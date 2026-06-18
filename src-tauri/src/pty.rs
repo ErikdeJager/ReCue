@@ -136,13 +136,35 @@ impl SessionManager {
         }
     }
 
-    /// Spawn an interactive `claude` session in `cwd`.
+    /// Spawn a new interactive `claude` session in `cwd`. We generate the
+    /// session id and pass it via `claude --session-id <uuid>` so the same id
+    /// can be resumed later (see `resume_session`).
     pub fn spawn_session(
         &self,
         cwd: impl AsRef<Path>,
         name: Option<String>,
     ) -> Result<SessionInfo, SessionError> {
-        self.spawn_program("claude", &[], cwd.as_ref(), name)
+        let id = Uuid::new_v4().to_string();
+        let args = ["--session-id", id.as_str()];
+        self.spawn_with_id(id.clone(), "claude", &args, cwd.as_ref(), name)
+    }
+
+    /// Resume a previously-persisted `claude` session by id (used on boot) via
+    /// `claude --resume <claude_session_id>`.
+    pub fn resume_session(
+        &self,
+        claude_session_id: &str,
+        cwd: impl AsRef<Path>,
+        name: Option<String>,
+    ) -> Result<SessionInfo, SessionError> {
+        let args = ["--resume", claude_session_id];
+        self.spawn_with_id(
+            claude_session_id.to_string(),
+            "claude",
+            &args,
+            cwd.as_ref(),
+            name,
+        )
     }
 
     /// Send keystrokes / paste to a session's stdin.
@@ -213,9 +235,23 @@ impl SessionManager {
         self.lock_sessions().map(|s| s.len()).unwrap_or(0)
     }
 
-    /// Spawn an arbitrary program in a PTY. Backs `spawn_session` and the tests.
+    /// Spawn an arbitrary program in a PTY with a generated id (test helper).
+    #[cfg(test)]
     fn spawn_program(
         &self,
+        program: &str,
+        args: &[&str],
+        cwd: &Path,
+        name: Option<String>,
+    ) -> Result<SessionInfo, SessionError> {
+        self.spawn_with_id(Uuid::new_v4().to_string(), program, args, cwd, name)
+    }
+
+    /// Spawn `program` in a PTY under a caller-chosen session id. Backs
+    /// `spawn_session`, `resume_session`, and the tests.
+    fn spawn_with_id(
+        &self,
+        id: String,
         program: &str,
         args: &[&str],
         cwd: &Path,
@@ -262,7 +298,6 @@ impl SessionManager {
             .take_writer()
             .map_err(|e| SessionError::Io(e.to_string()))?;
 
-        let id = Uuid::new_v4().to_string();
         let scrollback = Arc::new(Mutex::new(Scrollback::new(SCROLLBACK_CAP)));
         let child = Arc::new(Mutex::new(child));
         let events = self.event_sender()?;

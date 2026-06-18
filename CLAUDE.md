@@ -35,8 +35,11 @@ clear error if it is missing).
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
-│   ├── src/lib.rs          # App builder + command/event surface
+│   ├── src/lib.rs          # App builder, state wiring, event forwarding
 │   ├── src/main.rs         # Binary entry point
+│   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
+│   ├── src/commands.rs     # Tauri command surface + event payloads
+│   ├── src/store.rs        # JSON persistence (sessions + recents)
 │   ├── tauri.conf.json     # Window, bundle, build config
 │   ├── capabilities/       # Tauri permission capabilities
 │   └── Cargo.toml          # Crate `claudecue` / lib `claudecue_lib`
@@ -79,6 +82,12 @@ npm run format:rust    # cargo fmt (backend)
   commands/events; the frontend wraps them in a typed IPC layer.
 - Keep terminal byte streams out of React state — xterm.js consumes them directly
   to avoid re-render storms.
+- **Sessions & resume:** each session is a `claude` PTY. New sessions are spawned
+  as `claude --session-id <uuid>` (we own the id); on boot they resume via
+  `claude --resume <uuid>`. Session metadata + recent dirs persist to
+  `sessions.json` in the app-data dir (`store.rs`). `Remove` = kill + delete the
+  record. If a future `claude` version changes these flags, update `pty.rs`
+  (`spawn_session` / `resume_session`) and note it here.
 - **Window chrome:** the native macOS title bar is hidden via
   `titleBarStyle: "Overlay"` with the traffic lights repositioned
   (`trafficLightPosition`) to sit inside the custom 38px `Titlebar` component.

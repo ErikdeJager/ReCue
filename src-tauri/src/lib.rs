@@ -1,28 +1,52 @@
 //! ClaudeCue Tauri backend.
 //!
 //! Hosts the application window and the Tauri command/event surface the React
-//! frontend talks to. The session/PTY core lives in `pty`; persistence/resume
-//! and read-only git support are added by later tasks.
+//! frontend talks to. The session/PTY core lives in `pty`, JSON persistence in
+//! `store`; read-only git support is added by a later task.
 
 mod commands;
 mod pty;
+mod store;
 
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
 use tauri::{Emitter, Manager};
 
 use pty::{SessionEvent, SessionManager};
+use store::Store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // The session manager emits to a channel; forward it to the frontend
-            // as Tauri events on a dedicated thread.
+            // The session manager emits to a channel; a dedicated thread forwards
+            // those events to the frontend as Tauri events.
             let (tx, rx) = mpsc::channel::<SessionEvent>();
-            app.manage(SessionManager::new(tx));
+            let manager = SessionManager::new(tx);
+
+            // Load persisted sessions + recents from the app-data dir.
+            let store_path = app
+                .path()
+                .app_data_dir()
+                .map(|dir| dir.join("sessions.json"))
+                .unwrap_or_else(|_| PathBuf::from("claudecue-sessions.json"));
+            let store = Store::load(&store_path);
+
+            // Best-effort: resume each persisted claude session on boot. Failures
+            // (e.g. claude missing) leave the record in place for the UI to show.
+            for record in store.sessions() {
+                let _ = manager.resume_session(
+                    &record.claude_session_id,
+                    &record.repo_path,
+                    record.name.clone(),
+                );
+            }
+
+            app.manage(manager);
+            app.manage(store);
 
             let handle = app.handle().clone();
             thread::spawn(move || {
@@ -45,6 +69,8 @@ pub fn run() {
             commands::resize_pty,
             commands::kill_session,
             commands::session_scrollback,
+            commands::list_sessions,
+            commands::list_recents,
             commands::open_in_editor,
         ])
         .run(tauri::generate_context!())

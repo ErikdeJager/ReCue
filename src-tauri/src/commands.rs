@@ -1,12 +1,13 @@
-//! Tauri command surface for sessions — thin wrappers over `SessionManager`,
+//! Tauri command surface — thin wrappers over `SessionManager` and `Store`,
 //! plus the event payloads emitted to the frontend.
 
-use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::State;
 
-use crate::pty::{self, SessionError, SessionInfo, SessionManager};
+use crate::pty::{self, SessionError, SessionManager};
+use crate::store::{PersistedSession, Store};
 
 /// Payload for the `session://output` event.
 #[derive(Clone, Serialize)]
@@ -25,10 +26,25 @@ pub struct ExitPayload {
 #[tauri::command]
 pub fn spawn_session(
     manager: State<'_, SessionManager>,
+    store: State<'_, Store>,
     cwd: String,
     name: Option<String>,
-) -> Result<SessionInfo, SessionError> {
-    manager.spawn_session(PathBuf::from(cwd), name)
+) -> Result<PersistedSession, SessionError> {
+    let info = manager.spawn_session(cwd.as_str(), name.clone())?;
+    let record = PersistedSession {
+        id: info.id.clone(),
+        claude_session_id: info.id,
+        repo_path: cwd.clone(),
+        name,
+        created_at: now_secs(),
+    };
+    store
+        .add_session(record.clone())
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    store
+        .touch_recent(&cwd)
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    Ok(record)
 }
 
 #[tauri::command]
@@ -51,8 +67,17 @@ pub fn resize_pty(
 }
 
 #[tauri::command]
-pub fn kill_session(manager: State<'_, SessionManager>, id: String) -> Result<(), SessionError> {
-    manager.kill_session(&id)
+pub fn kill_session(
+    manager: State<'_, SessionManager>,
+    store: State<'_, Store>,
+    id: String,
+) -> Result<(), SessionError> {
+    // The session may not be live (e.g. it failed to resume on boot); forget it
+    // from the store either way so Remove = kill + forget and it never reappears.
+    let _ = manager.kill_session(&id);
+    store
+        .remove_session(&id)
+        .map_err(|e| SessionError::Io(e.to_string()))
 }
 
 #[tauri::command]
@@ -64,6 +89,23 @@ pub fn session_scrollback(
 }
 
 #[tauri::command]
+pub fn list_sessions(store: State<'_, Store>) -> Vec<PersistedSession> {
+    store.sessions()
+}
+
+#[tauri::command]
+pub fn list_recents(store: State<'_, Store>) -> Vec<String> {
+    store.recents()
+}
+
+#[tauri::command]
 pub fn open_in_editor(cwd: String) -> Result<(), SessionError> {
     pty::open_in_editor(&cwd)
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }

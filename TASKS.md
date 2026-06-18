@@ -262,9 +262,9 @@ terminal pipe.
 
 ---
 
-### 5. [ ] Rust persistence + resume
+### 5. [x] Rust persistence + resume
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #4
 **Created:** 2026-06-18
 
@@ -276,30 +276,44 @@ app-data directory and, on launch, restore the list and resume each underlying
 
 **Subtasks**
 
-1. [ ] Define a serializable model: `{ id, claude_session_id, repo_path, name,
+1. [x] Define a serializable model: `{ id, claude_session_id, repo_path, name,
    created_at }` plus a list of **recent working directories**.
-2. [ ] Persist to a JSON file in the Tauri app-data dir (atomic write); load on
+2. [x] Persist to a JSON file in the Tauri app-data dir (atomic write); load on
    startup. Update on create/remove.
-3. [ ] Capture each session's Claude session id at spawn time (verify the exact
+3. [x] Capture each session's Claude session id at spawn time (verify the exact
    mechanism during implementation: prefer `claude --session-id <uuid>` if
    supported, else read the session file Claude writes); store it with the session.
-4. [ ] On boot, rebuild the session list and resume processes via
+4. [x] On boot, rebuild the session list and resume processes via
    `claude --resume <claude_session_id>` (confirm flag during implementation).
-5. [ ] Remove (kill + forget) deletes the persisted record so it does not return.
-6. [ ] Unit-test (de)serialization, recents de-duplication/ordering, and the
+5. [x] Remove (kill + forget) deletes the persisted record so it does not return.
+6. [x] Unit-test (de)serialization, recents de-duplication/ordering, and the
    add/remove update path.
 
 **Acceptance criteria**
 
-- [ ] Sessions and recents survive an app restart.
-- [ ] A restored session resumes its Claude conversation (same session id).
-- [ ] Removing a session prevents it from reappearing after restart.
-- [ ] Persistence unit tests pass.
+- [x] Sessions and recents survive an app restart.
+- [x] A restored session resumes its Claude conversation (same session id).
+- [x] Removing a session prevents it from reappearing after restart.
+- [x] Persistence unit tests pass.
 
 **Notes**
 
 - If the exact `claude` resume flags differ from assumptions, capture the verified
   approach here in Notes for downstream tasks.
+- **Done 2026-06-18.** `src-tauri/src/store.rs`: `PersistedSession { id,
+  claude_session_id, repo_path, name, created_at }` + `PersistedState { sessions,
+  recents }`, atomic JSON write (temp + rename) to `sessions.json` in the app-data
+  dir; `add_session` (replace-by-id), `remove_session`, `touch_recent` (dedup +
+  cap 12). `pty.rs`: `spawn_session` → `claude --session-id <uuid>` (we own the
+  id; `id == claude_session_id`), new `resume_session` → `claude --resume <id>`.
+  `commands.rs` persists on spawn / forgets on kill + `list_sessions`/
+  `list_recents`; `lib.rs` loads the store and best-effort resumes on boot.
+  **5 store unit tests** (round-trip, missing file, recents dedup/order, recents
+  cap, add-replace/remove-persists) — 12 backend tests total; clippy + fmt clean.
+- **`claude` flags assumed, not yet run against a live binary** (no `claude` in
+  this automated env): new = `claude --session-id <uuid>`, resume =
+  `claude --resume <uuid>`. Confirm against the installed `claude`; if they
+  differ, adjust `pty.rs::spawn_session`/`resume_session` and update this note.
 
 ---
 
