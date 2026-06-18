@@ -475,9 +475,9 @@ its container, and is themed with the design tokens.
 
 ---
 
-### 9. [ ] Sidebar (repo groups + sessions)
+### 9. [x] Sidebar (repo groups + sessions)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #5, #6, #7
 **Created:** 2026-06-18
 
@@ -489,27 +489,39 @@ sessions. No status dots and no Archived group in v1.
 
 **Subtasks**
 
-1. [ ] Top **+ New session** button (filled `--accent`) that opens the modal (#10).
-2. [ ] One persistent row per repo (from recents + active sessions): collapse
+1. [x] Top **+ New session** button (filled `--accent`) that opens the modal (#10).
+2. [x] One persistent row per repo (from recents + active sessions): collapse
    chevron, repo path (mono), a **+** to start a session in that repo, and a session
    count.
-3. [ ] A repo with no active sessions stays listed but **greyed**, with its **+**
+3. [x] A repo with no active sessions stays listed but **greyed**, with its **+**
    highlighted in coral.
-4. [ ] Session rows: name + a second line with the branch (from #6); selected row
+4. [x] Session rows: name + a second line with the branch (from #6); selected row
    gets `--accent-dim` background + a 2px coral left bar; on hover show a **Remove**
    (kill + forget) ghost action.
-5. [ ] Wire selection (→ Focus), per-repo new session, and Remove to the store
+5. [x] Wire selection (→ Focus), per-repo new session, and Remove to the store
    actions from #7.
 
 **Acceptance criteria**
 
-- [ ] Sessions group correctly under their repos; groups collapse/expand.
-- [ ] Empty repos appear greyed with a coral **+**; recents persist across restart.
-- [ ] Selecting a row focuses it; Remove kills the process and deletes the record.
+- [x] Sessions group correctly under their repos; groups collapse/expand.
+- [x] Empty repos appear greyed with a coral **+**; recents persist across restart.
+- [x] Selecting a row focuses it; Remove kills the process and deletes the record.
 
 **Notes**
 
 - No status dot is shown next to rows (status is out of scope for v1).
+- **Done 2026-06-18.** `src/components/Sidebar` (with a local `SessionRow`).
+  Repos = `repoOrder(recents, sessions)` (recents first, then session-only repos —
+  exported + unit-tested). Lucide icons (`ChevronRight`/`Plus`/`X`, 16px/1.5).
+  Top **New session** → `openNewSession()` (store flag the #10 modal renders);
+  per-repo **+** directly `spawnSession(repo)`; empty repos greyed with a coral
+  **+**. Session rows show name + branch (per-repo `branches` slice populated by a
+  new `refreshBranches()` action calling `current_branch`); selected row gets
+  `--accent-dim` + a 2px coral left bar; hover reveals a Remove (`removeSession` =
+  kill + forget) ghost. Collapse/expand is local component state. Store grew
+  `branches`/`newSessionOpen`/`newSessionRepo` + `openNewSession`/`closeNewSession`/
+  `refreshBranches`; **11 store tests** (repoOrder ×2 + modal). Verified
+  `npm run build` (strict tsc) + ESLint + Prettier + `npm test`; GUI not launched.
 
 ---
 

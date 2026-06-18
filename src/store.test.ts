@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useStore } from "./store";
+import { repoOrder, useStore } from "./store";
 import type { SessionView } from "./types";
 
 function session(id: string): SessionView {
@@ -21,8 +21,11 @@ beforeEach(() => {
     view: "overview",
     inspectorOpen: false,
     recents: [],
+    branches: {},
     claudeMissing: false,
     toasts: [],
+    newSessionOpen: false,
+    newSessionRepo: null,
   });
 });
 
@@ -81,5 +84,32 @@ describe("app store", () => {
     const id = useStore.getState().pushToast("hello");
     useStore.getState().dismissToast(id);
     expect(useStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("opens and closes the new-session modal with an optional repo", () => {
+    useStore.getState().openNewSession("/repo/a");
+    expect(useStore.getState().newSessionOpen).toBe(true);
+    expect(useStore.getState().newSessionRepo).toBe("/repo/a");
+    useStore.getState().closeNewSession();
+    expect(useStore.getState().newSessionOpen).toBe(false);
+    expect(useStore.getState().newSessionRepo).toBeNull();
+  });
+});
+
+describe("repoOrder", () => {
+  it("lists recents first, then repos that only have active sessions", () => {
+    const recents = ["/repo/a", "/repo/b"];
+    const sessions = [session("s1"), { ...session("s2"), repoPath: "/repo/b" }];
+    // session("s1") has repoPath "/repo/s1" (not in recents) -> appended last.
+    expect(repoOrder(recents, sessions)).toEqual([
+      "/repo/a",
+      "/repo/b",
+      "/repo/s1",
+    ]);
+  });
+
+  it("de-duplicates repos shared by recents and sessions", () => {
+    const sessions = [{ ...session("s1"), repoPath: "/repo/a" }];
+    expect(repoOrder(["/repo/a"], sessions)).toEqual(["/repo/a"]);
   });
 });

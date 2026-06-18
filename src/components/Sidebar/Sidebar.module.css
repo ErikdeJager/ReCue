@@ -5,14 +5,205 @@
   flex-shrink: 0;
   border-right: 1px solid var(--border-hairline);
   background: var(--bg-sidebar);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-.placeholder {
-  padding: var(--space-16);
+.newButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-6);
+  margin: var(--space-12);
+  padding: var(--space-8);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.newButton:hover {
+  background: var(--accent-hover);
+}
+
+.repos {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: var(--space-12);
+}
+
+.emptyHint {
+  margin: var(--space-12);
   color: var(--text-muted);
-  font-size: var(--fs-eyebrow);
-  font-weight: var(--fw-eyebrow);
-  letter-spacing: var(--tracking-eyebrow);
-  text-transform: uppercase;
+  font-size: var(--fs-meta);
+}
+
+.group {
+  margin-bottom: var(--space-4);
+}
+
+.repoHeader {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding-right: var(--space-8);
+}
+
+.repoToggle {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-6);
+  padding: 0 var(--space-8);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.repoEmpty .repoToggle {
+  color: var(--text-muted);
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.repoName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.count {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}
+
+.plus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.plus:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.plusCoral {
+  color: var(--accent);
+}
+
+.plusCoral:hover {
+  color: var(--accent-hover);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  margin: 1px var(--space-8);
+  border-radius: var(--radius-control);
+  border-left: 2px solid transparent;
+}
+
+.row:hover {
+  background: var(--bg-hover);
+}
+
+.rowSelected {
+  border-left-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.rowSelected:hover {
+  background: var(--accent-dim);
+}
+
+.rowMain {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-6) var(--space-8);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rowName {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowBranch {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  margin-right: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.row:hover .remove {
+  opacity: 1;
+}
+
+.remove:hover {
+  color: var(--text-primary);
 }

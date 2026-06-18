@@ -38,6 +38,22 @@ function isSessionError(
   );
 }
 
+/**
+ * The ordered set of repositories shown in the sidebar: persisted recents first
+ * (most-recent first), then any repo that only has active sessions. This keeps
+ * repos visible even with no active session in them.
+ */
+export function repoOrder(
+  recents: string[],
+  sessions: SessionView[],
+): string[] {
+  const order = [...recents];
+  for (const session of sessions) {
+    if (!order.includes(session.repoPath)) order.push(session.repoPath);
+  }
+  return order;
+}
+
 export interface AppState {
   // --- State ---
   sessions: SessionView[];
@@ -45,8 +61,13 @@ export interface AppState {
   view: View;
   inspectorOpen: boolean;
   recents: string[];
+  /** Current branch per repo path (from git reading); "" when unknown/non-git. */
+  branches: Record<string, string>;
   claudeMissing: boolean;
   toasts: Toast[];
+  /** New session modal (rendered by #10); `newSessionRepo` optionally prefills it. */
+  newSessionOpen: boolean;
+  newSessionRepo: string | null;
 
   // --- Sync reducers ---
   setView: (view: View) => void;
@@ -62,10 +83,13 @@ export interface AppState {
   setClaudeMissing: (missing: boolean) => void;
   pushToast: (message: string, tone?: ToastTone) => string;
   dismissToast: (id: string) => void;
+  openNewSession: (repo?: string) => void;
+  closeNewSession: () => void;
 
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
   refresh: () => Promise<void>;
+  refreshBranches: () => Promise<void>;
   spawnSession: (cwd: string, name?: string) => Promise<void>;
   restartSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
@@ -79,8 +103,11 @@ export const useStore = create<AppState>()((set, get) => ({
   view: "overview",
   inspectorOpen: false,
   recents: [],
+  branches: {},
   claudeMissing: false,
   toasts: [],
+  newSessionOpen: false,
+  newSessionRepo: null,
 
   setView: (view) => set({ view }),
   select: (id) => set((s) => ({ selectedId: id, view: id ? "focus" : s.view })),
@@ -127,6 +154,10 @@ export const useStore = create<AppState>()((set, get) => ({
   dismissToast: (id) =>
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
+  openNewSession: (repo) =>
+    set({ newSessionOpen: true, newSessionRepo: repo ?? null }),
+  closeNewSession: () => set({ newSessionOpen: false, newSessionRepo: null }),
+
   init: async () => {
     try {
       await ipc.subscribeSessionEvents({
@@ -152,8 +183,24 @@ export const useStore = create<AppState>()((set, get) => ({
         ipc.listRecents(),
       ]);
       set({ sessions: records.map(toSessionView), recents });
+      void get().refreshBranches();
     } catch {
       // Backend unreachable (e.g. running outside Tauri).
+    }
+  },
+
+  refreshBranches: async () => {
+    const repos = repoOrder(get().recents, get().sessions);
+    try {
+      const entries = await Promise.all(
+        repos.map(
+          async (repo) =>
+            [repo, await ipc.currentBranch(repo).catch(() => "")] as const,
+        ),
+      );
+      set({ branches: Object.fromEntries(entries) });
+    } catch {
+      // Backend unreachable; leave branches as-is.
     }
   },
 
