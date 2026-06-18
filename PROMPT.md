@@ -1,18 +1,10 @@
----
-name: develop-tasks
-description: One idempotent orchestration pass over TASKS.md that drives all open tasks to completion through isolated agents. Syncs main, parses tasks and their "Depends on" fields into a dependency graph, selects open tasks whose dependencies are all merged, and advances as many as possible in parallel by invoking the isolate-agent skill per task (background workers), finalizing and merging completed PRs and marking tasks done. Intended to be scheduled with `/loop 5m /develop-tasks`. Use ONLY when explicitly invoked. Reports completion when every task is [x] and local main equals origin/main.
-disable-model-invocation: true
-disallowed-tools: AskUserQuestion
-allowed-tools: Bash(git:*), Bash(gh:*), Read, Edit, Write, Skill(isolate-agent *), Task, Agent
----
-
 # Develop tasks — one orchestration pass
 
 One idempotent pass that advances `TASKS.md` toward completion through isolated
-agents. Designed to be scheduled by the user:
+agents. Run it repeatedly (e.g. scheduled on an interval) until everything is done:
 
 ```
-/loop 5m /develop-tasks
+/loop 5m Run one orchestration pass following the instructions in PROMPT.md
 ```
 
 Run **unattended**: never ask the user a question (make the safe choice, skip blocked
