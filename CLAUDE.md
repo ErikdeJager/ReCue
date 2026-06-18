@@ -56,14 +56,14 @@ clear error if it is missing).
 ├── index.html              # Vite entry
 ├── src/                    # Frontend (React + TS)
 │   ├── main.tsx            # React bootstrap (loads fonts + tokens + global CSS)
-│   ├── App.tsx             # App shell: titlebar + sidebar + Overview/Focus
+│   ├── App.tsx             # App shell: sidebar + Overview/Focus (native title bar)
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
 │   ├── paths.ts            # Shared path helpers (repoName)
 │   ├── updater.ts          # In-app auto-update (Tauri updater/process plugins)
 │   ├── components/         # React components (CSS Module alongside each):
-│   │                       #   Titlebar, Sidebar, Overview, Focus, Terminal,
+│   │                       #   Sidebar, Overview, Focus, Terminal,
 │   │                       #   DiffInspector, NewSessionModal, Toaster, ViewSwitch,
 │   │                       #   ClaudeMissing, EmptyState, UpdatePopup
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
@@ -126,11 +126,13 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   `sessions.json` in the app-data dir (`store.rs`). `Remove` = kill + delete the
   record. If a future `claude` version changes these flags, update `pty.rs`
   (`spawn_session` / `resume_session`) and note it here.
-- **Window chrome:** the native macOS title bar is hidden via
-  `titleBarStyle: "Overlay"` with the traffic lights repositioned
-  (`trafficLightPosition`) to sit inside the custom 38px `Titlebar` component.
-  The bar is a `data-tauri-drag-region`; interactive controls placed in it must
-  opt out so they remain clickable rather than dragging the window.
+- **Window chrome:** the **standard native macOS title bar** (#19) — native
+  traffic lights, native title (`title: "ClaudeCue"`), native drag, no custom
+  positioning. The window config carries no `titleBarStyle`/`hiddenTitle`/
+  `trafficLightPosition`, and there is no custom `Titlebar` component or
+  `data-tauri-drag-region` (the earlier overlay chrome from #3 was removed). The
+  webview content area sits cleanly below the native bar, so the app shell starts
+  at the top of the content area (no reserved top strip).
 - **Releases & auto-update:** CI (`.github/workflows/release.yml`) drafts a
   **universal** macOS release when the version in `tauri.conf.json` is bumped past
   the latest `v*` tag; publish the draft for clients to see it. The app

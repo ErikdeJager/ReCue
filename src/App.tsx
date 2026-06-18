@@ -6,16 +6,16 @@ import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
 import Overview from "./components/Overview/Overview";
 import Sidebar from "./components/Sidebar/Sidebar";
 import { reconcileTerminals } from "./components/Terminal/terminalPool";
-import Titlebar from "./components/Titlebar/Titlebar";
 import Toaster from "./components/Toaster/Toaster";
 import UpdatePopup from "./components/UpdatePopup/UpdatePopup";
 import { useStore } from "./store";
 
 /**
- * Application shell: custom titlebar (#3) over a sidebar region (#9) and the main
- * content area, which routes between the Overview wall (#11) and Focus view (#12).
- * Cross-cutting surfaces (toasts, the claude-missing banner) live at the top
- * level. State + IPC are wired through the Zustand store.
+ * Application shell: a sidebar region (#9) and the main content area, which
+ * routes between the Overview wall (#11) and Focus view (#12), under the native
+ * macOS title bar (#19 — no custom chrome). Cross-cutting surfaces (toasts, the
+ * claude-missing banner) live at the top level. State + IPC are wired through
+ * the Zustand store.
  */
 function App() {
   const view = useStore((s) => s.view);
@@ -36,7 +36,6 @@ function App() {
 
   return (
     <div className="app">
-      <Titlebar />
       {claudeMissing && <ClaudeMissing />}
       <div className="app-body">
         <Sidebar />

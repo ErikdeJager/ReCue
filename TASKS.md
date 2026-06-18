@@ -1257,9 +1257,9 @@ resizes, and adding/removing agents — never garbled.
 
 ---
 
-### 19. [ ] Replace the custom title bar with the native macOS title bar + restore dragging
+### 19. [x] Replace the custom title bar with the native macOS title bar + restore dragging
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-18
 
@@ -1277,25 +1277,50 @@ convention, which must be updated.
 
 **Subtasks**
 
-1. [ ] Remove `titleBarStyle: "Overlay"`, `hiddenTitle`, and `trafficLightPosition`
+1. [x] Remove `titleBarStyle: "Overlay"`, `hiddenTitle`, and `trafficLightPosition`
    from `src-tauri/tauri.conf.json` so the window uses the default macOS title bar
    (keep `title: "ClaudeCue"`).
-2. [ ] Remove the custom `Titlebar` from `App.tsx` and delete
+2. [x] Remove the custom `Titlebar` from `App.tsx` and delete
    `src/components/Titlebar/*`; fix the layout so the sidebar/main start cleanly under
    the native bar (no clipping, sensible top spacing on the New session button).
-3. [ ] Remove now-dead `data-tauri-drag-region` usage and stale capability/notes.
-4. [ ] Update `CLAUDE.md` (the "Window chrome" convention) and any stale references.
+3. [x] Remove now-dead `data-tauri-drag-region` usage and stale capability/notes.
+4. [x] Update `CLAUDE.md` (the "Window chrome" convention) and any stale references.
 
 **Acceptance criteria**
 
-- [ ] The window drags normally from the native title bar.
-- [ ] Traffic lights render at the normal macOS position and all three work.
-- [ ] No leftover custom-titlebar code/config; build + lint clean.
+- [x] The window drags normally from the native title bar. _(native default — see Notes.)_
+- [x] Traffic lights render at the normal macOS position and all three work.
+  _(native default — see Notes.)_
+- [x] No leftover custom-titlebar code/config; build + lint clean.
 
 **Notes**
 
 - Files: `src-tauri/tauri.conf.json`, `src/App.tsx`, `src/components/Titlebar/*`,
   `CLAUDE.md`. Verify content below the native bar isn't clipped.
+- **Done 2026-06-18.** Dropped the custom chrome entirely. `tauri.conf.json` window
+  block is now just `title/width/height/minWidth/minHeight` — removed
+  `titleBarStyle: "Overlay"`, `hiddenTitle`, and `trafficLightPosition`, so the window
+  renders the **standard native macOS title bar** (native traffic lights at the normal
+  position, native title, native drag). Deleted `src/components/Titlebar/*`
+  (`Titlebar.tsx` + `.module.css` + the now-empty dir) and removed its import/usage
+  from `App.tsx`; the app shell (`.app` → `app-body` → Sidebar + main) now starts at
+  the top of the webview content area, which the OS positions cleanly **below** the
+  native bar (no Overlay = no content under the bar = no clipping, no reserved top
+  strip). The New session button keeps its `margin: var(--space-12)` top spacing.
+  Removed the dead `data-tauri-drag-region` (only used by the deleted Titlebar). No
+  capability change needed — dragging is native and the capability set never had a
+  titlebar-specific permission (`core:default` covers windowing). Updated `CLAUDE.md`:
+  rewrote the "Window chrome" convention to describe the native bar, and fixed the
+  layout map + component list (dropped `Titlebar`). This **supersedes #3**.
+- **Hard gate green:** frontend `build`/`lint`/`format:check`/`test` (20) + `cargo
+  fmt`/`clippy -D warnings`/`test` (23); `cargo build` re-validates the trimmed
+  `tauri.conf.json` schema. The two **native-behavior** acceptance items (drag,
+  traffic-light placement) are now the **platform defaults** rather than custom code,
+  so they hold by construction; this headless automation can't launch the GUI to
+  pixel-confirm them (same constraint as #14/#15/#18). **Recommended human glance:**
+  open the app, confirm the native bar shows the three traffic lights at the standard
+  top-left and that dragging the bar moves the window — both are stock macOS behavior
+  now.
 
 ---
 
