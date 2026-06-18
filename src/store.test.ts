@@ -117,19 +117,42 @@ describe("app store", () => {
 });
 
 describe("repoOrder", () => {
-  it("lists recents first, then repos that only have active sessions", () => {
-    const recents = ["/repo/a", "/repo/b"];
-    const sessions = [session("s1"), { ...session("s2"), repoPath: "/repo/b" }];
-    // session("s1") has repoPath "/repo/s1" (not in recents) -> appended last.
+  it("sorts groups alphabetically by repo name, not by recents order", () => {
+    const recents = ["/repo/zeta", "/repo/alpha"]; // recent-first, non-alphabetical
+    const sessions = [{ ...session("s1"), repoPath: "/repo/mid" }];
     expect(repoOrder(recents, sessions)).toEqual([
-      "/repo/a",
-      "/repo/b",
-      "/repo/s1",
+      "/repo/alpha",
+      "/repo/mid",
+      "/repo/zeta",
     ]);
   });
 
   it("de-duplicates repos shared by recents and sessions", () => {
     const sessions = [{ ...session("s1"), repoPath: "/repo/a" }];
     expect(repoOrder(["/repo/a"], sessions)).toEqual(["/repo/a"]);
+  });
+
+  it("is stable regardless of spawn/recents order (no reorder on new agent)", () => {
+    expect(repoOrder(["/repo/b", "/repo/a"], [])).toEqual(
+      repoOrder(["/repo/a", "/repo/b"], []),
+    );
+    expect(repoOrder(["/repo/b", "/repo/a"], [])).toEqual([
+      "/repo/a",
+      "/repo/b",
+    ]);
+  });
+
+  it("orders case-insensitively and breaks name ties on the full path", () => {
+    // Names apple / Banana / Cherry -> case-insensitive alphabetical.
+    expect(repoOrder(["/x/Banana", "/z/Cherry", "/y/apple"], [])).toEqual([
+      "/y/apple",
+      "/x/Banana",
+      "/z/Cherry",
+    ]);
+    // Same displayed name "app" -> deterministic tiebreak on the full path.
+    expect(repoOrder(["/two/app", "/one/app"], [])).toEqual([
+      "/one/app",
+      "/two/app",
+    ]);
   });
 });

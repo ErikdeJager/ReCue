@@ -1324,9 +1324,9 @@ convention, which must be updated.
 
 ---
 
-### 20. [ ] Keep the sidebar repo list stable & alphabetical (no reorder on new agent)
+### 20. [x] Keep the sidebar repo list stable & alphabetical (no reorder on new agent)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-18
 
@@ -1339,24 +1339,39 @@ repo groups **alphabetically** (stable) so adding an agent never moves the group
 
 **Subtasks**
 
-1. [ ] Change `repoOrder(recents, sessions)` to return the union of recents +
+1. [x] Change `repoOrder(recents, sessions)` to return the union of recents +
    active-session repos sorted **alphabetically** (case-insensitive; prefer the
    displayed repo name via `repoName()` for predictability). Keep it pure.
-2. [ ] Leave `recents` itself most-recent-first (the new-session chips can stay
+2. [x] Leave `recents` itself most-recent-first (the new-session chips can stay
    recent-first); only the **sidebar grouping** becomes alphabetical.
-3. [ ] Update/extend the `repoOrder` unit tests.
+3. [x] Update/extend the `repoOrder` unit tests.
 
 **Acceptance criteria**
 
-- [ ] Starting a new agent does not reorder the sidebar groups.
-- [ ] Repo groups are alphabetical and stable across spawns/exits.
-- [ ] `repoOrder` unit tests pass.
+- [x] Starting a new agent does not reorder the sidebar groups.
+- [x] Repo groups are alphabetical and stable across spawns/exits.
+- [x] `repoOrder` unit tests pass.
 
 **Notes**
 
 - Files: `src/store.ts` (`repoOrder`), `src/store.test.ts`,
   `src/components/Sidebar/Sidebar.tsx`. The new-session recent chips
   (`NewSessionModal`) read `recents` directly — leave that order recent-first.
+- **Done 2026-06-18.** `repoOrder` now builds the recents∪session-repos union via
+  a `Set` (dedup) and sorts it **alphabetically by `repoName(path).toLowerCase()`**
+  with a **full-path `localeCompare` tiebreak** for same-named repos in different
+  paths — a total, deterministic order independent of spawn/recents order, so a new
+  agent never reshuffles the groups. Kept pure; imported `repoName` from `./paths`.
+  Only the **sidebar grouping** changed — `recents` stays most-recent-first, so the
+  `NewSessionModal` recent chips are untouched. No `Sidebar.tsx` change: it renders
+  `repoOrder(...)` directly (and its `reposKey` branch-refresh trigger is now even
+  more stable, since the set/order only changes when the repo set does). Replaced the
+  two recents-first `repoOrder` tests with **4** covering alphabetical-not-recents
+  order, dedup, order-independence (proves no reorder on spawn), and
+  case-insensitive + tiebreak. **Hard gate green:** frontend `build`/`lint`/
+  `format:check`/`test` (22). Pure frontend change — no Rust touched (Rust gate
+  unchanged since #19). The behavior is fully unit-tested, so the sidebar renders the
+  alphabetical/stable order by construction.
 
 ---
 

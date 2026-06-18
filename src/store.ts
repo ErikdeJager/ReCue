@@ -6,6 +6,7 @@ import { create } from "zustand";
 
 import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
+import { repoName } from "./paths";
 import * as updater from "./updater";
 import type {
   SessionRecord,
@@ -40,19 +41,25 @@ function isSessionError(
 }
 
 /**
- * The ordered set of repositories shown in the sidebar: persisted recents first
- * (most-recent first), then any repo that only has active sessions. This keeps
- * repos visible even with no active session in them.
+ * The set of repositories shown in the sidebar: the union of persisted recents
+ * and active-session repos (so a repo stays visible even with no active session),
+ * sorted **alphabetically** by displayed name — case-insensitive, with a
+ * full-path tiebreak for same-named repos. The order is stable: starting a new
+ * agent never reshuffles the groups. `recents` itself stays most-recent-first
+ * (the new-session chips read it directly); only this grouping is alphabetical.
  */
 export function repoOrder(
   recents: string[],
   sessions: SessionView[],
 ): string[] {
-  const order = [...recents];
-  for (const session of sessions) {
-    if (!order.includes(session.repoPath)) order.push(session.repoPath);
-  }
-  return order;
+  const paths = new Set(recents);
+  for (const session of sessions) paths.add(session.repoPath);
+  return [...paths].sort((a, b) => {
+    const byName = repoName(a)
+      .toLowerCase()
+      .localeCompare(repoName(b).toLowerCase());
+    return byName !== 0 ? byName : a.localeCompare(b);
+  });
 }
 
 export interface AppState {
