@@ -3,8 +3,34 @@
 # so the project-scoped skills are tracked and shared with the repo.
 !.claude/
 
+# This project's CLAUDE.md is committed (the global ignore hides it elsewhere).
+!CLAUDE.md
+
 # Isolated agent worktrees (managed by the isolate-agent / develop-tasks skills)
 .worktree/
 
 # Generated task handoff briefs
 .handoffs/
+
+# --- Frontend (Vite / React) ---
+node_modules
+dist
+dist-ssr
+*.local
+
+# --- Rust / Tauri backend ---
+src-tauri/target
+src-tauri/gen/schemas
+
+# --- Logs ---
+logs
+*.log
+npm-debug.log*
+
+# --- OS / editor ---
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.sw?

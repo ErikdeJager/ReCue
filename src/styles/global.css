@@ -1,0 +1,33 @@
+/*
+ * Provisional global styles.
+ *
+ * The full dark-only design-token system (CSS variables, fonts, scrollbars,
+ * reduced-motion) is defined in task #2. For now this is just enough of a reset
+ * and a dark background so the scaffold renders a non-jarring empty window.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0b0b0c; /* --bg-base (see Design reference in TASKS.md) */
+  color: #ededef; /* --text-primary */
+  font-family:
+    -apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.app {
+  height: 100%;
+}

@@ -68,9 +68,9 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-### 1. [ ] Project scaffolding — macOS Tauri 2 + React/TS/Vite
+### 1. [x] Project scaffolding — macOS Tauri 2 + React/TS/Vite
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-18
 
@@ -83,27 +83,33 @@ runnable empty window every other task builds on. macOS is the only target.
 
 **Subtasks**
 
-1. [ ] Initialize a Tauri 2 app named **ClaudeCue** (bundle identifier e.g.
+1. [x] Initialize a Tauri 2 app named **ClaudeCue** (bundle identifier e.g.
    `com.claudecue.app`) with the React + TypeScript + Vite frontend template.
-2. [ ] Establish the folder structure: `src/` (frontend), `src-tauri/` (Rust),
+2. [x] Establish the folder structure: `src/` (frontend), `src-tauri/` (Rust),
    shared TS types location, and a `src/styles/` dir for tokens (task #2).
-3. [ ] Configure scripts: `tauri dev`, `tauri build`; wire Vite + TS strict mode.
-4. [ ] Add ESLint + Prettier (or Biome) for the frontend and `rustfmt`/`clippy`
+3. [x] Configure scripts: `tauri dev`, `tauri build`; wire Vite + TS strict mode.
+4. [x] Add ESLint + Prettier (or Biome) for the frontend and `rustfmt`/`clippy`
    config for the backend; add format/lint scripts.
-5. [ ] Add `.gitignore` entries for `node_modules`, `dist`, `src-tauri/target`,
+5. [x] Add `.gitignore` entries for `node_modules`, `dist`, `src-tauri/target`,
    build artifacts.
-6. [ ] Add a starter `CLAUDE.md` describing the architecture, stack and the v1
+6. [x] Add a starter `CLAUDE.md` describing the architecture, stack and the v1
    scope decisions captured in **Project context** above.
 
 **Acceptance criteria**
 
-- [ ] `tauri dev` launches an empty ClaudeCue window on macOS.
-- [ ] `tauri build` completes without errors.
-- [ ] Lint + format run clean on the scaffold for both frontend and backend.
+- [x] `tauri dev` launches an empty ClaudeCue window on macOS.
+- [x] `tauri build` completes without errors.
+- [x] Lint + format run clean on the scaffold for both frontend and backend.
 
 **Notes**
 
 - Tauri 2.x. Keep the frontend/backend boundary clean; later tasks add commands.
+- **Scaffolded 2026-06-18.** Verified: `npm run build` (strict `tsc` + Vite) ✓,
+  ESLint + Prettier clean ✓, `cargo fmt --check` + `cargo clippy -D warnings` ✓,
+  and `npm run tauri build` produced `ClaudeCue.app` + `ClaudeCue_0.1.0_aarch64.dmg` ✓.
+  The runnable bundle confirms the compile/launch path; the GUI window was not
+  opened visually in this automated run. Toolchain: Tauri 2.11, Vite 7, React 19,
+  TypeScript 5.8. `greet` demo command removed; `tauri-plugin-opener` kept wired.
 
 ---
 

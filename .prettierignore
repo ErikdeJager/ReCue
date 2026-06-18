@@ -1,0 +1,14 @@
+# Build output
+dist
+node_modules
+
+# Rust / Tauri generated
+src-tauri/target
+src-tauri/gen
+
+# Lockfiles & generated
+package-lock.json
+Cargo.lock
+
+# Project docs use manual line wrapping — leave them as authored
+*.md
