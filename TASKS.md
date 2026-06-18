@@ -1136,3 +1136,690 @@ backend sequence/offset to dedupe. (2) `DiffInspector` row virtualization (repla
 (4) parallelize the background boot-resume + cache branch/diff results. (5) WebGL
 context-cap behavior under many terminals. (6) modal focus-trap (Tab cycling) for fuller
 a11y.
+
+---
+
+### 18. [ ] Fix garbled terminal rendering on view switch, resize & new agents
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+The **highest-priority** issue. The `claude` terminals frequently render as garbled,
+overlapping, duplicated text — most visibly when switching between Overview and Focus,
+when a new agent is added (the wall re-tiles), or when a terminal is otherwise resized
+(e.g. toggling the inspector). See the feedback screenshots: fragments like
+`can-I-help-you-with-today?` and the greeting drawn twice.
+
+Root cause: `claude` is a full-screen TUI that emits cursor-positioned escape
+sequences computed for a *specific* terminal width/height. Two things corrupt that:
+
+1. `App.tsx` mounts **either** `<Overview/>` **or** `<Focus/>`
+   (`view === "overview" ? <Overview/> : <Focus/>`), so every terminal is
+   **disposed and recreated** on each Overview↔Focus switch. On remount the component
+   replays the server-side scrollback (`session_scrollback`, raw bytes from `pty.rs`),
+   but those bytes encode absolute cursor moves for the width the PTY had when they
+   were produced — re-drawing them at a different size scrambles the layout.
+2. The `ResizeObserver` in `Terminal.tsx` calls `fit.fit()` then
+   `resize_pty(cols, rows)` on every tick with no debounce/sequencing, so during the
+   re-tile/transition the PTY is resized repeatedly mid-redraw.
+
+Goal: terminals stay **clean, readable and stable** across view switches, window
+resizes, and adding/removing agents — never garbled.
+
+**Subtasks**
+
+1. [ ] **Keep terminals mounted across Overview↔Focus.** Stop unmounting the terminal
+   when `view` changes. Evaluate: render both views and toggle visibility
+   (CSS `display`/visibility) while keeping the xterm instances alive; or hoist the
+   live `Terminal` instances into a persistent layer and reparent the DOM node into
+   the active view. A terminal is created **once per session** and survives view
+   switches (no dispose/recreate, no scrollback replay on switch).
+2. [ ] **Debounce + correctly sequence resize.** Debounce the `ResizeObserver`
+   handler; `fit.fit()` to compute cols/rows, then a single `resize_pty(cols,rows)`
+   after layout settles. Don't resize a hidden terminal — defer the fit until it
+   becomes visible, then fit once on show so `claude` repaints at the right size.
+3. [ ] **Fix scrollback-replay corruption.** Replay is only needed for a *freshly
+   mounted* terminal (first appearance / app boot), not on every view switch. Ensure
+   a replayed snapshot renders at a matching size, or trigger a `claude` full redraw
+   via a PTY resize after sizing. Confirm the live-vs-scrollback ordering still holds.
+4. [ ] **Verify the real failure cases:** switch Overview↔Focus repeatedly, add a
+   2nd/3rd agent so the wall re-tiles, resize the window narrow↔wide, toggle the
+   inspector. Text stays aligned throughout.
+
+**Acceptance criteria**
+
+- [ ] Switching Overview↔Focus never garbles a terminal; history is intact and
+  correctly laid out (no duplicated/overlapping lines).
+- [ ] Adding/removing an agent re-tiles the wall without corrupting other terminals.
+- [ ] Resizing the window or toggling the inspector reflows terminals cleanly.
+- [ ] Hard gate green: `npm run build`, `npm run lint`, `npm test`,
+  `cargo fmt --check`, `cargo clippy`, `cargo test`.
+
+**Notes**
+
+- Files: `src/App.tsx` (view mounting), `src/components/Terminal/Terminal.tsx` (xterm
+  lifecycle, FitAddon, ResizeObserver, scrollback replay),
+  `src/components/Overview/Overview.tsx` + `src/components/Focus/Focus.tsx` (terminal
+  embedding), `src-tauri/src/pty.rs` (`scrollback`, `resize_pty`).
+- Directly tackles the #16/#17 punch-list items: "keep terminals mounted across
+  Overview↔Focus (avoid remount + scrollback replay)" and the "scrollback↔live overlap
+  on mount."
+- Keep terminal bytes out of React state (xterm consumes the output bus directly) —
+  core convention, don't regress it.
+- Keeping instances alive across views should *reduce* WebGL context churn; verify it
+  doesn't worsen the context-cap fallback with many agents.
+
+---
+
+### 19. [ ] Replace the custom title bar with the native macOS title bar + restore dragging
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+The window can't be dragged from the top bar and the macOS traffic lights aren't
+positioned correctly. The custom chrome causes both: a 38px `Titlebar` with a centered
+"ClaudeCue" label over `titleBarStyle: "Overlay"` + `hiddenTitle: true` +
+`trafficLightPosition` (the broken centering) in `tauri.conf.json`. Per the decision,
+drop the custom chrome entirely and use the **standard native macOS title bar** —
+native traffic lights, native title, native drag, no custom positioning.
+
+This **supersedes task #3** (custom window chrome) and the CLAUDE.md "Window chrome"
+convention, which must be updated.
+
+**Subtasks**
+
+1. [ ] Remove `titleBarStyle: "Overlay"`, `hiddenTitle`, and `trafficLightPosition`
+   from `src-tauri/tauri.conf.json` so the window uses the default macOS title bar
+   (keep `title: "ClaudeCue"`).
+2. [ ] Remove the custom `Titlebar` from `App.tsx` and delete
+   `src/components/Titlebar/*`; fix the layout so the sidebar/main start cleanly under
+   the native bar (no clipping, sensible top spacing on the New session button).
+3. [ ] Remove now-dead `data-tauri-drag-region` usage and stale capability/notes.
+4. [ ] Update `CLAUDE.md` (the "Window chrome" convention) and any stale references.
+
+**Acceptance criteria**
+
+- [ ] The window drags normally from the native title bar.
+- [ ] Traffic lights render at the normal macOS position and all three work.
+- [ ] No leftover custom-titlebar code/config; build + lint clean.
+
+**Notes**
+
+- Files: `src-tauri/tauri.conf.json`, `src/App.tsx`, `src/components/Titlebar/*`,
+  `CLAUDE.md`. Verify content below the native bar isn't clipped.
+
+---
+
+### 20. [ ] Keep the sidebar repo list stable & alphabetical (no reorder on new agent)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+Every time a new agent starts, its repo jumps to the top of the sidebar because
+`repoOrder()` (`src/store.ts`) lists persisted recents **most-recent-first** then
+appends session-only repos. This reshuffles the list and is disorienting. Order the
+repo groups **alphabetically** (stable) so adding an agent never moves the groups.
+
+**Subtasks**
+
+1. [ ] Change `repoOrder(recents, sessions)` to return the union of recents +
+   active-session repos sorted **alphabetically** (case-insensitive; prefer the
+   displayed repo name via `repoName()` for predictability). Keep it pure.
+2. [ ] Leave `recents` itself most-recent-first (the new-session chips can stay
+   recent-first); only the **sidebar grouping** becomes alphabetical.
+3. [ ] Update/extend the `repoOrder` unit tests.
+
+**Acceptance criteria**
+
+- [ ] Starting a new agent does not reorder the sidebar groups.
+- [ ] Repo groups are alphabetical and stable across spawns/exits.
+- [ ] `repoOrder` unit tests pass.
+
+**Notes**
+
+- Files: `src/store.ts` (`repoOrder`), `src/store.test.ts`,
+  `src/components/Sidebar/Sidebar.tsx`. The new-session recent chips
+  (`NewSessionModal`) read `recents` directly — leave that order recent-first.
+
+---
+
+### 21. [ ] Sidebar agent labels = branch name (optional custom name as thin sub-text)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+Sidebar session rows currently show the **session name (defaulting to the repo name)**
+as the primary label and the branch as the thin sub-line (`SessionRow` in
+`src/components/Sidebar/Sidebar.tsx`). Flip this: the **branch name** is the primary
+label; the **optional custom name**, when set, shows **underneath as thin secondary
+text**. Handle duplicates and non-git folders.
+
+Decisions (from feedback):
+
+- Primary label = the folder's current branch (from the `branches` slice).
+- Duplicate branches within a repo group get an index: `main`, `main (2)`, `main (3)`
+  (stable order within the group).
+- Non-git folder (empty branch) → fall back to the folder name (`repoName`).
+- Keep an optional custom name; when present, render it **beneath** the branch in
+  thin/muted text (the reverse of today's layout).
+
+**Subtasks**
+
+1. [ ] In `SessionRow`, make the (deduped) branch the primary label and render
+   `session.name` (if set) as the thin sub-line.
+2. [ ] Implement per-group branch dedup indexing (pure helper, unit-tested).
+3. [ ] Non-git fallback to folder name; empty/unknown branch handled gracefully.
+4. [ ] Adjust `Sidebar.module.css` so the (branch primary / name secondary) hierarchy
+   reads correctly.
+
+**Acceptance criteria**
+
+- [ ] Rows show the branch as the main label; a custom name (if any) appears as thin
+  sub-text beneath.
+- [ ] Duplicate branches in a group are indexed (`main`, `main (2)`).
+- [ ] Non-git folders fall back to the folder name; no crash on missing branch.
+
+**Notes**
+
+- Files: `src/components/Sidebar/Sidebar.tsx`, `.../Sidebar.module.css`,
+  `src/store.ts` (`branches`). Branch is tracked **per repo path**
+  (`branches: Record<path, branch>`), so all agents in one folder share a branch
+  today — hence the dedup index. Related: #27 keeps the optional name field that feeds
+  the sub-text. (Per-agent branches via worktrees are intentionally out of scope.)
+
+---
+
+### 22. [ ] Clicking a sidebar agent navigates in Overview (don't force Focus)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+Clicking an agent row in the sidebar currently jumps to Focus, because `select(id)`
+(`src/store.ts`) sets `view: "focus"` as a side effect
+(`select: (id) => set((s) => ({ selectedId: id, view: id ? "focus" : s.view }))`).
+Clicking a running agent should instead just **select/highlight it in place** without
+changing the view — in Overview you stay in Overview with that agent highlighted. This
+is the foundation for the Overview selection border (#23) and keyboard nav (#24).
+
+**Subtasks**
+
+1. [ ] Decouple selection from view: `select(id)` sets `selectedId` only; it must
+   **not** force `view`. Audit callers (`Sidebar` row click, `Overview` "Expand",
+   `Focus`, `spawnSession`) and set the view explicitly only where a view change is
+   intended (Expand → Focus; decide spawn behavior — likely select + show in current
+   view, or focus the new agent).
+2. [ ] Sidebar row click → `select(id)` only (stay in view, highlight the row).
+3. [ ] Keep "Expand to Focus" and any intentional Focus affordances working via an
+   explicit `setView("focus")`.
+4. [ ] Update store unit tests for the new `select` semantics.
+
+**Acceptance criteria**
+
+- [ ] Clicking a sidebar agent highlights it without leaving Overview.
+- [ ] Explicit Expand/Focus affordances still switch to Focus.
+- [ ] Store tests updated and passing.
+
+**Notes**
+
+- Files: `src/store.ts` (`select`, `dropSession`), `src/components/Sidebar/*`,
+  `src/components/Overview/Overview.tsx`, `src/components/Focus/Focus.tsx`,
+  `src/store.test.ts`. Core interaction other tasks build on (#23, #24).
+
+---
+
+### 23. [ ] Show a border/highlight around the selected agent in Overview
+
+**Status:** Not started
+**Depends on:** #22
+**Created:** 2026-06-18
+
+**Description**
+
+In Overview there's no indication of which agent is "current." Add a clear
+**border/highlight** around the selected agent's card (where
+`session.id === selectedId`). Depends on #22 so selecting doesn't immediately leave
+Overview.
+
+**Subtasks**
+
+1. [ ] Pass `selected` into `SessionCard` (`selectedId === session.id`) in
+   `src/components/Overview/Overview.tsx`.
+2. [ ] Add a selected style in `Overview.module.css` — an accent border (`--accent`)
+   consistent with the sidebar's selected treatment; on-system tokens only.
+3. [ ] Clicking a card body selects it (highlight follows clicks) without forcing
+   Focus (the Expand button still goes to Focus).
+
+**Acceptance criteria**
+
+- [ ] The selected agent card has a clear, on-brand border in Overview.
+- [ ] The highlight stays in sync with sidebar selection and keyboard nav (#24).
+
+**Notes**
+
+- Files: `src/components/Overview/Overview.tsx`, `.../Overview.module.css`. Use the
+  existing accent tokens; match the sidebar selected look for consistency.
+
+---
+
+### 24. [ ] Keyboard navigation: Shift+arrows to move between agents and switch views
+
+**Status:** Not started
+**Depends on:** #22, #23
+**Created:** 2026-06-18
+
+**Description**
+
+Add global keyboard navigation:
+
+- **Shift+← / Shift+→** — move selection to the previous/next agent (in displayed
+  left-to-right order). Works in **both** Overview and Focus.
+- **Shift+↓** — switch to **Focus** on the selected agent.
+- **Shift+↑** — switch back to **Overview** (keeping the agent selected).
+
+**Subtasks**
+
+1. [ ] Add an app-level key handler for the four Shift+Arrow combos that updates
+   `selectedId` (prev/next) and `view` (↑ overview / ↓ focus).
+2. [ ] Agent order = the Overview wall order (`sessions` array) so left/right matches
+   what the user sees. Wrap-around at the ends (cycle); if nothing is selected,
+   Shift+→/← selects the first.
+3. [ ] **Precedence over the terminal:** xterm captures keystrokes when focused, so
+   intercept Shift+Arrow before xterm forwards them to the PTY (e.g.
+   `attachCustomKeyEventHandler` on xterm instances, or a capture-phase window
+   listener that stops propagation for these combos). Normal typing (incl.
+   Shift+letters) unaffected.
+4. [ ] Don't navigate while the new-session popover (#27) is open.
+
+**Acceptance criteria**
+
+- [ ] Shift+←/→ cycles the selected agent in both views; Shift+↓ focuses it, Shift+↑
+  returns to Overview.
+- [ ] Works even while a terminal is focused, without corrupting terminal input.
+- [ ] No interference with normal typing or the new-session popover.
+
+**Notes**
+
+- Files: an app-level key hook (e.g. `src/App.tsx` or a small hook), `src/store.ts`
+  (selection/view), `src/components/Terminal/Terminal.tsx`
+  (`attachCustomKeyEventHandler` if needed). Builds on #22 (selection decoupled) and
+  #23 (highlight). Only intercept the four Shift+Arrow combos so `claude`'s own
+  Shift usage (e.g. Shift+Tab) is untouched.
+
+---
+
+### 25. [ ] Move the Overview/Focus toggle into the sidebar, always visible
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+The Overview/Focus segmented control (`ViewSwitch`) currently lives only in the
+**Focus** toolbar (`src/components/Focus/Focus.tsx`), so it's unreachable from
+Overview. Move it into the **sidebar, directly under the New session button**, where
+it's **always visible** (both views) for one-click switching.
+
+**Subtasks**
+
+1. [ ] Render `ViewSwitch` in the sidebar beneath the New session button; remove it
+   from the Focus toolbar.
+2. [ ] Always show it. Switching to **Focus** with nothing selected focuses the
+   **last-selected** agent (or the first available); remember the last view so the
+   toggle reflects state. With zero agents, Focus is a no-op/disabled.
+3. [ ] Style to the sidebar width (full-width segmented control, on-system tokens).
+
+**Acceptance criteria**
+
+- [ ] The toggle sits under the New session button, visible in both views.
+- [ ] Clicking Focus with no explicit selection focuses the last-selected/first agent.
+- [ ] Removed cleanly from the Focus toolbar; styling matches the sidebar.
+
+**Notes**
+
+- Files: `src/components/Sidebar/Sidebar.tsx` (+ css), `src/components/ViewSwitch/*`,
+  `src/components/Focus/Focus.tsx`, `src/store.ts`. Coordinates with #26 (also edits
+  the sidebar header) and #24 (view switching).
+
+---
+
+### 26. [ ] Slimmer New session button + ⌘N shortcut
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+The New session button is too tall/bulky. Make it **thinner and cleaner**, and add a
+**⌘N** global shortcut to open the new-session flow.
+
+**Subtasks**
+
+1. [ ] Slim `.newButton` in `Sidebar.module.css` (less padding/height; keep it clearly
+   the primary action, on-system tokens).
+2. [ ] Add a global **⌘N** handler that opens the new-session flow (`openNewSession()`);
+   don't fire disruptively while typing in an input/terminal; no-op when the popover
+   is already open.
+3. [ ] Optionally show a subtle ⌘N hint on the button.
+
+**Acceptance criteria**
+
+- [ ] The button is visibly slimmer/cleaner and still obviously primary.
+- [ ] ⌘N opens the new-session flow from anywhere in the app.
+
+**Notes**
+
+- Files: `src/components/Sidebar/Sidebar.tsx` (+ css), an app-level key hook,
+  `src/store.ts` (`openNewSession`). Coordinates with #25 (toggle under this button)
+  and #27 (the flow this opens). Verify ⌘N doesn't collide with a native binding.
+
+---
+
+### 27. [ ] New session as a compact bottom-left popover with branch auto-detect
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+The new-session modal currently takes over the whole screen (`NewSessionModal` —
+full-screen overlay + centered sheet). Replace it with a **compact popover anchored
+bottom-left, overlaying part of the sidebar** (it needn't be large). Add **branch
+auto-detection**: when the chosen folder is a git repo, list its branches as clickable
+options; choosing a branch **checks it out** in the folder before starting the agent,
+with a clear warning when that could disrupt another running agent.
+
+This is a **deliberate scope expansion**: v1's rule was "no git writes," but this
+introduces `git checkout` (move HEAD). Keep it simple for now (folder-per-branch
+isolation is a separate future effort — do not reference it here).
+
+**Subtasks**
+
+1. [ ] **Popover UI:** replace the full-screen overlay with a small popover anchored
+   bottom-left over the sidebar (on-system surface + the single popover shadow); close
+   on Escape / outside click. Keep the folder picker + recent-folder chips + the
+   **optional name** field (feeds the thin sub-text from #21). Preserve autofocus +
+   Enter-to-create.
+2. [ ] **Branch detection (backend):** add a read-only command to **list local
+   branches** for a folder (e.g. `list_branches(cwd)` in `src-tauri/src/git.rs`) + a
+   typed IPC wrapper. Non-git folders return empty (fall back to "just spawn here").
+3. [ ] **Branch picker (frontend):** when the folder is a git repo, show its branches
+   as selectable options with the current branch indicated; default to current.
+4. [ ] **Checkout on create (backend):** add a `checkout_branch(cwd, branch)` command
+   (the first git *write*) running `git checkout <branch>`; surface a typed error on
+   failure (e.g. dirty-tree conflict) without crashing. Spawn the agent only after a
+   successful checkout.
+5. [ ] **Destructive warning:** show a clear inline warning **only when** the chosen
+   branch differs from the folder's current branch **and** ≥1 agent is already running
+   in that folder — explaining the checkout may disrupt that agent. Require
+   acknowledgement to proceed.
+6. [ ] Update capabilities/docs as needed; keep the diff inspector working after a
+   checkout.
+
+**Acceptance criteria**
+
+- [ ] New session opens as a small bottom-left popover over the sidebar, not a
+  full-screen modal.
+- [ ] Selecting a git folder lists its branches; picking one checks it out then starts
+  the agent there.
+- [ ] The disruptive-checkout warning appears exactly when branch ≠ current AND an
+  agent is already running in that folder, and is acknowledged before proceeding.
+- [ ] Non-git folders still work (spawn in the folder, no branch UI). Build/lint/tests
+  green.
+
+**Notes**
+
+- Files: `src/components/NewSessionModal/*` (becomes the popover), `src/store.ts`
+  (`openNewSession`/`spawnSession`), `src/ipc.ts`, `src-tauri/src/git.rs`
+  (+ `list_branches`, `checkout_branch`), `src-tauri/src/commands.rs`,
+  `src-tauri/src/lib.rs` (register commands), `src-tauri/capabilities/default.json` if
+  needed. **Scope note:** first intentional git write — document it in `CLAUDE.md`
+  (the "No git writes" note) as a deliberate change. Related: #21 (naming/sub-text),
+  #26 (⌘N opens this).
+
+---
+
+### 28. [ ] Session chip copies a "resume" command, not the bare session id
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+The Focus session chip copies the raw session id
+(`copyToClipboard(session.id, "session id")` in `src/components/Focus/Focus.tsx`).
+Instead, copy a ready-to-run command that resumes the chat, so pasting it into a
+terminal restarts the session: **`claude --resume <session-id>`**.
+
+**Subtasks**
+
+1. [ ] Change the chip's copy action to copy `claude --resume <session.id>` (the
+   `claude_session_id`/`id` are the same by design in `pty.rs`).
+2. [ ] Update the toast/label to reflect that a resume command was copied.
+3. [ ] Make any other copyable session-id surface consistent.
+
+**Acceptance criteria**
+
+- [ ] Clicking the chip copies `claude --resume <id>`; pasting it in a terminal
+  resumes that conversation.
+- [ ] Toast confirms the resume command was copied.
+
+**Notes**
+
+- Files: `src/components/Focus/Focus.tsx`, `src/store.ts` (`copyToClipboard`). The
+  resume flag must match the backend's boot resume (`pty.rs::resume_session` →
+  `claude --resume <id>`); keep them consistent (see #30).
+
+---
+
+### 29. [ ] Auto-refresh the git diff inspector (no manual refresh needed)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+The diff inspector only fetches when opened / on repo change, plus a manual Refresh
+button (`src/components/DiffInspector/DiffInspector.tsx`). Users shouldn't have to
+click Refresh — the diff should update on its own as the agent edits files.
+
+Approach (decided): lightweight **polling** while the inspector is open — re-fetch
+`working_diff` on a ~1.5–2s interval, **paused when the window/tab is hidden** and when
+the inspector is collapsed. Simpler and more robust than a filesystem watcher for a git
+working-tree diff (a native FS watcher via the `notify` crate is a possible future
+upgrade but noisier and out of scope). Keep manual Refresh as a fallback.
+
+**Subtasks**
+
+1. [ ] Add interval polling in `DiffInspector` (only while `active` && document
+   visible); clear on close/hide/unmount; avoid overlapping in-flight fetches.
+2. [ ] Skip redundant churn: don't reset the panel/selection on each poll when the
+   diff is unchanged (preserve `selectedFile` + scroll; consider a cheap content
+   hash). The refresh is invisible when nothing changed.
+3. [ ] Pause on `document.hidden`; resume on focus/visibility regain.
+4. [ ] Keep the manual Refresh button.
+
+**Acceptance criteria**
+
+- [ ] With the inspector open, agent edits appear within ~2s with no manual refresh.
+- [ ] Polling stops when the inspector is closed or the window is hidden.
+- [ ] No flicker / selection loss when the diff is unchanged.
+
+**Notes**
+
+- Files: `src/components/DiffInspector/DiffInspector.tsx`, `src/ipc.ts` (`workingDiff`),
+  `src-tauri/src/git.rs` (`working_diff`). Honors the #16/#17 punch-list item
+  ("DiffInspector manual-Refresh staleness").
+
+---
+
+### 30. [ ] Restore sessions live on startup — stop showing every agent as an error
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+After restarting the app, **all** persisted agents appear as errors ("Process exited")
+instead of resuming. The intended model (matching the code's intent): processes are
+*expected* to die when the app closes; on next launch, remember the open session ids
+and **re-spawn each via the resume command**, showing live terminals — not errors.
+
+`src-tauri/src/lib.rs` already best-effort resumes each persisted session on a
+background thread via `pty.rs::resume_session` (`claude --resume <id>`), and the
+frontend loads the persisted list — but sessions come back errored. Investigate & fix:
+
+- The `claude --session-id <uuid>` / `claude --resume <uuid>` flags were **assumed,
+  not verified against the real CLI** (flagged in #5's notes). If resume exits
+  non-zero ("no conversation found"), the reader emits `Exited(1)` → the UI shows the
+  exit overlay/toast. Verify the real invocation and fix flags/semantics.
+- A **race**: the frontend mounts terminals from the persisted list immediately while
+  the background resume hasn't created the PTY yet; the terminal should show a
+  "reconnecting" state, not an error, during that window.
+- Resumable sessions must not show as errored; genuinely-ended ones must not pretend
+  to be live.
+
+**Subtasks**
+
+1. [ ] **Verify the real `claude` resume contract** (run it): confirm new =
+   `claude --session-id <uuid>` and resume = `claude --resume <uuid>` actually
+   round-trip; adjust `pty.rs::spawn_session`/`resume_session` if they differ and
+   record the verified flags in `CLAUDE.md`/notes.
+2. [ ] **No error during reconnect.** While a persisted session is resuming (PTY not up
+   yet), show a neutral "reconnecting…" state, not "Process exited". Only show the
+   exit/error state on an *actual* failure after the resume attempt completes.
+3. [ ] **Tie persistence to "open at close".** Confirm the persisted set reflects
+   sessions open at close (persisted on spawn / forgotten on Remove) and that app
+   shutdown kills children cleanly (no orphans — see #31) so the set is accurate.
+4. [ ] **Surface real failures gracefully** per-session with a retry (e.g. claude
+   missing, folder gone), not a blanket error wall.
+5. [ ] Re-test the full quit → relaunch cycle with real sessions.
+
+**Acceptance criteria**
+
+- [ ] After quit + relaunch, previously-open agents come back as **live, resumed**
+  terminals (not errors).
+- [ ] A transient reconnect window shows "reconnecting", not an error.
+- [ ] Genuine failures show per-session with a retry; the rest still resume.
+
+**Notes**
+
+- Files: `src-tauri/src/lib.rs` (boot resume thread), `src-tauri/src/pty.rs`
+  (`spawn_session`/`resume_session` flags), `src/components/Terminal/Terminal.tsx`
+  (reconnecting vs exited UI), `src/store.ts` (lifecycle/toasts). Resolves #5's "flags
+  assumed, not verified" caveat. Pairs with #18 (terminals stay mounted) and #32
+  (don't double-toast exits).
+
+---
+
+### 31. [ ] Right-click a sidebar repo → "Forget" (kill its agents, no orphans)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+There's no way to remove a repo/folder from the sidebar. Add a **context menu**
+(right-click a repo header) with a **Forget** action that removes the folder from the
+sidebar and **kills + forgets all of its sessions**. If any agent is running, **confirm
+first**; closing must terminate every child process so no orphan `claude` processes are
+left behind. (A context menu is used so more per-repo actions can be added later.)
+
+**Subtasks**
+
+1. [ ] Add a right-click context menu on the repo header in
+   `src/components/Sidebar/Sidebar.tsx` (on-system styling + the single popover
+   shadow; keyboard-dismissable). One item for now: **Forget**.
+2. [ ] **Forget** = remove the folder from `recents` **and** kill+forget every session
+   in that repo. Add a store action (e.g. `forgetRepo(repoPath)`) that kills each
+   session (`kill_session`) and drops the repo from recents, then updates the store.
+3. [ ] **Confirm when agents run:** if the repo has ≥1 running agent, confirm ("Kill N
+   running agent(s) and forget this folder?") before proceeding.
+4. [ ] **No orphans:** ensure every child PTY is killed (reuse `kill_session`); verify
+   no `claude` processes survive. (Also confirm clean shutdown on app quit.)
+5. [ ] Persist the removal so the folder doesn't reappear after restart.
+
+**Acceptance criteria**
+
+- [ ] Right-clicking a repo shows a context menu with Forget.
+- [ ] Forget removes the folder and kills all its agents; with agents running it
+  confirms first.
+- [ ] No orphan processes remain; the folder stays gone after restart.
+
+**Notes**
+
+- Files: `src/components/Sidebar/Sidebar.tsx` (+ css), `src/store.ts` (`forgetRepo`,
+  recents), `src/ipc.ts`, `src-tauri/src/commands.rs` + `src-tauri/src/store.rs` (a
+  command to remove a recent dir — new backend surface; `store.rs` only adds/dedups
+  recents today), `src-tauri/src/pty.rs` (`kill_session`). Coordinates with #20
+  (ordering) and #30 (clean shutdown / no orphans).
+
+---
+
+### 32. [ ] One toast on close, and move all toasts to the bottom-right
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+Closing an agent shows the "Session exited (code 1)" toast **twice**, and toasts appear
+bottom-center. Show exactly **one** notification per close and move all toasts to the
+**bottom-right**.
+
+Likely causes of the double toast:
+
+- `App`'s `init()` runs in an effect; under React **StrictMode** (`main.tsx`) the
+  effect double-invokes in dev, so `subscribeSessionEvents` registers **two** listeners
+  on `session://exited` → the toast fires twice (the init effect doesn't unsubscribe on
+  cleanup).
+- On an intentional Remove, `removeSession` toasts "Session removed" **and** the backend
+  `Exited` event toasts "Session exited (code N)" on top.
+
+**Subtasks**
+
+1. [ ] **Single subscription:** make `init`/`subscribeSessionEvents` idempotent — use
+   the returned unlisten fn (clean up in the effect) or guard so only one set of
+   listeners is ever active. Verify only one `exited` handler runs.
+2. [ ] **De-dupe close notifications:** when a session is intentionally removed/killed,
+   suppress the generic "Session exited" toast (the "Session removed" toast suffices);
+   keep a single toast for *unexpected* exits.
+3. [ ] **Bottom-right position:** move `.toaster` (`Toaster.module.css`) from
+   bottom-center to bottom-right, stacked **above** the existing `UpdatePopup` (already
+   bottom-right at `right/bottom: 24px`) so they don't overlap.
+
+**Acceptance criteria**
+
+- [ ] Closing an agent shows exactly one notification (no duplicate "exited" toast).
+- [ ] Unexpected exits still toast once.
+- [ ] All toasts appear bottom-right and don't collide with the update popup.
+
+**Notes**
+
+- Files: `src/main.tsx` (StrictMode), `src/App.tsx` + `src/store.ts` (`init`,
+  `subscribeSessionEvents`, toasts), `src/ipc.ts` (`subscribeSessionEvents` already
+  returns an unlisten fn), `src/components/Toaster/Toaster.module.css`,
+  `src/components/UpdatePopup/UpdatePopup.module.css` (coordinate stacking). Don't
+  remove StrictMode — fix the subscription lifecycle instead.
