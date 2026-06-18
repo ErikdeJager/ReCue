@@ -853,3 +853,180 @@ menu, no background polling, no silent updates — startup check only.
   the updater consumes; `tauri-action` auto-generates `latest.json`.
 - Version-increment guard compares the `tauri.conf.json` version (semver) to the latest
   `v*` tag; with no prior tag the first run proceeds.
+
+---
+
+### 16. [ ] App-wide smoothness, performance & UX polish pass (pass 1)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-18
+
+**Description**
+
+Run a comprehensive improvement pass over the completed v1 app (#1–#14) to make it
+**fast, smooth, and effortless to use**. Performance and clean code matter, but the
+top priority is that **the UI feels buttery-smooth and the UX feels obvious** — when
+forced to choose, favor what makes the app *feel* better to use.
+
+Understand first: map the Tauri command surface (`commands.rs`), the React tree +
+Zustand store + the IPC boundary (`ipc.ts` / `outputBus.ts`), and find the slowest,
+jankiest, or most confusing parts before touching code. Follow the existing
+conventions (CSS Modules + design tokens, typed IPC, terminal bytes kept out of React
+state); introduce no new dependencies where existing ones suffice. Prioritize what the
+user actually feels: startup / time-to-interactive, click-to-response, scroll &
+animation jank, layout shift, and confusing flows.
+
+Candidate hotspots already known from v1 (verify before acting; not exhaustive):
+- The xterm scrollback↔live boundary can overlap on terminal mount (#8).
+- `DiffInspector` has no row virtualization (#13) — large diffs may jank.
+- `DiffInspector` needs a manual Refresh; no FS watcher, so the diff goes stale (#13).
+- WebGL terminals fall back to the DOM renderer past the browser context cap with many
+  sessions (#8 / #11) — perf under load.
+- Boot resume is best-effort and sequential per session (#5) — startup scales with the
+  session count.
+- Overview↔Focus switching remounts the terminal and replays scrollback (#11).
+- The sidebar refreshes branches with a `current_branch` round-trip per repo (#9).
+
+Out of scope: the v1 scope decisions stand (no git writes, no status UI, no archive,
+no settings screen, no light mode, no multi-window, no auth, no signing/notarization).
+Don't add features — this is a polish / perf / quality pass on what already exists.
+
+**Subtasks**
+
+1. [ ] **Understand & profile.** Map the command surface, React tree, store and IPC;
+   record the slowest / jankiest / most confusing spots and a prioritized plan before
+   editing anything.
+2. [ ] **Smoothness (top priority).** Immediate feedback on every interaction; never
+   block the main thread (push heavy work to async commands / `spawn_blocking`);
+   stream / paginate large data; optimistic updates where safe; animate only with
+   `transform` / `opacity` at a steady 60fps; debounce / throttle expensive handlers;
+   add loading / empty / error states (prefer skeletons over spinners).
+3. [ ] **Performance & cleanup.** React: kill needless re-renders (stable keys, correct
+   dependency arrays, memoize only where it helps), lazy-load heavy views, remove dead
+   code / unused deps. Tauri/IPC: fewer & smaller round-trips (batch related calls,
+   cache stable results). Startup: shrink time-to-interactive, defer non-critical work
+   past first paint. Tackle structural issues (duplication, tangled state), not just
+   renames.
+4. [ ] **Rust best practices.** Favor borrows / slices / iterators over needless
+   `clone()` / allocation; `Result` + `thiserror` / `anyhow`, no `unwrap()` /
+   `expect()` / `panic!` on fallible paths; commands return `Result<T, E>` with a
+   serializable error; never block the async runtime (`spawn_blocking` / async I/O);
+   correct `Arc` / `Mutex` / `RwLock` use with no deadlocks; avoid unjustified `unsafe`.
+5. [ ] **Security.** Treat all IPC input as untrusted — validate / sanitize everything
+   crossing the boundary; keep the Tauri capability / allowlist scoped to only what's
+   needed; no secrets in the frontend, no injection-prone string building, no
+   over-broad filesystem / shell / network access.
+6. [ ] **UI polish.** Consistent spacing / alignment / type scale / color and all
+   component states (hover / focus / active / disabled); clear visual hierarchy;
+   correct across window sizes; native macOS feel (stay on the design tokens, never an
+   off-system color).
+7. [ ] **UX & accessibility.** Make the common path short and obvious (fewer steps /
+   clicks / decisions); sensible defaults, keyboard shortcuts, focus management, human
+   error messages, undo where it helps; keyboard nav, visible focus, contrast, proper
+   labels / roles.
+8. [ ] **Traceability check.** Follow each key action end-to-end: UI event → React
+   handler → `invoke` → Rust command → response → UI update; confirm names, argument
+   types and return shapes match across the boundary and that no error path is ignored.
+9. [ ] **Self-review.** Re-read the diff as if reviewing an unfamiliar PR; name ≥3
+   concrete weaknesses (perf / correctness / readability / UX) and fix them before
+   finishing.
+
+**Acceptance criteria**
+
+- [ ] Hard gate passes: `cargo fmt --check`, `cargo clippy` (no warnings),
+  `cargo test --manifest-path src-tauri/Cargo.toml`, plus the frontend `npm run build`
+  (tsc + vite), `npm run lint`, `npm run format:check`, and `npm test`.
+- [ ] No v1 feature regressed; the app still builds and runs.
+- [ ] Measurable feel / perf improvements on the prioritized hotspots, with a short
+  before/after report (what was found, what changed, the concrete impact) and a
+  prioritized punch list of anything still worth doing.
+
+**Notes**
+
+- Rules (from the request): **stay on `main`** — do all work directly on `main`, do not
+  create or switch branches; small, safe, reviewable steps; don't break working
+  features for polish; when forced to choose, **favor smoothness and ease of use**.
+- This is **pass 1 of two**. Pass 2 is **#17**, which runs after this and re-profiles
+  to catch what this pass missed or any regressions it introduced.
+
+---
+
+### 17. [ ] App-wide smoothness, performance & UX polish pass (pass 2 — re-profile)
+
+**Status:** Not started
+**Depends on:** #16
+**Created:** 2026-06-18
+
+**Description**
+
+A second comprehensive improvement pass over the app, run **after pass 1 (#16) has
+landed on `main`**. Same goal — make ClaudeCue **fast, smooth, and effortless to use**,
+with **buttery-smooth UI and obvious UX as the top priority** (favor *feel* when
+trading off). Because the codebase is already improved, this pass exists to **catch
+what the first pass missed and any regressions it introduced**, then push the
+highest-impact feel / UX items further ("check for improvements twice").
+
+Re-orient first on the post-pass-1 code: re-map the Tauri commands, React tree, Zustand
+store and IPC boundary, then **re-profile from scratch** — measure startup,
+click-to-response, scroll / animation jank and layout shift fresh rather than trusting
+pass 1's notes. Stay on the existing conventions and add no new dependencies where the
+current ones suffice.
+
+Re-examine the known v1 hotspots and confirm whether pass 1 actually resolved them
+(verify; not exhaustive): the xterm scrollback↔live mount boundary (#8);
+`DiffInspector` large-diff rendering / virtualization and its manual-Refresh staleness
+(#13); terminal renderer behavior and perf with many sessions (#8 / #11); the
+sequential best-effort boot resume (#5); Overview↔Focus remount cost (#11); and the
+per-repo branch IPC round-trips (#9). Add anything new that surfaces.
+
+Out of scope: the v1 scope decisions are unchanged (no git writes, no status UI, no
+archive, no settings screen, no light mode, no multi-window, no auth, no signing /
+notarization). No new features — quality / perf / UX only.
+
+**Subtasks**
+
+1. [ ] **Re-profile.** Re-map the boundary and re-measure the felt hotspots on the
+   post-#16 code; record what's still slow / janky / confusing and a fresh prioritized
+   plan.
+2. [ ] **Smoothness (top priority).** Verify every interaction still gives immediate
+   feedback and nothing blocks the main thread; tighten animations to a steady 60fps
+   via `transform` / `opacity`; confirm loading / empty / error states; stream /
+   paginate or debounce / throttle anything still heavy.
+3. [ ] **Performance & cleanup.** Re-check for needless React re-renders, oversized or
+   chatty IPC round-trips, and any dead code / duplication / tangled state introduced
+   or left by pass 1; further shrink startup and defer non-critical work.
+4. [ ] **Rust best practices.** Re-audit ownership / borrowing and allocations, error
+   handling (`Result` / `?`, no `unwrap` / `expect` / `panic!` on fallible paths,
+   serializable command errors), no blocking on the async runtime, and correct
+   `Arc` / `Mutex` / `RwLock` concurrency.
+5. [ ] **Security.** Re-verify IPC input validation / sanitization, a tightly scoped
+   capability / allowlist, no frontend secrets, and no injection-prone or over-broad
+   filesystem / shell / network access.
+6. [ ] **UI polish.** Re-check spacing / alignment / type / color, all component states,
+   and visual hierarchy across window sizes; stay on the design tokens / native feel.
+7. [ ] **UX & accessibility.** Re-check that the common path is short and obvious;
+   defaults, shortcuts, focus management and human error messages; keyboard nav,
+   visible focus, contrast, labels / roles.
+8. [ ] **Traceability check.** Re-trace each key action UI → handler → `invoke` →
+   command → response → UI; confirm names / argument-types / return-shapes still match
+   and that no error path is ignored after both passes.
+9. [ ] **Self-review.** Re-read the combined diff as an unfamiliar PR; name ≥3 concrete
+   weaknesses and fix them; explicitly confirm pass 1's improvements weren't regressed.
+
+**Acceptance criteria**
+
+- [ ] Hard gate passes: `cargo fmt --check`, `cargo clippy` (no warnings),
+  `cargo test --manifest-path src-tauri/Cargo.toml`, plus the frontend `npm run build`,
+  `npm run lint`, `npm run format:check`, and `npm test`.
+- [ ] No regression from pass 1 (#16) or from v1; the app still builds and runs.
+- [ ] Additional measurable feel / perf / UX gains beyond pass 1, with a short report
+  (found / changed / impact) and an updated prioritized punch list.
+
+**Notes**
+
+- Rules (from the request): **stay on `main`**; small, safe, reviewable steps; don't
+  break working features for polish; when forced to choose, **favor smoothness and
+  ease of use**.
+- This is **pass 2 of two**; it **depends on #16** so it operates on the already-
+  improved codebase — the point is a fresh, independent second look.
