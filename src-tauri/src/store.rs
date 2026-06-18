@@ -69,6 +69,11 @@ impl Store {
         self.with(|state| state.recents.clone())
     }
 
+    /// A single persisted session by id, if present.
+    pub fn session(&self, id: &str) -> Option<PersistedSession> {
+        self.with(|state| state.sessions.iter().find(|s| s.id == id).cloned())
+    }
+
     /// Add a session record (replacing any existing one with the same id) and
     /// persist.
     pub fn add_session(&self, session: PersistedSession) -> io::Result<()> {
@@ -186,6 +191,16 @@ mod tests {
         }
         assert_eq!(store.recents().len(), RECENTS_CAP);
         assert_eq!(store.recents()[0], format!("/repo/{}", RECENTS_CAP + 4));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn session_lookup_by_id() {
+        let path = temp_path("lookup");
+        let store = Store::load(&path);
+        store.add_session(record("s1", "/repo/x")).unwrap();
+        assert_eq!(store.session("s1").unwrap().repo_path, "/repo/x");
+        assert!(store.session("missing").is_none());
         let _ = fs::remove_file(&path);
     }
 

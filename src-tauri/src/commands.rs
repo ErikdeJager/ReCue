@@ -68,6 +68,23 @@ pub fn resize_pty(
 }
 
 #[tauri::command]
+pub fn resume_session(
+    manager: State<'_, SessionManager>,
+    store: State<'_, Store>,
+    id: String,
+) -> Result<PersistedSession, SessionError> {
+    let record = store
+        .session(&id)
+        .ok_or_else(|| SessionError::SessionNotFound(id.clone()))?;
+    manager.resume_session(
+        &record.claude_session_id,
+        &record.repo_path,
+        record.name.clone(),
+    )?;
+    Ok(record)
+}
+
+#[tauri::command]
 pub fn kill_session(
     manager: State<'_, SessionManager>,
     store: State<'_, Store>,

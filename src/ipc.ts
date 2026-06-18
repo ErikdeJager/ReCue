@@ -15,6 +15,9 @@ import type {
 export const spawnSession = (cwd: string, name?: string) =>
   invoke<SessionRecord>("spawn_session", { cwd, name: name ?? null });
 
+export const resumeSession = (id: string) =>
+  invoke<SessionRecord>("resume_session", { id });
+
 export const writeStdin = (id: string, data: string) =>
   invoke<void>("write_stdin", { id, data });
 

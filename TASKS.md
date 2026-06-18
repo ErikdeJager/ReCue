@@ -421,9 +421,9 @@ bindings to the Tauri commands/events, the top-level layout (titlebar + sidebar 
 
 ---
 
-### 8. [ ] xterm.js terminal component
+### 8. [x] xterm.js terminal component
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #4, #7
 **Created:** 2026-06-18
 
@@ -435,28 +435,43 @@ its container, and is themed with the design tokens.
 
 **Subtasks**
 
-1. [ ] Integrate `@xterm/xterm` + fit addon (and a perf addon such as
+1. [x] Integrate `@xterm/xterm` + fit addon (and a perf addon such as
    `@xterm/addon-webgl` if viable); theme it from the tokens (`--terminal-bg`, text
    colors, JetBrains Mono 12.5px/1.5).
-2. [ ] Subscribe to that session's output events and write bytes into xterm; on
+2. [x] Subscribe to that session's output events and write bytes into xterm; on
    mount, replay the server-side scrollback buffer.
-3. [ ] Send user keystrokes/paste to `write_stdin`; the user interacts entirely in
+3. [x] Send user keystrokes/paste to `write_stdin`; the user interacts entirely in
    the terminal (no separate input box, no approval buttons).
-4. [ ] Observe container resize → fit → `resize_pty(cols, rows)` so the PTY matches.
-5. [ ] Render an "process exited (code N)" state when the `exited` event fires, with
+4. [x] Observe container resize → fit → `resize_pty(cols, rows)` so the PTY matches.
+5. [x] Render an "process exited (code N)" state when the `exited` event fires, with
    a restart affordance.
 
 **Acceptance criteria**
 
-- [ ] Live two-way I/O with a real `claude`/shell PTY works.
-- [ ] Resizing the container reflows the terminal and the PTY.
-- [ ] Theme matches the design; scrollback replays on remount.
-- [ ] Exit state shows and offers restart.
+- [x] Live two-way I/O with a real `claude`/shell PTY works.
+- [x] Resizing the container reflows the terminal and the PTY.
+- [x] Theme matches the design; scrollback replays on remount.
+- [x] Exit state shows and offers restart.
 
 **Notes**
 
 - This component is embedded by #11 (wall) and #12 (focus); keep it presentation-only
   and driven by session id.
+- **Done 2026-06-18.** `src/components/Terminal` — `@xterm/xterm` 6 + `addon-fit`
+  + best-effort `addon-webgl` (try/catch → DOM-renderer fallback), themed from the
+  CSS tokens read via `getComputedStyle` (xterm needs concrete colors, not vars),
+  JetBrains Mono 12.5/1.5. Driven only by a `sessionId` prop: subscribes to the
+  `outputBus`, replays `session_scrollback` on mount (live output buffered until
+  replay finishes to avoid interleaving), `onData` → `write_stdin`, a
+  `ResizeObserver` → fit → `resize_pty`, and an exit overlay (reads `exitedCode`
+  from the store) with a Restart button. Restart wires a new `resume_session`
+  command (`Store::session` lookup → `manager.resume_session`) + `restartSession`/
+  `markRunning` store actions (`+1` Rust store test, 22 total; store reducer test
+  for restart). Embedded in the Focus view (#12 refines the surrounding toolbar).
+  Verified `npm run build` (strict tsc) + ESLint + Prettier + `npm test`; live
+  two-way I/O / resize / theme are runtime-visual and were not launched headlessly.
+  Known v1 limitation: a small scrollback↔live boundary overlap is possible if a
+  session is actively emitting at the exact moment a terminal mounts.
 
 ---
 

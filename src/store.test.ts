@@ -56,10 +56,12 @@ describe("app store", () => {
     expect(useStore.getState().view).toBe("overview");
   });
 
-  it("marks a session as exited", () => {
+  it("marks a session as exited, then running again (restart)", () => {
     useStore.getState().upsertSession(session("s1"));
     useStore.getState().markExited("s1", 0);
     expect(useStore.getState().sessions[0]?.exitedCode).toBe(0);
+    useStore.getState().markRunning("s1");
+    expect(useStore.getState().sessions[0]?.exitedCode).toBeUndefined();
   });
 
   it("sets the claude-missing flag", () => {

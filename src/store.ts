@@ -58,6 +58,7 @@ export interface AppState {
   upsertSession: (session: SessionView) => void;
   dropSession: (id: string) => void;
   markExited: (id: string, code: number | null) => void;
+  markRunning: (id: string) => void;
   setClaudeMissing: (missing: boolean) => void;
   pushToast: (message: string, tone?: ToastTone) => string;
   dismissToast: (id: string) => void;
@@ -66,6 +67,7 @@ export interface AppState {
   init: () => Promise<void>;
   refresh: () => Promise<void>;
   spawnSession: (cwd: string, name?: string) => Promise<void>;
+  restartSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   openInZed: (cwd: string) => Promise<void>;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
@@ -103,6 +105,13 @@ export const useStore = create<AppState>()((set, get) => ({
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, exitedCode: code } : x,
+      ),
+    })),
+
+  markRunning: (id) =>
+    set((s) => ({
+      sessions: s.sessions.map((x) =>
+        x.id === id ? { ...x, exitedCode: undefined } : x,
       ),
     })),
 
@@ -161,6 +170,22 @@ export const useStore = create<AppState>()((set, get) => ({
       }
       get().pushToast(
         isSessionError(err) ? err.message : "Failed to start session",
+        "error",
+      );
+    }
+  },
+
+  restartSession: async (id) => {
+    try {
+      await ipc.resumeSession(id);
+      get().markRunning(id);
+      get().pushToast("Session restarted");
+    } catch (err) {
+      if (isSessionError(err) && err.kind === "BinaryNotFound") {
+        get().setClaudeMissing(true);
+      }
+      get().pushToast(
+        isSessionError(err) ? err.message : "Could not restart session",
         "error",
       );
     }
