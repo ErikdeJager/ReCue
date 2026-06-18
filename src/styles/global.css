@@ -50,19 +50,10 @@ body {
   background: var(--bg-panel);
 }
 
-.main-topbar {
-  display: flex;
-  height: 44px;
-  flex-shrink: 0;
-  align-items: center;
-  padding: 0 var(--space-12);
-  border-bottom: 1px solid var(--border-hairline);
-}
-
 .main-content {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 /* --- Themed custom scrollbars --- */

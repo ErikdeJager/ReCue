@@ -7,7 +7,6 @@ import Overview from "./components/Overview/Overview";
 import Sidebar from "./components/Sidebar/Sidebar";
 import Titlebar from "./components/Titlebar/Titlebar";
 import Toaster from "./components/Toaster/Toaster";
-import ViewSwitch from "./components/ViewSwitch/ViewSwitch";
 import { useStore } from "./store";
 
 /**
@@ -32,9 +31,6 @@ function App() {
       <div className="app-body">
         <Sidebar />
         <main className="main">
-          <div className="main-topbar">
-            <ViewSwitch />
-          </div>
           <div className="main-content">
             {view === "overview" ? <Overview /> : <Focus />}
           </div>

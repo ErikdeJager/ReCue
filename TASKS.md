@@ -620,9 +620,9 @@ Each column is a card embedding a live terminal (#8).
 
 ---
 
-### 12. [ ] Focus view + toolbar
+### 12. [x] Focus view + toolbar
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #6, #8
 **Created:** 2026-06-18
 
@@ -634,24 +634,36 @@ toggle (the inspector content itself is task #13).
 
 **Subtasks**
 
-1. [ ] Large terminal (#8) for the selected session filling the main area.
-2. [ ] Toolbar: an **Overview / Focus** segmented control.
-3. [ ] A click-to-copy chip showing `repo · branch · sessionID` (copies the session
+1. [x] Large terminal (#8) for the selected session filling the main area.
+2. [x] Toolbar: an **Overview / Focus** segmented control.
+3. [x] A click-to-copy chip showing `repo · branch · sessionID` (copies the session
    id to the clipboard with a toast).
-4. [ ] **Open in Zed** button and an **inspector toggle** button.
-5. [ ] Collapsible inspector container with a 200ms slide and an **extensible tab
+4. [x] **Open in Zed** button and an **inspector toggle** button.
+5. [x] Collapsible inspector container with a 200ms slide and an **extensible tab
    strip** (Diff tab placeholder now; built to accept more tabs later) — content
    filled by #13.
 
 **Acceptance criteria**
 
-- [ ] The selected session's terminal fills the Focus area.
-- [ ] The chip copies the session id; Overview/Focus switching works.
-- [ ] The inspector panel slides open/closed; the tab strip is present.
+- [x] The selected session's terminal fills the Focus area.
+- [x] The chip copies the session id; Overview/Focus switching works.
+- [x] The inspector panel slides open/closed; the tab strip is present.
 
 **Notes**
 
 - Don't hard-bind the inspector to a single tab — leave room for future tabs.
+- **Done 2026-06-18.** `src/components/Focus` rewritten: 44px toolbar with the
+  reusable `ViewSwitch` (moved here from the shell — Overview is now full-area, no
+  shell topbar), a click-to-copy chip (`repo · branch · id8` → `copyToClipboard`
+  full id + toast), Open in Zed (`openInZed`), and an inspector toggle
+  (`toggleInspector`, active-styled). Stage = terminal area (`Terminal` #8,
+  fills) + a collapsible inspector that slides `width 0 ↔ 360px` over 200ms with a
+  fixed-width inner; the **tab strip maps over a `TABS` array** (Diff only for now,
+  body is a #13 placeholder) so more tabs drop in without rework. Toggling the
+  inspector resizes the terminal area, and #8's ResizeObserver reflows the PTY.
+  Removed the temporary shell `.main-topbar`/ViewSwitch (App + global.css). No
+  store/backend changes. Verified `npm run build` (strict tsc) + ESLint + Prettier
+  + 14 tests; terminal-fill / copy / slide are runtime-visual.
 
 ---
 
