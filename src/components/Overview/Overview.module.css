@@ -1,39 +1,87 @@
 .wall {
   display: flex;
   height: 100%;
-  gap: var(--space-12);
-  padding: var(--space-16);
+  background: var(--bg-panel);
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
+/* Equal width, grow to fill; never shrink below the min so excess columns
+   overflow horizontally instead of squeezing. */
 .card {
   display: flex;
+  flex: 1 0 360px;
   flex-direction: column;
-  gap: var(--space-4);
-  width: 320px;
-  flex-shrink: 0;
-  padding: var(--space-12);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-window);
-  background: var(--bg-elevated);
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out);
+  border-right: 1px solid var(--border-hairline);
+  overflow: hidden;
 }
 
-.card:hover {
-  border-color: var(--border-strong);
+.header {
+  display: flex;
+  height: 40px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 0 var(--space-6) 0 var(--space-12);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--bg-panel);
+}
+
+.titleBlock {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .name {
+  overflow: hidden;
   color: var(--text-primary);
-  font-size: var(--fs-ui);
+  font-size: var(--fs-meta);
   font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .meta {
+  overflow: hidden;
   color: var(--text-muted);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.action {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.action:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }

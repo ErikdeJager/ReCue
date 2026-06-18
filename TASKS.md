@@ -572,9 +572,9 @@ it.
 
 ---
 
-### 11. [ ] Overview wall (the agent wall)
+### 11. [x] Overview wall (the agent wall)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #8
 **Created:** 2026-06-18
 
@@ -586,25 +586,37 @@ Each column is a card embedding a live terminal (#8).
 
 **Subtasks**
 
-1. [ ] Horizontal, equal-width card layout on `--bg-panel` that fills the area and
+1. [x] Horizontal, equal-width card layout on `--bg-panel` that fills the area and
    scrolls horizontally past capacity.
-2. [ ] Sticky card header: session name + `repo · branch` meta, right-aligned
+2. [x] Sticky card header: session name + `repo · branch` meta, right-aligned
    actions **Expand** (→ Focus), **Open in Zed**, **Remove**.
-3. [ ] Embed the xterm terminal (#8) as the card body; clicking the body focuses the
+3. [x] Embed the xterm terminal (#8) as the card body; clicking the body focuses the
    terminal input.
-4. [ ] Centered empty state ("No active sessions…") with a **New session** button
+4. [x] Centered empty state ("No active sessions…") with a **New session** button
    when there are none.
-5. [ ] Wire Expand/Open in Zed/Remove to store actions.
+5. [x] Wire Expand/Open in Zed/Remove to store actions.
 
 **Acceptance criteria**
 
-- [ ] Multiple live terminals tile at equal width and scroll horizontally.
-- [ ] Expand opens that session in Focus; Open in Zed and Remove work.
-- [ ] Empty state shows with a working New session button.
+- [x] Multiple live terminals tile at equal width and scroll horizontally.
+- [x] Expand opens that session in Focus; Open in Zed and Remove work.
+- [x] Empty state shows with a working New session button.
 
 **Notes**
 
 - No status pill, amber awaiting-glow, or auto-floating in v1 — cards are uniform.
+- **Done 2026-06-18.** `src/components/Overview` rewritten into the wall (local
+  `SessionCard`). Equal-width flex columns `flex: 1 0 360px` on `--bg-panel` —
+  fill when few, min-width + horizontal scroll when many. Each card: header (name
+  + `repo · branch` from the `branches` slice) with right-aligned Lucide actions
+  Expand (`select` → Focus), Open in Zed (`openInZed`), Remove (`removeSession`),
+  over an embedded `Terminal` body (xterm focuses on click natively). Empty state
+  reuses `EmptyState` → `openNewSession`. No store/backend changes. Because App
+  mounts only Overview *or* Focus, each session's terminal is single-instanced and
+  replays server-side scrollback (#4/#8) on remount when switching views — so
+  history survives Overview↔Focus. WebGL contexts fall back to the DOM renderer
+  past the browser cap (handled in #8). Verified `npm run build` (strict tsc) +
+  ESLint + Prettier + 14 tests; tiling/scroll/actions are runtime-visual.
 
 ---
 
