@@ -9,6 +9,7 @@ import { reconcileTerminals } from "./components/Terminal/terminalPool";
 import Toaster from "./components/Toaster/Toaster";
 import UpdatePopup from "./components/UpdatePopup/UpdatePopup";
 import { useStore } from "./store";
+import { useKeyboardNav } from "./useKeyboardNav";
 
 /**
  * Application shell: a sidebar region (#9) and the main content area, which
@@ -26,6 +27,9 @@ function App() {
   useEffect(() => {
     void init();
   }, [init]);
+
+  // Global Shift+Arrow navigation between agents / views (#24).
+  useKeyboardNav();
 
   // Terminal instances live in a persistent pool (not the React view tree) so
   // they survive Overview↔Focus switches. Dispose one only when its session is

@@ -77,6 +77,25 @@ export function dedupeBranchLabels(labels: string[]): string[] {
   });
 }
 
+/**
+ * The id to select when moving `delta` (+1 next / -1 prev) through `sessions` in
+ * displayed (left-to-right wall) order, with wrap-around at the ends. With
+ * nothing currently selected, returns the first session; returns null only when
+ * there are no sessions. Pure — drives Shift+←/→ keyboard nav (#24).
+ */
+export function adjacentSessionId(
+  sessions: SessionView[],
+  selectedId: string | null,
+  delta: number,
+): string | null {
+  const n = sessions.length;
+  if (n === 0) return null;
+  const i = sessions.findIndex((s) => s.id === selectedId);
+  if (i === -1) return sessions[0]?.id ?? null;
+  const next = (((i + delta) % n) + n) % n;
+  return sessions[next]?.id ?? null;
+}
+
 export interface AppState {
   // --- State ---
   sessions: SessionView[];

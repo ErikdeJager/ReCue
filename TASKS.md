@@ -1550,9 +1550,9 @@ Overview.
 
 ---
 
-### 24. [ ] Keyboard navigation: Shift+arrows to move between agents and switch views
+### 24. [x] Keyboard navigation: Shift+arrows to move between agents and switch views
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #22, #23
 **Created:** 2026-06-18
 
@@ -1567,24 +1567,24 @@ Add global keyboard navigation:
 
 **Subtasks**
 
-1. [ ] Add an app-level key handler for the four Shift+Arrow combos that updates
+1. [x] Add an app-level key handler for the four Shift+Arrow combos that updates
    `selectedId` (prev/next) and `view` (↑ overview / ↓ focus).
-2. [ ] Agent order = the Overview wall order (`sessions` array) so left/right matches
+2. [x] Agent order = the Overview wall order (`sessions` array) so left/right matches
    what the user sees. Wrap-around at the ends (cycle); if nothing is selected,
    Shift+→/← selects the first.
-3. [ ] **Precedence over the terminal:** xterm captures keystrokes when focused, so
+3. [x] **Precedence over the terminal:** xterm captures keystrokes when focused, so
    intercept Shift+Arrow before xterm forwards them to the PTY (e.g.
    `attachCustomKeyEventHandler` on xterm instances, or a capture-phase window
    listener that stops propagation for these combos). Normal typing (incl.
    Shift+letters) unaffected.
-4. [ ] Don't navigate while the new-session popover (#27) is open.
+4. [x] Don't navigate while the new-session popover (#27) is open.
 
 **Acceptance criteria**
 
-- [ ] Shift+←/→ cycles the selected agent in both views; Shift+↓ focuses it, Shift+↑
+- [x] Shift+←/→ cycles the selected agent in both views; Shift+↓ focuses it, Shift+↑
   returns to Overview.
-- [ ] Works even while a terminal is focused, without corrupting terminal input.
-- [ ] No interference with normal typing or the new-session popover.
+- [x] Works even while a terminal is focused, without corrupting terminal input.
+- [x] No interference with normal typing or the new-session popover.
 
 **Notes**
 
@@ -1593,6 +1593,28 @@ Add global keyboard navigation:
   (`attachCustomKeyEventHandler` if needed). Builds on #22 (selection decoupled) and
   #23 (highlight). Only intercept the four Shift+Arrow combos so `claude`'s own
   Shift usage (e.g. Shift+Tab) is untouched.
+- **Done 2026-06-19.** New `src/useKeyboardNav.ts` hook (called once from `App`)
+  registers a **capture-phase `window` keydown** listener. Capture runs window→…→
+  target *before* xterm's textarea keydown handler, so for the four Shift+Arrow combos
+  it calls `preventDefault()` + `stopPropagation()` — the focused terminal never
+  forwards them to the PTY (chose the window-capture route over per-terminal
+  `attachCustomKeyEventHandler` so one place covers both views and the
+  no-terminal-focused case; `Terminal.tsx` untouched). Guard order: plain **Shift +
+  Arrow only** (`!shiftKey || metaKey || ctrlKey || altKey` → ignore; non-arrow keys →
+  ignore), so normal typing, Shift+letters, Shift+Tab, and Cmd/Ctrl/Alt combos pass
+  straight through. **Nav:** Shift+←/→ → `adjacentSessionId(sessions, selectedId, ±1)`
+  (new **pure helper** in `store.ts`: wall-order prev/next, **wrap-around**, no/unknown
+  selection → first; null only when empty) → `select(id)` (selection-only per #22, so
+  it works in both views and the #23 highlight follows); Shift+↓ → focus the selected
+  agent (selects the first if none) via `setView("focus")`; Shift+↑ → `setView("overview")`.
+  **#27 guard:** returns early (before intercepting) when `newSessionOpen` so the
+  modal/popover inputs handle Shift+Arrow normally. Listener is stable (`[]` deps,
+  reads fresh `useStore.getState()` at event time). **+5 `adjacentSessionId` unit
+  tests** (empty/none/unknown/next-prev/wrap/single). **Hard gate green:** frontend
+  `build`/`lint`/`format:check`/`test` (**31**). Pure frontend change — no Rust
+  touched. The selection/wrap logic is unit-tested; the capture-phase interception is
+  sound by construction (verified by reasoning) but the live terminal-focused
+  keystroke behavior wasn't launched headlessly.
 
 ---
 

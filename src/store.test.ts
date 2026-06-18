@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { dedupeBranchLabels, repoOrder, useStore } from "./store";
+import {
+  adjacentSessionId,
+  dedupeBranchLabels,
+  repoOrder,
+  useStore,
+} from "./store";
 import type { SessionView } from "./types";
 
 function session(id: string): SessionView {
@@ -184,5 +189,36 @@ describe("dedupeBranchLabels", () => {
 
   it("returns an empty array for no sessions", () => {
     expect(dedupeBranchLabels([])).toEqual([]);
+  });
+});
+
+describe("adjacentSessionId", () => {
+  const ss = [session("a"), session("b"), session("c")];
+
+  it("returns null when there are no sessions", () => {
+    expect(adjacentSessionId([], null, 1)).toBeNull();
+    expect(adjacentSessionId([], "a", -1)).toBeNull();
+  });
+
+  it("selects the first when nothing is selected or the id is unknown", () => {
+    expect(adjacentSessionId(ss, null, 1)).toBe("a");
+    expect(adjacentSessionId(ss, null, -1)).toBe("a");
+    expect(adjacentSessionId(ss, "zzz", 1)).toBe("a");
+  });
+
+  it("moves to the next / previous in order", () => {
+    expect(adjacentSessionId(ss, "a", 1)).toBe("b");
+    expect(adjacentSessionId(ss, "b", 1)).toBe("c");
+    expect(adjacentSessionId(ss, "b", -1)).toBe("a");
+  });
+
+  it("wraps around at the ends", () => {
+    expect(adjacentSessionId(ss, "c", 1)).toBe("a"); // last -> first
+    expect(adjacentSessionId(ss, "a", -1)).toBe("c"); // first -> last
+  });
+
+  it("stays on the only session when there is one", () => {
+    expect(adjacentSessionId([session("solo")], "solo", 1)).toBe("solo");
+    expect(adjacentSessionId([session("solo")], "solo", -1)).toBe("solo");
   });
 });
