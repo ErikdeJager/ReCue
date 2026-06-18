@@ -41,10 +41,12 @@ describe("app store", () => {
     expect(useStore.getState().view).toBe("focus");
   });
 
-  it("selecting a session focuses it", () => {
+  it("selecting a session highlights it without changing the view (#22)", () => {
+    expect(useStore.getState().view).toBe("overview");
     useStore.getState().select("abc");
     expect(useStore.getState().selectedId).toBe("abc");
-    expect(useStore.getState().view).toBe("focus");
+    // Selection is decoupled from the view — it must not force Focus.
+    expect(useStore.getState().view).toBe("overview");
   });
 
   it("toggles the inspector", () => {
@@ -57,11 +59,13 @@ describe("app store", () => {
     useStore.getState().upsertSession(session("s1"));
     useStore.getState().upsertSession(session("s1"));
     useStore.getState().select("s1");
+    useStore.getState().setView("focus"); // simulate focusing s1
     expect(useStore.getState().sessions).toHaveLength(1);
 
     useStore.getState().dropSession("s1");
     expect(useStore.getState().sessions).toHaveLength(0);
     expect(useStore.getState().selectedId).toBeNull();
+    // Removing the focused session returns to Overview (no stranded empty Focus).
     expect(useStore.getState().view).toBe("overview");
   });
 

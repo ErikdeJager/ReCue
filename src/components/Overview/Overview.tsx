@@ -80,6 +80,7 @@ function Overview() {
   const sessions = useStore((s) => s.sessions);
   const branches = useStore((s) => s.branches);
   const select = useStore((s) => s.select);
+  const setView = useStore((s) => s.setView);
   const openInZed = useStore((s) => s.openInZed);
   const removeSession = useStore((s) => s.removeSession);
   const openNewSession = useStore((s) => s.openNewSession);
@@ -88,6 +89,13 @@ function Overview() {
     return <EmptyState onNewSession={() => openNewSession()} />;
   }
 
+  // Expand is the intentional Focus affordance: select, then switch the view
+  // explicitly (selection alone no longer forces Focus — see store `select`).
+  const expand = (id: string) => {
+    select(id);
+    setView("focus");
+  };
+
   return (
     <div className={styles.wall}>
       {sessions.map((session) => (
@@ -95,7 +103,7 @@ function Overview() {
           key={session.id}
           session={session}
           branch={branches[session.repoPath] ?? ""}
-          onExpand={() => select(session.id)}
+          onExpand={() => expand(session.id)}
           onOpenInZed={() => void openInZed(session.repoPath)}
           onRemove={() => void removeSession(session.id)}
         />

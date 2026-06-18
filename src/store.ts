@@ -149,7 +149,10 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   setView: (view) => set({ view }),
-  select: (id) => set((s) => ({ selectedId: id, view: id ? "focus" : s.view })),
+  // Selection is decoupled from the view (#22): selecting only highlights — it
+  // never forces Focus. Callers that intend a view change (Overview "Expand",
+  // the ViewSwitch) call setView explicitly.
+  select: (id) => set({ selectedId: id }),
   toggleInspector: () => set((s) => ({ inspectorOpen: !s.inspectorOpen })),
   setInspectorOpen: (open) => set({ inspectorOpen: open }),
   setSessions: (sessions) => set({ sessions }),

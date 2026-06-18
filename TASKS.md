@@ -1440,9 +1440,9 @@ Decisions (from feedback):
 
 ---
 
-### 22. [ ] Clicking a sidebar agent navigates in Overview (don't force Focus)
+### 22. [x] Clicking a sidebar agent navigates in Overview (don't force Focus)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-18
 
@@ -1457,27 +1457,44 @@ is the foundation for the Overview selection border (#23) and keyboard nav (#24)
 
 **Subtasks**
 
-1. [ ] Decouple selection from view: `select(id)` sets `selectedId` only; it must
+1. [x] Decouple selection from view: `select(id)` sets `selectedId` only; it must
    **not** force `view`. Audit callers (`Sidebar` row click, `Overview` "Expand",
    `Focus`, `spawnSession`) and set the view explicitly only where a view change is
    intended (Expand → Focus; decide spawn behavior — likely select + show in current
    view, or focus the new agent).
-2. [ ] Sidebar row click → `select(id)` only (stay in view, highlight the row).
-3. [ ] Keep "Expand to Focus" and any intentional Focus affordances working via an
+2. [x] Sidebar row click → `select(id)` only (stay in view, highlight the row).
+3. [x] Keep "Expand to Focus" and any intentional Focus affordances working via an
    explicit `setView("focus")`.
-4. [ ] Update store unit tests for the new `select` semantics.
+4. [x] Update store unit tests for the new `select` semantics.
 
 **Acceptance criteria**
 
-- [ ] Clicking a sidebar agent highlights it without leaving Overview.
-- [ ] Explicit Expand/Focus affordances still switch to Focus.
-- [ ] Store tests updated and passing.
+- [x] Clicking a sidebar agent highlights it without leaving Overview.
+- [x] Explicit Expand/Focus affordances still switch to Focus.
+- [x] Store tests updated and passing.
 
 **Notes**
 
 - Files: `src/store.ts` (`select`, `dropSession`), `src/components/Sidebar/*`,
   `src/components/Overview/Overview.tsx`, `src/components/Focus/Focus.tsx`,
   `src/store.test.ts`. Core interaction other tasks build on (#23, #24).
+- **Done 2026-06-19.** `select(id)` is now `set({ selectedId: id })` — it sets
+  selection only and **never** touches `view` (was
+  `view: id ? "focus" : s.view`). Caller audit + dispositions: **Sidebar** row click
+  already calls `select(id)` → now highlights in place, stays in the current view;
+  **Overview "Expand"** is the explicit Focus affordance, so it now calls a local
+  `expand(id)` = `select(id)` + `setView("focus")`; **ViewSwitch** is unchanged
+  (`setView`); **`spawnSession`** keeps `select(record.id)` → a new agent is selected
+  and shown in the **current** view (the "select + show in current view" option, per
+  the decoupling) rather than yanking to Focus. **`dropSession`** is intentionally
+  left as-is: removing the *focused* session still returns to Overview (avoids a
+  stranded empty Focus) — that's a removal behavior, not `select` forcing the view.
+  Updated 2 store tests: "selecting … highlights without changing the view" (asserts
+  view stays `overview`) and the drop test now `setView("focus")`s first so the
+  return-to-Overview-on-drop assertion stays meaningful. **Hard gate green:** frontend
+  `build`/`lint`/`format:check`/`test` (**26**). Pure frontend change — no Rust
+  touched (Rust gate unchanged since #19). Foundation for #23 (Overview selection
+  border) and #24 (keyboard nav).
 
 ---
 
