@@ -1957,3 +1957,495 @@ Likely causes of the double toast:
   returns an unlisten fn), `src/components/Toaster/Toaster.module.css`,
   `src/components/UpdatePopup/UpdatePopup.module.css` (coordinate stacking). Don't
   remove StrictMode — fix the subscription lifecycle instead.
+
+---
+
+### 33. [ ] Recolor the app with a Catppuccin Mocha palette (less dark)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+The current UI is too dark (`--bg-base: #0b0b0c`). Reinvent the app's colors around the
+**Catppuccin Mocha** palette — a softer, slightly lighter dark theme — by rewriting the
+design tokens in `src/styles/tokens.css`. Because every component consumes tokens
+(`var(--token)`), a faithful token remap recolors the whole app. Keep it tasteful and
+on-system (still dark, just warmer/less black); don't hand-edit per-component colors.
+
+Catppuccin Mocha reference (hex):
+`Base #1e1e2e · Mantle #181825 · Crust #11111b · Surface0 #313244 · Surface1 #45475a ·
+Surface2 #585b70 · Overlay0 #6c7086 · Overlay1 #7f849c · Overlay2 #9399b2 ·
+Subtext0 #a6adc8 · Subtext1 #bac2de · Text #cdd6f4`. Accents:
+`Rosewater #f5e0dc · Flamingo #f2cdcd · Pink #f5c2e7 · Mauve #cba6f7 · Red #f38ba8 ·
+Maroon #eba0ac · Peach #fab387 · Yellow #f9e2af · Green #a6e3a1 · Teal #94e2d5 ·
+Sky #89dceb · Sapphire #74c7ec · Blue #89b4fa · Lavender #b4befe`.
+
+**Subtasks**
+
+1. [ ] Remap the **surface** tokens to Mocha: `--bg-base #1e1e2e`, `--bg-sidebar`/
+   `--bg-panel` to Mantle/Base, `--bg-elevated #313244` (Surface0),
+   `--bg-hover #45475a` (Surface1), `--terminal-bg #181825` (Mantle) or `#11111b`
+   (Crust) — pick what reads best for the xterm background.
+2. [ ] **Borders/text:** hairline/strong borders from Surface0/Surface1 (or low-alpha
+   Text); `--text-primary #cdd6f4`, `--text-secondary #a6adc8` (Subtext0),
+   `--text-muted #6c7086` (Overlay0).
+3. [ ] **Accent:** choose one Catppuccin accent as the brand accent (recommend **Mauve
+   #cba6f7** or **Peach #fab387** to keep warmth); set `--accent`, `--accent-hover`
+   (a lighter shade), `--accent-dim` (low-alpha) accordingly.
+4. [ ] **Diff colors:** `--diff-add-fg #a6e3a1` (Green), `--diff-del-fg #f38ba8` (Red),
+   with low-alpha backgrounds; gutter from Overlay0.
+5. [ ] **Status tokens:** repoint the (now-used, see #42/#36) `--status-*` tokens to
+   Catppuccin accents (e.g. running→Blue, awaiting→Yellow, done→Green, error→Red,
+   idle→Overlay0).
+6. [ ] Recheck the xterm theme in `src/components/Terminal/Terminal.tsx` (it reads
+   tokens via `getComputedStyle` but hardcodes some fallbacks) so the terminal matches.
+7. [ ] Sweep components for any **off-token literal colors** (e.g. `color:#fff` on
+   buttons, the `rgba(217,119,87,…)` selection in `Terminal.tsx`) and move them onto
+   tokens so the recolor is complete.
+
+**Acceptance criteria**
+
+- [ ] The app renders in a cohesive Catppuccin Mocha theme; it's visibly less black
+  while staying a dark theme.
+- [ ] No off-system literal colors remain (everything flows from tokens).
+- [ ] Contrast stays readable (text on surfaces, diff add/del, selected states).
+
+**Notes**
+
+- Files: `src/styles/tokens.css` (primary), `src/components/Terminal/Terminal.tsx`
+  (xterm theme + selection literal), plus any component with a hardcoded color.
+- The 14 Catppuccin accents are the natural source for the **per-repo color palette**
+  in #35 — keep them consistent so repo colors and the theme feel unified.
+- This is a design change, not a scope change. Keep the single-source-of-truth token
+  convention (CLAUDE.md "Styling").
+
+---
+
+### 34. [ ] Sidebar repos: non-collapsible titles + click-to-filter Overview
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+Repos/folders in the sidebar should **no longer be collapsible** — they're just titles
+(right-click still opens the context menu from #31). Instead, **left-clicking a repo
+title filters Overview to show only that repo's agents**; clicking it again (or a
+"Show all" affordance) clears the filter. This makes the sidebar a way to focus the
+Overview wall on one folder.
+
+Today `src/components/Sidebar/Sidebar.tsx` keeps a `collapsed` Set and a chevron toggle
+(`repoToggle`/`chevron`); remove that. Add an Overview repo filter to the store.
+
+**Subtasks**
+
+1. [ ] Remove the collapse state, chevron, and expand/collapse behavior; render each
+   repo as a plain (always-shown) title row with its sessions listed beneath. Keep the
+   per-repo **+** (new session) and the #31 context menu.
+2. [ ] Add store state `overviewRepoFilter: string | null` + a `setOverviewRepoFilter`
+   action (clicking a repo toggles it; clicking the active one clears it).
+3. [ ] Clicking a repo **title** sets the filter **and** ensures the view is Overview
+   (so the effect is visible). The active-filter repo is visually marked in the sidebar.
+4. [ ] Overview consumes the filter (rendering handled in #36); add a clear
+   "Showing <repo> — Show all" control in Overview to reset.
+
+**Acceptance criteria**
+
+- [ ] Repos are plain, non-collapsible titles; no chevron/collapse remains.
+- [ ] Clicking a repo title filters Overview to that repo; clicking again / "Show all"
+  clears it; the active filter is indicated in the sidebar.
+- [ ] Right-click context menu (#31) still works on the title.
+
+**Notes**
+
+- Files: `src/components/Sidebar/Sidebar.tsx` (+ `Sidebar.module.css`), `src/store.ts`
+  (`overviewRepoFilter`). Coordinates with #31 (context menu on the same row), #25
+  (view toggle in the sidebar), #20 (repo order). The filter is consumed by #36.
+
+---
+
+### 35. [ ] Per-repo color identity (assign, persist, change via context menu)
+
+**Status:** Not started
+**Depends on:** #31
+**Created:** 2026-06-19
+
+**Description**
+
+Give each repo/folder a **color identifier** that is reflected throughout the UI
+(sidebar, Overview badges, Focus). Colors are **purely visual**. A new item in the repo
+**context menu** (from #31) lets the user **change a repo's color to anything they
+want** (a palette of presets + a custom color). Colors persist across restarts.
+
+**Subtasks**
+
+1. [ ] **Backend persistence:** extend the persisted state (`src-tauri/src/store.rs` —
+   currently `PersistedState { sessions, recents }`) with per-repo metadata keyed by
+   path, e.g. `repo_colors: HashMap<String,String>` (hex). Add a `set_repo_color(path,
+   color)` command (`commands.rs` + `ipc.ts`) and include the map in the loaded state /
+   a `list_repo_colors` getter. Atomic write as today.
+2. [ ] **Default color:** when a repo has no assigned color, derive a stable default by
+   hashing the path into the Catppuccin accent set (#33) so every repo starts with a
+   distinct, consistent color.
+3. [ ] **Store:** add `repoColors: Record<string,string>` + a `setRepoColor` action;
+   load on init.
+4. [ ] **Color picker UI:** add "Change color…" to the repo context menu → a small
+   popover with the ~14 Catppuccin accent swatches **plus** a custom color input
+   (native `<input type="color">` or a hex field) so the user can pick anything.
+5. [ ] Expose a helper `repoColor(path)` (assigned or derived default) for all consumers
+   (#36 badges, #37 Focus, #34 sidebar marker).
+
+**Acceptance criteria**
+
+- [ ] Each repo has a color (sensible distinct default; user-changeable to any color).
+- [ ] Changing a repo's color updates the UI everywhere and persists across restart.
+- [ ] The color picker offers presets + a custom color.
+
+**Notes**
+
+- Files: `src-tauri/src/store.rs` + `commands.rs` + `lib.rs` (register), `src/ipc.ts`,
+  `src/store.ts`, `src/components/Sidebar/Sidebar.tsx` (context menu). Palette from #33.
+  Consumed by #34 (sidebar marker), #36 (Overview badges), #37 (Focus). This begins
+  using color as identity — coordinate token usage with #33.
+
+---
+
+### 36. [ ] Overview grouped by repo, with colored repo badges + repo filter
+
+**Status:** Not started
+**Depends on:** #34, #35
+**Created:** 2026-06-19
+
+**Description**
+
+Overview agents must **always be grouped by their repo** (agents from the same folder
+sit next to each other), each agent card carries a **clear repo badge** (repo name +
+the per-repo color from #35), and the wall respects the **repo filter** from #34
+(clicking a sidebar repo shows only that repo's agents).
+
+**Subtasks**
+
+1. [ ] Sort/group the Overview cards by repo (repos in the sidebar's alphabetical order
+   from #20; agents contiguous within each repo). Add a light group delineation
+   (e.g. a thin colored rule/header per repo using the repo color) so groups read
+   clearly without breaking the equal-width column flow.
+2. [ ] Add a **colored repo badge** to each agent card header (repo name + a color
+   dot/chip in the repo color). Keep it compact; on-system tokens.
+3. [ ] Apply the **filter** (#34): when `overviewRepoFilter` is set, render only that
+   repo's group and show the "Showing <repo> — Show all" control.
+4. [ ] Preserve the selected-agent highlight (#23) and the persistent terminal pool
+   (#18) — grouping/filtering must not dispose/recreate terminals.
+
+**Acceptance criteria**
+
+- [ ] Agents are always grouped by repo and visually adjacent; each card shows a
+  colored repo badge.
+- [ ] Selecting a sidebar repo filters Overview to it; "Show all" clears it.
+- [ ] No terminal remount/garble when grouping/filtering changes (pool intact).
+
+**Notes**
+
+- Files: `src/components/Overview/Overview.tsx` (+ `Overview.module.css`), `src/store.ts`
+  (`overviewRepoFilter`, `repoColors`). Builds on #34 (filter), #35 (colors), and
+  respects #18 (pool) / #23 (selection). This grouped layout is the base that #38
+  extends with non-agent panels.
+
+---
+
+### 37. [ ] Show the repo color + badge in Focus
+
+**Status:** Not started
+**Depends on:** #35
+**Created:** 2026-06-19
+
+**Description**
+
+Focus mode should also reflect the focused agent's **repo color + badge**, so the repo
+identity is consistent across views. Add a colored repo badge to the Focus toolbar
+(near the existing session chip in `src/components/Focus/Focus.tsx`).
+
+**Subtasks**
+
+1. [ ] Render a repo badge (repo name + color dot/chip in the repo color from #35) in
+   the Focus toolbar for the selected session.
+2. [ ] Optionally tint a subtle accent (e.g. a thin top/side rule) with the repo color
+   so Focus clearly belongs to that repo — keep it tasteful, on-system.
+
+**Acceptance criteria**
+
+- [ ] Focus shows the selected agent's repo name + color, matching the Overview badge.
+- [ ] Consistent with the sidebar/Overview color for the same repo.
+
+**Notes**
+
+- Files: `src/components/Focus/Focus.tsx` (+ css), `src/store.ts` (`repoColors`).
+  Small, depends only on the #35 color source.
+
+---
+
+### 38. [ ] Customizable Overview: mixed panels (agent / diff / markdown columns)
+
+**Status:** Not started
+**Depends on:** #36
+**Created:** 2026-06-19
+
+**Description**
+
+Turn Overview from a fixed wall of agent terminals into a **customizable arrangement of
+panels (columns)**, where a panel is one of: an **agent terminal**, a **diff viewer**
+(#39), or a **markdown viewer** (#41). Within a repo's group the user can place, e.g.,
+*agent · agent · diff viewer* side by side. This is the **foundational architecture
+task** — it must be planned carefully; the diff and markdown panel *types* are added in
+#39/#41 but the model, persistence, layout, and add/remove/reorder plumbing live here.
+
+**Design (the model to implement):**
+
+- Each repo group renders: its **agent panels** (one per live session in that repo,
+  auto) followed by the repo's **extra panels** — an ordered, user-managed list of
+  `{ id, type: 'diff' | 'markdown', repoPath, params }` (params: e.g. markdown file
+  path; diff needs none beyond the repo). Persist the extra-panel layout per repo
+  (backend store) so it survives restarts.
+- Overview = for each repo (respecting the #36 filter/grouping): `[agent panels…]
+  [extra panels…]`, all as equal-width columns that scroll horizontally past capacity
+  (preserve current wall behavior).
+- Panels are **closeable**; extra panels can be **reordered** within their repo group
+  (v1: left/right move buttons are acceptable; drag-and-drop is a nice-to-have, not
+  required). Adding panels is driven by the repo context menu (#39/#41 wire the menu
+  items).
+
+**Subtasks**
+
+1. [ ] Define the panel model + store state (`overviewPanels` per repo) and a backend
+   persisted layout (extend `store.rs`); load on init. Actions: add/remove/reorder
+   extra panels.
+2. [ ] Refactor `Overview.tsx` to render the grouped agent panels (from #36) **plus**
+   the repo's extra panels as additional columns, with a shared column/card chrome
+   (header with title + close + move controls). Extract a `PanelColumn` wrapper.
+3. [ ] **Agent panel type:** wrap the existing terminal `SessionCard` as the `agent`
+   panel; it must keep using the persistent terminal pool (#18) — reflowing columns
+   (add/remove/reorder) must **never dispose/recreate** a terminal.
+4. [ ] Define clean extension points so #39 (diff) and #41 (markdown) only implement
+   their panel body + a context-menu "open" action, without re-touching layout.
+5. [ ] Respect the repo filter (#34/#36): a filtered view shows that repo's agent +
+   extra panels only.
+
+**Acceptance criteria**
+
+- [ ] Overview renders mixed columns: agent terminals and (once #39/#41 land) diff /
+  markdown panels, grouped by repo.
+- [ ] Extra panels can be added, closed, and reordered; the layout persists across
+  restart.
+- [ ] Reflowing columns never garbles or remounts terminals (pool intact).
+- [ ] Build/lint/tests green.
+
+**Notes**
+
+- Files: `src/components/Overview/*` (+ a new `PanelColumn`), `src/store.ts`
+  (`overviewPanels`), `src-tauri/src/store.rs` + `commands.rs` + `ipc.ts` (persist
+  layout), reuse `src/components/Terminal` pool (#18). **Plan-ahead:** the hard part is
+  keeping the terminal pool's reparenting correct as columns are added/removed/reordered
+  — model panels as stable keyed entries so React/the pool don't tear terminals down.
+  This is the base for #39 and #41.
+
+---
+
+### 39. [ ] Diff-viewer column in Overview (from the repo context menu)
+
+**Status:** Not started
+**Depends on:** #38, #31
+**Created:** 2026-06-19
+
+**Description**
+
+Add a **diff-viewer panel type** to the customizable Overview (#38): a column that shows
+a repo's working-tree diff vs `HEAD` (the same diff the Focus inspector shows), opened
+via the repo's **context menu** → "Open diff viewer". It auto-refreshes and is titled
+with the repo + branch + repo color, so a user can sit an agent next to a live diff of
+the branch it's working on.
+
+**Subtasks**
+
+1. [ ] **Extract a reusable diff component** from `src/components/DiffInspector/
+   DiffInspector.tsx` (summary + file list + unified/split body) so it can render both
+   in the Focus inspector and as an Overview column (avoid duplication).
+2. [ ] Implement the `diff` panel body using that component, bound to the panel's
+   `repoPath`; auto-refresh using the #29 polling approach (poll while visible/window
+   focused; manual refresh kept).
+3. [ ] Wire the repo context-menu item "Open diff viewer" (#31 menu) → add a `diff`
+   extra panel for that repo (#38 add action).
+4. [ ] Panel header shows repo name + branch + the repo color badge (#35); closeable
+   and reorderable via the #38 chrome.
+
+**Acceptance criteria**
+
+- [ ] "Open diff viewer" on a repo adds a diff column in Overview for that repo.
+- [ ] The column shows the live working diff (auto-refresh), titled with repo/branch +
+  color; close/reorder work.
+- [ ] Diff rendering is shared with the Focus inspector (no duplicated logic).
+
+**Notes**
+
+- Files: `src/components/DiffInspector/*` (extract shared component),
+  `src/components/Overview/*` (diff panel), `src/components/Sidebar/Sidebar.tsx`
+  (context-menu item), `src/store.ts`, reuse `working_diff` (`git.rs`) + #29 polling.
+  Branch is the repo's current branch (per-folder); the diff reflects whatever is
+  checked out (see #27).
+
+---
+
+### 40. [ ] Markdown viewer in the Focus inspector (pick a file, render, hot-reload)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+Add a **Markdown** tab to the Focus inspector (the tab strip in
+`src/components/Focus/Focus.tsx` is already extensible — `TABS`). The user picks a
+**markdown file** from the repo and sees it **fully formatted**; it **hot-reloads** when
+the file changes on disk. This is valuable for AI-assisted dev (e.g. viewing a `TODO.md`
+/ plan that the agent edits). Scope is **markdown for now** — generic any-file viewing
+is explicitly later.
+
+**Subtasks**
+
+1. [ ] **Backend:** add a `read_text_file(path)` command and a way to **list markdown
+   files** in the repo (e.g. `list_markdown_files(repo)` — `*.md`, sensibly capped /
+   excluding huge dirs like `node_modules`/`.git`). Validate the path is **inside the
+   repo** (reject traversal); treat content as untrusted.
+2. [ ] **Markdown rendering:** add `react-markdown` (+ `remark-gfm` for tables/task
+   lists) — a genuine new dependency markdown needs. Render **without raw HTML**
+   (no `rehype-raw`) so untrusted content can't inject markup; style headings/lists/
+   code/tables on-system (tokens, JetBrains Mono for code).
+3. [ ] **Tab UI:** add a "Markdown" tab; a file selector (dropdown of repo `*.md`, or a
+   small picker) to choose the file; render it formatted, scrollable.
+4. [ ] **Hot reload:** keep the rendered file fresh — poll the file (~1s while the tab
+   is visible + window focused; consistent with #29) and re-render on change; preserve
+   scroll position when content is unchanged. (A native watcher via the `notify` crate
+   is an optional upgrade.)
+
+**Acceptance criteria**
+
+- [ ] The Focus inspector has a Markdown tab; selecting a repo `.md` renders it
+  formatted (GFM: tables, task lists, code blocks).
+- [ ] Editing the file on disk updates the view within ~1–2s without manual refresh.
+- [ ] Path access is restricted to the repo; no raw-HTML injection.
+
+**Notes**
+
+- Files: `src/components/Focus/Focus.tsx` (+ a new `MarkdownViewer` component),
+  `src-tauri/src/commands.rs` (+ a small `fs`/git module for read/list), `lib.rs`
+  (register), `src/ipc.ts`, `src-tauri/capabilities/default.json` if needed,
+  `package.json` (react-markdown + remark-gfm). The `MarkdownViewer` is reused by #41.
+  Security: validate paths server-side; render sanitized markdown only.
+
+---
+
+### 41. [ ] Markdown-viewer column in Overview (from the repo context menu)
+
+**Status:** Not started
+**Depends on:** #38, #40
+**Created:** 2026-06-19
+
+**Description**
+
+Add a **markdown-viewer panel type** to the customizable Overview (#38): a column that
+displays a chosen repo markdown file, fully formatted and hot-reloading — reusing the
+`MarkdownViewer` from #40. Opened via the repo **context menu** → "Open markdown
+viewer" (then pick a file). So a user can keep, e.g., a live to-do/plan markdown next to
+the agents working on it.
+
+**Subtasks**
+
+1. [ ] Wire the repo context-menu item "Open markdown viewer" (#31 menu) → choose a
+   repo `.md` (reuse #40's file selector) → add a `markdown` extra panel (#38) with the
+   file path in its params.
+2. [ ] Render the panel body with the shared `MarkdownViewer` (#40), bound to the
+   panel's file path; hot-reload as in #40.
+3. [ ] Panel header shows the file name + repo color badge (#35); closeable +
+   reorderable via the #38 chrome. Persist the chosen file path in the panel layout.
+
+**Acceptance criteria**
+
+- [ ] "Open markdown viewer" → pick a `.md` adds a formatted, hot-reloading markdown
+  column in Overview for that repo.
+- [ ] The column persists (file + position) across restart; close/reorder work.
+- [ ] Rendering/security is shared with #40 (no duplicate renderer, path validated).
+
+**Notes**
+
+- Files: `src/components/Overview/*` (markdown panel), reuse
+  `src/components/.../MarkdownViewer` (#40), `src/components/Sidebar/Sidebar.tsx`
+  (context-menu item), `src/store.ts` + persisted panel layout (#38). Depends on #38
+  (panels) and #40 (renderer + backend read/list).
+
+---
+
+### 42. [ ] Busy indicator: show when a Claude session is working (sidebar + each terminal)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+Show whether each `claude` session is **busy/working** vs idle, with a small, **fun
+animated icon** — both in the **sidebar** row and on **each Overview terminal column**.
+This requires first determining *how* to detect "busy"; the task is part research, part
+implementation, so research feasibility and pick the most robust approach, defaulting to
+the output-activity heuristic below if nothing better is feasible.
+
+**Detection — research & choose (recommended order):**
+
+1. **Output-activity heuristic (recommended baseline; no claude config needed):** the
+   PTY reader (`src-tauri/src/pty.rs`) already streams output. Track a per-session
+   **last-output timestamp**; mark **busy** when bytes are flowing (output within the
+   last ~700ms, debounced to avoid flicker) and **idle** when quiet. Emit a new
+   `session://state` event (or a lightweight periodic state tick) with `{ id, busy }`.
+2. **Child-process activity** (more precise "working"): sample the claude child's CPU
+   via its PID (e.g. the `sysinfo` crate) — busy if CPU over a threshold. Heavier;
+   consider only if the heuristic is too noisy.
+3. **Claude Code hooks** (most semantically precise): research whether ClaudeCue can use
+   Claude Code hooks (e.g. `UserPromptSubmit` / `Stop` / `Notification`) to learn
+   start/stop, e.g. by providing a settings/hook that signals a local channel. Note the
+   trade-offs (it would require influencing the user's claude config or a local IPC
+   endpoint) and whether it's feasible without being invasive. Document findings even if
+   not adopted now.
+
+**Subtasks**
+
+1. [ ] Research the options above; record the chosen approach + why in the task notes.
+2. [ ] **Backend:** implement detection (baseline: last-output timestamp + debounce in
+   `pty.rs`); emit session busy/idle state to the frontend (new event/payload in
+   `commands.rs` + `lib.rs`).
+3. [ ] **Store/IPC:** route state into the store
+   (`sessionState: Record<id,'busy'|'idle'>`) via `ipc.ts`.
+4. [ ] **Sidebar indicator:** a small animated icon on each session row when busy.
+5. [ ] **Terminal-column indicator:** the same indicator on each Overview agent card
+   header (and optionally Focus). Make the animation **interesting and fun** (e.g. an
+   orbiting/bouncing glyph or animated Lucide icon) but **respect
+   `prefers-reduced-motion`** (fall back to a static colored dot).
+6. [ ] Use the status tokens / a Catppuccin accent for busy vs idle (coordinate with
+   #33; e.g. busy → Yellow/Peach, idle → muted).
+
+**Acceptance criteria**
+
+- [ ] When a session is actively working, an animated busy indicator shows in the
+  sidebar row and on its terminal column; it clears when idle.
+- [ ] The animation is fun but respects reduced-motion (static fallback).
+- [ ] Detection is reasonably accurate and doesn't flicker rapidly (debounced).
+
+**Notes**
+
+- Files: `src-tauri/src/pty.rs` (detection + state), `commands.rs`/`lib.rs` (event),
+  `src/ipc.ts`, `src/store.ts` (`sessionState`), `src/components/Sidebar/Sidebar.tsx`,
+  `src/components/Overview/*` (card header), `src/styles/global.css` (keyframes,
+  reduced-motion already handled), tokens (#33).
+- **Scope note:** this deliberately **reverses the v1 "No status system" decision** and
+  starts using the reserved `--status-*` tokens. That's intentional now. Keep it to a
+  busy/idle indicator (no approval UI, still answered in the terminal).
+- Pairs with #36 (per-card chrome) and #33 (status colors).
