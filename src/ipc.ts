@@ -45,6 +45,10 @@ export const listSessions = () => invoke<SessionRecord[]>("list_sessions");
 
 export const listRecents = () => invoke<string[]>("list_recents");
 
+/** Drop a folder from persisted recents (the "Forget" action, #31). */
+export const removeRecent = (path: string) =>
+  invoke<void>("remove_recent", { path });
+
 export const openInEditor = (cwd: string) =>
   invoke<void>("open_in_editor", { cwd });
 

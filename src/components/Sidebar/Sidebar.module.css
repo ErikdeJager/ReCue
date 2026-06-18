@@ -222,3 +222,65 @@
 .remove:hover {
   color: var(--text-primary);
 }
+
+/* --- Repo right-click context menu (#31) --- */
+.menuOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+}
+
+.menu {
+  position: fixed;
+  z-index: 201;
+  min-width: 150px;
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  animation: menu-in var(--dur-fast) var(--ease-out);
+}
+
+.menuItem,
+.menuDanger {
+  display: block;
+  width: 100%;
+  padding: var(--space-6) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.menuItem:hover {
+  background: var(--bg-hover);
+}
+
+/* Destructive confirm — emphasized but on-system (no status color); the explicit
+   "Kill N & forget?" label carries the warning. */
+.menuDanger {
+  background: var(--bg-hover);
+  font-weight: 500;
+}
+
+.menuDanger:hover {
+  background: var(--border-strong);
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

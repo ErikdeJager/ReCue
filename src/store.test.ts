@@ -97,6 +97,24 @@ describe("app store", () => {
     expect(useStore.getState().sessions[0]?.exitedCode).toBe(1);
   });
 
+  it("forgetRepo drops the repo's sessions + recent and fixes selection (#31)", async () => {
+    useStore.setState({
+      sessions: [
+        { ...session("a"), repoPath: "/repo/x" },
+        { ...session("b"), repoPath: "/repo/y" },
+      ],
+      recents: ["/repo/x", "/repo/y"],
+      selectedId: "a",
+      view: "focus",
+    });
+    // ipc calls reject without a Tauri host and are caught; the state update runs.
+    await useStore.getState().forgetRepo("/repo/x");
+    expect(useStore.getState().sessions.map((s) => s.id)).toEqual(["b"]);
+    expect(useStore.getState().recents).toEqual(["/repo/y"]);
+    expect(useStore.getState().selectedId).toBeNull();
+    expect(useStore.getState().view).toBe("overview");
+  });
+
   it("toggles the inspector", () => {
     expect(useStore.getState().inspectorOpen).toBe(false);
     useStore.getState().toggleInspector();

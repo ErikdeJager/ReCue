@@ -99,6 +99,12 @@ impl Store {
         })
     }
 
+    /// Drop a working directory from recents and persist, so a "forgotten" folder
+    /// (#31) does not reappear after a restart.
+    pub fn remove_recent(&self, path: &str) -> io::Result<()> {
+        self.update(|state| state.recents.retain(|existing| existing != path))
+    }
+
     fn with<R>(&self, read: impl FnOnce(&PersistedState) -> R) -> R {
         let guard = self
             .inner
@@ -168,6 +174,21 @@ mod tests {
         let reloaded = Store::load(&path);
         assert_eq!(reloaded.sessions(), store.sessions());
         assert_eq!(reloaded.recents(), vec!["/repo/a".to_string()]);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn remove_recent_drops_the_dir_and_persists() {
+        let path = temp_path("removerecent");
+        let store = Store::load(&path);
+        store.touch_recent("/repo/a").unwrap();
+        store.touch_recent("/repo/b").unwrap();
+        store.remove_recent("/repo/a").unwrap();
+        assert_eq!(store.recents(), vec!["/repo/b".to_string()]);
+
+        // The removal survives a reload (the folder won't reappear after restart).
+        let reloaded = Store::load(&path);
+        assert_eq!(reloaded.recents(), vec!["/repo/b".to_string()]);
         let _ = fs::remove_file(&path);
     }
 

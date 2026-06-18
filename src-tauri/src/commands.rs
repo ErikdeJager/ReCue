@@ -116,6 +116,14 @@ pub fn list_recents(store: State<'_, Store>) -> Vec<String> {
     store.recents()
 }
 
+/// Drop a folder from recents (the "Forget" action, #31) so it doesn't reappear.
+#[tauri::command]
+pub fn remove_recent(store: State<'_, Store>, path: String) -> Result<(), SessionError> {
+    store
+        .remove_recent(&path)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 #[tauri::command]
 pub fn open_in_editor(cwd: String) -> Result<(), SessionError> {
     pty::open_in_editor(&cwd)

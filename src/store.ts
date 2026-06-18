@@ -163,6 +163,8 @@ export interface AppState {
   ) => Promise<boolean>;
   restartSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
+  /** Forget a folder: kill+forget all its sessions and drop it from recents (#31). */
+  forgetRepo: (repoPath: string) => Promise<void>;
   openInZed: (cwd: string) => Promise<void>;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
 }
@@ -416,6 +418,30 @@ export const useStore = create<AppState>()((set, get) => ({
     }
     get().dropSession(id);
     get().pushToast("Session removed");
+  },
+
+  forgetRepo: async (repoPath) => {
+    const ids = get()
+      .sessions.filter((s) => s.repoPath === repoPath)
+      .map((s) => s.id);
+    // Kill + forget every session's process (kill_session also drops its record),
+    // then drop the folder from persisted recents so it can't reappear on restart.
+    await Promise.all(ids.map((id) => ipc.killSession(id).catch(() => {})));
+    await ipc.removeRecent(repoPath).catch(() => {});
+    set((s) => {
+      const clearSelection = s.selectedId != null && ids.includes(s.selectedId);
+      return {
+        sessions: s.sessions.filter((x) => x.repoPath !== repoPath),
+        recents: s.recents.filter((r) => r !== repoPath),
+        selectedId: clearSelection ? null : s.selectedId,
+        view: clearSelection ? "overview" : s.view,
+      };
+    });
+    get().pushToast(
+      ids.length > 0
+        ? `Forgot folder + ${ids.length} agent${ids.length === 1 ? "" : "s"}`
+        : "Forgot folder",
+    );
   },
 
   openInZed: async (cwd) => {

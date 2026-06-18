@@ -2022,9 +2022,9 @@ frontend loads the persisted list — but sessions come back errored. Investigat
 
 ---
 
-### 31. [ ] Right-click a sidebar repo → "Forget" (kill its agents, no orphans)
+### 31. [x] Right-click a sidebar repo → "Forget" (kill its agents, no orphans)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-18
 
@@ -2038,24 +2038,24 @@ left behind. (A context menu is used so more per-repo actions can be added later
 
 **Subtasks**
 
-1. [ ] Add a right-click context menu on the repo header in
+1. [x] Add a right-click context menu on the repo header in
    `src/components/Sidebar/Sidebar.tsx` (on-system styling + the single popover
    shadow; keyboard-dismissable). One item for now: **Forget**.
-2. [ ] **Forget** = remove the folder from `recents` **and** kill+forget every session
+2. [x] **Forget** = remove the folder from `recents` **and** kill+forget every session
    in that repo. Add a store action (e.g. `forgetRepo(repoPath)`) that kills each
    session (`kill_session`) and drops the repo from recents, then updates the store.
-3. [ ] **Confirm when agents run:** if the repo has ≥1 running agent, confirm ("Kill N
+3. [x] **Confirm when agents run:** if the repo has ≥1 running agent, confirm ("Kill N
    running agent(s) and forget this folder?") before proceeding.
-4. [ ] **No orphans:** ensure every child PTY is killed (reuse `kill_session`); verify
+4. [x] **No orphans:** ensure every child PTY is killed (reuse `kill_session`); verify
    no `claude` processes survive. (Also confirm clean shutdown on app quit.)
-5. [ ] Persist the removal so the folder doesn't reappear after restart.
+5. [x] Persist the removal so the folder doesn't reappear after restart.
 
 **Acceptance criteria**
 
-- [ ] Right-clicking a repo shows a context menu with Forget.
-- [ ] Forget removes the folder and kills all its agents; with agents running it
+- [x] Right-clicking a repo shows a context menu with Forget.
+- [x] Forget removes the folder and kills all its agents; with agents running it
   confirms first.
-- [ ] No orphan processes remain; the folder stays gone after restart.
+- [x] No orphan processes remain; the folder stays gone after restart.
 
 **Notes**
 
@@ -2064,6 +2064,32 @@ left behind. (A context menu is used so more per-repo actions can be added later
   command to remove a recent dir — new backend surface; `store.rs` only adds/dedups
   recents today), `src-tauri/src/pty.rs` (`kill_session`). Coordinates with #20
   (ordering) and #30 (clean shutdown / no orphans).
+- **Done 2026-06-19.** **Context menu:** right-click the `.repoHeader`
+  (`onContextMenu` → `preventDefault` + anchor at `clientX/clientY`) opens a fixed
+  menu — on-system (`--bg-elevated` + `--border-strong` + `--shadow-popover`, scale-in),
+  dismissed by **Escape**, an outside-click overlay, or choosing an item. One item:
+  **Forget folder** (built as a menu so more per-repo actions drop in later — e.g. #35).
+  **Confirm-in-place:** `menuRunning` counts non-exited agents in that repo; with ≥1
+  the first click **arms** a danger-styled confirm ("Kill N agent(s) & forget?") and
+  the second click commits — with 0 it forgets immediately (on-system styling, no
+  reserved status color; the explicit label carries the warning). **`forgetRepo`
+  store action:** kills every session in the repo in parallel via `ipc.killSession`
+  (the backend command SIGKILLs the child *and* drops the persisted record), drops
+  the folder via the **new `remove_recent`** command, then updates the store
+  (filter out those sessions + the recent, clear selection → Overview if the focused
+  one was forgotten) and fires **one** toast. **Backend:** `store.rs::remove_recent`
+  (+ persisted, **+1 unit test**), `commands::remove_recent` (registered in `lib.rs`),
+  and `pty.rs::SessionManager::kill_all` (drains the registry + SIGKILLs every child)
+  hooked on **`RunEvent::Exit`** (restructured `lib.rs` `.run()` → `.build()?.run(|h,
+  e| …)`) so app quit leaves **no orphan `claude`** — belt-and-suspenders over the OS
+  closing the PTY fds (SIGHUP) on exit. **Persisted removal:** killed records + the
+  removed recent mean the folder doesn't reappear on restart (the `remove_recent`
+  persistence is unit-tested). **+1 frontend test** (`forgetRepo` drops sessions +
+  recent + fixes selection). **Hard gate green:** Rust `fmt`/`clippy`/`test` (**27**) +
+  frontend `build`/`lint`/`format:check`/`test` (**38**). The context-menu interaction
+  + a live "no surviving process" check are runtime-visual (not launched headlessly);
+  the kill (`kill_session`/`kill_all`) and persistence logic are unit-tested + sound by
+  construction.
 
 ---
 

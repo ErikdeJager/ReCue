@@ -59,8 +59,21 @@ function Sidebar() {
   const spawnSession = useStore((s) => s.spawnSession);
   const openNewSession = useStore((s) => s.openNewSession);
   const refreshBranches = useStore((s) => s.refreshBranches);
+  const forgetRepo = useStore((s) => s.forgetRepo);
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Right-click repo context menu (#31): anchored at the cursor; `confirming`
+  // arms the destructive Forget when the repo has running agents.
+  const [menu, setMenu] = useState<{
+    repo: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const closeMenu = () => {
+    setMenu(null);
+    setConfirming(false);
+  };
 
   const repos = repoOrder(recents, sessions);
   const reposKey = repos.join("\n");
@@ -70,6 +83,26 @@ function Sidebar() {
     // session mutation (exit, output) that allocates a new sessions array.
     void refreshBranches();
   }, [refreshBranches, reposKey]);
+
+  // Escape dismisses the context menu (keyboard-dismissable).
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenu(null);
+        setConfirming(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menu]);
+
+  // Running (non-exited) agents in the menu's repo — gates the confirm step.
+  const menuRunning = menu
+    ? sessions.filter(
+        (s) => s.repoPath === menu.repo && s.exitedCode === undefined,
+      ).length
+    : 0;
 
   const toggle = (repo: string) =>
     setCollapsed((prev) => {
@@ -115,6 +148,11 @@ function Sidebar() {
             <div key={repo} className={styles.group}>
               <div
                 className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""}`}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenu({ repo, x: event.clientX, y: event.clientY });
+                  setConfirming(false);
+                }}
               >
                 <button
                   type="button"
@@ -160,6 +198,43 @@ function Sidebar() {
           );
         })}
       </div>
+
+      {menu && (
+        <>
+          <div
+            className={styles.menuOverlay}
+            onClick={closeMenu}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              closeMenu();
+            }}
+          />
+          <div
+            className={styles.menu}
+            style={{ left: menu.x, top: menu.y }}
+            role="menu"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className={confirming ? styles.menuDanger : styles.menuItem}
+              onClick={() => {
+                // Confirm first only when agents are running in this folder.
+                if (menuRunning > 0 && !confirming) {
+                  setConfirming(true);
+                } else {
+                  void forgetRepo(menu.repo);
+                  closeMenu();
+                }
+              }}
+            >
+              {confirming
+                ? `Kill ${menuRunning} agent${menuRunning === 1 ? "" : "s"} & forget?`
+                : "Forget folder"}
+            </button>
+          </div>
+        </>
+      )}
     </aside>
   );
 }

@@ -222,6 +222,21 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Kill every live child and clear the registry — used on app shutdown so no
+    /// orphan `claude` processes survive (#31). Best-effort and infallible
+    /// (recovers a poisoned lock); the dropped sessions close their PTYs too.
+    pub fn kill_all(&self) {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (_, session) in sessions.drain() {
+            if let Ok(mut child) = session.child.lock() {
+                let _ = child.kill();
+            }
+        }
+    }
+
     /// Snapshot a session's retained scrollback (for terminal replay on mount).
     pub fn scrollback(&self, id: &str) -> Result<Vec<u8>, SessionError> {
         let sessions = self.lock_sessions()?;

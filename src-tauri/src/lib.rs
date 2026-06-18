@@ -80,6 +80,7 @@ pub fn run() {
             commands::session_scrollback,
             commands::list_sessions,
             commands::list_recents,
+            commands::remove_recent,
             commands::open_in_editor,
             commands::current_branch,
             commands::current_branches,
@@ -87,6 +88,13 @@ pub fn run() {
             commands::list_branches,
             commands::checkout_branch,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|handle, event| {
+            // Clean shutdown (#31): kill every child PTY when the app exits so no
+            // orphan `claude` processes are left behind.
+            if let tauri::RunEvent::Exit = event {
+                handle.state::<SessionManager>().kill_all();
+            }
+        });
 }
