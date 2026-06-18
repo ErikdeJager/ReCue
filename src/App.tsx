@@ -2,6 +2,7 @@ import { useEffect } from "react";
 
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
 import Focus from "./components/Focus/Focus";
+import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
 import Overview from "./components/Overview/Overview";
 import Sidebar from "./components/Sidebar/Sidebar";
 import Titlebar from "./components/Titlebar/Titlebar";
@@ -40,6 +41,7 @@ function App() {
         </main>
       </div>
       <Toaster />
+      <NewSessionModal />
     </div>
   );
 }

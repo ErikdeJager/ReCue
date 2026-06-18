@@ -9,16 +9,10 @@ import styles from "./Overview.module.css";
 function Overview() {
   const sessions = useStore((s) => s.sessions);
   const select = useStore((s) => s.select);
-  const pushToast = useStore((s) => s.pushToast);
+  const openNewSession = useStore((s) => s.openNewSession);
 
   if (sessions.length === 0) {
-    return (
-      <EmptyState
-        onNewSession={() =>
-          pushToast("The New Session dialog arrives in task #10")
-        }
-      />
-    );
+    return <EmptyState onNewSession={() => openNewSession()} />;
   }
 
   return (

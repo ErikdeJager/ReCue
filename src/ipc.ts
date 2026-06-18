@@ -4,6 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
   ExitPayload,
@@ -11,6 +12,16 @@ import type {
   SessionRecord,
   WorkingDiff,
 } from "./types";
+
+/** Native folder picker. Returns the chosen directory, or null if cancelled. */
+export async function pickDirectory(): Promise<string | null> {
+  const selection = await open({
+    directory: true,
+    multiple: false,
+    title: "Choose a working directory",
+  });
+  return typeof selection === "string" ? selection : null;
+}
 
 export const spawnSession = (cwd: string, name?: string) =>
   invoke<SessionRecord>("spawn_session", { cwd, name: name ?? null });

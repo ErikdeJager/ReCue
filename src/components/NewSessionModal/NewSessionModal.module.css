@@ -1,0 +1,190 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-24);
+  background: rgba(0, 0, 0, 0.5);
+  animation: overlay-in var(--dur-fast) var(--ease-out);
+}
+
+.sheet {
+  width: min(460px, 100%);
+  padding: var(--space-24);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-window);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  animation: sheet-in var(--dur-slow) var(--ease-out);
+}
+
+.title {
+  margin: 0 0 var(--space-20);
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.label {
+  display: block;
+  margin: 0 0 var(--space-6);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+}
+
+.pickRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-bottom: var(--space-12);
+}
+
+.pickButton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  flex-shrink: 0;
+  padding: var(--space-6) var(--space-12);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.pickButton:hover {
+  background: var(--bg-hover);
+}
+
+.path,
+.pathEmpty {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+.path {
+  color: var(--text-secondary);
+}
+
+.pathEmpty {
+  color: var(--text-muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  margin-bottom: var(--space-20);
+}
+
+.chip {
+  padding: var(--space-4) var(--space-8);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chip);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.chip:hover {
+  color: var(--text-primary);
+}
+
+.chipActive {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--accent-dim);
+}
+
+.input {
+  width: 100%;
+  margin-bottom: var(--space-24);
+  padding: var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-ui);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8);
+}
+
+.cancel,
+.create {
+  padding: var(--space-8) var(--space-16);
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cancel {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.cancel:hover {
+  background: var(--bg-hover);
+}
+
+.create {
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.create:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.create:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

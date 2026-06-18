@@ -1,14 +1,10 @@
 import { useEffect, useState } from "react";
 import { ChevronRight, Plus, X } from "lucide-react";
 
+import { repoName } from "../../paths";
 import { repoOrder, useStore } from "../../store";
 import type { SessionView } from "../../types";
 import styles from "./Sidebar.module.css";
-
-function repoName(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? path;
-}
 
 interface SessionRowProps {
   session: SessionView;

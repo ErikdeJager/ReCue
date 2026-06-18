@@ -525,9 +525,9 @@ sessions. No status dots and no Archived group in v1.
 
 ---
 
-### 10. [ ] New session modal
+### 10. [x] New session modal
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #5, #7
 **Created:** 2026-06-18
 
@@ -539,24 +539,36 @@ it.
 
 **Subtasks**
 
-1. [ ] Modal shell: overlay + sheet with the design's animations and the soft modal
+1. [x] Modal shell: overlay + sheet with the design's animations and the soft modal
    shadow; close on backdrop click / Escape / Cancel.
-2. [ ] Working-directory picker using the Tauri dialog (folder select); show the
+2. [x] Working-directory picker using the Tauri dialog (folder select); show the
    chosen path.
-3. [ ] Recent-folder chips from persisted recents (#5); clicking one selects it.
-4. [ ] Optional **Name** field (defaults from the folder name if blank).
-5. [ ] **Create** → `spawn_session(cwd, name)`, add to store + recents, select it,
+3. [x] Recent-folder chips from persisted recents (#5); clicking one selects it.
+4. [x] Optional **Name** field (defaults from the folder name if blank).
+5. [x] **Create** → `spawn_session(cwd, name)`, add to store + recents, select it,
    close the modal, toast confirmation.
 
 **Acceptance criteria**
 
-- [ ] Picking a folder and creating starts a live session in that directory.
-- [ ] Recents update and reappear next launch.
-- [ ] Cancel/Escape/backdrop close without creating a session.
+- [x] Picking a folder and creating starts a live session in that directory.
+- [x] Recents update and reappear next launch.
+- [x] Cancel/Escape/backdrop close without creating a session.
 
 **Notes**
 
 - No initial-prompt field in v1 — the user types the first prompt in the terminal.
+- **Done 2026-06-18.** `src/components/NewSessionModal` renders from the store's
+  `newSessionOpen`/`newSessionRepo`. Overlay + sheet with fade/slide-in animations
+  and the soft modal shadow; closes on backdrop click / Escape / Cancel. Folder
+  picker via the **`tauri-plugin-dialog`** (`open({ directory: true })`, wrapped as
+  `ipc.pickDirectory`); registered the plugin in `lib.rs` and granted
+  `dialog:default` in the capability. Recent-folder chips from persisted recents;
+  optional Name (defaults to the folder name on blank). Create →
+  `spawnSession(cwd, name)` (already adds to store + recents, selects, toasts) then
+  closes. Wired the Overview empty-state button to `openNewSession`; extracted a
+  shared `repoName` (`src/paths.ts`, +3 unit tests, 14 total). Verified backend
+  `cargo build` (capability validates) + clippy + fmt, and frontend build (strict
+  tsc) + ESLint + Prettier + `npm test`. GUI/folder-dialog not launched headlessly.
 
 ---
 
