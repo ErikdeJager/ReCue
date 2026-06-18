@@ -1,0 +1,85 @@
+/*
+ * ClaudeCue design tokens — dark theme only.
+ *
+ * Ported from the Design reference in TASKS.md. These are the single source of
+ * truth for color, type, spacing, radii, depth, and motion. Consume them from
+ * CSS Modules (var(--token)); do not introduce off-system values.
+ */
+
+:root {
+  /* --- Surfaces --- */
+  --bg-base: #0b0b0c;
+  --bg-sidebar: #111113;
+  --bg-panel: #141416;
+  --bg-elevated: #1a1a1d;
+  --bg-hover: #1e1e22;
+  --terminal-bg: #0e0e10;
+
+  /* --- Borders --- */
+  --border-hairline: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.12);
+
+  /* --- Text --- */
+  --text-primary: #ededef;
+  --text-secondary: #9a9aa0;
+  --text-muted: #5e5e66;
+
+  /* --- Accent (brand only — New session button + selected row; never a status) --- */
+  --accent: #d97757;
+  --accent-hover: #e08a6d;
+  --accent-dim: rgba(217, 119, 87, 0.14);
+
+  /* --- Diff --- */
+  --diff-add-fg: #4bb58a;
+  --diff-add-bg: rgba(75, 181, 138, 0.12);
+  --diff-del-fg: #e5534b;
+  --diff-del-bg: rgba(229, 83, 75, 0.12);
+  --diff-gutter: #5e5e66;
+
+  /* --- Reserved status colors (unused in v1 — no status UI) --- */
+  --status-running: #5b8def;
+  --status-awaiting: #e0a33e;
+  --status-done: #4bb58a;
+  --status-error: #e5534b;
+  --status-idle: #6b6b73;
+
+  /* --- Fonts --- */
+  --ui: -apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  /* --- Type scale --- */
+  --fs-eyebrow: 11px;
+  --fs-ui: 13px;
+  --fs-meta: 12px;
+  --fs-meta-sm: 11px;
+  --fs-terminal: 12.5px;
+  --fs-diff: 12px;
+  --lh-terminal: 1.5;
+  --lh-diff: 1.45;
+  --fw-eyebrow: 600;
+  --tracking-eyebrow: 0.04em;
+
+  /* --- Spacing scale (4px base: 4 · 6 · 8 · 12 · 16 · 20 · 24 · 32) --- */
+  --space-4: 4px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-24: 24px;
+  --space-32: 32px;
+
+  /* --- Radii --- */
+  --radius-window: 10px;
+  --radius-control: 7px;
+  --radius-chip: 5px;
+  --radius-dot: 999px;
+
+  /* --- Depth (one soft shadow — popovers/modals only) --- */
+  --shadow-popover: 0 8px 28px rgba(0, 0, 0, 0.45);
+
+  /* --- Motion (120–180ms ease-out; respect prefers-reduced-motion) --- */
+  --dur-fast: 120ms;
+  --dur-slow: 180ms;
+  --ease-out: ease-out;
+}

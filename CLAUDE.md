@@ -29,9 +29,10 @@ clear error if it is missing).
 .
 ├── index.html              # Vite entry
 ├── src/                    # Frontend (React + TS)
-│   ├── main.tsx            # React bootstrap
-│   ├── App.tsx             # Root component (empty shell for now)
-│   ├── styles/             # Design tokens + global CSS (full system in task #2)
+│   ├── main.tsx            # React bootstrap (loads fonts + tokens + global CSS)
+│   ├── App.tsx             # Root component
+│   ├── components/         # React components (CSS Module alongside each)
+│   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
 │   ├── src/lib.rs          # App builder + command/event surface
@@ -78,8 +79,13 @@ npm run format:rust    # cargo fmt (backend)
   commands/events; the frontend wraps them in a typed IPC layer.
 - Keep terminal byte streams out of React state — xterm.js consumes them directly
   to avoid re-render storms.
-- Stay on-system: use the design tokens (task #2); do not introduce off-system
-  colors. See the **Design reference** in `TASKS.md`.
+- **Styling:** CSS Modules (`*.module.css` next to each component) that consume
+  the design tokens in `src/styles/tokens.css`. The reset, base styles,
+  scrollbars, keyframes, and the `prefers-reduced-motion` killswitch live in
+  `src/styles/global.css`. Tokens, global CSS, and the bundled **JetBrains Mono**
+  font (`@fontsource`, offline — never a CDN) are imported once in
+  `src/main.tsx`. Stay on-system: use tokens, never off-system colors. See the
+  **Design reference** in `TASKS.md`.
 
 ## Tasks
 

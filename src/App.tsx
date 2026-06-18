@@ -1,12 +1,15 @@
-import "./styles/global.css";
+import DesignSample from "./components/DesignSample/DesignSample";
 
 /**
- * Root component. Renders the empty application shell for now; the custom
- * titlebar (task #3), sidebar, and Overview/Focus views are added by later
- * tasks. This is the runnable empty window the rest of the app builds on.
+ * Root component. Renders the design-system sample for now (task #2); the custom
+ * titlebar (#3), sidebar, and Overview/Focus views replace this in later tasks.
  */
 function App() {
-  return <main className="app" />;
+  return (
+    <main className="app">
+      <DesignSample />
+    </main>
+  );
 }
 
 export default App;

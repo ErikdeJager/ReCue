@@ -1,9 +1,7 @@
 /*
- * Provisional global styles.
- *
- * The full dark-only design-token system (CSS variables, fonts, scrollbars,
- * reduced-motion) is defined in task #2. For now this is just enough of a reset
- * and a dark background so the scaffold renders a non-jarring empty window.
+ * Global reset, base styles, themed scrollbars, reusable keyframes, and the
+ * reduced-motion killswitch. Design tokens are defined in tokens.css; both are
+ * imported once in src/main.tsx (after the bundled JetBrains Mono font).
  */
 
 *,
@@ -20,14 +18,90 @@ body,
 
 body {
   margin: 0;
-  background: #0b0b0c; /* --bg-base (see Design reference in TASKS.md) */
-  color: #ededef; /* --text-primary */
-  font-family:
-    -apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--ui);
+  font-size: var(--fs-ui);
+  line-height: 1.4;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .app {
   height: 100%;
+}
+
+/* --- Themed custom scrollbars --- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: var(--radius-dot);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: content-box;
+}
+
+/* --- Reusable keyframes --- */
+@keyframes caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --- Respect reduced-motion globally --- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- Small on-system utilities --- */
+.u-mono {
+  font-family: var(--mono);
+}
+
+.u-eyebrow {
+  color: var(--text-muted);
+  font-size: var(--fs-eyebrow);
+  font-weight: var(--fw-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
 }

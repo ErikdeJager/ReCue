@@ -113,9 +113,9 @@ runnable empty window every other task builds on. macOS is the only target.
 
 ---
 
-### 2. [ ] Design tokens, fonts & global styles
+### 2. [x] Design tokens, fonts & global styles
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #1
 **Created:** 2026-06-18
 
@@ -127,30 +127,38 @@ global base styles. This is the visual foundation for every component.
 
 **Subtasks**
 
-1. [ ] Define all design tokens (surfaces, borders, text, accent, diff colors,
+1. [x] Define all design tokens (surfaces, borders, text, accent, diff colors,
    `--mono`, `--ui`) as CSS variables on `:root`.
-2. [ ] Bundle **JetBrains Mono** locally (woff2) and `@font-face` it; do **not**
+2. [x] Bundle **JetBrains Mono** locally (woff2) and `@font-face` it; do **not**
    load from a CDN (the app must work offline).
-3. [ ] Global reset + base: `box-sizing`, full-height `html,body`, antialiasing,
+3. [x] Global reset + base: `box-sizing`, full-height `html,body`, antialiasing,
    `overflow:hidden` app body, themed custom scrollbars.
-4. [ ] Define reusable keyframes (e.g. blinking caret) and a global
+4. [x] Define reusable keyframes (e.g. blinking caret) and a global
    `@media (prefers-reduced-motion: reduce)` that disables animations.
-5. [ ] Encode the type scale, spacing scale, radii and the single popover/modal
+5. [x] Encode the type scale, spacing scale, radii and the single popover/modal
    shadow as tokens/utilities so components stay on-system.
-6. [ ] Decide and document the styling convention (CSS Modules + token variables);
+6. [x] Decide and document the styling convention (CSS Modules + token variables);
    add a tiny sample component proving tokens + mono font render.
 
 **Acceptance criteria**
 
-- [ ] Tokens are available app-wide and a sample renders on `--bg-base` with the
+- [x] Tokens are available app-wide and a sample renders on `--bg-base` with the
   correct text colors and JetBrains Mono.
-- [ ] Fonts load with no network access.
-- [ ] Reduced-motion preference visibly disables animations.
+- [x] Fonts load with no network access.
+- [x] Reduced-motion preference visibly disables animations.
 
 **Notes**
 
 - Status colors are intentionally **not** used in v1 (no status UI) but may be kept
   as reserved tokens per the Design reference.
+- **Done 2026-06-18.** Tokens in `src/styles/tokens.css` (`:root`); reset/base/
+  scrollbars/keyframes/reduced-motion in `src/styles/global.css`; both + fonts
+  imported once in `src/main.tsx`. JetBrains Mono bundled via
+  `@fontsource/jetbrains-mono` (400/500/700) — Vite emits the woff2 into
+  `dist/assets`; verified the built CSS references only local `/assets/*.woff2`
+  (no CDN). Convention: CSS Modules consuming tokens (see `CLAUDE.md`); proof is
+  `src/components/DesignSample/` (rendered by `App.tsx`, replaced in #7).
+  Verified `npm run build` + ESLint + Prettier clean; GUI not launched visually.
 
 ---
 
