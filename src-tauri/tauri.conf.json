@@ -30,6 +30,9 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
+    "copyright": "© 2026 ClaudeCue",
+    "shortDescription": "Run and manage many live claude CLI sessions.",
+    "longDescription": "A macOS desktop app for running and managing many live claude CLI sessions at once — an Overview agent wall of real terminals, a Focus view with a git-diff inspector, and a repo-grouped sidebar.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

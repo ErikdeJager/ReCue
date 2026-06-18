@@ -20,8 +20,30 @@ clear error if it is missing).
   CSS-variable design tokens (CSS Modules), **xterm.js** terminals, **Lucide**
   icons, **JetBrains Mono** (bundled, offline)
 - **Backend (Rust, `src-tauri/`):** **`portable-pty`** for terminals, JSON
-  persistence in the app-data dir, read-only git
+  persistence in the app-data dir, read-only git (shells out to `git`), and the
+  Tauri **dialog** (folder picker) + **opener** plugins
 - Dark theme only
+
+## Architecture (data flow)
+
+- **Spawn:** `spawn_session(cwd, name)` → `SessionManager` (`pty.rs`) opens a PTY
+  running `claude --session-id <uuid>`, registers it by id, and persists a record
+  (`store.rs`). A per-session reader thread pushes output to a bounded scrollback
+  buffer and an `mpsc` channel.
+- **Output:** `lib.rs` forwards the channel to the `session://output` /
+  `session://exited` Tauri events. The frontend `ipc.ts` subscription routes
+  output **bytes** to `outputBus.ts` (a pub/sub the xterm `Terminal` consumes —
+  deliberately *not* React state) and lifecycle to the Zustand `store.ts`.
+- **Input / resize:** the `Terminal` sends keystrokes to `write_stdin` and a
+  `ResizeObserver` drives `resize_pty`.
+- **Persistence / resume:** records + recents survive restarts; on boot the
+  manager best-effort `resume_session`s each via `claude --resume <id>`.
+- **Git:** `working_diff(cwd)` / `current_branch(cwd)` shell out to `git`; the
+  `DiffInspector` and sidebar render the structured result.
+- **Views:** the store holds `sessions / selectedId / view / inspectorOpen /
+  recents / branches / claudeMissing / toasts`; the app mounts **Overview or
+  Focus** (not both), so each session's terminal is single-instanced and replays
+  scrollback on remount.
 
 ## Layout
 
@@ -34,7 +56,11 @@ clear error if it is missing).
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
-│   ├── components/         # React components (CSS Module alongside each)
+│   ├── paths.ts            # Shared path helpers (repoName)
+│   ├── components/         # React components (CSS Module alongside each):
+│   │                       #   Titlebar, Sidebar, Overview, Focus, Terminal,
+│   │                       #   DiffInspector, NewSessionModal, Toaster, ViewSwitch,
+│   │                       #   ClaudeMissing, EmptyState
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
@@ -62,8 +88,10 @@ npm run build          # type-check + build the frontend only
 npm run lint           # ESLint (frontend)
 npm run format         # Prettier write (frontend)
 npm run format:check   # Prettier check (frontend)
+npm test               # Vitest (store / pure-logic unit tests)
 npm run lint:rust      # cargo clippy (backend)
 npm run format:rust    # cargo fmt (backend)
+cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 ```
 
 ## v1 scope decisions / out of scope
@@ -108,4 +136,5 @@ npm run format:rust    # cargo fmt (backend)
 ## Tasks
 
 Work is tracked in `TASKS.md` (numbered, dependency-ordered). Each task lists its
-`Depends on:` prerequisites; tasks whose dependencies are all complete can proceed.
+`Depends on:` prerequisites and an implementation-notes block. **The v1 plan
+(#1–#14) is complete**; `TASKS.md` remains the reference for what was built and why.

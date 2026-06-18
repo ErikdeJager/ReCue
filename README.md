@@ -8,33 +8,59 @@ Each session is a real PTY running the Claude Code CLI. ClaudeCue provides the w
 chrome, navigation, persistence, and read-only git reading; the terminals come from
 `claude` itself.
 
-> Early development — see [`TASKS.md`](TASKS.md) for the v1 plan and
-> [`CLAUDE.md`](CLAUDE.md) for architecture. A full README lands with packaging
-> (task #14).
+## Features
 
-## Stack
-
-Tauri 2 · React + TypeScript + Vite · Zustand · xterm.js · `portable-pty` (Rust) ·
-JetBrains Mono · Lucide. Dark theme only.
+- **Overview wall** — every active session as an equal-width live terminal column,
+  scrolling horizontally past capacity.
+- **Focus view** — one large terminal plus a toolbar (view switch, copy-able
+  `repo · branch · id` chip, Open in Zed) and a collapsible **Diff inspector**
+  showing the working-tree diff vs `HEAD` (unified or split).
+- **Sidebar** — sessions grouped by repository (with branch labels), sourced from
+  persisted recents so repos stay listed even with no active session.
+- **Persistence + resume** — sessions and recent folders survive restarts; sessions
+  resume their `claude` conversation by id on launch.
+- **Remove = kill + forget**, bundled **JetBrains Mono** (offline), dark theme only.
 
 ## Prerequisites
 
 - macOS
-- [Node.js](https://nodejs.org/) + npm
-- [Rust](https://www.rust-lang.org/tools/install) (stable) + Cargo
-- `claude` (Claude Code CLI) installed and authenticated on your `PATH`
+- [`claude`](https://docs.claude.com/en/docs/claude-code) (Claude Code CLI)
+  **installed and authenticated** on your `PATH` — ClaudeCue runs `claude` for every
+  session and shows a clear error if it is missing.
+- For building from source: [Node.js](https://nodejs.org/) + npm and
+  [Rust](https://www.rust-lang.org/tools/install) (stable) + Cargo.
+- Optional: [Zed](https://zed.dev/) on your `PATH` for the "Open in Zed" action.
 
 ## Develop
 
 ```bash
 npm install
-npm run tauri dev      # launch the app with hot reload
+npm run tauri dev      # launch the app (Vite + Rust) with hot reload
 ```
 
 ## Build
 
 ```bash
-npm run tauri build    # produces an unsigned macOS .app / .dmg
+npm run tauri build    # produces an unsigned macOS .app and .dmg
 ```
 
-No code signing or notarization in v1 — expect a Gatekeeper warning on first open.
+Artifacts land in `src-tauri/target/release/bundle/` (`macos/ClaudeCue.app` and
+`dmg/ClaudeCue_<version>_<arch>.dmg`).
+
+> No code signing or notarization in v1 — Gatekeeper will warn on first open
+> (right-click → **Open**, or allow it under **System Settings → Privacy & Security**).
+
+## Develop scripts
+
+```bash
+npm run build          # type-check + build the frontend only
+npm run lint           # ESLint (frontend)
+npm run format         # Prettier write (frontend)
+npm test               # Vitest (store / pure-logic unit tests)
+npm run lint:rust      # cargo clippy (backend)
+npm run format:rust    # cargo fmt (backend)
+cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
+```
+
+See [`CLAUDE.md`](CLAUDE.md) for architecture and [`TASKS.md`](TASKS.md) for the v1
+plan and per-task implementation notes.
