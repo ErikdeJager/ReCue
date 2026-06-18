@@ -2954,3 +2954,156 @@ that content there.
   (#44), the shared diff (#39), the terminal pool (#18), dnd-kit (#43). Depends on #46
   (engine), #44 (file viewer), #45 (sidebar drag sources); reuses #39. Completes the
   Canvas feature.
+
+---
+
+### 48. [ ] Iteration pass 3 — UI visual polish & design-system consistency (UI-focused)
+
+**Status:** Not started
+**Depends on:** #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47 _(all current open tasks — this iteration runs only after the entire existing backlog is complete)_
+**Created:** 2026-06-19
+
+**Description**
+
+A focused iteration pass over the **whole app**, run after the entire current backlog
+(#1–#47) is complete, dedicated to **UI / visual quality and design-system
+consistency**. It must **not change fundamentals** — no behavior or architecture changes
+— just make the product look and feel noticeably more polished, cohesive, and on-system.
+This continues the #16/#17 polish series but is **UI-first** and reviews all the new
+surfaces (Catppuccin recolor #33, repo colors #35/#36/#37, customizable Overview
+#38/#43, Canvas #46/#47, file viewer #44, sidebar tree #45, busy indicator #42, …).
+
+Pair this with #49 (UX & accessibility); the two passes are deliberately complementary —
+**this one is the visual layer**, #49 is **interaction/usability**.
+
+**Method (review the product as its own toughest reviewer):**
+
+Use a heuristic-audit method: for each surface, inventory the current state, critique it
+against the rubric below as if seeing it fresh, rate severity (blocker / major / minor /
+nit), prescribe the fix, then apply the high-impact ones. Treat the rubric as a contract
+with **non-negotiables** (e.g. *no off-system colors*, *reduced-motion respected*) and a
+few **allowed exceptions** you call out. Also run an open-ended "what would make this look
+more polished?" sweep per surface to catch what the checklist misses. (Methodology
+distilled from current Claude-Code review-prompt and heuristic-evaluation practice — see
+Notes.)
+
+**UI rubric (audit every view: Sidebar, Overview, Focus, Canvas, modals, toasts, popups):**
+
+1. [ ] **Design tokens / color:** everything flows from `tokens.css` (Catppuccin Mocha,
+   #33); zero off-system literal colors; repo colors (#35) used consistently and
+   tastefully (badges, rules) without overwhelming.
+2. [ ] **Spacing & alignment:** consistent use of the 4px spacing scale; aligned edges,
+   even gaps, balanced padding; nothing cramped or drifting.
+3. [ ] **Typography:** the type scale applied consistently (sizes/weights/tracking); mono
+   vs UI fonts used correctly; truncation/ellipsis where needed.
+4. [ ] **Component states:** every interactive element has clear hover / focus-visible /
+   active / disabled / selected states; lists have empty / loading / error states
+   (prefer **skeletons over spinners**).
+5. [ ] **Visual hierarchy & density:** clear primary/secondary emphasis; the eye lands on
+   the right thing; comfortable density across the wall, panels, and trees.
+6. [ ] **Motion:** transitions are `transform`/`opacity` only, on the duration tokens, at
+   a steady 60fps; `prefers-reduced-motion` fully respected (incl. the #42 busy animation
+   and DnD).
+7. [ ] **Responsiveness:** correct at small and large window sizes (down to the min
+   window); sidebar/overview/canvas reflow cleanly; native macOS feel under the native
+   title bar (#19).
+8. [ ] **Iconography:** Lucide icons consistent in size / stroke / alignment.
+9. [ ] **Styling-code hygiene (clean code, visual layer only):** dedupe repeated CSS,
+   remove dead styles, consistent CSS-module naming; share common patterns (badges, chips,
+   panel chrome) instead of copy-paste.
+
+**Self-review:** re-read the full diff as an unfamiliar senior designer-engineer; name
+**≥5 concrete visual weaknesses** and fix them before finishing.
+
+**Acceptance criteria**
+
+- [ ] Hard gate green: `cargo fmt --check`, `cargo clippy` (no warnings), `cargo test`,
+  plus `npm run build`, `npm run lint`, `npm run format:check`, `npm test`.
+- [ ] No behavior/fundamentals changed; no feature regressed; app builds & runs.
+- [ ] Visibly more polished & cohesive UI across all views, with a short before/after
+  report (found → changed → impact) and a prioritized punch list of remaining nits.
+
+**Notes**
+
+- **UI-first**; #49 covers UX/accessibility. Stay on `main`; small, safe, reviewable
+  steps; favor *feel*. No new dependencies unless trivial.
+- Methodology grounded in research (cite in the report): Claude Code review-prompt practice
+  (contract-style non-negotiables; open-ended "what would you improve?"; focused
+  critical-issue lists) and heuristic-evaluation method (audit → severity rating →
+  remediation). The Catppuccin theme, repo colors, and status tokens are now all in use
+  (#33/#35/#42) — verify they read well together.
+
+---
+
+### 49. [ ] Iteration pass 4 — UX, interaction flows & accessibility (UX-focused; + clean code)
+
+**Status:** Not started
+**Depends on:** #48
+**Created:** 2026-06-19
+
+**Description**
+
+A second focused iteration pass, run **after #48**, dedicated to **UX, interaction flows,
+and accessibility**, plus clean-code and light (non-fundamental) optimization. Like #48 it
+must **not change fundamentals** — it sharpens how the app *feels to use* and how clean the
+code is, without altering behavior contracts or architecture. It reviews the whole app with
+emphasis on the new interaction-heavy surfaces (keyboard nav #24, DnD reorder #43, Canvas
+drag/split #46/#47, new-session branch flow #27, Forget #31, file viewer #44, sidebar tree
+#45, busy status #42).
+
+This is the **interaction/usability** complement to #48's **visual** pass.
+
+**Method:** heuristic evaluation against **Nielsen's 10 usability heuristics** (the
+canonical UX checklist) with modern adaptations (skeletons/progress over bare spinners;
+clear AI/agent **busy** signals; presence/attribution). For each flow: walk it as a new
+user, find friction/violations, rate severity, prescribe and apply fixes — highest-impact
+first. Add an open-ended "what's confusing or slow here?" sweep. (Sources in Notes.)
+
+**UX rubric (Nielsen-based) + clean code:**
+
+1. [ ] **Visibility of system status:** busy/working (#42), loading, and progress are
+   always clear; toasts (#32) confirm actions; diff/file viewers show fresh state.
+2. [ ] **Match to the real world / clarity:** labels, empty states, and errors are human
+   and actionable (not codes); the repo/branch/agent model reads naturally.
+3. [ ] **User control & freedom:** easy cancel/close/undo; destructive actions (Forget
+   #31, branch checkout #27) confirm and are clear/reversible; Escape closes overlays.
+4. [ ] **Consistency & standards:** the same gesture/affordance does the same thing
+   everywhere (selection, DnD, context menus, close buttons).
+5. [ ] **Error prevention & recovery:** guard foot-guns (resume failures #30, missing
+   folders, dirty-tree checkout #27) with clear prevention + recovery paths.
+6. [ ] **Recognition over recall & efficiency:** the common path is short and obvious;
+   keyboard shortcuts (#24, ⌘N #26) are present, consistent, and **discoverable** (hints);
+   sensible defaults everywhere.
+7. [ ] **Aesthetic & minimalist flows:** remove needless steps/clicks/decisions; reduce
+   clutter in the new-session popover, panels, and trees.
+8. [ ] **Drag-and-drop UX:** clear drop targets, drag previews, and cancel for Overview
+   reorder (#43) and Canvas (#46/#47); it's never ambiguous where something will land.
+9. [ ] **Accessibility:** correct roles/labels/aria; full keyboard navigation; **visible
+   focus** everywhere; sufficient **contrast** (re-check after the Catppuccin recolor #33);
+   dnd-kit's screen-reader announcements wired; focus-trap in modals/popovers.
+10. [ ] **Clean code & light optimization (no fundamentals):** single-responsibility,
+   dedupe, untangle state, remove dead code; kill needless re-renders and chatty/oversized
+   IPC where safe — **without** changing behavior or architecture.
+
+**Self-review:** re-read the combined diff as an unfamiliar senior reviewer; name **≥5
+concrete UX/code weaknesses** and fix them; explicitly confirm #48's visual gains weren't
+regressed.
+
+**Acceptance criteria**
+
+- [ ] Hard gate green: `cargo fmt --check`, `cargo clippy` (no warnings), `cargo test`,
+  plus `npm run build`, `npm run lint`, `npm run format:check`, `npm test`.
+- [ ] No behavior/fundamentals changed; no feature regressed; app builds & runs.
+- [ ] Measurably smoother, more intuitive, more accessible UX, with a short before/after
+  report (found → changed → impact) and an updated prioritized punch list.
+
+**Notes**
+
+- **UX/a11y-first**; depends on #48 (visual pass) so it operates on the already-polished
+  UI and gives a fresh, independent second look. Stay on `main`; small, safe steps; favor
+  ease of use. No new deps unless trivial.
+- Methodology grounded in research (cite in the report): Nielsen's 10 usability heuristics
+  + modern AI-native adaptations (status/progress semantics, skeletons), and Claude Code
+  self-review practice (open-ended "what would you improve?", adversarial weakness-listing,
+  contract-style non-negotiables). Together #48 + #49 are the UI/UX iteration of the
+  #16/#17 polish series, covering all of #18–#47.
