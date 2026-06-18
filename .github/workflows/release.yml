@@ -5,9 +5,14 @@ name: Release
 # GitHub release carrying the .dmg + the Tauri updater artifacts (.app.tar.gz,
 # .sig, latest.json). A maintainer then publishes the draft for clients to see.
 
+# Temporarily disabled — automatic release-on-push is turned off for now.
+# To re-enable, uncomment the `push` trigger below (and optionally remove the
+# `workflow_dispatch` line). Until then this workflow only runs if triggered
+# manually from the Actions tab.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch: {}
+  # push:
+  #   branches: [main]
 
 permissions:
   contents: write
