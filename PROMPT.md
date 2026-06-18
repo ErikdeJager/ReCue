@@ -20,7 +20,7 @@ each pass is safe to repeat.
    - **ready** — open and *every* task it depends on is done.
    - **blocked** — open with an unfinished dependency → skip this pass.
 
-   Maximize parallelism: all ready tasks may run at once, capped at **3 in-flight workers** (count active worktrees under `.worktree/` that have no merged PR). If at the cap, advance only in-progress tasks this pass.
+   Maximize parallelism: all ready tasks may run at once, capped at **5 in-flight workers** (count active worktrees under `.worktree/` that have no merged PR). If at the cap, advance only in-progress tasks this pass.
 4. **Advance.** For each ready or in-progress task, invoke the **isolate-agent** skill — `/isolate-agent <number>` (do **not** pass `--wait`, so workers run in the background, in parallel). isolate-agent decides per task whether to start, report, finalize, or skip from the current git state. Finalizing/merging happens there.
 5. **Report.** Print a short table: each task → state (done / merging / running / blocked / started-this-pass).
 6. **Completion check.** If **all** tasks are `[x]` **and** `git status` is clean **and** `git rev-parse HEAD` equals `git rev-parse origin/main`, print exactly:
