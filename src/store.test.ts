@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   adjacentSessionId,
   dedupeBranchLabels,
+  REPO_PALETTE,
+  repoColor,
   repoOrder,
   useStore,
 } from "./store";
@@ -28,6 +30,7 @@ beforeEach(() => {
     inspectorOpen: false,
     recents: [],
     branches: {},
+    repoColors: {},
     claudeMissing: false,
     toasts: [],
     newSessionOpen: false,
@@ -266,6 +269,18 @@ describe("dedupeBranchLabels", () => {
 
   it("returns an empty array for no sessions", () => {
     expect(dedupeBranchLabels([])).toEqual([]);
+  });
+});
+
+describe("repoColor", () => {
+  it("returns the assigned color when set", () => {
+    expect(repoColor("/repo/a", { "/repo/a": "#abcdef" })).toBe("#abcdef");
+  });
+
+  it("derives a stable palette default when unassigned (#35)", () => {
+    const c = repoColor("/repo/a", {});
+    expect(REPO_PALETTE).toContain(c);
+    expect(repoColor("/repo/a", {})).toBe(c); // stable across calls
   });
 });
 

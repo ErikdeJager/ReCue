@@ -5,6 +5,7 @@
 //! data layer — no Tauri and no process spawning — so it is unit-tested directly
 //! below.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -36,6 +37,10 @@ pub struct PersistedState {
     pub sessions: Vec<PersistedSession>,
     #[serde(default)]
     pub recents: Vec<String>,
+    /// Per-repo color identity, keyed by repo path → hex (#35). `default` keeps
+    /// older files (without this field) loading cleanly.
+    #[serde(default)]
+    pub repo_colors: HashMap<String, String>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -103,6 +108,21 @@ impl Store {
     /// (#31) does not reappear after a restart.
     pub fn remove_recent(&self, path: &str) -> io::Result<()> {
         self.update(|state| state.recents.retain(|existing| existing != path))
+    }
+
+    /// All assigned per-repo colors (path → hex). Unassigned repos derive a
+    /// default color frontend-side (#35).
+    pub fn repo_colors(&self) -> HashMap<String, String> {
+        self.with(|state| state.repo_colors.clone())
+    }
+
+    /// Assign a repo's color and persist (#35).
+    pub fn set_repo_color(&self, path: &str, color: &str) -> io::Result<()> {
+        self.update(|state| {
+            state
+                .repo_colors
+                .insert(path.to_string(), color.to_string());
+        })
     }
 
     fn with<R>(&self, read: impl FnOnce(&PersistedState) -> R) -> R {
@@ -174,6 +194,21 @@ mod tests {
         let reloaded = Store::load(&path);
         assert_eq!(reloaded.sessions(), store.sessions());
         assert_eq!(reloaded.recents(), vec!["/repo/a".to_string()]);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn repo_colors_set_and_persist() {
+        let path = temp_path("repocolors");
+        let store = Store::load(&path);
+        store.set_repo_color("/repo/a", "#cba6f7").unwrap();
+        store.set_repo_color("/repo/a", "#a6e3a1").unwrap(); // overwrite
+        store.set_repo_color("/repo/b", "#fab387").unwrap();
+
+        let reloaded = Store::load(&path);
+        let colors = reloaded.repo_colors();
+        assert_eq!(colors.get("/repo/a").map(String::as_str), Some("#a6e3a1"));
+        assert_eq!(colors.get("/repo/b").map(String::as_str), Some("#fab387"));
         let _ = fs::remove_file(&path);
     }
 

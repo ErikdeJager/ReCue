@@ -81,6 +81,8 @@ pub fn run() {
             commands::list_sessions,
             commands::list_recents,
             commands::remove_recent,
+            commands::list_repo_colors,
+            commands::set_repo_color,
             commands::open_in_editor,
             commands::current_branch,
             commands::current_branches,

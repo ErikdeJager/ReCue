@@ -102,6 +102,14 @@
   background: var(--accent-dim);
 }
 
+/* Per-repo color identity dot (#35). */
+.repoDot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: var(--radius-dot);
+}
+
 .repoName {
   flex: 1;
   min-width: 0;
@@ -279,6 +287,53 @@
 
 .menuDanger:hover {
   background: var(--border-strong);
+}
+
+/* --- Repo color picker (#35) --- */
+.colorPicker {
+  padding: var(--space-4);
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(7, 18px);
+  gap: var(--space-4);
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  cursor: pointer;
+}
+
+.swatchActive {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 1px;
+}
+
+.customColor {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  margin-top: var(--space-6);
+  padding: var(--space-4) var(--space-6);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+}
+
+.customColor input {
+  width: 28px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  background: transparent;
+  cursor: pointer;
 }
 
 @keyframes menu-in {

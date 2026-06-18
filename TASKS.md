@@ -2316,9 +2316,9 @@ Today `src/components/Sidebar/Sidebar.tsx` keeps a `collapsed` Set and a chevron
 
 ---
 
-### 35. [ ] Per-repo color identity (assign, persist, change via context menu)
+### 35. [x] Per-repo color identity (assign, persist, change via context menu)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #31
 **Created:** 2026-06-19
 
@@ -2331,27 +2331,27 @@ want** (a palette of presets + a custom color). Colors persist across restarts.
 
 **Subtasks**
 
-1. [ ] **Backend persistence:** extend the persisted state (`src-tauri/src/store.rs` —
+1. [x] **Backend persistence:** extend the persisted state (`src-tauri/src/store.rs` —
    currently `PersistedState { sessions, recents }`) with per-repo metadata keyed by
    path, e.g. `repo_colors: HashMap<String,String>` (hex). Add a `set_repo_color(path,
    color)` command (`commands.rs` + `ipc.ts`) and include the map in the loaded state /
    a `list_repo_colors` getter. Atomic write as today.
-2. [ ] **Default color:** when a repo has no assigned color, derive a stable default by
+2. [x] **Default color:** when a repo has no assigned color, derive a stable default by
    hashing the path into the Catppuccin accent set (#33) so every repo starts with a
    distinct, consistent color.
-3. [ ] **Store:** add `repoColors: Record<string,string>` + a `setRepoColor` action;
+3. [x] **Store:** add `repoColors: Record<string,string>` + a `setRepoColor` action;
    load on init.
-4. [ ] **Color picker UI:** add "Change color…" to the repo context menu → a small
+4. [x] **Color picker UI:** add "Change color…" to the repo context menu → a small
    popover with the ~14 Catppuccin accent swatches **plus** a custom color input
    (native `<input type="color">` or a hex field) so the user can pick anything.
-5. [ ] Expose a helper `repoColor(path)` (assigned or derived default) for all consumers
+5. [x] Expose a helper `repoColor(path)` (assigned or derived default) for all consumers
    (#36 badges, #37 Focus, #34 sidebar marker).
 
 **Acceptance criteria**
 
-- [ ] Each repo has a color (sensible distinct default; user-changeable to any color).
-- [ ] Changing a repo's color updates the UI everywhere and persists across restart.
-- [ ] The color picker offers presets + a custom color.
+- [x] Each repo has a color (sensible distinct default; user-changeable to any color).
+- [x] Changing a repo's color updates the UI everywhere and persists across restart.
+- [x] The color picker offers presets + a custom color.
 
 **Notes**
 
@@ -2359,6 +2359,28 @@ want** (a palette of presets + a custom color). Colors persist across restarts.
   `src/store.ts`, `src/components/Sidebar/Sidebar.tsx` (context menu). Palette from #33.
   Consumed by #34 (sidebar marker), #36 (Overview badges), #37 (Focus). This begins
   using color as identity — coordinate token usage with #33.
+- **Done 2026-06-19.** **Backend:** `PersistedState` gained
+  `#[serde(default)] repo_colors: HashMap<String,String>` (path→hex; `default` keeps
+  old `sessions.json` loading) + `repo_colors()` getter + `set_repo_color()` (atomic
+  write). Commands `list_repo_colors` / `set_repo_color` registered; the setter
+  **validates the hex** (`#` + 3/4/6/8 hex digits) so an untrusted IPC value can't
+  store garbage. **+1 store test** (set/overwrite/persist) → 28 Rust. **Default color:**
+  pure `repoColor(path, colors)` (in `store.ts`) returns the assigned color or a stable
+  default by hashing the path into the **14-color Catppuccin `REPO_PALETTE`** (#33) — so
+  every repo starts distinct and consistent across restarts. **+2 frontend tests**
+  (assigned / stable-default). **Store:** `repoColors` state + **optimistic**
+  `setRepoColor` (updates locally for instant preview, persists in the background) +
+  loaded in `refresh` (independently, so a colors failure doesn't block sessions).
+  **Picker:** the #31 context menu refactored to a `menuMode` (`menu`/`confirm`/`color`)
+  — a **"Change color…"** item opens a swatch grid of the 14 accents **plus** a native
+  `<input type="color">` for any custom color; a swatch click sets+closes, the custom
+  input sets live. **Visible consumer now:** a per-repo **color dot** on the sidebar
+  title (driven by `repoColor`); #36 (Overview badges) and #37 (Focus) consume the same
+  helper. **Hard gate green:** Rust `fmt`/`clippy`/`test` (28) + frontend `build`/`lint`/
+  `format:check`/`test` (**41**). The persistence + default-color + validation logic is
+  unit-tested; the picker/dot are runtime-visual, not launched headlessly. Minor known
+  note: dragging in the native color picker fires `onChange` repeatedly → repeated
+  background persists (last wins; harmless, debounce-able in a later polish pass).
 
 ---
 

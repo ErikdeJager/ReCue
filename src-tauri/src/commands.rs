@@ -125,6 +125,37 @@ pub fn remove_recent(store: State<'_, Store>, path: String) -> Result<(), Sessio
 }
 
 #[tauri::command]
+pub fn list_repo_colors(store: State<'_, Store>) -> std::collections::HashMap<String, String> {
+    store.repo_colors()
+}
+
+/// Assign a repo's color identity (#35). The color is validated as a hex string
+/// so an untrusted IPC value can't store arbitrary content.
+#[tauri::command]
+pub fn set_repo_color(
+    store: State<'_, Store>,
+    path: String,
+    color: String,
+) -> Result<(), SessionError> {
+    if !is_hex_color(&color) {
+        return Err(SessionError::Io(format!("invalid color `{color}`")));
+    }
+    store
+        .set_repo_color(&path, &color)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
+/// `#` followed by 3/4/6/8 hex digits.
+fn is_hex_color(value: &str) -> bool {
+    match value.strip_prefix('#') {
+        Some(hex) => {
+            matches!(hex.len(), 3 | 4 | 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit())
+        }
+        None => false,
+    }
+}
+
+#[tauri::command]
 pub fn open_in_editor(cwd: String) -> Result<(), SessionError> {
     pty::open_in_editor(&cwd)
 }

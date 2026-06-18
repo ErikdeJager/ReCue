@@ -2,7 +2,13 @@ import { useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
 
 import { repoName } from "../../paths";
-import { dedupeBranchLabels, repoOrder, useStore } from "../../store";
+import {
+  dedupeBranchLabels,
+  REPO_PALETTE,
+  repoColor,
+  repoOrder,
+  useStore,
+} from "../../store";
 import type { SessionView } from "../../types";
 import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import styles from "./Sidebar.module.css";
@@ -63,18 +69,23 @@ function Sidebar() {
   const setView = useStore((s) => s.setView);
   const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
+  const repoColors = useStore((s) => s.repoColors);
+  const setRepoColor = useStore((s) => s.setRepoColor);
 
-  // Right-click repo context menu (#31): anchored at the cursor; `confirming`
-  // arms the destructive Forget when the repo has running agents.
+  // Right-click repo context menu (#31/#35), anchored at the cursor. `menuMode`
+  // switches between the item list, the destructive Forget confirm, and the
+  // color picker.
   const [menu, setMenu] = useState<{
     repo: string;
     x: number;
     y: number;
   } | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  const [menuMode, setMenuMode] = useState<"menu" | "confirm" | "color">(
+    "menu",
+  );
   const closeMenu = () => {
     setMenu(null);
-    setConfirming(false);
+    setMenuMode("menu");
   };
 
   const repos = repoOrder(recents, sessions);
@@ -92,7 +103,7 @@ function Sidebar() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setMenu(null);
-        setConfirming(false);
+        setMenuMode("menu");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -145,7 +156,7 @@ function Sidebar() {
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setMenu({ repo, x: event.clientX, y: event.clientY });
-                  setConfirming(false);
+                  setMenuMode("menu");
                 }}
               >
                 {/* Left-click a repo title filters Overview to it (toggle);
@@ -160,6 +171,10 @@ function Sidebar() {
                   title={`Filter Overview to ${repoName(repo)}`}
                   aria-pressed={isFiltered}
                 >
+                  <span
+                    className={styles.repoDot}
+                    style={{ background: repoColor(repo, repoColors) }}
+                  />
                   <span className={styles.repoName}>{repoName(repo)}</span>
                   {!isEmpty && (
                     <span className={styles.count}>{repoSessions.length}</span>
@@ -208,24 +223,74 @@ function Sidebar() {
             style={{ left: menu.x, top: menu.y }}
             role="menu"
           >
-            <button
-              type="button"
-              role="menuitem"
-              className={confirming ? styles.menuDanger : styles.menuItem}
-              onClick={() => {
-                // Confirm first only when agents are running in this folder.
-                if (menuRunning > 0 && !confirming) {
-                  setConfirming(true);
-                } else {
+            {menuMode === "color" ? (
+              <div className={styles.colorPicker}>
+                <div className={styles.swatches}>
+                  {REPO_PALETTE.map((hex) => (
+                    <button
+                      key={hex}
+                      type="button"
+                      className={`${styles.swatch} ${repoColor(menu.repo, repoColors) === hex ? styles.swatchActive : ""}`}
+                      style={{ background: hex }}
+                      onClick={() => {
+                        void setRepoColor(menu.repo, hex);
+                        closeMenu();
+                      }}
+                      title={hex}
+                      aria-label={`Set color ${hex}`}
+                    />
+                  ))}
+                </div>
+                <label className={styles.customColor}>
+                  <span>Custom</span>
+                  <input
+                    type="color"
+                    value={repoColor(menu.repo, repoColors)}
+                    onChange={(event) =>
+                      void setRepoColor(menu.repo, event.currentTarget.value)
+                    }
+                  />
+                </label>
+              </div>
+            ) : menuMode === "confirm" ? (
+              <button
+                type="button"
+                role="menuitem"
+                className={styles.menuDanger}
+                onClick={() => {
                   void forgetRepo(menu.repo);
                   closeMenu();
-                }
-              }}
-            >
-              {confirming
-                ? `Kill ${menuRunning} agent${menuRunning === 1 ? "" : "s"} & forget?`
-                : "Forget folder"}
-            </button>
+                }}
+              >
+                Kill {menuRunning} agent{menuRunning === 1 ? "" : "s"} & forget?
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => setMenuMode("color")}
+                >
+                  Change color…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    // Confirm first only when agents are running in this folder.
+                    if (menuRunning > 0) setMenuMode("confirm");
+                    else {
+                      void forgetRepo(menu.repo);
+                      closeMenu();
+                    }
+                  }}
+                >
+                  Forget folder
+                </button>
+              </>
+            )}
           </div>
         </>
       )}

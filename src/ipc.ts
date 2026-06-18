@@ -49,6 +49,14 @@ export const listRecents = () => invoke<string[]>("list_recents");
 export const removeRecent = (path: string) =>
   invoke<void>("remove_recent", { path });
 
+/** Assigned per-repo colors, path → hex (#35). */
+export const listRepoColors = () =>
+  invoke<Record<string, string>>("list_repo_colors");
+
+/** Assign a repo's color identity (#35). */
+export const setRepoColor = (path: string, color: string) =>
+  invoke<void>("set_repo_color", { path, color });
+
 export const openInEditor = (cwd: string) =>
   invoke<void>("open_in_editor", { cwd });
 

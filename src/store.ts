@@ -112,6 +112,50 @@ export function adjacentSessionId(
   return sessions[next]?.id ?? null;
 }
 
+/**
+ * The Catppuccin accent palette (#33) used for per-repo color identity (#35) —
+ * the source for default repo colors and the picker swatches.
+ */
+export const REPO_PALETTE = [
+  "#f5e0dc", // Rosewater
+  "#f2cdcd", // Flamingo
+  "#f5c2e7", // Pink
+  "#cba6f7", // Mauve
+  "#f38ba8", // Red
+  "#eba0ac", // Maroon
+  "#fab387", // Peach
+  "#f9e2af", // Yellow
+  "#a6e3a1", // Green
+  "#94e2d5", // Teal
+  "#89dceb", // Sky
+  "#74c7ec", // Sapphire
+  "#89b4fa", // Blue
+  "#b4befe", // Lavender
+];
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+/**
+ * A repo's color identity (#35): the user-assigned color if any, else a stable
+ * default derived by hashing the path into the Catppuccin palette so each repo
+ * starts distinct and consistent across restarts. Pure.
+ */
+export function repoColor(
+  path: string,
+  colors: Record<string, string>,
+): string {
+  const assigned = colors[path];
+  if (assigned) return assigned;
+  const idx = hashString(path) % REPO_PALETTE.length;
+  return REPO_PALETTE[idx] ?? REPO_PALETTE[0] ?? "#cba6f7";
+}
+
 export interface AppState {
   // --- State ---
   sessions: SessionView[];
@@ -123,6 +167,8 @@ export interface AppState {
   recents: string[];
   /** Current branch per repo path (from git reading); "" when unknown/non-git. */
   branches: Record<string, string>;
+  /** Assigned per-repo colors, path → hex (#35); unassigned repos derive a default. */
+  repoColors: Record<string, string>;
   claudeMissing: boolean;
   toasts: Toast[];
   /** New session modal (rendered by #10); `newSessionRepo` optionally prefills it. */
@@ -165,6 +211,8 @@ export interface AppState {
   init: () => Promise<void>;
   refresh: () => Promise<void>;
   refreshBranches: () => Promise<void>;
+  /** Assign a repo's color (optimistic + persisted) (#35). */
+  setRepoColor: (path: string, color: string) => Promise<void>;
   checkForUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
   /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
@@ -189,6 +237,7 @@ export const useStore = create<AppState>()((set, get) => ({
   inspectorOpen: false,
   recents: [],
   branches: {},
+  repoColors: {},
   claudeMissing: false,
   toasts: [],
   newSessionOpen: false,
@@ -355,6 +404,12 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Backend unreachable (e.g. running outside Tauri).
     }
+    // Repo colors load independently so a failure here doesn't block sessions.
+    try {
+      set({ repoColors: await ipc.listRepoColors() });
+    } catch {
+      // Backend unreachable; leave colors as-is.
+    }
   },
 
   refreshBranches: async () => {
@@ -365,6 +420,17 @@ export const useStore = create<AppState>()((set, get) => ({
       set({ branches: await ipc.currentBranches(repos) });
     } catch {
       // Backend unreachable; leave branches as-is.
+    }
+  },
+
+  setRepoColor: async (path, color) => {
+    // Optimistic: the color is purely visual, so update immediately and persist
+    // in the background (#35).
+    set((s) => ({ repoColors: { ...s.repoColors, [path]: color } }));
+    try {
+      await ipc.setRepoColor(path, color);
+    } catch {
+      // Persist failed (e.g. outside Tauri); the local color stays for the session.
     }
   },
 
