@@ -7,6 +7,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
+  BranchList,
   ExitPayload,
   OutputPayload,
   SessionRecord,
@@ -56,6 +57,14 @@ export const currentBranches = (paths: string[]) =>
 
 export const workingDiff = (cwd: string) =>
   invoke<WorkingDiff>("working_diff", { cwd });
+
+/** Local branches + current branch for a folder (new-session branch picker). */
+export const listBranches = (cwd: string) =>
+  invoke<BranchList>("list_branches", { cwd });
+
+/** Check out an existing local branch in `cwd` (the first git write — #27). */
+export const checkoutBranch = (cwd: string, branch: string) =>
+  invoke<void>("checkout_branch", { cwd, branch });
 
 export interface SessionEventHandlers {
   onOutput: (payload: OutputPayload) => void;

@@ -38,6 +38,8 @@ pub enum SessionError {
     Spawn(String),
     #[error("pty error: {0}")]
     Io(String),
+    #[error("{0}")]
+    Git(String),
 }
 
 impl SessionError {
@@ -47,6 +49,7 @@ impl SessionError {
             Self::SessionNotFound(_) => "SessionNotFound",
             Self::Spawn(_) => "Spawn",
             Self::Io(_) => "Io",
+            Self::Git(_) => "Git",
         }
     }
 }

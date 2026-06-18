@@ -1,29 +1,34 @@
+/* Transparent full-screen catcher: closes on outside click without dimming the
+   app (this is a compact popover, not a screen-takeover modal). */
 .overlay {
   position: fixed;
   inset: 0;
   z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-24);
-  background: rgba(0, 0, 0, 0.5);
-  animation: overlay-in var(--dur-fast) var(--ease-out);
 }
 
-.sheet {
-  width: min(460px, 100%);
-  padding: var(--space-24);
+/* Compact popover anchored bottom-left, overlaying part of the sidebar. */
+.popover {
+  position: fixed;
+  left: var(--space-12);
+  bottom: var(--space-12);
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-height: calc(100vh - var(--space-24));
+  overflow-y: auto;
+  padding: var(--space-16);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-window);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-popover);
-  animation: sheet-in var(--dur-slow) var(--ease-out);
+  animation: popover-in var(--dur-fast) var(--ease-out);
 }
 
 .title {
-  margin: 0 0 var(--space-20);
+  margin: 0 0 var(--space-12);
   color: var(--text-primary);
-  font-size: 16px;
+  font-size: var(--fs-ui);
   font-weight: 600;
 }
 
@@ -31,7 +36,7 @@
   display: block;
   margin: 0 0 var(--space-6);
   color: var(--text-secondary);
-  font-size: var(--fs-meta);
+  font-size: var(--fs-meta-sm);
 }
 
 .pickRow {
@@ -46,13 +51,13 @@
   align-items: center;
   gap: var(--space-6);
   flex-shrink: 0;
-  padding: var(--space-6) var(--space-12);
+  padding: var(--space-4) var(--space-8);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--bg-panel);
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-meta-sm);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
 }
@@ -83,11 +88,11 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-6);
-  margin-bottom: var(--space-20);
+  margin-bottom: var(--space-12);
 }
 
 .chip {
-  padding: var(--space-4) var(--space-8);
+  padding: 2px var(--space-8);
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-chip);
   background: var(--bg-panel);
@@ -110,21 +115,113 @@
   background: var(--accent-dim);
 }
 
+/* Branch picker — a compact scrollable list (capped so the popover stays small). */
+.branches {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 132px;
+  margin-bottom: var(--space-12);
+  overflow-y: auto;
+}
+
+.branch,
+.branchActive {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-4) var(--space-6);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.branch:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.branchActive {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.branchName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchCurrent {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
 .input {
   width: 100%;
-  margin-bottom: var(--space-24);
-  padding: var(--space-8);
+  margin-bottom: var(--space-12);
+  padding: var(--space-6) var(--space-8);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--bg-base);
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--fs-ui);
+  font-size: var(--fs-meta);
 }
 
 .input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* Destructive-checkout warning (on-system: icon + secondary text, no status
+   color); the checkbox gates Create. */
+.warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-6);
+  margin-bottom: var(--space-12);
+  padding: var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  cursor: pointer;
+}
+
+.warnIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--text-secondary);
+}
+
+.warnText {
+  flex: 1;
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.4;
+}
+
+.warnText strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.warnCheck {
+  flex-shrink: 0;
+  margin-top: 1px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .actions {
@@ -135,10 +232,10 @@
 
 .cancel,
 .create {
-  padding: var(--space-8) var(--space-16);
+  padding: var(--space-6) var(--space-12);
   border-radius: var(--radius-control);
   font: inherit;
-  font-size: var(--fs-ui);
+  font-size: var(--fs-meta);
   font-weight: 500;
   cursor: pointer;
 }
@@ -169,22 +266,13 @@
   cursor: not-allowed;
 }
 
-@keyframes overlay-in {
+@keyframes popover-in {
   from {
     opacity: 0;
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
-  }
-}
-
-@keyframes sheet-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }

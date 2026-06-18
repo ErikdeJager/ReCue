@@ -84,6 +84,8 @@ pub fn run() {
             commands::current_branch,
             commands::current_branches,
             commands::working_diff,
+            commands::list_branches,
+            commands::checkout_branch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

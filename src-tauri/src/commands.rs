@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tauri::State;
 
-use crate::git::{self, WorkingDiff};
+use crate::git::{self, BranchList, WorkingDiff};
 use crate::pty::{self, SessionError, SessionManager};
 use crate::store::{PersistedSession, Store};
 
@@ -134,6 +134,18 @@ pub fn current_branches(paths: Vec<String>) -> std::collections::HashMap<String,
 #[tauri::command]
 pub fn working_diff(cwd: String) -> WorkingDiff {
     git::working_diff(cwd)
+}
+
+#[tauri::command]
+pub fn list_branches(cwd: String) -> BranchList {
+    git::list_branches(cwd)
+}
+
+/// Check out a branch in `cwd` (the first git write — see #27). Errors surface as
+/// a typed `SessionError::Git { message }` carrying git's explanation.
+#[tauri::command]
+pub fn checkout_branch(cwd: String, branch: String) -> Result<(), SessionError> {
+    git::checkout_branch(&cwd, &branch).map_err(SessionError::Git)
 }
 
 fn now_secs() -> u64 {

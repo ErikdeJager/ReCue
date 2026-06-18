@@ -102,8 +102,13 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 
 ## v1 scope decisions / out of scope
 
-- **No git writes** — ClaudeCue only *reads* git (current branch + working-tree
-  diff vs `HEAD`); it never creates branches or commits.
+- **Git is read-only, with one deliberate exception** — ClaudeCue reads git
+  (current branch + working-tree diff vs `HEAD`) and never creates branches or
+  commits. The lone write is **`git checkout <existing branch>`** from the
+  new-session popover (#27): picking a branch checks it out (in the chosen folder)
+  before the agent starts. It only switches to a branch that already exists
+  locally (validated backend-side) and warns before disrupting another agent
+  already running in that folder. No branch creation, commits, or other writes.
 - No status system (no pills/dots/awaiting-glow/floating) and no app-rendered
   approval UI — users answer prompts directly in the terminal.
 - No Archive (single **Remove = kill + forget**), no Skills manager, no Fork, no

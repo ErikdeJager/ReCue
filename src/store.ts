@@ -144,7 +144,12 @@ export interface AppState {
   refreshBranches: () => Promise<void>;
   checkForUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
-  spawnSession: (cwd: string, name?: string) => Promise<void>;
+  /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
+  spawnSession: (
+    cwd: string,
+    name?: string,
+    branch?: string,
+  ) => Promise<boolean>;
   restartSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   openInZed: (cwd: string) => Promise<void>;
@@ -309,13 +314,20 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  spawnSession: async (cwd, name) => {
+  spawnSession: async (cwd, name, branch) => {
     try {
+      // Optional branch checkout (#27) before spawning the agent. A failed
+      // checkout (e.g. dirty tree) aborts without spawning so nothing starts on
+      // the wrong branch.
+      if (branch) await ipc.checkoutBranch(cwd, branch);
       const record = await ipc.spawnSession(cwd, name);
       get().upsertSession(toSessionView(record));
       set((s) => ({ recents: [cwd, ...s.recents.filter((r) => r !== cwd)] }));
       get().select(record.id);
       get().pushToast(`Started ${record.name ?? cwd}`);
+      // A checkout (or a brand-new repo) can change the branch label — refresh.
+      void get().refreshBranches();
+      return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
         get().setClaudeMissing(true);
@@ -324,6 +336,7 @@ export const useStore = create<AppState>()((set, get) => ({
         isSessionError(err) ? err.message : "Failed to start session",
         "error",
       );
+      return false;
     }
   },
 

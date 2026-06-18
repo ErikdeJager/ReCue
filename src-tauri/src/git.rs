@@ -1,6 +1,8 @@
-//! Read-only git support: current branch + working-tree diff vs `HEAD`.
+//! Git support: current branch + working-tree diff vs `HEAD`, branch listing,
+//! and the single write (`checkout_branch`, #27).
 //!
-//! ClaudeCue never writes git. We **shell out to `git`** (rather than linking
+//! Reads aside, the lone write is `checkout_branch` (switch to an *existing*
+//! local branch). We **shell out to `git`** (rather than linking
 //! `git2`/libgit2) because the value here is a faithful unified-diff parse, and
 //! the parser — the part with real logic — is then a pure `&str -> structs`
 //! function that is unit-tested against fixtures with no repo on disk. The thin
@@ -74,6 +76,14 @@ pub struct WorkingDiff {
     pub files: Vec<FileDiff>,
 }
 
+/// Local branches of a folder, with the currently checked-out one. A non-git
+/// folder yields `{ current: "", all: [] }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BranchList {
+    pub current: String,
+    pub all: Vec<String>,
+}
+
 /// Current branch name, a short sha when detached, or `""` for a non-git dir.
 pub fn current_branch(cwd: impl AsRef<Path>) -> String {
     let cwd = cwd.as_ref();
@@ -134,6 +144,56 @@ pub fn working_diff(cwd: impl AsRef<Path>) -> WorkingDiff {
             dels,
         },
         files,
+    }
+}
+
+/// Local branches of `cwd` plus the current one (for the new-session branch
+/// picker). Non-git folders / repos with no branches return an empty list, which
+/// the UI treats as "just spawn here" (no branch picker).
+pub fn list_branches(cwd: impl AsRef<Path>) -> BranchList {
+    let cwd = cwd.as_ref();
+    let all = run_git(
+        cwd,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    )
+    .map(|out| {
+        out.lines()
+            .map(str::to_string)
+            .filter(|line| !line.is_empty())
+            .collect()
+    })
+    .unwrap_or_default();
+    BranchList {
+        current: current_branch(cwd),
+        all,
+    }
+}
+
+/// Check out an existing local branch in `cwd` — the first intentional git
+/// *write* (see CLAUDE.md). The branch must already exist locally (we validate
+/// against `list_branches`, which also blocks flag-like / arbitrary refspecs from
+/// the IPC boundary). On failure (e.g. a dirty tree that would be overwritten)
+/// returns git's stderr so the UI can explain it; never panics.
+pub fn checkout_branch(cwd: impl AsRef<Path>, branch: &str) -> Result<(), String> {
+    let cwd = cwd.as_ref();
+    if !list_branches(cwd).all.iter().any(|b| b == branch) {
+        return Err(format!("unknown branch `{branch}`"));
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["checkout", branch])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("could not check out `{branch}`")
+        } else {
+            stderr
+        })
     }
 }
 
@@ -542,6 +602,52 @@ index 0..1
         let map = current_branches(&[repo.clone(), nongit.clone()]);
         assert!(!map.get(&repo).unwrap().is_empty());
         assert_eq!(map.get(&nongit).map(String::as_str), Some(""));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_branches_returns_locals_and_current() {
+        let Some(dir) = init_repo("listbranches") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        assert!(git_in(&dir, &["branch", "feature"]));
+
+        let list = list_branches(&dir);
+        assert!(list.all.iter().any(|b| b == "feature"));
+        assert!(list.all.iter().any(|b| b == &list.current));
+        assert!(!list.current.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_branches_is_empty_for_non_git() {
+        let dir = unique_dir("listbranches-nongit");
+        fs::create_dir_all(&dir).unwrap();
+        let list = list_branches(&dir);
+        assert_eq!(list.current, "");
+        assert!(list.all.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checkout_branch_switches_and_rejects_unknown() {
+        let Some(dir) = init_repo("checkout") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        assert!(git_in(&dir, &["branch", "feature"]));
+
+        assert!(checkout_branch(&dir, "feature").is_ok());
+        assert_eq!(current_branch(&dir), "feature");
+
+        // Unknown branch is rejected without touching the tree.
+        assert!(checkout_branch(&dir, "does-not-exist").is_err());
+        assert_eq!(current_branch(&dir), "feature");
 
         let _ = fs::remove_dir_all(&dir);
     }

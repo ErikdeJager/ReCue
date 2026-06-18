@@ -17,8 +17,14 @@ export interface SessionRecord {
 
 /** Typed command error (mirrors `pty::SessionError`, serialized `{ kind, message }`). */
 export interface SessionError {
-  kind: "BinaryNotFound" | "SessionNotFound" | "Spawn" | "Io";
+  kind: "BinaryNotFound" | "SessionNotFound" | "Spawn" | "Io" | "Git";
   message: string;
+}
+
+/** Local branches of a folder + the current one (mirrors `git::BranchList`). */
+export interface BranchList {
+  current: string;
+  all: string[];
 }
 
 export type FileStatusCode = "M" | "A" | "D";

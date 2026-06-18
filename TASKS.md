@@ -1722,9 +1722,9 @@ The New session button is too tall/bulky. Make it **thinner and cleaner**, and a
 
 ---
 
-### 27. [ ] New session as a compact bottom-left popover with branch auto-detect
+### 27. [x] New session as a compact bottom-left popover with branch auto-detect
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-18
 
@@ -1743,36 +1743,36 @@ isolation is a separate future effort — do not reference it here).
 
 **Subtasks**
 
-1. [ ] **Popover UI:** replace the full-screen overlay with a small popover anchored
+1. [x] **Popover UI:** replace the full-screen overlay with a small popover anchored
    bottom-left over the sidebar (on-system surface + the single popover shadow); close
    on Escape / outside click. Keep the folder picker + recent-folder chips + the
    **optional name** field (feeds the thin sub-text from #21). Preserve autofocus +
    Enter-to-create.
-2. [ ] **Branch detection (backend):** add a read-only command to **list local
+2. [x] **Branch detection (backend):** add a read-only command to **list local
    branches** for a folder (e.g. `list_branches(cwd)` in `src-tauri/src/git.rs`) + a
    typed IPC wrapper. Non-git folders return empty (fall back to "just spawn here").
-3. [ ] **Branch picker (frontend):** when the folder is a git repo, show its branches
+3. [x] **Branch picker (frontend):** when the folder is a git repo, show its branches
    as selectable options with the current branch indicated; default to current.
-4. [ ] **Checkout on create (backend):** add a `checkout_branch(cwd, branch)` command
+4. [x] **Checkout on create (backend):** add a `checkout_branch(cwd, branch)` command
    (the first git *write*) running `git checkout <branch>`; surface a typed error on
    failure (e.g. dirty-tree conflict) without crashing. Spawn the agent only after a
    successful checkout.
-5. [ ] **Destructive warning:** show a clear inline warning **only when** the chosen
+5. [x] **Destructive warning:** show a clear inline warning **only when** the chosen
    branch differs from the folder's current branch **and** ≥1 agent is already running
    in that folder — explaining the checkout may disrupt that agent. Require
    acknowledgement to proceed.
-6. [ ] Update capabilities/docs as needed; keep the diff inspector working after a
+6. [x] Update capabilities/docs as needed; keep the diff inspector working after a
    checkout.
 
 **Acceptance criteria**
 
-- [ ] New session opens as a small bottom-left popover over the sidebar, not a
+- [x] New session opens as a small bottom-left popover over the sidebar, not a
   full-screen modal.
-- [ ] Selecting a git folder lists its branches; picking one checks it out then starts
+- [x] Selecting a git folder lists its branches; picking one checks it out then starts
   the agent there.
-- [ ] The disruptive-checkout warning appears exactly when branch ≠ current AND an
+- [x] The disruptive-checkout warning appears exactly when branch ≠ current AND an
   agent is already running in that folder, and is acknowledged before proceeding.
-- [ ] Non-git folders still work (spawn in the folder, no branch UI). Build/lint/tests
+- [x] Non-git folders still work (spawn in the folder, no branch UI). Build/lint/tests
   green.
 
 **Notes**
@@ -1784,6 +1784,38 @@ isolation is a separate future effort — do not reference it here).
   needed. **Scope note:** first intentional git write — document it in `CLAUDE.md`
   (the "No git writes" note) as a deliberate change. Related: #21 (naming/sub-text),
   #26 (⌘N opens this).
+- **Done 2026-06-19.** **Backend (first git write):** `git.rs` gained
+  `BranchList { current, all }` + **`list_branches(cwd)`** (`git for-each-ref
+  refs/heads`; non-git → empty) and **`checkout_branch(cwd, branch)`** — runs
+  `git checkout <branch>` but **only after validating the branch exists locally**
+  (blocks flag-like / arbitrary refspecs from the IPC boundary; args passed
+  separately, no shell), returning git's stderr (e.g. dirty-tree conflict) on failure,
+  never panicking. New `SessionError::Git` variant (`pty.rs`) carries that message as
+  `{ kind: "Git", message }`; commands `list_branches` / `checkout_branch` registered
+  in `lib.rs`. **No capability change** — custom commands are invokable by default
+  (only plugin/core perms live in capabilities). **+3 git integration tests** (list
+  branches + current, non-git empty, checkout switches / rejects unknown) → **26
+  Rust**. **Frontend:** `NewSessionModal` rewritten into a **compact bottom-left
+  popover** (`position: fixed; bottom/left: 12px; width 300px`, `--bg-elevated` +
+  `--shadow-popover`, slide-up) over a **transparent** full-screen catcher (outside-
+  click close, no screen dim) — kept Escape, folder picker, recent chips, optional
+  name, autofocus, Enter-to-create. On folder change it calls `listBranches`; a git
+  repo shows a capped scrollable **branch picker** (mono, `current` tag, defaults to
+  current). `spawnSession` now takes an optional `branch` → `checkoutBranch` **before**
+  spawning (aborts the spawn if checkout fails so nothing starts on the wrong branch),
+  returns a success bool (popover closes only on success), and `refreshBranches()` after
+  so the label reflects the checkout. **Destructive warning** (`AlertTriangle` + a gating
+  **ack checkbox**) shows exactly when the picked branch ≠ current **and** ≥1 non-exited
+  agent runs in that folder; on-system styling only (no reserved status color). Non-git
+  folders show no branch UI and just spawn. `ipc.ts` + `types` got `BranchList` /
+  `listBranches` / `checkoutBranch` (`SessionError` kind union gained `"Git"`).
+  **Docs:** `CLAUDE.md` "git writes" note + the `git.rs` header rewritten to record the
+  one deliberate write. **Hard gate green:** Rust `fmt`/`clippy`/`test` (26) + frontend
+  `build`/`lint`/`format:check`/`test` (35). The git read/write/validation logic is
+  unit-tested; the popover UI + checkout-on-create flow are runtime-visual and were not
+  launched headlessly (no GUI + real `claude`/repo in this automation). The diff
+  inspector is unaffected — `working_diff` re-runs git each call, so it shows the new
+  branch's diff on its next fetch (live auto-refresh is #29).
 
 ---
 
