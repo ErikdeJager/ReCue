@@ -2445,9 +2445,9 @@ the per-repo color from #35), and the wall respects the **repo filter** from #34
 
 ---
 
-### 37. [ ] Show the repo color + badge in Focus
+### 37. [x] Show the repo color + badge in Focus
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #35
 **Created:** 2026-06-19
 
@@ -2459,20 +2459,33 @@ identity is consistent across views. Add a colored repo badge to the Focus toolb
 
 **Subtasks**
 
-1. [ ] Render a repo badge (repo name + color dot/chip in the repo color from #35) in
+1. [x] Render a repo badge (repo name + color dot/chip in the repo color from #35) in
    the Focus toolbar for the selected session.
-2. [ ] Optionally tint a subtle accent (e.g. a thin top/side rule) with the repo color
+2. [x] Optionally tint a subtle accent (e.g. a thin top/side rule) with the repo color
    so Focus clearly belongs to that repo — keep it tasteful, on-system.
 
 **Acceptance criteria**
 
-- [ ] Focus shows the selected agent's repo name + color, matching the Overview badge.
-- [ ] Consistent with the sidebar/Overview color for the same repo.
+- [x] Focus shows the selected agent's repo name + color, matching the Overview badge.
+- [x] Consistent with the sidebar/Overview color for the same repo.
 
 **Notes**
 
 - Files: `src/components/Focus/Focus.tsx` (+ css), `src/store.ts` (`repoColors`).
   Small, depends only on the #35 color source.
+- **Done 2026-06-19.** Focus now reads the focused session's color via
+  `repoColor(session.repoPath, repoColors)` (#35 — the same source as the sidebar dot
+  and the Overview badge, so they always match). The toolbar shows a **colored repo
+  badge** (a `--radius-dot` color dot + the repo name, mono) at its start, and `.focus`
+  carries a **2px repo-color top rule** (inline `borderTopColor` over a transparent
+  `border-top`) echoing the Overview card band. To avoid duplicating the repo name, the
+  session **chip was simplified** to `branch · id8` (the badge now carries the repo
+  identity); it still copies the `claude --resume <id>` command (#28). With no session
+  selected, `color` is `undefined` → no badge (inside `{session && …}`) and no top rule.
+  On-system tokens only. **Hard gate green:** frontend `build`/`lint`/`format:check`/
+  `test` (41). Pure frontend change — no Rust, no new tests (`repoColor` already
+  unit-tested; the badge/rule are visual). Runtime-visual, not launched headlessly;
+  color consistency is guaranteed by the shared helper.
 
 ---
 

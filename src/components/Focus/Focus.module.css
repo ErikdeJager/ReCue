@@ -2,6 +2,8 @@
   display: flex;
   height: 100%;
   flex-direction: column;
+  /* Subtle repo-color top rule (#37) — filled via inline borderTopColor. */
+  border-top: 2px solid transparent;
 }
 
 .toolbar {
@@ -12,6 +14,31 @@
   gap: var(--space-8);
   padding: 0 var(--space-12);
   border-bottom: 1px solid var(--border-hairline);
+}
+
+/* Colored repo badge (#37): color dot + repo name, matching Overview/sidebar. */
+.badge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+}
+
+.badgeDot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: var(--radius-dot);
+}
+
+.badgeName {
+  max-width: 160px;
+  overflow: hidden;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chip {

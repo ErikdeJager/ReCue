@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Copy, ExternalLink, PanelRight } from "lucide-react";
 
 import { repoName } from "../../paths";
-import { useStore } from "../../store";
+import { repoColor, useStore } from "../../store";
 import DiffInspector from "../DiffInspector/DiffInspector";
 import Terminal from "../Terminal/Terminal";
 import styles from "./Focus.module.css";
@@ -11,9 +11,10 @@ import styles from "./Focus.module.css";
 const TABS = [{ id: "diff", label: "Diff" }];
 
 /**
- * Single-session view: a large terminal filling the area, a toolbar (copy-able
- * session chip, Open in Zed, inspector toggle), and a collapsible inspector with
- * an extensible tab strip. The Overview/Focus switch lives in the sidebar (#25).
+ * Single-session view: a large terminal filling the area, a toolbar (colored
+ * repo badge #37, copy-able session chip, Open in Zed, inspector toggle), and a
+ * collapsible inspector with an extensible tab strip. The Overview/Focus switch
+ * lives in the sidebar (#25).
  */
 function Focus() {
   const selectedId = useStore((s) => s.selectedId);
@@ -23,17 +24,31 @@ function Focus() {
   const toggleInspector = useStore((s) => s.toggleInspector);
   const openInZed = useStore((s) => s.openInZed);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
+  const repoColors = useStore((s) => s.repoColors);
 
   const [activeTab, setActiveTab] = useState("diff");
 
   const session = sessions.find((x) => x.id === selectedId);
   const branch = session ? (branches[session.repoPath] ?? "") : "";
+  // Repo color identity (#35), shown as the toolbar badge + a subtle top rule so
+  // Focus matches the sidebar/Overview color for this repo (#37).
+  const color = session ? repoColor(session.repoPath, repoColors) : undefined;
 
   return (
-    <div className={styles.focus}>
+    <div
+      className={styles.focus}
+      style={color ? { borderTopColor: color } : undefined}
+    >
       <div className={styles.toolbar}>
         {session && (
           <>
+            {/* Colored repo badge (#37) — matches the Overview/sidebar color. */}
+            <span className={styles.badge}>
+              <span className={styles.badgeDot} style={{ background: color }} />
+              <span className={styles.badgeName}>
+                {repoName(session.repoPath)}
+              </span>
+            </span>
             <button
               type="button"
               className={styles.chip}
@@ -46,8 +61,8 @@ function Focus() {
               title="Copy resume command (claude --resume <id>)"
             >
               <span className={styles.chipText}>
-                {repoName(session.repoPath)}
-                {branch && ` · ${branch}`} · {session.id.slice(0, 8)}
+                {branch && `${branch} · `}
+                {session.id.slice(0, 8)}
               </span>
               <Copy size={13} strokeWidth={1.5} />
             </button>
