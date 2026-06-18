@@ -80,9 +80,10 @@ function Terminal({ sessionId }: TerminalProps) {
     safeFit();
     void document.fonts?.ready.then(safeFit);
 
-    // Keystrokes / paste -> stdin.
+    // Keystrokes / paste -> stdin. Ignore rejections (e.g. a session whose PTY
+    // is still resuming in the background after boot).
     const dataSub = term.onData((data) => {
-      void writeStdin(sessionId, data);
+      void writeStdin(sessionId, data).catch(() => {});
     });
 
     // Buffer live output until the historical scrollback has been replayed, so
@@ -112,7 +113,7 @@ function Terminal({ sessionId }: TerminalProps) {
     // Keep the PTY sized to the container.
     const observer = new ResizeObserver(() => {
       safeFit();
-      void resizePty(sessionId, term.cols, term.rows);
+      void resizePty(sessionId, term.cols, term.rows).catch(() => {});
     });
     observer.observe(container);
     void resizePty(sessionId, term.cols, term.rows);

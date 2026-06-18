@@ -58,12 +58,16 @@ function NewSessionModal() {
 
   return (
     <div className={styles.overlay} onClick={close}>
-      <div
+      <form
         className={styles.sheet}
         role="dialog"
         aria-modal="true"
         aria-label="New session"
         onClick={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void create();
+        }}
       >
         <h2 className={styles.title}>New session</h2>
 
@@ -107,6 +111,7 @@ function NewSessionModal() {
           value={name}
           placeholder={cwd ? repoName(cwd) : "Defaults to the folder name"}
           onChange={(event) => setName(event.currentTarget.value)}
+          autoFocus
         />
 
         <div className={styles.actions}>
@@ -114,15 +119,14 @@ function NewSessionModal() {
             Cancel
           </button>
           <button
-            type="button"
+            type="submit"
             className={styles.create}
-            onClick={() => void create()}
             disabled={!cwd || busy}
           >
             Create
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

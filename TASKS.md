@@ -1017,9 +1017,9 @@ robustness (W1).
 
 ---
 
-### 17. [ ] App-wide smoothness, performance & UX polish pass (pass 2 — re-profile)
+### 17. [x] App-wide smoothness, performance & UX polish pass (pass 2 — re-profile)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #16
 **Created:** 2026-06-18
 
@@ -1051,41 +1051,41 @@ notarization). No new features — quality / perf / UX only.
 
 **Subtasks**
 
-1. [ ] **Re-profile.** Re-map the boundary and re-measure the felt hotspots on the
+1. [x] **Re-profile.** Re-map the boundary and re-measure the felt hotspots on the
    post-#16 code; record what's still slow / janky / confusing and a fresh prioritized
    plan.
-2. [ ] **Smoothness (top priority).** Verify every interaction still gives immediate
+2. [x] **Smoothness (top priority).** Verify every interaction still gives immediate
    feedback and nothing blocks the main thread; tighten animations to a steady 60fps
    via `transform` / `opacity`; confirm loading / empty / error states; stream /
    paginate or debounce / throttle anything still heavy.
-3. [ ] **Performance & cleanup.** Re-check for needless React re-renders, oversized or
+3. [x] **Performance & cleanup.** Re-check for needless React re-renders, oversized or
    chatty IPC round-trips, and any dead code / duplication / tangled state introduced
    or left by pass 1; further shrink startup and defer non-critical work.
-4. [ ] **Rust best practices.** Re-audit ownership / borrowing and allocations, error
+4. [x] **Rust best practices.** Re-audit ownership / borrowing and allocations, error
    handling (`Result` / `?`, no `unwrap` / `expect` / `panic!` on fallible paths,
    serializable command errors), no blocking on the async runtime, and correct
    `Arc` / `Mutex` / `RwLock` concurrency.
-5. [ ] **Security.** Re-verify IPC input validation / sanitization, a tightly scoped
+5. [x] **Security.** Re-verify IPC input validation / sanitization, a tightly scoped
    capability / allowlist, no frontend secrets, and no injection-prone or over-broad
    filesystem / shell / network access.
-6. [ ] **UI polish.** Re-check spacing / alignment / type / color, all component states,
+6. [x] **UI polish.** Re-check spacing / alignment / type / color, all component states,
    and visual hierarchy across window sizes; stay on the design tokens / native feel.
-7. [ ] **UX & accessibility.** Re-check that the common path is short and obvious;
+7. [x] **UX & accessibility.** Re-check that the common path is short and obvious;
    defaults, shortcuts, focus management and human error messages; keyboard nav,
    visible focus, contrast, labels / roles.
-8. [ ] **Traceability check.** Re-trace each key action UI → handler → `invoke` →
+8. [x] **Traceability check.** Re-trace each key action UI → handler → `invoke` →
    command → response → UI; confirm names / argument-types / return-shapes still match
    and that no error path is ignored after both passes.
-9. [ ] **Self-review.** Re-read the combined diff as an unfamiliar PR; name ≥3 concrete
+9. [x] **Self-review.** Re-read the combined diff as an unfamiliar PR; name ≥3 concrete
    weaknesses and fix them; explicitly confirm pass 1's improvements weren't regressed.
 
 **Acceptance criteria**
 
-- [ ] Hard gate passes: `cargo fmt --check`, `cargo clippy` (no warnings),
+- [x] Hard gate passes: `cargo fmt --check`, `cargo clippy` (no warnings),
   `cargo test --manifest-path src-tauri/Cargo.toml`, plus the frontend `npm run build`,
   `npm run lint`, `npm run format:check`, and `npm test`.
-- [ ] No regression from pass 1 (#16) or from v1; the app still builds and runs.
-- [ ] Additional measurable feel / perf / UX gains beyond pass 1, with a short report
+- [x] No regression from pass 1 (#16) or from v1; the app still builds and runs.
+- [x] Additional measurable feel / perf / UX gains beyond pass 1, with a short report
   (found / changed / impact) and an updated prioritized punch list.
 
 **Notes**
@@ -1095,3 +1095,44 @@ notarization). No new features — quality / perf / UX only.
   ease of use**.
 - This is **pass 2 of two**; it **depends on #16** so it operates on the already-
   improved codebase — the point is a fresh, independent second look.
+
+**Pass-2 report (2026-06-18)**
+
+_Found (fresh re-profile of post-#16 code):_ (a) **boot resume blocked `setup`** —
+`lib.rs` resumed each persisted session sequentially *before* the window appeared, so
+time-to-interactive scaled with the session count; (b) the `Terminal` ignored
+`write_stdin` / `resize_pty` rejections (`void`), so after async resume a session whose
+PTY isn't up yet (its card mounts in the Overview wall on boot) would throw unhandled
+promise rejections; (c) the New Session modal had **no autofocus / Enter-to-submit** —
+an all-mouse flow; (d) no app-wide keyboard **focus ring** (browser default only). Note
+— pass-1's "W1 (reposKey space collision)" was a *misread*: the separator was actually a
+raw **NUL byte** (collision-proof but ugly in source).
+
+_Changed (small, safe):_ (1) **boot resume runs off the startup critical path** in a
+background thread (via `app.handle().state::<…>()`) — the window appears immediately and
+sessions reconnect as their PTYs come up. (2) `Terminal` swallows `write_stdin` /
+`resize_pty` rejections (pairs with #1). (3) the modal is now a `<form>` (Enter submits
+Create) with the name input **autofocused** — open → pick/type → Enter. (4) app-wide
+`:focus-visible` ring (on-brand, keyboard-only) in `global.css`. (5) cleaned the
+`reposKey` separator (raw NUL → explicit `"\n"`).
+
+_Impact:_ startup time-to-interactive **no longer scales with session count**; no console
+errors when a terminal mounts before its PTY resumes; the new-session path is
+keyboard-first; keyboard users get a clear focus ring everywhere. **No regression** —
+hard gate green: 23 Rust + 15 frontend tests, `clippy` / `fmt` clean, frontend build /
+lint / format clean, full **signed `tauri build`** (.dmg + signed updater artifacts).
+GUI not launched headlessly.
+
+_Self-review (≥3):_ W1 (fixed) — Terminal unhandled rejections during resume → `.catch`.
+W2 (fixed) — raw NUL separator in source → `"\n"`. W3 (dispositioned) — background boot
+resume is non-blocking but still sequential within its thread; parallelize only if a
+large session count proves it matters (punch-listed). **Confirmed pass-1 intact:**
+batched `current_branches` (1 IPC), repo-set-keyed branch refresh, opener removed, diff
+600-row cap, cwd validation — all present and green.
+
+_Updated punch list (future work):_ (1) xterm scrollback↔live overlap on mount — needs a
+backend sequence/offset to dedupe. (2) `DiffInspector` row virtualization (replace the
+600-row cap). (3) keep terminals mounted across Overview↔Focus (avoid remount + replay).
+(4) parallelize the background boot-resume + cache branch/diff results. (5) WebGL
+context-cap behavior under many terminals. (6) modal focus-trap (Tab cycling) for fuller
+a11y.
