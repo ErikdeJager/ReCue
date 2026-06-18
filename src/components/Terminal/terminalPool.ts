@@ -94,11 +94,14 @@ function createHost(sessionId: string): TerminalHost {
     cursorBlink: true,
     allowProposedApi: true,
     theme: {
-      background: cssToken("--terminal-bg", "#0e0e10"),
-      foreground: cssToken("--text-primary", "#ededef"),
-      cursor: cssToken("--accent", "#d97757"),
-      cursorAccent: cssToken("--terminal-bg", "#0e0e10"),
-      selectionBackground: "rgba(217, 119, 87, 0.25)",
+      background: cssToken("--terminal-bg", "#11111b"),
+      foreground: cssToken("--text-primary", "#cdd6f4"),
+      cursor: cssToken("--accent", "#fab387"),
+      cursorAccent: cssToken("--terminal-bg", "#11111b"),
+      selectionBackground: cssToken(
+        "--terminal-selection",
+        "rgba(88, 91, 112, 0.5)",
+      ),
     },
   });
 

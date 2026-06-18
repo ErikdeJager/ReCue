@@ -1,47 +1,51 @@
 /*
- * ClaudeCue design tokens — dark theme only.
+ * ClaudeCue design tokens — dark theme (Catppuccin Mocha).
  *
- * Ported from the Design reference in TASKS.md. These are the single source of
- * truth for color, type, spacing, radii, depth, and motion. Consume them from
- * CSS Modules (var(--token)); do not introduce off-system values.
+ * The single source of truth for color, type, spacing, radii, depth, and motion.
+ * Colors are remapped onto the Catppuccin Mocha palette (#33) — softer/less black
+ * than the original near-black theme. Consume them from CSS Modules
+ * (var(--token)); do not introduce off-system values.
  */
 
 :root {
-  /* --- Surfaces --- */
-  --bg-base: #0b0b0c;
-  --bg-sidebar: #111113;
-  --bg-panel: #141416;
-  --bg-elevated: #1a1a1d;
-  --bg-hover: #1e1e22;
-  --terminal-bg: #0e0e10;
+  /* --- Surfaces (Catppuccin Mocha) --- */
+  --bg-base: #1e1e2e; /* Base */
+  --bg-sidebar: #181825; /* Mantle */
+  --bg-panel: #1e1e2e; /* Base */
+  --bg-elevated: #313244; /* Surface0 */
+  --bg-hover: #45475a; /* Surface1 */
+  --terminal-bg: #11111b; /* Crust — deep bg so terminal content stands out */
+  --terminal-selection: rgba(88, 91, 112, 0.5); /* Surface2 — text selection */
+  --scrim: rgba(17, 17, 27, 0.8); /* Crust-based full-window dim overlay */
 
-  /* --- Borders --- */
-  --border-hairline: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.12);
+  /* --- Borders (low-alpha Text — subtle, theme-tinted) --- */
+  --border-hairline: rgba(205, 214, 244, 0.08);
+  --border-strong: rgba(205, 214, 244, 0.15);
 
   /* --- Text --- */
-  --text-primary: #ededef;
-  --text-secondary: #9a9aa0;
-  --text-muted: #5e5e66;
+  --text-primary: #cdd6f4; /* Text */
+  --text-secondary: #a6adc8; /* Subtext0 */
+  --text-muted: #6c7086; /* Overlay0 */
 
-  /* --- Accent (brand only — New session button + selected row; never a status) --- */
-  --accent: #d97757;
-  --accent-hover: #e08a6d;
-  --accent-dim: rgba(217, 119, 87, 0.14);
+  /* --- Accent (brand only — Peach; never a status) --- */
+  --accent: #fab387; /* Peach */
+  --accent-hover: #fcc39e; /* lighter Peach (hover) */
+  --accent-dim: rgba(250, 179, 135, 0.14);
+  --accent-fg: #11111b; /* readable text/icons ON the (light) accent fill */
 
   /* --- Diff --- */
-  --diff-add-fg: #4bb58a;
-  --diff-add-bg: rgba(75, 181, 138, 0.12);
-  --diff-del-fg: #e5534b;
-  --diff-del-bg: rgba(229, 83, 75, 0.12);
-  --diff-gutter: #5e5e66;
+  --diff-add-fg: #a6e3a1; /* Green */
+  --diff-add-bg: rgba(166, 227, 161, 0.12);
+  --diff-del-fg: #f38ba8; /* Red */
+  --diff-del-bg: rgba(243, 139, 168, 0.12);
+  --diff-gutter: #6c7086; /* Overlay0 */
 
-  /* --- Reserved status colors (unused in v1 — no status UI) --- */
-  --status-running: #5b8def;
-  --status-awaiting: #e0a33e;
-  --status-done: #4bb58a;
-  --status-error: #e5534b;
-  --status-idle: #6b6b73;
+  /* --- Status colors (Catppuccin accents; consumed by #36/#42) --- */
+  --status-running: #89b4fa; /* Blue */
+  --status-awaiting: #f9e2af; /* Yellow */
+  --status-done: #a6e3a1; /* Green */
+  --status-error: #f38ba8; /* Red */
+  --status-idle: #6c7086; /* Overlay0 */
 
   /* --- Fonts --- */
   --ui: -apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif;

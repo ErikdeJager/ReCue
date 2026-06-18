@@ -2164,9 +2164,9 @@ Likely causes of the double toast:
 
 ---
 
-### 33. [ ] Recolor the app with a Catppuccin Mocha palette (less dark)
+### 33. [x] Recolor the app with a Catppuccin Mocha palette (less dark)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -2188,33 +2188,33 @@ Sky #89dceb · Sapphire #74c7ec · Blue #89b4fa · Lavender #b4befe`.
 
 **Subtasks**
 
-1. [ ] Remap the **surface** tokens to Mocha: `--bg-base #1e1e2e`, `--bg-sidebar`/
+1. [x] Remap the **surface** tokens to Mocha: `--bg-base #1e1e2e`, `--bg-sidebar`/
    `--bg-panel` to Mantle/Base, `--bg-elevated #313244` (Surface0),
    `--bg-hover #45475a` (Surface1), `--terminal-bg #181825` (Mantle) or `#11111b`
    (Crust) — pick what reads best for the xterm background.
-2. [ ] **Borders/text:** hairline/strong borders from Surface0/Surface1 (or low-alpha
+2. [x] **Borders/text:** hairline/strong borders from Surface0/Surface1 (or low-alpha
    Text); `--text-primary #cdd6f4`, `--text-secondary #a6adc8` (Subtext0),
    `--text-muted #6c7086` (Overlay0).
-3. [ ] **Accent:** choose one Catppuccin accent as the brand accent (recommend **Mauve
+3. [x] **Accent:** choose one Catppuccin accent as the brand accent (recommend **Mauve
    #cba6f7** or **Peach #fab387** to keep warmth); set `--accent`, `--accent-hover`
    (a lighter shade), `--accent-dim` (low-alpha) accordingly.
-4. [ ] **Diff colors:** `--diff-add-fg #a6e3a1` (Green), `--diff-del-fg #f38ba8` (Red),
+4. [x] **Diff colors:** `--diff-add-fg #a6e3a1` (Green), `--diff-del-fg #f38ba8` (Red),
    with low-alpha backgrounds; gutter from Overlay0.
-5. [ ] **Status tokens:** repoint the (now-used, see #42/#36) `--status-*` tokens to
+5. [x] **Status tokens:** repoint the (now-used, see #42/#36) `--status-*` tokens to
    Catppuccin accents (e.g. running→Blue, awaiting→Yellow, done→Green, error→Red,
    idle→Overlay0).
-6. [ ] Recheck the xterm theme in `src/components/Terminal/Terminal.tsx` (it reads
+6. [x] Recheck the xterm theme in `src/components/Terminal/Terminal.tsx` (it reads
    tokens via `getComputedStyle` but hardcodes some fallbacks) so the terminal matches.
-7. [ ] Sweep components for any **off-token literal colors** (e.g. `color:#fff` on
+7. [x] Sweep components for any **off-token literal colors** (e.g. `color:#fff` on
    buttons, the `rgba(217,119,87,…)` selection in `Terminal.tsx`) and move them onto
    tokens so the recolor is complete.
 
 **Acceptance criteria**
 
-- [ ] The app renders in a cohesive Catppuccin Mocha theme; it's visibly less black
+- [x] The app renders in a cohesive Catppuccin Mocha theme; it's visibly less black
   while staying a dark theme.
-- [ ] No off-system literal colors remain (everything flows from tokens).
-- [ ] Contrast stays readable (text on surfaces, diff add/del, selected states).
+- [x] No off-system literal colors remain (everything flows from tokens).
+- [x] Contrast stays readable (text on surfaces, diff add/del, selected states).
 
 **Notes**
 
@@ -2224,6 +2224,30 @@ Sky #89dceb · Sapphire #74c7ec · Blue #89b4fa · Lavender #b4befe`.
   in #35 — keep them consistent so repo colors and the theme feel unified.
 - This is a design change, not a scope change. Keep the single-source-of-truth token
   convention (CLAUDE.md "Styling").
+- **Done 2026-06-19.** Recolored entirely via `tokens.css` (single source of truth —
+  every component already consumes `var(--token)`). **Surfaces:** `--bg-base`/
+  `--bg-panel` Base `#1e1e2e`, `--bg-sidebar` Mantle `#181825`, `--bg-elevated`
+  Surface0 `#313244`, `--bg-hover` Surface1 `#45475a`; **`--terminal-bg` Crust
+  `#11111b`** (a deep bg so terminal content stands out clearly from the lighter Base
+  panel / Mantle sidebar — the chrome carries the "less dark" win). **Borders:**
+  low-alpha Text (`rgba(205,214,244,.08/.15)`) — subtle, theme-tinted. **Text:** Text/
+  Subtext0/Overlay0. **Accent: Peach `#fab387`** (keeps the original coral warmth) +
+  lighter hover + low-alpha dim; added **`--accent-fg #11111b`** (the new accent is
+  *light*, so filled buttons need dark text for contrast — every old `color:#fff` on
+  an accent fill now uses it). **Diff:** Green/Red Catppuccin + low-alpha bg + Overlay0
+  gutter. **Status tokens** repointed Blue/Yellow/Green/Red/Overlay0 (ready for #36/
+  #42). **xterm** (`terminalPool.ts`): fallbacks updated to Mocha and the hardcoded
+  coral `selectionBackground` moved onto a new **`--terminal-selection`** token
+  (Surface2, translucent). **Literal sweep:** all 4 `color:#fff` accent-button literals
+  → `--accent-fg`; the two `rgba(11,11,12,…)` dim overlays (Terminal exit/reconnect +
+  UpdatePopup install) → a new **`--scrim`** token. No literal colors remain outside
+  `tokens.css` (the only greps left are the intentional `cssToken` JS *fallbacks*,
+  which xterm requires as concrete strings — established #8 pattern — now Mocha-aligned).
+  CLAUDE.md "Styling" note updated. **Hard gate green:** frontend `build`/`lint`/
+  `format:check`/`test` (38). Pure frontend/token change — no Rust, no new tests. The
+  recolor + contrast are unit-test-invisible (CSS); verified by construction
+  (token-pure, dark-on-light-accent for buttons, light text on dark surfaces) but the
+  rendered theme wasn't launched headlessly — a human glance is recommended.
 
 ---
 

@@ -253,7 +253,7 @@
 .create {
   border: 0;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   transition: background var(--dur-fast) var(--ease-out);
 }
 

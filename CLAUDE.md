@@ -157,8 +157,12 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   scrollbars, keyframes, and the `prefers-reduced-motion` killswitch live in
   `src/styles/global.css`. Tokens, global CSS, and the bundled **JetBrains Mono**
   font (`@fontsource`, offline — never a CDN) are imported once in
-  `src/main.tsx`. Stay on-system: use tokens, never off-system colors. See the
-  **Design reference** in `TASKS.md`.
+  `src/main.tsx`. Stay on-system: use tokens, never off-system colors. The color
+  tokens are a **Catppuccin Mocha** remap (#33) — accent is **Peach**, with
+  `--accent-fg` for readable text on the (light) accent fill, `--scrim` for
+  full-window dim overlays, and `--status-*` repointed to Catppuccin accents. See
+  the **Design reference** in `TASKS.md` (the original near-black v1 palette;
+  superseded by the Mocha tokens).
 
 ## Tasks
 
