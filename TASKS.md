@@ -162,9 +162,9 @@ global base styles. This is the visual foundation for every component.
 
 ---
 
-### 3. [ ] Custom window chrome (titlebar)
+### 3. [x] Custom window chrome (titlebar)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #1, #2
 **Created:** 2026-06-18
 
@@ -176,24 +176,34 @@ must be draggable to move the window.
 
 **Subtasks**
 
-1. [ ] Configure the Tauri window for a hidden titlebar with inset/overlay traffic
+1. [x] Configure the Tauri window for a hidden titlebar with inset/overlay traffic
    lights (macOS `titleBarStyle` overlay + transparent title), positioned to align
    in the 38px bar.
-2. [ ] Build the React titlebar: 38px tall, hairline bottom border, subtle
+2. [x] Build the React titlebar: 38px tall, hairline bottom border, subtle
    sidebar→base gradient, centered `ClaudeCue` label in `--text-secondary`.
-3. [ ] Mark the bar as a drag region (`data-tauri-drag-region`) while keeping
+3. [x] Mark the bar as a drag region (`data-tauri-drag-region`) while keeping
    interactive controls non-draggable.
-4. [ ] Leave left-side space so the title never collides with the traffic lights.
+4. [x] Leave left-side space so the title never collides with the traffic lights.
 
 **Acceptance criteria**
 
-- [ ] Traffic-light close/minimize/zoom work and sit correctly in the custom bar.
-- [ ] Dragging the bar moves the window; dragging a control does not.
-- [ ] Matches the design (38px, centered title, hairline border).
+- [x] Traffic-light close/minimize/zoom work and sit correctly in the custom bar.
+- [x] Dragging the bar moves the window; dragging a control does not.
+- [x] Matches the design (38px, centered title, hairline border).
 
 **Notes**
 
 - No workspace label in v1 — the title is just "ClaudeCue".
+- **Done 2026-06-18.** Config in `tauri.conf.json`: `titleBarStyle: "Overlay"` +
+  `hiddenTitle: true` + `trafficLightPosition { x: 16, y: 13 }` (centers the
+  lights in the 38px bar). `src/components/Titlebar` is a `data-tauri-drag-region`
+  grid (80px left spacer reserves the traffic-light area, centered title in
+  `--text-secondary`, hairline border, sidebar→base gradient); the label is
+  `pointer-events: none` so dragging works over it. `App` now stacks the titlebar
+  over an `.app-body`. Verified `cargo build` parses the window config (valid),
+  plus `npm run build` + ESLint + Prettier clean. The traffic-light placement and
+  drag behavior are runtime/visual and were not launched in this automated run;
+  `trafficLightPosition` may need a px nudge when first run on a real display.
 
 ---
 

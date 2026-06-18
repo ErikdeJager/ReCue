@@ -1,0 +1,25 @@
+.titlebar {
+  display: grid;
+  grid-template-columns: 80px 1fr 80px;
+  align-items: center;
+  height: 38px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-hairline);
+  /* Subtle sidebar -> base gradient. The native macOS traffic lights overlay
+     the left (reserved by the 80px first column). */
+  background: linear-gradient(180deg, var(--bg-sidebar), var(--bg-base));
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.title {
+  grid-column: 2;
+  color: var(--text-secondary);
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-align: center;
+  /* Click-through so dragging works anywhere on the bar, including over the
+     label (the bar itself is the drag region). */
+  pointer-events: none;
+}

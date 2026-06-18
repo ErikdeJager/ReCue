@@ -79,6 +79,11 @@ npm run format:rust    # cargo fmt (backend)
   commands/events; the frontend wraps them in a typed IPC layer.
 - Keep terminal byte streams out of React state — xterm.js consumes them directly
   to avoid re-render storms.
+- **Window chrome:** the native macOS title bar is hidden via
+  `titleBarStyle: "Overlay"` with the traffic lights repositioned
+  (`trafficLightPosition`) to sit inside the custom 38px `Titlebar` component.
+  The bar is a `data-tauri-drag-region`; interactive controls placed in it must
+  opt out so they remain clickable rather than dragging the window.
 - **Styling:** CSS Modules (`*.module.css` next to each component) that consume
   the design tokens in `src/styles/tokens.css`. The reset, base styles,
   scrollbars, keyframes, and the `prefers-reduced-motion` killswitch live in
