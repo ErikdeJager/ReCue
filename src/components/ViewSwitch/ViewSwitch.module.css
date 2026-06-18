@@ -1,5 +1,7 @@
+/* Full-width segmented control: fills its sidebar container, segments split
+   evenly. */
 .group {
-  display: inline-flex;
+  display: flex;
   padding: 2px;
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-control);
@@ -8,6 +10,7 @@
 
 .option,
 .active {
+  flex: 1;
   padding: 4px var(--space-12);
   border: 0;
   border-radius: var(--radius-chip);
@@ -15,6 +18,7 @@
   color: var(--text-secondary);
   font: inherit;
   font-size: var(--fs-meta);
+  text-align: center;
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-out);
 }

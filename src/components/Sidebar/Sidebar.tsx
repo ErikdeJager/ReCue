@@ -4,6 +4,7 @@ import { ChevronRight, Plus, X } from "lucide-react";
 import { repoName } from "../../paths";
 import { dedupeBranchLabels, repoOrder, useStore } from "../../store";
 import type { SessionView } from "../../types";
+import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import styles from "./Sidebar.module.css";
 
 interface SessionRowProps {
@@ -88,6 +89,10 @@ function Sidebar() {
         <Plus size={16} strokeWidth={1.5} />
         New session
       </button>
+
+      <div className={styles.viewSwitch}>
+        <ViewSwitch />
+      </div>
 
       <div className={styles.repos}>
         {repos.length === 0 && (

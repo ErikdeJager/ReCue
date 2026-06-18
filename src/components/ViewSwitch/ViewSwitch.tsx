@@ -8,12 +8,19 @@ const OPTIONS: { value: View; label: string }[] = [
 ];
 
 /**
- * Segmented Overview / Focus control. Lives in the shell top bar for now; task
- * #12 relocates it into the Focus toolbar.
+ * Segmented Overview / Focus control. Lives in the sidebar, under the New
+ * session button (#25), so it's always visible in both views. Choosing Focus
+ * goes through `showFocus` so it focuses the selected (or first) agent.
  */
 function ViewSwitch() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
+  const showFocus = useStore((s) => s.showFocus);
+
+  const go = (value: View) => {
+    if (value === "focus") showFocus();
+    else setView(value);
+  };
 
   return (
     <div className={styles.group} role="tablist" aria-label="View">
@@ -24,7 +31,7 @@ function ViewSwitch() {
           role="tab"
           aria-selected={view === option.value}
           className={view === option.value ? styles.active : styles.option}
-          onClick={() => setView(option.value)}
+          onClick={() => go(option.value)}
         >
           {option.label}
         </button>

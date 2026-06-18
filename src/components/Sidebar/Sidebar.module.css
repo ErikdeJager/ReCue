@@ -30,6 +30,11 @@
   background: var(--accent-hover);
 }
 
+/* Always-visible Overview/Focus toggle, aligned with the New session button. */
+.viewSwitch {
+  margin: 0 var(--space-12) var(--space-12);
+}
+
 .repos {
   flex: 1;
   min-height: 0;

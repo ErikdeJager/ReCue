@@ -54,6 +54,36 @@ describe("app store", () => {
     expect(useStore.getState().view).toBe("overview");
   });
 
+  it("showFocus focuses the first agent when nothing is selected (#25)", () => {
+    useStore.setState({ sessions: [session("s1"), session("s2")] });
+    useStore.getState().showFocus();
+    expect(useStore.getState().selectedId).toBe("s1");
+    expect(useStore.getState().view).toBe("focus");
+  });
+
+  it("showFocus keeps a valid selection", () => {
+    useStore.setState({
+      sessions: [session("s1"), session("s2")],
+      selectedId: "s2",
+    });
+    useStore.getState().showFocus();
+    expect(useStore.getState().selectedId).toBe("s2");
+    expect(useStore.getState().view).toBe("focus");
+  });
+
+  it("showFocus falls back to the first agent when the selection is stale", () => {
+    useStore.setState({ sessions: [session("s1")], selectedId: "gone" });
+    useStore.getState().showFocus();
+    expect(useStore.getState().selectedId).toBe("s1");
+    expect(useStore.getState().view).toBe("focus");
+  });
+
+  it("showFocus is a no-op with zero agents", () => {
+    useStore.getState().showFocus();
+    expect(useStore.getState().selectedId).toBeNull();
+    expect(useStore.getState().view).toBe("overview");
+  });
+
   it("toggles the inspector", () => {
     expect(useStore.getState().inspectorOpen).toBe(false);
     useStore.getState().toggleInspector();

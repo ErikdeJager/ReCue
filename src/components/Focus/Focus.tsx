@@ -5,17 +5,15 @@ import { repoName } from "../../paths";
 import { useStore } from "../../store";
 import DiffInspector from "../DiffInspector/DiffInspector";
 import Terminal from "../Terminal/Terminal";
-import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import styles from "./Focus.module.css";
 
 // Extensible tab strip — more inspector tabs can be added here later.
 const TABS = [{ id: "diff", label: "Diff" }];
 
 /**
- * Single-session view: a large terminal filling the area, a toolbar (view
- * switch, copy-able session chip, Open in Zed, inspector toggle), and a
- * collapsible inspector with an extensible tab strip. The Diff tab's content is
- * filled in task #13.
+ * Single-session view: a large terminal filling the area, a toolbar (copy-able
+ * session chip, Open in Zed, inspector toggle), and a collapsible inspector with
+ * an extensible tab strip. The Overview/Focus switch lives in the sidebar (#25).
  */
 function Focus() {
   const selectedId = useStore((s) => s.selectedId);
@@ -34,7 +32,6 @@ function Focus() {
   return (
     <div className={styles.focus}>
       <div className={styles.toolbar}>
-        <ViewSwitch />
         {session && (
           <>
             <button

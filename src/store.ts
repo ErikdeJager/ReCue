@@ -121,6 +121,8 @@ export interface AppState {
   // --- Sync reducers ---
   setView: (view: View) => void;
   select: (id: string | null) => void;
+  /** Switch to Focus, ensuring an agent is selected (last/first); no-op if none. */
+  showFocus: () => void;
   toggleInspector: () => void;
   setInspectorOpen: (open: boolean) => void;
   setSessions: (sessions: SessionView[]) => void;
@@ -172,6 +174,19 @@ export const useStore = create<AppState>()((set, get) => ({
   // never forces Focus. Callers that intend a view change (Overview "Expand",
   // the ViewSwitch) call setView explicitly.
   select: (id) => set({ selectedId: id }),
+
+  // Switch to Focus from anywhere (#25). Keep the current selection if it's still
+  // valid, else focus the first agent; with no agents this is a no-op so the
+  // Focus toggle can't strand the user on an empty view.
+  showFocus: () =>
+    set((s) => {
+      if (s.sessions.length === 0) return {};
+      const valid = s.sessions.some((x) => x.id === s.selectedId);
+      return {
+        selectedId: valid ? s.selectedId : (s.sessions[0]?.id ?? null),
+        view: "focus",
+      };
+    }),
   toggleInspector: () => set((s) => ({ inspectorOpen: !s.inspectorOpen })),
   setInspectorOpen: (open) => set({ inspectorOpen: open }),
   setSessions: (sessions) => set({ sessions }),

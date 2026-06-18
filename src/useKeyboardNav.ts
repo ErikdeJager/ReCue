@@ -49,12 +49,8 @@ export function useKeyboardNav(): void {
         );
         if (id) state.select(id);
       } else if (key === "ArrowDown") {
-        // Focus the selected agent; if none is selected yet, pick the first.
-        if (!state.selectedId) {
-          const first = state.sessions[0];
-          if (first) state.select(first.id);
-        }
-        state.setView("focus");
+        // Focus the selected agent (selects the first if none; no-op if empty).
+        state.showFocus();
       } else {
         // ArrowUp -> back to Overview, keeping the selection.
         state.setView("overview");

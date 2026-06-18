@@ -1618,9 +1618,9 @@ Add global keyboard navigation:
 
 ---
 
-### 25. [ ] Move the Overview/Focus toggle into the sidebar, always visible
+### 25. [x] Move the Overview/Focus toggle into the sidebar, always visible
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-18
 
@@ -1633,24 +1633,41 @@ it's **always visible** (both views) for one-click switching.
 
 **Subtasks**
 
-1. [ ] Render `ViewSwitch` in the sidebar beneath the New session button; remove it
+1. [x] Render `ViewSwitch` in the sidebar beneath the New session button; remove it
    from the Focus toolbar.
-2. [ ] Always show it. Switching to **Focus** with nothing selected focuses the
+2. [x] Always show it. Switching to **Focus** with nothing selected focuses the
    **last-selected** agent (or the first available); remember the last view so the
    toggle reflects state. With zero agents, Focus is a no-op/disabled.
-3. [ ] Style to the sidebar width (full-width segmented control, on-system tokens).
+3. [x] Style to the sidebar width (full-width segmented control, on-system tokens).
 
 **Acceptance criteria**
 
-- [ ] The toggle sits under the New session button, visible in both views.
-- [ ] Clicking Focus with no explicit selection focuses the last-selected/first agent.
-- [ ] Removed cleanly from the Focus toolbar; styling matches the sidebar.
+- [x] The toggle sits under the New session button, visible in both views.
+- [x] Clicking Focus with no explicit selection focuses the last-selected/first agent.
+- [x] Removed cleanly from the Focus toolbar; styling matches the sidebar.
 
 **Notes**
 
 - Files: `src/components/Sidebar/Sidebar.tsx` (+ css), `src/components/ViewSwitch/*`,
   `src/components/Focus/Focus.tsx`, `src/store.ts`. Coordinates with #26 (also edits
   the sidebar header) and #24 (view switching).
+- **Done 2026-06-19.** `ViewSwitch` moved out of the Focus toolbar into the **sidebar**,
+  rendered in a `.viewSwitch` container directly under the New session button (aligned
+  to the same 12px gutters, always visible in both views). Removed its import + usage
+  (and the toolbar mention in the doc comment) from `Focus.tsx`. **Always-selectable
+  Focus:** new store action **`showFocus()`** — keeps the current selection if still
+  valid, else focuses the first agent, then `view: "focus"`; **no-op with zero agents**
+  (returns `{}`), so the toggle can't strand the user on an empty Focus. The ViewSwitch
+  "Focus" segment now routes through `showFocus()` (Overview stays `setView`); the
+  toggle's active state still reflects the store `view`, so with zero agents clicking
+  Focus simply stays on Overview ("no-op"). Also **DRY'd #24**: the Shift+↓ handler now
+  calls `showFocus()` (was inline select-first-then-setView), so keyboard + click share
+  one path. **Full-width styling:** `.group` `inline-flex`→`flex` with `flex: 1` +
+  `text-align: center` segments, so it fills the sidebar width; on-system tokens only.
+  **+4 `showFocus` unit tests** (none→first, valid kept, stale→first, zero→no-op).
+  **Hard gate green:** frontend `build`/`lint`/`format:check`/`test` (**35**). Pure
+  frontend change — no Rust touched. The `showFocus` logic is unit-tested; the sidebar
+  placement / full-width styling is visual, not launched headlessly.
 
 ---
 
