@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
 import { workingDiff } from "../../ipc";
 import type { FileDiff, HunkLine, WorkingDiff } from "../../types";
 import styles from "./DiffInspector.module.css";
+
+// Poll the working-tree diff while the inspector is open so agent edits appear
+// on their own (#29). ~1.5s feels live without hammering `git`.
+const POLL_MS = 1500;
 
 interface DiffInspectorProps {
   repoPath: string;
@@ -108,21 +112,76 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [mode, setMode] = useState<DiffMode>("unified");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setDiff(await workingDiff(repoPath));
-    } catch {
-      setDiff(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [repoPath]);
+  // Signature of the last applied diff (skip re-render when a poll finds no
+  // change) and an in-flight guard (never overlap fetches).
+  const sigRef = useRef<string | null>(null);
+  const inFlightRef = useRef(false);
 
-  // Lazy: fetch when the inspector becomes visible and on repo change. (There is
-  // no filesystem watcher in v1 — use Refresh after editing the working tree.)
+  const load = useCallback(
+    async (silent = false) => {
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
+      if (!silent) setLoading(true);
+      try {
+        const next = await workingDiff(repoPath);
+        const sig = JSON.stringify(next);
+        // Only update state when the diff actually changed — an unchanged poll
+        // is invisible (no re-render, so selection + scroll are preserved).
+        if (sig !== sigRef.current) {
+          sigRef.current = sig;
+          setDiff(next);
+        }
+      } catch {
+        // A transient background-poll failure keeps the last good diff (no
+        // flicker); an explicit/initial load surfaces the empty state.
+        if (!silent) {
+          sigRef.current = null;
+          setDiff(null);
+        }
+      } finally {
+        if (!silent) setLoading(false);
+        inFlightRef.current = false;
+      }
+    },
+    [repoPath],
+  );
+
+  // Fetch (with spinner) when the inspector becomes visible / on repo change.
   useEffect(() => {
     if (active) void load();
+  }, [active, load]);
+
+  // While open, poll so edits appear on their own. Paused when the inspector is
+  // closed (effect not active) or the window is hidden; resumes + catches up on
+  // visibility regain. Manual Refresh remains as a fallback.
+  useEffect(() => {
+    if (!active) return;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const start = () => {
+      if (timer === undefined && !document.hidden) {
+        timer = setInterval(() => void load(true), POLL_MS);
+      }
+    };
+    const stop = () => {
+      if (timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+      } else {
+        void load(true); // catch up immediately, then resume polling
+        start();
+      }
+    };
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [active, load]);
 
   const files = diff?.files ?? [];

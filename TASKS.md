@@ -1866,9 +1866,9 @@ terminal restarts the session: **`claude --resume <session-id>`**.
 
 ---
 
-### 29. [ ] Auto-refresh the git diff inspector (no manual refresh needed)
+### 29. [x] Auto-refresh the git diff inspector (no manual refresh needed)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-18
 
@@ -1886,25 +1886,44 @@ upgrade but noisier and out of scope). Keep manual Refresh as a fallback.
 
 **Subtasks**
 
-1. [ ] Add interval polling in `DiffInspector` (only while `active` && document
+1. [x] Add interval polling in `DiffInspector` (only while `active` && document
    visible); clear on close/hide/unmount; avoid overlapping in-flight fetches.
-2. [ ] Skip redundant churn: don't reset the panel/selection on each poll when the
+2. [x] Skip redundant churn: don't reset the panel/selection on each poll when the
    diff is unchanged (preserve `selectedFile` + scroll; consider a cheap content
    hash). The refresh is invisible when nothing changed.
-3. [ ] Pause on `document.hidden`; resume on focus/visibility regain.
-4. [ ] Keep the manual Refresh button.
+3. [x] Pause on `document.hidden`; resume on focus/visibility regain.
+4. [x] Keep the manual Refresh button.
 
 **Acceptance criteria**
 
-- [ ] With the inspector open, agent edits appear within ~2s with no manual refresh.
-- [ ] Polling stops when the inspector is closed or the window is hidden.
-- [ ] No flicker / selection loss when the diff is unchanged.
+- [x] With the inspector open, agent edits appear within ~2s with no manual refresh.
+- [x] Polling stops when the inspector is closed or the window is hidden.
+- [x] No flicker / selection loss when the diff is unchanged.
 
 **Notes**
 
 - Files: `src/components/DiffInspector/DiffInspector.tsx`, `src/ipc.ts` (`workingDiff`),
   `src-tauri/src/git.rs` (`working_diff`). Honors the #16/#17 punch-list item
   ("DiffInspector manual-Refresh staleness").
+- **Done 2026-06-19.** Lightweight **polling** (`POLL_MS = 1500`) added to
+  `DiffInspector`, entirely frontend. `load` was reworked to take a `silent` flag and
+  two refs: an **in-flight guard** (`inFlightRef` — a tick returns early if a fetch is
+  still running, so fetches never overlap) and a **content signature** (`sigRef =
+  JSON.stringify(diff)`) — `setDiff` is called **only when the signature changed**, so
+  an unchanged poll does **zero** state updates → no re-render → `selectedFile`, scroll,
+  and mode are all preserved (subtask 2; the refresh is invisible when nothing changed).
+  Silent (poll) errors keep the last good diff (no flicker); only an explicit/initial
+  load blanks to the empty state. **Polling effect:** runs only while `active`; the
+  interval starts only when `!document.hidden`, is **stopped on `visibilitychange` →
+  hidden** and **resumes + immediately catches up** on visibility regain; cleaned up on
+  close (`active` false) / repo change (the panel is keyed by `repoPath` in Focus, so it
+  remounts) / unmount. The initial open still fetches **with** the spinner; polls are
+  silent (no spinner flicker). **Manual Refresh kept** (`load()` → non-silent). No
+  backend change — `working_diff` already returns the live tree each call. **Hard gate
+  green:** frontend `build`/`lint`/`format:check`/`test` (35). Pure frontend change — no
+  Rust, no new unit tests (DOM/interval effect; no extractable pure logic — the existing
+  `git.rs` parser tests already cover the diff shape). The ~1.5s timing + visibility
+  pause are runtime behavior, sound by construction but not launched headlessly.
 
 ---
 
