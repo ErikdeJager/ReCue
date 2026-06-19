@@ -583,19 +583,6 @@ fn monitor_loop(activity: Activity, events: Sender<SessionEvent>, base: Instant)
     }
 }
 
-/// Shell out to the Zed editor to open `cwd` (best-effort, detached).
-pub fn open_in_editor(cwd: &str) -> Result<(), SessionError> {
-    const EDITOR: &str = "zed";
-    if find_on_path(EDITOR).is_none() {
-        return Err(SessionError::BinaryNotFound(EDITOR.to_string()));
-    }
-    std::process::Command::new(EDITOR)
-        .arg(cwd)
-        .spawn()
-        .map_err(|e| SessionError::Spawn(e.to_string()))?;
-    Ok(())
-}
-
 /// Resolve `program` to an executable path via `PATH` (or a direct path).
 fn find_on_path(program: &str) -> Option<PathBuf> {
     if program.contains('/') {

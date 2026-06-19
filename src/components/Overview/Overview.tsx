@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
-import { Copy, ExternalLink, GripVertical, X } from "lucide-react";
+import { Copy, GripVertical, X } from "lucide-react";
 import {
   closestCenter,
   DndContext,
@@ -118,7 +118,6 @@ interface SessionCardProps {
   busy: boolean;
   onSelect: () => void;
   onCopyResume: () => void;
-  onOpenInZed: () => void;
   onRemove: () => void;
 }
 
@@ -131,7 +130,6 @@ function SessionCard({
   busy,
   onSelect,
   onCopyResume,
-  onOpenInZed,
   onRemove,
 }: SessionCardProps) {
   // Unified label rule (#67): name is primary with the branch as the subtitle;
@@ -161,15 +159,6 @@ function SessionCard({
         aria-label="Copy resume command"
       >
         <Copy size={15} strokeWidth={1.5} />
-      </button>
-      <button
-        type="button"
-        className={styles.action}
-        onClick={onOpenInZed}
-        title="Open in Zed"
-        aria-label="Open in Zed"
-      >
-        <ExternalLink size={15} strokeWidth={1.5} />
       </button>
       <button
         type="button"
@@ -295,7 +284,6 @@ function Overview() {
   const branches = useStore((s) => s.branches);
   const selectedId = useStore((s) => s.selectedId);
   const select = useStore((s) => s.select);
-  const openInZed = useStore((s) => s.openInZed);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const removeSession = useStore((s) => s.removeSession);
   const openNewSession = useStore((s) => s.openNewSession);
@@ -470,7 +458,6 @@ function Overview() {
                             "resume command",
                           )
                         }
-                        onOpenInZed={() => void openInZed(session.repoPath)}
                         onRemove={() => void removeSession(session.id)}
                       />
                     );

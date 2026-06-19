@@ -1729,9 +1729,9 @@ items; the copy action implementation (reuse as-is).
 
 ---
 
-### 87. [ ] Remove the "Open in Zed" button + its logic entirely (UI + IPC + backend)
+### 87. [x] Remove the "Open in Zed" button + its logic entirely (UI + IPC + backend)
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -1764,21 +1764,20 @@ toggle); replacing Zed with another editor; the shared binary-lookup helpers abo
 
 **Subtasks**
 
-1. [ ] **Overview** (`Overview.tsx`): remove the "Open in Zed" `<button>` from `SessionCard`
+1. [x] **Overview** (`Overview.tsx`): remove the "Open in Zed" `<button>` from `SessionCard`
    `actions`, the `onOpenInZed` prop (in `SessionCardProps` + the destructure), the
    `onOpenInZed={() => void openInZed(...)}` wiring on the rendered card, the `openInZed`
    store selector, and the now-unused `ExternalLink` import.
-2. [ ] **Focus** (`Focus.tsx`): remove the "Open in Zed" toolbar `<button>`, the `openInZed`
-   store selector, the now-unused `ExternalLink` import, and the "Open in Zed" mention in the
-   toolbar's header comment.
-3. [ ] **Store** (`store.ts`): remove `openInZed` from the store interface and its
+2. [x] **Focus** (`Focus.tsx`): already handled — #75 deleted Focus.tsx entirely, so its
+   "Open in Zed" button, `openInZed` selector, and `ExternalLink` import are already gone.
+3. [x] **Store** (`store.ts`): remove `openInZed` from the store interface and its
    implementation (the `ipc.openInEditor` call + "Could not open Zed" error toast).
-4. [ ] **IPC** (`ipc.ts`): remove the `openInEditor` wrapper.
-5. [ ] **Backend command** (`commands.rs` + `lib.rs`): remove the `open_in_editor`
+4. [x] **IPC** (`ipc.ts`): remove the `openInEditor` wrapper.
+5. [x] **Backend command** (`commands.rs` + `lib.rs`): remove the `open_in_editor`
    `#[tauri::command]` and its entry in the `invoke_handler!` list in `lib.rs`.
-6. [ ] **Backend PTY** (`pty.rs`): remove the `open_in_editor` function (and its doc comment).
+6. [x] **Backend PTY** (`pty.rs`): remove the `open_in_editor` function (and its doc comment).
    Leave `find_on_path` / `is_executable` / `BinaryNotFound` intact (claude lookup).
-7. [ ] Verify nothing dangles: `npm run build` (type-check) + `npm run lint` +
+7. [x] Verify nothing dangles: `npm run build` (type-check) + `npm run lint` +
    `npm run lint:rust` (clippy) + `cargo test --manifest-path src-tauri/Cargo.toml` all pass
    with no unused-import/unused-variant or unknown-symbol warnings; grep the repo for `zed`,
    `openInZed`, `openInEditor`, `open_in_editor` and confirm only unrelated false matches
@@ -1786,16 +1785,16 @@ toggle); replacing Zed with another editor; the shared binary-lookup helpers abo
 
 **Acceptance criteria**
 
-- [ ] The "Open in Zed" button is gone from **both** the Overview agent card and the Focus
+- [x] The "Open in Zed" button is gone from **both** the Overview agent card and the Focus
   toolbar; no other action buttons are affected.
-- [ ] No `openInZed` / `openInEditor` / `open_in_editor` symbols remain in the frontend or
+- [x] No `openInZed` / `openInEditor` / `open_in_editor` symbols remain in the frontend or
   backend (store action, IPC wrapper, Tauri command + its registration, and the `pty.rs`
   function are all removed).
-- [ ] The `ExternalLink` import is removed from `Overview.tsx` and `Focus.tsx` (no unused
+- [x] The `ExternalLink` import is removed from `Overview.tsx` and `Focus.tsx` (no unused
   imports); the build and lint pass clean.
-- [ ] `find_on_path` / `is_executable` / `BinaryNotFound` are retained and the `claude`
+- [x] `find_on_path` / `is_executable` / `BinaryNotFound` are retained and the `claude`
   missing-binary path still works (clippy + Rust tests pass).
-- [ ] App builds and runs with no broken IPC reference (no missing `open_in_editor` command).
+- [x] App builds and runs with no broken IPC reference (no missing `open_in_editor` command).
 
 **Notes**
 

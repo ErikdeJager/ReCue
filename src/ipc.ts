@@ -119,9 +119,6 @@ export const listFiles = (repo: string) =>
 export const readTextFile = (repo: string, file: string) =>
   invoke<string>("read_text_file", { repo, file });
 
-export const openInEditor = (cwd: string) =>
-  invoke<void>("open_in_editor", { cwd });
-
 export const currentBranch = (cwd: string) =>
   invoke<string>("current_branch", { cwd });
 

@@ -101,7 +101,6 @@ pub fn run() {
             commands::set_canvases,
             commands::list_files,
             commands::read_text_file,
-            commands::open_in_editor,
             commands::current_branch,
             commands::current_branches,
             commands::working_diff,

@@ -9,7 +9,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::git::{self, BranchList, WorkingDiff};
-use crate::pty::{self, SessionError, SessionManager};
+use crate::pty::{SessionError, SessionManager};
 use crate::store::{OverviewPanel, PersistedSession, Store};
 
 /// Payload for the `session://output` event.
@@ -334,11 +334,6 @@ fn is_hex_color(value: &str) -> bool {
         }
         None => false,
     }
-}
-
-#[tauri::command]
-pub fn open_in_editor(cwd: String) -> Result<(), SessionError> {
-    pty::open_in_editor(&cwd)
 }
 
 #[tauri::command]

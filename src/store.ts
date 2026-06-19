@@ -389,7 +389,6 @@ export interface AppState {
   renameSession: (id: string, name: string) => Promise<void>;
   /** Forget a folder: kill+forget all its sessions and drop it from recents (#31). */
   forgetRepo: (repoPath: string) => Promise<void>;
-  openInZed: (cwd: string) => Promise<void>;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
 }
 
@@ -1150,17 +1149,6 @@ export const useStore = create<AppState>()((set, get) => ({
         ? `Forgot folder + ${ids.length} agent${ids.length === 1 ? "" : "s"}`
         : "Forgot folder",
     );
-  },
-
-  openInZed: async (cwd) => {
-    try {
-      await ipc.openInEditor(cwd);
-    } catch (err) {
-      get().pushToast(
-        isSessionError(err) ? err.message : "Could not open Zed",
-        "error",
-      );
-    }
   },
 
   copyToClipboard: async (text, label) => {
