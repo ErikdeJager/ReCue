@@ -287,6 +287,8 @@ export interface AppState {
   ) => Promise<boolean>;
   restartSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
+  /** Set (or clear, when blank) a session's custom name; propagates everywhere (#57). */
+  renameSession: (id: string, name: string) => Promise<void>;
   /** Forget a folder: kill+forget all its sessions and drop it from recents (#31). */
   forgetRepo: (repoPath: string) => Promise<void>;
   openInZed: (cwd: string) => Promise<void>;
@@ -724,6 +726,17 @@ export const useStore = create<AppState>()((set, get) => ({
     }
     get().dropSession(id);
     get().pushToast("Session removed");
+  },
+
+  renameSession: async (id, name) => {
+    const trimmed = name.trim();
+    const next = trimmed ? trimmed : null;
+    // Optimistic: every name surface (sidebar / Overview / Canvas / Focus) reads
+    // session.name, so they all reflect the change immediately (#57).
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === id ? { ...x, name: next } : x)),
+    }));
+    await ipc.renameSession(id, trimmed).catch(() => {});
   },
 
   forgetRepo: async (repoPath) => {

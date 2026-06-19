@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { FileText, Plus, X } from "lucide-react";
@@ -28,6 +28,8 @@ interface SessionRowProps {
   busy: boolean;
   onSelect: () => void;
   onRemove: () => void;
+  /** Set (or clear, when blank) the session's custom name (#57). */
+  onRename: (name: string) => void;
 }
 
 function SessionRow({
@@ -37,6 +39,7 @@ function SessionRow({
   busy,
   onSelect,
   onRemove,
+  onRename,
 }: SessionRowProps) {
   // Draggable into Canvas (#47); a small activation distance keeps the click
   // (select) working. The drag snaps back outside Canvas's drop zones.
@@ -52,24 +55,88 @@ function SessionRow({
   const style = transform
     ? { transform: CSS.Translate.toString(transform) }
     : undefined;
+
+  // Right-click menu (Rename / Remove, #57) + the inline rename editor.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const committed = useRef(false);
+
+  // Escape closes the row menu (keyboard-dismissable, like the repo menu #54).
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menu]);
+
+  const beginRename = () => {
+    setDraft(session.name ?? "");
+    committed.current = false;
+    setEditing(true);
+  };
+  // Enter / blur commit; Escape cancels. The guard avoids a double-commit when
+  // Enter both fires and blurs the (now-unmounting) input.
+  const finishRename = () => {
+    if (committed.current) return;
+    committed.current = true;
+    setEditing(false);
+    onRename(draft);
+  };
+  const cancelRename = () => {
+    committed.current = true;
+    setEditing(false);
+  };
+
   return (
     <div
       ref={setNodeRef}
       className={`${styles.row} ${selected ? styles.rowSelected : ""} ${isDragging ? styles.rowDragging : ""}`}
       style={style}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenu({
+          x: Math.max(8, Math.min(event.clientX, window.innerWidth - 160)),
+          y: Math.max(8, Math.min(event.clientY, window.innerHeight - 96)),
+        });
+      }}
     >
-      <button
-        type="button"
-        className={styles.rowMain}
-        onClick={onSelect}
-        {...attributes}
-        {...listeners}
-      >
-        <span className={styles.rowPrimary}>{label}</span>
-        {session.name && (
-          <span className={styles.rowSecondary}>{session.name}</span>
-        )}
-      </button>
+      {editing ? (
+        <input
+          className={styles.renameInput}
+          autoFocus
+          value={draft}
+          placeholder={label}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              finishRename();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              cancelRename();
+            }
+          }}
+          onBlur={finishRename}
+          aria-label="Rename session"
+        />
+      ) : (
+        <button
+          type="button"
+          className={styles.rowMain}
+          onClick={onSelect}
+          {...attributes}
+          {...listeners}
+        >
+          <span className={styles.rowPrimary}>{label}</span>
+          {session.name && (
+            <span className={styles.rowSecondary}>{session.name}</span>
+          )}
+        </button>
+      )}
       {/* Status ball (#55): always shown (dimmed when idle); the Remove ghost
           shows on hover to its right. */}
       <span className={styles.rowBusy}>
@@ -84,6 +151,47 @@ function SessionRow({
       >
         <X size={14} strokeWidth={1.5} />
       </button>
+
+      {menu && (
+        <>
+          <div
+            className={styles.menuOverlay}
+            onClick={() => setMenu(null)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setMenu(null);
+            }}
+          />
+          <div
+            className={styles.menu}
+            style={{ left: menu.x, top: menu.y }}
+            role="menu"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.menuItem}
+              onClick={() => {
+                setMenu(null);
+                beginRename();
+              }}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.menuItemDanger}
+              onClick={() => {
+                setMenu(null);
+                onRemove();
+              }}
+            >
+              Remove
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -159,6 +267,7 @@ function Sidebar() {
   const selectedId = useStore((s) => s.selectedId);
   const select = useStore((s) => s.select);
   const removeSession = useStore((s) => s.removeSession);
+  const renameSession = useStore((s) => s.renameSession);
   const openNewSession = useStore((s) => s.openNewSession);
   const refreshBranches = useStore((s) => s.refreshBranches);
   const forgetRepo = useStore((s) => s.forgetRepo);
@@ -333,6 +442,7 @@ function Sidebar() {
                   busy={sessionBusy[session.id] ?? false}
                   onSelect={() => select(session.id)}
                   onRemove={() => void removeSession(session.id)}
+                  onRename={(name) => void renameSession(session.id, name)}
                 />
               ))}
 

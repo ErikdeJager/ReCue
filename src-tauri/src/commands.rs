@@ -105,6 +105,24 @@ pub fn kill_session(
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+/// Set (or clear, when blank) a session's custom display name and persist (#57).
+#[tauri::command]
+pub fn rename_session(
+    store: State<'_, Store>,
+    id: String,
+    name: String,
+) -> Result<(), SessionError> {
+    let trimmed = name.trim();
+    let name = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    store
+        .rename_session(&id, name)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 #[tauri::command]
 pub fn session_scrollback(
     manager: State<'_, SessionManager>,

@@ -194,6 +194,7 @@ function Focus() {
               title="Copy resume command (claude --resume <id>)"
             >
               <span className={styles.chipText}>
+                {session.name && `${session.name} · `}
                 {branch && `${branch} · `}
                 {session.id.slice(0, 8)}
               </span>

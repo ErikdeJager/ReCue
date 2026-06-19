@@ -41,6 +41,10 @@ export const resizePty = (id: string, cols: number, rows: number) =>
 
 export const killSession = (id: string) => invoke<void>("kill_session", { id });
 
+/** Set (or clear, when blank) a session's custom display name (#57). */
+export const renameSession = (id: string, name: string) =>
+  invoke<void>("rename_session", { id, name });
+
 export const sessionScrollback = (id: string) =>
   invoke<number[]>("session_scrollback", { id });
 

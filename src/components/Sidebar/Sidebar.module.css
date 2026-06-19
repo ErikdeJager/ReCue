@@ -216,6 +216,21 @@
   white-space: nowrap;
 }
 
+/* Inline rename editor (#57) — replaces the row label while editing. */
+.renameInput {
+  min-width: 0;
+  flex: 1;
+  margin: var(--space-4) var(--space-8);
+  padding: var(--space-2) var(--space-6);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-chip);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+}
+
 .remove {
   display: flex;
   align-items: center;

@@ -128,6 +128,16 @@ impl Store {
         self.update(|state| state.sessions.retain(|existing| existing.id != id))
     }
 
+    /// Update a persisted session's display name (`None` clears it back to no
+    /// custom name) and persist (#57); a no-op if the id is unknown.
+    pub fn rename_session(&self, id: &str, name: Option<String>) -> io::Result<()> {
+        self.update(|state| {
+            if let Some(session) = state.sessions.iter_mut().find(|s| s.id == id) {
+                session.name = name;
+            }
+        })
+    }
+
     /// Record a working directory as most-recently-used (de-duplicated, capped)
     /// and persist.
     pub fn touch_recent(&self, path: &str) -> io::Result<()> {
@@ -454,6 +464,29 @@ mod tests {
         store.add_session(record("s1", "/repo/x")).unwrap();
         assert_eq!(store.session("s1").unwrap().repo_path, "/repo/x");
         assert!(store.session("missing").is_none());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rename_session_sets_and_clears_name() {
+        let path = temp_path("rename");
+        let store = Store::load(&path);
+        store.add_session(record("s1", "/repo/x")).unwrap();
+
+        store
+            .rename_session("s1", Some("My Agent".to_string()))
+            .unwrap();
+        assert_eq!(
+            Store::load(&path).session("s1").unwrap().name,
+            Some("My Agent".to_string())
+        );
+
+        // Clearing reverts to no custom name, and survives a reload.
+        store.rename_session("s1", None).unwrap();
+        assert_eq!(Store::load(&path).session("s1").unwrap().name, None);
+
+        // An unknown id is a no-op (no panic).
+        store.rename_session("missing", Some("x".into())).unwrap();
         let _ = fs::remove_file(&path);
     }
 

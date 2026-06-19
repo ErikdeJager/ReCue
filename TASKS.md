@@ -3996,9 +3996,9 @@ switches to Overview).
 
 ---
 
-### 57. [ ] Rename an agent from the sidebar (right-click) — propagates everywhere
+### 57. [x] Rename an agent from the sidebar (right-click) — propagates everywhere
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -4013,25 +4013,25 @@ task adds the **rename interaction plus a backend command to update + persist it
 
 **Subtasks**
 
-1. [ ] Backend: add a `rename_session(id, name)` command that updates the persisted
+1. [x] Backend: add a `rename_session(id, name)` command that updates the persisted
    session's `name` (blank → clears it back to no custom name) and saves `sessions.json`;
    add the matching `Store` update method (`store.rs`).
-2. [ ] Frontend store: a `renameSession(id, name)` action — optimistic update of
+2. [x] Frontend store: a `renameSession(id, name)` action — optimistic update of
    `sessions[].name` + persist via the command.
-3. [ ] Sidebar UI: right-click an agent `SessionRow` → a small context menu with **Rename**
+3. [x] Sidebar UI: right-click an agent `SessionRow` → a small context menu with **Rename**
    (and reuse **Remove**); Rename swaps the row label for an inline `<input>` (autofocus,
    Enter commits, Escape cancels, blur commits).
-4. [ ] Verify propagation: the new name appears in the sidebar, the Overview card header,
+4. [x] Verify propagation: the new name appears in the sidebar, the Overview card header,
    the Canvas panel title, and the Focus chip without a reload (all already read
    `session.name`).
 
 **Acceptance criteria**
 
-- [ ] Right-clicking an agent offers Rename; entering a name updates it live everywhere and
+- [x] Right-clicking an agent offers Rename; entering a name updates it live everywhere and
   survives an app restart.
-- [ ] Clearing the name reverts to the default label (branch in the sidebar per #21; repo
+- [x] Clearing the name reverts to the default label (branch in the sidebar per #21; repo
   name elsewhere).
-- [ ] No regression to selection / drag / remove on the row.
+- [x] No regression to selection / drag / remove on the row.
 
 **Notes**
 
@@ -4044,6 +4044,24 @@ task adds the **rename interaction plus a backend command to update + persist it
   is the *ability to rename* + propagation, which this satisfies.
 - Coordinates with #59 (also adds `SessionRow` interactions). **Assumption:** rename via a
   right-click menu + inline input; blank clears the name.
+- **Done 2026-06-19.** Full-stack rename. **Backend:** `Store::rename_session(id,
+  Option<String>)` updates the persisted record's `name` (blank → `None`) and saves
+  `sessions.json`; a `rename_session(id, name)` Tauri command (trims; blank → clear) wired in
+  `lib.rs`; unit test `rename_session_sets_and_clears_name` (39 Rust tests). **Frontend:**
+  `ipc.renameSession` + a store `renameSession(id, name)` action — optimistic
+  `sessions[].name` update (all surfaces refresh live) then persist via the command.
+  **Sidebar:** right-clicking a `SessionRow` opens a small **Rename / Remove** menu (reuses
+  the menu styles + Escape / outside-click dismiss, viewport-clamped); **Rename** swaps the
+  row label for an inline autofocused `<input>` (Enter commits, Escape cancels, blur commits;
+  a guard prevents double-commit), prefilled with the current name. **Propagation verified:**
+  the sidebar secondary line, Overview card title (`session.name ?? repoName`), and Canvas
+  panel title already read `session.name`; added the name to the **Focus chip** (it had shown
+  only branch · id). Clearing reverts each to its default (branch in the sidebar per #21;
+  repo name elsewhere). No regression to row select / drag / hover-Remove (the rowMain button
+  + its drag listeners are untouched when not editing). Gate green: `cargo fmt`/clippy/`test`
+  (39) + `npm run build`/lint/`format:check`/`test` (63). The `claude` PTY title isn't
+  updated (cosmetic; `pty.rs`'s `name` is dead-code) — persistence is the source of truth on
+  restart. Live UI is runtime-visual (not launched headlessly).
 
 ---
 
