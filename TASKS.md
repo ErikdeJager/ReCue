@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#71**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#72**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -569,3 +569,70 @@ any button does.
 - Key code: `src/components/Overview/Overview.tsx` (`PanelColumn` header: `.dragHandle`,
   `.titleBlock`, `.actions`; `useSortable`), `src/components/Overview/Overview.module.css`
   (`.header` ~112, `.dragHandle` ~125).
+
+---
+
+### 71. [ ] Activity indicator — move it before the agent title (all surfaces) + reinvent it as a spinner arc
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+Two changes to the agent **busy/activity indicator** (`BusyIndicator`, #42 → #55):
+
+**1. Reposition — before the title, everywhere.** Today the indicator sits on the **right**
+of the title bar / row: in the Overview card header it's inside the actions group
+(`.headerBusy`, left of Expand/Zed/×), in the sidebar row it's after the label (`.rowBusy`,
+before ×), and the Focus toolbar shows it after the title text. Move it to the **far left —
+before the agent's name/title** — on **all** surfaces: Overview card header, Focus toolbar,
+and sidebar rows. It should read consistently as "● name", left of the name.
+
+**2. Reinvent the look — a spinner arc.** The user dislikes the current single pulsing ball
+(`busy-pulse`: scale + opacity). Replace it with a **small rotating arc / ring (spinner)**
+that circles continuously while the session is **working** (in `--status-running`). Keep the
+**idle** state a **calm static dot** (`--status-idle`, no motion) so the slot stays stable,
+and keep the **reduced-motion** fallback static (a static ring/dot, no rotation — global
+killswitch in `global.css`). Keep it compact so it fits all three placements, and keep the
+`role="status"` + aria-label/tooltip (Working…/Idle).
+
+The redesign lives in the shared `BusyIndicator` component, so the new spinner applies
+everywhere it renders at once; only the *position* changes per surface.
+
+Out of scope: the busy/idle detection (#55 backend heuristic stays); non-agent panels
+(file/diff) don't show the indicator.
+
+**Subtasks**
+
+1. [ ] Redesign `BusyIndicator` (`.tsx` + `.module.css`): busy = rotating spinner arc
+   (`--status-running`); idle = static dot (`--status-idle`); reduced-motion = static. Keep
+   compact + `role="status"` label.
+2. [ ] Sidebar `SessionRow`: move `<BusyIndicator>` to before the label (`.rowMain`) instead
+   of after it.
+3. [ ] Overview `SessionCard`: move the indicator out of `actions` (`.headerBusy`) to the
+   start of the header, before the title (`.titleBlock`).
+4. [ ] Focus toolbar: move the indicator before the title text.
+
+**Acceptance criteria**
+
+- [ ] On all three surfaces (sidebar rows, Overview card header, Focus toolbar) the activity
+  indicator sits to the **left of the agent's name/title**, not on the right.
+- [ ] While an agent is working it's a rotating spinner arc; when idle it's a calm static
+  dot; under reduced-motion it's static (no rotation).
+- [ ] The indicator stays compact and aligned in every placement; `role="status"` +
+  Working…/Idle label preserved.
+- [ ] No change to when busy/idle is detected.
+
+**Notes**
+
+- Decisions (from the requester): reposition on all surfaces incl. sidebar; animation =
+  spinner arc (rotating); idle stays a static dot.
+- The redesign is in the shared `BusyIndicator` (conflict-free); the per-surface reposition
+  touches the same header/row regions as #67 (agent label rule) and #70 (Overview title-bar
+  drag) — coordinate/rebase if those land first, and place the indicator relative to the
+  final Overview title-bar structure from #70.
+- Key code: `src/components/BusyIndicator/BusyIndicator.tsx` + `BusyIndicator.module.css`
+  (`.ball`/`.busy`/`busy-pulse`), `src/components/Sidebar/Sidebar.tsx` (`.rowBusy`,
+  `SessionRow`), `src/components/Overview/Overview.tsx` (`.headerBusy`, `SessionCard`),
+  `src/components/Focus/Focus.tsx` (toolbar, ~204).
