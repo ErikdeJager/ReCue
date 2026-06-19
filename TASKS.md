@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#78**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#79**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -1118,3 +1118,40 @@ just its keyboard equivalent).
   those.
 - Key code: `src/useKeyboardNav.ts` (add the ⌘\ branch), `src/store.ts` (`setView`, `view`),
   `src/components/ViewSwitch/ViewSwitch.tsx` (mouse equivalent, for parity).
+
+---
+
+### 78. [ ] Reduce terminal line height (xterm `lineHeight` 1.5 → ~1.2)
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+The terminals (the xterm.js panes running `claude`) have too much vertical space between
+lines. The terminal pool sets `lineHeight: 1.5` in the xterm config (`terminalPool.ts`,
+`createHost`, alongside `fontSize: 12.5`), which reads as too tall. Reduce it to a tighter,
+still-readable value — **~1.2** (tune to taste, e.g. 1.2–1.3) — so each line takes less
+vertical room.
+
+This is the single shared xterm config, so it applies to **all** pooled terminals (every agent
+terminal, and the shell terminal #72 when it lands). Keep the font size (12.5px) unchanged —
+only the line height changes. Update the design-reference note in TASKS.md ("terminal
+12.5px/1.5") to the new value.
+
+After the change, sanity-check that `claude`'s TUI still renders cleanly (cursor alignment,
+box-drawing, no clipped glyphs or overlap) at the tighter line height.
+
+**Acceptance criteria**
+
+- [ ] Terminal lines are visibly tighter than before (xterm `lineHeight` reduced from 1.5 to
+  ~1.2), across Overview and Canvas terminals.
+- [ ] Text stays readable and `claude`'s TUI renders correctly (cursor, box-drawing, no
+  overlap/clipping).
+- [ ] Font size unchanged; the design-reference line-height note is updated to match.
+
+**Notes**
+
+- Key code: `src/components/Terminal/terminalPool.ts` (`createHost` — `lineHeight: 1.5` at
+  ~line 93), and the "terminal 12.5px/1.5" note in `TASKS.md` (design reference).
