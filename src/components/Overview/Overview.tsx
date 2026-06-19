@@ -200,6 +200,7 @@ function SessionCard({
 
 function panelLabel(panel: OverviewPanel): string {
   if (panel.kind === "diff") return "Diff";
+  if (panel.kind === "terminal") return "Terminal";
   return panel.file?.split("/").pop() || "File";
 }
 
@@ -255,6 +256,11 @@ function ExtraPanel({
         // Reuse the Focus inspector's diff component (#39), bound to this repo
         // and always active so it polls (#29) while the column is shown.
         <DiffInspector repoPath={repoPath} active />
+      ) : panel.kind === "terminal" ? (
+        // Terminal item (#72): the panel id is the shell PTY id, rendered by the
+        // same pooled <Terminal>. repoPath marks it a non-agent (Restart respawns
+        // the shell; no busy/branch/claude-resume).
+        <Terminal sessionId={panel.id} repoPath={repoPath} />
       ) : panel.file ? (
         // File panel (#41/#44): the shared FileViewer renders the panel's saved
         // file by type (markdown/code/text), always active so it hot-reloads.

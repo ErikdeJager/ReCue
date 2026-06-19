@@ -55,6 +55,21 @@ pub fn spawn_session(
     Ok(record)
 }
 
+/// Spawn a plain shell **terminal item** (#72) in `cwd` under the caller-chosen
+/// `id` (the Overview panel's id). Unlike `spawn_session` this is not a `claude`
+/// agent and is **not** persisted in `sessions.json` — the item lives in
+/// `overview_panels` (frontend) and a fresh shell is respawned on boot. Kill it
+/// with `kill_session` (the PTY registry is shared).
+#[tauri::command]
+pub fn spawn_terminal(
+    manager: State<'_, SessionManager>,
+    cwd: String,
+    id: String,
+) -> Result<(), SessionError> {
+    manager.spawn_terminal(id, cwd.as_str())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn write_stdin(
     manager: State<'_, SessionManager>,

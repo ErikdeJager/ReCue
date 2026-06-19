@@ -648,9 +648,9 @@ Out of scope: the busy/idle detection (#55 backend heuristic stays); non-agent p
 
 ---
 
-### 72. [ ] Plain terminal item — a shell PTY that works like the file/diff viewers
+### 72. [x] Plain terminal item — a shell PTY that works like the file/diff viewers
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -709,35 +709,39 @@ repo menu then drag), tabs/splits inside one terminal item, and shell-history re
 
 **Subtasks**
 
-1. [ ] Backend: add `spawn_terminal(cwd)` (+ a with-id variant for boot) in
+1. [x] Backend: add `spawn_terminal(cwd)` (+ a with-id variant for boot) in
    `pty.rs`/`commands.rs` running `$SHELL` (fallback `/bin/zsh`) via `spawn_with_id`; reuse
    the existing write/resize/kill/scrollback/event paths. Clear error if the shell is missing.
-2. [ ] Model: add `"terminal"` to `OverviewPanel.kind` (`types/index.ts`) and
+   _(`spawn_terminal(id, cwd)` — the frontend owns the id, so one path serves create + boot.)_
+2. [x] Model: add `"terminal"` to `OverviewPanel.kind` (`types/index.ts`) and
    `CanvasContent.kind`; add a typed IPC wrapper for `spawn_terminal`.
-3. [ ] Repo menu: add **"Open terminal"** → `addOverviewPanel(repo, "terminal")` + spawn the
+   _(`CanvasContent.kind` is already a free `string`; the terminal's PTY id rides on
+   `sessionId`.)_
+3. [x] Repo menu: add **"Open terminal"** → `addOverviewPanel(repo, "terminal")` + spawn the
    shell with that panel's id.
-4. [ ] Overview: render the terminal panel as a column (`ExtraPanel`/`PanelColumn`, title
+4. [x] Overview: render the terminal panel as a column (`ExtraPanel`/`PanelColumn`, title
    "Terminal", × kills+removes).
-5. [ ] Sidebar: add a `TerminalRow` under the repo (click→Overview, ×→remove, draggable into
+5. [x] Sidebar: add a `TerminalRow` under the repo (click→Overview, ×→remove, draggable into
    Canvas).
-6. [ ] Canvas: extend `payloadToContent` + the render switch + dedupe for `kind: "terminal"`
+6. [x] Canvas: extend `payloadToContent` + the render switch + dedupe for `kind: "terminal"`
    → `<Terminal>`.
-7. [ ] Pool: include terminal-item ids in `reconcileTerminals`; make the `Terminal` exit
-   overlay work for non-agent PTYs (shell exit → restart affordance).
-8. [ ] Persistence/boot: respawn a fresh `$SHELL` for each persisted terminal panel on
+7. [x] Pool: include terminal-item ids in `reconcileTerminals`; make the `Terminal` exit
+   overlay work for non-agent PTYs (shell exit → restart affordance). _(New `terminalExits`
+   store map + `restartTerminal`; `Terminal` takes an optional `repoPath` prop.)_
+8. [x] Persistence/boot: respawn a fresh `$SHELL` for each persisted terminal panel on
    startup using its id; removing the item kills the shell + drops the panel.
 
 **Acceptance criteria**
 
-- [ ] A repo's context menu has "Open terminal"; choosing it opens a usable shell (typing
+- [x] A repo's context menu has "Open terminal"; choosing it opens a usable shell (typing
   works) in the repo folder, as an Overview column.
-- [ ] The terminal item also shows as a sidebar row under the repo and can be dragged into a
+- [x] The terminal item also shows as a sidebar row under the repo and can be dragged into a
   Canvas panel — the same item rendering everywhere (pool intact, no remount).
-- [ ] The terminal is not treated as an agent: no busy indicator, no branch label, not in the
+- [x] The terminal is not treated as an agent: no busy indicator, no branch label, not in the
   agent/session list; its × kills the shell and removes the item.
-- [ ] After an app restart, the terminal item reappears (persisted) with a fresh shell in the
+- [x] After an app restart, the terminal item reappears (persisted) with a fresh shell in the
   repo folder.
-- [ ] Multiple terminal items per repo work; each is an independent shell.
+- [x] Multiple terminal items per repo work; each is an independent shell.
 
 **Notes**
 

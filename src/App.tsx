@@ -39,6 +39,7 @@ function App() {
   const view = useStore((s) => s.view);
   const claudeMissing = useStore((s) => s.claudeMissing);
   const sessions = useStore((s) => s.sessions);
+  const overviewPanels = useStore((s) => s.overviewPanels);
   const init = useStore((s) => s.init);
   const [dragActive, setDragActive] = useState(false);
 
@@ -57,8 +58,13 @@ function App() {
   // they survive Overview↔Focus↔Canvas switches. Dispose one only when its
   // session is truly gone — this fires on the (infrequent) session-list change.
   useEffect(() => {
-    reconcileTerminals(sessions.map((s) => s.id));
-  }, [sessions]);
+    // Keep alive both agent PTYs and terminal-item PTYs (#72); dispose the rest.
+    const terminalIds = Object.values(overviewPanels)
+      .flat()
+      .filter((p) => p.kind === "terminal")
+      .map((p) => p.id);
+    reconcileTerminals([...sessions.map((s) => s.id), ...terminalIds]);
+  }, [sessions, overviewPanels]);
 
   const onDragEnd = (event: DragEndEvent) => {
     setDragActive(false);

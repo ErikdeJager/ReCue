@@ -30,8 +30,8 @@ export interface BranchList {
 /** A user-added Overview panel — a non-agent column (mirrors `store::OverviewPanel`, #38). */
 export interface OverviewPanel {
   id: string;
-  kind: "diff" | "markdown";
-  /** Panel parameter, e.g. the markdown file path; absent for a diff panel. */
+  kind: "diff" | "markdown" | "terminal";
+  /** Panel parameter, e.g. the markdown file path; absent for diff/terminal panels. */
   file?: string;
 }
 

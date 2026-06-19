@@ -227,6 +227,22 @@ impl SessionManager {
         )
     }
 
+    /// Spawn the user's `$SHELL` (fallback `/bin/zsh`) in `cwd` under a
+    /// caller-chosen id — a plain interactive **terminal item** (#72), not a
+    /// `claude` agent. The PTY plumbing (reader thread, scrollback, events,
+    /// write/resize/kill) is identical to a session; only the program differs and
+    /// there is no `--session-id`/`--resume`. The id is the Overview panel's id,
+    /// so the frontend renders it with the same `<Terminal>` pool and persists the
+    /// item in `overview_panels` (a fresh shell is respawned on boot).
+    pub fn spawn_terminal(
+        &self,
+        id: String,
+        cwd: impl AsRef<Path>,
+    ) -> Result<SessionInfo, SessionError> {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        self.spawn_with_id(id, shell.as_str(), &[], cwd.as_ref(), None)
+    }
+
     /// Send keystrokes / paste to a session's stdin.
     pub fn write_stdin(&self, id: &str, data: &str) -> Result<(), SessionError> {
         // Stamp the keystroke time *before* writing, so the echo the terminal

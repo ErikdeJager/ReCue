@@ -230,6 +230,9 @@ export interface AppState {
   /** Sessions currently working, from the output-activity heuristic (#42); an
    * absent/false entry means idle. (The task's `sessionState`, as a boolean map.) */
   sessionBusy: Record<string, boolean>;
+  /** Terminal items (#72) whose shell has exited → exit code (or null); drives the
+   * Terminal exit overlay for non-agent PTYs (they aren't in `sessions`). */
+  terminalExits: Record<string, number | null>;
   claudeMissing: boolean;
   toasts: Toast[];
   /** New session modal (rendered by #10); `newSessionRepo` optionally prefills it. */
@@ -275,6 +278,10 @@ export interface AppState {
     file?: string,
   ) => Promise<void>;
   removeOverviewPanel: (repoPath: string, id: string) => Promise<void>;
+  /** Record a terminal item's shell exit (#72) so its Terminal shows Restart. */
+  markTerminalExited: (id: string, code: number | null) => void;
+  /** Respawn a terminal item's shell in `repoPath` under the same id (#72). */
+  restartTerminal: (id: string, repoPath: string) => Promise<boolean>;
   /** Persist a repo cluster's drag-reordered item order (#43). */
   reorderOverview: (repoPath: string, orderedKeys: string[]) => Promise<void>;
   /** Replace the active Canvas tab's layout tree and persist (#58). */
@@ -332,6 +339,7 @@ export const useStore = create<AppState>()((set, get) => ({
   activeCanvasId: "canvas-1",
   inspectorWidth: INSPECTOR_DEFAULT_WIDTH,
   sessionBusy: {},
+  terminalExits: {},
   claudeMissing: false,
   toasts: [],
   newSessionOpen: false,
@@ -453,6 +461,14 @@ export const useStore = create<AppState>()((set, get) => ({
             // One event per close. An intentional kill (Remove/Forget) already
             // toasts and is never auto-forgotten or double-toasted here (#32).
             const intentional = intentionalKills.delete(id);
+            // Terminal item (#72): a shell PTY, not a claude session (not in
+            // `sessions`). On an unintentional exit, record it so the pooled
+            // <Terminal> shows a Restart overlay; an intentional × already removed
+            // the panel, so just swallow it.
+            if (!get().sessions.some((s) => s.id === id)) {
+              if (!intentional) get().markTerminalExited(id, code);
+              return;
+            }
             // Clean exit (code 0 while running): the user ended the agent — forget
             // it like Remove so it vanishes everywhere and won't return on next
             // boot, with a brief "Agent exited" toast and no overlay/Restart (#63).
@@ -587,6 +603,16 @@ export const useStore = create<AppState>()((set, get) => ({
         activeCanvasId,
         inspectorWidth: inspectorWidth ?? INSPECTOR_DEFAULT_WIDTH,
       });
+      // Terminal items can't resume (#72): respawn a fresh shell for each
+      // persisted terminal panel under its repo so the item is usable after a
+      // restart (previous output/history is gone, by design).
+      for (const [repo, list] of Object.entries(mergedPanels)) {
+        for (const p of list) {
+          if (p.kind === "terminal") {
+            void ipc.spawnTerminal(repo, p.id).catch(() => {});
+          }
+        }
+      }
     } catch {
       // Backend unreachable; leave colors/panels/order/canvas/width as-is.
     }
@@ -619,16 +645,34 @@ export const useStore = create<AppState>()((set, get) => ({
   // markdown panel per file); updates optimistically and persists the list.
   addOverviewPanel: async (repoPath, kind, file) => {
     const current = get().overviewPanels[repoPath] ?? [];
+    // Terminals are never deduped — multiple independent shells per repo (#72);
+    // one diff per repo; one markdown panel per file.
     const dup =
       kind === "diff"
         ? current.some((p) => p.kind === "diff")
-        : current.some((p) => p.kind === "markdown" && p.file === file);
+        : kind === "markdown"
+          ? current.some((p) => p.kind === "markdown" && p.file === file)
+          : false;
     if (dup) return;
     const panel: OverviewPanel = {
       id: crypto.randomUUID(),
       kind,
       ...(file ? { file } : {}),
     };
+    // A terminal item is backed by a real shell PTY (#72): spawn it first under
+    // the panel's id so the pooled <Terminal> has something to render; if the
+    // shell is missing, surface it and don't add a dead panel.
+    if (kind === "terminal") {
+      try {
+        await ipc.spawnTerminal(repoPath, panel.id);
+      } catch (err) {
+        get().pushToast(
+          isSessionError(err) ? err.message : "Could not open terminal",
+          "error",
+        );
+        return;
+      }
+    }
     const next = [...current, panel];
     set((s) => ({
       overviewPanels: { ...s.overviewPanels, [repoPath]: next },
@@ -641,19 +685,45 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   removeOverviewPanel: async (repoPath, id) => {
-    const next = (get().overviewPanels[repoPath] ?? []).filter(
-      (p) => p.id !== id,
-    );
+    const panels = get().overviewPanels[repoPath] ?? [];
+    const removed = panels.find((p) => p.id === id);
+    const next = panels.filter((p) => p.id !== id);
     set((s) => {
       const map = { ...s.overviewPanels };
       if (next.length) map[repoPath] = next;
       else delete map[repoPath];
-      return { overviewPanels: map };
+      return {
+        overviewPanels: map,
+        terminalExits: omitKey(s.terminalExits, id),
+      };
     });
+    // A terminal item owns a shell PTY (#72): kill it on close. Mark the kill
+    // intentional so its exit doesn't pop the Restart overlay.
+    if (removed?.kind === "terminal") {
+      intentionalKills.add(id);
+      await ipc.killSession(id).catch(() => {});
+    }
     try {
       await ipc.setOverviewPanels(repoPath, next);
     } catch {
       // ignore
+    }
+  },
+
+  markTerminalExited: (id, code) =>
+    set((s) => ({ terminalExits: { ...s.terminalExits, [id]: code } })),
+
+  restartTerminal: async (id, repoPath) => {
+    try {
+      await ipc.spawnTerminal(repoPath, id);
+      set((s) => ({ terminalExits: omitKey(s.terminalExits, id) }));
+      return true;
+    } catch (err) {
+      get().pushToast(
+        isSessionError(err) ? err.message : "Could not restart terminal",
+        "error",
+      );
+      return false;
     }
   },
 

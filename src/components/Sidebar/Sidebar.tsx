@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { FileDiff, FileText, Plus, X } from "lucide-react";
+import {
+  FileDiff,
+  FileText,
+  Plus,
+  Terminal as TerminalIcon,
+  X,
+} from "lucide-react";
 
 import { listFiles } from "../../ipc";
 import { repoName, sessionLabel } from "../../paths";
@@ -320,6 +326,65 @@ function DiffRow({
 }
 
 /**
+ * A plain shell terminal item in the sidebar tree (#72): a draggable row that
+ * drops into Canvas as a terminal panel (`{kind:"terminal"}`). Click opens
+ * Overview; the × removes the panel (and kills its shell). Mirrors DiffRow.
+ */
+function TerminalRow({
+  repoPath,
+  panelId,
+  onOpen,
+  onClose,
+}: {
+  repoPath: string;
+  panelId: string;
+  onOpen: () => void;
+  onClose: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: `terminal:${repoPath}:${panelId}`,
+      data: { kind: "terminal", repoPath, sessionId: panelId },
+    });
+  const style = transform
+    ? { transform: CSS.Translate.toString(transform) }
+    : undefined;
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${styles.fileRow} ${isDragging ? styles.fileRowDragging : ""}`}
+      style={style}
+    >
+      <button
+        type="button"
+        className={styles.fileMain}
+        onClick={onOpen}
+        title="Terminal"
+        {...attributes}
+        {...listeners}
+      >
+        <TerminalIcon
+          size={13}
+          strokeWidth={1.5}
+          className={styles.fileIcon}
+          aria-hidden
+        />
+        <span className={styles.fileName}>Terminal</span>
+      </button>
+      <button
+        type="button"
+        className={styles.fileClose}
+        onClick={onClose}
+        title="Close terminal"
+        aria-label="Close terminal"
+      >
+        <X size={13} strokeWidth={1.5} />
+      </button>
+    </div>
+  );
+}
+
+/**
  * Left sidebar: New session button + sessions grouped by repository. Repos come
  * from persisted recents unioned with active-session repos, so a repo stays
  * listed (greyed, with a coral +) even when it has no active sessions.
@@ -522,6 +587,14 @@ function Sidebar() {
                     onOpen={() => setView("overview")}
                     onClose={() => void removeOverviewPanel(repo, panel.id)}
                   />
+                ) : panel.kind === "terminal" ? (
+                  <TerminalRow
+                    key={panel.id}
+                    repoPath={repo}
+                    panelId={panel.id}
+                    onOpen={() => setView("overview")}
+                    onClose={() => void removeOverviewPanel(repo, panel.id)}
+                  />
                 ) : panel.file ? (
                   <FileRow
                     key={panel.id}
@@ -638,6 +711,20 @@ function Sidebar() {
                   }}
                 >
                   Open diff viewer
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    // Open a plain shell terminal item in this repo (#72); switch
+                    // to Overview so the new column is visible.
+                    void addOverviewPanel(menu.repo, "terminal");
+                    setView("overview");
+                    closeMenu();
+                  }}
+                >
+                  Open terminal
                 </button>
                 <button
                   type="button"

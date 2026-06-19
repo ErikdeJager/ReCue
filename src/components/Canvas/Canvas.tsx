@@ -53,6 +53,7 @@ function EdgeZone({ panelId, edge }: { panelId: string; edge: CanvasEdge }) {
 function panelTitle(content: CanvasContent): string {
   if (content.kind === "file") return content.file?.split("/").pop() ?? "File";
   if (content.kind === "diff") return "Diff";
+  if (content.kind === "terminal") return "Terminal";
   return content.label ?? "Panel";
 }
 
@@ -96,6 +97,12 @@ function LeafPanel({
         return <div className={styles.placeholder}>Session closed.</div>;
       }
       return <Terminal sessionId={content.sessionId} />;
+    }
+    if (content.kind === "terminal" && content.sessionId) {
+      // Plain shell terminal item (#72): repoPath lets Restart respawn the shell.
+      return (
+        <Terminal sessionId={content.sessionId} repoPath={content.repoPath} />
+      );
     }
     if (content.kind === "file" && content.repoPath && content.file) {
       return (

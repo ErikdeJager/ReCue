@@ -31,6 +31,10 @@ export async function pickDirectory(): Promise<string | null> {
 export const spawnSession = (cwd: string, name?: string) =>
   invoke<SessionRecord>("spawn_session", { cwd, name: name ?? null });
 
+/** Spawn a plain shell terminal item (#72) in `cwd` under `id` (the panel id). */
+export const spawnTerminal = (cwd: string, id: string) =>
+  invoke<void>("spawn_terminal", { cwd, id });
+
 export const resumeSession = (id: string) =>
   invoke<SessionRecord>("resume_session", { id });
 

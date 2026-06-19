@@ -35,6 +35,9 @@ export function payloadToContent(
   if (data.kind === "diff") {
     return { kind: "diff", repoPath };
   }
+  if (data.kind === "terminal" && typeof data.sessionId === "string") {
+    return { kind: "terminal", sessionId: data.sessionId, repoPath };
+  }
   return null;
 }
 
@@ -51,6 +54,13 @@ function isDuplicate(tree: CanvasNode | null, content: CanvasContent): boolean {
     return leaves.some(
       (l) =>
         l.content.kind === "diff" && l.content.repoPath === content.repoPath,
+    );
+  }
+  if (content.kind === "terminal") {
+    return leaves.some(
+      (l) =>
+        l.content.kind === "terminal" &&
+        l.content.sessionId === content.sessionId,
     );
   }
   return false;
