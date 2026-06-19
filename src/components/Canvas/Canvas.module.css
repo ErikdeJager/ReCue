@@ -240,6 +240,15 @@
   color: var(--text-primary);
 }
 
+/* Header action buttons (#86 copy-resume + close), kept grouped on the right so
+   the header stays a 2-child flex (title block ⟷ actions). */
+.panelActions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-4);
+}
+
 .panelBody {
   display: flex;
   flex: 1;

@@ -1,6 +1,6 @@
 import { type ReactElement, useEffect } from "react";
 import { useDroppable } from "@dnd-kit/core";
-import { X } from "lucide-react";
+import { Copy, X } from "lucide-react";
 import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
 
 import { repoName, sessionLabel } from "../../paths";
@@ -72,6 +72,7 @@ function LeafPanel({
   const repoColors = useStore((s) => s.repoColors);
   const activeLeafId = useStore((s) => s.activeLeafId);
   const setActiveLeaf = useStore((s) => s.setActiveLeaf);
+  const copyToClipboard = useStore((s) => s.copyToClipboard);
   const isActive = leaf.id === activeLeafId;
 
   const content = leaf.content;
@@ -147,15 +148,35 @@ function LeafPanel({
           <span className={styles.panelTitle}>{titleText}</span>
           {metaText && <span className={styles.panelMeta}>{metaText}</span>}
         </span>
-        <button
-          type="button"
-          className={styles.panelClose}
-          onClick={onClose}
-          title="Close panel"
-          aria-label="Close panel"
-        >
-          <X size={14} strokeWidth={1.5} />
-        </button>
+        <span className={styles.panelActions}>
+          {/* Copy `claude --resume <id>` (#28) — agents only, re-homed here
+              post-Focus (#86). Non-agent panels have no resumable session. */}
+          {content.kind === "agent" && session && (
+            <button
+              type="button"
+              className={styles.panelClose}
+              onClick={() =>
+                void copyToClipboard(
+                  `claude --resume ${session.id}`,
+                  "resume command",
+                )
+              }
+              title="Copy resume command (claude --resume <id>)"
+              aria-label="Copy resume command"
+            >
+              <Copy size={14} strokeWidth={1.5} />
+            </button>
+          )}
+          <button
+            type="button"
+            className={styles.panelClose}
+            onClick={onClose}
+            title="Close panel"
+            aria-label="Close panel"
+          >
+            <X size={14} strokeWidth={1.5} />
+          </button>
+        </span>
       </header>
       <div className={styles.panelBody}>{renderContent()}</div>
       {dragActive && (

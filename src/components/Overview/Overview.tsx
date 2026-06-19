@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
-import { ExternalLink, GripVertical, X } from "lucide-react";
+import { Copy, ExternalLink, GripVertical, X } from "lucide-react";
 import {
   closestCenter,
   DndContext,
@@ -117,6 +117,7 @@ interface SessionCardProps {
   selected: boolean;
   busy: boolean;
   onSelect: () => void;
+  onCopyResume: () => void;
   onOpenInZed: () => void;
   onRemove: () => void;
 }
@@ -129,6 +130,7 @@ function SessionCard({
   selected,
   busy,
   onSelect,
+  onCopyResume,
   onOpenInZed,
   onRemove,
 }: SessionCardProps) {
@@ -150,6 +152,16 @@ function SessionCard({
   );
   const actions = (
     <>
+      {/* Copy `claude --resume <id>` (#28) — re-homed here post-Focus (#86). */}
+      <button
+        type="button"
+        className={styles.action}
+        onClick={onCopyResume}
+        title="Copy resume command (claude --resume <id>)"
+        aria-label="Copy resume command"
+      >
+        <Copy size={15} strokeWidth={1.5} />
+      </button>
       <button
         type="button"
         className={styles.action}
@@ -284,6 +296,7 @@ function Overview() {
   const selectedId = useStore((s) => s.selectedId);
   const select = useStore((s) => s.select);
   const openInZed = useStore((s) => s.openInZed);
+  const copyToClipboard = useStore((s) => s.copyToClipboard);
   const removeSession = useStore((s) => s.removeSession);
   const openNewSession = useStore((s) => s.openNewSession);
   const filter = useStore((s) => s.overviewRepoFilter);
@@ -451,6 +464,12 @@ function Overview() {
                         selected={session.id === selectedId}
                         busy={sessionBusy[session.id] ?? false}
                         onSelect={() => select(session.id)}
+                        onCopyResume={() =>
+                          void copyToClipboard(
+                            `claude --resume ${session.id}`,
+                            "resume command",
+                          )
+                        }
                         onOpenInZed={() => void openInZed(session.repoPath)}
                         onRemove={() => void removeSession(session.id)}
                       />

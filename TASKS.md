@@ -1677,9 +1677,9 @@ Canvas tab close.
 
 ---
 
-### 86. [ ] Keep the "copy resume command" button on agents in Overview & Canvas (post-Focus)
+### 86. [x] Keep the "copy resume command" button on agents in Overview & Canvas (post-Focus)
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** #75
 **Created:** 2026-06-19
 
@@ -1709,10 +1709,10 @@ items; the copy action implementation (reuse as-is).
 
 **Acceptance criteria**
 
-- [ ] Every agent in Overview (card header) and Canvas (panel header) has a copy button that
+- [x] Every agent in Overview (card header) and Canvas (panel header) has a copy button that
   copies `claude --resume <that session's id>` and toasts "Copied resume command".
-- [ ] Non-agent items (file/diff/terminal viewers) do not show it.
-- [ ] Reuses the existing `copyToClipboard` store action (no duplicate copy logic); icon/title
+- [x] Non-agent items (file/diff/terminal viewers) do not show it.
+- [x] Reuses the existing `copyToClipboard` store action (no duplicate copy logic); icon/title
   match #28.
 
 **Notes**
