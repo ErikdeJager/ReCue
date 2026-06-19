@@ -90,7 +90,7 @@ function createHost(sessionId: string): TerminalHost {
       '"JetBrains Mono", ui-monospace, "SF Mono", monospace',
     ),
     fontSize: 12.5,
-    lineHeight: 1.5,
+    lineHeight: 1.2,
     cursorBlink: true,
     allowProposedApi: true,
     theme: {

@@ -162,7 +162,7 @@ Define as CSS variables; do not introduce off-system colors.
 **Type:** UI/chrome → system stack (`-apple-system, "SF Pro Text", ui-sans-serif,
 system-ui`); terminal + diff → `JetBrains Mono`, fallback `ui-monospace, "SF Mono",
 monospace`. Scale: eyebrow 11px/600/uppercase · UI default 13px · meta 11–12px ·
-terminal 12.5px/1.5 · diff 12px/1.45.
+terminal 12.5px/1.2 · diff 12px/1.45.
 **Spacing** 4px base (4·6·8·12·16·20·24·32). **Radii** window/panels 10px,
 buttons/inputs 7px, chips 5px, dots 999px. **Depth** hairline borders + bg layering;
 one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motion**
@@ -1140,9 +1140,9 @@ just its keyboard equivalent).
 
 ---
 
-### 78. [ ] Reduce terminal line height (xterm `lineHeight` 1.5 → ~1.2)
+### 78. [x] Reduce terminal line height (xterm `lineHeight` 1.5 → ~1.2)
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -1164,11 +1164,11 @@ box-drawing, no clipped glyphs or overlap) at the tighter line height.
 
 **Acceptance criteria**
 
-- [ ] Terminal lines are visibly tighter than before (xterm `lineHeight` reduced from 1.5 to
+- [x] Terminal lines are visibly tighter than before (xterm `lineHeight` reduced from 1.5 to
   ~1.2), across Overview and Canvas terminals.
-- [ ] Text stays readable and `claude`'s TUI renders correctly (cursor, box-drawing, no
+- [x] Text stays readable and `claude`'s TUI renders correctly (cursor, box-drawing, no
   overlap/clipping).
-- [ ] Font size unchanged; the design-reference line-height note is updated to match.
+- [x] Font size unchanged; the design-reference line-height note is updated to match.
 
 **Notes**
 
