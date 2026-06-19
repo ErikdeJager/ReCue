@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#77**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#78**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -1075,3 +1075,46 @@ Out of scope: a prev/next canvas chord (chosen: jump-only); making canvas-switch
   `src/components/Canvas/Canvas.tsx` (active-leaf highlight + content focus),
   `src/components/Canvas/canvasTree.ts` (spatial neighbor helper), `src/store.ts`
   (`selectCanvas`, `canvases`/`activeCanvasId`, active-leaf state).
+
+---
+
+### 77. [ ] Keybind to toggle between Overview and Canvas (⌘\)
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** #75
+**Created:** 2026-06-19
+
+**Description**
+
+Add a keyboard shortcut — **⌘\ (Cmd+Backslash)** — that toggles the main view between
+**Overview** and **Canvas**. After #75 removes Focus, those are the only two views, so one key
+flipping between them is the natural keyboard equivalent of the sidebar Overview/Canvas toggle
+(`ViewSwitch`, #25).
+
+Implement in the global handler (`useKeyboardNav.ts`, capture phase): on ⌘\,
+`setView(view === "overview" ? "canvas" : "overview")`. It's ⌘-based, so it never reaches a
+focused `claude`/terminal (and the capture-phase `stopPropagation` keeps it off xterm), and it
+doesn't collide with the existing ⌘N (#26) or the Canvas ⌘1–9 / Shift+arrows (#76). Don't fire
+while the new-session modal is open (`!newSessionOpen` guard), matching the other shortcuts.
+
+Out of scope: any third view (Focus is gone); changing the sidebar ViewSwitch itself (this is
+just its keyboard equivalent).
+
+**Acceptance criteria**
+
+- [ ] Pressing ⌘\ from Overview switches to Canvas, and from Canvas switches to Overview.
+- [ ] It works with a `claude` session focused in a terminal (the chord is intercepted before
+  xterm; claude never sees it).
+- [ ] No conflict with ⌘N or the Canvas ⌘1–9 / Shift+arrow bindings; it's inert while the
+  new-session modal is open.
+
+**Notes**
+
+- Decision (from the requester, after keybind research): ⌘\ as a single toggle between the two
+  views.
+- Depends on #75 (Focus removal) — only then is the app a clean two-view (Overview/Canvas)
+  toggle; #75 also edits the same `useKeyboardNav.ts`.
+- Coordinate with #76 (Canvas ⌘1–9 + Shift+arrows in the same handler) — ⌘\ is chosen to avoid
+  those.
+- Key code: `src/useKeyboardNav.ts` (add the ⌘\ branch), `src/store.ts` (`setView`, `view`),
+  `src/components/ViewSwitch/ViewSwitch.tsx` (mouse equivalent, for parity).
