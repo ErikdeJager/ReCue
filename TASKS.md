@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#80**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#81**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -1234,3 +1234,60 @@ sidebar row highlight extend to every item kind. Presence-in-canvas = the item a
   generalized selected item; toast), `src/components/Overview/Overview.tsx` (selected highlight
   + scroll-into-view for all columns), `src/components/Canvas/Canvas.tsx` + `canvasTree.ts`
   (find the leaf for an item id; focus it via #76's active-leaf).
+
+---
+
+### 80. [ ] Diff viewer — wrap long lines to fit width (no horizontal scroll)
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+In the diff viewer (`DiffInspector`, #13/#39/#47), long lines currently render with
+`white-space: pre` and overflow horizontally, forcing the user to scroll right to read them.
+Instead, **soft-wrap** overflowing lines to the next visual line so the content fits the
+available width — keeping the **single line number** in the gutter (the wrapped continuation
+has no extra number).
+
+Apply to **both** the **unified** and **split** views (`UnifiedRow` / `SplitRow`). It's a CSS
+change in `DiffInspector.module.css`:
+- The line **content** (`.content` / `.code`, currently `white-space: pre`) →
+  **`white-space: pre-wrap`** (preserves code indentation + spaces while wrapping at the edge)
+  plus **`overflow-wrap: anywhere`** (so very long unbroken tokens — minified lines, long URLs
+  — also wrap).
+- The diff **rows** (`.line`, `.splitLine` / `.splitCell`, currently `align-items: center`) →
+  **`align-items: flex-start`** so the gutter line number sits at the **top** of a wrapped (now
+  taller) line, not vertically centered.
+- The diff **body** (`.body`, currently `overflow: auto`) → drop the horizontal scroll
+  (`overflow-x: hidden`, keep `overflow-y: auto`) now that lines wrap.
+- In **split** view, each side's content wraps within its half-width; the paired old/new cells
+  of a row top-align (flex-start) so they stay readable.
+
+Keep tab rendering and the add/del/context coloring unchanged; only the wrapping/alignment
+changes.
+
+Out of scope: a wrap/no-wrap toggle (always wrap, per the request); the file viewer's code/raw
+rendering (#64 covers that surface separately).
+
+**Acceptance criteria**
+
+- [ ] In the diff viewer, a line longer than the panel width wraps to the next visual line and
+  fits within the width — no horizontal scrollbar / no scrolling right to read it.
+- [ ] The wrapped line keeps its single gutter line number, top-aligned to the first visual
+  row; continuation rows have no extra number.
+- [ ] Works in both unified and split views; code indentation/whitespace is preserved
+  (pre-wrap) and very long tokens still wrap (overflow-wrap).
+- [ ] Add/del/context colors, gutter, and tab rendering are otherwise unchanged; the viewer
+  behaves the same in Overview diff columns and Canvas diff panels.
+
+**Notes**
+
+- `DiffInspector` is shared by Overview diff columns (#39) and Canvas diff panels (#47) — one
+  CSS change covers both. (#75 removes the Focus inspector that also hosted it, but
+  DiffInspector itself is unaffected.)
+- Key code: `src/components/DiffInspector/DiffInspector.module.css` (`.content`/`.code`
+  `white-space`, `.line`/`.splitLine`/`.splitCell` `align-items`, `.body` overflow),
+  `src/components/DiffInspector/DiffInspector.tsx` (`UnifiedRow`/`SplitRow` — gutter + content
+  spans).
