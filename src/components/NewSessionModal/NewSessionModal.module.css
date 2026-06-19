@@ -55,11 +55,6 @@
   font-size: var(--fs-meta-sm);
 }
 
-.optional {
-  color: var(--text-muted);
-  font-weight: 400;
-}
-
 .pickRow {
   display: flex;
   align-items: center;
@@ -174,16 +169,6 @@
   direction: rtl;
 }
 
-.recentKbd {
-  flex-shrink: 0;
-  padding: 0 var(--space-4);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
-  color: var(--text-muted);
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-}
-
 .empty {
   margin: 0 0 var(--space-12);
   color: var(--text-muted);
@@ -243,30 +228,8 @@
   color: var(--text-muted);
 }
 
-.input {
-  width: 100%;
-  margin-bottom: var(--space-12);
-  padding: var(--space-6) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--fs-meta);
-}
-
-.input:focus {
-  border-color: var(--accent);
-}
-
-/* Keyboard focus keeps the global :focus-visible ring; pointer focus shows the
-   border highlight only (no ring). */
-.input:focus:not(:focus-visible) {
-  outline: none;
-}
-
 /* Destructive-checkout warning (on-system: icon + secondary text, no status
-   color); the checkbox gates Create. */
+   color); the checkbox gates Start. */
 .warning {
   display: flex;
   align-items: center;
@@ -288,24 +251,6 @@
   flex: 1;
 }
 
-/* Inline keyboard hints (#61) — discoverability for the launcher keys. */
-.hints {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-4);
-  margin: 0 0 var(--space-12);
-  color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
-}
-
-.hints kbd {
-  padding: 0 var(--space-4);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
-  font-family: var(--mono);
-}
-
 .actions {
   display: flex;
   justify-content: flex-end;
@@ -314,6 +259,9 @@
 
 .cancel,
 .create {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
   padding: var(--space-6) var(--space-12);
   border-radius: var(--radius-control);
   font: inherit;
@@ -346,6 +294,52 @@
 .create:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* In-button key hint (#66): ⏎ in Start, esc in Cancel — replaces the old
+   standalone hints row. Inherits the button's text color so it reads on both
+   the accent Start and the plain Cancel. */
+.btnKbd {
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+/* Branch step (#66): a back affordance that returns to the folder step and
+   shows which folder was chosen. */
+.folderBack {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-bottom: var(--space-12);
+  padding: var(--space-4) var(--space-6);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.folderBack:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.folderBackName {
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+}
+
+.folderBackHint {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
 }
 
 @keyframes popover-in {

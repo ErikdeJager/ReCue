@@ -285,9 +285,9 @@ Out of scope: the panel's internal flow/keybindings (#66).
 
 ---
 
-### 66. [ ] Rework the new-session flow — two-step folder→branch keyboard flow, branch filter, in-button hints, remove Name, "Start"
+### 66. [x] Rework the new-session flow — two-step folder→branch keyboard flow, branch filter, in-button hints, remove Name, "Start"
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -328,32 +328,35 @@ launcher entry, the destructive-checkout acknowledgement (#27).
 
 **Subtasks**
 
-1. [ ] Folder step: keep search auto-focus + type/↑↓ filter; change Enter to **advance**
+1. [x] Folder step: keep search auto-focus + type/↑↓ filter; change Enter to **advance**
    (focus Branch step for git; start immediately for non-git / 0 branches).
-2. [ ] Branch step: auto-focus on entry; ↑↓ roving; Enter starts (checkout for non-current,
+2. [x] Branch step: auto-focus on entry; ↑↓ roving; Enter starts (checkout for non-current,
    destructive-confirm intact).
-3. [ ] Branch filter input above the list, shown when **>4 branches**; type filters, ↑↓
+3. [x] Branch filter input above the list, shown when **>4 branches**; type filters, ↑↓
    moves, Enter starts.
-4. [ ] Sort branches: pin `main` > `master` > `dev`/`develop` to the top, current
+4. [x] Sort branches: pin `main` > `master` > `dev`/`develop` to the top, current
    highlighted/default, rest after; priority branches sort to top of filtered results.
-5. [ ] Remove `.hints` row; ⏎ in Start, esc in Cancel; remove ⌘1–9 badges and ↑↓ hints.
-6. [ ] Remove the Name input; stop defaulting name to repoName — new sessions have no custom
+5. [x] Remove `.hints` row; ⏎ in Start, esc in Cancel; remove ⌘1–9 badges and ↑↓ hints.
+6. [x] Remove the Name input; stop defaulting name to repoName — new sessions have no custom
    name.
-7. [ ] Rename action button to "Start" / "Checkout & start".
+7. [x] Rename action button to "Start" / "Checkout & start". _(Branch-step start button =
+   "Start" / "Checkout & start"; the folder-step advance button reads "Continue" for a git
+   folder and "Start" for a non-git folder, since it advances vs. starts. A "‹ change folder"
+   back affordance returns from the branch step to the folder step.)_
 
 **Acceptance criteria**
 
-- [ ] Opening focuses the recents search; typing/↑↓ filters & highlights a folder.
-- [ ] Enter on a **git** folder advances to the Branch step (no start); Enter on a
+- [x] Opening focuses the recents search; typing/↑↓ filters & highlights a folder.
+- [x] Enter on a **git** folder advances to the Branch step (no start); Enter on a
   **non-git** folder starts immediately.
-- [ ] In the Branch step, ↑↓ moves and Enter starts (checkout for a non-current branch;
+- [x] In the Branch step, ↑↓ moves and Enter starts (checkout for a non-current branch;
   destructive-confirm still gates it).
-- [ ] Branch filter appears when >4 branches, auto-focused, filters as you type;
+- [x] Branch filter appears when >4 branches, auto-focused, filters as you type;
   `main`/`master`/`dev` pinned to the top in that order (and atop matching results).
-- [ ] No standalone hint row; Start shows ⏎, Cancel shows esc; no ⌘1–9 / ↑↓ hint badges
+- [x] No standalone hint row; Start shows ⏎, Cancel shows esc; no ⌘1–9 / ↑↓ hint badges
   remain.
-- [ ] No Name field; a session created here has no custom name.
-- [ ] Action button reads "Start" (or "Checkout & start" when switching branches).
+- [x] No Name field; a session created here has no custom name.
+- [x] Action button reads "Start" (or "Checkout & start" when switching branches).
 
 **Notes**
 
