@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#75**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#76**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -902,3 +902,93 @@ location, and any worktree management UI beyond create/remove.
   ref-counted removal), `src/components/NewSessionModal/NewSessionModal.tsx` (⌘⏎ in the branch
   step), `src/components/Sidebar/Sidebar.tsx` (nested worktree sub-groups), `src/store.ts`
   (worktree-aware spawn + removal), `src/types/index.ts`, `CLAUDE.md` (git-writes rule).
+
+---
+
+### 75. [ ] Remove Focus mode entirely (views become Overview + Canvas)
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+Remove the **Focus view** and everything that navigates to it. Canvas mode supersedes it — a
+single-agent Canvas is the same thing from the user's perspective — so Focus is obsolete. Do a
+**clean removal: no dangling references** anywhere (code, state, persistence, keybinds, docs).
+After this, the app has **two views: Overview and Canvas.**
+
+Per the requester: **no replacement affordances** — the Overview card's "Expand to Focus"
+button is removed (not repurposed), and the Focus keybind is removed with no Canvas
+substitute. To focus one agent the user builds a Canvas (drag the agent in); Canvas is
+reachable via the sidebar Overview/Canvas toggle.
+
+**Keep `DiffInspector`** — it's shared by the diff-viewer panels in Overview (#39) and Canvas
+(#47); only the Focus *inspector* (the resizable Diff/Files tab strip) is removed. Likewise
+`FileViewer` stays (used by file panels everywhere); only the Focus "Files" tab entry point
+goes (the searchable file picker #56 + sidebar remain the ways to open a file viewer).
+
+**Removal checklist (touch points found):**
+- **Component:** delete `src/components/Focus/` (Focus.tsx + Focus.module.css).
+- **View type:** `View = "overview" | "focus" | "canvas"` → `"overview" | "canvas"`
+  (`types/index.ts`).
+- **App shell:** `App.tsx` — drop the `Focus` import + the `view === "canvas" ? <Canvas> :
+  <Focus>` branch (render Overview or Canvas); fix comments (#12, "Overview↔Focus↔Canvas").
+- **Store (`store.ts`):** remove `showFocus`, `toggleInspector`, `setInspectorOpen`,
+  `inspectorOpen`, `setInspectorWidth`, `persistInspectorWidth`, `inspectorWidth`,
+  `INSPECTOR_DEFAULT_WIDTH` + bounds, the `view: "focus"` set, and the boot load of
+  `inspectorWidth`. Keep `selectedId`/`setView`/`view` (now only overview/canvas) and Overview
+  selection.
+- **ViewSwitch:** remove the "focus" option + `showFocus` call → a two-option Overview/Canvas
+  toggle (`ViewSwitch.tsx`).
+- **Overview:** remove the "Expand to Focus" button (`Maximize2`, `onExpand` →
+  `setView("focus")`) and its prop/wiring (`Overview.tsx`).
+- **Keybinds:** in `useKeyboardNav.ts` remove the Focus nav keybinds (Shift+↓ "focus selected
+  agent" → `showFocus`, and the Shift+↑ "back to Overview" that only existed to return from
+  Focus); keep agent navigation. Update the header comment.
+- **IPC + backend:** remove `getInspectorWidth`/`setInspectorWidth` (`ipc.ts`), the matching
+  Tauri commands (`commands.rs`, registration in `lib.rs`), and the `inspector_width` field +
+  `inspector_width()`/`set_inspector_width()` + its test in `store.rs`. Old persisted
+  `inspector_width` keys are ignored (serde default) — no migration needed.
+- **Tests:** update `store.test.ts` (it sets `view: "focus"` / calls `showFocus`) and the
+  `store.rs` inspector test.
+- **Docs:** scrub Focus from `CLAUDE.md` and `README.md` (architecture, the three-views
+  description, inspector, keybinds, layout/components list). The TASKS.md *Implemented* entries
+  (#12/#37/#40/#51) are historical provenance — leave them (they point to git history), but
+  remove any *live* "current behavior" Focus references.
+
+Final sweep: grep for `focus`/`Focus`/`inspector`/`showFocus` (excluding DOM focus /
+focus-visible / focusable / `.focus()`) and confirm nothing live remains.
+
+Out of scope: changing Canvas; adding any new "open in Canvas" button or keybind (explicitly
+not wanted).
+
+**Acceptance criteria**
+
+- [ ] There is no Focus view: the app renders only Overview or Canvas; the sidebar toggle
+  offers just those two.
+- [ ] The Overview "Expand to Focus" button is gone (cards keep select + Open-in-Zed + ×); no
+  keybind navigates to Focus.
+- [ ] No `Focus` component, `"focus"` view value, `showFocus`/inspector state, or
+  `inspector_width` command/persistence remains; `npm run build`, `npm run lint`, `npm test`,
+  and `cargo test` pass.
+- [ ] `DiffInspector` and `FileViewer` still work in Overview and Canvas (diff/file panels
+  unaffected).
+- [ ] CLAUDE.md and README no longer describe Focus as a current view; a `focus`/`inspector`
+  grep finds no live references (only DOM-focus a11y usages).
+
+**Notes**
+
+- Decisions (from the requester): complete removal, no replacement — remove the Expand button
+  (don't repurpose) and the Focus keybind (no Canvas substitute).
+- `DiffInspector`/`FileViewer` are shared — do NOT delete them; only remove the Focus inspector
+  that hosted them.
+- Coordinates with open tasks that also touch Focus, which this deletes: **#67** (session label
+  rule includes the Focus toolbar) and **#71** (activity indicator is repositioned in the Focus
+  toolbar) — their Focus-specific parts become moot once this lands; **#70** edits the Overview
+  card actions where the Expand button lives. Sequence/rebase to avoid wasted work (ideally land
+  this before the Focus-touching parts of #67/#71).
+- Key code: `src/components/Focus/*` (delete), `src/types/index.ts`, `src/App.tsx`,
+  `src/store.ts`, `src/components/ViewSwitch/ViewSwitch.tsx`, `src/components/Overview/Overview.tsx`,
+  `src/useKeyboardNav.ts`, `src/ipc.ts`, `src/store.test.ts`,
+  `src-tauri/src/{store.rs,commands.rs,lib.rs}`, `CLAUDE.md`, `README.md`.
