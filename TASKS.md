@@ -4139,9 +4139,9 @@ own independent BSP layout; switching tabs preserves layouts and never disposes 
 
 ---
 
-### 59. [ ] Folders as the source of truth: show every repo item in the sidebar + drag anything into Canvas
+### 59. [x] Folders as the source of truth: show every repo item in the sidebar + drag anything into Canvas
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #58
 **Created:** 2026-06-19
 
@@ -4162,31 +4162,31 @@ through a mix of drags and a special context-menu item. Two changes:
 
 **Subtasks**
 
-1. [ ] Render the repo's non-agent items (diff + file viewers from `overviewPanels`) as
+1. [x] Render the repo's non-agent items (diff + file viewers from `overviewPanels`) as
    **draggable** rows in the sidebar tree under their repo, alongside agent and opened-file
    rows; each drags into Canvas (diff → diff panel, file → file viewer) and click-opens as
    today.
-2. [ ] Reconcile so the **sidebar items == Overview columns** for each repo (1:1).
+2. [x] Reconcile so the **sidebar items == Overview columns** for each repo (1:1).
    Recommended: treat the per-repo item list (`overviewPanels`) as the source of truth that
    both the sidebar and Overview render, and fold the separate `openFiles` (#45) concept
    into it (an opened file *is* a file item) so a file/diff opened anywhere shows in both
    places and is draggable to Canvas. (Implementer's architecture call; the end state must
    be 1:1.)
-3. [ ] Extend the drag-payload→content mapping (`canvasDrop.payloadToContent`) so a diff
+3. [x] Extend the drag-payload→content mapping (`canvasDrop.payloadToContent`) so a diff
    item maps to a diff panel; confirm sessions/files still map. **Establish + document the
    pattern:** a new left-panel item type is draggable into Canvas **by default** (add a
    draggable source row + a `payloadToContent` case).
-4. [ ] Remove the "Open diff in Canvas" context-menu item; keep "Open diff viewer" /
+4. [x] Remove the "Open diff in Canvas" context-menu item; keep "Open diff viewer" /
    "Open file viewer…" (which now also register the item in the sidebar).
-5. [ ] Drops target the **active** canvas (per #58).
+5. [x] Drops target the **active** canvas (per #58).
 
 **Acceptance criteria**
 
-- [ ] Opening a diff viewer or a file shows it under its repo in the sidebar **and** as an
+- [x] Opening a diff viewer or a file shows it under its repo in the sidebar **and** as an
   Overview column (the two stay 1:1 per repo).
-- [ ] Dragging any sidebar item — agent, file, or diff — into a Canvas creates/splits a
+- [x] Dragging any sidebar item — agent, file, or diff — into a Canvas creates/splits a
   panel with its content; terminals stay alive.
-- [ ] The "Open diff in Canvas" context-menu item is gone (drag replaces it); future item
+- [x] The "Open diff in Canvas" context-menu item is gone (drag replaces it); future item
   types are draggable into Canvas by default.
 
 **Notes**
@@ -4201,6 +4201,25 @@ through a mix of drags and a special context-menu item. Two changes:
   dnd-kit drag source with a `payloadToContent` case so it drops into Canvas by default.
 - **Key reconciliation:** today opening a file registers it in both `openFiles` (sidebar)
   and `overviewPanels` markdown (Overview) — collapse to one source so they can't diverge.
+- **Done 2026-06-19.** Unified the two per-repo item models into **one source —
+  `overviewPanels`** (frontend-only; the `open_files` backend stays only as a one-time
+  migration read). On boot, any persisted `openFiles` entry not already a panel is folded in
+  as a markdown panel and persisted once, so nothing is lost. **Sidebar** now renders a
+  repo's `overviewPanels` 1:1 with Overview — file items via `FileRow`, **diff items via a
+  new `DiffRow`** — each click-opens Overview, the × calls `removeOverviewPanel` (which drops
+  the Overview column too), and each is a dnd-kit drag source. **Drag→Canvas:**
+  `payloadToContent` gained a **diff** case (`{kind:"diff"}` → diff panel); agents/files
+  already mapped — so any sidebar item drops into the **active** canvas (#58). **Removed** the
+  "Open diff in Canvas" menu item (+ the now-unused `appendCanvasContent`); "Open diff
+  viewer" / "Open file viewer…" stay and now register the item in both places.
+  `addOverviewPanel` now **dedups** (one diff per repo; one markdown per file) so every caller
+  (repo menu, FilePicker #56, Focus Files tab) simplified to a single call. Removed the
+  `openFiles` state + `openFile`/`closeFile` actions + the `setOpenFiles` ipc wrapper.
+  **Forward-looking rule (documented on `DiffRow`):** a new left-panel item type = a
+  draggable row + a `payloadToContent` case → draggable into Canvas by default. Terminals
+  survive drags via the #18 pool. Hard gate green: `npm run build`/lint/`format:check`/`test`
+  (63; store tests updated to the unified model) + `cargo fmt`/clippy/`test` (40; backend
+  unchanged). Live drag / 1:1 sync is runtime-visual (not launched headlessly).
 
 ---
 

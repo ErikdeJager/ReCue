@@ -29,7 +29,7 @@ const TABS = [
 function FileTab({ repoPath, active }: { repoPath: string; active: boolean }) {
   const [files, setFiles] = useState<string[]>([]);
   const [file, setFile] = useState<string | null>(null);
-  const openFile = useStore((s) => s.openFile);
+  const addOverviewPanel = useStore((s) => s.addOverviewPanel);
 
   useEffect(() => {
     if (!active) return;
@@ -61,10 +61,11 @@ function FileTab({ repoPath, active }: { repoPath: string; active: boolean }) {
         className={styles.fileSelect}
         value={file ?? ""}
         onChange={(event) => {
-          // An explicit pick "opens" the file → register it in the sidebar tree (#45).
+          // An explicit pick "opens" the file → register it as the repo's file
+          // item (#59, deduped in the store): shows in the sidebar + Overview.
           const picked = event.currentTarget.value;
           setFile(picked);
-          void openFile(repoPath, picked);
+          void addOverviewPanel(repoPath, "markdown", picked);
         }}
         aria-label="File"
       >

@@ -34,7 +34,6 @@ beforeEach(() => {
     repoColors: {},
     overviewPanels: {},
     overviewOrder: {},
-    openFiles: {},
     canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
     activeCanvasId: "canvas-1",
     sessionBusy: {},
@@ -326,28 +325,27 @@ describe("overview panels (#38)", () => {
   });
 });
 
-describe("opened-file tree (#45)", () => {
-  it("openFile appends, dedups, and closeFile removes (dropping empties)", async () => {
-    await useStore.getState().openFile("/repo/a", "README.md");
-    await useStore.getState().openFile("/repo/a", "src/main.rs");
-    await useStore.getState().openFile("/repo/a", "README.md"); // dup → no-op
-    expect(useStore.getState().openFiles["/repo/a"]).toEqual([
-      "README.md",
-      "src/main.rs",
-    ]);
+describe("repo items — overviewPanels as the single source (#59)", () => {
+  it("addOverviewPanel dedups: one diff per repo, one markdown per file", async () => {
+    const add = () => useStore.getState().addOverviewPanel;
+    await add()("/repo/a", "markdown", "docs/x.md");
+    await add()("/repo/a", "markdown", "docs/x.md"); // dup file → no-op
+    await add()("/repo/a", "diff");
+    await add()("/repo/a", "diff"); // dup diff → no-op
+    await add()("/repo/a", "markdown", "docs/y.md");
 
-    await useStore.getState().closeFile("/repo/a", "README.md");
-    expect(useStore.getState().openFiles["/repo/a"]).toEqual(["src/main.rs"]);
-
-    await useStore.getState().closeFile("/repo/a", "src/main.rs");
-    expect(useStore.getState().openFiles["/repo/a"]).toBeUndefined();
+    const items = useStore.getState().overviewPanels["/repo/a"] ?? [];
+    expect(items.filter((p) => p.kind === "diff")).toHaveLength(1);
+    expect(
+      items.filter((p) => p.kind === "markdown").map((p) => p.file),
+    ).toEqual(["docs/x.md", "docs/y.md"]);
   });
 
-  it("addOverviewPanel with a file registers it as an opened file (#45)", async () => {
-    await useStore
-      .getState()
-      .addOverviewPanel("/repo/a", "markdown", "docs/x.md");
-    expect(useStore.getState().openFiles["/repo/a"]).toEqual(["docs/x.md"]);
+  it("removeOverviewPanel drops the item (and its repo entry when empty)", async () => {
+    await useStore.getState().addOverviewPanel("/repo/a", "markdown", "z.md");
+    const id = useStore.getState().overviewPanels["/repo/a"]?.[0]?.id ?? "";
+    await useStore.getState().removeOverviewPanel("/repo/a", id);
+    expect(useStore.getState().overviewPanels["/repo/a"]).toBeUndefined();
   });
 });
 

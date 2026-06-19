@@ -5,7 +5,7 @@
 
 import { useStore } from "../../store";
 import type { CanvasContent, CanvasEdge, CanvasNode } from "../../types";
-import { appendLeaf, collectLeaves, splitLeaf } from "./canvasTree";
+import { collectLeaves, splitLeaf } from "./canvasTree";
 
 /** The active Canvas tab's layout tree (#58), or null. */
 function activeLayout(
@@ -31,6 +31,9 @@ export function payloadToContent(
   }
   if (data.kind === "file" && typeof data.file === "string") {
     return { kind: "file", repoPath, file: data.file };
+  }
+  if (data.kind === "diff") {
+    return { kind: "diff", repoPath };
   }
   return null;
 }
@@ -81,16 +84,4 @@ export function applyCanvasDrop(overId: string, content: CanvasContent): void {
       ),
     );
   }
-}
-
-/** Add content without a drop target (e.g. the repo menu's "Open diff in Canvas"). */
-export function appendCanvasContent(content: CanvasContent): void {
-  const store = useStore.getState();
-  const tree = activeLayout(store);
-  if (isDuplicate(tree, content)) return;
-  store.setActiveCanvasLayout(
-    tree
-      ? appendLeaf(tree, content, crypto.randomUUID(), crypto.randomUUID())
-      : leaf(content),
-  );
 }

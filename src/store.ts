@@ -205,8 +205,6 @@ export interface AppState {
   /** Per-repo drag-reorder order (#43): item keys (agent ids + panel ids). Merged
    * with the live items at render — unknown keys filtered, new ones appended. */
   overviewOrder: Record<string, string[]>;
-  /** Per-repo opened files for the sidebar tree (#45); repo-relative paths. */
-  openFiles: Record<string, string[]>;
   /** The Canvas tabs (#58) — each a named, independent BSP layout; always ≥1. */
   canvases: CanvasTab[];
   /** Which Canvas tab is active (#58). */
@@ -271,9 +269,6 @@ export interface AppState {
   removeOverviewPanel: (repoPath: string, id: string) => Promise<void>;
   /** Persist a repo cluster's drag-reordered item order (#43). */
   reorderOverview: (repoPath: string, orderedKeys: string[]) => Promise<void>;
-  /** Register / forget an opened file in the sidebar tree (#45, persisted). */
-  openFile: (repoPath: string, file: string) => Promise<void>;
-  closeFile: (repoPath: string, file: string) => Promise<void>;
   /** Replace the active Canvas tab's layout tree and persist (#58). */
   setActiveCanvasLayout: (tree: CanvasNode | null) => void;
   /** Add a new empty Canvas tab (default "Canvas N") and select it (#58). */
@@ -319,7 +314,6 @@ export const useStore = create<AppState>()((set, get) => ({
   repoColors: {},
   overviewPanels: {},
   overviewOrder: {},
-  openFiles: {},
   // One empty canvas until init loads/migrates the persisted tabs (#58) — keeps
   // the always-≥1 invariant even before the backend responds.
   canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
@@ -551,17 +545,38 @@ export const useStore = create<AppState>()((set, get) => ({
           .setCanvases({ canvases, activeId: activeCanvasId })
           .catch(() => {});
       }
+      // #59: fold the old per-repo `openFiles` (#45) into `overviewPanels` as
+      // markdown file items, so the sidebar and Overview share one source of
+      // truth. Any opened file not already a panel becomes one; persist once.
+      const mergedPanels: Record<string, OverviewPanel[]> = { ...panels };
+      for (const [repo, fileList] of Object.entries(files)) {
+        const existing = mergedPanels[repo] ?? [];
+        const have = new Set(
+          existing.filter((p) => p.kind === "markdown").map((p) => p.file),
+        );
+        const additions = fileList
+          .filter((f) => !have.has(f))
+          .map((f) => ({
+            id: crypto.randomUUID(),
+            kind: "markdown" as const,
+            file: f,
+          }));
+        if (additions.length > 0) {
+          const list = [...existing, ...additions];
+          mergedPanels[repo] = list;
+          void ipc.setOverviewPanels(repo, list).catch(() => {});
+        }
+      }
       set({
         repoColors: colors,
-        overviewPanels: panels,
+        overviewPanels: mergedPanels,
         overviewOrder: order,
-        openFiles: files,
         canvases,
         activeCanvasId,
         inspectorWidth: inspectorWidth ?? INSPECTOR_DEFAULT_WIDTH,
       });
     } catch {
-      // Backend unreachable; leave colors/panels/order/files/canvas/width as-is.
+      // Backend unreachable; leave colors/panels/order/canvas/width as-is.
     }
   },
 
@@ -587,20 +602,25 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  // Extra Overview panels (#38) — each action recomputes the repo's ordered list,
-  // updates optimistically, and persists the whole list for that repo.
+  // Extra Overview panels (#38) — the single per-repo item source (#59): each is
+  // also a sidebar row. Dedups so callers don't have to (one diff per repo; one
+  // markdown panel per file); updates optimistically and persists the list.
   addOverviewPanel: async (repoPath, kind, file) => {
+    const current = get().overviewPanels[repoPath] ?? [];
+    const dup =
+      kind === "diff"
+        ? current.some((p) => p.kind === "diff")
+        : current.some((p) => p.kind === "markdown" && p.file === file);
+    if (dup) return;
     const panel: OverviewPanel = {
       id: crypto.randomUUID(),
       kind,
       ...(file ? { file } : {}),
     };
-    const next = [...(get().overviewPanels[repoPath] ?? []), panel];
+    const next = [...current, panel];
     set((s) => ({
       overviewPanels: { ...s.overviewPanels, [repoPath]: next },
     }));
-    // A file panel is also an "open file" — register it in the sidebar tree (#45).
-    if (file) void get().openFile(repoPath, file);
     try {
       await ipc.setOverviewPanels(repoPath, next);
     } catch {
@@ -633,36 +653,6 @@ export const useStore = create<AppState>()((set, get) => ({
       await ipc.setOverviewOrder(repoPath, orderedKeys);
     } catch {
       // Persist failed (e.g. outside Tauri); keep the local order for the session.
-    }
-  },
-
-  // Opened-file tree (#45). openFile appends (deduped, stable order); closeFile
-  // removes; both persist the repo's list. Decoupled from Overview columns — the
-  // tree is a per-repo "opened files" list that survives restarts.
-  openFile: async (repoPath, file) => {
-    const current = get().openFiles[repoPath] ?? [];
-    if (current.includes(file)) return; // already listed — no-op
-    const next = [...current, file];
-    set((s) => ({ openFiles: { ...s.openFiles, [repoPath]: next } }));
-    try {
-      await ipc.setOpenFiles(repoPath, next);
-    } catch {
-      // Persist failed (e.g. outside Tauri); keep the local list for the session.
-    }
-  },
-
-  closeFile: async (repoPath, file) => {
-    const next = (get().openFiles[repoPath] ?? []).filter((f) => f !== file);
-    set((s) => {
-      const map = { ...s.openFiles };
-      if (next.length) map[repoPath] = next;
-      else delete map[repoPath];
-      return { openFiles: map };
-    });
-    try {
-      await ipc.setOpenFiles(repoPath, next);
-    } catch {
-      // ignore
     }
   },
 

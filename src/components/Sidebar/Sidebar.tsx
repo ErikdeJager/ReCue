@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { FileText, Plus, X } from "lucide-react";
+import { FileDiff, FileText, Plus, X } from "lucide-react";
 
 import { listFiles } from "../../ipc";
 import { repoName } from "../../paths";
@@ -14,7 +14,6 @@ import {
 } from "../../store";
 import type { SessionView } from "../../types";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
-import { appendCanvasContent } from "../Canvas/canvasDrop";
 import FilePicker from "../FilePicker/FilePicker";
 import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import styles from "./Sidebar.module.css";
@@ -205,10 +204,11 @@ interface FileRowProps {
 }
 
 /**
- * An opened-file entry in the sidebar tree (#45): clickable (re-open) with a
- * hover close (×), and a dnd-kit draggable source so #47 can drop it into Canvas.
- * The whole label is the drag handle; a small activation distance keeps clicks
- * working. (Drop targets are added in #47 — until then a drag snaps back.)
+ * A file-viewer item in the sidebar tree (#45/#59): one per repo file panel
+ * (`overviewPanels`, the single item source) — clickable (→ Overview), hover
+ * close (×, removes the panel), and a dnd-kit draggable source that drops into
+ * Canvas as a file viewer. The whole label is the drag handle; a small activation
+ * distance keeps clicks working.
  */
 function FileRow({ repoPath, file, onOpen, onClose }: FileRowProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } =
@@ -256,6 +256,67 @@ function FileRow({ repoPath, file, onOpen, onClose }: FileRowProps) {
 }
 
 /**
+ * A diff-viewer item in the sidebar tree (#59): a repo's diff panel as a
+ * draggable row that drops into Canvas as a diff panel (`{kind:"diff"}`). Click
+ * opens Overview; the × removes the panel (and its Overview column — they're
+ * 1:1). Mirrors FileRow — the forward-looking rule: a new left-panel item type is
+ * a draggable row + a `payloadToContent` case, draggable into Canvas by default.
+ */
+function DiffRow({
+  repoPath,
+  panelId,
+  onOpen,
+  onClose,
+}: {
+  repoPath: string;
+  panelId: string;
+  onOpen: () => void;
+  onClose: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: `diff:${repoPath}:${panelId}`,
+      data: { kind: "diff", repoPath },
+    });
+  const style = transform
+    ? { transform: CSS.Translate.toString(transform) }
+    : undefined;
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${styles.fileRow} ${isDragging ? styles.fileRowDragging : ""}`}
+      style={style}
+    >
+      <button
+        type="button"
+        className={styles.fileMain}
+        onClick={onOpen}
+        title="Diff"
+        {...attributes}
+        {...listeners}
+      >
+        <FileDiff
+          size={13}
+          strokeWidth={1.5}
+          className={styles.fileIcon}
+          aria-hidden
+        />
+        <span className={styles.fileName}>Diff</span>
+      </button>
+      <button
+        type="button"
+        className={styles.fileClose}
+        onClick={onClose}
+        title="Close diff viewer"
+        aria-label="Close diff viewer"
+      >
+        <X size={13} strokeWidth={1.5} />
+      </button>
+    </div>
+  );
+}
+
+/**
  * Left sidebar: New session button + sessions grouped by repository. Repos come
  * from persisted recents unioned with active-session repos, so a repo stays
  * listed (greyed, with a coral +) even when it has no active sessions.
@@ -278,9 +339,8 @@ function Sidebar() {
   const setRepoColor = useStore((s) => s.setRepoColor);
   const overviewPanels = useStore((s) => s.overviewPanels);
   const addOverviewPanel = useStore((s) => s.addOverviewPanel);
+  const removeOverviewPanel = useStore((s) => s.removeOverviewPanel);
   const sessionBusy = useStore((s) => s.sessionBusy);
-  const openFiles = useStore((s) => s.openFiles);
-  const closeFile = useStore((s) => s.closeFile);
 
   // Right-click repo context menu (#31/#35), anchored at the cursor. `menuMode`
   // switches between the item list, the destructive Forget confirm, and the
@@ -446,26 +506,29 @@ function Sidebar() {
                 />
               ))}
 
-              {/* Opened files under this repo (#45): click re-opens as an
-                  Overview column; the × forgets it; draggable for Canvas (#47). */}
-              {(openFiles[repo] ?? []).map((f) => (
-                <FileRow
-                  key={f}
-                  repoPath={repo}
-                  file={f}
-                  onOpen={() => {
-                    if (
-                      !overviewPanels[repo]?.some(
-                        (p) => p.kind !== "diff" && p.file === f,
-                      )
-                    ) {
-                      void addOverviewPanel(repo, "markdown", f);
-                    }
-                    setView("overview");
-                  }}
-                  onClose={() => void closeFile(repo, f)}
-                />
-              ))}
+              {/* This repo's non-agent items (#59) — the same `overviewPanels`
+                  Overview shows, 1:1: file + diff viewers. Each click opens
+                  Overview, the × removes the item, and each is draggable into a
+                  Canvas (file → file viewer, diff → diff panel). */}
+              {(overviewPanels[repo] ?? []).map((panel) =>
+                panel.kind === "diff" ? (
+                  <DiffRow
+                    key={panel.id}
+                    repoPath={repo}
+                    panelId={panel.id}
+                    onOpen={() => setView("overview")}
+                    onClose={() => void removeOverviewPanel(repo, panel.id)}
+                  />
+                ) : panel.file ? (
+                  <FileRow
+                    key={panel.id}
+                    repoPath={repo}
+                    file={panel.file}
+                    onOpen={() => setView("overview")}
+                    onClose={() => void removeOverviewPanel(repo, panel.id)}
+                  />
+                ) : null,
+              )}
             </div>
           );
         })}
@@ -524,14 +587,9 @@ function Sidebar() {
               <FilePicker
                 files={fileList}
                 onPick={(f) => {
-                  // One column per file — don't duplicate an open one.
-                  if (
-                    !overviewPanels[menu.repo]?.some(
-                      (p) => p.kind === "markdown" && p.file === f,
-                    )
-                  ) {
-                    void addOverviewPanel(menu.repo, "markdown", f);
-                  }
+                  // Opens it as the repo's single file item (#59, deduped in the
+                  // store) — shows in both the sidebar and Overview.
+                  void addOverviewPanel(menu.repo, "markdown", f);
                   setView("overview");
                   closeMenu();
                 }}
@@ -568,13 +626,10 @@ function Sidebar() {
                   role="menuitem"
                   className={styles.menuItem}
                   onClick={() => {
-                    // Add a diff column for this repo (#39), avoiding duplicates;
-                    // switch to Overview so the new column is visible.
-                    if (
-                      !overviewPanels[menu.repo]?.some((p) => p.kind === "diff")
-                    ) {
-                      void addOverviewPanel(menu.repo, "diff");
-                    }
+                    // Add the repo's diff item (#39/#59, deduped in the store);
+                    // switch to Overview so the new column is visible. It now also
+                    // appears in the sidebar and is draggable into a Canvas.
+                    void addOverviewPanel(menu.repo, "diff");
                     setView("overview");
                     closeMenu();
                   }}
@@ -588,20 +643,6 @@ function Sidebar() {
                   onClick={() => setMenuMode("files")}
                 >
                   Open file viewer…
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => {
-                    // Add a diff panel to the Canvas (#47, deduped per repo) and
-                    // switch to Canvas so it's visible.
-                    appendCanvasContent({ kind: "diff", repoPath: menu.repo });
-                    setView("canvas");
-                    closeMenu();
-                  }}
-                >
-                  Open diff in Canvas
                 </button>
                 <button
                   type="button"
