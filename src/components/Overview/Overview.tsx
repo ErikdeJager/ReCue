@@ -81,22 +81,21 @@ function PanelColumn({
       className={`${styles.card} ${selected ? styles.cardSelected : ""} ${groupStart ? styles.cardGroupStart : ""} ${isDragging ? styles.cardDragging : ""}`}
       style={style}
     >
-      <header className={styles.header}>
-        {/* Drag handle (#43): the only drag affordance, so the terminal body and
-            the action buttons stay fully clickable. dnd-kit gives it keyboard +
-            screen-reader support via `attributes`. */}
-        <button
-          type="button"
-          className={styles.dragHandle}
-          title="Drag to reorder"
-          aria-label="Drag to reorder"
-          {...attributes}
-          {...listeners}
-        >
+      {/* The whole title bar is the drag handle (#70): dnd-kit attributes make it
+          focusable for keyboard + screen-reader drag; the grip is just a visual
+          hint. The .actions group stops pointerdown so its buttons stay clickable
+          and never start a drag. The body (a sibling) stays separately clickable. */}
+      <header className={styles.header} {...attributes} {...listeners}>
+        <span className={styles.dragHandle} title="Drag to reorder" aria-hidden>
           <GripVertical size={14} strokeWidth={1.5} />
-        </button>
+        </span>
         <div className={styles.titleBlock}>{title}</div>
-        <div className={styles.actions}>{actions}</div>
+        <div
+          className={styles.actions}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {actions}
+        </div>
       </header>
       <div className={styles.body} onClick={onClickBody}>
         {children}

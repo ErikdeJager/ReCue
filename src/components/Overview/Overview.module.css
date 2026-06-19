@@ -109,6 +109,9 @@
   );
 }
 
+/* The whole title bar is the drag handle (#70): grab to reorder a column within
+   its repo cluster. touch-action:none lets dnd-kit's pointer sensor drag on
+   touch; the .actions group + the body (a sibling) stay clickable. */
 .header {
   display: flex;
   height: 40px;
@@ -118,10 +121,16 @@
   padding: 0 var(--space-6);
   border-bottom: 1px solid var(--border-hairline);
   background: var(--bg-panel);
+  cursor: grab;
+  touch-action: none;
 }
 
-/* Drag handle (#43): grab to reorder a column within its repo cluster. It is the
-   only drag affordance, so the terminal body + action buttons stay clickable. */
+.header:active {
+  cursor: grabbing;
+}
+
+/* Visual hint that the title bar is draggable (#70); the drag listeners live on
+   the whole .header, so this is a non-interactive icon. */
 .dragHandle {
   display: flex;
   width: 16px;
@@ -129,20 +138,13 @@
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  border: 0;
-  background: transparent;
   color: var(--text-muted);
-  cursor: grab;
-  touch-action: none;
   transition: color var(--dur-fast) var(--ease-out);
 }
 
-.dragHandle:hover {
+/* Brighten the grip when hovering the draggable header. */
+.header:hover .dragHandle {
   color: var(--text-secondary);
-}
-
-.dragHandle:active {
-  cursor: grabbing;
 }
 
 /* The column being dragged: lift it above its neighbours. */

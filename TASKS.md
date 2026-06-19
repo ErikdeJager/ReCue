@@ -513,9 +513,9 @@ Out of scope: the global `:focus-visible` style and any other input's focus ring
 
 ---
 
-### 70. [ ] Overview: make the whole column title bar a drag handle (not just the corner grip)
+### 70. [x] Overview: make the whole column title bar a drag handle (not just the corner grip)
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -547,23 +547,24 @@ any button does.
 
 **Subtasks**
 
-1. [ ] In `PanelColumn` (`Overview.tsx`), attach the sortable `listeners` to the whole
+1. [x] In `PanelColumn` (`Overview.tsx`), attach the sortable `listeners` to the whole
    header (title bar) rather than only the grip; keep `attributes` / keyboard drag working.
-2. [ ] Guard the `.actions` buttons (×, Expand, Zed) so pressing them doesn't start a drag
-   and their onClick still fires.
-3. [ ] Add `cursor: grab` / `:active` `grabbing` to the header in `Overview.module.css`;
-   keep or remove the grip as a visual hint.
+   _(Both `attributes` + `listeners` moved to `<header>`; grip is now a visual-hint span.)_
+2. [x] Guard the `.actions` buttons (×, Expand, Zed) so pressing them doesn't start a drag
+   and their onClick still fires. _(One `onPointerDown` stopPropagation on the `.actions` div.)_
+3. [x] Add `cursor: grab` / `:active` `grabbing` to the header in `Overview.module.css`;
+   keep or remove the grip as a visual hint. _(Grip kept; brightens on header hover.)_
 
 **Acceptance criteria**
 
-- [ ] In Overview, pressing and dragging anywhere on a column's title bar (over the
+- [x] In Overview, pressing and dragging anywhere on a column's title bar (over the
   name/subtitle, not just the corner grip) reorders the column — for agent terminals and for
   file/diff/markdown panels.
-- [ ] The × still closes the agent/panel; Expand to Focus and Open in Zed still work; none of
+- [x] The × still closes the agent/panel; Expand to Focus and Open in Zed still work; none of
   them start a drag.
-- [ ] The title bar shows a grab/grabbing cursor; keyboard reorder + screen-reader drag still
+- [x] The title bar shows a grab/grabbing cursor; keyboard reorder + screen-reader drag still
   work.
-- [ ] No regression to selecting a card or to the terminal/body interactions.
+- [x] No regression to selecting a card or to the terminal/body interactions.
 
 **Notes**
 
