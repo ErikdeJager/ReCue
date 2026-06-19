@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#81**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#82**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -1293,3 +1293,89 @@ rendering (#64 covers that surface separately).
   `white-space`, `.line`/`.splitLine`/`.splitCell` `align-items`, `.body` overflow),
   `src/components/DiffInspector/DiffInspector.tsx` (`UnifiedRow`/`SplitRow` — gutter + content
   spans).
+
+---
+
+### 81. [ ] Diff viewer — branch-compare mode (two-dot `git diff base target`)
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+Add a **branch-compare mode** to the existing diff viewer (`DiffInspector`, #13/#39/#47).
+Today it always shows the **working tree vs HEAD** (`working_diff`). Add a **source toggle** so
+the same viewer can instead **compare two branches head-to-head**, rendering the result in the
+identical diff body (file list + unified/split + #80 wrapping). Only the source of the diff
+changes; the look is the same.
+
+- **Source toggle:** "Working tree" (current, vs HEAD, with the #29 auto-refresh) ↔
+  **"Compare"** (branch base vs target).
+- **Compare-mode UI:** two branch selectors — **base** and **target** — populated from
+  `list_branches(repoPath)` (the existing `listBranches` IPC; reuse the #66 picker patterns /
+  priority sort if handy). Picking branches loads the comparison.
+- **Comparison:** **two-dot `git diff <base> <target>`** (per the requester — the full
+  head-to-head difference between the two branch tips). Oriented base → target (what target has
+  relative to base).
+- **Backend:** add `compare_branches(cwd, base, target)` in `git.rs` — **validate both branches
+  exist** (via `list_branches`, mirroring `checkout_branch`, so the IPC boundary can't pass
+  arbitrary refspecs), run `git -C cwd diff <base> <target> --no-color --no-ext-diff -c
+  core.quotepath=false`, **reuse `parse_unified_diff`**, return the same `WorkingDiff` shape
+  (summary labeled "base → target", counts like `working_diff`). New Tauri command +
+  `compareBranches` IPC wrapper.
+- **Refresh:** compare mode reloads on branch-selection change and via the existing Refresh
+  button; the working-tree poll (#29) stays for working-tree mode (compare needn't poll
+  aggressively — branches change only on new commits).
+- **Persistence:** persist the source mode + chosen base/target on the diff panel (extend the
+  `diff` `OverviewPanel` with optional compare fields) so a configured compare view survives
+  view switches / restart, rather than resetting like the ephemeral unified/split toggle.
+
+**Defaults:** Compare mode defaults base = the repo's current branch, target = its default
+branch (`main`/`master`) if present, else target unset until picked.
+
+Reuses the whole diff rendering pipeline — file list, unified/split, gutters, colors, and the
+#80 line-wrapping — so a branch compare looks identical to the working-tree diff.
+
+Out of scope: three-dot/merge-base comparison (chosen: two-dot); comparing arbitrary
+commits/tags/remotes (local branches only for now); a separate compare *item* (chosen: a toggle
+in the existing diff viewer).
+
+**Subtasks**
+
+1. [ ] Backend: `compare_branches(cwd, base, target)` in `git.rs` (validate both branches;
+   `git diff base target`; reuse `parse_unified_diff`; `WorkingDiff` out) + Tauri command +
+   `compareBranches` IPC wrapper.
+2. [ ] DiffInspector: add a Working-tree↔Compare source toggle; in Compare mode show base/target
+   branch selectors (from `listBranches`) and fetch `compareBranches` via the generalized
+   `load`.
+3. [ ] Reuse the existing body (file list, unified/split, #80 wrapping); summary shows
+   "base → target" + counts.
+4. [ ] Refresh on branch change + manual Refresh; keep #29 polling for working-tree mode only.
+5. [ ] Persist source mode + base/target on the diff panel (extend the `diff` OverviewPanel;
+   `types/index.ts` + `store.rs`).
+
+**Acceptance criteria**
+
+- [ ] The diff viewer has a Working-tree / Compare source toggle; Compare mode shows base +
+  target branch pickers from the repo's local branches.
+- [ ] Selecting two branches loads `git diff base target` (two-dot) and renders it in the same
+  diff body (file list + unified/split + wrapped lines), with the summary showing base → target
+  + counts.
+- [ ] Working-tree mode is unchanged (vs HEAD, auto-refreshing #29); switching back and forth
+  works.
+- [ ] The chosen compare mode + branches persist across view switches and an app restart.
+- [ ] Unknown branches are rejected backend-side; a clear empty/error state shows if the
+  compare can't be produced.
+
+**Notes**
+
+- Decisions (from the requester): toggle inside the existing diff viewer (not a new item);
+  two-dot `git diff base target` (head vs head).
+- Reuses `working_diff`'s parser + `list_branches` + the DiffInspector body — all shipped;
+  shares `DiffInspector` with #80 (line wrapping) — coordinate/rebase.
+- Key code: `src-tauri/src/git.rs` (`compare_branches` next to `working_diff`/`checkout_branch`;
+  `parse_unified_diff` is reusable), `src-tauri/src/commands.rs` + `lib.rs` (command),
+  `src/ipc.ts` (`compareBranches`), `src/components/DiffInspector/DiffInspector.tsx` (source
+  toggle + branch pickers + generalized `load`), `src/types/index.ts` + `src-tauri/src/store.rs`
+  (persist compare fields on the `diff` panel).
