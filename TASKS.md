@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#79**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#80**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -1155,3 +1155,82 @@ box-drawing, no clipped glyphs or overlap) at the tighter line height.
 
 - Key code: `src/components/Terminal/terminalPool.ts` (`createHost` — `lineHeight: 1.5` at
   ~line 93), and the "terminal 12.5px/1.5" note in `TASKS.md` (design reference).
+
+---
+
+### 79. [ ] Unified, view-aware sidebar item click — select/jump without switching views
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** #76
+**Created:** 2026-06-19
+
+**Description**
+
+Make clicking **any** sidebar item behave consistently and **respect the current view** —
+never auto-switching between Overview and Canvas. Today agent rows just `select(id)` (no view
+change), but file/diff rows force `setView("overview")` on click (`Sidebar.tsx` FileRow/DiffRow
+`onOpen`), and only agents have a selection concept. Unify all item kinds (agents, file
+viewers, diff viewers — and terminals #72 when present) under one "select/jump to this item"
+behavior that depends on the active view:
+
+- **No auto-switch.** Clicking a sidebar item must **not** change the current view. Remove the
+  `setView("overview")` from the file/diff (and future terminal) row handlers. Switching
+  Overview↔Canvas stays the user's choice (sidebar toggle / ⌘\ #77).
+- **In Overview:** clicking an item **selects it and scrolls its Overview column into view**
+  (highlighted). Generalize the agent selection highlight (#23/#50) to **all** item types
+  (file/diff/terminal columns get the same selected treatment).
+- **In Canvas:** clicking an item →
+  - if that item is present in the **currently-shown canvas tab** → **jump to it**: focus/select
+    the panel showing it (the active-leaf from #76) and reflect it as the sidebar selection.
+  - if it's **not** present in the current canvas → show a brief toast **"Item not present in
+    canvas — drag to add"** and **deselect** the sidebar selection (don't switch views, don't
+    switch tabs).
+
+So the sidebar's selected highlight tracks: in Overview, the item you jumped to; in Canvas, the
+item focused in the current canvas (or nothing, if you clicked a non-present item).
+
+**Model.** Generalize `selectedId` (currently a session id) to a **selected sidebar item** that
+can be any item id (session id or panel id). Overview's `selected={id === selectedId}` and the
+sidebar row highlight extend to every item kind. Presence-in-canvas = the item appears in the
+**active** canvas tab's layout only (a match in another tab counts as "not present," per
+"currently shown" + no auto-switch).
+
+**Subtasks**
+
+1. [ ] Generalize selection: a `selectedItemId` covering agents + panels (file/diff/terminal);
+   sidebar highlights the selected row for every item kind.
+2. [ ] Remove `setView("overview")` from the file/diff (and future terminal) sidebar click
+   handlers — clicking never changes the view.
+3. [ ] Overview: clicking an item selects it + scrolls its column into view; extend the
+   selected-column highlight to file/diff/terminal columns.
+4. [ ] Canvas: clicking an item focuses its panel if present in the active canvas (via #76's
+   active-leaf); else toast "Item not present in canvas — drag to add" and clear selection.
+   Never switch view or tab.
+5. [ ] Keep the sidebar selection in sync with the canvas's focused panel (and clear it
+   appropriately).
+
+**Acceptance criteria**
+
+- [ ] Clicking any sidebar item (agent, file, diff, terminal) selects/jumps to it without ever
+  changing the current view.
+- [ ] In Overview, the clicked item's column is highlighted and scrolled into view, for every
+  item kind (not just agents).
+- [ ] In Canvas, clicking an item that's in the current canvas focuses its panel; clicking one
+  that isn't shows the "Item not present in canvas — drag to add" toast and deselects — with no
+  view/tab switch.
+- [ ] Overview↔Canvas switching only happens via the user (sidebar toggle / ⌘\), never as a
+  side effect of clicking a sidebar item.
+
+**Notes**
+
+- Decisions (from the requester): standard behavior for every item kind; view-aware; never
+  auto-switch views; Canvas → jump-if-present else toast "Item not present in canvas — drag to
+  add" + deselect.
+- Depends on **#76** for the Canvas focused-panel (active-leaf) concept used by "jump to the
+  item inside the canvas." Generic across item kinds, so #72 terminals get it for free (not a
+  hard dep). Builds on #59 (unified sidebar items) and #47 (Canvas content) — both shipped.
+- Key code: `src/components/Sidebar/Sidebar.tsx` (`SessionRow` onSelect, `FileRow`/`DiffRow`
+  onOpen — drop `setView`; unify selection), `src/store.ts` (`select`/`selectedId` →
+  generalized selected item; toast), `src/components/Overview/Overview.tsx` (selected highlight
+  + scroll-into-view for all columns), `src/components/Canvas/Canvas.tsx` + `canvasTree.ts`
+  (find the leaf for an item id; focus it via #76's active-leaf).
