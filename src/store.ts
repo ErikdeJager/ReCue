@@ -104,6 +104,21 @@ export function dedupeBranchLabels(labels: string[]): string[] {
 }
 
 /**
+ * Merge a repo cluster's saved drag order with the items currently present (#43):
+ * keep the saved order for items that still exist, then append present items not
+ * in the saved order (in their default order). So a reorder persists, while a
+ * spawned agent appends and a closed one drops out — never scrambling the rest.
+ * Pure — unit-tested and reused by the Overview render + drag handlers.
+ */
+export function mergeRepoOrder(saved: string[], present: string[]): string[] {
+  const presentSet = new Set(present);
+  const kept = saved.filter((key) => presentSet.has(key));
+  const keptSet = new Set(kept);
+  const appended = present.filter((key) => !keptSet.has(key));
+  return [...kept, ...appended];
+}
+
+/**
  * The id to select when moving `delta` (+1 next / -1 prev) through `sessions` in
  * displayed (left-to-right wall) order, with wrap-around at the ends. With
  * nothing currently selected, returns the first session; returns null only when
@@ -181,6 +196,9 @@ export interface AppState {
   repoColors: Record<string, string>;
   /** Per-repo ordered list of extra (non-agent) Overview panels (#38). */
   overviewPanels: Record<string, OverviewPanel[]>;
+  /** Per-repo drag-reorder order (#43): item keys (agent ids + panel ids). Merged
+   * with the live items at render — unknown keys filtered, new ones appended. */
+  overviewOrder: Record<string, string[]>;
   /** Sessions currently working, from the output-activity heuristic (#42); an
    * absent/false entry means idle. (The task's `sessionState`, as a boolean map.) */
   sessionBusy: Record<string, boolean>;
@@ -237,11 +255,8 @@ export interface AppState {
     file?: string,
   ) => Promise<void>;
   removeOverviewPanel: (repoPath: string, id: string) => Promise<void>;
-  moveOverviewPanel: (
-    repoPath: string,
-    id: string,
-    delta: number,
-  ) => Promise<void>;
+  /** Persist a repo cluster's drag-reordered item order (#43). */
+  reorderOverview: (repoPath: string, orderedKeys: string[]) => Promise<void>;
   checkForUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
   /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
@@ -268,6 +283,7 @@ export const useStore = create<AppState>()((set, get) => ({
   branches: {},
   repoColors: {},
   overviewPanels: {},
+  overviewOrder: {},
   sessionBusy: {},
   claudeMissing: false,
   toasts: [],
@@ -455,13 +471,14 @@ export const useStore = create<AppState>()((set, get) => ({
     // Repo colors + Overview panel layouts load independently so a failure here
     // doesn't block sessions.
     try {
-      const [colors, panels] = await Promise.all([
+      const [colors, panels, order] = await Promise.all([
         ipc.listRepoColors(),
         ipc.listOverviewPanels(),
+        ipc.listOverviewOrder(),
       ]);
-      set({ repoColors: colors, overviewPanels: panels });
+      set({ repoColors: colors, overviewPanels: panels, overviewOrder: order });
     } catch {
-      // Backend unreachable; leave colors/panels as-is.
+      // Backend unreachable; leave colors/panels/order as-is.
     }
   },
 
@@ -523,19 +540,14 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  moveOverviewPanel: async (repoPath, id, delta) => {
-    const list = [...(get().overviewPanels[repoPath] ?? [])];
-    const i = list.findIndex((p) => p.id === id);
-    const a = list[i];
-    const b = list[i + delta];
-    if (!a || !b) return; // not found / out of bounds — no-op
-    list[i] = b;
-    list[i + delta] = a;
-    set((s) => ({ overviewPanels: { ...s.overviewPanels, [repoPath]: list } }));
+  reorderOverview: async (repoPath, orderedKeys) => {
+    set((s) => ({
+      overviewOrder: { ...s.overviewOrder, [repoPath]: orderedKeys },
+    }));
     try {
-      await ipc.setOverviewPanels(repoPath, list);
+      await ipc.setOverviewOrder(repoPath, orderedKeys);
     } catch {
-      // ignore
+      // Persist failed (e.g. outside Tauri); keep the local order for the session.
     }
   },
 

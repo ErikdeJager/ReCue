@@ -19,7 +19,8 @@ clear error if it is missing).
 - **Frontend:** React + TypeScript + Vite, **Zustand** for state, plain CSS with
   CSS-variable design tokens (CSS Modules), **xterm.js** terminals, **Lucide**
   icons, **JetBrains Mono** (bundled, offline), **react-markdown + remark-gfm**
-  (markdown viewer #40 — GFM, no raw HTML)
+  (markdown viewer #40 — GFM, no raw HTML), **dnd-kit** (`@dnd-kit/core` +
+  `/sortable` — the app's one drag-and-drop system, #43)
 - **Backend (Rust, `src-tauri/`):** **`portable-pty`** for terminals, JSON
   persistence in the app-data dir, read-only git (shells out to `git`), and the
   Tauri **dialog** (folder picker), **opener**, **updater**, and **process** plugins
@@ -55,6 +56,13 @@ clear error if it is missing).
   disposes/recreates the terminal or replays scrollback (which would garble
   `claude`'s width-specific TUI redraw). Scrollback replays once at creation;
   resizes are debounced + applied only while visible.
+- **Overview customization:** columns are grouped by repo (#36). Per repo, a
+  user-managed list of extra panels (diff #39 / markdown #41) follows the agent
+  terminals, and the whole cluster is **drag-reorderable within the repo** (#43,
+  dnd-kit) — each column is a sortable keyed by session/panel id, so a reorder
+  reparents DOM nodes and never remounts a terminal (pool intact). Persisted per
+  repo: `overview_panels` (panel defs) + `overview_order` (the unified item
+  order, merged with live items so spawn/exit don't scramble it).
 
 ## Layout
 

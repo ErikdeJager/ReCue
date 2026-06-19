@@ -183,6 +183,25 @@ pub fn set_overview_panels(
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+#[tauri::command]
+pub fn list_overview_order(
+    store: State<'_, Store>,
+) -> std::collections::HashMap<String, Vec<String>> {
+    store.overview_order()
+}
+
+/// Replace a repo's Overview drag-reorder order (#43) and persist.
+#[tauri::command]
+pub fn set_overview_order(
+    store: State<'_, Store>,
+    path: String,
+    order: Vec<String>,
+) -> Result<(), SessionError> {
+    store
+        .set_overview_order(&path, order)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// `#` followed by 3/4/6/8 hex digits.
 fn is_hex_color(value: &str) -> bool {
     match value.strip_prefix('#') {

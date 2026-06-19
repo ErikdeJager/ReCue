@@ -103,9 +103,41 @@
   flex-shrink: 0;
   align-items: center;
   gap: var(--space-8);
-  padding: 0 var(--space-6) 0 var(--space-12);
+  padding: 0 var(--space-6);
   border-bottom: 1px solid var(--border-hairline);
   background: var(--bg-panel);
+}
+
+/* Drag handle (#43): grab to reorder a column within its repo cluster. It is the
+   only drag affordance, so the terminal body + action buttons stay clickable. */
+.dragHandle {
+  display: flex;
+  width: 16px;
+  height: 26px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.dragHandle:hover {
+  color: var(--text-secondary);
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+/* The column being dragged: lift it above its neighbours. */
+.cardDragging {
+  z-index: 3;
+  opacity: 0.92;
+  box-shadow: var(--shadow-popover);
 }
 
 .titleBlock {

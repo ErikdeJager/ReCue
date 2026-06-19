@@ -2874,9 +2874,9 @@ the output-activity heuristic below if nothing better is feasible.
 
 ---
 
-### 43. [ ] Overview: drag-to-reorder agents/panels within their repo cluster
+### 43. [x] Overview: drag-to-reorder agents/panels within their repo cluster
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #36, #38
 **Created:** 2026-06-19
 
@@ -2893,25 +2893,25 @@ The per-cluster order must **persist**.
 
 **Subtasks**
 
-1. [ ] Adopt **dnd-kit** (`@dnd-kit/core` + `@dnd-kit/sortable`) as the app's drag-and-
+1. [x] Adopt **dnd-kit** (`@dnd-kit/core` + `@dnd-kit/sortable`) as the app's drag-and-
    drop library (modern, lightweight ~6KB core, headless, accessible — keyboard +
    screen-reader, transform-based perf). It's reused by the Canvas tasks (#46/#47), so
    the app has **one** DnD system.
-2. [ ] Make each repo cluster a sortable context; allow reordering items **within** the
+2. [x] Make each repo cluster a sortable context; allow reordering items **within** the
    cluster only (constrain drops so an item can't cross into another repo's group).
-3. [ ] Persist the per-repo item order (extend the #38 overview-panel layout / store);
+3. [x] Persist the per-repo item order (extend the #38 overview-panel layout / store);
    agents that appear/disappear (spawn/exit) merge into the saved order sensibly
    (new agents append; removed ones drop out).
-4. [ ] Keep the persistent terminal pool (#18) intact — reordering reparents DOM nodes,
+4. [x] Keep the persistent terminal pool (#18) intact — reordering reparents DOM nodes,
    never disposes terminals. Smooth drag animation (transform/opacity, reduced-motion
    aware).
 
 **Acceptance criteria**
 
-- [ ] Agents/panels can be reordered by dragging, but only within their repo cluster
+- [x] Agents/panels can be reordered by dragging, but only within their repo cluster
   (clusters never interleave).
-- [ ] The order persists across restart; spawning/closing agents doesn't scramble it.
-- [ ] No terminal remount/garble while dragging (pool intact).
+- [x] The order persists across restart; spawning/closing agents doesn't scramble it.
+- [x] No terminal remount/garble while dragging (pool intact).
 
 **Notes**
 
@@ -2920,6 +2920,31 @@ The per-cluster order must **persist**.
   react-dnd (heavier, steeper learning curve) and the deprecated react-beautiful-dnd;
   `@dnd-kit/sortable` fits list reordering and dnd-kit also covers the Canvas drop zones
   (#46/#47).
+- **Done 2026-06-19.** **Subtask 1 — dnd-kit adopted** (`@dnd-kit/core` +
+  `/sortable` + `/utilities`), the app's single DnD system (reused by #46/#47). **Model
+  (subtask 3):** a new **unified per-repo order** is the display authority — backend
+  `store.rs` gained `#[serde(default)] overview_order: HashMap<repo → Vec<String>>` (item
+  keys = agent **session ids** + **panel ids**) with `overview_order()` /
+  `set_overview_order` + commands `list/set_overview_order` (registered in `lib.rs`); a
+  pure, exported **`mergeRepoOrder(saved, present)`** keeps the saved order for live items
+  and **appends new / drops removed** ones (agents default to createdAt order, then
+  panels), so spawn/exit never scramble the layout. Store: `overviewOrder` slice +
+  `reorderOverview(repo, keys)` (optimistic + persisted), loaded in `refresh`; the #38
+  left/right **move buttons + `moveOverviewPanel` were removed** (drag supersedes them).
+  **Layout (subtask 2):** `Overview` renders **one `DndContext`** wrapping the wall with a
+  **`SortableContext` per repo cluster** (`horizontalListSortingStrategy`); `PanelColumn`
+  is the sortable item (keyed by id) with a **`GripVertical` drag handle** (the only drag
+  affordance, so the terminal body + actions stay clickable; keyboard sensor for a11y).
+  `onDragEnd` reorders **only within the active item's cluster** (cross-repo drops are
+  ignored, and order is stored per repo, so clusters structurally can't interleave).
+  **Pool intact (subtask 4):** columns keep stable keys, so a reorder reparents DOM nodes
+  via React — no terminal dispose/remount (same guarantee as #38); the dragged column lifts
+  with the popover shadow, and the global reduced-motion killswitch zeroes the transition.
+  **Tests:** Rust `overview_order_set_and_persist` (→ 34) + frontend `mergeRepoOrder` ×4 /
+  `reorderOverview` (→ 49). **Hard gate green:** Rust `fmt`/`clippy`/`test` (34) + frontend
+  `build`/`lint`/`format:check`/`test` (49). CLAUDE.md updated (Stack + Overview data-flow).
+  The actual drag interaction is runtime-visual (not launched headlessly); the
+  no-remount + within-cluster + persistence guarantees are by-construction + unit-tested.
 
 ---
 

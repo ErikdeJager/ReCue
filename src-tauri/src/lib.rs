@@ -89,6 +89,8 @@ pub fn run() {
             commands::set_repo_color,
             commands::list_overview_panels,
             commands::set_overview_panels,
+            commands::list_overview_order,
+            commands::set_overview_order,
             commands::list_markdown_files,
             commands::read_text_file,
             commands::open_in_editor,

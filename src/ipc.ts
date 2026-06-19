@@ -67,6 +67,14 @@ export const listOverviewPanels = () =>
 export const setOverviewPanels = (path: string, panels: OverviewPanel[]) =>
   invoke<void>("set_overview_panels", { path, panels });
 
+/** Per-repo Overview drag-reorder orders, path → ordered item keys (#43). */
+export const listOverviewOrder = () =>
+  invoke<Record<string, string[]>>("list_overview_order");
+
+/** Replace a repo's Overview item order (#43). */
+export const setOverviewOrder = (path: string, order: string[]) =>
+  invoke<void>("set_overview_order", { path, order });
+
 /** Repo-relative `*.md` files in a repo (markdown viewer, #40). */
 export const listMarkdownFiles = (repo: string) =>
   invoke<string[]>("list_markdown_files", { repo });

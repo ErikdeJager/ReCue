@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   adjacentSessionId,
   dedupeBranchLabels,
+  mergeRepoOrder,
   REPO_PALETTE,
   repoColor,
   repoOrder,
@@ -32,6 +33,7 @@ beforeEach(() => {
     branches: {},
     repoColors: {},
     overviewPanels: {},
+    overviewOrder: {},
     sessionBusy: {},
     claudeMissing: false,
     toasts: [],
@@ -311,16 +313,41 @@ describe("overview panels (#38)", () => {
     expect(useStore.getState().overviewPanels["/repo/a"]).toBeUndefined();
   });
 
-  it("moves a panel within the repo, bounded (no-op past the ends)", async () => {
-    useStore.setState({ overviewPanels: { "/repo/a": [...panels] } });
-    await useStore.getState().moveOverviewPanel("/repo/a", "p1", 1);
-    expect(
-      useStore.getState().overviewPanels["/repo/a"]?.map((p) => p.id),
-    ).toEqual(["p2", "p1", "p3"]);
-    await useStore.getState().moveOverviewPanel("/repo/a", "p2", -1); // already first
-    expect(
-      useStore.getState().overviewPanels["/repo/a"]?.map((p) => p.id),
-    ).toEqual(["p2", "p1", "p3"]);
+  it("reorderOverview persists a repo cluster's drag order (#43)", async () => {
+    await useStore.getState().reorderOverview("/repo/a", ["s2", "p1", "s1"]);
+    expect(useStore.getState().overviewOrder["/repo/a"]).toEqual([
+      "s2",
+      "p1",
+      "s1",
+    ]);
+  });
+});
+
+describe("mergeRepoOrder (#43)", () => {
+  it("keeps the saved order for present items", () => {
+    expect(mergeRepoOrder(["b", "a", "c"], ["a", "b", "c"])).toEqual([
+      "b",
+      "a",
+      "c",
+    ]);
+  });
+
+  it("appends present items missing from the saved order (new agents)", () => {
+    // saved had a, c; b and d are new → appended in their default order.
+    expect(mergeRepoOrder(["c", "a"], ["a", "b", "c", "d"])).toEqual([
+      "c",
+      "a",
+      "b",
+      "d",
+    ]);
+  });
+
+  it("drops saved keys no longer present (closed items)", () => {
+    expect(mergeRepoOrder(["a", "gone", "b"], ["b", "a"])).toEqual(["a", "b"]);
+  });
+
+  it("returns the default order when nothing was saved", () => {
+    expect(mergeRepoOrder([], ["a", "b", "c"])).toEqual(["a", "b", "c"]);
   });
 });
 

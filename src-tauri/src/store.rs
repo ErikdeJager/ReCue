@@ -56,6 +56,12 @@ pub struct PersistedState {
     /// Per-repo ordered list of extra Overview panels (#38).
     #[serde(default)]
     pub overview_panels: HashMap<String, Vec<OverviewPanel>>,
+    /// Per-repo drag-reorder order (#43): an ordered list of item keys (agent
+    /// session ids + panel ids) for a repo's Overview cluster. Keys not present
+    /// are filtered, and present items missing here append in their default order,
+    /// so spawn/exit merges in without scrambling. `default` keeps old files loading.
+    #[serde(default)]
+    pub overview_order: HashMap<String, Vec<String>>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -153,6 +159,23 @@ impl Store {
                 state.overview_panels.remove(path);
             } else {
                 state.overview_panels.insert(path.to_string(), panels);
+            }
+        })
+    }
+
+    /// All per-repo Overview drag-reorder orders (#43).
+    pub fn overview_order(&self) -> HashMap<String, Vec<String>> {
+        self.with(|state| state.overview_order.clone())
+    }
+
+    /// Replace a repo's Overview item order and persist (#43); an empty list
+    /// drops the entry so the map stays tidy.
+    pub fn set_overview_order(&self, path: &str, order: Vec<String>) -> io::Result<()> {
+        self.update(|state| {
+            if order.is_empty() {
+                state.overview_order.remove(path);
+            } else {
+                state.overview_order.insert(path.to_string(), order);
             }
         })
     }
@@ -270,6 +293,22 @@ mod tests {
         // An empty list drops the repo's entry.
         store.set_overview_panels("/repo/a", vec![]).unwrap();
         assert!(!Store::load(&path).overview_panels().contains_key("/repo/a"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn overview_order_set_and_persist() {
+        let path = temp_path("order");
+        let store = Store::load(&path);
+        let order = vec!["sess-1".to_string(), "panel-1".to_string()];
+        store.set_overview_order("/repo/a", order.clone()).unwrap();
+
+        let reloaded = Store::load(&path);
+        assert_eq!(reloaded.overview_order().get("/repo/a"), Some(&order));
+
+        // An empty order drops the repo's entry.
+        store.set_overview_order("/repo/a", vec![]).unwrap();
+        assert!(!Store::load(&path).overview_order().contains_key("/repo/a"));
         let _ = fs::remove_file(&path);
     }
 

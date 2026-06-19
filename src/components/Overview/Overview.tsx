@@ -1,14 +1,25 @@
-import type { ReactNode } from "react";
+import { type CSSProperties, type ReactNode } from "react";
+import { ExternalLink, GripVertical, Maximize2, X } from "lucide-react";
 import {
-  ChevronLeft,
-  ChevronRight,
-  ExternalLink,
-  Maximize2,
-  X,
-} from "lucide-react";
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  horizontalListSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
+import { mergeRepoOrder, repoColor, useStore } from "../../store";
 import { repoName } from "../../paths";
-import { repoColor, useStore } from "../../store";
 import type { OverviewPanel, SessionView } from "../../types";
 // The Focus inspector's diff component is already parameterized by { repoPath,
 // active }, so the Overview diff panel (#39) reuses it directly — one source.
@@ -22,12 +33,13 @@ import styles from "./Overview.module.css";
 /**
  * Shared column chrome (#38): every Overview column — an agent terminal, a diff
  * panel (#39), or a markdown panel (#41) — renders inside this frame (repo-color
- * top band, header with a title + actions, and a body), so adding/closing/
- * reordering panels all share one layout. Terminal columns keep stable keys at
- * the Overview level, so React reorders (never remounts) them and the persistent
- * pool (#18) is untouched.
+ * top band, drag handle, header with a title + actions, and a body). It is a
+ * dnd-kit sortable item (#43): keyed by a stable `id` (session id / panel id) so
+ * a drag-reorder reparents the DOM node — React never remounts it and the
+ * persistent terminal pool (#18) is untouched.
  */
 interface PanelColumnProps {
+  id: string;
   color: string;
   groupStart: boolean;
   selected?: boolean;
@@ -38,6 +50,7 @@ interface PanelColumnProps {
 }
 
 function PanelColumn({
+  id,
   color,
   groupStart,
   selected = false,
@@ -46,12 +59,39 @@ function PanelColumn({
   onClickBody,
   children,
 }: PanelColumnProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+  const style: CSSProperties = {
+    borderTopColor: color,
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
   return (
     <div
-      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${groupStart ? styles.cardGroupStart : ""}`}
-      style={{ borderTopColor: color }}
+      ref={setNodeRef}
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${groupStart ? styles.cardGroupStart : ""} ${isDragging ? styles.cardDragging : ""}`}
+      style={style}
     >
       <header className={styles.header}>
+        {/* Drag handle (#43): the only drag affordance, so the terminal body and
+            the action buttons stay fully clickable. dnd-kit gives it keyboard +
+            screen-reader support via `attributes`. */}
+        <button
+          type="button"
+          className={styles.dragHandle}
+          title="Drag to reorder"
+          aria-label="Drag to reorder"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={14} strokeWidth={1.5} />
+        </button>
         <div className={styles.titleBlock}>{title}</div>
         <div className={styles.actions}>{actions}</div>
       </header>
@@ -142,6 +182,7 @@ function SessionCard({
     // Clicking the card body selects it (highlight in place); Expand goes to
     // Focus. The terminal inside keeps its own click-to-focus.
     <PanelColumn
+      id={session.id}
       color={color}
       groupStart={groupStart}
       selected={selected}
@@ -166,10 +207,6 @@ interface ExtraPanelProps {
   branch: string;
   color: string;
   groupStart: boolean;
-  canMoveLeft: boolean;
-  canMoveRight: boolean;
-  onMoveLeft: () => void;
-  onMoveRight: () => void;
   onClose: () => void;
 }
 
@@ -179,10 +216,6 @@ function ExtraPanel({
   branch,
   color,
   groupStart,
-  canMoveLeft,
-  canMoveRight,
-  onMoveLeft,
-  onMoveRight,
   onClose,
 }: ExtraPanelProps) {
   const title = (
@@ -198,40 +231,19 @@ function ExtraPanel({
     </>
   );
   const actions = (
-    <>
-      <button
-        type="button"
-        className={styles.action}
-        onClick={onMoveLeft}
-        disabled={!canMoveLeft}
-        title="Move panel left"
-        aria-label="Move panel left"
-      >
-        <ChevronLeft size={15} strokeWidth={1.5} />
-      </button>
-      <button
-        type="button"
-        className={styles.action}
-        onClick={onMoveRight}
-        disabled={!canMoveRight}
-        title="Move panel right"
-        aria-label="Move panel right"
-      >
-        <ChevronRight size={15} strokeWidth={1.5} />
-      </button>
-      <button
-        type="button"
-        className={styles.action}
-        onClick={onClose}
-        title="Close panel"
-        aria-label="Close panel"
-      >
-        <X size={15} strokeWidth={1.5} />
-      </button>
-    </>
+    <button
+      type="button"
+      className={styles.action}
+      onClick={onClose}
+      title="Close panel"
+      aria-label="Close panel"
+    >
+      <X size={15} strokeWidth={1.5} />
+    </button>
   );
   return (
     <PanelColumn
+      id={panel.id}
       color={color}
       groupStart={groupStart}
       title={title}
@@ -255,13 +267,15 @@ function ExtraPanel({
 
 type ColumnItem =
   | { kind: "agent"; session: SessionView }
-  | { kind: "panel"; panel: OverviewPanel; index: number; count: number };
+  | { kind: "panel"; panel: OverviewPanel };
 
 /**
  * The Overview "agent wall" (#38): a customizable arrangement of equal-width
- * columns grouped by repo — each repo's live agent terminals (auto) followed by
- * its user-managed extra panels (diff/markdown). Columns scroll horizontally
- * past capacity; the sidebar repo filter (#34/#36) narrows it to one repo.
+ * columns grouped by repo — each repo's live agent terminals plus its
+ * user-managed extra panels (diff/markdown). Columns scroll horizontally past
+ * capacity; the sidebar repo filter (#34/#36) narrows it to one repo. Items
+ * **drag to reorder within their repo cluster** (#43, dnd-kit) and the order
+ * persists per repo.
  */
 function Overview() {
   const sessions = useStore((s) => s.sessions);
@@ -276,9 +290,19 @@ function Overview() {
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const repoColors = useStore((s) => s.repoColors);
   const overviewPanels = useStore((s) => s.overviewPanels);
+  const overviewOrder = useStore((s) => s.overviewOrder);
   const removeOverviewPanel = useStore((s) => s.removeOverviewPanel);
-  const moveOverviewPanel = useStore((s) => s.moveOverviewPanel);
+  const reorderOverview = useStore((s) => s.reorderOverview);
   const sessionBusy = useStore((s) => s.sessionBusy);
+
+  // Drag with a small activation distance so clicking the handle doesn't start a
+  // drag; keyboard sensor makes reordering accessible (#43).
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
 
   // The welcome empty state only when there's truly nothing — no agents and no
   // extra panels (a repo can have a diff/markdown panel without an agent, #39/#41).
@@ -302,7 +326,7 @@ function Overview() {
     : sessions;
 
   // Always group by repo: sidebar's alphabetical order (#20), agents contiguous
-  // within a repo (stable by createdAt).
+  // within a repo (stable by createdAt) — the default order before any drag.
   const ordered = [...shown].sort((a, b) => {
     const byName = repoName(a.repoPath)
       .toLowerCase()
@@ -332,22 +356,47 @@ function Overview() {
     return byName !== 0 ? byName : a.localeCompare(b);
   });
 
-  // Flatten to columns: per repo, [agent panels…] then [extra panels…] (#38).
-  const columns: { repoPath: string; item: ColumnItem }[] = [];
-  for (const repo of repoList) {
-    for (const s of ordered) {
-      if (s.repoPath === repo) {
-        columns.push({ repoPath: repo, item: { kind: "agent", session: s } });
-      }
-    }
-    const extras = overviewPanels[repo] ?? [];
-    extras.forEach((panel, index) =>
-      columns.push({
-        repoPath: repo,
-        item: { kind: "panel", panel, index, count: extras.length },
-      }),
-    );
-  }
+  // Per repo: the drag-reordered item list (#43). The saved order is merged with
+  // the live items (agents by createdAt, then panels) so a spawn appends and an
+  // exit drops out without scrambling the rest.
+  const clusters = repoList
+    .map((repo) => {
+      const agents = ordered.filter((s) => s.repoPath === repo);
+      const extras = overviewPanels[repo] ?? [];
+      const defaultKeys = [
+        ...agents.map((s) => s.id),
+        ...extras.map((p) => p.id),
+      ];
+      const keys = mergeRepoOrder(overviewOrder[repo] ?? [], defaultKeys);
+      const byKey = new Map<string, ColumnItem>();
+      for (const s of agents) byKey.set(s.id, { kind: "agent", session: s });
+      for (const p of extras) byKey.set(p.id, { kind: "panel", panel: p });
+      const items = keys
+        .map((k) => byKey.get(k))
+        .filter((x): x is ColumnItem => x !== undefined);
+      return { repo, keys, items };
+    })
+    .filter((c) => c.items.length > 0);
+
+  // Map every item key → its repo, so a drag can be constrained to its cluster.
+  const keyToRepo = new Map<string, string>();
+  for (const c of clusters) for (const k of c.keys) keyToRepo.set(k, c.repo);
+
+  const onDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    const repo = keyToRepo.get(activeId);
+    // Within-cluster only: ignore a drop that landed over another repo's column.
+    if (!repo || keyToRepo.get(overId) !== repo) return;
+    const cluster = clusters.find((c) => c.repo === repo);
+    if (!cluster) return;
+    const oldIndex = cluster.keys.indexOf(activeId);
+    const newIndex = cluster.keys.indexOf(overId);
+    if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+    void reorderOverview(repo, arrayMove(cluster.keys, oldIndex, newIndex));
+  };
 
   return (
     <div className={styles.overview}>
@@ -365,56 +414,64 @@ function Overview() {
           </button>
         </div>
       )}
-      {columns.length === 0 ? (
+      {clusters.length === 0 ? (
         <div className={styles.filterEmpty}>
           {filter ? "Nothing to show for this repo." : "No agents yet."}
         </div>
       ) : (
-        <div className={styles.wall}>
-          {columns.map((col, i) => {
-            const groupStart =
-              i > 0 && columns[i - 1]?.repoPath !== col.repoPath;
-            const color = repoColor(col.repoPath, repoColors);
-            if (col.item.kind === "agent") {
-              const session = col.item.session;
-              return (
-                <SessionCard
-                  key={session.id}
-                  session={session}
-                  branch={branches[session.repoPath] ?? ""}
-                  color={color}
-                  groupStart={groupStart}
-                  selected={session.id === selectedId}
-                  busy={sessionBusy[session.id] ?? false}
-                  onSelect={() => select(session.id)}
-                  onExpand={() => expand(session.id)}
-                  onOpenInZed={() => void openInZed(session.repoPath)}
-                  onRemove={() => void removeSession(session.id)}
-                />
-              );
-            }
-            const { panel, index, count } = col.item;
-            return (
-              <ExtraPanel
-                key={panel.id}
-                panel={panel}
-                repoPath={col.repoPath}
-                branch={branches[col.repoPath] ?? ""}
-                color={color}
-                groupStart={groupStart}
-                canMoveLeft={index > 0}
-                canMoveRight={index < count - 1}
-                onMoveLeft={() =>
-                  void moveOverviewPanel(col.repoPath, panel.id, -1)
-                }
-                onMoveRight={() =>
-                  void moveOverviewPanel(col.repoPath, panel.id, 1)
-                }
-                onClose={() => void removeOverviewPanel(col.repoPath, panel.id)}
-              />
-            );
-          })}
-        </div>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={onDragEnd}
+        >
+          <div className={styles.wall}>
+            {clusters.map((cluster, clusterIdx) => (
+              <SortableContext
+                key={cluster.repo}
+                items={cluster.keys}
+                strategy={horizontalListSortingStrategy}
+              >
+                {cluster.items.map((item, itemIdx) => {
+                  // Divider before every cluster except the first rendered one.
+                  const groupStart = clusterIdx > 0 && itemIdx === 0;
+                  const color = repoColor(cluster.repo, repoColors);
+                  const branch = branches[cluster.repo] ?? "";
+                  if (item.kind === "agent") {
+                    const session = item.session;
+                    return (
+                      <SessionCard
+                        key={session.id}
+                        session={session}
+                        branch={branch}
+                        color={color}
+                        groupStart={groupStart}
+                        selected={session.id === selectedId}
+                        busy={sessionBusy[session.id] ?? false}
+                        onSelect={() => select(session.id)}
+                        onExpand={() => expand(session.id)}
+                        onOpenInZed={() => void openInZed(session.repoPath)}
+                        onRemove={() => void removeSession(session.id)}
+                      />
+                    );
+                  }
+                  return (
+                    <ExtraPanel
+                      key={item.panel.id}
+                      panel={item.panel}
+                      repoPath={cluster.repo}
+                      branch={branch}
+                      color={color}
+                      groupStart={groupStart}
+                      onClose={() =>
+                        void removeOverviewPanel(cluster.repo, item.panel.id)
+                      }
+                    />
+                  );
+                })}
+              </SortableContext>
+            ))}
+          </div>
+        </DndContext>
       )}
     </div>
   );
