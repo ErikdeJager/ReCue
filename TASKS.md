@@ -371,9 +371,9 @@ launcher entry, the destructive-checkout acknowledgement (#27).
 
 ---
 
-### 67. [ ] Session label: branch is the primary title; a custom name overrides it (branch becomes the subtitle)
+### 67. [x] Session label: branch is the primary title; a custom name overrides it (branch becomes the subtitle)
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** #66
 **Created:** 2026-06-19
 
@@ -402,18 +402,18 @@ new rule would duplicate.
 
 **Subtasks**
 
-1. [ ] Define the rule once (shared helper): primary = `name || branch || folderName`;
-   subtitle = `name ? (branch || folderName) : null`.
-2. [ ] Apply to Sidebar rows, Overview cards, Focus toolbar, Canvas panel titles.
-3. [ ] Preserve repo color/badge; remove redundant repo/branch text left by the change.
+1. [x] Define the rule once (shared helper): primary = `name || branch || folderName`;
+   subtitle = `name ? (branch || folderName) : null`. _(`sessionLabel` in `src/paths.ts`.)_
+2. [x] Apply to Sidebar rows, Overview cards, Focus toolbar, Canvas panel titles.
+3. [x] Preserve repo color/badge; remove redundant repo/branch text left by the change.
 
 **Acceptance criteria**
 
-- [ ] A session with no custom name shows the **branch** as its primary label on all
+- [x] A session with no custom name shows the **branch** as its primary label on all
   surfaces (folder name when non-git), no subtitle.
-- [ ] After renaming (#57), the **custom name** is primary and the **branch** is the
+- [x] After renaming (#57), the **custom name** is primary and the **branch** is the
   subtitle on all surfaces.
-- [ ] Sidebar, Overview, Focus, Canvas all follow the same rule; repo color/badge retained.
+- [x] Sidebar, Overview, Focus, Canvas all follow the same rule; repo color/badge retained.
 
 **Notes**
 
@@ -426,9 +426,9 @@ new rule would duplicate.
 
 ---
 
-### 68. [ ] Repo filter selector should visually include its "+" (new-session) button
+### 68. [x] Repo filter selector should visually include its "+" (new-session) button
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -455,11 +455,11 @@ Out of scope: changing what the title or "+" *do*; the session-row labels (#67).
 
 **Acceptance criteria**
 
-- [ ] The repo header's hover and active-filter highlight enclose both the repo title and
+- [x] The repo header's hover and active-filter highlight enclose both the repo title and
   the "+" as a single rounded selector — the "+" no longer sits outside the highlighted box.
-- [ ] Clicking the title still filters Overview; clicking the "+" still opens New session in
+- [x] Clicking the title still filters Overview; clicking the "+" still opens New session in
   that repo; empty-repo accent "+" and a11y labels preserved.
-- [ ] Tokens only; no off-system values.
+- [x] Tokens only; no off-system values.
 
 **Notes**
 
@@ -472,9 +472,9 @@ Out of scope: changing what the title or "+" *do*; the session-row labels (#67).
 
 ---
 
-### 69. [ ] File picker — remove the focus-ring border around the search input
+### 69. [x] File picker — remove the focus-ring border around the search input
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -498,11 +498,11 @@ Out of scope: the global `:focus-visible` style and any other input's focus ring
 
 **Acceptance criteria**
 
-- [ ] The "Search files…" input no longer shows the accent outline/border when focused
+- [x] The "Search files…" input no longer shows the accent outline/border when focused
   (including on open, when it auto-focuses).
-- [ ] The global focus-visible ring is unchanged for every other focusable control (other
+- [x] The global focus-visible ring is unchanged for every other focusable control (other
   inputs, buttons, list rows).
-- [ ] The change is scoped to `FilePicker`'s search input only.
+- [x] The change is scoped to `FilePicker`'s search input only.
 
 **Notes**
 
