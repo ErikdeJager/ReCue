@@ -222,6 +222,15 @@ and git history for full per-task detail. The open tasks (#88+) follow. New work
 here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
 
+> **Implementing tasks — never skip one.** The agent implementing this backlog
+> (`/develop-tasks`, `/isolate-agent`, `/handoff`) MUST implement **every** open task
+> whose dependencies are all complete — take the lowest-numbered such `### N.` first —
+> and must **never skip a task because it looks big, risky, or hard to verify**. Size is
+> not a reason to defer: a task that is genuinely too large for one pass must be **split
+> into smaller dependent sub-tasks** first (as #93 was split into #93 + #94), and then
+> one of those is implemented — skipping is never the answer. Every task is carried to a
+> finished, building, lint-clean state.
+
 ---
 
 ### 88. [ ] Replace the busy-indicator spinner with a Claude-style shimmer (dot-only)
@@ -612,7 +621,7 @@ not the button.
 
 ---
 
-### 93. [ ] Scheduled sessions: "+ Schedule session" button, modal, scheduling engine, and scheduled-agent panels
+### 93. [ ] Scheduled sessions (part 1 of 2): scheduling engine + launcher — schedules fire into live agents
 
 **Status:** Not started · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
@@ -620,11 +629,19 @@ not the button.
 
 **Description**
 
-Add **scheduled sessions** — agents that launch **automatically at a chosen time**, optionally
-pre-seeded with a prompt so `claude` starts ready to go. Major new feature spanning a new launcher,
-a backend scheduling engine, and a new draggable item type.
+**Part 1 of two** (#94 is part 2). Deliver **scheduled sessions end-to-end at the engine level**: the
+user can schedule an agent to launch automatically at a chosen time (optionally pre-seeded with a
+prompt so `claude` starts ready), it **persists**, and at the time it **fires into a normal live
+agent**. This part owns the **backend engine + data model + the launcher (button/⌘⇧N + modal) + a
+minimal pending list**; the **rich draggable item type and the editable auto-saving panel are #94**,
+which builds on this part's records + commands.
 
-**Pieces:**
+> Split rationale: scheduling spans a Rust engine *and* a cross-surface React item type. Part 1 is
+> the engine + create/fire loop (verifiable by `cargo test` + a 1-minute schedule); part 2 is pure
+> frontend on top of this part's finished data/command surface. Part 1 exposes the full
+> update-prompt/name/time command surface up front so part 2 needs **no** backend changes.
+
+**Pieces (this part):**
 
 - **"+ Schedule session" button** below the "New session" button in the sidebar (`Sidebar.tsx`),
   with a distinct-but-related keybind **⌘⇧N** (⌘N opens New session #26; ⌘⇧N schedules). Add it to
@@ -632,7 +649,7 @@ a backend scheduling engine, and a new draggable item type.
 - **Schedule modal** = the New-session flow (folder → branch, **reusing `NewSessionModal`**'s
   two-step #66 UI) **plus a final step**: pick a **launch time** (date + time), optionally enter a
   **prompt**, and optionally a **custom name** (re-added here — #66 dropped the inline name field, but
-  the scheduled panel surfaces a name). The **prompt is optional** (can be added/edited later in the
+  #94's panel surfaces a name). The **prompt is optional** (it can be added/edited later in #94's
   panel).
 - **Prompt → run command.** The prompt is passed **positionally** so `claude` boots with it ready:
   `claude --session-id <uuid> "<prompt>"` (combined with the existing optional `git checkout`).
@@ -644,31 +661,23 @@ a backend scheduling engine, and a new draggable item type.
   timer/scheduler (`lib.rs`/`pty.rs`); when `fire_at` is reached, spawn the agent (with checkout +
   prompt), **convert** the scheduled record into a live session, and emit an event so the frontend
   moves the item scheduled→live. On boot, reload schedules and re-arm; if `fire_at` **already passed**
-  while the app was closed, **fire on boot (catch-up)**. Tauri commands: create / list / cancel /
-  update-prompt (+ update-name/time).
-- **UI — a new "scheduled" item type** flowing like existing items (#45/#59 sidebar, #38 Overview,
-  #46/#47 Canvas):
-  - **Sidebar (left panel):** a scheduled row under its repo with **basic details** (name/branch +
-    fire time, a clock icon), draggable into a Canvas, with a × to **cancel** it.
-  - **Overview:** a scheduled card.
-  - **Canvas:** draggable in — new `CanvasContent` kind `"scheduled"` + a `payloadToContent` case
-    (new item types are draggable by default per that pattern).
-  - **Scheduled-agent panel** (shared body for the Overview card + Canvas panel): shows **branch,
-    custom name, fire time, and the prompt**, with a **big prompt textarea** that **auto-saves**
-    (debounced) to the record; the prompt is optional and editable any time before it fires; includes
-    a way to **cancel** the schedule.
-- **On fire**, the scheduled item is **consumed** and becomes a normal live agent, appearing
-  everywhere agents do.
+  while the app was closed, **fire on boot (catch-up)**. Tauri commands: **create / list / cancel /
+  update (prompt, name, time)** — expose the full update surface now so #94 is pure UI.
+- **Frontend store/IPC.** Scheduled-sessions state + typed IPC + actions (schedule, cancel,
+  updatePrompt/name/time, onFired→move into `sessions`); persistence wiring.
+- **Minimal pending UI (so it's usable + verifiable).** A **basic pending-schedules list in the
+  sidebar** under each repo — name/branch + fire time + a × to **cancel** — enough to create, see,
+  cancel, and watch a schedule fire into a live agent. Non-draggable, no rich panel (that's #94).
 
 **Decisions / out of scope (assumed — no requester Q&A):**
-- Keybind **⌘⇧N**; prompt **optional** + editable in-panel with **auto-save**; **catch-up fire on
-  boot** for schedules missed while closed; re-add an optional **custom name** in the schedule flow.
+- Keybind **⌘⇧N**; prompt **optional**; **catch-up fire on boot** for schedules missed while closed;
+  re-add an optional **custom name** in the schedule flow. Time zone = the local machine zone.
 - **One-shot** schedules only — **recurring** schedules are out of scope.
-- Editing **fire time** after creation is a **nice-to-have** (include if cheap; the core editable
-  field in the panel is the prompt).
-- Time zone = the local machine zone.
+- **Deferred to #94:** the draggable scheduled item type in Overview + Canvas (`payloadToContent`),
+  and the scheduled-agent panel with the big **auto-saving** prompt editor / in-panel prompt editing.
+  Part 1 only sets the prompt **at creation time** in the modal.
 
-**Subtasks (phased)**
+**Subtasks**
 
 1. [ ] **Backend data + spawn:** persisted scheduled-session records (`store.rs`); Tauri commands to
    create / list / cancel / update (prompt, name, time) (`commands.rs`); extend `pty.rs spawn_session`
@@ -680,12 +689,10 @@ a backend scheduling engine, and a new draggable item type.
    updatePrompt/name/time, onFired→move into `sessions`); persistence wiring.
 4. [ ] **Launcher:** "+ Schedule session" button under New session + **⌘⇧N** (`useKeyboardNav`);
    the schedule modal (reuse `NewSessionModal` folder→branch + a final time/prompt/name step).
-5. [ ] **New "scheduled" item type:** sidebar row (basic details + clock + cancel + draggable),
-   Overview card, Canvas content (`"scheduled"` kind + `payloadToContent` + draggable), and the
-   shared **scheduled-agent panel** (branch / name / fire time + big auto-saving prompt textarea +
-   cancel).
-6. [ ] **Docs + checks:** update CLAUDE.md (scheduled sessions, ⌘⇧N, the engine, the new item type,
-   the prompt-positional spawn); `npm run build`, `npm run lint`, `npm test`, `cargo test` pass.
+5. [ ] **Minimal pending list:** basic sidebar rows per repo (name/branch + fire time + cancel),
+   non-draggable.
+6. [ ] **Docs + checks:** update CLAUDE.md (scheduled sessions, ⌘⇧N, the engine, the positional-prompt
+   spawn); `npm run build`, `npm run lint`, `npm test`, `cargo test` pass.
 
 **Acceptance criteria**
 
@@ -696,21 +703,79 @@ a backend scheduling engine, and a new draggable item type.
   (`claude --session-id <id> "<prompt>"`, plus checkout when a non-current branch was chosen), and
   the scheduled item becomes a normal live agent; a schedule **missed while the app was closed fires
   on next boot**.
-- [ ] Scheduled sessions appear in the **sidebar** (basic details, draggable, cancelable) and in
-  **Overview**, and can be **dragged into a Canvas**; their panel shows **branch, custom name, fire
-  time, and a big prompt field that auto-saves**.
-- [ ] Scheduled records **persist** across restart (timers re-armed on boot); canceling removes the
-  schedule and its timer.
+- [ ] Pending schedules show in the **sidebar** (name/branch + fire time) and can be **canceled**;
+  records **persist** across restart (timers re-armed on boot).
 - [ ] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass; CLAUDE.md documents the
-  feature.
+  feature and the **verified** positional-prompt invocation.
 
 **Notes**
 
-- **Large feature** — consider phasing: (A) backend records + engine + spawn-with-prompt + the
-  button/modal; (B) the full sidebar/Overview/Canvas item type + the auto-saving panel.
-- Reuses `NewSessionModal` (#66), the spawn flow (`pty.rs`), item plumbing (#45/#59/#38/#46/#47), and
-  keyboard nav (#26). Scheduled items are a **new draggable item type** but created via the schedule
-  modal — **not** via the repo "Views" registry (#82) — so #82 is unaffected.
-- `claude "<prompt>"` as the initial-prompt invocation must be CLI-verified before relying on it
-  (mirror the #30 flag-verification note in CLAUDE.md).
-- Independent of the other open tasks (#84, #88–#92).
+- **Part 1 of 2** — #94 adds the rich draggable item type + the auto-saving panel and **depends on
+  this part's** data model + update commands (exposed here so #94 is pure UI, no Rust changes).
+- Reuses `NewSessionModal` (#66), the spawn flow (`pty.rs`), and keyboard nav (#26). The positional
+  `claude "<prompt>"` invocation must be CLI-verified before relying on it (mirror the #30 note in
+  CLAUDE.md).
+- Independent of the other open tasks (#88–#92).
+
+---
+
+### 94. [ ] Scheduled sessions (part 2 of 2): draggable item type (sidebar/Overview/Canvas) + auto-saving prompt panel
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** #93
+**Created:** 2026-06-19
+
+**Description**
+
+**Part 2 of two** — builds on **#93** (the scheduling engine, the schedule modal, and the basic
+pending list). Turn scheduled sessions into a **first-class, draggable item type** across every
+surface and add the **editable scheduled-agent panel**. This part is **pure frontend** — it consumes
+#93's persisted records + Tauri commands (including **update-prompt / name / time**); **no backend or
+engine changes**.
+
+**Pieces:**
+
+- **Sidebar:** upgrade #93's basic pending row into the **standard draggable item** (like sessions /
+  files / diffs, #45/#59) — a dnd-kit **draggable source** that drops into the active Canvas; a click
+  **selects/jumps** to it in the current view (#79); the × **cancels** the schedule.
+- **Overview:** a **scheduled card** in the repo cluster (#38), reusing the shared panel body.
+- **Canvas:** a new `CanvasContent` kind **`"scheduled"`** + a **`payloadToContent`** case (new item
+  types are draggable by default per that pattern, #47/#59), resolved at render to the shared panel.
+- **Scheduled-agent panel** (shared body for the Overview card + Canvas panel): shows **branch,
+  custom name, and fire time**, plus a **big prompt textarea** that **auto-saves** (debounced) to the
+  record via #93's **update-prompt** command — the prompt is optional and editable any time before it
+  fires; includes a **cancel** control. In-panel editing of **name / fire-time** too (uses #93's
+  update-name/time commands) if straightforward.
+- When the schedule **fires** (engine, #93), the item is consumed and becomes a normal live agent
+  everywhere; this panel is the **pending (pre-fire)** representation.
+
+**Out of scope:** any backend/engine change (all in #93); recurring schedules.
+
+**Subtasks**
+
+1. [ ] **Sidebar:** upgrade the pending row to a dnd-kit draggable item (drop into Canvas),
+   click-to-select/jump (#79), × cancel.
+2. [ ] **Overview:** a scheduled card using the shared panel body.
+3. [ ] **Canvas:** `"scheduled"` content kind + `payloadToContent` + render the shared panel body.
+4. [ ] **Scheduled-agent panel:** branch / name / fire-time details + a **big auto-saving prompt
+   textarea** (debounced → #93 `update-prompt`) + cancel; optional in-panel name/time edit.
+5. [ ] **Docs + checks:** update CLAUDE.md (the scheduled **item type** + the auto-saving panel +
+   drag-into-canvas); `npm run build`, `npm run lint`, `npm test` pass.
+
+**Acceptance criteria**
+
+- [ ] Scheduled sessions appear in the **sidebar** (draggable + cancelable), in **Overview**, and can
+  be **dragged into a Canvas**.
+- [ ] The scheduled-agent panel shows **branch, custom name, and fire time**, and a **big prompt
+  field that auto-saves** as you type (persisted via #93's command); a schedule created with **no
+  prompt** can have one **added later** here.
+- [ ] Canceling from any surface removes the schedule (and its timer, via #93).
+- [ ] `npm run build`, `npm run lint`, and `npm test` pass; CLAUDE.md documents the item type + panel.
+
+**Notes**
+
+- **Part 2 of 2** — depends on **#93** for the records, store state, and update commands; this part is
+  **pure frontend** (no Rust changes).
+- Reuses item plumbing — sidebar drag (#45/#59), Overview cluster (#38), Canvas `payloadToContent`
+  (#46/#47). Created via the schedule modal (#93), **not** the repo "Views" registry (#82), so #82 is
+  unaffected.

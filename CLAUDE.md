@@ -280,3 +280,9 @@ grouped by theme), with full per-task detail in git history; newer open tasks (#
 live in the `## Tasks` body. New tasks go there in `TASKS-TEMPLATE.md` format with
 `Depends on:` prerequisites. The `(#N)` provenance markers throughout this doc index
 back to that summary + git history.
+
+**Never skip a task.** When implementing the backlog (`/develop-tasks`,
+`/isolate-agent`, `/handoff`), implement **every** open task whose dependencies are
+complete — lowest-numbered first — and **never skip one for being big, risky, or hard to
+verify**. A task too large for a single pass is **split into smaller dependent sub-tasks**
+(as #93 → #93 + #94) and then implemented; deferring it is not an option.
