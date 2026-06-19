@@ -445,7 +445,7 @@ function Sidebar() {
           return (
             <div key={repo} className={styles.group}>
               <div
-                className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""}`}
+                className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""} ${isFiltered ? styles.repoActive : ""}`}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   // Clamp so the menu — and the taller file picker it can become
@@ -466,7 +466,7 @@ function Sidebar() {
                     right-click opens the #31 context menu. */}
                 <button
                   type="button"
-                  className={`${styles.repoTitle} ${isFiltered ? styles.repoActive : ""}`}
+                  className={styles.repoTitle}
                   onClick={() => {
                     setOverviewRepoFilter(repo);
                     setView("overview");

@@ -60,14 +60,30 @@
   margin-bottom: var(--space-4);
 }
 
+/* The repo header is one selector (#68): its hover + active-filter highlight
+   enclose both the title and the "+" as a single rounded control. */
 .repoHeader {
   display: flex;
   align-items: center;
   height: 30px;
   padding-right: var(--space-8);
+  border-radius: var(--radius-chip);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
-/* Repo title — left-click filters Overview to this repo (#34). */
+.repoHeader:hover {
+  background: var(--bg-hover);
+}
+
+/* Active Overview filter (#34): the whole header reads as the selected control
+   (#68); accent-dim wins over the plain hover background. */
+.repoActive,
+.repoActive:hover {
+  background: var(--accent-dim);
+}
+
+/* Repo title — left-click filters Overview to this repo (#34). Transparent: the
+   selector box lives on .repoHeader (#68). */
 .repoTitle {
   display: flex;
   flex: 1;
@@ -77,15 +93,12 @@
   height: 100%;
   padding: 0 var(--space-8);
   border: 0;
-  border-radius: var(--radius-chip);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .repoTitle:hover {
@@ -96,10 +109,10 @@
   color: var(--text-muted);
 }
 
-/* Active Overview filter — clear accent marking (wins over the empty/muted rule). */
-.repoTitle.repoActive {
+/* Active filter accents the title text (the header carries the box, #68); wins
+   over the empty/muted rule via source order. */
+.repoActive .repoTitle {
   color: var(--accent);
-  background: var(--accent-dim);
 }
 
 /* Per-repo color identity dot (#35). */
@@ -127,6 +140,8 @@
   font-size: var(--fs-meta-sm);
 }
 
+/* The "+" is a separate click target inside the header selector (#68): no box
+   of its own — only an icon-color hover for feedback. */
 .plus {
   display: flex;
   align-items: center;
@@ -135,17 +150,13 @@
   height: 22px;
   flex-shrink: 0;
   border: 0;
-  border-radius: var(--radius-chip);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .plus:hover {
-  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
