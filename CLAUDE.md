@@ -25,7 +25,7 @@ clear error if it is missing).
   **react-resizable-panels** (Canvas split resizing, #46)
 - **Backend (Rust, `src-tauri/`):** **`portable-pty`** for terminals, JSON
   persistence in the app-data dir, read-only git (shells out to `git`), and the
-  Tauri **dialog** (folder picker), **opener**, **updater**, and **process** plugins
+  Tauri **dialog** (folder picker) plugin
 - Dark theme only
 
 ## Architecture (data flow)
@@ -97,12 +97,11 @@ clear error if it is missing).
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
 │   ├── paths.ts            # Shared path helpers (repoName)
-│   ├── updater.ts          # In-app auto-update (Tauri updater/process plugins)
 │   ├── components/         # React components (CSS Module alongside each):
 │   │                       #   Sidebar, Overview, Focus, Canvas, Terminal,
 │   │                       #   FileViewer, DiffInspector, BusyIndicator, Checkbox,
 │   │                       #   NewSessionModal, Toaster, ViewSwitch,
-│   │                       #   ClaudeMissing, EmptyState, UpdatePopup
+│   │                       #   ClaudeMissing, EmptyState
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
@@ -116,7 +115,6 @@ clear error if it is missing).
 │   ├── tauri.conf.json     # Window, bundle, build config
 │   ├── capabilities/       # Tauri permission capabilities
 │   └── Cargo.toml          # Crate `claudecue` / lib `claudecue_lib`
-├── .github/workflows/      # release.yml (CI: version-bump guard → draft release)
 ├── eslint.config.js        # ESLint flat config (TS + React)
 └── .prettierrc.json        # Prettier config
 ```
@@ -183,15 +181,11 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   `data-tauri-drag-region` (the earlier overlay chrome from #3 was removed). The
   webview content area sits cleanly below the native bar, so the app shell starts
   at the top of the content area (no reserved top strip).
-- **Releases & auto-update:** CI (`.github/workflows/release.yml`) drafts a
-  **universal** macOS release when the version in `tauri.conf.json` is bumped past
-  the latest `v*` tag; publish the draft for clients to see it. The app
-  self-updates from published releases via the Tauri updater plugin (`updater.ts`
-  + the `UpdatePopup` component, checked once on boot). Bump the version in
-  `tauri.conf.json` + `package.json` + `Cargo.toml` together. The minisign
-  **private** key lives only in GitHub secrets (`TAURI_SIGNING_PRIVATE_KEY` /
-  `…_PASSWORD`) — never commit it; the public key is in `tauri.conf.json`. Apple
-  code-signing/notarization remains out of scope. See `README.md` for the flow.
+- **Builds & distribution:** `npm run tauri build` produces a local **unsigned**
+  macOS `.app`/`.dmg` (Gatekeeper warns on first open — no code signing /
+  notarization). There is **no in-app auto-update and no release pipeline**: the
+  repo is private and the #15 updater (Tauri updater/process plugins, the baked-in
+  minisign pubkey, and the release workflow) was removed in **#62**.
 - **Styling:** CSS Modules (`*.module.css` next to each component) that consume
   the design tokens in `src/styles/tokens.css`. The reset, base styles,
   scrollbars, keyframes, and the `prefers-reduced-motion` killswitch live in

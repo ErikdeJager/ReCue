@@ -7,7 +7,6 @@ import { create } from "zustand";
 import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
 import { repoName } from "./paths";
-import * as updater from "./updater";
 import type {
   CanvasNode,
   CanvasTab,
@@ -219,13 +218,6 @@ export interface AppState {
   /** New session modal (rendered by #10); `newSessionRepo` optionally prefills it. */
   newSessionOpen: boolean;
   newSessionRepo: string | null;
-  /** In-app updater state (Tauri updater plugin); `dismissed` is session-only. */
-  update: {
-    available: boolean;
-    version: string | null;
-    dismissed: boolean;
-    installing: boolean;
-  };
 
   // --- Sync reducers ---
   setView: (view: View) => void;
@@ -252,7 +244,6 @@ export interface AppState {
   dismissToast: (id: string) => void;
   openNewSession: (repo?: string) => void;
   closeNewSession: () => void;
-  dismissUpdate: () => void;
 
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
@@ -285,8 +276,6 @@ export interface AppState {
   setInspectorWidth: (px: number) => void;
   /** Persist the current Focus inspector width — on drag end / keyboard step (#51). */
   persistInspectorWidth: () => void;
-  checkForUpdate: () => Promise<void>;
-  installUpdate: () => Promise<void>;
   /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
   spawnSession: (
     cwd: string,
@@ -324,12 +313,6 @@ export const useStore = create<AppState>()((set, get) => ({
   toasts: [],
   newSessionOpen: false,
   newSessionRepo: null,
-  update: {
-    available: false,
-    version: null,
-    dismissed: false,
-    installing: false,
-  },
 
   setView: (view) => set({ view }),
   // Selection is decoupled from the view (#22): selecting only highlights — it
@@ -423,9 +406,6 @@ export const useStore = create<AppState>()((set, get) => ({
     set({ newSessionOpen: true, newSessionRepo: repo ?? null }),
   closeNewSession: () => set({ newSessionOpen: false, newSessionRepo: null }),
 
-  dismissUpdate: () =>
-    set((s) => ({ update: { ...s.update, dismissed: true } })),
-
   init: async () => {
     // Subscribe exactly once. The flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
@@ -467,7 +447,6 @@ export const useStore = create<AppState>()((set, get) => ({
       }
     }
     await get().refresh();
-    void get().checkForUpdate();
   },
 
   refresh: async () => {
@@ -753,35 +732,6 @@ export const useStore = create<AppState>()((set, get) => ({
     void ipc.setInspectorWidth(get().inspectorWidth).catch(() => {
       // Persist failed (e.g. outside Tauri); the local width stays for the session.
     });
-  },
-
-  checkForUpdate: async () => {
-    try {
-      const info = await updater.checkForUpdate();
-      if (info) {
-        set({
-          update: {
-            available: true,
-            version: info.version,
-            dismissed: false,
-            installing: false,
-          },
-        });
-      }
-    } catch {
-      // Offline, no update, or running outside Tauri — ignore.
-    }
-  },
-
-  installUpdate: async () => {
-    set((s) => ({ update: { ...s.update, installing: true } }));
-    try {
-      await updater.downloadAndRelaunch();
-      // On success the app relaunches into the new version.
-    } catch {
-      set((s) => ({ update: { ...s.update, installing: false } }));
-      get().pushToast("Update failed", "error");
-    }
   },
 
   spawnSession: async (cwd, name, branch) => {

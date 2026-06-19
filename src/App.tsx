@@ -20,7 +20,6 @@ import Overview from "./components/Overview/Overview";
 import Sidebar from "./components/Sidebar/Sidebar";
 import { reconcileTerminals } from "./components/Terminal/terminalPool";
 import Toaster from "./components/Toaster/Toaster";
-import UpdatePopup from "./components/UpdatePopup/UpdatePopup";
 import { useStore } from "./store";
 import { useKeyboardNav } from "./useKeyboardNav";
 
@@ -96,7 +95,6 @@ function App() {
       </DndContext>
       <Toaster />
       <NewSessionModal />
-      <UpdatePopup />
     </div>
   );
 }

@@ -41,12 +41,6 @@ beforeEach(() => {
     toasts: [],
     newSessionOpen: false,
     newSessionRepo: null,
-    update: {
-      available: false,
-      version: null,
-      dismissed: false,
-      installing: false,
-    },
   });
 });
 
@@ -204,20 +198,6 @@ describe("app store", () => {
     const id = useStore.getState().pushToast("hello");
     useStore.getState().dismissToast(id);
     expect(useStore.getState().toasts).toHaveLength(0);
-  });
-
-  it("dismisses an available update for the session", () => {
-    useStore.setState({
-      update: {
-        available: true,
-        version: "1.2.3",
-        dismissed: false,
-        installing: false,
-      },
-    });
-    useStore.getState().dismissUpdate();
-    expect(useStore.getState().update.dismissed).toBe(true);
-    expect(useStore.getState().update.available).toBe(true);
   });
 
   it("opens and closes the new-session modal with an optional repo", () => {

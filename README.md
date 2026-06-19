@@ -50,33 +50,8 @@ Artifacts land in `src-tauri/target/release/bundle/` (`macos/ClaudeCue.app` and
 > No code signing or notarization in v1 — Gatekeeper will warn on first open
 > (right-click → **Open**, or allow it under **System Settings → Privacy & Security**).
 
-## Releases & auto-update
-
-Releases are cut by CI from `main` (`.github/workflows/release.yml`):
-
-1. **Bump the version** in `src-tauri/tauri.conf.json`, `package.json`, and
-   `src-tauri/Cargo.toml` (keep them in sync) and push to `main`.
-2. CI compares the version to the latest `v*` tag. If it's higher, it builds a
-   **universal** macOS bundle and opens a **draft** release `v<version>` with the
-   `.dmg` + updater artifacts (`.app.tar.gz`, `.sig`, `latest.json`). A push that
-   doesn't bump the version creates no release.
-3. **Publish the draft** on GitHub — only published (non-draft) releases are
-   visible to clients via `/releases/latest/`.
-
-On startup the app checks for a newer published release (Tauri updater plugin)
-and, if found, shows a bottom-right popup: **Update** downloads, installs, and
-relaunches; **×** dismisses it until the next launch.
-
-### Required GitHub secrets
-
-The updater signs its artifacts with a minisign key (separate from Apple
-code-signing, which remains out of scope):
-
-- `TAURI_SIGNING_PRIVATE_KEY` — the minisign private key.
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — its password.
-
-The matching **public** key is committed in `tauri.conf.json`
-(`plugins.updater.pubkey`); the private key is never committed.
+> The build is a **local, unsigned** artifact — there is no in-app auto-update and
+> no release pipeline (the repo is private; the earlier updater was removed).
 
 ## Develop scripts
 
