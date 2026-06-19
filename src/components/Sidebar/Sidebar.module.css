@@ -246,6 +246,78 @@
   padding-left: var(--space-4);
 }
 
+/* --- Opened-file tree rows (#45) — children of a repo, below its sessions --- */
+.fileRow {
+  display: flex;
+  align-items: center;
+  margin: 1px var(--space-8);
+  border-radius: var(--radius-control);
+}
+
+.fileRow:hover {
+  background: var(--bg-hover);
+}
+
+.fileMain {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-6);
+  /* Extra left padding indents files under their repo's sessions. */
+  padding: var(--space-4) var(--space-8) var(--space-4) var(--space-20);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fileIcon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.fileName {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileClose {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  margin-right: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.fileRow:hover .fileClose {
+  opacity: 1;
+}
+
+.fileClose:hover {
+  color: var(--text-primary);
+}
+
+/* The file being dragged toward Canvas (#45/#47). */
+.fileRowDragging {
+  opacity: 0.6;
+}
+
 /* --- Repo right-click context menu (#31) --- */
 .menuOverlay {
   position: fixed;

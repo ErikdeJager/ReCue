@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { Plus, X } from "lucide-react";
+import {
+  DndContext,
+  PointerSensor,
+  useDraggable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
+import { FileText, Plus, X } from "lucide-react";
 
 import { listFiles } from "../../ipc";
 import { repoName } from "../../paths";
@@ -62,6 +70,65 @@ function SessionRow({
   );
 }
 
+interface FileRowProps {
+  repoPath: string;
+  /** Repo-relative file path. */
+  file: string;
+  onOpen: () => void;
+  onClose: () => void;
+}
+
+/**
+ * An opened-file entry in the sidebar tree (#45): clickable (re-open) with a
+ * hover close (×), and a dnd-kit draggable source so #47 can drop it into Canvas.
+ * The whole label is the drag handle; a small activation distance keeps clicks
+ * working. (Drop targets are added in #47 — until then a drag snaps back.)
+ */
+function FileRow({ repoPath, file, onOpen, onClose }: FileRowProps) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: `file:${repoPath}:${file}`,
+      data: { kind: "file", repoPath, file },
+    });
+  const name = file.split("/").pop() || file;
+  const style = transform
+    ? { transform: CSS.Translate.toString(transform) }
+    : undefined;
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${styles.fileRow} ${isDragging ? styles.fileRowDragging : ""}`}
+      style={style}
+    >
+      <button
+        type="button"
+        className={styles.fileMain}
+        onClick={onOpen}
+        title={file}
+        {...attributes}
+        {...listeners}
+      >
+        <FileText
+          size={13}
+          strokeWidth={1.5}
+          className={styles.fileIcon}
+          aria-hidden
+        />
+        <span className={styles.fileName}>{name}</span>
+      </button>
+      <button
+        type="button"
+        className={styles.fileClose}
+        onClick={onClose}
+        title="Close file"
+        aria-label={`Close ${name}`}
+      >
+        <X size={13} strokeWidth={1.5} />
+      </button>
+    </div>
+  );
+}
+
 /**
  * Left sidebar: New session button + sessions grouped by repository. Repos come
  * from persisted recents unioned with active-session repos, so a repo stays
@@ -86,6 +153,14 @@ function Sidebar() {
   const overviewPanels = useStore((s) => s.overviewPanels);
   const addOverviewPanel = useStore((s) => s.addOverviewPanel);
   const sessionBusy = useStore((s) => s.sessionBusy);
+  const openFiles = useStore((s) => s.openFiles);
+  const closeFile = useStore((s) => s.closeFile);
+
+  // Drag sources for the sidebar tree (#45); a small distance keeps clicks
+  // working. Drop targets (Canvas) arrive in #47.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+  );
 
   // Right-click repo context menu (#31/#35), anchored at the cursor. `menuMode`
   // switches between the item list, the destructive Forget confirm, and the
@@ -168,81 +243,106 @@ function Sidebar() {
         <ViewSwitch />
       </div>
 
-      <div className={styles.repos}>
-        {repos.length === 0 && (
-          <p className={styles.emptyHint}>No repositories yet.</p>
-        )}
+      <DndContext sensors={sensors}>
+        <div className={styles.repos}>
+          {repos.length === 0 && (
+            <p className={styles.emptyHint}>No repositories yet.</p>
+          )}
 
-        {repos.map((repo) => {
-          const repoSessions = sessions.filter((s) => s.repoPath === repo);
-          const isEmpty = repoSessions.length === 0;
-          const isFiltered = overviewRepoFilter === repo;
-          // Primary label = the repo's branch, or the folder name when non-git /
-          // not yet known. All sessions in a group share it, so index duplicates.
-          const baseLabel = (branches[repo] ?? "") || repoName(repo);
-          const rowLabels = dedupeBranchLabels(
-            repoSessions.map(() => baseLabel),
-          );
+          {repos.map((repo) => {
+            const repoSessions = sessions.filter((s) => s.repoPath === repo);
+            const isEmpty = repoSessions.length === 0;
+            const isFiltered = overviewRepoFilter === repo;
+            // Primary label = the repo's branch, or the folder name when non-git /
+            // not yet known. All sessions in a group share it, so index duplicates.
+            const baseLabel = (branches[repo] ?? "") || repoName(repo);
+            const rowLabels = dedupeBranchLabels(
+              repoSessions.map(() => baseLabel),
+            );
 
-          return (
-            <div key={repo} className={styles.group}>
-              <div
-                className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""}`}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  setMenu({ repo, x: event.clientX, y: event.clientY });
-                  setMenuMode("menu");
-                }}
-              >
-                {/* Left-click a repo title filters Overview to it (toggle);
-                    right-click opens the #31 context menu. */}
-                <button
-                  type="button"
-                  className={`${styles.repoTitle} ${isFiltered ? styles.repoActive : ""}`}
-                  onClick={() => {
-                    setOverviewRepoFilter(repo);
-                    setView("overview");
+            return (
+              <div key={repo} className={styles.group}>
+                <div
+                  className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""}`}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setMenu({ repo, x: event.clientX, y: event.clientY });
+                    setMenuMode("menu");
                   }}
-                  title={`Filter Overview to ${repoName(repo)}`}
-                  aria-pressed={isFiltered}
                 >
-                  <span
-                    className={styles.repoDot}
-                    style={{ background: repoColor(repo, repoColors) }}
-                  />
-                  <span className={styles.repoName}>{repoName(repo)}</span>
-                  {!isEmpty && (
-                    <span className={styles.count}>{repoSessions.length}</span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
-                  onClick={() => void spawnSession(repo)}
-                  title="New session in this repo"
-                  aria-label="New session in this repo"
-                >
-                  <Plus size={14} strokeWidth={1.5} />
-                </button>
-              </div>
+                  {/* Left-click a repo title filters Overview to it (toggle);
+                    right-click opens the #31 context menu. */}
+                  <button
+                    type="button"
+                    className={`${styles.repoTitle} ${isFiltered ? styles.repoActive : ""}`}
+                    onClick={() => {
+                      setOverviewRepoFilter(repo);
+                      setView("overview");
+                    }}
+                    title={`Filter Overview to ${repoName(repo)}`}
+                    aria-pressed={isFiltered}
+                  >
+                    <span
+                      className={styles.repoDot}
+                      style={{ background: repoColor(repo, repoColors) }}
+                    />
+                    <span className={styles.repoName}>{repoName(repo)}</span>
+                    {!isEmpty && (
+                      <span className={styles.count}>
+                        {repoSessions.length}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
+                    onClick={() => void spawnSession(repo)}
+                    title="New session in this repo"
+                    aria-label="New session in this repo"
+                  >
+                    <Plus size={14} strokeWidth={1.5} />
+                  </button>
+                </div>
 
-              {repoSessions.map((session, i) => (
-                <SessionRow
-                  key={session.id}
-                  session={session}
-                  // rowLabels has one entry per session; fallback satisfies
-                  // noUncheckedIndexedAccess and is never reached at runtime.
-                  label={rowLabels[i] ?? baseLabel}
-                  selected={session.id === selectedId}
-                  busy={sessionBusy[session.id] ?? false}
-                  onSelect={() => select(session.id)}
-                  onRemove={() => void removeSession(session.id)}
-                />
-              ))}
-            </div>
-          );
-        })}
-      </div>
+                {repoSessions.map((session, i) => (
+                  <SessionRow
+                    key={session.id}
+                    session={session}
+                    // rowLabels has one entry per session; fallback satisfies
+                    // noUncheckedIndexedAccess and is never reached at runtime.
+                    label={rowLabels[i] ?? baseLabel}
+                    selected={session.id === selectedId}
+                    busy={sessionBusy[session.id] ?? false}
+                    onSelect={() => select(session.id)}
+                    onRemove={() => void removeSession(session.id)}
+                  />
+                ))}
+
+                {/* Opened files under this repo (#45): click re-opens as an
+                  Overview column; the × forgets it; draggable for Canvas (#47). */}
+                {(openFiles[repo] ?? []).map((f) => (
+                  <FileRow
+                    key={f}
+                    repoPath={repo}
+                    file={f}
+                    onOpen={() => {
+                      if (
+                        !overviewPanels[repo]?.some(
+                          (p) => p.kind !== "diff" && p.file === f,
+                        )
+                      ) {
+                        void addOverviewPanel(repo, "markdown", f);
+                      }
+                      setView("overview");
+                    }}
+                    onClose={() => void closeFile(repo, f)}
+                  />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </DndContext>
 
       {menu && (
         <>

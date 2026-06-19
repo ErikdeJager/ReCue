@@ -75,6 +75,14 @@ export const listOverviewOrder = () =>
 export const setOverviewOrder = (path: string, order: string[]) =>
   invoke<void>("set_overview_order", { path, order });
 
+/** Per-repo opened files, path → repo-relative file paths (sidebar tree, #45). */
+export const listOpenFiles = () =>
+  invoke<Record<string, string[]>>("list_open_files");
+
+/** Replace a repo's opened-file list (#45). */
+export const setOpenFiles = (path: string, files: string[]) =>
+  invoke<void>("set_open_files", { path, files });
+
 /** Repo-relative viewable (text-ish) files in a repo (file viewer, #44). */
 export const listFiles = (repo: string) =>
   invoke<string[]>("list_files", { repo });

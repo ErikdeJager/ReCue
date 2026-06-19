@@ -34,6 +34,7 @@ beforeEach(() => {
     repoColors: {},
     overviewPanels: {},
     overviewOrder: {},
+    openFiles: {},
     sessionBusy: {},
     claudeMissing: false,
     toasts: [],
@@ -320,6 +321,31 @@ describe("overview panels (#38)", () => {
       "p1",
       "s1",
     ]);
+  });
+});
+
+describe("opened-file tree (#45)", () => {
+  it("openFile appends, dedups, and closeFile removes (dropping empties)", async () => {
+    await useStore.getState().openFile("/repo/a", "README.md");
+    await useStore.getState().openFile("/repo/a", "src/main.rs");
+    await useStore.getState().openFile("/repo/a", "README.md"); // dup → no-op
+    expect(useStore.getState().openFiles["/repo/a"]).toEqual([
+      "README.md",
+      "src/main.rs",
+    ]);
+
+    await useStore.getState().closeFile("/repo/a", "README.md");
+    expect(useStore.getState().openFiles["/repo/a"]).toEqual(["src/main.rs"]);
+
+    await useStore.getState().closeFile("/repo/a", "src/main.rs");
+    expect(useStore.getState().openFiles["/repo/a"]).toBeUndefined();
+  });
+
+  it("addOverviewPanel with a file registers it as an opened file (#45)", async () => {
+    await useStore
+      .getState()
+      .addOverviewPanel("/repo/a", "markdown", "docs/x.md");
+    expect(useStore.getState().openFiles["/repo/a"]).toEqual(["docs/x.md"]);
   });
 });
 

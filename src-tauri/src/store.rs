@@ -62,6 +62,10 @@ pub struct PersistedState {
     /// so spawn/exit merges in without scrambling. `default` keeps old files loading.
     #[serde(default)]
     pub overview_order: HashMap<String, Vec<String>>,
+    /// Per-repo list of opened files (#45): repo-relative paths the user has opened
+    /// in a file viewer, shown in the sidebar tree. `default` keeps old files loading.
+    #[serde(default)]
+    pub open_files: HashMap<String, Vec<String>>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -176,6 +180,23 @@ impl Store {
                 state.overview_order.remove(path);
             } else {
                 state.overview_order.insert(path.to_string(), order);
+            }
+        })
+    }
+
+    /// All per-repo opened-file lists (#45).
+    pub fn open_files(&self) -> HashMap<String, Vec<String>> {
+        self.with(|state| state.open_files.clone())
+    }
+
+    /// Replace a repo's opened-file list and persist (#45); an empty list drops
+    /// the entry so the map stays tidy.
+    pub fn set_open_files(&self, path: &str, files: Vec<String>) -> io::Result<()> {
+        self.update(|state| {
+            if files.is_empty() {
+                state.open_files.remove(path);
+            } else {
+                state.open_files.insert(path.to_string(), files);
             }
         })
     }
@@ -309,6 +330,22 @@ mod tests {
         // An empty order drops the repo's entry.
         store.set_overview_order("/repo/a", vec![]).unwrap();
         assert!(!Store::load(&path).overview_order().contains_key("/repo/a"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_files_set_and_persist() {
+        let path = temp_path("openfiles");
+        let store = Store::load(&path);
+        let files = vec!["README.md".to_string(), "src/main.rs".to_string()];
+        store.set_open_files("/repo/a", files.clone()).unwrap();
+
+        let reloaded = Store::load(&path);
+        assert_eq!(reloaded.open_files().get("/repo/a"), Some(&files));
+
+        // An empty list drops the repo's entry.
+        store.set_open_files("/repo/a", vec![]).unwrap();
+        assert!(!Store::load(&path).open_files().contains_key("/repo/a"));
         let _ = fs::remove_file(&path);
     }
 

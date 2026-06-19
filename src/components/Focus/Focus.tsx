@@ -24,6 +24,7 @@ const TABS = [
 function FileTab({ repoPath, active }: { repoPath: string; active: boolean }) {
   const [files, setFiles] = useState<string[]>([]);
   const [file, setFile] = useState<string | null>(null);
+  const openFile = useStore((s) => s.openFile);
 
   useEffect(() => {
     if (!active) return;
@@ -54,7 +55,12 @@ function FileTab({ repoPath, active }: { repoPath: string; active: boolean }) {
       <select
         className={styles.fileSelect}
         value={file ?? ""}
-        onChange={(event) => setFile(event.currentTarget.value)}
+        onChange={(event) => {
+          // An explicit pick "opens" the file → register it in the sidebar tree (#45).
+          const picked = event.currentTarget.value;
+          setFile(picked);
+          void openFile(repoPath, picked);
+        }}
         aria-label="File"
       >
         {files.map((f) => (

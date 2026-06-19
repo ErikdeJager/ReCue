@@ -199,6 +199,8 @@ export interface AppState {
   /** Per-repo drag-reorder order (#43): item keys (agent ids + panel ids). Merged
    * with the live items at render — unknown keys filtered, new ones appended. */
   overviewOrder: Record<string, string[]>;
+  /** Per-repo opened files for the sidebar tree (#45); repo-relative paths. */
+  openFiles: Record<string, string[]>;
   /** Sessions currently working, from the output-activity heuristic (#42); an
    * absent/false entry means idle. (The task's `sessionState`, as a boolean map.) */
   sessionBusy: Record<string, boolean>;
@@ -257,6 +259,9 @@ export interface AppState {
   removeOverviewPanel: (repoPath: string, id: string) => Promise<void>;
   /** Persist a repo cluster's drag-reordered item order (#43). */
   reorderOverview: (repoPath: string, orderedKeys: string[]) => Promise<void>;
+  /** Register / forget an opened file in the sidebar tree (#45, persisted). */
+  openFile: (repoPath: string, file: string) => Promise<void>;
+  closeFile: (repoPath: string, file: string) => Promise<void>;
   checkForUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
   /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
@@ -284,6 +289,7 @@ export const useStore = create<AppState>()((set, get) => ({
   repoColors: {},
   overviewPanels: {},
   overviewOrder: {},
+  openFiles: {},
   sessionBusy: {},
   claudeMissing: false,
   toasts: [],
@@ -471,14 +477,20 @@ export const useStore = create<AppState>()((set, get) => ({
     // Repo colors + Overview panel layouts load independently so a failure here
     // doesn't block sessions.
     try {
-      const [colors, panels, order] = await Promise.all([
+      const [colors, panels, order, files] = await Promise.all([
         ipc.listRepoColors(),
         ipc.listOverviewPanels(),
         ipc.listOverviewOrder(),
+        ipc.listOpenFiles(),
       ]);
-      set({ repoColors: colors, overviewPanels: panels, overviewOrder: order });
+      set({
+        repoColors: colors,
+        overviewPanels: panels,
+        overviewOrder: order,
+        openFiles: files,
+      });
     } catch {
-      // Backend unreachable; leave colors/panels/order as-is.
+      // Backend unreachable; leave colors/panels/order/files as-is.
     }
   },
 
@@ -516,6 +528,8 @@ export const useStore = create<AppState>()((set, get) => ({
     set((s) => ({
       overviewPanels: { ...s.overviewPanels, [repoPath]: next },
     }));
+    // A file panel is also an "open file" — register it in the sidebar tree (#45).
+    if (file) void get().openFile(repoPath, file);
     try {
       await ipc.setOverviewPanels(repoPath, next);
     } catch {
@@ -548,6 +562,36 @@ export const useStore = create<AppState>()((set, get) => ({
       await ipc.setOverviewOrder(repoPath, orderedKeys);
     } catch {
       // Persist failed (e.g. outside Tauri); keep the local order for the session.
+    }
+  },
+
+  // Opened-file tree (#45). openFile appends (deduped, stable order); closeFile
+  // removes; both persist the repo's list. Decoupled from Overview columns — the
+  // tree is a per-repo "opened files" list that survives restarts.
+  openFile: async (repoPath, file) => {
+    const current = get().openFiles[repoPath] ?? [];
+    if (current.includes(file)) return; // already listed — no-op
+    const next = [...current, file];
+    set((s) => ({ openFiles: { ...s.openFiles, [repoPath]: next } }));
+    try {
+      await ipc.setOpenFiles(repoPath, next);
+    } catch {
+      // Persist failed (e.g. outside Tauri); keep the local list for the session.
+    }
+  },
+
+  closeFile: async (repoPath, file) => {
+    const next = (get().openFiles[repoPath] ?? []).filter((f) => f !== file);
+    set((s) => {
+      const map = { ...s.openFiles };
+      if (next.length) map[repoPath] = next;
+      else delete map[repoPath];
+      return { openFiles: map };
+    });
+    try {
+      await ipc.setOpenFiles(repoPath, next);
+    } catch {
+      // ignore
     }
   },
 

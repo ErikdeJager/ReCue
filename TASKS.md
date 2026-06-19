@@ -3034,9 +3034,9 @@ user explicitly does not want a full editor / LSP.
 
 ---
 
-### 45. [ ] Sidebar tree: show opened files under their repo (draggable + clickable)
+### 45. [x] Sidebar tree: show opened files under their repo (draggable + clickable)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #44
 **Created:** 2026-06-19
 
@@ -3051,29 +3051,51 @@ the folders."
 
 **Subtasks**
 
-1. [ ] Add an **open-files** concept to the store: a per-repo list of opened file paths
+1. [x] Add an **open-files** concept to the store: a per-repo list of opened file paths
    (`openFiles: Record<repoPath, string[]>`) with open/close actions. Opening a file
    anywhere (FileViewer #44) registers it; closing removes it. Persist it.
-2. [ ] Render opened files under each repo in the sidebar (below its sessions) as tree
+2. [x] Render opened files under each repo in the sidebar (below its sessions) as tree
    rows with a file icon + name (mono), truncating long names. Repos remain the
    non-collapsible titles from #34; files are children.
-3. [ ] Clicking a file entry opens/focuses it (e.g. in the Focus file tab, or selects its
+3. [x] Clicking a file entry opens/focuses it (e.g. in the Focus file tab, or selects its
    Canvas panel if present). A hover **close** (×) removes it from the tree.
-4. [ ] Make file entries **draggable** (dnd-kit, #43) so they can be dropped into Canvas
+4. [x] Make file entries **draggable** (dnd-kit, #43) so they can be dropped into Canvas
    (#47). Sessions remain draggable into Canvas too (#47).
 
 **Acceptance criteria**
 
-- [ ] Opening a file makes it appear under its repo in the sidebar tree; closing removes
+- [x] Opening a file makes it appear under its repo in the sidebar tree; closing removes
   it; the list persists across restart.
-- [ ] File entries are clickable (open/focus) and draggable (into Canvas).
-- [ ] Repos stay non-collapsible titles (#34); the tree reads clearly.
+- [x] File entries are clickable (open/focus) and draggable (into Canvas).
+- [x] Repos stay non-collapsible titles (#34); the tree reads clearly.
 
 **Notes**
 
 - Files: `src/components/Sidebar/Sidebar.tsx` (+ css), `src/store.ts` (`openFiles`),
   persisted via the backend store. Depends on #44 (the file-open concept + viewer) and
   reuses dnd-kit (#43). Coordinates with #34 (sidebar repos) and #47 (drag into Canvas).
+- **Done 2026-06-19.** **Store/persistence (subtask 1):** `openFiles: Record<repo,
+  string[]>` + `openFile`/`closeFile` actions (append-deduped / remove-and-drop-empty,
+  both optimistic + persisted); backend mirrors the #43 pattern — `store.rs`
+  `#[serde(default)] open_files` + `open_files()`/`set_open_files`, commands
+  `list/set_open_files`, loaded in `refresh`. **Registration:** explicit opens register
+  a file — `addOverviewPanel(repo, kind, file)` calls `openFile`, and the Focus **Files**
+  tab registers on an explicit dropdown pick (the auto-default README isn't registered, so
+  the tree reflects deliberate opens and a closed file can't resurrect on a remount).
+  **Tree (subtasks 2-3):** a new `FileRow` renders under each repo's sessions (file icon +
+  mono basename, truncated, indented child); repos stay the #34 non-collapsible titles.
+  Click re-opens the file as an Overview file column (deduped) + switches to Overview
+  (session-independent — always works without Canvas yet); a hover **×** calls `closeFile`.
+  **Draggable (subtask 4):** file rows are dnd-kit **`useDraggable`** sources (data
+  `{ kind:"file", repoPath, file }`) inside a Sidebar `DndContext` (PointerSensor distance
+  4 so clicks still work); with no droppable yet a drag snaps back — **#47** lifts the
+  context to span Canvas and adds the drop targets (and makes sessions draggable too).
+  **Tests:** store `openFile`/`closeFile` + `addOverviewPanel`-registers-file; Rust
+  `open_files_set_and_persist`. **Hard gate green:** Rust `fmt`/`clippy`/`test` (35) +
+  frontend `build`/`lint`/`format:check`/`test` (55). The drag-into-Canvas can't be
+  exercised until #47; the tree open/close/click/persist is fully verifiable (+ by
+  construction). Decision noted: click opens as an Overview column (not the Focus file
+  tab) because it's session-independent; #47 can prefer a Canvas panel when present.
 
 ---
 

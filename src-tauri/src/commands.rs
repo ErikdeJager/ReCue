@@ -202,6 +202,23 @@ pub fn set_overview_order(
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+#[tauri::command]
+pub fn list_open_files(store: State<'_, Store>) -> std::collections::HashMap<String, Vec<String>> {
+    store.open_files()
+}
+
+/// Replace a repo's opened-file list (#45) and persist.
+#[tauri::command]
+pub fn set_open_files(
+    store: State<'_, Store>,
+    path: String,
+    files: Vec<String>,
+) -> Result<(), SessionError> {
+    store
+        .set_open_files(&path, files)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// `#` followed by 3/4/6/8 hex digits.
 fn is_hex_color(value: &str) -> bool {
     match value.strip_prefix('#') {

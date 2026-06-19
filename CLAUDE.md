@@ -64,6 +64,11 @@ clear error if it is missing).
   reparents DOM nodes and never remounts a terminal (pool intact). Persisted per
   repo: `overview_panels` (panel defs) + `overview_order` (the unified item
   order, merged with live items so spawn/exit don't scramble it).
+- **Sidebar tree (#45):** each repo lists its sessions **and** its opened files
+  (`open_files`, persisted per repo). Opening a file in a viewer registers it
+  (Focus Files-tab pick or an Overview file column); the tree row re-opens it as
+  an Overview column on click and forgets it on the hover ×. File rows are
+  dnd-kit **draggable sources** (drop targets land in Canvas, #47).
 
 ## Layout
 
