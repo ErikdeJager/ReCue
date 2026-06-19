@@ -9,6 +9,7 @@ import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
 import { repoName } from "./paths";
 import type {
+  CanvasContent,
   CanvasNode,
   CanvasTab,
   OverviewPanel,
@@ -201,6 +202,58 @@ export function repoColor(
   return REPO_PALETTE[idx] ?? REPO_PALETTE[0] ?? "#cba6f7";
 }
 
+/** A clicked sidebar item — an agent/terminal (by PTY id) or a file/diff panel
+ * (by repo path + file). Matched against Canvas leaves for view-aware nav (#79). */
+type SidebarItem = {
+  id: string;
+  kind: "agent" | "terminal" | "file" | "diff";
+  repoPath?: string;
+  file?: string;
+};
+
+/** Whether a Canvas leaf's content is the same item as a clicked sidebar item
+ * (#79): agents/terminals match by PTY id, files by repo+path, diffs by repo. */
+function matchesCanvasItem(content: CanvasContent, item: SidebarItem): boolean {
+  switch (item.kind) {
+    case "agent":
+      return content.kind === "agent" && content.sessionId === item.id;
+    case "terminal":
+      return content.kind === "terminal" && content.sessionId === item.id;
+    case "file":
+      return (
+        content.kind === "file" &&
+        content.repoPath === item.repoPath &&
+        content.file === item.file
+      );
+    case "diff":
+      return content.kind === "diff" && content.repoPath === item.repoPath;
+  }
+}
+
+/** The sidebar item id for a Canvas leaf's content (#79) — the reverse of
+ * matchesCanvasItem, so focusing a panel highlights its sidebar row. Agents/
+ * terminals carry their id directly; file/diff panels are looked up in
+ * overviewPanels. Null when not resolvable. */
+function leafItemId(
+  content: CanvasContent,
+  overviewPanels: Record<string, OverviewPanel[]>,
+): string | null {
+  if (content.kind === "agent" || content.kind === "terminal") {
+    return content.sessionId ?? null;
+  }
+  const panels = overviewPanels[content.repoPath ?? ""] ?? [];
+  if (content.kind === "file") {
+    return (
+      panels.find((p) => p.kind === "markdown" && p.file === content.file)
+        ?.id ?? null
+    );
+  }
+  if (content.kind === "diff") {
+    return panels.find((p) => p.kind === "diff")?.id ?? null;
+  }
+  return null;
+}
+
 export interface AppState {
   // --- State ---
   sessions: SessionView[];
@@ -239,6 +292,10 @@ export interface AppState {
   // --- Sync reducers ---
   setView: (view: View) => void;
   select: (id: string | null) => void;
+  /** Select/jump to a sidebar item, view-aware (#79): in Overview select + scroll
+   * its column; in Canvas focus its panel if present, else toast + deselect.
+   * Never switches the view. */
+  selectItem: (item: SidebarItem) => void;
   /** Toggle the Overview repo filter (clicking the active repo clears it); pass
    * null to clear ("Show all"). #34 */
   setOverviewRepoFilter: (repo: string | null) => void;
@@ -795,7 +852,23 @@ export const useStore = create<AppState>()((set, get) => ({
     void ipc.setCanvases({ canvases, activeId: id }).catch(() => {});
   },
 
-  setActiveLeaf: (id) => set({ activeLeafId: id }),
+  setActiveLeaf: (id) => {
+    if (id === null) {
+      set({ activeLeafId: null });
+      return;
+    }
+    const s = get();
+    const layout =
+      s.canvases.find((c) => c.id === s.activeCanvasId)?.layout ?? null;
+    const leaf = collectLeaves(layout).find((l) => l.id === id);
+    // Keep the sidebar selection in sync with the focused panel (#79).
+    set({
+      activeLeafId: id,
+      selectedId: leaf
+        ? leafItemId(leaf.content, s.overviewPanels)
+        : s.selectedId,
+    });
+  },
 
   moveCanvasFocus: (dir) => {
     const s = get();
@@ -804,15 +877,41 @@ export const useStore = create<AppState>()((set, get) => ({
     const leaves = collectLeaves(layout);
     if (leaves.length === 0) return;
     // No focused panel yet → focus the first; else move to the spatial neighbor.
-    const currentId = leaves.some((l) => l.id === s.activeLeafId)
-      ? (s.activeLeafId as string)
-      : null;
-    if (!currentId) {
-      set({ activeLeafId: leaves[0]?.id ?? null });
+    const hasCurrent = leaves.some((l) => l.id === s.activeLeafId);
+    const targetId = hasCurrent
+      ? spatialNeighbor(layout, s.activeLeafId as string, dir)
+      : (leaves[0]?.id ?? null);
+    if (!targetId) return;
+    // Keep the sidebar selection in sync with the focused panel (#79).
+    const leaf = leaves.find((l) => l.id === targetId);
+    set({
+      activeLeafId: targetId,
+      selectedId: leaf
+        ? leafItemId(leaf.content, s.overviewPanels)
+        : s.selectedId,
+    });
+  },
+
+  selectItem: (item) => {
+    const s = get();
+    if (s.view !== "canvas") {
+      // Overview (or any non-canvas): select; Overview scrolls its column in.
+      set({ selectedId: item.id });
       return;
     }
-    const next = spatialNeighbor(layout, currentId, dir);
-    if (next) set({ activeLeafId: next });
+    // Canvas (#79): jump to the item's panel if it's in the active tab, else
+    // toast + deselect. Never switches the view or tab.
+    const layout =
+      s.canvases.find((c) => c.id === s.activeCanvasId)?.layout ?? null;
+    const match = collectLeaves(layout).find((l) =>
+      matchesCanvasItem(l.content, item),
+    );
+    if (match) {
+      set({ selectedId: item.id, activeLeafId: match.id });
+    } else {
+      set({ selectedId: null });
+      get().pushToast("Item not present in canvas — drag to add");
+    }
   },
 
   spawnSession: async (cwd, name, branch) => {

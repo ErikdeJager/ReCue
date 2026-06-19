@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
 import { ExternalLink, GripVertical, X } from "lucide-react";
 import {
   closestCenter,
@@ -81,6 +81,7 @@ function PanelColumn({
   return (
     <div
       ref={setNodeRef}
+      data-item-id={id}
       className={`${styles.card} ${selected ? styles.cardSelected : ""} ${groupStart ? styles.cardGroupStart : ""} ${isDragging ? styles.cardDragging : ""}`}
       style={style}
     >
@@ -199,6 +200,7 @@ interface ExtraPanelProps {
   branch: string;
   color: string;
   groupStart: boolean;
+  selected: boolean;
   onClose: () => void;
 }
 
@@ -208,6 +210,7 @@ function ExtraPanel({
   branch,
   color,
   groupStart,
+  selected,
   onClose,
 }: ExtraPanelProps) {
   const title = (
@@ -238,6 +241,7 @@ function ExtraPanel({
       id={panel.id}
       color={color}
       groupStart={groupStart}
+      selected={selected}
       title={title}
       actions={actions}
     >
@@ -299,6 +303,16 @@ function Overview() {
       coordinateGetter: sortableKeyboardCoordinates,
     }),
   );
+
+  // Scroll the selected item's column into view when the selection changes (#79)
+  // — so clicking a sidebar item in Overview reveals its column.
+  const wallRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!selectedId) return;
+    wallRef.current
+      ?.querySelector(`[data-item-id="${selectedId}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedId]);
 
   // The welcome empty state only when there's truly nothing — no agents and no
   // extra panels (a repo can have a diff/markdown panel without an agent, #39/#41).
@@ -413,7 +427,7 @@ function Overview() {
           collisionDetection={closestCenter}
           onDragEnd={onDragEnd}
         >
-          <div className={styles.wall}>
+          <div ref={wallRef} className={styles.wall}>
             {clusters.map((cluster, clusterIdx) => (
               <SortableContext
                 key={cluster.repo}
@@ -450,6 +464,7 @@ function Overview() {
                       branch={branch}
                       color={color}
                       groupStart={groupStart}
+                      selected={item.panel.id === selectedId}
                       onClose={() =>
                         void removeOverviewPanel(cluster.repo, item.panel.id)
                       }

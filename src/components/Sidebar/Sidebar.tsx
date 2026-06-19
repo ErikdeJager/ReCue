@@ -209,6 +209,7 @@ interface FileRowProps {
   repoPath: string;
   /** Repo-relative file path. */
   file: string;
+  selected: boolean;
   onOpen: () => void;
   onClose: () => void;
 }
@@ -220,7 +221,7 @@ interface FileRowProps {
  * Canvas as a file viewer. The whole label is the drag handle; a small activation
  * distance keeps clicks working.
  */
-function FileRow({ repoPath, file, onOpen, onClose }: FileRowProps) {
+function FileRow({ repoPath, file, selected, onOpen, onClose }: FileRowProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: `file:${repoPath}:${file}`,
@@ -233,7 +234,7 @@ function FileRow({ repoPath, file, onOpen, onClose }: FileRowProps) {
   return (
     <div
       ref={setNodeRef}
-      className={`${styles.fileRow} ${isDragging ? styles.fileRowDragging : ""}`}
+      className={`${styles.fileRow} ${selected ? styles.fileRowSelected : ""} ${isDragging ? styles.fileRowDragging : ""}`}
       style={style}
     >
       <button
@@ -268,18 +269,20 @@ function FileRow({ repoPath, file, onOpen, onClose }: FileRowProps) {
 /**
  * A diff-viewer item in the sidebar tree (#59): a repo's diff panel as a
  * draggable row that drops into Canvas as a diff panel (`{kind:"diff"}`). Click
- * opens Overview; the × removes the panel (and its Overview column — they're
+ * selects/jumps to it in the current view (#79); the × removes the panel (its
  * 1:1). Mirrors FileRow — the forward-looking rule: a new left-panel item type is
  * a draggable row + a `payloadToContent` case, draggable into Canvas by default.
  */
 function DiffRow({
   repoPath,
   panelId,
+  selected,
   onOpen,
   onClose,
 }: {
   repoPath: string;
   panelId: string;
+  selected: boolean;
   onOpen: () => void;
   onClose: () => void;
 }) {
@@ -294,7 +297,7 @@ function DiffRow({
   return (
     <div
       ref={setNodeRef}
-      className={`${styles.fileRow} ${isDragging ? styles.fileRowDragging : ""}`}
+      className={`${styles.fileRow} ${selected ? styles.fileRowSelected : ""} ${isDragging ? styles.fileRowDragging : ""}`}
       style={style}
     >
       <button
@@ -328,17 +331,19 @@ function DiffRow({
 
 /**
  * A plain shell terminal item in the sidebar tree (#72): a draggable row that
- * drops into Canvas as a terminal panel (`{kind:"terminal"}`). Click opens
- * Overview; the × removes the panel (and kills its shell). Mirrors DiffRow.
+ * drops into Canvas as a terminal panel (`{kind:"terminal"}`). Click selects/
+ * jumps to it (#79); the × removes the panel (and kills its shell). Mirrors DiffRow.
  */
 function TerminalRow({
   repoPath,
   panelId,
+  selected,
   onOpen,
   onClose,
 }: {
   repoPath: string;
   panelId: string;
+  selected: boolean;
   onOpen: () => void;
   onClose: () => void;
 }) {
@@ -353,7 +358,7 @@ function TerminalRow({
   return (
     <div
       ref={setNodeRef}
-      className={`${styles.fileRow} ${isDragging ? styles.fileRowDragging : ""}`}
+      className={`${styles.fileRow} ${selected ? styles.fileRowSelected : ""} ${isDragging ? styles.fileRowDragging : ""}`}
       style={style}
     >
       <button
@@ -395,7 +400,7 @@ function Sidebar() {
   const recents = useStore((s) => s.recents);
   const branches = useStore((s) => s.branches);
   const selectedId = useStore((s) => s.selectedId);
-  const select = useStore((s) => s.select);
+  const selectItem = useStore((s) => s.selectItem);
   const removeSession = useStore((s) => s.removeSession);
   const renameSession = useStore((s) => s.renameSession);
   const openNewSession = useStore((s) => s.openNewSession);
@@ -588,23 +593,32 @@ function Sidebar() {
                   label={rowLabels[i] ?? baseLabel}
                   selected={session.id === selectedId}
                   busy={sessionBusy[session.id] ?? false}
-                  onSelect={() => select(session.id)}
+                  onSelect={() =>
+                    selectItem({
+                      kind: "agent",
+                      id: session.id,
+                      repoPath: session.repoPath,
+                    })
+                  }
                   onRemove={() => void removeSession(session.id)}
                   onRename={(name) => void renameSession(session.id, name)}
                 />
               ))}
 
               {/* This repo's non-agent items (#59) — the same `overviewPanels`
-                  Overview shows, 1:1: file + diff viewers. Each click opens
-                  Overview, the × removes the item, and each is draggable into a
-                  Canvas (file → file viewer, diff → diff panel). */}
+                  Overview shows, 1:1: file + diff viewers. A click selects/jumps
+                  to the item in the current view (#79), the × removes it, and each
+                  is draggable into a Canvas (file → file viewer, diff → diff). */}
               {(overviewPanels[repo] ?? []).map((panel) =>
                 panel.kind === "diff" ? (
                   <DiffRow
                     key={panel.id}
                     repoPath={repo}
                     panelId={panel.id}
-                    onOpen={() => setView("overview")}
+                    selected={panel.id === selectedId}
+                    onOpen={() =>
+                      selectItem({ kind: "diff", id: panel.id, repoPath: repo })
+                    }
                     onClose={() => void removeOverviewPanel(repo, panel.id)}
                   />
                 ) : panel.kind === "terminal" ? (
@@ -612,7 +626,14 @@ function Sidebar() {
                     key={panel.id}
                     repoPath={repo}
                     panelId={panel.id}
-                    onOpen={() => setView("overview")}
+                    selected={panel.id === selectedId}
+                    onOpen={() =>
+                      selectItem({
+                        kind: "terminal",
+                        id: panel.id,
+                        repoPath: repo,
+                      })
+                    }
                     onClose={() => void removeOverviewPanel(repo, panel.id)}
                   />
                 ) : panel.file ? (
@@ -620,7 +641,15 @@ function Sidebar() {
                     key={panel.id}
                     repoPath={repo}
                     file={panel.file}
-                    onOpen={() => setView("overview")}
+                    selected={panel.id === selectedId}
+                    onOpen={() =>
+                      selectItem({
+                        kind: "file",
+                        id: panel.id,
+                        repoPath: repo,
+                        file: panel.file,
+                      })
+                    }
                     onClose={() => void removeOverviewPanel(repo, panel.id)}
                   />
                 ) : null,
@@ -656,7 +685,13 @@ function Sidebar() {
                         label={wtLabels[i] ?? wtBranch}
                         selected={session.id === selectedId}
                         busy={sessionBusy[session.id] ?? false}
-                        onSelect={() => select(session.id)}
+                        onSelect={() =>
+                          selectItem({
+                            kind: "agent",
+                            id: session.id,
+                            repoPath: session.repoPath,
+                          })
+                        }
                         onRemove={() => void removeSession(session.id)}
                         onRename={(name) =>
                           void renameSession(session.id, name)

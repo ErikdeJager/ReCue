@@ -289,6 +289,13 @@
   background: var(--bg-hover);
 }
 
+/* Selected sidebar item (#79): the accent-dim treatment a selected session row
+   gets, extended to file/diff/terminal items. */
+.fileRowSelected,
+.fileRowSelected:hover {
+  background: var(--accent-dim);
+}
+
 .fileMain {
   display: flex;
   flex: 1;

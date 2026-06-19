@@ -1177,9 +1177,9 @@ box-drawing, no clipped glyphs or overlap) at the tighter line height.
 
 ---
 
-### 79. [ ] Unified, view-aware sidebar item click — select/jump without switching views
+### 79. [x] Unified, view-aware sidebar item click — select/jump without switching views
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** #76
 **Created:** 2026-06-19
 
@@ -1216,28 +1216,30 @@ sidebar row highlight extend to every item kind. Presence-in-canvas = the item a
 
 **Subtasks**
 
-1. [ ] Generalize selection: a `selectedItemId` covering agents + panels (file/diff/terminal);
-   sidebar highlights the selected row for every item kind.
-2. [ ] Remove `setView("overview")` from the file/diff (and future terminal) sidebar click
+1. [x] Generalize selection: a `selectedItemId` covering agents + panels (file/diff/terminal);
+   sidebar highlights the selected row for every item kind. _(Broadened `selectedId` to any
+   item id; `.fileRowSelected` for file/diff/terminal rows; ExtraPanel gets `selected`.)_
+2. [x] Remove `setView("overview")` from the file/diff (and future terminal) sidebar click
    handlers — clicking never changes the view.
-3. [ ] Overview: clicking an item selects it + scrolls its column into view; extend the
-   selected-column highlight to file/diff/terminal columns.
-4. [ ] Canvas: clicking an item focuses its panel if present in the active canvas (via #76's
+3. [x] Overview: clicking an item selects it + scrolls its column into view; extend the
+   selected-column highlight to file/diff/terminal columns. _(`data-item-id` + a
+   scroll-into-view effect on `selectedId`.)_
+4. [x] Canvas: clicking an item focuses its panel if present in the active canvas (via #76's
    active-leaf); else toast "Item not present in canvas — drag to add" and clear selection.
-   Never switch view or tab.
-5. [ ] Keep the sidebar selection in sync with the canvas's focused panel (and clear it
-   appropriately).
+   Never switch view or tab. _(`selectItem` + `matchesCanvasItem`.)_
+5. [x] Keep the sidebar selection in sync with the canvas's focused panel (and clear it
+   appropriately). _(`moveCanvasFocus`/`setActiveLeaf` set `selectedId` via `leafItemId`.)_
 
 **Acceptance criteria**
 
-- [ ] Clicking any sidebar item (agent, file, diff, terminal) selects/jumps to it without ever
+- [x] Clicking any sidebar item (agent, file, diff, terminal) selects/jumps to it without ever
   changing the current view.
-- [ ] In Overview, the clicked item's column is highlighted and scrolled into view, for every
+- [x] In Overview, the clicked item's column is highlighted and scrolled into view, for every
   item kind (not just agents).
-- [ ] In Canvas, clicking an item that's in the current canvas focuses its panel; clicking one
+- [x] In Canvas, clicking an item that's in the current canvas focuses its panel; clicking one
   that isn't shows the "Item not present in canvas — drag to add" toast and deselects — with no
   view/tab switch.
-- [ ] Overview↔Canvas switching only happens via the user (sidebar toggle / ⌘\), never as a
+- [x] Overview↔Canvas switching only happens via the user (sidebar toggle / ⌘\), never as a
   side effect of clicking a sidebar item.
 
 **Notes**
