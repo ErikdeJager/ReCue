@@ -242,6 +242,27 @@ export function unmountTerminal(sessionId: string, slot: HTMLElement): void {
 }
 
 /**
+ * Reset a session's pooled terminal so a relaunched PTY repaints cleanly (#63,
+ * Restart). The existing host already replayed its scrollback once and still
+ * shows the dead session's final screen, so a resumed `claude --resume` would
+ * append onto that stale content (the root cause of the broken Restart). Dispose
+ * the host and recreate a fresh one in the same slot: it refetches the (now
+ * fresh) backend scrollback and re-subscribes to live output, so the relaunched
+ * agent paints from a clean state. Recreate eagerly so the new host is listening
+ * before the resumed PTY's first output arrives.
+ */
+export function resetTerminal(sessionId: string): void {
+  const stale = hosts.get(sessionId);
+  const slot = stale?.slot ?? null;
+  if (stale) {
+    stale.dispose();
+    hosts.delete(sessionId);
+  }
+  if (slot) mountTerminal(sessionId, slot);
+  else ensureHost(sessionId);
+}
+
+/**
  * Dispose terminals whose sessions have been removed. Call when the session list
  * changes; an exited-but-still-listed session keeps its terminal (and overlay).
  */

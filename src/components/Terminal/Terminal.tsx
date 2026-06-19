@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { useStore } from "../../store";
-import { mountTerminal, unmountTerminal } from "./terminalPool";
+import { mountTerminal, resetTerminal, unmountTerminal } from "./terminalPool";
 import styles from "./Terminal.module.css";
 
 interface TerminalProps {
@@ -31,6 +31,13 @@ function Terminal({ sessionId }: TerminalProps) {
     return () => unmountTerminal(sessionId, slot);
   }, [sessionId]);
 
+  // Restart (#63): resume the backend PTY, then — only on success — reset the
+  // pooled terminal so the relaunched `claude --resume` repaints into a clean
+  // xterm instead of appending onto the dead session's last screen.
+  const handleRestart = async () => {
+    if (await restartSession(sessionId)) resetTerminal(sessionId);
+  };
+
   return (
     <div className={styles.wrapper}>
       <div ref={slotRef} className={styles.slot} />
@@ -47,7 +54,7 @@ function Terminal({ sessionId }: TerminalProps) {
           <button
             type="button"
             className={styles.restart}
-            onClick={() => void restartSession(sessionId)}
+            onClick={() => void handleRestart()}
           >
             Restart
           </button>

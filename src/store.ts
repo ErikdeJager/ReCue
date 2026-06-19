@@ -72,6 +72,23 @@ function isSessionError(
 }
 
 /**
+ * Classify a session exit (#63). A **clean** exit — `claude` exits **code 0**
+ * while the app is running and the kill was not user-initiated (Remove/Forget) —
+ * means the user ended the agent: it is forgotten everywhere (kill + forget),
+ * never showing a "Process exited" overlay. Anything else — a non-zero/unknown
+ * code (crash), the boot resume window (#30, where a failed resume exits and is
+ * offered a Restart), or an intentional kill (which toasts on its own) — is
+ * **not** a clean exit and keeps the existing path. Pure — unit-tested; the lone
+ * discriminator behind the `onExited` branch. */
+export function isCleanExit(
+  code: number | null,
+  booting: boolean,
+  intentional: boolean,
+): boolean {
+  return code === 0 && !booting && !intentional;
+}
+
+/**
  * The set of repositories shown in the sidebar: the union of persisted recents
  * and active-session repos (so a repo stays visible even with no active session),
  * sorted **alphabetically** by displayed name — case-insensitive, with a
@@ -282,7 +299,13 @@ export interface AppState {
     name?: string,
     branch?: string,
   ) => Promise<boolean>;
-  restartSession: (id: string) => Promise<void>;
+  /** Resume a crashed / boot-failed agent's PTY; resolves true on success so the
+   * caller can reset the pooled terminal (#63). */
+  restartSession: (id: string) => Promise<boolean>;
+  /** Forget a cleanly-exited (code 0) agent (#63): drop it from the store and its
+   * persisted record (kill + forget, like Remove) so it vanishes from
+   * Focus/Overview/sidebar and won't return on next boot; shows a brief toast. */
+  forgetExitedSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   /** Set (or clear, when blank) a session's custom name; propagates everywhere (#57). */
   renameSession: (id: string, name: string) => Promise<void>;
@@ -427,11 +450,21 @@ export const useStore = create<AppState>()((set, get) => ({
             get().setBusy(id, busy);
           },
           onExited: ({ id, code }) => {
-            get().markExited(id, code);
-            // One notification per close (#32): skip the generic exit toast for
-            // intentional kills (Remove/Forget already toast) and during the boot
-            // resume window (#30). Unexpected exits still toast exactly once.
+            // One event per close. An intentional kill (Remove/Forget) already
+            // toasts and is never auto-forgotten or double-toasted here (#32).
             const intentional = intentionalKills.delete(id);
+            // Clean exit (code 0 while running): the user ended the agent — forget
+            // it like Remove so it vanishes everywhere and won't return on next
+            // boot, with a brief "Agent exited" toast and no overlay/Restart (#63).
+            if (isCleanExit(code, booting, intentional)) {
+              void get().forgetExitedSession(id);
+              return;
+            }
+            // Non-zero / crash exit (or a failed boot resume): keep the session
+            // and its exit code so the Terminal shows the "Process exited" overlay
+            // + Restart (#63/#30). The generic exit toast is suppressed for
+            // intentional kills and during the boot window; others toast once.
+            get().markExited(id, code);
             if (!booting && !intentional) {
               get().pushToast(
                 code != null
@@ -765,6 +798,9 @@ export const useStore = create<AppState>()((set, get) => ({
       await ipc.resumeSession(id);
       get().markRunning(id);
       get().pushToast("Session restarted");
+      // Caller resets the pooled terminal on success so the relaunched PTY
+      // repaints into a clean xterm instead of the dead session's screen (#63).
+      return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
         get().setClaudeMissing(true);
@@ -773,7 +809,21 @@ export const useStore = create<AppState>()((set, get) => ({
         isSessionError(err) ? err.message : "Could not restart session",
         "error",
       );
+      return false;
     }
+  },
+
+  forgetExitedSession: async (id) => {
+    // Vanish from Focus/Overview/sidebar immediately; the session-list change
+    // disposes the now-orphaned pooled xterm via reconcileTerminals (App.tsx).
+    get().dropSession(id);
+    get().pushToast("Agent exited");
+    // Forget the persisted record so a cleanly-exited agent doesn't return on
+    // next boot. kill_session also clears the (already-dead) PTY from the
+    // manager; it's a no-op if the process is already gone (#63).
+    await ipc.killSession(id).catch(() => {
+      // Forget locally regardless of whether the backend call succeeded.
+    });
   },
 
   removeSession: async (id) => {

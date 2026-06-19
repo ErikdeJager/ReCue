@@ -133,6 +133,10 @@ an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sid
 - #61 New-session keyboard-speed pass — command-palette launcher (type-ahead recents, ⌘1–9, quick-repeat).
 - #62 Remove the in-app auto-update mechanism + the baked-in updater secret (repo now private).
 
+**Post-v1 fixes (#63).**
+
+- #63 Clean agent exit (code 0) disappears (kill + forget, no overlay); non-zero/crash & failed boot-resume keep the "Process exited" overlay + Restart — and Restart now resets the pooled terminal so the relaunched agent repaints cleanly instead of appending onto the dead screen.
+
 ---
 
 ## Design reference (dark theme only)
@@ -169,104 +173,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#62 are complete — see **Implemented (completed tasks)** above for the index,
+Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
 in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#64**), with its
 `Depends on:` prerequisites.
-
----
-
-### 63. [ ] Clean agent exit (code 0) disappears; fix Restart for crashes & boot
-
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
-**Depends on:** none
-**Created:** 2026-06-19
-
-**Description**
-
-Today a `claude` session that exits is never removed: the `Terminal` overlay
-(`Terminal.tsx`) shows "Process exited (code N)" + **Restart** for *any* exit code, the
-session stays in the store, and its pooled xterm is kept (`terminalPool.ts`
-`reconcileTerminals`). So a **clean, intentional exit** (the user ends the agent —
-`claude` exits **code 0**) leaves a dead "Process exited (code 0)" card sitting in
-Focus, the Overview wall, and the sidebar tree — with a Restart button that doesn't even
-work.
-
-Desired behavior:
-
-- **Clean exit (code 0) while the app is running → the agent just disappears.** Treat
-  code-0 as intentional: remove the session everywhere (Focus, Overview, sidebar) **and
-  forget its persisted record** (kill + forget, like *Remove*) so it never returns on
-  next boot. Show a single brief toast ("Agent exited"); no overlay, no Restart.
-- **Non-zero / crash exit while running → keep the overlay + Restart.** An unexpected
-  death (crash, or a failed `claude --resume` of a stale id → exit 1) still shows the
-  "Process exited (code N)" overlay with a Restart button — and that **button must
-  actually work**.
-- **App shutdown (app quit/killed, agent did not naturally exit) → unchanged (#30).**
-  Those records are *not* removed (shutdown kills children via `kill_all` but keeps the
-  store records), so on next boot they restore live and **auto-resume** via
-  `claude --resume` ("Reconnecting…"); the Restart offer appears only if that resume
-  fails. This is the only path that "offers to restart," exactly as intended.
-- **Fix the broken Restart button.** Wherever the overlay legitimately appears (crash
-  exit, or a failed boot resume), Restart must relaunch the agent and the terminal must
-  come back cleanly. Likely cause: `restartSession` → `resume_session` spawns a new PTY
-  under the same id, but the terminal pool **reuses the old exited xterm host** —
-  scrollback was already replayed once, so the new PTY's output just appends onto the
-  dead terminal. Restart should reset/recreate the pooled terminal for that id so
-  `claude`'s TUI repaints from a clean state.
-
-The discriminator is **exit code 0 = clean/intentional → disappears; anything else →
-recoverable overlay** (so a crash also offers Restart, the desired recovery affordance,
-even though it isn't an app shutdown).
-
-Out of scope: changing the boot/resume mechanism (#30 stays auto-resume), any new status
-UI, and changing `Remove`.
-
-**Subtasks**
-
-1. [ ] In the `onExited` handler (`store.ts`), special-case **code 0 while not
-   `booting`**: forget the session (drop the persisted record via the backend, like
-   `removeSession`/`kill_session`) and remove it from the store so it vanishes from
-   Focus/Overview/sidebar; its pooled xterm is then disposed via the existing
-   `reconcileTerminals` path (`App.tsx:60`).
-2. [ ] Replace the generic "Session exited (code 0)" toast with a single brief "Agent
-   exited" toast for the clean-exit case; keep the existing exit toast for non-zero
-   exits.
-3. [ ] Leave non-zero exits showing the overlay (`Terminal.tsx` already keys on
-   `exitedCode !== undefined`; only code 0 now removes the session before the overlay
-   can show).
-4. [ ] Fix **Restart**: make `restartSession` reset/recreate the pooled terminal host
-   for the id (so the new `claude --resume` PTY renders into a clean xterm), then verify
-   the relaunched agent is live and interactive. Confirm the actual root cause and fix
-   it.
-5. [ ] Verify app shutdown → next-boot auto-resume (#30) is unaffected and remains the
-   only path that surfaces a Restart offer (when resume fails).
-
-**Acceptance criteria**
-
-- [ ] Ending an agent so `claude` exits code 0 removes it from Focus, Overview, and the
-  sidebar with no "Process exited" overlay; a brief "Agent exited" toast shows once.
-- [ ] A code-0-exited agent does **not** reappear after restarting the app (its record
-  is forgotten).
-- [ ] A non-zero / crash exit still shows the "Process exited (code N)" overlay with a
-  Restart button.
-- [ ] Clicking **Restart** on a crashed agent (or a failed boot resume) relaunches it
-  and the terminal comes back live and interactive (no dead/garbled scrollback).
-- [ ] After an app shutdown with a still-running agent, the agent restores on next boot
-  and auto-resumes (#30); the Restart offer appears only if the resume fails.
-
-**Notes**
-
-- Decisions (from the requester): crash/non-zero exits keep the overlay + Restart; boot
-  restore stays auto-resume (#30); clean exit fully forgets the record; show a brief
-  toast (not silent) when a clean-exited agent vanishes.
-- Key code: `src/components/Terminal/Terminal.tsx` (overlay + Restart), `src/store.ts`
-  (`onExited`, `markExited`, `restartSession`, `removeSession`, `booting` /
-  `intentionalKills`), `src/components/Terminal/terminalPool.ts` (`reconcileTerminals`
-  keeps exited hosts; restart likely needs to dispose/recreate the host),
-  `src-tauri/src/pty.rs` (`resume_session`, `kill_all`), `src-tauri/src/commands.rs`
-  (`resume_session`, `kill_session`).
-- App-shutdown vs clean-exit discriminator at the store level: `kill_all` (shutdown)
-  keeps persisted records → boot restores them; the new code-0 path removes the record →
-  no restore. Reuse the existing `booting` guard so a code-0 during the boot resume
-  window doesn't wrongly auto-remove.

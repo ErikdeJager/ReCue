@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   adjacentSessionId,
   dedupeBranchLabels,
+  isCleanExit,
   mergeRepoOrder,
   REPO_PALETTE,
   repoColor,
@@ -179,6 +180,34 @@ describe("app store", () => {
     expect(useStore.getState().sessions[0]?.exitedCode).toBe(0);
     useStore.getState().markRunning("s1");
     expect(useStore.getState().sessions[0]?.exitedCode).toBeUndefined();
+  });
+
+  it("forgetExitedSession drops a clean-exited agent + toasts 'Agent exited' (#63)", async () => {
+    useStore.setState({
+      sessions: [session("s1"), session("s2")],
+      selectedId: "s1",
+      view: "focus",
+    });
+    // ipc.killSession rejects without a Tauri host and is caught; the local
+    // forget still runs (kill + forget locally regardless).
+    await useStore.getState().forgetExitedSession("s1");
+    expect(useStore.getState().sessions.map((s) => s.id)).toEqual(["s2"]);
+    // The focused agent vanishing returns to Overview (no stranded empty Focus).
+    expect(useStore.getState().selectedId).toBeNull();
+    expect(useStore.getState().view).toBe("overview");
+    expect(useStore.getState().toasts.map((t) => t.message)).toContain(
+      "Agent exited",
+    );
+  });
+
+  it("restartSession resolves false (and toasts an error) when resume fails (#63)", async () => {
+    useStore.setState({ sessions: [{ ...session("s1"), exitedCode: 1 }] });
+    // No Tauri host → ipc.resumeSession rejects → the action reports failure so
+    // the caller skips the terminal reset; the session stays exited.
+    const ok = await useStore.getState().restartSession("s1");
+    expect(ok).toBe(false);
+    expect(useStore.getState().sessions[0]?.exitedCode).toBe(1);
+    expect(useStore.getState().toasts.at(-1)?.tone).toBe("error");
   });
 
   it("sets the claude-missing flag", () => {
@@ -397,5 +426,26 @@ describe("adjacentSessionId", () => {
   it("stays on the only session when there is one", () => {
     expect(adjacentSessionId([session("solo")], "solo", 1)).toBe("solo");
     expect(adjacentSessionId([session("solo")], "solo", -1)).toBe("solo");
+  });
+});
+
+describe("isCleanExit (#63)", () => {
+  it("treats code 0 while running (not intentional) as a clean exit → forget", () => {
+    expect(isCleanExit(0, false, false)).toBe(true);
+  });
+
+  it("keeps non-zero / unknown exits as a recoverable overlay (not clean)", () => {
+    expect(isCleanExit(1, false, false)).toBe(false);
+    expect(isCleanExit(137, false, false)).toBe(false);
+    expect(isCleanExit(null, false, false)).toBe(false);
+  });
+
+  it("never auto-forgets during the boot resume window (#30)", () => {
+    // A code-0 exit while booting keeps the overlay + Restart instead of vanishing.
+    expect(isCleanExit(0, true, false)).toBe(false);
+  });
+
+  it("never auto-forgets an intentional kill (Remove/Forget toasts on its own)", () => {
+    expect(isCleanExit(0, false, true)).toBe(false);
   });
 });

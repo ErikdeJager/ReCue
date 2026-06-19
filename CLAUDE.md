@@ -187,6 +187,21 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   dir (`store.rs`). `Remove` = kill + delete the record. If a future `claude`
   version changes these flags, update `pty.rs` (`spawn_session` /
   `resume_session`) and note it here.
+- **Exit handling (#63):** the discriminator is the exit code (`store.ts`
+  `onExited` / the pure `isCleanExit`). A **clean exit — `claude` exits code 0
+  while running** (the user ended the agent) is forgotten like _Remove_:
+  `forgetExitedSession` drops it from the store (its pooled xterm is disposed by
+  `reconcileTerminals`) **and** its persisted record (so it doesn't return on next
+  boot), with a brief "Agent exited" toast — no overlay, no Restart. **Any other
+  exit** (non-zero/crash, or a failed boot resume) keeps the session with its
+  `exitedCode`, so `Terminal.tsx` shows the "Process exited (code N)" overlay +
+  Restart. **Restart** (`restartSession` → `resume_session`) spawns a fresh PTY
+  under the same id; on success the Terminal calls `terminalPool.resetTerminal`
+  to dispose + recreate the pooled xterm so the relaunched TUI repaints cleanly
+  instead of appending onto the dead session's screen. The boot window is guarded
+  (`booting`): a code-0 exit there keeps the overlay rather than auto-forgetting,
+  and **app shutdown keeps records** (`kill_all` doesn't delete them) so they
+  auto-resume on next boot (#30) — the only path that "offers to restart."
 - **Window chrome:** the **standard native macOS title bar** (#19) — native
   traffic lights, native title (`title: "ClaudeCue"`), native drag, no custom
   positioning. The window config carries no `titleBarStyle`/`hiddenTitle`/

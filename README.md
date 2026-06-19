@@ -28,7 +28,8 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
 - **Busy indicator** — a per-session pulsing ball shows when `claude` is genuinely
   working (and stays dim while you type).
 - **Persistence + resume** — sessions, layouts, and recent folders survive restarts;
-  sessions resume their `claude` conversation by id on launch.
+  sessions resume their `claude` conversation by id on launch. An agent you end
+  cleanly just disappears; one that crashes keeps a **Restart** button.
 - **Remove = kill + forget**, **Catppuccin Mocha** theme, bundled **JetBrains Mono**
   (offline), dark theme only.
 
