@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#86**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#87**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -1658,3 +1658,55 @@ Canvas tab close.
 
 - Key code: `src/components/Canvas/Canvas.module.css` (`.tabClose`, ~line 86 — `width`/`height:
   16px`), `src/components/Canvas/CanvasTabs.tsx` (the `<X size={12}>` icon, ~line 100).
+
+---
+
+### 86. [ ] Keep the "copy resume command" button on agents in Overview & Canvas (post-Focus)
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** #75
+**Created:** 2026-06-19
+
+**Description**
+
+#28 added a button that copies a `claude --resume <session-id>` command, and it lived in the
+**Focus toolbar** — which **#75 removes**. Re-home that button so it stays available on **every
+agent (claude session)** in **Overview** (the agent card header) and **Canvas** (the agent
+panel header).
+
+The copy logic itself **survives #75**: the store action `copyToClipboard(text, label)`
+(`store.ts`) and `resumeSession` remain — only the Focus *button* is gone. So this task just
+adds the button to the agent headers, calling the same action with `claude --resume
+${session.id}` (label "resume command"), the `<Copy>` Lucide icon, the title "Copy resume
+command (claude --resume <id>)", and the existing "Copied resume command" toast.
+
+Add it to:
+- **Overview** `SessionCard` actions (next to Open in Zed / Remove; the Expand-to-Focus button
+  there is removed by #75).
+- **Canvas** agent panel header.
+
+Only **agent** terminals get it (a claude session with a resumable id) — not file/diff/terminal
+viewer items (no session id to resume).
+
+Out of scope: changing what's copied (#28's `claude --resume <id>` format stays); non-agent
+items; the copy action implementation (reuse as-is).
+
+**Acceptance criteria**
+
+- [ ] Every agent in Overview (card header) and Canvas (panel header) has a copy button that
+  copies `claude --resume <that session's id>` and toasts "Copied resume command".
+- [ ] Non-agent items (file/diff/terminal viewers) do not show it.
+- [ ] Reuses the existing `copyToClipboard` store action (no duplicate copy logic); icon/title
+  match #28.
+
+**Notes**
+
+- Depends on #75 (which removes the Focus toolbar that hosted this button); the
+  `copyToClipboard` / `resumeSession` store actions survive #75 — this task only re-adds the
+  button to the agent headers.
+- Coordinate with #70 (Overview header drag), #71 (busy-indicator placement), #67 (agent
+  labels) — all touch the same agent-card header/actions; and with the Canvas agent panel header.
+- Key code: `src/components/Overview/Overview.tsx` (`SessionCard` `actions`),
+  `src/components/Canvas/Canvas.tsx` (agent panel header actions), `src/store.ts`
+  (`copyToClipboard` — reuse); reference the removed `Focus.tsx` (lines ~190–202) for the exact
+  button (Copy icon, `claude --resume ${id}`, "resume command").
