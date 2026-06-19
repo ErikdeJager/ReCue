@@ -70,14 +70,17 @@ clear error if it is missing).
   (Focus Files-tab pick or an Overview file column); the tree row re-opens it as
   an Overview column on click and forgets it on the hover ×. File rows are
   dnd-kit **draggable sources** (drop targets land in Canvas, #47).
-- **Canvas (#46):** a third view — a recursive **BSP split-panel** workspace. The
-  layout is a binary tree (`split{dir,a,b,sizes}` / `leaf{id,content}`) persisted
-  as `canvas_layout`; the pure ops live in `Canvas/canvasTree.ts`. Dropping content
-  on a panel **edge** splits it (recursively), borders resize via
-  **react-resizable-panels**, panels close (collapsing their split). Built on
-  dnd-kit (one DnD system) so terminal content can stay alive via the #18 pool on
-  relayout. #46 ships the engine with a built-in palette drag source; real content +
-  sidebar drag-in is #47.
+- **Canvas (#46/#47):** a third view — a recursive **BSP split-panel** workspace.
+  The layout is a binary tree (`split{dir,a,b,sizes}` / `leaf{id,content}`)
+  persisted as `canvas_layout`; pure ops in `Canvas/canvasTree.ts`. Panels host
+  **real content** (#47): agent terminals (#18 pool), file viewers (#44), diff
+  viewers (#39) — a `content` descriptor `{kind, ...refs}` resolved at render.
+  **Drag-in:** one **app-level dnd-kit context** (`App.tsx`) spans the sidebar
+  (drag sources: sessions + opened files, #45) and Canvas (center + edge drop
+  zones); `Canvas/canvasDrop.ts` maps payloads → content and applies the
+  split/append. Dropping on an edge splits recursively, borders resize via
+  **react-resizable-panels**, panels close. The Overview wall keeps its own nested
+  sortable context (#43) — only one view mounts at a time, so targets never clash.
 
 ## Layout
 

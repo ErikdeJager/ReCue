@@ -3,7 +3,12 @@
 // Unchanged subtrees keep their object identity, so a relayout only remounts the
 // affected branch — the #18 terminal pool reparents the rest, never disposing.
 
-import type { CanvasContent, CanvasEdge, CanvasNode } from "../../types";
+import type {
+  CanvasContent,
+  CanvasEdge,
+  CanvasLeaf,
+  CanvasNode,
+} from "../../types";
 
 /**
  * Split the leaf `targetId`, placing `content` on the dropped `edge`: left/right
@@ -75,4 +80,32 @@ export function leafIds(tree: CanvasNode | null): string[] {
   if (!tree) return [];
   if (tree.type === "leaf") return [tree.id];
   return [...leafIds(tree.a), ...leafIds(tree.b)];
+}
+
+/** Every leaf node, left-to-right — used to dedup content (#47). */
+export function collectLeaves(tree: CanvasNode | null): CanvasLeaf[] {
+  if (!tree) return [];
+  if (tree.type === "leaf") return [tree];
+  return [...collectLeaves(tree.a), ...collectLeaves(tree.b)];
+}
+
+/**
+ * Append a new leaf to the right of the whole canvas — used when content is
+ * added without a specific drop target (e.g. the repo menu's "Open diff in
+ * Canvas", #47). The existing tree keeps the larger share.
+ */
+export function appendLeaf(
+  tree: CanvasNode,
+  content: CanvasContent,
+  newLeafId: string,
+  newSplitId: string,
+): CanvasNode {
+  return {
+    type: "split",
+    id: newSplitId,
+    dir: "row",
+    a: tree,
+    b: { type: "leaf", id: newLeafId, content },
+    sizes: [70, 30],
+  };
 }

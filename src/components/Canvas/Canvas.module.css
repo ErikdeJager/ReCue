@@ -1,54 +1,10 @@
-/* Canvas view (#46): a toolbar (palette + hint) above the split-panel area. */
+/* Canvas view (#46/#47): the split-panel area fills the view; content is dragged
+   in from the sidebar via the app-level DnD context. */
 .canvas {
   display: flex;
   flex-direction: column;
   height: 100%;
   background: var(--bg-base);
-}
-
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-12);
-  height: 40px;
-  flex-shrink: 0;
-  padding: 0 var(--space-12);
-  border-bottom: 1px solid var(--border-hairline);
-  background: var(--bg-panel);
-}
-
-/* Palette drag source (#46) — the built-in way to create panels. */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-chip);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  cursor: grab;
-  touch-action: none;
-  transition: border-color var(--dur-fast) var(--ease-out);
-}
-
-.chip:hover {
-  border-color: var(--accent);
-}
-
-.chip:active {
-  cursor: grabbing;
-}
-
-.chipDragging {
-  opacity: 0.5;
-}
-
-.hint {
-  color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
 }
 
 .area {
@@ -103,14 +59,39 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-8);
-  padding: 0 var(--space-4) 0 var(--space-12);
+  padding: 0 var(--space-4) 0 var(--space-8);
   border-bottom: 1px solid var(--border-hairline);
   background: var(--bg-panel);
 }
 
+/* Title + repo badge (#35/#47): color dot, content title, repo · branch meta. */
+.panelTitleBlock {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.panelDot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: var(--radius-dot);
+}
+
 .panelTitle {
   overflow: hidden;
-  color: var(--text-secondary);
+  flex-shrink: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-meta-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelMeta {
+  overflow: hidden;
+  color: var(--text-muted);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
   text-overflow: ellipsis;
@@ -143,11 +124,21 @@
   display: flex;
   flex: 1;
   min-height: 0;
-  align-items: center;
-  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Real content (terminal / file viewer / diff) fills the body. */
+.panelBody > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 .placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-muted);
   font-size: var(--fs-meta);
 }

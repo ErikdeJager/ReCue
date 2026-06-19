@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { CanvasContent, CanvasNode } from "../../types";
-import { leafIds, removeLeaf, splitLeaf, updateSizes } from "./canvasTree";
+import {
+  appendLeaf,
+  collectLeaves,
+  leafIds,
+  removeLeaf,
+  splitLeaf,
+  updateSizes,
+} from "./canvasTree";
 
 const ph: CanvasContent = { kind: "placeholder" };
 const leaf = (id: string): CanvasNode => ({ type: "leaf", id, content: ph });
@@ -55,5 +62,23 @@ describe("canvas BSP tree (#46)", () => {
     const tree = splitLeaf(leaf("p1"), "p1", "right", ph, "p2", "s1");
     const resized = updateSizes(tree, "s1", [70, 30]);
     expect(resized).toMatchObject({ sizes: [70, 30] });
+  });
+
+  it("appends a leaf to the right of the whole canvas (#47)", () => {
+    const tree = splitLeaf(leaf("p1"), "p1", "right", ph, "p2", "s1");
+    const appended = appendLeaf(tree, ph, "p3", "s2");
+    expect(appended).toMatchObject({
+      type: "split",
+      dir: "row",
+      b: { id: "p3" },
+    });
+    expect(leafIds(appended)).toEqual(["p1", "p2", "p3"]);
+  });
+
+  it("collects every leaf node, left-to-right (#47)", () => {
+    let tree = splitLeaf(leaf("p1"), "p1", "right", ph, "p2", "s1");
+    tree = splitLeaf(tree, "p2", "bottom", ph, "p3", "s2");
+    expect(collectLeaves(tree).map((l) => l.id)).toEqual(["p1", "p2", "p3"]);
+    expect(collectLeaves(null)).toEqual([]);
   });
 });

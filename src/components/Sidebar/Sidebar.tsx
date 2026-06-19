@@ -1,11 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  DndContext,
-  PointerSensor,
-  useDraggable,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
+import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { FileText, Plus, X } from "lucide-react";
 
@@ -20,6 +14,7 @@ import {
 } from "../../store";
 import type { SessionView } from "../../types";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
+import { appendCanvasContent } from "../Canvas/canvasDrop";
 import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import styles from "./Sidebar.module.css";
 
@@ -42,9 +37,33 @@ function SessionRow({
   onSelect,
   onRemove,
 }: SessionRowProps) {
+  // Draggable into Canvas (#47); a small activation distance keeps the click
+  // (select) working. The drag snaps back outside Canvas's drop zones.
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: `session:${session.id}`,
+      data: {
+        kind: "session",
+        sessionId: session.id,
+        repoPath: session.repoPath,
+      },
+    });
+  const style = transform
+    ? { transform: CSS.Translate.toString(transform) }
+    : undefined;
   return (
-    <div className={`${styles.row} ${selected ? styles.rowSelected : ""}`}>
-      <button type="button" className={styles.rowMain} onClick={onSelect}>
+    <div
+      ref={setNodeRef}
+      className={`${styles.row} ${selected ? styles.rowSelected : ""} ${isDragging ? styles.rowDragging : ""}`}
+      style={style}
+    >
+      <button
+        type="button"
+        className={styles.rowMain}
+        onClick={onSelect}
+        {...attributes}
+        {...listeners}
+      >
         <span className={styles.rowPrimary}>{label}</span>
         {session.name && (
           <span className={styles.rowSecondary}>{session.name}</span>
@@ -156,12 +175,6 @@ function Sidebar() {
   const openFiles = useStore((s) => s.openFiles);
   const closeFile = useStore((s) => s.closeFile);
 
-  // Drag sources for the sidebar tree (#45); a small distance keeps clicks
-  // working. Drop targets (Canvas) arrive in #47.
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-  );
-
   // Right-click repo context menu (#31/#35), anchored at the cursor. `menuMode`
   // switches between the item list, the destructive Forget confirm, and the
   // color picker.
@@ -243,106 +256,102 @@ function Sidebar() {
         <ViewSwitch />
       </div>
 
-      <DndContext sensors={sensors}>
-        <div className={styles.repos}>
-          {repos.length === 0 && (
-            <p className={styles.emptyHint}>No repositories yet.</p>
-          )}
+      <div className={styles.repos}>
+        {repos.length === 0 && (
+          <p className={styles.emptyHint}>No repositories yet.</p>
+        )}
 
-          {repos.map((repo) => {
-            const repoSessions = sessions.filter((s) => s.repoPath === repo);
-            const isEmpty = repoSessions.length === 0;
-            const isFiltered = overviewRepoFilter === repo;
-            // Primary label = the repo's branch, or the folder name when non-git /
-            // not yet known. All sessions in a group share it, so index duplicates.
-            const baseLabel = (branches[repo] ?? "") || repoName(repo);
-            const rowLabels = dedupeBranchLabels(
-              repoSessions.map(() => baseLabel),
-            );
+        {repos.map((repo) => {
+          const repoSessions = sessions.filter((s) => s.repoPath === repo);
+          const isEmpty = repoSessions.length === 0;
+          const isFiltered = overviewRepoFilter === repo;
+          // Primary label = the repo's branch, or the folder name when non-git /
+          // not yet known. All sessions in a group share it, so index duplicates.
+          const baseLabel = (branches[repo] ?? "") || repoName(repo);
+          const rowLabels = dedupeBranchLabels(
+            repoSessions.map(() => baseLabel),
+          );
 
-            return (
-              <div key={repo} className={styles.group}>
-                <div
-                  className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""}`}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    setMenu({ repo, x: event.clientX, y: event.clientY });
-                    setMenuMode("menu");
-                  }}
-                >
-                  {/* Left-click a repo title filters Overview to it (toggle);
+          return (
+            <div key={repo} className={styles.group}>
+              <div
+                className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""}`}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenu({ repo, x: event.clientX, y: event.clientY });
+                  setMenuMode("menu");
+                }}
+              >
+                {/* Left-click a repo title filters Overview to it (toggle);
                     right-click opens the #31 context menu. */}
-                  <button
-                    type="button"
-                    className={`${styles.repoTitle} ${isFiltered ? styles.repoActive : ""}`}
-                    onClick={() => {
-                      setOverviewRepoFilter(repo);
-                      setView("overview");
-                    }}
-                    title={`Filter Overview to ${repoName(repo)}`}
-                    aria-pressed={isFiltered}
-                  >
-                    <span
-                      className={styles.repoDot}
-                      style={{ background: repoColor(repo, repoColors) }}
-                    />
-                    <span className={styles.repoName}>{repoName(repo)}</span>
-                    {!isEmpty && (
-                      <span className={styles.count}>
-                        {repoSessions.length}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
-                    onClick={() => void spawnSession(repo)}
-                    title="New session in this repo"
-                    aria-label="New session in this repo"
-                  >
-                    <Plus size={14} strokeWidth={1.5} />
-                  </button>
-                </div>
-
-                {repoSessions.map((session, i) => (
-                  <SessionRow
-                    key={session.id}
-                    session={session}
-                    // rowLabels has one entry per session; fallback satisfies
-                    // noUncheckedIndexedAccess and is never reached at runtime.
-                    label={rowLabels[i] ?? baseLabel}
-                    selected={session.id === selectedId}
-                    busy={sessionBusy[session.id] ?? false}
-                    onSelect={() => select(session.id)}
-                    onRemove={() => void removeSession(session.id)}
+                <button
+                  type="button"
+                  className={`${styles.repoTitle} ${isFiltered ? styles.repoActive : ""}`}
+                  onClick={() => {
+                    setOverviewRepoFilter(repo);
+                    setView("overview");
+                  }}
+                  title={`Filter Overview to ${repoName(repo)}`}
+                  aria-pressed={isFiltered}
+                >
+                  <span
+                    className={styles.repoDot}
+                    style={{ background: repoColor(repo, repoColors) }}
                   />
-                ))}
-
-                {/* Opened files under this repo (#45): click re-opens as an
-                  Overview column; the × forgets it; draggable for Canvas (#47). */}
-                {(openFiles[repo] ?? []).map((f) => (
-                  <FileRow
-                    key={f}
-                    repoPath={repo}
-                    file={f}
-                    onOpen={() => {
-                      if (
-                        !overviewPanels[repo]?.some(
-                          (p) => p.kind !== "diff" && p.file === f,
-                        )
-                      ) {
-                        void addOverviewPanel(repo, "markdown", f);
-                      }
-                      setView("overview");
-                    }}
-                    onClose={() => void closeFile(repo, f)}
-                  />
-                ))}
+                  <span className={styles.repoName}>{repoName(repo)}</span>
+                  {!isEmpty && (
+                    <span className={styles.count}>{repoSessions.length}</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
+                  onClick={() => void spawnSession(repo)}
+                  title="New session in this repo"
+                  aria-label="New session in this repo"
+                >
+                  <Plus size={14} strokeWidth={1.5} />
+                </button>
               </div>
-            );
-          })}
-        </div>
-      </DndContext>
+
+              {repoSessions.map((session, i) => (
+                <SessionRow
+                  key={session.id}
+                  session={session}
+                  // rowLabels has one entry per session; fallback satisfies
+                  // noUncheckedIndexedAccess and is never reached at runtime.
+                  label={rowLabels[i] ?? baseLabel}
+                  selected={session.id === selectedId}
+                  busy={sessionBusy[session.id] ?? false}
+                  onSelect={() => select(session.id)}
+                  onRemove={() => void removeSession(session.id)}
+                />
+              ))}
+
+              {/* Opened files under this repo (#45): click re-opens as an
+                  Overview column; the × forgets it; draggable for Canvas (#47). */}
+              {(openFiles[repo] ?? []).map((f) => (
+                <FileRow
+                  key={f}
+                  repoPath={repo}
+                  file={f}
+                  onOpen={() => {
+                    if (
+                      !overviewPanels[repo]?.some(
+                        (p) => p.kind !== "diff" && p.file === f,
+                      )
+                    ) {
+                      void addOverviewPanel(repo, "markdown", f);
+                    }
+                    setView("overview");
+                  }}
+                  onClose={() => void closeFile(repo, f)}
+                />
+              ))}
+            </div>
+          );
+        })}
+      </div>
 
       {menu && (
         <>
@@ -463,6 +472,20 @@ function Sidebar() {
                   onClick={() => setMenuMode("files")}
                 >
                   Open file viewer…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    // Add a diff panel to the Canvas (#47, deduped per repo) and
+                    // switch to Canvas so it's visible.
+                    appendCanvasContent({ kind: "diff", repoPath: menu.repo });
+                    setView("canvas");
+                    closeMenu();
+                  }}
+                >
+                  Open diff in Canvas
                 </button>
                 <button
                   type="button"

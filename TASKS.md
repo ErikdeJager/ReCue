@@ -3197,9 +3197,9 @@ drag-in is #47 (the engine renders panels from a content descriptor and exposes 
 
 ---
 
-### 47. [ ] Canvas content + drag-and-drop from the sidebar (agents, files, diffs)
+### 47. [x] Canvas content + drag-and-drop from the sidebar (agents, files, diffs)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #44, #45, #46
 **Created:** 2026-06-19
 
@@ -3219,24 +3219,24 @@ that content there.
 
 **Subtasks**
 
-1. [ ] Define a canvas **panel content descriptor** (`{ kind: 'agent'|'file'|'diff',
+1. [x] Define a canvas **panel content descriptor** (`{ kind: 'agent'|'file'|'diff',
    ref }`) the #46 engine renders; map each kind to its component (terminal pool /
    `FileViewer` #44 / shared diff #39).
-2. [ ] Make sidebar **sessions** and **opened files** (#45) **draggable** (dnd-kit, #43)
+2. [x] Make sidebar **sessions** and **opened files** (#45) **draggable** (dnd-kit, #43)
    with payloads the canvas drop zones accept (center + edges from #46).
-3. [ ] On drop, create/split a panel with the dropped content; persist it in the canvas
+3. [x] On drop, create/split a panel with the dropped content; persist it in the canvas
    layout (#46). Support adding a diff viewer for a repo and a file viewer for a path.
-4. [ ] Panel headers show what they contain (agent name / file name / "diff · branch")
+4. [x] Panel headers show what they contain (agent name / file name / "diff · branch")
    with the repo color badge (#35); panels are closeable.
-5. [ ] Empty / instructional state when the canvas has no panels ("Drag an agent or file
+5. [x] Empty / instructional state when the canvas has no panels ("Drag an agent or file
    here").
 
 **Acceptance criteria**
 
-- [ ] Dragging an agent or file from the sidebar into Canvas creates/splits a panel with
+- [x] Dragging an agent or file from the sidebar into Canvas creates/splits a panel with
   that content; panels render agents, file viewers, and diffs correctly.
-- [ ] Canvas content persists across restart; closing panels works; terminals stay alive.
-- [ ] Content components are shared (no duplicate terminal/file/diff implementations).
+- [x] Canvas content persists across restart; closing panels works; terminals stay alive.
+- [x] Content components are shared (no duplicate terminal/file/diff implementations).
 
 **Notes**
 
@@ -3245,6 +3245,31 @@ that content there.
   (#44), the shared diff (#39), the terminal pool (#18), dnd-kit (#43). Depends on #46
   (engine), #44 (file viewer), #45 (sidebar drag sources); reuses #39. Completes the
   Canvas feature.
+- **Done 2026-06-19.** Completes Canvas. **Architecture — one app-level DnD context:**
+  the #45 sidebar context and #46 canvas context were **merged into a single `DndContext`
+  in `App.tsx`** wrapping the sidebar (drag sources) + Canvas (drop targets), since dnd-kit
+  can't drag across sibling contexts. The Overview wall keeps its **own nested** sortable
+  context (#43) — safe because only one main view mounts at a time, so their drop targets
+  never coexist. `dragActive` (from the app context) is passed to Canvas to toggle the edge
+  split-zones. **Content (subtask 1):** `CanvasContent { kind: 'agent'|'file'|'diff', +refs }`
+  (the #46 type, pre-provisioned); `LeafPanel` renders **shared components** — `Terminal`
+  (#18 pool), `FileViewer` (#44), `DiffInspector` (#39) — with no duplication; an agent whose
+  session is gone shows "Session closed." **Drop/append (`Canvas/canvasDrop.ts`):**
+  `payloadToContent` maps a sidebar **session** (`{kind:session,…}` → agent) or **file**
+  (`{kind:file,…}` → file) payload to content; `applyCanvasDrop` creates (center) or splits
+  (edge) the layout; `appendCanvasContent` adds without a target. **Agents are deduped**
+  (the pool gives one terminal slot per session) and **diffs deduped per repo. Sources
+  (subtask 2):** sidebar **session rows** are now `useDraggable` too (files already were,
+  #45). **Diff add (subtask 3):** the repo menu gained **"Open diff in Canvas"** →
+  `appendCanvasContent({kind:'diff',repoPath})` + switch to Canvas. **Headers (subtask 4):**
+  repo color dot + content title + `repo · branch`, resolved live from the store; closeable.
+  **Empty state (subtask 5):** "Drag an agent or file from the sidebar here." **Pool
+  keep-alive:** terminals reparent across canvas↔overview↔focus (one view mounts at a time)
+  — never disposed. **Tests:** +2 `canvasTree` (`appendLeaf`, `collectLeaves`) → 63 frontend;
+  no Rust change (reuses #46's `canvas_layout`). **Hard gate green:** frontend
+  `build`/`lint`/`format:check`/`test` (63); Rust unchanged (36). The live drag/render is
+  runtime-visual (not launched headlessly); payload mapping, dedup, tree ops, and
+  persistence are unit-tested / by-construction.
 
 ---
 

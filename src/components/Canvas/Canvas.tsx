@@ -1,54 +1,23 @@
-import { type ReactElement, useState } from "react";
-import {
-  DndContext,
-  type DragEndEvent,
-  PointerSensor,
-  pointerWithin,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import { Plus, X } from "lucide-react";
+import { type ReactElement } from "react";
+import { useDroppable } from "@dnd-kit/core";
+import { X } from "lucide-react";
 import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
 
-import { useStore } from "../../store";
+import { repoName } from "../../paths";
+import { repoColor, useStore } from "../../store";
 import type {
   CanvasContent,
   CanvasEdge,
   CanvasLeaf,
   CanvasNode,
 } from "../../types";
-import { removeLeaf, splitLeaf, updateSizes } from "./canvasTree";
+import DiffInspector from "../DiffInspector/DiffInspector";
+import FileViewer from "../FileViewer/FileViewer";
+import Terminal from "../Terminal/Terminal";
+import { removeLeaf, updateSizes } from "./canvasTree";
 import styles from "./Canvas.module.css";
 
 const EDGES: CanvasEdge[] = ["top", "right", "bottom", "left"];
-
-/**
- * The built-in drag source (#46): a palette chip that creates placeholder
- * panels, so the engine is usable standalone. #47 adds the real sources (agents,
- * files, diffs dragged from the sidebar) carrying richer `content` descriptors.
- */
-function PaletteChip() {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: "canvas-palette",
-    data: {
-      content: { kind: "placeholder", label: "Panel" } satisfies CanvasContent,
-    },
-  });
-  return (
-    <button
-      ref={setNodeRef}
-      type="button"
-      className={`${styles.chip} ${isDragging ? styles.chipDragging : ""}`}
-      {...attributes}
-      {...listeners}
-    >
-      <Plus size={14} strokeWidth={1.5} />
-      Panel
-    </button>
-  );
-}
 
 /** Empty-canvas center target — the first drop creates the first panel. */
 function CenterDrop() {
@@ -58,7 +27,9 @@ function CenterDrop() {
       ref={setNodeRef}
       className={`${styles.center} ${isOver ? styles.centerOver : ""}`}
     >
-      <p className={styles.centerHint}>Drag a panel here to start</p>
+      <p className={styles.centerHint}>
+        Drag an agent or file from the sidebar here
+      </p>
     </div>
   );
 }
@@ -76,20 +47,73 @@ function EdgeZone({ panelId, edge }: { panelId: string; edge: CanvasEdge }) {
   );
 }
 
+/** A panel's title + repo (resolved live from the store, so renames/branch
+ * changes stay fresh); the content descriptor only stores refs. */
+function panelTitle(content: CanvasContent, name: string | undefined): string {
+  if (content.kind === "agent") return name ?? repoName(content.repoPath ?? "");
+  if (content.kind === "file") return content.file?.split("/").pop() ?? "File";
+  if (content.kind === "diff") return "Diff";
+  return content.label ?? "Panel";
+}
+
 function LeafPanel({
   leaf,
-  dragging,
+  dragActive,
   onClose,
 }: {
   leaf: CanvasLeaf;
-  dragging: boolean;
+  dragActive: boolean;
   onClose: () => void;
 }) {
+  const sessions = useStore((s) => s.sessions);
+  const branches = useStore((s) => s.branches);
+  const repoColors = useStore((s) => s.repoColors);
+
+  const content = leaf.content;
+  const session =
+    content.kind === "agent"
+      ? sessions.find((s) => s.id === content.sessionId)
+      : undefined;
+  const repoPath = content.repoPath ?? session?.repoPath ?? "";
+  const branch = branches[repoPath] ?? "";
+
+  const renderContent = (): ReactElement => {
+    if (content.kind === "agent" && content.sessionId) {
+      if (!session) {
+        return <div className={styles.placeholder}>Session closed.</div>;
+      }
+      return <Terminal sessionId={content.sessionId} />;
+    }
+    if (content.kind === "file" && content.repoPath && content.file) {
+      return (
+        <FileViewer repoPath={content.repoPath} file={content.file} active />
+      );
+    }
+    if (content.kind === "diff" && content.repoPath) {
+      return <DiffInspector repoPath={content.repoPath} active />;
+    }
+    return <div className={styles.placeholder}>Empty panel</div>;
+  };
+
   return (
     <div className={styles.panel}>
       <header className={styles.panelHeader}>
-        <span className={styles.panelTitle}>
-          {leaf.content.label ?? leaf.content.kind}
+        <span className={styles.panelTitleBlock}>
+          {repoPath && (
+            <span
+              className={styles.panelDot}
+              style={{ background: repoColor(repoPath, repoColors) }}
+            />
+          )}
+          <span className={styles.panelTitle}>
+            {panelTitle(content, session?.name ?? undefined)}
+          </span>
+          {repoPath && (
+            <span className={styles.panelMeta}>
+              {repoName(repoPath)}
+              {branch && ` · ${branch}`}
+            </span>
+          )}
         </span>
         <button
           type="button"
@@ -101,11 +125,8 @@ function LeafPanel({
           <X size={14} strokeWidth={1.5} />
         </button>
       </header>
-      <div className={styles.panelBody}>
-        {/* #46 placeholder; #47 renders real content by leaf.content.kind. */}
-        <span className={styles.placeholder}>Empty panel</span>
-      </div>
-      {dragging && (
+      <div className={styles.panelBody}>{renderContent()}</div>
+      {dragActive && (
         <div className={styles.edges}>
           {EDGES.map((edge) => (
             <EdgeZone key={edge} panelId={leaf.id} edge={edge} />
@@ -117,23 +138,19 @@ function LeafPanel({
 }
 
 /**
- * Canvas (#46): a recursive binary split-panel workspace. The layout is a BSP
- * tree (persisted); dropping the palette chip onto a panel edge splits it
- * (recursively), borders resize via react-resizable-panels, and panels close
- * (collapsing their split). The tree ops are the pure `canvasTree` helpers, so
- * relayout keeps unaffected branches' identity and the #18 pool can keep any
- * future terminal content alive across relayout. Content + sidebar drag-in is #47.
+ * Canvas (#46/#47): a recursive binary split-panel workspace hosting real
+ * content — agent terminals (via the #18 pool), file viewers (#44), and diff
+ * viewers (#39). Items are dragged in from the sidebar (#45) via the app-level
+ * DndContext; the layout is a persisted BSP tree. Splitting/closing use the pure
+ * `canvasTree` ops (identity-preserving), and resizing uses react-resizable-panels.
+ * `dragActive` (from the app DndContext) toggles the edge split-zones.
  */
-function Canvas() {
+function Canvas({ dragActive }: { dragActive: boolean }) {
   const layout = useStore((s) => s.canvasLayout);
   const setCanvasLayout = useStore((s) => s.setCanvasLayout);
-  const [dragging, setDragging] = useState(false);
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-  );
 
-  // react-resizable-panels' `onLayoutChanged` fires once, after the resize ends,
-  // with a { panelId: flexGrow } map — commit those two values to the split.
+  // `onLayoutChanged` fires once, after a resize ends, with a { panelId: flexGrow }
+  // map — commit those two values to the split.
   const commitResize = (
     splitId: string,
     aId: string,
@@ -147,37 +164,6 @@ function Canvas() {
     if (tree) setCanvasLayout(updateSizes(tree, splitId, [a, b]));
   };
 
-  const onDragEnd = (event: DragEndEvent) => {
-    setDragging(false);
-    const { active, over } = event;
-    if (!over) return;
-    const content = (
-      active.data.current as { content?: CanvasContent } | undefined
-    )?.content;
-    if (!content) return;
-    const overId = String(over.id);
-    if (overId === "canvas-center") {
-      setCanvasLayout({ type: "leaf", id: crypto.randomUUID(), content });
-      return;
-    }
-    const match = /^panel:(.+):(left|right|top|bottom)$/.exec(overId);
-    const current = useStore.getState().canvasLayout;
-    if (match && current) {
-      const panelId = match[1] as string;
-      const edge = match[2] as CanvasEdge;
-      setCanvasLayout(
-        splitLeaf(
-          current,
-          panelId,
-          edge,
-          content,
-          crypto.randomUUID(),
-          crypto.randomUUID(),
-        ),
-      );
-    }
-  };
-
   const closePanel = (leafId: string) => {
     const current = useStore.getState().canvasLayout;
     if (current) setCanvasLayout(removeLeaf(current, leafId));
@@ -189,7 +175,7 @@ function Canvas() {
         <LeafPanel
           key={node.id}
           leaf={node}
-          dragging={dragging}
+          dragActive={dragActive}
           onClose={() => closePanel(node.id)}
         />
       );
@@ -221,23 +207,9 @@ function Canvas() {
 
   return (
     <div className={styles.canvas}>
-      <DndContext
-        sensors={sensors}
-        collisionDetection={pointerWithin}
-        onDragStart={() => setDragging(true)}
-        onDragEnd={onDragEnd}
-        onDragCancel={() => setDragging(false)}
-      >
-        <div className={styles.toolbar}>
-          <PaletteChip />
-          <span className={styles.hint}>
-            Drag a panel onto an edge to split, or close panels with ×.
-          </span>
-        </div>
-        <div className={styles.area}>
-          {layout ? renderNode(layout) : <CenterDrop />}
-        </div>
-      </DndContext>
+      <div className={styles.area}>
+        {layout ? renderNode(layout) : <CenterDrop />}
+      </div>
     </div>
   );
 }
