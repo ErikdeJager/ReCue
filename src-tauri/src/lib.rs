@@ -95,6 +95,8 @@ pub fn run() {
             commands::set_open_files,
             commands::get_canvas_layout,
             commands::set_canvas_layout,
+            commands::get_inspector_width,
+            commands::set_inspector_width,
             commands::list_files,
             commands::read_text_file,
             commands::open_in_editor,

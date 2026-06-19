@@ -19,6 +19,10 @@ import type {
 } from "./types";
 
 const TOAST_TTL_MS = 3500;
+/** Focus inspector resize bounds (#51); the default when none is persisted. */
+export const INSPECTOR_MIN_WIDTH = 240;
+export const INSPECTOR_MAX_WIDTH = 720;
+export const INSPECTOR_DEFAULT_WIDTH = 360;
 // Boot resume window (#30): clear any lingering "reconnecting" flag after this in
 // case a resumed session's first output raced the event listener (its scrollback
 // still replays the conversation; no live output then arrives to clear the flag).
@@ -204,6 +208,8 @@ export interface AppState {
   openFiles: Record<string, string[]>;
   /** The Canvas split-panel layout tree (#46); null = empty canvas. */
   canvasLayout: CanvasNode | null;
+  /** The Focus inspector width in px (#51), within the resize bounds. */
+  inspectorWidth: number;
   /** Sessions currently working, from the output-activity heuristic (#42); an
    * absent/false entry means idle. (The task's `sessionState`, as a boolean map.) */
   sessionBusy: Record<string, boolean>;
@@ -267,6 +273,10 @@ export interface AppState {
   closeFile: (repoPath: string, file: string) => Promise<void>;
   /** Replace the Canvas layout tree and persist (#46). */
   setCanvasLayout: (tree: CanvasNode | null) => void;
+  /** Set the Focus inspector width (clamped); live during a drag, not persisted (#51). */
+  setInspectorWidth: (px: number) => void;
+  /** Persist the current Focus inspector width — on drag end / keyboard step (#51). */
+  persistInspectorWidth: () => void;
   checkForUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
   /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
@@ -296,6 +306,7 @@ export const useStore = create<AppState>()((set, get) => ({
   overviewOrder: {},
   openFiles: {},
   canvasLayout: null,
+  inspectorWidth: INSPECTOR_DEFAULT_WIDTH,
   sessionBusy: {},
   claudeMissing: false,
   toasts: [],
@@ -483,22 +494,25 @@ export const useStore = create<AppState>()((set, get) => ({
     // Repo colors + Overview panel layouts load independently so a failure here
     // doesn't block sessions.
     try {
-      const [colors, panels, order, files, canvas] = await Promise.all([
-        ipc.listRepoColors(),
-        ipc.listOverviewPanels(),
-        ipc.listOverviewOrder(),
-        ipc.listOpenFiles(),
-        ipc.getCanvasLayout(),
-      ]);
+      const [colors, panels, order, files, canvas, inspectorWidth] =
+        await Promise.all([
+          ipc.listRepoColors(),
+          ipc.listOverviewPanels(),
+          ipc.listOverviewOrder(),
+          ipc.listOpenFiles(),
+          ipc.getCanvasLayout(),
+          ipc.getInspectorWidth(),
+        ]);
       set({
         repoColors: colors,
         overviewPanels: panels,
         overviewOrder: order,
         openFiles: files,
         canvasLayout: canvas ?? null,
+        inspectorWidth: inspectorWidth ?? INSPECTOR_DEFAULT_WIDTH,
       });
     } catch {
-      // Backend unreachable; leave colors/panels/order/files/canvas as-is.
+      // Backend unreachable; leave colors/panels/order/files/canvas/width as-is.
     }
   },
 
@@ -610,6 +624,21 @@ export const useStore = create<AppState>()((set, get) => ({
     set({ canvasLayout: tree });
     void ipc.setCanvasLayout(tree).catch(() => {
       // Persist failed (e.g. outside Tauri); keep the local layout for the session.
+    });
+  },
+
+  // Inspector resize (#51): `set` updates state live during the drag (cheap — the
+  // terminal lives in the pool, not re-rendered); `persist` writes the settled
+  // width on drag-end / keyboard step so we don't hit the disk every frame.
+  setInspectorWidth: (px) => {
+    const clamped = Math.round(
+      Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, px)),
+    );
+    if (clamped !== get().inspectorWidth) set({ inspectorWidth: clamped });
+  },
+  persistInspectorWidth: () => {
+    void ipc.setInspectorWidth(get().inspectorWidth).catch(() => {
+      // Persist failed (e.g. outside Tauri); the local width stays for the session.
     });
   },
 

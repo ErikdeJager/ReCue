@@ -1,9 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Copy, ExternalLink, PanelRight } from "lucide-react";
 
 import { listFiles } from "../../ipc";
 import { repoName } from "../../paths";
-import { repoColor, useStore } from "../../store";
+import {
+  INSPECTOR_MAX_WIDTH,
+  INSPECTOR_MIN_WIDTH,
+  repoColor,
+  useStore,
+} from "../../store";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import DiffInspector from "../DiffInspector/DiffInspector";
 import FileViewer from "../FileViewer/FileViewer";
@@ -90,8 +95,69 @@ function Focus() {
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const repoColors = useStore((s) => s.repoColors);
   const sessionBusy = useStore((s) => s.sessionBusy);
+  const inspectorWidth = useStore((s) => s.inspectorWidth);
+  const setInspectorWidth = useStore((s) => s.setInspectorWidth);
+  const persistInspectorWidth = useStore((s) => s.persistInspectorWidth);
 
   const [activeTab, setActiveTab] = useState("diff");
+  // Inspector resize (#51). `resizing` suppresses the open/close width transition
+  // so the panel tracks the pointer 1:1. The width is driven through a CSS var,
+  // set imperatively (below) — not via React state — so dragging never re-renders
+  // the heavy inspector content (diff / markdown); state is committed on release.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [resizing, setResizing] = useState(false);
+  const dragRef = useRef<{ x: number; w: number; cur: number } | null>(null);
+
+  // Keep the committed width on the CSS var (mount + after a commit), before
+  // paint so there's no flash. Skipped during a drag (`inspectorWidth` doesn't
+  // change then), so the live imperative value below isn't clobbered.
+  useLayoutEffect(() => {
+    rootRef.current?.style.setProperty(
+      "--inspector-width",
+      `${inspectorWidth}px`,
+    );
+  }, [inspectorWidth]);
+
+  const clampWidth = (px: number) =>
+    Math.round(
+      Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, px)),
+    );
+
+  const onResizeDown = (event: React.PointerEvent) => {
+    event.preventDefault();
+    dragRef.current = {
+      x: event.clientX,
+      w: inspectorWidth,
+      cur: inspectorWidth,
+    };
+    setResizing(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onResizeMove = (event: React.PointerEvent) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // Dragging left (toward the terminal) widens the inspector; update the var
+    // directly so the panel + content reflow without a React render.
+    drag.cur = clampWidth(drag.w - (event.clientX - drag.x));
+    rootRef.current?.style.setProperty("--inspector-width", `${drag.cur}px`);
+  };
+  const onResizeUp = (event: React.PointerEvent) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    setResizing(false);
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    setInspectorWidth(drag.cur); // commit (matches the live var → no jump)
+    persistInspectorWidth();
+  };
+  const onResizeKey = (event: React.KeyboardEvent) => {
+    const step =
+      event.key === "ArrowLeft" ? 24 : event.key === "ArrowRight" ? -24 : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    setInspectorWidth(useStore.getState().inspectorWidth + step);
+    persistInspectorWidth();
+  };
 
   const session = sessions.find((x) => x.id === selectedId);
   const branch = session ? (branches[session.repoPath] ?? "") : "";
@@ -102,6 +168,7 @@ function Focus() {
 
   return (
     <div
+      ref={rootRef}
       className={styles.focus}
       style={color ? { borderTopColor: color } : undefined}
     >
@@ -165,9 +232,25 @@ function Focus() {
               <Terminal key={session.id} sessionId={session.id} />
             </div>
             <div
-              className={`${styles.inspector} ${inspectorOpen ? styles.inspectorOpen : ""}`}
+              className={`${styles.inspector} ${inspectorOpen ? styles.inspectorOpen : ""} ${resizing ? styles.inspectorResizing : ""}`}
               aria-hidden={!inspectorOpen}
             >
+              {inspectorOpen && (
+                <div
+                  className={`${styles.inspectorHandle} ${resizing ? styles.inspectorHandleActive : ""}`}
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize inspector"
+                  aria-valuenow={inspectorWidth}
+                  aria-valuemin={INSPECTOR_MIN_WIDTH}
+                  aria-valuemax={INSPECTOR_MAX_WIDTH}
+                  tabIndex={0}
+                  onPointerDown={onResizeDown}
+                  onPointerMove={onResizeMove}
+                  onPointerUp={onResizeUp}
+                  onKeyDown={onResizeKey}
+                />
+              )}
               <div className={styles.inspectorInner}>
                 <div className={styles.tabStrip} role="tablist">
                   {TABS.map((tab) => (

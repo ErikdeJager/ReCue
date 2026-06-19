@@ -3483,9 +3483,9 @@ var(--accent) }` in `Overview.module.css`) plus an accent-dim header tint. Two c
 
 ---
 
-### 51. [ ] Resizable Focus inspector (drag to expand/minimize) + responsive content
+### 51. [x] Resizable Focus inspector (drag to expand/minimize) + responsive content
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -3500,25 +3500,25 @@ reflow mid-slide*. That trade-off must be replaced with a fluid, resizable panel
 
 **Subtasks**
 
-1. [ ] Add a **drag handle** on the inspector's left edge to resize its width (sensible
+1. [x] Add a **drag handle** on the inspector's left edge to resize its width (sensible
    min/max bounds; smooth, pointer-based). Focus inspector only — not Overview/Canvas
    columns.
-2. [ ] Make `.inspectorInner` **fluid** (`width: 100%`) instead of fixed 360px so content
+2. [x] Make `.inspectorInner` **fluid** (`width: 100%`) instead of fixed 360px so content
    reflows with the panel; reconcile with the open/close slide so opening still animates to
    the user's chosen width.
-3. [ ] **Persist** the chosen inspector width and restore it on launch (sensible default).
-4. [ ] Ensure **all inspector content is responsive**: the markdown viewer (#40) reflows
+3. [x] **Persist** the chosen inspector width and restore it on launch (sensible default).
+4. [x] Ensure **all inspector content is responsive**: the markdown viewer (#40) reflows
    (wrap, tables/images fit, code blocks scroll within the panel), the diff view (#13
    unified/split) adapts, and the tab strip stays usable at narrow and wide widths. Future
    tabs (e.g. universal file viewer #44) inherit this responsive container.
 
 **Acceptance criteria**
 
-- [ ] The Focus inspector can be dragged wider/narrower within bounds, and the width
+- [x] The Focus inspector can be dragged wider/narrower within bounds, and the width
   persists across restarts.
-- [ ] Markdown and diff content reflow responsively as the panel resizes (no clipped/
+- [x] Markdown and diff content reflow responsively as the panel resizes (no clipped/
   fixed-360px content); the tab strip stays usable.
-- [ ] Open/close still animates; Overview/Canvas are unaffected.
+- [x] Open/close still animates; Overview/Canvas are unaffected.
 
 **Notes**
 
@@ -3528,6 +3528,30 @@ reflow mid-slide*. That trade-off must be replaced with a fluid, resizable panel
   (persist width). Builds on #12/#13/#40 (done). Could reuse `react-resizable-panels`
   (already proposed for Canvas #46) or a small custom edge drag handle — prefer the
   lightest fit for a single edge.
+- **Done 2026-06-19.** Chose a **small custom edge handle** over react-resizable-panels
+  (lightest fit for a single edge; no extra wrapper components around the existing
+  inspector). **Handle (subtask 1):** a 6px `col-resize` strip absolutely positioned on
+  the inspector's left edge (Focus only), `role="separator"` + `aria-orientation` +
+  `aria-value*` + `tabIndex` with **Arrow-Left/Right keyboard** resize; pointer drag uses
+  pointer-capture, bounded to **240–720px**. **Fluid content (subtask 2):**
+  `.inspectorOpen`/`.inspectorInner` width is now `var(--inspector-width)` (was fixed
+  360px). Note: I tracked the **chosen width** rather than literal `width:100%` — at 100%
+  the inner would reflow *during* the open/close width-slide (exactly the garble the old
+  fixed-360 avoided); tracking the var gives responsive-on-resize **without** mid-slide
+  reflow, and a `.inspectorResizing` class drops the slide transition so a drag tracks the
+  pointer 1:1. **Perf:** the width is driven through the CSS var **imperatively** during a
+  drag (a `useLayoutEffect` syncs the committed value; the drag does `setProperty` on a
+  ref) so dragging **never re-renders** the heavy diff/markdown content — state commits
+  only on release. **Persist (subtask 3):** `inspector_width: Option<u32>` in `store.rs`
+  (#[serde(default)]) + `get/set_inspector_width`; store `inspectorWidth` +
+  `setInspectorWidth` (clamped, live) / `persistInspectorWidth` (on release/keydown),
+  loaded in `refresh`. **Responsive (subtask 4):** `FileViewer` (#44, supersedes the
+  removed `MarkdownViewer`) already wraps/scrolls; `DiffInspector` split is 50%/50% +
+  horizontal-scroll body; the file `<select>` got `min-width:0` so it shrinks; tab strip
+  is fine at any width. **Tests:** Rust `inspector_width_set_and_persist` (→ 37); no new
+  frontend unit test (drag is runtime-visual; clamp/persist are by-construction).
+  **Hard gate green:** Rust `fmt`/`clippy`/`test` (37) + frontend `build`/`lint`/
+  `format:check`/`test` (63). CLAUDE.md updated. The drag feel is runtime-visual.
 
 ---
 

@@ -51,8 +51,11 @@ clear error if it is missing).
 - **Git:** `working_diff(cwd)` / `current_branch(cwd)` shell out to `git`; the
   `DiffInspector` and sidebar render the structured result.
 - **Views:** the store holds `sessions / selectedId / view / inspectorOpen /
-  recents / branches / claudeMissing / toasts`; the app mounts one of **Overview,
-  Focus, or Canvas** (#46). Each session's xterm is owned by a **persistent terminal
+  inspectorWidth / recents / branches / claudeMissing / toasts`; the app mounts one
+  of **Overview, Focus, or Canvas** (#46). The Focus inspector is **drag-resizable**
+  from its left edge (#51): the width drives a `--inspector-width` CSS var (set
+  imperatively during a drag so heavy content doesn't re-render), bounded + persisted
+  as `inspector_width`. Each session's xterm is owned by a **persistent terminal
   pool** (`Terminal/terminalPool.ts`), created once and **reparented** into the
   active view's slot (parked off-screen otherwise) — so a view switch never
   disposes/recreates the terminal or replays scrollback (which would garble

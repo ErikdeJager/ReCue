@@ -92,6 +92,14 @@ export const getCanvasLayout = () =>
 export const setCanvasLayout = (layout: CanvasNode | null) =>
   invoke<void>("set_canvas_layout", { layout });
 
+/** The Focus inspector width in px (#51); null = use the default. */
+export const getInspectorWidth = () =>
+  invoke<number | null>("get_inspector_width");
+
+/** Persist the Focus inspector width (#51). */
+export const setInspectorWidth = (width: number) =>
+  invoke<void>("set_inspector_width", { width });
+
 /** Repo-relative viewable (text-ish) files in a repo (file viewer, #44). */
 export const listFiles = (repo: string) =>
   invoke<string[]>("list_files", { repo });
