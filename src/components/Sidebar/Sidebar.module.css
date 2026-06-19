@@ -343,6 +343,7 @@
 }
 
 .menuItem,
+.menuItemDanger,
 .menuDanger {
   display: block;
   width: 100%;
@@ -363,15 +364,33 @@
   background: var(--bg-hover);
 }
 
-/* Destructive confirm — emphasized but on-system (no status color); the explicit
-   "Kill N & forget?" label carries the warning. */
+/* Hairline divider grouping destructive items apart from neutral ones (#54). */
+.menuSeparator {
+  height: 1px;
+  margin: var(--space-4) var(--space-6);
+  background: var(--border-hairline);
+}
+
+/* Destructive menu item (#54): Catppuccin Red (--status-error) so it reads as
+   dangerous, with a subtle red-tinted hover. */
+.menuItemDanger {
+  color: var(--status-error);
+}
+
+.menuItemDanger:hover {
+  background: color-mix(in srgb, var(--status-error) 14%, transparent);
+}
+
+/* Destructive confirm (#54): a red fill + the explicit "Kill N & forget?" label
+   make the danger unmistakable. */
 .menuDanger {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--status-error) 14%, transparent);
+  color: var(--status-error);
   font-weight: 500;
 }
 
 .menuDanger:hover {
-  background: var(--border-strong);
+  background: color-mix(in srgb, var(--status-error) 22%, transparent);
 }
 
 /* --- Repo color picker (#35) --- */

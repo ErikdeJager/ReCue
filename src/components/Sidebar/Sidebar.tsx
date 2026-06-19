@@ -446,6 +446,19 @@ function Sidebar() {
               </button>
             ) : (
               <>
+                {/* New session (#54): first item; mirrors the inline + button. */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    openNewSession(menu.repo);
+                    closeMenu();
+                  }}
+                >
+                  New session
+                </button>
+                <div className={styles.menuSeparator} role="separator" />
                 <button
                   type="button"
                   role="menuitem"
@@ -494,10 +507,12 @@ function Sidebar() {
                 >
                   Change color…
                 </button>
+                {/* Destructive actions (#54): set apart and styled red. */}
+                <div className={styles.menuSeparator} role="separator" />
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className={styles.menuItemDanger}
                   onClick={() => {
                     // Confirm first only when agents are running in this folder.
                     if (menuRunning > 0) setMenuMode("confirm");

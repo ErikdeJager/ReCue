@@ -3713,9 +3713,9 @@ guided mini-flow vs inline form) — justify the choice in the notes.
 
 ---
 
-### 54. [ ] Repo context menu: "New session" as the first item + red/danger styling for destructive actions
+### 54. [x] Repo context menu: "New session" as the first item + red/danger styling for destructive actions
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -3733,21 +3733,21 @@ color #35, Open diff viewer #39, Open markdown viewer #41). Two changes:
 
 **Subtasks**
 
-1. [ ] Add "New session" as the **first** context-menu item → triggers the same
+1. [x] Add "New session" as the **first** context-menu item → triggers the same
    new-session-in-this-repo flow as the inline **+** (the redefined model from #53/#27).
-2. [ ] Apply a **danger style** (red — the Catppuccin Red / `--status-error` token from #33)
+2. [x] Apply a **danger style** (red — the Catppuccin Red / `--status-error` token from #33)
    to destructive items (Forget), visually distinct from neutral items.
-3. [ ] Order the menu sensibly: **New session** (first) → neutral items (Change color #35,
+3. [x] Order the menu sensibly: **New session** (first) → neutral items (Change color #35,
    Open diff viewer #39, Open markdown viewer #41) → separator → **Forget** (danger, last).
-4. [ ] Keep the menu on-system and accessible (keyboard navigable, focus-visible; dismiss on
+4. [x] Keep the menu on-system and accessible (keyboard navigable, focus-visible; dismiss on
    Escape / outside click).
 
 **Acceptance criteria**
 
-- [ ] The repo context menu lists "New session" first and starts a session in that repo.
-- [ ] Forget (and any destructive action) is clearly styled as dangerous (red), set apart
+- [x] The repo context menu lists "New session" first and starts a session in that repo.
+- [x] Forget (and any destructive action) is clearly styled as dangerous (red), set apart
   from neutral items.
-- [ ] Menu remains on-system, keyboard-accessible, and consistent.
+- [x] Menu remains on-system, keyboard-accessible, and consistent.
 
 **Notes**
 
@@ -3755,3 +3755,17 @@ color #35, Open diff viewer #39, Open markdown viewer #41). Two changes:
   per-repo new-session action (`openNewSession(repo)` / spawn) and the Red token (#33).
   Coordinates with #31 (Forget), #35/#39/#41 (other menu items). Some neutral items may not
   exist yet if their tasks are open — order/group around whatever items are present.
+- **Done 2026-06-19.** In `Sidebar.tsx` the default-mode context menu now leads with
+  **New session** (calls `openNewSession(menu.repo)` — the exact action the inline **+**
+  fires, the #53/#27 flow — then `closeMenu()`), followed by a separator, the neutral items
+  (Open diff viewer #39, Open file viewer… #44, Open diff in Canvas #47, Change color… #35),
+  a second separator, and finally **Forget folder** styled as danger. New CSS classes in
+  `Sidebar.module.css`: `.menuSeparator` (a hairline `--border-hairline` divider) and
+  `.menuItemDanger` (Catppuccin **`--status-error`** red text + a `color-mix` red-tinted
+  hover); the existing `.menuDanger` confirm button ("Kill N agents & forget?") was recolored
+  red to match (was the v1 on-system grey — superseded now that #33/#42 use status colors).
+  Accessibility: items keep `role="menuitem"`, separators get `role="separator"`, the menu
+  keeps `role="menu"`; the existing Escape + overlay-click dismissal and the global
+  `:focus-visible` outline cover keyboard use. Frontend gate green: `npm run build` (strict
+  tsc) + ESLint + `format:check` + 63 vitest tests all pass. Backend untouched. Visual
+  (red/hover/separator) is runtime-visual, not launched headlessly.
