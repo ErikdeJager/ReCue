@@ -763,9 +763,9 @@ repo menu then drag), tabs/splits inside one terminal item, and shell-history re
 
 ---
 
-### 73. [ ] Markdown viewer — make switching back from raw to rendered obvious (two-way toggle)
+### 73. [x] Markdown viewer — make switching back from raw to rendered obvious (two-way toggle)
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -793,11 +793,11 @@ rendering itself.
 
 **Acceptance criteria**
 
-- [ ] From the raw view of a markdown file there is an obvious, labeled control to return to
+- [x] From the raw view of a markdown file there is an obvious, labeled control to return to
   the rendered view, and it works.
-- [ ] The control clearly shows the current mode (rendered vs raw) — not a single ambiguous
+- [x] The control clearly shows the current mode (rendered vs raw) — not a single ambiguous
   icon.
-- [ ] Works in the Focus inspector, an Overview markdown column, and a Canvas panel;
+- [x] Works in the Focus inspector, an Overview markdown column, and a Canvas panel;
   markdown-only; tokens + a11y labels preserved.
 
 **Notes**

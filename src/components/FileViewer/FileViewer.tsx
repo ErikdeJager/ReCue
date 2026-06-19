@@ -129,20 +129,29 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
       {/* The eye/code toggle is markdown-only (rendered ↔ raw source). */}
       {mode === "markdown" && !tooLarge && (
         <div className={styles.toolbar}>
-          <button
-            type="button"
-            className={styles.toggle}
-            onClick={() => setShowRaw((v) => !v)}
-            title={showRaw ? "Show rendered" : "Show raw source"}
-            aria-label={showRaw ? "Show rendered" : "Show raw source"}
-            aria-pressed={showRaw}
-          >
-            {showRaw ? (
-              <Eye size={14} strokeWidth={1.5} />
-            ) : (
-              <Code2 size={14} strokeWidth={1.5} />
-            )}
-          </button>
+          {/* Two-segment Rendered / Raw toggle (#73): both options always shown
+              with the active one highlighted, so returning to the rendered view
+              is obvious (the old lone corner icon read as one-way). */}
+          <div className={styles.segmented} role="group" aria-label="View mode">
+            <button
+              type="button"
+              className={`${styles.segment} ${!showRaw ? styles.segmentActive : ""}`}
+              onClick={() => setShowRaw(false)}
+              aria-pressed={!showRaw}
+            >
+              <Eye size={13} strokeWidth={1.5} />
+              Rendered
+            </button>
+            <button
+              type="button"
+              className={`${styles.segment} ${showRaw ? styles.segmentActive : ""}`}
+              onClick={() => setShowRaw(true)}
+              aria-pressed={showRaw}
+            >
+              <Code2 size={13} strokeWidth={1.5} />
+              Raw
+            </button>
+          </div>
         </div>
       )}
       {tooLarge && (
