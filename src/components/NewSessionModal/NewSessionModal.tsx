@@ -12,7 +12,6 @@ import { listBranches, pickDirectory } from "../../ipc";
 import { repoName } from "../../paths";
 import { useStore } from "../../store";
 import type { BranchList } from "../../types";
-import Checkbox from "../Checkbox/Checkbox";
 import styles from "./NewSessionModal.module.css";
 
 // Well-known branches pinned to the top of the branch list, in this order (#66).
@@ -64,7 +63,6 @@ function NewSessionModal() {
   const [branches, setBranches] = useState<BranchList | null>(null);
   const [branchQuery, setBranchQuery] = useState("");
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
-  const [acknowledged, setAcknowledged] = useState(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const chooseRef = useRef<HTMLButtonElement>(null);
@@ -87,7 +85,6 @@ function NewSessionModal() {
     setBranches(null);
     setBranchQuery("");
     setSelectedBranch(null);
-    setAcknowledged(false);
   }, [open, prefillRepo]);
 
   // Focus the recents search whenever the folder step is shown (open or Back) —
@@ -122,7 +119,6 @@ function NewSessionModal() {
             : (sortBranches(bl.all)[0] ?? null),
         );
         setBranchQuery("");
-        setAcknowledged(false);
       })
       .catch(() => {
         if (!cancelled) {
@@ -221,7 +217,7 @@ function NewSessionModal() {
     (s) => s.repoPath === cwd && s.exitedCode === undefined,
   ).length;
   const isDestructive = willCheckout && runningInFolder > 0;
-  const canCreate = !!cwd && !busy && (!isDestructive || acknowledged);
+  const canCreate = !!cwd && !busy;
 
   const pick = async () => {
     const dir = await pickDirectory().catch(() => null);
@@ -341,10 +337,7 @@ function NewSessionModal() {
     const next =
       i < 0 ? 0 : Math.min(Math.max(i + delta, 0), branchList.length - 1);
     const b = branchList[next];
-    if (b) {
-      setSelectedBranch(b);
-      setAcknowledged(false);
-    }
+    if (b) setSelectedBranch(b);
     return next;
   };
 
@@ -550,10 +543,7 @@ function NewSessionModal() {
                     data-branch
                     tabIndex={b === selectedBranch ? 0 : -1}
                     className={`${styles.branch} ${b === selectedBranch ? styles.branchActive : ""}`}
-                    onClick={() => {
-                      setSelectedBranch(b);
-                      setAcknowledged(false);
-                    }}
+                    onClick={() => setSelectedBranch(b)}
                     title={b}
                   >
                     <GitBranch size={13} strokeWidth={1.5} />
@@ -573,18 +563,11 @@ function NewSessionModal() {
                   strokeWidth={1.5}
                   className={styles.warnIcon}
                 />
-                <Checkbox
-                  className={styles.warnCheckbox}
-                  checked={acknowledged}
-                  onChange={setAcknowledged}
-                  label={
-                    <>
-                      Checking out <strong>{selectedBranch}</strong> changes the
-                      working tree under {runningInFolder} running agent
-                      {runningInFolder > 1 ? "s" : ""} in this folder.
-                    </>
-                  }
-                />
+                <span className={styles.warnText}>
+                  Checking out <strong>{selectedBranch}</strong> changes the
+                  working tree under {runningInFolder} running agent
+                  {runningInFolder > 1 ? "s" : ""} in this folder.
+                </span>
               </div>
             )}
 
@@ -607,7 +590,7 @@ function NewSessionModal() {
                 className={styles.create}
                 disabled={!canCreate}
               >
-                {willCheckout ? "Checkout & start" : "Start"}
+                Start
                 <kbd className={styles.btnKbd}>⏎</kbd>
               </button>
             </div>

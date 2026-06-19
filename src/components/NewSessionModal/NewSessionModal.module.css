@@ -228,8 +228,8 @@
   color: var(--text-muted);
 }
 
-/* Destructive-checkout warning (on-system: icon + secondary text, no status
-   color); the checkbox gates Start. */
+/* Destructive-checkout warning (#89: informational only — icon + secondary text,
+   no status color, no acknowledgement gate). */
 .warning {
   display: flex;
   align-items: center;
@@ -246,13 +246,19 @@
   color: var(--text-secondary);
 }
 
-/* The acknowledgement Checkbox (#52) fills the row so its label wraps. */
-.warnCheckbox {
+/* The warning message fills the row so it wraps beside the icon (#89). */
+.warnText {
   flex: 1;
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.4;
 }
 
+/* Right-aligned action row; wraps to a second line rather than overflowing the
+   fixed-width popover when the buttons don't fit (#89). */
 .actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-8);
 }
