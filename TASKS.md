@@ -4265,9 +4265,9 @@ run **last**.
 
 ---
 
-### 61. [ ] New-session flow: deep keyboard-speed pass (fast keybind-driven launch)
+### 61. [x] New-session flow: deep keyboard-speed pass (fast keybind-driven launch)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -4316,29 +4316,29 @@ on its current branch — the zero-input common case); show inline kbd hints thr
 
 **Subtasks**
 
-1. [ ] **Research & decide:** evaluate the patterns above; write down the options, trade-offs,
+1. [x] **Research & decide:** evaluate the patterns above; write down the options, trade-offs,
    the hotkey/typing conflict-resolution scheme, and the **chosen model** (+ why) before
    building.
-2. [ ] **Keyboard folder/recents selection:** type-ahead fuzzy filter over recents + quick
+2. [x] **Keyboard folder/recents selection:** type-ahead fuzzy filter over recents + quick
    keybinds (e.g. ⌘1–9) to pick a recent without the mouse; keep "Choose folder…" for new
    folders (add a typed-path quick-entry only if research favors it).
-3. [ ] **Keyboard branch selection:** make the branch list type-ahead + arrow-navigable with
+3. [x] **Keyboard branch selection:** make the branch list type-ahead + arrow-navigable with
    a keybind to jump to it; Enter on a non-current branch = checkout & start, keeping the
    destructive-confirm (#52) when agents are running in the folder.
-4. [ ] **Quick-repeat / fewest-keystrokes path:** the fastest common case (e.g. ⌘N → Enter
+4. [x] **Quick-repeat / fewest-keystrokes path:** the fastest common case (e.g. ⌘N → Enter
    launches the last folder/branch) with sensible defaults.
-5. [ ] **Discoverability + a11y:** inline kbd hints; no conflicts with ⌘N / Shift-arrows /
+5. [x] **Discoverability + a11y:** inline kbd hints; no conflicts with ⌘N / Shift-arrows /
    terminal keys; preserve focus-trap + focus-restore (#49/#53).
-6. [ ] Keep all #27 function intact (folders / recents / branch / checkout / warning / spawn)
+6. [x] Keep all #27 function intact (folders / recents / branch / checkout / warning / spawn)
    — UX only.
 
 **Acceptance criteria**
 
-- [ ] A user can open the flow and **select a recent folder and a branch entirely by
+- [x] A user can open the flow and **select a recent folder and a branch entirely by
   keyboard** (type-ahead and/or quick keybinds), then launch — no mouse required.
-- [ ] There is a clearly faster path than today (e.g. quick-repeat / number hotkeys); the
+- [x] There is a clearly faster path than today (e.g. quick-repeat / number hotkeys); the
   chosen model + research is documented in the task notes.
-- [ ] No regression to existing function (#27), global keys (#26 / #24), terminal input, or
+- [x] No regression to existing function (#27), global keys (#26 / #24), terminal input, or
   a11y (#49 / #53); the keybinds are discoverable (kbd hints).
 
 **Notes**
@@ -4356,6 +4356,27 @@ on its current branch — the zero-input common case); show inline kbd hints thr
   subtask may refine it. Hotkey/typing conflicts are resolved via modifiers or empty-field
   context. The native folder dialog stays for new folders unless research favors typed-path
   entry.
+- **Done 2026-06-19.** **Research → chosen model.** Evaluated command-palette fuzzy-find
+  (⌘P / Raycast), number quick-select (⌘1–9), type-ahead lists, vim-modal motions, and
+  "repeat last." Chose a **command-palette launcher for recents + quick-repeat**; rejected
+  vim-modal (a modal layer is overkill for a one-input panel) and typed-path entry (the
+  native OS dialog is fine for the rare *new* folder; recents are the fast path).
+  **Hotkey/typing conflict** resolved by **modifier**: ⌘1–9 select recents (a Cmd+digit is
+  never a typed character) while plain digits filter — no empty-field gymnastics needed.
+  **Built:** recents are now a **search box + ↑/↓-navigable list** (substring type-ahead over
+  repo name + path); the highlighted row = the target folder. **⌘1–9** jump to the Nth visible
+  recent (shown as `⌘N` kbd badges). **Quick-repeat:** opening (⌘N / button) defaults the
+  folder to the most-recent, so **⌘N → Enter** launches it on its current branch — zero input,
+  no checkout. **Branches** are a `listbox` with ↑/↓ roving + Enter-to-start (checkout & start
+  for a non-current branch; the destructive-confirm #52 stays). A **kbd hints** row + badges
+  teach the keys. **a11y:** search autofocused; the focus-trap selector now skips roving
+  `tabindex=-1` branch buttons; focus-restore + Escape preserved. **No conflicts:** ⌘1–9 is
+  scoped to the panel's search-input handler (no global key), so ⌘N (#26), Shift+Arrows (#24),
+  and terminal keys are untouched. **Function unchanged (#27):** `spawnSession` / branch
+  detection / `git checkout` / warning / spawn are identical — UX only. Replaced the recents
+  chips (removed `.chips`/`.chip`/`.pathEmpty` CSS). Gate green: `npm run build`/lint/
+  `format:check`/`test` (63); backend untouched (40). Live keyboard flow is runtime-visual
+  (not launched headlessly).
 
 ---
 

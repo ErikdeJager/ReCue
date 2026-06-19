@@ -10,18 +10,17 @@ import Checkbox from "../Checkbox/Checkbox";
 import styles from "./NewSessionModal.module.css";
 
 /**
- * Start-a-new-agent panel (#53, supersedes #27's bottom-left popover): a panel
- * that **expands from the New session button** (top-left, scale-from-corner;
- * reduced-motion → instant via the global killswitch). The flow leads with the
- * **fast path — recent folders** (recognition over recall), then "Choose
- * another…", then git **branch detection** (when the folder is a repo, pick one
- * to check out first), an optional name, and a destructive-checkout
- * acknowledgement (custom Checkbox #52) when switching a branch under a running
- * agent. Every entry point — the top button, ⌘N (#26), the per-repo + — opens
- * this same model (prefilled when a repo is known). Function is unchanged from
- * #27: state in the store (`newSessionOpen`/`newSessionRepo`); `spawnSession`
- * does the checkout + spawn, persists/selects/toasts. Autofocus + Enter create;
- * Escape / outside-click close.
+ * Start-a-new-agent panel (#53 → keyboard-speed pass #61). A **keyboard-first
+ * launcher**: recents are a type-ahead-filtered, ↑/↓-navigable list with **⌘1–9**
+ * quick-select; the highlighted recent is the target folder, so **⌘N then Enter
+ * launches the most-recent folder** on its current branch (the zero-input common
+ * case). Once a folder is set, branches are ↑/↓-navigable and Enter starts
+ * (checkout & start for a non-current branch). Inline kbd hints throughout.
+ *
+ * Function is unchanged from #27 — `spawnSession` does folder / recents / branch /
+ * `git checkout` / destructive-confirm / spawn; this pass only changes how fast
+ * the keyboard drives it. a11y (#49): focus-trap, focus-restore, Escape /
+ * outside-click close.
  */
 function NewSessionModal() {
   const open = useStore((s) => s.newSessionOpen);
@@ -32,41 +31,45 @@ function NewSessionModal() {
   const spawnSession = useStore((s) => s.spawnSession);
 
   const [cwd, setCwd] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [branches, setBranches] = useState<BranchList | null>(null);
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
 
-  const nameRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const chooseRef = useRef<HTMLButtonElement>(null);
+  const recentsRef = useRef<HTMLDivElement>(null);
+  const branchesRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   // The element focused before the dialog opened, restored on close (a11y #49).
   const openerRef = useRef<HTMLElement | null>(null);
 
-  // Reset / prefill each time the panel opens.
+  // Reset / prefill each time the panel opens. Default the folder to the prefill
+  // repo (per-repo +) else the most-recent folder, so ⌘N → Enter quick-launches.
   useEffect(() => {
-    if (open) {
-      setCwd(prefillRepo);
-      setName("");
-      setBusy(false);
-      setBranches(null);
-      setSelectedBranch(null);
-      setAcknowledged(false);
-    }
+    if (!open) return;
+    const mostRecent = useStore.getState().recents[0] ?? null;
+    setCwd(prefillRepo ?? mostRecent);
+    setQuery("");
+    setName("");
+    setBusy(false);
+    setBranches(null);
+    setSelectedBranch(null);
+    setAcknowledged(false);
   }, [open, prefillRepo]);
 
-  // Focus the right first control on open: the name when a folder is already
-  // known (per-repo + / prefilled — straight to naming + Enter), otherwise the
-  // folder picker (the user's first decision is which folder).
+  // Focus the search on open (keyboard-first) — or the folder picker when there
+  // are no recents to search.
   useEffect(() => {
     if (!open) return;
     const timer = setTimeout(() => {
-      if (prefillRepo) nameRef.current?.focus();
+      if (searchRef.current) searchRef.current.focus();
       else chooseRef.current?.focus();
     }, 0);
     return () => clearTimeout(timer);
-  }, [open, prefillRepo]);
+  }, [open]);
 
   // Detect branches whenever the chosen folder changes; default to the current.
   useEffect(() => {
@@ -77,12 +80,10 @@ function NewSessionModal() {
     }
     let cancelled = false;
     void listBranches(cwd)
-      .then((list) => {
+      .then((bl) => {
         if (cancelled) return;
-        setBranches(list);
-        setSelectedBranch(
-          list.all.includes(list.current) ? list.current : null,
-        );
+        setBranches(bl);
+        setSelectedBranch(bl.all.includes(bl.current) ? bl.current : null);
         setAcknowledged(false);
       })
       .catch(() => {
@@ -106,8 +107,7 @@ function NewSessionModal() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, close]);
 
-  // Capture the opener on open; restore focus to it on close (a11y #49) so
-  // keyboard focus doesn't get dumped on <body> when the dialog dismisses.
+  // Capture the opener on open; restore focus to it on close (a11y #49).
   useEffect(() => {
     if (open) {
       openerRef.current = document.activeElement as HTMLElement | null;
@@ -117,7 +117,25 @@ function NewSessionModal() {
     }
   }, [open]);
 
+  // Keep the highlighted recent scrolled into view as ↑/↓ / ⌘1–9 move it.
+  useEffect(() => {
+    const el = recentsRef.current?.querySelector(
+      '[aria-selected="true"]',
+    ) as HTMLElement | null;
+    el?.scrollIntoView({ block: "nearest" });
+  }, [cwd]);
+
   if (!open) return null;
+
+  // Substring type-ahead over recents (repo name + full path).
+  const q = query.trim().toLowerCase();
+  const list = q
+    ? recents.filter(
+        (r) =>
+          repoName(r).toLowerCase().includes(q) || r.toLowerCase().includes(q),
+      )
+    : recents;
+  const activeIndex = list.findIndex((r) => r === cwd);
 
   const willCheckout =
     !!branches &&
@@ -132,7 +150,10 @@ function NewSessionModal() {
 
   const pick = async () => {
     const dir = await pickDirectory().catch(() => null);
-    if (dir) setCwd(dir);
+    if (dir) {
+      setQuery("");
+      setCwd(dir);
+    }
   };
 
   const create = async () => {
@@ -147,11 +168,83 @@ function NewSessionModal() {
     else setBusy(false); // stay open so the error (e.g. dirty tree) can be fixed
   };
 
-  // Keep Tab focus inside the dialog (focus-trap, a11y #49).
+  // Filter as the user types; keep a folder selected (the top match) so Enter
+  // always launches something.
+  const onQueryChange = (value: string) => {
+    setQuery(value);
+    const qq = value.trim().toLowerCase();
+    const nl = qq
+      ? recents.filter(
+          (r) =>
+            repoName(r).toLowerCase().includes(qq) ||
+            r.toLowerCase().includes(qq),
+        )
+      : recents;
+    if (cwd === null || !nl.includes(cwd)) {
+      if (nl[0]) setCwd(nl[0]);
+    }
+  };
+
+  // Keyboard nav over the recents list (#61): ⌘1–9 jump to a recent; ↑/↓ move the
+  // highlight (= the target folder). Enter falls through to the form submit (start).
+  const onSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if ((event.metaKey || event.ctrlKey) && /^[1-9]$/.test(event.key)) {
+      event.preventDefault();
+      const r = list[Number(event.key) - 1];
+      if (r) setCwd(r);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (list.length === 0) return;
+      const next =
+        activeIndex < 0
+          ? 0
+          : Math.min(
+              Math.max(activeIndex + (event.key === "ArrowDown" ? 1 : -1), 0),
+              list.length - 1,
+            );
+      const r = list[next];
+      if (r) setCwd(r);
+    }
+  };
+
+  // ↑/↓ roving over the branch list (#61): move + select the adjacent branch;
+  // Enter starts (with the destructive-confirm gate intact via canCreate).
+  const onBranchKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!branches) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void create();
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const all = branches.all;
+    if (all.length === 0) return;
+    const i = selectedBranch ? all.indexOf(selectedBranch) : -1;
+    const next =
+      i < 0
+        ? 0
+        : Math.min(
+            Math.max(i + (event.key === "ArrowDown" ? 1 : -1), 0),
+            all.length - 1,
+          );
+    const b = all[next];
+    if (!b) return;
+    setSelectedBranch(b);
+    setAcknowledged(false);
+    branchesRef.current
+      ?.querySelectorAll<HTMLButtonElement>("[data-branch]")
+      [next]?.focus();
+  };
+
+  // Keep Tab focus inside the dialog (focus-trap, a11y #49). Excludes roving
+  // tabindex=-1 elements (e.g. unselected branch buttons, #61).
   const onTrapKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>) => {
     if (event.key !== "Tab" || !formRef.current) return;
     const focusable = formRef.current.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     );
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -185,22 +278,50 @@ function NewSessionModal() {
           New session
         </h2>
 
-        {/* Folder — lead with recents (the fast path), then choose another. */}
+        {/* Folder — a keyboard-first launcher (#61): type to filter, ↑/↓ to move,
+            ⌘1–9 to jump, ⏎ to start. "Choose folder…" handles a new folder. */}
         <p className={styles.label}>Folder</p>
         {recents.length > 0 && (
-          <div className={styles.chips}>
-            {recents.slice(0, 6).map((recent) => (
-              <button
-                key={recent}
-                type="button"
-                className={`${styles.chip} ${recent === cwd ? styles.chipActive : ""}`}
-                onClick={() => setCwd(recent)}
-                title={recent}
-              >
-                {repoName(recent)}
-              </button>
-            ))}
-          </div>
+          <>
+            <input
+              ref={searchRef}
+              className={styles.search}
+              type="text"
+              value={query}
+              placeholder="Search recent folders…"
+              onChange={(event) => onQueryChange(event.currentTarget.value)}
+              onKeyDown={onSearchKeyDown}
+              aria-label="Search recent folders"
+            />
+            <div
+              ref={recentsRef}
+              className={styles.recents}
+              role="listbox"
+              aria-label="Recent folders"
+            >
+              {list.length === 0 ? (
+                <p className={styles.empty}>No matching folders.</p>
+              ) : (
+                list.map((recent, i) => (
+                  <button
+                    key={recent}
+                    type="button"
+                    role="option"
+                    aria-selected={recent === cwd}
+                    className={`${styles.recent} ${recent === cwd ? styles.recentActive : ""}`}
+                    onClick={() => setCwd(recent)}
+                    title={recent}
+                  >
+                    <span className={styles.recentName}>
+                      {repoName(recent)}
+                    </span>
+                    <span className={styles.recentPath}>{recent}</span>
+                    {i < 9 && <kbd className={styles.recentKbd}>⌘{i + 1}</kbd>}
+                  </button>
+                ))
+              )}
+            </div>
+          </>
         )}
         <div className={styles.pickRow}>
           <button
@@ -212,19 +333,29 @@ function NewSessionModal() {
             <FolderOpen size={15} strokeWidth={1.5} />
             {recents.length > 0 ? "Choose another…" : "Choose folder…"}
           </button>
-          <span className={cwd ? styles.path : styles.pathEmpty}>
-            {cwd ?? "No folder selected"}
-          </span>
+          {cwd && !recents.includes(cwd) && (
+            <span className={styles.path}>{cwd}</span>
+          )}
         </div>
 
         {branches && branches.all.length > 0 && (
           <>
             <p className={styles.label}>Branch</p>
-            <div className={styles.branches}>
+            <div
+              ref={branchesRef}
+              className={styles.branches}
+              role="listbox"
+              aria-label="Branch"
+              onKeyDown={onBranchKeyDown}
+            >
               {branches.all.map((b) => (
                 <button
                   key={b}
                   type="button"
+                  role="option"
+                  aria-selected={b === selectedBranch}
+                  data-branch
+                  tabIndex={b === selectedBranch ? 0 : -1}
                   className={`${styles.branch} ${b === selectedBranch ? styles.branchActive : ""}`}
                   onClick={() => {
                     setSelectedBranch(b);
@@ -247,7 +378,6 @@ function NewSessionModal() {
           Name <span className={styles.optional}>optional</span>
         </label>
         <input
-          ref={nameRef}
           id="session-name"
           className={styles.input}
           value={name}
@@ -276,6 +406,19 @@ function NewSessionModal() {
             />
           </div>
         )}
+
+        {/* kbd hints (#61) — make the keyboard path discoverable. */}
+        <p className={styles.hints}>
+          <kbd>⏎</kbd> start
+          {recents.length > 0 && (
+            <>
+              {" · "}
+              <kbd>⌘1–9</kbd> recent <kbd>↑↓</kbd> move
+            </>
+          )}
+          {" · "}
+          <kbd>esc</kbd> cancel
+        </p>
 
         <div className={styles.actions}>
           <button type="button" className={styles.cancel} onClick={close}>

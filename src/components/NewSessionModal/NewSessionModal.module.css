@@ -82,9 +82,9 @@
   background: var(--bg-hover);
 }
 
-.path,
-.pathEmpty {
+.path {
   overflow: hidden;
+  color: var(--text-secondary);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
   text-overflow: ellipsis;
@@ -92,43 +92,97 @@
   direction: rtl;
 }
 
-.path {
-  color: var(--text-secondary);
+/* Recents launcher (#61): a search box over a keyboard-navigable recents list. */
+.search {
+  width: 100%;
+  margin-bottom: var(--space-8);
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
 }
 
-.pathEmpty {
+.search::placeholder {
   color: var(--text-muted);
 }
 
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-6);
-  margin-bottom: var(--space-12);
+.search:focus {
+  border-color: var(--accent);
 }
 
-.chip {
-  padding: var(--space-2) var(--space-8);
-  border: 1px solid var(--border-hairline);
+.recents {
+  display: flex;
+  max-height: 200px;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-12);
+  overflow-y: auto;
+}
+
+.recent,
+.recentActive {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-4) var(--space-8);
+  border: 0;
   border-radius: var(--radius-chip);
-  background: var(--bg-panel);
+  background: transparent;
   color: var(--text-secondary);
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   transition:
-    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
 }
 
-.chip:hover {
+.recent:hover {
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
-.chipActive {
-  border-color: var(--accent);
-  color: var(--text-primary);
+.recentActive {
   background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.recentName {
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+}
+
+.recentPath {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+.recentKbd {
+  flex-shrink: 0;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chip);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+}
+
+.empty {
+  margin: 0 0 var(--space-12);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
 }
 
 /* Branch picker — a compact scrollable list (capped so the popover stays small). */
@@ -227,6 +281,24 @@
 /* The acknowledgement Checkbox (#52) fills the row so its label wraps. */
 .warnCheckbox {
   flex: 1;
+}
+
+/* Inline keyboard hints (#61) — discoverability for the launcher keys. */
+.hints {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-12);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}
+
+.hints kbd {
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chip);
+  font-family: var(--mono);
 }
 
 .actions {
