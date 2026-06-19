@@ -175,5 +175,72 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#64**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#65**), with its
 `Depends on:` prerequisites.
+
+---
+
+### 64. [ ] File viewer — right-side margin so content isn't clipped at the right edge
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+In the universal file viewer (`FileViewer`, #44 — reused by the Focus inspector #40,
+Overview markdown columns #41, and Canvas panels #47), content is **clipped on the right
+edge**: the rightmost text sits flush against (or under) the right edge / vertical
+scrollbar with no breathing room. Add a small right-side margin/padding so nothing is cut
+off.
+
+This affects **all three content modes** the viewer renders — rendered **markdown**
+(`.markdown`), raw **text** (`.raw`), and highlighted **code** (`.code`/`.raw`) — and
+should be fixed **everywhere the viewer mounts** (Focus inspector, Overview column,
+Canvas panel). The fix is shared CSS in `FileViewer.module.css`, so one change covers all
+contexts.
+
+Likely cause (for the implementer): the scrolling surfaces use `overflow-y: auto` (which
+also makes `overflow-x` compute to `auto`) together with the app's **10px classic,
+space-consuming scrollbar** (`global.css` `*::-webkit-scrollbar`), so when content scrolls
+the scrollbar eats into the right side and the last characters read as cut off.
+`.markdown` currently has uniform 16px (`--space-16`) padding and `.raw` only 12px
+(`--space-12`). Pick whatever actually clears it in WKWebView — a touch more right padding
+and/or `scrollbar-gutter: stable` on the scrolling surfaces so the scrollbar reserves its
+own track instead of overlapping content. Keep it "small" per the request; stay on the
+spacing tokens.
+
+Out of scope: redesigning the viewer, changing the global scrollbar style app-wide, or
+touching unrelated panels.
+
+**Subtasks**
+
+1. [ ] Reproduce the right-edge clipping across markdown, raw, and code modes (content
+   tall enough to show the vertical scrollbar).
+2. [ ] Add right-side breathing room on the viewer's scrolling surfaces (`.markdown`,
+   `.raw`) in `FileViewer.module.css` — small right-padding bump and/or
+   `scrollbar-gutter: stable` — using `--space-*` tokens.
+3. [ ] Verify content clears the right edge/scrollbar in the Focus inspector, an Overview
+   markdown column, and a Canvas panel — both with and without a visible vertical
+   scrollbar.
+
+**Acceptance criteria**
+
+- [ ] In the file viewer's markdown, raw-text, and code modes, the rightmost content is no
+  longer clipped — there's a small, even gap between the content and the right edge /
+  vertical scrollbar.
+- [ ] Holds in all mount contexts: Focus inspector, Overview column, and Canvas panel.
+- [ ] The gap is present whether or not a vertical scrollbar is showing (no layout jump
+  when it appears, if `scrollbar-gutter` is used).
+- [ ] Only `--space-*` design tokens are used; no off-token values introduced.
+
+**Notes**
+
+- Decisions (from the requester): applies to all viewer modes (markdown + raw + code) and
+  everywhere the viewer mounts; the remedy is a *small* right margin (keep it subtle).
+- Key code: `src/components/FileViewer/FileViewer.module.css` (`.markdown`, `.raw`,
+  `.code`), `src/components/FileViewer/FileViewer.tsx` (which class wraps each mode),
+  `src/styles/global.css` (the 10px `*::-webkit-scrollbar` that consumes right-edge space).
+- Sanity-check edge cases: wide markdown tables and long inline code / URLs
+  (`.markdown table` has no horizontal-scroll wrapper, and `overflow-y: auto` couples
+  `overflow-x` to `auto`).
