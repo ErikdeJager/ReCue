@@ -64,6 +64,12 @@
   margin: 0;
   padding: var(--space-12);
   overflow: auto;
+  /* Reserve the scrollbar's own track (#64): the app's 10px classic scrollbar
+     would otherwise overlap the inline-end padding (~2px left here) and clip the
+     rightmost text. A stable gutter keeps the full padding as the right-side gap
+     and avoids a layout jump when the scrollbar appears. Covers code mode too —
+     CodeBlock rides on .raw. */
+  scrollbar-gutter: stable;
   background: var(--terminal-bg);
   color: var(--text-secondary);
   font-family: var(--mono);
@@ -138,6 +144,9 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* See .raw: a stable gutter (#64) keeps the scrollbar off the content's right
+     edge and avoids a layout shift when it appears. */
+  scrollbar-gutter: stable;
   padding: var(--space-16);
   background: var(--terminal-bg);
   color: var(--text-secondary);

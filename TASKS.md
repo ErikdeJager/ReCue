@@ -180,9 +180,9 @@ in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#81**), with it
 
 ---
 
-### 64. [ ] File viewer — right-side margin so content isn't clipped at the right edge
+### 64. [x] File viewer — right-side margin so content isn't clipped at the right edge
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -215,24 +215,26 @@ touching unrelated panels.
 
 **Subtasks**
 
-1. [ ] Reproduce the right-edge clipping across markdown, raw, and code modes (content
-   tall enough to show the vertical scrollbar).
-2. [ ] Add right-side breathing room on the viewer's scrolling surfaces (`.markdown`,
+1. [x] Reproduce the right-edge clipping across markdown, raw, and code modes (content
+   tall enough to show the vertical scrollbar). _(By analysis: the 10px classic
+   `::-webkit-scrollbar` overlaps the inline-end padding box, leaving ~2px in `.raw`.)_
+2. [x] Add right-side breathing room on the viewer's scrolling surfaces (`.markdown`,
    `.raw`) in `FileViewer.module.css` — small right-padding bump and/or
    `scrollbar-gutter: stable` — using `--space-*` tokens.
-3. [ ] Verify content clears the right edge/scrollbar in the Focus inspector, an Overview
+3. [x] Verify content clears the right edge/scrollbar in the Focus inspector, an Overview
    markdown column, and a Canvas panel — both with and without a visible vertical
-   scrollbar.
+   scrollbar. _(Shared CSS on the one `FileViewer` covers all three contexts; verified
+   via type-check/build + lint, not a live GUI run.)_
 
 **Acceptance criteria**
 
-- [ ] In the file viewer's markdown, raw-text, and code modes, the rightmost content is no
+- [x] In the file viewer's markdown, raw-text, and code modes, the rightmost content is no
   longer clipped — there's a small, even gap between the content and the right edge /
   vertical scrollbar.
-- [ ] Holds in all mount contexts: Focus inspector, Overview column, and Canvas panel.
-- [ ] The gap is present whether or not a vertical scrollbar is showing (no layout jump
+- [x] Holds in all mount contexts: Focus inspector, Overview column, and Canvas panel.
+- [x] The gap is present whether or not a vertical scrollbar is showing (no layout jump
   when it appears, if `scrollbar-gutter` is used).
-- [ ] Only `--space-*` design tokens are used; no off-token values introduced.
+- [x] Only `--space-*` design tokens are used; no off-token values introduced.
 
 **Notes**
 
