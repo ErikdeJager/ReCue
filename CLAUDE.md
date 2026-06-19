@@ -21,7 +21,8 @@ clear error if it is missing).
   icons, **JetBrains Mono** (bundled, offline), **react-markdown + remark-gfm**
   (GFM markdown, no raw HTML) + **Prism.js** (curated-language read-only code
   highlighting) — both in the universal **`FileViewer`** (#40/#44), **dnd-kit**
-  (`@dnd-kit/core` + `/sortable` — the app's one drag-and-drop system, #43)
+  (`@dnd-kit/core` + `/sortable` — the app's one drag-and-drop system, #43),
+  **react-resizable-panels** (Canvas split resizing, #46)
 - **Backend (Rust, `src-tauri/`):** **`portable-pty`** for terminals, JSON
   persistence in the app-data dir, read-only git (shells out to `git`), and the
   Tauri **dialog** (folder picker), **opener**, **updater**, and **process** plugins
@@ -50,8 +51,8 @@ clear error if it is missing).
 - **Git:** `working_diff(cwd)` / `current_branch(cwd)` shell out to `git`; the
   `DiffInspector` and sidebar render the structured result.
 - **Views:** the store holds `sessions / selectedId / view / inspectorOpen /
-  recents / branches / claudeMissing / toasts`; the app mounts **Overview or
-  Focus** (not both). Each session's xterm is owned by a **persistent terminal
+  recents / branches / claudeMissing / toasts`; the app mounts one of **Overview,
+  Focus, or Canvas** (#46). Each session's xterm is owned by a **persistent terminal
   pool** (`Terminal/terminalPool.ts`), created once and **reparented** into the
   active view's slot (parked off-screen otherwise) — so a view switch never
   disposes/recreates the terminal or replays scrollback (which would garble
@@ -69,6 +70,14 @@ clear error if it is missing).
   (Focus Files-tab pick or an Overview file column); the tree row re-opens it as
   an Overview column on click and forgets it on the hover ×. File rows are
   dnd-kit **draggable sources** (drop targets land in Canvas, #47).
+- **Canvas (#46):** a third view — a recursive **BSP split-panel** workspace. The
+  layout is a binary tree (`split{dir,a,b,sizes}` / `leaf{id,content}`) persisted
+  as `canvas_layout`; the pure ops live in `Canvas/canvasTree.ts`. Dropping content
+  on a panel **edge** splits it (recursively), borders resize via
+  **react-resizable-panels**, panels close (collapsing their split). Built on
+  dnd-kit (one DnD system) so terminal content can stay alive via the #18 pool on
+  relayout. #46 ships the engine with a built-in palette drag source; real content +
+  sidebar drag-in is #47.
 
 ## Layout
 
@@ -84,10 +93,10 @@ clear error if it is missing).
 │   ├── paths.ts            # Shared path helpers (repoName)
 │   ├── updater.ts          # In-app auto-update (Tauri updater/process plugins)
 │   ├── components/         # React components (CSS Module alongside each):
-│   │                       #   Sidebar, Overview, Focus, Terminal, FileViewer,
-│   │                       #   DiffInspector, BusyIndicator, NewSessionModal,
-│   │                       #   Toaster, ViewSwitch, ClaudeMissing, EmptyState,
-│   │                       #   UpdatePopup
+│   │                       #   Sidebar, Overview, Focus, Canvas, Terminal,
+│   │                       #   FileViewer, DiffInspector, BusyIndicator,
+│   │                       #   NewSessionModal, Toaster, ViewSwitch,
+│   │                       #   ClaudeMissing, EmptyState, UpdatePopup
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)

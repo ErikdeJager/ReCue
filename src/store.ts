@@ -9,6 +9,7 @@ import { emitSessionOutput } from "./outputBus";
 import { repoName } from "./paths";
 import * as updater from "./updater";
 import type {
+  CanvasNode,
   OverviewPanel,
   SessionRecord,
   SessionView,
@@ -201,6 +202,8 @@ export interface AppState {
   overviewOrder: Record<string, string[]>;
   /** Per-repo opened files for the sidebar tree (#45); repo-relative paths. */
   openFiles: Record<string, string[]>;
+  /** The Canvas split-panel layout tree (#46); null = empty canvas. */
+  canvasLayout: CanvasNode | null;
   /** Sessions currently working, from the output-activity heuristic (#42); an
    * absent/false entry means idle. (The task's `sessionState`, as a boolean map.) */
   sessionBusy: Record<string, boolean>;
@@ -262,6 +265,8 @@ export interface AppState {
   /** Register / forget an opened file in the sidebar tree (#45, persisted). */
   openFile: (repoPath: string, file: string) => Promise<void>;
   closeFile: (repoPath: string, file: string) => Promise<void>;
+  /** Replace the Canvas layout tree and persist (#46). */
+  setCanvasLayout: (tree: CanvasNode | null) => void;
   checkForUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
   /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
@@ -290,6 +295,7 @@ export const useStore = create<AppState>()((set, get) => ({
   overviewPanels: {},
   overviewOrder: {},
   openFiles: {},
+  canvasLayout: null,
   sessionBusy: {},
   claudeMissing: false,
   toasts: [],
@@ -477,20 +483,22 @@ export const useStore = create<AppState>()((set, get) => ({
     // Repo colors + Overview panel layouts load independently so a failure here
     // doesn't block sessions.
     try {
-      const [colors, panels, order, files] = await Promise.all([
+      const [colors, panels, order, files, canvas] = await Promise.all([
         ipc.listRepoColors(),
         ipc.listOverviewPanels(),
         ipc.listOverviewOrder(),
         ipc.listOpenFiles(),
+        ipc.getCanvasLayout(),
       ]);
       set({
         repoColors: colors,
         overviewPanels: panels,
         overviewOrder: order,
         openFiles: files,
+        canvasLayout: canvas ?? null,
       });
     } catch {
-      // Backend unreachable; leave colors/panels/order/files as-is.
+      // Backend unreachable; leave colors/panels/order/files/canvas as-is.
     }
   },
 
@@ -593,6 +601,16 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // ignore
     }
+  },
+
+  // Canvas layout (#46): the component computes the next tree via the pure
+  // canvasTree helpers; this just commits + persists it (resize is debounced in
+  // the component, so each call here is a settled structural/size change).
+  setCanvasLayout: (tree) => {
+    set({ canvasLayout: tree });
+    void ipc.setCanvasLayout(tree).catch(() => {
+      // Persist failed (e.g. outside Tauri); keep the local layout for the session.
+    });
   },
 
   checkForUpdate: async () => {

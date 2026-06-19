@@ -1,0 +1,222 @@
+/* Canvas view (#46): a toolbar (palette + hint) above the split-panel area. */
+.canvas {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-base);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 var(--space-12);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--bg-panel);
+}
+
+/* Palette drag source (#46) — the built-in way to create panels. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: grab;
+  touch-action: none;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.chip:hover {
+  border-color: var(--accent);
+}
+
+.chip:active {
+  cursor: grabbing;
+}
+
+.chipDragging {
+  opacity: 0.5;
+}
+
+.hint {
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}
+
+.area {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-panel);
+}
+
+/* Empty-canvas center drop target. */
+.center {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  margin: var(--space-16);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-window);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.centerOver {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.centerHint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+
+/* --- A leaf panel --- */
+.panel {
+  position: relative;
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-hairline);
+  background: var(--terminal-bg);
+}
+
+.panelHeader {
+  display: flex;
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  padding: 0 var(--space-4) 0 var(--space-12);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--bg-panel);
+}
+
+.panelTitle {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelClose {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.panelClose:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.panelBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.placeholder {
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+
+/* A split group fills its slot (parent area, or an enclosing Panel when nested). */
+.group {
+  width: 100%;
+  height: 100%;
+}
+
+/* --- Resize separators (react-resizable-panels) --- */
+/* `flex: 0 0 6px` sizes the main axis (width in a row group, height in a column
+   group) and stretches the cross axis — one rule for both orientations. The
+   library manages the resize cursor itself. */
+.handle {
+  flex: 0 0 6px;
+  background: var(--border-hairline);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.handle:hover,
+.handle:active {
+  background: var(--accent);
+}
+
+/* --- Edge split-drop zones (shown only during a drag) --- */
+.edges {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+}
+
+.edge {
+  position: absolute;
+  border: 1px dashed transparent;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.edgeOver {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.top {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30%;
+}
+
+.bottom {
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 30%;
+}
+
+.left {
+  top: 30%;
+  bottom: 30%;
+  left: 0;
+  width: 30%;
+}
+
+.right {
+  top: 30%;
+  bottom: 30%;
+  right: 0;
+  width: 30%;
+}

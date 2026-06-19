@@ -8,6 +8,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
   BranchList,
+  CanvasNode,
   ExitPayload,
   OutputPayload,
   OverviewPanel,
@@ -82,6 +83,14 @@ export const listOpenFiles = () =>
 /** Replace a repo's opened-file list (#45). */
 export const setOpenFiles = (path: string, files: string[]) =>
   invoke<void>("set_open_files", { path, files });
+
+/** The Canvas layout tree (#46); null when the canvas is empty. */
+export const getCanvasLayout = () =>
+  invoke<CanvasNode | null>("get_canvas_layout");
+
+/** Replace the Canvas layout tree (#46). */
+export const setCanvasLayout = (layout: CanvasNode | null) =>
+  invoke<void>("set_canvas_layout", { layout });
 
 /** Repo-relative viewable (text-ish) files in a repo (file viewer, #44). */
 export const listFiles = (repo: string) =>

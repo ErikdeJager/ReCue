@@ -219,6 +219,22 @@ pub fn set_open_files(
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+#[tauri::command]
+pub fn get_canvas_layout(store: State<'_, Store>) -> serde_json::Value {
+    store.canvas_layout()
+}
+
+/// Replace the Canvas layout tree (#46) and persist.
+#[tauri::command]
+pub fn set_canvas_layout(
+    store: State<'_, Store>,
+    layout: serde_json::Value,
+) -> Result<(), SessionError> {
+    store
+        .set_canvas_layout(layout)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// `#` followed by 3/4/6/8 hex digits.
 fn is_hex_color(value: &str) -> bool {
     match value.strip_prefix('#') {

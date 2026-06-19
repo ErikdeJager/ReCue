@@ -86,7 +86,41 @@ export interface StatePayload {
 
 // --- Frontend UI state ---
 
-export type View = "overview" | "focus";
+export type View = "overview" | "focus" | "canvas";
+
+// --- Canvas (#46): a recursive binary split-panel (BSP) layout tree ---
+
+/** What a Canvas leaf shows. #46 uses `kind: "placeholder"`; #47 adds real
+ * content kinds (agent / file / diff) with the extra fields below. */
+export interface CanvasContent {
+  kind: string;
+  label?: string;
+  repoPath?: string;
+  file?: string;
+  sessionId?: string;
+}
+
+/** A single panel. */
+export interface CanvasLeaf {
+  type: "leaf";
+  id: string;
+  content: CanvasContent;
+}
+
+/** A binary split of two child nodes; `sizes` are the two percentages (sum 100). */
+export interface CanvasSplit {
+  type: "split";
+  id: string;
+  dir: "row" | "col";
+  a: CanvasNode;
+  b: CanvasNode;
+  sizes: [number, number];
+}
+
+export type CanvasNode = CanvasLeaf | CanvasSplit;
+
+/** The edge of a panel a drop lands on, choosing the split direction + side. */
+export type CanvasEdge = "left" | "right" | "top" | "bottom";
 
 export type ToastTone = "info" | "error";
 

@@ -93,6 +93,8 @@ pub fn run() {
             commands::set_overview_order,
             commands::list_open_files,
             commands::set_open_files,
+            commands::get_canvas_layout,
+            commands::set_canvas_layout,
             commands::list_files,
             commands::read_text_file,
             commands::open_in_editor,

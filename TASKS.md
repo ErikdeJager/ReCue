@@ -3099,9 +3099,9 @@ the folders."
 
 ---
 
-### 46. [ ] Canvas mode: recursive split-panel layout engine
+### 46. [x] Canvas mode: recursive split-panel layout engine
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #18, #25
 **Created:** 2026-06-19
 
@@ -3143,25 +3143,25 @@ drag-in is #47 (the engine renders panels from a content descriptor and exposes 
 
 **Subtasks**
 
-1. [ ] Add **Canvas** to the view switch (#25) and route it as a third top-level view in
+1. [x] Add **Canvas** to the view switch (#25) and route it as a third top-level view in
    `App.tsx` (Overview / Focus / Canvas).
-2. [ ] Implement the BSP layout tree + rendering of leaf panels; empty-state center drop
+2. [x] Implement the BSP layout tree + rendering of leaf panels; empty-state center drop
    creates the first panel.
-3. [ ] **Edge-split:** dropping onto a panel's L/R/T/B edge splits it (recursive); show
+3. [x] **Edge-split:** dropping onto a panel's L/R/T/B edge splits it (recursive); show
    clear drop-zone affordances on the edges during a drag.
-4. [ ] **Resizable borders** between panels (react-resizable-panels or equivalent), with
+4. [x] **Resizable borders** between panels (react-resizable-panels or equivalent), with
    sensible min sizes; smooth.
-5. [ ] **Persist** the canvas layout tree; restore on launch.
-6. [ ] Panels close (removing a leaf collapses its split); reparent terminals via the #18
+5. [x] **Persist** the canvas layout tree; restore on launch.
+6. [x] Panels close (removing a leaf collapses its split); reparent terminals via the #18
    pool on every relayout — never dispose.
 
 **Acceptance criteria**
 
-- [ ] Canvas is selectable from the sidebar; an empty canvas accepts a center drop to
+- [x] Canvas is selectable from the sidebar; an empty canvas accepts a center drop to
   create the first panel.
-- [ ] Dropping on a panel edge splits it L/R/T/B, recursively; borders resize; panels
+- [x] Dropping on a panel edge splits it L/R/T/B, recursively; borders resize; panels
   close.
-- [ ] The layout persists across restart; terminals are never torn down by relayout.
+- [x] The layout persists across restart; terminals are never torn down by relayout.
 
 **Notes**
 
@@ -3170,6 +3170,30 @@ drag-in is #47 (the engine renders panels from a content descriptor and exposes 
   (persist layout), reuse the #18 terminal pool, dnd-kit (#43), `package.json`
   (react-resizable-panels [+ dockview if chosen]). **Content wiring + sidebar drag-in is
   #47.** Keep terminal-pool keep-alive the deciding factor in the library choice.
+- **Done 2026-06-19.** **Library choice — custom BSP tree + `react-resizable-panels` +
+  dnd-kit** (not dockview): the deciding factor per the task was keeping terminals alive
+  via the #18 pool, and this keeps **one DnD system** app-wide (dnd-kit, #43/#45) with
+  full control over panel lifecycle — dockview owns lifecycle + ships its own DnD.
+  **Model:** a binary split tree `split{id,dir,a,b,sizes}` / `leaf{id,content}` with pure,
+  unit-tested ops in `Canvas/canvasTree.ts` (`splitLeaf`/`removeLeaf`/`updateSizes`) that
+  **preserve unaffected subtrees' identity** so relayout only remounts the touched branch
+  (the #18 pool parks+reparents terminal content → never disposed; #46 renders placeholder
+  content, #47 wires real). **Persistence:** stored opaquely as `canvas_layout` JSON in
+  `store.rs` (`#[serde(default)]`) + `get/set_canvas_layout` commands; frontend
+  `canvasLayout` slice + `setCanvasLayout` (loaded in `refresh`). **View:** added **Canvas**
+  to the #25 `ViewSwitch` and routed it as the third view in `App.tsx`. **Engine
+  (`Canvas.tsx`):** empty canvas shows a **center drop**; during a drag each leaf shows
+  four **edge drop-zones** (`pointerWithin` collision) that split L/R/T/B recursively; a
+  built-in **palette chip** is the #46 drag source (placeholder panels) so the engine works
+  standalone; panels have a **close ×** (collapses the split); borders resize via
+  `react-resizable-panels` v4 (`Group`/`Panel`/`Separator`, `defaultLayout` flexGrow map,
+  `onLayoutChanged` commits the settled sizes — no manual debounce). **Tests:** 6 frontend
+  `canvasTree` (split sides, recursive, collapse-on-remove, identity preservation, resize)
+  + Rust `canvas_layout_set_and_persist`. **Hard gate green:** Rust `fmt`/`clippy`/`test`
+  (36) + frontend `build`/`lint`/`format:check`/`test` (61). Bundle +~13 KB gzip
+  (react-resizable-panels). The drag/split/resize interactions are runtime-visual (not
+  launched headlessly); the tree ops + persistence are unit-tested, and the no-dispose
+  guarantee is by-construction (#18 pool + identity-preserving ops). Base for #47.
 
 ---
 

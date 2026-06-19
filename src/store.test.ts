@@ -35,6 +35,7 @@ beforeEach(() => {
     overviewPanels: {},
     overviewOrder: {},
     openFiles: {},
+    canvasLayout: null,
     sessionBusy: {},
     claudeMissing: false,
     toasts: [],

@@ -66,6 +66,11 @@ pub struct PersistedState {
     /// in a file viewer, shown in the sidebar tree. `default` keeps old files loading.
     #[serde(default)]
     pub open_files: HashMap<String, Vec<String>>,
+    /// The Canvas split-panel layout tree (#46), stored opaquely as JSON (the
+    /// frontend owns the recursive shape). `null` = empty canvas. `default` keeps
+    /// old files loading.
+    #[serde(default)]
+    pub canvas_layout: serde_json::Value,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -199,6 +204,16 @@ impl Store {
                 state.open_files.insert(path.to_string(), files);
             }
         })
+    }
+
+    /// The Canvas layout tree (#46) — opaque JSON; `null` when the canvas is empty.
+    pub fn canvas_layout(&self) -> serde_json::Value {
+        self.with(|state| state.canvas_layout.clone())
+    }
+
+    /// Replace the Canvas layout tree and persist (#46).
+    pub fn set_canvas_layout(&self, layout: serde_json::Value) -> io::Result<()> {
+        self.update(|state| state.canvas_layout = layout)
     }
 
     fn with<R>(&self, read: impl FnOnce(&PersistedState) -> R) -> R {
@@ -346,6 +361,27 @@ mod tests {
         // An empty list drops the repo's entry.
         store.set_open_files("/repo/a", vec![]).unwrap();
         assert!(!Store::load(&path).open_files().contains_key("/repo/a"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn canvas_layout_set_and_persist() {
+        let path = temp_path("canvas");
+        let store = Store::load(&path);
+        // Defaults to null (empty canvas).
+        assert!(store.canvas_layout().is_null());
+
+        let tree = serde_json::json!({
+            "type": "leaf",
+            "id": "p1",
+            "content": { "kind": "placeholder" }
+        });
+        store.set_canvas_layout(tree.clone()).unwrap();
+        assert_eq!(Store::load(&path).canvas_layout(), tree);
+
+        // Clearing back to null persists too.
+        store.set_canvas_layout(serde_json::Value::Null).unwrap();
+        assert!(Store::load(&path).canvas_layout().is_null());
         let _ = fs::remove_file(&path);
     }
 

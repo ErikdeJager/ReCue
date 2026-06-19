@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 
+import Canvas from "./components/Canvas/Canvas";
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
 import Focus from "./components/Focus/Focus";
 import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
@@ -13,10 +14,10 @@ import { useKeyboardNav } from "./useKeyboardNav";
 
 /**
  * Application shell: a sidebar region (#9) and the main content area, which
- * routes between the Overview wall (#11) and Focus view (#12), under the native
- * macOS title bar (#19 — no custom chrome). Cross-cutting surfaces (toasts, the
- * claude-missing banner) live at the top level. State + IPC are wired through
- * the Zustand store.
+ * routes between the Overview wall (#11), Focus view (#12), and Canvas (#46),
+ * under the native macOS title bar (#19 — no custom chrome). Cross-cutting
+ * surfaces (toasts, the claude-missing banner) live at the top level. State +
+ * IPC are wired through the Zustand store.
  */
 function App() {
   const view = useStore((s) => s.view);
@@ -45,7 +46,13 @@ function App() {
         <Sidebar />
         <main className="main">
           <div className="main-content">
-            {view === "overview" ? <Overview /> : <Focus />}
+            {view === "overview" ? (
+              <Overview />
+            ) : view === "canvas" ? (
+              <Canvas />
+            ) : (
+              <Focus />
+            )}
           </div>
         </main>
       </div>

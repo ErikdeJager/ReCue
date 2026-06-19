@@ -5,12 +5,13 @@ import styles from "./ViewSwitch.module.css";
 const OPTIONS: { value: View; label: string }[] = [
   { value: "overview", label: "Overview" },
   { value: "focus", label: "Focus" },
+  { value: "canvas", label: "Canvas" },
 ];
 
 /**
- * Segmented Overview / Focus control. Lives in the sidebar, under the New
- * session button (#25), so it's always visible in both views. Choosing Focus
- * goes through `showFocus` so it focuses the selected (or first) agent.
+ * Segmented Overview / Focus / Canvas control (#25, #46). Lives in the sidebar,
+ * under the New session button, so it's always visible. Choosing Focus goes
+ * through `showFocus` so it focuses the selected (or first) agent.
  */
 function ViewSwitch() {
   const view = useStore((s) => s.view);
