@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#83**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#84**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -1454,3 +1454,68 @@ diff viewer, not an addable view); a Canvas-native "add view" menu.
   branch + `addOverviewPanel`; add a Views registry/section), `src/components/Sidebar/Sidebar.module.css`
   (section-header style; reuse `menuSeparator`), `src/components/FilePicker/FilePicker.tsx` (file
   viewer path), and the terminal-add action from #72.
+
+---
+
+### 83. [ ] More subtle toasts — confirm closing views and canvas add/close/rename
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** none
+**Created:** 2026-06-19
+
+**Description**
+
+Several everyday actions currently happen silently; add a **small, low-key confirmation toast**
+to each, reusing the existing toast system (`pushToast`, `info` tone, bottom-right #32 — **no
+new visual variant** per the requester; the existing info toast is the "easy on the eyes"
+baseline). Cover the actions the requester named plus their obvious siblings:
+
+- **Close a view** (`removeOverviewPanel`) — file viewer, diff viewer, **and** terminal (#72)
+  — e.g. "Closed <filename>" / "Closed diff viewer" / "Closed terminal". (Today only agents
+  toast on close via "Session removed"; this extends a close-toast to **all** view kinds.)
+- **Add a view** (`addOverviewPanel`) — e.g. "Opened <filename>" / "Opened diff viewer" /
+  "Opened terminal".
+- **Create a canvas** (`addCanvas`) — e.g. "Canvas created".
+- **Close a canvas** (`closeCanvas`) — e.g. "Canvas closed".
+- **Rename a canvas** (`renameCanvas`) — e.g. "Canvas renamed".
+
+Skip noisy/continuous actions (drag-reorder of panels or canvas tabs, view switching, repo
+color change). Keep messages short and consistent.
+
+**Avoid toast spam on compound actions:** bulk operations that already toast once must not also
+fire a per-item toast — e.g. **Forget repo** (#31) removes a repo's agents + panels and toasts
+once; the new panel-close toast must fire only on a user's **direct** single close (the × on a
+row/column), not during forget. Reuse the existing one-toast-per-action discipline (the
+`intentionalKills` / #32 suppression pattern). For a deduped add (#59 — the file/diff already
+open), don't double-toast (skip or a gentle "already open").
+
+Out of scope: a new toast tone/visual (reuse info per the requester); toasting every action
+(chosen: the named set + siblings); changing the toast position/TTL system.
+
+**Subtasks**
+
+1. [ ] `removeOverviewPanel` → toast a kind-aware "Closed …" on a direct user close; suppress
+   during bulk forget (#31).
+2. [ ] `addOverviewPanel` → toast "Opened …" on an actual add (not on a deduped no-op).
+3. [ ] `addCanvas` / `closeCanvas` / `renameCanvas` → toast "Canvas created / closed / renamed".
+4. [ ] Keep messages short + consistent; reuse the `info` tone (no new variant).
+
+**Acceptance criteria**
+
+- [ ] Closing any view (file / diff / terminal) shows a brief toast; closing is no longer
+  silent for non-agent views.
+- [ ] Adding a view, and creating / closing / renaming a canvas each show a brief toast.
+- [ ] Bulk Forget-repo still shows a single toast (no per-panel spam); a deduped re-add doesn't
+  double-toast.
+- [ ] Toasts use the existing info style + bottom-right placement; noisy actions (reorder, view
+  switch, color) don't toast.
+
+**Notes**
+
+- Decisions (from the requester): cover close-view + add-view + canvas add/close/rename (named
+  examples + siblings); reuse the existing info toast style (no new tone).
+- Generic across view kinds, so #72 terminals and the #82 "Views" add-actions get these toasts
+  for free (not hard deps).
+- Key code: `src/store.ts` (`removeOverviewPanel`, `addOverviewPanel`, `addCanvas`,
+  `closeCanvas`, `renameCanvas`, `pushToast`, the `intentionalKills` / #32 suppression),
+  `src/components/Toaster/*` (existing styling — unchanged).
