@@ -1,4 +1,4 @@
-import { type ReactElement } from "react";
+import { type ReactElement, useEffect } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { X } from "lucide-react";
 import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
@@ -14,6 +14,7 @@ import type {
 import DiffInspector from "../DiffInspector/DiffInspector";
 import FileViewer from "../FileViewer/FileViewer";
 import Terminal from "../Terminal/Terminal";
+import { focusTerminal } from "../Terminal/terminalPool";
 import CanvasTabs from "./CanvasTabs";
 import { removeLeaf, updateSizes } from "./canvasTree";
 import styles from "./Canvas.module.css";
@@ -69,6 +70,9 @@ function LeafPanel({
   const sessions = useStore((s) => s.sessions);
   const branches = useStore((s) => s.branches);
   const repoColors = useStore((s) => s.repoColors);
+  const activeLeafId = useStore((s) => s.activeLeafId);
+  const setActiveLeaf = useStore((s) => s.setActiveLeaf);
+  const isActive = leaf.id === activeLeafId;
 
   const content = leaf.content;
   const session =
@@ -90,6 +94,18 @@ function LeafPanel({
     : repoPath
       ? `${repoName(repoPath)}${branch ? ` · ${branch}` : ""}`
       : null;
+
+  // When this panel becomes the keyboard-focused one (#76), focus its terminal so
+  // subsequent keystrokes go there; non-terminal panels just take the highlight.
+  useEffect(() => {
+    if (
+      isActive &&
+      (content.kind === "agent" || content.kind === "terminal") &&
+      content.sessionId
+    ) {
+      focusTerminal(content.sessionId);
+    }
+  }, [isActive, content.kind, content.sessionId]);
 
   const renderContent = (): ReactElement => {
     if (content.kind === "agent" && content.sessionId) {
@@ -116,7 +132,10 @@ function LeafPanel({
   };
 
   return (
-    <div className={styles.panel}>
+    <div
+      className={`${styles.panel} ${isActive ? styles.panelActive : ""}`}
+      onPointerDown={() => setActiveLeaf(leaf.id)}
+    >
       <header className={styles.panelHeader}>
         <span className={styles.panelTitleBlock}>
           {repoPath && (

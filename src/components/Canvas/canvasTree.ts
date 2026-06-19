@@ -109,3 +109,94 @@ export function appendLeaf(
     sizes: [70, 30],
   };
 }
+
+/** A leaf id with its rectangle (percent of the canvas, 0–100). */
+export interface LeafRect {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Compute every leaf's rectangle from the tree + split sizes (percent units),
+ * starting from the full canvas. `dir: "row"` puts `a` left of `b`, `"col"` puts
+ * `a` above `b`; `sizes` are the two shares. Pure — drives spatial keyboard nav
+ * (#76).
+ */
+export function leafRects(
+  tree: CanvasNode | null,
+  rect: LeafRect = { id: "", x: 0, y: 0, w: 100, h: 100 },
+): LeafRect[] {
+  if (!tree) return [];
+  if (tree.type === "leaf") return [{ ...rect, id: tree.id }];
+  const total = tree.sizes[0] + tree.sizes[1] || 1;
+  if (tree.dir === "row") {
+    const wa = (rect.w * tree.sizes[0]) / total;
+    return [
+      ...leafRects(tree.a, { ...rect, w: wa }),
+      ...leafRects(tree.b, { ...rect, x: rect.x + wa, w: rect.w - wa }),
+    ];
+  }
+  const ha = (rect.h * tree.sizes[0]) / total;
+  return [
+    ...leafRects(tree.a, { ...rect, h: ha }),
+    ...leafRects(tree.b, { ...rect, y: rect.y + ha, h: rect.h - ha }),
+  ];
+}
+
+/**
+ * The leaf spatially adjacent to `fromId` in `dir`, or null if none. Considers
+ * only leaves across the relevant edge that overlap on the perpendicular axis,
+ * then picks the nearest (perpendicular-center distance breaks ties). Pure (#76).
+ */
+export function spatialNeighbor(
+  tree: CanvasNode | null,
+  fromId: string,
+  dir: "left" | "right" | "up" | "down",
+): string | null {
+  const rects = leafRects(tree);
+  const from = rects.find((r) => r.id === fromId);
+  if (!from) return null;
+  const fromCx = from.x + from.w / 2;
+  const fromCy = from.y + from.h / 2;
+  const EPS = 0.5;
+  let best: { id: string; primary: number; secondary: number } | null = null;
+  for (const r of rects) {
+    if (r.id === fromId) continue;
+    let primary: number;
+    let secondary: number;
+    let overlaps: boolean;
+    if (dir === "right") {
+      if (r.x < from.x + from.w - EPS) continue;
+      overlaps = r.y < from.y + from.h - EPS && r.y + r.h > from.y + EPS;
+      primary = r.x - (from.x + from.w);
+      secondary = Math.abs(r.y + r.h / 2 - fromCy);
+    } else if (dir === "left") {
+      if (r.x + r.w > from.x + EPS) continue;
+      overlaps = r.y < from.y + from.h - EPS && r.y + r.h > from.y + EPS;
+      primary = from.x - (r.x + r.w);
+      secondary = Math.abs(r.y + r.h / 2 - fromCy);
+    } else if (dir === "down") {
+      if (r.y < from.y + from.h - EPS) continue;
+      overlaps = r.x < from.x + from.w - EPS && r.x + r.w > from.x + EPS;
+      primary = r.y - (from.y + from.h);
+      secondary = Math.abs(r.x + r.w / 2 - fromCx);
+    } else {
+      if (r.y + r.h > from.y + EPS) continue;
+      overlaps = r.x < from.x + from.w - EPS && r.x + r.w > from.x + EPS;
+      primary = from.y - (r.y + r.h);
+      secondary = Math.abs(r.x + r.w / 2 - fromCx);
+    }
+    if (!overlaps) continue;
+    if (
+      !best ||
+      primary < best.primary - EPS ||
+      (Math.abs(primary - best.primary) <= EPS && secondary < best.secondary)
+    ) {
+      best = { id: r.id, primary, secondary };
+    }
+  }
+  return best?.id ?? null;
+}

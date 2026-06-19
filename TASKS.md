@@ -1013,9 +1013,9 @@ not wanted).
 
 ---
 
-### 76. [ ] Canvas keyboard navigation — Shift+arrows between panels, ⌘1–9 to jump canvases
+### 76. [x] Canvas keyboard navigation — Shift+arrows between panels, ⌘1–9 to jump canvases
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** #75
 **Created:** 2026-06-19
 
@@ -1061,24 +1061,25 @@ Out of scope: a prev/next canvas chord (chosen: jump-only); making canvas-switch
 
 **Subtasks**
 
-1. [ ] Add a focused/active Canvas leaf concept + a subtle highlight on the active panel; focus
-   its content (xterm/etc.) when it becomes active.
-2. [ ] `canvasTree.ts`: pure helper to compute leaf rects from the tree+sizes and find the
-   spatial neighbor in a given direction.
-3. [ ] `useKeyboardNav.ts`: in Canvas view, Shift+arrows = move focused panel spatially
+1. [x] Add a focused/active Canvas leaf concept + a subtle highlight on the active panel; focus
+   its content (xterm/etc.) when it becomes active. _(Store `activeLeafId` + `setActiveLeaf`;
+   `.panelActive` accent frame; `focusTerminal` in the pool, called on activate + click.)_
+2. [x] `canvasTree.ts`: pure helper to compute leaf rects from the tree+sizes and find the
+   spatial neighbor in a given direction. _(`leafRects` + `spatialNeighbor`, unit-tested.)_
+3. [x] `useKeyboardNav.ts`: in Canvas view, Shift+arrows = move focused panel spatially
    (Overview keeps agent nav); ⌘1–9 = jump to canvas N; capture-phase + `!newSessionOpen` guard.
-4. [ ] Verify no conflict with a focused claude/terminal (⌘1–9 never reaches the PTY;
-   Shift+arrows intercepted before xterm).
+4. [x] Verify no conflict with a focused claude/terminal (⌘1–9 never reaches the PTY;
+   Shift+arrows intercepted before xterm). _(Capture-phase handler + stopPropagation, as #24.)_
 
 **Acceptance criteria**
 
-- [ ] In Canvas, Shift+←/→/↑/↓ move the focused panel to the spatially adjacent panel; the
+- [x] In Canvas, Shift+←/→/↑/↓ move the focused panel to the spatially adjacent panel; the
   active panel is highlighted and receives subsequent keystrokes.
-- [ ] In Canvas, ⌘1 … ⌘9 jump to the 1st … 9th canvas tab (no-op past the tab count); active
+- [x] In Canvas, ⌘1 … ⌘9 jump to the 1st … 9th canvas tab (no-op past the tab count); active
   only in Canvas view.
-- [ ] With a `claude` session focused in a panel, ⌘1–9 still switches canvases (doesn't reach
+- [x] With a `claude` session focused in a panel, ⌘1–9 still switches canvases (doesn't reach
   claude) and Shift+arrows still move panels (don't reach claude).
-- [ ] In Overview, Shift+←/→ still navigate agents (unchanged); the new-session modal's keys
+- [x] In Overview, Shift+←/→ still navigate agents (unchanged); the new-session modal's keys
   aren't hijacked.
 
 **Notes**

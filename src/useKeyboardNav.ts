@@ -1,6 +1,8 @@
 // Global keyboard shortcuts.
 //
-//   Shift+← / Shift+→  select prev/next agent (wall order, wrap-around)   (#24)
+//   Shift+← / Shift+→  select prev/next agent in Overview                 (#24)
+//   Shift+arrows       move the focused panel spatially in Canvas         (#76)
+//   ⌘1 … ⌘9            jump to canvas N (Canvas view only)                (#76)
 //   ⌘N / Ctrl+N        open the new-session flow from anywhere            (#26)
 //
 // xterm forwards keystrokes to the PTY when a terminal is focused, so the
@@ -33,27 +35,67 @@ export function useKeyboardNav(): void {
         return;
       }
 
-      // Plain Shift + Arrow only — leave Cmd/Ctrl/Alt combos (and claude's own
-      // Shift usage) untouched.
+      // ⌘1 … ⌘9 — jump to canvas N, Canvas view only (#76). Safe over a focused
+      // claude session: ⌘+number never reaches the PTY. Skipped while the
+      // new-session modal is open so its own ⌘1–9 recents (#61/#66) aren't taken.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        /^[1-9]$/.test(e.key)
+      ) {
+        const state = useStore.getState();
+        if (state.view !== "canvas" || state.newSessionOpen) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const canvas = state.canvases[Number(e.key) - 1];
+        if (canvas) state.selectCanvas(canvas.id);
+        return;
+      }
+
+      // Plain Shift + Arrow — context-sensitive (#24/#76). Leave Cmd/Ctrl/Alt
+      // combos (and claude's own Shift usage) untouched.
       if (!e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key;
-      if (key !== "ArrowLeft" && key !== "ArrowRight") return;
+      const isArrow =
+        key === "ArrowLeft" ||
+        key === "ArrowRight" ||
+        key === "ArrowUp" ||
+        key === "ArrowDown";
+      if (!isArrow) return;
 
       const state = useStore.getState();
-      // Don't navigate while the new-session modal/popover is open (#27) — let
-      // its inputs handle Shift+Arrow normally.
+      // Don't navigate while the new-session modal/popover is open (#27).
       if (state.newSessionOpen) return;
 
-      // Intercept before xterm forwards the key to the PTY.
-      e.preventDefault();
-      e.stopPropagation();
+      // Canvas: Shift+arrows move the keyboard-focused panel spatially (#76).
+      if (state.view === "canvas") {
+        e.preventDefault();
+        e.stopPropagation();
+        const dir =
+          key === "ArrowLeft"
+            ? "left"
+            : key === "ArrowRight"
+              ? "right"
+              : key === "ArrowUp"
+                ? "up"
+                : "down";
+        state.moveCanvasFocus(dir);
+        return;
+      }
 
-      const id = adjacentSessionId(
-        state.sessions,
-        state.selectedId,
-        key === "ArrowRight" ? 1 : -1,
-      );
-      if (id) state.select(id);
+      // Overview: only ←/→ navigate agents (#24); ↑/↓ pass through.
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        // Intercept before xterm forwards the key to the PTY.
+        e.preventDefault();
+        e.stopPropagation();
+        const id = adjacentSessionId(
+          state.sessions,
+          state.selectedId,
+          key === "ArrowRight" ? 1 : -1,
+        );
+        if (id) state.select(id);
+      }
     };
 
     window.addEventListener("keydown", onKeyDown, true); // capture phase

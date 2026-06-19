@@ -4,6 +4,7 @@
 
 import { create } from "zustand";
 
+import { collectLeaves, spatialNeighbor } from "./components/Canvas/canvasTree";
 import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
 import { repoName } from "./paths";
@@ -221,6 +222,8 @@ export interface AppState {
   canvases: CanvasTab[];
   /** Which Canvas tab is active (#58). */
   activeCanvasId: string;
+  /** The keyboard-focused Canvas panel (leaf id), or null (#76). */
+  activeLeafId: string | null;
   /** Sessions currently working, from the output-activity heuristic (#42); an
    * absent/false entry means idle. (The task's `sessionState`, as a boolean map.) */
   sessionBusy: Record<string, boolean>;
@@ -286,6 +289,10 @@ export interface AppState {
   reorderCanvases: (orderedIds: string[]) => void;
   /** Switch the active Canvas tab (#58). */
   selectCanvas: (id: string) => void;
+  /** Set (or clear) the keyboard-focused Canvas panel (#76). */
+  setActiveLeaf: (id: string | null) => void;
+  /** Move the Canvas focus to the spatially adjacent panel (#76). */
+  moveCanvasFocus: (dir: "left" | "right" | "up" | "down") => void;
   /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
   spawnSession: (
     cwd: string,
@@ -326,6 +333,7 @@ export const useStore = create<AppState>()((set, get) => ({
   // the always-≥1 invariant even before the backend responds.
   canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
   activeCanvasId: "canvas-1",
+  activeLeafId: null,
   sessionBusy: {},
   terminalExits: {},
   claudeMissing: false,
@@ -782,8 +790,29 @@ export const useStore = create<AppState>()((set, get) => ({
   selectCanvas: (id) => {
     const { canvases, activeCanvasId } = get();
     if (id === activeCanvasId || !canvases.some((c) => c.id === id)) return;
-    set({ activeCanvasId: id });
+    // Clear the focused panel (#76) — the new tab has its own panels.
+    set({ activeCanvasId: id, activeLeafId: null });
     void ipc.setCanvases({ canvases, activeId: id }).catch(() => {});
+  },
+
+  setActiveLeaf: (id) => set({ activeLeafId: id }),
+
+  moveCanvasFocus: (dir) => {
+    const s = get();
+    const layout =
+      s.canvases.find((c) => c.id === s.activeCanvasId)?.layout ?? null;
+    const leaves = collectLeaves(layout);
+    if (leaves.length === 0) return;
+    // No focused panel yet → focus the first; else move to the spatial neighbor.
+    const currentId = leaves.some((l) => l.id === s.activeLeafId)
+      ? (s.activeLeafId as string)
+      : null;
+    if (!currentId) {
+      set({ activeLeafId: leaves[0]?.id ?? null });
+      return;
+    }
+    const next = spatialNeighbor(layout, currentId, dir);
+    if (next) set({ activeLeafId: next });
   },
 
   spawnSession: async (cwd, name, branch) => {

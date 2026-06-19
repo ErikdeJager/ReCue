@@ -163,6 +163,13 @@
   background: var(--terminal-bg);
 }
 
+/* The keyboard-focused panel (#76): a subtle accent frame so it's clear which
+   panel Shift+arrows move from and where keystrokes go. */
+.panelActive {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
 .panelHeader {
   display: flex;
   height: 28px;

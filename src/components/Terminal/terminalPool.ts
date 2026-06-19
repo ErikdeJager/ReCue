@@ -262,6 +262,12 @@ export function resetTerminal(sessionId: string): void {
   else ensureHost(sessionId);
 }
 
+/** Focus the pooled xterm for `sessionId` (Canvas panel keyboard nav, #76) so
+ * subsequent keystrokes go to it. No-op if it isn't mounted. */
+export function focusTerminal(sessionId: string): void {
+  hosts.get(sessionId)?.term.focus();
+}
+
 /**
  * Dispose terminals whose sessions have been removed. Call when the session list
  * changes; an exited-but-still-listed session keeps its terminal (and overlay).
