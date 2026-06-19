@@ -123,7 +123,7 @@ clear error if it is missing).
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions + recents)
-│   ├── src/git.rs          # Read-only git: branch + diff + branch list/checkout
+│   ├── src/git.rs          # Git: branch + diff + list + checkout + worktree add/remove (#74)
 │   ├── src/files.rs        # Read-only file access (list text files/read, path-validated)
 │   ├── tauri.conf.json     # Window, bundle, build config
 │   ├── capabilities/       # Tauri permission capabilities
@@ -151,13 +151,18 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 
 ## v1 scope decisions / out of scope
 
-- **Git is read-only, with one deliberate exception** — ClaudeCue reads git
-  (current branch + working-tree diff vs `HEAD`) and never creates branches or
-  commits. The lone write is **`git checkout <existing branch>`** from the
-  new-session panel (#27/#53/#61): picking a branch checks it out (in the chosen
-  folder) before the agent starts. It only switches to a branch that already exists
-  locally (validated backend-side) and warns before disrupting another agent
-  already running in that folder. No branch creation, commits, or other writes.
+- **Git is read-mostly, with a small set of deliberate writes** — ClaudeCue reads
+  git (current branch + working-tree diff vs `HEAD`) and never creates branches or
+  commits. Its writes are: (1) **`git checkout <existing branch>`** from the
+  new-session panel (#27/#53/#61) — picking a branch checks it out (in the chosen
+  folder, only an existing local branch, validated backend-side) before the agent
+  starts, warning before disrupting another agent already running in that folder;
+  and (2) **`git worktree add` / `git worktree remove`** for isolated worktree
+  agents (#74) — **⌘⏎** in the branch step starts an agent in an app-managed
+  worktree (`<app-data>/worktrees/<repo-id>/<branch>`) on an existing branch, shown
+  nested under its parent repo in the sidebar; the worktree is removed (ref-counted)
+  only when its last agent goes, and a dirty worktree is kept rather than
+  force-deleted. No branch creation, commits, or other writes.
 - No app-rendered approval UI — users answer prompts directly in the terminal.
   (The v1 "no status system" rule was deliberately narrowed by **#42**: a single
   **busy/idle** indicator now exists. Still no approval pills/awaiting-glow/

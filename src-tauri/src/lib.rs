@@ -76,6 +76,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::spawn_session,
             commands::spawn_terminal,
+            commands::spawn_worktree_agent,
+            commands::remove_worktree,
             commands::resume_session,
             commands::write_stdin,
             commands::resize_pty,

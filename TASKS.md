@@ -810,9 +810,9 @@ rendering itself.
 
 ---
 
-### 74. [ ] Isolated worktree agents — ⌘⏎ in the new-session modal; nested under the parent repo
+### 74. [x] Isolated worktree agents — ⌘⏎ in the new-session modal; nested under the parent repo
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** #65, #66, #67
 **Created:** 2026-06-19
 
@@ -866,37 +866,42 @@ location, and any worktree management UI beyond create/remove.
 
 **Subtasks**
 
-1. [ ] Backend `git.rs`: add `worktree_add(repo, branch, dest)`, `worktree_remove(repo, dest,
+1. [x] Backend `git.rs`: add `worktree_add(repo, branch, dest)`, `worktree_remove(repo, dest,
    force)`, `worktree_list(repo)` (+ resolve a worktree's parent repo); validate the branch
-   exists; return git's stderr on failure. New writes — note the rule change.
-2. [ ] App-managed location + IPC: compute the worktree path (`…/worktrees/<repo-id>/<branch>`);
+   exists; return git's stderr on failure. New writes — note the rule change. _(Added
+   `worktree_add` + `worktree_remove`; `worktree_list`/git parent-resolution omitted — the
+   parent repo is stored on the session record instead, see subtask 6.)_
+2. [x] App-managed location + IPC: compute the worktree path (`…/worktrees/<repo-id>/<branch>`);
    a command to create-or-reuse a worktree and spawn an agent in it (existing-branch only).
-3. [ ] Modal (#66): add **⌘⏎** in the branch step = start in an isolated worktree for the
+   _(`spawn_worktree_agent(repo, branch)`; path `<data-dir>/worktrees/<basename>-<hash>/<branch>`.)_
+3. [x] Modal (#66): add **⌘⏎** in the branch step = start in an isolated worktree for the
    selected branch (Enter = normal start, unchanged); reuse an existing worktree for that
-   (repo, branch).
-4. [ ] Sidebar: nest worktrees as indented sub-groups under the parent repo, each with isolated
+   (repo, branch). _(⌘⏎ in the branch list/filter + a "Worktree ⌘⏎" button.)_
+4. [x] Sidebar: nest worktrees as indented sub-groups under the parent repo, each with isolated
    titling and its agent(s); support multiple worktrees/repo and multiple agents/worktree.
-5. [ ] Removal: ref-count active agents per worktree — remove the agent always; `git worktree
+5. [x] Removal: ref-count active agents per worktree — remove the agent always; `git worktree
    remove` only when its last active agent goes (guard/confirm if dirty); extend Forget-repo
-   (#31) to clean up its worktrees.
-6. [ ] Persistence/boot: worktree agents persist + resume in their worktree path; re-derive the
-   parent-repo nesting on boot.
-7. [ ] Docs: update CLAUDE.md (git is no longer read-only-except-checkout — worktree
+   (#31) to clean up its worktrees. _(Dirty guard = non-forced remove fails → worktree kept +
+   warned, rather than a native confirm; Forget-repo force-removes its worktrees.)_
+6. [x] Persistence/boot: worktree agents persist + resume in their worktree path; re-derive the
+   parent-repo nesting on boot. _(Parent link stored on the record as `worktree_parent`, so
+   nesting needs no git call on boot; resume uses the worktree `repo_path`.)_
+7. [x] Docs: update CLAUDE.md (git is no longer read-only-except-checkout — worktree
    add/remove are new writes).
 
 **Acceptance criteria**
 
-- [ ] In the modal's branch step, ⌘⏎ starts an agent in an isolated worktree on the selected
+- [x] In the modal's branch step, ⌘⏎ starts an agent in an isolated worktree on the selected
   existing branch (its own folder, separate checkout); plain Enter still starts in the repo
   folder.
-- [ ] The worktree agent appears indented under its parent repo in the sidebar, titled as an
+- [x] The worktree agent appears indented under its parent repo in the sidebar, titled as an
   isolated instance (not as a separate top-level repo).
-- [ ] Starting a second agent on the same (repo, branch) reuses the same worktree folder;
+- [x] Starting a second agent on the same (repo, branch) reuses the same worktree folder;
   multiple agents can run in one worktree.
-- [ ] Removing an agent never deletes a worktree that still has another active agent; the
+- [x] Removing an agent never deletes a worktree that still has another active agent; the
   worktree folder is removed only when its last active agent is removed (guard/confirm if it
   has uncommitted changes).
-- [ ] Worktree agents survive an app restart (resume in their worktree folder) and re-nest
+- [x] Worktree agents survive an app restart (resume in their worktree folder) and re-nest
   under the parent repo.
 
 **Notes**

@@ -35,6 +35,16 @@ export const spawnSession = (cwd: string, name?: string) =>
 export const spawnTerminal = (cwd: string, id: string) =>
   invoke<void>("spawn_terminal", { cwd, id });
 
+/** Start an agent in an isolated git worktree for an existing `branch` of `repo`
+ * (#74) — creates the app-managed worktree if absent, reuses it otherwise. */
+export const spawnWorktreeAgent = (repo: string, branch: string) =>
+  invoke<SessionRecord>("spawn_worktree_agent", { repo, branch });
+
+/** Remove the worktree at `dest` from its `parent` repo (#74); `force` ignores a
+ * dirty tree (a non-forced call fails on uncommitted changes — the dirty guard). */
+export const removeWorktree = (parent: string, dest: string, force: boolean) =>
+  invoke<void>("remove_worktree", { parent, dest, force });
+
 export const resumeSession = (id: string) =>
   invoke<SessionRecord>("resume_session", { id });
 

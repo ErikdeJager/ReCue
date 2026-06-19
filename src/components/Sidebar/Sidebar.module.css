@@ -476,3 +476,43 @@
     transform: scale(1);
   }
 }
+
+/* --- Worktree sub-group (#74): an isolated worktree nested under its parent
+   repo, indented with a left rail so it reads as a child of the repo group. --- */
+.worktreeGroup {
+  margin: var(--space-1) 0 var(--space-1) var(--space-16);
+  border-left: 1px solid var(--border-hairline);
+}
+
+.worktreeHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 26px;
+  padding: 0 var(--space-8);
+  color: var(--text-muted);
+}
+
+.worktreeIcon {
+  flex-shrink: 0;
+}
+
+.worktreeName {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "worktree" marker so an isolated instance is unmistakable (#74). */
+.worktreeBadge {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chip);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}

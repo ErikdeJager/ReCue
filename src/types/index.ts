@@ -13,6 +13,8 @@ export interface SessionRecord {
   repo_path: string;
   name: string | null;
   created_at: number;
+  /** Worktree agent (#74): the parent repo path; absent for a normal agent. */
+  worktree_parent?: string | null;
 }
 
 /** Typed command error (mirrors `pty::SessionError`, serialized `{ kind, message }`). */
@@ -154,4 +156,7 @@ export interface SessionView {
   exitedCode?: number | null;
   /** True while a persisted session is being resumed on boot (#30). */
   reconnecting?: boolean;
+  /** Worktree agent (#74): the parent repo path (its `repoPath` is the isolated
+   * worktree folder); absent/null for a normal agent. Drives sidebar nesting. */
+  worktreeParent?: string | null;
 }

@@ -1,6 +1,8 @@
 //! Tauri command surface — thin wrappers over `SessionManager` and `Store`,
 //! plus the event payloads emitted to the frontend.
 
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -45,6 +47,7 @@ pub fn spawn_session(
         repo_path: cwd.clone(),
         name,
         created_at: now_secs(),
+        worktree_parent: None,
     };
     store
         .add_session(record.clone())
@@ -68,6 +71,48 @@ pub fn spawn_terminal(
 ) -> Result<(), SessionError> {
     manager.spawn_terminal(id, cwd.as_str())?;
     Ok(())
+}
+
+/// Start an agent in an **isolated git worktree** for an existing `branch` of
+/// `repo` (#74). Creates the app-managed worktree folder if absent, reuses it
+/// otherwise (multiple agents per worktree), spawns `claude` there, and persists
+/// the record with `worktree_parent = repo` (its `repo_path` is the worktree).
+#[tauri::command]
+pub fn spawn_worktree_agent(
+    manager: State<'_, SessionManager>,
+    store: State<'_, Store>,
+    repo: String,
+    branch: String,
+) -> Result<PersistedSession, SessionError> {
+    let dest = worktree_path(&store, &repo, &branch)?;
+    // `git worktree add` fails if the folder already exists, so only add when it
+    // isn't there yet — an existing folder means we reuse the worktree.
+    if !dest.is_dir() {
+        git::worktree_add(&repo, &branch, &dest).map_err(SessionError::Git)?;
+    }
+    let dest_str = dest.to_string_lossy().to_string();
+    let info = manager.spawn_session(dest_str.as_str(), None)?;
+    let record = PersistedSession {
+        id: info.id.clone(),
+        claude_session_id: info.id,
+        repo_path: dest_str,
+        name: None,
+        created_at: now_secs(),
+        worktree_parent: Some(repo),
+    };
+    store
+        .add_session(record.clone())
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    Ok(record)
+}
+
+/// Remove the worktree at `dest` from its `parent` repo (#74). Called by the
+/// frontend only after the worktree's last active agent is removed. `force` is
+/// needed when the worktree has uncommitted changes; a non-forced call fails on
+/// a dirty tree, which the UI uses as the confirm guard.
+#[tauri::command]
+pub fn remove_worktree(parent: String, dest: String, force: bool) -> Result<(), SessionError> {
+    git::worktree_remove(&parent, &dest, force).map_err(SessionError::Git)
 }
 
 #[tauri::command]
@@ -341,4 +386,44 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
+}
+
+/// A path-segment-safe slug: keep alphanumerics and `-_.`, replace the rest with
+/// `-` (so a branch like `feat/x` becomes `feat-x`). Used for worktree paths (#74).
+fn sanitize_seg(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// A stable (deterministic) hash of a string — `DefaultHasher` uses fixed keys,
+/// so the same repo path always maps to the same worktree-id across runs (#74).
+fn stable_hash(s: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The app-managed worktree folder for a (repo, branch) (#74):
+/// `<data-dir>/worktrees/<repo-basename>-<repo-hash>/<branch>`. Stable per repo
+/// path, so a second agent on the same (repo, branch) reuses the same folder.
+fn worktree_path(store: &Store, repo: &str, branch: &str) -> Result<PathBuf, SessionError> {
+    let base = store
+        .data_dir()
+        .ok_or_else(|| SessionError::Io("no app data directory".to_string()))?;
+    let basename = Path::new(repo)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "repo".to_string());
+    let repo_id = format!("{}-{:x}", sanitize_seg(&basename), stable_hash(repo));
+    Ok(base
+        .join("worktrees")
+        .join(repo_id)
+        .join(sanitize_seg(branch)))
 }

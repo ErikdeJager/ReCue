@@ -53,6 +53,7 @@ function NewSessionModal() {
   const sessions = useStore((s) => s.sessions);
   const close = useStore((s) => s.closeNewSession);
   const spawnSession = useStore((s) => s.spawnSession);
+  const spawnWorktreeSession = useStore((s) => s.spawnWorktreeSession);
 
   const [step, setStep] = useState<"folder" | "branch">("folder");
   const [cwd, setCwd] = useState<string | null>(null);
@@ -244,6 +245,16 @@ function NewSessionModal() {
     else setBusy(false); // stay open so the error (e.g. dirty tree) can be fixed
   };
 
+  // ⌘⏎ in the branch step (#74): start the agent in an isolated git worktree for
+  // the selected existing branch (its own folder), instead of the repo folder.
+  const createWorktree = async () => {
+    if (!cwd || busy || !selectedBranch) return;
+    setBusy(true);
+    const ok = await spawnWorktreeSession(cwd, selectedBranch);
+    if (ok) close();
+    else setBusy(false);
+  };
+
   // Folder step Enter / primary button: advance to the branch step for a git
   // repo, or start immediately for a non-git folder. Resolves branches first if
   // they haven't loaded yet, so a fast ⌘N → Enter still does the right thing.
@@ -342,6 +353,13 @@ function NewSessionModal() {
   const onBranchQueryKeyDown = (
     event: ReactKeyboardEvent<HTMLInputElement>,
   ) => {
+    // ⌘⏎ starts in an isolated worktree (#74); plain Enter falls through to the
+    // form submit (normal start in the repo folder).
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void createWorktree();
+      return;
+    }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
     moveBranch(event.key === "ArrowDown" ? 1 : -1);
@@ -352,7 +370,9 @@ function NewSessionModal() {
   const onBranchKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      void create();
+      // ⌘⏎ = start in an isolated worktree (#74); Enter = normal start.
+      if (event.metaKey || event.ctrlKey) void createWorktree();
+      else void create();
       return;
     }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -571,6 +591,16 @@ function NewSessionModal() {
             <div className={styles.actions}>
               <button type="button" className={styles.cancel} onClick={close}>
                 Cancel <kbd className={styles.btnKbd}>esc</kbd>
+              </button>
+              {/* Isolated worktree (#74): its own folder + separate checkout. */}
+              <button
+                type="button"
+                className={styles.cancel}
+                onClick={() => void createWorktree()}
+                disabled={!cwd || busy || !selectedBranch}
+                title="Start in an isolated git worktree"
+              >
+                Worktree <kbd className={styles.btnKbd}>⌘⏎</kbd>
               </button>
               <button
                 type="submit"

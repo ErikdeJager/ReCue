@@ -197,6 +197,68 @@ pub fn checkout_branch(cwd: impl AsRef<Path>, branch: &str) -> Result<(), String
     }
 }
 
+/// Add a worktree for an existing local `branch` at `dest` (#74 — a new git
+/// *write*, expanding the read-only-except-checkout rule; see CLAUDE.md).
+/// Validates the branch exists (like `checkout_branch`) and returns git's stderr
+/// on failure (e.g. the branch is already checked out elsewhere). Never panics.
+pub fn worktree_add(
+    repo: impl AsRef<Path>,
+    branch: &str,
+    dest: impl AsRef<Path>,
+) -> Result<(), String> {
+    let repo = repo.as_ref();
+    if !list_branches(repo).all.iter().any(|b| b == branch) {
+        return Err(format!("unknown branch `{branch}`"));
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "add"])
+        .arg(dest.as_ref())
+        .arg(branch)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("could not add worktree for `{branch}`")
+        } else {
+            stderr
+        })
+    }
+}
+
+/// Remove the worktree at `dest` from `repo` (#74 — a new git write). `force` is
+/// required when the worktree has uncommitted changes; without it git refuses,
+/// which the caller uses as the dirty guard. Returns git's stderr on failure.
+pub fn worktree_remove(
+    repo: impl AsRef<Path>,
+    dest: impl AsRef<Path>,
+    force: bool,
+) -> Result<(), String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(repo.as_ref())
+        .args(["worktree", "remove"]);
+    if force {
+        cmd.arg("--force");
+    }
+    cmd.arg(dest.as_ref());
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "could not remove worktree".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
 /// Parse `git diff` unified output into structured per-file diffs.
 pub fn parse_unified_diff(diff: &str) -> Vec<FileDiff> {
     let mut files: Vec<FileDiff> = Vec::new();

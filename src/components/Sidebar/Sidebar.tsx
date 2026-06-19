@@ -4,6 +4,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   FileDiff,
   FileText,
+  GitBranch,
   Plus,
   Terminal as TerminalIcon,
   X,
@@ -428,7 +429,16 @@ function Sidebar() {
     setMenuMode("menu");
   };
 
-  const repos = repoOrder(recents, sessions);
+  // Top-level groups exclude worktree agents (#74) — their repo_path is the
+  // worktree folder, not a repo — but include every worktree's parent so the
+  // parent group is always present to nest under.
+  const worktreeParents = sessions
+    .filter((s) => s.worktreeParent)
+    .map((s) => s.worktreeParent as string);
+  const repos = repoOrder(
+    [...recents, ...worktreeParents],
+    sessions.filter((s) => !s.worktreeParent),
+  );
   const reposKey = repos.join("\n");
 
   useEffect(() => {
@@ -497,7 +507,9 @@ function Sidebar() {
         )}
 
         {repos.map((repo) => {
-          const repoSessions = sessions.filter((s) => s.repoPath === repo);
+          const repoSessions = sessions.filter(
+            (s) => s.repoPath === repo && !s.worktreeParent,
+          );
           const isEmpty = repoSessions.length === 0;
           const isFiltered = overviewRepoFilter === repo;
           // Primary label = the repo's branch, or the folder name when non-git /
@@ -506,6 +518,14 @@ function Sidebar() {
           const rowLabels = dedupeBranchLabels(
             repoSessions.map(() => baseLabel),
           );
+          // Worktree agents (#74) of this repo, grouped by their worktree folder —
+          // rendered as indented sub-groups below the repo's own sessions/items.
+          const worktreeAgents = sessions.filter(
+            (s) => s.worktreeParent === repo,
+          );
+          const worktreePaths = [
+            ...new Set(worktreeAgents.map((s) => s.repoPath)),
+          ];
 
           return (
             <div key={repo} className={styles.group}>
@@ -605,6 +625,47 @@ function Sidebar() {
                   />
                 ) : null,
               )}
+
+              {/* Isolated worktrees (#74), nested under their parent repo: each
+                  worktree folder is a sub-group (branch + "worktree" badge) with
+                  its agent(s). Their repo_path is the worktree, not this repo. */}
+              {worktreePaths.map((wt) => {
+                const wtAgents = worktreeAgents.filter(
+                  (s) => s.repoPath === wt,
+                );
+                const wtBranch = (branches[wt] ?? "") || repoName(wt);
+                const wtLabels = dedupeBranchLabels(
+                  wtAgents.map(() => wtBranch),
+                );
+                return (
+                  <div key={wt} className={styles.worktreeGroup}>
+                    <div className={styles.worktreeHeader} title={wt}>
+                      <GitBranch
+                        size={12}
+                        strokeWidth={1.5}
+                        className={styles.worktreeIcon}
+                        aria-hidden
+                      />
+                      <span className={styles.worktreeName}>{wtBranch}</span>
+                      <span className={styles.worktreeBadge}>worktree</span>
+                    </div>
+                    {wtAgents.map((session, i) => (
+                      <SessionRow
+                        key={session.id}
+                        session={session}
+                        label={wtLabels[i] ?? wtBranch}
+                        selected={session.id === selectedId}
+                        busy={sessionBusy[session.id] ?? false}
+                        onSelect={() => select(session.id)}
+                        onRemove={() => void removeSession(session.id)}
+                        onRename={(name) =>
+                          void renameSession(session.id, name)
+                        }
+                      />
+                    ))}
+                  </div>
+                );
+              })}
             </div>
           );
         })}

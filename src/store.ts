@@ -57,6 +57,7 @@ function toSessionView(record: SessionRecord): SessionView {
     repoPath: record.repo_path,
     name: record.name,
     createdAt: record.created_at,
+    worktreeParent: record.worktree_parent ?? null,
   };
 }
 
@@ -306,6 +307,10 @@ export interface AppState {
     name?: string,
     branch?: string,
   ) => Promise<boolean>;
+  /** Start an agent in an isolated git worktree for an existing branch (#74). */
+  spawnWorktreeSession: (repo: string, branch: string) => Promise<boolean>;
+  /** Remove a worktree once its last active agent is gone (ref-counted, #74). */
+  cleanupWorktreeIfEmpty: (parent: string, dest: string) => Promise<void>;
   /** Resume a crashed / boot-failed agent's PTY; resolves true on success so the
    * caller can reset the pooled terminal (#63). */
   restartSession: (id: string) => Promise<boolean>;
@@ -863,6 +868,45 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
+  spawnWorktreeSession: async (repo, branch) => {
+    try {
+      // Isolated worktree agent (#74): no checkout, no custom name. The backend
+      // creates-or-reuses the app-managed worktree and spawns claude there; the
+      // record carries worktree_parent = repo for the sidebar nesting.
+      const record = await ipc.spawnWorktreeAgent(repo, branch);
+      get().upsertSession(toSessionView(record));
+      get().select(record.id);
+      get().pushToast(`Started isolated worktree on ${branch}`);
+      void get().refreshBranches();
+      return true;
+    } catch (err) {
+      if (isSessionError(err) && err.kind === "BinaryNotFound") {
+        get().setClaudeMissing(true);
+      }
+      get().pushToast(
+        isSessionError(err) ? err.message : "Could not start worktree agent",
+        "error",
+      );
+      return false;
+    }
+  },
+
+  cleanupWorktreeIfEmpty: async (parent, dest) => {
+    // Ref-counted (#74): never remove a worktree while another active agent still
+    // runs in it.
+    const stillActive = get().sessions.some(
+      (s) => s.repoPath === dest && s.exitedCode === undefined,
+    );
+    if (stillActive) return;
+    try {
+      // Non-forced: git refuses a dirty worktree, which is our dirty guard.
+      await ipc.removeWorktree(parent, dest, false);
+    } catch {
+      // Keep a dirty worktree rather than force-deleting uncommitted work (#74).
+      get().pushToast("Worktree kept — it has uncommitted changes", "error");
+    }
+  },
+
   restartSession: async (id) => {
     try {
       await ipc.resumeSession(id);
@@ -899,6 +943,7 @@ export const useStore = create<AppState>()((set, get) => ({
   removeSession: async (id) => {
     // Intentional kill — the backend `Exited` toast is suppressed (#32); the
     // "Session removed" toast below is the single notification.
+    const session = get().sessions.find((s) => s.id === id);
     intentionalKills.add(id);
     try {
       await ipc.killSession(id);
@@ -907,6 +952,14 @@ export const useStore = create<AppState>()((set, get) => ({
     }
     get().dropSession(id);
     get().pushToast("Session removed");
+    // Worktree cleanup (#74): if this was a worktree agent, remove its worktree
+    // once it was the last active agent there (ref-counted; dirty = kept+warned).
+    if (session?.worktreeParent) {
+      void get().cleanupWorktreeIfEmpty(
+        session.worktreeParent,
+        session.repoPath,
+      );
+    }
   },
 
   renameSession: async (id, name) => {
@@ -921,19 +974,37 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   forgetRepo: async (repoPath) => {
-    const ids = get()
-      .sessions.filter((s) => s.repoPath === repoPath)
-      .map((s) => s.id);
+    // Include this repo's worktree agents (#74) — their repo_path is the worktree
+    // folder, not the repo — so forgetting the repo also kills them and removes
+    // their worktree folders (forgetRepo is explicitly destructive → force).
+    const repoSessions = get().sessions.filter(
+      (s) => s.repoPath === repoPath || s.worktreeParent === repoPath,
+    );
+    const ids = repoSessions.map((s) => s.id);
+    const worktreeDests = [
+      ...new Set(
+        repoSessions
+          .filter((s) => s.worktreeParent === repoPath)
+          .map((s) => s.repoPath),
+      ),
+    ];
     // Kill + forget every session's process (kill_session also drops its record),
     // then drop the folder from persisted recents so it can't reappear on restart.
     // Mark them intentional so their exit events don't each pop a toast (#32).
     ids.forEach((id) => intentionalKills.add(id));
     await Promise.all(ids.map((id) => ipc.killSession(id).catch(() => {})));
     await ipc.removeRecent(repoPath).catch(() => {});
+    await Promise.all(
+      worktreeDests.map((dest) =>
+        ipc.removeWorktree(repoPath, dest, true).catch(() => {}),
+      ),
+    );
     set((s) => {
       const clearSelection = s.selectedId != null && ids.includes(s.selectedId);
       return {
-        sessions: s.sessions.filter((x) => x.repoPath !== repoPath),
+        sessions: s.sessions.filter(
+          (x) => x.repoPath !== repoPath && x.worktreeParent !== repoPath,
+        ),
         recents: s.recents.filter((r) => r !== repoPath),
         selectedId: clearSelection ? null : s.selectedId,
         view: clearSelection ? "overview" : s.view,

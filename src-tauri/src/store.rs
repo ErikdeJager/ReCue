@@ -28,6 +28,11 @@ pub struct PersistedSession {
     pub repo_path: String,
     pub name: Option<String>,
     pub created_at: u64,
+    /// For a worktree agent (#74): the parent repo path; absent for a normal
+    /// agent. The agent's `repo_path` is the isolated worktree folder. Defaulted
+    /// so older records (without the field) still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_parent: Option<String>,
 }
 
 /// A user-added Overview panel (a non-agent column), persisted per repo (#38).
@@ -102,6 +107,12 @@ impl Store {
             path,
             inner: Mutex::new(inner),
         }
+    }
+
+    /// The directory holding the persisted state (sessions.json) — used to place
+    /// app-managed git worktrees alongside it (#74).
+    pub fn data_dir(&self) -> Option<&Path> {
+        self.path.parent()
     }
 
     /// All persisted sessions, in insertion order.
@@ -299,6 +310,7 @@ mod tests {
             repo_path: path.to_string(),
             name: None,
             created_at: 0,
+            worktree_parent: None,
         }
     }
 
