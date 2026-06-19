@@ -19,7 +19,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 import { mergeRepoOrder, repoColor, useStore } from "../../store";
-import { repoName } from "../../paths";
+import { repoName, sessionLabel } from "../../paths";
 import type { OverviewPanel, SessionView } from "../../types";
 // The Focus inspector's diff component is already parameterized by { repoPath,
 // active }, so the Overview diff panel (#39) reuses it directly — one source.
@@ -130,17 +130,19 @@ function SessionCard({
   onOpenInZed,
   onRemove,
 }: SessionCardProps) {
+  // Unified label rule (#67): name is primary with the branch as the subtitle;
+  // with no name the branch (folder name when non-git) is primary and there is
+  // no subtitle. The repo color dot stays as the "which repo" badge.
+  const { primary, subtitle } = sessionLabel(
+    session.name,
+    branch || repoName(session.repoPath),
+  );
   const title = (
     <>
-      <span className={styles.name}>
-        {session.name ?? repoName(session.repoPath)}
-      </span>
+      <span className={styles.name}>{primary}</span>
       <span className={styles.meta}>
         <span className={styles.metaDot} style={{ background: color }} />
-        <span className={styles.metaText}>
-          {repoName(session.repoPath)}
-          {branch && ` · ${branch}`}
-        </span>
+        {subtitle && <span className={styles.metaText}>{subtitle}</span>}
       </span>
     </>
   );

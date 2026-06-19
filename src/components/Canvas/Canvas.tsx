@@ -3,7 +3,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { X } from "lucide-react";
 import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
 
-import { repoName } from "../../paths";
+import { repoName, sessionLabel } from "../../paths";
 import { repoColor, useStore } from "../../store";
 import type {
   CanvasContent,
@@ -50,8 +50,7 @@ function EdgeZone({ panelId, edge }: { panelId: string; edge: CanvasEdge }) {
 
 /** A panel's title + repo (resolved live from the store, so renames/branch
  * changes stay fresh); the content descriptor only stores refs. */
-function panelTitle(content: CanvasContent, name: string | undefined): string {
-  if (content.kind === "agent") return name ?? repoName(content.repoPath ?? "");
+function panelTitle(content: CanvasContent): string {
   if (content.kind === "file") return content.file?.split("/").pop() ?? "File";
   if (content.kind === "diff") return "Diff";
   return content.label ?? "Panel";
@@ -77,6 +76,19 @@ function LeafPanel({
       : undefined;
   const repoPath = content.repoPath ?? session?.repoPath ?? "";
   const branch = branches[repoPath] ?? "";
+  // Agent panels use the unified label rule (#67): name primary, branch the
+  // subtitle (branch primary when unnamed). File/diff panels keep their
+  // filename/"Diff" title + repo·branch context.
+  const agentLabel =
+    content.kind === "agent"
+      ? sessionLabel(session?.name, branch || repoName(repoPath))
+      : null;
+  const titleText = agentLabel ? agentLabel.primary : panelTitle(content);
+  const metaText = agentLabel
+    ? agentLabel.subtitle
+    : repoPath
+      ? `${repoName(repoPath)}${branch ? ` · ${branch}` : ""}`
+      : null;
 
   const renderContent = (): ReactElement => {
     if (content.kind === "agent" && content.sessionId) {
@@ -106,15 +118,8 @@ function LeafPanel({
               style={{ background: repoColor(repoPath, repoColors) }}
             />
           )}
-          <span className={styles.panelTitle}>
-            {panelTitle(content, session?.name ?? undefined)}
-          </span>
-          {repoPath && (
-            <span className={styles.panelMeta}>
-              {repoName(repoPath)}
-              {branch && ` · ${branch}`}
-            </span>
-          )}
+          <span className={styles.panelTitle}>{titleText}</span>
+          {metaText && <span className={styles.panelMeta}>{metaText}</span>}
         </span>
         <button
           type="button"

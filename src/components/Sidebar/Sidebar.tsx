@@ -4,7 +4,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { FileDiff, FileText, Plus, X } from "lucide-react";
 
 import { listFiles } from "../../ipc";
-import { repoName } from "../../paths";
+import { repoName, sessionLabel } from "../../paths";
 import {
   dedupeBranchLabels,
   REPO_PALETTE,
@@ -89,6 +89,11 @@ function SessionRow({
     setEditing(false);
   };
 
+  // Unified label rule (#67): a custom name is primary with the branch as the
+  // subtitle; with no name the branch (the deduped `label`, folder name when
+  // non-git) is primary and there is no subtitle.
+  const { primary, subtitle } = sessionLabel(session.name, label);
+
   return (
     <div
       ref={setNodeRef}
@@ -130,10 +135,8 @@ function SessionRow({
           {...attributes}
           {...listeners}
         >
-          <span className={styles.rowPrimary}>{label}</span>
-          {session.name && (
-            <span className={styles.rowSecondary}>{session.name}</span>
-          )}
+          <span className={styles.rowPrimary}>{primary}</span>
+          {subtitle && <span className={styles.rowSecondary}>{subtitle}</span>}
         </button>
       )}
       {/* Status ball (#55): always shown (dimmed when idle); the Remove ghost

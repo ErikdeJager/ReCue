@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Copy, ExternalLink, PanelRight } from "lucide-react";
 
 import { listFiles } from "../../ipc";
-import { repoName } from "../../paths";
+import { repoName, sessionLabel } from "../../paths";
 import {
   INSPECTOR_MAX_WIDTH,
   INSPECTOR_MIN_WIDTH,
@@ -162,6 +162,10 @@ function Focus() {
 
   const session = sessions.find((x) => x.id === selectedId);
   const branch = session ? (branches[session.repoPath] ?? "") : "";
+  // Unified label (#67) for the resume chip: name primary, branch the subtitle.
+  const chipLabel = session
+    ? sessionLabel(session.name, branch || repoName(session.repoPath))
+    : null;
   const busy = session ? (sessionBusy[session.id] ?? false) : false;
   // Repo color identity (#35), shown as the toolbar badge + a subtle top rule so
   // Focus matches the sidebar/Overview color for this repo (#37).
@@ -195,9 +199,9 @@ function Focus() {
               title="Copy resume command (claude --resume <id>)"
             >
               <span className={styles.chipText}>
-                {session.name && `${session.name} · `}
-                {branch && `${branch} · `}
-                {session.id.slice(0, 8)}
+                {chipLabel?.primary}
+                {chipLabel?.subtitle ? ` · ${chipLabel.subtitle}` : ""}
+                {` · ${session.id.slice(0, 8)}`}
               </span>
               <Copy size={13} strokeWidth={1.5} />
             </button>
