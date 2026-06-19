@@ -5,8 +5,8 @@ running and managing many live `claude` CLI sessions at once.
 
 ## What this app is
 
-An **Overview** "agent wall" of real terminals, a **Focus** view for one session
-with a **git-diff inspector**, and a repo-grouped **sidebar**. Each session is a
+An **Overview** "agent wall" of real terminals, a **Canvas** split-panel workspace
+(with file and **git-diff** viewers), and a repo-grouped **sidebar**. Each session is a
 **real PTY running `claude`** — ClaudeCue provides the window chrome, navigation,
 persistence, and git-reading; the terminals come from the Claude Code CLI itself.
 
@@ -46,21 +46,18 @@ clear error if it is missing).
   monitor marks busy only when output arrived ≥300ms *after* the last keystroke. The
   store keeps `sessionBusy`; the `BusyIndicator` is a **single pulsing ball** — Blue
   (`--status-running`) pulsing when busy, dimmed (`--status-idle`) when idle,
-  **always rendered** (static dot under reduced-motion) — in the sidebar, Overview
-  cards, and Focus toolbar.
+  **always rendered** (static dot under reduced-motion) — in the sidebar and Overview
+  cards.
 - **Input / resize:** the `Terminal` sends keystrokes to `write_stdin` and a
   `ResizeObserver` drives `resize_pty`.
 - **Persistence / resume:** records + recents survive restarts; on boot the
   manager best-effort `resume_session`s each via `claude --resume <id>`.
 - **Git:** `working_diff(cwd)` / `current_branch(cwd)` shell out to `git`; the
   `DiffInspector` and sidebar render the structured result.
-- **Views:** the store holds `sessions / selectedId / view / inspectorOpen /
-  inspectorWidth / recents / branches / canvases / activeCanvasId / claudeMissing /
-  toasts`; the app mounts one
-  of **Overview, Focus, or Canvas** (#46). The Focus inspector is **drag-resizable**
-  from its left edge (#51): the width drives a `--inspector-width` CSS var (set
-  imperatively during a drag so heavy content doesn't re-render), bounded + persisted
-  as `inspector_width`. Each session's xterm is owned by a **persistent terminal
+- **Views:** the store holds `sessions / selectedId / view / recents / branches /
+  canvases / activeCanvasId / claudeMissing / toasts`; the app mounts one of
+  **Overview or Canvas** (#46/#75 — Focus was removed). Each session's xterm is owned
+  by a **persistent terminal
   pool** (`Terminal/terminalPool.ts`), created once and **reparented** into the
   active view's slot (parked off-screen otherwise) — so a view switch never
   disposes/recreates the terminal or replays scrollback (which would garble
@@ -76,7 +73,7 @@ clear error if it is missing).
 - **Sidebar tree (#45/#59):** each repo lists its sessions **and** its non-agent
   items — the **same `overview_panels` Overview shows, 1:1**: file viewers and diff
   viewers. #59 folded the old per-repo `open_files` into `overview_panels`, so a
-  file/diff opened anywhere (Focus Files-tab pick, the searchable file picker #56,
+  file/diff opened anywhere (the searchable file picker #56,
   or the repo menu) appears in both places. A tree row click opens Overview; the
   hover × removes the item (and its Overview column); every row (session / file /
   diff) is a dnd-kit **draggable source** that drops into the active Canvas (#47/#59
@@ -105,13 +102,13 @@ clear error if it is missing).
 ├── index.html              # Vite entry
 ├── src/                    # Frontend (React + TS)
 │   ├── main.tsx            # React bootstrap (loads fonts + tokens + global CSS)
-│   ├── App.tsx             # App shell: sidebar + Overview/Focus (native title bar)
+│   ├── App.tsx             # App shell: sidebar + Overview/Canvas (native title bar)
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
 │   ├── paths.ts            # Shared path helpers (repoName)
 │   ├── components/         # React components (CSS Module alongside each):
-│   │                       #   Sidebar, Overview, Focus, Canvas, Terminal,
+│   │                       #   Sidebar, Overview, Canvas, Terminal,
 │   │                       #   FileViewer, FilePicker, DiffInspector,
 │   │                       #   BusyIndicator, Checkbox, NewSessionModal, Toaster,
 │   │                       #   ViewSwitch, ClaudeMissing, EmptyState

@@ -29,7 +29,6 @@ beforeEach(() => {
     selectedId: null,
     view: "overview",
     overviewRepoFilter: null,
-    inspectorOpen: false,
     recents: [],
     branches: {},
     repoColors: {},
@@ -47,8 +46,8 @@ beforeEach(() => {
 
 describe("app store", () => {
   it("switches the view", () => {
-    useStore.getState().setView("focus");
-    expect(useStore.getState().view).toBe("focus");
+    useStore.getState().setView("canvas");
+    expect(useStore.getState().view).toBe("canvas");
   });
 
   it("selecting a session highlights it without changing the view (#22)", () => {
@@ -56,36 +55,6 @@ describe("app store", () => {
     useStore.getState().select("abc");
     expect(useStore.getState().selectedId).toBe("abc");
     // Selection is decoupled from the view — it must not force Focus.
-    expect(useStore.getState().view).toBe("overview");
-  });
-
-  it("showFocus focuses the first agent when nothing is selected (#25)", () => {
-    useStore.setState({ sessions: [session("s1"), session("s2")] });
-    useStore.getState().showFocus();
-    expect(useStore.getState().selectedId).toBe("s1");
-    expect(useStore.getState().view).toBe("focus");
-  });
-
-  it("showFocus keeps a valid selection", () => {
-    useStore.setState({
-      sessions: [session("s1"), session("s2")],
-      selectedId: "s2",
-    });
-    useStore.getState().showFocus();
-    expect(useStore.getState().selectedId).toBe("s2");
-    expect(useStore.getState().view).toBe("focus");
-  });
-
-  it("showFocus falls back to the first agent when the selection is stale", () => {
-    useStore.setState({ sessions: [session("s1")], selectedId: "gone" });
-    useStore.getState().showFocus();
-    expect(useStore.getState().selectedId).toBe("s1");
-    expect(useStore.getState().view).toBe("focus");
-  });
-
-  it("showFocus is a no-op with zero agents", () => {
-    useStore.getState().showFocus();
-    expect(useStore.getState().selectedId).toBeNull();
     expect(useStore.getState().view).toBe("overview");
   });
 
@@ -142,7 +111,7 @@ describe("app store", () => {
       ],
       recents: ["/repo/x", "/repo/y"],
       selectedId: "a",
-      view: "focus",
+      view: "canvas",
       overviewRepoFilter: "/repo/x",
     });
     // ipc calls reject without a Tauri host and are caught; the state update runs.
@@ -154,23 +123,17 @@ describe("app store", () => {
     expect(useStore.getState().overviewRepoFilter).toBeNull();
   });
 
-  it("toggles the inspector", () => {
-    expect(useStore.getState().inspectorOpen).toBe(false);
-    useStore.getState().toggleInspector();
-    expect(useStore.getState().inspectorOpen).toBe(true);
-  });
-
   it("upserts (de-duplicating by id) and drops sessions, fixing selection", () => {
     useStore.getState().upsertSession(session("s1"));
     useStore.getState().upsertSession(session("s1"));
     useStore.getState().select("s1");
-    useStore.getState().setView("focus"); // simulate focusing s1
+    useStore.getState().setView("canvas"); // simulate viewing s1 in a canvas
     expect(useStore.getState().sessions).toHaveLength(1);
 
     useStore.getState().dropSession("s1");
     expect(useStore.getState().sessions).toHaveLength(0);
     expect(useStore.getState().selectedId).toBeNull();
-    // Removing the focused session returns to Overview (no stranded empty Focus).
+    // Removing the selected session returns to Overview (#75).
     expect(useStore.getState().view).toBe("overview");
   });
 
@@ -186,13 +149,13 @@ describe("app store", () => {
     useStore.setState({
       sessions: [session("s1"), session("s2")],
       selectedId: "s1",
-      view: "focus",
+      view: "canvas",
     });
     // ipc.killSession rejects without a Tauri host and is caught; the local
     // forget still runs (kill + forget locally regardless).
     await useStore.getState().forgetExitedSession("s1");
     expect(useStore.getState().sessions.map((s) => s.id)).toEqual(["s2"]);
-    // The focused agent vanishing returns to Overview (no stranded empty Focus).
+    // The selected agent vanishing returns to Overview (#75).
     expect(useStore.getState().selectedId).toBeNull();
     expect(useStore.getState().view).toBe("overview");
     expect(useStore.getState().toasts.map((t) => t.message)).toContain(

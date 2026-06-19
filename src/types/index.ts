@@ -88,7 +88,7 @@ export interface StatePayload {
 
 // --- Frontend UI state ---
 
-export type View = "overview" | "focus" | "canvas";
+export type View = "overview" | "canvas";
 
 // --- Canvas (#46): a recursive binary split-panel (BSP) layout tree ---
 

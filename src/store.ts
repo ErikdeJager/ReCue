@@ -19,10 +19,6 @@ import type {
 } from "./types";
 
 const TOAST_TTL_MS = 3500;
-/** Focus inspector resize bounds (#51); the default when none is persisted. */
-export const INSPECTOR_MIN_WIDTH = 240;
-export const INSPECTOR_MAX_WIDTH = 720;
-export const INSPECTOR_DEFAULT_WIDTH = 360;
 // Boot resume window (#30): clear any lingering "reconnecting" flag after this in
 // case a resumed session's first output raced the event listener (its scrollback
 // still replays the conversation; no live output then arrives to clear the flag).
@@ -211,7 +207,6 @@ export interface AppState {
   view: View;
   /** Overview filter: show only this repo's agents, or all when null (#34). */
   overviewRepoFilter: string | null;
-  inspectorOpen: boolean;
   recents: string[];
   /** Current branch per repo path (from git reading); "" when unknown/non-git. */
   branches: Record<string, string>;
@@ -226,8 +221,6 @@ export interface AppState {
   canvases: CanvasTab[];
   /** Which Canvas tab is active (#58). */
   activeCanvasId: string;
-  /** The Focus inspector width in px (#51), within the resize bounds. */
-  inspectorWidth: number;
   /** Sessions currently working, from the output-activity heuristic (#42); an
    * absent/false entry means idle. (The task's `sessionState`, as a boolean map.) */
   sessionBusy: Record<string, boolean>;
@@ -246,10 +239,6 @@ export interface AppState {
   /** Toggle the Overview repo filter (clicking the active repo clears it); pass
    * null to clear ("Show all"). #34 */
   setOverviewRepoFilter: (repo: string | null) => void;
-  /** Switch to Focus, ensuring an agent is selected (last/first); no-op if none. */
-  showFocus: () => void;
-  toggleInspector: () => void;
-  setInspectorOpen: (open: boolean) => void;
   setSessions: (sessions: SessionView[]) => void;
   setRecents: (recents: string[]) => void;
   upsertSession: (session: SessionView) => void;
@@ -297,10 +286,6 @@ export interface AppState {
   reorderCanvases: (orderedIds: string[]) => void;
   /** Switch the active Canvas tab (#58). */
   selectCanvas: (id: string) => void;
-  /** Set the Focus inspector width (clamped); live during a drag, not persisted (#51). */
-  setInspectorWidth: (px: number) => void;
-  /** Persist the current Focus inspector width — on drag end / keyboard step (#51). */
-  persistInspectorWidth: () => void;
   /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
   spawnSession: (
     cwd: string,
@@ -332,7 +317,6 @@ export const useStore = create<AppState>()((set, get) => ({
   selectedId: null,
   view: "overview",
   overviewRepoFilter: null,
-  inspectorOpen: false,
   recents: [],
   branches: {},
   repoColors: {},
@@ -342,7 +326,6 @@ export const useStore = create<AppState>()((set, get) => ({
   // the always-≥1 invariant even before the backend responds.
   canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
   activeCanvasId: "canvas-1",
-  inspectorWidth: INSPECTOR_DEFAULT_WIDTH,
   sessionBusy: {},
   terminalExits: {},
   claudeMissing: false,
@@ -351,9 +334,8 @@ export const useStore = create<AppState>()((set, get) => ({
   newSessionRepo: null,
 
   setView: (view) => set({ view }),
-  // Selection is decoupled from the view (#22): selecting only highlights — it
-  // never forces Focus. Callers that intend a view change (Overview "Expand",
-  // the ViewSwitch) call setView explicitly.
+  // Selection is decoupled from the view (#22): selecting only highlights. The
+  // sidebar ViewSwitch is the only thing that changes the view (#75).
   select: (id) => set({ selectedId: id }),
 
   // Toggle the Overview repo filter: clicking the active repo (or passing null)
@@ -363,20 +345,6 @@ export const useStore = create<AppState>()((set, get) => ({
       overviewRepoFilter: s.overviewRepoFilter === repo ? null : repo,
     })),
 
-  // Switch to Focus from anywhere (#25). Keep the current selection if it's still
-  // valid, else focus the first agent; with no agents this is a no-op so the
-  // Focus toggle can't strand the user on an empty view.
-  showFocus: () =>
-    set((s) => {
-      if (s.sessions.length === 0) return {};
-      const valid = s.sessions.some((x) => x.id === s.selectedId);
-      return {
-        selectedId: valid ? s.selectedId : (s.sessions[0]?.id ?? null),
-        view: "focus",
-      };
-    }),
-  toggleInspector: () => set((s) => ({ inspectorOpen: !s.inspectorOpen })),
-  setInspectorOpen: (open) => set({ inspectorOpen: open }),
   setSessions: (sessions) => set({ sessions }),
   setRecents: (recents) => set({ recents }),
 
@@ -539,23 +507,15 @@ export const useStore = create<AppState>()((set, get) => ({
     // Repo colors + Overview panel layouts load independently so a failure here
     // doesn't block sessions.
     try {
-      const [
-        colors,
-        panels,
-        order,
-        files,
-        canvas,
-        canvasesState,
-        inspectorWidth,
-      ] = await Promise.all([
-        ipc.listRepoColors(),
-        ipc.listOverviewPanels(),
-        ipc.listOverviewOrder(),
-        ipc.listOpenFiles(),
-        ipc.getCanvasLayout(),
-        ipc.getCanvases(),
-        ipc.getInspectorWidth(),
-      ]);
+      const [colors, panels, order, files, canvas, canvasesState] =
+        await Promise.all([
+          ipc.listRepoColors(),
+          ipc.listOverviewPanels(),
+          ipc.listOverviewOrder(),
+          ipc.listOpenFiles(),
+          ipc.getCanvasLayout(),
+          ipc.getCanvases(),
+        ]);
       // Multi-canvas (#58): use the persisted tabs; else migrate the old single
       // canvas_layout into "Canvas 1"; else start with one empty canvas. Persist
       // the migrated shape once so the new field becomes the source of truth.
@@ -606,7 +566,6 @@ export const useStore = create<AppState>()((set, get) => ({
         overviewOrder: order,
         canvases,
         activeCanvasId,
-        inspectorWidth: inspectorWidth ?? INSPECTOR_DEFAULT_WIDTH,
       });
       // Terminal items can't resume (#72): respawn a fresh shell for each
       // persisted terminal panel under its repo so the item is usable after a
@@ -825,21 +784,6 @@ export const useStore = create<AppState>()((set, get) => ({
     if (id === activeCanvasId || !canvases.some((c) => c.id === id)) return;
     set({ activeCanvasId: id });
     void ipc.setCanvases({ canvases, activeId: id }).catch(() => {});
-  },
-
-  // Inspector resize (#51): `set` updates state live during the drag (cheap — the
-  // terminal lives in the pool, not re-rendered); `persist` writes the settled
-  // width on drag-end / keyboard step so we don't hit the disk every frame.
-  setInspectorWidth: (px) => {
-    const clamped = Math.round(
-      Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, px)),
-    );
-    if (clamped !== get().inspectorWidth) set({ inspectorWidth: clamped });
-  },
-  persistInspectorWidth: () => {
-    void ipc.setInspectorWidth(get().inspectorWidth).catch(() => {
-      // Persist failed (e.g. outside Tauri); the local width stays for the session.
-    });
   },
 
   spawnSession: async (cwd, name, branch) => {

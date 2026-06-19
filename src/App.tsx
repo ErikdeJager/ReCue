@@ -14,7 +14,6 @@ import {
   payloadToContent,
 } from "./components/Canvas/canvasDrop";
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
-import Focus from "./components/Focus/Focus";
 import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
 import Overview from "./components/Overview/Overview";
 import Sidebar from "./components/Sidebar/Sidebar";
@@ -25,7 +24,7 @@ import { useKeyboardNav } from "./useKeyboardNav";
 
 /**
  * Application shell: a sidebar region (#9) and the main content area, which
- * routes between the Overview wall (#11), Focus view (#12), and Canvas (#46),
+ * routes between the Overview wall (#11) and Canvas (#46),
  * under the native macOS title bar (#19 — no custom chrome). Cross-cutting
  * surfaces (toasts, the claude-missing banner) live at the top level. State +
  * IPC are wired through the Zustand store.
@@ -55,7 +54,7 @@ function App() {
   useKeyboardNav();
 
   // Terminal instances live in a persistent pool (not the React view tree) so
-  // they survive Overview↔Focus↔Canvas switches. Dispose one only when its
+  // they survive Overview↔Canvas switches. Dispose one only when its
   // session is truly gone — this fires on the (infrequent) session-list change.
   useEffect(() => {
     // Keep alive both agent PTYs and terminal-item PTYs (#72); dispose the rest.
@@ -90,10 +89,8 @@ function App() {
             <div className="main-content">
               {view === "overview" ? (
                 <Overview />
-              ) : view === "canvas" ? (
-                <Canvas dragActive={dragActive} />
               ) : (
-                <Focus />
+                <Canvas dragActive={dragActive} />
               )}
             </div>
           </main>

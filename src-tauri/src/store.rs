@@ -76,10 +76,6 @@ pub struct PersistedState {
     /// old files loading.
     #[serde(default)]
     pub canvas_layout: serde_json::Value,
-    /// The Focus inspector width in px (#51); `None` = the default. `default`
-    /// keeps old files loading.
-    #[serde(default)]
-    pub inspector_width: Option<u32>,
     /// Multiple named Canvas tabs (#58), stored opaquely as JSON
     /// `{ canvases: [{ id, name, layout }], activeId }` — the frontend owns the
     /// shape and migrates the single `canvas_layout` into it once. `null` until
@@ -256,16 +252,6 @@ impl Store {
     /// Replace the multi-canvas tab state and persist (#58).
     pub fn set_canvases(&self, canvases: serde_json::Value) -> io::Result<()> {
         self.update(|state| state.canvases = canvases)
-    }
-
-    /// The Focus inspector width in px (#51), or `None` for the default.
-    pub fn inspector_width(&self) -> Option<u32> {
-        self.with(|state| state.inspector_width)
-    }
-
-    /// Persist the Focus inspector width (#51).
-    pub fn set_inspector_width(&self, px: u32) -> io::Result<()> {
-        self.update(|state| state.inspector_width = Some(px))
     }
 
     fn with<R>(&self, read: impl FnOnce(&PersistedState) -> R) -> R {
@@ -450,16 +436,6 @@ mod tests {
         });
         store.set_canvases(tabs.clone()).unwrap();
         assert_eq!(Store::load(&path).canvases(), tabs);
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn inspector_width_set_and_persist() {
-        let path = temp_path("inspector");
-        let store = Store::load(&path);
-        assert_eq!(store.inspector_width(), None); // default
-        store.set_inspector_width(420).unwrap();
-        assert_eq!(Store::load(&path).inspector_width(), Some(420));
         let _ = fs::remove_file(&path);
     }
 

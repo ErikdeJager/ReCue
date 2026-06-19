@@ -1,8 +1,6 @@
 // Global keyboard shortcuts.
 //
 //   Shift+← / Shift+→  select prev/next agent (wall order, wrap-around)   (#24)
-//   Shift+↓            Focus the selected agent
-//   Shift+↑            back to Overview (keeps the selection)
 //   ⌘N / Ctrl+N        open the new-session flow from anywhere            (#26)
 //
 // xterm forwards keystrokes to the PTY when a terminal is focused, so the
@@ -39,14 +37,7 @@ export function useKeyboardNav(): void {
       // Shift usage) untouched.
       if (!e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key;
-      if (
-        key !== "ArrowLeft" &&
-        key !== "ArrowRight" &&
-        key !== "ArrowUp" &&
-        key !== "ArrowDown"
-      ) {
-        return;
-      }
+      if (key !== "ArrowLeft" && key !== "ArrowRight") return;
 
       const state = useStore.getState();
       // Don't navigate while the new-session modal/popover is open (#27) — let
@@ -57,20 +48,12 @@ export function useKeyboardNav(): void {
       e.preventDefault();
       e.stopPropagation();
 
-      if (key === "ArrowLeft" || key === "ArrowRight") {
-        const id = adjacentSessionId(
-          state.sessions,
-          state.selectedId,
-          key === "ArrowRight" ? 1 : -1,
-        );
-        if (id) state.select(id);
-      } else if (key === "ArrowDown") {
-        // Focus the selected agent (selects the first if none; no-op if empty).
-        state.showFocus();
-      } else {
-        // ArrowUp -> back to Overview, keeping the selection.
-        state.setView("overview");
-      }
+      const id = adjacentSessionId(
+        state.sessions,
+        state.selectedId,
+        key === "ArrowRight" ? 1 : -1,
+      );
+      if (id) state.select(id);
     };
 
     window.addEventListener("keydown", onKeyDown, true); // capture phase

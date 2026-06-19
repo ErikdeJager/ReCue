@@ -923,9 +923,9 @@ location, and any worktree management UI beyond create/remove.
 
 ---
 
-### 75. [ ] Remove Focus mode entirely (views become Overview + Canvas)
+### 75. [x] Remove Focus mode entirely (views become Overview + Canvas)
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -983,16 +983,16 @@ not wanted).
 
 **Acceptance criteria**
 
-- [ ] There is no Focus view: the app renders only Overview or Canvas; the sidebar toggle
+- [x] There is no Focus view: the app renders only Overview or Canvas; the sidebar toggle
   offers just those two.
-- [ ] The Overview "Expand to Focus" button is gone (cards keep select + Open-in-Zed + ×); no
+- [x] The Overview "Expand to Focus" button is gone (cards keep select + Open-in-Zed + ×); no
   keybind navigates to Focus.
-- [ ] No `Focus` component, `"focus"` view value, `showFocus`/inspector state, or
+- [x] No `Focus` component, `"focus"` view value, `showFocus`/inspector state, or
   `inspector_width` command/persistence remains; `npm run build`, `npm run lint`, `npm test`,
   and `cargo test` pass.
-- [ ] `DiffInspector` and `FileViewer` still work in Overview and Canvas (diff/file panels
+- [x] `DiffInspector` and `FileViewer` still work in Overview and Canvas (diff/file panels
   unaffected).
-- [ ] CLAUDE.md and README no longer describe Focus as a current view; a `focus`/`inspector`
+- [x] CLAUDE.md and README no longer describe Focus as a current view; a `focus`/`inspector`
   grep finds no live references (only DOM-focus a11y usages).
 
 **Notes**

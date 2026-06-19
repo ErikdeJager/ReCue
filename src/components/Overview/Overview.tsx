@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode } from "react";
-import { ExternalLink, GripVertical, Maximize2, X } from "lucide-react";
+import { ExternalLink, GripVertical, X } from "lucide-react";
 import {
   closestCenter,
   DndContext,
@@ -116,7 +116,6 @@ interface SessionCardProps {
   selected: boolean;
   busy: boolean;
   onSelect: () => void;
-  onExpand: () => void;
   onOpenInZed: () => void;
   onRemove: () => void;
 }
@@ -129,7 +128,6 @@ function SessionCard({
   selected,
   busy,
   onSelect,
-  onExpand,
   onOpenInZed,
   onRemove,
 }: SessionCardProps) {
@@ -151,15 +149,6 @@ function SessionCard({
   );
   const actions = (
     <>
-      <button
-        type="button"
-        className={styles.action}
-        onClick={onExpand}
-        title="Expand to Focus"
-        aria-label="Expand to Focus"
-      >
-        <Maximize2 size={15} strokeWidth={1.5} />
-      </button>
       <button
         type="button"
         className={styles.action}
@@ -290,7 +279,6 @@ function Overview() {
   const branches = useStore((s) => s.branches);
   const selectedId = useStore((s) => s.selectedId);
   const select = useStore((s) => s.select);
-  const setView = useStore((s) => s.setView);
   const openInZed = useStore((s) => s.openInZed);
   const removeSession = useStore((s) => s.removeSession);
   const openNewSession = useStore((s) => s.openNewSession);
@@ -320,13 +308,6 @@ function Overview() {
   if (sessions.length === 0 && !anyPanels) {
     return <EmptyState onNewSession={() => openNewSession()} />;
   }
-
-  // Expand is the intentional Focus affordance: select, then switch the view
-  // explicitly (selection alone no longer forces Focus — see store `select`).
-  const expand = (id: string) => {
-    select(id);
-    setView("focus");
-  };
 
   // The sidebar repo filter (#34) narrows the wall to one repo's agents.
   const shown = filter
@@ -456,7 +437,6 @@ function Overview() {
                         selected={session.id === selectedId}
                         busy={sessionBusy[session.id] ?? false}
                         onSelect={() => select(session.id)}
-                        onExpand={() => expand(session.id)}
                         onOpenInZed={() => void openInZed(session.repoPath)}
                         onRemove={() => void removeSession(session.id)}
                       />

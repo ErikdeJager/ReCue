@@ -1,8 +1,8 @@
 # ClaudeCue
 
 A **macOS** desktop app for running and managing many live `claude` CLI sessions at
-once — an **Overview** "agent wall" of real terminals, a **Focus** view for a single
-session with a **git-diff inspector**, and a repo-grouped **sidebar**.
+once — an **Overview** "agent wall" of real terminals, a **Canvas** split-panel
+workspace (with file and git-diff viewers), and a repo-grouped **sidebar**.
 
 Each session is a real PTY running the Claude Code CLI. ClaudeCue provides the window
 chrome, navigation, persistence, and read-only git reading; the terminals come from
@@ -13,10 +13,6 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
 - **Overview wall** — active sessions as equal-width live terminal columns, **grouped
   by repo** with colored badges and a per-repo filter; columns are
   **drag-reorderable**, and a repo can add **diff** and **file-viewer** columns.
-- **Focus view** — one large terminal plus a toolbar (view switch, a copy-able session
-  chip that copies a `claude --resume` command, Open in Zed) and a **resizable,
-  collapsible Diff inspector** (working-tree diff vs `HEAD`, unified or split,
-  auto-refreshing) with a Files tab for any repo file.
 - **Canvas** — a split-panel workspace with **multiple named tabs**; drag any sidebar
   item (agent, file, or diff) in to tile it, split panels on their edges, resize borders.
 - **Sidebar** — sessions and their file/diff viewers grouped by repository (branch

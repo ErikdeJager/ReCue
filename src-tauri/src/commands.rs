@@ -326,19 +326,6 @@ pub fn set_canvases(store: State<'_, Store>, state: serde_json::Value) -> Result
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
-#[tauri::command]
-pub fn get_inspector_width(store: State<'_, Store>) -> Option<u32> {
-    store.inspector_width()
-}
-
-/// Persist the Focus inspector width (#51).
-#[tauri::command]
-pub fn set_inspector_width(store: State<'_, Store>, width: u32) -> Result<(), SessionError> {
-    store
-        .set_inspector_width(width)
-        .map_err(|e| SessionError::Io(e.to_string()))
-}
-
 /// `#` followed by 3/4/6/8 hex digits.
 fn is_hex_color(value: &str) -> bool {
     match value.strip_prefix('#') {
