@@ -6,7 +6,7 @@ running and managing many live `claude` CLI sessions at once.
 ## What this app is
 
 An **Overview** "agent wall" of real terminals, a **Canvas** split-panel workspace
-(with file and **git-diff** viewers), and a repo-grouped **sidebar**. Each session is a
+(with file, **git-diff**, and terminal viewers), and a repo-grouped **sidebar**. Each session is a
 **real PTY running `claude`** — ClaudeCue provides the window chrome, navigation,
 persistence, and git-reading; the terminals come from the Claude Code CLI itself.
 
@@ -39,21 +39,23 @@ clear error if it is missing).
   subscription routes output **bytes** to `outputBus.ts` (a pub/sub the xterm
   `Terminal` consumes — deliberately *not* React state) and lifecycle +
   busy/idle to the Zustand `store.ts`.
-- **Busy indicator (#42/#55):** a backend monitor thread (`pty.rs`) derives each
+- **Busy indicator (#42/#55/#71):** a backend monitor thread (`pty.rs`) derives each
   session's **busy/idle** from output activity (within a ~700ms window) and emits
   `session://state { id, busy }` on transitions only. So **keystroke echo doesn't
   read as busy** (#55), `write_stdin` stamps a per-session `last_input` time and the
   monitor marks busy only when output arrived ≥300ms *after* the last keystroke. The
-  store keeps `sessionBusy`; the `BusyIndicator` is a **single pulsing ball** — Blue
-  (`--status-running`) pulsing when busy, dimmed (`--status-idle`) when idle,
-  **always rendered** (static dot under reduced-motion) — in the sidebar and Overview
-  cards.
+  store keeps `sessionBusy`; the `BusyIndicator` is a **small spinner arc** (#71) — a
+  Blue (`--status-running`) ring whose top edge rotates while busy, settling into a calm
+  static dot (`--status-idle`) when idle, **always rendered** (a full static ring under
+  reduced-motion) and placed **before the agent's name** — in the sidebar rows and
+  Overview card headers.
 - **Input / resize:** the `Terminal` sends keystrokes to `write_stdin` and a
   `ResizeObserver` drives `resize_pty`.
 - **Persistence / resume:** records + recents survive restarts; on boot the
   manager best-effort `resume_session`s each via `claude --resume <id>`.
-- **Git:** `working_diff(cwd)` / `current_branch(cwd)` shell out to `git`; the
-  `DiffInspector` and sidebar render the structured result.
+- **Git:** `working_diff(cwd)` / `current_branch(cwd)` / `compare_branches(cwd, base,
+  target)` (the #81 two-dot branch compare) shell out to `git`; the `DiffInspector` and
+  sidebar render the structured result.
 - **Views:** the store holds `sessions / selectedId / view / recents / branches /
   canvases / activeCanvasId / claudeMissing / toasts`; the app mounts one of
   **Overview or Canvas** (#46/#75 — Focus was removed). Each session's xterm is owned
@@ -64,21 +66,22 @@ clear error if it is missing).
   `claude`'s width-specific TUI redraw). Scrollback replays once at creation;
   resizes are debounced + applied only while visible.
 - **Overview customization:** columns are grouped by repo (#36). Per repo, a
-  user-managed list of extra panels (diff #39 / markdown #41) follows the agent
+  user-managed list of extra panels (diff #39 / markdown #41 / terminal #72) follows the agent
   terminals, and the whole cluster is **drag-reorderable within the repo** (#43,
   dnd-kit) — each column is a sortable keyed by session/panel id, so a reorder
   reparents DOM nodes and never remounts a terminal (pool intact). Persisted per
   repo: `overview_panels` (panel defs) + `overview_order` (the unified item
   order, merged with live items so spawn/exit don't scramble it).
 - **Sidebar tree (#45/#59):** each repo lists its sessions **and** its non-agent
-  items — the **same `overview_panels` Overview shows, 1:1**: file viewers and diff
-  viewers. #59 folded the old per-repo `open_files` into `overview_panels`, so a
-  file/diff opened anywhere (the searchable file picker #56,
-  or the repo menu) appears in both places. A tree row click opens Overview; the
-  hover × removes the item (and its Overview column); every row (session / file /
-  diff) is a dnd-kit **draggable source** that drops into the active Canvas (#47/#59
-  — agents → terminal, files → file viewer, diffs → diff panel; new item types are
-  draggable by default via a `payloadToContent` case).
+  items — the **same `overview_panels` Overview shows, 1:1**: file viewers, diff
+  viewers, and shell terminals (#72). #59 folded the old per-repo `open_files` into
+  `overview_panels`, so an item opened anywhere (the searchable file picker #56, or the
+  repo menu's **Views** section #82) appears in both places. A tree row click
+  **selects/jumps to the item in the current view** (#79 — never auto-switching
+  Overview↔Canvas); the hover × removes the item (and its Overview column); every row
+  (session / file / diff / terminal) is a dnd-kit **draggable source** that drops into
+  the active Canvas (#47/#59 — agents → terminal, files → file viewer, diffs → diff
+  panel; new item types are draggable by default via a `payloadToContent` case).
 - **Canvas (#46/#47/#58):** a third view — **multiple named tabs** (#58), each its
   own recursive **BSP split-panel** layout (a binary tree `split{dir,a,b,sizes}` /
   `leaf{id,content}`; pure ops in `Canvas/canvasTree.ts`). The tabs (`canvases` =
@@ -86,7 +89,8 @@ clear error if it is missing).
   (migrated once from the old single `canvas_layout`); the `CanvasTabs` strip adds
   (+), closes (always keeps ≥1), inline-renames, and drag-reorders tabs via a nested
   dnd-kit context. Panels host **real content** (#47): agent terminals (#18 pool),
-  file viewers (#44), diff viewers (#39) — a `content` descriptor `{kind, ...refs}`
+  file viewers (#44), diff viewers (#39), and shell terminals (#72) — a `content`
+  descriptor `{kind, ...refs}`
   resolved at render. **Drag-in:** one **app-level dnd-kit context** (`App.tsx`)
   spans the sidebar (drag sources: sessions, files, diffs #59) and Canvas (center +
   edge drop zones); `Canvas/canvasDrop.ts` maps payloads → content and applies the
@@ -106,7 +110,8 @@ clear error if it is missing).
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
-│   ├── paths.ts            # Shared path helpers (repoName)
+│   ├── paths.ts            # Shared path helpers (repoName, sessionLabel)
+│   ├── useKeyboardNav.ts   # Global keyboard shortcuts (#24/#76/#77)
 │   ├── components/         # React components (CSS Module alongside each):
 │   │                       #   Sidebar, Overview, Canvas, Terminal,
 │   │                       #   FileViewer, FilePicker, DiffInspector,
@@ -120,7 +125,7 @@ clear error if it is missing).
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions + recents)
-│   ├── src/git.rs          # Git: branch + diff + list + checkout + worktree add/remove (#74)
+│   ├── src/git.rs          # Git: branch + diff + compare (#81) + list + checkout + worktree (#74)
 │   ├── src/files.rs        # Read-only file access (list text files/read, path-validated)
 │   ├── tauri.conf.json     # Window, bundle, build config
 │   ├── capabilities/       # Tauri permission capabilities
@@ -168,9 +173,9 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   settings screen, no light mode, no multi-window, no auth.
 - No code signing / notarization (expect a Gatekeeper warning on first open).
 
-> Status colors were *reserved* design tokens, unused in v1; **#42** starts using
-> `--status-awaiting` (Yellow) for the busy indicator. The original design spec
-> and prototype are preserved in git history (commit `b02efd8`).
+> Status colors were *reserved* design tokens, unused in v1; **#42** put them to use —
+> the busy/idle indicator uses `--status-running` (Blue) and `--status-idle` (#55/#71).
+> The original design spec and prototype are preserved in git history (commit `b02efd8`).
 
 ## Conventions
 
@@ -230,9 +235,10 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 
 ## Tasks
 
-Work is tracked in `TASKS.md`. **The full backlog (#1–#62) has shipped** — completed
-tasks are condensed into an **Implemented (completed tasks)** summary at the top (one
-line each, grouped by theme); per-task detail for completed work lives in git history.
-New tasks, when added, go in the `## Tasks` section in `TASKS-TEMPLATE.md` format with
-`Depends on:` prerequisites. The `(#N)` provenance markers throughout this doc index
-back to that summary + git history.
+Work is tracked in `TASKS.md`. **Nearly the whole backlog has shipped** (#1–#83 and
+#85–#87; only **#84** is still open) — completed tasks are condensed into an
+**Implemented (completed tasks)** summary at the top (one line each, grouped by theme),
+and the `## Tasks` body holds only the open task(s); per-task detail for completed work
+lives in git history. New tasks, when added, go in the `## Tasks` section in
+`TASKS-TEMPLATE.md` format with `Depends on:` prerequisites. The `(#N)` provenance
+markers throughout this doc index back to that summary + git history.

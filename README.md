@@ -2,7 +2,7 @@
 
 A **macOS** desktop app for running and managing many live `claude` CLI sessions at
 once — an **Overview** "agent wall" of real terminals, a **Canvas** split-panel
-workspace (with file and git-diff viewers), and a repo-grouped **sidebar**.
+workspace (with file, git-diff, and terminal viewers), and a repo-grouped **sidebar**.
 
 Each session is a real PTY running the Claude Code CLI. ClaudeCue provides the window
 chrome, navigation, persistence, and read-only git reading; the terminals come from
@@ -12,17 +12,22 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
 
 - **Overview wall** — active sessions as equal-width live terminal columns, **grouped
   by repo** with colored badges and a per-repo filter; columns are
-  **drag-reorderable**, and a repo can add **diff** and **file-viewer** columns.
+  **drag-reorderable**, and a repo can add **diff**, **file-viewer**, and **terminal**
+  columns.
 - **Canvas** — a split-panel workspace with **multiple named tabs**; drag any sidebar
-  item (agent, file, or diff) in to tile it, split panels on their edges, resize borders.
-- **Sidebar** — sessions and their file/diff viewers grouped by repository (branch
-  labels + optional custom names), from persisted recents so repos stay listed with no
-  active session. Right-click a repo (new session, change color, open viewers, forget)
-  or an agent (**rename**, remove).
-- **Keyboard-first** — ⌘N opens a fast new-session launcher (type-ahead recents, ⌘1–9
-  quick-select, branch pick, Enter to start); Shift+arrows move between agents and views.
-- **Busy indicator** — a per-session pulsing ball shows when `claude` is genuinely
-  working (and stays dim while you type).
+  item (agent, file, diff, or terminal) in to tile it, split panels on their edges,
+  resize borders.
+- **Sidebar** — sessions and their file / diff / terminal viewers grouped by repository
+  (branch labels + optional custom names), from persisted recents so repos stay listed
+  with no active session; isolated **worktree agents** nest under their parent repo.
+  Right-click a repo (new session, a **Views** section to add viewers, change color,
+  forget) or an agent (**rename**, remove).
+- **Keyboard-first** — ⌘N opens a fast two-step new-session launcher (type-ahead recents
+  → branch pick; **Enter** to start, **⌘⏎** for an isolated worktree agent). In the app,
+  Shift+arrows move between agents (Overview) or panels (Canvas), ⌘1–9 jump between
+  canvases, and ⌘\\ toggles Overview ↔ Canvas.
+- **Busy indicator** — a per-session spinner arc shows when `claude` is genuinely
+  working, settling into a calm dot when idle (typing alone doesn't read as busy).
 - **Persistence + resume** — sessions, layouts, and recent folders survive restarts;
   sessions resume their `claude` conversation by id on launch. An agent you end
   cleanly just disappears; one that crashes keeps a **Restart** button.
@@ -37,7 +42,6 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
   session and shows a clear error if it is missing.
 - For building from source: [Node.js](https://nodejs.org/) + npm and
   [Rust](https://www.rust-lang.org/tools/install) (stable) + Cargo.
-- Optional: [Zed](https://zed.dev/) on your `PATH` for the "Open in Zed" action.
 
 ## Develop
 
