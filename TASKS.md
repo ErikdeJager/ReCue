@@ -1379,3 +1379,78 @@ in the existing diff viewer).
   `src/ipc.ts` (`compareBranches`), `src/components/DiffInspector/DiffInspector.tsx` (source
   toggle + branch pickers + generalized `load`), `src/types/index.ts` + `src-tauri/src/store.rs`
   (persist compare fields on the `diff` panel).
+
+---
+
+### 82. [ ] Repo context menu — a dedicated "Views" section listing every addable view
+
+**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Depends on:** #72
+**Created:** 2026-06-19
+
+**Description**
+
+In the **folder/repo context menu** (sidebar, `Sidebar.tsx`), group the "add a viewer to this
+repo" actions into one clearly-labeled **"Views" section** so the user can see every available
+view type at a glance and click to add it. Today these actions are flat and mixed in (the
+default menu is: New session · Open diff viewer · Open file viewer… · Change color… · Forget).
+
+Restructure the default menu into clear sections:
+- **New session** stays its own prominent first item (#54) — agents are separate, not part of
+  Views (per the requester).
+- **Views** (labeled section header) — one button per **addable, non-agent view type**, each
+  adding that view to the repo (it then shows as an Overview column, a sidebar row, and is
+  draggable into a Canvas, #59):
+  - **File viewer** → the searchable file picker (#56) → file column (#44)
+  - **Diff viewer** → the repo diff column (#39)
+  - **Terminal** → a shell terminal item (#72)
+  - …and any future addable view type joins this section.
+- **Change color…** and **Forget** (danger) stay as the existing trailing/destructive actions.
+
+Each Views button should be clearly labeled (a Lucide icon + name) so the available views are
+obvious. The section should be **driven by a single list of view types** (a small
+registry/array — kind + label + icon + add-action) so adding a new view kind in future is a
+one-line addition here, not a scattered edit.
+
+Coordinate with #79 ("swapping views is up to the user"): **adding a view from this menu should
+not force a main-view switch** — it creates the item (visible in the sidebar/Overview,
+draggable to Canvas); the user switches views themselves. (Today the diff/file actions call
+`setView("overview")`; align them with #79's no-auto-switch rule.)
+
+Out of scope: agents/New session (kept separate); the compare *mode* (#81 — a toggle inside the
+diff viewer, not an addable view); a Canvas-native "add view" menu.
+
+**Subtasks**
+
+1. [ ] Add a "Views" section header in the default repo menu (`Sidebar.tsx` menu render) above
+   the view-adding buttons; keep New session first and color/Forget trailing.
+2. [ ] Drive the Views buttons from a single list/registry of addable view types (kind + label
+   + icon + add-action), so File/Diff/Terminal (and future kinds) render uniformly.
+3. [ ] Wire each: File viewer → file picker (`menuMode "files"`), Diff viewer →
+   `addOverviewPanel(repo, "diff")`, Terminal → add terminal item (#72).
+4. [ ] Don't force a view switch on add (drop the `setView("overview")`), aligning with #79.
+
+**Acceptance criteria**
+
+- [ ] The repo context menu has a clearly-labeled "Views" section listing every addable view
+  type (File viewer, Diff viewer, Terminal) as one-click buttons with icons.
+- [ ] Clicking a view button adds that view to the repo (appears in the sidebar + Overview,
+  draggable to Canvas) without forcing a main-view switch.
+- [ ] New session stays a separate first item; Change color / Forget stay as the
+  trailing/destructive actions.
+- [ ] Adding a new addable view kind in future is a single-entry addition to the Views registry
+  (no scattered menu edits).
+
+**Notes**
+
+- **Dependency rule (from the requester):** this task depends on **all tasks that create a new
+  addable view type** (shown in Overview / draggable into Canvas). Currently: **#72** (terminal).
+  **When any future task adds a new view kind, add it to this task's `Depends on`** (and to the
+  Views registry). The compare mode #81 is not a new view (it's a toggle in the diff viewer), so
+  it's not a dependency.
+- Decision (from the requester): New session stays separate (not in Views).
+- Coordinate with #79 (no auto view-switch on click) — apply the same to adding from this menu.
+- Key code: `src/components/Sidebar/Sidebar.tsx` (repo context menu, the `menuMode "menu"`
+  branch + `addOverviewPanel`; add a Views registry/section), `src/components/Sidebar/Sidebar.module.css`
+  (section-header style; reuse `menuSeparator`), `src/components/FilePicker/FilePicker.tsx` (file
+  viewer path), and the terminal-add action from #72.
