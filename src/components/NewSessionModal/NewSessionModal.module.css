@@ -21,7 +21,12 @@
   overflow-y: auto;
   padding: var(--space-16);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-window);
+  /* Top-left matches the button's --radius-control (7px) so the panel fully
+     occludes the New session button it grows from (#65) — the button's sharper
+     corner used to peek past the panel's rounder --radius-window corner. The
+     other three corners keep the 10px window radius. */
+  border-radius: var(--radius-control) var(--radius-window) var(--radius-window)
+    var(--radius-window);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-popover);
   transform-origin: top left;

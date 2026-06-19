@@ -175,7 +175,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#63 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. New work goes here as a fresh `### N.` entry
-in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#82**), with its
+in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format (next number: **#83**), with its
 `Depends on:` prerequisites.
 
 ---
@@ -249,9 +249,9 @@ touching unrelated panels.
 
 ---
 
-### 65. [ ] New session panel should fully cover the New session button (no corner peeking out)
+### 65. [x] New session panel should fully cover the New session button (no corner peeking out)
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -273,9 +273,9 @@ Out of scope: the panel's internal flow/keybindings (#66).
 
 **Acceptance criteria**
 
-- [ ] With the panel open, no part of the New session button is visible around it (top-left
+- [x] With the panel open, no part of the New session button is visible around it (top-left
   corner included).
-- [ ] The open animation still reads as growing from the button; tokens only.
+- [x] The open animation still reads as growing from the button; tokens only.
 
 **Notes**
 
