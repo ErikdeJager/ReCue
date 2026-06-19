@@ -24,13 +24,37 @@ function ViewSwitch() {
   };
 
   return (
-    <div className={styles.group} role="tablist" aria-label="View">
+    <div
+      className={styles.group}
+      role="tablist"
+      aria-label="View"
+      onKeyDown={(event) => {
+        // Roving arrow-key nav per the ARIA tablist pattern (#49).
+        const idx = OPTIONS.findIndex((o) => o.value === view);
+        let next = idx;
+        if (event.key === "ArrowRight" || event.key === "ArrowDown")
+          next = (idx + 1) % OPTIONS.length;
+        else if (event.key === "ArrowLeft" || event.key === "ArrowUp")
+          next = (idx - 1 + OPTIONS.length) % OPTIONS.length;
+        else return;
+        event.preventDefault();
+        const option = OPTIONS[next];
+        if (!option) return;
+        go(option.value);
+        const tabs =
+          event.currentTarget.querySelectorAll<HTMLButtonElement>(
+            '[role="tab"]',
+          );
+        tabs[next]?.focus();
+      }}
+    >
       {OPTIONS.map((option) => (
         <button
           key={option.value}
           type="button"
           role="tab"
           aria-selected={view === option.value}
+          tabIndex={view === option.value ? 0 : -1}
           className={view === option.value ? styles.active : styles.option}
           onClick={() => go(option.value)}
         >

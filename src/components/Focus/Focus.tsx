@@ -252,13 +252,39 @@ function Focus() {
                 />
               )}
               <div className={styles.inspectorInner}>
-                <div className={styles.tabStrip} role="tablist">
+                <div
+                  className={styles.tabStrip}
+                  role="tablist"
+                  onKeyDown={(event) => {
+                    // Roving arrow-key nav per the ARIA tablist pattern (#49).
+                    const idx = TABS.findIndex((t) => t.id === activeTab);
+                    let next = idx;
+                    if (event.key === "ArrowRight" || event.key === "ArrowDown")
+                      next = (idx + 1) % TABS.length;
+                    else if (
+                      event.key === "ArrowLeft" ||
+                      event.key === "ArrowUp"
+                    )
+                      next = (idx - 1 + TABS.length) % TABS.length;
+                    else return;
+                    event.preventDefault();
+                    const tab = TABS[next];
+                    if (!tab) return;
+                    setActiveTab(tab.id);
+                    const tabs =
+                      event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                        '[role="tab"]',
+                      );
+                    tabs[next]?.focus();
+                  }}
+                >
                   {TABS.map((tab) => (
                     <button
                       key={tab.id}
                       type="button"
                       role="tab"
                       aria-selected={activeTab === tab.id}
+                      tabIndex={activeTab === tab.id ? 0 : -1}
                       className={
                         activeTab === tab.id ? styles.tabActive : styles.tab
                       }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertTriangle, FolderOpen, GitBranch, Plus } from "lucide-react";
 
 import { listBranches, pickDirectory } from "../../ipc";
@@ -39,6 +40,9 @@ function NewSessionModal() {
 
   const nameRef = useRef<HTMLInputElement>(null);
   const chooseRef = useRef<HTMLButtonElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  // The element focused before the dialog opened, restored on close (a11y #49).
+  const openerRef = useRef<HTMLElement | null>(null);
 
   // Reset / prefill each time the panel opens.
   useEffect(() => {
@@ -102,6 +106,17 @@ function NewSessionModal() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, close]);
 
+  // Capture the opener on open; restore focus to it on close (a11y #49) so
+  // keyboard focus doesn't get dumped on <body> when the dialog dismisses.
+  useEffect(() => {
+    if (open) {
+      openerRef.current = document.activeElement as HTMLElement | null;
+    } else {
+      openerRef.current?.focus?.();
+      openerRef.current = null;
+    }
+  }, [open]);
+
   if (!open) return null;
 
   const willCheckout =
@@ -132,14 +147,34 @@ function NewSessionModal() {
     else setBusy(false); // stay open so the error (e.g. dirty tree) can be fixed
   };
 
+  // Keep Tab focus inside the dialog (focus-trap, a11y #49).
+  const onTrapKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>) => {
+    if (event.key !== "Tab" || !formRef.current) return;
+    const focusable = formRef.current.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!first || !last) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div className={styles.overlay} onClick={close}>
       <form
+        ref={formRef}
         className={styles.popover}
         role="dialog"
         aria-modal="true"
         aria-label="New session"
         onClick={(event) => event.stopPropagation()}
+        onKeyDown={onTrapKeyDown}
         onSubmit={(event) => {
           event.preventDefault();
           void create();

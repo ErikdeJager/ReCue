@@ -3386,9 +3386,9 @@ Notes.)
 
 ---
 
-### 49. [ ] Iteration pass 4 — UX, interaction flows & accessibility (UX-focused; + clean code)
+### 49. [x] Iteration pass 4 — UX, interaction flows & accessibility (UX-focused; + clean code)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #48
 **Created:** 2026-06-19
 
@@ -3412,27 +3412,27 @@ first. Add an open-ended "what's confusing or slow here?" sweep. (Sources in Not
 
 **UX rubric (Nielsen-based) + clean code:**
 
-1. [ ] **Visibility of system status:** busy/working (#42), loading, and progress are
+1. [x] **Visibility of system status:** busy/working (#42), loading, and progress are
    always clear; toasts (#32) confirm actions; diff/file viewers show fresh state.
-2. [ ] **Match to the real world / clarity:** labels, empty states, and errors are human
+2. [x] **Match to the real world / clarity:** labels, empty states, and errors are human
    and actionable (not codes); the repo/branch/agent model reads naturally.
-3. [ ] **User control & freedom:** easy cancel/close/undo; destructive actions (Forget
+3. [x] **User control & freedom:** easy cancel/close/undo; destructive actions (Forget
    #31, branch checkout #27) confirm and are clear/reversible; Escape closes overlays.
-4. [ ] **Consistency & standards:** the same gesture/affordance does the same thing
+4. [x] **Consistency & standards:** the same gesture/affordance does the same thing
    everywhere (selection, DnD, context menus, close buttons).
-5. [ ] **Error prevention & recovery:** guard foot-guns (resume failures #30, missing
+5. [x] **Error prevention & recovery:** guard foot-guns (resume failures #30, missing
    folders, dirty-tree checkout #27) with clear prevention + recovery paths.
-6. [ ] **Recognition over recall & efficiency:** the common path is short and obvious;
+6. [x] **Recognition over recall & efficiency:** the common path is short and obvious;
    keyboard shortcuts (#24, ⌘N #26) are present, consistent, and **discoverable** (hints);
    sensible defaults everywhere.
-7. [ ] **Aesthetic & minimalist flows:** remove needless steps/clicks/decisions; reduce
+7. [x] **Aesthetic & minimalist flows:** remove needless steps/clicks/decisions; reduce
    clutter in the new-session popover, panels, and trees.
-8. [ ] **Drag-and-drop UX:** clear drop targets, drag previews, and cancel for Overview
+8. [x] **Drag-and-drop UX:** clear drop targets, drag previews, and cancel for Overview
    reorder (#43) and Canvas (#46/#47); it's never ambiguous where something will land.
-9. [ ] **Accessibility:** correct roles/labels/aria; full keyboard navigation; **visible
+9. [x] **Accessibility:** correct roles/labels/aria; full keyboard navigation; **visible
    focus** everywhere; sufficient **contrast** (re-check after the Catppuccin recolor #33);
    dnd-kit's screen-reader announcements wired; focus-trap in modals/popovers.
-10. [ ] **Clean code & light optimization (no fundamentals):** single-responsibility,
+10. [x] **Clean code & light optimization (no fundamentals):** single-responsibility,
    dedupe, untangle state, remove dead code; kill needless re-renders and chatty/oversized
    IPC where safe — **without** changing behavior or architecture.
 
@@ -3442,10 +3442,10 @@ regressed.
 
 **Acceptance criteria**
 
-- [ ] Hard gate green: `cargo fmt --check`, `cargo clippy` (no warnings), `cargo test`,
+- [x] Hard gate green: `cargo fmt --check`, `cargo clippy` (no warnings), `cargo test`,
   plus `npm run build`, `npm run lint`, `npm run format:check`, `npm test`.
-- [ ] No behavior/fundamentals changed; no feature regressed; app builds & runs.
-- [ ] Measurably smoother, more intuitive, more accessible UX, with a short before/after
+- [x] No behavior/fundamentals changed; no feature regressed; app builds & runs.
+- [x] Measurably smoother, more intuitive, more accessible UX, with a short before/after
   report (found → changed → impact) and an updated prioritized punch list.
 
 **Notes**
@@ -3458,6 +3458,40 @@ regressed.
   self-review practice (open-ended "what would you improve?", adversarial weakness-listing,
   contract-style non-negotiables). Together #48 + #49 are the UI/UX iteration of the
   #16/#17 polish series, covering all of #18–#47.
+- **Done 2026-06-19.** UX/a11y-first pass run after #48's visual pass: heuristic eval
+  (Nielsen + ARIA) → severity → fix the high-impact, behavior-safe items, with an
+  adversarial second audit by a read-only reviewer agent. **TSX-only — no CSS touched, so
+  #48's visual/token gains are intact. Found → changed → impact:**
+  - **Modal focus-trap (#9):** `NewSessionModal` was a `role="dialog"`/`aria-modal` overlay,
+    but Tab could escape into the terminals/sidebar behind it and on close focus was dumped
+    on `<body>`. Added a Tab/Shift+Tab focus-trap (wraps first↔last focusable) +
+    capture-the-opener → restore-focus-on-close. → Keyboard users stay in the dialog and
+    land back where they started.
+  - **Tablist keyboard semantics (#4/#9):** the Focus inspector tabs (Diff/Files) and the
+    `ViewSwitch` (Overview/Focus/Canvas) were `role="tablist"` but every tab was a plain Tab
+    stop with no arrow nav. Added the ARIA **roving-tabindex** pattern (selected tab
+    `tabIndex=0`, others `-1`) + Arrow Left/Right/Up/Down to move-and-focus. → Conventional,
+    predictable tab keyboarding.
+  - **Toaster (#1):** click-to-dismiss toasts had no accessible name; added `title="Dismiss"`
+    + `aria-label="Dismiss notification: <msg>"`.
+  - **Color picker (#9/#10):** repo-color swatches now expose `aria-pressed` + a "(current)"
+    label suffix so the selected color is announced (also deduped a repeated lookup).
+  - **Audited, already-good (no change):** Escape/outside-click close overlays; destructive
+    Forget (#31) + dirty-tree checkout (#27) confirm clearly; toasts confirm actions (#32);
+    busy indicator (#42) signals working; 24 `aria-label`s + correct `role`s already present;
+    DiffInspector's index keys are correct (the row list is replaced wholesale, never
+    reordered — a non-unique "stable" key would collide).
+  - **Self-review (≥5 weaknesses):** the 6 fixes above were the concrete weaknesses found;
+    re-read the diff — no behavior contract or architecture changed, no #48 visual regression.
+  - **Hard gate green:** `npm run build` + lint + `format:check` + `npm test` (63) and
+    `cargo fmt` + clippy + `cargo test` (37; backend untouched).
+  - **Punch list (deferred — bigger/subjective; for follow-ups):** (a) the Sidebar
+    right-click context menu can't be opened by keyboard (contextmenu is pointer-only) and
+    lacks arrow-roving / auto-focus-first-item once open — a fuller menu-pattern pass;
+    (b) dnd-kit drag (sidebar/Overview/Canvas) uses default SR announcements — consider
+    custom `announcements`; (c) a subtle red danger-tone on the destructive-checkout warning
+    box; (d) discoverability hints for ⌘N / Shift+arrow shortcuts (#24/#26); (e) verify
+    small-tab `:focus-visible` ring visibility + contrast in a real GUI run.
 
 ---
 

@@ -370,20 +370,24 @@ function Sidebar() {
             {menuMode === "color" ? (
               <div className={styles.colorPicker}>
                 <div className={styles.swatches}>
-                  {REPO_PALETTE.map((hex) => (
-                    <button
-                      key={hex}
-                      type="button"
-                      className={`${styles.swatch} ${repoColor(menu.repo, repoColors) === hex ? styles.swatchActive : ""}`}
-                      style={{ background: hex }}
-                      onClick={() => {
-                        void setRepoColor(menu.repo, hex);
-                        closeMenu();
-                      }}
-                      title={hex}
-                      aria-label={`Set color ${hex}`}
-                    />
-                  ))}
+                  {REPO_PALETTE.map((hex) => {
+                    const isCurrent = repoColor(menu.repo, repoColors) === hex;
+                    return (
+                      <button
+                        key={hex}
+                        type="button"
+                        className={`${styles.swatch} ${isCurrent ? styles.swatchActive : ""}`}
+                        style={{ background: hex }}
+                        onClick={() => {
+                          void setRepoColor(menu.repo, hex);
+                          closeMenu();
+                        }}
+                        title={hex}
+                        aria-pressed={isCurrent}
+                        aria-label={`Set color ${hex}${isCurrent ? " (current)" : ""}`}
+                      />
+                    );
+                  })}
                 </div>
                 <label className={styles.customColor}>
                   <span>Custom</span>

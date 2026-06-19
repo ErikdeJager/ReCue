@@ -28,6 +28,8 @@ function Toaster() {
           type="button"
           className={`${styles.toast} ${toast.tone === "error" ? styles.error : ""}`}
           onClick={() => dismiss(toast.id)}
+          title="Dismiss"
+          aria-label={`Dismiss notification: ${toast.message}`}
         >
           {toast.message}
         </button>
