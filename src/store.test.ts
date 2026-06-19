@@ -321,6 +321,51 @@ describe("repo items — overviewPanels as the single source (#59)", () => {
   });
 });
 
+describe("action toasts (#83)", () => {
+  const lastToast = () => {
+    const { toasts } = useStore.getState();
+    return toasts[toasts.length - 1]?.message;
+  };
+
+  it("addOverviewPanel toasts 'Opened …'; a deduped re-add toasts 'Already open'", async () => {
+    const add = useStore.getState().addOverviewPanel;
+    await add("/repo/a", "diff");
+    expect(lastToast()).toBe("Opened diff viewer");
+    await add("/repo/a", "markdown", "docs/readme.md");
+    expect(lastToast()).toBe("Opened readme.md"); // basename, not the full path
+    await add("/repo/a", "diff"); // dup diff → no second "Opened"
+    expect(lastToast()).toBe("Already open");
+    const opened = useStore
+      .getState()
+      .toasts.filter((t) => t.message.startsWith("Opened "));
+    expect(opened).toHaveLength(2);
+  });
+
+  it("removeOverviewPanel toasts a kind-aware 'Closed …'", async () => {
+    await useStore
+      .getState()
+      .addOverviewPanel("/repo/a", "markdown", "src/main.ts");
+    const id = useStore.getState().overviewPanels["/repo/a"]?.[0]?.id ?? "";
+    await useStore.getState().removeOverviewPanel("/repo/a", id);
+    expect(lastToast()).toBe("Closed main.ts");
+  });
+
+  it("canvas add / rename / close each toast; a no-op rename doesn't", () => {
+    const s = () => useStore.getState();
+    s().addCanvas();
+    expect(lastToast()).toBe("Canvas created");
+    const canvases = s().canvases;
+    const created = canvases[canvases.length - 1];
+    const cid = created?.id ?? "";
+    s().renameCanvas(cid, created?.name ?? ""); // unchanged → no toast
+    expect(lastToast()).toBe("Canvas created");
+    s().renameCanvas(cid, "Renamed");
+    expect(lastToast()).toBe("Canvas renamed");
+    s().closeCanvas(cid);
+    expect(lastToast()).toBe("Canvas closed");
+  });
+});
+
 describe("mergeRepoOrder (#43)", () => {
   it("keeps the saved order for present items", () => {
     expect(mergeRepoOrder(["b", "a", "c"], ["a", "b", "c"])).toEqual([

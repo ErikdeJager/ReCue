@@ -1476,9 +1476,9 @@ diff viewer, not an addable view); a Canvas-native "add view" menu.
 
 ---
 
-### 83. [ ] More subtle toasts — confirm closing views and canvas add/close/rename
+### 83. [x] More subtle toasts — confirm closing views and canvas add/close/rename
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** none
 **Created:** 2026-06-19
 
@@ -1513,20 +1513,20 @@ Out of scope: a new toast tone/visual (reuse info per the requester); toasting e
 
 **Subtasks**
 
-1. [ ] `removeOverviewPanel` → toast a kind-aware "Closed …" on a direct user close; suppress
+1. [x] `removeOverviewPanel` → toast a kind-aware "Closed …" on a direct user close; suppress
    during bulk forget (#31).
-2. [ ] `addOverviewPanel` → toast "Opened …" on an actual add (not on a deduped no-op).
-3. [ ] `addCanvas` / `closeCanvas` / `renameCanvas` → toast "Canvas created / closed / renamed".
-4. [ ] Keep messages short + consistent; reuse the `info` tone (no new variant).
+2. [x] `addOverviewPanel` → toast "Opened …" on an actual add (not on a deduped no-op).
+3. [x] `addCanvas` / `closeCanvas` / `renameCanvas` → toast "Canvas created / closed / renamed".
+4. [x] Keep messages short + consistent; reuse the `info` tone (no new variant).
 
 **Acceptance criteria**
 
-- [ ] Closing any view (file / diff / terminal) shows a brief toast; closing is no longer
+- [x] Closing any view (file / diff / terminal) shows a brief toast; closing is no longer
   silent for non-agent views.
-- [ ] Adding a view, and creating / closing / renaming a canvas each show a brief toast.
-- [ ] Bulk Forget-repo still shows a single toast (no per-panel spam); a deduped re-add doesn't
+- [x] Adding a view, and creating / closing / renaming a canvas each show a brief toast.
+- [x] Bulk Forget-repo still shows a single toast (no per-panel spam); a deduped re-add doesn't
   double-toast.
-- [ ] Toasts use the existing info style + bottom-right placement; noisy actions (reorder, view
+- [x] Toasts use the existing info style + bottom-right placement; noisy actions (reorder, view
   switch, color) don't toast.
 
 **Notes**

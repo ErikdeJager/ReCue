@@ -48,6 +48,14 @@ function omitKey<T>(map: Record<string, T>, key: string): Record<string, T> {
   return next;
 }
 
+/** Short, human label for a view panel — used in #83's open/close toasts:
+ * "diff viewer" / "terminal", or the file's basename for a file (markdown) panel. */
+function panelLabel(kind: OverviewPanel["kind"], file?: string): string {
+  if (kind === "diff") return "diff viewer";
+  if (kind === "terminal") return "terminal";
+  return file ? (file.split("/").pop() ?? file) : "file viewer";
+}
+
 function toSessionView(record: SessionRecord): SessionView {
   return {
     id: record.id,
@@ -691,7 +699,12 @@ export const useStore = create<AppState>()((set, get) => ({
         : kind === "markdown"
           ? current.some((p) => p.kind === "markdown" && p.file === file)
           : false;
-    if (dup) return;
+    if (dup) {
+      // Already open (#59 dedup) — a gentle nudge instead of a second "Opened…"
+      // (#83), so re-clicking the menu item still gives feedback.
+      get().pushToast("Already open");
+      return;
+    }
     const panel: OverviewPanel = {
       id: crypto.randomUUID(),
       kind,
@@ -715,6 +728,9 @@ export const useStore = create<AppState>()((set, get) => ({
     set((s) => ({
       overviewPanels: { ...s.overviewPanels, [repoPath]: next },
     }));
+    // Low-key confirmation that the view was added (#83) — it doesn't switch the
+    // main view (#79/#82), so the toast is the feedback that it happened.
+    get().pushToast(`Opened ${panelLabel(kind, file)}`);
     try {
       await ipc.setOverviewPanels(repoPath, next);
     } catch {
@@ -735,6 +751,12 @@ export const useStore = create<AppState>()((set, get) => ({
         terminalExits: omitKey(s.terminalExits, id),
       };
     });
+    // Low-key close confirmation (#83). Only direct user closes call this (the ×
+    // on a sidebar row / Overview column) — bulk forgetRepo (#31) doesn't, so
+    // there's no per-panel spam during a forget.
+    if (removed) {
+      get().pushToast(`Closed ${panelLabel(removed.kind, removed.file)}`);
+    }
     // A terminal item owns a shell PTY (#72): kill it on close. Mark the kill
     // intentional so its exit doesn't pop the Restart overlay.
     if (removed?.kind === "terminal") {
@@ -829,6 +851,7 @@ export const useStore = create<AppState>()((set, get) => ({
     void ipc
       .setCanvases({ canvases: next, activeId: created.id })
       .catch(() => {});
+    get().pushToast("Canvas created");
   },
 
   closeCanvas: (id) => {
@@ -846,12 +869,17 @@ export const useStore = create<AppState>()((set, get) => ({
     }
     set({ canvases: next, activeCanvasId: active });
     void ipc.setCanvases({ canvases: next, activeId: active }).catch(() => {});
+    get().pushToast("Canvas closed");
   },
 
   renameCanvas: (id, name) => {
     const trimmed = name.trim();
     if (!trimmed) return; // blank keeps the current name (#58)
     const { canvases, activeCanvasId } = get();
+    const target = canvases.find((c) => c.id === id);
+    // No-op rename (same name / missing tab): skip the write + toast (#83) so an
+    // unchanged inline edit doesn't fire "Canvas renamed".
+    if (!target || target.name === trimmed) return;
     const next = canvases.map((c) =>
       c.id === id ? { ...c, name: trimmed } : c,
     );
@@ -859,6 +887,7 @@ export const useStore = create<AppState>()((set, get) => ({
     void ipc
       .setCanvases({ canvases: next, activeId: activeCanvasId })
       .catch(() => {});
+    get().pushToast("Canvas renamed");
   },
 
   reorderCanvases: (orderedIds) => {
