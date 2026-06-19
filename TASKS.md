@@ -1401,9 +1401,9 @@ in the existing diff viewer).
 
 ---
 
-### 82. [ ] Repo context menu — a dedicated "Views" section listing every addable view
+### 82. [x] Repo context menu — a dedicated "Views" section listing every addable view
 
-**Status:** Not started · _(Not started | In progress | Blocked | Done)_
+**Status:** Done · _(Not started | In progress | Blocked | Done)_
 **Depends on:** #72
 **Created:** 2026-06-19
 
@@ -1441,23 +1441,23 @@ diff viewer, not an addable view); a Canvas-native "add view" menu.
 
 **Subtasks**
 
-1. [ ] Add a "Views" section header in the default repo menu (`Sidebar.tsx` menu render) above
+1. [x] Add a "Views" section header in the default repo menu (`Sidebar.tsx` menu render) above
    the view-adding buttons; keep New session first and color/Forget trailing.
-2. [ ] Drive the Views buttons from a single list/registry of addable view types (kind + label
+2. [x] Drive the Views buttons from a single list/registry of addable view types (kind + label
    + icon + add-action), so File/Diff/Terminal (and future kinds) render uniformly.
-3. [ ] Wire each: File viewer → file picker (`menuMode "files"`), Diff viewer →
+3. [x] Wire each: File viewer → file picker (`menuMode "files"`), Diff viewer →
    `addOverviewPanel(repo, "diff")`, Terminal → add terminal item (#72).
-4. [ ] Don't force a view switch on add (drop the `setView("overview")`), aligning with #79.
+4. [x] Don't force a view switch on add (drop the `setView("overview")`), aligning with #79.
 
 **Acceptance criteria**
 
-- [ ] The repo context menu has a clearly-labeled "Views" section listing every addable view
+- [x] The repo context menu has a clearly-labeled "Views" section listing every addable view
   type (File viewer, Diff viewer, Terminal) as one-click buttons with icons.
-- [ ] Clicking a view button adds that view to the repo (appears in the sidebar + Overview,
+- [x] Clicking a view button adds that view to the repo (appears in the sidebar + Overview,
   draggable to Canvas) without forcing a main-view switch.
-- [ ] New session stays a separate first item; Change color / Forget stay as the
+- [x] New session stays a separate first item; Change color / Forget stay as the
   trailing/destructive actions.
-- [ ] Adding a new addable view kind in future is a single-entry addition to the Views registry
+- [x] Adding a new addable view kind in future is a single-entry addition to the Views registry
   (no scattered menu edits).
 
 **Notes**

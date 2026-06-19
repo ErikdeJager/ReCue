@@ -397,6 +397,28 @@
   background: var(--bg-hover);
 }
 
+/* "Views" section (#82): a small muted header over the icon-led view buttons. */
+.menuSection {
+  padding: var(--space-6) var(--space-8) var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+/* View-adding buttons (#82): icon + label, so the available views read at a
+   glance. Overrides the base .menuItem `display: block` (later = wins). */
+.menuItemView {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.menuIcon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
 /* Hairline divider grouping destructive items apart from neutral ones (#54). */
 .menuSeparator {
   height: 1px;

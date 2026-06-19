@@ -434,6 +434,45 @@ function Sidebar() {
     setMenuMode("menu");
   };
 
+  // Addable, non-agent view types for the repo menu's "Views" section (#82).
+  // One entry per view kind — adding a future kind is a single entry here, not a
+  // scattered menu edit. Each `onAdd` adds the view to the repo *without* forcing
+  // a main-view switch (#79): it appears as a sidebar row + Overview column and
+  // is draggable into a Canvas; the user switches views when ready.
+  const viewTypes: {
+    key: string;
+    label: string;
+    icon: typeof FileText;
+    onAdd: (repo: string) => void;
+  }[] = [
+    {
+      key: "file",
+      label: "File viewer",
+      icon: FileText,
+      // The searchable file picker (#56) → file column (#44); the menu stays
+      // open to pick, so this transitions mode rather than closing.
+      onAdd: () => setMenuMode("files"),
+    },
+    {
+      key: "diff",
+      label: "Diff viewer",
+      icon: FileDiff,
+      onAdd: (repo) => {
+        void addOverviewPanel(repo, "diff");
+        closeMenu();
+      },
+    },
+    {
+      key: "terminal",
+      label: "Terminal",
+      icon: TerminalIcon,
+      onAdd: (repo) => {
+        void addOverviewPanel(repo, "terminal");
+        closeMenu();
+      },
+    },
+  ];
+
   // Top-level groups exclude worktree agents (#74) — their repo_path is the
   // worktree folder, not a repo — but include every worktree's parent so the
   // parent group is always present to nest under.
@@ -760,9 +799,9 @@ function Sidebar() {
                 files={fileList}
                 onPick={(f) => {
                   // Opens it as the repo's single file item (#59, deduped in the
-                  // store) — shows in both the sidebar and Overview.
+                  // store) — shows in both the sidebar and Overview. No forced
+                  // view switch (#79/#82) — the user switches when ready.
                   void addOverviewPanel(menu.repo, "markdown", f);
-                  setView("overview");
                   closeMenu();
                 }}
               />
@@ -793,43 +832,32 @@ function Sidebar() {
                   New session
                 </button>
                 <div className={styles.menuSeparator} role="separator" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => {
-                    // Add the repo's diff item (#39/#59, deduped in the store);
-                    // switch to Overview so the new column is visible. It now also
-                    // appears in the sidebar and is draggable into a Canvas.
-                    void addOverviewPanel(menu.repo, "diff");
-                    setView("overview");
-                    closeMenu();
-                  }}
-                >
-                  Open diff viewer
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => {
-                    // Open a plain shell terminal item in this repo (#72); switch
-                    // to Overview so the new column is visible.
-                    void addOverviewPanel(menu.repo, "terminal");
-                    setView("overview");
-                    closeMenu();
-                  }}
-                >
-                  Open terminal
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => setMenuMode("files")}
-                >
-                  Open file viewer…
-                </button>
+                {/* Views (#82): every addable non-agent view, rendered from a
+                    single registry (`viewTypes`) so a new kind is a one-line
+                    addition, not a scattered menu edit. New session stays a
+                    separate item above; adding a view here doesn't switch the
+                    main view (#79) — the user switches when ready. */}
+                <div className={styles.menuSection}>Views</div>
+                {viewTypes.map((v) => {
+                  const Icon = v.icon;
+                  return (
+                    <button
+                      key={v.key}
+                      type="button"
+                      role="menuitem"
+                      className={`${styles.menuItem} ${styles.menuItemView}`}
+                      onClick={() => v.onAdd(menu.repo)}
+                    >
+                      <Icon
+                        size={14}
+                        strokeWidth={1.5}
+                        className={styles.menuIcon}
+                      />
+                      {v.label}
+                    </button>
+                  );
+                })}
+                <div className={styles.menuSeparator} role="separator" />
                 <button
                   type="button"
                   role="menuitem"
