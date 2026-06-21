@@ -66,6 +66,7 @@
   --fs-ui: 13px;
   --fs-meta: 12px;
   --fs-meta-sm: 11px;
+  --fs-meta-xs: 10px; /* compact sidebar tree-row labels (#111) */
   --fs-terminal: 12.5px;
   --fs-diff: 12px;
   --lh-terminal: 1.5;

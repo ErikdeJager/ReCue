@@ -209,7 +209,8 @@
   min-width: 0;
   overflow: hidden;
   font-family: var(--mono);
-  font-size: var(--fs-meta);
+  /* Compact tree (#111): every sidebar row label is 10px (font size only). */
+  font-size: var(--fs-meta-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
@@ -218,7 +219,7 @@
 .count {
   flex-shrink: 0;
   color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
 }
 
 /* The "+" is a separate click target inside the header selector (#68): no box
@@ -294,7 +295,7 @@
   overflow: hidden;
   color: var(--text-primary);
   font-family: var(--mono);
-  font-size: var(--fs-meta);
+  font-size: var(--fs-meta-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -320,7 +321,7 @@
   color: var(--text-primary);
   font: inherit;
   font-family: var(--mono);
-  font-size: var(--fs-meta);
+  font-size: var(--fs-meta-xs);
 }
 
 .remove {
@@ -422,7 +423,7 @@
 .scheduleName {
   overflow: hidden;
   flex-shrink: 1;
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -486,7 +487,7 @@
 .fileName {
   overflow: hidden;
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

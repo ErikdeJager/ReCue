@@ -408,9 +408,9 @@ place — emptied — as a follow-up).
 
 ---
 
-### 111. [ ] Compact sidebar — unify every tree-row label to 10px (font size only)
+### 111. [x] Compact sidebar — unify every tree-row label to 10px (font size only)
 
-**Status:** Not started
+**Status:** Complete
 **Depends on:** none
 **Created:** 2026-06-21
 
@@ -443,21 +443,21 @@ it — staying on-system (token-driven) rather than hardcoding 10px.
 
 **Subtasks**
 
-1. [ ] Add `--fs-meta-xs: 10px` to the font-size group in `src/styles/tokens.css`.
-2. [ ] Point the agent label `.rowPrimary` (and `.renameInput`) at `--fs-meta-xs`.
-3. [ ] Point the file / diff / terminal / scheduled **item** row label text at `--fs-meta-xs`.
-4. [ ] Point the repo header `.repoName` + `.count` at `--fs-meta-xs`.
-5. [ ] Verify no padding / height / chrome changed; run build + lint + format.
+1. [x] Add `--fs-meta-xs: 10px` to the font-size group in `src/styles/tokens.css`.
+2. [x] Point the agent label `.rowPrimary` (and `.renameInput`) at `--fs-meta-xs`.
+3. [x] Point the file / diff / terminal / scheduled **item** row label text at `--fs-meta-xs`.
+4. [x] Point the repo header `.repoName` + `.count` at `--fs-meta-xs`.
+5. [x] Verify no padding / height / chrome changed; run build + lint + format.
 
 **Acceptance criteria**
 
-- [ ] Every sidebar tree-row label — repo header name, agent label, and file / diff /
+- [x] Every sidebar tree-row label — repo header name, agent label, and file / diff /
       terminal / scheduled item labels — renders at 10px.
-- [ ] Row padding, heights, gaps, and the busy-indicator slot are unchanged (font size only).
-- [ ] Non-row sidebar chrome (New session / Schedule buttons, footer, context menus, section
+- [x] Row padding, heights, gaps, and the busy-indicator slot are unchanged (font size only).
+- [x] Non-row sidebar chrome (New session / Schedule buttons, footer, context menus, section
       headers) is visually unchanged.
-- [ ] A `--fs-meta-xs: 10px` token exists and the sidebar rows reference it — no hardcoded 10px.
-- [ ] `npm run build`, `npm run lint`, `npm test`, and `npm run format:check` pass.
+- [x] A `--fs-meta-xs: 10px` token exists and the sidebar rows reference it — no hardcoded 10px.
+- [x] `npm run build`, `npm run lint`, `npm test`, and `npm run format:check` pass.
 
 **Notes**
 
