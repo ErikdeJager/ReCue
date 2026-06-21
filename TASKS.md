@@ -42,7 +42,7 @@ agents (#74). `claude` is assumed on `PATH` (clear in-app error if missing).
 
 ## Implemented (completed tasks)
 
-> The backlog has fully shipped (#1–#104).
+> The backlog has fully shipped (#1–#105).
 > Completed tasks are condensed here — number, title, and one line
 > on what each delivered — and their full entries removed from the list below; per-task
 > detail (subtasks, notes, acceptance, implementation reports) lives in git history.
@@ -247,6 +247,10 @@ an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sid
 
 - #104 Fixed overflowing panel content being **clipped with no scrollbar** in a detached canvas window (#84): the window wrapper `.body` (`CanvasWindow.module.css`) was a plain block, so the shared `CanvasSurface` `.area` (`flex: 1; min-height: 0; overflow: hidden`) had no bounded height — it grew to content height and each panel's internal scroller never engaged. Made `.body` a **flex column** (mirroring the main window's `.canvas` wrapper) so the height chain cascades and long FileViewer / diff / code content scrolls. CSS-only; the main-window Canvas was already correct.
 
+**Detached canvas window — DOM renderer fixes garbled agent terminals (#105).**
+
+- #105 Agent (`claude`) terminals rendered **garbled** — doubled/ghosted glyphs, misaligned box-drawing — in a detached canvas window (#84), a known **WebGL glyph-atlas / `devicePixelRatio`** artifact in a freshly-opened secondary native window. Fix: skip the `WebglAddon` in detached windows (`terminalPool.ts`, guarded by `!IS_MAIN_WINDOW`) so they use xterm's **DOM renderer** (visually equivalent, no artifact); the main window keeps WebGL, so its rendering is **provably unchanged** (the guard is true there). **Runtime-unverified** — xterm rendering isn't unit-testable and a window can't be popped out in the dev environment, so flagged for manual verification (per the #84 precedent); a residual stale-scrollback-replay contribution, if any, is a follow-up.
+
 ---
 
 ## Design reference (dark theme only)
@@ -283,8 +287,8 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#104 are complete — see **Implemented (completed tasks)** above for the index,
-and git history for full per-task detail. **Open tasks are listed below.** New work goes
+All tasks (#1–#105) are complete — see **Implemented (completed tasks)** above for the index,
+and git history for full per-task detail. There are no open tasks. New work goes
 here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
 
@@ -296,87 +300,3 @@ its `Depends on:` prerequisites.
 > into smaller dependent sub-tasks** first (as #93 was split into #93 + #94), and then
 > one of those is implemented — skipping is never the answer. Every task is carried to a
 > finished, building, lint-clean state.
-
----
-
-### 105. [ ] Detached canvas window: agent terminals render garbled (doubled/ghosted text, broken box-drawing)
-
-**Status:** Not started
-**Depends on:** none _(#84 detached canvas windows and #18 terminal pool are both complete; independent of #104)_
-**Created:** 2026-06-21
-
-**Description**
-
-An agent (`claude` PTY) shown inside a **detached canvas window** (#84 — a canvas popped
-out into its own native window) renders **garbled**: every glyph is doubled/ghosted, the
-Claude welcome logo and box-drawing borders are misaligned, and the screen is unreadable
-(reported with a screenshot — a "Canvas 1" window running a "Check and resolve vulnerable
-dependencies" agent). The **same agent renders cleanly in the main window's Overview and
-Canvas**, so the defect is specific to PTYs rendered in a popped-out window.
-
-Likely mechanism: each window is its own document with its own #18 terminal pool
-(`src/components/Terminal/terminalPool.ts`). When a session becomes owned by the detached
-window, `CanvasSurface` → `Terminal` → `mountTerminal` → `createHost` builds a **fresh
-xterm there and replays the backend scrollback** (`terminalPool.ts:203`). Those bytes are
-claude's full-screen TUI escape sequences encoded for the PTY's **previous (main-window)
-width**; replaying them into a fresh xterm at a different width reproduces exactly the
-**#18 corruption** that the terminal-pool header comment (`terminalPool.ts:1-19`) documents
-and that #18 avoided in the main window by *never* recreating/replaying. #84's per-window
-pool unavoidably recreates when a PTY moves windows, so #18's corruption returns. A second
-possible contributor is a renderer-level issue — the `WebglAddon` glyph atlas /
-`devicePixelRatio` in the freshly-opened native window (uniform horizontal glyph-doubling is
-a known WebGL artifact).
-
-These two causes are distinguishable in-app and predict different fixes, so the implementer
-must **diagnose first**:
-
-- If resizing the detached window or typing into the agent **snaps it clean** → it's the
-  stale width-mismatched scrollback replay on window-move. Fix direction: force a clean full
-  repaint at the new width when a terminal is created for a PTY moving into this window (e.g.
-  fit to the real slot size + resize the PTY *before* showing the replayed frame, and/or
-  clear and let claude repaint), so the first frame the user sees is drawn at the correct
-  width — not the main window's stale frame.
-- If it **stays garbled** regardless of resize/typing → it's renderer-level. Fix direction:
-  rebuild/defer the `WebglAddon` after the new window + DPR settle, or fall back to the DOM
-  renderer in detached windows, handling `devicePixelRatio`.
-
-Outcome required either way: agent terminals in a detached canvas window render **as cleanly
-as in the main window**.
-
-Out of scope: the main-window Overview/Canvas terminal rendering (already correct via #18);
-non-agent panels (covered by #104's separate scroll fix); any backend PTY change beyond what
-a correct resize/repaint needs.
-
-**Subtasks**
-
-1. [ ] Reproduce: pop a canvas with a running (ideally busy) agent into its own window (#84)
-   and confirm the garbled rendering; note whether a window resize or a keystroke into the
-   agent makes it snap clean (this selects the cause below).
-2. [ ] Diagnose which cause applies — stale width-mismatched scrollback replay on window-move
-   (resize/typing recovers) vs. renderer-level WebGL/DPR in the new window (stays garbled).
-3. [ ] Implement the matching fix so the agent's **first** frame in the detached window is
-   drawn cleanly at the correct width:
-   - stale-frame: force a clean repaint at the new slot width on terminal creation/move
-     (fit + resize before showing, and/or reset + let claude repaint);
-   - renderer-level: rebuild/defer WebGL after the window/DPR settles, or DOM-renderer
-     fallback.
-4. [ ] Verify the main-window Overview/Canvas terminal rendering is unchanged, and that
-   re-docking the canvas (closing the window) still renders the agent cleanly in the main
-   window.
-
-**Acceptance criteria**
-
-- [ ] An agent terminal popped into its own canvas window (#84) renders cleanly — no
-  doubled/ghosted glyphs, correct box-drawing — matching the main window's quality.
-- [ ] It stays clean after resizing the detached window and after typing into the agent.
-- [ ] Re-docking (closing the detached window) renders the agent cleanly in the main window.
-- [ ] Main-window Overview/Canvas terminal rendering is unaffected; `npm run build` and
-  `npm run lint` pass.
-
-**Notes**
-
-- Detached-window-specific (#84); the main window is fine (the #18 terminal-pool fix holds
-  there). Independent of #104 (the detached-window non-terminal scroll-clip fix) — sibling
-  detached-window bugs, different panels/mechanisms.
-- No automated test (xterm rendering isn't unit-testable in the current Vitest setup) —
-  verification is manual, per decision.

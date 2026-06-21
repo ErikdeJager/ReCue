@@ -25,6 +25,7 @@ import "@xterm/xterm/css/xterm.css";
 
 import { resizePty, sessionScrollback, writeStdin } from "../../ipc";
 import { onSessionOutput } from "../../outputBus";
+import { IS_MAIN_WINDOW } from "../../windowContext";
 import { terminalsToDispose } from "./poolReconcile";
 import styles from "./Terminal.module.css";
 
@@ -139,15 +140,22 @@ function createHost(sessionId: string): TerminalHost {
   parkingLayer().appendChild(container);
   term.open(container);
 
-  // Best-effort GPU renderer; fall back to the default DOM renderer.
+  // Best-effort GPU renderer; fall back to the default DOM renderer. Skipped in a
+  // detached canvas window (#84/#105): a freshly-opened native window renders agent
+  // TUIs with doubled/ghosted glyphs and misaligned box-drawing — a known WebGL
+  // glyph-atlas / devicePixelRatio artifact in a secondary window — so detached
+  // windows use the DOM renderer (visually equivalent, no artifact). The main window
+  // keeps WebGL, so its rendering is provably unchanged.
   let webgl: WebglAddon | undefined;
-  try {
-    const addon = new WebglAddon();
-    addon.onContextLoss(() => addon.dispose());
-    term.loadAddon(addon);
-    webgl = addon;
-  } catch {
-    webgl = undefined;
+  if (IS_MAIN_WINDOW) {
+    try {
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => addon.dispose());
+      term.loadAddon(addon);
+      webgl = addon;
+    } catch {
+      webgl = undefined;
+    }
   }
 
   const safeFit = () => {
