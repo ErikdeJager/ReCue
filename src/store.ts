@@ -556,6 +556,39 @@ async function killAgentsInRepo(repoPath: string): Promise<number> {
   return ids.length;
 }
 
+/**
+ * Remove `repoPath`'s non-agent items (#106) — file/diff viewers and shell
+ * terminals (#72) — and kill each terminal's PTY (intentional, so no Restart
+ * overlay). Drops `overviewPanels[repoPath]`, prunes the matching `terminalExits`,
+ * and persists the cleared list. Shared by #91 Close all items and #106 Forget
+ * folder; adds **no** toast (each caller emits its own summary). Returns the count.
+ */
+async function closeRepoItems(repoPath: string): Promise<number> {
+  const panels = useStore.getState().overviewPanels[repoPath] ?? [];
+  if (panels.length === 0) return 0;
+  // Each terminal item owns a shell PTY (#72) — kill it (intentional, so no
+  // Restart overlay). File/diff panels are pure UI.
+  for (const p of panels) {
+    if (p.kind === "terminal") {
+      intentionalKills.add(p.id);
+      await ipc.killSession(p.id).catch(() => {});
+    }
+  }
+  const removed = new Set(panels.map((p) => p.id));
+  useStore.setState((s) => {
+    const map = { ...s.overviewPanels };
+    delete map[repoPath];
+    return {
+      overviewPanels: map,
+      terminalExits: Object.fromEntries(
+        Object.entries(s.terminalExits).filter(([id]) => !removed.has(id)),
+      ),
+    };
+  });
+  void ipc.setOverviewPanels(repoPath, []).catch(() => {});
+  return panels.length;
+}
+
 export const useStore = create<AppState>()((set, get) => ({
   sessions: [],
   selectedId: null,
@@ -1495,6 +1528,11 @@ export const useStore = create<AppState>()((set, get) => ({
           .map((s) => s.repoPath),
       ),
     ];
+    // Pending scheduled sessions for this folder (#93/#94, keyed by `cwd`) — cancel
+    // them so a forgotten folder can't later auto-spawn an agent into it (#106).
+    const scheduleIds = get()
+      .schedules.filter((sc) => sc.cwd === repoPath)
+      .map((sc) => sc.id);
     // Kill + forget every session's process (kill_session also drops its record),
     // then drop the folder from persisted recents so it can't reappear on restart.
     // Mark them intentional so their exit events don't each pop a toast (#32).
@@ -1506,6 +1544,13 @@ export const useStore = create<AppState>()((set, get) => ({
         ipc.removeWorktree(repoPath, dest, true).catch(() => {}),
       ),
     );
+    // Forget folder is a complete teardown (#106): also remove the folder's
+    // non-agent items (files / diffs / terminals + their PTYs) via the shared #91
+    // helper, and cancel its pending schedules (backend; dropped from state below).
+    const itemCount = await closeRepoItems(repoPath);
+    await Promise.all(
+      scheduleIds.map((id) => ipc.cancelSchedule(id).catch(() => {})),
+    );
     set((s) => {
       const clearSelection = s.selectedId != null && ids.includes(s.selectedId);
       return {
@@ -1513,6 +1558,7 @@ export const useStore = create<AppState>()((set, get) => ({
           (x) => x.repoPath !== repoPath && x.worktreeParent !== repoPath,
         ),
         recents: s.recents.filter((r) => r !== repoPath),
+        schedules: s.schedules.filter((sc) => sc.cwd !== repoPath),
         selectedId: clearSelection ? null : s.selectedId,
         view: clearSelection ? "overview" : s.view,
         // Drop a now-dangling Overview filter on the forgotten repo (#34).
@@ -1520,9 +1566,16 @@ export const useStore = create<AppState>()((set, get) => ({
           s.overviewRepoFilter === repoPath ? null : s.overviewRepoFilter,
       };
     });
+    // One summary toast (#83) listing everything removed, omitting zero parts.
+    const parts: string[] = [];
+    if (ids.length > 0)
+      parts.push(`${ids.length} agent${ids.length === 1 ? "" : "s"}`);
+    if (itemCount > 0)
+      parts.push(`${itemCount} view${itemCount === 1 ? "" : "s"}`);
+    if (scheduleIds.length > 0) parts.push(`${scheduleIds.length} scheduled`);
     get().pushToast(
-      ids.length > 0
-        ? `Forgot folder + ${ids.length} agent${ids.length === 1 ? "" : "s"}`
+      parts.length > 0
+        ? `Forgot folder + ${parts.join(" + ")}`
         : "Forgot folder",
     );
   },
@@ -1535,32 +1588,11 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   closeAllItems: async (repoPath) => {
-    // Kill the agents (shared mechanics; no toast), then clear the non-agent items.
+    // Kill the agents (shared mechanics; no toast), then clear the non-agent items
+    // via the shared #106 helper. Unlike Forget folder, this keeps the folder in
+    // recents — that's the only difference between the two.
     const killed = await killAgentsInRepo(repoPath);
-    const panels = get().overviewPanels[repoPath] ?? [];
-    const panelCount = panels.length;
-    // Each terminal item owns a shell PTY (#72) — kill it (intentional, so no
-    // Restart overlay). File/diff panels are pure UI.
-    for (const p of panels) {
-      if (p.kind === "terminal") {
-        intentionalKills.add(p.id);
-        await ipc.killSession(p.id).catch(() => {});
-      }
-    }
-    if (panelCount > 0) {
-      const removed = new Set(panels.map((p) => p.id));
-      set((s) => {
-        const map = { ...s.overviewPanels };
-        delete map[repoPath]; // keep the folder in recents; just drop its items
-        return {
-          overviewPanels: map,
-          terminalExits: Object.fromEntries(
-            Object.entries(s.terminalExits).filter(([id]) => !removed.has(id)),
-          ),
-        };
-      });
-      void ipc.setOverviewPanels(repoPath, []).catch(() => {});
-    }
+    const panelCount = await closeRepoItems(repoPath);
     // One summary toast (#83) — no per-item spam.
     const parts: string[] = [];
     if (killed > 0) parts.push(`${killed} agent${killed === 1 ? "" : "s"}`);

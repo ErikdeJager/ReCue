@@ -42,7 +42,7 @@ agents (#74). `claude` is assumed on `PATH` (clear in-app error if missing).
 
 ## Implemented (completed tasks)
 
-> The backlog has fully shipped (#1–#105).
+> The backlog has fully shipped (#1–#106).
 > Completed tasks are condensed here — number, title, and one line
 > on what each delivered — and their full entries removed from the list below; per-task
 > detail (subtasks, notes, acceptance, implementation reports) lives in git history.
@@ -251,6 +251,10 @@ an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sid
 
 - #105 Agent (`claude`) terminals rendered **garbled** — doubled/ghosted glyphs, misaligned box-drawing — in a detached canvas window (#84), a known **WebGL glyph-atlas / `devicePixelRatio`** artifact in a freshly-opened secondary native window. Fix: skip the `WebglAddon` in detached windows (`terminalPool.ts`, guarded by `!IS_MAIN_WINDOW`) so they use xterm's **DOM renderer** (visually equivalent, no artifact); the main window keeps WebGL, so its rendering is **provably unchanged** (the guard is true there). **Runtime-unverified** — xterm rendering isn't unit-testable and a window can't be popped out in the dev environment, so flagged for manual verification (per the #84 precedent); a residual stale-scrollback-replay contribution, if any, is a follow-up.
 
+**Forget folder — complete teardown of items + schedules (#106).**
+
+- #106 Made the repo menu's **Forget folder** (#31) a *complete* teardown: it killed the folder's agents but left its non-agent items (file/diff viewers, shell terminals #72 with PTYs still running) and pending schedules behind. Factored #91's item-teardown out of `closeAllItems` into a shared `closeRepoItems` helper (kills each terminal PTY as intentional, drops `overviewPanels[repoPath]`, prunes `terminalExits`, persists the cleared list) and called it from `forgetRepo` too; `forgetRepo` also **cancels the folder's pending scheduled sessions** (#93/#94, by `cwd`) and reports everything removed (agents + views + scheduled) in one summary toast. `closeAllItems` is unchanged (still keeps the folder in recents — the only difference between the two).
+
 ---
 
 ## Design reference (dark theme only)
@@ -287,7 +291,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#105 are complete — see **Implemented (completed tasks)** above for the index,
+Tasks #1–#106 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. **Open tasks are listed below.** New work goes
 here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
@@ -300,79 +304,6 @@ its `Depends on:` prerequisites.
 > into smaller dependent sub-tasks** first (as #93 was split into #93 + #94), and then
 > one of those is implemented — skipping is never the answer. Every task is carried to a
 > finished, building, lint-clean state.
-
----
-
-### 106. [ ] "Forget folder" also removes open items (files/diffs/terminals) + cancels pending schedules
-
-**Status:** Not started
-**Depends on:** none _(builds on shipped #31 forget, #91 close-all-items, #72 terminals, #93/#94 schedules — all complete)_
-**Created:** 2026-06-21
-
-**Description**
-
-The repo context-menu **"Forget folder"** (#31) currently kills + forgets the folder's
-**agents** (including worktree agents #74 and their worktree folders) and drops the folder
-from recents — but it **leaves the folder's non-agent items behind**: open file viewers,
-diff viewers, and shell terminals (#72) persist, and each terminal item's shell **PTY keeps
-running**. "Forget folder" should be a *complete* teardown: removing the folder should remove
-everything belonging to it.
-
-The teardown for non-agent items already exists in **`closeAllItems`** (#91, `store.ts:1537`):
-it kills each `terminal`-kind panel's PTY (marked intentional, so no Restart overlay), drops
-`overviewPanels[repoPath]`, prunes the matching `terminalExits`, and persists the cleared
-panels via `ipc.setOverviewPanels(repoPath, [])`. **`forgetRepo`** (`store.ts:1483`) does none
-of that. The fix is to fold that same item-teardown into `forgetRepo` (ideally via a shared
-helper so the two actions don't drift), in addition to what `forgetRepo` already does (kill
-agents + worktrees, `removeRecent`, clear a dangling selection / Overview filter).
-
-Additionally — confirmed in scope — `forgetRepo` should **cancel the folder's pending
-scheduled sessions** (#93/#94): a forgotten folder shouldn't later auto-spawn an agent into
-it. Cancel each schedule in `schedules` whose `cwd` is this repo (reusing the existing
-`cancelSchedule` / backend cancel path) and drop them from state.
-
-The summary toast (#32/#83) should reflect everything removed in one message (no per-item
-spam) — e.g. "Forgot folder + N agents + M views + K scheduled", showing only the non-zero
-parts (mirroring `closeAllItems`' summary style).
-
-Out of scope (confirmed): **Canvas** tab panels that reference the folder's files/diffs/
-terminals are left alone — consistent with `closeAllItems`, which also doesn't touch Canvas
-(a stale leaf simply renders empty/closed). The destructive-confirm gate (#103) is unchanged.
-
-**Subtasks**
-
-1. [ ] Factor the non-agent-item teardown out of `closeAllItems` into a shared helper (kill
-   `terminal`-kind PTYs as intentional, drop `overviewPanels[repoPath]`, prune `terminalExits`,
-   persist `setOverviewPanels(repoPath, [])`) and call it from both `closeAllItems` and
-   `forgetRepo`.
-2. [ ] In `forgetRepo`, after killing agents + worktrees and `removeRecent`, run that item
-   teardown so files / diffs / terminals (and their PTYs) are removed too.
-3. [ ] In `forgetRepo`, cancel pending schedules whose `cwd === repoPath` via the existing
-   cancel path and drop them from `schedules`.
-4. [ ] Update the `forgetRepo` summary toast to list agents + views (+ scheduled) removed, in
-   one message, omitting zero parts.
-5. [ ] Verify nothing of the folder remains: no agents, no file/diff/terminal items, no running
-   terminal PTYs, no pending schedules, and the folder is gone from recents.
-
-**Acceptance criteria**
-
-- [ ] After "Forget folder", the folder's open file viewers, diff viewers, and terminals are
-  all removed from the sidebar tree and Overview (not just its agents).
-- [ ] Each removed terminal item's shell PTY is actually killed (no orphaned process, no
-  Restart overlay).
-- [ ] The folder's pending scheduled sessions are canceled and gone from the list.
-- [ ] The folder is removed from recents and does not reappear on restart; its persisted
-  overview panels are cleared.
-- [ ] A single summary toast reports what was removed; `closeAllItems` still behaves as before
-  (folder kept in recents); `npm run build`, `npm run lint`, and `npm test` pass.
-
-**Notes**
-
-- Reuses #91's existing item-teardown mechanics; the change is making `forgetRepo` a superset
-  of `closeAllItems` (close items **and** remove the folder from recents) plus schedule
-  cancellation.
-- Canvas references are intentionally untouched (matches #91). Schedules are tied to a folder
-  by `cwd` only (no worktree linkage today), so cancellation keys on `cwd === repoPath`.
 
 ---
 
