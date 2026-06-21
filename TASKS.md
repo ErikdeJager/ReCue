@@ -25,10 +25,12 @@ CSS-variable design tokens (CSS Modules) · **xterm.js** terminals · **`portabl
 (bundled, offline).
 
 **v1 decisions / out of scope:** no status system beyond the busy/idle indicator
-(#42/#55/#71 — still no approval pills/awaiting-glow/floating) · no app-rendered
+(#42/#55/#71/#88/#95 — still no approval pills/awaiting-glow/floating) · no app-rendered
 approval UI (users answer in the terminal) · no Archive (single **Remove = kill +
-forget**) · no Skills manager · no Fork · no settings screen · no light mode · no
-multi-window · no auth · no code signing/notarization · **git is read-mostly** —
+forget**) · no Skills manager · no Fork · no light mode · no auth · no code
+signing/notarization · a **Settings** screen now exists (#100/#102/#103, reversing the
+v1 "no settings screen" rule) and **Canvas tabs detach into their own native window**
+(#84, reversing "no multi-window") · **git is read-mostly** —
 ClaudeCue reads git (current branch + working-tree diff vs `HEAD`, branch compare #81)
 and never commits or creates branches; its writes are `git checkout <existing branch>`
 from the new-session flow (#27) and `git worktree add`/`remove` for isolated worktree

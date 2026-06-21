@@ -16,21 +16,30 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
   columns.
 - **Canvas** — a split-panel workspace with **multiple named tabs**; drag any sidebar
   item (agent, file, diff, or terminal) in to tile it, split panels on their edges,
-  resize borders.
+  resize borders. A tab can **pop out into its own native window** for multi-monitor use.
 - **Sidebar** — sessions and their file / diff / terminal viewers grouped by repository
-  (branch labels + optional custom names), from persisted recents so repos stay listed
-  with no active session; isolated **worktree agents** nest under their parent repo.
-  Right-click a repo (new session, a **Views** section to add viewers, change color,
-  forget) or an agent (**rename**, remove).
+  (labelled by your custom name, else `claude`'s own session title, else the branch),
+  from persisted recents so repos stay listed with no active session; isolated
+  **worktree agents** nest under their parent repo. Right-click a repo (new session, a
+  **Views** section to add viewers, change color, **kill all agents** / **close all
+  items**, forget) or an agent (**rename**, remove). Drag the sidebar's right edge to
+  resize it.
+- **Schedule sessions** — **⌘⇧N** (or the sidebar's **Schedule session** button) queues
+  an agent to launch later at a set time, optionally pre-seeded with a prompt; it fires
+  on schedule, catching up anything missed while the app was closed.
+- **Settings** — a gear in the sidebar footer opens **Settings**: terminal font /
+  spacing / cursor, auto-naming, accent color, reduce-motion, default launch view, and
+  confirm-destructive toggles, plus data tools (open data folder, clear recents,
+  versions).
 - **Keyboard-first** — ⌘N opens a fast two-step new-session launcher (type-ahead recents
-  → branch pick; **Enter** to start, **⌘⏎** for an isolated worktree agent). In the app,
-  Shift+arrows move between agents (Overview) or panels (Canvas), ⌘1–9 jump between
-  canvases, and ⌘\\ toggles Overview ↔ Canvas.
-- **Busy indicator** — a per-session spinner arc shows when `claude` is genuinely
+  → branch pick; **Enter** to start, **⌘⏎** for an isolated worktree agent), **⌘⇧N**
+  schedules one for later. In the app, Shift+arrows move between agents (Overview) or
+  panels (Canvas), ⌘1–9 jump between canvases, and ⌘\\ toggles Overview ↔ Canvas.
+- **Busy indicator** — a per-session **shimmer** marks when `claude` is genuinely
   working, settling into a calm dot when idle (typing alone doesn't read as busy).
-- **Persistence + resume** — sessions, layouts, and recent folders survive restarts;
-  sessions resume their `claude` conversation by id on launch. An agent you end
-  cleanly just disappears; one that crashes keeps a **Restart** button.
+- **Persistence + resume** — sessions, layouts, settings, and recent folders survive
+  restarts; sessions resume their `claude` conversation by id on launch. An agent you
+  end cleanly just disappears; one that crashes keeps a **Restart** button.
 - **Remove = kill + forget**, **Catppuccin Mocha** theme, bundled **JetBrains Mono**
   (offline), dark theme only.
 

@@ -41,7 +41,7 @@ clear error if it is missing).
   subscription routes output **bytes** to `outputBus.ts` (a pub/sub the xterm
   `Terminal` consumes — deliberately *not* React state) and lifecycle +
   busy/idle to the Zustand `store.ts`.
-- **Busy indicator (#42/#55/#71/#88):** a backend monitor thread (`pty.rs`) derives each
+- **Busy indicator (#42/#55/#71/#88/#95):** a backend monitor thread (`pty.rs`) derives each
   session's **busy/idle** from output activity (within a ~700ms window) and emits
   `session://state { id, busy }` on transitions only. So **keystroke echo doesn't
   read as busy** (#55), `write_stdin` stamps a per-session `last_input` time and the
@@ -50,10 +50,10 @@ clear error if it is missing).
   supersedes #71's spinner arc) — a calm `--status-idle` dot that, while busy, turns
   `--status-running` (Blue) with a soft sheen **sweeping across it** (animated
   `background-position` on a `::after` sheen, the dot via `::before` — no extra DOM),
-  **always rendered** (idle dot visible) in a fixed ~12px slot so the footprint never
-  shifts, and placed **before the agent's name** — in the sidebar rows and Overview card
-  headers. Under reduced-motion the sweep is dropped, leaving a solid glowing blue dot
-  distinct from idle.
+  **always rendered** (idle dot visible) as a ~10px dot in a fixed ~14px slot (#95)
+  so the footprint never shifts, and placed **before the agent's name** — in the
+  sidebar rows and Overview card headers. Under reduced-motion the sweep is dropped,
+  leaving a solid glowing blue dot distinct from idle.
 - **Input / resize:** the `Terminal` sends keystrokes to `write_stdin` and a
   `ResizeObserver` drives `resize_pty`.
 - **Persistence / resume:** records + recents survive restarts; on boot the
@@ -62,7 +62,8 @@ clear error if it is missing).
   target)` (the #81 two-dot branch compare) shell out to `git`; the `DiffInspector` and
   sidebar render the structured result.
 - **Views:** the store holds `sessions / selectedId / view / recents / branches /
-  canvases / activeCanvasId / claudeMissing / toasts`; the app mounts one of
+  canvases / activeCanvasId / claudeMissing / toasts / schedules / settings /
+  sidebarWidth`; the app mounts one of
   **Overview or Canvas** (#46/#75 — Focus was removed). Each session's xterm is owned
   by a **persistent terminal
   pool** (`Terminal/terminalPool.ts`), created once and **reparented** into the
@@ -70,7 +71,10 @@ clear error if it is missing).
   disposes/recreates the terminal or replays scrollback (which would garble
   `claude`'s width-specific TUI redraw). Scrollback replays once at creation;
   resizes are debounced + applied only while visible.
-- **Overview customization:** columns are grouped by repo (#36). Per repo, a
+- **Overview customization:** columns are grouped by repo (#36) — by a session's
+  pure **`effectiveRepo`** (`paths.ts`), so a worktree agent (#74) sits in its
+  **parent repo's** cluster sharing its color, text-badged "worktree" rather than
+  reading as a foreign-colored stray (#96). Per repo, a
   user-managed list of extra panels (diff #39 / markdown #41 / terminal #72) follows the agent
   terminals, and the whole cluster is **drag-reorderable within the repo** (#43,
   dnd-kit) — each column is a sortable keyed by session/panel id, so a reorder
@@ -79,14 +83,20 @@ clear error if it is missing).
   order, merged with live items so spawn/exit don't scramble it).
 - **Sidebar tree (#45/#59):** each repo lists its sessions **and** its non-agent
   items — the **same `overview_panels` Overview shows, 1:1**: file viewers, diff
-  viewers, and shell terminals (#72). #59 folded the old per-repo `open_files` into
+  viewers, shell terminals (#72), and scheduled sessions (#94). #59 folded the old per-repo `open_files` into
   `overview_panels`, so an item opened anywhere (the searchable file picker #56, or the
   repo menu's **Views** section #82) appears in both places. A tree row click
   **selects/jumps to the item in the current view** (#79 — never auto-switching
   Overview↔Canvas); the hover × removes the item (and its Overview column); every row
   (session / file / diff / terminal) is a dnd-kit **draggable source** that drops into
   the active Canvas (#47/#59 — agents → terminal, files → file viewer, diffs → diff
-  panel; new item types are draggable by default via a `payloadToContent` case).
+  panel; new item types are draggable by default via a `payloadToContent` case). The
+  repo's context menu (#54) offers **New session**, a **Views** section to add
+  file/diff/terminal panels (#82), repo color (#35), and destructive actions —
+  **Kill all agents** / **Close all items** (#91) and **Forget folder** (#31), the
+  latter two also tearing down the folder's non-agent items (killing their PTYs) and
+  pending schedules (#106); each destructive step is confirm-gated unless turned off
+  in Settings (#103).
 - **Canvas (#46/#47/#58):** a third view — **multiple named tabs** (#58), each its
   own recursive **BSP split-panel** layout (a binary tree `split{dir,a,b,sizes}` /
   `leaf{id,content}`; pure ops in `Canvas/canvasTree.ts`). The tabs (`canvases` =
@@ -144,6 +154,41 @@ clear error if it is missing).
   editor for the launch time / name / prompt + cancel — in the **sidebar** (a
   draggable row, click selects/jumps #79, × cancels), an **Overview card**, and a
   **Canvas panel**. Time helpers live in `src/time.ts`.
+- **Auto-named agents (#97):** an agent with **no custom name** shows **claude's own
+  session title** rather than the bare branch. A backend **title reader**
+  (`src-tauri/src/title.rs`) globs the session's `~/.claude/projects/*/<uuid>.jsonl`
+  log by UUID and takes the latest `ai-title` (fallback: the first `last-prompt`,
+  else the branch); a dedicated **title-worker** thread re-reads it on each
+  busy→idle edge (off the monitor's hot path), emitting `SessionEvent::Name` →
+  `session://name`, which `lib.rs` persists (the `auto_name` field) and forwards.
+  `sessionLabel` (`paths.ts`) resolves **`custom || auto || branch`**, so the title
+  fills the single-line label (#95) everywhere — a user rename (#57) still wins.
+  Best-effort: a missing / unreadable / format-changed log degrades to the branch,
+  and the busy indicator is never stalled. The Settings auto-name toggle (#100) gates
+  it.
+- **Settings (#100/#102/#103/#107):** a sidebar **footer gear** opens a centered,
+  focus-trapped **Settings modal** (`components/Settings`) with five sections —
+  **Terminal** (font size / line height / cursor blink → the live pooled xterms via
+  `terminalPool.applyTerminalSettings`), **Sessions** (the #97 auto-name toggle),
+  **Appearance** (an accent swatch over the Catppuccin palette + a reduce-motion
+  toggle), **Behavior** (default launch view + confirm-destructive gating #103), and
+  **Data & About** (open data folder, clear recents, app + `claude` versions). A
+  modal-local **draft** applies only on **Save** via `applySettingsEffects` (accent
+  overrides `--accent` plus its companions `--accent-hover/-dim/-fg` through
+  `accentCompanions` #107; reduce-motion toggles `body.reduce-motion`). Settings
+  persist as an opaque `settings` blob (`get_settings` / `set_settings`) merged over
+  TS-side `DEFAULT_SETTINGS`, so an older `sessions.json` upgrades cleanly.
+- **Pluggable coding agent (#101):** an `AgentSpec` catalog
+  (`src-tauri/src/agents.rs`) is the single source of truth for each agent's binary +
+  how it spawns / resumes / seeds a session; the **`claude`** spec preserves today's
+  exact flags. Each session and schedule **records its own `agent`** (serde-default
+  `"claude"`), and `pty.rs` (`spawn_session` / `spawn_session_with_prompt` /
+  `resume_session`) resolves the spec instead of hardcoding `"claude"`. **Claude is
+  still the only agent** — the Codex spec + a Settings selector are a planned part 2.
+- **Resizable sidebar (#108):** a thin right-edge drag handle sets the sidebar width,
+  clamped to **[180, 560]** (default 260) and **persisted** via a dedicated Rust
+  `sidebar_width` value (`get_sidebar_width` / `set_sidebar_width`), kept **separate**
+  from the Settings blob so the modal draft can't clobber a drag. Main-window only.
 
 ## Layout
 
@@ -157,7 +202,7 @@ clear error if it is missing).
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
-│   ├── paths.ts            # Shared path helpers (repoName, sessionLabel)
+│   ├── paths.ts            # Shared path helpers (repoName, sessionLabel, effectiveRepo #96)
 │   ├── time.ts             # Schedule time helpers (toLocalInput, formatFireTime) (#93/#94)
 │   ├── windowContext.ts    # Window identity (#84): main vs canvas-<id>, ownership helpers
 │   ├── ownership.ts        # useSessionOwners hook — which window renders each PTY (#84)
@@ -166,17 +211,19 @@ clear error if it is missing).
 │   │                       #   Sidebar, Overview, Canvas (+ CanvasSurface),
 │   │                       #   CanvasWindow (#84), Terminal, FileViewer, FilePicker,
 │   │                       #   FileSwitcher (#90), DiffInspector, DetachedNote (#84),
-│   │                       #   ScheduledPanel (#94), BusyIndicator, Checkbox,
-│   │                       #   NewSessionModal, Toaster, ViewSwitch, ClaudeMissing,
-│   │                       #   EmptyState
+│   │                       #   ScheduledPanel (#94), Settings (#100), BusyIndicator,
+│   │                       #   Checkbox, NewSessionModal, Toaster, ViewSwitch,
+│   │                       #   ClaudeMissing, EmptyState
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
-│   ├── src/lib.rs          # App builder, state wiring, event forwarding
+│   ├── src/lib.rs          # App builder, state wiring, event forwarding, schedule poll loop (#93)
 │   ├── src/main.rs         # Binary entry point
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
+│   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog) (#101)
+│   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
-│   ├── src/store.rs        # JSON persistence (sessions + recents)
+│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, schedules, settings, sidebar width)
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + list + checkout + worktree (#74)
 │   ├── src/files.rs        # Read-only file access (list text files/read, path-validated)
 │   ├── tauri.conf.json     # Window, bundle, build config
@@ -222,7 +269,11 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   **busy/idle** indicator now exists. Still no approval pills/awaiting-glow/
   floating.)
 - No Archive (single **Remove = kill + forget**), no Skills manager, no Fork, no
-  settings screen, no light mode, no auth.
+  light mode, no auth.
+- **Settings** now exists (#100/#102/#103 — reverses the v1 "no settings screen"
+  rule, as #84 reversed single-window): a sidebar footer gear opens a modal with
+  Terminal / Sessions / Appearance / Behavior / Data & About sections (see the
+  architecture note). Still no light mode and no per-session config beyond these.
 - **Multi-window** is now supported for **Canvas tabs only** (#84 — reverses the v1
   single-window rule): a canvas can open in its own native window (pop-out button +
   drag tear-off) for multi-monitor use. Detached windows are **per-session** (not
@@ -255,7 +306,10 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   `claude [options] [command] [prompt]` — a positional prompt that starts the
   interactive session with it sent. If a future `claude` version changes these
   flags, update `pty.rs` (`spawn_session` / `spawn_session_with_prompt` /
-  `resume_session`) and note it here.
+  `resume_session`) and note it here. Since **#101** these spawn/resume paths resolve
+  a pluggable **`AgentSpec`** (`agents.rs`) keyed by each record's stored `agent`
+  (serde-default `"claude"`) rather than hardcoding the binary — claude remains the
+  only agent and its flags are unchanged.
 - **Exit handling (#63):** the discriminator is the exit code (`store.ts`
   `onExited` / the pure `isCleanExit`). A **clean exit — `claude` exits code 0
   while running** (the user ended the agent) is forgotten like _Remove_:
@@ -295,18 +349,21 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   `src/main.tsx`. Stay on-system: use tokens, never off-system colors. The color
   tokens are a **Catppuccin Mocha** remap (#33) — accent is **Peach**, with
   `--accent-fg` for readable text on the (light) accent fill, `--scrim` for
-  full-window dim overlays, and `--status-*` repointed to Catppuccin accents. See
-  the **Design reference** in `TASKS.md` (the original near-black v1 palette;
-  superseded by the Mocha tokens).
+  full-window dim overlays, and `--status-*` repointed to Catppuccin accents. A
+  custom accent from Settings (#102) overrides `--accent` **and** its derived
+  companions `--accent-hover` / `--accent-dim` / `--accent-fg` together
+  (`accentCompanions`, #107). See the **Design reference** in `TASKS.md` (the
+  original near-black v1 palette; superseded by the Mocha tokens).
 
 ## Tasks
 
-Work is tracked in `TASKS.md`. **#1–#87 have shipped** — completed tasks are
-condensed into an **Implemented (completed tasks)** summary at the top (one line each,
-grouped by theme), with full per-task detail in git history; newer open tasks (#88+)
-live in the `## Tasks` body. New tasks go there in `TASKS-TEMPLATE.md` format with
-`Depends on:` prerequisites. The `(#N)` provenance markers throughout this doc index
-back to that summary + git history.
+Work is tracked in `TASKS.md`. **#1–#108 have shipped — the backlog is fully
+implemented, with no open tasks.** Completed tasks are condensed into an **Implemented
+(completed tasks)** summary at the top (one line each, grouped by theme), with full
+per-task detail in git history; the `## Tasks` body holds any open tasks (currently
+none). New tasks go there in `TASKS-TEMPLATE.md` format with `Depends on:`
+prerequisites. The `(#N)` provenance markers throughout this doc index back to that
+summary + git history.
 
 **Never skip a task.** When implementing the backlog (`/develop-tasks`,
 `/isolate-agent`, `/handoff`), implement **every** open task whose dependencies are
