@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -481,6 +486,8 @@ function Sidebar() {
   const openSchedule = useStore((s) => s.openSchedule);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
+  const sidebarWidth = useStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useStore((s) => s.setSidebarWidth);
   const schedules = useStore((s) => s.schedules);
   const cancelSchedule = useStore((s) => s.cancelSchedule);
   const refreshBranches = useStore((s) => s.refreshBranches);
@@ -624,8 +631,43 @@ function Sidebar() {
     : 0;
   const menuPanelCount = menu ? (overviewPanels[menu.repo]?.length ?? 0) : 0;
 
+  // Drag-to-resize the sidebar (#108): a right-edge handle with pointer capture so
+  // the drag tracks even when the pointer leaves the thin handle. The store clamps
+  // to [180, 560] + persists (debounced); double-click resets to the default.
+  const resizeStart = useRef<{ x: number; width: number } | null>(null);
+  const onResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    resizeStart.current = { x: e.clientX, width: sidebarWidth };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const start = resizeStart.current;
+    if (!start) return;
+    setSidebarWidth(start.width + (e.clientX - start.x));
+  };
+  const onResizeUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    resizeStart.current = null;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+
   return (
-    <aside className={styles.sidebar} aria-label="Sessions">
+    <aside
+      className={styles.sidebar}
+      style={{ width: sidebarWidth }}
+      aria-label="Sessions"
+    >
+      {/* Drag-to-resize handle on the right edge (#108). */}
+      <div
+        className={styles.resizeHandle}
+        onPointerDown={onResizeDown}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeUp}
+        onDoubleClick={() => setSidebarWidth(260)}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar (double-click to reset)"
+        title="Drag to resize · double-click to reset"
+      />
       <button
         type="button"
         className={styles.newButton}

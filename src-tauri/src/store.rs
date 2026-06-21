@@ -139,6 +139,10 @@ pub struct PersistedState {
     /// shape and supplies defaults, so an older file without it upgrades cleanly.
     #[serde(default)]
     pub settings: serde_json::Value,
+    /// Sidebar width in px (#108), drag-resized by the user. `None` until first set
+    /// (the frontend defaults + clamps); `default` keeps old files loading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_width: Option<u32>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -337,6 +341,17 @@ impl Store {
     /// Replace the application settings and persist (#100).
     pub fn set_settings(&self, settings: serde_json::Value) -> io::Result<()> {
         self.update(|state| state.settings = settings)
+    }
+
+    /// The persisted sidebar width in px (#108); `None` until first set (the
+    /// frontend defaults + clamps).
+    pub fn sidebar_width(&self) -> Option<u32> {
+        self.with(|state| state.sidebar_width)
+    }
+
+    /// Persist the sidebar width (#108).
+    pub fn set_sidebar_width(&self, width: u32) -> io::Result<()> {
+        self.update(|state| state.sidebar_width = Some(width))
     }
 
     /// All pending scheduled sessions (#93).

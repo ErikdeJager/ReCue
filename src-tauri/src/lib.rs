@@ -143,6 +143,8 @@ pub fn run() {
             commands::compare_branches,
             commands::get_settings,
             commands::set_settings,
+            commands::get_sidebar_width,
+            commands::set_sidebar_width,
             commands::clear_recents,
             commands::open_data_folder,
             commands::app_version,

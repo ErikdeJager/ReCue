@@ -1,11 +1,32 @@
 .sidebar {
+  /* Width is set inline (#108, drag-resizable + persisted); default 260px. */
+  position: relative;
   display: flex;
   flex-direction: column;
-  width: 260px;
   flex-shrink: 0;
   border-right: 1px solid var(--border-hairline);
   background: var(--bg-sidebar);
   overflow: hidden;
+}
+
+/* Drag-to-resize handle (#108): a thin hit-target on the sidebar's right edge,
+   tinted on hover/drag. Pointer capture (in the component) tracks the drag past
+   the handle; the store clamps to [180, 560] and persists. */
+.resizeHandle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.resizeHandle:hover,
+.resizeHandle:active {
+  background: var(--accent-dim);
 }
 
 /* Primary action — slim: icon + label left, a subtle ⌘N hint pushed right. */

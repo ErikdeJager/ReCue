@@ -47,6 +47,16 @@ let eventsSubscribed = false;
 // must not add a second "Session exited" toast on top of the action's toast (#32).
 const intentionalKills = new Set<string>();
 
+// Sidebar width (#108): drag-resizable, clamped to [min, max] and persisted
+// separately from the Settings blob (so the modal's draft can't clobber a drag).
+const SIDEBAR_WIDTH_DEFAULT = 260;
+const SIDEBAR_WIDTH_MIN = 180;
+const SIDEBAR_WIDTH_MAX = 560;
+const clampSidebarWidth = (w: number): number =>
+  Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, Math.round(w)));
+// Debounce the persist so a drag's many updates don't spam IPC (state updates live).
+let sidebarWidthPersistTimer: ReturnType<typeof setTimeout> | undefined;
+
 /** Copy of `map` without `key` — returns the same ref when `key` is absent so
  * callers don't trigger needless re-renders. */
 function omitKey<T>(map: Record<string, T>, key: string): Record<string, T> {
@@ -407,6 +417,8 @@ export interface AppState {
   settings: Settings;
   /** Whether the Settings modal is open (#100). */
   settingsOpen: boolean;
+  /** Sidebar width in px (#108), drag-resizable + persisted (main window). */
+  sidebarWidth: number;
 
   // --- Sync reducers ---
   setView: (view: View) => void;
@@ -439,6 +451,8 @@ export interface AppState {
   closeNewSession: () => void;
   /** Open/close the Settings modal (#100). */
   setSettingsOpen: (open: boolean) => void;
+  /** Set the sidebar width (#108): clamp to [180, 560] + persist (debounced). */
+  setSidebarWidth: (width: number) => void;
 
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
@@ -657,9 +671,20 @@ export const useStore = create<AppState>()((set, get) => ({
   schedules: [],
   settings: DEFAULT_SETTINGS,
   settingsOpen: false,
+  sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
 
   setView: (view) => set({ view }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
+  setSidebarWidth: (width) => {
+    const clamped = clampSidebarWidth(width);
+    if (clamped === get().sidebarWidth) return; // no-op (e.g. dragging past a bound)
+    set({ sidebarWidth: clamped });
+    // Persist debounced so a drag's many updates don't spam IPC; the last wins.
+    if (sidebarWidthPersistTimer) clearTimeout(sidebarWidthPersistTimer);
+    sidebarWidthPersistTimer = setTimeout(() => {
+      void ipc.setSidebarWidth(clamped).catch(() => {});
+    }, 300);
+  },
   // Selection is decoupled from the view (#22): selecting only highlights. The
   // sidebar ViewSwitch is the only thing that changes the view (#75).
   select: (id) => set({ selectedId: id }),
@@ -921,20 +946,34 @@ export const useStore = create<AppState>()((set, get) => ({
     // Repo colors + Overview panel layouts load independently so a failure here
     // doesn't block sessions.
     try {
-      const [colors, panels, order, files, canvas, canvasesState, rawSettings] =
-        await Promise.all([
-          ipc.listRepoColors(),
-          ipc.listOverviewPanels(),
-          ipc.listOverviewOrder(),
-          ipc.listOpenFiles(),
-          ipc.getCanvasLayout(),
-          ipc.getCanvases(),
-          ipc.getSettings(),
-        ]);
+      const [
+        colors,
+        panels,
+        order,
+        files,
+        canvas,
+        canvasesState,
+        rawSettings,
+        rawSidebarWidth,
+      ] = await Promise.all([
+        ipc.listRepoColors(),
+        ipc.listOverviewPanels(),
+        ipc.listOverviewOrder(),
+        ipc.listOpenFiles(),
+        ipc.getCanvasLayout(),
+        ipc.getCanvases(),
+        ipc.getSettings(),
+        ipc.getSidebarWidth(),
+      ]);
       // Settings (#100): merge the persisted blob over the defaults and apply its
       // side-effects (live terminal options) before the first paint.
       const settings = mergeSettings(rawSettings);
       applySettingsEffects(settings);
+      // Sidebar width (#108): restore the persisted value re-clamped to the range
+      // (or the default when absent).
+      const sidebarWidth = clampSidebarWidth(
+        rawSidebarWidth ?? SIDEBAR_WIDTH_DEFAULT,
+      );
       // Multi-canvas (#58): use the persisted tabs; else migrate the old single
       // canvas_layout into "Canvas 1"; else start with one empty canvas. Persist
       // the migrated shape once so the new field becomes the source of truth.
@@ -998,6 +1037,7 @@ export const useStore = create<AppState>()((set, get) => ({
         canvases,
         activeCanvasId,
         settings,
+        sidebarWidth,
       });
       // Terminal items can't resume (#72): respawn a fresh shell for each
       // persisted terminal panel under its repo so the item is usable after a

@@ -201,6 +201,11 @@ export const getSettings = () =>
   invoke<Partial<Settings> | null>("get_settings");
 export const setSettings = (settings: Settings) =>
   invoke<void>("set_settings", { settings });
+/** Sidebar width in px (#108), persisted separately from the Settings blob so the
+ * modal's draft can't clobber a mid-session drag. `null` until first set. */
+export const getSidebarWidth = () => invoke<number | null>("get_sidebar_width");
+export const setSidebarWidth = (width: number) =>
+  invoke<void>("set_sidebar_width", { width });
 /** Clear the recents list (#100 Settings → Data). */
 export const clearRecents = () => invoke<void>("clear_recents");
 /** Reveal the app-data folder (where sessions.json lives) in Finder (#100). */

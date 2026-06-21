@@ -42,7 +42,7 @@ agents (#74). `claude` is assumed on `PATH` (clear in-app error if missing).
 
 ## Implemented (completed tasks)
 
-> The backlog has fully shipped (#1–#107).
+> The backlog has fully shipped (#1–#108).
 > Completed tasks are condensed here — number, title, and one line
 > on what each delivered — and their full entries removed from the list below; per-task
 > detail (subtasks, notes, acceptance, implementation reports) lives in git history.
@@ -259,6 +259,10 @@ an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sid
 
 - #107 Fixed the Settings accent picker (#102) only overriding `--accent`, so button **hover stayed Peach** (and dim / on-accent surfaces too) because the **derived** tokens kept their defaults. Added a pure `accentCompanions(hex)` helper (a ~18%-lightened hover, the accent at `0.14` alpha for dim, a luminance-based fg) and made `applySettingsEffects` set `--accent-hover` / `--accent-dim` / `--accent-fg` alongside `--accent` for a custom accent — and `removeProperty` all four for the default (`""`) so the Catppuccin tokens stand. Hover / dim / selected-row / on-accent text now all track the chosen color; the derivation is unit-tested.
 
+**Resizable sidebar (#108).**
+
+- #108 Made the left sidebar **drag-resizable**: a thin right-edge handle (pointer-capture drag, `col-resize`, accent-dim on hover; double-click resets) sets its width, clamped to **[180, 560]** (default 260) and **persisted** across restarts — a dedicated Rust `sidebar_width` value with its own `get` / `set` commands (separate from the #100 Settings blob so the modal draft can't clobber a drag); the width restores + re-clamps on boot, with a debounced persist during the drag. Main-window only; the main content reflows via the existing flex layout.
+
 ---
 
 ## Design reference (dark theme only)
@@ -295,8 +299,8 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#107 are complete — see **Implemented (completed tasks)** above for the index,
-and git history for full per-task detail. **Open tasks are listed below.** New work goes
+All tasks (#1–#108) are complete — see **Implemented (completed tasks)** above for the index,
+and git history for full per-task detail. There are no open tasks. New work goes
 here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
 
@@ -308,70 +312,3 @@ its `Depends on:` prerequisites.
 > into smaller dependent sub-tasks** first (as #93 was split into #93 + #94), and then
 > one of those is implemented — skipping is never the answer. Every task is carried to a
 > finished, building, lint-clean state.
-
----
-
-### 108. [ ] Resizable sidebar — drag the right edge to set its width (min 180 / max 560, persisted)
-
-**Status:** Not started
-**Depends on:** none _(builds on the #9 sidebar + #100 settings/persistence infra — both complete)_
-**Created:** 2026-06-21
-
-**Description**
-
-The left **Sidebar** is a fixed `width: 260px` (`src/components/Sidebar/Sidebar.module.css:4`),
-rendered as a flex child of `.app-body` beside `<main>` (`src/App.tsx:98-100`). Make it
-**drag-resizable**: a thin draggable divider on the sidebar's **right edge** lets the user drag
-to widen / narrow it, **clamped to min 180px / max 560px**, defaulting to **260px**. The chosen
-width **persists across restarts** (restored on boot, re-clamped to the range).
-
-Approach (implementer's choice, recommended): a **custom edge drag-handle** is the most
-localized fit — a thin hit-target on the sidebar's right border that, on pointer drag, updates a
-width value (clamped) applied to the sidebar (inline width / CSS var), with the standard
-`col-resize` cursor; this avoids restructuring the app shell or the app-level dnd-kit context
-(#47) that spans the sidebar. (The existing `react-resizable-panels` (#46) could instead wrap
-`.app-body`, but it sizes in %, makes px min/max awkward, and risks the shell / DnD wiring —
-hence the custom handle is preferred.)
-
-Persistence: store the width as a **dedicated persisted value** (mirroring how recents /
-canvases persist via their own IPC), **not** inside the #100 Settings blob — the Settings modal
-applies a modal-local draft on Save, which could overwrite a mid-session drag. On boot, read +
-clamp the value; if absent, use 260.
-
-Scope:
-
-- **Main window only** — the detached `CanvasWindow` (#84) has no sidebar.
-- The min keeps the sidebar fully usable (repo names + New / Schedule buttons); **no
-  collapse / hide** (out of scope — the min width keeps it visible).
-
-Out of scope: collapsing / hiding the sidebar; resizing anything else (Canvas already resizes
-via #46); any change to the detached window.
-
-**Subtasks**
-
-1. [ ] Add a draggable resize handle on the sidebar's right edge (thin hit-target, `col-resize`
-   cursor, accent on hover / drag) that updates the sidebar width on pointer drag.
-2. [ ] Clamp the width to **[180, 560]** and apply it to the sidebar (replace the hard-coded
-   `width: 260px` with the dynamic value; keep 260 as the default).
-3. [ ] Persist the width as a dedicated value (its own store field + IPC get / set, like
-   recents) and restore + clamp it on boot.
-4. [ ] Ensure the drag is smooth (pointer capture) and the rest of the layout (main content,
-   Overview / Canvas) reflows correctly at every width; main-window only.
-5. [ ] (Optional) Double-click the handle to reset to 260.
-
-**Acceptance criteria**
-
-- [ ] Dragging the sidebar's right edge resizes it live; the width is clamped to 180–560px and
-  cannot go beyond either bound.
-- [ ] The chosen width survives an app restart (restored, re-clamped on boot).
-- [ ] The main content area (Overview / Canvas) reflows to the remaining space at every width.
-- [ ] The sidebar stays usable at the min and doesn't break layout at the max; detached canvas
-  windows are unaffected.
-- [ ] `npm run build`, `npm run lint`, and `npm test` pass.
-
-**Notes**
-
-- Today's fixed width lives at `Sidebar.module.css:4` (`width: 260px`); `.app-body` (flex) is in
-  `src/styles/global.css`.
-- Persisted separately from the #100 Settings blob to avoid the Settings-modal draft clobbering
-  a mid-session drag (per decision).

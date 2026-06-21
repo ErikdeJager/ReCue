@@ -709,6 +709,20 @@ pub fn set_settings(
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+/// The persisted sidebar width in px (#108); `None` until first set.
+#[tauri::command]
+pub fn get_sidebar_width(store: State<'_, Store>) -> Option<u32> {
+    store.sidebar_width()
+}
+
+/// Persist the sidebar width (#108) — stored as-is; the frontend clamps.
+#[tauri::command]
+pub fn set_sidebar_width(store: State<'_, Store>, width: u32) -> Result<(), SessionError> {
+    store
+        .set_sidebar_width(width)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
 /// untouched — only the recently-used folder list is emptied.
 #[tauri::command]
