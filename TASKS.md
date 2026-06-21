@@ -42,7 +42,7 @@ agents (#74). `claude` is assumed on `PATH` (clear in-app error if missing).
 
 ## Implemented (completed tasks)
 
-> The backlog has fully shipped (#1–#97).
+> The backlog has fully shipped (#1–#98).
 > Completed tasks are condensed here — number, title, and one line
 > on what each delivered — and their full entries removed from the list below; per-task
 > detail (subtasks, notes, acceptance, implementation reports) lives in git history.
@@ -219,6 +219,10 @@ an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sid
 
 - #97 An agent with **no custom name** now shows **claude's own session title** rather than the bare branch. A new persisted `auto_name` field (Rust `PersistedSession` + `SessionView`) is filled by a backend **title reader** (`src-tauri/src/title.rs`) that globs the session's `~/.claude/projects/*/<uuid>.jsonl` log by UUID and takes the latest `ai-title` (fallback: the trimmed first `last-prompt`, else the branch). A dedicated **title-worker** thread re-reads it on each busy→idle edge **off the monitor's hot path** (the monitor only pokes it via a channel), emitting `SessionEvent::Name` → `session://name`; `lib.rs` persists + forwards it and the frontend updates `autoName`. `sessionLabel` now resolves **`custom || auto || branch`**, so the title fills the single-line label (#95) everywhere (sidebar / Overview / Canvas) — a user rename (#57) still wins, and it covers interactive, worktree (#74), and scheduled (#93) agents. Best-effort: a missing / unreadable / format-changed log degrades to the branch, and the busy indicator is never stalled.
 
+**Fix: detached canvas window renders its panels (#98).**
+
+- #98 Popping a canvas into its own window (#84) showed an **empty** "open in its own window" placeholder instead of the canvas's panels: `CanvasSurface` reused the main-window guard `detachedCanvasIds.includes(activeCanvasId)`, which is also true in the detached window (it forces `activeCanvasId` to its own detached id). Gated it on `IS_MAIN_WINDOW`, so only the **main** window shows the note while the detached window renders its layout — live agent terminals (it owns its sessions) plus file / diff / terminal panels. One-line frontend fix in `CanvasSurface.tsx`; a PTY is still never drawn in two windows.
+
 ---
 
 ## Design reference (dark theme only)
@@ -255,7 +259,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#97 are complete — see **Implemented (completed tasks)** above for the index,
+Tasks #1–#98 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. Open tasks are listed below. New work goes
 here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
@@ -268,75 +272,6 @@ its `Depends on:` prerequisites.
 > into smaller dependent sub-tasks** first (as #93 was split into #93 + #94), and then
 > one of those is implemented — skipping is never the answer. Every task is carried to a
 > finished, building, lint-clean state.
-
----
-
-### 98. [ ] Fix: a detached canvas window shows an empty "open in its own window" placeholder instead of its panels
-
-**Status:** Not started
-**Depends on:** none
-**Created:** 2026-06-21
-
-**Description**
-
-Popping a canvas into its own window (#84) shows an **empty** window: the body renders the
-"This canvas is open in its own window. / Focus window" placeholder (`DetachedCanvasNote`)
-instead of the canvas's panels (image #2). A canvas that already has components should keep
-showing them in the detached window.
-
-**Root cause.** `CanvasSurface` is shared by the main window's Canvas view **and** the
-detached `CanvasWindow`. It picks the placeholder vs. the layout with:
-
-```
-const activeDetached = detachedCanvasIds.includes(activeCanvasId);
-… activeDetached ? <DetachedCanvasNote …/> : renderNode(layout)
-```
-
-That guard is meant only for the **main** window (so a detached canvas's PTYs aren't drawn
-in two windows). But the detached window forces `activeCanvasId = DETACHED_CANVAS_ID` on
-init (`store.ts` ~806–807), and that id **is** in `detachedCanvasIds`, so `activeDetached`
-is `true` there too — the detached window shows the placeholder instead of its own content.
-
-**Fix.** Gate the placeholder on window identity so only the main window shows it:
-
-```
-const activeDetached = IS_MAIN_WINDOW && detachedCanvasIds.includes(activeCanvasId);
-```
-
-(import `IS_MAIN_WINDOW` from `../../windowContext`). In the detached window
-(`IS_MAIN_WINDOW === false`) this is always `false`, so it renders `renderNode(layout)` for
-its canvas. The detached window already owns its canvas's sessions
-(`computeSessionOwners` → `reconcileTerminals`), so each agent panel's `ownedHere` is `true`
-and the pooled terminals render; file / diff / terminal panels render regardless. The main
-window still shows the note for a detached active tab (unchanged), so a PTY is never drawn
-in two windows.
-
-Scope: the single `activeDetached` guard in `CanvasSurface.tsx`. No backend, ownership, or
-cross-window-sync changes.
-
-**Subtasks**
-
-1. [ ] `CanvasSurface.tsx`: import `IS_MAIN_WINDOW` and gate `activeDetached` with it.
-2. [ ] Verify the detached window renders the canvas's panels with **live** content (agent
-   terminals included), and the main window still shows the "open in its own window" note
-   when its active tab is the detached canvas.
-3. [ ] `npm run build` + `npm run lint` clean.
-
-**Acceptance criteria**
-
-- [ ] Opening a non-empty canvas in its own window shows its **panels** (live terminals /
-  file / diff content), not the "open in its own window" placeholder.
-- [ ] The main window still shows the "This canvas is open in its own window / Focus window"
-  note when its active tab is a popped-out canvas (no PTY rendered in two windows).
-- [ ] `npm run build` and `npm run lint` pass.
-
-**Notes**
-
-- Regression from #84 (multi-window canvases), built but never runtime-verified for
-  interactive multi-monitor behavior.
-- Touches `CanvasSurface.tsx`, the same file as #95 / #96 / #97 (which edit the agent panel
-  *header* / label — a different region). No functional dependency; sequencing after them
-  just avoids edit churn.
 
 ---
 

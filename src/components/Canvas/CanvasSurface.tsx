@@ -12,7 +12,7 @@ import type {
   CanvasLeaf,
   CanvasNode,
 } from "../../types";
-import { ownedHere } from "../../windowContext";
+import { IS_MAIN_WINDOW, ownedHere } from "../../windowContext";
 import DetachedNote from "../DetachedNote/DetachedNote";
 import DiffInspector from "../DiffInspector/DiffInspector";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
@@ -267,8 +267,11 @@ export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
 
   const layout = canvases.find((c) => c.id === activeCanvasId)?.layout ?? null;
   // In the main window, the active tab can (rarely) be a detached canvas — show a
-  // note instead of rendering its PTYs in two windows (#84).
-  const activeDetached = detachedCanvasIds.includes(activeCanvasId);
+  // note instead of rendering its PTYs in two windows (#84). Gate on IS_MAIN_WINDOW
+  // (#98): the detached window forces activeCanvasId to its own (detached) id, so
+  // without this guard it would show the note instead of its own panels.
+  const activeDetached =
+    IS_MAIN_WINDOW && detachedCanvasIds.includes(activeCanvasId);
 
   // Resize/close fire after a render, so re-derive the active tab's *current*
   // layout from the store rather than closing over `layout`.
