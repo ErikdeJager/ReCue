@@ -13,7 +13,11 @@ chrome, navigation, persistence, and git-reading; the terminals come from the
 Claude Code CLI itself.
 
 `claude` is assumed to be installed and authenticated on `PATH` (the app surfaces a
-clear error if it is missing).
+clear error if it is missing). Because a bundled `.app` launched from Finder/Dock
+inherits launchd's minimal `PATH` (not the shell's), `run()` first calls
+`path_env::restore_user_path()` to adopt the **login-shell PATH** at startup
+(release builds only) — without it `claude` reads as "not found" in `tauri build`
+even though it works in `tauri dev`.
 
 ## Stack
 
@@ -221,6 +225,7 @@ clear error if it is missing).
 │   ├── src/main.rs         # Binary entry point
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog) (#101)
+│   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder-launch fix)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, schedules, settings, sidebar width)

@@ -8,6 +8,7 @@ mod agents;
 mod commands;
 mod files;
 mod git;
+mod path_env;
 mod pty;
 mod store;
 mod title;
@@ -27,6 +28,13 @@ const SCHEDULE_POLL_SECS: u64 = 5;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // A bundled `.app` launched from Finder/Dock inherits launchd's minimal PATH, so
+    // `claude` (Homebrew/npm/nvm/…) isn't found and every agent fails to start —
+    // whereas `tauri dev`, launched from a terminal, inherits the full shell PATH.
+    // Restore the login-shell PATH *before* any threads spawn (env mutation isn't
+    // thread-safe). See `path_env`.
+    path_env::restore_user_path();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
