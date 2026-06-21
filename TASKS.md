@@ -42,7 +42,7 @@ agents (#74). `claude` is assumed on `PATH` (clear in-app error if missing).
 
 ## Implemented (completed tasks)
 
-> The backlog has fully shipped (#1–#94).
+> The backlog has fully shipped (#1–#95).
 > Completed tasks are condensed here — number, title, and one line
 > on what each delivered — and their full entries removed from the list below; per-task
 > detail (subtasks, notes, acceptance, implementation reports) lives in git history.
@@ -207,6 +207,10 @@ an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sid
 
 - #94 Scheduled sessions (part 2): a schedule is now a first-class **draggable item type** — a `CanvasContent` `kind: "scheduled"` (+ a `payloadToContent` case) rendering the shared **`ScheduledPanel`** (an auto-saving launch-time / name / **prompt** editor, debounced → `update_schedule`, + cancel) in the **sidebar** (a draggable row; click selects/jumps #79; × cancels), an **Overview card**, and a **Canvas panel**. Pure frontend on #93's command surface; time helpers in `src/time.ts`.
 
+**Agent items: single-line label + larger activity dot (#95).**
+
+- #95 Slimmed agent items to a single thin line and enlarged the activity dot. The shared `BusyIndicator` (#88) is now a ~10px dot in a ~14px slot (still a fixed slot — no idle↔busy layout shift) everywhere it appears: Overview agent cards + sidebar rows. Agent labels render **only the primary** — the custom name if set, else the branch, with no subtitle line — on all three surfaces (sidebar `SessionRow`, Overview `SessionCard`, Canvas agent panels). The colored repo dot was removed from **every** Overview card (the `.metaDot` on agent / diff / file / scheduled cards) and from Canvas **agent** panels; repo color still reads from each card's colored top band. Canvas non-agent panels keep their dot + meta. Purely visual.
+
 ---
 
 ## Design reference (dark theme only)
@@ -243,7 +247,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#94 are complete — see **Implemented (completed tasks)** above for the index,
+Tasks #1–#95 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. Open tasks are listed below. New work goes
 here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
@@ -256,93 +260,6 @@ its `Depends on:` prerequisites.
 > into smaller dependent sub-tasks** first (as #93 was split into #93 + #94), and then
 > one of those is implemented — skipping is never the answer. Every task is carried to a
 > finished, building, lint-clean state.
-
----
-
-### 95. [ ] Slim agent items to a single name line, and enlarge the activity dot
-
-**Status:** Not started
-**Depends on:** none
-**Created:** 2026-06-21
-
-**Description**
-
-Tighten the agent indicators so an agent item is a single thin line, and make the
-activity dot slightly larger. Three coordinated changes:
-
-1. **Enlarge the activity icon.** The busy/idle activity dot (the shared `BusyIndicator`
-   component, #88) is an 8px dot in a fixed 12px slot. Make it slightly bigger — a
-   **~10px dot in a ~14px slot** — keeping the fixed-slot / no-layout-shift behavior
-   (idle and busy share one dot; reduced-motion still resolves to a solid glowing dot).
-   Because `BusyIndicator` is shared, this grows it in both places it appears: the
-   Overview agent cards (`leading` slot) and the sidebar agent rows (`.rowBusy`).
-   Consistency is intended. (Canvas has no activity dot — unaffected.)
-
-2. **Agent label = one line: the custom name if set, else the branch.** Today the
-   unified label rule (#67) makes a custom name primary with the branch as a subtitle
-   beneath it (and the branch primary when unnamed). Drop the subtitle for agents
-   entirely: a **named** agent shows **only its name**, an **unnamed** agent shows
-   **only its branch** — always a single thin line, no second line, no colored repo dot
-   beside it. Apply on **all three** surfaces an agent label appears:
-   - **Sidebar** `SessionRow`: render only `.rowPrimary`; drop `.rowSecondary`.
-   - **Overview** `SessionCard`: render only `.name`; drop the whole `.meta` row (no
-     dot, no subtitle).
-   - **Canvas** `CanvasSurface` agent panels: render only `panelTitle`; drop the agent
-     `panelMeta` (subtitle) and the agent `panelDot`.
-
-   This also fixes the original report: an **unnamed** agent's Overview card no longer
-   shows a lone colored dot floating under the branch (image #1), and a **named** agent
-   no longer shows the "main" branch line under the name (image #2).
-
-3. **Remove the colored repo dot from every Overview card.** Beyond agent cards (handled
-   above), also remove the `.metaDot` from the Overview **diff / file / scheduled** cards
-   (`ExtraPanel` / `ScheduleCard`) — keep their `repo · branch` meta **text**, just drop
-   the dot. Repo color still reads from each card's colored top band (`border-top`).
-   Delete the now-unused `.metaDot` CSS rule.
-
-Out of scope: Canvas **non-agent** panels (file / diff / terminal) keep their `panelDot`
-+ meta line as-is (only agent panels change there); the sidebar repo-header dot
-(`.repoDot`) is a different element and stays. Purely visual — no logic changes.
-
-**Subtasks**
-
-1. [ ] `BusyIndicator.module.css`: grow `.ball` 12px → ~14px (keep `inset: 2px`, so the
-   dot becomes ~10px); update the "8px dot in a fixed 12px slot" comment.
-2. [ ] Sidebar `SessionRow` (`Sidebar.tsx`): render only the primary label; remove the
-   `.rowSecondary` subtitle (destructure only `primary` from `sessionLabel`).
-3. [ ] Overview `SessionCard` (`Overview.tsx`): render only `.name`; remove the `.meta`
-   block (and its `.metaDot`); destructure only `primary` from `sessionLabel`.
-4. [ ] Overview `ExtraPanel` + `ScheduleCard` (`Overview.tsx`): remove the `.metaDot`
-   span; keep `.metaText`.
-5. [ ] Delete the `.metaDot` rule from `Overview.module.css`; confirm no `metaDot`
-   references remain.
-6. [ ] Canvas `CanvasSurface.tsx`: for agent panels, render only `panelTitle` (no
-   `panelMeta`) and don't render the `panelDot`; leave file / diff / terminal panels
-   unchanged.
-7. [ ] `npm run build` + `npm run lint` clean (no unused `subtitle` / `color` /
-   `metaDot`).
-
-**Acceptance criteria**
-
-- [ ] The activity dot is visibly but subtly larger (~10px) in Overview cards and sidebar
-  rows, with no idle↔busy layout shift and no clipping.
-- [ ] A **named** agent shows only its custom name (no branch line) in the sidebar,
-  Overview, and Canvas — a single thin line.
-- [ ] An **unnamed** agent shows only its branch — no lone colored dot, no empty meta row.
-- [ ] No Overview card (agent / diff / file / scheduled) shows a colored repo dot; repo
-  color still reads from each card's top band.
-- [ ] Canvas non-agent panels (file / diff / terminal) are unchanged.
-- [ ] `npm run build` and `npm run lint` pass.
-
-**Notes**
-
-- This narrows the #67 label rule for *display*: `sessionLabel` still computes
-  `{primary, subtitle}`, but agent surfaces now render only `primary` (name if set, else
-  branch). Keep `sessionLabel` as-is.
-- Root cause of the original "lone ball" (unnamed agent): #67 makes the branch primary
-  and leaves the subtitle empty, so the Overview `.metaDot` rendered alone.
-- CLAUDE.md's #88 note mentions a "fixed ~12px slot"; the next docs pass can pick up the
-  new size (not required by this task).
 
 ---
 

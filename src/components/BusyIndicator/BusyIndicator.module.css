@@ -1,6 +1,6 @@
 /* Activity indicator (#88, supersedes the #71 spinner arc): a calm dot that gains
    a soft Claude-style shimmer — a sheen sweeping across it — while the session is
-   working. Idle and busy share one 8px dot in a fixed 12px slot (box-sizing:
+   working. Idle and busy share one 10px dot in a fixed 14px slot (box-sizing:
    border-box, set globally) so the footprint never shifts between states. Only the
    sheen's background-position animates, so the loop stays compositor-cheap with no
    layout/paint churn. The global reduced-motion killswitch (global.css) neutralizes
@@ -10,12 +10,12 @@
 .ball {
   position: relative;
   display: inline-flex;
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
 }
 
-/* The dot: idle = a calm --status-idle dot, centered in the 12px slot. */
+/* The dot: idle = a calm --status-idle dot, centered in the 14px slot. */
 .ball::before {
   content: "";
   position: absolute;

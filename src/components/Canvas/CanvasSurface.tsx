@@ -89,16 +89,17 @@ function LeafPanel({
       : undefined;
   const repoPath = content.repoPath ?? session?.repoPath ?? "";
   const branch = branches[repoPath] ?? "";
-  // Agent panels use the unified label rule (#67): name primary, branch the
-  // subtitle (branch primary when unnamed). File/diff panels keep their
-  // filename/"Diff" title + repo·branch context.
+  // Agent panels (#95) render only their primary label (name if set, else branch) —
+  // a single line, no subtitle and no repo dot (see below). File/diff/terminal panels
+  // keep their filename/"Diff" title + repo·branch context + dot.
   const agentLabel =
     content.kind === "agent"
       ? sessionLabel(session?.name, branch || repoName(repoPath))
       : null;
   const titleText = agentLabel ? agentLabel.primary : panelTitle(content);
+  // Agent panels (#95) drop the subtitle line; non-agent panels keep repo·branch.
   const metaText = agentLabel
-    ? agentLabel.subtitle
+    ? null
     : repoPath
       ? `${repoName(repoPath)}${branch ? ` · ${branch}` : ""}`
       : null;
@@ -157,7 +158,8 @@ function LeafPanel({
     >
       <header className={styles.panelHeader}>
         <span className={styles.panelTitleBlock}>
-          {repoPath && (
+          {/* Agent panels drop the repo dot (#95); non-agent panels keep it. */}
+          {repoPath && content.kind !== "agent" && (
             <span
               className={styles.panelDot}
               style={{ background: repoColor(repoPath, repoColors) }}

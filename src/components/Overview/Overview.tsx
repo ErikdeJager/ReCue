@@ -144,22 +144,15 @@ function SessionCard({
   onCopyResume,
   onRemove,
 }: SessionCardProps) {
-  // Unified label rule (#67): name is primary with the branch as the subtitle;
-  // with no name the branch (folder name when non-git) is primary and there is
-  // no subtitle. The repo color dot stays as the "which repo" badge.
-  const { primary, subtitle } = sessionLabel(
+  // Agent label (#95): a single line showing only the primary — the custom name if
+  // set, else the branch (folder name when non-git). No subtitle, no repo dot; repo
+  // color reads from the card's top band (#36). `sessionLabel` still computes the
+  // subtitle (#67) — agent surfaces just don't render it.
+  const { primary } = sessionLabel(
     session.name,
     branch || repoName(session.repoPath),
   );
-  const title = (
-    <>
-      <span className={styles.name}>{primary}</span>
-      <span className={styles.meta}>
-        <span className={styles.metaDot} style={{ background: color }} />
-        {subtitle && <span className={styles.metaText}>{subtitle}</span>}
-      </span>
-    </>
-  );
+  const title = <span className={styles.name}>{primary}</span>;
   const actions = (
     <>
       {/* Copy `claude --resume <id>` (#28) — re-homed here post-Focus (#86). */}
@@ -247,7 +240,6 @@ function ExtraPanel({
         <span className={styles.name}>{panelLabel(panel)}</span>
       )}
       <span className={styles.meta}>
-        <span className={styles.metaDot} style={{ background: color }} />
         <span className={styles.metaText}>
           {repoName(repoPath)}
           {branch && ` · ${branch}`}
@@ -321,7 +313,6 @@ function ScheduleCard({
         {schedule.name?.trim() || schedule.branch || "Scheduled"}
       </span>
       <span className={styles.meta}>
-        <span className={styles.metaDot} style={{ background: color }} />
         <span className={styles.metaText}>
           {repoName(schedule.cwd)}
           {branch && ` · ${branch}`} · {formatFireTime(schedule.fire_at)}

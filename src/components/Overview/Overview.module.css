@@ -171,7 +171,8 @@
   white-space: nowrap;
 }
 
-/* Colored repo badge (#36): a color dot + the repo name. */
+/* Repo badge (#36): the repo name / agent subtitle text. The colored repo dot was
+   removed in #95 — repo color now reads from the card's top band (border-top). */
 .meta {
   display: flex;
   align-items: center;
@@ -180,13 +181,6 @@
   color: var(--text-muted);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
-}
-
-.metaDot {
-  width: 7px;
-  height: 7px;
-  flex-shrink: 0;
-  border-radius: var(--radius-dot);
 }
 
 .metaText {

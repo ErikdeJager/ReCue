@@ -164,10 +164,10 @@ function SessionRow({
     setEditing(false);
   };
 
-  // Unified label rule (#67): a custom name is primary with the branch as the
-  // subtitle; with no name the branch (the deduped `label`, folder name when
-  // non-git) is primary and there is no subtitle.
-  const { primary, subtitle } = sessionLabel(session.name, label);
+  // Agent label (#95): a single line showing only the primary — the custom name if
+  // set, else the branch (deduped `label`, folder name when non-git). `sessionLabel`
+  // still computes the subtitle (#67); the row just doesn't render it.
+  const { primary } = sessionLabel(session.name, label);
 
   return (
     <div
@@ -216,7 +216,6 @@ function SessionRow({
           {...listeners}
         >
           <span className={styles.rowPrimary}>{primary}</span>
-          {subtitle && <span className={styles.rowSecondary}>{subtitle}</span>}
         </button>
       )}
       <button
