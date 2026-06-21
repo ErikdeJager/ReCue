@@ -397,3 +397,90 @@ new IPC `openUrl(uri)` (instead of the addon's default `window.open`).
   beyond the underline.
 - **Depends on: none** — the terminal pool (#18), the typed IPC layer, and the
   `open_data_folder` OS-open precedent all already exist (#1–#108 shipped).
+
+---
+
+### 110. [ ] Fix: a closed/forgotten file viewer reopens on every launch (stale legacy `open_files` resurrected each boot)
+
+**Status:** Not started
+**Depends on:** none
+**Created:** 2026-06-21
+
+**Description**
+
+A specific markdown file viewer (`CLAUDE.md`) reopens on **every** app launch. Closing
+its panel — and even using **Forget folder** on the whole repo — doesn't stop it; it
+returns on the next startup.
+
+Root cause (verified against the code and the user's on-disk `sessions.json`):
+
+- The #59 migration that folds the **legacy** per-repo `open_files` map (#45) into
+  `overviewPanels` as markdown panels runs in `store.ts` `refresh()` on **every** boot
+  (the `mergedPanels` fold-in loop), not once.
+- `open_files` is effectively **write-once, read-only from the frontend**: `src/ipc.ts`
+  exposes only `listOpenFiles` (read). There is **no `setOpenFiles` wrapper**, even
+  though the Rust command `set_open_files` exists and is registered (`commands.rs` →
+  `store.rs`, wired in `lib.rs`). So no frontend action ever clears `open_files`.
+- Closing a panel (`removeOverviewPanel`) and Forget-folder / Close-all-items
+  (`closeRepoItems`, `forgetRepo`) both clear `overviewPanels` but never touch
+  `open_files`.
+- Net effect: each boot the migration sees the file still in `open_files`, notices it's
+  absent from `overviewPanels`, and **re-creates it as a fresh markdown panel** (new
+  UUID) — forever.
+
+The user's `sessions.json` confirms the stuck entry:
+`open_files = { "/Users/erikdejager/repos/ClaudeCue": ["CLAUDE.md"] }`.
+
+**Fix (decided):** make the legacy `open_files` migration **one-shot and
+non-resurrecting**. On boot, **stop folding `open_files` into `overviewPanels`** (every
+real install has long since migrated and persisted its panels) and **clear the legacy
+`open_files` map** so the stale data is permanently removed. Result: the file is gone on
+the **very next launch** and never returns; closing a panel or forgetting a folder now
+sticks.
+
+Out of scope: how panels themselves persist (`overview_panels` unchanged); fully removing
+the legacy `open_files` field / `list_open_files` command from the backend (left in
+place — emptied — as a follow-up).
+
+**Subtasks**
+
+1. [ ] Add a typed `setOpenFiles(path, files)` wrapper in `src/ipc.ts` mapping to the
+   existing `set_open_files` Rust command (already registered in `lib.rs`).
+2. [ ] In `store.ts` `refresh()`, remove the `open_files → overviewPanels` fold-in (the
+   `mergedPanels` resurrection loop) so `overviewPanels` loads from persisted panels
+   only — nothing is re-added from `open_files`.
+3. [ ] After loading, **main-window only** (mirroring the old migration's
+   `IS_MAIN_WINDOW` guard), clear every legacy entry: for each repo in `listOpenFiles()`,
+   call `ipc.setOpenFiles(repo, [])` so `sessions.json`'s `open_files` empties once and
+   stays empty (the Rust setter drops empty keys).
+4. [ ] Confirm no other path depends on the fold-in; verify closing a panel and
+   Forget-folder now leave nothing behind that can resurrect an item.
+5. [ ] Tests: keep the Rust `open_files_set_and_persist` test green; add/extend a Vitest
+   store test for "boot does not resurrect a closed file and empties `open_files`" if the
+   harness can mock the IPC layer.
+
+**Acceptance criteria**
+
+- [ ] Launching the app no longer auto-opens `CLAUDE.md` (or any previously-closed/
+      forgotten file viewer); it does not reappear across restarts.
+- [ ] Closing a file/markdown panel (×) and relaunching: it stays closed.
+- [ ] Forget-folder on a repo and relaunching: none of its file viewers reappear.
+- [ ] After one launch with the fix, `sessions.json`'s `open_files` is empty (the stuck
+      `{ ClaudeCue: ["CLAUDE.md"] }` entry is gone).
+- [ ] No regression to `overview_panels` persistence: panels kept open still persist and
+      restore.
+- [ ] `npm run build`, `npm run lint`, `npm test`, and the Rust build / `cargo test` /
+      clippy all pass.
+
+**Notes**
+
+- Decision: "gone on next launch, not re-added" (vs. honoring the legacy entry one final
+  time). Safe because the #59 fold has demonstrably already run for any real install (the
+  file has reappeared for several updates), so dropping it loses nothing the user wants.
+- Verified anchors: `src/store.ts` (`refresh()` `mergedPanels` loop, `closeRepoItems`,
+  `removeOverviewPanel`); `src/ipc.ts` (`listOpenFiles`, no setter);
+  `src-tauri/src/commands.rs` (`list_open_files` / `set_open_files`);
+  `src-tauri/src/store.rs` (`open_files` / `set_open_files`); `src-tauri/src/lib.rs`
+  (both registered).
+- Follow-up (not this task): fully retire the legacy `open_files` field +
+  `list_open_files` / `set_open_files` commands once confirmed empty in the wild.
