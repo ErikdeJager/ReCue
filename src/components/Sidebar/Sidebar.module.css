@@ -13,7 +13,9 @@
   display: flex;
   align-items: center;
   gap: var(--space-6);
-  margin: var(--space-12);
+  /* Bottom margin tightened to 4px (#99) so the New ↔ Schedule buttons (#93) read
+     as one compact cluster; the top/side margins stay at 12px. */
+  margin: var(--space-12) var(--space-12) var(--space-4);
   padding: var(--space-4) var(--space-12);
   border: 0;
   border-radius: var(--radius-control);

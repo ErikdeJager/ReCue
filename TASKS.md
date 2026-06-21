@@ -42,7 +42,7 @@ agents (#74). `claude` is assumed on `PATH` (clear in-app error if missing).
 
 ## Implemented (completed tasks)
 
-> The backlog has fully shipped (#1–#98).
+> The backlog has fully shipped (#1–#99).
 > Completed tasks are condensed here — number, title, and one line
 > on what each delivered — and their full entries removed from the list below; per-task
 > detail (subtasks, notes, acceptance, implementation reports) lives in git history.
@@ -223,6 +223,10 @@ an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sid
 
 - #98 Popping a canvas into its own window (#84) showed an **empty** "open in its own window" placeholder instead of the canvas's panels: `CanvasSurface` reused the main-window guard `detachedCanvasIds.includes(activeCanvasId)`, which is also true in the detached window (it forces `activeCanvasId` to its own detached id). Gated it on `IS_MAIN_WINDOW`, so only the **main** window shows the note while the detached window renders its layout — live agent terminals (it owns its sessions) plus file / diff / terminal panels. One-line frontend fix in `CanvasSurface.tsx`; a PTY is still never drawn in two windows.
 
+**Tighter New ↔ Schedule button gap (#99).**
+
+- #99 Tightened the vertical gap between the sidebar's **New session** and **Schedule session** (#93) buttons from 12px to 4px so they read as one compact cluster — reduced only `.newButton`'s bottom margin (`Sidebar.module.css`); the Schedule button (top margin 0) and the rest of the sidebar spacing are unchanged. Pure CSS.
+
 ---
 
 ## Design reference (dark theme only)
@@ -259,7 +263,7 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#98 are complete — see **Implemented (completed tasks)** above for the index,
+Tasks #1–#99 are complete — see **Implemented (completed tasks)** above for the index,
 and git history for full per-task detail. Open tasks are listed below. New work goes
 here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
@@ -272,36 +276,6 @@ its `Depends on:` prerequisites.
 > into smaller dependent sub-tasks** first (as #93 was split into #93 + #94), and then
 > one of those is implemented — skipping is never the answer. Every task is carried to a
 > finished, building, lint-clean state.
-
----
-
-### 99. [ ] Tighten the gap between the "New session" and "Schedule session" sidebar buttons
-
-**Status:** Not started
-**Depends on:** none
-**Created:** 2026-06-21
-
-**Description**
-
-The two stacked sidebar action buttons — the accent **New session** button and the ghost
-**Schedule session** button (#93) — sit **12px** apart, which reads as too loose (image
-#3). Tighten that gap to **4px** so they read as one compact cluster.
-
-The gap is entirely the New session button's bottom margin: in `Sidebar.module.css`,
-`.newButton` has `margin: var(--space-12)` (12px on all sides) and `.scheduleButton` has
-`margin: 0 var(--space-12) var(--space-12)` (top 0). Reduce only `.newButton`'s **bottom**
-margin from 12px to 4px (`var(--space-4)`) — e.g.
-`margin: var(--space-12) var(--space-12) var(--space-4)`. Leave the top/side margins and
-the Schedule button untouched, so only the inter-button gap tightens.
-
-Scope: just the New ↔ Schedule gap in `Sidebar.module.css`. The Schedule → ViewSwitch gap
-and the rest of the sidebar spacing stay as they are.
-
-**Acceptance criteria**
-
-- [ ] The vertical gap between the New session and Schedule session buttons is ~4px (down
-  from 12px); their outer/side margins and the rest of the sidebar layout are unchanged.
-- [ ] `npm run build` and `npm run lint` pass.
 
 ---
 
