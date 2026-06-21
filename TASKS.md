@@ -233,7 +233,7 @@ an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sid
 
 **Pluggable coding-agent CLI — abstraction + persistence (#101, part 1).**
 
-- #101 Made the coding-agent CLI **pluggable** (part 1 of 2): a new `AgentSpec` abstraction (`src-tauri/src/agents.rs`) — a built-in catalog describing each agent's binary + how it spawns / resumes / seeds a session + capability flags (resume / auto-name / install-hint) — with the **`claude`** spec preserving today's exact flags (`--session-id <uuid>`, `--resume <uuid>`, positional prompt). Each session/schedule now **records its own `agent`** (`PersistedSession` / `ScheduledSession`, serde-default `"claude"`; TS `SessionRecord` / `SessionView` / `ScheduledSession` mirrors + record→view mapping). The spawn/resume **path is generalized off the `"claude"` literal**: `pty.rs` (`spawn_session` / `spawn_session_with_prompt` / `resume_session`) resolves the spec's `binary_name` + arg builders, and `commands.rs` (`spawn_session` / `spawn_worktree_agent` / `create_schedule` / `fire_due_schedules`) + the `lib.rs` boot-resume loop thread the agent (default Claude, stored on the record, resumed with the **stored** agent). **Claude is still the only agent and behaves identically** (verified). Codex spec + Settings "Agent" select + resume-capability gating + missing-binary / auto-name / UI-copy generalization → #104.
+- #101 Made the coding-agent CLI **pluggable** (part 1 of 2): a new `AgentSpec` abstraction (`src-tauri/src/agents.rs`) — a built-in catalog describing each agent's binary + how it spawns / resumes / seeds a session + capability flags (resume / auto-name / install-hint) — with the **`claude`** spec preserving today's exact flags (`--session-id <uuid>`, `--resume <uuid>`, positional prompt). Each session/schedule now **records its own `agent`** (`PersistedSession` / `ScheduledSession`, serde-default `"claude"`; TS `SessionRecord` / `SessionView` / `ScheduledSession` mirrors + record→view mapping). The spawn/resume **path is generalized off the `"claude"` literal**: `pty.rs` (`spawn_session` / `spawn_session_with_prompt` / `resume_session`) resolves the spec's `binary_name` + arg builders, and `commands.rs` (`spawn_session` / `spawn_worktree_agent` / `create_schedule` / `fire_due_schedules`) + the `lib.rs` boot-resume loop thread the agent (default Claude, stored on the record, resumed with the **stored** agent). **Claude is still the only agent and behaves identically** (verified). Codex spec + Settings "Agent" select + resume-capability gating + missing-binary / auto-name / UI-copy generalization remain for a future part 2.
 
 **Settings — Appearance section (#102).**
 
@@ -279,8 +279,8 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-All tasks (#1–#103) are complete — see **Implemented (completed tasks)** above for the index,
-and git history for full per-task detail. There are no open tasks. New work goes
+Tasks #1–#103 are complete — see **Implemented (completed tasks)** above for the index,
+and git history for full per-task detail. **Open tasks are listed below.** New work goes
 here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
 
@@ -292,3 +292,64 @@ its `Depends on:` prerequisites.
 > into smaller dependent sub-tasks** first (as #93 was split into #93 + #94), and then
 > one of those is implemented — skipping is never the answer. Every task is carried to a
 > finished, building, lint-clean state.
+
+---
+
+### 104. [ ] Detached canvas window: panel content scrolls instead of being clipped
+
+**Status:** Not started
+**Depends on:** none _(#84 detached canvas windows and #98 detached-window rendering are both complete)_
+**Created:** 2026-06-21
+
+**Description**
+
+When a canvas is popped out into its own window (#84), overflowing panel content is
+**clipped and cannot be scrolled** — e.g. a long markdown file in a `FileViewer` is cut
+off at the window's bottom edge with no scrollbar. The same panel scrolls correctly in
+the main-window Canvas, so the defect is specific to the detached window.
+
+Root cause: the detached window's wrapper `.body` in
+`src/components/CanvasWindow/CanvasWindow.module.css` is a plain block
+(`position: relative; flex: 1; min-height: 0`) — **not** a flex container. The shared
+`CanvasSurface` renders its root `.area` (`src/components/Canvas/Canvas.module.css`) with
+`flex: 1; min-height: 0; overflow: hidden`, which only resolves to a definite, bounded
+height when its parent is a flex column. Under `.body` (a block), `.area`'s `flex: 1` is
+inert, so it grows to content height; `.panel { height: 100% }` then collapses to content
+height, the FileViewer's own `overflow-y: auto` never engages, and the overgrown content
+is clipped (`overflow: hidden`) with no scrollbar. The **main window works** because its
+wrapper `.canvas` (`Canvas.module.css`) already is `display: flex; flex-direction: column`
+— exactly what `.body` lacks.
+
+Fix: make `.body` mirror `.canvas` by adding `display: flex; flex-direction: column`. The
+height chain then cascades and each panel's internal scroller (FileViewer markdown/raw,
+DiffInspector, etc.) regains its bounded height. This is a container-level fix above
+`CanvasSurface`, so it restores scrolling for **all** overflowing panel content in detached
+windows — markdown is just the reported symptom.
+
+Out of scope: any change to the shared `CanvasSurface`/`.area` or to `FileViewer` (they are
+correct and unchanged); the main-window Canvas (already correct).
+
+**Subtasks**
+
+1. [ ] In `src/components/CanvasWindow/CanvasWindow.module.css`, add
+   `display: flex; flex-direction: column;` to the `.body` rule so it matches the main
+   window's `.canvas` wrapper.
+2. [ ] Manually verify in a detached canvas window: a long markdown file scrolls within its
+   panel (not clipped); confirm the same for a long raw/code file and a large diff.
+3. [ ] Confirm the main-window Canvas is visually unchanged, and `npm run build` /
+   `npm run lint` pass.
+
+**Acceptance criteria**
+
+- [ ] In a detached canvas window, a `FileViewer` panel whose content overflows shows a
+  scrollbar and scrolls to the end (no content clipped at the window's bottom).
+- [ ] Other overflowing panel types (raw/code file, diff) also scroll in a detached window.
+- [ ] The main-window Canvas behaves exactly as before.
+- [ ] `npm run build` and `npm run lint` pass.
+
+**Notes**
+
+- Builds on #84 (detached canvas windows) and #98 (detached window renders its panels) —
+  both already shipped, so no open dependency.
+- CSS-only fix; no automated test (the Vitest suite covers pure logic, not CSS height
+  chains — verification is manual, per decision).
