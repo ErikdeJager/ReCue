@@ -110,7 +110,11 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
         />
         <span className={styles.metaText}>
           {repoName(schedule.cwd)}
-          {branch ? ` · will check out ${branch}` : ""}
+          {branch
+            ? schedule.create_branch
+              ? ` · will create ${branch}`
+              : ` · will check out ${branch}`
+            : ""}
         </span>
       </div>
 

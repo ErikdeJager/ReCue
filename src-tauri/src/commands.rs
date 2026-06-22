@@ -559,6 +559,7 @@ pub fn list_canvas_windows(app: AppHandle) -> Vec<String> {
 /// `at` (unix secs). `branch` (a non-current branch to check out), `name`, and
 /// `prompt` are optional; the backend owns the id + `created_at`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // a flat Tauri command surface (cwd + branch/new-branch + name/prompt/at/agent)
 pub fn create_schedule(
     store: State<'_, Store>,
     cwd: String,
@@ -567,11 +568,22 @@ pub fn create_schedule(
     prompt: Option<String>,
     at: u64,
     agent: Option<String>,
+    create_branch: Option<bool>,
+    base: Option<String>,
 ) -> Result<ScheduledSession, SessionError> {
+    // New-branch intent (#125): when create_branch is set, `branch` is the new branch
+    // name (created at fire time) and `base` its base (empty/None = HEAD).
+    let create_branch = create_branch.unwrap_or(false);
     let sched = ScheduledSession {
         id: Uuid::new_v4().to_string(),
         cwd,
         branch: branch.filter(|b| !b.is_empty()),
+        create_branch,
+        branch_base: if create_branch {
+            base.filter(|b| !b.is_empty())
+        } else {
+            None
+        },
         name: name.filter(|n| !n.trim().is_empty()),
         prompt: prompt.filter(|p| !p.trim().is_empty()),
         fire_at: at,
@@ -632,8 +644,18 @@ pub fn fire_due_schedules(app: &AppHandle) {
     let manager = app.state::<SessionManager>();
     for sched in due {
         if let Some(branch) = &sched.branch {
-            // Best-effort checkout; a failure still spawns in the folder.
-            let _ = git::checkout_branch(&sched.cwd, branch);
+            // Best-effort; a failure still spawns in the folder. New-branch schedules
+            // (#125) create + check out the branch at fire time (reusing #124's write);
+            // existing-branch schedules check out as before (#93).
+            let _ = if sched.create_branch {
+                git::create_branch(
+                    &sched.cwd,
+                    branch,
+                    sched.branch_base.as_deref().unwrap_or(""),
+                )
+            } else {
+                git::checkout_branch(&sched.cwd, branch)
+            };
         }
         match manager.spawn_session_with_prompt(
             &sched.cwd,

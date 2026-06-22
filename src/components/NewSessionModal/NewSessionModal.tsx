@@ -377,12 +377,14 @@ function NewSessionModal() {
     }
   };
 
-  // New-branch name input keys (#124): Enter creates + starts (⌘⏎ as a worktree);
-  // ArrowUp returns to the branch list (leaving the add-branch form).
+  // New-branch name input keys (#124/#125): in new-session mode Enter creates +
+  // starts (⌘⏎ as a worktree); in schedule mode Enter advances to the launch-time
+  // step (no worktree — #125). ArrowUp returns to the branch list.
   const onNewBranchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      if (event.metaKey || event.ctrlKey) void confirmAddBranchWorktree();
+      if (scheduleMode) goToScheduleFromBranch();
+      else if (event.metaKey || event.ctrlKey) void confirmAddBranchWorktree();
       else void confirmAddBranch();
       return;
     }
@@ -428,21 +430,40 @@ function NewSessionModal() {
     setStep("schedule");
   };
 
+  // Schedule mode + "+ add branch" (#125): validate the new-branch name, then advance
+  // to the launch-time step (the branch is created when the schedule fires, not now).
+  const goToScheduleFromBranch = () => {
+    if (addBranchActive && !newBranchName.trim()) {
+      setBranchError("Enter a branch name");
+      return;
+    }
+    goToSchedule();
+  };
+
   const backFromSchedule = () => setStep(folderIsGit ? "branch" : "folder");
 
   // Create the schedule from the launch-time step (#93): parse the local
-  // datetime-local value → unix secs, carry the optional branch/name/prompt.
+  // datetime-local value → unix secs, carry the optional branch/name/prompt. A
+  // "+ add branch" intent (#125) records the new branch (created at fire time).
   const submitSchedule = async () => {
     if (!cwd || busy) return;
     const ms = new Date(fireAt).getTime();
     if (!Number.isFinite(ms)) return;
+    const useNewBranch = addBranchActive && !!newBranchName.trim();
+    const branchArg = useNewBranch
+      ? newBranchName.trim()
+      : willCheckout
+        ? (selectedBranch ?? null)
+        : null;
     setBusy(true);
     const ok = await scheduleSession(
       cwd,
-      willCheckout ? (selectedBranch ?? null) : null,
+      branchArg,
       schedName.trim() || null,
       prompt.trim() || null,
       Math.floor(ms / 1000),
+      useNewBranch,
+      useNewBranch ? newBranchBase : null,
     );
     if (ok) close();
     else setBusy(false);
@@ -545,8 +566,9 @@ function NewSessionModal() {
     event.preventDefault();
     const down = event.key === "ArrowDown";
     // ArrowDown past the last branch (or from a filtered-empty list) highlights the
-    // "+ add branch" option (#124, non-schedule); ArrowUp is handled in its input.
-    if (down && !scheduleMode) {
+    // "+ add branch" option (#124; also in schedule mode #125); ArrowUp is handled
+    // in its input.
+    if (down) {
       const i = selectedBranch ? branchList.indexOf(selectedBranch) : -1;
       if (i >= branchList.length - 1) {
         setAddBranchActive(true);
@@ -572,8 +594,9 @@ function NewSessionModal() {
     event.preventDefault();
     const down = event.key === "ArrowDown";
     // ArrowDown past the last branch (or from a filtered-empty list) highlights the
-    // "+ add branch" option (#124, non-schedule); ArrowUp is handled in its input.
-    if (down && !scheduleMode) {
+    // "+ add branch" option (#124; also in schedule mode #125); ArrowUp is handled
+    // in its input.
+    if (down) {
       const i = selectedBranch ? branchList.indexOf(selectedBranch) : -1;
       if (i >= branchList.length - 1) {
         setAddBranchActive(true);
@@ -625,8 +648,10 @@ function NewSessionModal() {
             if (pickerActive) void pick();
             else void advanceFromFolder();
           } else if (step === "branch") {
-            if (addBranchActive) void confirmAddBranch();
-            else if (scheduleMode) goToSchedule();
+            if (addBranchActive) {
+              if (scheduleMode) goToScheduleFromBranch();
+              else void confirmAddBranch();
+            } else if (scheduleMode) goToSchedule();
             else void create();
           } else {
             void submitSchedule();
@@ -793,26 +818,26 @@ function NewSessionModal() {
               )}
             </div>
 
-            {/* "+ add branch" (#124): the create-a-new-branch option after all
+            {/* "+ add branch" (#124/#125): the create-a-new-branch option after all
                 existing branches — outside the listbox (like #123's folder picker)
                 so its own Enter/click activates it, not the list's start handler.
-                New-session path only; schedule is #125. */}
-            {!scheduleMode && (
-              <button
-                type="button"
-                aria-selected={addBranchActive}
-                className={`${styles.branch} ${styles.addBranch} ${addBranchActive ? styles.branchActive : ""}`}
-                onClick={() => setAddBranchActive(true)}
-                title="Create a new branch"
-              >
-                <Plus size={13} strokeWidth={1.5} />
-                <span className={styles.branchName}>add branch</span>
-              </button>
-            )}
+                Both modes: in schedule mode (#125) it records intent (created at fire
+                time) instead of creating now. */}
+            <button
+              type="button"
+              aria-selected={addBranchActive}
+              className={`${styles.branch} ${styles.addBranch} ${addBranchActive ? styles.branchActive : ""}`}
+              onClick={() => setAddBranchActive(true)}
+              title="Create a new branch"
+            >
+              <Plus size={13} strokeWidth={1.5} />
+              <span className={styles.branchName}>add branch</span>
+            </button>
 
-            {/* Inline new-branch form (#124): name + base dropdown (default current
-                branch). Enter creates + starts; ⌘⏎ creates as a worktree. */}
-            {!scheduleMode && addBranchActive && (
+            {/* Inline new-branch form (#124/#125): name + base dropdown (default
+                current branch). New-session: Enter creates + starts, ⌘⏎ as a worktree.
+                Schedule: Enter advances; the branch is created when the schedule fires. */}
+            {addBranchActive && (
               <div className={styles.addBranchForm}>
                 <input
                   ref={newBranchNameRef}
@@ -937,11 +962,13 @@ function NewSessionModal() {
             >
               <ChevronLeft size={14} strokeWidth={1.5} />
               <span className={styles.folderBackName}>
-                {folderIsGit && selectedBranch
-                  ? selectedBranch
-                  : cwd
-                    ? repoName(cwd)
-                    : ""}
+                {addBranchActive && newBranchName.trim()
+                  ? `new: ${newBranchName.trim()}`
+                  : folderIsGit && selectedBranch
+                    ? selectedBranch
+                    : cwd
+                      ? repoName(cwd)
+                      : ""}
               </span>
               <span className={styles.folderBackHint}>back</span>
             </button>

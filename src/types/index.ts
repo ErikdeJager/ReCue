@@ -63,8 +63,15 @@ export interface OverviewPanel {
 export interface ScheduledSession {
   id: string;
   cwd: string;
-  /** A non-current branch to check out before spawning; absent otherwise. */
+  /** Branch to use before spawning. When `create_branch` is false, an existing
+   * branch to check out (absent = none); when true, the **new** branch to create at
+   * fire time (#125). */
   branch?: string | null;
+  /** Create + check out `branch` at fire time from `branch_base` (or HEAD), rather
+   * than checking out an existing branch (#125); absent/false for older records. */
+  create_branch?: boolean;
+  /** Base for the new branch when `create_branch` (absent = HEAD) (#125). */
+  branch_base?: string | null;
   name?: string | null;
   prompt?: string | null;
   fire_at: number;

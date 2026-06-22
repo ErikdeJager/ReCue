@@ -223,13 +223,17 @@ export const spawnWorktreeAgentNewBranch = (
   });
 
 /** Create a scheduled session (#93); `at` is the fire time in unix secs. Returns
- * the persisted record (the backend owns its id + created_at). */
+ * the persisted record (the backend owns its id + created_at). When `createBranch`
+ * is true, `branch` is a **new** branch created at fire time (#125) from `base`
+ * (null = HEAD); otherwise `branch` is an existing branch to check out. */
 export const createSchedule = (
   cwd: string,
   branch: string | null,
   name: string | null,
   prompt: string | null,
   at: number,
+  createBranch = false,
+  base: string | null = null,
 ) =>
   invoke<ScheduledSession>("create_schedule", {
     cwd,
@@ -237,6 +241,8 @@ export const createSchedule = (
     name,
     prompt,
     at,
+    createBranch,
+    base,
   });
 
 /** All pending scheduled sessions (#93). */

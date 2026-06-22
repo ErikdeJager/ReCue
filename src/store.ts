@@ -627,6 +627,8 @@ export interface AppState {
     name: string | null,
     prompt: string | null,
     at: number,
+    createBranch?: boolean,
+    base?: string | null,
   ) => Promise<boolean>;
   /** Cancel a pending scheduled session (#93). */
   cancelSchedule: (id: string) => Promise<void>;
@@ -2009,9 +2011,25 @@ export const useStore = create<AppState>()((set, get) => ({
     );
   },
 
-  scheduleSession: async (cwd, branch, name, prompt, at) => {
+  scheduleSession: async (
+    cwd,
+    branch,
+    name,
+    prompt,
+    at,
+    createBranch = false,
+    base = null,
+  ) => {
     try {
-      const record = await ipc.createSchedule(cwd, branch, name, prompt, at);
+      const record = await ipc.createSchedule(
+        cwd,
+        branch,
+        name,
+        prompt,
+        at,
+        createBranch,
+        base,
+      );
       // Newest-first; surface the (possibly new) folder in recents immediately.
       set((s) => ({
         schedules: [record, ...s.schedules],

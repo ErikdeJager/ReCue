@@ -323,9 +323,9 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#119 + #122–#124 are complete — see **Implemented (completed tasks)** above
-for the index, and git history for full per-task detail. **Open tasks: #120, #121,
-#125.** New work
+Tasks #1–#119 + #122–#125 are complete — see **Implemented (completed tasks)** above
+for the index, and git history for full per-task detail. **Open tasks: #120
+(now unblocked), #121.** New work
 goes here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
 
@@ -1525,9 +1525,9 @@ new-session branch step, and deleting/renaming branches.
 
 ---
 
-### 125. [ ] Create a new branch from the Scheduled-session modal (create at fire time)
+### 125. [x] Create a new branch from the Scheduled-session modal (create at fire time)
 
-**Status:** Not started
+**Status:** Complete
 **Owner:** _(unassigned)_
 **Depends on:** #124 · _(reuses #124's "+ add branch" UI + create-branch git write)_
 **Created:** 2026-06-22
@@ -1567,23 +1567,23 @@ the `ScheduledPanel` (#94) editor (branch isn't editable there today — note).
 
 **Subtasks**
 
-1. [ ] Persist new-branch intent on `ScheduledSession` (name + base + create-new
+1. [x] Persist new-branch intent on `ScheduledSession` (name + base + create-new
    flag; serde-default), threaded through `create_schedule`.
-2. [ ] Enable #124's "+ add branch" UI in schedule mode, recording the intent
+2. [x] Enable #124's "+ add branch" UI in schedule mode, recording the intent
    instead of creating immediately.
-3. [ ] Fire-time create + checkout from base (reuse #124's git write) before spawn,
+3. [x] Fire-time create + checkout from base (reuse #124's git write) before spawn,
    best-effort like the current checkout; then the pre-seeded launch (#93).
-4. [ ] Tests for the record round-trip + the fire-time create-branch path.
+4. [x] Tests for the record round-trip + the fire-time create-branch path.
 
 **Acceptance criteria**
 
-- [ ] In the Schedule modal, "+ add branch" lets the user name a new branch + pick a
+- [x] In the Schedule modal, "+ add branch" lets the user name a new branch + pick a
   base; the schedule is created **without** creating the branch yet.
-- [ ] When the schedule **fires**, the new branch is **created + checked out** from
+- [x] When the schedule **fires**, the new branch is **created + checked out** from
   its base and the pre-seeded session launches on it.
-- [ ] An existing `sessions.json` (no new-branch fields) still loads (serde-default);
+- [x] An existing `sessions.json` (no new-branch fields) still loads (serde-default);
   existing-branch schedules behave exactly as before.
-- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+- [x] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
   `npm run lint:rust` pass.
 
 **Notes**

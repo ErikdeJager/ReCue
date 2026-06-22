@@ -192,14 +192,17 @@ even though it works in `tauri dev`.
   detached window re-docks** its canvas (its `Destroyed` handler re-broadcasts the
   set; the main window reclaims the PTYs). Detached windows are **per-session** — not
   restored on relaunch (capability `canvas-*` in `capabilities/default.json`).
-- **Scheduled sessions (#93/#94):** an agent can be **scheduled to launch later**.
+- **Scheduled sessions (#93/#94/#125):** an agent can be **scheduled to launch later**.
   The **"+ Schedule session"** sidebar button / **⌘⇧N** opens the new-session modal
-  in **schedule mode** — folder → branch → a final step for **launch time** (a
+  in **schedule mode** — folder → branch (incl. **"+ add branch"** to create a new
+  branch *at fire time*, #125) → a final step for **launch time** (a
   `datetime-local`), optional **prompt**, optional **name** — and calls
-  `create_schedule`. Records persist in `store.rs` (`schedules: ScheduledSession[]`).
+  `create_schedule`. Records persist in `store.rs` (`schedules: ScheduledSession[]`,
+  carrying a `create_branch` flag + `branch_base` for the new-branch intent, #125).
   A **poll loop** in `lib.rs` (every `SCHEDULE_POLL_SECS`) calls
-  `commands::fire_due_schedules`, which atomically `take_due_schedules(now)`, checks
-  out the branch (if any), spawns `claude` **pre-seeded with the prompt** (the
+  `commands::fire_due_schedules`, which atomically `take_due_schedules(now)`, then
+  (best-effort) **creates** the new branch (`git checkout -b`, #124/#125) or checks
+  out the existing one, spawns `claude` **pre-seeded with the prompt** (the
   positional invocation, see Conventions), converts the record into a live session,
   and emits **`schedule://fired`** (→ the main window moves it scheduled→live). On
   boot the first tick fires anything **missed while closed** (catch-up). One-shot

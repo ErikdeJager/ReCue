@@ -89,9 +89,19 @@ pub struct OverviewPanel {
 pub struct ScheduledSession {
     pub id: String,
     pub cwd: String,
-    /// Check out this branch before spawning (only set for a non-current branch).
+    /// Branch to use before spawning. When `create_branch` is false this is an
+    /// existing branch to check out (only set for a non-current one); when true it's
+    /// the **new** branch name to create at fire time (#125).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// When true, `branch` is created + checked out at fire time (#125) from
+    /// `branch_base` (or HEAD), instead of checking out an existing branch. `default`
+    /// (false) keeps existing records as checkout-existing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub create_branch: bool,
+    /// Base for the new branch when `create_branch` (None/empty = HEAD) (#125).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_base: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -512,6 +522,8 @@ mod tests {
             id: id.to_string(),
             cwd: "/repo/x".to_string(),
             branch: None,
+            create_branch: false,
+            branch_base: None,
             name: None,
             prompt: None,
             fire_at,
@@ -779,6 +791,36 @@ mod tests {
         store.remove_schedule("s2").unwrap();
         assert!(Store::load(&path).schedules().is_empty());
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn schedule_new_branch_intent_round_trips_and_old_records_default() {
+        let path = temp_path("sched-new-branch");
+        let store = Store::load(&path);
+        let mut s = sched("nb", 100);
+        s.branch = Some("feature/x".to_string());
+        s.create_branch = true;
+        s.branch_base = Some("main".to_string());
+        store.add_schedule(s).unwrap();
+
+        let loaded = &Store::load(&path).schedules()[0];
+        assert_eq!(loaded.branch.as_deref(), Some("feature/x"));
+        assert!(loaded.create_branch);
+        assert_eq!(loaded.branch_base.as_deref(), Some("main"));
+
+        // An older record without the new-branch fields loads with defaults
+        // (create_branch = false → checkout-existing semantics, #125 back-compat).
+        let legacy =
+            r#"{"schedules":[{"id":"old","cwd":"/r","branch":"dev","fire_at":1,"created_at":0}]}"#;
+        let legacy_path = temp_path("sched-legacy");
+        fs::write(&legacy_path, legacy).unwrap();
+        let old = &Store::load(&legacy_path).schedules()[0];
+        assert_eq!(old.branch.as_deref(), Some("dev"));
+        assert!(!old.create_branch);
+        assert_eq!(old.branch_base, None);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&legacy_path);
     }
 
     #[test]
