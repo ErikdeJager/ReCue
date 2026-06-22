@@ -595,9 +595,9 @@ was a clip-path shape). Implementer's choice between those two; recommend `Box`.
 
 ---
 
-### 116. [ ] Activity indicator goes yellow on a brand-new session before any prompt — should stay gray until first real work
+### 116. [x] Activity indicator goes yellow on a brand-new session before any prompt — should stay gray until first real work
 
-**Status:** Not started
+**Status:** Complete
 **Owner:** _(unassigned)_
 **Depends on:** none · _(fixes shipped #112 / #42 / #55 behavior)_
 **Created:** 2026-06-22
@@ -661,32 +661,32 @@ despite the resume repaint.
 
 **Subtasks**
 
-1. [ ] Reproduce: start a new interactive session → confirm it goes yellow before
+1. [x] Reproduce: start a new interactive session → confirm it goes yellow before
    any prompt; identify the startup-paint busy edge.
-2. [ ] Adjust the busy heuristic (`pty.rs` monitor, ~604–606) so `claude`'s
+2. [x] Adjust the busy heuristic (`pty.rs` monitor, ~604–606) so `claude`'s
    pre-input startup output does **not** read as busy for an interactive session
    (reuse `last_input`), while preserving the #55 echo-aware behavior after input.
-3. [ ] Add the **seeded-session exception** so scheduled/prompt-seeded sessions
+3. [x] Add the **seeded-session exception** so scheduled/prompt-seeded sessions
    (#93, `spawn_session_with_prompt`) still go blue while working and yellow when
    idle (per-session "started-with-prompt" flag or equivalent).
-4. [ ] Verify the downstream latches (`sessionActive` in `store.ts`,
+4. [x] Verify the downstream latches (`sessionActive` in `store.ts`,
    `mark_session_active` in `lib.rs`) now only fire on genuine work; adjust if any
    independent path can still latch from the startup paint.
-5. [ ] Add/extend tests: a pure/unit test that startup output with no prior input
+5. [x] Add/extend tests: a pure/unit test that startup output with no prior input
    does **not** mark a session busy/active, and that post-input output (and a
    seeded session) does.
 
 **Acceptance criteria**
 
-- [ ] A newly started interactive session shows the **gray** dot right after start
+- [x] A newly started interactive session shows the **gray** dot right after start
   and stays gray until the user sends their first prompt.
-- [ ] After the first prompt, the dot goes **blue** while `claude` works and
+- [x] After the first prompt, the dot goes **blue** while `claude` works and
   **yellow** ("needs input") once it finishes and is idle.
-- [ ] **Scheduled / prompt-seeded** sessions (#93/#94) still go blue while working
+- [x] **Scheduled / prompt-seeded** sessions (#93/#94) still go blue while working
   their seeded prompt and yellow when done — they are **not** stuck gray.
-- [ ] Boot-resume is unchanged: a previously-active session shows yellow on boot;
+- [x] Boot-resume is unchanged: a previously-active session shows yellow on boot;
   a never-active one stays gray despite the resume repaint.
-- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+- [x] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
   `npm run lint:rust` all pass.
 
 **Notes**
@@ -1113,3 +1113,133 @@ creep / over-engineering, dependency upgrades, and build-system changes.
   consistency / tests / docs with **no behavior changes or new features**, and the
   pass uses **independent review + verification** rather than self-grading. Adjust if
   you want behavior changes included or a different dependency set.
+
+---
+
+### 121. [ ] Iteration & UI/UX improvement pass — elevate the user experience across the app
+
+**Status:** Not started
+**Owner:** _(unassigned)_
+**Depends on:** #120 · _(runs after the code-quality iteration pass — therefore after all feature work too; this is the truly-last task)_
+**Created:** 2026-06-22
+
+**Description**
+
+A second iteration pass focused entirely on **UI and UX** — how the app *looks*,
+*feels*, and how users accomplish their goals — building on the cleaned-up code from
+#120. **Where #120 forbade behavior changes, this pass deliberately changes visual
+presentation and interactions** to improve the user experience — but **within
+ClaudeCue's established design system** (Catppuccin Mocha tokens, **dark-only**,
+JetBrains Mono, Lucide icons, motion tokens). It must **not** redesign the core
+aesthetic, introduce **off-system colors** (a hard `CLAUDE.md` rule), add light mode,
+or change feature behavior/data. It applies the researched best-practice conventions
+for prompting Claude Code on UI/UX (below), centered on a **visual feedback loop**:
+run the app, screenshot, compare, refine.
+
+**Method — the researched UI/UX conventions to follow** (this is the *how*, and the
+point of the deep research the user asked for):
+
+1. **Visual feedback loop (headline convention).** Never refine UI blind. Run the
+   app (`npm run tauri dev`, or the `run`/`verify` skills), **screenshot** each
+   surface being changed, **compare** before/after, and **iterate at least two
+   passes** (industry guidance: one pass closes ~70% of issues, two ~95%). Verify
+   the dark theme and **reduced-motion** both render correctly.
+2. **Evaluate against explicit heuristics.** Use **Nielsen's 10 usability
+   heuristics** as a per-surface checklist — visibility of system status, match to
+   the real world, user control & undo, consistency & standards, error prevention,
+   recognition over recall, flexibility/efficiency (keyboard shortcuts), aesthetic &
+   minimalist design, error recovery, help — and fix what they surface.
+3. **Accessibility (WCAG AA).** Check **color contrast** within the dark theme,
+   semantic structure, ARIA, **focus order + visible focus**, full **keyboard
+   parity**, and the **"color-as-only-signal" anti-pattern** (e.g. the busy
+   indicator's gray/blue/yellow must stay distinguishable by shape/motion/glow with a
+   reduced-motion fallback, per #88/#112).
+4. **Consistency via design tokens.** Improve **within** `tokens.css` — unify
+   spacing rhythm, radii, type scale, and motion across surfaces; **extend tokens
+   rather than introducing one-off values**; never off-system colors.
+5. **Stay distinctive; avoid generic regressions.** Don't flatten toward generic
+   spacing/hierarchy. Commit to clear **visual hierarchy** — a single primary anchor
+   per surface, scannable typography, a dominant surface with the sharp Peach accent.
+6. **States & affordances.** Polish **empty / loading / reconnecting / error** states
+   (e.g. exit overlays, "reconnecting"), hover/active/focus affordances, action
+   **discoverability** (menus, drag handles), and **microcopy** (labels, tooltips,
+   button text) for clarity.
+7. **Motion with restraint.** Prefer a few **high-impact, purposeful** transitions
+   (token durations/easings) over scattered micro-interactions; always honor
+   `prefers-reduced-motion` / `body.reduce-motion`.
+8. **Scope tightly, verify, don't over-design.** Improve UX without changing feature
+   behavior/data; use an **independent, fresh-context review** of the visual diff /
+   before-after screenshots; only keep changes that genuinely improve usability
+   (avoid decoration for its own sake).
+
+**Scope — in:** visual polish, layout / spacing / hierarchy, motion (reduced-motion
+safe), affordances & discoverability, empty/loading/error states, microcopy,
+keyboard UX, and accessibility — **app-wide**, prioritized by traffic (Overview,
+Canvas + tabs, Sidebar, Settings, the New-session / Schedule modals, terminal
+chrome, toasts). **Out:** redesigning the Catppuccin/dark aesthetic, off-system
+colors, light mode, **new features or any change to feature behavior / data model**,
+and new heavy UI dependencies.
+
+**Subtasks**
+
+1. [ ] **Baseline & inventory** — run the app, screenshot every primary surface, and
+   catalogue UX issues against the heuristics + a11y checklist; prioritize by impact.
+2. [ ] **Per-surface UX pass** — for each prioritized surface, apply improvements
+   using the **visual feedback loop** (screenshot → compare → refine, ≥2 passes),
+   keeping before/after screenshots as evidence.
+3. [ ] **Cross-cutting consistency** — unify spacing / type / radii / motion tokens,
+   focus + hover/active states, and microcopy across surfaces.
+4. [ ] **Accessibility** — WCAG AA contrast on changed UI, ARIA/semantics, focus
+   order, keyboard parity, no color-as-only-signal regressions; reduced-motion
+   verified.
+5. [ ] **Independent visual review** — a fresh-context review of the before/after
+   screenshots + diff; address usability gaps (not over-design).
+6. [ ] **Docs** — record any token additions / UX conventions in `CLAUDE.md`; keep
+   all gates green.
+
+**Acceptance criteria**
+
+- [ ] Runs **after #120** (and therefore after all feature work) — the truly-last
+  task.
+- [ ] Each changed surface has **before/after screenshots** demonstrating a real UX
+  improvement, with ≥2 refine passes.
+- [ ] Stays **within the design system** — dark Catppuccin aesthetic preserved, **no
+  off-system colors**, no light mode; tokens **extended, not bypassed**.
+- [ ] **No feature behavior or data changes** — all functionality preserved.
+- [ ] Accessibility: WCAG AA contrast on changed UI, visible focus + full keyboard
+  parity, no color-as-only-signal regressions, reduced-motion honored.
+- [ ] An **independent fresh-context review** of the visual diff finds no usability
+  regressions.
+- [ ] All gates pass: `npm run build`, `npm run lint`, `npm test`, `npm run
+  format:check`, `cargo test`, `npm run lint:rust`, `cargo fmt --check`.
+
+**Notes**
+
+- **Best-practice conventions sourced from deep web research** (the user's explicit
+  requirement):
+  - Anthropic — *Claude Cookbook: Prompting for frontend aesthetics*
+    (https://platform.claude.com/cookbook/coding-prompting-for-frontend-aesthetics):
+    guide design dimensions **individually** (typography, color, motion, backgrounds),
+    avoid generic defaults, **commit to a cohesive aesthetic via CSS variables**,
+    dominant colors + sharp accents, high-impact motion moments.
+  - *How to Design Beautiful UIs With Claude Code (2026)*
+    (https://www.aidesigner.ai/blog/claude-code-frontend-design): the
+    **screenshot → compare → refine visual feedback loop** (≥2 passes), reference
+    images beat text, **extract/reuse design tokens**, avoid vague "modern/clean".
+  - *Top design skills for Claude Code* (https://composio.dev/content/top-design-skills):
+    visual loops via screenshots/Playwright, **design-system enforcement**, **WCAG
+    AA/AAA contrast + semantic HTML/ARIA + flag color-as-only-signal**, single visual
+    anchor + scannable hierarchy.
+  - Plus **Nielsen's 10 usability heuristics** and **WCAG** as the evaluation
+    frameworks.
+- **Adapted to ClaudeCue:** the app already commits to **Catppuccin Mocha / dark-only
+  / JetBrains Mono** with design tokens, so "avoid generic fonts/colors" becomes
+  *"improve UX within the committed system — never introduce off-system colors or a
+  redesign."* The visual loop uses the desktop app (`npm run tauri dev` / `run` /
+  `verify`), not a web `localhost`.
+- **Dependency:** depends on **#120** (the code iteration pass), so it runs after all
+  feature work **and** the quality pass — it is the final task in the chain.
+- **Assumptions (autonomous authoring):** **app-wide** scope (prioritized by
+  traffic); **visual/interaction changes ARE in scope** (unlike #120) while feature
+  behavior is preserved; the pass relies on a run-the-app **visual feedback loop** +
+  independent review. Adjust if you want it limited to specific surfaces.
