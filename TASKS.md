@@ -360,12 +360,12 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks **#1–#137 are complete** — see **Implemented (completed tasks)** above for the
-index and git history for per-task detail. The only **open** task is **#138**
-(`Depends on: none`). The full entries for the recently completed #133–#137 remain below
-until the next `/update-docs` condenses them into the summary. New work goes here as a
-fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with its
-`Depends on:` prerequisites.
+Tasks **#1–#138 are complete** — see **Implemented (completed tasks)** above for the
+index and git history for per-task detail. There are **no open tasks** right now. The
+full entries for the recently completed #133–#138 remain below until the next
+`/update-docs` condenses them into the summary. New work goes here as a fresh `### N.`
+entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with its `Depends on:`
+prerequisites.
 
 > **Implementing tasks — never skip one.** The agent implementing this backlog
 > (`/develop-tasks`, `/isolate-agent`, `/handoff`) MUST implement **every** open task
@@ -942,9 +942,9 @@ GUI/multi-monitor here, per the #84/#105 precedent). All gates pass: `npm run bu
 
 ---
 
-### 138. [ ] Show the Fork action as unavailable (with an explanatory tooltip) when the source has no history
+### 138. [x] Show the Fork action as unavailable (with an explanatory tooltip) when the source has no history
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none · _(builds on #134 `has_conversation` + the `NothingToFork` guard, the #97 title-worker cadence, and #126 fork + #131 sidebar fork menu item — all shipped)_
 **Created:** 2026-06-22
 
@@ -1004,29 +1004,58 @@ and the backend guard itself (#134 — kept unchanged as the safety net).
 
 **Subtasks**
 
-1. [ ] Backend: persist a `forkable` field + emit it from `has_conversation` on the
-   title-worker cadence (extend `Name` or add a `Forkable` event + `session://forkable`);
-   `lib.rs` persists + forwards.
-2. [ ] Seed forkability at spawn (`false`) and at boot/resume (read once) so resumed
-   sessions with history show available immediately.
-3. [ ] Frontend store: cache + update the per-session `forkable` flag from the record + event.
-4. [ ] Gate the three Fork sites (Overview header, Canvas `LeafPanel` header, sidebar #131
+1. [x] Backend: persist a `forkable` field + emit it from `has_conversation` on the
+   title-worker cadence (added a `Forkable` event + `session://forkable`); `lib.rs`
+   persists (`set_forkable`, persist-on-change) + forwards.
+2. [x] Seed forkability at spawn (`false`) and at boot/resume (read `has_conversation`
+   once per record) so resumed sessions with history show available immediately.
+3. [x] Frontend store: cache + update the per-session `forkable` flag from the record
+   (`toSessionView`, fail-open default) + the `session://forkable` event (`setForkable`).
+4. [x] Gate the three Fork sites (Overview header, Canvas `LeafPanel` header, sidebar #131
    menu item): dimmed / unavailable + no-op + explanatory hover tooltip when not forkable.
-5. [ ] Ensure the tooltip shows on the unavailable control (`aria-disabled` + click guard,
-   not the native `disabled` attribute).
+5. [x] Tooltip shows on the unavailable control via `aria-disabled` + a click guard (not
+   the native `disabled` attribute, which would suppress the `title` hover).
 
 **Acceptance criteria**
 
-- [ ] On a brand-new session the user has never prompted, the Fork affordance (all three
+- [x] On a brand-new session the user has never prompted, the Fork affordance (all three
   sites) is shown **unavailable**, and hovering it explains why.
-- [ ] After the agent's first real turn (log materialized), the Fork affordance becomes
-  available automatically (on the next busy→idle edge).
-- [ ] A resumed session with existing history shows Fork available immediately on boot.
-- [ ] Clicking / activating the unavailable Fork affordance does **nothing** — no doomed
-  panel, no error toast.
-- [ ] When forkability is **uncertain** (unreadable log), Fork stays available (fail-open)
+- [x] After the agent's first real turn (log materialized), the Fork affordance becomes
+  available automatically (on the next busy→idle edge → `session://forkable`).
+- [x] A resumed session with existing history shows Fork available immediately on boot
+  (the boot read seeds `forkable` from the on-disk log).
+- [x] Clicking / activating the unavailable Fork affordance does **nothing** — the click
+  handlers early-return when not forkable (no spawn, no toast).
+- [x] When forkability is **uncertain** (unreadable log), Fork stays available (fail-open:
+  `has_conversation` → true, serde default true, UI treats undefined/true as available)
   and the #134 guard still protects the actual fork.
-- [ ] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass.
+- [x] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass.
+
+**Implementation report**
+
+Backend signal → frontend gating, as specified. **Backend:** persisted a `forkable: bool`
+on `PersistedSession` (`#[serde(default = "default_true")]` — fail-open for older records),
+explicitly `false` in all five new-session constructors (spawn / worktree ×2 / fork /
+scheduled — no log yet). Added `Store::set_forkable` (persist-on-change, like
+`mark_session_active`). `pty.rs::title_worker` now computes `title::has_conversation(&id)`
+on every busy→idle poke (the #97 cadence, independent of the title) and emits a new
+`SessionEvent::Forkable { id, forkable }` when it flips; `lib.rs` persists + forwards it as
+`session://forkable` (+ `commands::ForkablePayload`), and the boot/resume loop reads
+`has_conversation` once per record and seeds+emits so a resumed session **with** history
+shows Fork available immediately. **Frontend:** `SessionRecord`/`SessionView` gained
+`forkable`; `toSessionView` seeds it fail-open (`?? true`); a `setForkable` store action
+(no-op for unknown ids — e.g. a shell terminal also poked) updates it from the
+`onForkable` subscription. The **three Fork sites** (Overview `SessionCard`, Canvas
+`LeafPanel`, sidebar #131 `SessionRow` menu item) read `session.forkable !== false` and,
+when unavailable, render dimmed via `aria-disabled` (**not** native `disabled`, so the
+`title` tooltip still shows on hover — CSS `[aria-disabled="true"]` dims + suppresses
+hover), no-op the click, and show the shared `FORK_UNAVAILABLE_REASON` (`paths.ts`, mirrors
+the #134 message). Fail-open throughout; the #134 `NothingToFork` backend guard is
+unchanged as the real safety net. Tests: Rust `set_forkable_updates_and_persists_on_change`
+(+ legacy-record fail-open) and frontend `setForkable` (flip + unknown-id no-op). All
+gates pass: `npm run build`, `npm run lint`, `npm test` (150), `cargo test` (69),
+`cargo clippy -D warnings`, `prettier --check`. The runtime hover/dim across the three
+sites isn't unit-testable, but the logic + the fail-open contract are covered.
 
 **Notes**
 

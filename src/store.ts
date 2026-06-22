@@ -97,6 +97,9 @@ function toSessionView(record: SessionRecord): SessionView {
     hasBeenActive: record.has_been_active ?? false,
     agent: record.agent ?? "claude",
     forkedFrom: record.forked_from ?? null,
+    // Fail-open (#138): undefined (older record) → forkable; only a persisted `false`
+    // disables Fork. Live updates arrive via `session://forkable` → setForkable.
+    forkable: record.forkable ?? true,
   };
 }
 
@@ -474,6 +477,9 @@ export interface AppState {
   setBusy: (id: string, busy: boolean) => void;
   /** Apply claude's auto-title (#97) to a session (no-op if unchanged). */
   setAutoName: (id: string, autoName: string | null) => void;
+  /** Update a session's forkability (#138) — gates the Fork affordance (no-op if
+   * the id isn't a tracked session, e.g. a shell terminal). */
+  setForkable: (id: string, forkable: boolean) => void;
   /** Clear the boot "reconnecting" flag once a session proves it's live (#30). */
   markConnected: (id: string) => void;
   setClaudeMissing: (missing: boolean) => void;
@@ -1007,6 +1013,18 @@ export const useStore = create<AppState>()((set, get) => ({
       };
     }),
 
+  setForkable: (id, forkable) =>
+    set((s) => {
+      const session = s.sessions.find((x) => x.id === id);
+      // No-op when the id isn't a tracked session (e.g. a shell terminal also poked
+      // by the title worker) or the flag is unchanged (#138) — keeps the busy/idle
+      // re-render path quiet.
+      if (!session || (session.forkable ?? true) === forkable) return {};
+      return {
+        sessions: s.sessions.map((x) => (x.id === id ? { ...x, forkable } : x)),
+      };
+    }),
+
   markRunning: (id) =>
     set((s) => ({
       sessions: s.sessions.map((x) =>
@@ -1102,6 +1120,10 @@ export const useStore = create<AppState>()((set, get) => ({
             // claude's own auto-title (#97); fills the label for an unnamed agent
             // (a custom name #57 still wins in sessionLabel).
             get().setAutoName(id, name);
+          },
+          onForkable: ({ id, forkable }) => {
+            // Forkability changed (#138) — gates the Fork affordance up front.
+            get().setForkable(id, forkable);
           },
           onExited: ({ id, code }) => {
             // Session lifecycle (forget / toast / kill) is owned by the **main**

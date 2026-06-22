@@ -11,6 +11,7 @@ import type {
   CanvasNode,
   CanvasTemplate,
   ExitPayload,
+  ForkablePayload,
   NamePayload,
   OutputPayload,
   OverviewPanel,
@@ -298,9 +299,11 @@ export interface SessionEventHandlers {
   onState: (payload: StatePayload) => void;
   /** claude's auto-title for a session changed (#97). */
   onName: (payload: NamePayload) => void;
+  /** The session's forkability changed (#138) — gate the Fork affordance. */
+  onForkable: (payload: ForkablePayload) => void;
 }
 
-/** Subscribe to the per-session output/exit/state/name events. Returns an unlisten fn. */
+/** Subscribe to the per-session output/exit/state/name/forkable events. Returns an unlisten fn. */
 export async function subscribeSessionEvents(
   handlers: SessionEventHandlers,
 ): Promise<UnlistenFn> {
@@ -318,11 +321,16 @@ export async function subscribeSessionEvents(
   const unlistenName = await listen<NamePayload>("session://name", (event) =>
     handlers.onName(event.payload),
   );
+  const unlistenForkable = await listen<ForkablePayload>(
+    "session://forkable",
+    (event) => handlers.onForkable(event.payload),
+  );
   return () => {
     unlistenOutput();
     unlistenExited();
     unlistenState();
     unlistenName();
+    unlistenForkable();
   };
 }
 

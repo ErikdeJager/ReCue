@@ -20,7 +20,12 @@ import { CSS } from "@dnd-kit/utilities";
 
 import { mergeRepoOrder, repoColor, useStore } from "../../store";
 import { useSessionOwners } from "../../ownership";
-import { effectiveRepo, repoName, sessionLabel } from "../../paths";
+import {
+  effectiveRepo,
+  FORK_UNAVAILABLE_REASON,
+  repoName,
+  sessionLabel,
+} from "../../paths";
 import { formatFireTime } from "../../time";
 import type { OverviewPanel, ScheduledSession, SessionView } from "../../types";
 import { ownedHere } from "../../windowContext";
@@ -173,14 +178,25 @@ function SessionCard({
       {session.forkedFrom && <span className={styles.worktreeBadge}>fork</span>}
     </span>
   );
+  // Fork is unavailable (#138) until the source has a real conversation turn — a
+  // never-prompted session / a just-created fork has no log to fork. Fail-open:
+  // undefined/true → available; only a confident `false` disables it.
+  const canFork = session.forkable !== false;
   const actions = (
     <>
-      {/* Fork the conversation into a new parallel session (#126). */}
+      {/* Fork the conversation into a new parallel session (#126); gated (#138). */}
       <button
         type="button"
         className={styles.action}
-        onClick={onFork}
-        title="Fork conversation into a new parallel session"
+        onClick={() => {
+          if (canFork) onFork();
+        }}
+        aria-disabled={!canFork}
+        title={
+          canFork
+            ? "Fork conversation into a new parallel session"
+            : FORK_UNAVAILABLE_REASON
+        }
         aria-label="Fork conversation"
       >
         <GitFork size={15} strokeWidth={1.5} />

@@ -116,6 +116,13 @@ pub enum SessionEvent {
         id: String,
         name: String,
     },
+    /// Whether the session has forkable conversation history (#138); emitted by the
+    /// title worker on the same busy→idle cadence (#97) when it changes, so the Fork
+    /// affordance can be gated up front. The command layer persists + forwards it.
+    Forkable {
+        id: String,
+        forkable: bool,
+    },
 }
 
 /// Per-session activity timestamps (millis-since-`base`, 0 = none) for the busy
@@ -711,7 +718,24 @@ fn monitor_loop(
 /// until the channel closes (app shutdown).
 fn title_worker(title_rx: Receiver<String>, events: Sender<SessionEvent>) {
     let mut last: HashMap<String, String> = HashMap::new();
+    let mut last_forkable: HashMap<String, bool> = HashMap::new();
     while let Ok(id) = title_rx.recv() {
+        // Forkability (#138): computed every poke (independent of the title, which may
+        // be absent) and emitted only when it flips — false→true the moment the log
+        // first materializes a real turn. Same file-scan class as the title read.
+        let forkable = crate::title::has_conversation(&id);
+        if last_forkable.get(&id) != Some(&forkable) {
+            last_forkable.insert(id.clone(), forkable);
+            if events
+                .send(SessionEvent::Forkable {
+                    id: id.clone(),
+                    forkable,
+                })
+                .is_err()
+            {
+                return; // receiver dropped (app shutting down)
+            }
+        }
         let Some(title) = crate::title::read_session_title(&id) else {
             continue; // no log / no title yet (e.g. a shell terminal item) — skip
         };
@@ -792,6 +816,7 @@ mod tests {
                 Ok(SessionEvent::Exited { code, .. }) => break code,
                 Ok(SessionEvent::State { .. }) => {}
                 Ok(SessionEvent::Name { .. }) => {}
+                Ok(SessionEvent::Forkable { .. }) => {}
                 Err(_) => panic!("timed out waiting for session events"),
             }
         };

@@ -25,6 +25,10 @@ export interface SessionRecord {
   /** The source session this was forked from (#126); absent for non-fork sessions.
    * Drives the "fork" badge + records provenance. */
   forked_from?: string | null;
+  /** Whether the session has forkable conversation history (#138): false until its
+   * on-disk claude log has a real turn, gating the Fork affordance. Defaults true
+   * (fail-open) for older records without the field. */
+  forkable?: boolean;
 }
 
 /** A slash-invokable skill/command (#114, mirrors `skills::SkillInfo`). Powers
@@ -154,6 +158,13 @@ export interface StatePayload {
 export interface NamePayload {
   id: string;
   name: string;
+}
+
+/** Payload of the `session://forkable` event (#138): whether the session now has
+ * forkable conversation history, gating the Fork affordance up front. */
+export interface ForkablePayload {
+  id: string;
+  forkable: boolean;
 }
 
 // --- Frontend UI state ---
@@ -305,4 +316,8 @@ export interface SessionView {
   /** The source session this was forked from (#126); absent for non-fork sessions.
    * Drives the "fork" badge distinguishing it from the identically-titled source. */
   forkedFrom?: string | null;
+  /** Whether the session has forkable conversation history (#138): when `false` the
+   * Fork affordance is shown unavailable (no-op + explanatory tooltip). Seeded from the
+   * record + updated by `session://forkable`. Undefined/true → forkable (fail-open). */
+  forkable?: boolean;
 }

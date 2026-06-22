@@ -23,6 +23,13 @@ fn default_agent() -> String {
     "claude".to_string()
 }
 
+/// Serde default for `forkable` (#138): older records (and uncertainty) are
+/// **fail-open** — Fork stays available unless we positively know there's no
+/// conversation. A freshly spawned session is explicitly set `false`.
+fn default_true() -> bool {
+    true
+}
+
 /// A persisted session record.
 ///
 /// `id` is ClaudeCue's own session id; `claude_session_id` is the id handed to
@@ -64,6 +71,13 @@ pub struct PersistedSession {
     /// older records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<String>,
+    /// Whether this session has forkable conversation history (#138): true when its
+    /// on-disk claude log has ≥1 real turn (#134 `title::has_conversation`), gating the
+    /// Fork affordance up front. Updated on the #97 title-worker busy→idle cadence plus a
+    /// one-shot boot read. Defaults **true** (fail-open) so an older record / uncertainty
+    /// never wrongly disables Fork; a freshly spawned session (no log yet) is set `false`.
+    #[serde(default = "default_true")]
+    pub forkable: bool,
 }
 
 /// A user-added Overview panel (a non-agent column), persisted per repo (#38).
@@ -264,6 +278,28 @@ impl Store {
         let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
             Some(session) if !session.has_been_active => {
                 session.has_been_active = true;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.persist(&guard)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Set a session's forkability (#138) and persist **only on change** — the #97
+    /// title-worker pokes this on every busy→idle edge, so this avoids rewriting the
+    /// file each turn. A no-op for an unknown id.
+    pub fn set_forkable(&self, id: &str, forkable: bool) -> io::Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
+            Some(session) if session.forkable != forkable => {
+                session.forkable = forkable;
                 true
             }
             _ => false,
@@ -514,6 +550,7 @@ mod tests {
             has_been_active: false,
             agent: default_agent(),
             forked_from: None,
+            forkable: true,
         }
     }
 
@@ -849,6 +886,30 @@ mod tests {
         // An unknown id is a no-op (no panic).
         store.mark_session_active("missing").unwrap();
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_forkable_updates_and_persists_on_change() {
+        let path = temp_path("forkable");
+        let store = Store::load(&path);
+        store.add_session(record("s1", "/repo/x")).unwrap();
+        // The fixture defaults true; flip it false and confirm it survives a reload.
+        store.set_forkable("s1", false).unwrap();
+        assert!(!store.session("s1").unwrap().forkable);
+        assert!(!Store::load(&path).session("s1").unwrap().forkable);
+        // Back to true, and an unknown id is a no-op (no panic).
+        store.set_forkable("s1", true).unwrap();
+        assert!(store.session("s1").unwrap().forkable);
+        store.set_forkable("missing", true).unwrap();
+
+        // A legacy record without the field loads fail-open (forkable = true).
+        let legacy = r#"{"sessions":[{"id":"old","claude_session_id":"old","repo_path":"/r","name":null,"created_at":0}]}"#;
+        let legacy_path = temp_path("forkable-legacy");
+        fs::write(&legacy_path, legacy).unwrap();
+        assert!(Store::load(&legacy_path).session("old").unwrap().forkable);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&legacy_path);
     }
 
     #[test]

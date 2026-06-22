@@ -1,3 +1,9 @@
+/** Why Fork is unavailable for a source with no conversation yet (#138). Shown as
+ * the Fork affordance's hover tooltip at all three sites, mirroring the backend
+ * `SessionError::NothingToFork` message (#134) for a consistent explanation. */
+export const FORK_UNAVAILABLE_REASON =
+  "Nothing to fork yet — send the agent a message first.";
+
 /** The last path segment (folder name) of a path, for display. */
 export function repoName(path: string): string {
   const parts = path.split("/").filter(Boolean);

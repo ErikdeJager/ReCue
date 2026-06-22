@@ -569,8 +569,15 @@
   transition: background var(--dur-fast) var(--ease-out);
 }
 
-.menuItem:hover {
+.menuItem:hover:not([aria-disabled="true"]) {
   background: var(--bg-hover);
+}
+
+/* Unavailable Fork menu item (#138): aria-disabled (not native, so the explanatory
+   `title` tooltip still shows) + a no-op click. */
+.menuItem[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* "Views" section (#82): a small muted header over the icon-led view buttons. */

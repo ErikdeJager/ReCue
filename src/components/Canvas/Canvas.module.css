@@ -319,9 +319,16 @@
     background var(--dur-fast) var(--ease-out);
 }
 
-.panelClose:hover {
+.panelClose:hover:not([aria-disabled="true"]) {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+/* Unavailable Fork (#138): aria-disabled (not native, so the explanatory `title`
+   tooltip still shows on hover) + a no-op click handler. */
+.panelClose[aria-disabled="true"] {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 /* Header action buttons (#86 copy-resume + close), kept grouped on the right so

@@ -4,7 +4,7 @@ import { Copy, ExternalLink, GitFork, GripVertical, X } from "lucide-react";
 import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
 
 import { useSessionOwners } from "../../ownership";
-import { repoName, sessionLabel } from "../../paths";
+import { FORK_UNAVAILABLE_REASON, repoName, sessionLabel } from "../../paths";
 import { repoColor, useStore } from "../../store";
 import type {
   CanvasContent,
@@ -232,13 +232,21 @@ function LeafPanel({
           )}
         </span>
         <span className={styles.panelActions}>
-          {/* Fork the conversation into a new parallel session (#126) — agents only. */}
+          {/* Fork the conversation into a new parallel session (#126) — agents only.
+              Gated (#138): unavailable until the source has a real turn to fork. */}
           {content.kind === "agent" && session && (
             <button
               type="button"
               className={styles.panelClose}
-              onClick={() => void forkSession(session.id)}
-              title="Fork conversation into a new parallel session"
+              onClick={() => {
+                if (session.forkable !== false) void forkSession(session.id);
+              }}
+              aria-disabled={session.forkable === false}
+              title={
+                session.forkable === false
+                  ? FORK_UNAVAILABLE_REASON
+                  : "Fork conversation into a new parallel session"
+              }
               aria-label="Fork conversation"
             >
               <GitFork size={14} strokeWidth={1.5} />

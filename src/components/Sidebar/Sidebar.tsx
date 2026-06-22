@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 
 import { listFiles, revealPath } from "../../ipc";
-import { repoName, sessionLabel } from "../../paths";
+import { FORK_UNAVAILABLE_REASON, repoName, sessionLabel } from "../../paths";
 import { formatFireTime } from "../../time";
 import {
   dedupeBranchLabels,
@@ -218,6 +218,9 @@ function SessionRow({
   // surfaces the same fork action as the Overview/Canvas header buttons.
   const forkSession = useStore((s) => s.forkSession);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
+  // Fork is unavailable (#138) until the source has a real turn to fork; fail-open
+  // (undefined/true → available, only a confident `false` disables it).
+  const canFork = session.forkable !== false;
 
   // Draggable into Canvas (#47); a small activation distance keeps the click
   // (select) working. The drag snaps back outside Canvas's drop zones.
@@ -373,7 +376,10 @@ function SessionRow({
               type="button"
               role="menuitem"
               className={`${styles.menuItem} ${styles.menuItemView}`}
+              aria-disabled={!canFork}
+              title={canFork ? undefined : FORK_UNAVAILABLE_REASON}
               onClick={() => {
+                if (!canFork) return;
                 setMenu(null);
                 void forkSession(session.id);
               }}

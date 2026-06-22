@@ -82,6 +82,16 @@ pub fn run() {
                                 .set_auto_name(&id, Some(name.clone()));
                             handle.emit("session://name", commands::NamePayload { id, name })
                         }
+                        SessionEvent::Forkable { id, forkable } => {
+                            // Persist forkability (#138) — persist-on-change inside
+                            // set_forkable — then notify the UI so the Fork affordance
+                            // enables/disables up front, on the #97 title cadence.
+                            let _ = handle.state::<Store>().set_forkable(&id, forkable);
+                            handle.emit(
+                                "session://forkable",
+                                commands::ForkablePayload { id, forkable },
+                            )
+                        }
                     };
                 }
             });
@@ -100,6 +110,19 @@ pub fn run() {
                         &record.repo_path,
                         record.name.clone(),
                         &record.agent,
+                    );
+                    // Seed forkability once at boot (#138): read the on-disk log so a
+                    // resumed session **with** history shows Fork available immediately,
+                    // rather than waiting for its first busy→idle edge. Persist-on-change,
+                    // then notify the UI (the persisted value also covers a missed emit).
+                    let forkable = crate::title::has_conversation(&record.claude_session_id);
+                    let _ = store.set_forkable(&record.id, forkable);
+                    let _ = resume.emit(
+                        "session://forkable",
+                        commands::ForkablePayload {
+                            id: record.id.clone(),
+                            forkable,
+                        },
                     );
                 }
             });

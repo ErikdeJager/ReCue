@@ -42,6 +42,14 @@ pub struct NamePayload {
     pub name: String,
 }
 
+/// Payload for the `session://forkable` event (#138): whether a session now has
+/// forkable conversation history, so the UI can enable/disable Fork up front.
+#[derive(Clone, Serialize)]
+pub struct ForkablePayload {
+    pub id: String,
+    pub forkable: bool,
+}
+
 /// Payload for the `canvas://windows` event (#84): the canvas ids that currently
 /// have a detached window open. Every window listens so the main tab strip can
 /// mark detached tabs and each window can recompute terminal ownership.
@@ -93,6 +101,9 @@ pub fn spawn_session(
         has_been_active: false,
         agent,
         forked_from: None,
+        // A freshly spawned session has no log yet → not forkable until its first
+        // real turn materializes one (#138); the title worker flips it then.
+        forkable: false,
     };
     store
         .add_session(record.clone())
@@ -150,6 +161,9 @@ pub fn spawn_worktree_agent(
         has_been_active: false,
         agent,
         forked_from: None,
+        // A freshly spawned session has no log yet → not forkable until its first
+        // real turn materializes one (#138); the title worker flips it then.
+        forkable: false,
     };
     store
         .add_session(record.clone())
@@ -186,6 +200,9 @@ pub fn spawn_worktree_agent_new_branch(
         has_been_active: false,
         agent,
         forked_from: None,
+        // A freshly spawned session has no log yet → not forkable until its first
+        // real turn materializes one (#138); the title worker flips it then.
+        forkable: false,
     };
     store
         .add_session(record.clone())
@@ -281,6 +298,9 @@ pub fn fork_session(
         has_been_active: false,
         agent: source.agent.clone(),
         forked_from: Some(source_id),
+        // A fresh fork's own log isn't materialized until first interaction (#134),
+        // so it isn't forkable yet — the title worker flips it on the first turn (#138).
+        forkable: false,
     };
     store
         .add_session(record.clone())
@@ -730,6 +750,8 @@ pub fn fire_due_schedules(app: &AppHandle) {
                     has_been_active: false,
                     agent: sched.agent.clone(),
                     forked_from: None,
+                    // Prompt-seeded, but its log materializes only once it runs (#138).
+                    forkable: false,
                 };
                 let _ = store.add_session(record.clone());
                 let _ = store.touch_recent(&sched.cwd);

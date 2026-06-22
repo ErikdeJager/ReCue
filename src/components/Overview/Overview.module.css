@@ -239,12 +239,15 @@
     background var(--dur-fast) var(--ease-out);
 }
 
-.action:hover:not(:disabled) {
+.action:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
 
-.action:disabled {
+/* Unavailable Fork (#138): aria-disabled (not the native attribute, so the
+   explanatory `title` tooltip still shows on hover) + a no-op click handler. */
+.action:disabled,
+.action[aria-disabled="true"] {
   opacity: 0.35;
   cursor: not-allowed;
 }

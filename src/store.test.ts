@@ -719,3 +719,19 @@ describe("canvas tab close behavior (#137)", () => {
     expect(s().sessions.some((x) => x.id === "a1")).toBe(false); // killed + dropped
   });
 });
+
+describe("forkability gating (#138)", () => {
+  const s = () => useStore.getState();
+
+  it("setForkable updates the session flag and is a no-op for an unknown id", () => {
+    useStore.setState({ sessions: [session("f1")] });
+    // Seeded undefined (fail-open → forkable in the UI); setForkable flips it.
+    s().setForkable("f1", false);
+    expect(s().sessions.find((x) => x.id === "f1")?.forkable).toBe(false);
+    s().setForkable("f1", true);
+    expect(s().sessions.find((x) => x.id === "f1")?.forkable).toBe(true);
+    // An unknown id (e.g. a shell terminal also poked by the title worker) is a no-op.
+    s().setForkable("missing", false);
+    expect(s().sessions).toHaveLength(1);
+  });
+});
