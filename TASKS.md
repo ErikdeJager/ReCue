@@ -360,9 +360,9 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks **#1–#132 are all complete** — the backlog is fully implemented, with no open
-tasks. See **Implemented (completed tasks)** above for the index and git history for
-per-task detail. New work goes here as a fresh `### N.` entry in
+Tasks **#1–#132 are complete** — see **Implemented (completed tasks)** above for the
+index and git history for per-task detail. The **open** tasks (#133–#134) follow below.
+New work goes here as a fresh `### N.` entry in
 [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with its `Depends on:` prerequisites.
 
 > **Implementing tasks — never skip one.** The agent implementing this backlog
@@ -373,4 +373,135 @@ per-task detail. New work goes here as a fresh `### N.` entry in
 > into smaller dependent sub-tasks** first (as #93 was split into #93 + #94), and then
 > one of those is implemented — skipping is never the answer. Every task is carried to a
 > finished, building, lint-clean state.
+
+---
+
+### 133. [ ] Worktree header context menu — Reveal in Finder / Copy absolute path
+
+**Status:** Not started
+**Depends on:** none · _(builds on #74 worktree agents, #130 Reveal/Copy + `reveal_path`, #132 row menus — all shipped)_
+**Created:** 2026-06-22
+
+**Description**
+
+In the sidebar, each isolated worktree (#74) renders as a sub-group under its parent
+repo: a `worktreeHeader` row (`GitBranch` icon + branch name + "worktree" badge, with
+the worktree's absolute path already in its `title` tooltip) followed by the worktree
+agent's `SessionRow`(s). Unlike the repo header (which has the #130 menu) and every row
+type (#131/#132), the **worktree header has no right-click menu at all**.
+
+Add a right-click context menu to the **`worktreeHeader`** row (`Sidebar.tsx`) with
+exactly two non-destructive items, mirroring the repo menu (#130):
+
+- **Reveal in Finder** → `revealPath(wt)` (the existing `reveal_path` backend, macOS
+  `open <path>`, no shell)
+- **Copy absolute path** → `copyToClipboard(wt, "path")` (the store clipboard helper)
+
+where `wt` is the worktree folder's own absolute path (the worktree agent's `repoPath`,
+i.e. `<app-data>/worktrees/<repo>-<hash>/<branch>`) — the path the header already shows
+on hover.
+
+Scope: **worktree header only**. The worktree agent's `SessionRow` keeps its existing
+#131 menu unchanged; regular (non-worktree) agent rows are untouched. No new backend, no
+destructive actions, no confirm gate.
+
+**Subtasks**
+
+1. [ ] Give the `worktreeHeader` a cursor-positioned context menu — reuse the existing
+   `useRowMenu()` hook (the `{x,y}` + Escape/overlay-dismiss pattern used by
+   `RowContextMenu`).
+2. [ ] Render the two items ("Reveal in Finder" / "Copy absolute path") wired to
+   `revealPath(wt)` and `copyToClipboard(wt, "path")`, reusing the `.menu` /
+   `.menuOverlay` / `.menuItem` styles. Generalize `RowContextMenu` to accept multiple
+   items, or add a small dedicated menu — implementer's choice.
+3. [ ] Verify the menu closes on select / Escape / outside-click and clamps to the
+   viewport like the other row menus.
+
+**Acceptance criteria**
+
+- [ ] Right-clicking a worktree's branch/badge header opens a two-item menu.
+- [ ] "Reveal in Finder" opens the worktree folder in Finder; "Copy absolute path" puts
+  that absolute path on the clipboard (toast "Copied path").
+- [ ] The worktree **agent** row's menu (#131) and regular agent rows are unchanged.
+- [ ] `npm run build`, `npm run lint`, and `npm test` pass.
+
+**Notes**
+
+- Label wording uses "Copy absolute path" (per the request) vs. the repo menu's "Copy
+  path" (#130) — the worktree path is an out-of-repo absolute location, so the
+  distinction is meaningful. Easy to align to "Copy path" if consistency is preferred.
+
+---
+
+### 134. [ ] Guard Fork against an empty / un-materialized conversation
+
+**Status:** Not started
+**Depends on:** none · _(builds on #126 fork + #97 `title.rs` log-globbing — both shipped)_
+**Created:** 2026-06-22
+
+**Description**
+
+Fork (#126, surfaced on the Overview/Canvas agent headers and the #131 sidebar row menu)
+spawns `claude --session-id <new> --resume <source> --fork-session`. This requires the
+**source's on-disk conversation log** (`~/.claude/projects/*/<source-uuid>.jsonl`) to
+exist with at least one conversation entry. When it doesn't, `claude` exits **code 1**
+("No conversation found"), and — per the #63 exit handling — the new forked session is
+left as a **dead panel showing the "Process exited (code 1)" overlay + Restart**, which
+reads to the user as a crash.
+
+Two real cases hit this, sharing one root cause (the source has no materialized
+conversation log):
+
+1. Forking a brand-new interactive session the user has **never sent anything to** — no
+   log written yet.
+2. Forking a **fork that was just created and never interacted with** — a fresh fork's
+   log isn't materialized until first interaction, so its `--resume` finds nothing. This
+   is why "type a prompt → fork → fork the fork" crashes on the second fork.
+
+Fix it once at that root: refuse to fork a source whose conversation log doesn't exist /
+is empty, gracefully, **without creating a doomed session/panel**.
+
+**Important:** the detector must check the **actual on-disk log**, not the
+`hasBeenActive` / busy flags — a fork inherits its parent's history yet starts gray
+(#116), so those flags would wrongly judge it empty; conversely a never-prompted session
+has no log. Reuse `title.rs`'s `~/.claude/projects/*/<uuid>.jsonl` glob.
+
+**Recommended approach (backend guard):** in `fork_session` (commands.rs → `pty.rs`
+`fork_session`), before spawning, verify the source's claude log exists and is non-empty;
+if not, return a typed `SessionError` with a friendly message (e.g. "Nothing to fork yet
+— send the agent a message first"). The frontend `forkSession` (store.ts) already toasts
+`err.message` on failure, so this surfaces as a clean error toast and **no broken/exited
+panel is created**.
+
+Out of scope: changing fork's flags or behavior for sessions that **do** have history.
+
+**Subtasks**
+
+1. [ ] Factor a small read-only helper that locates a session's claude JSONL log (reuse
+   `title.rs`'s `~/.claude/projects/*/<uuid>.jsonl` glob) and reports whether it exists
+   with ≥1 conversation entry.
+2. [ ] In `fork_session` (commands.rs / `pty.rs`), call it for the source before
+   spawning; on "no history" return a typed `SessionError` with a clear message instead
+   of spawning a doomed PTY.
+3. [ ] Confirm the frontend `forkSession` surfaces that message as an error toast and
+   creates no session/panel on this path (it already toasts `err.message`).
+4. [ ] _(Optional)_ Also disable/hide the Fork buttons + the #131 menu item when the
+   source has no history, if a reliable signal is cheaply available.
+
+**Acceptance criteria**
+
+- [ ] Forking a brand-new session the user never prompted does **not** create a dead
+  "Process exited" panel; the user is told to send a message first.
+- [ ] "Type a prompt → fork → fork the fork" no longer crashes the second fork — an
+  un-materialized fork is handled gracefully (no dead panel).
+- [ ] Forking a session that **does** have conversation history is unchanged (works as
+  in #126).
+- [ ] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass.
+
+**Notes**
+
+- The "crash" is a non-zero `claude` exit (code 1, "No conversation found") leaving the
+  #63 exit overlay on the new fork; the fix prevents creating that session at all.
+- Detection is against the on-disk log, not `hasBeenActive` / busy (a fork inherits
+  history yet starts gray #116).
 
