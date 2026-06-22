@@ -117,12 +117,6 @@
   font-size: var(--fs-meta-sm);
 }
 
-.range {
-  width: 100%;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
 .checkRow {
   font-size: var(--fs-meta);
 }

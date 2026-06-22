@@ -19,6 +19,7 @@ import * as ipc from "../../ipc";
 import { DEFAULT_SETTINGS, REPO_PALETTE, useStore } from "../../store";
 import type { Settings as SettingsType } from "../../types";
 import Checkbox from "../Checkbox/Checkbox";
+import Slider from "../Slider/Slider";
 import styles from "./Settings.module.css";
 
 type Section = "terminal" | "appearance" | "behavior" | "sessions" | "data";
@@ -175,44 +176,24 @@ function SettingsModal() {
           <div className={styles.content}>
             {section === "terminal" && (
               <>
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>
-                    Font size
-                    <span className={styles.fieldValue}>
-                      {draft.terminalFontSize}px
-                    </span>
-                  </span>
-                  <input
-                    type="range"
-                    className={styles.range}
-                    min={10}
-                    max={16}
-                    step={0.5}
-                    value={draft.terminalFontSize}
-                    onChange={(e) =>
-                      update("terminalFontSize", Number(e.target.value))
-                    }
-                  />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>
-                    Line height
-                    <span className={styles.fieldValue}>
-                      {draft.terminalLineHeight.toFixed(1)}
-                    </span>
-                  </span>
-                  <input
-                    type="range"
-                    className={styles.range}
-                    min={1}
-                    max={1.8}
-                    step={0.1}
-                    value={draft.terminalLineHeight}
-                    onChange={(e) =>
-                      update("terminalLineHeight", Number(e.target.value))
-                    }
-                  />
-                </label>
+                <Slider
+                  label="Font size"
+                  valueLabel={`${draft.terminalFontSize}px`}
+                  min={10}
+                  max={16}
+                  step={0.5}
+                  value={draft.terminalFontSize}
+                  onChange={(v) => update("terminalFontSize", v)}
+                />
+                <Slider
+                  label="Line height"
+                  valueLabel={draft.terminalLineHeight.toFixed(1)}
+                  min={1}
+                  max={1.8}
+                  step={0.1}
+                  value={draft.terminalLineHeight}
+                  onChange={(v) => update("terminalLineHeight", v)}
+                />
                 <Checkbox
                   checked={draft.terminalCursorBlink}
                   onChange={(v) => update("terminalCursorBlink", v)}

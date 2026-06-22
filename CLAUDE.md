@@ -225,8 +225,9 @@ even though it works in `tauri dev`.
   focus-trapped **Settings modal** (`components/Settings`) — a **fixed 720×600** size
   (clamped to 90vh, #119) so every section renders identically and a tall section
   scrolls inside the content pane (the nav + action row stay put) — with five sections —
-  **Terminal** (font size / line height / cursor blink → the live pooled xterms via
-  `terminalPool.applyTerminalSettings`), **Sessions** (the #97 auto-name toggle),
+  **Terminal** (font size / line height via the custom **`Slider`** #122 + cursor
+  blink → the live pooled xterms via `terminalPool.applyTerminalSettings`),
+  **Sessions** (the #97 auto-name toggle),
   **Appearance** (an accent swatch over the Catppuccin palette + a reduce-motion
   toggle), **Behavior** (default launch view + confirm-destructive gating #103), and
   **Data & About** (open data folder, clear recents, app + `claude` versions). A
@@ -270,7 +271,7 @@ even though it works in `tauri dev`.
 │   │                       #   FileSwitcher (#90), DiffInspector, DetachedNote (#84),
 │   │                       #   ScheduledPanel (#94), Settings (#100), BusyIndicator,
 │   │                       #   TemplateEditor + TemplateManager (#117) + TemplateUseModal (#118),
-│   │                       #   Checkbox, NewSessionModal, Toaster, ViewSwitch,
+│   │                       #   Checkbox, Slider (#122), NewSessionModal, Toaster, ViewSwitch,
 │   │                       #   ClaudeMissing, EmptyState
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)

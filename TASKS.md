@@ -321,8 +321,9 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#119 are complete — see **Implemented (completed tasks)** above for the index,
-and git history for full per-task detail. **Open tasks: #120–#125.** New work
+Tasks #1–#119 + #122 are complete — see **Implemented (completed tasks)** above for the
+index, and git history for full per-task detail. **Open tasks: #120, #121, #123, #124,
+#125.** New work
 goes here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
 
@@ -1246,9 +1247,9 @@ and new heavy UI dependencies.
 
 ---
 
-### 122. [ ] Custom slider component (refined) — replace the native Settings range inputs
+### 122. [x] Custom slider component (refined) — replace the native Settings range inputs
 
-**Status:** Not started
+**Status:** Complete
 **Owner:** _(unassigned)_
 **Depends on:** none · _(builds on shipped Settings #100 + the Checkbox custom-control precedent #52)_
 **Created:** 2026-06-22
@@ -1292,31 +1293,31 @@ instances elsewhere.
 
 **Subtasks**
 
-1. [ ] Build `src/components/Slider/Slider.tsx` + `Slider.module.css` — a real range
+1. [x] Build `src/components/Slider/Slider.tsx` + `Slider.module.css` — a real range
    input with a custom rounded track, accent fill, and larger thumb; hover / active
    / focus-visible states; tokens only; reduced-motion safe; cross-browser
    pseudo-elements; value-driven fill.
-2. [ ] Accessibility — keyboard parity (arrows / Home / End), visible focus,
+2. [x] Accessibility — keyboard parity (arrows / Home / End), visible focus,
    label / `ariaLabel` association, disabled state.
-3. [ ] Replace both Settings sliders (Font size, Line height) with `<Slider>`,
+3. [x] Replace both Settings sliders (Font size, Line height) with `<Slider>`,
    keeping the value display + draft `update(...)` wiring; remove the `.range` CSS.
-4. [ ] Tests — a small render/interaction test (value / min / max / step / onChange)
+4. [x] Tests — a small render/interaction test (value / min / max / step / onChange)
    following the project's testing patterns.
 
 **Acceptance criteria**
 
-- [ ] Both Settings sliders render the custom `Slider`; **no native range visual
+- [x] Both Settings sliders render the custom `Slider`; **no native range visual
   remains** anywhere.
-- [ ] Refined look: rounded track, accent fill up to a **larger thumb** with
+- [x] Refined look: rounded track, accent fill up to a **larger thumb** with
   hover / active / focus states; **tokens only (no off-system colors)**;
   reduced-motion respected.
-- [ ] **Full keyboard + ARIA parity** — arrows / Home / End change the value, focus
+- [x] **Full keyboard + ARIA parity** — arrows / Home / End change the value, focus
   is visible, the accessible value is correct.
-- [ ] **Reusable** — a single `Slider` component is used for both (and future)
+- [x] **Reusable** — a single `Slider` component is used for both (and future)
   sliders.
-- [ ] Settings draft/Save still applies font size + line height to the live pooled
+- [x] Settings draft/Save still applies font size + line height to the live pooled
   terminals (behavior unchanged).
-- [ ] `npm run build`, `npm run lint`, `npm test`, and `npm run format:check` pass.
+- [x] `npm run build`, `npm run lint`, `npm test`, and `npm run format:check` pass.
 
 **Notes**
 

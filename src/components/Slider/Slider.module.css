@@ -1,0 +1,139 @@
+/* On-system slider (#122): a real <input type="range"> with the native track/thumb
+   dropped (appearance: none) and a refined custom look drawn via the cross-browser
+   pseudo-elements — a thicker rounded track, an accent fill up to the thumb (the
+   value-driven `--fill` variable), and a larger circular thumb with hover/active/
+   focus states. Tokens only; transitions via the motion tokens (reduced-motion
+   neutralized by the global killswitch). */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  cursor: pointer;
+}
+
+.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.label {
+  color: var(--text-primary);
+  font-size: var(--fs-meta);
+}
+
+.value {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+}
+
+/* The real range input is the visual (not hidden, unlike the Checkbox): we strip
+   the native chrome and draw the track/thumb ourselves. A tall-ish box gives the
+   thumb a comfortable hit area. */
+.input {
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* --- Track --- */
+/* WebKit has no separate "progress" pseudo, so the fill is a gradient split at
+   `--fill`; Firefox gets a real progress element below. */
+.input::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: var(--radius-dot);
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--fill, 0%),
+    var(--border-strong) var(--fill, 0%) 100%
+  );
+}
+
+.input::-moz-range-track {
+  height: 6px;
+  border-radius: var(--radius-dot);
+  background: var(--border-strong);
+}
+
+.input::-moz-range-progress {
+  height: 6px;
+  border-radius: var(--radius-dot);
+  background: var(--accent);
+}
+
+/* --- Thumb --- */
+.input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  /* Center the 16px thumb on the 6px track: (16 - 6) / 2 = 5px. */
+  margin-top: -5px;
+  border: 2px solid var(--bg-panel);
+  border-radius: var(--radius-dot);
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.input::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--bg-panel);
+  border-radius: var(--radius-dot);
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+/* Hover / active grow the thumb slightly for tactile feedback. */
+.input:not(:disabled):hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.input:not(:disabled):active::-webkit-slider-thumb {
+  transform: scale(1.18);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+}
+.input:not(:disabled):hover::-moz-range-thumb {
+  transform: scale(1.12);
+}
+.input:not(:disabled):active::-moz-range-thumb {
+  transform: scale(1.18);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+}
+
+/* Keyboard focus: a clear ring on the thumb (the input itself has no visible box). */
+.input:focus-visible {
+  outline: none;
+}
+.input:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.input:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.input:disabled::-webkit-slider-thumb {
+  background: var(--text-muted);
+}
+.input:disabled::-moz-range-thumb {
+  background: var(--text-muted);
+}
