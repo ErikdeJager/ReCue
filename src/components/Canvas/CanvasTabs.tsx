@@ -156,6 +156,24 @@ function CanvasTabs() {
   // "Manage templates…". Closes on outside-click, Escape, or a selection.
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const templatesRef = useRef<HTMLDivElement>(null);
+  const templatesBtnRef = useRef<HTMLButtonElement>(null);
+  // The menu is position: fixed, anchored to the button's viewport rect, so it
+  // escapes the tab strip's overflow clip (#129): `.tabStrip`'s `overflow-x: auto`
+  // forces its computed `overflow-y` to `auto`, which would clip a dropdown sitting
+  // below the 34px strip. Mirrors the sidebar context-menu precedent (#31/#54).
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
+    null,
+  );
+  const toggleTemplates = () => {
+    if (!templatesOpen && templatesBtnRef.current) {
+      const rect = templatesBtnRef.current.getBoundingClientRect();
+      setMenuPos({
+        top: rect.bottom + 4,
+        right: window.innerWidth - rect.right,
+      });
+    }
+    setTemplatesOpen((open) => !open);
+  };
   useEffect(() => {
     if (!templatesOpen) return;
     const onPointer = (event: PointerEvent) => {
@@ -228,8 +246,9 @@ function CanvasTabs() {
       <div className={styles.templatesWrap} ref={templatesRef}>
         <button
           type="button"
+          ref={templatesBtnRef}
           className={styles.tabAdd}
-          onClick={() => setTemplatesOpen((o) => !o)}
+          onClick={toggleTemplates}
           title="Templates"
           aria-label="Templates"
           aria-haspopup="menu"
@@ -238,8 +257,12 @@ function CanvasTabs() {
           <LayoutTemplate size={14} strokeWidth={1.5} />
           <ChevronDown size={11} strokeWidth={1.5} />
         </button>
-        {templatesOpen && (
-          <div className={styles.templatesMenu} role="menu">
+        {templatesOpen && menuPos && (
+          <div
+            className={styles.templatesMenu}
+            role="menu"
+            style={{ top: menuPos.top, right: menuPos.right }}
+          >
             <button
               type="button"
               className={styles.templatesItem}

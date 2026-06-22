@@ -449,9 +449,9 @@ backend, IPC, store, or persistence changes.
 
 ---
 
-### 129. [ ] Fix: the Canvas Templates ▾ dropdown menu can't open (clipped by the tab strip's overflow)
+### 129. [x] Fix: the Canvas Templates ▾ dropdown menu can't open (clipped by the tab strip's overflow)
 
-**Status:** Not started
+**Status:** Done
 **Owner:** _(unassigned)_
 **Depends on:** none · _(a self-contained bug fix in the shipped Canvas Templates tab-strip menu #117/#118)_
 **Created:** 2026-06-22
@@ -508,29 +508,29 @@ menu doesn't exist there).
 
 **Subtasks**
 
-1. [ ] Reproduce and confirm the clip: the menu renders but is hidden by `.tabStrip`'s
+1. [x] Reproduce and confirm the clip: the menu renders but is hidden by `.tabStrip`'s
    computed `overflow-y: auto`.
-2. [ ] Make the dropdown escape the clip (recommended: fixed/portaled positioning anchored
+2. [x] Make the dropdown escape the clip (recommended: fixed/portaled positioning anchored
    to the button, per the sidebar context-menu precedent), **without** removing the tab
    strip's horizontal scroll.
-3. [ ] Preserve the existing open/close behavior: toggle on the button, close on
+3. [x] Preserve the existing open/close behavior: toggle on the button, close on
    outside-click (`pointerdown`), Escape, and item selection; keep `aria-haspopup` /
    `aria-expanded` / `role="menu"` / `role="menuitem"`.
-4. [ ] Verify all three items work (**New tab from template…** is still `disabled` when
+4. [x] Verify all three items work (**New tab from template…** is still `disabled` when
    there are no templates), and that the menu is positioned sensibly relative to the button
    (right-aligned as today, on-screen).
-5. [ ] Verify horizontal tab scrolling still works with enough tabs to overflow the strip.
+5. [x] Verify horizontal tab scrolling still works with enough tabs to overflow the strip.
 
 **Acceptance criteria**
 
-- [ ] Clicking the Templates **▾** button opens the menu **fully visible** in the main
+- [x] Clicking the Templates **▾** button opens the menu **fully visible** in the main
   window (no longer clipped/hidden).
-- [ ] **New tab from template…**, **New template…**, and **Manage templates…** are all
+- [x] **New tab from template…**, **New template…**, and **Manage templates…** are all
   reachable and work; the menu closes on outside-click, Escape, and selection.
-- [ ] **Horizontal scrolling of many canvas tabs still works** (the fix didn't remove the
+- [x] **Horizontal scrolling of many canvas tabs still works** (the fix didn't remove the
   strip's scroll).
-- [ ] No off-system colors, no layout shift in the tab strip, reduced-motion unaffected.
-- [ ] `npm run build`, `npm run lint`, `npm test`, and `npm run format:check` pass (no Rust
+- [x] No off-system colors, no layout shift in the tab strip, reduced-motion unaffected.
+- [x] `npm run build`, `npm run lint`, `npm test`, and `npm run format:check` pass (no Rust
   changes expected).
 
 **Notes**

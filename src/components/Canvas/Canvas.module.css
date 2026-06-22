@@ -136,10 +136,13 @@
   flex-shrink: 0;
 }
 
+/* position: fixed (not absolute) so the dropdown escapes the tab strip's overflow
+   clip (#129): `.tabStrip`'s `overflow-x: auto` forces computed `overflow-y: auto`,
+   which would clip a menu sitting below the 34px strip. `top`/`right` are set
+   inline from the button's viewport rect (CanvasTabs.tsx), mirroring the sidebar
+   context menu (#31). */
 .templatesMenu {
-  position: absolute;
-  top: calc(100% + var(--space-4));
-  right: 0;
+  position: fixed;
   z-index: 20;
   display: flex;
   min-width: 160px;
