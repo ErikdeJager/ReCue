@@ -1006,7 +1006,7 @@ user-confirmed **720 × 600** (height clamped to 90vh).
 
 **Status:** Not started
 **Owner:** _(unassigned)_
-**Depends on:** #116, #117, #118, #119, #122, #123 · _(all feature/fix tasks; #122 and #123 added afterward so they land before the improvement iterations; #120 runs after all of them and before the UI/UX pass #121)_
+**Depends on:** #116, #117, #118, #119, #122, #123, #124, #125 · _(all feature/fix tasks; #122–#125 added afterward so they land before the improvement iterations; #120 runs after all of them and before the UI/UX pass #121)_
 **Created:** 2026-06-22
 
 **Description**
@@ -1420,3 +1420,176 @@ modals, and mouse behavior.
   ArrowUp from the picker returns to recents; the picker highlight is **state-based**
   (search keeps focus), mirroring how recents are highlighted. Adjust if you'd rather
   the picker take real DOM focus.
+
+---
+
+### 124. [ ] Create a new branch from the New-session modal ("+ add branch")
+
+**Status:** Not started
+**Owner:** _(unassigned)_
+**Depends on:** none · _(extends the #27/#66 new-session branch step and the #74 worktree write)_
+**Created:** 2026-06-22
+
+**Description**
+
+In the **branch step** of the New-session modal, let the user **create a new
+branch** instead of only choosing an existing one. As the **final option beneath
+all existing branches**, show a **"+ add branch"** entry; selecting it reveals an
+inline form to **enter a new branch name** plus a **base-branch dropdown**
+(defaulting to the **current branch / HEAD**, with any existing branch selectable as
+the base). Confirming **creates + checks out** the new branch from the chosen base
+and starts the agent; the existing **destructive-checkout warning** still applies.
+
+This **introduces a new git write — branch creation** — which **expands** the v1
+constraint that "ClaudeCue never creates branches" (its writes were only
+`git checkout <existing>` #27 and `git worktree add/remove` #74). Treat this like
+the other deliberate scope reversals (e.g. #84 multi-window): update `CLAUDE.md`'s
+git-scope notes to record that branch creation from the new-session flow is now an
+allowed write. **Scope here is the New-session (immediate) path; the
+Scheduled-session path is #125.**
+
+**Behavior.**
+
+- **"+ add branch" as the last branch option**, reachable by **arrow keys** (mirrors
+  the last-option-reachable pattern of #123) and by click. Selecting it expands an
+  inline form: a **name input** + a **base dropdown** (default current branch/HEAD).
+- **Confirm (Enter / button)** → create the branch from the base and check it out,
+  then start a **normal** agent in the repo folder.
+- **⌘⏎** → create the new branch as an **isolated worktree** (extends #74) and start
+  the agent there.
+- **Destructive warning preserved**: creating + checking out switches the folder's
+  HEAD, so the existing `isDestructive` / `runningInFolder` warning shows when an
+  agent is already running in that folder (same as an existing-branch checkout). The
+  **worktree** path uses a separate folder, so — consistent with #74 — no warning.
+- **Validation**: the name must be a valid git ref and **must not already exist** →
+  show an **inline error** and don't proceed (backend-validated). The base must be an
+  existing branch.
+
+**Backend (new git writes).**
+
+- Add a `create_branch` path — `git checkout -b <name> [<base>]` in `cwd`, validating
+  the name (valid ref, not existing) and base (exists); errors surface like
+  `checkout_branch` (#27).
+- Add a worktree-with-new-branch path — `git worktree add -b <name> <dest> [<base>]`
+  (extends `worktree_add`, #74) for the ⌘⏎ flow.
+- Expose both via Tauri commands + typed IPC; the spawn flow creates the branch (or
+  worktree) then starts the agent.
+
+**Out of scope:** schedule mode (#125), branch creation anywhere outside the
+new-session branch step, and deleting/renaming branches.
+
+**Subtasks**
+
+1. [ ] Backend: `git checkout -b` create-branch write (name + base validation,
+   exists→error) and `git worktree add -b` new-branch-worktree write; commands +
+   typed IPC + Rust tests.
+2. [ ] Branch step UI: render "+ add branch" as the last option (arrow-key reachable
+   + click); inline name input + base-branch dropdown (default current/HEAD).
+3. [ ] Wire confirm → create+checkout+start (normal) and ⌘⏎ → create-as-worktree+
+   start; preserve the destructive warning for the in-folder checkout path.
+4. [ ] Inline validation/error for invalid or already-existing names.
+5. [ ] Update `CLAUDE.md` git-scope notes to record branch creation as an allowed
+   write.
+6. [ ] Tests for the git writes + any pure validation/nav helpers.
+
+**Acceptance criteria**
+
+- [ ] The branch step shows a **"+ add branch"** option below all branches,
+  selectable by arrow keys and click.
+- [ ] Selecting it lets the user type a name and pick a **base** (default current
+  branch); confirm **creates + checks out** the branch from that base and starts the
+  agent.
+- [ ] **⌘⏎** creates the new branch as an **isolated worktree** (#74) and starts there.
+- [ ] The **destructive-checkout warning** still shows when an agent is already
+  running in the folder (in-folder path); the worktree path doesn't warn.
+- [ ] An **invalid or already-existing** name shows an inline error and does not
+  create/start anything.
+- [ ] `CLAUDE.md` reflects that branch creation is now an allowed git write.
+- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+  `npm run lint:rust` pass.
+
+**Notes**
+
+- Decisions captured from the user: base defaults to **current HEAD** with a
+  **dropdown** to pick another existing base; **worktree-on-new-branch supported**
+  via ⌘⏎; **duplicate name → error**.
+- **Ordering:** before the improvement iterations — wired by adding **#124 to #120's
+  `Depends on`**.
+- Files in play: `src-tauri/src/git.rs` (`checkout_branch` ~216, `worktree_add`,
+  `list_branches` ~197), `src-tauri/src/commands.rs` (spawn / worktree paths),
+  `src/components/NewSessionModal/NewSessionModal.tsx` (branch step + `onBranchKeyDown`),
+  `src/ipc.ts`.
+
+---
+
+### 125. [ ] Create a new branch from the Scheduled-session modal (create at fire time)
+
+**Status:** Not started
+**Owner:** _(unassigned)_
+**Depends on:** #124 · _(reuses #124's "+ add branch" UI + create-branch git write)_
+**Created:** 2026-06-22
+
+**Description**
+
+Extend the **"+ add branch"** flow (#124) to the **Scheduled-session** modal. Since
+a schedule launches later, the new branch must be **created when the schedule
+fires**, not when it's scheduled (the user's explicit choice). The same UI applies
+(it's the same `NewSessionModal` in `scheduleMode`): "+ add branch" as the last
+branch option, a name input + base-branch dropdown — but instead of creating
+immediately, the schedule **records the new-branch intent** and the poll loop
+creates + checks it out at launch.
+
+**Behavior.**
+
+- In schedule mode, "+ add branch" + name + base records on the schedule a
+  **new-branch intent** rather than creating now.
+- At **fire time** (`fire_due_schedules`, `commands.rs` ~568–585), **create + check
+  out** the new branch from its base (reusing #124's `git checkout -b` write), then
+  spawn the pre-seeded session (#93). Creation is **best-effort**, matching today's
+  fire-time checkout (a failure still spawns in the folder) — log/surface as the
+  existing path does.
+- The schedule-time destructive warning stays **informational** as it is today
+  (the actual checkout happens at fire time).
+
+**Persistence.**
+
+- Extend the `ScheduledSession` record (`store.rs` + TS mirrors) to represent a
+  **new branch**: the branch name + base + a flag distinguishing **"create new"**
+  from **"checkout existing"** (serde-default for back-compat with existing
+  `sessions.json`). Thread it through `create_schedule` and `fire_due_schedules`.
+
+**Out of scope:** worktree-on-new-branch in schedule mode (schedules spawn normal
+agents per #93 — note as a possible follow-up); editing the new-branch intent from
+the `ScheduledPanel` (#94) editor (branch isn't editable there today — note).
+
+**Subtasks**
+
+1. [ ] Persist new-branch intent on `ScheduledSession` (name + base + create-new
+   flag; serde-default), threaded through `create_schedule`.
+2. [ ] Enable #124's "+ add branch" UI in schedule mode, recording the intent
+   instead of creating immediately.
+3. [ ] Fire-time create + checkout from base (reuse #124's git write) before spawn,
+   best-effort like the current checkout; then the pre-seeded launch (#93).
+4. [ ] Tests for the record round-trip + the fire-time create-branch path.
+
+**Acceptance criteria**
+
+- [ ] In the Schedule modal, "+ add branch" lets the user name a new branch + pick a
+  base; the schedule is created **without** creating the branch yet.
+- [ ] When the schedule **fires**, the new branch is **created + checked out** from
+  its base and the pre-seeded session launches on it.
+- [ ] An existing `sessions.json` (no new-branch fields) still loads (serde-default);
+  existing-branch schedules behave exactly as before.
+- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+  `npm run lint:rust` pass.
+
+**Notes**
+
+- Decision captured from the user: in schedule mode the branch is created **when the
+  schedule fires** (not at schedule time).
+- **Depends on #124** for the "+ add branch" UI and the create-branch git write.
+- **Ordering:** before the improvement iterations — wired by adding **#125 to #120's
+  `Depends on`**.
+- Files in play: `src-tauri/src/store.rs` (`ScheduledSession`), `src-tauri/src/commands.rs`
+  (`create_schedule` ~509, `fire_due_schedules` ~568–585), `src/components/NewSessionModal/NewSessionModal.tsx`
+  (schedule step), TS schedule types.
