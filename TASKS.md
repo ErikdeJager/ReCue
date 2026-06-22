@@ -736,3 +736,121 @@ titles (filename / "Diff" / "Terminal") — a generic per-panel title override f
   `canvas_templates` persists as an opaque JSON blob; `sessionLabel` resolves
   custom || auto || branch (#97). A user rename after spawn (#57) still wins, as always.
 
+---
+
+### 137. [ ] Closing a Canvas tab — prompt to kill/keep its contents (+ default-behavior setting)
+
+**Status:** Not started
+**Depends on:** none · _(builds on the #58 Canvas tabs, the #91/#106 kill/close-all mechanics, the #100/#103 Settings + Behavior section, the #84 detached windows, and the #18 terminal pool — all shipped)_
+**Created:** 2026-06-22
+
+**Description**
+
+Today, closing a Canvas tab via its **×** (`CanvasTabs.tsx` → `store.closeCanvas`) just
+drops the tab from `canvases`; the agents and items it contained **survive** — they live
+in `sessions` / `overviewPanels` and stay in the sidebar ("left panel") + Overview
+regardless of tabs. The user wants closing a tab to optionally **tear down its contents**.
+
+**Behavior:** clicking **×** on a Canvas tab that **contains panels** pops a small
+**modal** asking what to do with the tab's contents:
+
+- **Kill & close** — kill the tab's agents, kill its shell-terminal PTYs, and remove its
+  file / diff / terminal / scheduled items — i.e. **remove them from the left panel /
+  Overview entirely** — then close the tab. (This is a **global** removal: the sidebar
+  lists each agent/item once, independent of tabs, so "remove from the left panel" means
+  remove everywhere — an item that also appeared in another tab is gone there too. This is
+  the intended behavior, matching "remove it all from the left panel"; protecting items
+  still referenced by another open tab is **out of scope**.)
+- **Keep & close** — today's behavior: just close the tab; its agents/items remain in the
+  sidebar + Overview ("still there in overview mode").
+- **Cancel** — abort; don't close the tab.
+
+**Keybinds (required):** each option must be a single quick keypress so the user can "get a
+move on" without the mouse. Recommended: **`K`** → Kill & close, **`Enter`** → Keep &
+close (the safe default), **`Esc`** → Cancel. The exact letters can be finalized in
+implementation, but **both** kill and keep must have a keybind and the modal must be
+focus-trapped (mirror the Settings / TemplateManager / TemplateUseModal modal pattern).
+Showing a short summary of what will be removed (e.g. "Kill 2 agents + 1 terminal and
+close 1 file?") is encouraged.
+
+**Default-behavior setting (required):** add a **Settings → Behavior** control to configure
+the default for this action with **three** values:
+
+- **Ask every time** (default) — show the modal on every tab close that has contents.
+- **Always kill** — skip the modal; kill + remove contents and close the tab directly.
+- **Never kill (keep)** — skip the modal; close the tab only (today's behavior).
+
+This setting is **self-contained** — when it's "Ask", the modal always shows, independent
+of the existing #103 "Confirm destructive actions" toggle (which gates the sidebar's
+inline confirms, not this). An **empty tab** (no panels) always closes silently with no
+modal, in every mode.
+
+**Recommended approach**
+
+1. **Setting:** add `canvasCloseBehavior: "ask" | "kill" | "keep"` to the `Settings` type
+   (`src/types`) + `DEFAULT_SETTINGS` (`"ask"`, store.ts) — persists in the opaque
+   `settings` blob, upgrades cleanly. Wire a 3-segment control in the Settings **Behavior**
+   section (`components/Settings`), reusing the existing `styles.segmented` pattern used by
+   "Default view on launch".
+2. **Per-tab teardown helper:** a new store helper `closeCanvasContents(layout)` (or
+   inline) that walks `collectLeaves(layout)` and, per leaf kind, reuses existing
+   primitives: `agent` → kill + drop the session (with #74 worktree cleanup, like
+   `removeSession`); `terminal` → kill its shell PTY (intentional, no Restart overlay) and
+   `removeOverviewPanel` if it's a sidebar item (a canvas-only template terminal #118 isn't,
+   so just kill the PTY); `file`/`diff` → `removeOverviewPanel(repoPath, id)` when present;
+   `scheduled` → `cancelSchedule`. Mark kills `intentional` (#32) and emit **one** summary
+   toast (#83), not per-item spam.
+3. **Close flow:** the tab × calls a new action `requestCloseCanvas(id)` that branches on
+   `settings.canvasCloseBehavior` and whether the tab has contents: empty → `closeCanvas(id)`
+   directly; `"kill"` → teardown + `closeCanvas`; `"keep"` → `closeCanvas`; `"ask"` → set a
+   store field (e.g. `canvasClosePromptId`) to open the modal. Keep the existing
+   `closeCanvas(id)` as the pure tab-drop step (still used by "keep" and post-kill).
+4. **Modal:** a focus-trapped `CanvasCloseModal` rendered at the App top level (like
+   `Settings` / `TemplateManager`), shown when `canvasClosePromptId` is set. Buttons +
+   keybinds (K / Enter / Esc) call `confirmCloseCanvas(id, kill)` which runs the chosen
+   path and clears the prompt. Show the contents summary.
+5. **Detached tabs (#84):** clicking × on a detached canvas's tab still prompts; the kill
+   path tears down its sessions (kill is global over IPC) and `closeCanvas` already closes
+   the detached window. Confirm the flow works for a detached tab too.
+
+Out of scope: changing the **+** / template-instantiation flows, the tear-off gesture, or
+protecting contents shared with another open tab (kill is global, as above).
+
+**Subtasks**
+
+1. [ ] Add `canvasCloseBehavior` to `Settings` + `DEFAULT_SETTINGS` and a 3-segment control
+   in the Settings Behavior section.
+2. [ ] Add the per-tab `closeCanvasContents(layout)` teardown helper (reusing kill /
+   removeOverviewPanel / cancelSchedule / worktree-cleanup primitives) with one summary toast.
+3. [ ] Add `requestCloseCanvas(id)` + `confirmCloseCanvas(id, kill)` + `canvasClosePromptId`
+   state; point the tab × at `requestCloseCanvas`.
+4. [ ] Build the focus-trapped `CanvasCloseModal` with K / Enter / Esc keybinds and a
+   contents summary; render it at the App top level.
+5. [ ] Verify empty tabs close with no modal; the setting's kill/keep modes skip the modal;
+   detached tabs work.
+
+**Acceptance criteria**
+
+- [ ] Clicking × on a Canvas tab **with contents** (in "Ask" mode) opens a modal with
+  **Kill & close**, **Keep & close**, and **Cancel**, each operable by a single keybind.
+- [ ] **Kill & close** kills the tab's agents + shell-terminal PTYs and removes its
+  file/diff/terminal/scheduled items from the sidebar + Overview, then closes the tab.
+- [ ] **Keep & close** closes the tab while leaving its agents/items in the sidebar +
+  Overview; **Cancel** leaves the tab open and untouched.
+- [ ] The Settings → Behavior control switches the default among **Ask every time** /
+  **Always kill** / **Never kill**, persists across restarts, and the non-Ask modes skip
+  the modal.
+- [ ] An empty tab closes with no modal in every mode; the always-≥1-tab invariant (#58)
+  still holds (closing the last tab leaves a fresh empty canvas).
+- [ ] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass.
+
+**Notes**
+
+- "Remove it all from the left panel" = a **global** removal; the sidebar shows each
+  agent/item once, so killing removes it from any other tab too — a deliberate, documented
+  consequence (protecting cross-tab items is a possible follow-up, not this task).
+- The new setting governs tab-close on its own (its "Ask" value replaces a confirm gate);
+  it does **not** read the #103 `confirmDestructive` toggle.
+- Per-tab teardown reuses the #91/#106 mechanics (`intentionalKills` #32, summary toast
+  #83, worktree ref-counting #74) but keyed off the **closed tab's leaves**, not a repo.
+
