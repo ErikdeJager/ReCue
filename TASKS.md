@@ -890,3 +890,100 @@ protecting contents shared with another open tab (kill is global, as above).
 - Per-tab teardown reuses the #91/#106 mechanics (`intentionalKills` #32, summary toast
   #83, worktree ref-counting #74) but keyed off the **closed tab's leaves**, not a repo.
 
+---
+
+### 138. [ ] Show the Fork action as unavailable (with an explanatory tooltip) when the source has no history
+
+**Status:** Not started
+**Depends on:** none · _(builds on #134 `has_conversation` + the `NothingToFork` guard, the #97 title-worker cadence, and #126 fork + #131 sidebar fork menu item — all shipped)_
+**Created:** 2026-06-22
+
+**Description**
+
+#134 made forking a source with **no conversation log** fail gracefully — a friendly error
+toast (`SessionError::NothingToFork`, "Nothing to fork yet — send the agent a message
+first.") instead of creating a doomed dead panel. But its **optional subtask 4 was
+deliberately skipped**: there was no cheap, reliable client-side signal to know *up front*
+whether a session is forkable, so the Fork affordances stay fully enabled and the user only
+learns "nothing to fork yet" **after** clicking. This task adds that signal and uses it to
+render the Fork action as **visually unavailable** with a hover tooltip that **clearly
+states why**, at all three fork sites.
+
+The signal problem #134 named: the only trustworthy source of "has forkable history" is the
+**on-disk claude log** (the #97/#134 `title::has_conversation` / `log_has_turn` glob over
+`~/.claude/projects/*/<uuid>.jsonl`), and a per-render IPC read is too expensive. The fix
+is to **reuse the #97 title-worker cadence** to push a cheap, cached per-session `forkable`
+boolean — no new polling, no per-render IPC.
+
+**Approach (backend signal → frontend gating)**
+
+1. **Backend signal.** Emit a per-session forkability boolean from `has_conversation` on the
+   **same edges the title is read** (the #97 monitor's busy→idle poke → `title_worker`):
+   - Persist a `forkable` field on the session record (serde-default), like `auto_name` /
+     `has_been_active` (`store.rs`).
+   - In `pty.rs::title_worker`, on each busy→idle poke also compute
+     `title::has_conversation(&id)` and, when it changes, emit it — either extend
+     `SessionEvent::Name` with a `forkable` field or add `SessionEvent::Forkable { id,
+     forkable }` + a `session://forkable` event (mirroring `session://name`). `lib.rs`
+     persists it (a `set_forkable`) and forwards to the UI.
+   - **Seed it:** a freshly spawned session has no log → `forkable = false` (Fork disabled
+     until its first real turn materializes the log). On boot, the resume path reads
+     `has_conversation` once per resumed session (or pokes the title worker) so a resumed
+     session **with** history shows Fork available immediately; the persisted `forkable`
+     covers the pre-first-refresh window.
+   - **Fail-open, consistent with #134:** `has_conversation` returns `true` on uncertainty
+     (unreadable / unknown), so `forkable` is `true` when unsure — the unavailable state
+     appears **only when we're confident there's no history**, never wrongly blocking a
+     forkable session. The #134 backend guard + toast stays as the real safety net.
+2. **Frontend gating.** The store caches the flag (a `sessionForkable[id]` map or a
+   `forkable` field on the session view, seeded from the record + updated by the new event,
+   mirroring `setAutoName` / `onName`). The **three Fork sites** read it:
+   - Overview card header (`Overview.tsx`), Canvas `LeafPanel` header
+     (`CanvasSurface.tsx`), and the #131 sidebar `SessionRow` menu item (`Sidebar.tsx`).
+   - When `forkable === false`: render the Fork icon / menu item **dimmed / unavailable**
+     (on-token disabled styling), make it a **no-op** (don't fork, don't even toast), and
+     show a hover **tooltip stating why** — reuse the #134 message ("Nothing to fork yet —
+     send the agent a message first.") for consistency.
+   - **Implementation note:** a native `disabled` button suppresses hover / `title`, so the
+     tooltip wouldn't show. Use `aria-disabled` + a guarded click handler (or a wrapping
+     element carrying the `title`) so the explanatory tooltip still appears on hover. The
+     sidebar menu item can show the reason inline (sub-text) or via `title`.
+
+Out of scope: changing fork's flags / behavior for sources that **do** have history (#126),
+and the backend guard itself (#134 — kept unchanged as the safety net).
+
+**Subtasks**
+
+1. [ ] Backend: persist a `forkable` field + emit it from `has_conversation` on the
+   title-worker cadence (extend `Name` or add a `Forkable` event + `session://forkable`);
+   `lib.rs` persists + forwards.
+2. [ ] Seed forkability at spawn (`false`) and at boot/resume (read once) so resumed
+   sessions with history show available immediately.
+3. [ ] Frontend store: cache + update the per-session `forkable` flag from the record + event.
+4. [ ] Gate the three Fork sites (Overview header, Canvas `LeafPanel` header, sidebar #131
+   menu item): dimmed / unavailable + no-op + explanatory hover tooltip when not forkable.
+5. [ ] Ensure the tooltip shows on the unavailable control (`aria-disabled` + click guard,
+   not the native `disabled` attribute).
+
+**Acceptance criteria**
+
+- [ ] On a brand-new session the user has never prompted, the Fork affordance (all three
+  sites) is shown **unavailable**, and hovering it explains why.
+- [ ] After the agent's first real turn (log materialized), the Fork affordance becomes
+  available automatically (on the next busy→idle edge).
+- [ ] A resumed session with existing history shows Fork available immediately on boot.
+- [ ] Clicking / activating the unavailable Fork affordance does **nothing** — no doomed
+  panel, no error toast.
+- [ ] When forkability is **uncertain** (unreadable log), Fork stays available (fail-open)
+  and the #134 guard still protects the actual fork.
+- [ ] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass.
+
+**Notes**
+
+- Reuses the #97 title-worker busy→idle cadence — forkability changes exactly when the log
+  first materializes, so that cadence already captures every transition; no new polling.
+- Fail-open mirrors #134: unavailable only on a confident "no history"; the backend
+  `NothingToFork` guard is unchanged.
+- This surfaces, **up front**, the two un-materialized cases #134 documented: a
+  never-prompted session, and a just-created-never-used fork.
+
