@@ -314,17 +314,23 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 ## v1 scope decisions / out of scope
 
 - **Git is read-mostly, with a small set of deliberate writes** — ClaudeCue reads
-  git (current branch + working-tree diff vs `HEAD`) and never creates branches or
-  commits. Its writes are: (1) **`git checkout <existing branch>`** from the
-  new-session panel (#27/#53/#61) — picking a branch checks it out (in the chosen
-  folder, only an existing local branch, validated backend-side) before the agent
-  starts, warning before disrupting another agent already running in that folder;
-  and (2) **`git worktree add` / `git worktree remove`** for isolated worktree
-  agents (#74) — **⌘⏎** in the branch step starts an agent in an app-managed
-  worktree (`<app-data>/worktrees/<repo-id>/<branch>`) on an existing branch, shown
-  nested under its parent repo in the sidebar; the worktree is removed (ref-counted)
-  only when its last agent goes, and a dirty worktree is kept rather than
-  force-deleted. No branch creation, commits, or other writes.
+  git (current branch + working-tree diff vs `HEAD`) and never commits. Its writes
+  are: (1) **`git checkout <existing branch>`** from the new-session panel
+  (#27/#53/#61) — picking a branch checks it out (in the chosen folder, only an
+  existing local branch, validated backend-side) before the agent starts, warning
+  before disrupting another agent already running in that folder; (2) **`git worktree
+  add` / `git worktree remove`** for isolated worktree agents (#74) — **⌘⏎** in the
+  branch step starts an agent in an app-managed worktree
+  (`<app-data>/worktrees/<repo-id>/<branch>`), shown nested under its parent repo in
+  the sidebar; the worktree is removed (ref-counted) only when its last agent goes,
+  and a dirty worktree is kept rather than force-deleted; and (3) **branch creation**
+  (#124, expanding the earlier "never creates branches" rule) — the branch step's
+  **"+ add branch"** option creates + checks out a new branch (`git checkout -b
+  <name> [<base>]`, base defaulting to the current branch/HEAD) and starts a normal
+  agent, or with **⌘⏎** creates it as a worktree (`git worktree add -b`); the name is
+  validated backend-side (a valid ref that must not already exist) with an inline
+  error, and the destructive-checkout warning still applies to the in-folder path.
+  No commits or other writes.
 - No app-rendered approval UI — users answer prompts directly in the terminal.
   (The v1 "no status system" rule was deliberately narrowed by **#42** — a single
   **busy/idle** indicator — and by **#112**, which adds a third "finished / needs

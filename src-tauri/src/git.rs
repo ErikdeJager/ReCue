@@ -1,8 +1,12 @@
 //! Git support: current branch + working-tree diff vs `HEAD`, branch listing,
-//! and the single write (`checkout_branch`, #27).
+//! and a small set of deliberate writes (`checkout_branch` #27, `worktree_add`/
+//! `worktree_remove` #74, and branch creation `create_branch`/`worktree_add_new_branch`
+//! #124).
 //!
-//! Reads aside, the lone write is `checkout_branch` (switch to an *existing*
-//! local branch). We **shell out to `git`** (rather than linking
+//! Reads aside, the writes are: `checkout_branch` (switch to an *existing* local
+//! branch, #27), the worktree add/remove pair (#74), and **branch creation** —
+//! `git checkout -b` / `git worktree add -b` from the new-session flow (#124).
+//! We **shell out to `git`** (rather than linking
 //! `git2`/libgit2) because the value here is a faithful unified-diff parse, and
 //! the parser — the part with real logic — is then a pure `&str -> structs`
 //! function that is unit-tested against fixtures with no repo on disk. The thin
@@ -268,6 +272,90 @@ pub fn worktree_add(
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(if stderr.is_empty() {
             format!("could not add worktree for `{branch}`")
+        } else {
+            stderr
+        })
+    }
+}
+
+/// Validate a **new** branch `name` (and optional `base`) before a create (#124):
+/// non-empty, a valid git ref (rejecting leading-dash / flag-like names at the IPC
+/// boundary), not already existing, and `base` (when given) must exist. Returns the
+/// error message on failure, mirroring the other writes' messages.
+fn validate_new_branch(cwd: &Path, name: &str, base: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("branch name is required".to_string());
+    }
+    // A leading '-' would be parsed as a flag by git; reject before shelling out.
+    if name.starts_with('-') || run_git(cwd, &["check-ref-format", "--branch", name]).is_none() {
+        return Err(format!("invalid branch name `{name}`"));
+    }
+    let existing = list_branches(cwd);
+    if existing.all.iter().any(|b| b == name) {
+        return Err(format!("branch `{name}` already exists"));
+    }
+    if !base.is_empty() && !existing.all.iter().any(|b| b == base) {
+        return Err(format!("unknown base branch `{base}`"));
+    }
+    Ok(())
+}
+
+/// Create + check out a **new** local branch `name` from `base` (or HEAD when
+/// `base` is empty) in `cwd` — a new git *write* introduced by #124 (branch
+/// creation, expanding the prior checkout-only rule; see CLAUDE.md). Validates the
+/// name (valid ref, not existing) and base (exists) before `git checkout -b`. On
+/// failure (incl. a dirty tree) returns git's stderr; never panics.
+pub fn create_branch(cwd: impl AsRef<Path>, name: &str, base: &str) -> Result<(), String> {
+    let cwd = cwd.as_ref();
+    let name = name.trim();
+    let base = base.trim();
+    validate_new_branch(cwd, name, base)?;
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(cwd).args(["checkout", "-b", name]);
+    if !base.is_empty() {
+        cmd.arg(base);
+    }
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("could not create branch `{name}`")
+        } else {
+            stderr
+        })
+    }
+}
+
+/// Add a worktree at `dest` on a **new** branch `name` (from `base` or HEAD) — the
+/// ⌘⏎ create-branch-as-worktree path (#124, extends #74's `worktree_add`). Same
+/// name/base validation as `create_branch`. Returns git's stderr on failure.
+pub fn worktree_add_new_branch(
+    repo: impl AsRef<Path>,
+    name: &str,
+    base: &str,
+    dest: impl AsRef<Path>,
+) -> Result<(), String> {
+    let repo = repo.as_ref();
+    let name = name.trim();
+    let base = base.trim();
+    validate_new_branch(repo, name, base)?;
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(repo)
+        .args(["worktree", "add", "-b", name])
+        .arg(dest.as_ref());
+    if !base.is_empty() {
+        cmd.arg(base);
+    }
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("could not create worktree branch `{name}`")
         } else {
             stderr
         })
@@ -779,6 +867,62 @@ index 0..1
         assert!(checkout_branch(&dir, "does-not-exist").is_err());
         assert_eq!(current_branch(&dir), "feature");
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_branch_creates_checks_out_and_rejects_invalid_or_existing() {
+        let Some(dir) = init_repo("create-branch") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let base = current_branch(&dir);
+
+        // Create + check out a new branch from HEAD (empty base).
+        assert!(create_branch(&dir, "feature/new", "").is_ok());
+        assert_eq!(current_branch(&dir), "feature/new");
+        assert!(list_branches(&dir).all.iter().any(|b| b == "feature/new"));
+
+        // Re-creating the same branch fails (already exists), tree untouched.
+        assert!(create_branch(&dir, "feature/new", "").is_err());
+
+        // An invalid ref name is rejected.
+        assert!(create_branch(&dir, "bad branch~name", "").is_err());
+        // A leading-dash (flag-like) name is rejected.
+        assert!(create_branch(&dir, "-x", "").is_err());
+        // An unknown base is rejected.
+        assert!(create_branch(&dir, "another", "no-such-base").is_err());
+
+        // Create from an explicit existing base.
+        assert!(create_branch(&dir, "from-base", &base).is_ok());
+        assert_eq!(current_branch(&dir), "from-base");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worktree_add_new_branch_creates_a_branch_in_a_separate_dir() {
+        let Some(dir) = init_repo("wt-new-branch") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let started_on = current_branch(&dir);
+
+        let dest = unique_dir("wt-new-branch-dest");
+        assert!(worktree_add_new_branch(&dir, "wt/feature", "", &dest).is_ok());
+        // The new branch exists and the main checkout's HEAD is unchanged.
+        assert!(list_branches(&dir).all.iter().any(|b| b == "wt/feature"));
+        assert_eq!(current_branch(&dir), started_on);
+        // The worktree dir is on the new branch.
+        assert_eq!(current_branch(&dest), "wt/feature");
+
+        // A duplicate branch name is rejected.
+        let dest2 = unique_dir("wt-new-branch-dest2");
+        assert!(worktree_add_new_branch(&dir, "wt/feature", "", &dest2).is_err());
+
+        let _ = fs::remove_dir_all(&dest);
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -585,6 +585,21 @@ export interface AppState {
   ) => Promise<boolean>;
   /** Start an agent in an isolated git worktree for an existing branch (#74). */
   spawnWorktreeSession: (repo: string, branch: string) => Promise<boolean>;
+  /** Create + check out a new branch from `base` (empty = HEAD), then start an agent
+   * in the repo folder (#124). Resolves `true` on success, else an error message for
+   * inline display (e.g. an invalid / already-existing name). */
+  createBranchSession: (
+    cwd: string,
+    name: string,
+    base: string,
+  ) => Promise<true | string>;
+  /** Create a new branch as an isolated worktree (#74/#124) and start an agent there
+   * (the ⌘⏎ path). Resolves `true` on success, else an error message. */
+  createBranchWorktreeSession: (
+    repo: string,
+    name: string,
+    base: string,
+  ) => Promise<true | string>;
   /** Remove a worktree once its last active agent is gone (ref-counted, #74). */
   cleanupWorktreeIfEmpty: (parent: string, dest: string) => Promise<void>;
   /** Resume a crashed / boot-failed agent's PTY; resolves true on success so the
@@ -1777,6 +1792,48 @@ export const useStore = create<AppState>()((set, get) => ({
         "error",
       );
       return false;
+    }
+  },
+
+  createBranchSession: async (cwd, name, base) => {
+    // Branch-name validation errors (invalid / already-existing / unknown base) are
+    // returned for inline display; the spawn itself reuses the normal flow.
+    try {
+      await ipc.createBranch(cwd, name, base);
+    } catch (err) {
+      return isSessionError(err) ? err.message : "Could not create branch";
+    }
+    try {
+      // The branch is created + checked out, so HEAD is already correct — spawn
+      // with no further checkout.
+      const record = await ipc.spawnSession(cwd);
+      get().upsertSession(toSessionView(record));
+      set((s) => ({ recents: [cwd, ...s.recents.filter((r) => r !== cwd)] }));
+      get().select(record.id);
+      get().pushToast(`Created ${name} & started`);
+      void get().refreshBranches();
+      return true;
+    } catch (err) {
+      if (isSessionError(err) && err.kind === "BinaryNotFound") {
+        get().setClaudeMissing(true);
+      }
+      return isSessionError(err) ? err.message : "Failed to start session";
+    }
+  },
+
+  createBranchWorktreeSession: async (repo, name, base) => {
+    try {
+      const record = await ipc.spawnWorktreeAgentNewBranch(repo, name, base);
+      get().upsertSession(toSessionView(record));
+      get().select(record.id);
+      get().pushToast(`Created ${name} worktree & started`);
+      void get().refreshBranches();
+      return true;
+    } catch (err) {
+      if (isSessionError(err) && err.kind === "BinaryNotFound") {
+        get().setClaudeMissing(true);
+      }
+      return isSessionError(err) ? err.message : "Could not create worktree";
     }
   },
 

@@ -259,6 +259,57 @@
   color: var(--text-muted);
 }
 
+/* "+ add branch" (#124): the create-a-new-branch option after the branch list —
+   accent text so it reads as an action, not a branch. Sits just below the list
+   (outside its scroll box), mirroring #123's folder picker. */
+.addBranch {
+  margin-bottom: var(--space-12);
+  color: var(--accent);
+}
+
+/* Inline new-branch form (#124): name input + base dropdown + inline error. */
+.addBranchForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin-bottom: var(--space-12);
+}
+
+.baseRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.baseLabel {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}
+
+.baseSelect {
+  min-width: 0;
+  flex: 1;
+  padding: var(--space-4) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+}
+
+.baseSelect:focus {
+  border-color: var(--accent);
+}
+
+.branchError {
+  margin: 0;
+  color: var(--status-error);
+  font-size: var(--fs-meta-sm);
+  overflow-wrap: anywhere;
+}
+
 /* Destructive-checkout warning (#89: informational only — icon + secondary text,
    no status color, no acknowledgement gate). */
 .warning {

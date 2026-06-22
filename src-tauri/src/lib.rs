@@ -162,6 +162,8 @@ pub fn run() {
             commands::working_diff,
             commands::list_branches,
             commands::checkout_branch,
+            commands::create_branch,
+            commands::spawn_worktree_agent_new_branch,
             commands::compare_branches,
             commands::get_settings,
             commands::set_settings,

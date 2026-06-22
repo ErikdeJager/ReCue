@@ -155,6 +155,41 @@ pub fn spawn_worktree_agent(
     Ok(record)
 }
 
+/// Start an agent in an isolated worktree on a **new** branch `name` (from `base`,
+/// empty = HEAD) of `repo` (#124, extends #74). Creates the branch + its worktree
+/// folder via `git worktree add -b`, spawns `claude` there, and persists the record
+/// with `worktree_parent = repo`. Branch-name validation surfaces as `SessionError::Git`.
+#[tauri::command]
+pub fn spawn_worktree_agent_new_branch(
+    manager: State<'_, SessionManager>,
+    store: State<'_, Store>,
+    repo: String,
+    name: String,
+    base: String,
+    agent: Option<String>,
+) -> Result<PersistedSession, SessionError> {
+    let agent = agent.unwrap_or_else(|| crate::agents::DEFAULT_AGENT_ID.to_string());
+    let dest = worktree_path(&store, &repo, &name)?;
+    git::worktree_add_new_branch(&repo, &name, &base, &dest).map_err(SessionError::Git)?;
+    let dest_str = dest.to_string_lossy().to_string();
+    let info = manager.spawn_session(dest_str.as_str(), None, &agent)?;
+    let record = PersistedSession {
+        id: info.id.clone(),
+        claude_session_id: info.id,
+        repo_path: dest_str,
+        name: None,
+        created_at: now_secs(),
+        worktree_parent: Some(repo),
+        auto_name: None,
+        has_been_active: false,
+        agent,
+    };
+    store
+        .add_session(record.clone())
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    Ok(record)
+}
+
 /// Remove the worktree at `dest` from its `parent` repo (#74). Called by the
 /// frontend only after the worktree's last active agent is removed. `force` is
 /// needed when the worktree has uncommitted changes; a non-forced call fails on
@@ -688,6 +723,14 @@ pub fn list_branches(cwd: String) -> BranchList {
 #[tauri::command]
 pub fn checkout_branch(cwd: String, branch: String) -> Result<(), SessionError> {
     git::checkout_branch(&cwd, &branch).map_err(SessionError::Git)
+}
+
+/// Create + check out a new branch `name` from `base` (empty = HEAD) in `cwd` — the
+/// branch-creation git write (#124). Validation (invalid / already-existing name,
+/// unknown base) surfaces as `SessionError::Git { message }` for inline display.
+#[tauri::command]
+pub fn create_branch(cwd: String, name: String, base: String) -> Result<(), SessionError> {
+    git::create_branch(&cwd, &name, &base).map_err(SessionError::Git)
 }
 
 /// Two-dot branch comparison for the diff viewer (#81) — `git diff base target`,

@@ -203,6 +203,25 @@ export const listBranches = (cwd: string) =>
 export const checkoutBranch = (cwd: string, branch: string) =>
   invoke<void>("checkout_branch", { cwd, branch });
 
+/** Create + check out a new branch `name` from `base` (empty = HEAD) in `cwd` —
+ * the branch-creation git write (#124). Rejects an invalid / already-existing name
+ * or unknown base with a typed error (shown inline in the new-session modal). */
+export const createBranch = (cwd: string, name: string, base: string) =>
+  invoke<void>("create_branch", { cwd, name, base });
+
+/** Start an agent in an isolated worktree on a **new** branch `name` (from `base`,
+ * empty = HEAD) of `repo` — the ⌘⏎ create-branch-as-worktree path (#124). */
+export const spawnWorktreeAgentNewBranch = (
+  repo: string,
+  name: string,
+  base: string,
+) =>
+  invoke<SessionRecord>("spawn_worktree_agent_new_branch", {
+    repo,
+    name,
+    base,
+  });
+
 /** Create a scheduled session (#93); `at` is the fire time in unix secs. Returns
  * the persisted record (the backend owns its id + created_at). */
 export const createSchedule = (

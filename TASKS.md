@@ -32,9 +32,11 @@ signing/notarization · a **Settings** screen now exists (#100/#102/#103, revers
 v1 "no settings screen" rule) and **Canvas tabs detach into their own native window**
 (#84, reversing "no multi-window") · **git is read-mostly** —
 ClaudeCue reads git (current branch + working-tree diff vs `HEAD`, branch compare #81)
-and never commits or creates branches; its writes are `git checkout <existing branch>`
-from the new-session flow (#27) and `git worktree add`/`remove` for isolated worktree
-agents (#74). `claude` is assumed on `PATH` (clear in-app error if missing).
+and never commits; its writes are `git checkout <existing branch>` from the new-session
+flow (#27), `git worktree add`/`remove` for isolated worktree agents (#74), and
+**branch creation** (`git checkout -b` / `git worktree add -b`) via the new-session
+branch step's "+ add branch" (#124). `claude` is assumed on `PATH` (clear in-app error
+if missing).
 
 > The original design spec and interactive prototype (`HANDOFF.md`,
 > `Conductor.dc.html`) are preserved in git history (commit `b02efd8`
@@ -321,8 +323,8 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#119 + #122 + #123 are complete — see **Implemented (completed tasks)** above
-for the index, and git history for full per-task detail. **Open tasks: #120, #121, #124,
+Tasks #1–#119 + #122–#124 are complete — see **Implemented (completed tasks)** above
+for the index, and git history for full per-task detail. **Open tasks: #120, #121,
 #125.** New work
 goes here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
@@ -1424,9 +1426,9 @@ modals, and mouse behavior.
 
 ---
 
-### 124. [ ] Create a new branch from the New-session modal ("+ add branch")
+### 124. [x] Create a new branch from the New-session modal ("+ add branch")
 
-**Status:** Not started
+**Status:** Complete
 **Owner:** _(unassigned)_
 **Depends on:** none · _(extends the #27/#66 new-session branch step and the #74 worktree write)_
 **Created:** 2026-06-22
@@ -1481,32 +1483,32 @@ new-session branch step, and deleting/renaming branches.
 
 **Subtasks**
 
-1. [ ] Backend: `git checkout -b` create-branch write (name + base validation,
+1. [x] Backend: `git checkout -b` create-branch write (name + base validation,
    exists→error) and `git worktree add -b` new-branch-worktree write; commands +
    typed IPC + Rust tests.
-2. [ ] Branch step UI: render "+ add branch" as the last option (arrow-key reachable
+2. [x] Branch step UI: render "+ add branch" as the last option (arrow-key reachable
    + click); inline name input + base-branch dropdown (default current/HEAD).
-3. [ ] Wire confirm → create+checkout+start (normal) and ⌘⏎ → create-as-worktree+
+3. [x] Wire confirm → create+checkout+start (normal) and ⌘⏎ → create-as-worktree+
    start; preserve the destructive warning for the in-folder checkout path.
-4. [ ] Inline validation/error for invalid or already-existing names.
-5. [ ] Update `CLAUDE.md` git-scope notes to record branch creation as an allowed
+4. [x] Inline validation/error for invalid or already-existing names.
+5. [x] Update `CLAUDE.md` git-scope notes to record branch creation as an allowed
    write.
-6. [ ] Tests for the git writes + any pure validation/nav helpers.
+6. [x] Tests for the git writes + any pure validation/nav helpers.
 
 **Acceptance criteria**
 
-- [ ] The branch step shows a **"+ add branch"** option below all branches,
+- [x] The branch step shows a **"+ add branch"** option below all branches,
   selectable by arrow keys and click.
-- [ ] Selecting it lets the user type a name and pick a **base** (default current
+- [x] Selecting it lets the user type a name and pick a **base** (default current
   branch); confirm **creates + checks out** the branch from that base and starts the
   agent.
-- [ ] **⌘⏎** creates the new branch as an **isolated worktree** (#74) and starts there.
-- [ ] The **destructive-checkout warning** still shows when an agent is already
+- [x] **⌘⏎** creates the new branch as an **isolated worktree** (#74) and starts there.
+- [x] The **destructive-checkout warning** still shows when an agent is already
   running in the folder (in-folder path); the worktree path doesn't warn.
-- [ ] An **invalid or already-existing** name shows an inline error and does not
+- [x] An **invalid or already-existing** name shows an inline error and does not
   create/start anything.
-- [ ] `CLAUDE.md` reflects that branch creation is now an allowed git write.
-- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+- [x] `CLAUDE.md` reflects that branch creation is now an allowed git write.
+- [x] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
   `npm run lint:rust` pass.
 
 **Notes**
