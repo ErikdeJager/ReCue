@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Copy, Pencil, Plus, Trash2, X } from "lucide-react";
 
 import { useStore } from "../../store";
@@ -23,6 +23,9 @@ function TemplateManager() {
   const [draft, setDraft] = useState("");
   // The template pending a delete confirm (#103); null when not confirming.
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  // Guards the rename `onBlur` so an explicit cancel/commit doesn't double-fire
+  // (mirrors the SessionRow #57 pattern): Escape cancels without committing.
+  const renameSettled = useRef(false);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -33,11 +36,20 @@ function TemplateManager() {
   }, [close]);
 
   const beginRename = (id: string, name: string) => {
+    renameSettled.current = false;
     setRenamingId(id);
     setDraft(name);
   };
+  // Enter / blur commit; Escape cancels. The guard avoids a double-commit (and a
+  // commit-on-cancel) when clearing `renamingId` blurs the unmounting input.
   const commitRename = (id: string) => {
+    if (renameSettled.current) return;
+    renameSettled.current = true;
     renameTemplate(id, draft);
+    setRenamingId(null);
+  };
+  const cancelRename = () => {
+    renameSettled.current = true;
     setRenamingId(null);
   };
 
@@ -93,8 +105,12 @@ function TemplateManager() {
                         event.preventDefault();
                         commitRename(t.id);
                       } else if (event.key === "Escape") {
+                        // Cancel the rename (discard the draft) without closing the
+                        // modal: stopPropagation keeps the window Escape→close handler
+                        // from firing, and cancelRename guards the onBlur commit.
                         event.preventDefault();
-                        setRenamingId(null);
+                        event.stopPropagation();
+                        cancelRename();
                       }
                     }}
                     onBlur={() => commitRename(t.id)}

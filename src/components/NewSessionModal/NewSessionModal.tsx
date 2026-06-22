@@ -616,7 +616,7 @@ function NewSessionModal() {
   const onTrapKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>) => {
     if (event.key !== "Tab" || !formRef.current) return;
     const focusable = formRef.current.querySelectorAll<HTMLElement>(
-      'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
     );
     const first = focusable[0];
     const last = focusable[focusable.length - 1];

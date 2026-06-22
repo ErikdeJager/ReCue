@@ -1505,6 +1505,16 @@ export const useStore = create<AppState>()((set, get) => ({
       } else if (liveKind === "terminal") {
         const termId = crypto.randomUUID();
         await ipc.spawnTerminal(cwd, termId);
+        // If the panel (or its whole tab) was closed while the shell spawned, kill
+        // the now-orphaned PTY rather than leaking it — a canvas terminal is tracked
+        // only by its leaf, so once that's gone nothing else would dispose it.
+        const layout = get().canvases.find((c) => c.id === canvasId)?.layout;
+        const leafGone =
+          !layout || !collectLeaves(layout).some((l) => l.id === leafId);
+        if (leafGone) {
+          void ipc.killSession(termId).catch(() => {});
+          return;
+        }
         live = resolvedContent(block, cwd, { sessionId: termId });
       } else if (liveKind === "file") {
         const exists = await ipc.fileExists(cwd, block.file ?? "");
