@@ -13,7 +13,8 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
 - **Overview wall** — active sessions as equal-width live terminal columns, **grouped
   by repo** with colored badges and a per-repo filter; columns are
   **drag-reorderable**, and a repo can add **diff**, **file-viewer**, and **terminal**
-  columns.
+  columns. **Fork** any agent's conversation from its header to branch it into a new
+  parallel session.
 - **Canvas** — a split-panel workspace with **multiple named tabs**; drag any sidebar
   item (agent, file, diff, or terminal) in to tile it, split panels on their edges,
   resize borders. A tab can **pop out into its own native window** for multi-monitor use.

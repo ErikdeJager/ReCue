@@ -216,7 +216,14 @@ even though it works in `tauri dev`.
   shared **`ScheduledPanel`** — an **auto-saving** (debounced → `update_schedule`)
   editor for the launch time / name / prompt + cancel — in the **sidebar** (a
   draggable row, click selects/jumps #79, × cancels), an **Overview card**, and a
-  **Canvas panel**. Time helpers live in `src/time.ts`.
+  **Canvas panel**. Time helpers live in `src/time.ts`. The schedule **prompt** field
+  (in both the `NewSessionModal` schedule step and the `ScheduledPanel`) is a shared
+  **`SkillAutocomplete`** component (#114): typing `/` in command position opens a
+  dropdown of the slash-invokable **skills** `claude` would offer, read best-effort by
+  the Rust **`skills.rs`** (`list_skills(cwd)`) from project (`<cwd>/.claude/skills/*/SKILL.md`
+  + `.claude/commands/**/*.md`) and user (`~/.claude/…`) dirs, deduped (project shadows
+  user); ↑/↓/Enter/Tab insert `/<skill-name> ` (with a container-key guard so Enter/Escape
+  drive the menu, not the modal). Plugin/marketplace skills are out of scope.
 - **Auto-named agents (#97):** an agent with **no custom name** shows **claude's own
   session title** rather than the bare branch. A backend **title reader**
   (`src-tauri/src/title.rs`) globs the session's `~/.claude/projects/*/<uuid>.jsonl`
@@ -279,7 +286,8 @@ even though it works in `tauri dev`.
 │   │                       #   FileSwitcher (#90), DiffInspector, DetachedNote (#84),
 │   │                       #   ScheduledPanel (#94), Settings (#100), BusyIndicator,
 │   │                       #   TemplateEditor + TemplateManager (#117) + TemplateUseModal (#118),
-│   │                       #   Checkbox, Slider (#122), NewSessionModal, Toaster, ViewSwitch,
+│   │                       #   Checkbox, Slider (#122), SkillAutocomplete (#114),
+│   │                       #   NewSessionModal, Toaster, ViewSwitch,
 │   │                       #   ClaudeMissing, EmptyState
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
@@ -294,6 +302,7 @@ even though it works in `tauri dev`.
 │   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, settings, sidebar width)
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + list + checkout + worktree (#74)
 │   ├── src/files.rs        # Read-only file access (list text files/read, path-validated)
+│   ├── src/skills.rs        # Read-only scan of .claude skills/commands for prompt autocomplete (#114)
 │   ├── Info.plist          # Partial plist (mic + speech-recognition usage strings), merged into the bundle
 │   ├── tauri.conf.json     # Window, bundle, build config
 │   ├── capabilities/       # Tauri permission capabilities
@@ -343,8 +352,10 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   (The v1 "no status system" rule was deliberately narrowed by **#42** — a single
   **busy/idle** indicator — and by **#112**, which adds a third "finished / needs
   input" yellow state to that same dot. Still no approval pills or floating status.)
-- No Archive (single **Remove = kill + forget**), no Skills manager, no Fork, no
-  light mode, no auth.
+- No Archive (single **Remove = kill + forget**), no Skills manager, no light mode,
+  no auth. **Fork now exists** (#126 — reverses the v1 "no Fork" rule): a "Fork
+  conversation" button on every agent header branches the source agent into a new
+  parallel session (see the Spawn note + Conventions).
 - **Settings** now exists (#100/#102/#103 — reverses the v1 "no settings screen"
   rule, as #84 reversed single-window): a sidebar footer gear opens a modal with
   Terminal / Sessions / Appearance / Behavior / Data & About sections (see the
