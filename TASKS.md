@@ -591,3 +591,111 @@ was a clip-path shape). Implementer's choice between those two; recommend `Box`.
   user's tweak at implementation. Adjust if any of these is wrong.
 - This **reverses #113** (which itself reversed the non-collapsible part of #34);
   after this task, sidebar repo folders are non-collapsible again, as in #34.
+
+---
+
+### 116. [ ] Activity indicator goes yellow on a brand-new session before any prompt — should stay gray until first real work
+
+**Status:** Not started
+**Owner:** _(unassigned)_
+**Depends on:** none · _(fixes shipped #112 / #42 / #55 behavior)_
+**Created:** 2026-06-22
+
+**Description**
+
+When you **start a new session**, the activity indicator (#112) **immediately
+turns yellow** ("finished — needs input") and sits there, even though you haven't
+sent the agent anything yet. It should instead stay **gray** (the fresh /
+never-active state) right after start, and only become yellow once the agent has
+actually **done some work and gone idle** — i.e., after you've sent your first
+prompt and `claude` has worked on it.
+
+**Root cause (traced).** The yellow "settled" state is `!busy && hasBeenActive`
+(`BusyIndicator.tsx:34`). `hasBeenActive` is latched on the **first `busy`
+edge** — persisted via `mark_session_active` (`lib.rs:70–72`) and flipped in the
+store's `setBusy` → `sessionActive` (`store.ts:759–762`). But the busy heuristic
+counts `claude`'s **startup TUI paint** as busy: in `pty.rs` (lines 604–606) a
+session with no keystrokes yet (`last_input == 0`) treats **any** recent output as
+busy. So spawning `claude` paints its welcome screen → `busy=true` → latches
+`has_been_active` → the paint settles → `!busy && hasBeenActive` → **yellow**, all
+before the user typed a prompt.
+
+**Desired behavior.**
+
+- A freshly started **interactive** session reads **gray** from spawn, through the
+  user reading the welcome screen and typing their first prompt.
+- It turns **blue** (shimmer) while `claude` is actually working on a submitted
+  prompt.
+- It turns **yellow** ("needs input") only **after** `claude` has done work and
+  gone idle (the existing #112 settled state), and stays yellow until it works
+  again.
+
+**Recommended direction.** Stop `claude`'s pre-input startup paint from counting
+as activity. The cleanest single lever is the **busy heuristic** itself: a session
+should only read as busy once it has work to do — i.e., output that arrives **after
+the user has submitted input** (reuse the existing #55 `last_input` stamp:
+`last_input != 0`), rather than the current `inp == 0 → any output is busy` branch.
+With no busy until first input, neither `sessionActive` (frontend) nor
+`mark_session_active` (backend) latches, so the dot stays gray until the first real
+turn — which also removes the brief startup **blue** flicker, matching "gray right
+after start". (If the implementer prefers, gate only the `has_been_active` latch on
+"has received input" and leave the startup blue as-is — but the unified
+busy-heuristic fix is preferred.)
+
+**Critical edge case — scheduled sessions (#93/#94).** A scheduled agent boots
+**pre-seeded with a prompt positionally** (`claude --session-id <id> "<prompt>"`,
+via `spawn_session_with_prompt`) and starts working immediately with **no
+`write_stdin`**, so `last_input` stays `0`. A naive "busy requires `last_input !=
+0`" rule would leave scheduled sessions **stuck gray** — never blue while working,
+never yellow when done. The fix **must** treat a prompt-seeded session as already
+having work (e.g. a per-session "started-with-prompt" flag in the activity state,
+or stamping a synthetic initial input), so seeded sessions still go blue→yellow
+correctly.
+
+**Out of scope.** No change to the visual design of the three states (#112) or the
+busy-window / echo timings (#42/#55) beyond the gating described. Boot-resume must
+not regress: a previously-active resumed session still shows yellow immediately
+(its persisted `has_been_active`), and a never-active resumed session stays gray
+despite the resume repaint.
+
+**Subtasks**
+
+1. [ ] Reproduce: start a new interactive session → confirm it goes yellow before
+   any prompt; identify the startup-paint busy edge.
+2. [ ] Adjust the busy heuristic (`pty.rs` monitor, ~604–606) so `claude`'s
+   pre-input startup output does **not** read as busy for an interactive session
+   (reuse `last_input`), while preserving the #55 echo-aware behavior after input.
+3. [ ] Add the **seeded-session exception** so scheduled/prompt-seeded sessions
+   (#93, `spawn_session_with_prompt`) still go blue while working and yellow when
+   idle (per-session "started-with-prompt" flag or equivalent).
+4. [ ] Verify the downstream latches (`sessionActive` in `store.ts`,
+   `mark_session_active` in `lib.rs`) now only fire on genuine work; adjust if any
+   independent path can still latch from the startup paint.
+5. [ ] Add/extend tests: a pure/unit test that startup output with no prior input
+   does **not** mark a session busy/active, and that post-input output (and a
+   seeded session) does.
+
+**Acceptance criteria**
+
+- [ ] A newly started interactive session shows the **gray** dot right after start
+  and stays gray until the user sends their first prompt.
+- [ ] After the first prompt, the dot goes **blue** while `claude` works and
+  **yellow** ("needs input") once it finishes and is idle.
+- [ ] **Scheduled / prompt-seeded** sessions (#93/#94) still go blue while working
+  their seeded prompt and yellow when done — they are **not** stuck gray.
+- [ ] Boot-resume is unchanged: a previously-active session shows yellow on boot;
+  a never-active one stays gray despite the resume repaint.
+- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+  `npm run lint:rust` all pass.
+
+**Notes**
+
+- **Assumptions made (autonomous authoring — no clarifying questions asked):**
+  (a) the leaving-gray trigger is "the user has submitted input" (interactive),
+  reusing the #55 `last_input` stamp; (b) the fix should produce "gray right after
+  start" with **no** startup blue flicker either (the unified busy-heuristic
+  approach), not just suppress the yellow; (c) scheduled/seeded sessions must keep
+  their blue→yellow behavior via a seeded exception. Adjust if any is wrong.
+- Files in play: `src-tauri/src/pty.rs` (busy monitor + `Activity`/`last_input`,
+  `spawn_session_with_prompt`), `src-tauri/src/lib.rs` (`mark_session_active`),
+  `src/store.ts` (`setBusy` → `sessionActive`), `src/components/BusyIndicator`.
