@@ -673,3 +673,85 @@ would also read `forkSession` / `copyToClipboard` via `useStore`.
 - Session ID = the `claude` UUID (`claudeSessionId`), usable with `claude --resume`;
   equals the app session id (`claude_session_id: info.id`).
 - Reuses `copyToClipboard` (`store.ts`).
+
+---
+
+### 131. [ ] Add simple right-click context menus to the non-agent left-panel rows (file / diff / terminal / schedule)
+
+**Status:** Not started
+**Owner:** _(unassigned)_
+**Depends on:** none · _(pure-frontend; builds on the shipped sidebar rows #45/#59/#72/#94 and mirrors the `SessionRow` menu pattern; the #120/#121 refining passes are complete, so nothing open gates it)_
+**Created:** 2026-06-22
+
+**Description**
+
+The sidebar's **non-agent** item rows have **no right-click context menu** today —
+`FileRow`, `DiffRow`, `TerminalRow`, and `ScheduleRow`
+(`src/components/Sidebar/Sidebar.tsx`) offer only click-to-open, a hover-× close button,
+and drag-into-Canvas. By contrast the agent `SessionRow` and the repo header both have
+context menus. Add a **deliberately simple** right-click menu to each of these four rows
+with a **single item** — **Remove** for the file/diff/terminal rows and **Cancel** for the
+schedule row — so every left-panel row gains a menu now, with room to grow later.
+
+**Grounded in the code.** `ScheduleRow` (~line 40), `FileRow` (~line 307), `DiffRow`
+(~line 359), and `TerminalRow` (~line 420) currently have no `onContextMenu`. The pattern
+to mirror is **`SessionRow`** (~line 118): local `menu` state `{x,y}`, an `onContextMenu`
+that `preventDefault()`/`stopPropagation()` and sets a viewport-clamped position, then a
+`.menuOverlay` + `.menu` (`role="menu"`) block with `.menuItem` / `.menuItemDanger`
+buttons (overlay click closes). Each row **already receives the exact handler the menu
+needs**: `FileRow`/`DiffRow`/`TerminalRow` get `onClose` (the parent wires
+`onClose={() => void removeOverviewPanel(repo, panel.id)}`, ~lines 829/844/860 — and a
+terminal's close also kills its shell, #72); `ScheduleRow` gets `onCancel` (cancels the
+schedule). Reuse the existing `.menuOverlay` / `.menu` / `.menuItemDanger` classes in
+`Sidebar.module.css`.
+
+**Decisions (from the user / for consistency):**
+- **One item per menu:** **Remove** (file/diff/terminal) and **Cancel** (schedule) — no
+  other items in this pass ("for now they can just have the remove option").
+- **Behavior = the existing ×** (same `onClose`/`onCancel` handler) — for a terminal,
+  Remove kills its shell, exactly as the × does today. **No** new store/IPC/backend.
+- **No confirm gate** — mirrors the `SessionRow` Remove (ungated, calls the handler
+  directly); the repo-level #103 confirm gating is not applied here.
+- **Styling:** the red `menuItemDanger` style for all four (both Remove and Cancel are
+  removal-type actions), matching the agent Remove.
+
+**Scope — in:** the four non-agent sidebar rows; add an `onContextMenu` + a single-item
+menu to each. **Out:** the agent `SessionRow` menu (#130), the repo menu (#129), any new
+menu items beyond Remove/Cancel, and any backend change.
+
+**Subtasks**
+
+1. [ ] Add the menu to each row by mirroring `SessionRow`'s local `menu` state +
+   `onContextMenu` + `.menuOverlay`/`.menu` render. To avoid four near-identical copies,
+   optionally factor a tiny shared `RowContextMenu` (single-item) component — but a direct
+   mirror is acceptable for this minimal pass.
+2. [ ] `FileRow` / `DiffRow` / `TerminalRow`: single **Remove** item (`menuItemDanger`) →
+   calls the existing `onClose`; close the menu after.
+3. [ ] `ScheduleRow`: single **Cancel** item (`menuItemDanger`) → calls the existing
+   `onCancel`; close the menu after.
+4. [ ] Verify `npm run build`, `npm run lint`, `npm test`, `npm run format:check` (no Rust
+   changes expected).
+
+**Acceptance criteria**
+
+- [ ] Right-clicking a **file**, **diff**, or **terminal** row opens a menu with a single
+  **Remove** item that removes the row (and, for a terminal, kills its shell) — identical
+  to the × button.
+- [ ] Right-clicking a **scheduled-session** row opens a menu with a single **Cancel**
+  item that cancels the schedule — identical to the × button.
+- [ ] The menu mirrors the `SessionRow` menu (cursor-positioned/clamped, overlay-click
+  closes, red danger styling) with **no** confirm prompt.
+- [ ] Existing click-to-open, ×, and drag-into-Canvas behaviors are unchanged on all four
+  rows.
+- [ ] All build/lint/test/format checks pass.
+
+**Notes**
+
+- Pure frontend — reuses each row's existing `onClose` / `onCancel`; no backend/IPC/store
+  changes.
+- Deliberately minimal ("just Remove/Cancel for now"); future items (Open in Canvas,
+  Reveal in Finder, Copy path, Refresh diff, etc. — the earlier suggestion table) can
+  extend these same menus.
+- Sibling tasks **#129** (repo menu) and **#130** (agent `SessionRow` menu) edit the same
+  file (`Sidebar.tsx`) but different components — no logical dependency, just adjacent
+  edits if developed close together.
