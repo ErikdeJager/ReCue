@@ -325,7 +325,8 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks #1–#119 + #122–#125 are complete — see **Implemented (completed tasks)** above
 for the index, and git history for full per-task detail. **Open tasks: #120
-(now unblocked), #121.** New work
+(now unblocked), #121, #126** — note #126 (fork-conversation button) runs **after** the
+refining passes (`Depends on: #120, #121`), so it does **not** gate #120. New work
 goes here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
 
@@ -1596,3 +1597,174 @@ the `ScheduledPanel` (#94) editor (branch isn't editable there today — note).
 - Files in play: `src-tauri/src/store.rs` (`ScheduledSession`), `src-tauri/src/commands.rs`
   (`create_schedule` ~509, `fire_due_schedules` ~568–585), `src/components/NewSessionModal/NewSessionModal.tsx`
   (schedule step), TS schedule types.
+
+---
+
+### 126. [ ] Fork an agent's conversation into a new parallel session ("Fork" button on the agent header)
+
+**Status:** Not started
+**Owner:** _(unassigned)_
+**Depends on:** #120, #121 · _(per the user: built on top of the refined codebase — runs after both iteration/refining passes; otherwise independent, building on shipped #86 agent header, #101 agent spec, #93 spawn machinery, #97 auto-name, #63 exit handling)_
+**Created:** 2026-06-22
+
+**Description**
+
+Add a **"Fork conversation" button to every agent's header** that starts a **new,
+parallel `claude` session branched from the source agent's current conversation**, so
+the user can type into the fork and continue a **divergent line** while the original
+keeps running untouched. This is the "branch the conversation here and explore in
+parallel" workflow.
+
+**Verified CLI mechanism (claude 2.1.176).** `claude` supports `--fork-session`
+("When resuming, create a new session ID instead of reusing the original; use with
+`--resume`"). Crucially, **ClaudeCue can own the forked session's id**: `claude
+--session-id <new-uuid> --resume <source-uuid> --fork-session` is **accepted** — all
+three flags parse together (a probe only failed on a nonexistent source: "No
+conversation found with session ID: …"). So a fork becomes a **normal tracked
+session** carrying an app-generated UUID, integrating with resume-on-boot (#30),
+auto-naming (#97), persistence, and the busy indicator exactly like any session. The
+source session is **left completely untouched** (the fork gets a brand-new id),
+running in parallel — the point of the feature. _(Hold the same "verified against the
+real CLI" discipline as the existing flag notes in CLAUDE.md Conventions; if a future
+`claude` changes these flags, update `agents.rs`.)_
+
+**The fork reads the source's on-disk conversation log** at click time. `claude`
+flushes per turn, so forking when the source is idle captures everything up to the
+last completed turn; forking mid-turn captures up to whatever is persisted at that
+moment (allowed — see below).
+
+**Behavior (from the user's answers).**
+
+- **Placement:** a fork button (Lucide `GitFork`) on **every agent header** — both the
+  Overview `SessionCard` and Canvas agent-panel headers — sitting **next to the
+  existing Copy-resume (#28/#86) and Close/Remove buttons** at the top of the header.
+  One affordance, same place everywhere.
+- **On click → create + surface the fork:** spawn the forked session, **select it and
+  make it visible where the user is** — in Overview its new card appears in the same
+  repo cluster and is selected; in Canvas it opens as a **new panel** in the active
+  tab — so the user can immediately type. A brief confirmation toast ("Forked
+  conversation").
+- **Fork marker:** because a fork shares the source conversation, claude's auto-title
+  (#97) will likely give it the **same name** as the source. Show a small **"fork"
+  text badge** on the forked agent (mirroring the existing **"worktree"** badge on
+  `SessionCard` / the Canvas agent header) so the two are distinguishable. The label
+  itself stays the normal auto-title/branch; a user rename (#57) still wins.
+- **Allowed anytime:** the fork button is **always enabled**, including while the
+  source is busy; the fork reflects the conversation as persisted to the session log
+  at that moment.
+- **Same folder/context:** the fork inherits the source's `repo_path` (same `cwd`) and
+  `worktree_parent`, so a fork of a worktree agent (#74) runs in the **same worktree**
+  and clusters with its parent. No new worktree is created.
+- **Fresh-for-input (busy state):** the fork spawns via the **resume-like, non-seeded**
+  path (it does **not** re-run a prompt), so per #116 its activity dot stays **gray**
+  until the user submits their first prompt in it (the resume repaint doesn't read as
+  busy); `has_been_active` starts false.
+
+**Backend (new spawn mode — no git writes).**
+
+- `agents.rs`: add `AgentSpec::fork_args(new_id, source_id)` → for Claude
+  `["--session-id", new_id, "--resume", source_id, "--fork-session"]`, keeping the
+  agent pluggable; fork is a resume variant, so gate on `supports_resume`.
+- `pty.rs`: add `SessionManager::fork_session(source_session_id, cwd, name, agent)` —
+  generate a new UUID, build the fork args via the spec, spawn through `spawn_with_id`
+  with `seeded = false` (mirrors `resume_session`).
+- `commands.rs`: add a `fork_session(source_id)` Tauri command — look up the source's
+  persisted record for `repo_path` / `agent` / `worktree_parent`, spawn the fork, and
+  persist a **new** `PersistedSession` (new `id` = new `claude_session_id`,
+  `repo_path` / `worktree_parent` / `agent` copied from the source) with a new
+  serde-default `forked_from: Option<String>` set to the source id; `touch_recent`.
+  Register in `lib.rs`.
+
+**Persistence / types.** Add `forked_from: Option<String>` (serde-default for
+back-compat) to `PersistedSession` + `SessionView` (Rust) and `forkedFrom?: string` to
+the TS `SessionRecord` / `SessionView` mirrors. The badge renders when `forkedFrom` is
+set; it's also useful provenance.
+
+**Frontend.**
+
+- `ipc.ts`: typed `forkSession(sourceId)` → `invoke("fork_session", …)`.
+- `store.ts`: a `forkSession(sourceId)` action — call the IPC, add the returned record
+  to `sessions`, **select it**, and **surface it** (when the current view is Canvas,
+  append it as an agent panel to the active tab, reusing the existing agent→panel path
+  used for sidebar drag-in / `canvasDrop`); emit the toast. Handle failure (e.g.
+  `claude` missing → the existing `claudeMissing` / error toast path).
+- `Overview.tsx` (`SessionCard` `actions`) and `CanvasSurface.tsx` (agent-panel
+  header): render the fork button next to Copy-resume + Close, wired to
+  `forkSession(session.id)`; and render the **"fork" badge** (reuse
+  `styles.worktreeBadge`) when `session.forkedFrom` is set.
+
+**Edge cases.**
+
+- **Source has no conversation yet** (a brand-new session that never produced a turn):
+  `--resume` finds nothing → the fork PTY exits non-zero and shows the standard
+  "Process exited" overlay + Restart (#63). Acceptable (button stays always-enabled per
+  the user); note as a known limitation.
+- Killing/removing the source does **not** affect the fork, and vice-versa — they're
+  independent sessions.
+- Detached canvas windows (#84): forking from the main window is the supported path; a
+  fork initiated in a detached window can defer to / appear in the main window (don't
+  block it). Note, don't over-engineer.
+
+**Out of scope.** Forking into a _different_ folder or a _fresh_ worktree; a visual
+fork-lineage/tree graph (just the badge + persisted `forked_from`); forking non-claude
+agents (claude is the only agent; `fork_args` covers it, gated on `supports_resume`);
+any conversation-merge.
+
+**Subtasks**
+
+1. [ ] **Backend args + spawn** — `AgentSpec::fork_args` (claude → `--session-id <new>
+   --resume <src> --fork-session`) and `SessionManager::fork_session` (new UUID,
+   non-seeded); Rust unit test for the args.
+2. [ ] **`fork_session` command + persistence** — look up the source record, spawn the
+   fork, persist a new `PersistedSession` with `forked_from = Some(source_id)`; add the
+   serde-default `forked_from` field to `PersistedSession` + `SessionView`; register in
+   `lib.rs`.
+3. [ ] **IPC + TS types** — `forkSession(sourceId)` in `ipc.ts`; `forkedFrom?` on
+   `SessionRecord` / `SessionView`.
+4. [ ] **Store action** — `forkSession`: call IPC, add + **select** the session,
+   **surface** it (append a Canvas panel when in Canvas), toast, error handling.
+5. [ ] **Header button** — fork button (Lucide `GitFork`) next to Copy-resume + Close
+   on `SessionCard` (Overview) and the Canvas agent-panel header.
+6. [ ] **Fork badge** — small "fork" badge (reuse `worktreeBadge`) on both surfaces
+   when `forkedFrom` is set.
+7. [ ] **Docs** — record the fork spawn path + verified flag combo in CLAUDE.md
+   (Conventions "Sessions & resume" + the Spawn note).
+8. [ ] **Tests** — Vitest for the store action (adds + selects the fork) and any pure
+   helpers; Rust fork-args test; all gates green.
+
+**Acceptance criteria**
+
+- [ ] Every agent header (Overview cards **and** Canvas agent panels) shows a **Fork**
+  button next to the Copy-resume and Close buttons.
+- [ ] Clicking it starts a **new parallel `claude` session** forked from the source's
+  current conversation (via `--session-id <new> --resume <src> --fork-session`),
+  **selected and surfaced** where the user is (Overview card selected / new Canvas
+  panel), ready to type — while the **source keeps running untouched**.
+- [ ] The forked agent carries an **app-owned UUID** (resumes on boot, auto-names,
+  persists like any session) and shows a small **"fork" badge** distinguishing it from
+  the identically-titled source.
+- [ ] The fork button is **enabled anytime** (including while the source is busy); the
+  fork reflects the conversation persisted at click time.
+- [ ] The forked session starts **gray** (per #116) and goes blue→yellow only after
+  the user submits a prompt in it.
+- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+  `npm run lint:rust` all pass.
+
+**Notes**
+
+- **Decisions captured from the user:** button on **every agent header** next to
+  Copy-resume + Close; on click **select & surface** the fork; mark forks with a small
+  **"fork" badge** (because they inherit the source's auto-title); **allow forking
+  anytime** (incl. while busy).
+- **Per the user:** implement this **after the refining steps** — hence
+  `Depends on: #120, #121` (it is **not** added to #120's `Depends on`; it builds on
+  the refined code rather than gating the refinement pass).
+- **CLI verified** here against claude 2.1.176: `--fork-session` works with `--resume`,
+  and `--session-id` + `--resume --fork-session` parse together (only failing on a
+  nonexistent source) — so the app can dictate the fork's id.
+- Files in play: `src-tauri/src/agents.rs` (`AgentSpec`), `src-tauri/src/pty.rs`
+  (`spawn_session` / `resume_session` / `spawn_with_id`), `src-tauri/src/commands.rs`
+  (`spawn_session` ~69), `src-tauri/src/store.rs` (`PersistedSession`),
+  `src-tauri/src/lib.rs`, `src/ipc.ts` (`spawnSession` ~41), `src/store.ts`,
+  `src/types/index.ts`, `src/components/Overview/Overview.tsx` (`SessionCard` actions
+  ~172), `src/components/Canvas/CanvasSurface.tsx` (agent panel header).
