@@ -446,3 +446,103 @@ backend, IPC, store, or persistence changes.
   repo-color **outline** tint.
 - Files in play: `src/components/Sidebar/Sidebar.tsx` (~10 import, ~751–757 marker),
   `src/components/Sidebar/Sidebar.module.css` (`.repoCube` ~205–213).
+
+---
+
+### 129. [ ] Fix: the Canvas Templates ▾ dropdown menu can't open (clipped by the tab strip's overflow)
+
+**Status:** Not started
+**Owner:** _(unassigned)_
+**Depends on:** none · _(a self-contained bug fix in the shipped Canvas Templates tab-strip menu #117/#118)_
+**Created:** 2026-06-22
+
+**Description**
+
+The **Templates ▾ menu** in the Canvas tab strip (the `LayoutTemplate` + `ChevronDown`
+button next to the tab **+**, from #117/#118) **does not open** — clicking it shows
+**nothing at all**. Confirmed by the user (main app window; "nothing appears at all").
+Without this menu the user can't reach **"New tab from template…"**, **"New template…"**,
+or **"Manage templates…"**, so the entire Canvas Templates feature is unreachable from the
+UI.
+
+**Root cause (traced).** The toggle state logic is correct — clicking the button flips
+`templatesOpen` and the `.templatesMenu` is rendered. The problem is **CSS clipping**:
+
+- The dropdown `.templatesMenu` (`src/components/Canvas/Canvas.module.css` ~139–152) is
+  `position: absolute; top: calc(100% + var(--space-4)); right: 0;` — it drops **below**
+  the button.
+- Its scroll/clip ancestor `.tabStrip` (`Canvas.module.css` ~20–30) is a fixed
+  **`height: 34px`** row with **`overflow-x: auto`** (for horizontal scrolling of many
+  tabs). Per the CSS Overflow spec, when `overflow-x` is set to a non-`visible` value the
+  computed **`overflow-y` can no longer be `visible` — it becomes `auto`** too. So the tab
+  strip **clips everything beyond its 34px height**, and the menu (which sits *below* the
+  strip) is clipped away — it opens but is invisible/unreachable.
+
+So this is a layout/overflow bug, not an event bug. (The open/close logic in
+`CanvasTabs.tsx` ~157–175 — toggle, outside-`pointerdown`, Escape — is fine and must be
+preserved.)
+
+**Recommended fix.** Make the dropdown **escape the tab strip's overflow** rather than
+weakening the strip's needed horizontal scroll. Two viable directions (implementer's
+choice):
+
+1. **(Recommended) Render the menu with fixed positioning** anchored to the button's
+   `getBoundingClientRect()` (optionally via a portal to `document.body`), mirroring the
+   **sidebar repo context menu** which already escapes clipping this way
+   (`Sidebar.tsx:259` `style={{ left: menu.x, top: menu.y }}` + `position: fixed` in
+   `Sidebar.module.css:537`). Fixed/portaled elements aren't clipped by an ancestor's
+   `overflow`. Keep the existing outside-click/Escape/selection close behavior.
+2. **Restructure the strip so it doesn't clip** — move the `overflow-x: auto` horizontal
+   scroll onto an **inner tabs-only container** and let the outer `.tabStrip` (which holds
+   the **+** and the Templates wrapper) be `overflow: visible`, so the absolutely-positioned
+   menu is no longer inside a clipping box.
+
+Either way: the menu must open **fully visible**, all three items must work, and
+**horizontal scrolling of many tabs must still work**.
+
+**Scope — in:** the Canvas tab-strip Templates menu visibility/positioning
+(`CanvasTabs.tsx` + `Canvas.module.css`). **Out:** the menu's *contents* / the
+template editor / manager / use flows (they work once the menu opens — #117/#118), tab
+behavior, and detached canvas windows (#84 `CanvasWindow` renders no tab strip, so the
+menu doesn't exist there).
+
+**Subtasks**
+
+1. [ ] Reproduce and confirm the clip: the menu renders but is hidden by `.tabStrip`'s
+   computed `overflow-y: auto`.
+2. [ ] Make the dropdown escape the clip (recommended: fixed/portaled positioning anchored
+   to the button, per the sidebar context-menu precedent), **without** removing the tab
+   strip's horizontal scroll.
+3. [ ] Preserve the existing open/close behavior: toggle on the button, close on
+   outside-click (`pointerdown`), Escape, and item selection; keep `aria-haspopup` /
+   `aria-expanded` / `role="menu"` / `role="menuitem"`.
+4. [ ] Verify all three items work (**New tab from template…** is still `disabled` when
+   there are no templates), and that the menu is positioned sensibly relative to the button
+   (right-aligned as today, on-screen).
+5. [ ] Verify horizontal tab scrolling still works with enough tabs to overflow the strip.
+
+**Acceptance criteria**
+
+- [ ] Clicking the Templates **▾** button opens the menu **fully visible** in the main
+  window (no longer clipped/hidden).
+- [ ] **New tab from template…**, **New template…**, and **Manage templates…** are all
+  reachable and work; the menu closes on outside-click, Escape, and selection.
+- [ ] **Horizontal scrolling of many canvas tabs still works** (the fix didn't remove the
+  strip's scroll).
+- [ ] No off-system colors, no layout shift in the tab strip, reduced-motion unaffected.
+- [ ] `npm run build`, `npm run lint`, `npm test`, and `npm run format:check` pass (no Rust
+  changes expected).
+
+**Notes**
+
+- **Confirmed symptom (user):** clicking the ▾ shows **nothing at all**, in the **main app
+  window** — consistent with the overflow-clip root cause (not an event/race bug).
+- **CSS gotcha at the heart of this:** `overflow-x: auto` forces the computed `overflow-y`
+  away from `visible` (to `auto`), so a single-axis scroll container still clips the other
+  axis — which is why a dropdown that overflows *below* a horizontally-scrolling strip
+  disappears.
+- **Fix precedent in-repo:** the sidebar repo context menu (#31/#54) renders
+  `position: fixed` at cursor coords and is never clipped — the same escape applies here.
+- Files in play: `src/components/Canvas/CanvasTabs.tsx` (~150–175 menu state/handlers,
+  ~227–279 button + `.templatesMenu` render), `src/components/Canvas/Canvas.module.css`
+  (`.tabStrip` ~20–30, `.templatesWrap` ~133–137, `.templatesMenu` ~139–152).
