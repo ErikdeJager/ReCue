@@ -376,9 +376,9 @@ New work goes here as a fresh `### N.` entry in
 
 ---
 
-### 133. [ ] Worktree header context menu — Reveal in Finder / Copy absolute path
+### 133. [x] Worktree header context menu — Reveal in Finder / Copy absolute path
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none · _(builds on #74 worktree agents, #130 Reveal/Copy + `reveal_path`, #132 row menus — all shipped)_
 **Created:** 2026-06-22
 
@@ -407,23 +407,38 @@ destructive actions, no confirm gate.
 
 **Subtasks**
 
-1. [ ] Give the `worktreeHeader` a cursor-positioned context menu — reuse the existing
+1. [x] Give the `worktreeHeader` a cursor-positioned context menu — reuse the existing
    `useRowMenu()` hook (the `{x,y}` + Escape/overlay-dismiss pattern used by
    `RowContextMenu`).
-2. [ ] Render the two items ("Reveal in Finder" / "Copy absolute path") wired to
+2. [x] Render the two items ("Reveal in Finder" / "Copy absolute path") wired to
    `revealPath(wt)` and `copyToClipboard(wt, "path")`, reusing the `.menu` /
    `.menuOverlay` / `.menuItem` styles. Generalize `RowContextMenu` to accept multiple
    items, or add a small dedicated menu — implementer's choice.
-3. [ ] Verify the menu closes on select / Escape / outside-click and clamps to the
+3. [x] Verify the menu closes on select / Escape / outside-click and clamps to the
    viewport like the other row menus.
 
 **Acceptance criteria**
 
-- [ ] Right-clicking a worktree's branch/badge header opens a two-item menu.
-- [ ] "Reveal in Finder" opens the worktree folder in Finder; "Copy absolute path" puts
+- [x] Right-clicking a worktree's branch/badge header opens a two-item menu.
+- [x] "Reveal in Finder" opens the worktree folder in Finder; "Copy absolute path" puts
   that absolute path on the clipboard (toast "Copied path").
-- [ ] The worktree **agent** row's menu (#131) and regular agent rows are unchanged.
-- [ ] `npm run build`, `npm run lint`, and `npm test` pass.
+- [x] The worktree **agent** row's menu (#131) and regular agent rows are unchanged.
+- [x] `npm run build`, `npm run lint`, and `npm test` pass.
+
+**Implementation report**
+
+Extracted the inline `worktreeHeader` JSX in `Sidebar.tsx` into a `WorktreeHeader`
+component (so it can call the `useRowMenu()` hook at component top level), wired to a
+two-item right-click menu: **Reveal in Finder** → `revealPath(wt)` and **Copy absolute
+path** → `copyToClipboard(wt, "path")` (toast "Copied path"), where `wt` is the
+worktree's own absolute folder path (already the header tooltip). Generalized the shared
+`RowContextMenu` (#132) from a single `label`/`onActivate` to an `items: RowMenuItem[]`
+array (`{label, onActivate, danger?}`) — `danger` paints `menuItemDanger`, else the
+neutral `menuItem` — and updated the four existing single-item call sites
+(ScheduleRow/FileRow/DiffRow/TerminalRow) to pass a one-element `items` array.
+`useRowMenu`'s existing Escape/overlay-dismiss + viewport clamp cover subtask 3. Scope
+held to the worktree header; agent rows (#131) untouched. No backend change.
+`npm run build`, `npm run lint`, `npm test` (140) all pass.
 
 **Notes**
 

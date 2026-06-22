@@ -61,20 +61,24 @@ function useRowMenu() {
   return { menu, openMenu, closeMenu: () => setMenu(null) };
 }
 
-/** A deliberately minimal single-item context menu for the non-agent rows (#132):
- * file / diff / terminal show **Remove**, schedule shows **Cancel** — both the red
- * `menuItemDanger` style, calling the row's existing `onClose`/`onCancel` handler
- * (no confirm, no new backend). Reuses the `.menuOverlay` / `.menu` classes. */
+/** One entry in a `RowContextMenu` (#132/#133). `danger` paints it red
+ * (`menuItemDanger`) for destructive actions (Remove / Cancel); otherwise it
+ * uses the neutral `menuItem` style (the worktree header's Reveal / Copy, #133). */
+type RowMenuItem = { label: string; onActivate: () => void; danger?: boolean };
+
+/** A minimal cursor-positioned context menu for the non-agent sidebar rows
+ * (#132/#133): renders one or more `items`, each calling its `onActivate` and
+ * closing the menu. The non-agent rows show a single red Remove (or Cancel)
+ * item; the worktree header (#133) shows two neutral items (Reveal in Finder,
+ * Copy absolute path). Reuses the `.menuOverlay` / `.menu` classes. */
 function RowContextMenu({
   menu,
-  label,
+  items,
   onClose,
-  onActivate,
 }: {
   menu: { x: number; y: number } | null;
-  label: string;
+  items: RowMenuItem[];
   onClose: () => void;
-  onActivate: () => void;
 }) {
   if (!menu) return null;
   return (
@@ -92,17 +96,20 @@ function RowContextMenu({
         style={{ left: menu.x, top: menu.y }}
         role="menu"
       >
-        <button
-          type="button"
-          role="menuitem"
-          className={styles.menuItemDanger}
-          onClick={() => {
-            onClose();
-            onActivate();
-          }}
-        >
-          {label}
-        </button>
+        {items.map((item) => (
+          <button
+            key={item.label}
+            type="button"
+            role="menuitem"
+            className={item.danger ? styles.menuItemDanger : styles.menuItem}
+            onClick={() => {
+              onClose();
+              item.onActivate();
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
       </div>
     </>
   );
@@ -175,9 +182,8 @@ function ScheduleRow({
       </button>
       <RowContextMenu
         menu={menu}
-        label="Cancel"
+        items={[{ label: "Cancel", onActivate: onCancel, danger: true }]}
         onClose={closeMenu}
-        onActivate={onCancel}
       />
     </div>
   );
@@ -471,9 +477,8 @@ function FileRow({ repoPath, file, selected, onOpen, onClose }: FileRowProps) {
       </button>
       <RowContextMenu
         menu={menu}
-        label="Remove"
+        items={[{ label: "Remove", onActivate: onClose, danger: true }]}
         onClose={closeMenu}
-        onActivate={onClose}
       />
     </div>
   );
@@ -542,9 +547,8 @@ function DiffRow({
       </button>
       <RowContextMenu
         menu={menu}
-        label="Remove"
+        items={[{ label: "Remove", onActivate: onClose, danger: true }]}
         onClose={closeMenu}
-        onActivate={onClose}
       />
     </div>
   );
@@ -611,9 +615,47 @@ function TerminalRow({
       </button>
       <RowContextMenu
         menu={menu}
-        label="Remove"
+        items={[{ label: "Remove", onActivate: onClose, danger: true }]}
         onClose={closeMenu}
-        onActivate={onClose}
+      />
+    </div>
+  );
+}
+
+/**
+ * A worktree sub-group header (#74): the `GitBranch` icon + branch name +
+ * "worktree" badge for an isolated worktree folder, with the worktree's absolute
+ * path as its tooltip. Right-click opens a two-item menu (#133) mirroring the
+ * repo menu (#130): **Reveal in Finder** / **Copy absolute path** — both
+ * non-destructive, operating on the worktree's own absolute folder path (`path`).
+ */
+function WorktreeHeader({ path, branch }: { path: string; branch: string }) {
+  const copyToClipboard = useStore((s) => s.copyToClipboard);
+  const { menu, openMenu, closeMenu } = useRowMenu();
+  return (
+    <div
+      className={styles.worktreeHeader}
+      title={path}
+      onContextMenu={openMenu}
+    >
+      <GitBranch
+        size={12}
+        strokeWidth={1.5}
+        className={styles.worktreeIcon}
+        aria-hidden
+      />
+      <span className={styles.worktreeName}>{branch}</span>
+      <span className={styles.worktreeBadge}>worktree</span>
+      <RowContextMenu
+        menu={menu}
+        items={[
+          { label: "Reveal in Finder", onActivate: () => void revealPath(path) },
+          {
+            label: "Copy absolute path",
+            onActivate: () => void copyToClipboard(path, "path"),
+          },
+        ]}
+        onClose={closeMenu}
       />
     </div>
   );
@@ -1042,16 +1084,7 @@ function Sidebar() {
                 );
                 return (
                   <div key={wt} className={styles.worktreeGroup}>
-                    <div className={styles.worktreeHeader} title={wt}>
-                      <GitBranch
-                        size={12}
-                        strokeWidth={1.5}
-                        className={styles.worktreeIcon}
-                        aria-hidden
-                      />
-                      <span className={styles.worktreeName}>{wtBranch}</span>
-                      <span className={styles.worktreeBadge}>worktree</span>
-                    </div>
+                    <WorktreeHeader path={wt} branch={wtBranch} />
                     {wtAgents.map((session, i) => (
                       <SessionRow
                         key={session.id}
