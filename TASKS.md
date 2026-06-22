@@ -479,3 +479,115 @@ existing `FilePicker` (#56) popover/list patterns for look and keyboard feel.
 - Follow the `FilePicker` (#56) / `FileSwitcher` (#90) popover + keyboard patterns
   for consistency; the backend follows the `files.rs` → `commands.rs` → `lib.rs`
   → `ipc.ts` pattern (read-only, path-validated).
+
+---
+
+### 115. [ ] Revert collapsible sidebar folders (#113); replace the disclosure triangle with a static repo-colored cube
+
+**Status:** Not started
+**Owner:** _(unassigned)_
+**Depends on:** none · _(reverts the already-shipped #113; no open task feeds it)_
+**Created:** 2026-06-22
+
+**Description**
+
+**Revert the collapsible-folders feature (#113)** — the user does not want sidebar
+repo folders to collapse/expand, and does not want the **disclosure triangle**.
+Remove the collapse behavior **entirely** (toggle, persistence, child-row hiding),
+and **replace the triangle with a static repo-colored cube** as the folder's
+identity marker (the user's preference — "perhaps a cube looks better"). The cube
+takes the place the triangle/dot occupied: a small, **non-interactive** repo-color
+marker before the repo name, restoring the pre-#113 static-marker role that the
+#35 color dot used to play — but rendered as a **cube**, not a circle or triangle.
+
+**Background — exactly what #113 added (all to be removed):**
+
+- **Frontend `Sidebar.tsx`** (~lines 713, 750–765, 794–796): the `isCollapsed`
+  computation, the separate **`repoToggle` button** wrapping the
+  `repoTriangle`/`repoTriangleExpanded` span, the `onClick={toggleRepoCollapsed}`
+  + `aria-expanded`, and the `{!isCollapsed && (…)}` gate that hides a folder's
+  child rows.
+- **`Sidebar.module.css`** (~lines 199–231): `.repoToggle`, `.repoTriangle`,
+  `.repoTriangleExpanded`.
+- **`store.ts`**: the `collapsedRepos` state field (~line 430, default ~690),
+  the `toggleRepoCollapsed` action (~466, ~707–713), and the `init` seeding —
+  `getCollapsedRepos()` in the boot `Promise.all` (~1012), the `rawCollapsedRepos`
+  destructure (~1002), and `collapsedRepos: rawCollapsedRepos ?? []` (~1079).
+- **`ipc.ts`** (~216–220): `getCollapsedRepos` / `setCollapsedRepos` wrappers.
+- **Rust backend:** `commands.rs` `get_collapsed_repos` / `set_collapsed_repos`
+  (~743–751); `lib.rs` their `invoke_handler` registration (~164–165);
+  `store.rs` the `collapsed_repos` field (~158), `collapsed_repos()` /
+  `set_collapsed_repos()` accessors (~395–401), and the
+  `collapsed_repos_set_and_persist` test (~772–784).
+- **Tests:** `store.test.ts` (the `toggleRepoCollapsed` test + `collapsedRepos`
+  assertions, ~69/139–146), `store.refresh.test.ts` (the `getCollapsedRepos` /
+  `setCollapsedRepos` mocks + the "seeds collapsedRepos" test, ~21–22/53–54/153–162).
+
+**What stays unchanged:** the repo name still **filters Overview** on click
+(#34/#68) and right-click still opens the context menu (#31/#54). All child rows
+(sessions, worktree agents #74, file/diff/terminal/scheduled items) **always
+render** — there is no longer any hidden state. The activity-dot slot/alignment
+(#95) and the compact 10px labels (#111) are untouched.
+
+**The cube marker.** A static, repo-colored cube glyph occupying the same ~14px
+slot / ~10px footprint the triangle used, so row alignment with the agent
+activity dots is preserved. It is **non-interactive** (no button, no toggle,
+`aria-hidden`) — a plain identity marker like the #35 dot. Tinted to the repo
+color via the existing `repoColor(repo, repoColors)`. **Recommended rendering:**
+the **Lucide `Box`** icon (a 3D cube outline, on-system with the rest of the icon
+set) colored to the repo color; an acceptable alternative is a CSS `clip-path`
+isometric-cube silhouette filled with the repo color (mirroring how the triangle
+was a clip-path shape). Implementer's choice between those two; recommend `Box`.
+
+**Subtasks**
+
+1. [ ] **Frontend revert** — in `Sidebar.tsx` remove the `repoToggle` button, the
+   triangle span, `isCollapsed`, and the `{!isCollapsed && …}` gate (child rows
+   render unconditionally); drop the `collapsedRepos` / `toggleRepoCollapsed`
+   store reads.
+2. [ ] **Cube marker** — render a static repo-colored cube before the repo name
+   (Lucide `Box`, recommended), sized to keep the existing row alignment; remove
+   the triangle CSS and add the cube's styling.
+3. [ ] **Store + IPC** — remove `collapsedRepos`, `toggleRepoCollapsed`, the
+   `getCollapsedRepos` boot seeding from `store.ts`, and the
+   `getCollapsedRepos` / `setCollapsedRepos` wrappers from `ipc.ts`.
+4. [ ] **Rust** — remove the `collapsed_repos` field + accessors (`store.rs`), the
+   `get_collapsed_repos` / `set_collapsed_repos` commands (`commands.rs`), and
+   their `lib.rs` registration. An older `sessions.json` that still contains a
+   `collapsed_repos` key must deserialize cleanly (serde ignores unknown fields by
+   default — verify no `deny_unknown_fields`).
+5. [ ] **Tests** — delete the now-obsolete collapse tests in `store.test.ts`,
+   `store.refresh.test.ts`, and `store.rs`; adjust any remaining assertions that
+   referenced `collapsedRepos`.
+6. [ ] **Docs** — update the #113 line in `CLAUDE.md` / `TASKS.md`'s Implemented
+   summary to note it was reverted by this task (don't rewrite history; add the
+   reversal note, mirroring how #15→#62 and other reversals are recorded).
+
+**Acceptance criteria**
+
+- [ ] Sidebar repo folders **cannot** be collapsed — there is no toggle, and all
+  child rows are always visible.
+- [ ] The disclosure **triangle is gone**, replaced by a static repo-colored
+  **cube** before the repo name, aligned with the agent activity dots and tinted
+  to the repo color; it is not clickable.
+- [ ] Clicking the repo name still filters Overview; right-click still opens the
+  repo context menu (both unchanged).
+- [ ] No `collapsedRepos` / `collapsed_repos` code, IPC, commands, or persisted
+  value remains; an existing `sessions.json` with the old key loads without error.
+- [ ] No off-system colors, no layout shift in the repo header, reduced-motion
+  respected.
+- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+  `npm run lint:rust` all pass with the obsolete tests removed.
+
+**Notes**
+
+- **Assumptions made (autonomous authoring — no clarifying questions asked):**
+  (a) a **full** revert of #113 — the collapse behavior and its entire
+  persistence stack (TS + Rust `collapsed_repos`) are removed, not just hidden;
+  (b) the triangle is replaced by a **static, non-interactive** repo-colored
+  **cube** (not by restoring the #35 circular dot) in the same slot;
+  (c) cube rendering is the **Lucide `Box`** icon by default, with a clip-path
+  cube silhouette as an acceptable alternative — final visual is open to the
+  user's tweak at implementation. Adjust if any of these is wrong.
+- This **reverses #113** (which itself reversed the non-collapsible part of #34);
+  after this task, sidebar repo folders are non-collapsible again, as in #34.
