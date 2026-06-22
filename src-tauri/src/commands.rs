@@ -72,11 +72,16 @@ pub fn spawn_session(
     cwd: String,
     name: Option<String>,
     agent: Option<String>,
+    prompt: Option<String>,
 ) -> Result<PersistedSession, SessionError> {
     // The coding agent for this session (#101). Until the Settings selector (the
     // follow-up) the frontend omits it, so it defaults to Claude.
     let agent = agent.unwrap_or_else(|| crate::agents::DEFAULT_AGENT_ID.to_string());
-    let info = manager.spawn_session(cwd.as_str(), name.clone(), &agent)?;
+    // A non-blank initial prompt pre-seeds the session (#118 Canvas templates),
+    // like a scheduled session (#93); omitted/blank → a plain new session.
+    let prompt = prompt.filter(|p| !p.trim().is_empty());
+    let info =
+        manager.spawn_session_with_prompt(cwd.as_str(), name.clone(), prompt.as_deref(), &agent)?;
     let record = PersistedSession {
         id: info.id.clone(),
         claude_session_id: info.id,
@@ -293,6 +298,19 @@ pub fn read_text_file(repo: String, file: String) -> Result<String, SessionError
 #[tauri::command]
 pub fn list_skills(cwd: String) -> Vec<crate::skills::SkillInfo> {
     crate::skills::list_skills(cwd)
+}
+
+/// Whether a repo-relative `file` exists inside `repo` (#118) — resolves a Canvas
+/// template's `open-file` block; path-validated (rejects traversal).
+#[tauri::command]
+pub fn file_exists(repo: String, file: String) -> bool {
+    crate::files::file_exists(&repo, &file)
+}
+
+/// Whether `cwd` is a git work tree (#118) — gates a template's `open-diff` block.
+#[tauri::command]
+pub fn is_git_repo(cwd: String) -> bool {
+    crate::git::is_git_repo(cwd)
 }
 
 #[tauri::command]

@@ -164,8 +164,13 @@
   transition: background var(--dur-fast) var(--ease-out);
 }
 
-.templatesItem:hover {
+.templatesItem:hover:not(:disabled) {
   background: var(--bg-hover);
+}
+
+.templatesItem:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
 }
 
 /* Empty-canvas center drop target. */
@@ -321,6 +326,94 @@
   justify-content: center;
   color: var(--text-muted);
   font-size: var(--fs-meta);
+}
+
+/* --- Template instantiation: pending / error panels (#118) --- */
+.pending {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-8);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+}
+
+.pendingSpin {
+  color: var(--text-muted);
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pendingError {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-8);
+  padding: var(--space-16);
+  text-align: center;
+}
+
+.pendingErrIcon {
+  color: var(--status-error);
+}
+
+.pendingErrMsg {
+  margin: 0;
+  max-width: 320px;
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+  overflow-wrap: anywhere;
+}
+
+.pendingActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.pendingBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-12);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.pendingBtn:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.pickWrap {
+  position: relative;
+}
+
+.pickPopover {
+  position: absolute;
+  bottom: calc(100% + var(--space-4));
+  left: 0;
+  z-index: 20;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
 }
 
 /* A split group fills its slot (parent area, or an enclosing Panel when nested). */

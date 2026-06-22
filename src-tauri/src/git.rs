@@ -448,6 +448,15 @@ fn has_head(cwd: &Path) -> bool {
     run_git(cwd, &["rev-parse", "--verify", "HEAD"]).is_some()
 }
 
+/// Whether `cwd` is inside a git work tree (#118) — decides if a template's
+/// `open-diff` block can resolve. A non-git folder returns false (the panel then
+/// shows "Not a git repository" + Retry).
+pub fn is_git_repo(cwd: impl AsRef<Path>) -> bool {
+    run_git(cwd.as_ref(), &["rev-parse", "--is-inside-work-tree"])
+        .map(|out| out == "true")
+        .unwrap_or(false)
+}
+
 /// Run `git -C <cwd> <args>`; trimmed stdout on success, else `None`.
 fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
@@ -644,6 +653,21 @@ index 0..1
 
     fn commit_all(dir: &Path, msg: &str) -> bool {
         git_in(dir, &["add", "-A"]) && git_in(dir, &["commit", "-q", "--no-verify", "-m", msg])
+    }
+
+    #[test]
+    fn is_git_repo_distinguishes_git_and_plain_folders() {
+        // A plain (non-git) folder is not a repo.
+        let plain = unique_dir("plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert!(!is_git_repo(&plain));
+        let _ = fs::remove_dir_all(&plain);
+        // An init'd repo is.
+        let Some(repo) = init_repo("isrepo") else {
+            return;
+        };
+        assert!(is_git_repo(&repo));
+        let _ = fs::remove_dir_all(&repo);
     }
 
     #[test]

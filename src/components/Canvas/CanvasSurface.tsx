@@ -21,6 +21,8 @@ import ScheduledPanel from "../ScheduledPanel/ScheduledPanel";
 import Terminal from "../Terminal/Terminal";
 import { focusTerminal } from "../Terminal/terminalPool";
 import { removeLeaf, updateSizes } from "./canvasTree";
+import TemplatePendingPanel from "./TemplatePendingPanel";
+import { blockPlaceholderLabel } from "./templateBlocks";
 import styles from "./Canvas.module.css";
 
 const EDGES: CanvasEdge[] = ["top", "right", "bottom", "left"];
@@ -60,6 +62,9 @@ function panelTitle(content: CanvasContent): string {
   if (content.kind === "diff") return "Diff";
   if (content.kind === "terminal") return "Terminal";
   if (content.kind === "scheduled") return "Scheduled";
+  // A pending template panel (#118) shows its block's label until it resolves.
+  if (content.kind === "pending")
+    return content.block ? blockPlaceholderLabel(content.block) : "Panel";
   return content.label ?? "Panel";
 }
 
@@ -153,6 +158,10 @@ function LeafPanel({
     }
     if (content.kind === "scheduled" && content.scheduleId) {
       return <ScheduledPanel scheduleId={content.scheduleId} />;
+    }
+    // A pending/erroring template panel (#118): loading → live, or error + Retry.
+    if (content.kind === "pending") {
+      return <TemplatePendingPanel leafId={leaf.id} content={content} />;
     }
     return <div className={styles.placeholder}>Empty panel</div>;
   };

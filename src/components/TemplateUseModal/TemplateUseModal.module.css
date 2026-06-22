@@ -1,0 +1,199 @@
+/* "New tab from template" chooser (#118): scrim + centered dialog, two steps
+   (pick template → pick folder). On-system tokens + the shared popover shadow. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+}
+
+.dialog {
+  display: flex;
+  width: 360px;
+  max-width: calc(100vw - var(--space-32));
+  max-height: calc(100vh - var(--space-32));
+  flex-direction: column;
+  padding: var(--space-16);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-window);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-bottom: var(--space-12);
+}
+
+.headerIcon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+
+.label {
+  margin: 0 0 var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}
+
+.empty {
+  margin: 0 0 var(--space-12);
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+
+.list {
+  display: flex;
+  max-height: 240px;
+  flex-direction: column;
+  margin-bottom: var(--space-8);
+  overflow-y: auto;
+}
+
+.row {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-6) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--bg-hover);
+}
+
+.rowActive {
+  background: var(--accent-dim);
+}
+
+.rowName {
+  overflow: hidden;
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowPath {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.back {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.back:hover {
+  color: var(--text-primary);
+}
+
+.pickButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.pickButton:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.path {
+  margin: var(--space-4) 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8);
+  margin-top: var(--space-16);
+}
+
+.cancel,
+.primary {
+  padding: var(--space-4) var(--space-12);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.cancel {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.cancel:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

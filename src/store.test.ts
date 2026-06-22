@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { collectLeaves } from "./components/Canvas/canvasTree";
 import {
   accentCompanions,
   adjacentSessionId,
@@ -11,7 +12,7 @@ import {
   repoOrder,
   useStore,
 } from "./store";
-import type { SessionView } from "./types";
+import type { CanvasNode, SessionView } from "./types";
 
 function session(id: string): SessionView {
   return {
@@ -582,5 +583,82 @@ describe("canvas templates (#117)", () => {
     useStore.getState().closeTemplateEditor();
     expect(useStore.getState().templateEditorOpen).toBe(false);
     expect(useStore.getState().templateEditorId).toBe(null);
+  });
+});
+
+describe("canvas template instantiation (#118)", () => {
+  const pendingTab = (block: { kind: string; file?: string }): CanvasNode => ({
+    type: "leaf",
+    id: "L",
+    content: { kind: "pending", repoPath: "/repo/x", block },
+  });
+
+  it("useTemplate opens a new Canvas tab (pending panels) and switches to Canvas", () => {
+    const layout: CanvasNode = {
+      type: "leaf",
+      id: "lt",
+      content: { kind: "new-terminal" },
+    };
+    const id = useStore.getState().saveTemplate("Term", layout, null);
+    const before = useStore.getState().canvases.length;
+    useStore.getState().useTemplate(id, "/repo/x");
+    const s = useStore.getState();
+    expect(s.canvases.length).toBe(before + 1);
+    expect(s.view).toBe("canvas");
+    const tab = s.canvases[s.canvases.length - 1];
+    expect(tab?.name).toBe("Term");
+    expect(s.activeCanvasId).toBe(tab?.id);
+    // The leaf opens as a pending panel bound to the chosen folder (resolution is
+    // async + rejects host-less, but the tab opens immediately).
+    const leaf = collectLeaves(tab?.layout ?? null)[0];
+    expect(leaf?.content.kind).toBe("pending");
+    expect(leaf?.content.block).toEqual({ kind: "new-terminal" });
+    expect(leaf?.content.repoPath).toBe("/repo/x");
+  });
+
+  it("resolveTemplateBlock sets an inline error when a block can't resolve", async () => {
+    useStore.setState({
+      canvases: [
+        { id: "c1", name: "T", layout: pendingTab({ kind: "open-diff" }) },
+      ],
+      activeCanvasId: "c1",
+    });
+    // Host-less: ipc.isGitRepo rejects → the panel records an inline error and
+    // RETAINS its block so Retry can re-run it.
+    await useStore.getState().resolveTemplateBlock("c1", "L");
+    const leaf = collectLeaves(
+      useStore.getState().canvases[0]?.layout ?? null,
+    )[0];
+    expect(leaf?.content.kind).toBe("pending");
+    expect(leaf?.content.error).toBeTruthy();
+    expect(leaf?.content.block).toEqual({ kind: "open-diff" });
+  });
+
+  it("pickTemplateBlockFile replaces the pending block's relative path", () => {
+    useStore.setState({
+      canvases: [
+        {
+          id: "c1",
+          name: "T",
+          layout: pendingTab({ kind: "open-file", file: "missing.md" }),
+        },
+      ],
+      activeCanvasId: "c1",
+    });
+    useStore.getState().pickTemplateBlockFile("c1", "L", "README.md");
+    const leaf = collectLeaves(
+      useStore.getState().canvases[0]?.layout ?? null,
+    )[0];
+    expect(leaf?.content.block).toEqual({
+      kind: "open-file",
+      file: "README.md",
+    });
+  });
+
+  it("openTemplateUse / close toggle the chooser flag", () => {
+    useStore.getState().openTemplateUse();
+    expect(useStore.getState().templateUseOpen).toBe(true);
+    useStore.getState().closeTemplateUse();
+    expect(useStore.getState().templateUseOpen).toBe(false);
   });
 });

@@ -155,6 +155,8 @@ pub fn run() {
             commands::list_files,
             commands::read_text_file,
             commands::list_skills,
+            commands::file_exists,
+            commands::is_git_repo,
             commands::current_branch,
             commands::current_branches,
             commands::working_diff,

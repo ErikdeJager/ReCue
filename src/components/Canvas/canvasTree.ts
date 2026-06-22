@@ -110,6 +110,24 @@ export function updateLeafContent(
   return a === tree.a && b === tree.b ? tree : { ...tree, a, b };
 }
 
+/**
+ * Replace the leaf `leafId`'s content **wholesale** (#118) — used when a pending
+ * template panel resolves to live content (clearing its `block`/`error`), where a
+ * merge wouldn't drop the old fields. Unchanged subtrees keep their identity.
+ */
+export function setLeafContent(
+  tree: CanvasNode,
+  leafId: string,
+  content: CanvasContent,
+): CanvasNode {
+  if (tree.type === "leaf") {
+    return tree.id === leafId ? { ...tree, content } : tree;
+  }
+  const a = setLeafContent(tree.a, leafId, content);
+  const b = setLeafContent(tree.b, leafId, content);
+  return a === tree.a && b === tree.b ? tree : { ...tree, a, b };
+}
+
 /** The PTY session ids referenced by a layout's agent/terminal leaves (#84) —
  * the sessions whose terminal a window must render (and own) for that canvas. */
 export function sessionIdsInLayout(tree: CanvasNode | null): string[] {

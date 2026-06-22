@@ -35,8 +35,15 @@ export async function pickDirectory(): Promise<string | null> {
   return typeof selection === "string" ? selection : null;
 }
 
-export const spawnSession = (cwd: string, name?: string) =>
-  invoke<SessionRecord>("spawn_session", { cwd, name: name ?? null });
+/** Spawn a new `claude` session in `cwd`. An optional `prompt` pre-seeds it
+ * (positional, like a scheduled session #93) — used by Canvas template `new-agent`
+ * blocks (#118). */
+export const spawnSession = (cwd: string, name?: string, prompt?: string) =>
+  invoke<SessionRecord>("spawn_session", {
+    cwd,
+    name: name ?? null,
+    prompt: prompt ?? null,
+  });
 
 /** Spawn a plain shell terminal item (#72) in `cwd` under `id` (the panel id). */
 export const spawnTerminal = (cwd: string, id: string) =>
@@ -164,6 +171,15 @@ export const readTextFile = (repo: string, file: string) =>
  * project shadowing user; a missing dir just yields fewer entries (never throws). */
 export const listSkills = (cwd: string) =>
   invoke<SkillInfo[]>("list_skills", { cwd });
+
+/** Whether a repo-relative file exists inside `repo` (#118) — resolves a Canvas
+ * template `open-file` block (path-validated). */
+export const fileExists = (repo: string, file: string) =>
+  invoke<boolean>("file_exists", { repo, file });
+
+/** Whether `cwd` is a git work tree (#118) — gates a template `open-diff` block. */
+export const isGitRepo = (cwd: string) =>
+  invoke<boolean>("is_git_repo", { cwd });
 
 export const currentBranch = (cwd: string) =>
   invoke<string>("current_branch", { cwd });

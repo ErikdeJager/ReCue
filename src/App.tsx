@@ -13,7 +13,10 @@ import {
   applyCanvasDrop,
   payloadToContent,
 } from "./components/Canvas/canvasDrop";
-import { computeSessionOwners } from "./components/Canvas/canvasTree";
+import {
+  computeSessionOwners,
+  sessionIdsInLayout,
+} from "./components/Canvas/canvasTree";
 import CanvasWindow from "./components/CanvasWindow/CanvasWindow";
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
 import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
@@ -22,6 +25,7 @@ import Settings from "./components/Settings/Settings";
 import Sidebar from "./components/Sidebar/Sidebar";
 import TemplateEditor from "./components/TemplateEditor/TemplateEditor";
 import TemplateManager from "./components/TemplateManager/TemplateManager";
+import TemplateUseModal from "./components/TemplateUseModal/TemplateUseModal";
 import { reconcileTerminals } from "./components/Terminal/terminalPool";
 import Toaster from "./components/Toaster/Toaster";
 import { useStore } from "./store";
@@ -49,6 +53,7 @@ function MainApp() {
   const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
   const templateEditorOpen = useStore((s) => s.templateEditorOpen);
   const templateManagerOpen = useStore((s) => s.templateManagerOpen);
+  const templateUseOpen = useStore((s) => s.templateUseOpen);
   const init = useStore((s) => s.init);
   const [dragActive, setDragActive] = useState(false);
 
@@ -75,9 +80,15 @@ function MainApp() {
     // A PTY rendered in a detached canvas window (#84) is owned by that window —
     // drop it from this window's pool so it isn't rendered/resized in two places.
     const owners = computeSessionOwners(canvases, detachedCanvasIds);
-    const active = [...sessions.map((s) => s.id), ...terminalIds].filter((id) =>
-      ownedHere(owners, id),
-    );
+    // Template-created (#118) terminals live only in a Canvas layout — not in
+    // `overviewPanels` — so collect terminal/agent PTY ids referenced by any canvas
+    // too, else reconcile would dispose them. (Agent ids dedupe with `sessions`.)
+    const canvasPtyIds = canvases.flatMap((c) => sessionIdsInLayout(c.layout));
+    const active = [
+      ...sessions.map((s) => s.id),
+      ...terminalIds,
+      ...canvasPtyIds,
+    ].filter((id) => ownedHere(owners, id));
     reconcileTerminals(active);
   }, [sessions, overviewPanels, canvases, detachedCanvasIds]);
 
@@ -115,6 +126,7 @@ function MainApp() {
       <Toaster />
       <NewSessionModal />
       <Settings />
+      {templateUseOpen && <TemplateUseModal />}
       {templateManagerOpen && <TemplateManager />}
       {templateEditorOpen && <TemplateEditor />}
     </div>

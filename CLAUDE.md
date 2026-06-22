@@ -142,21 +142,32 @@ even though it works in `tauri dev`.
   resize via **react-resizable-panels**, panels close. The Overview wall and the tab
   strip keep their own nested sortable contexts (#43/#58) — only one view mounts at a
   time, so targets never clash.
-- **Canvas templates (#117, part 1 of 2):** reusable saved Canvas layouts whose
-  leaves hold inert action **blocks** (`new-agent` w/ optional prompt, `new-terminal`,
-  `open-file` w/ a relative path, `open-diff`) instead of live content. A single
-  **block registry** (`Canvas/templateBlocks.ts`, mirroring #82) drives the placeable
-  set — a new content kind becomes a block with one entry. The `CanvasTabs` strip's
-  **▾ Templates menu** opens a full-screen **`TemplateEditor`** (reuses the BSP
-  surface + `canvasTree` ops: a block **palette** is the only drag source, drop into
-  center/edges to split, resize, configure each block inline, name + save) and a
-  **`TemplateManager`** modal (edit / inline-rename / duplicate / delete, Delete
-  confirm-gated #103). Templates persist in their **own** `canvas_templates` Rust blob
+- **Canvas templates (#117/#118):** reusable saved Canvas layouts whose leaves hold
+  inert action **blocks** (`new-agent` w/ optional prompt, `new-terminal`, `open-file`
+  w/ a relative path, `open-diff`) instead of live content. A single **block registry**
+  (`Canvas/templateBlocks.ts`, mirroring #82) drives the placeable set — a new content
+  kind becomes a block with one entry. The `CanvasTabs` strip's **▾ Templates menu**
+  opens a full-screen **`TemplateEditor`** (reuses the BSP surface + `canvasTree` ops:
+  a block **palette** is the only drag source, drop into center/edges to split, resize,
+  configure each block inline, name + save), a **`TemplateManager`** modal (edit /
+  inline-rename / duplicate / delete, Delete confirm-gated #103), and (#118) **"New tab
+  from template…"** → a **`TemplateUseModal`** (pick template → pick one folder, reusing
+  the #66 folder UX). Templates persist in their **own** `canvas_templates` Rust blob
   (`get_canvas_templates`/`set_canvas_templates`, separate from `canvases`) → store
   `canvasTemplates` + `saveTemplate`/`renameTemplate`/`duplicateTemplate`/`deleteTemplate`.
-  The editor creates **no** live PTY/file (blocks are placeholders); a `CanvasTemplate`
-  reuses the `CanvasNode` tree with block-kind leaf `content`. **Instantiation** (using
-  a template to spin up a real canvas) + per-block fallbacks are **#118**.
+  A `CanvasTemplate` reuses the `CanvasNode` tree with block-kind leaf `content`.
+  **Instantiation (#118):** `useTemplate(id, cwd)` opens a **new tab** (pure
+  `templateInstantiate.ts` maps the tree → leaves flagged `kind:"pending"` carrying the
+  source `block` + chosen folder, fresh ids), then `resolveTemplateBlock` runs each
+  block **independently, best-effort** against that folder — `new-agent` via the
+  prompt-seeded spawn (`spawn_session` now takes an optional `prompt`, #93/#101),
+  `new-terminal` a fresh shell, `open-file` gated by `file_exists`, `open-diff` by
+  `is_git_repo`. A failed panel stays `pending` with an **inline error + Retry** (never
+  a toast/silent skip), `open-file` also offering **Pick file** (`FilePicker` scoped to
+  the folder); the panel **retains its block** so Retry re-runs it in place. No
+  spawn-count guard ("just do it"). The reconcile (`App.tsx`) now also keeps PTYs
+  referenced only by a Canvas layout (`sessionIdsInLayout`) so template terminals
+  survive.
 - **Detached canvas windows (#84):** a Canvas tab can open in its **own native
   window** for multi-monitor use, via a **pop-out button** on the tab or a **drag
   tear-off** (drag a tab out of the strip). The button/tear-off call Rust
@@ -256,7 +267,7 @@ even though it works in `tauri dev`.
 │   │                       #   CanvasWindow (#84), Terminal, FileViewer, FilePicker,
 │   │                       #   FileSwitcher (#90), DiffInspector, DetachedNote (#84),
 │   │                       #   ScheduledPanel (#94), Settings (#100), BusyIndicator,
-│   │                       #   TemplateEditor + TemplateManager (#117),
+│   │                       #   TemplateEditor + TemplateManager (#117) + TemplateUseModal (#118),
 │   │                       #   Checkbox, NewSessionModal, Toaster, ViewSwitch,
 │   │                       #   ClaudeMissing, EmptyState
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)

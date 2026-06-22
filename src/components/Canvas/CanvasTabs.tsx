@@ -149,6 +149,8 @@ function CanvasTabs() {
   const popOutCanvas = useStore((s) => s.popOutCanvas);
   const openTemplateEditor = useStore((s) => s.openTemplateEditor);
   const openTemplateManager = useStore((s) => s.openTemplateManager);
+  const openTemplateUse = useStore((s) => s.openTemplateUse);
+  const hasTemplates = useStore((s) => s.canvasTemplates.length > 0);
 
   // Templates ▾ menu (#117): a small dropdown near the + with "New template…" /
   // "Manage templates…". Closes on outside-click, Escape, or a selection.
@@ -238,6 +240,18 @@ function CanvasTabs() {
         </button>
         {templatesOpen && (
           <div className={styles.templatesMenu} role="menu">
+            <button
+              type="button"
+              className={styles.templatesItem}
+              role="menuitem"
+              disabled={!hasTemplates}
+              onClick={() => {
+                setTemplatesOpen(false);
+                openTemplateUse();
+              }}
+            >
+              New tab from template…
+            </button>
             <button
               type="button"
               className={styles.templatesItem}

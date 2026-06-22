@@ -6,9 +6,15 @@ import { create } from "zustand";
 
 import {
   collectLeaves,
+  setLeafContent,
   spatialNeighbor,
   updateLeafContent,
 } from "./components/Canvas/canvasTree";
+import { blockDescriptor } from "./components/Canvas/templateBlocks";
+import {
+  instantiateTemplate,
+  resolvedContent,
+} from "./components/Canvas/templateInstantiate";
 import { applyTerminalSettings } from "./components/Terminal/terminalPool";
 import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
@@ -406,6 +412,8 @@ export interface AppState {
   templateEditorId: string | null;
   /** Whether the "Manage templates" view is open (#117). */
   templateManagerOpen: boolean;
+  /** Whether the "New tab from template" chooser is open (#118). */
+  templateUseOpen: boolean;
   /** The keyboard-focused Canvas panel (leaf id), or null (#76). */
   activeLeafId: string | null;
   /** Sessions currently working, from the output-activity heuristic (#42); an
@@ -550,6 +558,21 @@ export interface AppState {
   duplicateTemplate: (id: string) => void;
   /** Delete a saved template (#117). */
   deleteTemplate: (id: string) => void;
+  /** Open / close the "New tab from template" chooser (#118). */
+  openTemplateUse: () => void;
+  closeTemplateUse: () => void;
+  /** Instantiate a template (#118): open a new Canvas tab against `cwd` with each
+   * block pending, then asynchronously resolve every pending panel. */
+  useTemplate: (templateId: string, cwd: string) => void;
+  /** (Re)run a pending template panel's block (#118) — initial resolution + Retry.
+   * Resolves to live content on success, or sets the panel's inline error. */
+  resolveTemplateBlock: (canvasId: string, leafId: string) => Promise<void>;
+  /** Set a pending `open-file` panel's relative path then retry it (#118 Pick file). */
+  pickTemplateBlockFile: (
+    canvasId: string,
+    leafId: string,
+    file: string,
+  ) => void;
   /** Set (or clear) the keyboard-focused Canvas panel (#76). */
   setActiveLeaf: (id: string | null) => void;
   /** Move the Canvas focus to the spatially adjacent panel (#76). */
@@ -704,6 +727,7 @@ export const useStore = create<AppState>()((set, get) => ({
   templateEditorOpen: false,
   templateEditorId: null,
   templateManagerOpen: false,
+  templateUseOpen: false,
   activeLeafId: null,
   sessionBusy: {},
   sessionActive: {},
@@ -1398,6 +1422,120 @@ export const useStore = create<AppState>()((set, get) => ({
     set({ canvasTemplates: next });
     void ipc.setCanvasTemplates(next).catch(() => {});
     get().pushToast("Template deleted");
+  },
+
+  // Canvas-template instantiation (#118): open a new tab from a template against one
+  // chosen folder, then resolve each block (best-effort, independent) into live
+  // content — agents/terminals spawn, files/diffs open, failures show inline Retry.
+  openTemplateUse: () => set({ templateUseOpen: true }),
+  closeTemplateUse: () => set({ templateUseOpen: false }),
+
+  useTemplate: (templateId, cwd) => {
+    const template = get().canvasTemplates.find((t) => t.id === templateId);
+    if (!template) return;
+    const tab = instantiateTemplate(template, cwd, () => crypto.randomUUID());
+    const next = [...get().canvases, tab];
+    // Open the new tab as the active Canvas (switch to Canvas if needed).
+    set({
+      canvases: next,
+      activeCanvasId: tab.id,
+      view: "canvas",
+      templateUseOpen: false,
+    });
+    set((s) => ({ recents: [cwd, ...s.recents.filter((r) => r !== cwd)] }));
+    void ipc.setCanvases({ canvases: next, activeId: tab.id }).catch(() => {});
+    get().pushToast(`Opened template "${template.name}"`);
+    // Kick off async resolution of every pending leaf (independent + best-effort).
+    for (const leaf of collectLeaves(tab.layout)) {
+      if (leaf.content.kind === "pending") {
+        void get().resolveTemplateBlock(tab.id, leaf.id);
+      }
+    }
+  },
+
+  resolveTemplateBlock: async (canvasId, leafId) => {
+    // Update just this canvas's layout leaf + persist (the tab may not be active if
+    // the user switched away during async resolution).
+    const applyLeaf = (mut: (tree: CanvasNode) => CanvasNode) => {
+      const { canvases, activeCanvasId } = get();
+      const next = canvases.map((c) =>
+        c.id === canvasId && c.layout ? { ...c, layout: mut(c.layout) } : c,
+      );
+      set({ canvases: next });
+      void ipc
+        .setCanvases({ canvases: next, activeId: activeCanvasId })
+        .catch(() => {});
+    };
+
+    const canvas = get().canvases.find((c) => c.id === canvasId);
+    const leaf = canvas?.layout
+      ? collectLeaves(canvas.layout).find((l) => l.id === leafId)
+      : undefined;
+    const block = leaf?.content.block;
+    const cwd = leaf?.content.repoPath ?? "";
+    if (!block) return;
+
+    // Loading: clear any prior error.
+    applyLeaf((tree) => updateLeafContent(tree, leafId, { error: undefined }));
+
+    try {
+      const liveKind = blockDescriptor(block.kind)?.liveKind;
+      let live;
+      if (liveKind === "agent") {
+        const record = await ipc.spawnSession(cwd, undefined, block.prompt);
+        get().upsertSession(toSessionView(record));
+        live = resolvedContent(block, cwd, { sessionId: record.id });
+      } else if (liveKind === "terminal") {
+        const termId = crypto.randomUUID();
+        await ipc.spawnTerminal(cwd, termId);
+        live = resolvedContent(block, cwd, { sessionId: termId });
+      } else if (liveKind === "file") {
+        const exists = await ipc.fileExists(cwd, block.file ?? "");
+        if (!exists) {
+          throw new Error(`File not found: ${block.file ?? "(no path)"}`);
+        }
+        live = resolvedContent(block, cwd, {});
+      } else if (liveKind === "diff") {
+        const isRepo = await ipc.isGitRepo(cwd);
+        if (!isRepo) throw new Error("Not a git repository");
+        live = resolvedContent(block, cwd, {});
+      } else {
+        throw new Error(`Unknown block: ${block.kind}`);
+      }
+      applyLeaf((tree) => setLeafContent(tree, leafId, live));
+    } catch (err) {
+      // `claude` missing surfaces the global banner too (reuse #30's signal).
+      if (isSessionError(err) && err.kind === "BinaryNotFound") {
+        get().setClaudeMissing(true);
+      }
+      const message =
+        err instanceof Error
+          ? err.message
+          : isSessionError(err)
+            ? err.message
+            : "Couldn't start this panel";
+      applyLeaf((tree) => updateLeafContent(tree, leafId, { error: message }));
+    }
+  },
+
+  pickTemplateBlockFile: (canvasId, leafId, file) => {
+    // Replace the pending open-file block's path, then retry resolving it.
+    const { canvases, activeCanvasId } = get();
+    const next = canvases.map((c) =>
+      c.id === canvasId && c.layout
+        ? {
+            ...c,
+            layout: updateLeafContent(c.layout, leafId, {
+              block: { kind: "open-file", file },
+            }),
+          }
+        : c,
+    );
+    set({ canvases: next });
+    void ipc
+      .setCanvases({ canvases: next, activeId: activeCanvasId })
+      .catch(() => {});
+    void get().resolveTemplateBlock(canvasId, leafId);
   },
 
   addCanvas: () => {

@@ -321,8 +321,8 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#117 are complete — see **Implemented (completed tasks)** above for the index,
-and git history for full per-task detail. **Open tasks: #118–#125.** New work
+Tasks #1–#118 are complete — see **Implemented (completed tasks)** above for the index,
+and git history for full per-task detail. **Open tasks: #119–#125.** New work
 goes here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
 
@@ -835,9 +835,9 @@ paths, and detached-window (#84) interaction.
 
 ---
 
-### 118. [ ] Canvas Templates (part 2 of 2): instantiation engine, block actions & per-panel fallbacks
+### 118. [x] Canvas Templates (part 2 of 2): instantiation engine, block actions & per-panel fallbacks
 
-**Status:** Not started
+**Status:** Complete
 **Owner:** _(unassigned)_
 **Depends on:** #117 · _(uses the template model, persistence, blocks & editor from part 1)_
 **Created:** 2026-06-22
@@ -904,35 +904,35 @@ and any spawn-count guard.
 
 **Subtasks**
 
-1. [ ] **"New tab from template" entry** in the tab-strip ▾ (#117) → template
+1. [x] **"New tab from template" entry** in the tab-strip ▾ (#117) → template
    chooser.
-2. [ ] **Folder-pick-on-use** step (reuse #66 folder UX); carry the chosen folder
+2. [x] **Folder-pick-on-use** step (reuse #66 folder UX); carry the chosen folder
    to all blocks.
-3. [ ] **Instantiation engine** — pure mapping of a template tree → a new
+3. [x] **Instantiation engine** — pure mapping of a template tree → a new
    `CanvasTab`, with each block flagged pending; async executor that resolves each
    block to live content (agent via prompt-seeded spawn, terminal, file, diff).
-4. [ ] **Per-panel loading / error / Retry** rendering in `CanvasSurface.tsx`,
+4. [x] **Per-panel loading / error / Retry** rendering in `CanvasSurface.tsx`,
    including `open-file`'s **Pick file** affordance and the retain-source-block
    logic.
-5. [ ] **Fallback coverage** — file-not-found, spawn failure (claude missing),
+5. [x] **Fallback coverage** — file-not-found, spawn failure (claude missing),
    non-git diff; verify partial success (some panels live, some error).
-6. [ ] **Tests** — Vitest over the pure template→tab instantiation mapping and the
+6. [x] **Tests** — Vitest over the pure template→tab instantiation mapping and the
    block→content resolution (incl. error states); cover the retry path.
 
 **Acceptance criteria**
 
-- [ ] "New tab from template" → pick a folder → a **new Canvas tab** opens with the
+- [x] "New tab from template" → pick a folder → a **new Canvas tab** opens with the
   template's layout, and each block executes against the chosen folder.
-- [ ] `new-agent` blocks start real sessions (with their optional prompt pre-sent);
+- [x] `new-agent` blocks start real sessions (with their optional prompt pre-sent);
   `new-terminal`, `open-file` (relative to the folder), and `open-diff` blocks open
   their content.
-- [ ] A missing file shows an **inline error + Pick file + Retry** in that panel;
+- [x] A missing file shows an **inline error + Pick file + Retry** in that panel;
   the rest of the tab still loads. Spawn failures and non-git diffs likewise show
   **error + Retry**. Nothing is silently skipped.
-- [ ] **Retry** re-runs the failed block in place and, on success, replaces the
+- [x] **Retry** re-runs the failed block in place and, on success, replaces the
   error with live content.
-- [ ] Many `new-agent` blocks instantiate without any confirmation ("just do it").
-- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+- [x] Many `new-agent` blocks instantiate without any confirmation ("just do it").
+- [x] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
   `npm run lint:rust` all pass.
 
 **Notes**

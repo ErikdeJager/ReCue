@@ -191,6 +191,12 @@ export interface CanvasContent {
    * agent when the template is instantiated (#118), like a scheduled session (#93).
    * Only set on template-block leaves, never on live content. */
   prompt?: string;
+  /** A `kind: "pending"` panel from instantiating a template (#118): the originating
+   * template block, re-run on Retry. Cleared once the panel resolves to live content. */
+  block?: CanvasContent;
+  /** Set on a pending panel whose block failed to resolve (#118) — the inline error
+   * message shown with a Retry button (and Pick file for `open-file`). */
+  error?: string;
 }
 
 /** A single panel. */

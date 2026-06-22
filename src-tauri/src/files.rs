@@ -95,6 +95,21 @@ pub fn read_text_file(repo: impl AsRef<Path>, file: &str) -> Result<String, Stri
     fs::read_to_string(&canon_target).map_err(|e| e.to_string())
 }
 
+/// Whether `file` (repo-relative) exists as a regular file inside `repo` (#118) —
+/// path-validated like `read_text_file` (canonical paths reject `..`/symlink
+/// escapes and absolute targets). Used to resolve a template's `open-file` block;
+/// a missing/escaping path → false (the panel shows "File not found" + Retry).
+pub fn file_exists(repo: impl AsRef<Path>, file: &str) -> bool {
+    let repo = repo.as_ref();
+    let Ok(canon_repo) = repo.canonicalize() else {
+        return false;
+    };
+    let Ok(canon_target) = repo.join(file).canonicalize() else {
+        return false;
+    };
+    canon_target.starts_with(&canon_repo) && canon_target.is_file()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +165,21 @@ mod tests {
         // Escaping the repo must be rejected (canonical path lands outside, or
         // the target doesn't exist and canonicalize fails) — never read.
         assert!(read_text_file(&dir, "../../../../../../etc/hosts").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_exists_checks_presence_inside_the_repo() {
+        let dir = tmp("exists");
+        fs::write(dir.join("present.md"), "hi").unwrap();
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("sub/nested.txt"), "x").unwrap();
+        assert!(file_exists(&dir, "present.md"));
+        assert!(file_exists(&dir, "sub/nested.txt"));
+        assert!(!file_exists(&dir, "missing.md"));
+        // A directory is not a file; traversal escapes are rejected.
+        assert!(!file_exists(&dir, "sub"));
+        assert!(!file_exists(&dir, "../../../../etc/hosts"));
         let _ = fs::remove_dir_all(&dir);
     }
 }
