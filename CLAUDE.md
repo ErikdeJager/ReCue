@@ -142,6 +142,21 @@ even though it works in `tauri dev`.
   resize via **react-resizable-panels**, panels close. The Overview wall and the tab
   strip keep their own nested sortable contexts (#43/#58) — only one view mounts at a
   time, so targets never clash.
+- **Canvas templates (#117, part 1 of 2):** reusable saved Canvas layouts whose
+  leaves hold inert action **blocks** (`new-agent` w/ optional prompt, `new-terminal`,
+  `open-file` w/ a relative path, `open-diff`) instead of live content. A single
+  **block registry** (`Canvas/templateBlocks.ts`, mirroring #82) drives the placeable
+  set — a new content kind becomes a block with one entry. The `CanvasTabs` strip's
+  **▾ Templates menu** opens a full-screen **`TemplateEditor`** (reuses the BSP
+  surface + `canvasTree` ops: a block **palette** is the only drag source, drop into
+  center/edges to split, resize, configure each block inline, name + save) and a
+  **`TemplateManager`** modal (edit / inline-rename / duplicate / delete, Delete
+  confirm-gated #103). Templates persist in their **own** `canvas_templates` Rust blob
+  (`get_canvas_templates`/`set_canvas_templates`, separate from `canvases`) → store
+  `canvasTemplates` + `saveTemplate`/`renameTemplate`/`duplicateTemplate`/`deleteTemplate`.
+  The editor creates **no** live PTY/file (blocks are placeholders); a `CanvasTemplate`
+  reuses the `CanvasNode` tree with block-kind leaf `content`. **Instantiation** (using
+  a template to spin up a real canvas) + per-block fallbacks are **#118**.
 - **Detached canvas windows (#84):** a Canvas tab can open in its **own native
   window** for multi-monitor use, via a **pop-out button** on the tab or a **drag
   tear-off** (drag a tab out of the strip). The button/tear-off call Rust
@@ -241,6 +256,7 @@ even though it works in `tauri dev`.
 │   │                       #   CanvasWindow (#84), Terminal, FileViewer, FilePicker,
 │   │                       #   FileSwitcher (#90), DiffInspector, DetachedNote (#84),
 │   │                       #   ScheduledPanel (#94), Settings (#100), BusyIndicator,
+│   │                       #   TemplateEditor + TemplateManager (#117),
 │   │                       #   Checkbox, NewSessionModal, Toaster, ViewSwitch,
 │   │                       #   ClaudeMissing, EmptyState
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
@@ -253,7 +269,7 @@ even though it works in `tauri dev`.
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder-launch fix)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
-│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, schedules, settings, sidebar width)
+│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, settings, sidebar width)
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + list + checkout + worktree (#74)
 │   ├── src/files.rs        # Read-only file access (list text files/read, path-validated)
 │   ├── Info.plist          # Partial plist (mic + speech-recognition usage strings), merged into the bundle

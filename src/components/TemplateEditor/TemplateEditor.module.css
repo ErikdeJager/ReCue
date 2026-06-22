@@ -1,0 +1,249 @@
+/* Canvas-template editor (#117): a full-screen surface over the app. Reuses the
+   Canvas BSP styles (Canvas.module.css) for the panels/splits; this module adds the
+   editor chrome — toolbar, block palette, and per-block config. On-system tokens. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  background: var(--bg-base);
+}
+
+.editor {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+}
+
+.toolbar {
+  display: flex;
+  height: 48px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 0 var(--space-16);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--bg-sidebar);
+}
+
+.eyebrow {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.nameInput {
+  width: 260px;
+  max-width: 40%;
+  padding: var(--space-4) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+}
+
+.nameInput:focus {
+  border-color: var(--accent);
+}
+
+.nameInput::placeholder {
+  color: var(--text-muted);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.cancelBtn,
+.saveBtn {
+  padding: var(--space-4) var(--space-12);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.cancelBtn {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.cancelBtn:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.saveBtn {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.saveBtn:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* --- Block palette (drag source) --- */
+.palette {
+  display: flex;
+  width: 180px;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-12);
+  border-right: 1px solid var(--border-hairline);
+  background: var(--bg-sidebar);
+  overflow-y: auto;
+}
+
+.paletteTitle {
+  margin: 0 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  cursor: grab;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.chip:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.chipDragging {
+  opacity: 0.5;
+}
+
+.chipLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paletteHint {
+  margin: var(--space-8) 0 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
+}
+
+/* --- Per-block config (inside a block placeholder) --- */
+.blockBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  padding: var(--space-8);
+  overflow-y: auto;
+}
+
+.blockIcon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.configField {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.configLabel {
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}
+
+.configInput {
+  flex: 1;
+  min-height: 56px;
+  width: 100%;
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  resize: none;
+}
+
+.configLine {
+  width: 100%;
+  padding: var(--space-4) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+}
+
+.configInput:focus,
+.configLine:focus {
+  border-color: var(--accent);
+}
+
+.configInput::placeholder,
+.configLine::placeholder {
+  color: var(--text-muted);
+}
+
+.helper {
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
+}
+
+.helper code {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-chip);
+  background: var(--bg-hover);
+  font-family: var(--mono);
+}
+
+.blockNote {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
+}

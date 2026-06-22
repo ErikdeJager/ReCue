@@ -321,8 +321,8 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks #1–#116 are complete — see **Implemented (completed tasks)** above for the index,
-and git history for full per-task detail. **Open tasks: #117–#119.** New work
+Tasks #1–#117 are complete — see **Implemented (completed tasks)** above for the index,
+and git history for full per-task detail. **Open tasks: #118–#125.** New work
 goes here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with
 its `Depends on:` prerequisites.
 
@@ -703,9 +703,9 @@ despite the resume repaint.
 
 ---
 
-### 117. [ ] Canvas Templates (part 1 of 2): data model, persistence, block registry, editor & CRUD
+### 117. [x] Canvas Templates (part 1 of 2): data model, persistence, block registry, editor & CRUD
 
-**Status:** Not started
+**Status:** Complete
 **Owner:** _(unassigned)_
 **Depends on:** none · _(builds on the shipped Canvas subsystem #46/#47/#58/#94)_
 **Created:** 2026-06-22
@@ -789,37 +789,37 @@ paths, and detached-window (#84) interaction.
 
 **Subtasks**
 
-1. [ ] **Types + registry** — `CanvasTemplate` + block-kind descriptors in
+1. [x] **Types + registry** — `CanvasTemplate` + block-kind descriptors in
    `src/types`; a centralized content-kind/block-kind **registry** (extensible so a
    future content kind auto-yields a block).
-2. [ ] **Persistence** — Rust `canvas_templates` store value + `get`/`set`
+2. [x] **Persistence** — Rust `canvas_templates` store value + `get`/`set`
    commands + `lib.rs` registration + `store.rs` field/accessors/tests; typed
    `ipc.ts` wrappers; store state + `create/update/rename/duplicate/delete`
    actions (persisting the blob).
-3. [ ] **Editor surface** — reuse the Canvas BSP surface/`canvasTree` in an
+3. [x] **Editor surface** — reuse the Canvas BSP surface/`canvasTree` in an
    edit-template mode: block **palette** (drag source), drop/split/resize/close,
    per-block config (agent prompt; file relative-path picker + helper text),
    name + save.
-4. [ ] **Tab-strip Templates menu** — ▾ near **+** in `CanvasTabs.tsx`: "New
+4. [x] **Tab-strip Templates menu** — ▾ near **+** in `CanvasTabs.tsx`: "New
    template…", "Manage templates…".
-5. [ ] **Manage view** — list templates with Edit / Rename / Duplicate / Delete
+5. [x] **Manage view** — list templates with Edit / Rename / Duplicate / Delete
    (confirm-gated per #103 for Delete).
-6. [ ] **Tests** — Vitest over the template store actions + any pure tree/block
+6. [x] **Tests** — Vitest over the template store actions + any pure tree/block
    helpers; Rust tests over `canvas_templates` persistence.
 
 **Acceptance criteria**
 
-- [ ] A user can open a template editor (from the Canvas tab-strip ▾), drag the
+- [x] A user can open a template editor (from the Canvas tab-strip ▾), drag the
   v1 blocks (start session / terminal / file / diff) into a split layout, configure
   them (agent prompt; file relative path with clear helper text), name and **save**
   the template.
-- [ ] Saved templates **persist** across restarts (separate `canvas_templates`
+- [x] Saved templates **persist** across restarts (separate `canvas_templates`
   blob) and can be **edited, renamed, duplicated, and deleted**.
-- [ ] The placeable block set is driven by a **registry** such that adding a new
+- [x] The placeable block set is driven by a **registry** such that adding a new
   Canvas content kind later surfaces a new block with minimal, localized changes.
-- [ ] No live PTY/file is created in the editor (blocks are inert placeholders);
+- [x] No live PTY/file is created in the editor (blocks are inert placeholders);
   the `canvases` blob and existing Canvas behavior are untouched.
-- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
+- [x] `npm run build`, `npm run lint`, `npm test`, `cargo test`, and
   `npm run lint:rust` all pass.
 
 **Notes**

@@ -187,6 +187,10 @@ export interface CanvasContent {
   sessionId?: string;
   /** Pending scheduled session this panel shows (#94, kind: "scheduled"). */
   scheduleId?: string;
+  /** Initial prompt for a `new-agent` **template block** (#117) — pre-sent to the
+   * agent when the template is instantiated (#118), like a scheduled session (#93).
+   * Only set on template-block leaves, never on live content. */
+  prompt?: string;
 }
 
 /** A single panel. */
@@ -213,6 +217,18 @@ export type CanvasEdge = "left" | "right" | "top" | "bottom";
 
 /** One named Canvas tab — its own independent BSP layout (#58). */
 export interface CanvasTab {
+  id: string;
+  name: string;
+  layout: CanvasNode | null;
+}
+
+/** A reusable, saved Canvas layout (#117). Same BSP shape as a `CanvasTab`, but
+ * each leaf's `content.kind` is a **block kind** (`new-agent` / `new-terminal` /
+ * `open-file` / `open-diff`) carrying inert action descriptors — config like the
+ * agent `prompt` or the `open-file` relative `file` path — rather than live
+ * content. Instantiated into a real canvas in #118. Persisted as the separate
+ * `canvas_templates` blob (kept apart from the `canvases` blob). */
+export interface CanvasTemplate {
   id: string;
   name: string;
   layout: CanvasNode | null;

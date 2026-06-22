@@ -64,6 +64,7 @@ beforeEach(() => {
     overviewOrder: {},
     canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
     activeCanvasId: "canvas-1",
+    canvasTemplates: [],
     sessionBusy: {},
     sessionActive: {},
     claudeMissing: false,
@@ -505,5 +506,81 @@ describe("isCleanExit (#63)", () => {
 
   it("never auto-forgets an intentional kill (Remove/Forget toasts on its own)", () => {
     expect(isCleanExit(0, false, true)).toBe(false);
+  });
+});
+
+describe("canvas templates (#117)", () => {
+  it("saveTemplate creates a new template and returns its id", () => {
+    const id = useStore.getState().saveTemplate("Dev workspace", null);
+    const templates = useStore.getState().canvasTemplates;
+    expect(templates).toHaveLength(1);
+    expect(templates[0]).toMatchObject({ id, name: "Dev workspace" });
+  });
+
+  it("saveTemplate with an existing id updates in place (no new record)", () => {
+    const id = useStore.getState().saveTemplate("First", null);
+    const layout = {
+      type: "leaf" as const,
+      id: "leaf-1",
+      content: { kind: "new-agent" },
+    };
+    const sameId = useStore
+      .getState()
+      .saveTemplate("First (edited)", layout, id);
+    expect(sameId).toBe(id);
+    const templates = useStore.getState().canvasTemplates;
+    expect(templates).toHaveLength(1);
+    expect(templates[0]).toMatchObject({
+      id,
+      name: "First (edited)",
+      layout,
+    });
+  });
+
+  it("blank name falls back to a placeholder", () => {
+    useStore.getState().saveTemplate("   ", null);
+    expect(useStore.getState().canvasTemplates[0]?.name).toBe(
+      "Untitled template",
+    );
+  });
+
+  it("renameTemplate updates the name; blank is ignored", () => {
+    const id = useStore.getState().saveTemplate("Old", null);
+    useStore.getState().renameTemplate(id, "New");
+    expect(useStore.getState().canvasTemplates[0]?.name).toBe("New");
+    useStore.getState().renameTemplate(id, "  ");
+    expect(useStore.getState().canvasTemplates[0]?.name).toBe("New");
+  });
+
+  it("duplicateTemplate appends a copy with an independent layout", () => {
+    const layout = {
+      type: "leaf" as const,
+      id: "leaf-1",
+      content: { kind: "open-file", file: "README.md" },
+    };
+    const id = useStore.getState().saveTemplate("Base", layout, null);
+    useStore.getState().duplicateTemplate(id);
+    const templates = useStore.getState().canvasTemplates;
+    expect(templates).toHaveLength(2);
+    expect(templates[1]?.name).toBe("Base copy");
+    // The copy's layout is a deep clone, not the same object reference.
+    expect(templates[1]?.layout).not.toBe(templates[0]?.layout);
+    expect(templates[1]?.layout).toEqual(templates[0]?.layout);
+  });
+
+  it("deleteTemplate removes the template", () => {
+    const id = useStore.getState().saveTemplate("Gone", null);
+    useStore.getState().deleteTemplate(id);
+    expect(useStore.getState().canvasTemplates).toEqual([]);
+  });
+
+  it("openTemplateEditor / close toggle the editor flags", () => {
+    useStore.getState().openTemplateEditor("t1");
+    expect(useStore.getState().templateEditorOpen).toBe(true);
+    expect(useStore.getState().templateEditorId).toBe("t1");
+    expect(useStore.getState().templateManagerOpen).toBe(false);
+    useStore.getState().closeTemplateEditor();
+    expect(useStore.getState().templateEditorOpen).toBe(false);
+    expect(useStore.getState().templateEditorId).toBe(null);
   });
 });

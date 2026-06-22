@@ -9,6 +9,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   BranchList,
   CanvasNode,
+  CanvasTemplate,
   ExitPayload,
   NamePayload,
   OutputPayload,
@@ -124,6 +125,15 @@ export const getCanvases = () =>
  * `canvas://changed` so other windows (#84) stay in sync. */
 export const setCanvases = (state: PersistedCanvases) =>
   invoke<void>("set_canvases", { state });
+
+/** Saved Canvas templates (#117); `null` before the first write. Persisted in its
+ * own `canvas_templates` blob, separate from `canvases`. */
+export const getCanvasTemplates = () =>
+  invoke<CanvasTemplate[] | null>("get_canvas_templates");
+
+/** Replace the saved Canvas templates (#117). */
+export const setCanvasTemplates = (templates: CanvasTemplate[]) =>
+  invoke<void>("set_canvas_templates", { templates });
 
 /** Open (or focus, if already open) a detached window for canvas `id` (#84). */
 export const openCanvasWindow = (id: string, title: string) =>

@@ -20,6 +20,8 @@ import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
 import Overview from "./components/Overview/Overview";
 import Settings from "./components/Settings/Settings";
 import Sidebar from "./components/Sidebar/Sidebar";
+import TemplateEditor from "./components/TemplateEditor/TemplateEditor";
+import TemplateManager from "./components/TemplateManager/TemplateManager";
 import { reconcileTerminals } from "./components/Terminal/terminalPool";
 import Toaster from "./components/Toaster/Toaster";
 import { useStore } from "./store";
@@ -45,6 +47,8 @@ function MainApp() {
   const overviewPanels = useStore((s) => s.overviewPanels);
   const canvases = useStore((s) => s.canvases);
   const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
+  const templateEditorOpen = useStore((s) => s.templateEditorOpen);
+  const templateManagerOpen = useStore((s) => s.templateManagerOpen);
   const init = useStore((s) => s.init);
   const [dragActive, setDragActive] = useState(false);
 
@@ -111,6 +115,8 @@ function MainApp() {
       <Toaster />
       <NewSessionModal />
       <Settings />
+      {templateManagerOpen && <TemplateManager />}
+      {templateEditorOpen && <TemplateEditor />}
     </div>
   );
 }

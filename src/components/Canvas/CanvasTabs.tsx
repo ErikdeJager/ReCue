@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   closestCenter,
   DndContext,
@@ -16,7 +16,13 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ExternalLink, Plus, X } from "lucide-react";
+import {
+  ChevronDown,
+  ExternalLink,
+  LayoutTemplate,
+  Plus,
+  X,
+} from "lucide-react";
 
 import { useStore } from "../../store";
 import type { CanvasTab } from "../../types";
@@ -141,6 +147,30 @@ function CanvasTabs() {
   const addCanvas = useStore((s) => s.addCanvas);
   const reorderCanvases = useStore((s) => s.reorderCanvases);
   const popOutCanvas = useStore((s) => s.popOutCanvas);
+  const openTemplateEditor = useStore((s) => s.openTemplateEditor);
+  const openTemplateManager = useStore((s) => s.openTemplateManager);
+
+  // Templates ▾ menu (#117): a small dropdown near the + with "New template…" /
+  // "Manage templates…". Closes on outside-click, Escape, or a selection.
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const templatesRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!templatesOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!templatesRef.current?.contains(event.target as Node)) {
+        setTemplatesOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setTemplatesOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [templatesOpen]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -192,6 +222,47 @@ function CanvasTabs() {
       >
         <Plus size={14} strokeWidth={1.5} />
       </button>
+      {/* Templates ▾ menu (#117). */}
+      <div className={styles.templatesWrap} ref={templatesRef}>
+        <button
+          type="button"
+          className={styles.tabAdd}
+          onClick={() => setTemplatesOpen((o) => !o)}
+          title="Templates"
+          aria-label="Templates"
+          aria-haspopup="menu"
+          aria-expanded={templatesOpen}
+        >
+          <LayoutTemplate size={14} strokeWidth={1.5} />
+          <ChevronDown size={11} strokeWidth={1.5} />
+        </button>
+        {templatesOpen && (
+          <div className={styles.templatesMenu} role="menu">
+            <button
+              type="button"
+              className={styles.templatesItem}
+              role="menuitem"
+              onClick={() => {
+                setTemplatesOpen(false);
+                openTemplateEditor(null);
+              }}
+            >
+              New template…
+            </button>
+            <button
+              type="button"
+              className={styles.templatesItem}
+              role="menuitem"
+              onClick={() => {
+                setTemplatesOpen(false);
+                openTemplateManager();
+              }}
+            >
+              Manage templates…
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

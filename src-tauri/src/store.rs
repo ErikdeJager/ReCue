@@ -146,6 +146,12 @@ pub struct PersistedState {
     /// shape and supplies defaults, so an older file without it upgrades cleanly.
     #[serde(default)]
     pub settings: serde_json::Value,
+    /// Saved Canvas templates (#117), stored opaquely as JSON `[{ id, name, layout }]`
+    /// — the frontend owns the shape. Kept separate from the `canvases` blob so a
+    /// canvas write can't clobber templates. `null` until first written; `default`
+    /// keeps old files loading.
+    #[serde(default)]
+    pub canvas_templates: serde_json::Value,
     /// Sidebar width in px (#108), drag-resized by the user. `None` until first set
     /// (the frontend defaults + clamps); `default` keeps old files loading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -360,6 +366,16 @@ impl Store {
     /// Replace the multi-canvas tab state and persist (#58).
     pub fn set_canvases(&self, canvases: serde_json::Value) -> io::Result<()> {
         self.update(|state| state.canvases = canvases)
+    }
+
+    /// Saved Canvas templates (#117) — opaque JSON; `null` until first written.
+    pub fn canvas_templates(&self) -> serde_json::Value {
+        self.with(|state| state.canvas_templates.clone())
+    }
+
+    /// Replace the saved Canvas templates and persist (#117).
+    pub fn set_canvas_templates(&self, templates: serde_json::Value) -> io::Result<()> {
+        self.update(|state| state.canvas_templates = templates)
     }
 
     /// Application settings (#100) — opaque JSON; `null` until first written, the
@@ -639,6 +655,20 @@ mod tests {
         });
         store.set_canvases(tabs.clone()).unwrap();
         assert_eq!(Store::load(&path).canvases(), tabs);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn canvas_templates_set_and_persist() {
+        let path = temp_path("templates");
+        let store = Store::load(&path);
+        assert!(store.canvas_templates().is_null()); // default (none saved yet)
+
+        let templates = serde_json::json!([
+            { "id": "t1", "name": "Dev workspace", "layout": null }
+        ]);
+        store.set_canvas_templates(templates.clone()).unwrap();
+        assert_eq!(Store::load(&path).canvas_templates(), templates);
         let _ = fs::remove_file(&path);
     }
 

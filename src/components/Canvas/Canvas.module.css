@@ -129,6 +129,45 @@
   color: var(--text-primary);
 }
 
+/* --- Templates ▾ menu (#117) --- */
+.templatesWrap {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.templatesMenu {
+  position: absolute;
+  top: calc(100% + var(--space-4));
+  right: 0;
+  z-index: 20;
+  display: flex;
+  min-width: 160px;
+  flex-direction: column;
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.templatesItem {
+  padding: var(--space-6) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.templatesItem:hover {
+  background: var(--bg-hover);
+}
+
 /* Empty-canvas center drop target. */
 .center {
   display: flex;

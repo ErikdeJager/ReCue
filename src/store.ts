@@ -18,6 +18,7 @@ import type {
   CanvasContent,
   CanvasNode,
   CanvasTab,
+  CanvasTemplate,
   OverviewPanel,
   ScheduledSession,
   SessionRecord,
@@ -396,6 +397,15 @@ export interface AppState {
   /** Canvas ids currently open in a detached window (#84) — synced from the
    * backend; drives terminal ownership + the "in window" tab marker. */
   detachedCanvasIds: string[];
+  /** Saved Canvas templates (#117) — reusable layouts of action blocks. */
+  canvasTemplates: CanvasTemplate[];
+  /** Whether the template editor surface is open (#117). */
+  templateEditorOpen: boolean;
+  /** The template being edited (#117); `null` = a brand-new template. Only
+   * meaningful while `templateEditorOpen`. */
+  templateEditorId: string | null;
+  /** Whether the "Manage templates" view is open (#117). */
+  templateManagerOpen: boolean;
   /** The keyboard-focused Canvas panel (leaf id), or null (#76). */
   activeLeafId: string | null;
   /** Sessions currently working, from the output-activity heuristic (#42); an
@@ -519,6 +529,27 @@ export interface AppState {
   setDetachedCanvasIds: (ids: string[]) => void;
   /** Switch a Canvas file panel (the active tab's leaf) to another file (#90). */
   setLeafFile: (leafId: string, file: string) => void;
+  /** Open the template editor (#117) — `id` to edit an existing template, `null`
+   * for a brand-new one. */
+  openTemplateEditor: (id: string | null) => void;
+  /** Close the template editor without saving (#117). */
+  closeTemplateEditor: () => void;
+  /** Open / close the "Manage templates" view (#117). */
+  openTemplateManager: () => void;
+  closeTemplateManager: () => void;
+  /** Save a template (#117): update `id` if given, else create a new one; persist.
+   * Returns the saved template's id. */
+  saveTemplate: (
+    name: string,
+    layout: CanvasNode | null,
+    id?: string | null,
+  ) => string;
+  /** Rename a saved template (#117); a blank name is ignored. */
+  renameTemplate: (id: string, name: string) => void;
+  /** Duplicate a saved template (#117) as "<name> copy". */
+  duplicateTemplate: (id: string) => void;
+  /** Delete a saved template (#117). */
+  deleteTemplate: (id: string) => void;
   /** Set (or clear) the keyboard-focused Canvas panel (#76). */
   setActiveLeaf: (id: string | null) => void;
   /** Move the Canvas focus to the spatially adjacent panel (#76). */
@@ -669,6 +700,10 @@ export const useStore = create<AppState>()((set, get) => ({
   // so it renders the right layout before the persisted tabs load.
   activeCanvasId: DETACHED_CANVAS_ID ?? "canvas-1",
   detachedCanvasIds: [],
+  canvasTemplates: [],
+  templateEditorOpen: false,
+  templateEditorId: null,
+  templateManagerOpen: false,
   activeLeafId: null,
   sessionBusy: {},
   sessionActive: {},
@@ -982,6 +1017,7 @@ export const useStore = create<AppState>()((set, get) => ({
         canvasesState,
         rawSettings,
         rawSidebarWidth,
+        rawTemplates,
       ] = await Promise.all([
         ipc.listRepoColors(),
         ipc.listOverviewPanels(),
@@ -991,6 +1027,7 @@ export const useStore = create<AppState>()((set, get) => ({
         ipc.getCanvases(),
         ipc.getSettings(),
         ipc.getSidebarWidth(),
+        ipc.getCanvasTemplates(),
       ]);
       // Settings (#100): merge the persisted blob over the defaults and apply its
       // side-effects (live terminal options) before the first paint.
@@ -1054,6 +1091,8 @@ export const useStore = create<AppState>()((set, get) => ({
         activeCanvasId,
         settings,
         sidebarWidth,
+        // Saved Canvas templates (#117); absent (null) → none saved yet.
+        canvasTemplates: rawTemplates ?? [],
       });
       // Terminal items can't resume (#72): respawn a fresh shell for each
       // persisted terminal panel under its repo so the item is usable after a
@@ -1283,6 +1322,82 @@ export const useStore = create<AppState>()((set, get) => ({
       canvases.find((c) => c.id === activeCanvasId)?.layout ?? null;
     if (!layout) return;
     get().setActiveCanvasLayout(updateLeafContent(layout, leafId, { file }));
+  },
+
+  // Canvas templates (#117): the editor builds a draft layout of inert blocks with
+  // the same pure canvasTree helpers; these actions persist the saved-template set
+  // (its own `canvas_templates` blob). Persist failures are swallowed.
+  openTemplateEditor: (id) =>
+    set({
+      templateEditorOpen: true,
+      templateEditorId: id,
+      templateManagerOpen: false,
+    }),
+  closeTemplateEditor: () =>
+    set({ templateEditorOpen: false, templateEditorId: null }),
+  openTemplateManager: () => set({ templateManagerOpen: true }),
+  closeTemplateManager: () => set({ templateManagerOpen: false }),
+
+  saveTemplate: (name, layout, id) => {
+    const trimmed = name.trim() || "Untitled template";
+    const { canvasTemplates } = get();
+    const isUpdate = !!id && canvasTemplates.some((t) => t.id === id);
+    let savedId: string;
+    let next: CanvasTemplate[];
+    if (isUpdate) {
+      savedId = id as string;
+      next = canvasTemplates.map((t) =>
+        t.id === savedId ? { ...t, name: trimmed, layout } : t,
+      );
+    } else {
+      savedId = crypto.randomUUID();
+      next = [...canvasTemplates, { id: savedId, name: trimmed, layout }];
+    }
+    set({ canvasTemplates: next });
+    void ipc.setCanvasTemplates(next).catch(() => {});
+    get().pushToast(isUpdate ? "Template saved" : "Template created");
+    return savedId;
+  },
+
+  renameTemplate: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return; // blank keeps the current name
+    const { canvasTemplates } = get();
+    const target = canvasTemplates.find((t) => t.id === id);
+    if (!target || target.name === trimmed) return;
+    const next = canvasTemplates.map((t) =>
+      t.id === id ? { ...t, name: trimmed } : t,
+    );
+    set({ canvasTemplates: next });
+    void ipc.setCanvasTemplates(next).catch(() => {});
+    get().pushToast("Template renamed");
+  },
+
+  duplicateTemplate: (id) => {
+    const { canvasTemplates } = get();
+    const target = canvasTemplates.find((t) => t.id === id);
+    if (!target) return;
+    // Deep-clone the layout so the copy and original never share a tree object.
+    const copy: CanvasTemplate = {
+      id: crypto.randomUUID(),
+      name: `${target.name} copy`,
+      layout: target.layout
+        ? (JSON.parse(JSON.stringify(target.layout)) as CanvasNode)
+        : null,
+    };
+    const next = [...canvasTemplates, copy];
+    set({ canvasTemplates: next });
+    void ipc.setCanvasTemplates(next).catch(() => {});
+    get().pushToast("Template duplicated");
+  },
+
+  deleteTemplate: (id) => {
+    const { canvasTemplates } = get();
+    if (!canvasTemplates.some((t) => t.id === id)) return;
+    const next = canvasTemplates.filter((t) => t.id !== id);
+    set({ canvasTemplates: next });
+    void ipc.setCanvasTemplates(next).catch(() => {});
+    get().pushToast("Template deleted");
   },
 
   addCanvas: () => {

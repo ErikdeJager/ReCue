@@ -142,6 +142,8 @@ pub fn run() {
             commands::set_canvas_layout,
             commands::get_canvases,
             commands::set_canvases,
+            commands::get_canvas_templates,
+            commands::set_canvas_templates,
             commands::open_canvas_window,
             commands::focus_canvas_window,
             commands::close_canvas_window,

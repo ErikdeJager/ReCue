@@ -404,6 +404,24 @@ pub fn set_canvases(
     Ok(())
 }
 
+/// Saved Canvas templates (#117) — opaque JSON; `null` until first written.
+#[tauri::command]
+pub fn get_canvas_templates(store: State<'_, Store>) -> serde_json::Value {
+    store.canvas_templates()
+}
+
+/// Replace the saved Canvas templates and persist (#117). Kept separate from the
+/// `canvases` blob so a canvas write never clobbers templates.
+#[tauri::command]
+pub fn set_canvas_templates(
+    store: State<'_, Store>,
+    templates: serde_json::Value,
+) -> Result<(), SessionError> {
+    store
+        .set_canvas_templates(templates)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// The canvas ids that currently have a detached window (#84) — derived from the
 /// live window labels (`canvas-<id>`), optionally excluding one label (used when a
 /// window is closing and may still appear in the registry).
