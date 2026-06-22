@@ -746,20 +746,6 @@ pub fn set_sidebar_width(store: State<'_, Store>, width: u32) -> Result<(), Sess
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
-/// The collapsed sidebar repo folders (#113); empty means all expanded.
-#[tauri::command]
-pub fn get_collapsed_repos(store: State<'_, Store>) -> Vec<String> {
-    store.collapsed_repos()
-}
-
-/// Persist the set of collapsed sidebar repo folders (#113).
-#[tauri::command]
-pub fn set_collapsed_repos(store: State<'_, Store>, repos: Vec<String>) -> Result<(), SessionError> {
-    store
-        .set_collapsed_repos(repos)
-        .map_err(|e| SessionError::Io(e.to_string()))
-}
-
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
 /// untouched — only the recently-used folder list is emptied.
 #[tauri::command]

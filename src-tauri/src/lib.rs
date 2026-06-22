@@ -163,8 +163,6 @@ pub fn run() {
             commands::set_settings,
             commands::get_sidebar_width,
             commands::set_sidebar_width,
-            commands::get_collapsed_repos,
-            commands::set_collapsed_repos,
             commands::clear_recents,
             commands::open_data_folder,
             commands::open_url,

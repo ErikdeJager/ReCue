@@ -196,38 +196,20 @@
   color: var(--accent);
 }
 
-/* Per-repo color identity (#35) is now a disclosure triangle (#113) that toggles
-   the folder collapsed/expanded. The button is a 14px slot matching the activity
-   indicator footprint (#95), inset (margin-left 16px) so it lines up with the agent
-   rows' activity dots (row margin 8px + rowBusy padding 8px). */
-.repoToggle {
+/* Per-repo color identity (#35/#115): a static, non-interactive repo-colored cube
+   marker (Lucide Box) before the repo name — replaces the #113 disclosure triangle
+   (the collapse feature was reverted). A 14px slot matching the activity-indicator
+   footprint (#95), inset (margin-left 16px) so it lines up with the agent rows'
+   activity dots (row margin 8px + rowBusy padding 8px). The cube is tinted to the
+   repo color via the inline `color` (the icon strokes use currentColor). */
+.repoCube {
   display: flex;
-  align-items: center;
-  justify-content: center;
   width: 14px;
   height: 14px;
   flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
   margin-left: var(--space-16);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-/* A repo-colored triangle filled by the inline `background: repoColor` via a
-   clip-path so the color still applies (#113). Points right (▶) when collapsed;
-   .repoTriangleExpanded rotates it to point down (▼). The 10px glyph matches the
-   activity dot (#95); the rotation transition is reduced-motion-safe through the
-   global killswitch (global.css). */
-.repoTriangle {
-  width: 10px;
-  height: 10px;
-  clip-path: polygon(25% 8%, 25% 92%, 90% 50%);
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-
-.repoTriangleExpanded {
-  transform: rotate(90deg);
 }
 
 .repoName {

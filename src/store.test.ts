@@ -66,7 +66,6 @@ beforeEach(() => {
     activeCanvasId: "canvas-1",
     sessionBusy: {},
     sessionActive: {},
-    collapsedRepos: [],
     claudeMissing: false,
     toasts: [],
     newSessionOpen: false,
@@ -133,17 +132,6 @@ describe("app store", () => {
     useStore.getState().dropSession("s1");
     expect(useStore.getState().sessionActive.s1).toBeUndefined();
     expect(useStore.getState().sessionBusy.s1).toBeUndefined();
-  });
-
-  it("toggles a sidebar repo folder collapsed/expanded (#113)", () => {
-    expect(useStore.getState().collapsedRepos).toEqual([]);
-    // Collapse two folders.
-    useStore.getState().toggleRepoCollapsed("/repo/a");
-    useStore.getState().toggleRepoCollapsed("/repo/b");
-    expect(useStore.getState().collapsedRepos).toEqual(["/repo/a", "/repo/b"]);
-    // Toggling a collapsed folder expands it (removes it from the set).
-    useStore.getState().toggleRepoCollapsed("/repo/a");
-    expect(useStore.getState().collapsedRepos).toEqual(["/repo/b"]);
   });
 
   it("markExited clears a busy flag (an exited session isn't working) (#42)", () => {

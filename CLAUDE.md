@@ -74,7 +74,7 @@ even though it works in `tauri dev`.
   sidebar render the structured result.
 - **Views:** the store holds `sessions / selectedId / view / recents / branches /
   canvases / activeCanvasId / claudeMissing / toasts / schedules / settings /
-  sidebarWidth / collapsedRepos`; the app mounts one of
+  sidebarWidth`; the app mounts one of
   **Overview or Canvas** (#46/#75 — Focus was removed). Each session's xterm is owned
   by a **persistent terminal
   pool** (`Terminal/terminalPool.ts`), created once and **reparented** into the
@@ -112,14 +112,14 @@ even though it works in `tauri dev`.
   **Kill all agents** / **Close all items** (#91) and **Forget folder** (#31), the
   latter two also tearing down the folder's non-agent items (killing their PTYs) and
   pending schedules (#106); each destructive step is confirm-gated unless turned off
-  in Settings (#103). Each **repo header is collapsible** (#113): a repo-colored
-  **disclosure triangle** (▶ collapsed / ▼ expanded, a `clip-path` shape sized to the
-  activity-dot slot, replacing the old color dot) toggles hiding **all** the folder's
-  child rows (sessions, worktree agents, file/diff/terminal/scheduled items) while the
-  name still filters Overview (#34) — two independent controls; the collapsed set
-  persists via a dedicated Rust `collapsed_repos` value (separate from Settings,
-  mirroring #108). Every tree-row label renders at a uniform compact 10px
-  (`--fs-meta-xs`, #111).
+  in Settings (#103). Each repo header carries a **static, non-interactive
+  repo-colored cube** marker (the Lucide `Box` icon, tinted via `repoColor`) before
+  the repo name, occupying the activity-dot slot (#95); the name still filters
+  Overview (#34). _(#113 made folders collapsible with a repo-colored disclosure
+  triangle + a persisted `collapsed_repos`; **#115 reverted that** at the user's
+  request — folders are non-collapsible again, all child rows always render, and the
+  triangle was replaced by the cube.)_ Every tree-row label renders at a uniform
+  compact 10px (`--fs-meta-xs`, #111).
 - **Canvas (#46/#47/#58):** a third view — **multiple named tabs** (#58), each its
   own recursive **BSP split-panel** layout (a binary tree `split{dir,a,b,sizes}` /
   `leaf{id,content}`; pure ops in `Canvas/canvasTree.ts`). The tabs (`canvases` =
@@ -247,7 +247,7 @@ even though it works in `tauri dev`.
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder-launch fix)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
-│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, schedules, settings, sidebar width, collapsed repos)
+│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, schedules, settings, sidebar width)
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + list + checkout + worktree (#74)
 │   ├── src/files.rs        # Read-only file access (list text files/read, path-validated)
 │   ├── Info.plist          # Partial plist (mic + speech-recognition usage strings), merged into the bundle

@@ -425,9 +425,6 @@ export interface AppState {
   settingsOpen: boolean;
   /** Sidebar width in px (#108), drag-resizable + persisted (main window). */
   sidebarWidth: number;
-  /** Repo paths whose sidebar folder is collapsed (#113): their child rows hide.
-   * Persisted separately from the Settings blob; empty = all expanded. */
-  collapsedRepos: string[];
 
   // --- Sync reducers ---
   setView: (view: View) => void;
@@ -462,8 +459,6 @@ export interface AppState {
   setSettingsOpen: (open: boolean) => void;
   /** Set the sidebar width (#108): clamp to [180, 560] + persist (debounced). */
   setSidebarWidth: (width: number) => void;
-  /** Toggle a sidebar repo folder collapsed/expanded (#113) + persist. */
-  toggleRepoCollapsed: (repo: string) => void;
 
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
@@ -687,7 +682,6 @@ export const useStore = create<AppState>()((set, get) => ({
   settings: DEFAULT_SETTINGS,
   settingsOpen: false,
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
-  collapsedRepos: [],
 
   setView: (view) => set({ view }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
@@ -700,17 +694,6 @@ export const useStore = create<AppState>()((set, get) => ({
     sidebarWidthPersistTimer = setTimeout(() => {
       void ipc.setSidebarWidth(clamped).catch(() => {});
     }, 300);
-  },
-  // Collapse/expand a sidebar repo folder (#113): flip its membership in the
-  // persisted set. Each toggle is a single, immediate write (unlike the debounced
-  // drag width) so a collapse sticks across restarts.
-  toggleRepoCollapsed: (repo) => {
-    const current = get().collapsedRepos;
-    const next = current.includes(repo)
-      ? current.filter((r) => r !== repo)
-      : [...current, repo];
-    set({ collapsedRepos: next });
-    void ipc.setCollapsedRepos(next).catch(() => {});
   },
   // Selection is decoupled from the view (#22): selecting only highlights. The
   // sidebar ViewSwitch is the only thing that changes the view (#75).
@@ -999,7 +982,6 @@ export const useStore = create<AppState>()((set, get) => ({
         canvasesState,
         rawSettings,
         rawSidebarWidth,
-        rawCollapsedRepos,
       ] = await Promise.all([
         ipc.listRepoColors(),
         ipc.listOverviewPanels(),
@@ -1009,7 +991,6 @@ export const useStore = create<AppState>()((set, get) => ({
         ipc.getCanvases(),
         ipc.getSettings(),
         ipc.getSidebarWidth(),
-        ipc.getCollapsedRepos(),
       ]);
       // Settings (#100): merge the persisted blob over the defaults and apply its
       // side-effects (live terminal options) before the first paint.
@@ -1073,10 +1054,6 @@ export const useStore = create<AppState>()((set, get) => ({
         activeCanvasId,
         settings,
         sidebarWidth,
-        // Collapsed sidebar folders (#113): restore the persisted set (absent → all
-        // expanded). Main window only renders the sidebar, but loading it anywhere
-        // is harmless.
-        collapsedRepos: rawCollapsedRepos ?? [],
       });
       // Terminal items can't resume (#72): respawn a fresh shell for each
       // persisted terminal panel under its repo so the item is usable after a

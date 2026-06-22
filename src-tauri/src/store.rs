@@ -150,12 +150,6 @@ pub struct PersistedState {
     /// (the frontend defaults + clamps); `default` keeps old files loading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_width: Option<u32>,
-    /// Repo paths whose sidebar folder is collapsed (#113), so their child rows
-    /// hide. Persisted separately from the Settings blob (like `sidebar_width`) so
-    /// a Settings draft can't clobber it; `default` keeps old files loading (the
-    /// frontend's default is "all expanded" = empty).
-    #[serde(default)]
-    pub collapsed_repos: Vec<String>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -388,17 +382,6 @@ impl Store {
     /// Persist the sidebar width (#108).
     pub fn set_sidebar_width(&self, width: u32) -> io::Result<()> {
         self.update(|state| state.sidebar_width = Some(width))
-    }
-
-    /// The collapsed sidebar repo folders (#113) — repo paths whose child rows are
-    /// hidden. Empty (the default) means every folder is expanded.
-    pub fn collapsed_repos(&self) -> Vec<String> {
-        self.with(|state| state.collapsed_repos.clone())
-    }
-
-    /// Replace the set of collapsed sidebar repo folders and persist (#113).
-    pub fn set_collapsed_repos(&self, repos: Vec<String>) -> io::Result<()> {
-        self.update(|state| state.collapsed_repos = repos)
     }
 
     /// All pending scheduled sessions (#93).
@@ -765,23 +748,6 @@ mod tests {
 
         store.remove_schedule("s2").unwrap();
         assert!(Store::load(&path).schedules().is_empty());
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn collapsed_repos_set_and_persist() {
-        let path = temp_path("collapsed");
-        let store = Store::load(&path);
-        // Default: every folder expanded (empty list).
-        assert!(store.collapsed_repos().is_empty());
-
-        let repos = vec!["/repo/a".to_string(), "/repo/b".to_string()];
-        store.set_collapsed_repos(repos.clone()).unwrap();
-        assert_eq!(Store::load(&path).collapsed_repos(), repos);
-
-        // Clearing back to empty persists too.
-        store.set_collapsed_repos(vec![]).unwrap();
-        assert!(Store::load(&path).collapsed_repos().is_empty());
         let _ = fs::remove_file(&path);
     }
 

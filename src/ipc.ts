@@ -220,11 +220,6 @@ export const setSettings = (settings: Settings) =>
 export const getSidebarWidth = () => invoke<number | null>("get_sidebar_width");
 export const setSidebarWidth = (width: number) =>
   invoke<void>("set_sidebar_width", { width });
-/** Collapsed sidebar repo folders (#113), persisted separately from the Settings
- * blob (like the sidebar width). Empty means every folder is expanded. */
-export const getCollapsedRepos = () => invoke<string[]>("get_collapsed_repos");
-export const setCollapsedRepos = (repos: string[]) =>
-  invoke<void>("set_collapsed_repos", { repos });
 /** Clear the recents list (#100 Settings → Data). */
 export const clearRecents = () => invoke<void>("clear_recents");
 /** Reveal the app-data folder (where sessions.json lives) in Finder (#100). */
