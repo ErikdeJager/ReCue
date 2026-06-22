@@ -999,3 +999,117 @@ user-confirmed **720 × 600** (height clamped to 90vh).
 
 - User-confirmed target size: **720 × 600** (the "Recommended" option;
   `height: min(600px, 90vh)`, `width: min(720px, 100%)`).
+
+---
+
+### 120. [ ] Iteration & self-improvement pass — review, refine, and optimize all shipped work
+
+**Status:** Not started
+**Owner:** _(unassigned)_
+**Depends on:** #116, #117, #118, #119 · _(all tasks open at authoring time — this runs LAST, only once everything else is Done)_
+**Created:** 2026-06-22
+
+**Description**
+
+A final **iteration / self-improvement pass** that runs **only after every
+currently-open task is complete** (#116–#119). Its job is to take the code those
+tasks shipped — and the surrounding subsystems they touched (the busy-indicator /
+`pty.rs`, the Sidebar/store cube revert, the Canvas Templates engine + editor, the
+Settings modal) — and **improve its quality, performance, and consistency**,
+following the documented **best-practice conventions for prompting Claude Code to
+refine and optimize code** (researched below). It is **not** a feature task: it
+must **not change intended behavior or add functionality** — it hardens what's
+already there.
+
+**Method — the best-practice conventions to follow** (from the research below; this
+is the *how*, and is the point of this task):
+
+1. **Explore → plan → implement → verify.** Separate research/planning from edits
+   (plan mode) so the pass refines the *right* code, not a guessed-at problem.
+2. **Give every change a verifiable check and show evidence.** For each refinement,
+   run a real check (tests / build / lint / a benchmark) and record its **output** —
+   never assert "done" without proof. This verification loop is the single biggest
+   quality lever.
+3. **Address root causes, not symptoms** — no error suppression, no papering over.
+4. **Profile before optimizing.** For performance work: profile the hot path first,
+   propose **2–3 optimizations ranked by impact and risk**, apply them, and
+   **benchmark before/after**, keeping behavior identical (regression tests green).
+5. **Small, single-goal commits.** Write characterization/regression tests *first*
+   when touching behavior-sensitive code, then refactor.
+6. **Independent, adversarial review in a fresh context.** Use a fresh-context
+   reviewer (a subagent or the bundled `/code-review`) so the author isn't grading
+   itself — but **only act on findings that affect correctness or the stated quality
+   goals**; do **not** chase every reviewer nit into over-engineering (extra
+   abstraction, defensive code, tests for impossible cases).
+7. **Follow existing patterns & `CLAUDE.md`** — repo conventions, the
+   frontend/backend boundary, "terminal bytes stay out of React state", design
+   tokens (no off-system colors), a11y patterns.
+8. **Don't over-reach.** Improvements stay within the touched code; no unrelated
+   rewrites, no dependency bumps or build-system changes unless fixing a real defect.
+
+**Scope — in:** readability/naming, dead-code & duplication removal, pattern &
+token/a11y consistency, type-safety and error handling, **performance** of hot paths
+(e.g. output routing/`outputBus`, store updates, Canvas tree ops & re-render
+hotspots), **test** strengthening (regression/characterization) for the refined
+areas, and a **docs sync** (CLAUDE.md/README reflect the final shipped state).
+**Out:** new features, behavior/UI changes beyond what #116–#119 defined, scope
+creep / over-engineering, dependency upgrades, and build-system changes.
+
+**Subtasks**
+
+1. [ ] **Baseline** — on a clean tree, run all gates (`npm run build`, `npm run
+   lint`, `npm test`, `npm run format:check`; `cargo test`, `npm run lint:rust`
+   (clippy), `cargo fmt --check`) and record the current state + any slow/flaky
+   spots.
+2. [ ] **Per-feature refinement** — for each of #116–#119, review its diff in a
+   **fresh context** (independent review), fix correctness/quality gaps, and add
+   regression tests; show the passing evidence.
+3. [ ] **Cross-cutting quality sweep** — naming, dead code, duplication, pattern &
+   token & a11y consistency, error handling across the touched subsystems
+   (`store.ts`, Canvas, Sidebar, Settings, `pty.rs`/indicator).
+4. [ ] **Performance pass** — profile the hot paths, apply ranked,
+   behavior-preserving optimizations, and record before/after measurements.
+5. [ ] **Tests & docs** — strengthen tests for refined areas; sync CLAUDE.md &
+   README to the final state.
+6. [ ] **Final verification** — all gates green; an independent adversarial review
+   of the **cumulative** diff finds no correctness/requirement gaps; evidence
+   recorded.
+
+**Acceptance criteria**
+
+- [ ] This task is completed **last** — only after #116, #117, #118, and #119 are
+  all Done.
+- [ ] **No intended behavior change and no new features** — the behavior/UI of
+  #116–#119 is preserved (verified).
+- [ ] Each refinement is backed by **evidence** (passing test/build/lint output);
+  every performance change is backed by **before/after measurements** with
+  correctness preserved.
+- [ ] An **independent, fresh-context review** of the cumulative diff reports no
+  correctness or requirement gaps (style-only nits may be left).
+- [ ] All gates pass: `npm run build`, `npm run lint`, `npm test`, `npm run
+  format:check`, `cargo test`, `npm run lint:rust`, `cargo fmt --check`.
+- [ ] CLAUDE.md and README reflect the final shipped state.
+
+**Notes**
+
+- **Best-practice conventions sourced from web research** (the user's explicit
+  requirement):
+  - Anthropic — *Best practices for Claude Code* (https://code.claude.com/docs/en/best-practices):
+    explore→plan→implement→verify; **give Claude a verifiable check and have it show
+    evidence, not assert success**; **adversarial review in a fresh subagent context**
+    so the author doesn't grade itself; and the warning that a gap-hunting reviewer
+    over-reports — fix only correctness/requirement gaps, avoid over-engineering.
+  - Anthropic / Claude — *Optimize code performance quickly*
+    (https://claude.com/blog/optimize-code-performance-quickly): **profile to locate
+    bottlenecks first**, rank optimizations by impact, **benchmark before/after**, and
+    prevent regressions with tests.
+  - General convention (community + docs): **don't make "improvements" beyond what's
+    asked** — scope tightly and address root causes.
+- **Dependency snapshot:** `Depends on` lists the tasks open when this was authored
+  (#116–#119). If later tasks are added that should also gate this final pass,
+  **update this task's `Depends on`** to include them (this task is meant to run
+  after *everything*).
+- **Assumptions (autonomous authoring):** scope is quality / performance /
+  consistency / tests / docs with **no behavior changes or new features**, and the
+  pass uses **independent review + verification** rather than self-grading. Adjust if
+  you want behavior changes included or a different dependency set.
