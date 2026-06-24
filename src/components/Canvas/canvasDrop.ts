@@ -4,8 +4,87 @@
 // so both the app-level DndContext (drops) and the repo menu (append) share it.
 
 import { useStore } from "../../store";
-import type { CanvasContent, CanvasEdge, CanvasNode } from "../../types";
+import type {
+  CanvasContent,
+  CanvasEdge,
+  CanvasNode,
+  OverviewPanel,
+} from "../../types";
 import { collectLeaves, splitLeaf } from "./canvasTree";
+
+/**
+ * Whether two content descriptors refer to the **same live item** (#157, big mode) —
+ * agent/terminal by `sessionId`, file/kanban by `repoPath`+`file`, diff by
+ * `repoPath`, scheduled by `scheduleId`. Mirrors `isDuplicate`'s identity logic but
+ * compares two contents (not a content against a tree). Pure + unit-tested.
+ */
+export function sameItem(a: CanvasContent, b: CanvasContent): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "agent":
+    case "terminal":
+      return !!a.sessionId && a.sessionId === b.sessionId;
+    case "file":
+    case "kanban":
+      return a.repoPath === b.repoPath && a.file === b.file;
+    case "diff":
+      return a.repoPath === b.repoPath;
+    case "scheduled":
+      return !!a.scheduleId && a.scheduleId === b.scheduleId;
+    default:
+      return false;
+  }
+}
+
+/** Map an Overview panel (#38) to the live `CanvasContent` it renders, so big mode
+ * (#157) can match/maximize an Overview column the same way it does a Canvas leaf.
+ * Mirrors the Overview body render: markdown→file, terminal→a PTY by panel id. */
+export function overviewPanelToContent(
+  panel: OverviewPanel,
+  repoPath: string,
+): CanvasContent {
+  switch (panel.kind) {
+    case "diff":
+      return { kind: "diff", repoPath };
+    case "terminal":
+      return { kind: "terminal", sessionId: panel.id, repoPath };
+    case "kanban":
+      return { kind: "kanban", repoPath, file: panel.file };
+    default: // "markdown"
+      return { kind: "file", repoPath, file: panel.file };
+  }
+}
+
+/**
+ * Whether a maximized item (#157) still exists somewhere — used to auto-close big
+ * mode when the underlying item is removed/exits. An agent must still be in
+ * `sessions`, a schedule in `schedules`; a file/diff/kanban/terminal must still be
+ * referenced by an Overview panel or a Canvas leaf. Pure + unit-tested.
+ */
+export function itemStillPresent(
+  content: CanvasContent,
+  state: {
+    sessions: { id: string }[];
+    overviewPanels: Record<string, OverviewPanel[]>;
+    schedules: { id: string }[];
+    canvases: { layout: CanvasNode | null }[];
+  },
+): boolean {
+  if (content.kind === "agent") {
+    return state.sessions.some((s) => s.id === content.sessionId);
+  }
+  if (content.kind === "scheduled") {
+    return state.schedules.some((s) => s.id === content.scheduleId);
+  }
+  const inOverview = Object.entries(state.overviewPanels).some(
+    ([repo, panels]) =>
+      panels.some((p) => sameItem(overviewPanelToContent(p, repo), content)),
+  );
+  if (inOverview) return true;
+  return state.canvases.some((c) =>
+    collectLeaves(c.layout).some((l) => sameItem(l.content, content)),
+  );
+}
 
 /** The active Canvas tab's layout tree (#58), or null. */
 function activeLayout(

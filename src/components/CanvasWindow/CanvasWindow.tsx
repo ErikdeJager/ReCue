@@ -12,6 +12,7 @@ import {
 import { useStore } from "../../store";
 import { useKeyboardNav } from "../../useKeyboardNav";
 import { DETACHED_CANVAS_ID, ownedHere } from "../../windowContext";
+import BigModeModal from "../BigMode/BigModeModal";
 import { applyCanvasLiftEnd } from "../Canvas/canvasDrop";
 import { computeSessionOwners, sessionIdsInLayout } from "../Canvas/canvasTree";
 import CanvasSurface, { CanvasDragOverlay } from "../Canvas/CanvasSurface";
@@ -100,6 +101,7 @@ function CanvasWindow() {
           </DndContext>
         </div>
       </div>
+      <BigModeModal />
       <Toaster />
     </div>
   );

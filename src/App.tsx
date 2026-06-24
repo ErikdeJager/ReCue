@@ -16,6 +16,7 @@ import {
   payloadToContent,
 } from "./components/Canvas/canvasDrop";
 import { CanvasDragOverlay } from "./components/Canvas/CanvasSurface";
+import BigModeModal from "./components/BigMode/BigModeModal";
 import {
   computeSessionOwners,
   sessionIdsInLayout,
@@ -151,6 +152,7 @@ function MainApp() {
         <CanvasDragOverlay />
       </DndContext>
       <Toaster />
+      <BigModeModal />
       <NewSessionModal />
       <Settings />
       {canvasClosePromptId && <CanvasCloseModal />}

@@ -1,0 +1,41 @@
+/* "Shown in big mode" placeholder (#157) — fills an item's slot while it is
+   maximized in the big-mode modal, so the live content (pooled terminal / auto-save
+   hook) renders in exactly one place. Mirrors the #84 DetachedNote. */
+.note {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-8);
+  padding: var(--space-12);
+  text-align: center;
+}
+
+.text {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-12);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-button);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.button:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}

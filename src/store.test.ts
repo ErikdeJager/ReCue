@@ -66,6 +66,7 @@ beforeEach(() => {
     canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
     activeCanvasId: "canvas-1",
     liftedLeaf: null,
+    maximizedItem: null,
     canvasTemplates: [],
     sessionBusy: {},
     sessionActive: {},
@@ -831,6 +832,22 @@ describe("canvas panel lift (#155)", () => {
     expect(s.liftedLeaf).toBeNull();
     // Never mutated during the lift → same reference as before.
     expect(s.canvases[0]?.layout).toBe(layout);
+  });
+});
+
+describe("big mode (#157)", () => {
+  it("maximizeItem sets the overlay item; closeMaximized clears it", () => {
+    const content = { kind: "agent" as const, sessionId: "s1", repoPath: "/r" };
+    useStore.getState().maximizeItem(content);
+    expect(useStore.getState().maximizedItem).toEqual(content);
+    useStore.getState().closeMaximized();
+    expect(useStore.getState().maximizedItem).toBeNull();
+  });
+
+  it("closeMaximized is a no-op when nothing is maximized", () => {
+    expect(useStore.getState().maximizedItem).toBeNull();
+    useStore.getState().closeMaximized();
+    expect(useStore.getState().maximizedItem).toBeNull();
   });
 });
 

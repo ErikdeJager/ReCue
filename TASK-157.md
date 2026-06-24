@@ -1,6 +1,6 @@
-### 157. [ ] "Big mode" — maximize any item into a full-window modal overlay
+### 157. [x] "Big mode" — maximize any item into a full-window modal overlay
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-24
 
@@ -168,3 +168,45 @@ source shows a placeholder, restoring on close.
   `DetachedNote/DetachedNote.tsx`, `Settings/Settings.tsx` +
   `CanvasCloseModal/CanvasCloseModal.tsx` (modal pattern), `terminalPool.ts`,
   `ownership.ts` / `windowContext.ts` (`ownedHere`), `canvasDrop.ts` (`isDuplicate`).
+
+**Implementation note (done 2026-06-24)**
+
+All subtasks shipped as one cohesive feature:
+- **Pure helpers** (`canvasDrop.ts`): `sameItem(a,b)`, `overviewPanelToContent(panel,
+  repoPath)`, and `itemStillPresent(content, state)` — all unit-tested.
+- **Store** (`store.ts`): transient, never-persisted `maximizedItem: CanvasContent |
+  null` + `maximizeItem` / `closeMaximized`.
+- **Shared renderer** `components/ItemContent/ItemContent.tsx`: the single source of
+  truth for rendering a content descriptor → live child, with the #84 ownership guard
+  **and** the #157 big-mode placeholder (renders `MaximizedNote` when this exact item
+  is maximized and it's not the modal's `inModal` instance). It **replaced** the inline
+  copies in `CanvasSurface.renderContent` and Overview's `SessionCard`/`ExtraPanel`/
+  `ScheduleCard` bodies (Overview's `owned`/`ownerLabel` plumbing removed — ItemContent
+  resolves ownership). Title helpers (`panelTitle`, `itemTitle`) were extracted to
+  `components/ItemContent/itemTitle.ts` (no React) to avoid an import cycle; the #155
+  drag ghost now uses `itemTitle`.
+- **Affordance**: a Lucide `Maximize2` button on the Canvas panel header (all kinds but
+  `pending`) and on all three Overview card actions.
+- **Modal** `components/BigMode/BigModeModal.tsx`: near-fullscreen (`inset: var(--space-16)`)
+  over `--scrim`, `role="dialog"` `aria-modal`, header (title + close), body =
+  `<ItemContent ... inModal active>`. Closes on close-button, scrim mousedown, and Esc
+  **gated to non-terminal focus** (skips when the event target is inside `.xterm`).
+  Auto-closes via a `itemStillPresent` effect when the item disappears. Mounted in
+  `App.tsx` **and** `CanvasWindow.tsx` (per-window).
+- **`MaximizedNote`** mirrors `DetachedNote` ("Shown in big mode" + Close).
+- **Terminal preservation**: the leaf/panel stays in `canvases`/`overviewPanels` while
+  maximized, so the reconcile keeps the PTY; the pool's slot-equality guard
+  (`unmountTerminal`) makes the source→modal→source reparent reload-free in either
+  effect order.
+
+**Deviations / assumptions (recorded):**
+- **No rigid Tab focus-trap** in the modal (subtask 5 mentioned one). The body hosts
+  interactive content (a terminal/editor) that manages its own focus; a Tab-cycling trap
+  would fight the terminal. Kept `aria-modal` + the three closers (button/scrim/gated-Esc)
+  instead. Sensible for a content modal.
+- **Maximize icon shown even when `!ownedHere`** (subtask 8 called this optional) — the
+  modal then shows the `DetachedNote` for a PTY owned by another window. Harmless.
+- **Subtask 11 (manual UI verification)** can't run headlessly here; the behavior reuses
+  proven infra (the #18 pool reparent, #84 ownership/`DetachedNote`, the app modal
+  pattern). `npm run build`, `npm run lint`, `npm run format:check`, and `npm test` (205)
+  all pass.

@@ -448,6 +448,10 @@ export interface AppState {
    * persisted `canvases` blob is untouched until a committed drop, so a cancel /
    * interrupted drag restores the panel exactly. `null` when no panel is lifted. */
   liftedLeaf: { canvasId: string; leafId: string } | null;
+  /** The item currently maximized in **big mode** (#157), or null. Transient,
+   * per-window, never persisted — a single near-fullscreen overlay shows this one
+   * item live while its source panel/column shows a placeholder. */
+  maximizedItem: CanvasContent | null;
   /** Sessions currently working, from the output-activity heuristic (#42); an
    * absent/false entry means idle. (The task's `sessionState`, as a boolean map.) */
   sessionBusy: Record<string, boolean>;
@@ -575,6 +579,10 @@ export interface AppState {
   /** Cancel a lift (#155): Esc / drop on nothing → clear `liftedLeaf` with no
    * layout write, so the panel snaps back to its exact previous position. */
   cancelCanvasLift: () => void;
+  /** Maximize an item into big mode (#157): set the single overlay item. */
+  maximizeItem: (content: CanvasContent) => void;
+  /** Close big mode (#157): restore the item to its panel/column. */
+  closeMaximized: () => void;
   /** Add a new empty Canvas tab (default "Canvas N") and select it (#58). */
   addCanvas: () => void;
   /** Close a Canvas tab; always keeps ≥1 (closing the last leaves an empty one) (#58). */
@@ -1029,6 +1037,7 @@ export const useStore = create<AppState>()((set, get) => ({
   templateUseOpen: false,
   activeLeafId: null,
   liftedLeaf: null,
+  maximizedItem: null,
   sessionBusy: {},
   sessionActive: {},
   terminalExits: {},
@@ -1782,6 +1791,13 @@ export const useStore = create<AppState>()((set, get) => ({
   // panel to its exact previous position.
   cancelCanvasLift: () => {
     if (get().liftedLeaf) set({ liftedLeaf: null });
+  },
+
+  // Big mode (#157): a single per-window overlay item. Transient — never persisted.
+  // The BigModeModal auto-closes it if the underlying item disappears.
+  maximizeItem: (content) => set({ maximizedItem: content }),
+  closeMaximized: () => {
+    if (get().maximizedItem) set({ maximizedItem: null });
   },
 
   // Canvas templates (#117): the editor builds a draft layout of inert blocks with

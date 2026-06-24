@@ -1,26 +1,22 @@
 import { type ReactElement, useEffect } from "react";
 import { DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
-import { Copy, ExternalLink, GitFork, GripVertical, X } from "lucide-react";
+import {
+  Copy,
+  ExternalLink,
+  GitFork,
+  GripVertical,
+  Maximize2,
+  X,
+} from "lucide-react";
 import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
 
-import { useSessionOwners } from "../../ownership";
 import { FORK_UNAVAILABLE_REASON, repoName, sessionLabel } from "../../paths";
 import { repoColor, useStore } from "../../store";
-import type {
-  CanvasContent,
-  CanvasEdge,
-  CanvasLeaf,
-  CanvasNode,
-  SessionView,
-} from "../../types";
-import { IS_MAIN_WINDOW, ownedHere } from "../../windowContext";
-import DetachedNote from "../DetachedNote/DetachedNote";
-import DiffInspector from "../DiffInspector/DiffInspector";
+import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
+import { IS_MAIN_WINDOW } from "../../windowContext";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
-import FileViewer from "../FileViewer/FileViewer";
-import KanbanPanel from "../Kanban/KanbanPanel";
-import ScheduledPanel from "../ScheduledPanel/ScheduledPanel";
-import Terminal from "../Terminal/Terminal";
+import ItemContent from "../ItemContent/ItemContent";
+import { itemTitle, panelTitle } from "../ItemContent/itemTitle";
 import { focusTerminal } from "../Terminal/terminalPool";
 import {
   collectLeaves,
@@ -28,8 +24,6 @@ import {
   removeLeaf,
   updateSizes,
 } from "./canvasTree";
-import TemplatePendingPanel from "./TemplatePendingPanel";
-import { blockPlaceholderLabel } from "./templateBlocks";
 import styles from "./Canvas.module.css";
 
 const EDGES: CanvasEdge[] = ["top", "right", "bottom", "left"];
@@ -62,43 +56,6 @@ function EdgeZone({ panelId, edge }: { panelId: string; edge: CanvasEdge }) {
   );
 }
 
-/** A panel's title + repo (resolved live from the store, so renames/branch
- * changes stay fresh); the content descriptor only stores refs. */
-function panelTitle(content: CanvasContent): string {
-  if (content.kind === "file") return content.file?.split("/").pop() ?? "File";
-  if (content.kind === "kanban")
-    return content.file?.split("/").pop() ?? "Kanban";
-  if (content.kind === "diff") return "Diff";
-  if (content.kind === "terminal") return "Terminal";
-  if (content.kind === "scheduled") return "Scheduled";
-  // A pending template panel (#118) shows its block's label until it resolves.
-  if (content.kind === "pending")
-    return content.block ? blockPlaceholderLabel(content.block) : "Panel";
-  return content.label ?? "Panel";
-}
-
-/** A panel's single-line display title — the agent's resolved label (name/auto/
- * branch, #95/#97) for an agent leaf, else `panelTitle`. Used by the drag ghost
- * (#155) so a lifted panel's preview reads the same as its header. */
-function leafTitleText(
-  content: CanvasContent,
-  sessions: SessionView[],
-  branches: Record<string, string>,
-  autoNameOn: boolean,
-): string {
-  if (content.kind === "agent") {
-    const session = sessions.find((s) => s.id === content.sessionId);
-    const repoPath = content.repoPath ?? session?.repoPath ?? "";
-    const branch = branches[repoPath] ?? "";
-    return sessionLabel(
-      session?.name,
-      autoNameOn ? session?.autoName : null,
-      branch || repoName(repoPath),
-    ).primary;
-  }
-  return panelTitle(content);
-}
-
 function LeafPanel({
   leaf,
   dragActive,
@@ -116,7 +73,7 @@ function LeafPanel({
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const forkSession = useStore((s) => s.forkSession);
   const setLeafFile = useStore((s) => s.setLeafFile);
-  const owners = useSessionOwners();
+  const maximizeItem = useStore((s) => s.maximizeItem);
   const isActive = leaf.id === activeLeafId;
 
   // Drag source for reorder/reposition (#135): the **whole header bar** carries the
@@ -176,49 +133,6 @@ function LeafPanel({
       focusTerminal(content.sessionId);
     }
   }, [isActive, content.kind, content.sessionId]);
-
-  const renderContent = (): ReactElement => {
-    if (content.kind === "agent" && content.sessionId) {
-      if (!session) {
-        return <div className={styles.placeholder}>Session closed.</div>;
-      }
-      // One PTY renders in one window (#84): defer to the owning window otherwise.
-      if (!ownedHere(owners, content.sessionId)) {
-        return <DetachedNote ownerLabel={owners[content.sessionId]} />;
-      }
-      return <Terminal sessionId={content.sessionId} />;
-    }
-    if (content.kind === "terminal" && content.sessionId) {
-      if (!ownedHere(owners, content.sessionId)) {
-        return <DetachedNote ownerLabel={owners[content.sessionId]} />;
-      }
-      // Plain shell terminal item (#72): repoPath lets Restart respawn the shell.
-      return (
-        <Terminal sessionId={content.sessionId} repoPath={content.repoPath} />
-      );
-    }
-    if (content.kind === "file" && content.repoPath && content.file) {
-      return (
-        <FileViewer repoPath={content.repoPath} file={content.file} active />
-      );
-    }
-    if (content.kind === "kanban" && content.repoPath && content.file) {
-      return (
-        <KanbanPanel repoPath={content.repoPath} file={content.file} active />
-      );
-    }
-    if (content.kind === "diff" && content.repoPath) {
-      return <DiffInspector repoPath={content.repoPath} active />;
-    }
-    if (content.kind === "scheduled" && content.scheduleId) {
-      return <ScheduledPanel scheduleId={content.scheduleId} />;
-    }
-    // A pending/erroring template panel (#118): loading → live, or error + Retry.
-    if (content.kind === "pending") {
-      return <TemplatePendingPanel leafId={leaf.id} content={content} />;
-    }
-    return <div className={styles.placeholder}>Empty panel</div>;
-  };
 
   return (
     <div
@@ -327,6 +241,19 @@ function LeafPanel({
               <Copy size={14} strokeWidth={1.5} />
             </button>
           )}
+          {/* Maximize into big mode (#157) — every item except a pending template
+              panel (no stable content to maximize yet). */}
+          {content.kind !== "pending" && (
+            <button
+              type="button"
+              className={styles.panelClose}
+              onClick={() => maximizeItem(content)}
+              title="Open in big mode"
+              aria-label="Open in big mode"
+            >
+              <Maximize2 size={14} strokeWidth={1.5} />
+            </button>
+          )}
           <button
             type="button"
             className={styles.panelClose}
@@ -338,7 +265,9 @@ function LeafPanel({
           </button>
         </span>
       </header>
-      <div className={styles.panelBody}>{renderContent()}</div>
+      <div className={styles.panelBody}>
+        <ItemContent content={content} active leafId={leaf.id} />
+      </div>
       {dragActive && (
         <div className={styles.edges}>
           {EDGES.map((edge) => (
@@ -363,7 +292,7 @@ function PanelDragGhost({ leafId }: { leafId: string }) {
     .flatMap((c) => collectLeaves(c.layout))
     .find((l) => l.id === leafId);
   if (!leaf) return null;
-  const title = leafTitleText(leaf.content, sessions, branches, autoNameOn);
+  const title = itemTitle(leaf.content, sessions, branches, autoNameOn);
   return (
     <div className={styles.dragGhost}>
       <GripVertical size={14} strokeWidth={1.5} aria-hidden />

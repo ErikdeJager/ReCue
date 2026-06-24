@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
-import { Clock, Copy, GitFork, GripVertical, X } from "lucide-react";
+import { Clock, Copy, GitFork, GripVertical, Maximize2, X } from "lucide-react";
 import {
   closestCenter,
   DndContext,
@@ -19,7 +19,6 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 import { mergeRepoOrder, repoColor, useStore } from "../../store";
-import { useSessionOwners } from "../../ownership";
 import {
   effectiveRepo,
   FORK_UNAVAILABLE_REASON,
@@ -28,18 +27,14 @@ import {
 } from "../../paths";
 import { formatFireTime } from "../../time";
 import type { OverviewPanel, ScheduledSession, SessionView } from "../../types";
-import { ownedHere } from "../../windowContext";
-// The Focus inspector's diff component is already parameterized by { repoPath,
-// active }, so the Overview diff panel (#39) reuses it directly — one source.
+import { overviewPanelToContent } from "../Canvas/canvasDrop";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
-import DetachedNote from "../DetachedNote/DetachedNote";
-import DiffInspector from "../DiffInspector/DiffInspector";
 import EmptyState from "../EmptyState/EmptyState";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
-import FileViewer from "../FileViewer/FileViewer";
-import KanbanPanel from "../Kanban/KanbanPanel";
-import ScheduledPanel from "../ScheduledPanel/ScheduledPanel";
-import Terminal from "../Terminal/Terminal";
+// The shared item renderer (#157) maps a content descriptor → the right live child
+// (terminal / file / kanban / diff / scheduled) with the #84 ownership guard and the
+// big-mode placeholder — one source of truth shared with Canvas + the modal.
+import ItemContent from "../ItemContent/ItemContent";
 import styles from "./Overview.module.css";
 
 /**
@@ -130,10 +125,6 @@ interface SessionCardProps {
   busy: boolean;
   /** The session has been active at least once (#112) → yellow when idle. */
   hasBeenActive: boolean;
-  /** True when this window renders the PTY; false when it's in a detached
-   * canvas window (#84) and this card shows a "running in a window" note. */
-  owned: boolean;
-  ownerLabel?: string;
   onSelect: () => void;
   onCopyResume: () => void;
   onFork: () => void;
@@ -148,13 +139,12 @@ function SessionCard({
   selected,
   busy,
   hasBeenActive,
-  owned,
-  ownerLabel,
   onSelect,
   onCopyResume,
   onFork,
   onRemove,
 }: SessionCardProps) {
+  const maximizeItem = useStore((s) => s.maximizeItem);
   // Agent label (#95): a single line showing only the primary — the custom name if
   // set, else the branch (folder name when non-git). No subtitle, no repo dot; repo
   // color reads from the card's top band (#36). `sessionLabel` still computes the
@@ -212,6 +202,22 @@ function SessionCard({
       >
         <Copy size={15} strokeWidth={1.5} />
       </button>
+      {/* Maximize into big mode (#157). */}
+      <button
+        type="button"
+        className={styles.action}
+        onClick={() =>
+          maximizeItem({
+            kind: "agent",
+            sessionId: session.id,
+            repoPath: session.repoPath,
+          })
+        }
+        title="Open in big mode"
+        aria-label="Open in big mode"
+      >
+        <Maximize2 size={15} strokeWidth={1.5} />
+      </button>
       <button
         type="button"
         className={styles.action}
@@ -224,8 +230,9 @@ function SessionCard({
     </>
   );
   return (
-    // Clicking the card body selects it (highlight in place); Expand goes to
-    // Focus. The terminal inside keeps its own click-to-focus.
+    // Clicking the card body selects it (highlight in place). The shared ItemContent
+    // (#157) renders the live terminal — or a DetachedNote (#84) / MaximizedNote
+    // (#157) placeholder — with the same one-live-render-site guards as Canvas.
     <PanelColumn
       id={session.id}
       color={color}
@@ -236,11 +243,14 @@ function SessionCard({
       actions={actions}
       onClickBody={onSelect}
     >
-      {owned ? (
-        <Terminal sessionId={session.id} />
-      ) : (
-        <DetachedNote ownerLabel={ownerLabel} />
-      )}
+      <ItemContent
+        content={{
+          kind: "agent",
+          sessionId: session.id,
+          repoPath: session.repoPath,
+        }}
+        active
+      />
     </PanelColumn>
   );
 }
@@ -272,6 +282,8 @@ function ExtraPanel({
   onClose,
 }: ExtraPanelProps) {
   const setOverviewPanelFile = useStore((s) => s.setOverviewPanelFile);
+  const maximizeItem = useStore((s) => s.maximizeItem);
+  const content = overviewPanelToContent(panel, repoPath);
   const title = (
     <>
       {/* File panels: the filename is a switcher (#90) — click to pick another
@@ -296,15 +308,27 @@ function ExtraPanel({
     </>
   );
   const actions = (
-    <button
-      type="button"
-      className={styles.action}
-      onClick={onClose}
-      title="Close panel"
-      aria-label="Close panel"
-    >
-      <X size={15} strokeWidth={1.5} />
-    </button>
+    <>
+      {/* Maximize into big mode (#157). */}
+      <button
+        type="button"
+        className={styles.action}
+        onClick={() => maximizeItem(content)}
+        title="Open in big mode"
+        aria-label="Open in big mode"
+      >
+        <Maximize2 size={15} strokeWidth={1.5} />
+      </button>
+      <button
+        type="button"
+        className={styles.action}
+        onClick={onClose}
+        title="Close panel"
+        aria-label="Close panel"
+      >
+        <X size={15} strokeWidth={1.5} />
+      </button>
+    </>
   );
   return (
     <PanelColumn
@@ -315,27 +339,9 @@ function ExtraPanel({
       title={title}
       actions={actions}
     >
-      {panel.kind === "diff" ? (
-        // Reuse the Focus inspector's diff component (#39), bound to this repo
-        // and always active so it polls (#29) while the column is shown.
-        <DiffInspector repoPath={repoPath} active />
-      ) : panel.kind === "terminal" ? (
-        // Terminal item (#72): the panel id is the shell PTY id, rendered by the
-        // same pooled <Terminal>. repoPath marks it a non-agent (Restart respawns
-        // the shell; no busy/branch/claude-resume).
-        <Terminal sessionId={panel.id} repoPath={repoPath} />
-      ) : panel.kind === "kanban" && panel.file ? (
-        // Kanban board (#142): the shared read-only board renderer, always active
-        // so it hot-reloads the `.md` like the FileViewer.
-        <KanbanPanel repoPath={repoPath} file={panel.file} active />
-      ) : panel.file ? (
-        // File panel (#41/#44): the shared FileViewer renders the panel's saved
-        // file by type (markdown/code/text), always active so it hot-reloads.
-        <FileViewer repoPath={repoPath} file={panel.file} active />
-      ) : (
-        // A file panel is always created with a file; this is a guard.
-        <div className={styles.placeholder}>No file selected.</div>
-      )}
+      {/* The shared renderer (#157) maps diff/terminal/kanban/file → the live child
+          (the same components Canvas uses), with the big-mode placeholder guard. */}
+      <ItemContent content={content} active />
     </PanelColumn>
   );
 }
@@ -359,6 +365,7 @@ function ScheduleCard({
   selected,
   onCancel,
 }: ScheduleCardProps) {
+  const maximizeItem = useStore((s) => s.maximizeItem);
   const title = (
     <>
       <span className={styles.name}>
@@ -373,15 +380,33 @@ function ScheduleCard({
     </>
   );
   const actions = (
-    <button
-      type="button"
-      className={styles.action}
-      onClick={onCancel}
-      title="Cancel schedule"
-      aria-label="Cancel schedule"
-    >
-      <X size={15} strokeWidth={1.5} />
-    </button>
+    <>
+      {/* Maximize into big mode (#157). */}
+      <button
+        type="button"
+        className={styles.action}
+        onClick={() =>
+          maximizeItem({
+            kind: "scheduled",
+            scheduleId: schedule.id,
+            repoPath: schedule.cwd,
+          })
+        }
+        title="Open in big mode"
+        aria-label="Open in big mode"
+      >
+        <Maximize2 size={15} strokeWidth={1.5} />
+      </button>
+      <button
+        type="button"
+        className={styles.action}
+        onClick={onCancel}
+        title="Cancel schedule"
+        aria-label="Cancel schedule"
+      >
+        <X size={15} strokeWidth={1.5} />
+      </button>
+    </>
   );
   return (
     <PanelColumn
@@ -400,7 +425,14 @@ function ScheduleCard({
       }
       actions={actions}
     >
-      <ScheduledPanel scheduleId={schedule.id} />
+      <ItemContent
+        content={{
+          kind: "scheduled",
+          scheduleId: schedule.id,
+          repoPath: schedule.cwd,
+        }}
+        active
+      />
     </PanelColumn>
   );
 }
@@ -438,9 +470,8 @@ function Overview() {
   const sessionActive = useStore((s) => s.sessionActive);
   const schedules = useStore((s) => s.schedules);
   const cancelSchedule = useStore((s) => s.cancelSchedule);
-  // PTY ownership across windows (#84): an agent shown in a detached canvas window
-  // renders there, not on this wall — its card shows a note instead.
-  const owners = useSessionOwners();
+  // PTY ownership across windows (#84) is resolved inside the shared ItemContent
+  // (#157) now — an agent owned by a detached canvas window shows a note there.
 
   // Drag with a small activation distance so clicking the handle doesn't start a
   // drag; keyboard sensor makes reordering accessible (#43).
@@ -612,8 +643,6 @@ function Overview() {
                         selected={session.id === selectedId}
                         busy={sessionBusy[session.id] ?? false}
                         hasBeenActive={sessionActive[session.id] ?? false}
-                        owned={ownedHere(owners, session.id)}
-                        ownerLabel={owners[session.id]}
                         onSelect={() => select(session.id)}
                         onCopyResume={() =>
                           void copyToClipboard(
