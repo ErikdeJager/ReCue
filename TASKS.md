@@ -2320,3 +2320,92 @@ invasively). Whichever path is taken, **the detached-window invariant (#84) and 
 
 ---
 
+### 153. [ ] Agent row context menu — "Open in canvas" (reuse the agent's existing canvas tab, else create one)
+
+**Status:** Not started
+**Depends on:** none · _(builds on shipped #57/#131 (agent row context menu), #58 (Canvas tabs /
+`addCanvas`), #47/#126 (the "add an agent as a Canvas leaf" pattern via `appendLeaf`), and #84
+(detached canvas windows). Consistent with the open #152 source-of-truth model — the agent is
+already a sidebar/`sessions` item, so no extra registration is needed; no hard ordering required.)_
+**Created:** 2026-06-24
+
+**Description**
+
+The agent row's right-click context menu in the sidebar (`SessionRow` in
+`src/components/Sidebar/Sidebar.tsx`, the menu ~L347–410) currently offers **Rename / Fork
+conversation / Copy session ID / Remove** (#57/#131). The user wants a new **"Open in canvas"**
+item that puts that agent into the Canvas view as if it had been dragged in — without manually
+switching to Canvas, making a tab, and dragging the agent row across.
+
+**Behavior (decided with the user — this refines the original "always create a brand-new
+canvas" wording):**
+
+- **Reuse if already open.** If the agent already has a panel (`content.kind === "agent"` with
+  this `sessionId`) in some existing Canvas tab, **focus that tab** (don't create a duplicate).
+  Only if it isn't in any canvas do we **create a new tab** for it.
+- **New tab uses the generic name.** When a new tab is created, reuse `addCanvas`'s incremental
+  default ("Canvas N") — no agent-derived name.
+- **Switch + focus.** Either way, switch the app to the **Canvas view**, make the target tab
+  **active**, and focus the agent's panel so its terminal shows immediately.
+
+This is essentially the existing fork-into-canvas move (`store.ts` ~L2223–2242 builds
+`CanvasContent {kind:"agent", sessionId, repoPath}` and `appendLeaf`s it, or sets it as the sole
+leaf of an empty layout), packaged as a one-click menu action that targets a **reused-or-new
+tab** rather than the active one.
+
+Out of scope: changing drag-into-Canvas behavior; non-agent rows (this is the agent menu only —
+files/diffs/terminals/schedules already have their own rows and can be dragged in); renaming
+tabs after the agent; multi-window placement choices beyond the detached-window reuse note below.
+
+**Subtasks**
+
+1. [ ] Add a store action (e.g. `openSessionInCanvas(sessionId)`): search every `canvases[]`
+   layout (via `collectLeaves`) for a leaf with `content.kind === "agent"` && matching
+   `sessionId`.
+   - **Found, in a main-window tab:** set `view: "canvas"`, `activeCanvasId` = that tab,
+     `activeLeafId` = that leaf, `selectedId` = the session; persist the active id the same way
+     the existing active-canvas switch does (`setCanvases` / the #84 main-window-authoritative
+     path).
+   - **Found, in a detached canvas (#84):** raise that window via `ipc.focusCanvasWindow(id)`
+     instead of switching the main view (it can't render in the main window).
+   - **Not found anywhere:** create a new "Canvas N" tab (mirror `addCanvas`) whose `layout` is
+     a single leaf holding the agent content `{kind:"agent", sessionId, repoPath}`; set it active,
+     switch to Canvas view, focus the leaf, and persist via `setCanvases`.
+2. [ ] Add an **"Open in canvas"** item to the `SessionRow` context menu (a `menuItem` /
+   `menuItemView` button with a fitting Lucide icon — e.g. `PanelsTopLeft` / `Columns2` /
+   `LayoutPanelLeft` — matching the icon+label style used by Fork). Wire it to
+   `openSessionInCanvas(session.id)` + `setMenu(null)`. Place it logically (e.g. after "Copy
+   session ID", before the Remove separator).
+3. [ ] Bump the context-menu vertical clamp (`Sidebar.tsx` ~L295–298, currently
+   `window.innerHeight - 160`) to account for the extra item so the taller menu still doesn't
+   overflow the viewport bottom.
+
+**Acceptance criteria**
+
+- [ ] Right-clicking an agent row in the sidebar shows an **"Open in canvas"** item.
+- [ ] Choosing it when the agent is **not** in any canvas creates a new "Canvas N" tab containing
+  that agent, switches to the Canvas view, and focuses it — the agent's terminal renders
+  immediately.
+- [ ] Choosing it when the agent is **already** in a (main-window) Canvas tab focuses that tab
+  instead of creating a duplicate.
+- [ ] When the agent's existing tab is a **detached window** (#84), that window is raised rather
+  than the main view switching.
+- [ ] The reused/created tab and active state persist (survive a reload) and stay in sync with
+  detached windows.
+- [ ] `npm run build`, `npm run lint`, and `npm test` pass.
+
+**Notes**
+
+- Reuses the fork-into-canvas pattern (`store.ts` ~L2223–2242) and `addCanvas` (`store.ts`
+  ~L1863). The agent's draggable already carries `{kind:"session", sessionId, repoPath}`
+  (`Sidebar.tsx` ~L228–236), so the menu action just performs the same placement programmatically.
+- **Why reuse, not always-new:** a single PTY's xterm renders in one slot/window at a time
+  (#18/#84). Creating a second leaf for an agent already shown elsewhere would make two panels
+  fight over the one terminal — so "reuse if already open" both matches the user's choice and
+  avoids that conflict.
+- Consistent with #152: the agent is already a `sessions` / left-panel item, so no
+  `overviewPanels` registration is needed, and #152's removal cascade will prune this leaf when
+  the agent is removed.
+
+---
+
