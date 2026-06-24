@@ -1066,3 +1066,43 @@ sites isn't unit-testable, but the logic + the fail-open contract are covered.
 - This surfaces, **up front**, the two un-materialized cases #134 documented: a
   never-prompted session, and a just-created-never-used fork.
 
+---
+
+### 142. [ ] Opening a Canvas template into a sole empty canvas replaces it instead of leaving an empty tab behind
+
+**Status:** Not started
+**Depends on:** none · _(builds on #117 templates + #118 `useTemplate`/`instantiateTemplate` — both shipped)_
+**Created:** 2026-06-24
+
+**Description**
+
+Creating a new Canvas tab **from a template** (#118, the **▾ Templates → "New tab from template…"** flow → `TemplateUseModal` → store `useTemplate`) currently **always appends** a tab: `const next = [...get().canvases, tab]` in `src/store.ts` (`useTemplate`, ~`store.ts:1690`). On a fresh app the default state is a single empty `Canvas 1` (`layout: null`), so opening a template leaves that **untouched empty tab dangling** beside the new one — clutter the user never created anything in.
+
+Fix: when there is **exactly one canvas and it is empty**, the template **replaces it in place** (the sole empty tab becomes the template tab) rather than appending. In every other case — **2+ canvases**, or the single canvas **has panels** — keep today's append behavior and **remove nothing**.
+
+Definitions / decisions (confirmed with the user):
+
+- **"Empty"** = no panels, matching the existing `requestCloseCanvas` test (#137): `collectLeaves(canvas.layout).length === 0` (in practice `layout === null`). Reuse that exact notion — don't invent a second one.
+- **Trigger is the sole-canvas case only:** replace **only** when `canvases.length === 1` **and** that one canvas is empty. With 2+ tabs, always append (even if the active tab happens to be empty). This is the literal "there is only an empty canvas at the moment" reading.
+- **Name:** the replacing tab takes the **template's name** (as the appended tab does today); the old "Canvas 1" name is discarded.
+- Everything else about `useTemplate` is unchanged: it switches to `view: "canvas"`, sets `activeCanvasId` to the new tab, pushes the `recents` entry + the "Opened template" toast, persists via `ipc.setCanvases`, and kicks off the same best-effort async `resolveTemplateBlock` for each pending leaf.
+
+**Subtasks**
+
+1. [ ] In `store.ts` `useTemplate`, compute whether the sole canvas is empty (`canvases.length === 1 && collectLeaves(canvases[0].layout).length === 0`) and build `next` as `[tab]` (replace) in that case, else `[...canvases, tab]` (append). Keep the existing `activeCanvasId`/`view`/persist/toast/recents/resolve logic intact.
+2. [ ] Update the existing `useTemplate` unit test (`store.test.ts:596`) — its `beforeEach` starts with a single empty `canvas-1`, so it now expects a **replacement** (`canvases.length === 1`, the lone tab named after the template), not `before + 1`.
+3. [ ] Add unit tests for the append-unchanged cases: (a) 2+ canvases present → template appends, nothing removed; (b) one canvas that **has** panels → template appends, the existing tab survives.
+
+**Acceptance criteria**
+
+- [ ] Fresh app (one empty `Canvas 1`): opening a template shows exactly **one** tab, named after the template, active, in Canvas view — no leftover empty tab.
+- [ ] With 2+ canvases (even when the active one is empty), opening a template **adds** a tab and removes none.
+- [ ] With a single canvas that has panels, opening a template **adds** a tab and the existing one survives.
+- [ ] The replacing tab carries the **template's** name; pending blocks still resolve exactly as before.
+- [ ] `npm test`, `npm run build` (type-check), and `npm run lint` pass.
+
+**Notes**
+
+- Scope is **template instantiation only** (`useTemplate`); the plain "+" new-blank-canvas button (`addCanvas`) is untouched — it intentionally creates an empty tab.
+- Detached-window edge (#84): a sole empty canvas being detached is implausible (you'd have torn off a blank canvas as your only tab); not specially handled — just follow the existing `setCanvases` persist/broadcast path.
+
