@@ -1929,3 +1929,91 @@ autosave path so they don't fight:
 
 ---
 
+### 150. [ ] File viewer syntax highlighting — add Java + config formats (INI / .env / .properties), verify existing
+
+**Status:** Not started
+**Depends on:** none · _(extends the shipped #44 Prism setup — `prism.ts` / `fileType.ts` / the
+#33 `--syn-*` token theme; touches different files than the open #148/#149 FileViewer-editor
+tasks, so no conflict)_
+**Created:** 2026-06-24
+
+**Description**
+
+The file viewer **already** has Prism syntax highlighting (#44): `src/components/FileViewer/prism.ts`
+imports per-language grammars and `fileType.ts`'s `LANG_BY_EXT` maps extensions to Prism
+languages, themed by the Catppuccin `--syn-*` tokens (#33) in `FileViewer.module.css`. **Already
+highlighted today:** JSON/JSONC, YAML/YML, TOML, JavaScript, TypeScript, JSX/TSX, Rust, Python,
+CSS/SCSS, XML/HTML/SVG/Vue (markup), Bash/sh/zsh. So the user's core ask (JSON, YAML, JS, config)
+is mostly **present** — this task **fills the gaps** and **verifies** the existing highlighting
+renders.
+
+Keep it **minimal-package** (per the user): Prism is already a dependency; grammars are
+**per-language imports** (~1–5 KB each), so we add only the few that are missing — **no new
+library**, no autoloader, no bundling all of Prism.
+
+**Add (per the user's selection — Java + config formats; JavaScript is already covered):**
+
+1. **Java** — `import "prismjs/components/prism-java"` + `java: "java"` (`.java`) in `LANG_BY_EXT`.
+2. **Config formats:**
+   - **INI** — `prism-ini` + `ini` / `cfg` / `conf` → `"ini"`.
+   - **.properties** — `prism-properties` + `properties` → `"properties"`.
+   - **.env (dotenv)** — `.env` / `.env.*` are **dotfiles** (no extension — `fileExt` returns
+     `""`), so add a small **filename** rule in `fileType.ts` mapping them to a `KEY=value`
+     grammar (`"ini"` or `"properties"`) and routing to `"code"` mode.
+3. **JavaScript** — already supported (`.js` → `javascript`, Prism core); **verify** it renders
+   (the user wasn't sure highlighting works) — no new grammar.
+
+**Theme the new token types.** The `.code` CSS covers a broad token set, but the added grammars
+introduce token classes that may currently be **uncolored** (so highlighting would look flat):
+INI/properties `.token.key` / `.token.section` / `.token.value`, and Java `.token.annotation`.
+Add rules mapping those to the existing `--syn-*` palette so the new languages are **visibly**
+highlighted (reuse `--syn-keyword` / `--syn-property` / `--syn-string` / etc. — no new colors).
+
+**Verify existing (the user "hasn't checked").** Confirm the shipped highlighting actually
+renders for representative files — open a `.json`, `.yaml`, and `.js` in the FileViewer code
+view and check tokens are colored. **If** it's genuinely broken (not just missing languages),
+fix that as part of this task; otherwise leave the existing path unchanged.
+
+Out of scope: extension-less config files beyond `.env` (Dockerfile / Makefile / `.gitignore` —
+the user declined), more code languages (Go / SQL / C/C++ / C# — declined), editing highlighted
+code (the code view stays read-only, per #148), a new highlighting library, and the markdown /
+raw render paths.
+
+**Subtasks**
+
+1. [ ] Verify the existing Prism highlighting renders (JSON / YAML / JS); only fix if genuinely
+   broken.
+2. [ ] Add `prism-java`, `prism-ini`, `prism-properties` imports to `prism.ts` (mind Prism
+   grammar dependency order).
+3. [ ] Extend `LANG_BY_EXT` in `fileType.ts`: `java→java`; `ini`/`cfg`/`conf→ini`;
+   `properties→properties`. Add a filename rule so `.env` / `.env.*` map to a KEY=value grammar
+   and route to `"code"`.
+4. [ ] Add `.code` token-color rules for the new token types (INI/properties `key` / `section` /
+   `value`, Java `annotation`) using the existing `--syn-*` tokens.
+5. [ ] Update `fileType.test.ts`: `detectMode` / `prismLang` for `.java`, `.ini`, `.cfg`,
+   `.properties`, `.env`.
+
+**Acceptance criteria**
+
+- [ ] `.java`, `.ini` / `.cfg` / `.conf`, `.properties`, and `.env` / `.env.*` files render with
+  visible syntax highlighting in the FileViewer code view.
+- [ ] The already-supported languages (JSON, YAML, JS, TS, Rust, Python, CSS, XML, TOML, Bash)
+  still highlight (verified, unbroken).
+- [ ] The new grammars are added as individual Prism imports only (no new dependency, no
+  autoloader); the bundle stays minimal.
+- [ ] `npm run build`, `npm run lint`, and `npm test` (incl. the `fileType.test.ts` additions)
+  pass.
+
+**Notes**
+
+- The app already ships Prism (`prismjs ^1.30.0`) with a curated per-language import set and a
+  Catppuccin `--syn-*` token theme — this task **extends** that set, it does not introduce a
+  highlighter.
+- `.env` needs **filename** detection (dotfiles have no extension in `fileExt`); mapped to an
+  INI/properties KEY=value grammar.
+- Contained to `prism.ts` / `fileType.ts` / `FileViewer.module.css` / `fileType.test.ts` — does
+  **not** touch `FileViewer.tsx`, so no conflict with the open #148/#149 FileViewer-editor tasks.
+- Independent of the unmerged #139–#140.
+
+---
+
