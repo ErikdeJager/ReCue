@@ -17,6 +17,7 @@ import { IS_MAIN_WINDOW } from "../../windowContext";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import ItemContent from "../ItemContent/ItemContent";
 import { itemTitle, panelTitle } from "../ItemContent/itemTitle";
+import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import WorktreeViewsBadge from "../WorktreeViewsBadge/WorktreeViewsBadge";
 import { focusTerminal } from "../Terminal/terminalPool";
 import {
@@ -209,6 +210,11 @@ function LeafPanel({
           className={styles.panelActions}
           onPointerDown={(event) => event.stopPropagation()}
         >
+          {/* "Open view" in the agent's folder (#165) — normal agents only; a
+              worktree agent uses its clickable badge (#164) instead. */}
+          {content.kind === "agent" && session && !session.worktreeParent && (
+            <OpenViewButton repoPath={repoPath} className={styles.panelClose} />
+          )}
           {/* Fork the conversation into a new parallel session (#126) — agents only.
               Gated (#138): unavailable until the source has a real turn to fork. */}
           {content.kind === "agent" && session && (

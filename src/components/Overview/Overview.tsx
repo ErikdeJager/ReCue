@@ -35,6 +35,7 @@ import FileSwitcher from "../FileSwitcher/FileSwitcher";
 // (terminal / file / kanban / diff / scheduled) with the #84 ownership guard and the
 // big-mode placeholder — one source of truth shared with Canvas + the modal.
 import ItemContent from "../ItemContent/ItemContent";
+import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import WorktreeViewsBadge from "../WorktreeViewsBadge/WorktreeViewsBadge";
 import styles from "./Overview.module.css";
 
@@ -176,6 +177,15 @@ function SessionCard({
   const canFork = session.forkable !== false;
   const actions = (
     <>
+      {/* "Open view" in the agent's folder (#165) — normal agents only; a worktree
+          agent uses its clickable badge (#164) instead. */}
+      {!session.worktreeParent && (
+        <OpenViewButton
+          repoPath={session.repoPath}
+          className={styles.action}
+          iconSize={15}
+        />
+      )}
       {/* Fork the conversation into a new parallel session (#126); gated (#138). */}
       <button
         type="button"

@@ -1,6 +1,6 @@
-### 165. [ ] "Open view" button on normal (non-worktree) agents — scoped to the agent's folder
+### 165. [x] "Open view" button on normal (non-worktree) agents — scoped to the agent's folder
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #164
 **Created:** 2026-06-24
 
@@ -118,3 +118,27 @@ header and Overview card header, opening the shared `ViewsMenu` (#164) scoped to
   `Overview.tsx` (agent `actions` ≈186-225), TASK-164 (`ViewsMenu`, badge pattern),
   `store.ts:538` (`addOverviewPanel`), `FileSwitcher/FileSwitcher.tsx` (popover
   dismiss pattern), `paths.ts` (`effectiveRepo`).
+
+**Implementation note (done 2026-06-24)**
+
+- **Shared popover** `components/ViewsMenu/ViewsPopover.tsx` extracted from #164's
+  `WorktreeViewsBadge`: open/dismiss (outside-click + Escape) + `pointerdown`
+  stop-propagation + the popover surface, hosting the shared `ViewsMenu`. Takes an
+  `align` ("left" for the left-placed badge, "right" for a header action button) so
+  the popover stays on-screen. `WorktreeViewsBadge` was refactored to use it
+  (align="left") — #164's behavior preserved.
+- **`OpenViewButton`** (`components/OpenViewButton/`): an icon button (Lucide
+  `PanelsTopLeft`, `aria-haspopup="menu"`/`aria-expanded`, "Open a view in this
+  folder") wrapping `ViewsPopover` scoped to the agent's `repoPath`. `className` +
+  `iconSize` match the host action-button styling.
+- Wired into the agent header action groups **gated on `content.kind === "agent" &&
+  !session.worktreeParent`** — `CanvasSurface` `panelActions` (class `panelClose`)
+  and Overview `SessionCard` `actions` (class `action`, iconSize 15). Worktree agents
+  show no button (they keep the #164 badge).
+- No special grouping (a normal agent's `repoPath` is its repo, so the opened view
+  groups in that repo's cluster via the existing `overviewPanels` rendering). The
+  drag-safety is doubly ensured (the action group + ViewsPopover both stop
+  pointerdown).
+- `npm run build`, `npm run lint`, `npm run format:check`, and `npm test` (212) all
+  pass. Subtask 5 manual walk-through is interactive; the wiring reuses #164's proven
+  popover + action set.

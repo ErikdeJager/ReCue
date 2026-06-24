@@ -1,12 +1,6 @@
-/* Clickable "worktree" badge (#164) — the inert #74 badge turned into a popover
-   trigger. Replicates the badge look (small mono pill) + an interactive hover/focus
-   cue and a caret, opening a ViewsMenu popover. On-system tokens only. */
-.root {
-  position: relative;
-  display: inline-flex;
-  flex-shrink: 0;
-}
-
+/* Clickable "worktree" badge trigger (#164) — the inert #74 badge turned into a
+   popover trigger. Replicates the badge look (small mono pill) + an interactive
+   hover/focus cue and a caret. The popover chrome lives in ViewsPopover. */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -33,19 +27,4 @@
 
 .caret {
   flex-shrink: 0;
-}
-
-/* The ViewsMenu popover, anchored under the badge. Mirrors the FileSwitcher popover
-   chrome; the FilePicker (file/kanban modes) sets its own width. */
-.popover {
-  position: absolute;
-  left: 0;
-  top: calc(100% + var(--space-4));
-  z-index: 50;
-  min-width: 160px;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
 }
