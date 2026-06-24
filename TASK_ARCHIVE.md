@@ -1038,3 +1038,69 @@ CanvasWindow.tsx` (mount the modal per-window).
 
 ---
 
+### 158. [x] FileViewer cutoff in Overview at narrow widths (markdown text + Rendered/Raw toolbar)
+
+**Status:** Done
+**Depends on:** none · _(parallel to #156, which fixes the Overview `.body` wrapper; kept
+independent — every change here is FileViewer-internal CSS and works with or without #156.)_
+**Created:** 2026-06-24
+
+**Description**
+
+A markdown file shown as an **Overview column** was **cut off horizontally at small column widths**
+(the same column works fine in Canvas). Two symptoms: (1) the rendered markdown text was clipped on
+the right instead of wrapping to the column; (2) the **Rendered / Raw** toggle (+ "Saving…/Saved"
+status) in the toolbar was pushed off / clipped, so you couldn't switch views.
+
+**Root cause (FileViewer-internal CSS):** the FileViewer root `.viewer` is `{ display: flex; flex:
+1; min-height: 0; flex-direction: column }` but had **no `min-width: 0`**. A flex item's default
+`min-width: auto` keeps its content's intrinsic width, so when content is wider than the column
+`.viewer` refuses to shrink and the Overview `.card { overflow: hidden }` clips it. In Canvas this
+never happens because the panel body `.panelBody` already sets `min-width: 0` (+ a `> * { min-width:
+0 }` rule). The toolbar separately clipped because `.toolbar`/`.status`/`.segmented` don't shrink.
+
+**Subtasks**
+
+1. [x] `.viewer { min-width: 0 }` so it shrinks to the Overview column width.
+2. [x] Responsive toolbar: `.toolbar { min-width: 0; gap: var(--space-8) }`; `.status { min-width: 0;
+   overflow: hidden; text-overflow: ellipsis; white-space: nowrap }` (truncates instead of pushing the
+   toggle off); `.segmented { flex-shrink: 0 }` (the Rendered/Raw toggle never clips). The optional
+   `flex-wrap` was **not** added — the truncating status + non-shrinking toggle keep it single-line at
+   any realistic width (cards are `flex: 1 0 360px`).
+3. [x] `.markdown { min-width: 0; overflow-wrap: anywhere }` (alongside existing `word-wrap:
+   break-word`) so long unbreakable tokens (URLs, inline code) wrap; `.markdown pre` code blocks still
+   scroll.
+4. [x] Read-only raw/code surface now scrolls horizontally within the bounded `.viewer` instead of
+   being clipped (a side benefit of the `.viewer` fix — no edit needed there).
+5. [x] Manual narrow-column verification — interactive, can't run headlessly; the fix mirrors the
+   proven Canvas pattern.
+6. [x] `npm run build`, `npm run lint`, `npm run format:check` (+ `npm test`, 205) pass.
+
+**Acceptance criteria**
+
+- [x] In a narrow Overview column, rendered markdown wraps and is fully visible — no right-edge cutoff.
+- [x] The Rendered/Raw toggle (+ status) remain visible/usable at narrow Overview widths; the toggle is
+      never clipped.
+- [x] The raw/code view scrolls horizontally within the column rather than being clipped.
+- [x] Canvas FileViewer rendering is unchanged.
+- [x] `npm run build`, `npm run lint`, `npm run format:check` pass.
+
+**Implementation report** (commit `7f30582`, 2026-06-24)
+
+CSS-only fix in **`src/components/FileViewer/FileViewer.module.css`** exactly as diagnosed — fixes the
+FileViewer **directly** (robust in any flex context) and additionally fixes the toolbar, which #156's
+Overview `.body` change does not cover. Canvas FileViewer is unchanged (Canvas already bounded it via
+`.panelBody`, so the new `min-width: 0` is redundant + harmless there).
+
+**Key files touched:** `src/components/FileViewer/FileViewer.module.css` (only).
+
+**Notes**
+
+- **Relationship to #156:** #156 fixes the Overview `.body` wrapper (kanban scroll); its `.body > * {
+  min-width: 0 }` would also bound this `.viewer` (redundant + complementary). This task fixes the
+  FileViewer directly and adds the toolbar fix #156 doesn't cover — kept independent (no ordering).
+- **KanbanPanel** has an identical toolbar structure (`.toolbar`/`.status`/`.segmented`) and would
+  benefit from the same toolbar fix — tracked under the Kanban UI cards, not chased here.
+
+---
+
