@@ -1306,3 +1306,88 @@ KanbanPanel.module.css` (only).
 
 ---
 
+### 162. [x] Settings: auto-save vs manual save (⌘S), with a Save button in manual mode
+
+**Status:** Done
+**Depends on:** none · _(all infra existed: Settings #100, `useAutoSaveFile` #148, `useKeyboardNav`.
+Orthogonal to #160 (kanban edit→buffer timing) and #161 (kanban toolbar styling) — this governs
+buffer→disk timing.)_
+**Created:** 2026-06-24
+
+**Description**
+
+A global Settings choice between **auto-save** (today's behavior, default) and **manual save**. The
+card: "the user should be able to choose between auto save and manual save options. Auto save is the
+default… should the user choose to manually save, the cmd+s button saves files and the auto save
+indicator changes to a save button instead. Ensure that the entire plan keeps in account for all the
+different places that may save files." Goal: give users an explicit manual-save mode (⌘S / Save
+button) while keeping auto-save the default.
+
+**Key insight — one chokepoint covers every file save:** every editable **file** write routes through
+the shared `src/useAutoSaveFile.ts` hook (#148); its only consumers are the FileViewer raw/plain-text
+editor and the KanbanPanel Board + Raw editors. Implementing the mode there covers "all the different
+places that may save files" in one place. (ScheduledPanel auto-saves a schedule *record* via
+`update_schedule`, not a file — out of scope.)
+
+**Subtasks**
+
+1. [x] **Setting:** `autoSave: boolean` added to `Settings` + `DEFAULT_SETTINGS` (default **true**);
+   an "Auto-save files" checkbox + mode-aware helper in Settings → Behavior, persisted via the
+   existing draft/Save flow (merged over `DEFAULT_SETTINGS`, so old `sessions.json` upgrades cleanly).
+2. [x] **`useAutoSaveFile` manual mode:** reads `settings.autoSave` (via a ref so stable callbacks
+   aren't re-created). Auto = unchanged. Manual: `setText` marks the buffer dirty but does **not**
+   schedule a write; `onBlur` does **not** flush; `save()` flushes on demand; a mode-switch effect
+   reconciles (auto→manual cancels the debounce + keeps the dirty buffer, manual→auto schedules a
+   write if dirty). **Unmount / file-switch still flushes dirty content in both modes** (data-loss
+   safety). New `AutoSaveFile` fields: `dirty`, `manual`, `save`.
+3. [x] **Saver registry** (`src/saverRegistry.ts`, a non-React singleton like `outputBus`/
+   `terminalPool`): each mounted buffer registers `{isFocused, isDirty, save}`; `saveFocused()` saves
+   the focused editor, or — if none focused — every dirty buffer (so ⌘S never no-ops while edits are
+   pending). Unit-tested.
+4. [x] **⌘S** in `useKeyboardNav` (capture phase): manual mode → `preventDefault` + `saveFocused()`;
+   auto mode leaves the keystroke alone. Works in main + detached windows.
+5. [x] **Save-button UI:** both the FileViewer and Kanban toolbars render an accent **Save** button
+   (disabled muted "Saved" when clean) in place of the "Saving…/Saved" hint when `manual`; auto mode
+   keeps the hint. Shared `.saveBtn` styling, toolbar layout intact.
+6. [x] **Coverage:** the only non-hook `writeTextFile` caller is the #151 *create-board* one-shot file
+   creation (not an editing save); ScheduledPanel saves a record, not a file.
+7. [x] **Tests:** `saverRegistry.test.ts` (`saveFocused` selection); existing hook/kanban tests still
+   pass in auto mode.
+8. [x] **Verify:** `npm run build`, `npm run lint`, `npm run format:check`, `npm test` (209, +4) pass.
+
+**Acceptance criteria**
+
+- [x] Settings has an "Auto-save files" toggle (default **on**); the choice persists across restarts.
+- [x] With auto-save **on**, behavior is unchanged (debounced writes + "Saving…/Saved" hint) for
+      FileViewer and Kanban.
+- [x] With auto-save **off**: edits are **not** written on keystroke/blur/debounce; the indicator
+      becomes a **Save** button (enabled when dirty); **⌘S** saves the focused file. Both surfaces honor it.
+- [x] No file-saving path bypasses the setting (all route through `useAutoSaveFile`).
+- [x] Unsaved edits aren't silently lost when switching files or closing a panel in manual mode
+      (flush-on-unmount safety).
+- [x] `npm run build`, `npm run lint`, `npm test` pass.
+
+**Implementation report** (commit `4bb69ae`, 2026-06-24)
+
+The mode is implemented once in the hook + a tiny non-React saver registry + the two toolbars, so
+"all the different places that may save files" are covered at the single chokepoint. ⌘S saves the
+focused editor's file, or — when no editor is focused — all dirty buffers (so it never appears to do
+nothing while edits are pending). Blur does **not** flush in manual mode, but unmount / file-switch
+**does** (data-loss safety); a full "discard?" prompt was out of scope.
+
+**Key files touched:** `src/useAutoSaveFile.ts` (manual mode + `dirty`/`manual`/`save`),
+`src/saverRegistry.ts` (+`.test.ts`, new singleton), `src/useKeyboardNav.ts` (⌘S),
+`src/types/index.ts` + `src/store.ts` (`autoSave` setting), `src/components/Settings/Settings.tsx`
+(+`.module.css`, Behavior toggle), `src/components/FileViewer/FileViewer.tsx` +
+`src/components/Kanban/KanbanPanel.tsx` (+ their `.module.css`, Save-button UI).
+
+**Notes**
+
+- **⌘S target:** focused editor, else all dirty buffers — conventional document behavior but robust to
+  multiple open panels.
+- **Interaction with #160/#161:** #160 governs edit→buffer timing, this governs buffer→disk timing
+  (orthogonal, composing); #161 styles the kanban toolbar including this Save button. The FileViewer
+  toolbar is the independent primary surface, so this task wasn't blocked by the kanban tasks.
+
+---
+

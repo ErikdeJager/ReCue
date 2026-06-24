@@ -20,9 +20,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #162 — Settings: auto-save vs manual save (⌘S + Save button)
-	Plan: TASK-162.md
-	Depends on: none
 - [ ] #163 — File viewer "Browse…": open any file via native picker
 	Plan: TASK-163.md
 	Depends on: none
