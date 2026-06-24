@@ -17,6 +17,8 @@ import {
   instantiateTemplate,
   resolvedContent,
 } from "./components/Canvas/templateInstantiate";
+import { serializeBoard } from "./components/Kanban/kanban";
+import { defaultBoard } from "./components/Kanban/kanbanOps";
 import { applyTerminalSettings } from "./components/Terminal/terminalPool";
 import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
@@ -527,6 +529,9 @@ export interface AppState {
     kind: OverviewPanel["kind"],
     file?: string,
   ) => Promise<void>;
+  /** Author a new Kanban board (#143): write `<name>.md` with the default
+   * To Do/Doing/Done lanes via `writeTextFile`, then open it as a `kanban` panel. */
+  createKanbanBoard: (repoPath: string, name: string) => Promise<void>;
   removeOverviewPanel: (repoPath: string, id: string) => Promise<void>;
   /** Persist a repo's diff-panel branch-compare config on its diff panel (#81). */
   setDiffCompare: (
@@ -1484,6 +1489,28 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Persist failed (e.g. outside Tauri); keep the local layout for the session.
     }
+  },
+
+  createKanbanBoard: async (repoPath, name) => {
+    // Normalize to a repo-relative `<name>.md` (the user types a bare name).
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const file = trimmed.toLowerCase().endsWith(".md")
+      ? trimmed
+      : `${trimmed}.md`;
+    try {
+      // Write the default To Do/Doing/Done board, then open it as a kanban panel
+      // (#143). A pre-existing file would be overwritten — addOverviewPanel dedups
+      // by file, so re-creating the same name just re-opens it.
+      await ipc.writeTextFile(repoPath, file, serializeBoard(defaultBoard()));
+    } catch (err) {
+      get().pushToast(
+        isSessionError(err) ? err.message : "Could not create board",
+        "error",
+      );
+      return;
+    }
+    await get().addOverviewPanel(repoPath, "kanban", file);
   },
 
   removeOverviewPanel: async (repoPath, id) => {

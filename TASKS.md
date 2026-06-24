@@ -364,11 +364,10 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 ## Tasks
 
 Tasks **#1–#138 are complete** — see **Implemented (completed tasks)** above for the
-index and git history for per-task detail. **The Kanban board feature:** #141 (markdown
-engine + file-write backend) and #142 (board content type + read-only display) are
-**done**; **open now:** #143 (full editor). Task **#144** (Canvas panel header drag) is
-also open. _(Tasks #139–#140 are reserved on another branch, so this chain begins at
-#141.)_ The
+index and git history for per-task detail. **The Kanban board feature (#141 engine +
+file-write, #142 content type + read-only render, #143 full editor) is complete.**
+**Open now:** #144 (Canvas panel header drag). _(Tasks #139–#140 are reserved on another
+branch, so the Kanban chain began at #141.)_ The
 full entries for the recently completed #133–#138 remain below until the next
 `/update-docs` condenses them into the summary. New work goes here as a fresh `### N.`
 entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with its `Depends on:`
@@ -1289,9 +1288,9 @@ are covered.)_
 
 ---
 
-### 143. [ ] Kanban editor — full card & column editing with drag-and-drop, written back to the .md
+### 143. [x] Kanban editor — full card & column editing with drag-and-drop, written back to the .md
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #142 · _(needs #141's `serializeBoard` + `writeTextFile` and #142's
 `KanbanPanel`; uses dnd-kit #43/#47 and the #94 debounced-auto-save pattern — all
 shipped/prior in this chain)_
@@ -1335,35 +1334,36 @@ makes that possible externally).
 
 **Subtasks**
 
-1. [ ] Card mutations on the parsed `Board`: add / edit title+body / delete / reorder within
+1. [x] Card mutations on the parsed `Board`: add / edit title+body / delete / reorder within
    a column / toggle checked, then re-`serializeBoard` and `writeTextFile` (debounced).
-2. [ ] Card drag-and-drop **between** columns (nested dnd-kit sortable context) = move
+2. [x] Card drag-and-drop **between** columns (nested dnd-kit sortable context) = move
    status; reorder within a column by drag too.
-3. [ ] Column mutations: add / rename / reorder / delete (delete confirm-gated per #103).
-4. [ ] Debounced write-back (the #94 pattern) + reconcile with the #142 hot-reload poll
+3. [x] Column mutations: add / rename / reorder / delete (delete confirm-gated per #103).
+4. [x] Debounced write-back (the #94 pattern) + reconcile with the #142 hot-reload poll
    (don't reload our own write; do reload genuine external edits); preserve frontmatter +
    settings block.
-5. [ ] Card body editor = a markdown textarea (no structured field controls); the live
+5. [x] Card body editor = a markdown textarea (no structured field controls); the live
    render (#142) shows the formatting.
-6. [ ] "New Kanban board" creation affordance (frontmatter + default To Do/Doing/Done)
+6. [x] "New Kanban board" creation affordance (frontmatter + default To Do/Doing/Done)
    writing a fresh `.md` and opening it.
-7. [ ] Verify editing + DnD in the main Canvas view and a detached canvas window (#84).
+7. [x] Verify editing + DnD in the main Canvas view and a detached canvas window (#84).
+   _(Shared code path; detached-window runtime is best-effort per #84/#105 — see report.)_
 
 **Acceptance criteria**
 
-- [ ] The user can add/edit/delete/reorder cards and add/rename/reorder/delete columns
+- [x] The user can add/edit/delete/reorder cards and add/rename/reorder/delete columns
   entirely in the UI, and can drag a card between columns to change its status — never
   editing markdown by hand.
-- [ ] A card's content is edited as freeform markdown (title + body); there are **no**
+- [x] A card's content is edited as freeform markdown (title + body); there are **no**
   structured field controls (no due-date picker).
-- [ ] Every change is written back to the `.md` (debounced) preserving the frontmatter +
+- [x] Every change is written back to the `.md` (debounced) preserving the frontmatter +
   `%% kanban:settings %%` block; an external edit to the file still hot-reloads, and the
   panel's own writes don't cause a flicker / echo-reload.
-- [ ] A new board can be created from nothing (default columns) and immediately edited.
-- [ ] Editing + drag-and-drop work in the main Canvas view and a detached canvas window
+- [x] A new board can be created from nothing (default columns) and immediately edited.
+- [x] Editing + drag-and-drop work in the main Canvas view and a detached canvas window
   (#84). _(Detached-window runtime behavior is best-effort per the #84/#105 precedent — no
   GUI in the dev env.)_
-- [ ] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass.
+- [x] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass.
 
 **Notes**
 
@@ -1372,6 +1372,38 @@ makes that possible externally).
   drag.
 - The write loop reuses #141's `writeTextFile`; the only new persistence is the `.md`
   itself (the panel ref lives in `overview_panels` from #142).
+
+**Implementation report**
+
+Frontend-only (the #141 `writeTextFile` backend already shipped). **Pure ops**
+(`kanbanOps.ts`): immutable `addCard` / `updateCard` / `deleteCard` / `toggleCard` /
+`moveCard` (one op for reorder-within + move-between, arrayMove semantics, out-of-range →
+no-op) + `addColumn` / `renameColumn` / `deleteColumn` / `moveColumn` + `defaultBoard()`
+(To Do/Doing/Done) + `newCard()` — 17 unit tests (`kanbanOps.test.ts`). **Editor**
+(rewrote `KanbanPanel.tsx`): the read-only #142 board became editable — each card has a
+checkbox (toggle done), an inline title input + a markdown-textarea body editor (freeform,
+**no** structured fields; the live #142 react-markdown render shows formatting in view
+mode), and edit/delete buttons; a per-column "+ Add card"; column headers rename inline,
+reorder via ◀/▶ buttons, and delete (× → confirm-gated per the #103 `confirmDestructive`
+setting when the lane has cards); a trailing "+ Add column". **Card DnD** is a **nested**
+dnd-kit `DndContext` (PointerSensor 4px, `closestCorners`) — each card a `useSortable`
+(dragged by a grip handle only, so the textarea/buttons stay usable), each column a
+`useDroppable`; `onDragEnd` parses `card:col:idx` / `column:col` and calls `moveCard`
+(reorder within or move between lanes = status change). **Write-back**: every mutation
+updates the in-memory `Board` and debounces (`SAVE_DEBOUNCE_MS` 600, the #94 pattern) a
+`serializeBoard` → `writeTextFile`, preserving frontmatter + the settings block (#141). The
+#142 hot-reload poll is reconciled via a `dirty` ref (skip reload while there are unsaved
+edits) + a `lastSynced` raw-string compare (our own write updates `lastSynced`, so it never
+echo-reloads; a genuine external change differs → reload), with a flush-on-unmount/
+file-change. **New board**: a store `createKanbanBoard(repo, name)` writes `<name>.md` with
+`defaultBoard()` then opens it as a `kanban` panel; surfaced as a "New Kanban board" repo
+**Views** menu entry with an inline name input. **Detached window (#84):** `KanbanPanel`
+renders through the shared `CanvasSurface` and uses global read/write IPC, so editing works
+in both windows (they reconcile via disk + the poll) — **runtime-unverified** in a real
+detached window (no GUI here, per the #84/#105 precedent). All gates pass: `npm test`
+(179), `npm run build`, `npm run lint`, `prettier --check`, `cargo test` (71, unchanged).
+Completes the Kanban board feature (#141–#143). _(Runtime DnD/board rendering isn't
+unit-testable; the pure ops + parse/serialize + wiring are covered.)_
 
 ---
 

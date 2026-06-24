@@ -678,6 +678,45 @@
   cursor: pointer;
 }
 
+/* New Kanban board name entry (#143). */
+.newKanban {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-6);
+}
+
+.newKanbanInput {
+  width: 100%;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  padding: var(--space-4) var(--space-8);
+  color: var(--text-primary);
+  font-size: var(--fs-meta-sm);
+}
+
+.newKanbanCreate {
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-control);
+  padding: var(--space-6) var(--space-8);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-meta-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.newKanbanCreate:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.newKanbanCreate:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 @keyframes menu-in {
   from {
     opacity: 0;

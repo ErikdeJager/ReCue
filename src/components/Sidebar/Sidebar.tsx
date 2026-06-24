@@ -780,6 +780,7 @@ function Sidebar() {
   const setRepoColor = useStore((s) => s.setRepoColor);
   const overviewPanels = useStore((s) => s.overviewPanels);
   const addOverviewPanel = useStore((s) => s.addOverviewPanel);
+  const createKanbanBoard = useStore((s) => s.createKanbanBoard);
   const removeOverviewPanel = useStore((s) => s.removeOverviewPanel);
   const sessionBusy = useStore((s) => s.sessionBusy);
   const sessionActive = useStore((s) => s.sessionActive);
@@ -793,8 +794,16 @@ function Sidebar() {
     y: number;
   } | null>(null);
   const [menuMode, setMenuMode] = useState<
-    "menu" | "confirm" | "confirm-kill" | "confirm-close" | "color" | "files"
+    | "menu"
+    | "confirm"
+    | "confirm-kill"
+    | "confirm-close"
+    | "color"
+    | "files"
+    | "new-kanban"
   >("menu");
+  // The name being typed for a new Kanban board (#143, "new-kanban" mode).
+  const [newKanbanName, setNewKanbanName] = useState("");
   // The repo's files while the menu is in "files" mode (#44); null = loading.
   const [fileList, setFileList] = useState<string[] | null>(null);
   // Which view the "files" picker opens the chosen file as (#142): a plain file
@@ -838,6 +847,17 @@ function Sidebar() {
       onAdd: () => {
         setFilePickKind("kanban");
         setMenuMode("files");
+      },
+    },
+    {
+      key: "new-kanban",
+      label: "New Kanban board",
+      icon: Plus,
+      // Author a board from nothing (#143): a name → `<name>.md` with the
+      // default lanes, opened as a `kanban` panel.
+      onAdd: () => {
+        setNewKanbanName("");
+        setMenuMode("new-kanban");
       },
     },
     {
@@ -1316,6 +1336,38 @@ function Sidebar() {
                   closeMenu();
                 }}
               />
+            ) : menuMode === "new-kanban" ? (
+              // Author a new Kanban board (#143): a name → `<name>.md` with the
+              // default lanes, then opened as a board column.
+              <form
+                className={styles.newKanban}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const name = newKanbanName.trim();
+                  if (!name) return;
+                  void createKanbanBoard(menu.repo, name);
+                  closeMenu();
+                }}
+              >
+                <input
+                  className={styles.newKanbanInput}
+                  type="text"
+                  value={newKanbanName}
+                  placeholder="Board name…"
+                  autoFocus
+                  onChange={(event) =>
+                    setNewKanbanName(event.currentTarget.value)
+                  }
+                  aria-label="New Kanban board name"
+                />
+                <button
+                  type="submit"
+                  className={styles.newKanbanCreate}
+                  disabled={!newKanbanName.trim()}
+                >
+                  Create board
+                </button>
+              </form>
             ) : menuMode === "confirm" ? (
               <button
                 type="button"
