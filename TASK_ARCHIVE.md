@@ -1549,3 +1549,72 @@ WorktreeViewsBadge/*` (new badge popover), `src/components/Canvas/CanvasSurface.
 
 ---
 
+### 165. [x] "Open view" button on normal (non-worktree) agents — scoped to the agent's folder
+
+**Status:** Done
+**Depends on:** #164 _(reuses the shared `ViewsMenu` + the agent-header views-affordance pattern that
+#164 extracted)._
+**Created:** 2026-06-24
+
+**Description**
+
+#164 made the **worktree** badge clickable → a menu that opens views (diff / file / terminal / kanban)
+scoped to that worktree. This card adds the **same affordance to normal agents**: "normal agents
+should have a similar button. A button to create any kind of panel inside their current directory… for
+a 'normal' branch or folder/repo this option shows items to create for the folder. While the worktree
+button shows items to create for that specific worktree." A worktree agent already gets this via its
+clickable badge (#164); a normal agent has no badge, so it needs a dedicated header **button**. Both
+open the *same* `ViewsMenu`; the only difference is the scope path — the agent's `repoPath` (its
+repo/folder for a normal agent, the worktree for a worktree agent).
+
+**Subtasks**
+
+1. [x] Reused the shared `ViewsMenu` from #164 (no new action set); extracted a shared **`ViewsPopover`**
+   so the open/dismiss + drag-safety wrapper is shared too.
+2. [x] Added an **`OpenViewButton`** (Lucide `PanelsTopLeft`, `aria-haspopup="menu"`/`aria-expanded`,
+   "Open a view in this folder") to the agent header action groups — `CanvasSurface` `panelActions` and
+   Overview `SessionCard` `actions` — **gated on `content.kind === "agent" && !session.worktreeParent`**.
+3. [x] Clicking toggles the `ViewsPopover` scoped to `session.repoPath`; dismiss on outside-click +
+   Escape; `onPointerDown` stop-propagation so the click never starts a Canvas move-leaf / Overview card
+   drag (doubly ensured — the action group + ViewsPopover both stop pointerdown).
+4. [x] Each action calls `addOverviewPanel(session.repoPath, …)`; **no special grouping** (a normal
+   agent's `repoPath` is its repo, so the view groups in that repo's cluster via existing
+   `overviewPanels` rendering).
+5. [x] **Verify:** `npm run build`, `npm run lint`, `npm run format:check`, `npm test` (212) pass.
+
+**Acceptance criteria**
+
+- [x] Normal (non-worktree) agents show an "open view" button in their Canvas panel header **and**
+      Overview card header.
+- [x] Clicking opens the shared `ViewsMenu` (same menu as #164's badge and the #82 repo menu) scoped to
+      the agent's folder/repo.
+- [x] Selecting an action opens that view in the agent's folder, appearing as a left-panel row +
+      Overview column in the repo's cluster.
+- [x] Worktree agents are unaffected — no duplicate button (they use the #164 badge).
+- [x] The button click never starts a drag; the popover dismisses on outside-click / Escape.
+- [x] `npm run build`, `npm run lint`, `npm test` pass.
+
+**Implementation report** (commit `5316d91`, 2026-06-24)
+
+Extracted a shared **`ViewsPopover`** (`components/ViewsMenu/ViewsPopover.tsx`) from #164's
+`WorktreeViewsBadge` — the open/dismiss (outside-click + Escape) + `pointerdown` stop-propagation +
+popover surface hosting `ViewsMenu`, with an `align` prop ("left" for the badge, "right" for a header
+button) to keep it on-screen; `WorktreeViewsBadge` was refactored onto it (#164 behavior preserved).
+The new **`OpenViewButton`** wraps `ViewsPopover` scoped to the agent's `repoPath`, wired into both
+agent header action groups gated on `!session.worktreeParent`.
+
+**Key files touched:** `src/components/ViewsMenu/ViewsPopover.tsx` (+`.module.css`, new shared
+popover), `src/components/OpenViewButton/OpenViewButton.tsx` (new), `src/components/WorktreeViewsBadge/*`
+(refactored onto `ViewsPopover`), `src/components/Canvas/CanvasSurface.tsx` + `src/components/Overview/
+Overview.tsx` (render the button, gated).
+
+**Notes**
+
+- **Design split (deliberate):** worktree agents get the affordance via the clickable **badge** (#164),
+  normal agents via a header **button** (this task) — both open the same `ViewsMenu` scoped to
+  `repoPath`, so the only difference is the path (the "folder vs that specific worktree" distinction the
+  card calls out). A uniform button on all agents was considered and rejected to avoid two affordances
+  doing the same thing on worktree agents.
+
+---
+
