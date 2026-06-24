@@ -20,6 +20,3 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #163 — File viewer "Browse…": open any file via native picker
-	Plan: TASK-163.md
-	Depends on: none

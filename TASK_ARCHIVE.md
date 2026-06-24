@@ -1391,3 +1391,84 @@ nothing while edits are pending). Blur does **not** flush in manual mode, but un
 
 ---
 
+### 163. [x] File viewer "Browse…": open any file from the filesystem via the native picker
+
+**Status:** Done
+**Depends on:** none · _(composes with #162 (manual save) — an out-of-repo file saves through the same
+`useAutoSaveFile` path; coordinates with but isn't blocked by #157/#158 which touch nearby code.)_
+**Created:** 2026-06-24
+
+**Description**
+
+The file-viewer's filename dropdown (`FileSwitcher`, #90) only listed files **inside the current
+repo**. The card: "there should be the option to select other options… open a file picker (browse in
+finder)… the file can be anywhere in the file system and it would still get picked up." Goal: add a
+**Browse…** option that opens the native macOS open-file dialog so the user can open *any* file on
+disk and have it render (and edit) in the viewer.
+
+**Key design — reuse `(repoPath, relative file)`, no security change.** The viewer addresses a file as
+`{ repoPath, file }` read/written through `files.rs` which validates that `repoPath.join(file)`
+canonicalizes **inside** `repoPath`. An arbitrary absolute file `/a/b/c.md` is represented as
+`{ repoPath: "/a/b", file: "c.md" }` — its own parent directory as the "root" — which trivially passes
+that validation (a bare basename can't escape its parent), so **no backend confinement relaxation is
+required**. The native open dialog is the user's explicit consent to open that specific file.
+
+**Subtasks**
+
+1. [x] **ipc** `pickFile()` wraps the native `open({directory:false, multiple:false})` dialog →
+   absolute path or null (reuses the granted `dialog:default` capability).
+2. [x] **`splitPath(abs)`** in `paths.ts` → `{dir, base}` (handles nested, fs-root `/c.md` →
+   `{dir:"/", base}`, and bare-name cases); unit-tested.
+3–4. [x] **FileSwitcher** gains an optional `onPickAbsolute(repoPath, file)` prop + a **Browse…**
+   footer button (shown only when the prop is passed) that opens the dialog, splits the path, and
+   calls it.
+5. [x] **Host wiring — Canvas:** new `setLeafFileAbsolute(leafId, repoPath, file)` sets both refs on
+   the leaf.
+6. [x] **Host wiring — Overview:** new `moveOverviewPanelToFile(repoPath, panelId, newRepo, file)`
+   **moves** the panel to the file's parent-dir repo key (dedup by repo+file; same-repo falls back to
+   `setOverviewPanelFile`).
+7. [x] **Read/edit path:** added a Rust test
+   `reads_and_writes_an_out_of_repo_file_via_its_parent_dir` to `files.rs` confirming the
+   `{parentDir, basename}` representation reads/writes with no confinement change.
+8. [x] **Persistence:** opened absolute files (stored as `repoPath`+`file` in `canvases`/
+   `overview_panels`) survive reload.
+9. [x] **Docs:** updated the CLAUDE.md file-access scope note (Browse… / out-of-repo open, still
+   dir-confined; Overview grouping consequence).
+10. [x] **Verify:** `npm run build`, `npm run lint`, `npm test` (212, +3), `npm run format:check`,
+   `cargo test`, `cargo clippy` all pass.
+
+**Acceptance criteria**
+
+- [x] The file-viewer filename dropdown has a **Browse…** option that opens the native macOS open-file
+      dialog.
+- [x] Selecting a file **anywhere** on disk opens it rendered by type and editable through the existing
+      save path (auto-save / #162 manual mode).
+- [x] The opened out-of-repo file persists and re-opens on restart.
+- [x] `files.rs` repo-confinement logic is **unchanged**; each read/write remains confined to the
+      chosen file's own directory.
+- [x] `npm run build`, `npm run lint`, `npm test`, `cargo test` pass.
+
+**Implementation report** (commit `4a73a91`, 2026-06-24)
+
+Shipped exactly to the no-backend-change design: `/a/b/c.md` → `{repoPath:"/a/b", file:"c.md"}`, so the
+existing repo-confined read/write validates against the file's own directory. The native dialog is the
+user's explicit consent. Out-of-repo files persist via the standard `canvases`/`overview_panels` blobs.
+
+**Key files touched:** `src/ipc.ts` (`pickFile`), `src/paths.ts` (+`.test.ts`, `splitPath`),
+`src/components/FileSwitcher/FileSwitcher.tsx` (+`.module.css`, Browse… + `onPickAbsolute`),
+`src/components/Canvas/CanvasSurface.tsx` + `src/components/Overview/Overview.tsx` (host wiring),
+`src/store.ts` (`setLeafFileAbsolute` / `moveOverviewPanelToFile`), `src-tauri/src/files.rs` (test
+only — logic unchanged), `CLAUDE.md` (scope note).
+
+**Notes**
+
+- **Core trick:** the `{parentDir, basename}` representation passes existing validation, so reads/
+  writes stay confined and no backend change was needed.
+- **Grouping consequence (documented):** an out-of-repo file opened as an Overview/sidebar item groups
+  under a repo group named for its parent directory (grouping is by `effectiveRepo`); in a Canvas panel
+  there's no grouping, so it's seamless there.
+- **Out of scope (follow-up, per the card's "perhaps"):** Browse… in the repo-scoped Views/template/
+  kanban pickers, where an out-of-repo path carries murkier repo semantics.
+
+---
+
