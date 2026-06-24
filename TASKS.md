@@ -363,16 +363,15 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks **#1–#148 are complete** — see **Implemented (completed tasks)** above for the
+Tasks **#1–#149 are complete** — see **Implemented (completed tasks)** above for the
 index and git history for per-task detail. The Kanban board feature (#141–#143, #145,
-#147), the Canvas panel header-drag affordance (#144), the Canvas panel title truncation
-(#146), and the shared editable auto-saving raw text editor (#148) all shipped. **Open
-now:** #149 (editable Kanban raw view — now unblocked, reuses #148's hook) and #150
-(file-viewer syntax highlighting — Java + INI/.env/.properties). _(Tasks #139–#140 are
-reserved on another branch. The Kanban content-type task was renumbered #142 → #145 to
-avoid colliding with the separately merged template task #142.)_ The full entries for the
-recently completed #133–#148 remain below until the next `/update-docs` condenses them into
-the summary. New work goes here as a fresh `### N.` entry in
+#147, #149), the Canvas panel header-drag affordance (#144), the Canvas panel title
+truncation (#146), and the shared editable auto-saving raw text editor (#148) all shipped.
+**Open now:** #150 (file-viewer syntax highlighting — Java + INI/.env/.properties). _(Tasks
+#139–#140 are reserved on another branch. The Kanban content-type task was renumbered #142
+→ #145 to avoid colliding with the separately merged template task #142.)_ The full entries
+for the recently completed #133–#149 remain below until the next `/update-docs` condenses
+them into the summary. New work goes here as a fresh `### N.` entry in
 [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with its `Depends on:` prerequisites.
 
 > **Implementing tasks — never skip one.** The agent implementing this backlog
@@ -1892,9 +1891,9 @@ for #149. _(The timer/poll/IME reconcile is runtime-only — not unit-tested, co
 
 ---
 
-### 149. [ ] Editable, auto-saving Kanban raw view
+### 149. [x] Editable, auto-saving Kanban raw view
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #147, #148 · _(#147 adds the Kanban Board/Raw toggle + read-only raw `<pre>`;
 #148 provides the `useAutoSaveFile` hook + textarea editor — both prerequisites)_
 **Created:** 2026-06-24
@@ -1923,24 +1922,24 @@ autosave path so they don't fight:
 
 **Subtasks**
 
-1. [ ] Replace #147's read-only Kanban raw `<pre>` with #148's editable `<textarea>` bound to
+1. [x] Replace #147's read-only Kanban raw `<pre>` with #148's editable `<textarea>` bound to
    the shared autosave buffer.
-2. [ ] Unify the panel's board-edit write path (#143) and the raw-edit path onto one buffer /
+2. [x] Unify the panel's board-edit write path (#143) and the raw-edit path onto one buffer /
    dirty / last-synced state via `useAutoSaveFile` so they don't double-write or clobber.
-3. [ ] Round-trip the toggle: Raw→Board re-parses the buffer, Board→Raw shows the serialized
+3. [x] Round-trip the toggle: Raw→Board re-parses the buffer, Board→Raw shows the serialized
    text; no edits lost.
-4. [ ] Show the same subtle "Saving… / Saved" status; verify in Canvas + Overview + a detached
+4. [x] Show the same subtle "Saving… / Saved" status; verify in Canvas + Overview + a detached
    window (#84).
 
 **Acceptance criteria**
 
-- [ ] In the Kanban panel's **Raw** view, the user can type directly in the board's markdown and
+- [x] In the Kanban panel's **Raw** view, the user can type directly in the board's markdown and
   it **auto-saves** (debounced, no save button, subtle status).
-- [ ] Edits made in Raw appear in Board after switching (re-parsed), and vice-versa; no edit is
+- [x] Edits made in Raw appear in Board after switching (re-parsed), and vice-versa; no edit is
   lost across the toggle, and the Board #143 editing still works.
-- [ ] Raw and Board edits share one write path — no double-write / echo-reload / clobber;
+- [x] Raw and Board edits share one write path — no double-write / echo-reload / clobber;
   external edits hot-reload when not editing.
-- [ ] Works in Canvas + Overview (+ a detached window #84, best-effort per #84/#105);
+- [x] Works in Canvas + Overview (+ a detached window #84, best-effort per #84/#105);
   `npm run build`, `npm run lint`, and `npm test` pass.
 
 **Notes**
@@ -1949,6 +1948,27 @@ autosave path so they don't fight:
   Board (#143) and Raw write paths onto one buffer so the same file isn't edited by two
   competing loops.
 - Independent of the unmerged #139–#140.
+
+**Implementation report**
+
+Refactored `KanbanPanel` to route **both** views through #148's `useAutoSaveFile` — the one
+buffer the task called for. Removed the panel's own read/poll/`lastSynced`/`dirty`/`writeTimer`/
+`inFlight` machinery (now the hook's) and its separate `board`/`raw` state. The **board is now
+derived** from the hook's `text` (`board = useMemo(() => parseBoard(text))`); `mutate(next)` is
+just `setText(serializeBoard(next))`, so every #143 board op (add/edit/delete/reorder cards,
+column ops, card DnD) writes through the **same** debounced/dirty/last-synced path as raw edits —
+no double-write or clobber. The **Raw** view (#147's read-only `<pre>`) became an editable
+`<textarea>` (`.rawEditor`, the #148 `.editor` look) bound to `text` via `setText` + the hook's
+focus/blur/composition handlers. The **toggle round-trips losslessly** via the #141
+parse∘serialize invariant: Raw→Board re-parses `text`, Board→Raw shows the serialized buffer.
+The #147 auto-fallback (structure-less file → Raw on first load) now runs off a `text`-first-load
+effect + the `didInitView` ref (reset per file), so the user can **author** a board from raw text.
+Added the subtle **"Saving… / Saved"** status (the hook's `status`, `.status` span,
+`margin-right:auto` so the toggle stays right). Works in Canvas + Overview + a detached window
+(#84, same component) — **runtime-unverified** in a real detached window (no GUI, per #84/#105).
+All gates pass: `npm run build`, `npm run lint`, `npm test` (179), `prettier --check`. Completes
+the editable-raw chain (#147→#148→#149). _(Timer/poll/IME reconcile is runtime-only — covered by
+the shipped #148 hook it now reuses.)_
 
 ---
 

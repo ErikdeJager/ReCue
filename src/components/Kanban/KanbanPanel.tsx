@@ -2,6 +2,7 @@ import {
   type ReactElement,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -35,8 +36,8 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { readTextFile, writeTextFile } from "../../ipc";
 import { useStore } from "../../store";
+import { useAutoSaveFile } from "../../useAutoSaveFile";
 import Checkbox from "../Checkbox/Checkbox";
 import { type Board, type Card, parseBoard, serializeBoard } from "./kanban";
 import {
@@ -52,11 +53,6 @@ import {
   updateCard,
 } from "./kanbanOps";
 import styles from "./KanbanPanel.module.css";
-
-// Hot-reload poll while visible (the #44 FileViewer pattern).
-const POLL_MS = 1000;
-// Debounce write-back (the #94 ScheduledPanel auto-save pattern).
-const SAVE_DEBOUNCE_MS = 600;
 
 interface KanbanPanelProps {
   repoPath: string;
@@ -347,157 +343,61 @@ function KanbanPanel({
   active,
 }: KanbanPanelProps): ReactElement {
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
-  const [board, setBoard] = useState<Board | null>(null);
-  const [raw, setRaw] = useState<string | null>(null);
-  // Board ⟷ Raw view toggle (#147, mirroring the #73 FileViewer control) — local,
-  // reset per file; auto-defaults to Raw on first load of a structure-less file.
+  // Shared read + hot-reload-poll + debounced-autosave buffer (#148). BOTH the
+  // Board view (#143) and the Raw view (#149) edit this one buffer — no second,
+  // competing write loop — so they can't double-write or clobber each other.
+  const {
+    text,
+    error,
+    status,
+    setText,
+    onFocus,
+    onBlur,
+    onCompositionStart,
+    onCompositionEnd,
+  } = useAutoSaveFile(repoPath, file, active);
+
+  // Board ⟷ Raw view toggle (#147), local + reset per file; auto-defaults to Raw
+  // on first load of a structure-less file.
   const [showRaw, setShowRaw] = useState(false);
-  const [error, setError] = useState(false);
   const [editing, setEditing] = useState<{ col: number; idx: number } | null>(
     null,
   );
   const [renamingCol, setRenamingCol] = useState<number | null>(null);
   const [confirmDeleteCol, setConfirmDeleteCol] = useState<number | null>(null);
-
-  const lastSynced = useRef<string | null>(null);
-  const dirty = useRef(false);
-  const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inFlight = useRef(false);
-  const boardRef = useRef<Board | null>(null);
-  boardRef.current = board;
-  // Whether the per-file Board/Raw default has been applied (#147) — set once on
-  // first load so later hot-reload polls never override the user's toggle choice.
+  // The per-file Board/Raw default is applied once on first load (#147), so later
+  // hot-reload polls never override the user's toggle choice.
   const didInitView = useRef(false);
 
-  const load = useCallback(
-    async (silent = false) => {
-      // Skip while a fetch is in flight or we have unsaved local edits (so a poll
-      // never clobbers in-progress changes or echo-reloads our own write).
-      if (inFlight.current || dirty.current) return;
-      inFlight.current = true;
-      try {
-        const next = await readTextFile(repoPath, file);
-        setError(false);
-        // Keep the raw text current for Raw mode (#147) — read-only, always safe.
-        setRaw(next);
-        if (next !== lastSynced.current) {
-          // Genuine external change → reload + drop stale edit UI.
-          lastSynced.current = next;
-          const parsed = parseBoard(next);
-          setBoard(parsed);
-          setEditing(null);
-          setRenamingCol(null);
-          setConfirmDeleteCol(null);
-          // First load of this file: a structure-less `.md` (no columns) opens in
-          // Raw (#147); a real board opens in Board. Applied once — later polls
-          // never override the user's toggle.
-          if (!didInitView.current) {
-            didInitView.current = true;
-            setShowRaw(parsed.columns.length === 0);
-          }
-        }
-      } catch {
-        if (!silent) {
-          setBoard(null);
-          setError(true);
-        }
-      } finally {
-        inFlight.current = false;
-      }
-    },
-    [repoPath, file],
+  // The board is DERIVED from the shared text buffer (#149): Board mode renders
+  // parseBoard(text); a mutation serializes the next board back into the buffer
+  // via setText, routing Board + Raw edits through the one #148 write path. The
+  // #141 parse∘serialize round-trip keeps the toggle lossless.
+  const board = useMemo(
+    () => (text === null ? null : parseBoard(text)),
+    [text],
+  );
+  const mutate = useCallback(
+    (next: Board) => setText(serializeBoard(next)),
+    [setText],
   );
 
-  // Reset sync markers on file change; flush a pending write for the old file.
+  // Reset per-file view state; apply the Raw/Board default once text first loads.
   useEffect(() => {
-    lastSynced.current = null;
-    dirty.current = false;
     didInitView.current = false;
-    setBoard(null);
-    setRaw(null);
     setShowRaw(false);
     setEditing(null);
     setRenamingCol(null);
     setConfirmDeleteCol(null);
-    return () => {
-      if (writeTimer.current) {
-        clearTimeout(writeTimer.current);
-        writeTimer.current = null;
-      }
-      if (dirty.current && boardRef.current) {
-        void writeTextFile(
-          repoPath,
-          file,
-          serializeBoard(boardRef.current),
-        ).catch(() => {});
-        dirty.current = false;
-      }
-    };
   }, [repoPath, file]);
-
-  // Fetch when shown / on file change.
   useEffect(() => {
-    if (active) void load();
-  }, [active, load]);
-
-  // Poll for hot-reload while visible; pause when hidden, catch up on regain.
-  useEffect(() => {
-    if (!active) return;
-    let timer: ReturnType<typeof setInterval> | undefined;
-    const start = () => {
-      if (timer === undefined && !document.hidden) {
-        timer = setInterval(() => void load(true), POLL_MS);
-      }
-    };
-    const stop = () => {
-      if (timer !== undefined) {
-        clearInterval(timer);
-        timer = undefined;
-      }
-    };
-    const onVisibility = () => {
-      if (document.hidden) stop();
-      else {
-        void load(true);
-        start();
-      }
-    };
-    start();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      stop();
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [active, load]);
-
-  const writeNow = useCallback(
-    (b: Board) => {
-      const raw = serializeBoard(b);
-      if (raw === lastSynced.current) {
-        dirty.current = false;
-        return;
-      }
-      void writeTextFile(repoPath, file, raw)
-        .then(() => {
-          lastSynced.current = raw;
-          dirty.current = false;
-        })
-        .catch(() => {
-          // Keep dirty so the next mutation (or unmount flush) retries.
-        });
-    },
-    [repoPath, file],
-  );
-
-  const mutate = useCallback(
-    (next: Board) => {
-      setBoard(next);
-      dirty.current = true;
-      if (writeTimer.current) clearTimeout(writeTimer.current);
-      writeTimer.current = setTimeout(() => writeNow(next), SAVE_DEBOUNCE_MS);
-    },
-    [writeNow],
-  );
+    if (text !== null && !didInitView.current) {
+      didInitView.current = true;
+      // A structure-less `.md` (no columns) opens in Raw so the user can author it
+      // as raw text (#147/#149); a real board opens in Board.
+      setShowRaw(parseBoard(text).columns.length === 0);
+    }
+  }, [text]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -544,8 +444,18 @@ function KanbanPanel({
 
   return (
     <div className={styles.panel}>
-      {/* Board ⟷ Raw toggle (#147, mirroring the #73 FileViewer control). */}
+      {/* Board ⟷ Raw toggle (#147, mirroring the #73 FileViewer control) + the
+          subtle #148 auto-save status. */}
       <div className={styles.toolbar}>
+        {status !== "idle" && (
+          <span className={styles.status} role="status">
+            {status === "saving"
+              ? "Saving…"
+              : status === "saved"
+                ? "Saved"
+                : "Save failed"}
+          </span>
+        )}
         <div className={styles.segmented} role="group" aria-label="View mode">
           <button
             type="button"
@@ -568,9 +478,19 @@ function KanbanPanel({
         </div>
       </div>
       {showRaw ? (
-        // Read-only raw markdown (#147) — no editing in Raw, reusing the
-        // FileViewer's raw display style.
-        <pre className={styles.raw}>{raw ?? ""}</pre>
+        // Editable raw board markdown (#149), auto-saving via the shared #148 hook
+        // — the same buffer the Board view edits, so the toggle round-trips losslessly.
+        <textarea
+          className={styles.rawEditor}
+          value={text ?? ""}
+          spellCheck={false}
+          onChange={(event) => setText(event.currentTarget.value)}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
+          aria-label={`Edit ${file}`}
+        />
       ) : (
         <DndContext
           sensors={sensors}

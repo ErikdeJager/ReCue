@@ -19,10 +19,19 @@
 .toolbar {
   display: flex;
   flex-shrink: 0;
+  align-items: center;
   justify-content: flex-end;
   padding: var(--space-4) var(--space-6);
   border-bottom: 1px solid var(--border-hairline);
   background: var(--bg-panel);
+}
+
+/* Subtle auto-save hint (#148/#149) — "Saving… / Saved". `margin-right: auto`
+   keeps the Board/Raw toggle on the right when both are shown. */
+.status {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
 }
 
 .segmented {
@@ -61,15 +70,20 @@
 }
 
 /* Read-only raw markdown (#147) — the FileViewer raw style, wrapped (#80). */
-.raw {
+/* Editable raw board markdown (#149): the FileViewer .editor look — a full-height
+   monospace textarea that soft-wraps; auto-saves via the shared #148 hook. */
+.rawEditor {
   flex: 1;
   min-height: 0;
   margin: 0;
   padding: var(--space-12);
+  border: 0;
+  outline: none;
+  resize: none;
   overflow: auto;
   scrollbar-gutter: stable;
   background: var(--terminal-bg);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
   line-height: 1.5;
