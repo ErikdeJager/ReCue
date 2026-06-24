@@ -24,6 +24,8 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Code2,
+  Eye,
   GripVertical,
   Pencil,
   Plus,
@@ -346,6 +348,10 @@ function KanbanPanel({
 }: KanbanPanelProps): ReactElement {
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const [board, setBoard] = useState<Board | null>(null);
+  const [raw, setRaw] = useState<string | null>(null);
+  // Board ⟷ Raw view toggle (#147, mirroring the #73 FileViewer control) — local,
+  // reset per file; auto-defaults to Raw on first load of a structure-less file.
+  const [showRaw, setShowRaw] = useState(false);
   const [error, setError] = useState(false);
   const [editing, setEditing] = useState<{ col: number; idx: number } | null>(
     null,
@@ -359,6 +365,9 @@ function KanbanPanel({
   const inFlight = useRef(false);
   const boardRef = useRef<Board | null>(null);
   boardRef.current = board;
+  // Whether the per-file Board/Raw default has been applied (#147) — set once on
+  // first load so later hot-reload polls never override the user's toggle choice.
+  const didInitView = useRef(false);
 
   const load = useCallback(
     async (silent = false) => {
@@ -367,15 +376,25 @@ function KanbanPanel({
       if (inFlight.current || dirty.current) return;
       inFlight.current = true;
       try {
-        const raw = await readTextFile(repoPath, file);
+        const next = await readTextFile(repoPath, file);
         setError(false);
-        if (raw !== lastSynced.current) {
+        // Keep the raw text current for Raw mode (#147) — read-only, always safe.
+        setRaw(next);
+        if (next !== lastSynced.current) {
           // Genuine external change → reload + drop stale edit UI.
-          lastSynced.current = raw;
-          setBoard(parseBoard(raw));
+          lastSynced.current = next;
+          const parsed = parseBoard(next);
+          setBoard(parsed);
           setEditing(null);
           setRenamingCol(null);
           setConfirmDeleteCol(null);
+          // First load of this file: a structure-less `.md` (no columns) opens in
+          // Raw (#147); a real board opens in Board. Applied once — later polls
+          // never override the user's toggle.
+          if (!didInitView.current) {
+            didInitView.current = true;
+            setShowRaw(parsed.columns.length === 0);
+          }
         }
       } catch {
         if (!silent) {
@@ -393,7 +412,10 @@ function KanbanPanel({
   useEffect(() => {
     lastSynced.current = null;
     dirty.current = false;
+    didInitView.current = false;
     setBoard(null);
+    setRaw(null);
+    setShowRaw(false);
     setEditing(null);
     setRenamingCol(null);
     setConfirmDeleteCol(null);
@@ -521,60 +543,95 @@ function KanbanPanel({
   };
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCorners}
-      onDragStart={() => {
-        setEditing(null);
-        setConfirmDeleteCol(null);
-      }}
-      onDragEnd={onDragEnd}
-    >
-      <div className={styles.board}>
-        {board.columns.map((column, col) => (
-          <BoardColumn
-            key={col}
-            col={col}
-            name={column.name}
-            cards={column.cards}
-            isFirst={col === 0}
-            isLast={col === board.columns.length - 1}
-            renaming={renamingCol === col}
-            confirmingDelete={confirmDeleteCol === col}
-            editingCard={editing?.col === col ? editing.idx : null}
-            onRenameStart={() => setRenamingCol(col)}
-            onRename={(name) => mutate(renameColumn(board, col, name))}
-            onRenameStop={() => setRenamingCol(null)}
-            onMove={(dir) => mutate(moveColumn(board, col, col + dir))}
-            onDelete={() => deleteColumnAt(col)}
-            onAddCard={() => {
-              mutate(addCard(board, col, newCard()));
-              setEditing({ col, idx: board.columns[col]?.cards.length ?? 0 });
-            }}
-            onCardStartEdit={(idx) => setEditing({ col, idx })}
-            onCardStopEdit={() => setEditing(null)}
-            onCardChange={(idx, patch) =>
-              mutate(updateCard(board, col, idx, patch))
-            }
-            onCardToggle={(idx) => mutate(toggleCard(board, col, idx))}
-            onCardDelete={(idx) => {
-              if (editing?.col === col && editing.idx === idx) setEditing(null);
-              mutate(deleteCard(board, col, idx));
-            }}
-          />
-        ))}
-        <button
-          type="button"
-          className={styles.addColumn}
-          onClick={() => {
-            mutate(addColumn(board, "New column"));
-            setRenamingCol(board.columns.length);
-          }}
-        >
-          <Plus size={14} strokeWidth={1.5} /> Add column
-        </button>
+    <div className={styles.panel}>
+      {/* Board ⟷ Raw toggle (#147, mirroring the #73 FileViewer control). */}
+      <div className={styles.toolbar}>
+        <div className={styles.segmented} role="group" aria-label="View mode">
+          <button
+            type="button"
+            className={`${styles.segment} ${!showRaw ? styles.segmentActive : ""}`}
+            onClick={() => setShowRaw(false)}
+            aria-pressed={!showRaw}
+          >
+            <Eye size={13} strokeWidth={1.5} />
+            Board
+          </button>
+          <button
+            type="button"
+            className={`${styles.segment} ${showRaw ? styles.segmentActive : ""}`}
+            onClick={() => setShowRaw(true)}
+            aria-pressed={showRaw}
+          >
+            <Code2 size={13} strokeWidth={1.5} />
+            Raw
+          </button>
+        </div>
       </div>
-    </DndContext>
+      {showRaw ? (
+        // Read-only raw markdown (#147) — no editing in Raw, reusing the
+        // FileViewer's raw display style.
+        <pre className={styles.raw}>{raw ?? ""}</pre>
+      ) : (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={() => {
+            setEditing(null);
+            setConfirmDeleteCol(null);
+          }}
+          onDragEnd={onDragEnd}
+        >
+          <div className={styles.board}>
+            {board.columns.map((column, col) => (
+              <BoardColumn
+                key={col}
+                col={col}
+                name={column.name}
+                cards={column.cards}
+                isFirst={col === 0}
+                isLast={col === board.columns.length - 1}
+                renaming={renamingCol === col}
+                confirmingDelete={confirmDeleteCol === col}
+                editingCard={editing?.col === col ? editing.idx : null}
+                onRenameStart={() => setRenamingCol(col)}
+                onRename={(name) => mutate(renameColumn(board, col, name))}
+                onRenameStop={() => setRenamingCol(null)}
+                onMove={(dir) => mutate(moveColumn(board, col, col + dir))}
+                onDelete={() => deleteColumnAt(col)}
+                onAddCard={() => {
+                  mutate(addCard(board, col, newCard()));
+                  setEditing({
+                    col,
+                    idx: board.columns[col]?.cards.length ?? 0,
+                  });
+                }}
+                onCardStartEdit={(idx) => setEditing({ col, idx })}
+                onCardStopEdit={() => setEditing(null)}
+                onCardChange={(idx, patch) =>
+                  mutate(updateCard(board, col, idx, patch))
+                }
+                onCardToggle={(idx) => mutate(toggleCard(board, col, idx))}
+                onCardDelete={(idx) => {
+                  if (editing?.col === col && editing.idx === idx)
+                    setEditing(null);
+                  mutate(deleteCard(board, col, idx));
+                }}
+              />
+            ))}
+            <button
+              type="button"
+              className={styles.addColumn}
+              onClick={() => {
+                mutate(addColumn(board, "New column"));
+                setRenamingCol(board.columns.length);
+              }}
+            >
+              <Plus size={14} strokeWidth={1.5} /> Add column
+            </button>
+          </div>
+        </DndContext>
+      )}
+    </div>
   );
 }
 

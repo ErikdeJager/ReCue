@@ -363,16 +363,17 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks **#1–#146 are complete** — see **Implemented (completed tasks)** above for the
+Tasks **#1–#147 are complete** — see **Implemented (completed tasks)** above for the
 index and git history for per-task detail. The Kanban board feature (#141 engine +
-file-write, #145 content type + read-only render, #143 full editor), the Canvas panel
-header-drag affordance (#144), and the Canvas panel title truncation (#146) all shipped.
-**There are no open tasks right now.** _(Tasks #139–#140 are reserved on another branch.
-The Kanban content-type task was renumbered #142 → #145 to avoid colliding with the
-separately merged template task #142.)_ The full entries for the recently completed
-#133–#146 remain below until the next `/update-docs` condenses them into the summary. New
-work goes here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format,
-with its `Depends on:` prerequisites.
+file-write, #145 content type + read-only render, #143 full editor, #147 Board/Raw
+toggle), the Canvas panel header-drag affordance (#144), and the Canvas panel title
+truncation (#146) all shipped. **Open now:** #148 (editable auto-saving raw text editor);
+#149 (editable Kanban raw view) is blocked on #148. _(Tasks #139–#140 are reserved on
+another branch. The Kanban content-type task was renumbered #142 → #145 to avoid colliding
+with the separately merged template task #142.)_ The full entries for the recently
+completed #133–#147 remain below until the next `/update-docs` condenses them into the
+summary. New work goes here as a fresh `### N.` entry in
+[TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with its `Depends on:` prerequisites.
 
 > **Implementing tasks — never skip one.** The agent implementing this backlog
 > (`/develop-tasks`, `/isolate-agent`, `/handoff`) MUST implement **every** open task
@@ -1727,33 +1728,55 @@ read/write.
 
 **Subtasks**
 
-1. [ ] Add a thin toolbar to `KanbanPanel` with the #73 two-segment **Board / Raw** toggle
+1. [x] Add a thin toolbar to `KanbanPanel` with the #73 two-segment **Board / Raw** toggle
    (`Eye`/`Code2`, `aria-pressed`), `showRaw` local state reset per file.
-2. [ ] Keep the raw file text in state (set in `load`); render Raw as a read-only
+2. [x] Keep the raw file text in state (set in `load`); render Raw as a read-only
    `<pre className={styles.raw}>{raw}</pre>` (FileViewer raw style); add the `.raw` style to
    `KanbanPanel.module.css`.
-3. [ ] Auto-default to Raw on first load of a file with **no columns** (zero `## headings`);
+3. [x] Auto-default to Raw on first load of a file with **no columns** (zero `## headings`);
    don't override the user's toggle on subsequent hot-reload polls.
-4. [ ] Verify Board mode still edits/saves (#143) and Raw mode is read-only; the toggle +
+4. [x] Verify Board mode still edits/saves (#143) and Raw mode is read-only; the toggle +
    auto-fallback work in Canvas + Overview (+ a detached window #84).
 
 **Acceptance criteria**
 
-- [ ] The Kanban panel has a **Board / Raw** toggle (mirroring #73); Board shows the editable
+- [x] The Kanban panel has a **Board / Raw** toggle (mirroring #73); Board shows the editable
   board, Raw shows the file's raw markdown read-only.
-- [ ] A markdown file **with** board structure opens in Board; a file **without** any columns
+- [x] A markdown file **with** board structure opens in Board; a file **without** any columns
   auto-opens in Raw; the user can still toggle either way.
-- [ ] Switching to Raw doesn't edit/write the file; switching back to Board resumes #143
+- [x] Switching to Raw doesn't edit/write the file; switching back to Board resumes #143
   editing; an external edit still hot-reloads in both modes.
-- [ ] Works across Canvas + Overview panels and a detached window (#84). _(Detached-window
+- [x] Works across Canvas + Overview panels and a detached window (#84). _(Detached-window
   runtime check best-effort per #84/#105.)_
-- [ ] `npm run build`, `npm run lint`, and `npm test` pass.
+- [x] `npm run build`, `npm run lint`, and `npm test` pass.
 
 **Notes**
 
 - Direct mirror of the #73 FileViewer Rendered/Raw toggle, applied to the Kanban board; Raw
   reuses the file viewer's read-only raw display.
 - Independent of #146 (Canvas header truncation — different file) and the unmerged #139–#140.
+
+**Implementation report**
+
+Frontend-only, extending `KanbanPanel.tsx` (no backend change). Added a thin **toolbar** with
+the #73 two-segment **Board / Raw** toggle (`Eye`/`Code2`, `aria-pressed`, the
+`segmented`/`segment`/`segmentActive` pattern) — wrapped the panel in a `.panel` flex column
+(toolbar + content). A new `raw` state holds the last-read file text (set in `load`, so it
+stays current on hot-reload), and a local `showRaw` state (reset per file in the
+file-change effect) drives the view: **Board** = the #143 editable board (the existing
+`DndContext`), **Raw** = a read-only `<pre className={styles.raw}>{raw}</pre>` reusing the
+FileViewer raw style (monospace, scroll, `pre-wrap`). **Auto-fallback (#147):** a `didInitView`
+ref applies the per-file default exactly once on first load — `setShowRaw(parsed.columns.length
+=== 0)`, so a structure-less `.md` opens in Raw and a real board opens in Board; subsequent
+hot-reload polls never override the user's toggle. Raw is read-only — none of the #143
+edit/write machinery runs there (no `dirty`/write on raw); switching back to Board resumes
+editing, and an external edit still hot-reloads in both modes (the poll updates `raw` + the
+board). `.board` changed from `height:100%` to `flex:1; min-height:0` to fill the flex column
+under the toolbar. CSS: `.panel`/`.toolbar`/`.segmented`/`.segment`/`.segmentActive`/`.raw`
+added to `KanbanPanel.module.css`. Applies to Canvas + Overview + a detached window (#84, same
+component) — **runtime-unverified** in a real detached window (no GUI, per #84/#105). All gates
+pass: `npm run build`, `npm run lint`, `npm test` (179), `prettier --check`. _(The toggle is
+component-local + not persisted, like #73; visual rendering isn't unit-testable.)_
 
 ---
 

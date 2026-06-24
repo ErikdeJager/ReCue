@@ -8,8 +8,79 @@
   font-size: var(--fs-meta);
 }
 
-.board {
+/* Panel wrapper: a thin toolbar (#147 Board/Raw toggle) above the board/raw area. */
+.panel {
+  display: flex;
   height: 100%;
+  flex-direction: column;
+}
+
+/* Board ⟷ Raw toggle bar (#147, mirroring the #73 FileViewer toolbar). */
+.toolbar {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--bg-panel);
+}
+
+.segmented {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+}
+
+.segment {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-6);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.segment:hover {
+  color: var(--text-secondary);
+}
+
+.segmentActive {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* Read-only raw markdown (#147) — the FileViewer raw style, wrapped (#80). */
+.raw {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-12);
+  overflow: auto;
+  scrollbar-gutter: stable;
+  background: var(--terminal-bg);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+
+.board {
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: stretch;
   gap: var(--space-12);
