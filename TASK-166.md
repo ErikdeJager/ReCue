@@ -1,6 +1,6 @@
-### 166. [ ] Worktree context menu: new session, open views, and close worktree
+### 166. [x] Worktree context menu: new session, open views, and close worktree
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #164
 **Created:** 2026-06-24
 
@@ -122,3 +122,28 @@ worktree's own folder.
   repo menu Views/Kill-all for structure), `store.ts` (`spawnWorktreeSession` ≈664/2307,
   `killAllAgents` ≈706/733, `closeAllItems` ≈709/815, `cleanupWorktreeIfEmpty` ≈680,
   `addOverviewPanel` ≈538), TASK-164 (`ViewsMenu`), `RowContextMenu` (#132, Sidebar ≈76).
+
+**Implementation note (done 2026-06-24)**
+
+`WorktreeHeader` (`Sidebar.tsx`) gained a full right-click menu (replacing its
+2-item `RowContextMenu`) mirroring the repo menu structure, scoped to the worktree
+`path`:
+- **New session** → `spawnWorktreeSession(parent, branch)` (create-or-reuse → joins
+  the existing worktree, ref-count++, nests under the same header). New props
+  `parent` (= `wtAgents[0]?.worktreeParent`) and `agentCount` threaded from the
+  render site; "New session" is `aria-disabled` when no parent is resolvable.
+- **Views** → the shared #164 `ViewsMenu repoPath={path}` (file/diff/terminal/kanban),
+  so the action set never diverges. Opened views register under `overviewPanels[path]`
+  → they render under the worktree sub-group (left panel) + the parent cluster
+  (Overview) via #164's grouping — placement inherited, no new wiring (subtask 3).
+- **Reveal in Finder** / **Copy absolute path** — unchanged.
+- **Close worktree** (danger) → `killAllAgents(path)` (ref-counted `git worktree
+  remove`, dirty kept, #74) + `closeAllItems(path)`. **Confirm-gated** on
+  `confirmDestructive` (#103) via a local `confirming` step ("Kill N agents & close
+  worktree?" / "Close worktree & remove its items?"); immediate when the setting is off.
+- Built on existing actions only; the menu reuses the Sidebar's `.menu`/`.menuItem`/
+  `.menuSection`/`.menuItemDanger`/`.menuDanger` classes. `RowContextMenu` stays for
+  the other rows.
+- `npm run build`, `npm run lint`, `npm run format:check`, and `npm test` (212) all
+  pass. Subtask 5 manual walk-through is interactive; every wired action is a shipped,
+  tested store/ipc path.

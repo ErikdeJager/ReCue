@@ -729,13 +729,43 @@ function TerminalRow({
 /**
  * A worktree sub-group header (#74): the `GitBranch` icon + branch name +
  * "worktree" badge for an isolated worktree folder, with the worktree's absolute
- * path as its tooltip. Right-click opens a two-item menu (#133) mirroring the
- * repo menu (#130): **Reveal in Finder** / **Copy absolute path** — both
- * non-destructive, operating on the worktree's own absolute folder path (`path`).
+ * path as its tooltip. Right-click opens a full action menu (#166) mirroring the
+ * repo menu (#82/#130) but scoped to the worktree's own folder (`path`): **New
+ * session** (reuses the worktree via `spawnWorktreeSession(parent, branch)`,
+ * ref-counted), the shared **Views** add-view set (#164's `ViewsMenu`), **Reveal in
+ * Finder** / **Copy absolute path**, and a destructive **Close worktree** that kills
+ * the worktree's agents (ref-counted `git worktree remove`, dirty kept) + its items
+ * — confirm-gated per `confirmDestructive` (#103).
  */
-function WorktreeHeader({ path, branch }: { path: string; branch: string }) {
+function WorktreeHeader({
+  path,
+  branch,
+  parent,
+  agentCount,
+}: {
+  path: string;
+  branch: string;
+  /** The worktree's parent repo (#166) — needed to start a new worktree session;
+   * undefined disables "New session". */
+  parent?: string;
+  /** Agents in this worktree (#166) — for the Close-worktree confirm label. */
+  agentCount: number;
+}) {
   const copyToClipboard = useStore((s) => s.copyToClipboard);
+  const spawnWorktreeSession = useStore((s) => s.spawnWorktreeSession);
+  const killAllAgents = useStore((s) => s.killAllAgents);
+  const closeAllItems = useStore((s) => s.closeAllItems);
+  const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const { menu, openMenu, closeMenu } = useRowMenu();
+  const [confirming, setConfirming] = useState(false);
+  const close = () => {
+    setConfirming(false);
+    closeMenu();
+  };
+  const closeWorktree = () => {
+    void killAllAgents(path);
+    void closeAllItems(path);
+  };
   return (
     <div
       className={styles.worktreeHeader}
@@ -750,20 +780,105 @@ function WorktreeHeader({ path, branch }: { path: string; branch: string }) {
       />
       <span className={styles.worktreeName}>{branch}</span>
       <span className={styles.worktreeBadge}>worktree</span>
-      <RowContextMenu
-        menu={menu}
-        items={[
-          {
-            label: "Reveal in Finder",
-            onActivate: () => void revealPath(path),
-          },
-          {
-            label: "Copy absolute path",
-            onActivate: () => void copyToClipboard(path, "path"),
-          },
-        ]}
-        onClose={closeMenu}
-      />
+      {menu && (
+        <>
+          <div
+            className={styles.menuOverlay}
+            onClick={close}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              close();
+            }}
+          />
+          <div
+            className={styles.menu}
+            style={{ left: menu.x, top: menu.y }}
+            role="menu"
+          >
+            {confirming ? (
+              <button
+                type="button"
+                role="menuitem"
+                className={styles.menuDanger}
+                onClick={() => {
+                  closeWorktree();
+                  close();
+                }}
+              >
+                {agentCount > 0
+                  ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & close worktree?`
+                  : "Close worktree & remove its items?"}
+              </button>
+            ) : (
+              <>
+                {/* New session in this worktree (#166): create-or-reuse the
+                    app-managed worktree (ref-count++), nesting another agent here. */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  aria-disabled={!parent}
+                  title={parent ? undefined : "Worktree parent unknown"}
+                  onClick={() => {
+                    if (!parent) return;
+                    void spawnWorktreeSession(parent, branch);
+                    close();
+                  }}
+                >
+                  New session
+                </button>
+                <div className={styles.menuSeparator} role="separator" />
+                {/* Open a view scoped to the worktree folder — the shared #164
+                    ViewsMenu (file/diff/terminal/kanban), so the action set never
+                    diverges from the repo menu and the badge popover. */}
+                <div className={styles.menuSection}>Views</div>
+                <ViewsMenu repoPath={path} onClose={close} />
+                <div className={styles.menuSeparator} role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    void revealPath(path);
+                    close();
+                  }}
+                >
+                  Reveal in Finder
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    void copyToClipboard(path, "path");
+                    close();
+                  }}
+                >
+                  Copy absolute path
+                </button>
+                <div className={styles.menuSeparator} role="separator" />
+                {/* Close the worktree entirely (#166): kill its agents (ref-counted
+                    `git worktree remove`, dirty kept) + close its items. Confirm-gated. */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItemDanger}
+                  onClick={() => {
+                    if (confirmDestructive) {
+                      setConfirming(true);
+                    } else {
+                      closeWorktree();
+                      close();
+                    }
+                  }}
+                >
+                  Close worktree
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1146,7 +1261,12 @@ function Sidebar() {
                 );
                 return (
                   <div key={wt} className={styles.worktreeGroup}>
-                    <WorktreeHeader path={wt} branch={wtBranch} />
+                    <WorktreeHeader
+                      path={wt}
+                      branch={wtBranch}
+                      parent={wtAgents[0]?.worktreeParent ?? undefined}
+                      agentCount={wtAgents.length}
+                    />
                     {wtAgents.map((session, i) => (
                       <SessionRow
                         key={session.id}
