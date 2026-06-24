@@ -363,16 +363,16 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks **#1–#147 are complete** — see **Implemented (completed tasks)** above for the
-index and git history for per-task detail. The Kanban board feature (#141 engine +
-file-write, #145 content type + read-only render, #143 full editor, #147 Board/Raw
-toggle), the Canvas panel header-drag affordance (#144), and the Canvas panel title
-truncation (#146) all shipped. **Open now:** #148 (editable auto-saving raw text editor);
-#149 (editable Kanban raw view) is blocked on #148. _(Tasks #139–#140 are reserved on
-another branch. The Kanban content-type task was renumbered #142 → #145 to avoid colliding
-with the separately merged template task #142.)_ The full entries for the recently
-completed #133–#147 remain below until the next `/update-docs` condenses them into the
-summary. New work goes here as a fresh `### N.` entry in
+Tasks **#1–#148 are complete** — see **Implemented (completed tasks)** above for the
+index and git history for per-task detail. The Kanban board feature (#141–#143, #145,
+#147), the Canvas panel header-drag affordance (#144), the Canvas panel title truncation
+(#146), and the shared editable auto-saving raw text editor (#148) all shipped. **Open
+now:** #149 (editable Kanban raw view — now unblocked, reuses #148's hook) and #150
+(file-viewer syntax highlighting — Java + INI/.env/.properties). _(Tasks #139–#140 are
+reserved on another branch. The Kanban content-type task was renumbered #142 → #145 to
+avoid colliding with the separately merged template task #142.)_ The full entries for the
+recently completed #133–#148 remain below until the next `/update-docs` condenses them into
+the summary. New work goes here as a fresh `### N.` entry in
 [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with its `Depends on:` prerequisites.
 
 > **Implementing tasks — never skip one.** The agent implementing this backlog
@@ -1780,9 +1780,9 @@ component-local + not persisted, like #73; visual rendering isn't unit-testable.
 
 ---
 
-### 148. [ ] Editable, auto-saving raw text editor (FileViewer raw + plain-text files)
+### 148. [x] Editable, auto-saving raw text editor (FileViewer raw + plain-text files)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none · _(builds on the #141 `write_text_file`/`writeTextFile`, the #73/#44
 FileViewer raw view, and the #143 KanbanPanel debounced-write + dirty-reconcile pattern — all
 shipped)_
@@ -1835,27 +1835,27 @@ highlighting.
 
 **Subtasks**
 
-1. [ ] Add a shared `useAutoSaveFile(repoPath, file, active)` hook (extract/generalize the #143
+1. [x] Add a shared `useAutoSaveFile(repoPath, file, active)` hook (extract/generalize the #143
    KanbanPanel read+poll+debounced-write+dirty-reconcile): editable buffer, debounced
    `writeTextFile`, pause-poll-while-dirty, flush-on-blur/unmount, IME-safe, save-status.
-2. [ ] In FileViewer, replace the read-only raw `<pre>` with an editable monospace `<textarea>`
+2. [x] In FileViewer, replace the read-only raw `<pre>` with an editable monospace `<textarea>`
    bound to the hook — only for `(markdown && showRaw) || other`, and `!tooLarge`; keep
    rendered markdown, the Prism code view, and large files read-only.
-3. [ ] Add the subtle "Saving… / Saved" status to the FileViewer toolbar (next to the #73
+3. [x] Add the subtle "Saving… / Saved" status to the FileViewer toolbar (next to the #73
    toggle).
-4. [ ] Style the editor (`FileViewer.module.css`): monospace, full height, soft-wrap, scroll,
+4. [x] Style the editor (`FileViewer.module.css`): monospace, full height, soft-wrap, scroll,
    on-token colors.
 
 **Acceptance criteria**
 
-- [ ] In a FileViewer showing markdown **Raw** or a plain-text file, the user can type directly
+- [x] In a FileViewer showing markdown **Raw** or a plain-text file, the user can type directly
   and it **auto-saves** to disk (debounced, no save button); the file on disk reflects the
   edits.
-- [ ] Typing continuously doesn't lose keystrokes to the hot-reload poll (the buffer wins while
+- [x] Typing continuously doesn't lose keystrokes to the hot-reload poll (the buffer wins while
   dirty/focused); an external edit while **not** editing still hot-reloads.
-- [ ] A subtle "Saving… / Saved" status shows; the rendered markdown view, the code (Prism)
+- [x] A subtle "Saving… / Saved" status shows; the rendered markdown view, the code (Prism)
   view, and large files remain read-only.
-- [ ] Pending edits flush on blur and on unmount / switching files; `npm run build`,
+- [x] Pending edits flush on blur and on unmount / switching files; `npm run build`,
   `npm run lint`, and `npm test` pass.
 
 **Notes**
@@ -1866,6 +1866,29 @@ highlighting.
   (minimal deps).
 - The hook is the reuse point for #149 (Kanban raw) and any future editable format.
 - Independent of #146/#147 (different file) and the unmerged #139–#140.
+
+**Implementation report**
+
+Built the shared **`useAutoSaveFile(repoPath, file, active)`** hook (`src/useAutoSaveFile.ts`,
+a top-level hook like `useKeyboardNav`) generalizing the #143 KanbanPanel machinery: reads via
+`readTextFile`, hot-reload-**polls** while visible, holds an editable **buffer** (`text` +
+`setText`), **debounced** (`SAVE_DEBOUNCE_MS` 600) `writeTextFile` (no save button), and
+**reconciles** edits vs the poll — `load` early-returns while `dirty` **or** `focused` so a poll
+never clobbers in-progress typing, never echo-reloads our own write (`lastSynced` compare),
+**flushes** the pending write on **blur** (`onBlur`) and on **unmount / file change** (the reset
+effect's cleanup), is **IME-safe** (a `composing` ref gates the debounced save; `onCompositionEnd`
+re-arms it), is **last-write-wins** (mirrors #143), and exposes a **`status`**
+(`idle|saving|saved|error`). **FileViewer** now reads through the hook (replacing its own
+content/load/poll) and, for the **editable** cases — markdown in **Raw** mode (`mode==="markdown"
+&& showRaw`) **or** a plain-text file (`mode==="text"`), and `!tooLarge` — renders an editable
+monospace **`<textarea>`** (`.editor`: full height, `pre-wrap` soft-wrap #80, JetBrains Mono,
+spellcheck off) wired to `setText`/focus/blur/composition; rendered markdown, the Prism **code**
+view, and **large** files stay read-only (the `.raw` `<pre>` / `CodeBlock`). A subtle
+**"Saving… / Saved"** status (`.status`, `role="status"`, `margin-right:auto` so the #73 toggle
+stays right) shows in the toolbar (now also shown for editable plain-text files). All gates pass:
+`npm run build`, `npm run lint`, `npm test` (179), `prettier --check`. The hook is the reuse point
+for #149. _(The timer/poll/IME reconcile is runtime-only — not unit-tested, consistent with the
+#143 panel I/O precedent; it mirrors the shipped #143 logic.)_
 
 ---
 

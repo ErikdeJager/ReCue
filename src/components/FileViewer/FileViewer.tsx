@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Code2, Eye } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { readTextFile } from "../../ipc";
+import { useAutoSaveFile } from "../../useAutoSaveFile";
 import { detectMode, prismLang } from "./fileType";
 import { highlightToHtml } from "./prism";
 import styles from "./FileViewer.module.css";
 
-// Hot-reload poll while visible (#40 pattern). ~1s feels live without hammering disk.
-const POLL_MS = 1000;
-// Above this, skip render/highlight and show plain raw text so a big file can't jank.
+// Above this, skip render/highlight and show plain raw text so a big file can't
+// jank — and keep it read-only (no editing), for perf (#148).
 const LARGE_BYTES = 256 * 1024;
 
 interface FileViewerProps {
@@ -36,122 +35,93 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
 }
 
 /**
- * Universal read-only file viewer (#44) — the single content component reused by
- * the Focus inspector (#40), Overview columns (#41), and Canvas panels (#47).
- * Markdown renders formatted with an eye/code toggle to raw; curated code files
- * get lightweight Prism highlighting; everything else is raw mono. Hot-reloads
- * by polling while visible and only re-renders when the content actually changed
- * (preserves scroll otherwise). No `rehype-raw`, so untrusted markdown can't
- * inject HTML. Large files fall back to raw text to stay smooth.
+ * Universal file viewer (#44) — the single content component reused by Overview
+ * columns (#41) and Canvas panels (#47). Markdown renders formatted with an
+ * eye/code toggle to raw; curated code files get lightweight Prism highlighting;
+ * everything else is raw mono. Reads + hot-reloads via the shared
+ * `useAutoSaveFile` hook (#148). In **markdown Raw** mode or for a **plain-text**
+ * file (and not too large), the raw view is an **editable** monospace textarea
+ * that **auto-saves** debounced (#148, no save button); rendered markdown, the
+ * Prism code view, and large files stay read-only. No `rehype-raw`, so untrusted
+ * markdown can't inject HTML.
  */
 function FileViewer({ repoPath, file, active }: FileViewerProps) {
-  const [content, setContent] = useState<string | null>(null);
-  const [error, setError] = useState(false);
+  const {
+    text,
+    error,
+    status,
+    setText,
+    onFocus,
+    onBlur,
+    onCompositionStart,
+    onCompositionEnd,
+  } = useAutoSaveFile(repoPath, file, active);
   const [showRaw, setShowRaw] = useState(false);
-  const inFlight = useRef(false);
 
   const mode = detectMode(file);
 
-  const load = useCallback(
-    async (silent = false) => {
-      if (inFlight.current) return;
-      inFlight.current = true;
-      try {
-        const next = await readTextFile(repoPath, file);
-        setError(false);
-        // The content doubles as the change signature: returning the same string
-        // makes React bail out (no re-render), so scroll is preserved on an
-        // unchanged poll.
-        setContent((cur) => (cur === next ? cur : next));
-      } catch {
-        // A transient poll failure keeps the last good content; an explicit load
-        // surfaces the error.
-        if (!silent) {
-          setContent(null);
-          setError(true);
-        }
-      } finally {
-        inFlight.current = false;
-      }
-    },
-    [repoPath, file],
-  );
-
-  // Fetch when shown / on file change; reset the raw toggle per file.
-  useEffect(() => {
-    if (active) void load();
-  }, [active, load]);
+  // Reset the raw toggle per file.
   useEffect(() => setShowRaw(false), [file]);
-
-  // Poll for hot-reload while visible; pause when hidden, catch up on regain.
-  useEffect(() => {
-    if (!active) return;
-    let timer: ReturnType<typeof setInterval> | undefined;
-    const start = () => {
-      if (timer === undefined && !document.hidden) {
-        timer = setInterval(() => void load(true), POLL_MS);
-      }
-    };
-    const stop = () => {
-      if (timer !== undefined) {
-        clearInterval(timer);
-        timer = undefined;
-      }
-    };
-    const onVisibility = () => {
-      if (document.hidden) stop();
-      else {
-        void load(true);
-        start();
-      }
-    };
-    start();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      stop();
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [active, load]);
 
   if (error) {
     return <div className={styles.message}>Couldn’t read {file}.</div>;
   }
-  if (content === null) {
+  if (text === null) {
     return <div className={styles.message}>Loading…</div>;
   }
 
-  const tooLarge = content.length > LARGE_BYTES;
+  const tooLarge = text.length > LARGE_BYTES;
   const renderMarkdown = mode === "markdown" && !showRaw && !tooLarge;
   const lang = mode === "code" && !tooLarge ? prismLang(file) : undefined;
+  // Editable raw text (#148): markdown in Raw mode or a plain-text file, not too
+  // large. Rendered markdown, the Prism code view, and large files stay read-only.
+  const editable =
+    !tooLarge && ((mode === "markdown" && showRaw) || mode === "text");
+  const showToolbar = (mode === "markdown" && !tooLarge) || editable;
 
   return (
     <div className={styles.viewer}>
-      {/* The eye/code toggle is markdown-only (rendered ↔ raw source). */}
-      {mode === "markdown" && !tooLarge && (
+      {showToolbar && (
         <div className={styles.toolbar}>
-          {/* Two-segment Rendered / Raw toggle (#73): both options always shown
-              with the active one highlighted, so returning to the rendered view
-              is obvious (the old lone corner icon read as one-way). */}
-          <div className={styles.segmented} role="group" aria-label="View mode">
-            <button
-              type="button"
-              className={`${styles.segment} ${!showRaw ? styles.segmentActive : ""}`}
-              onClick={() => setShowRaw(false)}
-              aria-pressed={!showRaw}
+          {/* Subtle auto-save hint (#148) — no toast, no save button. Its
+              margin-right:auto keeps the toggle on the right when both show. */}
+          {editable && status !== "idle" && (
+            <span className={styles.status} role="status">
+              {status === "saving"
+                ? "Saving…"
+                : status === "saved"
+                  ? "Saved"
+                  : "Save failed"}
+            </span>
+          )}
+          {/* The eye/code toggle is markdown-only (rendered ↔ raw source). Two
+              segments always shown with the active highlighted (#73). */}
+          {mode === "markdown" && !tooLarge && (
+            <div
+              className={styles.segmented}
+              role="group"
+              aria-label="View mode"
             >
-              <Eye size={13} strokeWidth={1.5} />
-              Rendered
-            </button>
-            <button
-              type="button"
-              className={`${styles.segment} ${showRaw ? styles.segmentActive : ""}`}
-              onClick={() => setShowRaw(true)}
-              aria-pressed={showRaw}
-            >
-              <Code2 size={13} strokeWidth={1.5} />
-              Raw
-            </button>
-          </div>
+              <button
+                type="button"
+                className={`${styles.segment} ${!showRaw ? styles.segmentActive : ""}`}
+                onClick={() => setShowRaw(false)}
+                aria-pressed={!showRaw}
+              >
+                <Eye size={13} strokeWidth={1.5} />
+                Rendered
+              </button>
+              <button
+                type="button"
+                className={`${styles.segment} ${showRaw ? styles.segmentActive : ""}`}
+                onClick={() => setShowRaw(true)}
+                aria-pressed={showRaw}
+              >
+                <Code2 size={13} strokeWidth={1.5} />
+                Raw
+              </button>
+            </div>
+          )}
         </div>
       )}
       {tooLarge && (
@@ -159,12 +129,25 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
       )}
       {renderMarkdown ? (
         <div className={styles.markdown}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
         </div>
       ) : lang ? (
-        <CodeBlock code={content} lang={lang} />
+        <CodeBlock code={text} lang={lang} />
+      ) : editable ? (
+        // Editable raw text, auto-saving via the hook (#148).
+        <textarea
+          className={styles.editor}
+          value={text}
+          spellCheck={false}
+          onChange={(event) => setText(event.currentTarget.value)}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
+          aria-label={`Edit ${file}`}
+        />
       ) : (
-        <pre className={styles.raw}>{content}</pre>
+        <pre className={styles.raw}>{text}</pre>
       )}
     </div>
   );
