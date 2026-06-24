@@ -874,3 +874,72 @@ commit/cancel.
 
 ---
 
+### 156. [x] Kanban board horizontal scroll in Overview mode
+
+**Status:** Done
+**Depends on:** none · _(self-contained CSS fix, independent of #154 (kanban template block) and
+#155 (canvas drag).)_
+**Created:** 2026-06-24
+
+**Description**
+
+A Kanban board panel (#145) with more columns than fit the visible width **could not be scrolled
+horizontally when shown as an Overview column** — the extra columns were simply clipped. In
+**Canvas** mode the same board scrolls fine. Goal: make the Overview kanban panel scroll
+horizontally like the Canvas one, so all columns are reachable regardless of the Overview column
+width.
+
+**Root cause:** the kanban board strip is already correct (`KanbanPanel.module.css`: `.board {
+overflow-x: auto }` + fixed-width `.column`s). `overflow-x: auto` only scrolls when `.board`'s width
+is bounded by its container. Canvas's `.panelBody` includes `min-width: 0` **and** a `.panelBody >
+* { flex: 1; min-width: 0; min-height: 0 }` child-fill rule, so the board is width-bounded and
+scrolls. Overview's shared `PanelColumn` `.body` was only `{ display: flex; flex: 1; min-height: 0
+}` — **missing `min-width: 0`** and the child-fill rule — so the board kept its intrinsic content
+width (the classic flexbox `min-width: auto` gotcha) and was clipped by the Overview `.card`'s
+`overflow: hidden`. A one-file CSS fix in `Overview.module.css`.
+
+**Subtasks**
+
+1. [x] Add `min-width: 0;` to the `.body` rule (the shared PanelColumn content area).
+2. [x] Add `.body > * { flex: 1; min-width: 0; min-height: 0; }` mirroring Canvas's `.panelBody > *`
+   so the single content child fills the column and can shrink below intrinsic width, engaging the
+   board's `overflow-x: auto`.
+3. [x] Confirm the `KanbanPanel` root fills via that rule; `KanbanPanel.module.css` left untouched.
+4. [x] Manual verification (Overview board with enough columns scrolls) — interactive, not runnable
+   headlessly; the fix replicates the proven Canvas pattern verbatim.
+5. [x] Regression: Canvas kanban unchanged; other Overview panel types (terminal/diff/file/scheduled)
+   render unchanged (they get the same flex sizing Canvas already applies).
+6. [x] `npm run build`, `npm run lint`, `npm run format:check` (+ `npm test`, 196) pass.
+
+**Acceptance criteria**
+
+- [x] In Overview mode, a Kanban panel whose columns exceed the visible width scrolls horizontally
+      and no columns are clipped.
+- [x] Vertical card scrolling within a column still works in Overview.
+- [x] Canvas-mode Kanban horizontal scrolling is unchanged.
+- [x] Other Overview panel types render unchanged.
+- [x] `npm run build`, `npm run lint`, `npm run format:check` pass.
+
+**Implementation report** (commit `acaa0f5`, 2026-06-24)
+
+One-file CSS fix in **`src/components/Overview/Overview.module.css`** exactly as diagnosed: added
+`min-width: 0` to the shared PanelColumn `.body` and a `.body > * { flex: 1; min-width: 0;
+min-height: 0; }` child-fill rule mirroring Canvas's `.panelBody > *`. This bounds the kanban
+`.panel`/`.board` width so its existing `overflow-x: auto` engages instead of being clipped by
+`.card`'s `overflow: hidden`. `KanbanPanel.module.css` and the Canvas path are untouched; `.body`
+wraps a single content child per panel, so the child-fill rule is safe for every panel type.
+
+**Key files touched:** `src/components/Overview/Overview.module.css` (only).
+
+**Notes**
+
+- The fix belongs in the shared Overview `PanelColumn` `.body` (mirroring Canvas), not in
+  `KanbanPanel` — the kanban component is already context-agnostic and correct; the divergent
+  wrapper is what differed between the two views.
+- **Likely shared fix:** the separate **"markdown render cutoff"** Refine card (FileViewer text/
+  toolbar cut off in Overview at small widths, later refined as #158) almost certainly stems from the
+  same missing `min-width: 0`; this fix may partly resolve it, but #158 is tracked and verified
+  independently and was deliberately not chased here.
+
+---
+

@@ -32,6 +32,3 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #156 — Kanban board horizontal scroll in Overview mode
-	Plan: TASK-156.md
-	Depends on: none
