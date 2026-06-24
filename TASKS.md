@@ -1672,9 +1672,9 @@ child's width). All gates pass: `npm run build`, `npm run lint`, `npm test` (179
 
 ---
 
-### 147. [ ] Kanban panel — Board/Raw toggle + auto-fallback to raw markdown
+### 147. [x] Kanban panel — Board/Raw toggle + auto-fallback to raw markdown
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #145 · _(extends the `KanbanPanel` from #145/#143; mirrors the #73 FileViewer
 Rendered/Raw toggle and reuses its read-only raw `<pre>` style #44 — all shipped, so
 immediately runnable)_
@@ -1754,6 +1754,155 @@ read/write.
 - Direct mirror of the #73 FileViewer Rendered/Raw toggle, applied to the Kanban board; Raw
   reuses the file viewer's read-only raw display.
 - Independent of #146 (Canvas header truncation — different file) and the unmerged #139–#140.
+
+---
+
+### 148. [ ] Editable, auto-saving raw text editor (FileViewer raw + plain-text files)
+
+**Status:** Not started
+**Depends on:** none · _(builds on the #141 `write_text_file`/`writeTextFile`, the #73/#44
+FileViewer raw view, and the #143 KanbanPanel debounced-write + dirty-reconcile pattern — all
+shipped)_
+**Created:** 2026-06-24
+
+**Description**
+
+Let the user **edit files directly in the raw text view** — type into the raw markdown / plain
+text and **auto-save with no save button** (a debounced write a short time after they stop
+typing). This task delivers the **shared editor + the FileViewer raw view**; the Kanban raw
+editor is #149.
+
+Today the FileViewer raw branch is read-only — `<pre className={styles.raw}>{content}</pre>`
+(covers the markdown **Raw** toggle #73, plain-text files, and the large-file fallback).
+Replace it with an editable monospace **`<textarea>`** for editable text, wired to a debounced
+auto-save.
+
+**Editor (per the user): a plain `<textarea>`** — monospace (JetBrains Mono), full panel
+height, soft-wrap matching the raw view, spellcheck off; no new dependency, no syntax
+highlighting while editing.
+
+**Shared `useAutoSaveFile(repoPath, file, active)` hook** — extract the file-I/O + autosave +
+reconcile machinery the KanbanPanel (#143) already has into a reusable hook so #149 (and future
+formats) reuse it. It:
+
+- reads via `readTextFile`, hot-reload **polls** while visible (the #44/#143 pattern);
+- holds an editable **buffer** (the source of truth while editing) + a `setText`;
+- **debounced write-back** via `writeTextFile` (~600ms, the app's #94/#143 convention) — **no
+  save button**;
+- **reconciles edits vs the poll** (the researched pitfall): while the buffer is **dirty / the
+  textarea is focused**, the poll must **not** overwrite it (or keystrokes typed after the last
+  save are lost) — pause hot-reload while dirty, don't echo-reload the panel's own writes
+  (compare against last-synced), and **flush the pending write on blur + on unmount / file
+  change** (mirrors #143);
+- **last-write-wins** while editing (consistent with the #143 Kanban editor; a concurrent
+  external edit during an edit session is overwritten — noted as a tradeoff);
+- handles **IME composition** (`compositionstart`/`compositionend`) so a debounced save doesn't
+  fire mid-composition (CJK input);
+- exposes a **save status** (`"idle" | "saving" | "saved" | "error"`).
+
+**Subtle inline save status (per the user):** a quiet "Saving… / Saved" hint in the FileViewer
+toolbar (no toast, no button).
+
+**Editable when:** the file is shown as raw text, is an editable text type, and is not too
+large — i.e. markdown in **Raw** mode (`mode === "markdown" && showRaw`) or a plain-text file
+(`mode === "other"`), and `!tooLarge`. **Out of scope:** the rendered markdown view, the
+**code** view (Prism-highlighted — stays read-only for now), **large** files (kept read-only
+for perf), the Kanban raw editor (#149), undo/redo beyond the native textarea, and syntax
+highlighting.
+
+**Subtasks**
+
+1. [ ] Add a shared `useAutoSaveFile(repoPath, file, active)` hook (extract/generalize the #143
+   KanbanPanel read+poll+debounced-write+dirty-reconcile): editable buffer, debounced
+   `writeTextFile`, pause-poll-while-dirty, flush-on-blur/unmount, IME-safe, save-status.
+2. [ ] In FileViewer, replace the read-only raw `<pre>` with an editable monospace `<textarea>`
+   bound to the hook — only for `(markdown && showRaw) || other`, and `!tooLarge`; keep
+   rendered markdown, the Prism code view, and large files read-only.
+3. [ ] Add the subtle "Saving… / Saved" status to the FileViewer toolbar (next to the #73
+   toggle).
+4. [ ] Style the editor (`FileViewer.module.css`): monospace, full height, soft-wrap, scroll,
+   on-token colors.
+
+**Acceptance criteria**
+
+- [ ] In a FileViewer showing markdown **Raw** or a plain-text file, the user can type directly
+  and it **auto-saves** to disk (debounced, no save button); the file on disk reflects the
+  edits.
+- [ ] Typing continuously doesn't lose keystrokes to the hot-reload poll (the buffer wins while
+  dirty/focused); an external edit while **not** editing still hot-reloads.
+- [ ] A subtle "Saving… / Saved" status shows; the rendered markdown view, the code (Prism)
+  view, and large files remain read-only.
+- [ ] Pending edits flush on blur and on unmount / switching files; `npm run build`,
+  `npm run lint`, and `npm test` pass.
+
+**Notes**
+
+- Best-practice basis: debounce ~600ms (app convention), flush on blur/unmount, **pause
+  hot-reload while dirty** to avoid the re-render-clobbers-keystrokes pitfall, IME-composition
+  guard, last-write-wins (mirrors #143). Plain `<textarea>` over CodeMirror per the user
+  (minimal deps).
+- The hook is the reuse point for #149 (Kanban raw) and any future editable format.
+- Independent of #146/#147 (different file) and the unmerged #139–#140.
+
+---
+
+### 149. [ ] Editable, auto-saving Kanban raw view
+
+**Status:** Not started
+**Depends on:** #147, #148 · _(#147 adds the Kanban Board/Raw toggle + read-only raw `<pre>`;
+#148 provides the `useAutoSaveFile` hook + textarea editor — both prerequisites)_
+**Created:** 2026-06-24
+
+**Description**
+
+#147 gives the Kanban panel a **Board / Raw** toggle whose Raw view is a **read-only** `<pre>`
+of the board's markdown. Make that **raw view editable**, reusing #148's `useAutoSaveFile` hook
++ `<textarea>` editor: type directly in the raw board markdown and it **auto-saves** (debounced,
+no save button, subtle status) — the "raw editor for Kanban" the user asked for.
+
+The wrinkle vs a plain file: the KanbanPanel edits the **same file** two ways — the Board view
+via the #143 board ops, the Raw view via direct text. Both must stay consistent and share **one**
+autosave path so they don't fight:
+
+- **Unify the buffer.** The raw textarea and the parsed board both derive from one underlying
+  file buffer + one dirty/last-synced state (don't add a second, competing write loop). The
+  simplest design: route both through #148's `useAutoSaveFile` — Board mode renders the parsed
+  board and writes `serializeBoard(...)` into the buffer on each mutation; Raw mode binds the
+  textarea to the buffer directly.
+- **Mode switches round-trip.** Raw→Board re-parses the current buffer (`parseBoard`);
+  Board→Raw shows the serialized buffer — no edit is lost crossing the toggle.
+- Raw editing otherwise keeps #147's behavior (read-only becomes editable; the
+  auto-fallback-to-raw for a non-board file now lets the user **author** that file as raw text —
+  a natural way to start a board by hand).
+
+**Subtasks**
+
+1. [ ] Replace #147's read-only Kanban raw `<pre>` with #148's editable `<textarea>` bound to
+   the shared autosave buffer.
+2. [ ] Unify the panel's board-edit write path (#143) and the raw-edit path onto one buffer /
+   dirty / last-synced state via `useAutoSaveFile` so they don't double-write or clobber.
+3. [ ] Round-trip the toggle: Raw→Board re-parses the buffer, Board→Raw shows the serialized
+   text; no edits lost.
+4. [ ] Show the same subtle "Saving… / Saved" status; verify in Canvas + Overview + a detached
+   window (#84).
+
+**Acceptance criteria**
+
+- [ ] In the Kanban panel's **Raw** view, the user can type directly in the board's markdown and
+  it **auto-saves** (debounced, no save button, subtle status).
+- [ ] Edits made in Raw appear in Board after switching (re-parsed), and vice-versa; no edit is
+  lost across the toggle, and the Board #143 editing still works.
+- [ ] Raw and Board edits share one write path — no double-write / echo-reload / clobber;
+  external edits hot-reload when not editing.
+- [ ] Works in Canvas + Overview (+ a detached window #84, best-effort per #84/#105);
+  `npm run build`, `npm run lint`, and `npm test` pass.
+
+**Notes**
+
+- Builds on #147 (raw view) + #148 (shared editor/hook). The main work is **unifying** the
+  Board (#143) and Raw write paths onto one buffer so the same file isn't edited by two
+  competing loops.
+- Independent of the unmerged #139–#140.
 
 ---
 
