@@ -2206,3 +2206,117 @@ all pass.
 
 ---
 
+### 152. [ ] Left panel as the single source of truth — register Canvas-template-opened items in it, and cascade left-panel removal to Canvas + Overview
+
+**Status:** Not started
+**Depends on:** none · _(builds on shipped #59 (sidebar tree = `overviewPanels`), #118 (Canvas
+templates / `resolveTemplateBlock`), #84 (detached windows / `sessionIdsInLayout` reconcile),
+#94 (scheduled items), and #79 (leaf↔sidebar-item matching). No open task gates it.)_
+**Created:** 2026-06-24
+
+**Description**
+
+The sidebar **left panel** should be the **single source of truth for everything that is
+open** — files, diffs, terminals, kanban boards, agents, and scheduled sessions. The user's
+requirement: _"anything that is opened should show up in the left panel always. Left panel is
+the source of truth of all that is opened. If I remove something from the left panel, it is
+removed from a canvas. It is removed from overview."_ And: _"the overview panel also shows all
+things — unless a specific filter for a folder is active — but it should show everything in the
+left panel."_
+
+**Today this invariant is broken in two places** (investigated; describing the data model):
+
+- The app has **three independent stores**: `sessions` (agents — always in the sidebar),
+  `overviewPanels` (the `overview_panels` blob — the non-agent file/diff/terminal/kanban rows
+  that drive **both** the sidebar tree, #59, **and** the Overview wall 1:1), and **Canvas
+  layout leaves**, which hold **standalone `CanvasContent` descriptors** (`{kind, repoPath,
+  file, sessionId, …}`) that do **not** reference an `overviewPanels` entry.
+- **Gap 1 — Canvas-template instantiation doesn't register opened items (#118).**
+  `resolveTemplateBlock` places resolved content straight into a Canvas leaf. Only the
+  **`new-agent`** block registers in a source-of-truth store (it calls `upsertSession`, so the
+  agent shows in the sidebar). The **`new-terminal`**, **`open-file`**, and **`open-diff`**
+  blocks do **not** call `addOverviewPanel`, so a template-opened terminal / file / diff lives
+  **Canvas-only** — it never appears in the left panel or the Overview. (This is the user's
+  reported bug: "a file opened through Canvas templates does not show up in the left panel.")
+- **Gap 2 — removal from the left panel doesn't cascade to Canvas.** `removeOverviewPanel`
+  drops the item from `overviewPanels` (so the sidebar row and the Overview column disappear —
+  Overview already mirrors `overviewPanels`), but it does **not** scan Canvas layouts, so a
+  Canvas panel showing that item **lingers**. The reverse direction already works (closing a
+  Canvas tab with kill → `closeCanvasContents` removes matching `overviewPanels` entries); the
+  **sidebar → Canvas** direction is missing. Agents/schedules removed from the sidebar likewise
+  aren't pruned from Canvas.
+
+**Goal:** make the left panel canonical. (1) Anything opened — including via Canvas templates —
+**registers in the source of truth** (`overviewPanels` for non-agent items; `sessions` for
+agents, already done) so it shows in the sidebar **and** Overview. (2) Removing an item from the
+left panel **cascades**: it's removed from every Canvas tab that shows it **and** from Overview
+(automatic, since Overview mirrors `overviewPanels`), and its PTY is killed as today.
+
+Out of scope: adding new openable item types; the Overview **folder filter** (#34) behavior is
+unchanged (a filter may still narrow Overview by folder — that's the user's stated exception);
+the drag-into-Canvas path already registers because its drag source is an existing sidebar row.
+
+**Recommended approach (implementer may revise):** keep the standalone-descriptor leaf model and
+**register a matching `overviewPanels` entry** when a template block opens a non-agent item;
+reuse the existing `matchesCanvasItem` / `leafItemId` matchers (`store.ts`) + the `removeLeaf`
+pure op (`canvasTree.ts`) for the cascade. This is lighter than refactoring leaves to reference
+panels by id (which would touch the persisted `canvases` blob and the detached-window sync more
+invasively). Whichever path is taken, **the detached-window invariant (#84) and the persisted
+`canvases` / `overview_panels` blobs must be preserved.**
+
+**Subtasks**
+
+1. [ ] **Register template-opened non-agent items.** In `resolveTemplateBlock`, when a
+   `new-terminal` / `open-file` / `open-diff` block resolves, also call
+   `addOverviewPanel(cwd, kind, file?)` so it lands in the sidebar + Overview. For the PTY-backed
+   `new-terminal`, register the panel under the **same id as the spawned PTY / Canvas leaf
+   `sessionId`** so the existing matchers and the App.tsx reconcile line up (no duplicate /
+   orphan). For `open-file` / `open-diff`, rely on `addOverviewPanel`'s existing dedup. Leave
+   `new-agent` as-is (already registered via `upsertSession`).
+2. [ ] **Cascade left-panel removal to Canvas.** In `removeOverviewPanel`, after dropping the
+   panel, scan every `canvases[].layout`, `removeLeaf` any leaf whose content matches the removed
+   panel (via `matchesCanvasItem` / `leafItemId`), then persist with `setCanvases` and broadcast
+   (`canvas://changed`). Overview needs no extra work (it mirrors `overviewPanels`).
+3. [ ] **Extend the cascade to agents + schedules.** When an agent is removed (Remove =
+   kill + forget; the session-removal / `forgetExitedSession` path) prune Canvas leaves with
+   `kind:"agent"` and that `sessionId`; when a schedule is cancelled, prune `kind:"scheduled"`
+   leaves — so "remove from left panel ⇒ gone from Canvas" holds for **every** item type.
+4. [ ] **Reconcile/cleanup updates.** Now that template terminals are real `overviewPanels`
+   items, update `closeCanvasContents` — its "a canvas-only template terminal isn't a sidebar
+   item" branch — and confirm the App.tsx reconcile (`terminalIds` + `canvasPtyIds` via
+   `sessionIdsInLayout`) still **dedups** so a PTY isn't double-disposed.
+5. [ ] **Confirm the Overview invariant.** With no folder filter active, every `overviewPanels`
+   item renders as an Overview column 1:1 with the sidebar; the repo-name filter (#34) remains
+   the only thing that narrows them. (Expected: no change needed — verify.)
+
+**Acceptance criteria**
+
+- [ ] Opening a Canvas template whose blocks open a **file / diff / terminal** makes each appear
+  as a **left-panel sidebar row** AND an **Overview column** (under the chosen folder), not only
+  in the Canvas tab.
+- [ ] Template-spawned **agents** still appear in the sidebar (unchanged).
+- [ ] Removing **any** item from the left panel (row ×, context-menu Remove, or Cancel for a
+  schedule) removes it from **every** Canvas tab showing it **and** from Overview; a removed
+  terminal/agent PTY is killed as today.
+- [ ] No orphaned or empty Canvas panel is left behind referencing a removed item.
+- [ ] With no folder filter, Overview shows every left-panel item 1:1 (the folder filter still
+  narrows by folder).
+- [ ] Detached Canvas windows (#84) stay in sync — a leaf pruned in one window disappears in the
+  other — with no PTY double-render / double-dispose.
+- [ ] `npm run build`, `npm run lint`, `npm test`, and the Rust gates (`cargo clippy`, `cargo
+  fmt --check`) pass.
+
+**Notes**
+
+- Root cause: Canvas leaves hold **standalone** `CanvasContent` descriptors independent of
+  `overviewPanels`; `resolveTemplateBlock` registers only `new-agent` (via `upsertSession`).
+  Drag-into-Canvas items are already in the left panel because the drag source is a sidebar row,
+  so no change is needed there.
+- Existing infra to reuse: `addOverviewPanel`, `removeOverviewPanel`, `resolveTemplateBlock`,
+  `closeCanvasContents`, `matchesCanvasItem`, `leafItemId` (all `store.ts`), `removeLeaf` and
+  `sessionIdsInLayout` (`canvasTree.ts`).
+- The user's folder-filter caveat: Overview may legitimately hide left-panel items **only** when
+  a folder filter (#34) is active; otherwise it must show everything the left panel does.
+
+---
+
