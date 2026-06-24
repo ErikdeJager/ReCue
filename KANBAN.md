@@ -21,6 +21,3 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #154 — Kanban board block in the canvas template editor
-	Plan: TASK-154.md
-	Depends on: none

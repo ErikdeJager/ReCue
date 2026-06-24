@@ -687,3 +687,93 @@ the dev env, per the #84 precedent).
 
 ---
 
+### 154. [x] Kanban board block in the canvas template editor
+
+**Status:** Done
+**Depends on:** none · _(builds entirely on shipped code: the template block system (#117/#118),
+the kanban content kind + Views entry (#145/#151), and the left-panel-as-source-of-truth Overview
+registration (#152).)_
+**Created:** 2026-06-24
+
+**Description**
+
+The Canvas **template editor** (#117/#118) lets you build a reusable Canvas layout out of inert
+action **blocks** that instantiate into live panels when you "use" the template against a chosen
+folder. The placeable block kinds were **Start session** (`new-agent`), **Open terminal**
+(`new-terminal`), **Open file** (`open-file`), and **Open diff** (`open-diff`). The **Kanban
+board** content kind (`kind:"kanban"`, shipped in #145/#151) is a first-class Canvas panel — it
+can be dropped into a live Canvas, added from the repo **Views** menu, and shows as a sidebar row /
+Overview column — **but it was missing from the template editor's palette**, so you could not save
+a template that opens a Kanban board, even though the block registry was explicitly designed so "a
+new content kind becomes a block with one entry" (`src/components/Canvas/templateBlocks.ts`).
+
+**Goal / why:** make the Kanban board a placeable template block so a saved template can open a
+repo's board (e.g. `TASKS.md` / `KANBAN.md`) in a panel, exactly the way **Open file** opens a
+markdown/code file — closing the gap between the live content kinds and the template block set,
+which is the registry's whole purpose.
+
+**Subtasks**
+
+1. [x] **Registry** (`templateBlocks.ts`): added `"open-kanban"` to the `BlockKind` union and a
+   `BLOCK_REGISTRY` entry `{ kind: "open-kanban", label: "Open Kanban board", icon: SquareKanban,
+   config: "file", liveKind: "kanban" }` (Lucide `SquareKanban`, reused for visual consistency with
+   the sidebar/Views kanban icon). `blockPlaceholderLabel` (`config:"file"`) and `newBlockContent`
+   handle it generically — no other edit needed.
+2. [x] **Instantiation** (`templateInstantiate.ts`): added an explicit `case "kanban":` to
+   `resolvedContent` returning `{ kind:"kanban", repoPath: cwd, file: block.file }` (the default
+   branch dropped `file`, which `KanbanPanel`/`CanvasSurface` both require).
+3. [x] **Resolution** (`store.ts` `resolveTemplateBlock`): added a gated `liveKind === "kanban"`
+   branch mirroring the `"file"` branch — `await ipc.fileExists(cwd, block.file)`, throw
+   `File not found` if absent (read-only, **no auto-create**), build live content via
+   `resolvedContent`, and register a deduped `kind:"kanban"` left-panel/Overview row (#152).
+4. [x] **Pick-file kind preservation** (`store.ts` `pickTemplateBlockFile`): stopped hardcoding
+   `kind:"open-file"`; it now reads the leaf's existing `block.kind` (default `open-file`), so the
+   error-panel **Pick file** recovery keeps a kanban block kanban rather than silently degrading it
+   to a file viewer.
+5. [x] **Editor copy:** left as-is per plan — the shared `config:"file"` input keeps its generic
+   `e.g. README.md` placeholder for both `open-file` and `open-kanban`; no per-kind branching added.
+6. [x] **Tests:** `templateBlocks.test.ts` (registry kinds + `open-kanban` descriptor),
+   `templateInstantiate.test.ts` (`resolvedContent` → `{kind:"kanban", repoPath, file}`),
+   `store.test.ts` (`pickTemplateBlockFile` preserves the `open-kanban` kind).
+7. [x] **Verify:** `npm run build`, `npm run lint`, `npm test` (190) all pass.
+
+**Acceptance criteria**
+
+- [x] An **Open Kanban board** block (Lucide `SquareKanban`) appears in the template editor palette
+      and can be placed/split/removed like every other block.
+- [x] Selecting the block shows the relative-path config input; the inline placeholder label
+      reflects the configured path.
+- [x] A saved template containing a kanban block round-trips through the `canvas_templates` blob
+      with its `open-kanban` kind + `file` intact.
+- [x] Using such a template against a folder containing the board opens a live editable
+      `KanbanPanel` bound to that folder + path, plus a deduped `kind:"kanban"` left-panel/Overview
+      row (#152).
+- [x] When the board file is absent, the panel shows the inline error + **Retry**; **Pick file**
+      keeps the block a Kanban board (resolves into a `KanbanPanel`, not a `FileViewer`).
+- [x] `npm run build`, `npm run lint`, and `npm test` pass.
+
+**Implementation report** (commit `00451cc`, 2026-06-24)
+
+Added an `open-kanban` block to the template block registry so a saved Canvas template can open a
+repo's markdown Kanban board, mirroring `open-file`. The shared `config:"file"` editor UI and the
+pending-panel **Pick file** / **Retry** error-recovery flow handle the new block generically — **no
+new UI surfaces**. Resolution stays read-only and `fileExists`-gated (no silent file write into a
+freshly-chosen folder), consistent with `open-file`/`open-diff`.
+
+**Key files touched:** `src/components/Canvas/templateBlocks.ts` (registry entry + `BlockKind`),
+`src/components/Canvas/templateInstantiate.ts` (explicit `kanban` case carrying `repoPath` **and**
+`file`), `src/store.ts` (`resolveTemplateBlock` gated kanban branch + deduped Overview registration;
+`pickTemplateBlockFile` block-kind preservation), `src/types/index.ts`; tests in
+`templateBlocks.test.ts`, `templateInstantiate.test.ts`, `store.test.ts`.
+
+**Notes**
+
+- **Read-only, gated resolution (not create-or-open):** the live Views-menu kanban entry offers an
+  in-picker create-or-open flow (#151), but template-block resolution is deliberately read-only and
+  gated with a **Pick file** / **Retry** escape hatch; auto-creating a missing board at
+  instantiation was left as a possible follow-up (out of scope).
+- The `pickTemplateBlockFile` hardcoded-`open-file` fix was **required, not optional** — without it,
+  Pick file on a kanban block would silently convert it to a file viewer.
+
+---
+
