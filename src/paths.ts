@@ -11,6 +11,20 @@ export function repoName(path: string): string {
 }
 
 /**
+ * Split an absolute path into its parent `dir` and `base` filename (#163). Used to
+ * open an out-of-repo file `/a/b/c.md` as `{ repoPath: "/a/b", file: "c.md" }`, so
+ * the existing repo-confined read/write validates against the file's own directory.
+ * A file directly at the filesystem root (`/c.md`) → `{ dir: "/", base: "c.md" }`;
+ * a path with no slash → `{ dir: "", base: path }`.
+ */
+export function splitPath(path: string): { dir: string; base: string } {
+  const i = path.lastIndexOf("/");
+  if (i === -1) return { dir: "", base: path };
+  if (i === 0) return { dir: "/", base: path.slice(1) };
+  return { dir: path.slice(0, i), base: path.slice(i + 1) };
+}
+
+/**
  * The repo a session belongs to for grouping and coloring (#96). A worktree
  * agent (#74) runs in an isolated worktree folder but belongs to its **parent
  * repo**, so it groups and colors with the parent — not its own hashed path.

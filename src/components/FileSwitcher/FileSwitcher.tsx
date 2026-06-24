@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, FolderOpen } from "lucide-react";
 
-import { listFiles } from "../../ipc";
+import { listFiles, pickFile } from "../../ipc";
+import { splitPath } from "../../paths";
 import FilePicker from "../FilePicker/FilePicker";
 import styles from "./FileSwitcher.module.css";
 
@@ -17,6 +18,9 @@ interface FileSwitcherProps {
   file: string;
   /** Switch the viewer to the chosen repo-relative file. */
   onPick: (file: string) => void;
+  /** Open an absolute file picked via the native dialog (#163) — `repoPath` is the
+   * file's parent dir, `file` its basename. Absent → the Browse… option is hidden. */
+  onPickAbsolute?: (repoPath: string, file: string) => void;
   /** Class for the filename label, so it matches the host header's title style. */
   nameClassName?: string;
 }
@@ -33,6 +37,7 @@ function FileSwitcher({
   repoPath,
   file,
   onPick,
+  onPickAbsolute,
   nameClassName,
 }: FileSwitcherProps) {
   const [open, setOpen] = useState(false);
@@ -107,6 +112,25 @@ function FileSwitcher({
               setOpen(false);
             }}
           />
+          {/* Open any file on disk via the native dialog (#163) — its parent dir
+              becomes the viewer's repo so the existing read/write path is reused. */}
+          {onPickAbsolute && (
+            <button
+              type="button"
+              className={styles.browse}
+              onClick={() => {
+                setOpen(false);
+                void pickFile().then((path) => {
+                  if (!path) return;
+                  const { dir, base } = splitPath(path);
+                  onPickAbsolute(dir, base);
+                });
+              }}
+            >
+              <FolderOpen size={13} strokeWidth={1.5} />
+              Browse…
+            </button>
+          )}
         </div>
       )}
     </span>

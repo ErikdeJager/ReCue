@@ -401,7 +401,14 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   exactly like `read_text_file` (canonicalize, confine to the repo, reject
   `..`/symlink/out-of-repo targets; a new file's parent dir must exist + be inside
   the repo), narrowing the earlier "no arbitrary file writes" rule the way #74/#124
-  narrowed the git rule.
+  narrowed the git rule. The viewer can also **open any file on disk** (#163) via the
+  file-switcher's **Browse…** (the native open dialog → `pickFile`): an absolute
+  `/a/b/c.md` is addressed as `{ repoPath: "/a/b", file: "c.md" }` (its own parent
+  dir as the root), so every read/write stays **confined to that file's directory**
+  with **no `files.rs` change** — the native dialog is the user's explicit consent.
+  An out-of-repo file opened as an **Overview** item groups under a repo named for
+  its parent dir (grouping is by `effectiveRepo`); in a **Canvas** panel there's no
+  grouping.
 - No app-rendered approval UI — users answer prompts directly in the terminal.
   (The v1 "no status system" rule was deliberately narrowed by **#42** — a single
   **busy/idle** indicator — and by **#112**, which adds a third "finished / needs

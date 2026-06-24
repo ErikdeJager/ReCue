@@ -1,6 +1,6 @@
-### 163. [ ] File viewer "Browse…": open any file from the filesystem via the native picker
+### 163. [x] File viewer "Browse…": open any file from the filesystem via the native picker
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-24
 
@@ -140,3 +140,32 @@ Overview file column), reusing the existing read/write/edit path via the
   `useAutoSaveFile.ts`, `FileViewer/FileViewer.tsx`, `CanvasSurface.tsx`
   (`setLeafFile`), `Overview/Overview.tsx` (file column), `paths.ts` (`effectiveRepo`),
   `capabilities/default.json` (`dialog:default`).
+
+**Implementation note (done 2026-06-24)**
+
+Shipped exactly to the no-backend-change design:
+- **ipc** `pickFile()` wraps the native `open({directory:false})` dialog → absolute
+  path or null (reuses the granted `dialog:default` capability).
+- **`splitPath(abs)`** in `paths.ts` → `{dir, base}` (handles nested, fs-root
+  `/c.md` → `{dir:"/",base}`, and bare-name cases); unit-tested (`paths.test.ts`).
+- **FileSwitcher** gains an optional `onPickAbsolute(repoPath, file)` prop and a
+  **Browse…** footer button (shown only when the prop is passed) that opens the
+  dialog, splits the path, and calls it. `/a/b/c.md` → `{repoPath:"/a/b",
+  file:"c.md"}`, so the existing repo-confined read/write validates against the
+  file's own directory — no `files.rs` change.
+- **Host wiring:** Canvas → new `setLeafFileAbsolute(leafId, repoPath, file)` (sets
+  both refs on the leaf); Overview → new `moveOverviewPanelToFile(repoPath, panelId,
+  newRepo, file)` which **moves** the panel to the file's parent-dir repo key
+  (dedup by repo+file; same-repo falls back to `setOverviewPanelFile`). Both persist
+  via the standard `canvases` / `overview_panels` blobs → survive reload.
+- **Rust:** added `reads_and_writes_an_out_of_repo_file_via_its_parent_dir` to
+  `files.rs` tests confirming the `{parentDir, basename}` representation reads/writes
+  with no confinement change. Repo-confinement logic untouched.
+- **Docs:** updated the CLAUDE.md file-access scope note (Browse… / out-of-repo
+  open, still dir-confined; Overview grouping consequence).
+- Out of scope (left for follow-up, per the card's "perhaps"): Browse… in the
+  repo-scoped Views/template/kanban pickers. Composes with #162 (manual save) — an
+  out-of-repo file saves through the same `useAutoSaveFile` path.
+- `npm run build`, `npm run lint`, `npm test` (212, +3), `npm run format:check`,
+  `cargo test`, and `cargo clippy` all pass. Subtask 10 manual walk-through is
+  interactive; the read/write path is covered by the Rust test + the design.

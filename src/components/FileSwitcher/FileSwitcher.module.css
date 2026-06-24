@@ -45,3 +45,28 @@
   background: var(--bg-elevated);
   box-shadow: var(--shadow-popover);
 }
+
+/* "Browse…" footer (#163): opens the native open-file dialog to pick any file on
+   disk. A full-width row under the FilePicker list, separated by a hairline. */
+.browse {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-8) var(--space-12);
+  border: 0;
+  border-top: 1px solid var(--border-hairline);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.browse:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}

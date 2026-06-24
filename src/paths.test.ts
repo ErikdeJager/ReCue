@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { effectiveRepo, repoName } from "./paths";
+import { effectiveRepo, repoName, splitPath } from "./paths";
+
+describe("splitPath (#163)", () => {
+  it("splits a nested absolute path into parent dir + basename", () => {
+    expect(splitPath("/Users/me/notes/todo.md")).toEqual({
+      dir: "/Users/me/notes",
+      base: "todo.md",
+    });
+  });
+
+  it("keeps the root for a file directly at the filesystem root", () => {
+    expect(splitPath("/readme.md")).toEqual({ dir: "/", base: "readme.md" });
+  });
+
+  it("returns an empty dir for a bare filename (no slash)", () => {
+    expect(splitPath("todo.md")).toEqual({ dir: "", base: "todo.md" });
+  });
+});
 
 describe("repoName", () => {
   it("returns the last path segment", () => {

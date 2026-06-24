@@ -36,6 +36,18 @@ export async function pickDirectory(): Promise<string | null> {
   return typeof selection === "string" ? selection : null;
 }
 
+/** Native open-file picker (#163). Returns the chosen absolute file path, or null
+ * if cancelled. The dialog is the user's explicit consent to open that file; it is
+ * then read/written confined to its own parent directory (see `splitPath`). */
+export async function pickFile(): Promise<string | null> {
+  const selection = await open({
+    directory: false,
+    multiple: false,
+    title: "Open file",
+  });
+  return typeof selection === "string" ? selection : null;
+}
+
 /** Spawn a new `claude` session in `cwd`. An optional `prompt` pre-seeds it
  * (positional, like a scheduled session #93) — used by Canvas template `new-agent`
  * blocks (#118). */

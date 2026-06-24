@@ -560,6 +560,15 @@ export interface AppState {
     panelId: string,
     file: string,
   ) => void;
+  /** Open an **out-of-repo** absolute file in an Overview file panel (#163): move
+   * the panel to the file's parent dir (`newRepo`) with `file` = basename, deduping
+   * by repo+file. Same-repo falls back to `setOverviewPanelFile`. */
+  moveOverviewPanelToFile: (
+    repoPath: string,
+    panelId: string,
+    newRepo: string,
+    file: string,
+  ) => void;
   /** Record a terminal item's shell exit (#72) so its Terminal shows Restart. */
   markTerminalExited: (id: string, code: number | null) => void;
   /** Respawn a terminal item's shell in `repoPath` under the same id (#72). */
@@ -615,6 +624,9 @@ export interface AppState {
   setDetachedCanvasIds: (ids: string[]) => void;
   /** Switch a Canvas file panel (the active tab's leaf) to another file (#90). */
   setLeafFile: (leafId: string, file: string) => void;
+  /** Open an **out-of-repo** absolute file in a Canvas file panel (#163): set the
+   * leaf's `repoPath` (= file's parent dir) **and** `file` (= basename). */
+  setLeafFileAbsolute: (leafId: string, repoPath: string, file: string) => void;
   /** Open the template editor (#117) — `id` to edit an existing template, `null`
    * for a brand-new one. */
   openTemplateEditor: (id: string | null) => void;
@@ -1690,6 +1702,35 @@ export const useStore = create<AppState>()((set, get) => ({
     void ipc.setOverviewPanels(repoPath, next).catch(() => {});
   },
 
+  // Open an out-of-repo absolute file in an Overview file panel (#163). The panel is
+  // keyed by repo (overviewPanels[repo]), so an out-of-repo file means MOVING the
+  // panel to the file's parent dir; it then groups under a repo named for that dir
+  // (#36/#96 — a documented consequence). Same-repo → just switch the file in place.
+  moveOverviewPanelToFile: (repoPath, panelId, newRepo, file) => {
+    if (newRepo === repoPath) {
+      get().setOverviewPanelFile(repoPath, panelId, file);
+      return;
+    }
+    const all = get().overviewPanels;
+    const panel = (all[repoPath] ?? []).find((p) => p.id === panelId);
+    if (!panel) return;
+    const oldList = (all[repoPath] ?? []).filter((p) => p.id !== panelId);
+    const newList = all[newRepo] ?? [];
+    // Dedup by repo+file: if the target repo already shows this file, drop the moved
+    // panel (the order-merge then surfaces the existing one) rather than duplicate.
+    const dup = newList.some((p) => p.kind === panel.kind && p.file === file);
+    const nextNew = dup ? newList : [...newList, { ...panel, file }];
+    set((s) => ({
+      overviewPanels: {
+        ...s.overviewPanels,
+        [repoPath]: oldList,
+        [newRepo]: nextNew,
+      },
+    }));
+    void ipc.setOverviewPanels(repoPath, oldList).catch(() => {});
+    void ipc.setOverviewPanels(newRepo, nextNew).catch(() => {});
+  },
+
   markTerminalExited: (id, code) =>
     set((s) => ({ terminalExits: { ...s.terminalExits, [id]: code } })),
 
@@ -1741,6 +1782,19 @@ export const useStore = create<AppState>()((set, get) => ({
       canvases.find((c) => c.id === activeCanvasId)?.layout ?? null;
     if (!layout) return;
     get().setActiveCanvasLayout(updateLeafContent(layout, leafId, { file }));
+  },
+
+  // Open an out-of-repo absolute file in a Canvas file panel (#163): set both the
+  // leaf's repoPath (the file's parent dir) and file (basename), so the FileViewer
+  // reads/writes it confined to that directory.
+  setLeafFileAbsolute: (leafId, repoPath, file) => {
+    const { canvases, activeCanvasId } = get();
+    const layout =
+      canvases.find((c) => c.id === activeCanvasId)?.layout ?? null;
+    if (!layout) return;
+    get().setActiveCanvasLayout(
+      updateLeafContent(layout, leafId, { repoPath, file }),
+    );
   },
 
   // Lift an existing panel out of the active tab at drag start (#155, supersedes

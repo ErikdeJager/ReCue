@@ -282,6 +282,7 @@ function ExtraPanel({
   onClose,
 }: ExtraPanelProps) {
   const setOverviewPanelFile = useStore((s) => s.setOverviewPanelFile);
+  const moveOverviewPanelToFile = useStore((s) => s.moveOverviewPanelToFile);
   const maximizeItem = useStore((s) => s.maximizeItem);
   const content = overviewPanelToContent(panel, repoPath);
   const title = (
@@ -294,6 +295,9 @@ function ExtraPanel({
           repoPath={repoPath}
           file={panel.file}
           onPick={(f) => setOverviewPanelFile(repoPath, panel.id, f)}
+          onPickAbsolute={(newRepo, f) =>
+            moveOverviewPanelToFile(repoPath, panel.id, newRepo, f)
+          }
           nameClassName={styles.name}
         />
       ) : (

@@ -200,6 +200,21 @@ mod tests {
     }
 
     #[test]
+    fn reads_and_writes_an_out_of_repo_file_via_its_parent_dir(/* #163 */) {
+        // An arbitrary absolute file `/a/b/note.md` is opened (#163) as
+        // { repo: "/a/b", file: "note.md" } — its own parent dir as the root. A bare
+        // basename can't escape its parent, so the existing containment validation
+        // passes and read/write/file_exists all work with no backend change.
+        let dir = tmp("absfile");
+        fs::write(dir.join("note.md"), "outside").unwrap();
+        assert_eq!(read_text_file(&dir, "note.md").unwrap(), "outside");
+        assert!(file_exists(&dir, "note.md"));
+        write_text_file(&dir, "note.md", "edited").unwrap();
+        assert_eq!(read_text_file(&dir, "note.md").unwrap(), "edited");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn rejects_path_traversal() {
         let dir = tmp("traversal");
         fs::write(dir.join("a.md"), "x").unwrap();

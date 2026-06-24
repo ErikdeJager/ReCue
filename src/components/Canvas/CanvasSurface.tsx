@@ -73,6 +73,7 @@ function LeafPanel({
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const forkSession = useStore((s) => s.forkSession);
   const setLeafFile = useStore((s) => s.setLeafFile);
+  const setLeafFileAbsolute = useStore((s) => s.setLeafFileAbsolute);
   const maximizeItem = useStore((s) => s.maximizeItem);
   const isActive = leaf.id === activeLeafId;
 
@@ -179,6 +180,9 @@ function LeafPanel({
                 repoPath={content.repoPath}
                 file={content.file}
                 onPick={(f) => setLeafFile(leaf.id, f)}
+                onPickAbsolute={(repo, f) =>
+                  setLeafFileAbsolute(leaf.id, repo, f)
+                }
                 nameClassName={styles.panelTitle}
               />
             </span>
