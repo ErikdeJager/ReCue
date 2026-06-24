@@ -82,6 +82,8 @@ function omitKey<T>(map: Record<string, T>, key: string): Record<string, T> {
 function panelLabel(kind: OverviewPanel["kind"], file?: string): string {
   if (kind === "diff") return "diff viewer";
   if (kind === "terminal") return "terminal";
+  if (kind === "kanban")
+    return file ? (file.split("/").pop() ?? file) : "kanban board";
   return file ? (file.split("/").pop() ?? file) : "file viewer";
 }
 
@@ -334,7 +336,7 @@ function applySettingsEffects(s: Settings): void {
  * (by repo path + file). Matched against Canvas leaves for view-aware nav (#79). */
 type SidebarItem = {
   id: string;
-  kind: "agent" | "terminal" | "file" | "diff" | "scheduled";
+  kind: "agent" | "terminal" | "file" | "diff" | "scheduled" | "kanban";
   repoPath?: string;
   file?: string;
 };
@@ -350,6 +352,12 @@ function matchesCanvasItem(content: CanvasContent, item: SidebarItem): boolean {
     case "file":
       return (
         content.kind === "file" &&
+        content.repoPath === item.repoPath &&
+        content.file === item.file
+      );
+    case "kanban":
+      return (
+        content.kind === "kanban" &&
         content.repoPath === item.repoPath &&
         content.file === item.file
       );
@@ -379,6 +387,12 @@ function leafItemId(
     return (
       panels.find((p) => p.kind === "markdown" && p.file === content.file)
         ?.id ?? null
+    );
+  }
+  if (content.kind === "kanban") {
+    return (
+      panels.find((p) => p.kind === "kanban" && p.file === content.file)?.id ??
+      null
     );
   }
   if (content.kind === "diff") {
@@ -786,6 +800,7 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
   const panelIdsByRepo = new Map<string, Set<string>>();
   let files = 0;
   let diffs = 0;
+  let boards = 0;
 
   for (const { content: c } of leaves) {
     if (c.kind === "agent" && c.sessionId && sessionIds.has(c.sessionId)) {
@@ -798,6 +813,8 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
       files += 1;
     } else if (c.kind === "diff") {
       diffs += 1;
+    } else if (c.kind === "kanban") {
+      boards += 1;
     }
     // File/diff/terminal panels that are also sidebar items (in overviewPanels) get
     // removed from the left panel. A canvas-only template terminal (#118) isn't a
@@ -806,7 +823,7 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
       if (!panelIdsByRepo.has(repo)) panelIdsByRepo.set(repo, new Set());
       panelIdsByRepo.get(repo)?.add(id);
     };
-    if (c.kind === "file" || c.kind === "diff") {
+    if (c.kind === "file" || c.kind === "diff" || c.kind === "kanban") {
       const panelId = leafItemId(c, overviewPanels);
       if (panelId) addPanel(c.repoPath ?? "", panelId);
     } else if (c.kind === "terminal" && c.sessionId) {
@@ -891,6 +908,7 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
   if (termPtyIds.size) parts.push(plural(termPtyIds.size, "terminal"));
   if (files) parts.push(plural(files, "file"));
   if (diffs) parts.push(plural(diffs, "diff"));
+  if (boards) parts.push(plural(boards, "board"));
   if (scheduleIds.size) parts.push(plural(scheduleIds.size, "schedule"));
   if (parts.length)
     useStore.getState().pushToast(`Closed tab — removed ${parts.join(", ")}`);
@@ -1426,8 +1444,8 @@ export const useStore = create<AppState>()((set, get) => ({
     const dup =
       kind === "diff"
         ? current.some((p) => p.kind === "diff")
-        : kind === "markdown"
-          ? current.some((p) => p.kind === "markdown" && p.file === file)
+        : kind === "markdown" || kind === "kanban"
+          ? current.some((p) => p.kind === kind && p.file === file)
           : false;
     if (dup) {
       // Already open (#59 dedup) — a gentle nudge instead of a second "Opened…"

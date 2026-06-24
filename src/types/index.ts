@@ -61,8 +61,9 @@ export interface BranchList {
 /** A user-added Overview panel — a non-agent column (mirrors `store::OverviewPanel`, #38). */
 export interface OverviewPanel {
   id: string;
-  kind: "diff" | "markdown" | "terminal";
-  /** Panel parameter, e.g. the markdown file path; absent for diff/terminal panels. */
+  kind: "diff" | "markdown" | "terminal" | "kanban";
+  /** Panel parameter, e.g. the markdown / kanban-board file path; absent for
+   * diff/terminal panels. A `kanban` panel reuses this `file` ref (#142). */
   file?: string;
   /** Diff panel branch-compare state (#81): "working" (vs HEAD) or "compare"
    * (base → target), plus the two chosen branches; absent on non-diff panels. */

@@ -365,9 +365,10 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 Tasks **#1–#138 are complete** — see **Implemented (completed tasks)** above for the
 index and git history for per-task detail. **The Kanban board feature:** #141 (markdown
-engine + file-write backend) is **done**; **open now:** #142 (board content type +
-read-only display) and #143 (full editor). _(Tasks #139–#140 are reserved on another
-branch, so this chain begins at #141.)_ The
+engine + file-write backend) and #142 (board content type + read-only display) are
+**done**; **open now:** #143 (full editor). Task **#144** (Canvas panel header drag) is
+also open. _(Tasks #139–#140 are reserved on another branch, so this chain begins at
+#141.)_ The
 full entries for the recently completed #133–#138 remain below until the next
 `/update-docs` condenses them into the summary. New work goes here as a fresh `### N.`
 entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md) format, with its `Depends on:`
@@ -1188,9 +1189,9 @@ read-only render) and #143 (editor + write-back) build on this.
 
 ---
 
-### 142. [ ] Kanban board content type — load like the file viewer + read-only board rendering
+### 142. [x] Kanban board content type — load like the file viewer + read-only board rendering
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #141 · _(builds on the content-kind system + the #82 repo "Views"
 registry, the #56/#90 `FilePicker`, the #44 FileViewer markdown stack, and
 `overview_panels` persistence — all shipped)_
@@ -1227,32 +1228,32 @@ hot-reload. **No** add/edit/move/delete and **no** writes (all #143).
 
 **Subtasks**
 
-1. [ ] Add `"kanban"` to the `CanvasContent` kind union (`src/types/index.ts`), carrying
+1. [x] Add `"kanban"` to the `CanvasContent` kind union (`src/types/index.ts`), carrying
    `repoPath` + `file`.
-2. [ ] `payloadToContent` + `isDuplicate` cases (`Canvas/canvasDrop.ts`) for `kind:"kanban"`
+2. [x] `payloadToContent` + `isDuplicate` cases (`Canvas/canvasDrop.ts`) for `kind:"kanban"`
    (dedupe by `repoPath`+`file`, like `file`).
-3. [ ] Repo Views registry entry "Kanban board" (`Sidebar.tsx` `viewTypes`) → the
+3. [x] Repo Views registry entry "Kanban board" (`Sidebar.tsx` `viewTypes`) → the
    `.md`-scoped `FilePicker` flow (the file-viewer method) → add a `kanban` panel to
    `overview_panels`.
-4. [ ] `KanbanRow` sidebar row (mirror `FileRow`: dnd-kit draggable
+4. [x] `KanbanRow` sidebar row (mirror `FileRow`: dnd-kit draggable
    `data:{kind:"kanban",repoPath,file}`, click selects/jumps #79, `RowContextMenu` Remove
    #132).
-5. [ ] `KanbanPanel` component: `readTextFile` → `parseBoard` → columns/cards; card title +
+5. [x] `KanbanPanel` component: `readTextFile` → `parseBoard` → columns/cards; card title +
    markdown body via the #44 markdown renderer; horizontal-scroll column strip;
    FileViewer-style polling hot-reload.
-6. [ ] `CanvasSurface` `renderContent` case + the Overview column case → mount `KanbanPanel`.
+6. [x] `CanvasSurface` `renderContent` case + the Overview column case → mount `KanbanPanel`.
 
 **Acceptance criteria**
 
-- [ ] A `.md` board can be opened from the repo **Views** menu via the same searchable
+- [x] A `.md` board can be opened from the repo **Views** menu via the same searchable
   picker as the file viewer, and appears as a sidebar row, an Overview column, and a Canvas
   panel (draggable into Canvas), persisted across restarts.
-- [ ] The board renders its columns and cards read-only; a card renders its markdown body
+- [x] The board renders its columns and cards read-only; a card renders its markdown body
   (text formatting), with nothing extra shown for unused metadata.
-- [ ] Many columns / a narrow panel scroll **horizontally** without breaking the layout.
-- [ ] Editing the `.md` on disk updates the board (hot-reload), without flicker when
+- [x] Many columns / a narrow panel scroll **horizontally** without breaking the layout.
+- [x] Editing the `.md` on disk updates the board (hot-reload), without flicker when
   unchanged.
-- [ ] `npm run build`, `npm run lint`, and `npm test` pass.
+- [x] `npm run build`, `npm run lint`, and `npm test` pass.
 
 **Notes**
 
@@ -1260,6 +1261,31 @@ hot-reload. **No** add/edit/move/delete and **no** writes (all #143).
   (`overview_panels`) — no new store blob.
 - Read-only here keeps the milestone shippable/verifiable; all mutation + file writes are
   #143.
+
+**Implementation report**
+
+Frontend-only, exactly the recommended approach — `kanban` is a first-class content kind
+reusing the `file` panel's refs (`repoPath`+`file`) and `overview_panels` persistence (no
+new store blob; the Rust `OverviewPanel.kind` is a `String`, so `"kanban"` round-trips with
+no backend change). **Wiring:** added `"kanban"` to `OverviewPanel.kind` (types) and the
+`SidebarItem` kind union; `payloadToContent` + `isDuplicate` (`canvasDrop.ts`) map/dedupe a
+`kind:"kanban"` payload (by repo+file); `addOverviewPanel` dedups kanban by file (like
+markdown) + `panelLabel`/`leafItemId`/`matchesCanvasItem` gained kanban cases (so #79
+select/jump + #137 tab-close teardown + the `CanvasCloseModal` summary all count it).
+**Loading:** the repo **Views** menu gained a "Kanban board" entry (`SquareKanban` icon)
+that reuses the searchable `FilePicker` (#56) **scoped to `.md`** via a new `filePickKind`
+state — picking a file adds a `kanban` panel (the file-viewer method, no forced view switch
+#79/#82). **Sidebar:** a `KanbanRow` mirrors `FileRow` (dnd-kit draggable
+`{kind:"kanban",…}`, click selects/jumps, `RowContextMenu` Remove). **Rendering:** a new
+read-only `KanbanPanel` (`readTextFile` → #141 `parseBoard` → columns left-to-right, each
+with its cards; card title + markdown **body** via react-markdown + remark-gfm #44, no raw
+HTML; the column strip **scrolls horizontally**; FileViewer-style polling hot-reload that
+bails when the raw text is unchanged). Mounted in both `CanvasSurface.renderContent` +
+`panelTitle` and the Overview `ExtraPanel` body. **Tests:** `addOverviewPanel` kanban dedup
+(store.test) + `payloadToContent` kanban mapping (new `canvasDrop.test.ts`). All gates pass:
+`npm test` (167), `npm run build`, `npm run lint`, `prettier --check`. Editing / DnD /
+write-back is #143. _(Runtime board rendering isn't unit-testable here; the wiring + parse
+are covered.)_
 
 ---
 

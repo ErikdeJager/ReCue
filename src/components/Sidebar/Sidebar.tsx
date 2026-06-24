@@ -16,6 +16,7 @@ import {
   GitFork,
   Plus,
   Settings as SettingsIcon,
+  SquareKanban,
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
@@ -490,6 +491,81 @@ function FileRow({ repoPath, file, selected, onOpen, onClose }: FileRowProps) {
   );
 }
 
+interface KanbanRowProps {
+  repoPath: string;
+  /** Repo-relative `.md` board path. */
+  file: string;
+  selected: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+}
+
+/**
+ * A Kanban-board item in the sidebar tree (#142): one per repo `kanban` panel
+ * (`overviewPanels`, the single item source). Mirrors FileRow — clickable
+ * (selects/jumps in the current view #79), hover close (×, removes the panel),
+ * and a dnd-kit draggable source that drops into Canvas as a `{kind:"kanban"}`
+ * board panel. The whole label is the drag handle; a small activation distance
+ * keeps clicks working.
+ */
+function KanbanRow({
+  repoPath,
+  file,
+  selected,
+  onOpen,
+  onClose,
+}: KanbanRowProps) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: `kanban:${repoPath}:${file}`,
+      data: { kind: "kanban", repoPath, file },
+    });
+  const name = file.split("/").pop() || file;
+  const { menu, openMenu, closeMenu } = useRowMenu();
+  const style = transform
+    ? { transform: CSS.Translate.toString(transform) }
+    : undefined;
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${styles.fileRow} ${selected ? styles.fileRowSelected : ""} ${isDragging ? styles.fileRowDragging : ""}`}
+      style={style}
+      onContextMenu={openMenu}
+    >
+      <button
+        type="button"
+        className={styles.fileMain}
+        onClick={onOpen}
+        title={file}
+        {...attributes}
+        {...listeners}
+      >
+        <SquareKanban
+          size={13}
+          strokeWidth={1.5}
+          className={styles.fileIcon}
+          aria-hidden
+        />
+        <span className={styles.fileName}>{name}</span>
+      </button>
+      <button
+        type="button"
+        className={styles.fileClose}
+        onClick={onClose}
+        title="Close board"
+        aria-label={`Close ${name}`}
+      >
+        <X size={13} strokeWidth={1.5} />
+      </button>
+      <RowContextMenu
+        menu={menu}
+        items={[{ label: "Remove", onActivate: onClose, danger: true }]}
+        onClose={closeMenu}
+      />
+    </div>
+  );
+}
+
 /**
  * A diff-viewer item in the sidebar tree (#59): a repo's diff panel as a
  * draggable row that drops into Canvas as a diff panel (`{kind:"diff"}`). Click
@@ -721,6 +797,11 @@ function Sidebar() {
   >("menu");
   // The repo's files while the menu is in "files" mode (#44); null = loading.
   const [fileList, setFileList] = useState<string[] | null>(null);
+  // Which view the "files" picker opens the chosen file as (#142): a plain file
+  // viewer (`markdown`) or a Kanban board (`kanban`, scoped to `.md`).
+  const [filePickKind, setFilePickKind] = useState<"markdown" | "kanban">(
+    "markdown",
+  );
   const closeMenu = () => {
     setMenu(null);
     setMenuMode("menu");
@@ -743,7 +824,21 @@ function Sidebar() {
       icon: FileText,
       // The searchable file picker (#56) → file column (#44); the menu stays
       // open to pick, so this transitions mode rather than closing.
-      onAdd: () => setMenuMode("files"),
+      onAdd: () => {
+        setFilePickKind("markdown");
+        setMenuMode("files");
+      },
+    },
+    {
+      key: "kanban",
+      label: "Kanban board",
+      icon: SquareKanban,
+      // Same searchable picker (#56), scoped to `.md` (#142) → a read-only
+      // board column; the chosen file opens as a `kanban` panel.
+      onAdd: () => {
+        setFilePickKind("kanban");
+        setMenuMode("files");
+      },
     },
     {
       key: "diff",
@@ -1041,6 +1136,22 @@ function Sidebar() {
                     }
                     onClose={() => void removeOverviewPanel(repo, panel.id)}
                   />
+                ) : panel.kind === "kanban" && panel.file ? (
+                  <KanbanRow
+                    key={panel.id}
+                    repoPath={repo}
+                    file={panel.file}
+                    selected={panel.id === selectedId}
+                    onOpen={() =>
+                      selectItem({
+                        kind: "kanban",
+                        id: panel.id,
+                        repoPath: repo,
+                        file: panel.file,
+                      })
+                    }
+                    onClose={() => void removeOverviewPanel(repo, panel.id)}
+                  />
                 ) : panel.file ? (
                   <FileRow
                     key={panel.id}
@@ -1187,14 +1298,21 @@ function Sidebar() {
                 </label>
               </div>
             ) : menuMode === "files" ? (
-              // Searchable file picker (#56) → open as an Overview file column (#44).
+              // Searchable file picker (#56) → open as an Overview file column
+              // (#44) or, for a Kanban board, a `.md`-scoped board column (#142).
               <FilePicker
-                files={fileList}
+                files={
+                  filePickKind === "kanban"
+                    ? (fileList?.filter((f) =>
+                        f.toLowerCase().endsWith(".md"),
+                      ) ?? null)
+                    : fileList
+                }
                 onPick={(f) => {
-                  // Opens it as the repo's single file item (#59, deduped in the
-                  // store) — shows in both the sidebar and Overview. No forced
+                  // Opens it as the repo's single file/board item (#59, deduped in
+                  // the store) — shows in both the sidebar and Overview. No forced
                   // view switch (#79/#82) — the user switches when ready.
-                  void addOverviewPanel(menu.repo, "markdown", f);
+                  void addOverviewPanel(menu.repo, filePickKind, f);
                   closeMenu();
                 }}
               />

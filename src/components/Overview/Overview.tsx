@@ -37,6 +37,7 @@ import DiffInspector from "../DiffInspector/DiffInspector";
 import EmptyState from "../EmptyState/EmptyState";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import FileViewer from "../FileViewer/FileViewer";
+import KanbanPanel from "../Kanban/KanbanPanel";
 import ScheduledPanel from "../ScheduledPanel/ScheduledPanel";
 import Terminal from "../Terminal/Terminal";
 import styles from "./Overview.module.css";
@@ -247,6 +248,7 @@ function SessionCard({
 function panelLabel(panel: OverviewPanel): string {
   if (panel.kind === "diff") return "Diff";
   if (panel.kind === "terminal") return "Terminal";
+  if (panel.kind === "kanban") return panel.file?.split("/").pop() || "Kanban";
   return panel.file?.split("/").pop() || "File";
 }
 
@@ -322,6 +324,10 @@ function ExtraPanel({
         // same pooled <Terminal>. repoPath marks it a non-agent (Restart respawns
         // the shell; no busy/branch/claude-resume).
         <Terminal sessionId={panel.id} repoPath={repoPath} />
+      ) : panel.kind === "kanban" && panel.file ? (
+        // Kanban board (#142): the shared read-only board renderer, always active
+        // so it hot-reloads the `.md` like the FileViewer.
+        <KanbanPanel repoPath={repoPath} file={panel.file} active />
       ) : panel.file ? (
         // File panel (#41/#44): the shared FileViewer renders the panel's saved
         // file by type (markdown/code/text), always active so it hot-reloads.

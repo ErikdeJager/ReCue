@@ -17,6 +17,7 @@ import DetachedNote from "../DetachedNote/DetachedNote";
 import DiffInspector from "../DiffInspector/DiffInspector";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import FileViewer from "../FileViewer/FileViewer";
+import KanbanPanel from "../Kanban/KanbanPanel";
 import ScheduledPanel from "../ScheduledPanel/ScheduledPanel";
 import Terminal from "../Terminal/Terminal";
 import { focusTerminal } from "../Terminal/terminalPool";
@@ -59,6 +60,8 @@ function EdgeZone({ panelId, edge }: { panelId: string; edge: CanvasEdge }) {
  * changes stay fresh); the content descriptor only stores refs. */
 function panelTitle(content: CanvasContent): string {
   if (content.kind === "file") return content.file?.split("/").pop() ?? "File";
+  if (content.kind === "kanban")
+    return content.file?.split("/").pop() ?? "Kanban";
   if (content.kind === "diff") return "Diff";
   if (content.kind === "terminal") return "Terminal";
   if (content.kind === "scheduled") return "Scheduled";
@@ -166,6 +169,11 @@ function LeafPanel({
     if (content.kind === "file" && content.repoPath && content.file) {
       return (
         <FileViewer repoPath={content.repoPath} file={content.file} active />
+      );
+    }
+    if (content.kind === "kanban" && content.repoPath && content.file) {
+      return (
+        <KanbanPanel repoPath={content.repoPath} file={content.file} active />
       );
     }
     if (content.kind === "diff" && content.repoPath) {

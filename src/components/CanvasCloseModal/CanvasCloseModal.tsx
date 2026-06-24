@@ -76,6 +76,7 @@ function CanvasCloseModal() {
     ["agent", "agent"],
     ["terminal", "terminal"],
     ["file", "file"],
+    ["kanban", "board"],
     ["diff", "diff"],
     ["scheduled", "schedule"],
   ] as const) {

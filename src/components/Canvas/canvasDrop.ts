@@ -32,6 +32,9 @@ export function payloadToContent(
   if (data.kind === "file" && typeof data.file === "string") {
     return { kind: "file", repoPath, file: data.file };
   }
+  if (data.kind === "kanban" && typeof data.file === "string") {
+    return { kind: "kanban", repoPath, file: data.file };
+  }
   if (data.kind === "diff") {
     return { kind: "diff", repoPath };
   }
@@ -71,6 +74,14 @@ function isDuplicate(tree: CanvasNode | null, content: CanvasContent): boolean {
       (l) =>
         l.content.kind === "scheduled" &&
         l.content.scheduleId === content.scheduleId,
+    );
+  }
+  if (content.kind === "kanban") {
+    return leaves.some(
+      (l) =>
+        l.content.kind === "kanban" &&
+        l.content.repoPath === content.repoPath &&
+        l.content.file === content.file,
     );
   }
   return false;

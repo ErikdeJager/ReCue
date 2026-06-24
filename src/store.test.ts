@@ -365,6 +365,21 @@ describe("repo items — overviewPanels as the single source (#59)", () => {
     ).toEqual(["docs/x.md", "docs/y.md"]);
   });
 
+  it("addOverviewPanel adds a kanban board, deduped by file (#142)", async () => {
+    const add = () => useStore.getState().addOverviewPanel;
+    await add()("/repo/a", "kanban", "board.md");
+    await add()("/repo/a", "kanban", "board.md"); // dup file → no-op
+    await add()("/repo/a", "kanban", "other.md");
+    // A markdown file viewer of the same path is a distinct panel kind.
+    await add()("/repo/a", "markdown", "board.md");
+
+    const items = useStore.getState().overviewPanels["/repo/a"] ?? [];
+    expect(items.filter((p) => p.kind === "kanban").map((p) => p.file)).toEqual(
+      ["board.md", "other.md"],
+    );
+    expect(items.filter((p) => p.kind === "markdown")).toHaveLength(1);
+  });
+
   it("removeOverviewPanel drops the item (and its repo entry when empty)", async () => {
     await useStore.getState().addOverviewPanel("/repo/a", "markdown", "z.md");
     const id = useStore.getState().overviewPanels["/repo/a"]?.[0]?.id ?? "";
