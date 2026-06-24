@@ -1618,3 +1618,78 @@ Overview.tsx` (render the button, gated).
 
 ---
 
+### 166. [x] Worktree context menu: new session, open views, and close worktree
+
+**Status:** Done
+**Depends on:** #164 _(reuses the shared `ViewsMenu` for the open-view items; built on existing store
+actions otherwise)._
+**Created:** 2026-06-24
+
+**Description**
+
+The worktree sub-group header in the left panel (#74) had a right-click context menu (#133) offering
+only **Reveal in Finder** and **Copy absolute path**. The card: "should include options to start
+anything within this worktree, from new sessions, to files. Also option to close the worktree
+entirely, killing its contents." Goal: make the worktree header a full action hub — start a new agent
+in the worktree, open views (file/diff/terminal/kanban) scoped to it, and tear the whole worktree
+down — instead of just the two non-destructive items. Reuse-over-rebuild: every action already
+existed (`spawnWorktreeSession` create-or-reuse, `addOverviewPanel` via #164's `ViewsMenu`,
+`killAllAgents`+`closeAllItems` #91 teardown with #74 ref-counted worktree cleanup); the task wires
+them into the header menu.
+
+**Subtasks**
+
+1. [x] **Threaded the parent repo into `WorktreeHeader`:** new props `parent`
+   (= `wtAgents[0]?.worktreeParent`) and `agentCount` from the render site; "New session" is
+   `aria-disabled` when no parent is resolvable.
+2. [x] **Expanded the menu** (replacing the 2-item `RowContextMenu`, mirroring the repo menu, scoped to
+   the worktree `path`): **New session** → `spawnWorktreeSession(parent, branch)` (create-or-reuse →
+   joins the existing worktree, ref-count++, nests under the same header); **Views** → the shared #164
+   `ViewsMenu repoPath={path}` (file/diff/terminal/kanban); **Reveal in Finder** / **Copy absolute
+   path** unchanged; **Close worktree** (danger) → `killAllAgents(path)` + `closeAllItems(path)`.
+3. [x] **Opened-view placement:** inherited from #164's grouping — views register under
+   `overviewPanels[path]` and render under the worktree sub-group (left panel) + parent cluster
+   (Overview), no new wiring.
+4. [x] **Confirm-gating:** "Close worktree" honors `confirmDestructive` (#103) via a local `confirming`
+   step ("Kill N agents & close worktree?" / "Close worktree & remove its items?"); immediate when off.
+5. [x] **Verify:** `npm run build`, `npm run lint`, `npm run format:check`, `npm test` (212) pass.
+
+**Acceptance criteria**
+
+- [x] The worktree header menu includes New session, open-view actions (file/diff/terminal/kanban
+      scoped to the worktree), Reveal in Finder, Copy absolute path, and Close worktree (destructive).
+- [x] New session adds an agent to the **existing** worktree (nested, ref-counted) — not a second
+      worktree.
+- [x] Open-view actions create views scoped to the worktree, appearing in the left panel + Overview
+      associated with it.
+- [x] Close worktree kills the worktree's agents (ref-counted `git worktree remove`, dirty kept) and
+      closes its items; confirm-gated per `confirmDestructive`.
+- [x] Reveal in Finder / Copy absolute path still work.
+- [x] `npm run build`, `npm run lint`, `npm test` pass.
+
+**Implementation report** (commit `1e34889`, 2026-06-24)
+
+Wired existing actions into a full `WorktreeHeader` right-click menu (`Sidebar.tsx`) mirroring the repo
+menu structure, all scoped to the worktree `path`. The only genuinely new bit was threading the
+`parent` repo (+ `agentCount`) into `WorktreeHeader`; Close worktree reuses the #91 teardown
+(`killAllAgents` ref-counted `git worktree remove`, dirty kept #74) + `closeAllItems`, confirm-gated
+like the repo Kill-all/Forget flow. The menu reuses the Sidebar's existing `.menu`/`.menuItem`/
+`.menuSection`/`.menuItemDanger` classes; `RowContextMenu` stays for the other rows.
+
+**Key files touched:** `src/components/Sidebar/Sidebar.tsx` (only) — `WorktreeHeader` menu + the
+render-site prop threading.
+
+**Notes**
+
+- **Reuse over rebuild:** New session (`spawnWorktreeSession` create-or-reuse), Views (#164 `ViewsMenu`),
+  and Close (`killAllAgents`+`closeAllItems`) are all shipped, tested store paths.
+- **Close-worktree scope:** `killAllAgents(path)` matches `repoPath === path` (the worktree's own
+  agents); a worktree has no nested worktrees, so it cleanly targets just this worktree, and ref-counted
+  cleanup removes it when its last agent goes (a dirty worktree is intentionally kept, #74).
+- **No branch step for New session:** a worktree is tied to one branch, so it adds another agent on that
+  same worktree/branch.
+- Completes the worktree-affordance family (#164 badge / #165 normal-agent button / #166 this menu), all
+  reusing the shared `ViewsMenu`.
+
+---
+
