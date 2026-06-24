@@ -1,6 +1,6 @@
-### 160. [ ] Kanban: commit card edits on confirm, not on every keystroke
+### 160. [x] Kanban: commit card edits on confirm, not on every keystroke
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-24
 
@@ -130,3 +130,32 @@ all other behavior.
   state ≈ 363, `SortableCard` inputs ≈ 131-202, `onStopEdit` ≈ 153-162, column rename
   call site ≈ 511-525, `onDragEnd` ≈ 406-425), `kanbanOps.ts` (`updateCard`,
   `renameColumn`), `useAutoSaveFile.ts` (debounced write + dirty/focus reload guard).
+
+**Implementation note (done 2026-06-24)**
+
+Commit-on-confirm model in `KanbanPanel.tsx` (no change to `kanbanOps.ts` /
+`useAutoSaveFile.ts`):
+- New local draft state `editDraft: CardDraft | null` (`{title, body}`) and
+  `renameDraft: string | null`. The editing card's title `<input>` / body
+  `<textarea>` (and the column-rename input) bind to the **draft**; `onChange`
+  updates the draft via `setEditDraft`/`setRenameDraft` only — **never** `mutate` —
+  so typing produces zero per-keystroke writes (the "Saving…" hint never churns).
+- Commit handlers (`commitCardDraft` / `commitRenameDraft`) write **once** via the
+  existing `mutate` (→ `setText` → the #148 debounced buffer), and only when the
+  draft actually differs (no-op edits don't write). Triggers: the Done-editing
+  `<Check>` (`stopCardEdit`), **Enter** in the title, and **blur-out of the whole
+  card** — an `onBlur` on the `<article>` that uses `relatedTarget` containment so
+  moving focus between the card's own controls (title ↔ body ↔ Done) does **not**
+  prematurely commit/exit. Column rename commits on blur/Enter.
+- **Commit-on-switch:** `startCardEdit` / `startColumnRename` / add-card / add-column
+  / drag-start all commit the in-flight draft first, so switching never loses edits.
+- **No mid-edit clobber:** a `useEffect` calls the hook's `onFocus()` while an edit
+  is open (pauses the hot-reload poll) and `onBlur()` on close (resume + flush the
+  committed write), since the local draft doesn't mark the buffer dirty.
+- Discrete actions (toggle done, drag-move, add/delete card, add/delete column) keep
+  calling `mutate` immediately — unchanged.
+- Out of scope (untouched): the Raw-view textarea (#149) stays a normal auto-saving
+  editor; the global "Auto save settings" card is independent.
+- `npm run build`, `npm run lint`, `npm run format:check`, and `npm test` (205) all
+  pass. Subtask 8 (manual UI verification) is interactive; the keystroke-no-write
+  guarantee is structural (draft state, no `mutate` on `onChange`).

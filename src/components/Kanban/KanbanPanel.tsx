@@ -1,4 +1,5 @@
 import {
+  type FocusEvent,
   type ReactElement,
   useCallback,
   useEffect,
@@ -65,13 +66,20 @@ function parseCardId(id: string): [number, number] | null {
   return m ? [Number(m[1]), Number(m[2])] : null;
 }
 
+/** The in-progress title/body of the card being edited (#160) — held locally and
+ * committed to the board buffer once, on confirm (Done / blur-out / Enter / switch),
+ * instead of writing on every keystroke. */
+type CardDraft = { title: string; body: string };
+
 interface CardProps {
   id: string;
   card: Card;
   editing: boolean;
+  /** The local edit draft while this card is being edited (#160); null otherwise. */
+  draft: CardDraft | null;
   onStartEdit: () => void;
   onStopEdit: () => void;
-  onChange: (patch: Partial<Card>) => void;
+  onDraftChange: (patch: Partial<CardDraft>) => void;
   onToggle: () => void;
   onDelete: () => void;
 }
@@ -83,9 +91,10 @@ function SortableCard({
   id,
   card,
   editing,
+  draft,
   onStartEdit,
   onStopEdit,
-  onChange,
+  onDraftChange,
   onToggle,
   onDelete,
 }: CardProps) {
@@ -102,11 +111,22 @@ function SortableCard({
     transition,
     opacity: isDragging ? 0.4 : 1,
   };
+  // Commit-on-confirm (#160): while editing, the title/body bind to the local
+  // `draft` (no per-keystroke write). The edit commits once when focus leaves the
+  // whole card — but NOT when it moves between the card's own controls (title ↔
+  // body ↔ Done), so editing both fields doesn't prematurely commit/exit.
+  const onEditBlur = (event: FocusEvent<HTMLElement>) => {
+    if (!editing) return;
+    if (event.currentTarget.contains(event.relatedTarget as Node | null))
+      return;
+    onStopEdit();
+  };
   return (
     <article
       ref={setNodeRef}
       style={style}
       className={`${styles.card} ${card.checked ? styles.cardDone : ""}`}
+      onBlur={onEditBlur}
     >
       <div className={styles.cardTop}>
         <button
@@ -128,10 +148,17 @@ function SortableCard({
         {editing ? (
           <input
             className={styles.cardTitleInput}
-            value={card.title}
+            value={draft?.title ?? ""}
             placeholder="Card title…"
             autoFocus
-            onChange={(e) => onChange({ title: e.currentTarget.value })}
+            onChange={(e) => onDraftChange({ title: e.currentTarget.value })}
+            onKeyDown={(e) => {
+              // Enter confirms a single-line title (the textarea keeps newlines).
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onStopEdit();
+              }
+            }}
             aria-label="Card title"
           />
         ) : (
@@ -182,9 +209,9 @@ function SortableCard({
       {editing ? (
         <textarea
           className={styles.cardBodyInput}
-          value={card.body}
+          value={draft?.body ?? ""}
           placeholder="Markdown body (optional) — tags, dates, links…"
-          onChange={(e) => onChange({ body: e.currentTarget.value })}
+          onChange={(e) => onDraftChange({ body: e.currentTarget.value })}
           aria-label="Card body (markdown)"
           rows={4}
         />
@@ -206,8 +233,13 @@ interface ColumnProps {
   name: string;
   cards: Card[];
   renaming: boolean;
+  /** The rename draft while this column is being renamed (#160) — bound to the
+   * input, committed once on blur/Enter rather than per keystroke. */
+  renameValue: string;
   confirmingDelete: boolean;
   editingCard: number | null;
+  /** The edit draft for this column's editing card (#160), or null. */
+  editDraft: CardDraft | null;
   onRenameStart: () => void;
   onRename: (name: string) => void;
   onRenameStop: () => void;
@@ -215,7 +247,7 @@ interface ColumnProps {
   onAddCard: () => void;
   onCardStartEdit: (idx: number) => void;
   onCardStopEdit: () => void;
-  onCardChange: (idx: number, patch: Partial<Card>) => void;
+  onCardDraftChange: (patch: Partial<CardDraft>) => void;
   onCardToggle: (idx: number) => void;
   onCardDelete: (idx: number) => void;
 }
@@ -231,7 +263,7 @@ function BoardColumn(props: ColumnProps) {
         {props.renaming ? (
           <input
             className={styles.columnNameInput}
-            value={props.name}
+            value={props.renameValue}
             autoFocus
             onChange={(e) => props.onRename(e.currentTarget.value)}
             onBlur={props.onRenameStop}
@@ -281,9 +313,10 @@ function BoardColumn(props: ColumnProps) {
               id={cardId(props.col, idx)}
               card={card}
               editing={props.editingCard === idx}
+              draft={props.editingCard === idx ? props.editDraft : null}
               onStartEdit={() => props.onCardStartEdit(idx)}
               onStopEdit={props.onCardStopEdit}
-              onChange={(patch) => props.onCardChange(idx, patch)}
+              onDraftChange={props.onCardDraftChange}
               onToggle={() => props.onCardToggle(idx)}
               onDelete={() => props.onCardDelete(idx)}
             />
@@ -338,7 +371,12 @@ function KanbanPanel({
   const [editing, setEditing] = useState<{ col: number; idx: number } | null>(
     null,
   );
+  // Commit-on-confirm drafts (#160): the editing card's title/body and the renaming
+  // column's name live here while typing — NOT in the save buffer — so keystrokes
+  // don't trigger per-keystroke writes; they're flushed once on confirm.
+  const [editDraft, setEditDraft] = useState<CardDraft | null>(null);
   const [renamingCol, setRenamingCol] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState<string | null>(null);
   const [confirmDeleteCol, setConfirmDeleteCol] = useState<number | null>(null);
   // The per-file Board/Raw default is applied once on first load (#147), so later
   // hot-reload polls never override the user's toggle choice.
@@ -362,7 +400,9 @@ function KanbanPanel({
     didInitView.current = false;
     setShowRaw(false);
     setEditing(null);
+    setEditDraft(null);
     setRenamingCol(null);
+    setRenameDraft(null);
     setConfirmDeleteCol(null);
   }, [repoPath, file]);
   useEffect(() => {
@@ -373,6 +413,15 @@ function KanbanPanel({
       setShowRaw(parseBoard(text).columns.length === 0);
     }
   }, [text]);
+
+  // Pause the #148 hot-reload poll while a card/column edit is open (#160): the
+  // draft isn't in the save buffer (so the buffer isn't "dirty"), so without this an
+  // external poll could shift the board under the editor. Treat an open edit as
+  // focused; on close, resume the poll and flush the just-committed write.
+  useEffect(() => {
+    if (editing !== null || renamingCol !== null) onFocus();
+    else onBlur();
+  }, [editing, renamingCol, onFocus, onBlur]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -406,6 +455,81 @@ function KanbanPanel({
     return <div className={styles.message}>Loading…</div>;
   }
 
+  // --- Commit-on-confirm editing (#160) ---
+  // Write the in-flight CARD draft to the buffer once, only if it actually changed
+  // (a no-op edit shouldn't write). Callers also clear `editing`/`editDraft`.
+  const commitCardDraft = () => {
+    if (!editing || !editDraft) return;
+    const card = board.columns[editing.col]?.cards[editing.idx];
+    if (!card) return;
+    if (card.title !== editDraft.title || card.body !== editDraft.body) {
+      mutate(updateCard(board, editing.col, editing.idx, editDraft));
+    }
+  };
+  // Write the in-flight COLUMN-rename draft once, only if it changed.
+  const commitRenameDraft = () => {
+    if (renamingCol === null || renameDraft === null) return;
+    const current = board.columns[renamingCol]?.name;
+    if (current !== undefined && current !== renameDraft) {
+      mutate(renameColumn(board, renamingCol, renameDraft));
+    }
+  };
+  // Start editing a card: commit any in-flight draft first (commit-on-switch, so a
+  // switch never loses typed edits), then seed this card's draft from the board.
+  const startCardEdit = (col: number, idx: number) => {
+    if (editing && (editing.col !== col || editing.idx !== idx))
+      commitCardDraft();
+    if (renamingCol !== null) commitRenameDraft();
+    const card = board.columns[col]?.cards[idx];
+    setEditDraft({ title: card?.title ?? "", body: card?.body ?? "" });
+    setEditing({ col, idx });
+    setRenamingCol(null);
+    setRenameDraft(null);
+  };
+  // Confirm a card edit: commit once, then leave edit mode.
+  const stopCardEdit = () => {
+    commitCardDraft();
+    setEditing(null);
+    setEditDraft(null);
+  };
+  // Add a card and immediately edit it (its draft starts empty).
+  const addCardAndEdit = (col: number) => {
+    commitCardDraft();
+    if (renamingCol !== null) commitRenameDraft();
+    const idx = board.columns[col]?.cards.length ?? 0;
+    mutate(addCard(board, col, newCard()));
+    setEditDraft({ title: "", body: "" });
+    setEditing({ col, idx });
+    setRenamingCol(null);
+    setRenameDraft(null);
+  };
+  // Start renaming a column: commit in-flight drafts first, then seed the name.
+  const startColumnRename = (col: number) => {
+    commitCardDraft();
+    if (renamingCol !== null && renamingCol !== col) commitRenameDraft();
+    setRenameDraft(board.columns[col]?.name ?? "");
+    setRenamingCol(col);
+    setEditing(null);
+    setEditDraft(null);
+  };
+  // Confirm a column rename (blur/Enter): commit once, then leave rename mode.
+  const stopColumnRename = () => {
+    commitRenameDraft();
+    setRenamingCol(null);
+    setRenameDraft(null);
+  };
+  // Add a column and immediately rename it (its draft starts as "New column").
+  const addColumnAndRename = () => {
+    commitCardDraft();
+    if (renamingCol !== null) commitRenameDraft();
+    const idx = board.columns.length;
+    mutate(addColumn(board, "New column"));
+    setRenameDraft("New column");
+    setRenamingCol(idx);
+    setEditing(null);
+    setEditDraft(null);
+  };
+
   const deleteColumnAt = (col: number) => {
     const hasCards = (board.columns[col]?.cards.length ?? 0) > 0;
     if (confirmDestructive && hasCards && confirmDeleteCol !== col) {
@@ -413,7 +537,14 @@ function KanbanPanel({
       return;
     }
     setConfirmDeleteCol(null);
-    if (editing?.col === col) setEditing(null);
+    if (editing?.col === col) {
+      setEditing(null);
+      setEditDraft(null);
+    }
+    if (renamingCol === col) {
+      setRenamingCol(null);
+      setRenameDraft(null);
+    }
     mutate(deleteColumn(board, col));
   };
 
@@ -471,7 +602,9 @@ function KanbanPanel({
           sensors={sensors}
           collisionDetection={closestCorners}
           onDragStart={() => {
-            setEditing(null);
+            // Commit any in-flight card/column edit before a drag (don't lose it).
+            stopCardEdit();
+            stopColumnRename();
             setConfirmDeleteCol(null);
           }}
           onDragEnd={onDragEnd}
@@ -484,28 +617,29 @@ function KanbanPanel({
                 name={column.name}
                 cards={column.cards}
                 renaming={renamingCol === col}
+                renameValue={renameDraft ?? column.name}
                 confirmingDelete={confirmDeleteCol === col}
                 editingCard={editing?.col === col ? editing.idx : null}
-                onRenameStart={() => setRenamingCol(col)}
-                onRename={(name) => mutate(renameColumn(board, col, name))}
-                onRenameStop={() => setRenamingCol(null)}
+                editDraft={editing?.col === col ? editDraft : null}
+                onRenameStart={() => startColumnRename(col)}
+                onRename={(name) => setRenameDraft(name)}
+                onRenameStop={() => stopColumnRename()}
                 onDelete={() => deleteColumnAt(col)}
-                onAddCard={() => {
-                  mutate(addCard(board, col, newCard()));
-                  setEditing({
-                    col,
-                    idx: board.columns[col]?.cards.length ?? 0,
-                  });
-                }}
-                onCardStartEdit={(idx) => setEditing({ col, idx })}
-                onCardStopEdit={() => setEditing(null)}
-                onCardChange={(idx, patch) =>
-                  mutate(updateCard(board, col, idx, patch))
+                onAddCard={() => addCardAndEdit(col)}
+                onCardStartEdit={(idx) => startCardEdit(col, idx)}
+                onCardStopEdit={() => stopCardEdit()}
+                onCardDraftChange={(patch) =>
+                  setEditDraft((d) => ({
+                    ...(d ?? { title: "", body: "" }),
+                    ...patch,
+                  }))
                 }
                 onCardToggle={(idx) => mutate(toggleCard(board, col, idx))}
                 onCardDelete={(idx) => {
-                  if (editing?.col === col && editing.idx === idx)
+                  if (editing?.col === col && editing.idx === idx) {
                     setEditing(null);
+                    setEditDraft(null);
+                  }
                   mutate(deleteCard(board, col, idx));
                 }}
               />
@@ -513,10 +647,7 @@ function KanbanPanel({
             <button
               type="button"
               className={styles.addColumn}
-              onClick={() => {
-                mutate(addColumn(board, "New column"));
-                setRenamingCol(board.columns.length);
-              }}
+              onClick={addColumnAndRename}
             >
               <Plus size={14} strokeWidth={1.5} /> Add column
             </button>
