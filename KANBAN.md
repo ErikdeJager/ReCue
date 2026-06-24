@@ -6,9 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] file view picker
-	For the file viewer (and perhaps other file drop down menus) there should be the option to select other options. This would open a file picker (browse in finder) to find a file. Meaning that the file can be anywhere in the file system and it would still get picked up.
-
 ## READY
 
 - [ ] #157 — "Big mode": maximize any item into a full-window modal overlay
@@ -28,6 +25,9 @@ kanban-plugin: board
 	Depends on: #159, #160
 - [ ] #162 — Settings: auto-save vs manual save (⌘S + Save button)
 	Plan: TASK-162.md
+	Depends on: none
+- [ ] #163 — File viewer "Browse…": open any file via native picker
+	Plan: TASK-163.md
 	Depends on: none
 
 ## DONE
