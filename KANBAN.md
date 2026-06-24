@@ -6,8 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] Kanban bulk move remove
-	The Kanban UI should not have buttons to move the entire content from one column to the next. We want to move things per task
 - [ ] Kanban save issue
 	I want, for the kanban board specifically, it to only save one I click the little checkmark for an individual card. Instead of the contant auto saving
 - [ ] Kanban UI iteration
@@ -25,6 +23,9 @@ kanban-plugin: board
 	Depends on: none
 - [ ] #158 — FileViewer cutoff in Overview at narrow widths (markdown + toolbar)
 	Plan: TASK-158.md
+	Depends on: none
+- [ ] #159 — Remove Kanban column move-left/right buttons (move per task)
+	Plan: TASK-159.md
 	Depends on: none
 
 ## DONE
