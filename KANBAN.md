@@ -6,8 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] Kanban UI iteration
-	I dont like the UI of the kanban items. Iterate over the entire Kanban screen UI and ensure it is optimized for UX
 - [ ] Auto save settings
 	Inside the settings, the user should be able to choose between auto save and manual save optionsl Auto save is the default option, but should the user choose to manually save, the cmd+s button saves files and the auto save indicator changes to a save button instead. Ensure that the enitre plan keeps in account for all the different places that may save files
 - [ ] file view picker
@@ -27,6 +25,9 @@ kanban-plugin: board
 - [ ] #160 — Kanban: commit card edits on confirm, not per-keystroke
 	Plan: TASK-160.md
 	Depends on: none
+- [ ] #161 — Kanban board UI/UX polish pass
+	Plan: TASK-161.md
+	Depends on: #159, #160
 
 ## DONE
 
