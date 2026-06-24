@@ -14,6 +14,7 @@ import {
   Folder,
   GitBranch,
   GitFork,
+  PanelsTopLeft,
   Plus,
   Settings as SettingsIcon,
   SquareKanban,
@@ -219,6 +220,8 @@ function SessionRow({
   // surfaces the same fork action as the Overview/Canvas header buttons.
   const forkSession = useStore((s) => s.forkSession);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
+  // Open the agent in Canvas (#153) — reuse its existing tab or create a new one.
+  const openSessionInCanvas = useStore((s) => s.openSessionInCanvas);
   // Fork is unavailable (#138) until the source has a real turn to fork; fail-open
   // (undefined/true → available, only a confident `false` disables it).
   const canFork = session.forkable !== false;
@@ -293,9 +296,9 @@ function SessionRow({
         event.stopPropagation();
         setMenu({
           x: Math.max(8, Math.min(event.clientX, window.innerWidth - 160)),
-          // Clamp for the taller menu (#131 added Fork / Copy session ID, so it
-          // now has 4 items + a separator) so it never overflows the bottom edge.
-          y: Math.max(8, Math.min(event.clientY, window.innerHeight - 160)),
+          // Clamp for the taller menu (#131 Fork / Copy session ID + #153 Open in
+          // canvas → 5 items + a separator) so it never overflows the bottom edge.
+          y: Math.max(8, Math.min(event.clientY, window.innerHeight - 200)),
         });
       }}
     >
@@ -403,6 +406,25 @@ function SessionRow({
               }}
             >
               Copy session ID
+            </button>
+            {/* Open the agent in the Canvas view (#153): reuse its existing tab if
+                it's already shown there (or raise its detached window #84), else a
+                new "Canvas N" tab. Same icon+label layout as Fork (#82/#131). */}
+            <button
+              type="button"
+              role="menuitem"
+              className={`${styles.menuItem} ${styles.menuItemView}`}
+              onClick={() => {
+                setMenu(null);
+                openSessionInCanvas(session.id);
+              }}
+            >
+              <PanelsTopLeft
+                size={14}
+                strokeWidth={1.5}
+                className={styles.menuIcon}
+              />
+              Open in canvas
             </button>
             <div className={styles.menuSeparator} role="separator" />
             <button

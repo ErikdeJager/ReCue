@@ -49,7 +49,7 @@ error if missing).
 
 ## Implemented (completed tasks)
 
-> Tasks #1–#152 have shipped (#153 is open — see the **Tasks** section below).
+> Tasks #1–#153 have shipped — the backlog is fully implemented (no open tasks).
 > Completed tasks are condensed here — number, title, and one line
 > on what each delivered — and their full entries removed from the list below; per-task
 > detail (subtasks, notes, acceptance, implementation reports) lives in git history.
@@ -398,11 +398,8 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 
 ## Tasks
 
-Tasks **#1–#152 are complete** — see **Implemented (completed tasks)** above for the
-index and git history for per-task detail. **One task is open below:** **#153** (an
-agent-row "Open in canvas" context-menu item that reuses the agent's existing canvas tab,
-else creates one). It does not depend on a completed task (`Depends on: none`), so it is
-immediately runnable.
+Tasks **#1–#153 are complete** — see **Implemented (completed tasks)** above for the
+index and git history for per-task detail. **There are no open tasks right now.**
 _(Tasks #139–#140 are reserved on another branch. The Kanban content-type task was
 renumbered #142 → #145 to avoid colliding with the separately merged template task #142.)_
 New work goes here as a fresh `### N.` entry in [TASKS-TEMPLATE.md](TASKS-TEMPLATE.md)
@@ -575,9 +572,9 @@ the shared `setCanvases` path but isn't runtime-verified (no multi-window in the
 
 ---
 
-### 153. [ ] Agent row context menu — "Open in canvas" (reuse the agent's existing canvas tab, else create one)
+### 153. [x] Agent row context menu — "Open in canvas" (reuse the agent's existing canvas tab, else create one)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none · _(builds on shipped #57/#131 (agent row context menu), #58 (Canvas tabs /
 `addCanvas`), #47/#126 (the "add an agent as a Canvas leaf" pattern via `appendLeaf`), and #84
 (detached canvas windows). Consistent with the open #152 source-of-truth model — the agent is
@@ -614,7 +611,7 @@ tabs after the agent; multi-window placement choices beyond the detached-window 
 
 **Subtasks**
 
-1. [ ] Add a store action (e.g. `openSessionInCanvas(sessionId)`): search every `canvases[]`
+1. [x] Add a store action (e.g. `openSessionInCanvas(sessionId)`): search every `canvases[]`
    layout (via `collectLeaves`) for a leaf with `content.kind === "agent"` && matching
    `sessionId`.
    - **Found, in a main-window tab:** set `view: "canvas"`, `activeCanvasId` = that tab,
@@ -626,28 +623,54 @@ tabs after the agent; multi-window placement choices beyond the detached-window 
    - **Not found anywhere:** create a new "Canvas N" tab (mirror `addCanvas`) whose `layout` is
      a single leaf holding the agent content `{kind:"agent", sessionId, repoPath}`; set it active,
      switch to Canvas view, focus the leaf, and persist via `setCanvases`.
-2. [ ] Add an **"Open in canvas"** item to the `SessionRow` context menu (a `menuItem` /
+2. [x] Add an **"Open in canvas"** item to the `SessionRow` context menu (a `menuItem` /
    `menuItemView` button with a fitting Lucide icon — e.g. `PanelsTopLeft` / `Columns2` /
    `LayoutPanelLeft` — matching the icon+label style used by Fork). Wire it to
    `openSessionInCanvas(session.id)` + `setMenu(null)`. Place it logically (e.g. after "Copy
    session ID", before the Remove separator).
-3. [ ] Bump the context-menu vertical clamp (`Sidebar.tsx` ~L295–298, currently
+3. [x] Bump the context-menu vertical clamp (`Sidebar.tsx` ~L295–298, currently
    `window.innerHeight - 160`) to account for the extra item so the taller menu still doesn't
    overflow the viewport bottom.
 
 **Acceptance criteria**
 
-- [ ] Right-clicking an agent row in the sidebar shows an **"Open in canvas"** item.
-- [ ] Choosing it when the agent is **not** in any canvas creates a new "Canvas N" tab containing
+- [x] Right-clicking an agent row in the sidebar shows an **"Open in canvas"** item.
+- [x] Choosing it when the agent is **not** in any canvas creates a new "Canvas N" tab containing
   that agent, switches to the Canvas view, and focuses it — the agent's terminal renders
   immediately.
-- [ ] Choosing it when the agent is **already** in a (main-window) Canvas tab focuses that tab
+- [x] Choosing it when the agent is **already** in a (main-window) Canvas tab focuses that tab
   instead of creating a duplicate.
-- [ ] When the agent's existing tab is a **detached window** (#84), that window is raised rather
+- [x] When the agent's existing tab is a **detached window** (#84), that window is raised rather
   than the main view switching.
-- [ ] The reused/created tab and active state persist (survive a reload) and stay in sync with
+- [x] The reused/created tab and active state persist (survive a reload) and stay in sync with
   detached windows.
-- [ ] `npm run build`, `npm run lint`, and `npm test` pass.
+- [x] `npm run build`, `npm run lint`, and `npm test` pass.
+
+**Implementation report**
+
+Added `openSessionInCanvas(sessionId)` (`store.ts`) + an "Open in canvas" `SessionRow` menu item
+(`Sidebar.tsx`); reuses the fork-into-canvas / `addCanvas` patterns, no backend change.
+
+- **`openSessionInCanvas`** scans every `canvases[]` layout (`collectLeaves`) for an `agent` leaf
+  with the matching `sessionId`. **Found in a main-window tab:** `set({ view: "canvas",
+  activeCanvasId: tab, activeLeafId: leaf, selectedId })` + `setCanvases` (main-authoritative active
+  id, #84). **Found in a detached tab** (`detachedCanvasIds.includes(tab)`): `focusCanvasWindow(id)`
+  to raise that window and only set `selectedId` — the main view is left untouched (the PTY renders
+  in the other window). **Not found:** build `{kind:"agent", sessionId, repoPath}` as a sole-leaf
+  layout in a new "Canvas N" tab (mirroring `addCanvas`'s lowest-free-N naming), set it active +
+  focused, switch to Canvas, and persist. No duplicate panel is ever created — matching #18/#84
+  (one PTY renders in one slot) and the user's "reuse if already open" decision.
+- **`SessionRow` menu:** a new `menuItem menuItemView` button (`PanelsTopLeft` icon, same icon+label
+  layout as Fork) after "Copy session ID", before the Remove separator, wired to
+  `openSessionInCanvas(session.id)` + `setMenu(null)`. The menu's vertical clamp went `innerHeight
+  - 160` → `- 200` for the now-5-item menu.
+- **#152 consistency:** the agent is already a `sessions`/left-panel item, so no `overviewPanels`
+  registration is needed, and #152's removal cascade prunes this leaf when the agent is removed.
+
+3 store unit tests (new-tab / reuse-existing / detached-raise). `npm run build`, `npm run lint`,
+`npm test` (188), and `npm run format:check` pass. Detached-window raise/sync goes through the
+existing `focusCanvasWindow` / `setCanvases` paths but isn't runtime-verified (no multi-window in
+the dev env, per the #84 precedent).
 
 **Notes**
 

@@ -667,6 +667,12 @@ export interface AppState {
    * fork, add + **select** it, and **surface** it (a new Canvas panel when in Canvas);
    * the source keeps running untouched. Resolves true on success. */
   forkSession: (sourceId: string) => Promise<boolean>;
+  /** Open an agent in the Canvas view from its sidebar row menu (#153): reuse the
+   * agent's existing Canvas tab if it already has a panel there (focus that tab, or
+   * raise its detached window #84), else create a new "Canvas N" tab holding it.
+   * Switches to Canvas + focuses the panel; the agent is already a `sessions` item
+   * so no `overviewPanels` registration is needed (#152). */
+  openSessionInCanvas: (sessionId: string) => void;
   /** Forget a cleanly-exited (code 0) agent (#63): drop it from the store and its
    * persisted record (kill + forget, like Remove) so it vanishes from
    * Focus/Overview/sidebar and won't return on next boot; shows a brief toast. */
@@ -2351,6 +2357,63 @@ export const useStore = create<AppState>()((set, get) => ({
       );
       return false;
     }
+  },
+
+  openSessionInCanvas: (sessionId) => {
+    const { canvases, sessions, detachedCanvasIds } = get();
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    // Already shown in some tab? Reuse it — a single PTY's xterm renders in one
+    // slot at a time (#18/#84), so a second panel would fight over the terminal.
+    for (const c of canvases) {
+      const leaf = collectLeaves(c.layout).find(
+        (l) => l.content.kind === "agent" && l.content.sessionId === sessionId,
+      );
+      if (!leaf) continue;
+      if (detachedCanvasIds.includes(c.id)) {
+        // Its tab is a detached window (#84): raise that window (it can't render
+        // in the main view) and highlight the row, but don't switch the main view.
+        get().focusCanvasWindow(c.id);
+        set({ selectedId: sessionId });
+      } else {
+        // A main-window tab: switch to Canvas, make it active, focus the panel.
+        set({
+          view: "canvas",
+          activeCanvasId: c.id,
+          activeLeafId: leaf.id,
+          selectedId: sessionId,
+        });
+        void ipc.setCanvases({ canvases, activeId: c.id }).catch(() => {});
+      }
+      return;
+    }
+    // Not in any canvas: create a new "Canvas N" tab (mirroring addCanvas's naming)
+    // holding just this agent, then switch + focus it.
+    const content: CanvasContent = {
+      kind: "agent",
+      sessionId,
+      repoPath: session.repoPath,
+    };
+    const leafId = crypto.randomUUID();
+    const used = new Set(canvases.map((c) => c.name));
+    let n = canvases.length + 1;
+    while (used.has(`Canvas ${n}`)) n += 1;
+    const created: CanvasTab = {
+      id: crypto.randomUUID(),
+      name: `Canvas ${n}`,
+      layout: { type: "leaf", id: leafId, content },
+    };
+    const next = [...canvases, created];
+    set({
+      canvases: next,
+      activeCanvasId: created.id,
+      activeLeafId: leafId,
+      view: "canvas",
+      selectedId: sessionId,
+    });
+    void ipc
+      .setCanvases({ canvases: next, activeId: created.id })
+      .catch(() => {});
   },
 
   forgetExitedSession: async (id) => {

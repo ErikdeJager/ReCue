@@ -908,6 +908,79 @@ describe("left panel as source of truth (#152)", () => {
   });
 });
 
+describe("openSessionInCanvas (#153)", () => {
+  const s = () => useStore.getState();
+  const agentLeaf = (id: string, sessionId: string): CanvasNode => ({
+    type: "leaf",
+    id,
+    content: { kind: "agent", sessionId, repoPath: `/repo/${sessionId}` },
+  });
+
+  it("creates a new 'Canvas N' tab when the agent isn't in any canvas", () => {
+    useStore.setState({
+      sessions: [session("a1")],
+      canvases: [{ id: "c1", name: "Canvas 1", layout: null }],
+      activeCanvasId: "c1",
+      view: "overview",
+      detachedCanvasIds: [],
+    });
+    s().openSessionInCanvas("a1");
+    const st = s();
+    expect(st.canvases).toHaveLength(2);
+    const tab = st.canvases[1];
+    expect(tab?.name).toBe("Canvas 2");
+    expect(st.activeCanvasId).toBe(tab?.id);
+    expect(st.view).toBe("canvas");
+    const leaves = collectLeaves(tab?.layout ?? null);
+    expect(leaves).toHaveLength(1);
+    expect(leaves[0]?.content).toMatchObject({
+      kind: "agent",
+      sessionId: "a1",
+    });
+    expect(st.activeLeafId).toBe(leaves[0]?.id);
+    expect(st.selectedId).toBe("a1");
+  });
+
+  it("focuses the agent's existing tab instead of duplicating it", () => {
+    useStore.setState({
+      sessions: [session("a1")],
+      canvases: [
+        { id: "c1", name: "Canvas 1", layout: null },
+        { id: "c2", name: "Canvas 2", layout: agentLeaf("L", "a1") },
+      ],
+      activeCanvasId: "c1",
+      view: "overview",
+      detachedCanvasIds: [],
+    });
+    s().openSessionInCanvas("a1");
+    const st = s();
+    expect(st.canvases).toHaveLength(2); // no new tab
+    expect(st.activeCanvasId).toBe("c2");
+    expect(st.activeLeafId).toBe("L");
+    expect(st.view).toBe("canvas");
+    expect(st.selectedId).toBe("a1");
+  });
+
+  it("raises a detached window without switching the main view (#84)", () => {
+    useStore.setState({
+      sessions: [session("a1")],
+      canvases: [
+        { id: "c1", name: "Canvas 1", layout: null },
+        { id: "c2", name: "Canvas 2", layout: agentLeaf("L", "a1") },
+      ],
+      activeCanvasId: "c1",
+      view: "overview",
+      detachedCanvasIds: ["c2"],
+    });
+    s().openSessionInCanvas("a1");
+    const st = s();
+    expect(st.canvases).toHaveLength(2); // no new tab
+    expect(st.view).toBe("overview"); // main view unchanged
+    expect(st.activeCanvasId).toBe("c1"); // unchanged
+    expect(st.selectedId).toBe("a1"); // row still highlighted
+  });
+});
+
 describe("forkability gating (#138)", () => {
   const s = () => useStore.getState();
 
