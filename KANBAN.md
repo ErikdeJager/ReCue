@@ -11,9 +11,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #158 — FileViewer cutoff in Overview at narrow widths (markdown + toolbar)
-	Plan: TASK-158.md
-	Depends on: none
 - [ ] #159 — Remove Kanban column move-left/right buttons (move per task)
 	Plan: TASK-159.md
 	Depends on: none
@@ -38,3 +35,6 @@ kanban-plugin: board
 
 ## DONE
 
+- [ ] #158 — FileViewer cutoff in Overview at narrow widths (markdown + toolbar)
+	Plan: TASK-158.md
+	Depends on: none
