@@ -1672,3 +1672,88 @@ child's width). All gates pass: `npm run build`, `npm run lint`, `npm test` (179
 
 ---
 
+### 147. [ ] Kanban panel — Board/Raw toggle + auto-fallback to raw markdown
+
+**Status:** Not started
+**Depends on:** #145 · _(extends the `KanbanPanel` from #145/#143; mirrors the #73 FileViewer
+Rendered/Raw toggle and reuses its read-only raw `<pre>` style #44 — all shipped, so
+immediately runnable)_
+**Created:** 2026-06-24
+
+**Description**
+
+The Kanban panel (`KanbanPanel.tsx` — the #145 content type + #143 editor) **always** renders
+the parsed board and only shows an error on a **read** failure; it has **no raw view**. Give
+it a **Board ⟷ Raw** view toggle, mirroring the FileViewer's #73 Rendered/Raw control, so the
+user can see the underlying markdown — and **auto-fall-back to Raw when the file has no board
+structure**.
+
+Two behaviors (per the user):
+
+1. **Manual toggle (mirror #73).** Add a thin toolbar to the panel (it has no header today)
+   with a two-segment **Board / Raw** control — the #73 pattern: a
+   `segmented`/`segment`/`segmentActive` group, `Eye` (Board) / `Code2` (Raw) icons,
+   `aria-pressed`, a local `showRaw` state **reset per file** (`useEffect(() => …, [file])`).
+   **Board** = today's editable board (#143). **Raw** = the file's raw markdown shown
+   **read-only** as monospace text, reusing the FileViewer raw style
+   (`<pre className={styles.raw}>{raw}</pre>`) — _"clicking Raw just displays the file for
+   now"_, so **no editing in Raw**.
+
+2. **Auto-fallback to Raw.** `parseBoard` is lenient — arbitrary markdown with no `## headings`
+   parses to a **zero-column** board. When the loaded file has **no columns** (nothing
+   board-like to render), the panel **opens in Raw** instead of an empty board. The manual
+   toggle still works (the user can switch to Board to start adding columns). Apply this
+   default **once per file on first load** (from column presence) — a later hot-reload poll
+   must **not** override the user's current toggle choice.
+
+Implementation notes:
+
+- Keep the raw file text in render state (a `raw` state set in `load`) so Raw mode can display
+  it; the existing `lastSynced`/poll already track the latest content, so Raw stays current on
+  hot-reload (read-only → no dirty conflict).
+- Raw is read-only, so none of the #143 edit/write machinery runs in Raw mode; switching back
+  to Board resumes editing.
+- The toggle is **not persisted** (component-local, like #73): default Board for a real board,
+  Raw for a non-board file, reset per file.
+- Add a `.raw` style to `KanbanPanel.module.css` mirroring the FileViewer's (monospace, scroll,
+  wrap), or share the token-based styling.
+
+Applies to every surface that mounts `KanbanPanel` (Canvas panel, Overview column) and a
+detached canvas window (#84) — same component. No backend change.
+
+Scope: the in-panel Board/Raw toggle + auto-fallback + read-only raw display. Out of scope:
+editing in Raw mode (the _"for now"_), persisting the toggle choice, and any new file
+read/write.
+
+**Subtasks**
+
+1. [ ] Add a thin toolbar to `KanbanPanel` with the #73 two-segment **Board / Raw** toggle
+   (`Eye`/`Code2`, `aria-pressed`), `showRaw` local state reset per file.
+2. [ ] Keep the raw file text in state (set in `load`); render Raw as a read-only
+   `<pre className={styles.raw}>{raw}</pre>` (FileViewer raw style); add the `.raw` style to
+   `KanbanPanel.module.css`.
+3. [ ] Auto-default to Raw on first load of a file with **no columns** (zero `## headings`);
+   don't override the user's toggle on subsequent hot-reload polls.
+4. [ ] Verify Board mode still edits/saves (#143) and Raw mode is read-only; the toggle +
+   auto-fallback work in Canvas + Overview (+ a detached window #84).
+
+**Acceptance criteria**
+
+- [ ] The Kanban panel has a **Board / Raw** toggle (mirroring #73); Board shows the editable
+  board, Raw shows the file's raw markdown read-only.
+- [ ] A markdown file **with** board structure opens in Board; a file **without** any columns
+  auto-opens in Raw; the user can still toggle either way.
+- [ ] Switching to Raw doesn't edit/write the file; switching back to Board resumes #143
+  editing; an external edit still hot-reloads in both modes.
+- [ ] Works across Canvas + Overview panels and a detached window (#84). _(Detached-window
+  runtime check best-effort per #84/#105.)_
+- [ ] `npm run build`, `npm run lint`, and `npm test` pass.
+
+**Notes**
+
+- Direct mirror of the #73 FileViewer Rendered/Raw toggle, applied to the Kanban board; Raw
+  reuses the file viewer's read-only raw display.
+- Independent of #146 (Canvas header truncation — different file) and the unmerged #139–#140.
+
+---
+
