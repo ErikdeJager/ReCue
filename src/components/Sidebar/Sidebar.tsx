@@ -22,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 
-import { listFiles, revealPath } from "../../ipc";
+import { revealPath } from "../../ipc";
 import { FORK_UNAVAILABLE_REASON, repoName, sessionLabel } from "../../paths";
 import { formatFireTime } from "../../time";
 import {
@@ -34,8 +34,8 @@ import {
 } from "../../store";
 import type { ScheduledSession, SessionView } from "../../types";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
-import FilePicker from "../FilePicker/FilePicker";
 import ViewSwitch from "../ViewSwitch/ViewSwitch";
+import ViewsMenu from "../ViewsMenu/ViewsMenu";
 import styles from "./Sidebar.module.css";
 
 /** Shared right-click menu state for the non-agent sidebar rows (#132). Mirrors
@@ -801,8 +801,6 @@ function Sidebar() {
   const repoColors = useStore((s) => s.repoColors);
   const setRepoColor = useStore((s) => s.setRepoColor);
   const overviewPanels = useStore((s) => s.overviewPanels);
-  const addOverviewPanel = useStore((s) => s.addOverviewPanel);
-  const createKanbanBoard = useStore((s) => s.createKanbanBoard);
   const removeOverviewPanel = useStore((s) => s.removeOverviewPanel);
   const sessionBusy = useStore((s) => s.sessionBusy);
   const sessionActive = useStore((s) => s.sessionActive);
@@ -816,74 +814,12 @@ function Sidebar() {
     y: number;
   } | null>(null);
   const [menuMode, setMenuMode] = useState<
-    "menu" | "confirm" | "confirm-kill" | "confirm-close" | "color" | "files"
+    "menu" | "confirm" | "confirm-kill" | "confirm-close" | "color"
   >("menu");
-  // The repo's files while the menu is in "files" mode (#44); null = loading.
-  const [fileList, setFileList] = useState<string[] | null>(null);
-  // Which view the "files" picker opens the chosen file as (#142): a plain file
-  // viewer (`markdown`) or a Kanban board (`kanban`, scoped to `.md`).
-  const [filePickKind, setFilePickKind] = useState<"markdown" | "kanban">(
-    "markdown",
-  );
   const closeMenu = () => {
     setMenu(null);
     setMenuMode("menu");
   };
-
-  // Addable, non-agent view types for the repo menu's "Views" section (#82).
-  // One entry per view kind — adding a future kind is a single entry here, not a
-  // scattered menu edit. Each `onAdd` adds the view to the repo *without* forcing
-  // a main-view switch (#79): it appears as a sidebar row + Overview column and
-  // is draggable into a Canvas; the user switches views when ready.
-  const viewTypes: {
-    key: string;
-    label: string;
-    icon: typeof FileText;
-    onAdd: (repo: string) => void;
-  }[] = [
-    {
-      key: "file",
-      label: "File viewer",
-      icon: FileText,
-      // The searchable file picker (#56) → file column (#44); the menu stays
-      // open to pick, so this transitions mode rather than closing.
-      onAdd: () => {
-        setFilePickKind("markdown");
-        setMenuMode("files");
-      },
-    },
-    {
-      key: "kanban",
-      label: "Kanban board",
-      icon: SquareKanban,
-      // One merged entry (#151): the same searchable picker (#56), scoped to
-      // `.md` (#142), where the user either opens an existing board *or* names a
-      // new one — the picker's create affordance writes `<name>.md` (#143) and
-      // opens it. The old separate "New Kanban board" + Plus item is gone.
-      onAdd: () => {
-        setFilePickKind("kanban");
-        setMenuMode("files");
-      },
-    },
-    {
-      key: "diff",
-      label: "Diff viewer",
-      icon: FileDiff,
-      onAdd: (repo) => {
-        void addOverviewPanel(repo, "diff");
-        closeMenu();
-      },
-    },
-    {
-      key: "terminal",
-      label: "Terminal",
-      icon: TerminalIcon,
-      onAdd: (repo) => {
-        void addOverviewPanel(repo, "terminal");
-        closeMenu();
-      },
-    },
-  ];
 
   // Top-level groups exclude worktree agents (#74) — their repo_path is the
   // worktree folder, not a repo — but include every worktree's parent so the
@@ -915,24 +851,6 @@ function Sidebar() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [menu]);
-
-  // Load the repo's files when the menu enters "files" mode (#44) — the same
-  // repo-relative list the Focus Files tab uses.
-  useEffect(() => {
-    if (!menu || menuMode !== "files") return;
-    let cancelled = false;
-    setFileList(null);
-    void listFiles(menu.repo)
-      .then((list) => {
-        if (!cancelled) setFileList(list);
-      })
-      .catch(() => {
-        if (!cancelled) setFileList([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [menu, menuMode]);
 
   // Running (non-exited) agents in the menu's repo — gates the confirm step.
   const menuRunning = menu
@@ -973,6 +891,69 @@ function Sidebar() {
     resizeStart.current = null;
     e.currentTarget.releasePointerCapture(e.pointerId);
   };
+
+  // The non-agent rows (#59) for a folder key — file / diff / terminal / kanban
+  // viewers from `overviewPanels[repoKey]`. Rendered both for a top-level repo and,
+  // since #164, **inside a worktree sub-group** (its key is the worktree path) so a
+  // view opened from the worktree badge appears under that worktree, not a stray group.
+  const renderPanelRows = (repoKey: string) =>
+    (overviewPanels[repoKey] ?? []).map((panel) =>
+      panel.kind === "diff" ? (
+        <DiffRow
+          key={panel.id}
+          repoPath={repoKey}
+          panelId={panel.id}
+          selected={panel.id === selectedId}
+          onOpen={() =>
+            selectItem({ kind: "diff", id: panel.id, repoPath: repoKey })
+          }
+          onClose={() => void removeOverviewPanel(repoKey, panel.id)}
+        />
+      ) : panel.kind === "terminal" ? (
+        <TerminalRow
+          key={panel.id}
+          repoPath={repoKey}
+          panelId={panel.id}
+          selected={panel.id === selectedId}
+          onOpen={() =>
+            selectItem({ kind: "terminal", id: panel.id, repoPath: repoKey })
+          }
+          onClose={() => void removeOverviewPanel(repoKey, panel.id)}
+        />
+      ) : panel.kind === "kanban" && panel.file ? (
+        <KanbanRow
+          key={panel.id}
+          repoPath={repoKey}
+          file={panel.file}
+          selected={panel.id === selectedId}
+          onOpen={() =>
+            selectItem({
+              kind: "kanban",
+              id: panel.id,
+              repoPath: repoKey,
+              file: panel.file,
+            })
+          }
+          onClose={() => void removeOverviewPanel(repoKey, panel.id)}
+        />
+      ) : panel.file ? (
+        <FileRow
+          key={panel.id}
+          repoPath={repoKey}
+          file={panel.file}
+          selected={panel.id === selectedId}
+          onOpen={() =>
+            selectItem({
+              kind: "file",
+              id: panel.id,
+              repoPath: repoKey,
+              file: panel.file,
+            })
+          }
+          onClose={() => void removeOverviewPanel(repoKey, panel.id)}
+        />
+      ) : null,
+    );
 
   return (
     <aside
@@ -1130,71 +1111,7 @@ function Sidebar() {
                   Overview shows, 1:1: file + diff viewers. A click selects/jumps
                   to the item in the current view (#79), the × removes it, and each
                   is draggable into a Canvas (file → file viewer, diff → diff). */}
-              {(overviewPanels[repo] ?? []).map((panel) =>
-                panel.kind === "diff" ? (
-                  <DiffRow
-                    key={panel.id}
-                    repoPath={repo}
-                    panelId={panel.id}
-                    selected={panel.id === selectedId}
-                    onOpen={() =>
-                      selectItem({
-                        kind: "diff",
-                        id: panel.id,
-                        repoPath: repo,
-                      })
-                    }
-                    onClose={() => void removeOverviewPanel(repo, panel.id)}
-                  />
-                ) : panel.kind === "terminal" ? (
-                  <TerminalRow
-                    key={panel.id}
-                    repoPath={repo}
-                    panelId={panel.id}
-                    selected={panel.id === selectedId}
-                    onOpen={() =>
-                      selectItem({
-                        kind: "terminal",
-                        id: panel.id,
-                        repoPath: repo,
-                      })
-                    }
-                    onClose={() => void removeOverviewPanel(repo, panel.id)}
-                  />
-                ) : panel.kind === "kanban" && panel.file ? (
-                  <KanbanRow
-                    key={panel.id}
-                    repoPath={repo}
-                    file={panel.file}
-                    selected={panel.id === selectedId}
-                    onOpen={() =>
-                      selectItem({
-                        kind: "kanban",
-                        id: panel.id,
-                        repoPath: repo,
-                        file: panel.file,
-                      })
-                    }
-                    onClose={() => void removeOverviewPanel(repo, panel.id)}
-                  />
-                ) : panel.file ? (
-                  <FileRow
-                    key={panel.id}
-                    repoPath={repo}
-                    file={panel.file}
-                    selected={panel.id === selectedId}
-                    onOpen={() =>
-                      selectItem({
-                        kind: "file",
-                        id: panel.id,
-                        repoPath: repo,
-                        file: panel.file,
-                      })
-                    }
-                    onClose={() => void removeOverviewPanel(repo, panel.id)}
-                  />
-                ) : null,
-              )}
+              {renderPanelRows(repo)}
 
               {/* Pending scheduled sessions for this repo (#93): name/branch +
                   fire time + cancel. Non-draggable, no rich panel (that's #94). */}
@@ -1251,6 +1168,9 @@ function Sidebar() {
                         }
                       />
                     ))}
+                    {/* Views opened from the worktree badge (#164) are keyed by the
+                        worktree path, so they render here under their worktree. */}
+                    {renderPanelRows(wt)}
                   </div>
                 );
               })}
@@ -1322,40 +1242,6 @@ function Sidebar() {
                   />
                 </label>
               </div>
-            ) : menuMode === "files" ? (
-              // Searchable file picker (#56) → open as an Overview file column
-              // (#44) or, for a Kanban board, a `.md`-scoped board column (#142).
-              // For the Kanban flow the same modal also creates a new board
-              // (#151) via the picker's create affordance — no separate menu item.
-              <FilePicker
-                files={
-                  filePickKind === "kanban"
-                    ? (fileList?.filter((f) =>
-                        f.toLowerCase().endsWith(".md"),
-                      ) ?? null)
-                    : fileList
-                }
-                onPick={(f) => {
-                  // Opens it as the repo's single file/board item (#59, deduped in
-                  // the store) — shows in both the sidebar and Overview. No forced
-                  // view switch (#79/#82) — the user switches when ready.
-                  void addOverviewPanel(menu.repo, filePickKind, f);
-                  closeMenu();
-                }}
-                onCreate={
-                  filePickKind === "kanban"
-                    ? (name) => {
-                        // Reuses #143's write+open path (writes `<name>.md` with
-                        // the default lanes, opens it as a kanban panel). Only the
-                        // Kanban picker gets this — plain file viewing stays
-                        // open-only.
-                        void createKanbanBoard(menu.repo, name);
-                        closeMenu();
-                      }
-                    : undefined
-                }
-                createSuffix={filePickKind === "kanban" ? ".md" : undefined}
-              />
             ) : menuMode === "confirm" ? (
               <button
                 type="button"
@@ -1411,31 +1297,12 @@ function Sidebar() {
                   New session
                 </button>
                 <div className={styles.menuSeparator} role="separator" />
-                {/* Views (#82): every addable non-agent view, rendered from a
-                    single registry (`viewTypes`) so a new kind is a one-line
-                    addition, not a scattered menu edit. New session stays a
-                    separate item above; adding a view here doesn't switch the
-                    main view (#79) — the user switches when ready. */}
+                {/* Views (#82): the addable non-agent views, now from the shared
+                    `ViewsMenu` (#164) so the repo menu and the worktree-badge
+                    popover render one action set. File viewer / Kanban open a
+                    picker inline; adding a view doesn't switch the main view (#79). */}
                 <div className={styles.menuSection}>Views</div>
-                {viewTypes.map((v) => {
-                  const Icon = v.icon;
-                  return (
-                    <button
-                      key={v.key}
-                      type="button"
-                      role="menuitem"
-                      className={`${styles.menuItem} ${styles.menuItemView}`}
-                      onClick={() => v.onAdd(menu.repo)}
-                    >
-                      <Icon
-                        size={14}
-                        strokeWidth={1.5}
-                        className={styles.menuIcon}
-                      />
-                      {v.label}
-                    </button>
-                  );
-                })}
+                <ViewsMenu repoPath={menu.repo} onClose={closeMenu} />
                 {/* Non-destructive folder utilities (#129): reveal in Finder /
                     copy the absolute path. Reuses the `open`-shell-out backend
                     (#100/#109) and the store clipboard helper. */}

@@ -1,6 +1,6 @@
-### 164. [ ] Clickable worktree badge → worktree-scoped "open view" menu
+### 164. [x] Clickable worktree badge → worktree-scoped "open view" menu
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-24
 
@@ -136,3 +136,40 @@ and the Overview agent card header, reusing a single shared "add view" implement
   ≈833-883, FilePicker flow ≈1330-1342, worktree grouping ≈888-896),
   `store.ts:538` (`addOverviewPanel`), `FileSwitcher/FileSwitcher.tsx` (popover pattern),
   `paths.ts` (`effectiveRepo`).
+
+**Implementation note (done 2026-06-24)**
+
+All subtasks shipped, in three parts:
+- **Shared `ViewsMenu`** (`components/ViewsMenu/`): the #82 addable-view action set
+  (File viewer / Kanban board → inline `FilePicker`; Diff; Terminal) extracted into
+  one self-contained component (`{repoPath, onClose}`) calling `addOverviewPanel` /
+  `createKanbanBoard`. The Sidebar repo menu now renders `<ViewsMenu>` in its Views
+  section (its `menuMode:"files"` branch, `filePickKind`/`fileList` state, the
+  files-loading effect, and the inline `viewTypes` were removed — one source of truth).
+- **Clickable badge** (`components/WorktreeViewsBadge/`): the inert "worktree" badge
+  is now a button + popover (`role="menu"`, `aria-haspopup`/`aria-expanded`,
+  ChevronDown caret, hover/focus cue) hosting `<ViewsMenu repoPath={session.repoPath}>`
+  (the worktree folder). Dismisses on outside-click + Escape; `onPointerDown`
+  stop-propagation so opening it never starts a Canvas move-leaf / Overview card drag
+  (mirrors `FileSwitcher`). Rendered in both `CanvasSurface` and the Overview
+  `SessionCard`.
+- **Worktree-keyed panel grouping** (subtask 4): a view opened from the badge is
+  keyed by the worktree path. **Sidebar** — extracted `renderPanelRows(repoKey)` and
+  call it inside each worktree sub-group, so worktree panels render under that
+  worktree. **Overview** — map each panel key through `clusterRepoOf` (worktree path
+  → parent via the sessions' `worktreeParent`) so worktree panels cluster under the
+  **parent** repo (no stray group) while each `ExtraPanel` renders/removes against its
+  own `repoKey`; the `ColumnItem` panel variant now carries `repoKey`.
+- **Selection/jump** (subtask 5): inherited — the rows register like any
+  `overviewPanels` item and `selectItem` carries the worktree `repoKey`.
+
+**Deliberate behavior refinement (recorded):** the Sidebar repo menu's File/Kanban
+picker now renders **inline within the Views section** (the surrounding New session /
+Reveal / destructive items stay visible) rather than replacing the whole menu — a
+consequence of making `ViewsMenu` self-contained for reuse. Functionally identical;
+the action set is now shared (acceptance #4). The sibling **"Worktree context menu"**
+(#166) can reuse `ViewsMenu`.
+
+`npm run build`, `npm run lint`, `npm run format:check`, and `npm test` (212) all
+pass. Subtask 6 manual walk-through is interactive; the grouping logic is verified by
+build + reasoning (worktree path → parent cluster; rows render under the worktree).

@@ -35,6 +35,7 @@ import FileSwitcher from "../FileSwitcher/FileSwitcher";
 // (terminal / file / kanban / diff / scheduled) with the #84 ownership guard and the
 // big-mode placeholder — one source of truth shared with Canvas + the modal.
 import ItemContent from "../ItemContent/ItemContent";
+import WorktreeViewsBadge from "../WorktreeViewsBadge/WorktreeViewsBadge";
 import styles from "./Overview.module.css";
 
 /**
@@ -157,13 +158,13 @@ function SessionCard({
     autoNameOn ? session.autoName : null,
     branch || repoName(session.repoPath),
   );
-  // A worktree agent (#74/#96) inherits the parent repo's color, so a small text
-  // badge — mirroring the sidebar's (#74) — is the sole "this is a worktree" cue.
+  // A worktree agent (#74/#96): the "worktree" cue is now a clickable badge (#164)
+  // opening worktree-scoped add-view actions (`repoPath` is the worktree folder).
   const title = (
     <span className={styles.agentTitle}>
       <span className={styles.name}>{primary}</span>
       {session.worktreeParent && (
-        <span className={styles.worktreeBadge}>worktree</span>
+        <WorktreeViewsBadge repoPath={session.repoPath} />
       )}
       {/* A fork (#126) shares the source's auto-title, so a badge distinguishes them. */}
       {session.forkedFrom && <span className={styles.worktreeBadge}>fork</span>}
@@ -443,7 +444,10 @@ function ScheduleCard({
 
 type ColumnItem =
   | { kind: "agent"; session: SessionView }
-  | { kind: "panel"; panel: OverviewPanel }
+  // `repoKey` is the panel's own `overviewPanels` key (#164) — the worktree path
+  // for a worktree-opened view, else the cluster's repo — so it renders/removes
+  // against the right folder even when shown under a parent cluster.
+  | { kind: "panel"; panel: OverviewPanel; repoKey: string }
   | { kind: "schedule"; schedule: ScheduledSession };
 
 /**
@@ -526,17 +530,35 @@ function Overview() {
     return a.createdAt - b.createdAt;
   });
 
+  // A worktree agent's panels are keyed by the worktree folder (#164), but must
+  // cluster under the worktree's **parent** repo (where the worktree agent sits,
+  // #96) — not as a stray group. Map worktree path → parent so a panel keyed by a
+  // worktree path is attributed to the parent cluster (and rendered with its own key).
+  const wtParent = new Map<string, string>();
+  for (const s of sessions) {
+    if (s.worktreeParent) wtParent.set(s.repoPath, s.worktreeParent);
+  }
+  const clusterRepoOf = (path: string) => wtParent.get(path) ?? path;
+  const panelsByCluster = new Map<
+    string,
+    { panel: OverviewPanel; repoKey: string }[]
+  >();
+  for (const [key, list] of Object.entries(overviewPanels)) {
+    if (list.length === 0) continue;
+    const parent = clusterRepoOf(key);
+    const arr = panelsByCluster.get(parent) ?? [];
+    for (const p of list) arr.push({ panel: p, repoKey: key });
+    panelsByCluster.set(parent, arr);
+  }
+
   // Repos to render: those with agents, plus those with extra panels (respecting
   // the filter) — so a diff/markdown panel shows even with no agent in the repo.
   const repoSet = new Set<string>();
   // Worktree agents group under their parent repo (#96), not their own folder.
   for (const s of ordered) repoSet.add(effectiveRepo(s));
-  for (const repo of Object.keys(overviewPanels)) {
-    if (
-      (overviewPanels[repo]?.length ?? 0) > 0 &&
-      (!filter || repo === filter)
-    ) {
-      repoSet.add(repo);
+  for (const [parent, entries] of panelsByCluster) {
+    if (entries.length > 0 && (!filter || parent === filter)) {
+      repoSet.add(parent);
     }
   }
   // Repos with only pending schedules show too (#94).
@@ -556,17 +578,23 @@ function Overview() {
   const clusters = repoList
     .map((repo) => {
       const agents = ordered.filter((s) => effectiveRepo(s) === repo);
-      const extras = overviewPanels[repo] ?? [];
+      const extras = panelsByCluster.get(repo) ?? [];
       const repoSchedules = schedules.filter((sc) => sc.cwd === repo);
       const defaultKeys = [
         ...agents.map((s) => s.id),
-        ...extras.map((p) => p.id),
+        ...extras.map((e) => e.panel.id),
         ...repoSchedules.map((sc) => sc.id),
       ];
       const keys = mergeRepoOrder(overviewOrder[repo] ?? [], defaultKeys);
       const byKey = new Map<string, ColumnItem>();
       for (const s of agents) byKey.set(s.id, { kind: "agent", session: s });
-      for (const p of extras) byKey.set(p.id, { kind: "panel", panel: p });
+      for (const e of extras) {
+        byKey.set(e.panel.id, {
+          kind: "panel",
+          panel: e.panel,
+          repoKey: e.repoKey,
+        });
+      }
       for (const sc of repoSchedules) {
         byKey.set(sc.id, { kind: "schedule", schedule: sc });
       }
@@ -676,13 +704,15 @@ function Overview() {
                     <ExtraPanel
                       key={item.panel.id}
                       panel={item.panel}
-                      repoPath={cluster.repo}
-                      branch={branch}
+                      // A worktree-opened view (#164) renders against its own
+                      // worktree key while clustering under the parent repo.
+                      repoPath={item.repoKey}
+                      branch={branches[item.repoKey] ?? branch}
                       color={color}
                       groupStart={groupStart}
                       selected={item.panel.id === selectedId}
                       onClose={() =>
-                        void removeOverviewPanel(cluster.repo, item.panel.id)
+                        void removeOverviewPanel(item.repoKey, item.panel.id)
                       }
                     />
                   );

@@ -17,6 +17,7 @@ import { IS_MAIN_WINDOW } from "../../windowContext";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import ItemContent from "../ItemContent/ItemContent";
 import { itemTitle, panelTitle } from "../ItemContent/itemTitle";
+import WorktreeViewsBadge from "../WorktreeViewsBadge/WorktreeViewsBadge";
 import { focusTerminal } from "../Terminal/terminalPool";
 import {
   collectLeaves,
@@ -193,10 +194,11 @@ function LeafPanel({
             </span>
           )}
           {metaText && <span className={styles.panelMeta}>{metaText}</span>}
-          {/* Worktree agent (#74/#96): it inherits the parent repo's color, so a
-              text badge (mirroring the sidebar) is the sole worktree cue. */}
+          {/* Worktree agent (#74/#96): the "worktree" cue is a clickable badge
+              (#164) opening worktree-scoped add-view actions (`repoPath` is the
+              worktree folder). */}
           {content.kind === "agent" && session?.worktreeParent && (
-            <span className={styles.worktreeBadge}>worktree</span>
+            <WorktreeViewsBadge repoPath={session.repoPath} />
           )}
           {/* A fork (#126) shares the source's auto-title — a badge distinguishes them. */}
           {content.kind === "agent" && session?.forkedFrom && (
