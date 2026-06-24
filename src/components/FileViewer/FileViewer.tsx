@@ -51,6 +51,9 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
     error,
     status,
     setText,
+    dirty,
+    manual,
+    save,
     onFocus,
     onBlur,
     onCompositionStart,
@@ -83,16 +86,30 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
     <div className={styles.viewer}>
       {showToolbar && (
         <div className={styles.toolbar}>
-          {/* Subtle auto-save hint (#148) — no toast, no save button. Its
-              margin-right:auto keeps the toggle on the right when both show. */}
-          {editable && status !== "idle" && (
-            <span className={styles.status} role="status">
-              {status === "saving"
-                ? "Saving…"
-                : status === "saved"
-                  ? "Saved"
-                  : "Save failed"}
-            </span>
+          {/* Auto mode (#148): a subtle "Saving…/Saved" hint. Manual mode (#162):
+              a Save button in its place (enabled when dirty). Its margin-right:auto
+              keeps the Rendered/Raw toggle on the right when both show. */}
+          {editable && manual ? (
+            <button
+              type="button"
+              className={styles.saveBtn}
+              onClick={() => save()}
+              disabled={!dirty}
+              title={dirty ? "Save (⌘S)" : "Saved"}
+            >
+              {dirty ? "Save" : "Saved"}
+            </button>
+          ) : (
+            editable &&
+            status !== "idle" && (
+              <span className={styles.status} role="status">
+                {status === "saving"
+                  ? "Saving…"
+                  : status === "saved"
+                    ? "Saved"
+                    : "Save failed"}
+              </span>
+            )
           )}
           {/* The eye/code toggle is markdown-only (rendered ↔ raw source). Two
               segments always shown with the active highlighted (#73). */}

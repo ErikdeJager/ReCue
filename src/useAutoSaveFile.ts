@@ -11,10 +11,19 @@
 //! while editing (a concurrent external edit during a session is overwritten — a
 //! documented tradeoff, mirroring #143). An IME-composition guard keeps a
 //! debounced save from firing mid-composition (CJK input).
+//!
+//! Auto vs manual save (#162): governed by the global `settings.autoSave`. Auto
+//! (default) is the behavior above. Manual (off) updates the buffer + marks it
+//! dirty but does NOT schedule a write or flush on blur; the user saves via ⌘S or
+//! the Save button (`save()`). For data safety, manual mode STILL flushes a dirty
+//! buffer on **unmount / file-switch** (so closing a panel can't silently lose
+//! work). Every mounted buffer registers with `saverRegistry` so ⌘S can find it.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { readTextFile, writeTextFile } from "./ipc";
+import { registerSaver } from "./saverRegistry";
+import { useStore } from "./store";
 
 // Hot-reload poll while visible (#44/#143).
 const POLL_MS = 1000;
@@ -28,13 +37,21 @@ export interface AutoSaveFile {
   text: string | null;
   /** The initial read failed. */
   error: boolean;
-  /** Debounced-save status for a subtle inline hint. */
+  /** Debounced-save status for a subtle inline hint (auto mode). */
   status: SaveStatus;
-  /** Update the buffer — marks dirty + schedules a debounced write (no save button). */
+  /** Update the buffer — marks dirty; auto mode schedules a debounced write,
+   * manual mode waits for `save()` / ⌘S (#162). */
   setText: (next: string) => void;
+  /** Unsaved edits in the buffer (#162) — drives the manual-mode Save button. */
+  dirty: boolean;
+  /** Manual save mode is active (#162) — `settings.autoSave === false`. */
+  manual: boolean;
+  /** Flush the dirty buffer to disk now (#162) — the Save button / ⌘S. No-op when
+   * clean. */
+  save: () => void;
   /** Editor focus — pauses hot-reload so a poll can't clobber typing. */
   onFocus: () => void;
-  /** Editor blur — flushes any pending write + resumes hot-reload. */
+  /** Editor blur — flushes any pending write (auto mode) + resumes hot-reload. */
   onBlur: () => void;
   /** IME composition start — suppress a debounced save mid-composition. */
   onCompositionStart: () => void;
@@ -44,7 +61,8 @@ export interface AutoSaveFile {
 
 /**
  * Read `file` from `repoPath` (polled while `active`), hold an editable buffer,
- * and auto-save edits back debounced. See the module doc for the reconcile rules.
+ * and save edits back — debounced (auto) or on demand (manual, #162). See the
+ * module doc for the reconcile rules.
  */
 export function useAutoSaveFile(
   repoPath: string,
@@ -54,6 +72,13 @@ export function useAutoSaveFile(
   const [text, setTextState] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
+  const [dirtyState, setDirtyState] = useState(false);
+
+  // Manual vs auto save mode (#162) — a ref so the stable callbacks read the
+  // current value without being recreated (which would re-arm timers/registry).
+  const autoSave = useStore((s) => s.settings.autoSave);
+  const autoSaveRef = useRef(autoSave);
+  autoSaveRef.current = autoSave;
 
   const lastSynced = useRef<string | null>(null);
   const dirty = useRef(false);
@@ -64,10 +89,17 @@ export function useAutoSaveFile(
   const textRef = useRef<string | null>(null);
   textRef.current = text;
 
+  // Mirror dirty into state (for the Save button) alongside the ref (read
+  // synchronously by the reload reconcile).
+  const markDirty = useCallback((v: boolean) => {
+    dirty.current = v;
+    setDirtyState(v);
+  }, []);
+
   const writeNow = useCallback(
     (content: string) => {
       if (content === lastSynced.current) {
-        dirty.current = false;
+        markDirty(false);
         setStatus("saved");
         return;
       }
@@ -75,7 +107,7 @@ export function useAutoSaveFile(
       void writeTextFile(repoPath, file, content)
         .then(() => {
           lastSynced.current = content;
-          dirty.current = false;
+          markDirty(false);
           setStatus("saved");
         })
         .catch(() => {
@@ -83,7 +115,7 @@ export function useAutoSaveFile(
           setStatus("error");
         });
     },
-    [repoPath, file],
+    [repoPath, file, markDirty],
   );
 
   const scheduleWrite = useCallback(
@@ -100,12 +132,24 @@ export function useAutoSaveFile(
   const setText = useCallback(
     (next: string) => {
       setTextState(next);
-      dirty.current = true;
-      setStatus("saving");
-      scheduleWrite(next);
+      markDirty(true);
+      if (autoSaveRef.current) {
+        setStatus("saving");
+        scheduleWrite(next);
+      }
+      // Manual mode (#162): buffer is dirty; wait for save() / ⌘S — no write.
     },
-    [scheduleWrite],
+    [scheduleWrite, markDirty],
   );
+
+  // Flush the dirty buffer to disk now (#162 manual Save / ⌘S). No-op when clean.
+  const save = useCallback(() => {
+    if (writeTimer.current) {
+      clearTimeout(writeTimer.current);
+      writeTimer.current = null;
+    }
+    if (dirty.current && textRef.current !== null) writeNow(textRef.current);
+  }, [writeNow]);
 
   const load = useCallback(
     async (silent = false) => {
@@ -133,9 +177,11 @@ export function useAutoSaveFile(
   );
 
   // Reset per file; flush a pending write for the previous file before switching.
+  // The flush runs in BOTH modes (#162): closing a panel / switching files must
+  // not silently lose manual-mode edits.
   useEffect(() => {
     lastSynced.current = null;
-    dirty.current = false;
+    markDirty(false);
     setStatus("idle");
     setTextState(null);
     return () => {
@@ -148,7 +194,31 @@ export function useAutoSaveFile(
         dirty.current = false;
       }
     };
-  }, [repoPath, file]);
+  }, [repoPath, file, markDirty]);
+
+  // React to a save-mode change (#162): auto→manual cancels a pending debounce but
+  // keeps the dirty buffer (wait for ⌘S); manual→auto schedules a write if dirty.
+  useEffect(() => {
+    if (autoSave) {
+      if (dirty.current && textRef.current !== null)
+        scheduleWrite(textRef.current);
+    } else if (writeTimer.current) {
+      clearTimeout(writeTimer.current);
+      writeTimer.current = null;
+    }
+  }, [autoSave, scheduleWrite]);
+
+  // Register with the manual-save registry (#162) so ⌘S can find this buffer.
+  const saverId = useRef<string>(crypto.randomUUID());
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    return registerSaver(saverId.current, {
+      isFocused: () => focused.current,
+      isDirty: () => dirty.current,
+      save: () => saveRef.current(),
+    });
+  }, []);
 
   // Fetch when shown / on file change.
   useEffect(() => {
@@ -191,7 +261,9 @@ export function useAutoSaveFile(
 
   const onBlur = useCallback(() => {
     focused.current = false;
-    // Flush a pending write immediately on blur.
+    // Manual mode (#162): keep the dirty buffer; the user saves explicitly.
+    if (!autoSaveRef.current) return;
+    // Auto mode: flush a pending write immediately on blur.
     if (writeTimer.current) {
       clearTimeout(writeTimer.current);
       writeTimer.current = null;
@@ -205,7 +277,8 @@ export function useAutoSaveFile(
 
   const onCompositionEnd = useCallback(() => {
     composing.current = false;
-    if (dirty.current && textRef.current !== null)
+    // Re-arm only in auto mode; manual mode waits for save().
+    if (autoSaveRef.current && dirty.current && textRef.current !== null)
       scheduleWrite(textRef.current);
   }, [scheduleWrite]);
 
@@ -214,6 +287,9 @@ export function useAutoSaveFile(
     error,
     status,
     setText,
+    dirty: dirtyState,
+    manual: !autoSave,
+    save,
     onFocus,
     onBlur,
     onCompositionStart,

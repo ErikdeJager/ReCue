@@ -267,6 +267,19 @@ function SettingsModal() {
                   className={styles.checkRow}
                 />
                 <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.autoSave}
+                    onChange={(v) => update("autoSave", v)}
+                    label="Auto-save files"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    {draft.autoSave
+                      ? "Edits to files and Kanban boards are written automatically."
+                      : "Save manually with ⌘S or the Save button."}
+                  </p>
+                </div>
+                <div className={styles.field}>
                   <span className={styles.fieldLabel}>
                     Closing a Canvas tab with contents
                   </span>

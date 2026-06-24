@@ -1,6 +1,6 @@
-### 162. [ ] Settings: auto-save vs manual save (⌘S), with a Save button in manual mode
+### 162. [x] Settings: auto-save vs manual save (⌘S), with a Save button in manual mode
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-24
 
@@ -151,3 +151,36 @@ toolbars.
   `Settings/Settings.tsx` (Behavior section + `applySettingsEffects`),
   `FileViewer/FileViewer.tsx:88-93` (status), `Kanban/KanbanPanel.tsx` (toolbar status
   ≈ 352), `useKeyboardNav.ts` (capture-phase shortcuts), `ipc.ts` (`writeTextFile`).
+
+**Implementation note (done 2026-06-24)**
+
+All subtasks shipped:
+- **Setting:** `autoSave: boolean` added to `Settings` + `DEFAULT_SETTINGS`
+  (default **true**); a "Auto-save files" checkbox + mode-aware helper in the
+  Settings → Behavior section, persisted via the existing draft/Save flow (merged
+  over `DEFAULT_SETTINGS`, so old `sessions.json` upgrades cleanly).
+- **`useAutoSaveFile` manual mode:** reads `settings.autoSave` (via a ref so the
+  stable callbacks aren't re-created). Auto = unchanged. Manual: `setText` marks the
+  buffer dirty but does **not** schedule a write; `onBlur` does **not** flush;
+  `save()` flushes on demand; a mode-switch effect reconciles (auto→manual cancels
+  the debounce + keeps the dirty buffer, manual→auto schedules a write if dirty).
+  **Unmount / file-switch still flushes dirty content in both modes** (data-loss
+  safety). New `AutoSaveFile` fields: `dirty`, `manual`, `save`. `dirty` is mirrored
+  into state (for the button) alongside the ref the reload-reconcile reads.
+- **Saver registry** (`src/saverRegistry.ts`, a non-React singleton): each mounted
+  buffer registers `{isFocused, isDirty, save}`; `saveFocused()` saves the focused
+  editor, or — if none is focused — every dirty buffer (so ⌘S never no-ops while
+  edits are pending). Unit-tested (`saverRegistry.test.ts`).
+- **⌘S** in `useKeyboardNav` (capture phase): in manual mode `preventDefault` +
+  `saveFocused()`; in auto mode it leaves the keystroke alone. Works in main +
+  detached windows (both can host editors).
+- **Save-button UI:** both the FileViewer and Kanban toolbars render an accent
+  **Save** button (disabled muted "Saved" when clean) in place of the
+  "Saving…/Saved" hint when `manual`; auto mode keeps the hint. Shared `.saveBtn`
+  styling (on-system tokens), toolbar layout intact.
+- **Coverage:** the only non-hook `writeTextFile` caller is the #151 *create-board*
+  one-shot file creation (not an editing save) — all editing saves route through the
+  hook. ScheduledPanel saves a *record* (`update_schedule`), not a file — untouched.
+- `npm run build`, `npm run lint`, `npm run format:check`, and `npm test` (209, +4)
+  all pass. Subtask 8 manual walk-through is interactive; the hook's manual logic is
+  structural + the registry selection is unit-tested.

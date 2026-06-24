@@ -40,6 +40,38 @@
 /* Two-segment Rendered / Raw toggle (#73): a bordered group with the active mode
    filled — replaces the old single ambiguous icon so the way back to the rendered
    view is obvious. */
+/* Manual-save button (#162) — replaces the status hint in manual mode. Primary
+   (accent) when there are unsaved edits, a muted disabled "Saved" when clean.
+   margin-right:auto keeps the Rendered/Raw toggle on the right, like .status. */
+.saveBtn {
+  flex-shrink: 0;
+  margin-right: auto;
+  padding: var(--space-2) var(--space-10);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.saveBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.saveBtn:disabled {
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}
+
 .segmented {
   display: flex;
   /* Never shrink/clip the Rendered/Raw toggle — the status truncates instead (#158). */

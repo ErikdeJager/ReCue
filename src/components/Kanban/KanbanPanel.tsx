@@ -401,6 +401,9 @@ function KanbanPanel({
     error,
     status,
     setText,
+    dirty,
+    manual,
+    save,
     onFocus,
     onBlur,
     onCompositionStart,
@@ -602,16 +605,28 @@ function KanbanPanel({
   return (
     <div className={styles.panel}>
       {/* Board ⟷ Raw toggle (#147, mirroring the #73 FileViewer control) + the
-          subtle #148 auto-save status. */}
+          auto-save status (#148) — or a Save button in manual mode (#162). */}
       <div className={styles.toolbar}>
-        {status !== "idle" && (
-          <span className={styles.status} role="status">
-            {status === "saving"
-              ? "Saving…"
-              : status === "saved"
-                ? "Saved"
-                : "Save failed"}
-          </span>
+        {manual ? (
+          <button
+            type="button"
+            className={styles.saveBtn}
+            onClick={() => save()}
+            disabled={!dirty}
+            title={dirty ? "Save (⌘S)" : "Saved"}
+          >
+            {dirty ? "Save" : "Saved"}
+          </button>
+        ) : (
+          status !== "idle" && (
+            <span className={styles.status} role="status">
+              {status === "saving"
+                ? "Saving…"
+                : status === "saved"
+                  ? "Saved"
+                  : "Save failed"}
+            </span>
+          )
         )}
         <div className={styles.segmented} role="group" aria-label="View mode">
           <button

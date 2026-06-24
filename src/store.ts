@@ -266,6 +266,7 @@ export const DEFAULT_SETTINGS: Settings = {
   confirmDestructive: true,
   canvasCloseBehavior: "ask",
   autoName: true,
+  autoSave: true,
 };
 
 /** Merge a persisted (possibly partial / null) settings blob over the defaults so

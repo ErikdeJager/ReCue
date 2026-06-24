@@ -205,6 +205,10 @@ export interface Settings {
   // Sessions
   /** Use claude's `ai-title` (#97) for unnamed agents; off → the branch label. */
   autoName: boolean;
+  /** Auto-save edited files (#162): on (default) = debounced writes; off = manual
+   * save only (⌘S / the Save button). Governs every `useAutoSaveFile` consumer
+   * (FileViewer raw/text + Kanban Board/Raw). */
+  autoSave: boolean;
 }
 
 // --- Canvas (#46): a recursive binary split-panel (BSP) layout tree ---

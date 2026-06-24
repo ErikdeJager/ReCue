@@ -16,12 +16,31 @@
 
 import { useEffect } from "react";
 
+import { saveFocused } from "./saverRegistry";
 import { adjacentSessionId, useStore } from "./store";
 import { IS_MAIN_WINDOW } from "./windowContext";
 
 export function useKeyboardNav(): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // ⌘S / Ctrl+S — in manual-save mode (#162), flush the focused file editor
+      // (or all dirty buffers if none is focused) instead of the browser default.
+      // In auto mode, leave the keystroke alone (nothing to hijack). Works in the
+      // main and detached canvas windows (both can host file/kanban editors).
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "s"
+      ) {
+        if (!useStore.getState().settings.autoSave) {
+          e.preventDefault();
+          e.stopPropagation();
+          saveFocused();
+        }
+        return;
+      }
+
       // ⌘N / Ctrl+N — open the new-session flow from anywhere (#26). Intercept
       // before the webview's default (new window) and before xterm; no-op when
       // the flow is already open. Swallowed but inert in a detached canvas window
