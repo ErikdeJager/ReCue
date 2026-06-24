@@ -1,6 +1,6 @@
-### 159. [ ] Remove Kanban column move-left/right buttons (move per task, not whole columns)
+### 159. [x] Remove Kanban column move-left/right buttons (move per task, not whole columns)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-24
 
@@ -107,3 +107,18 @@ coarse "move the whole column" affordance the user finds confusing/unwanted.
 - **References:** `KanbanPanel.tsx` (`BoardColumn` header ≈ 260-296, `ColumnProps`
   ≈ 207-227, call site ≈ 505-525, imports 26-27 & 43-54, card grip ≈ 115-124),
   `kanbanOps.ts` (`moveColumn` ≈ 154, `moveCard`), `kanbanOps.test.ts` (≈ 104).
+
+**Implementation note (done 2026-06-24)**
+
+Clean removal in `KanbanPanel.tsx` (subtasks 1–4): deleted the two `‹`/`›`
+chevron buttons from the column header, dropped `isFirst`/`isLast`/`onMove` from
+`ColumnProps` and the call site, and removed the now-unused `ChevronLeft` /
+`ChevronRight` / `moveColumn` imports. The Delete (and rename) column actions and
+all per-card behavior (drag between/within lanes = status change, edit, delete,
+add) are untouched. `moveColumn` stays **exported** in `kanbanOps.ts` (still
+imported by `kanbanOps.test.ts`, which keeps passing) for a possible future
+drag-to-reorder under the broader Kanban UI iteration card. Consequence (as the
+plan flags): columns can no longer be reordered from the UI until drag-reorder is
+added — out of scope here. `npm run build`, `npm run lint`, `npm run format:check`,
+and `npm test` (205) all pass; subtask 6 is interactive (verified via build+lint
+that no dead refs remain).

@@ -23,8 +23,6 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   Check,
-  ChevronLeft,
-  ChevronRight,
   Code2,
   Eye,
   GripVertical,
@@ -46,7 +44,6 @@ import {
   deleteCard,
   deleteColumn,
   moveCard,
-  moveColumn,
   newCard,
   renameColumn,
   toggleCard,
@@ -208,15 +205,12 @@ interface ColumnProps {
   col: number;
   name: string;
   cards: Card[];
-  isFirst: boolean;
-  isLast: boolean;
   renaming: boolean;
   confirmingDelete: boolean;
   editingCard: number | null;
   onRenameStart: () => void;
   onRename: (name: string) => void;
   onRenameStop: () => void;
-  onMove: (dir: -1 | 1) => void;
   onDelete: () => void;
   onAddCard: () => void;
   onCardStartEdit: (idx: number) => void;
@@ -258,26 +252,7 @@ function BoardColumn(props: ColumnProps) {
         )}
         <span className={styles.count}>{props.cards.length}</span>
         <span className={styles.columnActions}>
-          <button
-            type="button"
-            className={styles.colBtn}
-            onClick={() => props.onMove(-1)}
-            disabled={props.isFirst}
-            title="Move column left"
-            aria-label="Move column left"
-          >
-            <ChevronLeft size={13} strokeWidth={1.5} />
-          </button>
-          <button
-            type="button"
-            className={styles.colBtn}
-            onClick={() => props.onMove(1)}
-            disabled={props.isLast}
-            title="Move column right"
-            aria-label="Move column right"
-          >
-            <ChevronRight size={13} strokeWidth={1.5} />
-          </button>
+          {/* Columns move per-card via drag (#159) — no whole-column move buttons. */}
           <button
             type="button"
             className={`${styles.colBtn} ${props.confirmingDelete ? styles.colBtnDanger : ""}`}
@@ -508,15 +483,12 @@ function KanbanPanel({
                 col={col}
                 name={column.name}
                 cards={column.cards}
-                isFirst={col === 0}
-                isLast={col === board.columns.length - 1}
                 renaming={renamingCol === col}
                 confirmingDelete={confirmDeleteCol === col}
                 editingCard={editing?.col === col ? editing.idx : null}
                 onRenameStart={() => setRenamingCol(col)}
                 onRename={(name) => mutate(renameColumn(board, col, name))}
                 onRenameStop={() => setRenamingCol(null)}
-                onMove={(dir) => mutate(moveColumn(board, col, col + dir))}
                 onDelete={() => deleteColumnAt(col)}
                 onAddCard={() => {
                   mutate(addCard(board, col, newCard()));
