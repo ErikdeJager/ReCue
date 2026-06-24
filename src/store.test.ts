@@ -12,7 +12,7 @@ import {
   repoOrder,
   useStore,
 } from "./store";
-import type { CanvasNode, SessionView } from "./types";
+import type { CanvasContent, CanvasNode, SessionView } from "./types";
 
 function session(id: string): SessionView {
   return {
@@ -788,6 +788,123 @@ describe("canvas tab close behavior (#137)", () => {
     expect(s().canvasClosePromptId).toBeNull();
     expect(s().canvases.some((c) => c.id === "c-full")).toBe(false);
     expect(s().sessions.some((x) => x.id === "a1")).toBe(false); // killed + dropped
+  });
+});
+
+describe("left panel as source of truth (#152)", () => {
+  const s = () => useStore.getState();
+  const leaf = (id: string, content: CanvasContent): CanvasNode => ({
+    type: "leaf",
+    id,
+    content,
+  });
+  const split = (a: CanvasNode, b: CanvasNode): CanvasNode => ({
+    type: "split",
+    id: "sp",
+    dir: "row",
+    sizes: [50, 50],
+    a,
+    b,
+  });
+
+  it("removeOverviewPanel cascades into every Canvas tab showing the item", async () => {
+    // A file panel in the left panel, shown in a Canvas leaf beside a terminal.
+    useStore.setState({
+      overviewPanels: {
+        "/repo/x": [{ id: "p1", kind: "markdown", file: "a.md" }],
+      },
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: split(
+            leaf("lf", { kind: "file", repoPath: "/repo/x", file: "a.md" }),
+            leaf("lt", {
+              kind: "terminal",
+              repoPath: "/repo/x",
+              sessionId: "t9",
+            }),
+          ),
+        },
+      ],
+      activeCanvasId: "c1",
+    });
+    await s().removeOverviewPanel("/repo/x", "p1");
+    // Gone from the left panel (Overview mirrors this) ...
+    expect(s().overviewPanels["/repo/x"]).toBeUndefined();
+    // ... and the Canvas split collapsed to the surviving terminal leaf.
+    const leaves = collectLeaves(s().canvases[0]?.layout ?? null);
+    expect(leaves.map((l) => l.content.kind)).toEqual(["terminal"]);
+  });
+
+  it("dropSession cascades agent leaves out of Canvas, keeping siblings", () => {
+    useStore.setState({
+      sessions: [session("a1")],
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: split(
+            leaf("la", {
+              kind: "agent",
+              sessionId: "a1",
+              repoPath: "/repo/a1",
+            }),
+            leaf("lb", {
+              kind: "agent",
+              sessionId: "a2",
+              repoPath: "/repo/a2",
+            }),
+          ),
+        },
+      ],
+      activeCanvasId: "c1",
+    });
+    s().dropSession("a1");
+    const leaves = collectLeaves(s().canvases[0]?.layout ?? null);
+    expect(leaves.map((l) => l.content.sessionId)).toEqual(["a2"]);
+  });
+
+  it("cancelSchedule removes the schedule's Canvas panel", async () => {
+    useStore.setState({
+      schedules: [{ id: "sch1", cwd: "/repo/x", fire_at: 0, created_at: 0 }],
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: leaf("ls", {
+            kind: "scheduled",
+            scheduleId: "sch1",
+            repoPath: "/repo/x",
+          }),
+        },
+      ],
+      activeCanvasId: "c1",
+    });
+    await s().cancelSchedule("sch1");
+    expect(s().schedules).toHaveLength(0);
+    expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(0);
+  });
+
+  it("leaves unrelated Canvas panels untouched", async () => {
+    useStore.setState({
+      overviewPanels: { "/repo/x": [{ id: "p1", kind: "diff" }] },
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: leaf("lf", {
+            kind: "file",
+            repoPath: "/repo/x",
+            file: "a.md",
+          }),
+        },
+      ],
+      activeCanvasId: "c1",
+    });
+    // Removing the diff panel must not disturb the unrelated file leaf.
+    await s().removeOverviewPanel("/repo/x", "p1");
+    expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(1);
   });
 });
 

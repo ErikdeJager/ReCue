@@ -8,6 +8,7 @@ import {
   appendLeaf,
   collectLeaves,
   moveLeaf,
+  removeLeaf,
   setLeafContent,
   spatialNeighbor,
   updateLeafContent,
@@ -822,8 +823,9 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
       boards += 1;
     }
     // File/diff/terminal panels that are also sidebar items (in overviewPanels) get
-    // removed from the left panel. A canvas-only template terminal (#118) isn't a
-    // sidebar item, so it's covered by the PTY kill above only.
+    // removed from the left panel. Since #152 a template-opened terminal (#118) is
+    // also a sidebar item (registered under its PTY id), so this drops its panel too;
+    // any non-registered terminal is still covered by the PTY kill above.
     const addPanel = (repo: string, id: string) => {
       if (!panelIdsByRepo.has(repo)) panelIdsByRepo.set(repo, new Set());
       panelIdsByRepo.get(repo)?.add(id);
@@ -919,6 +921,72 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
     useStore.getState().pushToast(`Closed tab — removed ${parts.join(", ")}`);
 }
 
+/**
+ * Register a template-opened (#118) non-agent item in the source of truth (#152) —
+ * `overviewPanels`, which drives **both** the sidebar tree (#59) and the Overview
+ * wall — so a file / diff / terminal opened through a Canvas template appears in the
+ * left panel and Overview, not only in its Canvas leaf. Unlike `addOverviewPanel`,
+ * this **does not** spawn a PTY (the template already spawned it) or toast (the
+ * template open already toasts). A **terminal** panel MUST carry the spawned PTY's
+ * id (== the Canvas leaf `sessionId`) so the matchers + the App reconcile line up
+ * (no duplicate / orphan); file/diff/kanban dedup by repo+file / repo (mirroring
+ * `addOverviewPanel`) so re-opening the same item doesn't add a second sidebar row.
+ * Persists the repo's list best-effort.
+ */
+function registerOverviewPanel(repoPath: string, panel: OverviewPanel): void {
+  const current = useStore.getState().overviewPanels[repoPath] ?? [];
+  const dup =
+    panel.kind === "diff"
+      ? current.some((p) => p.kind === "diff")
+      : panel.kind === "markdown" || panel.kind === "kanban"
+        ? current.some((p) => p.kind === panel.kind && p.file === panel.file)
+        : current.some((p) => p.id === panel.id); // terminal: same PTY id
+  if (dup) return;
+  const next = [...current, panel];
+  useStore.setState((s) => ({
+    overviewPanels: { ...s.overviewPanels, [repoPath]: next },
+  }));
+  void ipc.setOverviewPanels(repoPath, next).catch(() => {});
+}
+
+/**
+ * Cascade a left-panel removal into Canvas (#152): remove every Canvas leaf —
+ * across **all** tabs — whose content matches `match`, so removing an item from
+ * the sidebar (file/diff/terminal/kanban via `removeOverviewPanel`, an agent via
+ * `dropSession`, a schedule via `cancelSchedule`) also removes it from every Canvas
+ * panel that shows it. Each emptied split collapses (`removeLeaf`), a now-dangling
+ * keyboard focus (#76) is cleared, and the result is persisted + broadcast
+ * (`setCanvases` → `canvas://changed`) so detached windows (#84) stay in sync. The
+ * item's PTY is killed by the caller as today; Overview needs no extra work (it
+ * mirrors `overviewPanels`). No-op when nothing matches.
+ */
+function pruneCanvasLeaves(match: (content: CanvasContent) => boolean): void {
+  const { canvases, activeCanvasId, activeLeafId } = useStore.getState();
+  const removedLeafIds = new Set<string>();
+  const next = canvases.map((c) => {
+    if (!c.layout) return c;
+    const ids = collectLeaves(c.layout)
+      .filter((l) => match(l.content))
+      .map((l) => l.id);
+    if (ids.length === 0) return c;
+    let layout: CanvasNode | null = c.layout;
+    for (const id of ids) {
+      removedLeafIds.add(id);
+      if (layout) layout = removeLeaf(layout, id);
+    }
+    return { ...c, layout };
+  });
+  if (removedLeafIds.size === 0) return;
+  useStore.setState({
+    canvases: next,
+    activeLeafId:
+      activeLeafId && removedLeafIds.has(activeLeafId) ? null : activeLeafId,
+  });
+  void ipc
+    .setCanvases({ canvases: next, activeId: activeCanvasId })
+    .catch(() => {});
+}
+
 export const useStore = create<AppState>()((set, get) => ({
   sessions: [],
   selectedId: null,
@@ -988,14 +1056,19 @@ export const useStore = create<AppState>()((set, get) => ({
       sessions: [...s.sessions.filter((x) => x.id !== session.id), session],
     })),
 
-  dropSession: (id) =>
+  dropSession: (id) => {
     set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
       view: s.selectedId === id ? "overview" : s.view,
       sessionBusy: omitKey(s.sessionBusy, id),
       sessionActive: omitKey(s.sessionActive, id),
-    })),
+    }));
+    // An agent removed from the left panel (Remove #57, or a clean exit #63) also
+    // disappears from every Canvas tab showing it (#152). The PTY is killed by the
+    // caller (removeSession / forgetExitedSession); reconcile disposes the xterm.
+    pruneCanvasLeaves((c) => c.kind === "agent" && c.sessionId === id);
+  },
 
   markExited: (id, code) =>
     set((s) => ({
@@ -1531,6 +1604,17 @@ export const useStore = create<AppState>()((set, get) => ({
     // there's no per-panel spam during a forget.
     if (removed) {
       get().pushToast(`Closed ${panelLabel(removed.kind, removed.file)}`);
+      // The left panel is the source of truth (#152): removing an item here also
+      // removes it from every Canvas tab showing it (Overview already mirrors
+      // overviewPanels). Reuse the #79 matcher — mapping the panel's `markdown`
+      // kind to the sidebar item's `file` kind.
+      const item: SidebarItem = {
+        id: removed.id,
+        kind: removed.kind === "markdown" ? "file" : removed.kind,
+        repoPath,
+        file: removed.file,
+      };
+      pruneCanvasLeaves((c) => matchesCanvasItem(c, item));
     }
     // A terminal item owns a shell PTY (#72): kill it on close. Mark the kill
     // intentional so its exit doesn't pop the Restart overlay.
@@ -1810,6 +1894,10 @@ export const useStore = create<AppState>()((set, get) => ({
           void ipc.killSession(termId).catch(() => {});
           return;
         }
+        // Register in the source of truth (#152) under the SAME id as the PTY /
+        // leaf sessionId, so the sidebar row + Overview column line up with the
+        // Canvas panel (and the App reconcile keeps exactly one PTY).
+        registerOverviewPanel(cwd, { id: termId, kind: "terminal" });
         live = resolvedContent(block, cwd, { sessionId: termId });
       } else if (liveKind === "file") {
         const exists = await ipc.fileExists(cwd, block.file ?? "");
@@ -1817,10 +1905,21 @@ export const useStore = create<AppState>()((set, get) => ({
           throw new Error(`File not found: ${block.file ?? "(no path)"}`);
         }
         live = resolvedContent(block, cwd, {});
+        // Show the opened file in the left panel + Overview (#152); dedups by
+        // repo+file so re-opening doesn't add a duplicate row.
+        if (block.file) {
+          registerOverviewPanel(cwd, {
+            id: crypto.randomUUID(),
+            kind: "markdown",
+            file: block.file,
+          });
+        }
       } else if (liveKind === "diff") {
         const isRepo = await ipc.isGitRepo(cwd);
         if (!isRepo) throw new Error("Not a git repository");
         live = resolvedContent(block, cwd, {});
+        // Show the opened diff in the left panel + Overview (#152; one per repo).
+        registerOverviewPanel(cwd, { id: crypto.randomUUID(), kind: "diff" });
       } else {
         throw new Error(`Unknown block: ${block.kind}`);
       }
@@ -2427,6 +2526,8 @@ export const useStore = create<AppState>()((set, get) => ({
 
   cancelSchedule: async (id) => {
     set((s) => ({ schedules: s.schedules.filter((x) => x.id !== id) }));
+    // A schedule cancelled from the left panel also leaves every Canvas tab (#152).
+    pruneCanvasLeaves((c) => c.kind === "scheduled" && c.scheduleId === id);
     await ipc.cancelSchedule(id).catch(() => {});
     get().pushToast("Schedule canceled");
   },
