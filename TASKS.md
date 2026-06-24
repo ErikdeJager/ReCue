@@ -1315,6 +1315,85 @@ makes that possible externally).
 
 ---
 
+### 144. [ ] Canvas panel — make the whole header bar a drag handle (not just the grip)
+
+**Status:** Not started
+**Depends on:** none · _(adjusts the #135 Canvas panel-move drag source; mirrors the #70
+Overview whole-titlebar pattern; the #90 `FileSwitcher` + the #126/#86 header buttons are
+the click-not-drag exceptions — all shipped)_
+**Created:** 2026-06-24
+
+**Description**
+
+In **Overview**, a panel's **entire title bar** is the drag handle (#70) — you can grab
+anywhere on the header to reorder, and only the action buttons are excepted (their
+`.actions` group stops `pointerdown`). In **Canvas**, by contrast, #135 made *only* the
+small `GripVertical` button draggable (the `useDraggable` listeners live on the grip
+alone), so the user has to precisely grab the little dots to move a panel.
+
+Make the **whole Canvas panel header bar draggable**, mirroring #70, so grabbing any
+non-interactive part of the bar starts a panel move (reorder/reposition via the existing
+`move-leaf` flow).
+
+**Exact change (in `CanvasSurface.tsx` `LeafPanel`):**
+
+- Move the move-drag wiring (`setDragRef` ref + `{...dragAttributes}` `{...dragListeners}`,
+  id `move:<leaf.id>`, data `{kind:"move-leaf"}`) from the grip `<button>` onto the whole
+  `<header className={styles.panelHeader}>` — exactly as Overview attaches
+  `{...attributes} {...listeners}` to its `<header>`.
+- **Keep the `GripVertical` icon as a non-interactive visual hint** (per the user): demote
+  the grip from a `<button>`/drag-source to an `aria-hidden` span (like Overview's
+  `.dragHandle`) — purely a "this bar is draggable" cue; the whole bar drags regardless.
+- **Exceptions (stay clickable, never start a drag) — all interactive controls:** wrap the
+  right-side `panelActions` group (Fork #126, Copy-resume #86, Close) with
+  `onPointerDown={(e) => e.stopPropagation()}`, **and** do the same for the mid-bar
+  **`FileSwitcher`** filename (#90, file panels) so clicking it still opens the file picker
+  rather than dragging. (Mirrors Overview's `.actions` `stopPropagation`.)
+- Show a grab/move cursor over the draggable header area (default cursor on the excepted
+  controls).
+
+The drag mechanics are unchanged: the existing 4px `PointerSensor` activation constraint
+keeps a plain click (which selects the panel via the panel's `onPointerDown` →
+`setActiveLeaf`) from starting a drag; the move is still computed atomically on drop
+(`onDragEnd` → `moveCanvasLeaf`, #135), so no terminal churn. It applies to **both** the
+main Canvas view **and** a **detached canvas window** (#84) automatically — same
+`LeafPanel`/`CanvasSurface` component, and the #135 drop handling is already wired in both.
+
+Scope: the Canvas `LeafPanel` header drag affordance only. No change to the move/drop logic
+(#135), the edge drop-zones, or Overview.
+
+**Subtasks**
+
+1. [ ] Move the `useDraggable` ref + attributes + listeners from the grip button onto the
+   `panelHeader` `<header>`; demote the `GripVertical` grip to an `aria-hidden` visual-hint
+   span.
+2. [ ] Add `onPointerDown` `stopPropagation` to the `panelActions` group and to the
+   `FileSwitcher` so fork / copy-resume / close / filename-switch all stay clickable.
+3. [ ] Add a grab/move cursor on the draggable header area (default on the excepted
+   controls) in `Canvas.module.css`.
+4. [ ] Confirm a plain header click still just selects the panel (4px constraint) and
+   dropping on another panel's edge still moves it (#135 unchanged).
+
+**Acceptance criteria**
+
+- [ ] In Canvas, grabbing **anywhere on a panel's header bar** (not just the grip dots) and
+  dragging starts a panel move/reorder, in both the main view and a detached canvas window
+  (#84). _(Detached-window runtime behavior best-effort per the #84/#105 precedent.)_
+- [ ] The Fork (#126), Copy-resume (#86), and Close buttons, and the file-panel filename
+  switcher (#90), all still respond to clicks and never start a drag.
+- [ ] The grip icon remains as a non-interactive visual hint; a plain header click still
+  selects the panel; the #135 move-on-drop behavior (no terminal churn) is unchanged.
+- [ ] `npm run build`, `npm run lint`, and `npm test` pass.
+
+**Notes**
+
+- Direct port of the Overview #70 pattern (`<header>` carries the drag listeners; `.actions`
+  `stopPropagation`; grip is a visual hint) to the Canvas `LeafPanel` header — bringing the
+  two views to drag parity.
+- Independent of the unmerged #139–#140 and of the Kanban chain (#141–#143).
+
+---
+
 ### 142. [x] Opening a Canvas template into a sole empty canvas replaces it instead of leaving an empty tab behind
 
 **Status:** Done
