@@ -6,8 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] markdown render edits
-	Editing in markdown rendered view is not nessecary. But the one thing that would be nice to be able to write, even while in edit mode is checkboxes. Sometimes there are checkboxes and as user I want to be able to simply click them and mark them as checked. This would simply update the checkbox as “- [ ]” or “- [x]"
 
 ## READY
 
@@ -17,6 +15,9 @@ kanban-plugin: board
 - [ ] #172 — Empty-area context menu for the left sidebar (add folder without an agent)
 	Plan: TASK-172.md
 	Depends on: #168
+- [ ] #173 — Clickable task-list checkboxes in rendered markdown (FileViewer + Kanban card bodies)
+	Plan: TASK-173.md
+	Depends on: none
 
 ## DONE
 
