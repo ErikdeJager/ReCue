@@ -1005,6 +1005,21 @@ pub fn reveal_path(path: String) -> Result<(), SessionError> {
     Ok(())
 }
 
+/// Reveal a **file** in Finder (#171 sidebar file/Kanban row → "Reveal in Finder").
+/// The file counterpart of `reveal_path`: `open -R <path>` **selects** the file in
+/// its containing folder rather than launching it in its default app (a plain `open`
+/// would open the file). Same no-shell safety as `reveal_path` / `open_url` — `open`
+/// runs without a shell and the path is the app's own tracked panel data.
+#[tauri::command]
+pub fn reveal_file_in_finder(path: String) -> Result<(), SessionError> {
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    Ok(())
+}
+
 /// The ClaudeCue app version (#100 Settings → About), from the crate version.
 #[tauri::command]
 pub fn app_version() -> String {

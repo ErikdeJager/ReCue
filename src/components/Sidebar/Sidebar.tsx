@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 
 import { noAutoCapitalize } from "../../inputProps";
-import { revealPath } from "../../ipc";
+import { revealFileInFinder, revealPath } from "../../ipc";
 import { FORK_UNAVAILABLE_REASON, repoName, sessionLabel } from "../../paths";
 import { formatFireTime } from "../../time";
 import {
@@ -123,6 +123,42 @@ function RowContextMenu({
       </div>
     </>
   );
+}
+
+/** The absolute path of a sidebar file/Kanban row (#171): the folder root joined to
+ * the (repo-relative) `file`, trailing slashes on the root trimmed so there's no
+ * double slash. For an out-of-repo file opened via Browse… (#163) the root is the
+ * file's own parent dir, so this stays correct. */
+function rowAbsPath(repoPath: string, file: string): string {
+  return `${repoPath.replace(/\/+$/, "")}/${file}`;
+}
+
+/** The shared right-click menu for a sidebar **file** row — a real file on disk
+ * (#171): Reveal in Finder (`open -R`, which *selects* the file), Copy absolute path,
+ * Copy relative path (the repo-relative `file` verbatim), then the red Remove. Used by
+ * both `FileRow` and `KanbanRow` so the two menus never diverge. */
+function filePathMenuItems(
+  repoPath: string,
+  file: string,
+  copyToClipboard: (text: string, label?: string) => void,
+  onRemove: () => void,
+): RowMenuItem[] {
+  const abs = rowAbsPath(repoPath, file);
+  return [
+    {
+      label: "Reveal in Finder",
+      onActivate: () => void revealFileInFinder(abs),
+    },
+    {
+      label: "Copy absolute path",
+      onActivate: () => copyToClipboard(abs, "path"),
+    },
+    {
+      label: "Copy relative path",
+      onActivate: () => copyToClipboard(file, "path"),
+    },
+    { label: "Remove", onActivate: onRemove, danger: true },
+  ];
 }
 
 /** A pending scheduled-session row (#93/#94): a dnd-kit draggable item (drops into
@@ -471,6 +507,7 @@ interface FileRowProps {
  * distance keeps clicks working.
  */
 function FileRow({ repoPath, file, selected, onOpen, onClose }: FileRowProps) {
+  const copyToClipboard = useStore((s) => s.copyToClipboard);
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: `file:${repoPath}:${file}`,
@@ -515,7 +552,7 @@ function FileRow({ repoPath, file, selected, onOpen, onClose }: FileRowProps) {
       </button>
       <RowContextMenu
         menu={menu}
-        items={[{ label: "Remove", onActivate: onClose, danger: true }]}
+        items={filePathMenuItems(repoPath, file, copyToClipboard, onClose)}
         onClose={closeMenu}
       />
     </div>
@@ -546,6 +583,7 @@ function KanbanRow({
   onOpen,
   onClose,
 }: KanbanRowProps) {
+  const copyToClipboard = useStore((s) => s.copyToClipboard);
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: `kanban:${repoPath}:${file}`,
@@ -590,7 +628,7 @@ function KanbanRow({
       </button>
       <RowContextMenu
         menu={menu}
-        items={[{ label: "Remove", onActivate: onClose, danger: true }]}
+        items={filePathMenuItems(repoPath, file, copyToClipboard, onClose)}
         onClose={closeMenu}
       />
     </div>

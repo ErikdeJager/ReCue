@@ -200,6 +200,7 @@ pub fn run() {
             commands::open_data_folder,
             commands::open_url,
             commands::reveal_path,
+            commands::reveal_file_in_finder,
             commands::app_version,
             commands::claude_version,
         ])

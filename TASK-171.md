@@ -1,8 +1,8 @@
 # TASK-171
 
-### 1. [ ] Copy path / Reveal in Finder on sidebar file & Kanban rows
+### 1. [x] Copy path / Reveal in Finder on sidebar file & Kanban rows
 
-**Status:** Not started · _(Not started | In progress | Done)_
+**Status:** Done · _(Not started | In progress | Done)_
 **Depends on:** none
 **Created:** 2026-06-25
 
@@ -150,3 +150,17 @@ helper) plus one thin backend command + its IPC wrapper.
   this — though if #167 lands after this, it can reuse `reveal_file_in_finder`. **#168**
   (collapsible sidebar) only hides these rows in the rail; expanded mode is unaffected.
   **#170** (no-auto-capitalize) and **#169** (auto-name) are unrelated.
+
+- **Implementation notes (2026-06-25):** Implemented exactly as planned. Added the Rust
+  command `reveal_file_in_finder(path)` (`open -R <path>`, the file counterpart of
+  `reveal_path` which stays `open`-only) + its `lib.rs` `invoke_handler!` registration and
+  the `ipc.ts` `revealFileInFinder` wrapper. In `Sidebar.tsx`, added a shared
+  `filePathMenuItems(repoPath, file, copyToClipboard, onRemove)` helper (+ a `rowAbsPath`
+  that trims trailing slashes on the root → no double slash) returning Reveal in Finder /
+  Copy absolute path / Copy relative path / red Remove, and wired it into **both** `FileRow`
+  and `KanbanRow` (each now pulls `copyToClipboard` from the store). DiffRow / TerminalRow /
+  ScheduleRow and the repo/worktree menus are untouched; `reveal_path` unchanged; no
+  capabilities edit. All green: npm build / lint / test (221) / format:check; cargo test
+  (73) / clippy / fmt. The live Finder-selection behavior (`open -R`) wasn't runtime-verified
+  in a `tauri dev` macOS session in this autonomous loop, but the command mirrors the proven
+  `reveal_path` pattern with the documented `-R` flag.

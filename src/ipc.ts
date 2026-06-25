@@ -311,6 +311,11 @@ export const openUrl = (url: string) => invoke<void>("open_url", { url });
 /** Reveal a folder in Finder (#129 repo menu → "Reveal in Finder") — `open <path>`. */
 export const revealPath = (path: string) =>
   invoke<void>("reveal_path", { path });
+/** Reveal (select) a **file** in Finder (#171 sidebar file/Kanban row) — `open -R
+ * <path>`, selecting the file rather than launching it (the file counterpart of
+ * `revealPath`). */
+export const revealFileInFinder = (path: string) =>
+  invoke<void>("reveal_file_in_finder", { path });
 /** ClaudeCue version, and claude's version (best-effort) (#100 Settings → About). */
 export const appVersion = () => invoke<string>("app_version");
 export const claudeVersion = () => invoke<string | null>("claude_version");

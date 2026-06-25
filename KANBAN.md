@@ -9,9 +9,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #171 — Copy path / Reveal in Finder on sidebar file & Kanban rows
-	Plan: TASK-171.md
-	Depends on: none
 - [ ] #172 — Empty-area context menu for the left sidebar (add folder without an agent)
 	Plan: TASK-172.md
 	Depends on: #168
@@ -32,4 +29,7 @@ kanban-plugin: board
 	Depends on: none
 - [ ] #170 — Stop macOS auto-capitalizing (and auto-correcting) text inputs
 	Plan: TASK-170.md
+	Depends on: none
+- [ ] #171 — Copy path / Reveal in Finder on sidebar file & Kanban rows
+	Plan: TASK-171.md
 	Depends on: none
