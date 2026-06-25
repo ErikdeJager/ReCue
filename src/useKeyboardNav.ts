@@ -6,6 +6,7 @@
 //   ⌘\                 toggle the main view (Overview ↔ Canvas)           (#77)
 //   ⌘N / Ctrl+N        open the new-session flow from anywhere            (#26)
 //   ⌘⇧N / Ctrl+Shift+N open the schedule-session flow                     (#93)
+//   ⌘B / Ctrl+B        collapse / expand the sidebar (main window only)   (#168)
 //
 // xterm forwards keystrokes to the PTY when a terminal is focused, so the
 // listener runs in the **capture phase on window** — it fires before xterm's
@@ -74,6 +75,23 @@ export function useKeyboardNav(): void {
         if (IS_MAIN_WINDOW) {
           const { newSessionOpen, openSchedule } = useStore.getState();
           if (!newSessionOpen) openSchedule();
+        }
+        return;
+      }
+
+      // ⌘B / Ctrl+B — collapse / expand the sidebar to the icon rail (#168).
+      // ⌘-based, so it never reaches a focused claude/terminal; main window only
+      // (a detached canvas window has no sidebar — swallowed but inert).
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "b"
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (IS_MAIN_WINDOW) {
+          useStore.getState().toggleSidebarCollapsed();
         }
         return;
       }

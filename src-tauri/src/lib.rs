@@ -194,6 +194,8 @@ pub fn run() {
             commands::set_settings,
             commands::get_sidebar_width,
             commands::set_sidebar_width,
+            commands::get_sidebar_collapsed,
+            commands::set_sidebar_collapsed,
             commands::clear_recents,
             commands::open_data_folder,
             commands::open_url,

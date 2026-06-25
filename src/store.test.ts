@@ -91,6 +91,18 @@ describe("app store", () => {
     expect(useStore.getState().view).toBe("overview");
   });
 
+  it("toggles the sidebar collapsed flag (#168)", () => {
+    // Defaults to expanded; the footer chevron / ⌘B toggle it.
+    expect(useStore.getState().sidebarCollapsed).toBe(false);
+    useStore.getState().toggleSidebarCollapsed();
+    expect(useStore.getState().sidebarCollapsed).toBe(true);
+    useStore.getState().setSidebarCollapsed(false);
+    expect(useStore.getState().sidebarCollapsed).toBe(false);
+    // A redundant set is a no-op (same value).
+    useStore.getState().setSidebarCollapsed(false);
+    expect(useStore.getState().sidebarCollapsed).toBe(false);
+  });
+
   it("markConnected clears the boot reconnecting flag (#30)", () => {
     useStore.setState({ sessions: [{ ...session("s1"), reconnecting: true }] });
     useStore.getState().markConnected("s1");

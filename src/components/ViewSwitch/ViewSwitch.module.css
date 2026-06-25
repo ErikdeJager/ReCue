@@ -31,3 +31,38 @@
   background: var(--bg-elevated);
   color: var(--text-primary);
 }
+
+/* Compact (icon-only) mode for the collapsed sidebar rail (#168): two stacked
+   icon buttons sized to the ~56px rail. */
+.groupCompact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+}
+
+.iconOption,
+.iconActive {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.iconOption:hover {
+  color: var(--text-primary);
+}
+
+.iconActive {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}

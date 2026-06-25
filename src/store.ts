@@ -497,6 +497,9 @@ export interface AppState {
   settingsOpen: boolean;
   /** Sidebar width in px (#108), drag-resizable + persisted (main window). */
   sidebarWidth: number;
+  /** Whether the sidebar is collapsed to the icon rail (#168), persisted separately
+   * from Settings like the width. Main-window-only; a detached canvas has no sidebar. */
+  sidebarCollapsed: boolean;
 
   // --- Sync reducers ---
   setView: (view: View) => void;
@@ -539,6 +542,10 @@ export interface AppState {
   setSettingsOpen: (open: boolean) => void;
   /** Set the sidebar width (#108): clamp to [180, 560] + persist (debounced). */
   setSidebarWidth: (width: number) => void;
+  /** Set the sidebar collapsed flag (#168): set + persist (main window). */
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  /** Toggle the sidebar collapsed flag (#168) — the footer chevron + ⌘B. */
+  toggleSidebarCollapsed: () => void;
 
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
@@ -1077,6 +1084,7 @@ export const useStore = create<AppState>()((set, get) => ({
   settings: DEFAULT_SETTINGS,
   settingsOpen: false,
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
+  sidebarCollapsed: false,
 
   setView: (view) => set({ view }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
@@ -1090,6 +1098,17 @@ export const useStore = create<AppState>()((set, get) => ({
       void ipc.setSidebarWidth(clamped).catch(() => {});
     }, 300);
   },
+  setSidebarCollapsed: (collapsed) => {
+    if (collapsed === get().sidebarCollapsed) return;
+    set({ sidebarCollapsed: collapsed });
+    // Persist only from the main window (a detached canvas has no sidebar); rare
+    // toggle, so no debounce.
+    if (IS_MAIN_WINDOW) {
+      void ipc.setSidebarCollapsed(collapsed).catch(() => {});
+    }
+  },
+  toggleSidebarCollapsed: () =>
+    get().setSidebarCollapsed(!get().sidebarCollapsed),
   // Selection is decoupled from the view (#22): selecting only highlights. The
   // sidebar ViewSwitch is the only thing that changes the view (#75).
   select: (id) => set({ selectedId: id }),
@@ -1429,6 +1448,7 @@ export const useStore = create<AppState>()((set, get) => ({
         rawSettings,
         rawSidebarWidth,
         rawTemplates,
+        rawSidebarCollapsed,
       ] = await Promise.all([
         ipc.listRepoColors(),
         ipc.listOverviewPanels(),
@@ -1439,6 +1459,7 @@ export const useStore = create<AppState>()((set, get) => ({
         ipc.getSettings(),
         ipc.getSidebarWidth(),
         ipc.getCanvasTemplates(),
+        ipc.getSidebarCollapsed(),
       ]);
       // Settings (#100): merge the persisted blob over the defaults and apply its
       // side-effects (live terminal options) before the first paint.
@@ -1449,6 +1470,8 @@ export const useStore = create<AppState>()((set, get) => ({
       const sidebarWidth = clampSidebarWidth(
         rawSidebarWidth ?? SIDEBAR_WIDTH_DEFAULT,
       );
+      // Sidebar collapsed-to-rail flag (#168): default expanded when absent.
+      const sidebarCollapsed = rawSidebarCollapsed ?? false;
       // Multi-canvas (#58): use the persisted tabs; else migrate the old single
       // canvas_layout into "Canvas 1"; else start with one empty canvas. Persist
       // the migrated shape once so the new field becomes the source of truth.
@@ -1502,6 +1525,7 @@ export const useStore = create<AppState>()((set, get) => ({
         activeCanvasId,
         settings,
         sidebarWidth,
+        sidebarCollapsed,
         // Saved Canvas templates (#117); absent (null) → none saved yet.
         canvasTemplates: rawTemplates ?? [],
       });

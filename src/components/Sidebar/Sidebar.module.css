@@ -728,3 +728,135 @@
   color: var(--text-muted);
   font-size: var(--fs-meta-sm);
 }
+
+/* --- Collapsed icon rail (#168) ---
+   The sidebar minimized to a ~56px column of icons: New/Schedule/view-switch,
+   then per repo a repo-colored folder icon with that repo's per-session activity
+   dots stacked beneath it, each worktree as its own branch glyph (with its dots).
+   No text, no item/schedule/session rows — to reach an item the user expands. */
+.collapsed {
+  align-items: center;
+}
+
+.rail {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-12) 0 var(--space-8);
+  overflow: hidden;
+}
+
+.railButton {
+  display: flex;
+  width: 36px;
+  height: 32px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.railButton:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.railRepos {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-8);
+  overflow-y: auto;
+  padding: var(--space-6) 0;
+}
+
+.railRepo {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* The repo-colored folder icon — left-click filters Overview, right-click opens
+   the repo menu. Tint comes from the inline `color` (icon strokes = currentColor). */
+.railFolder {
+  display: flex;
+  width: 36px;
+  height: 32px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.railFolder:hover {
+  background: var(--bg-hover);
+}
+
+/* Active Overview filter (#34) — matches the expanded header's accent-dim box. */
+.railFolderActive,
+.railFolderActive:hover {
+  background: var(--accent-dim);
+}
+
+/* Vertical stack of per-session activity dots beneath a repo/worktree icon. */
+.railDots {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-1) 0;
+}
+
+.railWorktreeGroup {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* A worktree's branch glyph in the rail — icon-only, right-click menu intact. */
+.railWorktree {
+  position: relative;
+  display: flex;
+  width: 32px;
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  cursor: context-menu;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.railWorktree:hover {
+  background: var(--bg-hover);
+}
+
+/* Collapsed footer: too narrow for a row, so stack the Settings gear + chevron. */
+.footerCollapsed {
+  height: auto;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-8) 0;
+}

@@ -15,6 +15,8 @@ import {
   FolderTree,
   GitBranch,
   GitFork,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelsTopLeft,
   Plus,
   Settings as SettingsIcon,
@@ -38,6 +40,10 @@ import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import ViewsMenu from "../ViewsMenu/ViewsMenu";
 import styles from "./Sidebar.module.css";
+
+/** Fixed width of the collapsed sidebar icon rail (#168). The persisted
+ * `sidebarWidth` is left untouched while collapsed, so expanding restores it. */
+const SIDEBAR_RAIL_WIDTH = 56;
 
 /** Shared right-click menu state for the non-agent sidebar rows (#132). Mirrors
  * `SessionRow`'s pattern — a cursor-positioned, viewport-clamped `{x,y}` that
@@ -812,6 +818,7 @@ function WorktreeHeader({
   branch,
   parent,
   agentCount,
+  compact = false,
 }: {
   path: string;
   branch: string;
@@ -820,6 +827,9 @@ function WorktreeHeader({
   parent?: string;
   /** Agents in this worktree (#166) — for the Close-worktree confirm label. */
   agentCount: number;
+  /** Collapsed-rail mode (#168): icon-only (just the branch glyph), no name/badge,
+   * the full right-click menu intact. */
+  compact?: boolean;
 }) {
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const spawnWorktreeSession = useStore((s) => s.spawnWorktreeSession);
@@ -838,18 +848,18 @@ function WorktreeHeader({
   };
   return (
     <div
-      className={styles.worktreeHeader}
-      title={path}
+      className={compact ? styles.railWorktree : styles.worktreeHeader}
+      title={compact ? `${branch} · worktree` : path}
       onContextMenu={openMenu}
     >
       <GitBranch
-        size={12}
+        size={compact ? 16 : 12}
         strokeWidth={1.5}
         className={styles.worktreeIcon}
         aria-hidden
       />
-      <span className={styles.worktreeName}>{branch}</span>
-      <span className={styles.worktreeBadge}>worktree</span>
+      {!compact && <span className={styles.worktreeName}>{branch}</span>}
+      {!compact && <span className={styles.worktreeBadge}>worktree</span>}
       {menu && (
         <>
           <div
@@ -974,6 +984,9 @@ function Sidebar() {
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const setSidebarWidth = useStore((s) => s.setSidebarWidth);
+  const sidebarCollapsed = useStore((s) => s.sidebarCollapsed);
+  const toggleSidebarCollapsed = useStore((s) => s.toggleSidebarCollapsed);
+  const autoNameOn = useStore((s) => s.settings.autoName);
   const schedules = useStore((s) => s.schedules);
   const cancelSchedule = useStore((s) => s.cancelSchedule);
   const refreshBranches = useStore((s) => s.refreshBranches);
@@ -1003,6 +1016,16 @@ function Sidebar() {
   >("menu");
   const closeMenu = () => {
     setMenu(null);
+    setMenuMode("menu");
+  };
+  // Open the repo context menu at the cursor (#54), clamped so the menu — and the
+  // taller file picker it can become (#56) — stays on-screen. Shared by the expanded
+  // repo header and the collapsed rail's folder icon (#168) so both behave identically.
+  const openRepoMenu = (repo: string, event: ReactMouseEvent) => {
+    event.preventDefault();
+    const x = Math.max(8, Math.min(event.clientX, window.innerWidth - 300));
+    const y = Math.max(8, Math.min(event.clientY, window.innerHeight - 360));
+    setMenu({ repo, x, y });
     setMenuMode("menu");
   };
 
@@ -1151,227 +1174,96 @@ function Sidebar() {
       ) : null,
     );
 
-  return (
-    <aside
-      className={styles.sidebar}
-      style={{ width: sidebarWidth }}
-      aria-label="Sessions"
-    >
-      {/* Drag-to-resize handle on the right edge (#108). */}
-      <div
-        className={styles.resizeHandle}
-        onPointerDown={onResizeDown}
-        onPointerMove={onResizeMove}
-        onPointerUp={onResizeUp}
-        onDoubleClick={() => setSidebarWidth(260)}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize sidebar (double-click to reset)"
-        title="Drag to resize · double-click to reset"
-      />
+  // The collapsed icon rail (#168): folder icons + per-session activity dots +
+  // worktree icons + the New/Schedule/view-switch icons, with the repo & worktree
+  // context menus still functional. The repo context-menu JSX (rendered after the
+  // footer) and each WorktreeHeader's own menu sit over the rail unchanged.
+  const rail = (
+    <div className={styles.rail}>
       <button
         type="button"
-        className={styles.newButton}
+        className={styles.railButton}
         onClick={() => openNewSession()}
+        title="New session ⌘N"
+        aria-label="New session"
       >
-        <Plus size={16} strokeWidth={1.5} />
-        New session
-        <kbd className={styles.kbd}>⌘N</kbd>
+        <Plus size={18} strokeWidth={1.5} />
       </button>
-
-      {/* Schedule a session to launch later (#93) — same flow, plus a time step. */}
       <button
         type="button"
-        className={styles.scheduleButton}
+        className={styles.railButton}
         onClick={() => openSchedule()}
+        title="Schedule session ⌘⇧N"
+        aria-label="Schedule session"
       >
-        <Clock size={15} strokeWidth={1.5} />
-        Schedule session
-        <kbd className={styles.kbd}>⌘⇧N</kbd>
+        <Clock size={16} strokeWidth={1.5} />
       </button>
-
-      <div className={styles.viewSwitch}>
-        <ViewSwitch />
-      </div>
-
-      <div className={styles.repos}>
-        {repos.length === 0 && (
-          <p className={styles.emptyHint}>No repositories yet.</p>
-        )}
-
+      <ViewSwitch compact />
+      <div className={styles.railRepos}>
         {repos.map((repo) => {
           const repoSessions = sessions.filter(
             (s) => s.repoPath === repo && !s.worktreeParent,
           );
-          const isEmpty = repoSessions.length === 0;
           const isFiltered = overviewRepoFilter === repo;
-          // Primary label = the repo's branch, or the folder name when non-git /
-          // not yet known. All sessions in a group share it, so index duplicates.
           const baseLabel = (branches[repo] ?? "") || repoName(repo);
-          const rowLabels = dedupeBranchLabels(
-            repoSessions.map(() => baseLabel),
-          );
-          // Worktree agents (#74) of this repo, grouped by their worktree folder —
-          // rendered as indented sub-groups below the repo's own sessions/items.
           const worktreeAgents = sessions.filter(
             (s) => s.worktreeParent === repo,
           );
           const worktreePaths = [
             ...new Set(worktreeAgents.map((s) => s.repoPath)),
           ];
-
+          const dot = (s: SessionView, base: string) => (
+            <BusyIndicator
+              key={s.id}
+              busy={sessionBusy[s.id] ?? false}
+              hasBeenActive={sessionActive[s.id] ?? false}
+              label={
+                sessionLabel(s.name, autoNameOn ? s.autoName : null, base)
+                  .primary
+              }
+            />
+          );
           return (
-            <div key={repo} className={styles.group}>
-              <div
-                className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""} ${isFiltered ? styles.repoActive : ""}`}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  // Clamp so the menu — and the taller file picker it can become
-                  // (#56) — stays on-screen near the viewport edges.
-                  const x = Math.max(
-                    8,
-                    Math.min(event.clientX, window.innerWidth - 300),
-                  );
-                  const y = Math.max(
-                    8,
-                    Math.min(event.clientY, window.innerHeight - 360),
-                  );
-                  setMenu({ repo, x, y });
-                  setMenuMode("menu");
+            <div key={repo} className={styles.railRepo}>
+              <button
+                type="button"
+                className={`${styles.railFolder} ${isFiltered ? styles.railFolderActive : ""}`}
+                style={{ color: repoColor(repo, repoColors) }}
+                onClick={() => {
+                  setOverviewRepoFilter(repo);
+                  setView("overview");
                 }}
+                onContextMenu={(event) => openRepoMenu(repo, event)}
+                title={repoName(repo)}
+                aria-label={repoName(repo)}
+                aria-pressed={isFiltered}
               >
-                {/* Static repo-colored folder marker (#128, replaces the #115
-                    cube): a non-interactive identity marker. The name still
-                    filters Overview on click (#34). */}
-                <span
-                  className={styles.repoFolder}
-                  style={{ color: repoColor(repo, repoColors) }}
-                  aria-hidden
-                >
-                  <Folder size={12} strokeWidth={2} />
-                </span>
-                {/* Left-click a repo title filters Overview to it (toggle);
-                    right-click opens the #31 context menu. */}
-                <button
-                  type="button"
-                  className={styles.repoTitle}
-                  onClick={() => {
-                    setOverviewRepoFilter(repo);
-                    setView("overview");
-                  }}
-                  title={`Filter Overview to ${repoName(repo)}`}
-                  aria-pressed={isFiltered}
-                >
-                  <span className={styles.repoName}>{repoName(repo)}</span>
-                  {!isEmpty && (
-                    <span className={styles.count}>{repoSessions.length}</span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
-                  onClick={() => void startRepoSession(repo)}
-                  title="New session in this repo"
-                  aria-label="New session in this repo"
-                >
-                  <Plus size={14} strokeWidth={1.5} />
-                </button>
-              </div>
-
-              {/* Child rows (#59/#74/#93): sessions, non-agent items, schedules,
-                  and nested worktree agents — always rendered (#115 removed the
-                  #113 collapse gate). */}
-              {repoSessions.map((session, i) => (
-                <SessionRow
-                  key={session.id}
-                  session={session}
-                  // rowLabels has one entry per session; fallback satisfies
-                  // noUncheckedIndexedAccess and is never reached at runtime.
-                  label={rowLabels[i] ?? baseLabel}
-                  selected={session.id === selectedId}
-                  busy={sessionBusy[session.id] ?? false}
-                  hasBeenActive={sessionActive[session.id] ?? false}
-                  onSelect={() =>
-                    selectItem({
-                      kind: "agent",
-                      id: session.id,
-                      repoPath: session.repoPath,
-                    })
-                  }
-                  onRemove={() => void removeSession(session.id)}
-                  onRename={(name) => void renameSession(session.id, name)}
-                />
-              ))}
-
-              {/* This repo's non-agent items (#59) — the same `overviewPanels`
-                  Overview shows, 1:1: file + diff viewers. A click selects/jumps
-                  to the item in the current view (#79), the × removes it, and each
-                  is draggable into a Canvas (file → file viewer, diff → diff). */}
-              {renderPanelRows(repo)}
-
-              {/* Pending scheduled sessions for this repo (#93): name/branch +
-                  fire time + cancel. Non-draggable, no rich panel (that's #94). */}
-              {schedules
-                .filter((s) => s.cwd === repo)
-                .map((s) => (
-                  <ScheduleRow
-                    key={s.id}
-                    schedule={s}
-                    selected={s.id === selectedId}
-                    onOpen={() =>
-                      selectItem({
-                        kind: "scheduled",
-                        id: s.id,
-                        repoPath: s.cwd,
-                      })
-                    }
-                    onCancel={() => void cancelSchedule(s.id)}
-                  />
-                ))}
-
-              {/* Isolated worktrees (#74), nested under their parent repo: each
-                  worktree folder is a sub-group (branch + "worktree" badge) with
-                  its agent(s). Their repo_path is the worktree, not this repo. */}
+                <Folder size={18} strokeWidth={2} />
+              </button>
+              {repoSessions.length > 0 && (
+                <div className={styles.railDots}>
+                  {repoSessions.map((s) => dot(s, baseLabel))}
+                </div>
+              )}
               {worktreePaths.map((wt) => {
                 const wtAgents = worktreeAgents.filter(
                   (s) => s.repoPath === wt,
                 );
                 const wtBranch = (branches[wt] ?? "") || repoName(wt);
-                const wtLabels = dedupeBranchLabels(
-                  wtAgents.map(() => wtBranch),
-                );
                 return (
-                  <div key={wt} className={styles.worktreeGroup}>
+                  <div key={wt} className={styles.railWorktreeGroup}>
                     <WorktreeHeader
+                      compact
                       path={wt}
                       branch={wtBranch}
                       parent={wtAgents[0]?.worktreeParent ?? undefined}
                       agentCount={wtAgents.length}
                     />
-                    {wtAgents.map((session, i) => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        label={wtLabels[i] ?? wtBranch}
-                        selected={session.id === selectedId}
-                        busy={sessionBusy[session.id] ?? false}
-                        hasBeenActive={sessionActive[session.id] ?? false}
-                        onSelect={() =>
-                          selectItem({
-                            kind: "agent",
-                            id: session.id,
-                            repoPath: session.repoPath,
-                          })
-                        }
-                        onRemove={() => void removeSession(session.id)}
-                        onRename={(name) =>
-                          void renameSession(session.id, name)
-                        }
-                      />
-                    ))}
-                    {/* Views opened from the worktree badge (#164) are keyed by the
-                        worktree path, so they render here under their worktree. */}
-                    {renderPanelRows(wt)}
+                    {wtAgents.length > 0 && (
+                      <div className={styles.railDots}>
+                        {wtAgents.map((s) => dot(s, wtBranch))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1379,11 +1271,241 @@ function Sidebar() {
           );
         })}
       </div>
+    </div>
+  );
+
+  return (
+    <aside
+      className={`${styles.sidebar} ${sidebarCollapsed ? styles.collapsed : ""}`}
+      style={{ width: sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth }}
+      aria-label="Sessions"
+    >
+      {/* Drag-to-resize handle on the right edge (#108) — hidden while collapsed
+          (a fixed-width rail isn't resizable; expand via the chevron / ⌘B). */}
+      {!sidebarCollapsed && (
+        <div
+          className={styles.resizeHandle}
+          onPointerDown={onResizeDown}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeUp}
+          onDoubleClick={() => setSidebarWidth(260)}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar (double-click to reset)"
+          title="Drag to resize · double-click to reset"
+        />
+      )}
+      {sidebarCollapsed ? (
+        rail
+      ) : (
+        <>
+          <button
+            type="button"
+            className={styles.newButton}
+            onClick={() => openNewSession()}
+          >
+            <Plus size={16} strokeWidth={1.5} />
+            New session
+            <kbd className={styles.kbd}>⌘N</kbd>
+          </button>
+
+          {/* Schedule a session to launch later (#93) — same flow, plus a time step. */}
+          <button
+            type="button"
+            className={styles.scheduleButton}
+            onClick={() => openSchedule()}
+          >
+            <Clock size={15} strokeWidth={1.5} />
+            Schedule session
+            <kbd className={styles.kbd}>⌘⇧N</kbd>
+          </button>
+
+          <div className={styles.viewSwitch}>
+            <ViewSwitch />
+          </div>
+
+          <div className={styles.repos}>
+            {repos.length === 0 && (
+              <p className={styles.emptyHint}>No repositories yet.</p>
+            )}
+
+            {repos.map((repo) => {
+              const repoSessions = sessions.filter(
+                (s) => s.repoPath === repo && !s.worktreeParent,
+              );
+              const isEmpty = repoSessions.length === 0;
+              const isFiltered = overviewRepoFilter === repo;
+              // Primary label = the repo's branch, or the folder name when non-git /
+              // not yet known. All sessions in a group share it, so index duplicates.
+              const baseLabel = (branches[repo] ?? "") || repoName(repo);
+              const rowLabels = dedupeBranchLabels(
+                repoSessions.map(() => baseLabel),
+              );
+              // Worktree agents (#74) of this repo, grouped by their worktree folder —
+              // rendered as indented sub-groups below the repo's own sessions/items.
+              const worktreeAgents = sessions.filter(
+                (s) => s.worktreeParent === repo,
+              );
+              const worktreePaths = [
+                ...new Set(worktreeAgents.map((s) => s.repoPath)),
+              ];
+
+              return (
+                <div key={repo} className={styles.group}>
+                  <div
+                    className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""} ${isFiltered ? styles.repoActive : ""}`}
+                    onContextMenu={(event) => openRepoMenu(repo, event)}
+                  >
+                    {/* Static repo-colored folder marker (#128, replaces the #115
+                    cube): a non-interactive identity marker. The name still
+                    filters Overview on click (#34). */}
+                    <span
+                      className={styles.repoFolder}
+                      style={{ color: repoColor(repo, repoColors) }}
+                      aria-hidden
+                    >
+                      <Folder size={12} strokeWidth={2} />
+                    </span>
+                    {/* Left-click a repo title filters Overview to it (toggle);
+                    right-click opens the #31 context menu. */}
+                    <button
+                      type="button"
+                      className={styles.repoTitle}
+                      onClick={() => {
+                        setOverviewRepoFilter(repo);
+                        setView("overview");
+                      }}
+                      title={`Filter Overview to ${repoName(repo)}`}
+                      aria-pressed={isFiltered}
+                    >
+                      <span className={styles.repoName}>{repoName(repo)}</span>
+                      {!isEmpty && (
+                        <span className={styles.count}>
+                          {repoSessions.length}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
+                      onClick={() => void startRepoSession(repo)}
+                      title="New session in this repo"
+                      aria-label="New session in this repo"
+                    >
+                      <Plus size={14} strokeWidth={1.5} />
+                    </button>
+                  </div>
+
+                  {/* Child rows (#59/#74/#93): sessions, non-agent items, schedules,
+                  and nested worktree agents — always rendered (#115 removed the
+                  #113 collapse gate). */}
+                  {repoSessions.map((session, i) => (
+                    <SessionRow
+                      key={session.id}
+                      session={session}
+                      // rowLabels has one entry per session; fallback satisfies
+                      // noUncheckedIndexedAccess and is never reached at runtime.
+                      label={rowLabels[i] ?? baseLabel}
+                      selected={session.id === selectedId}
+                      busy={sessionBusy[session.id] ?? false}
+                      hasBeenActive={sessionActive[session.id] ?? false}
+                      onSelect={() =>
+                        selectItem({
+                          kind: "agent",
+                          id: session.id,
+                          repoPath: session.repoPath,
+                        })
+                      }
+                      onRemove={() => void removeSession(session.id)}
+                      onRename={(name) => void renameSession(session.id, name)}
+                    />
+                  ))}
+
+                  {/* This repo's non-agent items (#59) — the same `overviewPanels`
+                  Overview shows, 1:1: file + diff viewers. A click selects/jumps
+                  to the item in the current view (#79), the × removes it, and each
+                  is draggable into a Canvas (file → file viewer, diff → diff). */}
+                  {renderPanelRows(repo)}
+
+                  {/* Pending scheduled sessions for this repo (#93): name/branch +
+                  fire time + cancel. Non-draggable, no rich panel (that's #94). */}
+                  {schedules
+                    .filter((s) => s.cwd === repo)
+                    .map((s) => (
+                      <ScheduleRow
+                        key={s.id}
+                        schedule={s}
+                        selected={s.id === selectedId}
+                        onOpen={() =>
+                          selectItem({
+                            kind: "scheduled",
+                            id: s.id,
+                            repoPath: s.cwd,
+                          })
+                        }
+                        onCancel={() => void cancelSchedule(s.id)}
+                      />
+                    ))}
+
+                  {/* Isolated worktrees (#74), nested under their parent repo: each
+                  worktree folder is a sub-group (branch + "worktree" badge) with
+                  its agent(s). Their repo_path is the worktree, not this repo. */}
+                  {worktreePaths.map((wt) => {
+                    const wtAgents = worktreeAgents.filter(
+                      (s) => s.repoPath === wt,
+                    );
+                    const wtBranch = (branches[wt] ?? "") || repoName(wt);
+                    const wtLabels = dedupeBranchLabels(
+                      wtAgents.map(() => wtBranch),
+                    );
+                    return (
+                      <div key={wt} className={styles.worktreeGroup}>
+                        <WorktreeHeader
+                          path={wt}
+                          branch={wtBranch}
+                          parent={wtAgents[0]?.worktreeParent ?? undefined}
+                          agentCount={wtAgents.length}
+                        />
+                        {wtAgents.map((session, i) => (
+                          <SessionRow
+                            key={session.id}
+                            session={session}
+                            label={wtLabels[i] ?? wtBranch}
+                            selected={session.id === selectedId}
+                            busy={sessionBusy[session.id] ?? false}
+                            hasBeenActive={sessionActive[session.id] ?? false}
+                            onSelect={() =>
+                              selectItem({
+                                kind: "agent",
+                                id: session.id,
+                                repoPath: session.repoPath,
+                              })
+                            }
+                            onRemove={() => void removeSession(session.id)}
+                            onRename={(name) =>
+                              void renameSession(session.id, name)
+                            }
+                          />
+                        ))}
+                        {/* Views opened from the worktree badge (#164) are keyed by the
+                        worktree path, so they render here under their worktree. */}
+                        {renderPanelRows(wt)}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* Footer (#100): a thin bottom bar pinned below the scrolling repo list,
-          laid out (a flex row) to hold more quick-action icons later. For now it
-          holds the Settings gear. */}
-      <div className={styles.footer}>
+          holding the Settings gear and (#168) the collapse/expand chevron. When
+          collapsed the rail is too narrow for a row, so the footer stacks them. */}
+      <div
+        className={`${styles.footer} ${sidebarCollapsed ? styles.footerCollapsed : ""}`}
+      >
         <button
           type="button"
           className={styles.footerButton}
@@ -1392,6 +1514,19 @@ function Sidebar() {
           aria-label="Settings"
         >
           <SettingsIcon size={16} strokeWidth={1.5} />
+        </button>
+        <button
+          type="button"
+          className={styles.footerButton}
+          onClick={() => toggleSidebarCollapsed()}
+          title={sidebarCollapsed ? "Expand sidebar ⌘B" : "Collapse sidebar ⌘B"}
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {sidebarCollapsed ? (
+            <PanelLeftOpen size={16} strokeWidth={1.5} />
+          ) : (
+            <PanelLeftClose size={16} strokeWidth={1.5} />
+          )}
         </button>
       </div>
 

@@ -1,8 +1,8 @@
 # TASK-168
 
-### 1. [ ] Collapsible left panel — minimize the sidebar to an icon rail
+### 1. [x] Collapsible left panel — minimize the sidebar to an icon rail
 
-**Status:** Not started · _(Not started | In progress | Done)_
+**Status:** Done · _(Not started | In progress | Done)_
 **Depends on:** none
 **Created:** 2026-06-25
 
@@ -249,3 +249,22 @@ Activity dots are **indicators only** (not click-to-select) for the same reason.
   (file tree viewer), is unrelated and produces nothing this consumes. The prior #113→#115
   history (collapsible **repo folders**, reverted) is a different feature (folding a repo's
   child rows) and is not affected here.
+
+- **Implementation notes (2026-06-25):** All subtasks shipped as specified. The
+  `sidebar_collapsed` bool was plumbed end-to-end mirroring `sidebar_width`
+  (store.rs field + getter/setter, commands.rs `get/set_sidebar_collapsed`, lib.rs
+  `invoke_handler`, ipc.ts `getSidebarCollapsed`/`setSidebarCollapsed`, store.ts state +
+  `setSidebarCollapsed`/`toggleSidebarCollapsed` + boot `Promise.all`). `ViewSwitch`
+  gained a `compact` icon-only mode (LayoutGrid/PanelsTopLeft); `WorktreeHeader` a
+  `compact` icon-only mode (GitBranch glyph, menu intact). The repo context-menu open
+  handler was extracted to a shared `openRepoMenu(repo, event)` used by both the
+  expanded header and the rail folder icon. The collapsed rail renders New/Schedule/
+  compact-ViewSwitch icons + per-repo folder icons with per-session `BusyIndicator` dots
+  + per-worktree branch icons; resize handle hidden + width fixed to
+  `SIDEBAR_RAIL_WIDTH` (56px) while collapsed; footer stacks Settings gear + the
+  PanelLeftClose/PanelLeftOpen chevron. ⌘B added to `useKeyboardNav` (capture-phase,
+  `IS_MAIN_WINDOW`-guarded). Added the optional `toggleSidebarCollapsed` store test and
+  primed `getSidebarCollapsed` in `store.refresh.test.ts`'s ipc mock (the boot
+  `Promise.all` now calls it). All checks green: `npm run build` / `npm run lint` /
+  `npm test` (221) / `npm run format:check` / `cargo test` / `npm run lint:rust` /
+  `cargo fmt --check`.

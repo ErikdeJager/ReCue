@@ -295,6 +295,12 @@ export const setSettings = (settings: Settings) =>
 export const getSidebarWidth = () => invoke<number | null>("get_sidebar_width");
 export const setSidebarWidth = (width: number) =>
   invoke<void>("set_sidebar_width", { width });
+/** Sidebar collapsed-to-rail flag (#168), persisted separately from Settings like
+ * the width above. `null` until first set (the frontend defaults to expanded). */
+export const getSidebarCollapsed = () =>
+  invoke<boolean | null>("get_sidebar_collapsed");
+export const setSidebarCollapsed = (collapsed: boolean) =>
+  invoke<void>("set_sidebar_collapsed", { collapsed });
 /** Clear the recents list (#100 Settings → Data). */
 export const clearRecents = () => invoke<void>("clear_recents");
 /** Reveal the app-data folder (where sessions.json lives) in Finder (#100). */

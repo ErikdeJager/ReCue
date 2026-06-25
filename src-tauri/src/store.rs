@@ -186,6 +186,12 @@ pub struct PersistedState {
     /// (the frontend defaults + clamps); `default` keeps old files loading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_width: Option<u32>,
+    /// Whether the sidebar is collapsed to the icon rail (#168). `None` until first
+    /// set (the frontend defaults to expanded); kept separate from the Settings blob
+    /// so the Settings draft can't clobber this live UI toggle. `default` keeps old
+    /// files loading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_collapsed: Option<bool>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -450,6 +456,17 @@ impl Store {
     /// Persist the sidebar width (#108).
     pub fn set_sidebar_width(&self, width: u32) -> io::Result<()> {
         self.update(|state| state.sidebar_width = Some(width))
+    }
+
+    /// Whether the sidebar is collapsed to the icon rail (#168); `None` until first
+    /// set (the frontend defaults to expanded).
+    pub fn sidebar_collapsed(&self) -> Option<bool> {
+        self.with(|state| state.sidebar_collapsed)
+    }
+
+    /// Persist the sidebar collapsed flag (#168).
+    pub fn set_sidebar_collapsed(&self, collapsed: bool) -> io::Result<()> {
+        self.update(|state| state.sidebar_collapsed = Some(collapsed))
     }
 
     /// All pending scheduled sessions (#93).

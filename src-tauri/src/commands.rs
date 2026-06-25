@@ -933,6 +933,20 @@ pub fn set_sidebar_width(store: State<'_, Store>, width: u32) -> Result<(), Sess
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+/// Whether the sidebar is collapsed to the icon rail (#168); `None` until first set.
+#[tauri::command]
+pub fn get_sidebar_collapsed(store: State<'_, Store>) -> Option<bool> {
+    store.sidebar_collapsed()
+}
+
+/// Persist the sidebar collapsed flag (#168).
+#[tauri::command]
+pub fn set_sidebar_collapsed(store: State<'_, Store>, collapsed: bool) -> Result<(), SessionError> {
+    store
+        .set_sidebar_collapsed(collapsed)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
 /// untouched — only the recently-used folder list is emptied.
 #[tauri::command]

@@ -1,17 +1,20 @@
+import { LayoutGrid, PanelsTopLeft } from "lucide-react";
+
 import { useStore } from "../../store";
 import type { View } from "../../types";
 import styles from "./ViewSwitch.module.css";
 
-const OPTIONS: { value: View; label: string }[] = [
-  { value: "overview", label: "Overview" },
-  { value: "canvas", label: "Canvas" },
+const OPTIONS: { value: View; label: string; icon: typeof LayoutGrid }[] = [
+  { value: "overview", label: "Overview", icon: LayoutGrid },
+  { value: "canvas", label: "Canvas", icon: PanelsTopLeft },
 ];
 
 /**
  * Segmented Overview / Canvas control (#25, #46, #75). Lives in the sidebar,
- * under the New session button, so it's always visible.
+ * under the New session button, so it's always visible. With `compact` (#168) it
+ * renders as icon-only buttons stacked to fit the collapsed sidebar rail.
  */
-function ViewSwitch() {
+function ViewSwitch({ compact = false }: { compact?: boolean }) {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
 
@@ -19,7 +22,7 @@ function ViewSwitch() {
 
   return (
     <div
-      className={styles.group}
+      className={compact ? styles.groupCompact : styles.group}
       role="tablist"
       aria-label="View"
       onKeyDown={(event) => {
@@ -42,19 +45,37 @@ function ViewSwitch() {
         tabs[next]?.focus();
       }}
     >
-      {OPTIONS.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          role="tab"
-          aria-selected={view === option.value}
-          tabIndex={view === option.value ? 0 : -1}
-          className={view === option.value ? styles.active : styles.option}
-          onClick={() => go(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
+      {OPTIONS.map((option) => {
+        const selected = view === option.value;
+        const Icon = option.icon;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-label={compact ? option.label : undefined}
+            title={compact ? option.label : undefined}
+            tabIndex={selected ? 0 : -1}
+            className={
+              compact
+                ? selected
+                  ? styles.iconActive
+                  : styles.iconOption
+                : selected
+                  ? styles.active
+                  : styles.option
+            }
+            onClick={() => go(option.value)}
+          >
+            {compact ? (
+              <Icon size={16} strokeWidth={1.5} aria-hidden />
+            ) : (
+              option.label
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
