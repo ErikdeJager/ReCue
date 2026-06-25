@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, Pencil, Plus, Trash2, X } from "lucide-react";
 
+import { noAutoCapitalize } from "../../inputProps";
 import { useStore } from "../../store";
 import styles from "./TemplateManager.module.css";
 
@@ -97,6 +98,7 @@ function TemplateManager() {
                 {renamingId === t.id ? (
                   <input
                     className={styles.renameInput}
+                    {...noAutoCapitalize}
                     autoFocus
                     value={draft}
                     onChange={(event) => setDraft(event.currentTarget.value)}

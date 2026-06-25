@@ -12,6 +12,7 @@ import {
 import { type LucideIcon, X } from "lucide-react";
 import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
 
+import { noAutoCapitalize } from "../../inputProps";
 import { useStore } from "../../store";
 import type { CanvasContent, CanvasEdge, CanvasNode } from "../../types";
 import canvasStyles from "../Canvas/Canvas.module.css";
@@ -136,6 +137,7 @@ function BlockPanel({
             <span className={styles.configLabel}>Agent name (optional)</span>
             <input
               className={styles.configLine}
+              {...noAutoCapitalize}
               type="text"
               value={content.name ?? ""}
               placeholder="e.g. Backend"
@@ -156,6 +158,7 @@ function BlockPanel({
             </span>
             <textarea
               className={styles.configInput}
+              {...noAutoCapitalize}
               value={content.prompt ?? ""}
               placeholder="Sent to the agent when the template is used…"
               rows={4}
@@ -171,6 +174,7 @@ function BlockPanel({
             <span className={styles.configLabel}>File (relative path)</span>
             <input
               className={styles.configLine}
+              {...noAutoCapitalize}
               type="text"
               value={content.file ?? ""}
               placeholder="e.g. README.md"
@@ -331,6 +335,7 @@ function TemplateEditor() {
           </span>
           <input
             className={styles.nameInput}
+            {...noAutoCapitalize}
             value={name}
             placeholder="Template name…"
             onChange={(event) => setName(event.currentTarget.value)}

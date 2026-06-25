@@ -1,8 +1,8 @@
 # TASK-170
 
-### 1. [ ] Stop macOS auto-capitalizing (and auto-correcting) every text input
+### 1. [x] Stop macOS auto-capitalizing (and auto-correcting) every text input
 
-**Status:** Not started · _(Not started | In progress | Done)_
+**Status:** Done · _(Not started | In progress | Done)_
 **Depends on:** none
 **Created:** 2026-06-25
 
@@ -165,3 +165,18 @@ _Non-text inputs — DO NOT touch (auto-capitalize doesn't apply):_
   out of scope there). #168 (collapsible sidebar rail) adds only icon buttons, no text
   input. #169 (auto-name refresh) is backend-only. The Subtask-4 re-grep covers the
   unlikely case any of them lands a new field before this task runs.
+
+- **Implementation notes (2026-06-25):** Frontend-only. Added `src/inputProps.ts`
+  exporting `noAutoCapitalize = { autoCapitalize: "none", autoCorrect: "off" } as const`
+  and spread it into all 19 text `<input>`/`<textarea>` fields across the 10 files in the
+  inventory (Sidebar rename; FileViewer editor; CanvasTabs rename; ScheduledPanel name;
+  SkillAutocomplete textarea — covering both prompt sites; NewSessionModal search/branch
+  filter/new-branch/sched-name; KanbanPanel card-title/card-body/column-name/raw; Template
+  Manager rename; FilePicker search; TemplateEditor agent-name/prompt/file-path/template-name).
+  `#167`/`#168`/`#169` had landed first and added **no** new text fields (confirmed by the
+  Subtask-4 re-grep). `spellCheck={false}` preserved on FileViewer + Kanban raw; non-text
+  inputs (color/checkbox/range/datetime-local) untouched. All green: npm build / lint /
+  test (221) / format:check; no Rust change. The macOS WKWebView first-letter behavior is
+  a native text-substitution effect, so the live "lowercase stays lowercase" confirmation
+  (Subtask 5 / first acceptance bullet) was **not** runtime-verified in a `tauri dev` macOS
+  session in this autonomous loop — the attributes are the documented, dependable lever.

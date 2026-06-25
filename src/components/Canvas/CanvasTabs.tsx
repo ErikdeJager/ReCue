@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 
+import { noAutoCapitalize } from "../../inputProps";
 import { useStore } from "../../store";
 import type { CanvasTab } from "../../types";
 import styles from "./Canvas.module.css";
@@ -74,6 +75,7 @@ function Tab({ tab, active }: { tab: CanvasTab; active: boolean }) {
       {editing ? (
         <input
           className={styles.tabInput}
+          {...noAutoCapitalize}
           autoFocus
           defaultValue={tab.name}
           onClick={(event) => event.stopPropagation()}

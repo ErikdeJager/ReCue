@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Search } from "lucide-react";
 
+import { noAutoCapitalize } from "../../inputProps";
 import styles from "./FilePicker.module.css";
 
 interface FilePickerProps {
@@ -114,6 +115,7 @@ function FilePicker({
         />
         <input
           ref={inputRef}
+          {...noAutoCapitalize}
           type="text"
           className={styles.search}
           placeholder={

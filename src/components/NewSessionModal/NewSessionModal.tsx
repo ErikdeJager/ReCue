@@ -9,6 +9,7 @@ import {
   Plus,
 } from "lucide-react";
 
+import { noAutoCapitalize } from "../../inputProps";
 import { listBranches, listSkills, pickDirectory } from "../../ipc";
 import { repoName } from "../../paths";
 import { useStore } from "../../store";
@@ -710,6 +711,7 @@ function NewSessionModal() {
                 <input
                   ref={searchRef}
                   className={styles.search}
+                  {...noAutoCapitalize}
                   type="text"
                   value={query}
                   placeholder="Search recent folders…"
@@ -806,6 +808,7 @@ function NewSessionModal() {
               <input
                 ref={branchFilterRef}
                 className={styles.search}
+                {...noAutoCapitalize}
                 type="text"
                 value={branchQuery}
                 placeholder="Filter branches…"
@@ -875,6 +878,7 @@ function NewSessionModal() {
                 <input
                   ref={newBranchNameRef}
                   className={styles.search}
+                  {...noAutoCapitalize}
                   type="text"
                   value={newBranchName}
                   placeholder="New branch name…"
@@ -1030,6 +1034,7 @@ function NewSessionModal() {
             <p className={styles.label}>Name (optional)</p>
             <input
               className={styles.search}
+              {...noAutoCapitalize}
               type="text"
               value={schedName}
               placeholder="Custom name…"

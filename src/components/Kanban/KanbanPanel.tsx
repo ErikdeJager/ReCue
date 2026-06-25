@@ -37,6 +37,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { noAutoCapitalize } from "../../inputProps";
 import { useStore } from "../../store";
 import { useAutoSaveFile } from "../../useAutoSaveFile";
 import Checkbox from "../Checkbox/Checkbox";
@@ -151,6 +152,7 @@ function SortableCard({
         {editing ? (
           <input
             className={styles.cardTitleInput}
+            {...noAutoCapitalize}
             value={draft?.title ?? ""}
             placeholder="Card title…"
             autoFocus
@@ -212,6 +214,7 @@ function SortableCard({
       {editing ? (
         <textarea
           className={styles.cardBodyInput}
+          {...noAutoCapitalize}
           value={draft?.body ?? ""}
           placeholder="Markdown body (optional) — tags, dates, links…"
           onChange={(e) => onDraftChange({ body: e.currentTarget.value })}
@@ -301,6 +304,7 @@ function BoardColumn(props: ColumnProps) {
         {props.renaming ? (
           <input
             className={styles.columnNameInput}
+            {...noAutoCapitalize}
             value={props.renameValue}
             autoFocus
             onChange={(e) => props.onRename(e.currentTarget.value)}
@@ -654,6 +658,7 @@ function KanbanPanel({
         // — the same buffer the Board view edits, so the toggle round-trips losslessly.
         <textarea
           className={styles.rawEditor}
+          {...noAutoCapitalize}
           value={text ?? ""}
           spellCheck={false}
           onChange={(event) => setText(event.currentTarget.value)}

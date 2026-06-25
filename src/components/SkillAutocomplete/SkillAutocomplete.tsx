@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import type { SkillInfo } from "../../types";
+import { noAutoCapitalize } from "../../inputProps";
 import {
   applyInsertion,
   detectTrigger,
@@ -133,6 +134,7 @@ function SkillAutocomplete({
       <textarea
         ref={taRef}
         className={className}
+        {...noAutoCapitalize}
         value={value}
         placeholder={placeholder}
         rows={rows}

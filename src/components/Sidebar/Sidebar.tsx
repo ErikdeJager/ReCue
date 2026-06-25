@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 
+import { noAutoCapitalize } from "../../inputProps";
 import { revealPath } from "../../ipc";
 import { FORK_UNAVAILABLE_REASON, repoName, sessionLabel } from "../../paths";
 import { formatFireTime } from "../../time";
@@ -317,6 +318,7 @@ function SessionRow({
       {editing ? (
         <input
           className={styles.renameInput}
+          {...noAutoCapitalize}
           autoFocus
           value={draft}
           placeholder={label}

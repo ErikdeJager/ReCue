@@ -3,6 +3,7 @@ import { Code2, Eye } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { noAutoCapitalize } from "../../inputProps";
 import { useAutoSaveFile } from "../../useAutoSaveFile";
 import { detectMode, prismLang } from "./fileType";
 import { highlightToHtml } from "./prism";
@@ -154,6 +155,7 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
         // Editable raw text, auto-saving via the hook (#148).
         <textarea
           className={styles.editor}
+          {...noAutoCapitalize}
           value={text}
           spellCheck={false}
           onChange={(event) => setText(event.currentTarget.value)}

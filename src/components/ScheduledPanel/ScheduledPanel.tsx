@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { GitBranch } from "lucide-react";
 
+import { noAutoCapitalize } from "../../inputProps";
 import { listSkills } from "../../ipc";
 import { repoName } from "../../paths";
 import { useStore } from "../../store";
@@ -136,6 +137,7 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
         <span className={styles.label}>Name</span>
         <input
           className={styles.input}
+          {...noAutoCapitalize}
           type="text"
           value={name}
           placeholder="Custom name…"
