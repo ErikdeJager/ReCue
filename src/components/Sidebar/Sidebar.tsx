@@ -12,6 +12,7 @@ import {
   FileDiff,
   FileText,
   Folder,
+  FolderTree,
   GitBranch,
   GitFork,
   PanelsTopLeft,
@@ -659,6 +660,75 @@ function DiffRow({
 }
 
 /**
+ * A file-tree item in the sidebar tree (#167): a repo's file-tree panel as a
+ * draggable row that drops into Canvas as a file-tree panel (`{kind:"filetree"}`).
+ * Click selects/jumps to it in the current view (#79); the × removes the panel (its
+ * 1:1). Mirrors DiffRow — repo-scoped, one per repo.
+ */
+function FileTreeRow({
+  repoPath,
+  panelId,
+  selected,
+  onOpen,
+  onClose,
+}: {
+  repoPath: string;
+  panelId: string;
+  selected: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: `filetree:${repoPath}:${panelId}`,
+      data: { kind: "filetree", repoPath },
+    });
+  const { menu, openMenu, closeMenu } = useRowMenu();
+  const style = transform
+    ? { transform: CSS.Translate.toString(transform) }
+    : undefined;
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${styles.fileRow} ${selected ? styles.fileRowSelected : ""} ${isDragging ? styles.fileRowDragging : ""}`}
+      style={style}
+      onContextMenu={openMenu}
+    >
+      <button
+        type="button"
+        className={styles.fileMain}
+        onClick={onOpen}
+        title="File tree"
+        {...attributes}
+        {...listeners}
+      >
+        <FolderTree
+          size={13}
+          strokeWidth={1.5}
+          className={styles.fileIcon}
+          aria-hidden
+        />
+        <span className={styles.fileName}>File tree</span>
+      </button>
+      <button
+        type="button"
+        className={styles.fileClose}
+        onClick={onClose}
+        title="Close file tree"
+        aria-label="Close file tree"
+      >
+        <X size={13} strokeWidth={1.5} />
+      </button>
+      <RowContextMenu
+        menu={menu}
+        items={[{ label: "Remove", onActivate: onClose, danger: true }]}
+        onClose={closeMenu}
+      />
+    </div>
+  );
+}
+
+/**
  * A plain shell terminal item in the sidebar tree (#72): a draggable row that
  * drops into Canvas as a terminal panel (`{kind:"terminal"}`). Click selects/
  * jumps to it (#79); the × removes the panel (and kills its shell). Mirrors DiffRow.
@@ -1021,6 +1091,17 @@ function Sidebar() {
           selected={panel.id === selectedId}
           onOpen={() =>
             selectItem({ kind: "diff", id: panel.id, repoPath: repoKey })
+          }
+          onClose={() => void removeOverviewPanel(repoKey, panel.id)}
+        />
+      ) : panel.kind === "filetree" ? (
+        <FileTreeRow
+          key={panel.id}
+          repoPath={repoKey}
+          panelId={panel.id}
+          selected={panel.id === selectedId}
+          onOpen={() =>
+            selectItem({ kind: "filetree", id: panel.id, repoPath: repoKey })
           }
           onClose={() => void removeOverviewPanel(repoKey, panel.id)}
         />

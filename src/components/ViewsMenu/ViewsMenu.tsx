@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   FileDiff,
   FileText,
+  FolderTree,
   SquareKanban,
   Terminal as TerminalIcon,
 } from "lucide-react";
@@ -101,6 +102,15 @@ function ViewsMenu({
       icon: FileDiff,
       run: () => {
         void addOverviewPanel(repoPath, "diff");
+        onClose();
+      },
+    },
+    {
+      key: "filetree",
+      label: "File tree",
+      icon: FolderTree,
+      run: () => {
+        void addOverviewPanel(repoPath, "filetree");
         onClose();
       },
     },

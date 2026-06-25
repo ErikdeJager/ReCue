@@ -1,8 +1,8 @@
 # TASK-167
 
-### 1. [ ] File tree viewer — a collapsible repo file tree as a first-class view type
+### 1. [x] File tree viewer — a collapsible repo file tree as a first-class view type
 
-**Status:** Not started · _(Not started | In progress | Done)_
+**Status:** Done · _(Not started | In progress | Done)_
 **Depends on:** none
 **Created:** 2026-06-25
 
@@ -235,3 +235,18 @@ appear; this matches what the existing `FilePicker` shows.
 - **Why no separate prerequisite task:** the only other open item is the "left panel
   collapse" Refine card, which produces nothing this needs; the data source is the
   already-shipped `list_files`. Hence `Depends on: none`.
+
+- **Implementation notes (2026-06-25):** All subtasks shipped. One filename deviation
+  from the plan: the pure helper was created as `buildFileTree.ts` (not `fileTree.ts`)
+  because `fileTree.ts` and the component `FileTree.tsx` differ only in case, which
+  collides on macOS's case-insensitive filesystem (TS `TS1261`/`TS1192`). The export
+  surface (`buildFileTree` + `FileTreeNode`) and behavior are unchanged; the test is
+  `buildFileTree.test.ts`. The `FileTree` component reimplements the small
+  cursor-positioned context menu inline (with a local `menu-in` keyframe, since CSS
+  Modules scope `@keyframes`) rather than lifting `RowContextMenu` out of `Sidebar.tsx`.
+  An optional manual **refresh** button is included (re-calls `list_files`). The
+  `canvasDrop.ts` "content→label helper" referenced in the plan doesn't exist in the
+  current file (diff/filetree carry no `label`), so that sub-bullet was a no-op — the
+  filetree mapping matches diff everywhere (no label), and big-mode/dedupe match by
+  `repoPath`. All checks green: `npm run build` / `npm test` (220) / `npm run lint` /
+  `npm run format:check` / `cargo test` (72).

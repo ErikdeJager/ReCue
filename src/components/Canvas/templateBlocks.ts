@@ -10,6 +10,7 @@ import {
   Bot,
   FileDiff,
   FileText,
+  FolderTree,
   type LucideIcon,
   SquareKanban,
   TerminalSquare,
@@ -25,7 +26,8 @@ export type BlockKind =
   | "new-terminal"
   | "open-file"
   | "open-diff"
-  | "open-kanban";
+  | "open-kanban"
+  | "open-filetree";
 
 /** How a block is configured in the editor: a `new-agent` prompt textarea, an
  * `open-file` relative-path input, or nothing. */
@@ -84,6 +86,13 @@ export const BLOCK_REGISTRY: BlockDescriptor[] = [
     icon: SquareKanban,
     config: "file",
     liveKind: "kanban",
+  },
+  {
+    kind: "open-filetree",
+    label: "Open file tree",
+    icon: FolderTree,
+    config: "none",
+    liveKind: "filetree",
   },
 ];
 

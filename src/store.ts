@@ -84,6 +84,7 @@ function omitKey<T>(map: Record<string, T>, key: string): Record<string, T> {
  * "diff viewer" / "terminal", or the file's basename for a file (markdown) panel. */
 function panelLabel(kind: OverviewPanel["kind"], file?: string): string {
   if (kind === "diff") return "diff viewer";
+  if (kind === "filetree") return "file tree";
   if (kind === "terminal") return "terminal";
   if (kind === "kanban")
     return file ? (file.split("/").pop() ?? file) : "kanban board";
@@ -340,7 +341,14 @@ function applySettingsEffects(s: Settings): void {
  * (by repo path + file). Matched against Canvas leaves for view-aware nav (#79). */
 type SidebarItem = {
   id: string;
-  kind: "agent" | "terminal" | "file" | "diff" | "scheduled" | "kanban";
+  kind:
+    | "agent"
+    | "terminal"
+    | "file"
+    | "diff"
+    | "scheduled"
+    | "kanban"
+    | "filetree";
   repoPath?: string;
   file?: string;
 };
@@ -367,6 +375,8 @@ function matchesCanvasItem(content: CanvasContent, item: SidebarItem): boolean {
       );
     case "diff":
       return content.kind === "diff" && content.repoPath === item.repoPath;
+    case "filetree":
+      return content.kind === "filetree" && content.repoPath === item.repoPath;
     case "scheduled":
       return content.kind === "scheduled" && content.scheduleId === item.id;
   }
@@ -401,6 +411,9 @@ function leafItemId(
   }
   if (content.kind === "diff") {
     return panels.find((p) => p.kind === "diff")?.id ?? null;
+  }
+  if (content.kind === "filetree") {
+    return panels.find((p) => p.kind === "filetree")?.id ?? null;
   }
   return null;
 }
@@ -1558,10 +1571,10 @@ export const useStore = create<AppState>()((set, get) => ({
   addOverviewPanel: async (repoPath, kind, file) => {
     const current = get().overviewPanels[repoPath] ?? [];
     // Terminals are never deduped — multiple independent shells per repo (#72);
-    // one diff per repo; one markdown panel per file.
+    // one diff per repo; one file tree per repo (#167); one markdown panel per file.
     const dup =
-      kind === "diff"
-        ? current.some((p) => p.kind === "diff")
+      kind === "diff" || kind === "filetree"
+        ? current.some((p) => p.kind === kind)
         : kind === "markdown" || kind === "kanban"
           ? current.some((p) => p.kind === kind && p.file === file)
           : false;
@@ -2061,6 +2074,14 @@ export const useStore = create<AppState>()((set, get) => ({
         live = resolvedContent(block, cwd, {});
         // Show the opened diff in the left panel + Overview (#152; one per repo).
         registerOverviewPanel(cwd, { id: crypto.randomUUID(), kind: "diff" });
+      } else if (liveKind === "filetree") {
+        // Stateless repo data (#167) — resolves immediately, no spawn/file/git gate.
+        live = resolvedContent(block, cwd, {});
+        // Show the file tree in the left panel + Overview (#152; one per repo).
+        registerOverviewPanel(cwd, {
+          id: crypto.randomUUID(),
+          kind: "filetree",
+        });
       } else {
         throw new Error(`Unknown block: ${block.kind}`);
       }

@@ -28,6 +28,7 @@ export function sameItem(a: CanvasContent, b: CanvasContent): boolean {
     case "kanban":
       return a.repoPath === b.repoPath && a.file === b.file;
     case "diff":
+    case "filetree":
       return a.repoPath === b.repoPath;
     case "scheduled":
       return !!a.scheduleId && a.scheduleId === b.scheduleId;
@@ -46,6 +47,8 @@ export function overviewPanelToContent(
   switch (panel.kind) {
     case "diff":
       return { kind: "diff", repoPath };
+    case "filetree":
+      return { kind: "filetree", repoPath };
     case "terminal":
       return { kind: "terminal", sessionId: panel.id, repoPath };
     case "kanban":
@@ -117,6 +120,9 @@ export function payloadToContent(
   if (data.kind === "diff") {
     return { kind: "diff", repoPath };
   }
+  if (data.kind === "filetree") {
+    return { kind: "filetree", repoPath };
+  }
   if (data.kind === "terminal" && typeof data.sessionId === "string") {
     return { kind: "terminal", sessionId: data.sessionId, repoPath };
   }
@@ -139,6 +145,13 @@ function isDuplicate(tree: CanvasNode | null, content: CanvasContent): boolean {
     return leaves.some(
       (l) =>
         l.content.kind === "diff" && l.content.repoPath === content.repoPath,
+    );
+  }
+  if (content.kind === "filetree") {
+    return leaves.some(
+      (l) =>
+        l.content.kind === "filetree" &&
+        l.content.repoPath === content.repoPath,
     );
   }
   if (content.kind === "terminal") {

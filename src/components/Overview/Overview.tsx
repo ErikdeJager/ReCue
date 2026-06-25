@@ -268,6 +268,7 @@ function SessionCard({
 
 function panelLabel(panel: OverviewPanel): string {
   if (panel.kind === "diff") return "Diff";
+  if (panel.kind === "filetree") return "File tree";
   if (panel.kind === "terminal") return "Terminal";
   if (panel.kind === "kanban") return panel.file?.split("/").pop() || "Kanban";
   return panel.file?.split("/").pop() || "File";

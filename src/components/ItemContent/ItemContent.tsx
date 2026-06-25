@@ -6,6 +6,7 @@ import { sameItem } from "../Canvas/canvasDrop";
 import TemplatePendingPanel from "../Canvas/TemplatePendingPanel";
 import DetachedNote from "../DetachedNote/DetachedNote";
 import DiffInspector from "../DiffInspector/DiffInspector";
+import FileTree from "../FileTree/FileTree";
 import FileViewer from "../FileViewer/FileViewer";
 import KanbanPanel from "../Kanban/KanbanPanel";
 import MaximizedNote from "../MaximizedNote/MaximizedNote";
@@ -90,6 +91,10 @@ function ItemContent({
   }
   if (content.kind === "diff" && content.repoPath) {
     return <DiffInspector repoPath={content.repoPath} active={active} />;
+  }
+  if (content.kind === "filetree" && content.repoPath) {
+    // Stateless repo data (#167), like diff — no ownership/PTY guard needed.
+    return <FileTree repoPath={content.repoPath} />;
   }
   if (content.kind === "scheduled" && content.scheduleId) {
     return <ScheduledPanel scheduleId={content.scheduleId} />;

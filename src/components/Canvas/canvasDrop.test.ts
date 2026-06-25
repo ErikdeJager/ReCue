@@ -30,6 +30,12 @@ describe("payloadToContent (#47/#142)", () => {
       payloadToContent({ kind: "kanban", repoPath: "/repo/a" }),
     ).toBeNull();
   });
+
+  it("maps a filetree drag payload to filetree content (#167)", () => {
+    expect(payloadToContent({ kind: "filetree", repoPath: "/repo/a" })).toEqual(
+      { kind: "filetree", repoPath: "/repo/a" },
+    );
+  });
 });
 
 describe("sameItem (#157)", () => {
@@ -113,6 +119,12 @@ describe("overviewPanelToContent (#157)", () => {
     expect(
       overviewPanelToContent({ id: "m", kind: "markdown", file: "R.md" }, "/r"),
     ).toEqual({ kind: "file", repoPath: "/r", file: "R.md" });
+    expect(overviewPanelToContent({ id: "f", kind: "filetree" }, "/r")).toEqual(
+      {
+        kind: "filetree",
+        repoPath: "/r",
+      },
+    );
   });
 });
 

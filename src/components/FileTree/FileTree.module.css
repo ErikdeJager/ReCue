@@ -1,0 +1,143 @@
+/* File tree viewer (#167): a collapsible, repo-scoped tree rendered in a sidebar
+   row / Overview column / Canvas panel. On-system tokens only; compact rows mirror
+   the FilePicker / Sidebar styling. */
+.tree {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+.toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.refresh:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4) 0;
+}
+
+.row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-8);
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.row:hover {
+  background: var(--bg-hover);
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.folderIcon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.fileIcon {
+  flex-shrink: 0;
+  /* The chevron column is folder-only; nudge file rows to align with folder names. */
+  margin-left: 17px;
+  color: var(--text-muted);
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hint {
+  margin: 0;
+  padding: var(--space-8);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+}
+
+/* Cursor-positioned right-click menu (mirrors the Sidebar RowContextMenu, #167). */
+.menuOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+}
+
+.menu {
+  position: fixed;
+  z-index: 201;
+  min-width: 170px;
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  animation: menu-in var(--dur-fast) var(--ease-out);
+}
+
+.menuItem {
+  display: block;
+  width: 100%;
+  padding: var(--space-6) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.menuItem:hover {
+  background: var(--bg-hover);
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

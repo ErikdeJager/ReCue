@@ -18,6 +18,7 @@ describe("templateBlocks registry (#117)", () => {
       "open-file",
       "open-diff",
       "open-kanban",
+      "open-filetree",
     ]);
     expect(blockDescriptor("new-agent")?.liveKind).toBe("agent");
     expect(blockDescriptor("open-file")?.liveKind).toBe("file");
@@ -25,6 +26,9 @@ describe("templateBlocks registry (#117)", () => {
     // `kanban` content kind.
     expect(blockDescriptor("open-kanban")?.liveKind).toBe("kanban");
     expect(blockDescriptor("open-kanban")?.config).toBe("file");
+    // The file-tree block (#167) is config-less and maps to live `filetree`.
+    expect(blockDescriptor("open-filetree")?.liveKind).toBe("filetree");
+    expect(blockDescriptor("open-filetree")?.config).toBe("none");
   });
 
   it("blockDescriptor returns undefined for a non-block kind", () => {
