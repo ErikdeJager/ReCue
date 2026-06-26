@@ -24,6 +24,7 @@ import {
 import CanvasCloseModal from "./components/CanvasCloseModal/CanvasCloseModal";
 import CanvasWindow from "./components/CanvasWindow/CanvasWindow";
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
+import CreatePanelModal from "./components/CreatePanelModal/CreatePanelModal";
 import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
 import Overview from "./components/Overview/Overview";
 import Settings from "./components/Settings/Settings";
@@ -59,6 +60,7 @@ function MainApp() {
   const templateEditorOpen = useStore((s) => s.templateEditorOpen);
   const templateManagerOpen = useStore((s) => s.templateManagerOpen);
   const templateUseOpen = useStore((s) => s.templateUseOpen);
+  const createPanelOpen = useStore((s) => s.createPanelOpen);
   const canvasClosePromptId = useStore((s) => s.canvasClosePromptId);
   const init = useStore((s) => s.init);
   const beginCanvasLift = useStore((s) => s.beginCanvasLift);
@@ -154,6 +156,7 @@ function MainApp() {
       <Toaster />
       <BigModeModal />
       <NewSessionModal />
+      {createPanelOpen && <CreatePanelModal />}
       <Settings />
       {canvasClosePromptId && <CanvasCloseModal />}
       {templateUseOpen && <TemplateUseModal />}

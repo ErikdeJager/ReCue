@@ -6,6 +6,8 @@ kanban-plugin: board
 
 ## Refine
 
+- [ ] Worktree header: icon indicator + the same new-item button repos have
+	A worktree row shows the literal word "worktree" and its create flow looks different from a repo's. Drop the word in favor of a simple icon that marks it as a worktree, and give the worktree header the same new-panel/create button repos have — items created still go into that same worktree.
 - [ ] Click a worktree to filter Overview to just that worktree
 	Clicking a repo in the left panel filters Overview to it; a worktree isn't clickable that way. Make clicking a worktree filter Overview to show only the items running/shown inside that worktree, mirroring how folder filtering works.
 - [ ] Schedule a session into a worktree
@@ -16,13 +18,11 @@ kanban-plugin: board
 	The left-panel folder context menu has both a top-level "New session" and a "New session here" under Views — redundant and confusing. Collapse them into a single "New session" option.
 - [ ] File tree panel: search input with content matches + inline preview
 	Add a nice search input to the file tree panel. As the user types, matching files show up — matched by filename and by file contents. For content hits, show inline the matching snippet in a small "mini file viewer." Each result has easy actions: reveal/open the file's location in the tree, or open it in a file viewer panel. No separate search panel — it lives inside the file tree.
-- [ ] 
+- [ ] worktree deletion block
+	When closing a final item inside a worktree; that job blocks the UI. Since files are being removed from the filesystem, the application freezes up and is unresponsive. I want this process to happen in the background so that the user can continue to use the app.
 
 ## READY
 
-- [ ] #189 — Keyboard-driven panel-creation modal (⌘K) + per-type shortcuts
-	Plan: TASK-189.md
-	Depends on: none
 - [ ] #190 — Auto-update skeleton: gated release pipeline + in-app update UI (keys deferred)
 	Plan: TASK-190.md
 	Depends on: none
@@ -41,9 +41,9 @@ kanban-plugin: board
 - [ ] #195 — Clean up Kanban card UI (hover-revealed actions, declutter title)
 	Plan: TASK-195.md
 	Depends on: #194
-- [ ] #196 — Worktree header: icon-only marker + inline "new session" button
-	Plan: TASK-196.md
-	Depends on: none
 
 ## DONE
 
+- [ ] #189 — Keyboard-driven panel-creation modal (⌘K) + per-type shortcuts
+	Plan: TASK-189.md
+	Depends on: none

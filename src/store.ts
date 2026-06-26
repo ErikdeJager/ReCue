@@ -631,6 +631,14 @@ export interface AppState {
    * **directly at the branch step** for `newSessionRepo`, seeded with this list (no
    * folder step, no second `list_branches`). `null` for the folder-step open. */
   newSessionInitialBranches: BranchList | null;
+  /** The ⌘K "Create panel" launcher (#189): a keyboard-first modal to spawn any
+   * panel type (session / file / diff / terminal / kanban / filetree) in a chosen
+   * repo-or-worktree, reusing the existing creation actions. */
+  createPanelOpen: boolean;
+  /** A panel type pre-selected by ⌘⌥1–6 (#189): when set, the launcher skips the
+   * type step and opens straight at the folder step for that type; `null` = ⌘K
+   * (start at the type step). */
+  createPanelType: string | null;
   /** Pending scheduled sessions (#93), newest-first; main window only. */
   schedules: ScheduledSession[];
   /** Application settings (#100), merged with defaults on load. */
@@ -679,6 +687,11 @@ export interface AppState {
   startRepoSession: (repo: string) => Promise<void>;
   /** Open the modal in schedule mode (#93). */
   openSchedule: (repo?: string) => void;
+  /** Open the ⌘K "Create panel" launcher (#189). `type` (set by ⌘⌥1–6) pre-selects
+   * a panel type and skips the type step; omitted = open at the type step. */
+  openCreatePanel: (type?: string) => void;
+  /** Close the Create-panel launcher (#189). */
+  closeCreatePanel: () => void;
   /** Add an existing folder to recents without spawning an agent (#172 sidebar
    * background menu → "New folder…"): opens the native folder picker and persists
    * the choice so it shows as a folder group immediately. Cancel = no-op; an already
@@ -1259,6 +1272,8 @@ export const useStore = create<AppState>()((set, get) => ({
   newSessionRepo: null,
   scheduleMode: false,
   newSessionInitialBranches: null,
+  createPanelOpen: false,
+  createPanelType: null,
   schedules: [],
   settings: DEFAULT_SETTINGS,
   settingsOpen: false,
@@ -1442,6 +1457,14 @@ export const useStore = create<AppState>()((set, get) => ({
       scheduleMode: false,
       newSessionInitialBranches: null,
     }),
+
+  // ⌘K / ⌘⌥1–6 Create-panel launcher (#189): pure open/close. The modal itself
+  // orchestrates the existing creation actions (startRepoSession / addOverviewPanel
+  // / createKanbanBoard) against the chosen folder.
+  openCreatePanel: (type) =>
+    set({ createPanelOpen: true, createPanelType: type ?? null }),
+  closeCreatePanel: () =>
+    set({ createPanelOpen: false, createPanelType: null }),
 
   addFolder: async () => {
     // Native folder picker (#172): cancel returns null → no-op.

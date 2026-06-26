@@ -1,0 +1,266 @@
+/* Dimmed full-screen scrim; closes on outside click (#189). A centered launcher
+   (opened by ⌘K from anywhere), unlike the top-left-anchored NewSessionModal. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: var(--scrim);
+}
+
+.dialog {
+  display: flex;
+  width: 360px;
+  max-height: 70vh;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: var(--space-16);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-window);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  transform-origin: top center;
+  animation: create-panel-in var(--dur-slow) var(--ease-out);
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin: 0 0 var(--space-12);
+  color: var(--text-primary);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+
+.titleIcon {
+  color: var(--accent);
+}
+
+.label {
+  display: block;
+  margin: 0 0 var(--space-6);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-sm);
+}
+
+/* Type chips (#189): icon + label + a digit-key hint. */
+.types {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-12);
+}
+
+.type {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: var(--space-6) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.type:hover,
+.type:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.typeIcon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.typeLabel {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Digit hint (#189) — the in-modal number key / ⌘⌥N index. */
+.typeKbd {
+  flex-shrink: 0;
+  padding: 0 var(--space-6);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+}
+
+/* Back affordance to the previous step (mirrors NewSessionModal's folderBack). */
+.back {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-bottom: var(--space-12);
+  padding: var(--space-4) var(--space-6);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.back:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.backName {
+  color: var(--text-primary);
+  font-size: var(--fs-meta);
+}
+
+.backHint {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}
+
+.search {
+  width: 100%;
+  margin-bottom: var(--space-8);
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+}
+
+.search::placeholder {
+  color: var(--text-muted);
+}
+
+.search:focus {
+  border-color: var(--accent);
+}
+
+.folders {
+  display: flex;
+  max-height: 240px;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-12);
+  overflow-y: auto;
+}
+
+.folder,
+.folderActive {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-4) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.folder:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.folderActive {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.folderName {
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+}
+
+.folderPath {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+.empty {
+  margin: 0 0 var(--space-12);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-8);
+}
+
+.cancel,
+.pickButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-12);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.cancel:hover,
+.pickButton:hover {
+  background: var(--bg-hover);
+}
+
+.btnKbd {
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+@keyframes create-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
