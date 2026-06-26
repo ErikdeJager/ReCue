@@ -2560,3 +2560,65 @@ markdown-`components` factory, both already shipped).
 
 ---
 
+### 183. [x] Diff view: show untracked (new) files in the working-tree diff
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-26
+
+**Description**
+
+The diff view's **Working tree** source didn't show **untracked (new) files** — their changes were
+invisible in the panel. Reported as "the diff panel doesn't show hidden folders' changed contents,"
+the real defect was broader: `git::working_diff` ran only `git diff HEAD`, which reports **tracked**
+modifications/deletions + staged additions and **excludes untracked files entirely**. A freshly
+created folder (hidden or not — e.g. a new `.claude/`) has all-untracked files, so none appeared,
+which is how the reporter hit it with a hidden config folder. Tracked changes inside hidden folders
+already rendered correctly, so the framing was incidental.
+
+**What shipped** (commit `57fb580`, 2026-06-26) — **backend-only** (`src-tauri/src/git.rs`):
+
+- **`working_diff` untracked pass:** after parsing the tracked `git diff HEAD` output, it now lists
+  untracked files via `git ls-files --others --exclude-standard -z` (`--exclude-standard` honors
+  `.gitignore`/`.git/info/exclude`/global excludes so ignored build noise stays out; `-z` NUL-split
+  for path robustness) and synthesizes a new-file diff for each with
+  `git -c core.quotepath=false diff --no-index --no-color --no-ext-diff -- /dev/null <path>`, running
+  the output through the existing `parse_unified_diff` (the `new file mode` block maps to
+  `FileStatus::Added`; binary files get the `Binary files … differ` flag). The parsed `A` entries are
+  appended to the tracked `files` list and the existing summary recompute covers the combined list.
+- **`run_git_raw_allow_diff` helper:** `git diff --no-index` exits **1** when inputs differ (the normal
+  case), which the strict `run_git_raw` (`.status.success()`) would discard — dropping every
+  untracked diff. The new runner returns stdout when the exit code is `0` **or** `1` (None for ≥2 /
+  spawn failure), used **only** for the `--no-index` calls; `run_git` / `run_git_raw` are unchanged.
+- **Bounded:** a `MAX_UNTRACKED_FILES` cap (2000) guards against a pathological untracked set
+  (added during implementation beyond the plan's optional-cap suggestion); a per-file `--no-index`
+  call returning `None` is skipped best-effort.
+- **No frontend change:** `DiffInspector` already renders a flat, unfiltered list of `diff.files`, so
+  untracked rows appear as the existing green "A" (Added) glyph with no UI change; the poll loop's
+  `JSON.stringify` signature naturally re-renders when untracked files appear/disappear.
+
+**Key files touched:** `src-tauri/src/git.rs` only — `working_diff` (untracked pass + combined
+summary), new `run_git_raw_allow_diff` + untracked-listing helper, `MAX_UNTRACKED_FILES`, and a new
+unit test. No frontend, no other module, no `CLAUDE.md` change.
+
+**Dependencies:** none. Out of scope: `compare_branches` (#81 branch-to-branch, where untracked files
+don't apply) is unchanged; no `.gitignore`'d files, no index/working-tree mutation.
+
+**Notes**
+
+- User decisions (refine Q&A, 2026-06-26): **all untracked files** (the "hidden folders" framing was
+  incidental); **respect `.gitignore`** via `--exclude-standard`.
+- Verified against real `git` during refinement: `git diff HEAD` omits untracked files; `diff
+  --no-index -- /dev/null <relpath>` emits a clean `new file mode` block (exit 1) with a `b/<relpath>`
+  header (and a `Binary files … differ` line for binaries); `ls-files --others --exclude-standard -z`
+  skips a `.gitignore`'d folder. The per-file `--no-index` spawn is acceptable because
+  `--exclude-standard` keeps the set small — it's the faithful, read-only way to reuse
+  `parse_unified_diff` (avoids the index-mutating `git add -N`).
+- New Rust unit test asserts a tracked modification **and** untracked files in normal + hidden folders
+  show as `A` while a `.gitignore`'d path is omitted. `cargo test` + `npm run lint:rust` (clippy) pass;
+  no frontend code change required. The in-app manual check (new file in a hidden folder appearing in
+  the Working-tree diff) was **not** runtime-verified in the headless loop; the backend change is
+  covered by the unit test and the render reuses the existing `A`-row machinery.
+
+---
+
