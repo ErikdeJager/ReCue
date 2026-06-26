@@ -676,6 +676,11 @@ export interface AppState {
   settings: Settings;
   /** Whether the Settings modal is open (#100). */
   settingsOpen: boolean;
+  /** The section the Settings modal should open at (#191): set when a caller
+   * deep-links (e.g. the updater indicator → "updates"); `null` = the default
+   * (Terminal). The modal seeds its initial section from this and it's cleared on
+   * close. */
+  settingsSection: string | null;
   /** Sidebar width in px (#108), drag-resizable + persisted (main window). */
   sidebarWidth: number;
   /** Whether the sidebar is collapsed to the icon rail (#168), persisted separately
@@ -742,7 +747,7 @@ export interface AppState {
   addFolder: () => Promise<void>;
   closeNewSession: () => void;
   /** Open/close the Settings modal (#100). */
-  setSettingsOpen: (open: boolean) => void;
+  setSettingsOpen: (open: boolean, section?: string) => void;
   /** Set the sidebar width (#108): clamp to [180, 560] + persist (debounced). */
   setSidebarWidth: (width: number) => void;
   /** Set the sidebar collapsed flag (#168): set + persist (main window). */
@@ -1326,11 +1331,19 @@ export const useStore = create<AppState>()((set, get) => ({
   schedules: [],
   settings: DEFAULT_SETTINGS,
   settingsOpen: false,
+  settingsSection: null,
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
   sidebarCollapsed: false,
 
   setView: (view) => set({ view }),
-  setSettingsOpen: (open) => set({ settingsOpen: open }),
+  // Open/close the Settings modal (#100); an optional `section` deep-links to a
+  // pane (#191, e.g. the updater indicator → "updates"). Cleared on close so the
+  // next plain open (the gear) starts at the default section.
+  setSettingsOpen: (open, section) =>
+    set({
+      settingsOpen: open,
+      settingsSection: open ? (section ?? null) : null,
+    }),
   setSidebarWidth: (width) => {
     const clamped = clampSidebarWidth(width);
     if (clamped === get().sidebarWidth) return; // no-op (e.g. dragging past a bound)

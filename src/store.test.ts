@@ -295,6 +295,21 @@ describe("app store", () => {
     expect(useStore.getState().newSessionRepo).toBeNull();
   });
 
+  it("opens Settings at an optional deep-link section (#191)", () => {
+    // The updater indicator deep-links to the Updates pane.
+    useStore.getState().setSettingsOpen(true, "updates");
+    expect(useStore.getState().settingsOpen).toBe(true);
+    expect(useStore.getState().settingsSection).toBe("updates");
+    // A plain gear open resets to the default (no section).
+    useStore.getState().setSettingsOpen(true);
+    expect(useStore.getState().settingsSection).toBeNull();
+    // Closing clears the deep-link target.
+    useStore.getState().setSettingsOpen(true, "updates");
+    useStore.getState().setSettingsOpen(false);
+    expect(useStore.getState().settingsOpen).toBe(false);
+    expect(useStore.getState().settingsSection).toBeNull();
+  });
+
   it("drives the updater confirm dialog (#190)", () => {
     useStore
       .getState()

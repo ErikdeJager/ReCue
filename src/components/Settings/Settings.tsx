@@ -8,9 +8,11 @@ import {
 import {
   Bot,
   Database,
+  Download,
   FolderOpen,
   MousePointerClick,
   Palette,
+  RefreshCw,
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
@@ -22,7 +24,13 @@ import Checkbox from "../Checkbox/Checkbox";
 import Slider from "../Slider/Slider";
 import styles from "./Settings.module.css";
 
-type Section = "terminal" | "appearance" | "behavior" | "sessions" | "data";
+type Section =
+  | "terminal"
+  | "appearance"
+  | "behavior"
+  | "sessions"
+  | "updates"
+  | "data";
 
 /** Peach — the default `--accent` token (#102). The Appearance picker maps this
  * swatch to `accentColor: ""` (no override, so the token stands). */
@@ -50,6 +58,11 @@ const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
     icon: <Bot size={15} strokeWidth={1.5} />,
   },
   {
+    id: "updates",
+    label: "Updates",
+    icon: <RefreshCw size={15} strokeWidth={1.5} />,
+  },
+  {
     id: "data",
     label: "Data & About",
     icon: <Database size={15} strokeWidth={1.5} />,
@@ -73,9 +86,19 @@ function SettingsModal() {
   const setRecents = useStore((s) => s.setRecents);
   const recentsCount = useStore((s) => s.recents.length);
   const pushToast = useStore((s) => s.pushToast);
+  // Deep-link target (#191): the section the opener requested (e.g. the updater
+  // indicator → "updates"); else the default (Terminal).
+  const initialSection = useStore((s) => s.settingsSection);
+  // Updater (#190) — the Updates pane (#191) drives it manually; no new logic.
+  // Named `updateState` to avoid the local `update()` settings-draft helper below.
+  const updateState = useStore((s) => s.update);
+  const checkForUpdate = useStore((s) => s.checkForUpdate);
+  const installUpdate = useStore((s) => s.installUpdate);
 
   const [draft, setDraft] = useState<SettingsType>(saved);
-  const [section, setSection] = useState<Section>("terminal");
+  const [section, setSection] = useState<Section>(
+    () => (initialSection as Section | null) ?? "terminal",
+  );
   const [appVer, setAppVer] = useState("");
   const [claudeVer, setClaudeVer] = useState<string | null>(null);
 
@@ -322,6 +345,111 @@ function SettingsModal() {
                 label="Auto-name agents from claude's session title"
                 className={styles.checkRow}
               />
+            )}
+
+            {section === "updates" && (
+              // Manual "review then install" surface (#191) over #190's updater:
+              // current version + a Check button, status feedback, and — when an
+              // update is available — the new version, a labelled "What's new" slot
+              // (filled by #192), and an "Update now" button driving #190's
+              // download→freeze/progress→restart flow. No new updater logic here.
+              <div className={styles.updates}>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>
+                    Current version
+                    <span className={styles.fieldValue}>{appVer || "—"}</span>
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  className={styles.dataButton}
+                  onClick={() => void checkForUpdate()}
+                  disabled={
+                    updateState.status === "checking" ||
+                    updateState.status === "downloading"
+                  }
+                >
+                  <RefreshCw
+                    size={15}
+                    strokeWidth={1.5}
+                    className={
+                      updateState.status === "checking"
+                        ? styles.spin
+                        : undefined
+                    }
+                  />
+                  {updateState.status === "checking"
+                    ? "Checking…"
+                    : "Check for updates"}
+                </button>
+
+                {updateState.status === "idle" && (
+                  <p className={styles.updateStatus}>
+                    You&rsquo;re up to date.
+                  </p>
+                )}
+                {updateState.status === "error" && (
+                  <p
+                    className={`${styles.updateStatus} ${styles.updateError}`}
+                    role="alert"
+                  >
+                    {updateState.error ?? "Update check failed."}
+                  </p>
+                )}
+
+                {(updateState.status === "available" ||
+                  updateState.status === "downloading") &&
+                  updateState.version && (
+                    <div className={styles.field}>
+                      <span className={styles.fieldLabel}>
+                        Update available
+                        <span className={styles.fieldValue}>
+                          v{updateState.version}
+                        </span>
+                      </span>
+
+                      {/* "What will be installed" — a labelled slot the patch-notes
+                          view (#192) fills; empty placeholder for now. */}
+                      <div className={styles.whatsNew}>
+                        <span className={styles.whatsNewLabel}>
+                          What&rsquo;s new
+                        </span>
+                        <div
+                          className={styles.whatsNewSlot}
+                          data-update-version={updateState.version}
+                        >
+                          <p className={styles.whatsNewEmpty}>
+                            Release notes will appear here.
+                          </p>
+                        </div>
+                      </div>
+
+                      {updateState.status === "downloading" ? (
+                        <div className={styles.updateProgress}>
+                          <div className={styles.progressTrack}>
+                            <div
+                              className={styles.progressBar}
+                              style={{ width: `${updateState.progress}%` }}
+                            />
+                          </div>
+                          <span className={styles.fieldValue}>
+                            Installing… {updateState.progress}%
+                          </span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className={styles.updateNow}
+                          onClick={() => void installUpdate()}
+                        >
+                          <Download size={15} strokeWidth={1.5} />
+                          Update now &amp; restart
+                        </button>
+                      )}
+                    </div>
+                  )}
+              </div>
             )}
 
             {section === "data" && (

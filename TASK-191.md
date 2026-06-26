@@ -1,8 +1,8 @@
 # Task 191
 
-### 191. [ ] Settings → "Updates" section: check for updates + review what will be installed
+### 191. [x] Settings → "Updates" section: check for updates + review what will be installed
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #190
 **Created:** 2026-06-26
 
@@ -81,32 +81,39 @@ content is **#192** (this task leaves a labelled slot).
 
 **Subtasks**
 
-1. [ ] Add `"updates"` to the `Section` type + `SECTIONS` array (label + icon).
-2. [ ] Render the Updates pane: current version; "Check for updates" button →
-   `checkForUpdate()`; status feedback (checking / up to date / available v<version> /
-   error); when available, the new version + a labelled **"What's new" slot** (for #192) +
-   an **"Update now"** button → `installUpdate()`.
-3. [ ] Extend `setSettingsOpen(open, section?)` (or add `settingsSection`) and default the
-   modal's `section` state from it; point the #190 indicator at
-   `setSettingsOpen(true, "updates")`.
-4. [ ] CSS for the pane.
-5. [ ] **Verify** — `npm run build`, `npm run lint`, `npm test` green; Rust untouched.
-   Manual (or note as runtime-unverified, since a real update needs a release/key — exercise
-   via the #193 mock once it lands): open Settings → Updates → "Check for updates" shows
-   "up to date"; with a mocked available update, the version + slot + "Update now" appear and
-   trigger #190's install flow; the sidebar indicator opens Settings directly at Updates.
+1. [x] Added `"updates"` to the `Section` type + `SECTIONS` (label "Updates", Lucide
+   `RefreshCw`).
+2. [x] Rendered the Updates pane: current version (reuses the About `appVersion()` fetch); a
+   "Check for updates" button → `checkForUpdate()` (spinner + "Checking…" while checking,
+   disabled while checking/downloading); status feedback — `idle` → "You're up to date",
+   `error` → `update.error`, `available` → the new version + a labelled **"What's new" slot**
+   (`whatsNewSlot`, carries `data-update-version` for #192) + an **"Update now & restart"**
+   button → `installUpdate()`; `downloading` → an inline progress bar bound to
+   `update.progress` (the #190 full-window freeze overlay still covers the app).
+3. [x] Extended `setSettingsOpen(open, section?)` + a `settingsSection` store field (cleared
+   on close / a plain open); the modal seeds its initial `section` from it. The #190
+   `UpdateIndicator` now opens `setSettingsOpen(true, "updates")` instead of the confirm
+   modal.
+4. [x] CSS for the pane (`.updates`, status/error lines, `.whatsNew*` slot, `.updateProgress`
+   bar, the accent `.updateNow` CTA, a `.spin` keyframe).
+5. [x] **Verify** — `npm run build`, `npm run lint`, `npm test` (263, +1) green; **no Rust
+   changes**. The live update flow is **runtime-unverified** (needs a real release/key —
+   exercised via the #193 mock once it lands); see Notes. Added a store unit test for the
+   deep-link.
 
 **Acceptance criteria**
 
-- [ ] Settings has an **"Updates"** section with a **"Check for updates"** button, the
+- [x] Settings has an **"Updates"** section with a **"Check for updates"** button, the
       current version, and clear status (checking / up to date / available v<version> /
       error).
-- [ ] When an update is available, the pane shows the **new version**, a **labelled slot for
-      "what will be installed"** (filled by #192), and an **"Update now"** button that runs
-      #190's install (freeze/progress/restart) flow.
-- [ ] The **#190 sidebar indicator opens Settings directly at the Updates section**.
-- [ ] No new updater/plugin/pipeline logic is added here (all reused from #190).
-- [ ] `npm run build`, `npm run lint`, `npm test` pass; no Rust changes.
+- [x] When an update is available, the pane shows the **new version**, a **labelled slot for
+      "what will be installed"** (the `whatsNewSlot`, filled by #192), and an **"Update now"**
+      button that runs #190's install (freeze/progress/restart) flow via `installUpdate()`.
+- [x] The **#190 sidebar indicator opens Settings directly at the Updates section**
+      (`setSettingsOpen(true, "updates")` → the modal seeds `section` from `settingsSection`).
+- [x] No new updater/plugin/pipeline logic is added here (all reused from #190 — the pane
+      only calls `checkForUpdate`/`installUpdate` + reads the `update` slice).
+- [x] `npm run build`, `npm run lint`, `npm test` pass; no Rust changes.
 
 **Notes**
 
@@ -131,3 +138,34 @@ content is **#192** (this task leaves a labelled slot).
 - **References:** `Settings.tsx` (`SECTIONS` ~31, `section` state ~78, About version fetch
   ~92, Data pane ~327); `store.ts` `setSettingsOpen`; TASK-190.md (the `update` slice +
   indicator + install flow). CLAUDE.md "Settings (#100/#102/#103/#107/#119)".
+
+**Implementation notes (2026-06-26 — done)**
+
+- Files: `Settings.tsx` (the `"updates"` section + pane), `Settings.module.css` (pane
+  styles), `store.ts` (`settingsSection` field + `setSettingsOpen(open, section?)`),
+  `store.test.ts` (deep-link test), `UpdateIndicator.tsx` (deep-link onClick). **No Rust
+  changes**; **no new updater logic** — the pane only reads #190's `update` slice and calls
+  its `checkForUpdate`/`installUpdate`.
+- **Deep-link:** `setSettingsOpen(open, section?)` stores an optional `settingsSection`
+  (cleared on close and on a plain gear open, so the gear always lands on Terminal). The
+  Settings modal is mounted-only-while-open and seeds its `section` `useState` from
+  `settingsSection`. The indicator scrim covers the sidebar, so the deep-link only ever fires
+  from a *closed* Settings → the fresh-mount seed always applies (no already-open edge case).
+- **Naming gotcha:** the store slice is read as `updateState` in `Settings.tsx` because the
+  component already has a local `update<K>(key, value)` settings-draft helper that would
+  shadow a slice named `update`.
+- **#190 confirm modal kept, not dropped:** the indicator now deep-links to the Updates pane
+  (the richer review surface), so #190's `UpdateModal` **confirm dialog** is dormant
+  (nothing calls `openUpdateConfirm` anymore). Its **install overlay** (status
+  `downloading`) is still essential and reused — clicking "Update now" → `installUpdate()` →
+  `downloading` → the full-window freeze/progress overlay covers the app (incl. the Settings
+  modal) → relaunch. Left `openUpdateConfirm`/`cancelUpdate` in the store for the #193 mock.
+- **"You're up to date" semantics:** `update.status === "idle"` shows it; #190's boot
+  `checkForUpdate` already resolves to `idle` when there's no update, and the manual button
+  re-checks. Outside Tauri (dev/test) the check catches → idle, so the pane reads "up to
+  date" rather than erroring.
+- **Runtime-unverified (autonomous loop, no GUI session + no signed release):** the live
+  pane render and the actual check/install. All states are reachable via #193's
+  `setUpdateState`; the wiring is type-checked, lint/format clean, and the deep-link is
+  unit-tested. Mirrors the #190 precedent; recommend a pass once #193 lands (and a real
+  release later).

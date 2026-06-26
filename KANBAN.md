@@ -8,9 +8,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #191 — Settings → "Updates" section: check for updates + review what will be installed
-	Plan: TASK-191.md
-	Depends on: #190
 - [ ] #192 — Patch notes: baked-in per-version JSON, release-carried notes, settings view
 	Plan: TASK-192.md
 	Depends on: #190, #191
@@ -50,3 +47,6 @@ kanban-plugin: board
 - [ ] #190 — Auto-update skeleton: gated release pipeline + in-app update UI (keys deferred)
 	Plan: TASK-190.md
 	Depends on: none
+- [ ] #191 — Settings → "Updates" section: check for updates + review what will be installed
+	Plan: TASK-191.md
+	Depends on: #190
