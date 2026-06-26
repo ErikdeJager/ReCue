@@ -3546,3 +3546,62 @@ mechanism.
 
 ---
 
+### 199. [x] Worktree auto-delete guard: count ALL item types, and run on every item close
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-26
+
+**Description**
+
+A worktree (#74) is app-managed and should be removed the moment its last item is closed, but
+never while any item still references it. The existing ref-counted cleanup
+(`cleanupWorktreeIfEmpty`) **only counted agents** (`repoPath === dest && exitedCode === undefined`)
+— the confirmed gap the card asked to verify: it ignored a worktree's **non-agent items**
+(`overviewPanels[dest]` file/diff/terminal/kanban/filetree viewers #164) and **scheduled
+sessions** (#198), so a worktree with a panel/schedule but no live agent could be deleted out
+from under those items, and closing a non-agent item never triggered cleanup at all. This fixes
+both halves.
+
+**What shipped** (commit `536081e`, 2026-06-26) — **frontend-only** (no Rust):
+
+- **Pure `worktreeHasItems(state, dest)` predicate** — true if any session (`repoPath === dest`,
+  including an exited-but-still-shown agent with a Restart overlay), any non-empty
+  `overviewPanels[dest]`, or any schedule (`cwd === dest`) references the worktree. Unit-tested
+  across 6 combinations (empty / agent / panel-non-empty & empty / schedule / other-folder /
+  mixed).
+- **`cleanupWorktreeIfEmpty` rewritten** to use it (replacing the agent-only check); removal
+  stays **non-forced** so a dirty worktree is kept + toasted (#74).
+- **Guard runs on every close path:** `removeSession` (existing), plus now `removeOverviewPanel`
+  and `cancelSchedule` (both no-op for a regular repo folder).
+- **Parent-resolution fix (the key design call):** `git worktree remove` needs the **parent**,
+  but the plan's own scenario (close the agent first, then the panel) leaves no session to derive
+  it from. Added a module-level `worktreeParents` map (mirroring `intentionalKills`) that records
+  `dest → parent` every time the guard runs (captured while an agent still exists) and clears it
+  on successful removal; `worktreeParentOf` falls back to it when no session remains. In-memory
+  (persisting it would need Rust, out of scope).
+
+**Key files touched:** `src/store.ts` (`worktreeHasItems`, `cleanupWorktreeIfEmpty`,
+`worktreeParents`/`worktreeParentOf`, new guard calls), `src/store.test.ts` (+6).
+
+**Dependencies:** none — foundational. #198 (schedule→worktree cancel cleanup) and #200
+(non-blocking removal) build on it.
+
+**Notes**
+
+- **Autonomous refine (2026-06-26):** the card asked to confirm the guard covered all item types
+  — it didn't (agents only), so this is authored as a **fix**. Decisions in `ASSUMPTIONS.md` —
+  count exited-but-shown agents (a crashed agent's Restart row keeps the worktree); trigger on
+  every close path; pure predicate for testability.
+- **Two documented limitations, both fail-safe (worktree kept, never wrong-deleted):** (1) a
+  clean-exit of a worktree agent (`forgetExitedSession`) still doesn't trigger cleanup (outside
+  the plan's triggers, pre-existing); (2) an orphan worktree (panel but no agent) surviving an
+  app **restart** can't auto-resolve its parent (the in-memory map is empty) and lingers until
+  manually cleaned — persisting the map would need Rust.
+- **Runtime-unverified** in this autonomous loop (no GUI session): the live close-order flows.
+  The pure predicate is unit-tested across all item-type combinations and the agent-first parent
+  resolution is traced in review. `npm run build` / `npm run lint` / `npm test` (288, +6) all
+  green; no Rust changes.
+
+---
+

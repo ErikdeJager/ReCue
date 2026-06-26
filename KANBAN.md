@@ -22,7 +22,3 @@ kanban-plugin: board
 	Depends on: none
 
 ## DONE
-
-- [ ] #199 — Worktree auto-delete guard: count all item types, run on every item close
-	Plan: TASK-199.md
-	Depends on: none
