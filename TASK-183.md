@@ -1,8 +1,8 @@
 # TASK-183
 
-### 183. [ ] Diff view: show untracked (new) files in the working-tree diff
+### 183. [x] Diff view: show untracked (new) files in the working-tree diff
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-26
 

@@ -126,7 +126,7 @@ pub fn working_diff(cwd: impl AsRef<Path>) -> WorkingDiff {
     let cwd = cwd.as_ref();
     let branch = current_branch(cwd);
 
-    let files = if has_head(cwd) {
+    let mut files = if has_head(cwd) {
         let diff = run_git_raw(
             cwd,
             &[
@@ -143,6 +143,33 @@ pub fn working_diff(cwd: impl AsRef<Path>) -> WorkingDiff {
     } else {
         Vec::new()
     };
+
+    // `git diff HEAD` reports tracked changes only — untracked (new) files are invisible
+    // (#183). List them (respecting .gitignore via --exclude-standard) and synthesize a
+    // new-file diff for each with `diff --no-index -- /dev/null <path>`, reusing
+    // `parse_unified_diff` (the `new file mode` line → FileStatus::Added, the `b/<path>`
+    // header → the relative path, a binary file → flagged binary). Bounded by
+    // MAX_UNTRACKED_FILES so a pathological untracked set can't storm git spawns.
+    const MAX_UNTRACKED_FILES: usize = 2000;
+    for path in untracked_files(cwd).into_iter().take(MAX_UNTRACKED_FILES) {
+        let Some(diff) = run_git_raw_allow_diff(
+            cwd,
+            &[
+                "-c",
+                "core.quotepath=false",
+                "diff",
+                "--no-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--",
+                "/dev/null",
+                &path,
+            ],
+        ) else {
+            continue;
+        };
+        files.append(&mut parse_unified_diff(&diff));
+    }
 
     let adds: u32 = files.iter().map(|f| f.add).sum();
     let dels: u32 = files.iter().map(|f| f.del).sum();
@@ -666,6 +693,38 @@ fn run_git_raw(cwd: &Path, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Like `run_git_raw` but tolerates `git`'s "differences found" exit code (#183):
+/// `git diff --no-index` exits **1** when the two inputs differ (the normal case for
+/// an untracked file vs `/dev/null`), **0** only when identical. Returns stdout for
+/// exit 0 or 1, and `None` for ≥2 (a real error) or a spawn failure. Used **only**
+/// for the `--no-index` untracked-file pass — `run_git_raw` stays strict elsewhere.
+fn run_git_raw_allow_diff(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .ok()?;
+    match output.status.code() {
+        Some(0) | Some(1) => Some(String::from_utf8_lossy(&output.stdout).into_owned()),
+        _ => None,
+    }
+}
+
+/// Untracked (new) files in `cwd`, as repo-relative paths. `git diff HEAD` omits
+/// untracked files entirely (#183), so `working_diff` lists them here.
+/// `--exclude-standard` honors `.gitignore` / `.git/info/exclude` / global excludes
+/// (so build output and dependencies stay out); `-z` gives NUL-separated raw paths
+/// (robust to spaces/newlines). A non-git folder yields an empty list (no error).
+fn untracked_files(cwd: &Path) -> Vec<String> {
+    let out =
+        run_git_raw(cwd, &["ls-files", "--others", "--exclude-standard", "-z"]).unwrap_or_default();
+    out.split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -890,6 +949,58 @@ index 0..1
         assert_eq!(diff.files[0].path, "a.txt");
         assert_eq!(diff.files[0].status, FileStatus::Modified);
         assert!(diff.summary.adds >= 1 && diff.summary.dels >= 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn working_diff_includes_untracked_files_and_respects_gitignore() {
+        let Some(dir) = init_repo("untracked") else {
+            return;
+        };
+        // Initial commit: a normal file, a tracked file inside a hidden folder, and a
+        // .gitignore — so .gitignore itself is tracked (won't show as Added) and the
+        // hidden-folder tracked file can be modified to prove that path still works.
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        fs::create_dir_all(dir.join(".hidden")).unwrap();
+        fs::write(dir.join(".hidden/tracked.txt"), "v1\n").unwrap();
+        fs::write(dir.join(".gitignore"), "ignored/\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+
+        // A tracked modification inside the hidden folder (still must render, #183).
+        fs::write(dir.join(".hidden/tracked.txt"), "v2\n").unwrap();
+        // Untracked files: one in a normal folder, one in a new hidden folder.
+        fs::create_dir_all(dir.join("newvisible")).unwrap();
+        fs::write(dir.join("newvisible/file.txt"), "new\n").unwrap();
+        fs::create_dir_all(dir.join(".newhidden")).unwrap();
+        fs::write(dir.join(".newhidden/file.txt"), "newh\n").unwrap();
+        // An ignored untracked file — must NOT appear.
+        fs::create_dir_all(dir.join("ignored")).unwrap();
+        fs::write(dir.join("ignored/secret.txt"), "nope\n").unwrap();
+
+        let diff = working_diff(&dir);
+        let by_path = |p: &str| diff.files.iter().find(|f| f.path == p);
+
+        // Tracked modification inside the hidden folder still renders as before.
+        let tracked = by_path(".hidden/tracked.txt").expect("tracked hidden mod listed");
+        assert_eq!(tracked.status, FileStatus::Modified);
+
+        // Both untracked files appear as Added, regardless of hidden/normal folder.
+        let visible = by_path("newvisible/file.txt").expect("untracked visible file listed");
+        assert_eq!(visible.status, FileStatus::Added);
+        assert!(visible.add >= 1);
+        let hidden = by_path(".newhidden/file.txt").expect("untracked hidden file listed");
+        assert_eq!(hidden.status, FileStatus::Added);
+        assert!(hidden.add >= 1);
+
+        // The .gitignore'd file is omitted entirely.
+        assert!(
+            !diff.files.iter().any(|f| f.path.starts_with("ignored/")),
+            "ignored files must not appear in the diff"
+        );
+        // Summary counts cover tracked + untracked additions.
+        assert_eq!(diff.summary.files_changed, diff.files.len() as u32);
+        assert!(diff.summary.adds >= 2);
 
         let _ = fs::remove_dir_all(&dir);
     }
