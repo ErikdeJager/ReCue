@@ -6,8 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] Patchnotes JSON baked into app + settings patch-notes view
-	Patchnotes JSON baked into the app, and settings displaying patch notes. The JSON structure must be updated with every version bump; the pipeline should check if the version is still up to date — if not, the GitHub pipeline ends early. The patchnotes JSON is a simple structure containing a list of bullet-point changes grouped by category (e.g. feature, fix). Separate JSON file for each update, and the UI loads them and shows them in the settings screen for updating. The patchnotes should be part of the release in some way: the user should be able to read the patchnotes of a new update that has not been installed yet. Think of a smart solution for this.
 - [ ] Mock update (dev testing)
 	In dev runs, be able to insert a command to mock an available update. Mocking this will change the UI and show a fake update status, allowing testing of the UI.
 - [ ] Optional card checkbox — render plain `- bullet` lines as cards
@@ -35,6 +33,9 @@ kanban-plugin: board
 - [ ] #191 — Settings → "Updates" section: check for updates + review what will be installed
 	Plan: TASK-191.md
 	Depends on: #190
+- [ ] #192 — Patch notes: baked-in per-version JSON, release-carried notes, settings view
+	Plan: TASK-192.md
+	Depends on: #190, #191
 
 ## DONE
 

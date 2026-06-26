@@ -159,3 +159,24 @@ judgment with "see if this … has good UX"):
 - **Update actions are immediate** (not draft-staged), like Data & About's actions.
 - **Depends on: #190.** #192 (patchnotes) depends on this #191; #193 (mock) is how these panes
   get exercised before a real signed release exists.
+
+---
+
+## TASK-192 — Patch notes (baked-in JSON + release-carried notes)
+
+- **Smart solution for "read notes of a not-yet-installed update":** carry the new version's
+  notes **in the release** via the Tauri updater `latest.json` `notes` / `update.body`
+  (generated from that version's patch-notes JSON); the running older app renders
+  `update.notes`. The baked-in JSON is the authored **source** + the current/past changelog.
+- **One JSON file per version** under `src/patchnotes/<version>.json`,
+  `{version,date,changes:[{category,items[]}]}`, categories feature/fix/improvement/other;
+  loaded via `import.meta.glob` (eager), normalized best-effort; rendered with the existing
+  react-markdown stack (no new dep).
+- **Pipeline:** a guard that the bumped version has a matching patch-notes file (else end
+  early) + a step that generates the release body from it (`scripts/patchnotes-to-md.mjs`).
+- **Extends #190's `update` slice with a `notes` field** (populated from `update.body`),
+  rendered into **#191's "What's new" slot**.
+- **Depends on: #190, #191.** #193 (mock) should set `update.notes` so this view is testable
+  before a real release.
+- **Working-tree note:** an implementing agent was concurrently editing Canvas/store files
+  (#186, since completed) — this refine staged only its own 3 files, never `-A`.
