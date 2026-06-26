@@ -1266,19 +1266,37 @@ pub fn reveal_file_in_finder(path: String) -> Result<(), SessionError> {
     #[cfg(windows)]
     {
         // `explorer.exe /select,<path>` opens the containing folder with the file
-        // highlighted. The `/select,<path>` token must be a single argument, and
-        // explorer is unforgiving about separators — it only highlights when the path
-        // is **all backslashes** (the frontend already sends native paths via #143
-        // `joinPath`; this normalizes defensively for any other caller). explorer is a
-        // GUI process (no console window flashes) and quirkily returns a non-zero exit
-        // even on success — harmless here since we only `spawn()`, never `wait()`.
-        let win_path = path.replace('/', "\\");
+        // highlighted. explorer is a GUI process (no console window flashes) and
+        // quirkily returns a non-zero exit even on success — harmless here since we
+        // only `spawn()`, never `wait()`. The token is built by `explorer_select_arg`
+        // and passed via **`raw_arg`** (not `arg`): Rust's default arg-quoting would
+        // wrap the whole `/select,<path>` token when the path has a space (a leading
+        // quote *before* `/select,`), which explorer's nonstandard parser mishandles —
+        // so a file under e.g. `C:\Users\First Last\…` wouldn't highlight (#194). The
+        // helper instead quotes the path *inside* the token (`/select,"<path>"`).
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("explorer.exe")
-            .arg(format!("/select,{win_path}"))
+            .raw_arg(explorer_select_arg(&path))
             .spawn()
             .map_err(|e| SessionError::Io(e.to_string()))?;
     }
     Ok(())
+}
+
+/// Build the verbatim `explorer.exe` argument that selects `path` in its containing
+/// folder: `/select,"<path>"` with all-backslash separators and the path quoted.
+/// explorer needs backslashes (the frontend sends native paths via #143 `joinPath`;
+/// this normalizes defensively for any other caller) and breaks on a path with spaces
+/// unless the path itself is quoted — many real Windows paths contain spaces
+/// (`C:\Users\First Last\…`, `Program Files`). The result is passed through `raw_arg`,
+/// so the quoting lives *inside* the `/select,` token rather than around it (#194). A
+/// `"` can't appear in a Windows filename, so the path can't break out of the quotes.
+/// Gated to `any(windows, test)` so it's exercised by the cross-platform unit test
+/// without becoming dead code in a non-Windows release build.
+#[cfg(any(windows, test))]
+fn explorer_select_arg(path: &str) -> String {
+    let win_path = path.replace('/', "\\");
+    format!("/select,\"{win_path}\"")
 }
 
 /// The ClaudeCue app version (#100 Settings → About), from the crate version.
@@ -1414,5 +1432,24 @@ mod tests {
         // macOS preservation: the guard must not alter any segment off-Windows.
         assert_eq!(windows_safe_seg("con".to_string()), "con");
         assert_eq!(windows_safe_seg("feature.".to_string()), "feature.");
+    }
+
+    // The explorer `/select,` token is pure string logic — verify it on every OS so the
+    // Windows-only `reveal_file_in_finder` arm (which can't run in the macOS CI) is still
+    // covered. The bug it guards (#194): a path with a space wouldn't highlight when the
+    // quote wraps the whole `/select,<path>` token instead of just the path.
+    #[test]
+    fn explorer_select_arg_quotes_path_and_normalizes_separators() {
+        // Forward slashes (any caller) → backslashes; the path is quoted *inside* the
+        // token so a path with spaces still highlights.
+        assert_eq!(
+            explorer_select_arg("C:/Users/First Last/file.txt"),
+            "/select,\"C:\\Users\\First Last\\file.txt\""
+        );
+        // Already-native (backslash) paths from the frontend are preserved.
+        assert_eq!(
+            explorer_select_arg("C:\\repo\\sub dir\\a.md"),
+            "/select,\"C:\\repo\\sub dir\\a.md\""
+        );
     }
 }

@@ -235,3 +235,60 @@ Tasks #186–#191 are Refine-only (task-doc commits, no source). One backend def
   install; `explorer.exe` open/reveal/url; themed scrollbars on WebView2.
 - (New) The #180 remote-branch fetch, #181 Pull, and #183 untracked-diff actions run without
   a `conhost` flash on a real Windows build.
+
+### Iteration 7 — exhaustive full-codebase audit
+
+Whole-repo sweep (every Rust module, every frontend `.ts(x)`, all CSS, the build/bundle
+config) via parallel read-only Explore agents, then each finding hand-verified. The code is
+already well-hardened (Iters 1–6), so the net is one real bug + two flagged-for-Windows items;
+several plausible-looking findings were verified to be NON-bugs and are recorded here so a
+future pass doesn't "fix" them into regressions.
+
+- **Bug (#194)**: `reveal_file_in_finder` built the explorer token with
+  `Command::arg(format!("/select,{win_path}"))`. Rust's arg-quoting wraps an arg containing a
+  space in quotes — producing `explorer.exe "/select,C:\Users\First Last\file.txt"` — and
+  explorer's nonstandard parser, seeing the quote *before* `/select,`, opens the folder
+  **without highlighting the file**. Windows paths very commonly contain spaces
+  (`C:\Users\First Last\…`, `Program Files`), so "Reveal in Explorer" silently failed to
+  select for many users.
+  **Fix**: added `explorer_select_arg(path)` returning `/select,"<path>"` (backslashes,
+  path quoted *inside* the token) and passed it via `CommandExt::raw_arg` so Rust doesn't
+  re-quote. A `"` is illegal in a Windows filename, so the path can't break out. Added a
+  cross-platform unit test (the helper is `#[cfg(any(windows, test))]`, so the macOS CI still
+  exercises the quoting that the Windows-only spawn arm can't). Verified: 96 Rust tests pass,
+  clippy + `cargo fmt --check` clean.
+  **Files**: `src-tauri/src/commands.rs`
+  **macOS**: Preserved — the `#[cfg(not(windows))]` arm (`open -R`) is untouched; the helper
+  and `raw_arg` call are `#[cfg(windows)]` only.
+
+- **Verified NOT a bug (left as-is)**: `git.rs::working_diff` passes `/dev/null` to `git diff
+  --no-index` (#183). Confirmed empirically that git special-cases the **literal string**
+  `/dev/null` in `diff-no-index`'s `get_mode()` (a `strcmp`, not a device access) on every
+  platform incl. Git-for-Windows — `git diff --no-index -- NUL <file>` instead errors
+  `Could not access 'NUL'`. So `/dev/null` is the correct, portable token; switching to `NUL`
+  would **break** untracked-file diffs on Windows.
+- **Verified NOT worth changing**: `files.rs` `SKIP_DIRS.contains(name)` is case-sensitive.
+  Making it case-insensitive would, on a case-*sensitive* macOS/Linux volume, start hiding a
+  user's real `Build`/`Target`/`Dist` *source* dir (distinct from the lowercase generated one),
+  a macOS behavior change — and on Windows the file tree works fully either way (a `Build`
+  output dir merely shows when lowercase `build` would be hidden). Heuristic, not a defect.
+- **Verified already-deferred (Iter 6)**: repo paths used as map keys aren't case-normalized,
+  so the same folder added with different casing dedups as two on Windows. Canonicalizing would
+  be wrong on case-sensitive macOS volumes; the OS folder picker returns consistent casing, so
+  it isn't hit. Left as-is.
+
+### Still needs manual Windows verification (Iteration 7)
+
+- **xterm `windowsPty` (carried, unchanged)**: still unset. The correct value depends on the
+  ConPTY reflow build number and a wrong value *worsens* rendering, so it's not guessed without
+  a real box. On a Windows build, open a shell + an agent terminal, type long lines and resize
+  the panel; if lines duplicate/blank, set `windowsPty: { backend: 'conpty', buildNumber }`
+  (gated via the cached `platform` signal) and re-test.
+- **cmd.exe metacharacters in a seeded/scheduled prompt (new, flagged not fixed)**: a
+  prompt-seeded session (#93) whose agent is an npm `claude.cmd` launches via `cmd.exe /C
+  claude.cmd "<prompt>"`. portable-pty quotes the prompt arg, so `& | < > ( )` are literal, but
+  cmd.exe still expands `%VAR%` *inside* double quotes, so a prompt containing `%…%` would be
+  altered before the agent sees it. There is no robust `cmd /C` escape for `%`, and this only
+  affects seeded/scheduled launches of a `.cmd` agent (interactive prompts typed into the TUI
+  are unaffected). On a Windows box, schedule an agent with a prompt containing `50%` /
+  `%USERPROFILE%` and confirm whether the text arrives verbatim; fix only if it manifests.
