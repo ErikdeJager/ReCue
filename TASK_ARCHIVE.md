@@ -3375,3 +3375,61 @@ renders as a card and round-trips back unchanged as `- title`.
 
 ---
 
+### 195. [x] Clean up Kanban card UI — hover-revealed actions, declutter the title row
+
+**Status:** Done
+**Depends on:** #194
+**Created:** 2026-06-26
+
+**Description**
+
+The Kanban card (`KanbanPanel.tsx`) packed grip → checkbox → title → edit/delete buttons into
+one inline `.cardTop` row; the action icons crowded the title and the card read as cramped.
+Per web research (Trello / Linear / shadcn-kanban converge on hover/focus-revealed action
+clusters + full-width titles), redesign for a cleaner look by repositioning the checkbox and
+action icons.
+
+**What shipped** (commit `358bbd7`, 2026-06-26) — **frontend-only, layout/CSS** (no behavior
+change, no Rust):
+
+- **The real problem turned out to be flex space, not visibility:** a prior refinement (#161)
+  had *already* made the grip + actions hover/focus-revealed, but the `.cardActions` cluster
+  still sat **in the flex flow**, reserving ~50px even while invisible, so the title never got
+  that width. The fix moves `.cardActions` **out** of `.cardTop` to be a direct child of the
+  `.card` article (absolutely positioned top-right), so the title's row is just
+  `[grip] [checkbox?] [title]` and spans the full width.
+- **CSS** (`KanbanPanel.module.css`): `.card { position: relative }`; `.cardActions` absolute
+  top-right, `opacity:0` + `pointer-events:none` at rest, revealed on `.card:hover, .card:focus-within`
+  (keyboard-reachable; the global reduced-motion killswitch drops the transition); a
+  left→right card-colored **gradient backdrop** so a long title fades cleanly under the buttons,
+  plus a `padding-right` buffer on the title (larger on the editing input so typed text clears
+  the Done button). `pointer-events:none` at rest lets clicks/hover pass through to the title.
+- **#194 null-checkbox path preserved:** the conditional `<Checkbox>` (omitted when
+  `checked === null`) is unchanged, so a no-checkbox card renders flush-left with no empty gap.
+- **Behavior fully intact:** toggle, click-to-edit, edit Done, delete, drag/reorder (incl. the
+  `CardPreview` overlay, which already omits actions and shares `.cardTop`/`.cardTitle`), and
+  body task-list checkboxes (#173) keep their exact handlers/markup; the dnd grip still holds
+  `{...attributes}{...listeners}` (left as-is to avoid a hover layout-shift / dnd
+  re-architecture).
+
+**Key files touched:** `src/components/Kanban/KanbanPanel.tsx` (move `.cardActions` out of
+`.cardTop`), `src/components/Kanban/KanbanPanel.module.css` (absolute reveal cluster, gradient,
+title width/padding).
+
+**Dependencies:** #194 (the redesign must render its optional no-checkbox card; building this
+first would have conflicted on `KanbanPanel`'s checkbox render).
+
+**Notes**
+
+- **Autonomous refine (2026-06-26):** the user wasn't responding; decisions logged in
+  `ASSUMPTIONS.md` — adopt the researched hover/focus-revealed top-right cluster + full-width
+  title + quiet checkbox/grip; keyboard/touch fallback via `:focus-within` + click-to-edit (no
+  hover-only dependency); layout-only, no dnd re-architecture or new card content. Sources:
+  shadcn-ui Kanban templates, card-UI design examples, Kanban board UI system design.
+- **Runtime-unverified** in this autonomous loop (no GUI session): the live resting card +
+  hover/focus reveal + gradient fade. The change is pure layout/CSS, type-checks, lints, and
+  leaves every handler/markup intact (277 tests still pass). `npm run build` / `npm run lint` /
+  `npm test` (277) all green; no Rust changes.
+
+---
+
