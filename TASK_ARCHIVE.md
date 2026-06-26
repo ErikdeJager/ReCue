@@ -2751,3 +2751,77 @@ seeded).
 
 ---
 
+### 186. [x] Distribute Canvas panels evenly (tab-strip button + border double-click)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-26
+
+**Description**
+
+The Canvas (#46/#47) is a binary **BSP tree** (`canvasTree.ts`): every `split` node carries
+`sizes: [a, b]` and `splitLeaf` always adds a new panel as `[50, 50]`. Because the tree is
+binary, three panels in one row nest as `split(row, leaf1, split(row, leaf2, leaf3))` and end
+up **50% / 25% / 25%** — visibly uneven. The user wanted a one-shot "distribute / equalize"
+action (the design-tool operation) that rebalances an existing layout so **every panel is the
+same size**, without changing the add-time halving behaviour.
+
+**What shipped** (commit `662a6cc`, 2026-06-26) — **frontend-only** (no Rust):
+
+- **Two affordances.** (1) A **"Distribute evenly" button** in the Canvas tab strip
+  (`CanvasTabs.tsx`, Lucide `Grid2x2`, beside `+` / `▾ Templates`, reusing `styles.tabAdd`)
+  that equalizes the **whole active canvas** — disabled when the layout is null or a single
+  leaf (`<2` panels). (2) **Double-clicking the border** (the resize `Separator`) between two
+  panels equalizes just the **subtree that border divides** (`equalizeCanvas(node.id)`) —
+  two distinct, learnable tools rather than two triggers for the same action.
+- **Semantics — equal area via leaf-count weighting.** Each split's `sizes` are set
+  proportional to the leaf count of each child subtree: `[na/(na+nb)*100, nb/(na+nb)*100]`.
+  By induction every leaf gets an equal `1/total` share regardless of nesting; a 3-panel row
+  collapses to true thirds. (The naive "reset every split to `[50,50]`" alternative — which
+  leaves a 3-panel row at 50/25/25 — was explicitly rejected.)
+- **Pure ops** added to `canvasTree.ts`: `leafCount`, `equalize`, `equalizeSplit`,
+  `collectSplits` — identity-preserving (unchanged subtrees keep object identity) and
+  idempotent (re-equalizing an even tree returns the same ref), with **7 new unit tests** in
+  `canvasTree.test.ts`.
+- **Store action** `equalizeCanvas(splitId?)` (`store.ts`): reads the active layout, computes
+  `equalize` (no id) or `equalizeSplit(id)`, no-ops when there's no layout / already even,
+  else commits via the existing `setActiveCanvasLayout` (persist + `canvas://changed`
+  broadcast, so detached #84 windows pick it up).
+- **Remount-free imperative reconcile** (`CanvasSurface.tsx`): because a `Group`'s
+  `defaultLayout` is initial-only, equalize is the first programmatic size-only change.
+  A `groupHandles` registry (each `Group` gets a callback `groupRef`) plus a `[rawLayout]`
+  effect walks `collectSplits` and calls `handle.setLayout(...)` only where live sizes differ
+  from target by ≥0.5% — so it does real work right after an equalize but no-ops on user
+  drag-resize/structural remounts (avoiding a feedback loop). **No React `key` bump**, so the
+  #18 pooled terminals reparent and keep their scrollback. The `Separator` takes
+  `disableDoubleClick` (the library's built-in only resets to `defaultSize`, which our
+  `minSize="10%"`-only Panels don't set, so it was inert) + our own `onDoubleClick`.
+
+**Key files touched:** `src/components/Canvas/canvasTree.ts` (+ `.test.ts`),
+`src/store.ts` (`equalizeCanvas`), `src/components/Canvas/CanvasSurface.tsx` (groupRef
+registry + reconcile effect + Separator double-click), `src/components/Canvas/CanvasTabs.tsx`
+(button), `src/components/Canvas/Canvas.module.css` (`.tabAdd:disabled`). `splitLeaf`'s
+add-time `[50,50]` and the agent header-bar drag/rename target are untouched.
+
+**Dependencies:** none. Context: #46/#47/#58 (Canvas BSP + tabs), #84 (cross-window sync),
+#18 (terminal pool).
+
+**Notes**
+
+- **User decisions (refine, 2026-06-26):** both affordances ("tab-strip button, but also by
+  double-clicking the borders … see if this is possible and has good UX"); semantics =
+  "equal size for every panel" (leaf-count weighting), not 50/50 reset. The refine agent,
+  delegated the UX call, scoped the button to the whole canvas and the border double-click to
+  the divided subtree — a later one-line change makes the border equalize the whole canvas
+  if preferred.
+- **Edge case:** `<Panel minSize="10%">` clamps each side to ≥10%, so perfect equal area
+  isn't reachable past ~10 panels in one nesting chain; fine for typical 2–6-panel canvases.
+- **Runtime-unverified** in this autonomous loop (no GUI session): the DOM gestures (button →
+  equal thirds, border double-click scoping), persistence across reload, cross-window (#84)
+  sync, and busy-terminal scrollback survival. The pure layout math is unit-tested and the
+  imperative wiring uses the API verified against the installed `react-resizable-panels`
+  `dist/*.d.ts` + the existing persist/broadcast path. `npm run build` / `npm run lint` /
+  `npm test` (251) all green; no Rust changes.
+
+---
+
