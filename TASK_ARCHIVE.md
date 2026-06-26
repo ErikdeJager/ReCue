@@ -1923,3 +1923,51 @@ store, IPC, or CSS change.
 
 ---
 
+### 171. [x] Copy path / Reveal in Finder on sidebar file & Kanban rows
+
+**Status:** Done
+**Depends on:** none · _(edits existing sidebar rows + adds a self-contained backend command; nothing
+it needs comes from another task. #167 builds its own file context menu, #168 only hides these rows in
+the rail, #169/#170 are unrelated.)_
+**Created:** 2026-06-25
+
+**Description**
+
+Enriched the right-click context menu on the left-panel **file-viewer** and **Kanban-board** rows,
+which previously offered only a single red **Remove** (`RowContextMenu`, #132). They now also offer
+**Reveal in Finder**, **Copy absolute path**, and **Copy relative path** — the same utilities the repo
+menu (#130) and worktree header (#133) give folders. Only these two row types are real single files on
+disk (`repoPath` root + repo-relative `file`); Diff / Terminal / Schedule rows were deliberately
+excluded (not single files).
+
+**Reveal differs from folders.** The existing `reveal_path` command runs plain `open <path>` (correct
+for a folder, but for a file would launch it in its default app), so a **separate**
+`reveal_file_in_finder` command runs `open -R <path>` to **select** the file in Finder — the user's
+explicit choice. Absolute path = the root joined to the relative `file` (trailing slash trimmed → no
+double slash); relative path = `file` verbatim (per #163, relative to a Browse'd file's own parent dir
+for out-of-repo files — the intended meaning in both cases).
+
+**What shipped** (commit `85293fe`, 2026-06-25)
+
+- **Backend:** new `reveal_file_in_finder(path)` command (`Command::new("open").arg("-R").arg(path)`,
+  no shell — mirroring the `reveal_path` / `open_url` safety precedent), registered in `lib.rs`'s
+  `invoke_handler!` right after `reveal_path` (which stays `open`-only and untouched).
+- **IPC:** `revealFileInFinder` wrapper in `ipc.ts`.
+- **Frontend:** a shared `filePathMenuItems(repoPath, file, copyToClipboard, onRemove)` helper in
+  `Sidebar.tsx` (plus a `rowAbsPath` that trims trailing slashes on the root) returning Reveal in
+  Finder / Copy absolute path / Copy relative path / red Remove, wired into **both** `FileRow` and
+  `KanbanRow` (each now pulls `copyToClipboard` from the store, reusing the existing "Copied path"
+  toast). No capabilities edit needed.
+
+**Key files touched:** `src-tauri/src/commands.rs`, `src-tauri/src/lib.rs`, `src/ipc.ts`,
+`src/components/Sidebar/Sidebar.tsx`.
+
+**Notes**
+
+- All green: `npm run build`, `npm run lint`, `npm test` (221), `npm run format:check`; `cargo test`
+  (73), clippy, `cargo fmt`. **Caveat:** the live `open -R` Finder-selection behavior was **not**
+  runtime-verified in a `tauri dev` macOS session in the autonomous loop — the command mirrors the
+  proven `reveal_path` pattern with the documented `-R` flag.
+
+---
+
