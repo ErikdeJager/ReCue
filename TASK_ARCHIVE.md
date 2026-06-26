@@ -1872,3 +1872,54 @@ approach the user chose); existing per-session dedup and `forkable` (#138) emiss
 
 ---
 
+### 170. [x] Stop macOS auto-capitalizing (and auto-correcting) every text input
+
+**Status:** Done
+**Depends on:** none · _(edits existing text fields; nothing it needs comes from another task. #167
+adds no text input, #168 only icon buttons, #169 is backend-only — the Subtask-4 re-grep confirmed
+none added a new field.)_
+**Created:** 2026-06-25
+
+**Description**
+
+Stopped macOS from auto-capitalizing the first letter of (and auto-correcting) typed text across the
+app's WKWebView text fields — the behavior that turned `fix-foo` into `Fix-foo` in the new-branch-name
+box and mangled identifiers, file paths, and `/`-prefixed `claude` prompts. For a developer tool where
+capitalization is rarely wanted, the fields should **keep whatever was typed**. The user's decision was
+to apply this **app-wide to all text fields**, not just identifier/search inputs.
+
+**The fix** (frontend-only): a new shared constant spread into every text `<input>`/`<textarea>`. On
+macOS WebKit the dependable lever is `autoCorrect="off"` **together with** `autoCapitalize="none"` —
+the first-letter capitalization rides the auto-correct/substitution layer — so both attributes are set.
+**Spell-check is intentionally left untouched** (red squiggles don't alter typed text), so the two
+existing `spellCheck={false}` fields keep it and no other field gains/loses spell-check. Non-text inputs
+(color / checkbox / range / datetime-local) were excluded.
+
+**What shipped** (commit `56592c2`, 2026-06-25)
+
+- New module `src/inputProps.ts` exporting
+  `noAutoCapitalize = { autoCapitalize: "none", autoCorrect: "off" } as const`.
+- Spread into all **19** text fields across **10** components: Sidebar session rename; FileViewer
+  editor textarea (kept `spellCheck={false}`); CanvasTabs tab rename; ScheduledPanel name;
+  SkillAutocomplete prompt textarea (covers **both** prompt sites — ScheduledPanel + NewSessionModal);
+  NewSessionModal folder search / branch filter / new-branch name / schedule name; KanbanPanel card
+  title / card body / column name / raw markdown (kept `spellCheck={false}`); TemplateManager rename;
+  FilePicker search; TemplateEditor agent name / initial prompt / file path / template name.
+- A Subtask-4 re-grep confirmed #167/#168/#169 (which landed first) added no new text field.
+
+**Key files touched:** `src/inputProps.ts` (new), and the spread + import in
+`src/components/{Sidebar/Sidebar, FileViewer/FileViewer, Canvas/CanvasTabs, ScheduledPanel/ScheduledPanel,
+SkillAutocomplete/SkillAutocomplete, NewSessionModal/NewSessionModal, Kanban/KanbanPanel,
+TemplateManager/TemplateManager, FilePicker/FilePicker, TemplateEditor/TemplateEditor}.tsx`. No backend,
+store, IPC, or CSS change.
+
+**Notes**
+
+- All green: `npm run build`, `npm run lint`, `npm test` (221), `npm run format:check` (no Rust change).
+  **Caveat:** the macOS WKWebView first-letter behavior is a native text-substitution effect, so the
+  live "lowercase stays lowercase" confirmation (Subtask 5 / first acceptance bullet) was **not**
+  runtime-verified in a `tauri dev` macOS session in the autonomous loop — the paired attributes are
+  the documented, dependable lever.
+
+---
+

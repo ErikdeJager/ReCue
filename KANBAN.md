@@ -15,9 +15,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #170 — Stop macOS auto-capitalizing (and auto-correcting) text inputs
-	Plan: TASK-170.md
-	Depends on: none
 - [ ] #171 — Copy path / Reveal in Finder on sidebar file & Kanban rows
 	Plan: TASK-171.md
 	Depends on: none
