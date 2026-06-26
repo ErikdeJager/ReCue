@@ -2374,3 +2374,72 @@ unit test). Backend-only, no frontend or other module change.
 
 ---
 
+### 180. [x] Show remote branches in the new-agent branch picker (auto-fetch + pull-on-select)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-26
+
+**Description**
+
+The new-session modal's branch step listed only **local** branches (`list_branches` read just
+`refs/heads`), so a branch existing only on a remote — e.g. a teammate's `origin/feature-x` — was
+invisible; the user had to drop to a terminal to fetch + check it out before starting an agent on
+it. This task surfaces **remote branches** under a separate "Remote branches" header in the picker
+and lets the user "pull" one into a local tracking branch and start an agent on it, with the same
+two bindings the local list uses (**Enter** = in-folder checkout; **⌘⏎** = isolated worktree #74).
+
+**What shipped** (commit `35cc5d3`, 2026-06-26)
+
+- **Reuse insight (#124):** "pull a remote branch locally" is exactly "create a new local branch
+  named `<short>` based on `<remote-ref>`" — `git checkout -b <name> <remote-ref>` (in-folder) and
+  `git worktree add -b <name> <dest> <remote-ref>` (worktree) both create the branch **and** set
+  upstream tracking by default. So no new pull/checkout command was added; the pull reuses the
+  existing `create_branch` / `worktree_add_new_branch` writes.
+- **Backend (`src-tauri/src/git.rs`):** `BranchList` gained a `remote: Vec<String>` field;
+  `list_branches` now also reads `refs/remotes` via `for-each-ref` (no network), excludes the
+  `*/HEAD` symbolic ref, and dedups remote refs against local branches by first-`/`-stripped short
+  name (`split_once('/')`, so `origin/feature/foo` → name `feature/foo`). New best-effort
+  `fetch_remotes(cwd)` runs `git fetch --prune` with `GIT_TERMINAL_PROMPT=0` (fail-fast on a private
+  remote rather than hang on a credential prompt) — **the app's first git network read**.
+  `validate_new_branch` was widened so the `base` may be a member of `all` **or** `remote`, letting
+  a remote-tracking ref serve as the create-branch base while still blocking arbitrary refspecs.
+- **IPC (`commands.rs` / `lib.rs` / `src/ipc.ts` / `src/types/index.ts`):** added the `fetch_remotes`
+  command + `fetchRemotes(cwd)` wrapper and the `remote?` field on the TS `BranchList` (kept optional
+  so non-git `{ all, current }` fallbacks and test mocks stay valid).
+- **Frontend (`src/components/NewSessionModal/NewSessionModal.tsx` + `.module.css`):** the branch
+  step auto-fetches on open (fire-and-forget, then re-`listBranches` to refresh `remote`), shows the
+  locals immediately with a subtle "fetching…" hint in the remote section, and renders a
+  "Remote branches" subheader with dedup'd `<remote>/<name>` rows (section omitted when empty).
+  Keyboard nav traverses a combined local→remote→"+ add branch" list via a discriminated
+  `selectedRemote` highlight (mutually exclusive with `selectedBranch`/`addBranchActive`); the filter
+  input filters remote rows too. **Enter** on a remote row → `createBranchSession(cwd, shortName,
+  remoteRef)` (in-folder checkout-and-start, with the existing destructive-confirm gate when another
+  agent runs in that folder); **⌘⏎** → `createBranchWorktreeSession(repo, shortName, remoteRef)`.
+- **Scope decision (autonomous):** remotes appear in **new-session (immediate) mode only** — the
+  schedule step hides the section, skips the auto-fetch, and never offers remote rows, since
+  scheduling a remote pull at fire time would need new schedule-firing semantics (out of scope).
+
+**Key files touched:** `src-tauri/src/git.rs` (BranchList field, `list_branches` remote collection +
+dedup, `fetch_remotes`, widened `validate_new_branch`, Rust tests), `src-tauri/src/commands.rs` +
+`src/lib.rs` (`fetch_remotes` command + registration), `src/components/NewSessionModal/
+NewSessionModal.tsx` + `.module.css` (remote section, nav, selection wiring), `src/ipc.ts`,
+`src/types/index.ts`, and `CLAUDE.md` (git-scope note + architecture lines for the network read and
+remote listing).
+
+**Dependencies:** none (reuses the #124 create-branch path and #74 worktree path, both already shipped).
+
+**Notes**
+
+- User answers (refine Q&A, 2026-06-26): remote source = **auto-fetch on open** (best-effort, never
+  blocking the modal); selection mirrors **both Enter and ⌘⏎**; display = a **separate
+  "Remote branches" header with dedup vs local**.
+- Rust tests cover remote listing, `origin/HEAD` exclusion, local/remote dedup, and remote-ref base
+  acceptance. `cargo test` (75) + `cargo clippy` + `npm run build` / `npm test` (248) / `npm run lint`
+  all green.
+- Manual GUI verification of the live picker (showing/selecting a remote row, pull-&-start, worktree)
+  was **not** runtime-tested in the headless loop; the logic is covered by the backend tests +
+  type-check, and the render reuses the existing branch-row machinery.
+
+---
+
