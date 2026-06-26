@@ -194,6 +194,9 @@ export interface Settings {
   accentColor: string;
   /** Force reduced motion beyond the OS setting. */
   reduceMotion: boolean;
+  /** Overview column minimum width in px (320–600); the floor before columns
+   * scroll horizontally (#176). Applied as the `--overview-card-min` CSS var. */
+  overviewPanelMinWidth: number;
   // Behavior (wired by a follow-up)
   /** View shown on launch. */
   defaultView: View;

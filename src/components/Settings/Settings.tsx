@@ -237,6 +237,15 @@ function SettingsModal() {
                   label="Reduce motion"
                   className={styles.checkRow}
                 />
+                <Slider
+                  label="Overview panel min width"
+                  valueLabel={`${draft.overviewPanelMinWidth}px`}
+                  min={320}
+                  max={600}
+                  step={20}
+                  value={draft.overviewPanelMinWidth}
+                  onChange={(v) => update("overviewPanelMinWidth", v)}
+                />
               </>
             )}
 

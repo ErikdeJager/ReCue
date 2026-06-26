@@ -392,6 +392,7 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalCursorBlink: true,
   accentColor: "",
   reduceMotion: false,
+  overviewPanelMinWidth: 400,
   defaultView: "overview",
   confirmDestructive: true,
   canvasCloseBehavior: "ask",
@@ -464,6 +465,9 @@ function applySettingsEffects(s: Settings): void {
   // Reduce motion (#102): force-on beyond the OS setting via a body class that
   // global.css zeroes the motion for (mirrors the prefers-reduced-motion killswitch).
   document.body.classList.toggle("reduce-motion", s.reduceMotion);
+  // Overview column min width (#176): the floor before columns scroll horizontally.
+  // Always set it — the `.card` CSS fallback only covers the pre-JS first paint.
+  root.style.setProperty("--overview-card-min", `${s.overviewPanelMinWidth}px`);
 }
 
 /** A clicked sidebar item — an agent/terminal (by PTY id) or a file/diff panel

@@ -67,7 +67,7 @@
 .card {
   position: relative;
   display: flex;
-  flex: 1 0 360px;
+  flex: 1 0 var(--overview-card-min, 400px);
   flex-direction: column;
   /* Repo-color top band (#36) — filled via inline borderTopColor; contiguous
      same-repo cards share it, reading as a group. */

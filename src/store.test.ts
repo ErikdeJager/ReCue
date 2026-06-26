@@ -5,9 +5,11 @@ import {
   accentCompanions,
   adjacentId,
   adjacentSessionId,
+  DEFAULT_SETTINGS,
   dedupeBranchLabels,
   isCleanExit,
   mergeRepoOrder,
+  mergeSettings,
   overviewClusterKeys,
   REPO_PALETTE,
   repoColor,
@@ -1221,6 +1223,24 @@ describe("openSessionInCanvas (#153)", () => {
     expect(st.view).toBe("overview"); // main view unchanged
     expect(st.activeCanvasId).toBe("c1"); // unchanged
     expect(st.selectedId).toBe("a1"); // row still highlighted
+  });
+});
+
+describe("mergeSettings (#100/#176)", () => {
+  it("defaults the Overview panel min width to 400px", () => {
+    expect(DEFAULT_SETTINGS.overviewPanelMinWidth).toBe(400);
+  });
+
+  it("back-fills a newly-added key for an older persisted blob", () => {
+    // A pre-#176 blob (no overviewPanelMinWidth) upgrades cleanly to the default.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.overviewPanelMinWidth;
+    const merged = mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>);
+    expect(merged.overviewPanelMinWidth).toBe(400);
+    // A persisted value is preserved over the default.
+    expect(
+      mergeSettings({ overviewPanelMinWidth: 520 }).overviewPanelMinWidth,
+    ).toBe(520);
   });
 });
 

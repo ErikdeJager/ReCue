@@ -1,8 +1,8 @@
 # TASK-176
 
-### 176. [ ] Configurable Overview panel minimum width (Settings → Appearance)
+### 176. [x] Configurable Overview panel minimum width (Settings → Appearance)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-26
 
