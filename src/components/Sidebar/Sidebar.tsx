@@ -1000,7 +1000,13 @@ function WorktreeHeader({
                     ViewsMenu (file/diff/terminal/kanban), so the action set never
                     diverges from the repo menu and the badge popover. */}
                 <div className={styles.menuSection}>Views</div>
-                <ViewsMenu repoPath={path} onClose={close} />
+                {/* No "New session here" — this menu already has its own top-level
+                    "New session" above (#201). */}
+                <ViewsMenu
+                  repoPath={path}
+                  onClose={close}
+                  includeNewSession={false}
+                />
                 <div className={styles.menuSeparator} role="separator" />
                 <button
                   type="button"
@@ -1787,7 +1793,13 @@ function Sidebar() {
                     popover render one action set. File viewer / Kanban open a
                     picker inline; adding a view doesn't switch the main view (#79). */}
                 <div className={styles.menuSection}>Views</div>
-                <ViewsMenu repoPath={menu.repo} onClose={closeMenu} />
+                {/* No "New session here" — this menu already has its own top-level
+                    "New session" above (#201). */}
+                <ViewsMenu
+                  repoPath={menu.repo}
+                  onClose={closeMenu}
+                  includeNewSession={false}
+                />
                 {/* Non-destructive folder utilities (#129): reveal in Finder /
                     copy the absolute path. Reuses the `open`-shell-out backend
                     (#100/#109) and the store clipboard helper. */}

@@ -20,13 +20,21 @@ import styles from "./ViewsMenu.module.css";
  * #59/#152) without forcing a main-view switch (#79). **File viewer** / **Kanban
  * board** open a searchable `FilePicker` (#56) inline — Kanban scoped to `.md` with
  * the create-or-open flow (#142/#151). `onClose` dismisses the host popover/menu.
+ *
+ * `includeNewSession` (default `true`) renders the leading **"New session here"**
+ * instant-spawn action + its separator (#177). Host menus that already render their
+ * own top-level "New session" — the repo context menu and the worktree header menu
+ * — pass `false` to avoid the duplicate (#201); the standalone `WorktreeViewsBadge`
+ * popover (#164) keeps the default so it remains the sole new-session affordance there.
  */
 function ViewsMenu({
   repoPath,
   onClose,
+  includeNewSession = true,
 }: {
   repoPath: string;
   onClose: () => void;
+  includeNewSession?: boolean;
 }) {
   const addOverviewPanel = useStore((s) => s.addOverviewPanel);
   const createKanbanBoard = useStore((s) => s.createKanbanBoard);
@@ -109,20 +117,25 @@ function ViewsMenu({
     <>
       {/* Instant agent spawn on this folder's current branch — no modal (#177).
           A separate action from the "add a view" items, so it sits apart above
-          a separator. Appears everywhere the button does, including agents. */}
-      <button
-        type="button"
-        role="menuitem"
-        className={styles.item}
-        onClick={() => {
-          void spawnSession(repoPath);
-          onClose();
-        }}
-      >
-        <Plus size={14} strokeWidth={1.5} className={styles.icon} />
-        New session here
-      </button>
-      <div className={styles.sep} role="separator" />
+          a separator. Suppressed (#201) when the host menu already renders its own
+          top-level "New session" (repo / worktree header), so there's no duplicate. */}
+      {includeNewSession && (
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            className={styles.item}
+            onClick={() => {
+              void spawnSession(repoPath);
+              onClose();
+            }}
+          >
+            <Plus size={14} strokeWidth={1.5} className={styles.icon} />
+            New session here
+          </button>
+          <div className={styles.sep} role="separator" />
+        </>
+      )}
       {items.map((v) => {
         const Icon = v.icon;
         return (

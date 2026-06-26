@@ -1,8 +1,8 @@
 # Task 201
 
-### 201. [ ] Folder/worktree context menu: collapse the two "New session" items into one
+### 201. [x] Folder/worktree context menu: collapse the two "New session" items into one
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-26
 
@@ -60,23 +60,29 @@ surviving "New session" actions or the view items.
 
 **Subtasks**
 
-1. [ ] `ViewsMenu`: `includeNewSession` prop (default true) gating the "New session here"
-   button + leading separator.
-2. [ ] Pass `includeNewSession={false}` from the repo context menu and the worktree header
-   menu; leave the `WorktreeViewsBadge` popover on the default.
-3. [ ] **Verify** — `npm run build`, `npm run lint`, `npm test` green; Rust untouched.
-   Manual (or note): the repo and worktree context menus each show exactly **one** "New
-   session"; the worktree-badge popover still shows "New session here"; the view items are
-   unchanged.
+1. [x] `ViewsMenu`: added an `includeNewSession?: boolean` prop (default `true`) gating the
+   "New session here" instant-spawn button **and** its trailing separator (wrapped together in
+   a fragment so neither renders when `false`).
+2. [x] Passed `includeNewSession={false}` from the **repo context menu** (`Sidebar.tsx` ~1790)
+   and the **worktree header menu** (~1003), each of which already has its own top-level "New
+   session". Left the shared `ViewsPopover` (→ `ViewsMenu`) on the default, so **both**
+   standalone popovers that render `ViewsMenu` alone — `WorktreeViewsBadge` (#164) and
+   `OpenViewButton` (#165/#177) — keep "New session here" (neither has a separate top-level
+   new-session action).
+3. [x] **Verify** — `npm run build` ✓, `npm run lint` ✓, `npm test` (288) ✓, prettier ✓; Rust
+   untouched. Manual GUI check is runtime-unverified in this autonomous loop (no GUI) — see
+   Notes; the change is a pure prop gate.
 
 **Acceptance criteria**
 
-- [ ] The repo (folder) context menu shows a **single** "New session"; ditto the worktree
-      header menu.
-- [ ] The `WorktreeViewsBadge` popover still offers "New session here".
-- [ ] The view items (file/diff/terminal/kanban/filetree) and the surviving "New session"
-      behaviors are unchanged.
-- [ ] `npm run build`, `npm run lint`, `npm test` pass; no Rust changes.
+- [x] The repo (folder) context menu shows a **single** "New session" (top-level
+      `startRepoSession`); ditto the worktree header menu (top-level `spawnWorktreeSession`) —
+      the `ViewsMenu`'s "New session here" is suppressed in both.
+- [x] The `WorktreeViewsBadge` popover still offers "New session here" (default prop via the
+      shared `ViewsPopover`); `OpenViewButton` does too.
+- [x] The view items (file/diff/terminal/kanban/filetree) and the surviving "New session"
+      behaviors are unchanged (only the leading button + separator are conditionally rendered).
+- [x] `npm run build`, `npm run lint`, `npm test` pass; no Rust changes.
 
 **Notes**
 
@@ -91,3 +97,21 @@ surviving "New session" actions or the view items.
 - **References:** `ViewsMenu.tsx` "New session here" (~113–124), `Sidebar.tsx` repo menu
   top-level "New session" (~1722) + `ViewsMenu` (~1739), `WorktreeHeader` top-level "New
   session" (~949) + `ViewsMenu` (~956), `WorktreeViewsBadge` (#164). CLAUDE.md "Views" (#82/#164).
+
+**Implementation notes (2026-06-26 — done)**
+
+- **One prop, two call sites.** `ViewsMenu` gained `includeNewSession?: boolean` (default
+  `true`); the "New session here" button + its separator are wrapped in a fragment gated on it.
+  The repo context menu and the worktree header menu (both with their own top-level "New
+  session") pass `includeNewSession={false}`.
+- **Found a third `ViewsMenu` render** beyond the two the card named: the shared
+  `ViewsPopover` (`ViewsMenu/ViewsPopover.tsx` ~59), used by **both** `WorktreeViewsBadge`
+  (#164) **and** `OpenViewButton` (#165/#177). Both are standalone popovers rendering
+  `ViewsMenu` alone with **no** separate top-level new-session action, so I deliberately left
+  them on the default `true` — they remain the sole "New session here" affordance in those
+  surfaces (matches the card's intent for the badge popover, and keeps `OpenViewButton`'s
+  documented "plus an instant New session here" behavior). No change to `ViewsPopover`.
+- **Runtime-unverified (autonomous loop, no GUI):** the visual "exactly one New session per
+  context menu" check. It's a pure conditional-render prop gate; build/lint/tests/prettier all
+  pass and no Rust changed. Recommend a quick `npm run tauri dev` glance at the repo +
+  worktree context menus and the badge/open-view popovers.
