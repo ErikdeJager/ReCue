@@ -152,6 +152,9 @@ function CanvasTabs() {
   const popOutCanvas = useStore((s) => s.popOutCanvas);
   const equalizeCanvas = useStore((s) => s.equalizeCanvas);
   const openTemplateEditor = useStore((s) => s.openTemplateEditor);
+  const openTemplateEditorFromCanvas = useStore(
+    (s) => s.openTemplateEditorFromCanvas,
+  );
   const openTemplateManager = useStore((s) => s.openTemplateManager);
   const openTemplateUse = useStore((s) => s.openTemplateUse);
   const hasTemplates = useStore((s) => s.canvasTemplates.length > 0);
@@ -161,6 +164,8 @@ function CanvasTabs() {
   const activeLayout =
     canvases.find((c) => c.id === activeCanvasId)?.layout ?? null;
   const canEqualize = !!activeLayout && activeLayout.type === "split";
+  // "Save current canvas as template…" (#187) needs at least one panel to map.
+  const canSaveAsTemplate = !!activeLayout;
 
   // Templates ▾ menu (#117): a small dropdown near the + with "New template…" /
   // "Manage templates…". Closes on outside-click, Escape, or a selection.
@@ -307,6 +312,18 @@ function CanvasTabs() {
               }}
             >
               New template…
+            </button>
+            <button
+              type="button"
+              className={styles.templatesItem}
+              role="menuitem"
+              disabled={!canSaveAsTemplate}
+              onClick={() => {
+                setTemplatesOpen(false);
+                openTemplateEditorFromCanvas();
+              }}
+            >
+              Save current canvas as template…
             </button>
             <button
               type="button"

@@ -228,15 +228,18 @@ function TemplateEditor() {
   const existing = editingId
     ? templates.find((t) => t.id === editingId)
     : undefined;
+  // "Save current canvas as template…" (#187) seeds a brand-new template from the
+  // active canvas's mapped block tree; used only when not editing an existing one.
+  const seed = useStore((s) => s.templateEditorSeed);
+  const seedName = useStore((s) => s.templateEditorSeedName);
 
   // Draft state seeded once at mount; the layout is deep-cloned so edits don't
-  // touch the stored template until Save.
-  const [name, setName] = useState(() => existing?.name ?? "");
-  const [layout, setLayout] = useState<CanvasNode | null>(() =>
-    existing?.layout
-      ? (JSON.parse(JSON.stringify(existing.layout)) as CanvasNode)
-      : null,
-  );
+  // touch the stored template (or the live canvas seed) until Save.
+  const [name, setName] = useState(() => existing?.name ?? seedName ?? "");
+  const [layout, setLayout] = useState<CanvasNode | null>(() => {
+    const source = existing?.layout ?? seed;
+    return source ? (JSON.parse(JSON.stringify(source)) as CanvasNode) : null;
+  });
   const [dragActive, setDragActive] = useState(false);
 
   const sensors = useSensors(

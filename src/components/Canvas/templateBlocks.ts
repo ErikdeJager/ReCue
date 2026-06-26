@@ -104,6 +104,18 @@ export function blockDescriptor(kind: string): BlockDescriptor | undefined {
   return BLOCK_REGISTRY.find((b) => b.kind === kind);
 }
 
+/**
+ * The block whose `liveKind` matches a live `CanvasContent.kind` — the **inverse**
+ * of instantiation (#118), used to turn a live canvas back into template blocks
+ * (#187). Returns undefined for a kind no block produces (`scheduled` / `pending` /
+ * `placeholder`), so the caller drops that leaf.
+ */
+export function blockForLiveKind(
+  liveKind: string,
+): BlockDescriptor | undefined {
+  return BLOCK_REGISTRY.find((b) => b.liveKind === liveKind);
+}
+
 /** Whether a leaf's content is a template **block** (vs live content). */
 export function isBlockContent(content: CanvasContent): boolean {
   return BLOCK_KINDS.has(content.kind);

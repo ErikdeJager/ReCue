@@ -4,6 +4,7 @@
 
 import { create } from "zustand";
 
+import { canvasToTemplate } from "./components/Canvas/canvasToTemplate";
 import {
   appendLeaf,
   collectLeaves,
@@ -585,6 +586,12 @@ export interface AppState {
   /** The template being edited (#117); `null` = a brand-new template. Only
    * meaningful while `templateEditorOpen`. */
   templateEditorId: string | null;
+  /** A live canvas's block tree seeded into the editor by "Save current canvas as
+   * template…" (#187); the editor deep-clones it into its draft layout on open.
+   * Cleared whenever the editor opens for a real/blank template or closes. */
+  templateEditorSeed: CanvasNode | null;
+  /** Default name for a seeded template (#187) — the source canvas's tab name. */
+  templateEditorSeedName: string | null;
   /** Whether the "Manage templates" view is open (#117). */
   templateManagerOpen: boolean;
   /** Whether the "New tab from template" chooser is open (#118). */
@@ -797,6 +804,11 @@ export interface AppState {
   /** Open the template editor (#117) — `id` to edit an existing template, `null`
    * for a brand-new one. */
   openTemplateEditor: (id: string | null) => void;
+  /** Open the template editor seeded from the **active canvas's** live layout
+   * (#187): each panel maps to its template block (structure + sizes preserved,
+   * file/kanban paths and agent custom names carried). Toast + no-op when the
+   * canvas has nothing templatable. The draft is unsaved until the user Saves. */
+  openTemplateEditorFromCanvas: () => void;
   /** Close the template editor without saving (#117). */
   closeTemplateEditor: () => void;
   /** Open / close the "Manage templates" view (#117). */
@@ -1231,6 +1243,8 @@ export const useStore = create<AppState>()((set, get) => ({
   canvasTemplates: [],
   templateEditorOpen: false,
   templateEditorId: null,
+  templateEditorSeed: null,
+  templateEditorSeedName: null,
   templateManagerOpen: false,
   templateUseOpen: false,
   activeLeafId: null,
@@ -2093,10 +2107,41 @@ export const useStore = create<AppState>()((set, get) => ({
     set({
       templateEditorOpen: true,
       templateEditorId: id,
+      // A real/blank-template open never inherits a stale canvas seed (#187).
+      templateEditorSeed: null,
+      templateEditorSeedName: null,
       templateManagerOpen: false,
     }),
+  // Seed the editor from the active canvas's live layout (#187): map each panel to
+  // its template block (resolving an agent's custom name from `sessions`), preserve
+  // structure + sizes. Toast + no-op when nothing is templatable; otherwise open the
+  // editor as a brand-new template (id: null) carrying the seed for its draft.
+  openTemplateEditorFromCanvas: () => {
+    const { canvases, activeCanvasId, sessions } = get();
+    const canvas = canvases.find((c) => c.id === activeCanvasId);
+    const seed = canvasToTemplate(
+      canvas?.layout ?? null,
+      (id) => sessions.find((s) => s.id === id)?.name || undefined,
+    );
+    if (!seed) {
+      get().pushToast("This canvas has nothing to save as a template");
+      return;
+    }
+    set({
+      templateEditorOpen: true,
+      templateEditorId: null,
+      templateEditorSeed: seed,
+      templateEditorSeedName: canvas?.name ?? "",
+      templateManagerOpen: false,
+    });
+  },
   closeTemplateEditor: () =>
-    set({ templateEditorOpen: false, templateEditorId: null }),
+    set({
+      templateEditorOpen: false,
+      templateEditorId: null,
+      templateEditorSeed: null,
+      templateEditorSeedName: null,
+    }),
   openTemplateManager: () => set({ templateManagerOpen: true }),
   closeTemplateManager: () => set({ templateManagerOpen: false }),
 
