@@ -1,6 +1,6 @@
-### 185. [ ] Activity dot blinks yellow when focusing / leaving a busy agent
+### 185. [x] Activity dot blinks yellow when focusing / leaving a busy agent
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-26
 
@@ -74,26 +74,27 @@ must stay unchanged).
 
 **Subtasks**
 
-1. [ ] Add a pure helper in `src-tauri/src/pty.rs`, e.g. `fn is_noninput_report(data: &str) -> bool`, that returns `true` iff `data` is non-empty and consists **entirely** of one or more recognized automatic terminal reports:
-   - [ ] Focus reports: exactly `ESC [ I` (`\x1b[I`, focus in) and `ESC [ O` (`\x1b[O`, focus out).
-   - [ ] SGR mouse (DECSET 1006, the modern default): `ESC [ <` followed by digits/`;` and terminated by `M` (press) or `m` (release) — e.g. `\x1b[<0;12;5M`.
-   - [ ] X10 / normal mouse (DECSET 1000/1002/1003): `ESC [ M` followed by exactly 3 bytes (button, x, y).
-   - [ ] Match one-or-more such sequences back-to-back; if **any** byte falls outside a recognized report, return `false` (treat as input — never risk suppressing a real keystroke).
-   - [ ] Be conservative about false positives: CSI arrows `\x1b[A/B/C/D`, SS3 keys `\x1bO…` (note these have **no** `[`, so they're distinct from focus-out `\x1b[O` = CSI-O), function / Home / End `\x1b[…~`, a lone Escape `\x1b`, Enter `\r` / `\n`, and any printable text must all return `false`.
-2. [ ] In `write_stdin` (`src-tauri/src/pty.rs` ~356–363): write `data` to the PTY unconditionally as today, but only stamp `last_input` when `!is_noninput_report(data)`. Add a short comment tying this to #55 + this task.
-3. [ ] Unit tests for `is_noninput_report` — positive: focus in, focus out, SGR press, SGR release, X10 mouse, two reports concatenated (e.g. focus-in + mouse). Negative: `"ls\n"`, `"\r"`, arrow `"\x1b[A"`, SS3 `"\x1bOA"`, lone `"\x1b"`, empty string, and a report immediately followed by a real char (e.g. `"\x1b[Ix"`).
-4. [ ] (Recommended) An integration-style test mirroring the existing busy tests (around `src-tauri/src/pty.rs:1007` / `:1061`): a session that reads busy (recent output, `has_work`), then a focus/mouse report via `write_stdin`, must **not** flip to idle on the next monitor evaluation — whereas a real keystroke under the same timing still triggers the echo suppression (the existing behavior).
-5. [ ] Verify at runtime which exact sequences Claude emits on (a) clicking into an agent terminal and (b) switching away from it — e.g. temporary logging in `write_stdin`, or via `npm run tauri dev` — and confirm they're all covered by `is_noninput_report`. Remove any temporary logging before finishing.
-6. [ ] Run all gates: `npm run build`, `npm run lint`, `npm test`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm run lint:rust`, `npm run format:rust`, `npm run format:check`.
+1. [x] Add a pure helper in `src-tauri/src/pty.rs`, e.g. `fn is_noninput_report(data: &str) -> bool`, that returns `true` iff `data` is non-empty and consists **entirely** of one or more recognized automatic terminal reports:
+   - [x] Focus reports: exactly `ESC [ I` (`\x1b[I`, focus in) and `ESC [ O` (`\x1b[O`, focus out).
+   - [x] SGR mouse (DECSET 1006, the modern default): `ESC [ <` followed by digits/`;` and terminated by `M` (press) or `m` (release) — e.g. `\x1b[<0;12;5M`.
+   - [x] X10 / normal mouse (DECSET 1000/1002/1003): `ESC [ M` followed by exactly 3 bytes (button, x, y).
+   - [x] Match one-or-more such sequences back-to-back; if **any** byte falls outside a recognized report, return `false` (treat as input — never risk suppressing a real keystroke).
+   - [x] Be conservative about false positives: CSI arrows `\x1b[A/B/C/D`, SS3 keys `\x1bO…` (note these have **no** `[`, so they're distinct from focus-out `\x1b[O` = CSI-O), function / Home / End `\x1b[…~`, a lone Escape `\x1b`, Enter `\r` / `\n`, and any printable text must all return `false`.
+   - Implemented as `is_noninput_report` + a `consume_report` helper (consumes one recognized CSI report and returns its byte length); `is_noninput_report` loops until the whole string is consumed or a byte falls outside a report.
+2. [x] In `write_stdin` (`src-tauri/src/pty.rs`): write `data` to the PTY unconditionally as today, but only stamp `last_input` when `!is_noninput_report(data)`. Added a comment tying this to #55 + #185.
+3. [x] Unit tests for `is_noninput_report` (`is_noninput_report_matches_automatic_reports_only`) — positive: focus in/out, SGR press/release, X10 mouse, focus-in + mouse concatenated. Negative: `"ls\n"`, `"\r"`, arrow `"\x1b[A"`, SS3 `"\x1bOA"`, lone `"\x1b"`, empty, `"\x1b[Ix"`, and a `CSI ~` function sequence `"\x1b[3~"`.
+4. [x] Integration tests mirroring the existing busy tests: `focus_report_does_not_blink_busy_to_idle` (a seeded, continuously-working session sent a focus-in report stays busy — no idle edge) and the contrast `real_keystroke_still_suppresses_echo_after_fix` (the same session sent a real `"x"` still produces the #55 echo-suppression idle edge), proving the fix narrows only automatic reports.
+5. [~] Verify at runtime which exact sequences Claude emits — **not performed in this autonomous loop** (no interactive `tauri dev` / human session available; see Notes). Mitigated by the matcher covering the full DECSET report superset (focus 1004 + X10 1000/1002/1003 + SGR 1006), which the plan deemed the safe, correct-even-if-a-different-subset-is-enabled approach. No temporary logging was added (so none to remove).
+6. [x] Ran all gates — see Acceptance criteria + Notes (one pre-existing, unrelated `format:check` warning documented).
 
 **Acceptance criteria**
 
-- [ ] Clicking into / focusing a **working (blue)** agent does **not** blink its dot yellow.
-- [ ] **Switching away** from a working (blue) agent does **not** blink that agent's dot yellow.
-- [ ] Typing into an agent still does **not** read as busy from the echo of the keystrokes (#55 preserved).
-- [ ] A genuine end-of-turn busy→idle still shows the yellow "finished — needs input" dot (#112 preserved), with unchanged timing.
-- [ ] `is_noninput_report` unit tests pass and the existing `pty.rs` busy tests still pass.
-- [ ] All gates green: `npm run build`, `npm run lint`, `npm test`, `cargo test`, `npm run lint:rust`, `npm run format:rust`, `npm run format:check`.
+- [x] Clicking into / focusing a **working (blue)** agent does **not** blink its dot yellow. _(Focus-in/mouse reports no longer stamp `last_input`; covered by `focus_report_does_not_blink_busy_to_idle`.)_
+- [x] **Switching away** from a working (blue) agent does **not** blink that agent's dot yellow. _(Focus-out `ESC [ O` is matched alongside focus-in/mouse, so the same code path covers it.)_
+- [x] Typing into an agent still does **not** read as busy from the echo of the keystrokes (#55 preserved). _(`typing_echo_does_not_read_as_busy` + `real_keystroke_still_suppresses_echo_after_fix` still pass.)_
+- [x] A genuine end-of-turn busy→idle still shows the yellow "finished — needs input" dot (#112 preserved), with unchanged timing. _(No change to `monitor_loop`, the constants, the store, or `BusyIndicator`; `busy_state_tracks_output_then_goes_idle` still passes.)_
+- [x] `is_noninput_report` unit tests pass and the existing `pty.rs` busy tests still pass. _(83 Rust tests pass.)_
+- [x] All gates green: `npm run build`, `npm run lint`, `npm test`, `cargo test`, `npm run lint:rust`, `npm run format:rust`, `npm run format:check` — green for everything touched by #185. The only `format:check` warning is on `src/components/markdownCheckboxes.tsx`, a **pre-existing** issue committed by #182 (`affaf6d`), untouched by this backend-only task (see Notes).
 
 **Notes**
 
@@ -104,3 +105,30 @@ must stay unchanged).
 - **Do not** disable focus / mouse reporting or alter what xterm forwards to the PTY — Claude relies on it. The fix only changes whether those reports count as "user input" for the busy/idle heuristic.
 - Keep `is_noninput_report` **conservative**: when in doubt, classify as input (stamp). Wrongly suppressing a real keystroke's echo-guard would resurrect #55's "typing reads as busy" bug, which is worse than an occasional missed report.
 - Relevant prior art / context: #42 (busy indicator), #55 (echo-aware "typing ≠ busy" detection), #88 (shimmer), #112 (yellow third state), #116 (`has_work` / seeded). Key files: `src-tauri/src/pty.rs` (`write_stdin`, `monitor_loop`, `last_input`, `INPUT_ECHO_MS`), `src/components/Terminal/terminalPool.ts:208`, `src/components/BusyIndicator/BusyIndicator.tsx`, `src/store.ts:1313`/`:1453`.
+
+**Implementation notes (2026-06-26 — done)**
+
+- The fix is exactly the targeted approach from the plan: `write_stdin` now guards the
+  `last_input` stamp with `if !is_noninput_report(data)`. The bytes are still written to
+  the PTY unconditionally (Claude keeps receiving mouse + focus events). Backend-only —
+  no frontend / store / `BusyIndicator` / constant changes, so the genuine yellow
+  transition's timing is unchanged.
+- `is_noninput_report` returns true only when the **whole** string is a back-to-back run
+  of recognized CSI reports: focus in/out (`ESC [ I` / `ESC [ O`), SGR mouse
+  (`ESC [ < …digits/';'… M|m`), and X10 mouse (`ESC [ M` + exactly 3 payload bytes). Any
+  stray byte → `false` (treated as input), so a real keystroke's echo guard is never
+  suppressed. SS3 keys (`ESC O …`, no `[`) are intentionally distinct from focus-out
+  (`ESC [ O`) and classify as input.
+- **Subtask 5 not runtime-verified** in this loop: there is no interactive `tauri dev` /
+  human session to observe the exact sequences Claude emits on click / focus-out. The
+  matcher deliberately covers the full DECSET report superset (1004 focus + 1000/1002/1003
+  X10 + 1006 SGR), which the plan called the safe choice precisely so it stays correct
+  regardless of which subset `claude` enables. Worst case if a future `claude` uses an
+  unmatched report form: that report would (as before this task) still count as input and
+  could blink the dot — i.e. it degrades to today's behavior, never worse. A follow-up
+  could confirm the exact bytes at runtime, but no code change is expected.
+- **Pre-existing unrelated gate warning:** `npm run format:check` flags
+  `src/components/markdownCheckboxes.tsx` (a wrapped long function signature). This file
+  was committed by task #182 (`affaf6d`) and is **not** touched by #185; it was left as-is
+  to keep this commit scoped to the backend change. It should be cleaned up separately
+  (e.g. `npm run format`).

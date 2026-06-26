@@ -356,10 +356,17 @@ impl SessionManager {
     pub fn write_stdin(&self, id: &str, data: &str) -> Result<(), SessionError> {
         // Stamp the keystroke time *before* writing, so the echo the terminal
         // sends back can never be mistaken for autonomous Claude output (#55).
-        if let Ok(map) = self.activity.lock() {
-            if let Some(state) = map.get(id) {
-                let now = self.base.elapsed().as_millis() as u64;
-                state.last_input.store(now.max(1), Ordering::Relaxed);
+        // Skip the stamp for *automatic* terminal reports (focus in/out + mouse,
+        // #185): xterm forwards those like keystrokes, but they fire on click /
+        // focus / blur, so stamping them would land an agent's in-flight output in
+        // the echo window and blink the busy dot yellow while it's still working.
+        // The bytes are still written below — Claude needs the mouse/focus events.
+        if !is_noninput_report(data) {
+            if let Ok(map) = self.activity.lock() {
+                if let Some(state) = map.get(id) {
+                    let now = self.base.elapsed().as_millis() as u64;
+                    state.last_input.store(now.max(1), Ordering::Relaxed);
+                }
             }
         }
         let mut sessions = self.lock_sessions()?;
@@ -607,6 +614,61 @@ impl SessionManager {
             .lock()
             .map(|guard| guard.clone())
             .map_err(|_| SessionError::Io("event sender lock poisoned".to_string()))
+    }
+}
+
+/// True iff `data` consists **entirely** of one or more *automatic* terminal-protocol
+/// reports — focus in/out (DECSET 1004) and mouse (1000/1002/1003 X10, 1006 SGR) — and
+/// nothing else. xterm forwards these through `onData` exactly like keystrokes (Claude's
+/// TUI requests them), but they are emitted automatically when the user clicks into /
+/// focuses / leaves the terminal, not by typing. `write_stdin` uses this to **skip
+/// stamping `last_input`** for such reports (#185): otherwise an agent's in-flight output
+/// lands inside the #55 keystroke-echo window and is misread as echo, so the busy dot
+/// wrongly blinks yellow ("needs input") for a tick while the agent is still working.
+///
+/// Conservative by design: if **any** byte falls outside a recognized report, return
+/// `false` (treat as real input) so a genuine keystroke's echo guard (#55) is never
+/// suppressed — wrongly suppressing it would resurrect the "typing reads as busy" bug.
+fn is_noninput_report(data: &str) -> bool {
+    let bytes = data.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        match consume_report(&bytes[i..]) {
+            Some(n) => i += n,
+            None => return false,
+        }
+    }
+    true
+}
+
+/// If `bytes` begins with one recognized automatic terminal report, return its byte
+/// length; otherwise `None`. All such reports are CSI sequences (`ESC [ …`) — note SS3
+/// keys (`ESC O …`, arrows / F-keys, no `[`) are deliberately *not* matched, so they
+/// stay classified as real input distinct from focus-out (`ESC [ O`).
+fn consume_report(bytes: &[u8]) -> Option<usize> {
+    if bytes.len() < 3 || bytes[0] != 0x1b || bytes[1] != b'[' {
+        return None;
+    }
+    match bytes[2] {
+        // Focus in / out: ESC [ I  /  ESC [ O   (DECSET 1004).
+        b'I' | b'O' => Some(3),
+        // X10 / normal mouse: ESC [ M followed by exactly 3 payload bytes
+        // (button, x, y) — DECSET 1000/1002/1003.
+        b'M' => (bytes.len() >= 6).then_some(6),
+        // SGR mouse: ESC [ < <digits/';'>… terminated by 'M' (press) or 'm' (release)
+        // — DECSET 1006, the modern default.
+        b'<' => {
+            let mut j = 3;
+            while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b';') {
+                j += 1;
+            }
+            // Require at least one body byte and a terminating M/m.
+            (j > 3 && j < bytes.len() && (bytes[j] == b'M' || bytes[j] == b'm')).then_some(j + 1)
+        }
+        _ => None,
     }
 }
 
@@ -1128,6 +1190,127 @@ mod tests {
         assert!(
             !saw_busy,
             "keystroke echo must not mark the session busy (#55)"
+        );
+    }
+
+    #[test]
+    fn is_noninput_report_matches_automatic_reports_only() {
+        // Positive: focus in/out, SGR mouse press/release, X10 mouse, two reports
+        // concatenated — these are emitted on click/focus, not by typing (#185).
+        assert!(is_noninput_report("\x1b[I")); // focus in
+        assert!(is_noninput_report("\x1b[O")); // focus out
+        assert!(is_noninput_report("\x1b[<0;12;5M")); // SGR press
+        assert!(is_noninput_report("\x1b[<0;12;5m")); // SGR release
+        assert!(is_noninput_report("\x1b[M\x20\x21\x21")); // X10 mouse (CSI M + 3 bytes)
+        assert!(is_noninput_report("\x1b[I\x1b[<0;1;1M")); // focus-in + mouse back-to-back
+
+        // Negative: real keystrokes / text must stamp last_input, so they read as
+        // input (the #55 echo guard must keep working).
+        assert!(!is_noninput_report("ls\n"));
+        assert!(!is_noninput_report("\r"));
+        assert!(!is_noninput_report("\x1b[A")); // CSI arrow up
+        assert!(!is_noninput_report("\x1bOA")); // SS3 key (no '[', distinct from focus-out)
+        assert!(!is_noninput_report("\x1b")); // lone Escape
+        assert!(!is_noninput_report("")); // empty
+        assert!(!is_noninput_report("\x1b[Ix")); // report immediately followed by a real char
+        assert!(!is_noninput_report("\x1b[3~")); // function/Home/End style CSI ~ sequence
+    }
+
+    #[test]
+    fn focus_report_does_not_blink_busy_to_idle() {
+        // #185: a focus/mouse report (xterm forwards these like keystrokes) must NOT
+        // stamp last_input. A continuously-working agent should therefore stay busy
+        // when the user clicks into / focuses / leaves it — no spurious idle edge.
+        let (mgr, rx) = manager();
+        let info = mgr
+            .spawn_program_seeded(
+                "sh",
+                &[
+                    "-c",
+                    "i=0; while [ $i -lt 80 ]; do printf .; sleep 0.05; i=$((i+1)); done",
+                ],
+                &tmp(),
+            )
+            .expect("spawn sh");
+
+        // Wait until it reads busy.
+        let mut saw_busy = false;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && !saw_busy {
+            if let Ok(SessionEvent::State { busy: true, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                saw_busy = true;
+            }
+        }
+        assert!(saw_busy, "seeded continuous output should read as busy");
+
+        // A focus-in report mid-work must be ignored by the busy heuristic.
+        mgr.write_stdin(&info.id, "\x1b[I")
+            .expect("write focus report");
+
+        let mut saw_idle = false;
+        let watch = Instant::now() + Duration::from_millis(600);
+        while Instant::now() < watch {
+            if let Ok(SessionEvent::State { busy: false, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                saw_idle = true;
+                break;
+            }
+        }
+        let _ = mgr.kill_session(&info.id);
+        assert!(
+            !saw_idle,
+            "a focus/mouse report must not flip a working agent to idle (#185)"
+        );
+    }
+
+    #[test]
+    fn real_keystroke_still_suppresses_echo_after_fix() {
+        // Contrast to #185: a *real* keystroke still stamps last_input, so the echo
+        // of typing right after it is suppressed (#55) — the working agent briefly
+        // reads idle on the next tick. Proves the fix narrows only automatic reports.
+        let (mgr, rx) = manager();
+        let info = mgr
+            .spawn_program_seeded(
+                "sh",
+                &[
+                    "-c",
+                    "i=0; while [ $i -lt 80 ]; do printf .; sleep 0.05; i=$((i+1)); done",
+                ],
+                &tmp(),
+            )
+            .expect("spawn sh");
+
+        let mut saw_busy = false;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && !saw_busy {
+            if let Ok(SessionEvent::State { busy: true, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                saw_busy = true;
+            }
+        }
+        assert!(saw_busy, "seeded continuous output should read as busy");
+
+        // A real keystroke stamps last_input → the next-tick output reads as echo.
+        mgr.write_stdin(&info.id, "x").expect("write keystroke");
+
+        let mut saw_idle = false;
+        let watch = Instant::now() + Duration::from_millis(700);
+        while Instant::now() < watch {
+            if let Ok(SessionEvent::State { busy: false, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                saw_idle = true;
+                break;
+            }
+        }
+        let _ = mgr.kill_session(&info.id);
+        assert!(
+            saw_idle,
+            "a real keystroke must still suppress the echo as busy (#55 preserved)"
         );
     }
 }
