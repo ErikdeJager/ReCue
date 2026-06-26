@@ -2080,3 +2080,57 @@ the flip writes back directly. This is deliberately position-based, not a line-r
 
 ---
 
+### 174. [x] Shift+arrow Overview navigation selects every panel kind, not just agents
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-26
+
+**Description**
+
+Fixed Overview keyboard navigation so **Shift+←/→** reaches **every** column kind, not just agent
+terminals. Previously the Overview branch of `useKeyboardNav.ts` called `adjacentSessionId`, which
+iterates `state.sessions` only — so the cursor silently skipped file viewers, diff panels, shell
+terminals, kanban boards, file-tree panels (#167), and pending scheduled-session cards. Each column kind
+already supported being `selected` (highlight frame + scroll-into-view keyed off `selectedId`), so the
+only missing piece was the keyboard nav reaching those ids.
+
+This was a **refactor, not a one-liner**: the wall's left-to-right column order is computed inside
+`Overview.tsx` (group by `effectiveRepo`, attribute worktree panels to the parent cluster, add pending
+schedules, sort repos by `repoName`, order each repo by the persisted `overviewOrder` merged with the
+live default, drop empty clusters). To keep nav and the rendered wall from drifting, that ordering was
+extracted into one **pure, shared, unit-tested** function consumed by both the component and the key
+handler. Per the user's decisions: **Overview only** (Canvas's `moveCanvasFocus` already reaches every
+leaf kind) and **Left/Right only** (Shift+↑/↓ keep passing through to a focused terminal's scrollback).
+
+**What shipped** (commit `40d6b85`, 2026-06-26)
+
+- **`src/store.ts`:** new pure `overviewClusters(...)` (+ a flat `overviewClusterKeys(...)`) replicating
+  the wall's exact grouping/ordering from a narrow serializable input
+  (`sessions / overviewPanels / overviewOrder / schedules / filter`), plus a generic
+  `adjacentId(ids, selectedId, delta)` flat-list adjacency helper (empty → null; unknown/null selection
+  → first id; modulo wrap-around) mirroring `adjacentSessionId`'s semantics.
+- **`src/components/Overview/Overview.tsx`:** the `clusters` computation now derives each cluster's keys
+  from the shared helper (the component still builds its local `byKey`/`items` for rendering), so the
+  rendered order and nav order cannot diverge.
+- **`src/useKeyboardNav.ts`:** the Overview Shift+←/→ branch now computes the flat id list via
+  `overviewClusterKeys({ …, filter: overviewRepoFilter })` and steps it with `adjacentId` → `select` —
+  spanning every column kind, respecting the active repo filter, wrapping at both ends, selecting the
+  first column when nothing is selected. Shift+↑/↓ and the Canvas branch are untouched.
+- **Tests** (`src/store.test.ts`): `overviewClusters`/`overviewClusterKeys` ordering (two repos
+  alphabetical, interleaved kinds per `overviewOrder`, worktree→parent attribution, filter narrowing,
+  empty-cluster drop) and `adjacentId` (empty/unknown/wrap-around).
+
+**Key files touched:** `src/store.ts`, `src/components/Overview/Overview.tsx`, `src/useKeyboardNav.ts`,
+`src/store.test.ts`. Frontend-only (no Rust change).
+
+**Notes**
+
+- No new selection side effect — "select" keeps its meaning (frame highlight + scroll-into-view + synced
+  `selectedId`).
+- All green: `npm run build`, `npm run lint`, `npm test`, `npm run format:check`, `cargo test`,
+  `npm run lint:rust`. The live `tauri dev` keyboard check relies on the new unit tests of the
+  ordering/adjacency plus the already-shipping per-column selection rendering (which works for clicks).
+
+---
+

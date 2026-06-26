@@ -12,9 +12,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #174 — Shift+arrow Overview navigation selects every panel kind, not just agents
-	Plan: TASK-174.md
-	Depends on: none
 - [ ] #175 — File-tree click: jump to an already-open file, open in the current view
 	Plan: TASK-175.md
 	Depends on: none
