@@ -1247,18 +1247,37 @@ pub fn reveal_path(path: String) -> Result<(), SessionError> {
     os_open(path)
 }
 
-/// Reveal a **file** in Finder (#171 sidebar file/Kanban row → "Reveal in Finder").
-/// The file counterpart of `reveal_path`: `open -R <path>` **selects** the file in
-/// its containing folder rather than launching it in its default app (a plain `open`
-/// would open the file). Same no-shell safety as `reveal_path` / `open_url` — `open`
-/// runs without a shell and the path is the app's own tracked panel data.
+/// Reveal a **file** in the OS file manager (#171 sidebar file/Kanban row → "Reveal
+/// in Finder"/"…Explorer"), **selecting** the file in its containing folder rather
+/// than launching it in its default app. The file counterpart of `reveal_path`:
+/// macOS `open -R <path>`, Windows `explorer.exe /select,<path>`. Same no-shell
+/// safety as `reveal_path` / `open_url` — spawned without a shell, and the path is
+/// the app's own tracked panel data.
 #[tauri::command]
 pub fn reveal_file_in_finder(path: String) -> Result<(), SessionError> {
-    std::process::Command::new("open")
-        .arg("-R")
-        .arg(&path)
-        .spawn()
-        .map_err(|e| SessionError::Io(e.to_string()))?;
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| SessionError::Io(e.to_string()))?;
+    }
+    #[cfg(windows)]
+    {
+        // `explorer.exe /select,<path>` opens the containing folder with the file
+        // highlighted. The `/select,<path>` token must be a single argument, and
+        // explorer is unforgiving about separators — it only highlights when the path
+        // is **all backslashes** (the frontend already sends native paths via #143
+        // `joinPath`; this normalizes defensively for any other caller). explorer is a
+        // GUI process (no console window flashes) and quirkily returns a non-zero exit
+        // even on success — harmless here since we only `spawn()`, never `wait()`.
+        let win_path = path.replace('/', "\\");
+        std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{win_path}"))
+            .spawn()
+            .map_err(|e| SessionError::Io(e.to_string()))?;
+    }
     Ok(())
 }
 

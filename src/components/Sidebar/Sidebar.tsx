@@ -36,7 +36,7 @@ import { agentSupportsResume } from "../../agents";
 import { noAutoCapitalize } from "../../inputProps";
 import { openUrl, revealFileInFinder, revealPath } from "../../ipc";
 import { forkUnavailableReason, repoName, sessionLabel } from "../../paths";
-import { kbdHint, revealLabel } from "../../platform";
+import { joinPath, kbdHint, revealLabel } from "../../platform";
 import { formatFireTime } from "../../time";
 import {
   dedupeBranchLabels,
@@ -144,11 +144,13 @@ function RowContextMenu({
 }
 
 /** The absolute path of a sidebar file/Kanban row (#171): the folder root joined to
- * the (repo-relative) `file`, trailing slashes on the root trimmed so there's no
- * double slash. For an out-of-repo file opened via Browse… (#163) the root is the
- * file's own parent dir, so this stays correct. */
+ * the (repo-relative) `file` with OS-native separators (#143 `joinPath` — backslashes
+ * on Windows so a revealed/copied path is native), trailing separators on the root
+ * trimmed so there's no double separator. For an out-of-repo file opened via Browse…
+ * (#163) the root is the file's own parent dir, so this stays correct. `platform` is a
+ * boot-constant, so the non-reactive store read is correct in this non-hook helper. */
 function rowAbsPath(repoPath: string, file: string): string {
-  return `${repoPath.replace(/\/+$/, "")}/${file}`;
+  return joinPath(useStore.getState().platform, repoPath, file);
 }
 
 /** The shared right-click menu for a sidebar **file** row — a real file on disk
@@ -164,7 +166,9 @@ function filePathMenuItems(
   const abs = rowAbsPath(repoPath, file);
   return [
     {
-      label: "Reveal in Finder",
+      // OS-appropriate label (Finder ↔ Explorer, #143); `platform` is a boot-constant
+      // so a non-reactive store read is correct here in a non-hook helper.
+      label: revealLabel(useStore.getState().platform),
       onActivate: () => void revealFileInFinder(abs),
     },
     {
@@ -1692,7 +1696,9 @@ function Sidebar() {
           >
             <Plus size={16} strokeWidth={1.5} />
             New session
-            <kbd className={styles.kbd}>⌘N</kbd>
+            <kbd className={styles.kbd}>
+              {kbdHint(platform, "⌘N", "Ctrl+N")}
+            </kbd>
           </button>
 
           {/* Schedule a session to launch later (#93) — same flow, plus a time step. */}
@@ -1703,7 +1709,9 @@ function Sidebar() {
           >
             <Clock size={15} strokeWidth={1.5} />
             Schedule session
-            <kbd className={styles.kbd}>⌘⇧N</kbd>
+            <kbd className={styles.kbd}>
+              {kbdHint(platform, "⌘⇧N", "Ctrl+Shift+N")}
+            </kbd>
           </button>
 
           <div className={styles.viewSwitch}>
@@ -1778,7 +1786,11 @@ function Sidebar() {
           type="button"
           className={styles.footerButton}
           onClick={() => toggleSidebarCollapsed()}
-          title={sidebarCollapsed ? "Expand sidebar ⌘B" : "Collapse sidebar ⌘B"}
+          title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar ${kbdHint(
+            platform,
+            "⌘B",
+            "Ctrl+B",
+          )}`}
           aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           {sidebarCollapsed ? (

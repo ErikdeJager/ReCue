@@ -27,6 +27,7 @@ import {
   searchFiles,
 } from "../../ipc";
 import { noAutoCapitalize } from "../../inputProps";
+import { joinPath, revealLabel } from "../../platform";
 import { useStore } from "../../store";
 import styles from "./FileTree.module.css";
 
@@ -67,6 +68,7 @@ const CONTENT_RESULT_LIMIT = 200;
 function FileTree({ repoPath }: { repoPath: string }) {
   const openFileFromTree = useStore((s) => s.openFileFromTree);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
+  const platform = useStore((s) => s.platform);
   // Children keyed by directory path ("" = repo root); a missing key = not yet loaded.
   const [children, setChildren] = useState<Record<string, DirEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -536,18 +538,21 @@ function FileTree({ repoPath }: { repoPath: string }) {
               role="menuitem"
               className={styles.menuItem}
               onClick={() => {
-                void revealPath(`${repoPath}/${menu.file}`);
+                void revealPath(joinPath(platform, repoPath, menu.file));
                 setMenu(null);
               }}
             >
-              Reveal in Finder
+              {revealLabel(platform)}
             </button>
             <button
               type="button"
               role="menuitem"
               className={styles.menuItem}
               onClick={() => {
-                void copyToClipboard(`${repoPath}/${menu.file}`, "path");
+                void copyToClipboard(
+                  joinPath(platform, repoPath, menu.file),
+                  "path",
+                );
                 setMenu(null);
               }}
             >

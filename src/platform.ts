@@ -20,3 +20,16 @@ export function revealLabel(platform: string): string {
 export function kbdHint(platform: string, mac: string, win: string): string {
   return isWindows(platform) ? win : mac;
 }
+
+/** Join a folder `root` with a repo-relative path into an **OS-native** absolute
+ * path (#143). The backend reports relative paths as `/`-separated on every OS
+ * (`files.rs`), while `root` carries native separators — so a naive `${root}/${rel}`
+ * yields mixed separators on Windows, which `explorer /select` rejects and which
+ * read wrong when copied. This normalizes to backslashes on Windows (forward slashes
+ * on macOS, identical to the prior behavior) and trims any trailing root separator so
+ * there's never a doubled one. */
+export function joinPath(platform: string, root: string, rel: string): string {
+  const trimmed = root.replace(/[\\/]+$/, "");
+  const joined = `${trimmed}/${rel}`;
+  return isWindows(platform) ? joined.replace(/\//g, "\\") : joined;
+}

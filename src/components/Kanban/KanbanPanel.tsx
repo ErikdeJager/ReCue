@@ -38,6 +38,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { noAutoCapitalize } from "../../inputProps";
+import { kbdHint } from "../../platform";
 import { useStore } from "../../store";
 import { useAutoSaveFile } from "../../useAutoSaveFile";
 import Checkbox from "../Checkbox/Checkbox";
@@ -438,6 +439,7 @@ function KanbanPanel({
   active,
 }: KanbanPanelProps): ReactElement {
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
+  const platform = useStore((s) => s.platform);
   // Shared read + hot-reload-poll + debounced-autosave buffer (#148). BOTH the
   // Board view (#143) and the Raw view (#149) edit this one buffer — no second,
   // competing write loop — so they can't double-write or clobber each other.
@@ -658,7 +660,9 @@ function KanbanPanel({
             className={styles.saveBtn}
             onClick={() => save()}
             disabled={!dirty}
-            title={dirty ? "Save (⌘S)" : "Saved"}
+            title={
+              dirty ? `Save (${kbdHint(platform, "⌘S", "Ctrl+S")})` : "Saved"
+            }
           >
             {dirty ? "Save" : "Saved"}
           </button>

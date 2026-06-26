@@ -4,6 +4,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { noAutoCapitalize } from "../../inputProps";
+import { kbdHint } from "../../platform";
+import { useStore } from "../../store";
 import { useAutoSaveFile } from "../../useAutoSaveFile";
 import {
   makeCheckboxComponents,
@@ -64,6 +66,7 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
     onCompositionStart,
     onCompositionEnd,
   } = useAutoSaveFile(repoPath, file, active);
+  const platform = useStore((s) => s.platform);
   const [showRaw, setShowRaw] = useState(false);
 
   const mode = detectMode(file);
@@ -117,7 +120,9 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
               className={styles.saveBtn}
               onClick={() => save()}
               disabled={!dirty}
-              title={dirty ? "Save (⌘S)" : "Saved"}
+              title={
+                dirty ? `Save (${kbdHint(platform, "⌘S", "Ctrl+S")})` : "Saved"
+              }
             >
               {dirty ? "Save" : "Saved"}
             </button>

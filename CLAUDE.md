@@ -440,6 +440,17 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > and `[\\/]` path splitting (`repoName`/`lastSegment`). The macOS arm is always the prior
 > code. Runtime items needing a GUI/installer (the `claude.cmd` spawn, the Windows installer,
 > e2e smoke) are flagged for interactive verification (the #84/#105 precedent).
+>
+> **Keeping the port current with `main`.** When `main`'s later features (#144+) merge into the
+> Windows branch, each new feature is re-audited against the same abstractions so Windows
+> users get it too: **OS-native path joins** (`joinPath(platform, root, rel)` in `platform.ts`
+> — the backend reports relative paths as `/`-separated on every OS, so an absolute path is
+> reassembled with backslashes on Windows for `explorer /select` + native copy/paste);
+> **`splitPath`** splits on `/` **or** `\` (#163); **reveal-a-file** uses `open -R` on macOS
+> and `explorer.exe /select,<path>` (separators normalized to `\`) on Windows (#171); and any
+> new shortcut hint / "Reveal in Finder" label routes through `kbdHint` / `revealLabel` so it
+> reads `Ctrl+…` / "Reveal in Explorer" on Windows (e.g. #162 ⌘S, #168 ⌘B, #172 ⌘N). New
+> keyboard *handling* stays `metaKey || ctrlKey`, so a Ctrl shortcut fires on Windows for free.
 
 ## v1 scope decisions / out of scope
 

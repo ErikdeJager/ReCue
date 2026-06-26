@@ -24,6 +24,7 @@ import remarkGfm from "remark-gfm";
 import { SELECTABLE_AGENTS } from "../../agents";
 import * as ipc from "../../ipc";
 import { patchnotesFor } from "../../patchnotes";
+import { kbdHint } from "../../platform";
 import { DEFAULT_SETTINGS, REPO_PALETTE, useStore } from "../../store";
 import type { Settings as SettingsType } from "../../types";
 import Checkbox from "../Checkbox/Checkbox";
@@ -89,6 +90,7 @@ const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
  */
 function SettingsModal() {
   const saved = useStore((s) => s.settings);
+  const platform = useStore((s) => s.platform);
   const setOpen = useStore((s) => s.setSettingsOpen);
   const saveSettings = useStore((s) => s.saveSettings);
   const setRecents = useStore((s) => s.setRecents);
@@ -319,7 +321,11 @@ function SettingsModal() {
                   <p className={styles.helpText}>
                     {draft.autoSave
                       ? "Edits to files and Kanban boards are written automatically."
-                      : "Save manually with ⌘S or the Save button."}
+                      : `Save manually with ${kbdHint(
+                          platform,
+                          "⌘S",
+                          "Ctrl+S",
+                        )} or the Save button.`}
                   </p>
                 </div>
                 <div className={styles.field}>
