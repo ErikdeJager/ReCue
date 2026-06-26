@@ -6,9 +6,14 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] 
+- [ ] diff view hidden folders
+	The diff view panel doesnt show hidden folders or their contents that have changed. Fix this bug
 
 ## READY
+
+- [ ] #182 — Markdown links must open in the external browser, never inside the app window
+	Plan: TASK-182.md
+	Depends on: none
 
 
 ## DONE
