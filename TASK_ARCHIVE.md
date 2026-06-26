@@ -2134,3 +2134,57 @@ leaf kind) and **Left/Right only** (Shift+↑/↓ keep passing through to a focu
 
 ---
 
+### 175. [x] File-tree click: jump to an already-open file (don't double-open) and open in the current view
+
+**Status:** Done
+**Depends on:** none _(mirrors the already-shipped #153 `openSessionInCanvas` detached-aware pattern but
+doesn't depend on it)_
+**Created:** 2026-06-26
+
+**Description**
+
+Made file-tree (#167) clicks **view-aware** and **jump-to-existing** instead of a silent no-op or a
+duplicate. Previously `openFile` always called `addOverviewPanel(repoPath, "markdown", file)`, which (a)
+on a dedup hit only fired a dead-end "Already open" toast without taking you to the existing panel, and
+(b) **always** targeted the Overview panel list even when the tree was rendered inside a **Canvas** panel
+— so a click in Canvas appeared to do nothing (the column landed in the unmounted Overview). That
+mismatch was the "open double" frustration.
+
+**New behavior:** clicking a file follows the **current view** and jumps to it if already present.
+In **Overview** — add a new file column and select it, or on a dedup hit select the existing column
+(the `selectedId` → `data-item-id` scroll effect reveals it). In **Canvas** (including a detached window,
+`!IS_MAIN_WINDOW`) — focus the file's existing leaf across **all** tabs (switching tab / raising the
+detached window), else append it as a panel to the active tab. "Present" is judged **per view**: in
+Canvas, an Overview-only file with no canvas leaf counts as not-present and gets appended. Either way the
+file is registered in **`overviewPanels`** (the #152 source of truth), so a Canvas-opened file also
+appears as a sidebar row + Overview column and its removal cascades.
+
+**What shipped** (commit `0daab92`, 2026-06-26)
+
+- **`addOverviewPanel` now returns an id** (`Promise<string | null>`): the new panel's id on add, the
+  existing panel's id on a dedup hit, `null` only on real failure — so a caller can select/focus it.
+  Existing `void`-ing callers are unaffected.
+- **New store action `openFileFromTree(repoPath, file, kind)`** (`kind: "markdown" | "kanban"`):
+  computes `inCanvas = !IS_MAIN_WINDOW || view === "canvas"`; Overview branch adds-or-jumps + selects;
+  Canvas branch finds an existing leaf (`collectLeaves` + `matchesCanvasItem`) to focus
+  (`focusCanvasWindow` if detached, else switch tab via `setCanvases`), else appends a leaf
+  (`setActiveCanvasLayout(appendLeaf(...))`), always toast-lessly registering the source-of-truth panel.
+- **`FileTree.tsx`** left-click, "Open in file viewer", and "Open as Kanban board" all route through the
+  new action (kanban → `{kind:"kanban"}`, markdown → `{kind:"file"}` content).
+- **Six new `store.test.ts` cases:** Overview add-and-select, Overview dedup-no-duplicate, Canvas
+  append-and-register, Canvas focus-existing-leaf, Canvas detached-tab `focusCanvasWindow`, and the
+  `addOverviewPanel` return-value contract.
+
+**Key files touched:** `src/store.ts`, `src/components/FileTree/FileTree.tsx`, `src/store.test.ts`.
+Frontend-only (no backend change — same `overviewPanels` / `canvases` data sources).
+
+**Notes**
+
+- Dedup stays **kind-specific** (a `.md` opened as a Kanban board is a distinct item from the same file
+  as a plain viewer). The Overview branch keeps the harmless "Opened…/Already open" toast; the Canvas
+  branch registers the panel without a misleading toast.
+- All green: `npm run build`, `npm run lint`, `npm test`, `npm run format:check`, `cargo test`,
+  `npm run lint:rust`.
+
+---
+

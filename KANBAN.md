@@ -12,9 +12,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #175 — File-tree click: jump to an already-open file, open in the current view
-	Plan: TASK-175.md
-	Depends on: none
 - [ ] #176 — Configurable Overview panel minimum width (Settings)
 	Plan: TASK-176.md
 	Depends on: none
