@@ -240,3 +240,54 @@ judgment with "see if this … has good UX"):
 - **Depends on: none** — reuses shipped `spawnWorktreeSession` (#166) + the repo `+` pattern.
   Sibling worktree cards (filter-on-click, schedule-into-worktree, auto-delete guard) touch the
   same component but aren't prerequisites.
+
+---
+
+## TASK-197 — Click a worktree to filter Overview
+
+- The Overview filter matches `effectiveRepo === filter`, but a worktree's `effectiveRepo` is
+  its **parent** (#96) → broaden the predicate to `effectiveRepo === filter || repoPath ===
+  filter` so a worktree folder can be the filter; make the worktree header name clickable →
+  `setOverviewRepoFilter(dest)` (toggle), no view switch. **Depends on #196** (same
+  `WorktreeHeader`, sequenced to avoid edit conflicts).
+
+## TASK-198 — Schedule a session into a worktree
+
+- Add a serde-default `worktree` flag to `ScheduledSession`; an **explicit "Start in a
+  worktree" toggle** in the schedule branch step (clearer than a hidden ⌘⏎ for a deferred
+  flow); create the worktree at **fire time** (`worktree_add[_new_branch]`, like #125 defers
+  branch creation); **cancel cleanup reuses #199's broadened guard** so a cancelled schedule
+  never orphans a worktree. **Depends on #199.**
+
+## TASK-199 — Worktree auto-delete guard (THE confirmed bug)
+
+- The card asked to verify the guard covers all item types — it **does not**:
+  `cleanupWorktreeIfEmpty` (store.ts ~2737) counts **agents only**. So authored as a **fix**
+  (not removed): a pure `worktreeHasItems(state, dest)` counting sessions + `overviewPanels
+  [dest]` + schedules; trigger on **every** close (panel/schedule too, not just agent); count
+  exited-but-shown agents; dirty worktree still kept. **Depends on: none** (foundational for
+  #198/#200).
+
+## TASK-200 — Worktree removal must not freeze the UI
+
+- Root cause: `remove_worktree` is a **sync** `#[tauri::command]` → runs on the **main thread**
+  → the FS delete freezes the webview. Fix = make it `async` + `tauri::async_runtime::
+  spawn_blocking`; frontend cleanup made fire-and-forget (item removed instantly, dir deletes
+  in background, dirty-kept toast preserved). **Depends on #199** (shared cleanup path).
+
+## TASK-201 — One "New session" in the folder/worktree menu
+
+- Add `includeNewSession?: boolean` (default true) to the shared `ViewsMenu`; the repo context
+  menu **and** the worktree header menu (both already render a top-level "New session") pass
+  `false`; the standalone `WorktreeViewsBadge` popover keeps it. Keep the top-level action
+  (repo: `startRepoSession` branch-aware; worktree: `spawnWorktreeSession` reuse). **Depends
+  on: none.**
+
+## TASK-202 — File-tree search (filename + content)
+
+- Content search is **absent** (only filename `search_files`) → new bounded backend
+  `search_file_contents` (reuse `search_collect` walk + skip/validation, size/per-file/result
+  caps, deterministic, truncation surfaced); plain case-insensitive substring (no regex);
+  **in-panel** (tree↔results toggle), snippet "mini viewer" with the match highlighted, per-
+  result **Reveal in tree** (new expand-to-path) + **Open** (reuse existing file-open).
+  Sizable but kept as one card; adds no new view type. **Depends on: none.**
