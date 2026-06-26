@@ -3433,3 +3433,58 @@ first would have conflicted on `KanbanPanel`'s checkbox render).
 
 ---
 
+### 196. [x] Worktree header: icon-only marker + an inline "new session" button like repos
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-26
+
+**Description**
+
+In the sidebar tree a **worktree** (#74) renders as a sub-group header (`WorktreeHeader` in
+`Sidebar.tsx`) nested under its parent repo. It showed a `GitBranch` icon **plus the literal
+word "worktree"** and — unlike a **repo** header — had **no inline "+" new-session button**
+(the repo header carries an always-visible `+` → `startRepoSession`; a worktree's create flow
+was buried in its right-click menu). This task drops the word in favor of the icon alone and
+gives the worktree header the same inline new-session button repos have, with items still
+landing in that worktree.
+
+**What shipped** (commit `b536354`, 2026-06-26) — **frontend-only** (no Rust):
+
+- **Dropped the "worktree" text badge** (the `worktreeBadge` span); the existing `GitBranch`
+  icon remains the marker (distinct from a repo's `Folder` icon #128) and went from
+  `aria-hidden` to `role="img" aria-label="worktree"` so the meaning survives the word's
+  removal; the absolute-path `title` stays.
+- **Added an inline `+` new-session button** (reusing the repo header's `.plus` styling) →
+  `spawnWorktreeSession(parent, branch)` (#166, the same action the worktree menu's "New
+  session" uses, so a new agent reuses the app-managed worktree, ref-count++); native
+  `disabled={!parent}` (greyed via a new `.plus:disabled`, `title="Worktree parent unknown"`)
+  with a belt-and-suspenders guard; `onClick` `stopPropagation` so the click never opens the
+  row's context menu / selection (or a future #197 click-to-filter handler).
+- **Layout:** `.worktreeName` gains `flex: 1` so the row is `icon + branch-name(grow) + "+"`
+  with the name truncating, mirroring `.repoTitle`; the dead `.worktreeBadge` rule removed.
+  Compact-rail mode (icon only) and the right-click menu (New session / Views / Reveal / Copy /
+  Pull / Close worktree) are unchanged.
+
+**Key files touched:** `src/components/Sidebar/Sidebar.tsx` (`WorktreeHeader` markup),
+`src/components/Sidebar/Sidebar.module.css` (`.worktreeName` flex, `.plus:disabled`, dropped
+`.worktreeBadge`).
+
+**Dependencies:** none — reuses shipped `spawnWorktreeSession` (#166), `ViewsMenu` (#164), and
+the repo `+` pattern. Sibling worktree cards (#197 filter-on-click, #198 schedule-into-worktree,
+#199 auto-delete guard) touch the same component but aren't prerequisites.
+
+**Notes**
+
+- **Autonomous refine (2026-06-26):** the user wasn't responding; decisions logged in
+  `ASSUMPTIONS.md` — keep `GitBranch` (already distinguishes a worktree; `FolderGit2` noted as
+  an alternative) + an accessible "worktree" label; the inline `+` mirrors the repo `+`
+  (starts a session, other panel types stay in the right-click `ViewsMenu`); disabled when the
+  parent repo is unknown.
+- **Runtime-unverified** in this autonomous loop (no GUI session): the rendered header (icon +
+  name + `+`, no badge) and that `+` spawns an agent nested under the same worktree. The change
+  is small, mirrors the verified repo `+`, and reuses shipped actions. `npm run build` /
+  `npm run lint` / `npm test` (277) all green; no Rust changes.
+
+---
+

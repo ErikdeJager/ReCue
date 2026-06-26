@@ -26,9 +26,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #196 — Worktree header: icon-only marker + inline "new session" button
-	Plan: TASK-196.md
-	Depends on: none
 - [ ] #197 — Click a worktree to filter Overview to just that worktree
 	Plan: TASK-197.md
 	Depends on: #196
