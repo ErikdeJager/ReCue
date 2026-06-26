@@ -46,6 +46,40 @@ const MAX_SEARCH_DEPTH: usize = 64;
 /// tree (`list_dir`) imposes no count limit at all.
 pub const SEARCH_RESULT_CAP: usize = 500;
 const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+/// Files larger than this are **skipped** by the content search (#202) — reading +
+/// scanning a multi-MB file per keystroke would stall the bounded live walk. Smaller
+/// than `MAX_FILE_BYTES` (the viewer's read cap) on purpose: search is a hot path.
+const MAX_CONTENT_SEARCH_BYTES: u64 = 2 * 1024 * 1024;
+/// At most this many matching lines are returned **per file** by the content search
+/// (#202), so one match-dense file can't flood the results; hitting it flags the
+/// result `truncated` (no silent cap, mirroring #179).
+const MAX_MATCHES_PER_FILE: usize = 3;
+/// A content-search snippet is clamped to this many characters; a longer matching
+/// line is windowed around the match (with `…` markers) so the hit stays visible.
+const SNIPPET_MAX_CHARS: usize = 200;
+/// Characters of leading context kept before the match when a long line is windowed.
+const SNIPPET_CONTEXT_CHARS: usize = 40;
+
+/// One content-search hit (#202): a matching line inside a file. `path` is
+/// repo-relative (POSIX `/`), `line` is 1-based, and `snippet` is the matching line
+/// trimmed + clamped to `SNIPPET_MAX_CHARS` (windowed around the match for long
+/// lines) — the frontend re-finds + highlights the (case-insensitive) match in it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContentMatch {
+    pub path: String,
+    pub line: usize,
+    pub snippet: String,
+}
+
+/// The result of `search_file_contents` (#202): the bounded list of matches plus a
+/// `truncated` flag set when the global result cap **or** any file's per-file cap was
+/// hit, so the UI can surface "more matches not shown" rather than silently dropping
+/// them (#179's no-silent-truncation rule).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ContentSearchResult {
+    pub matches: Vec<ContentMatch>,
+    pub truncated: bool,
+}
 
 /// One immediate child of a directory, returned by `list_dir` to drive the **lazy**
 /// file tree (#167): the tree fetches a single directory level at a time as folders
@@ -191,6 +225,139 @@ fn search_collect(
             }
         }
     }
+}
+
+/// Search a repo's viewable files **by content** (#202) for the in-tree search: a
+/// recursive, **deterministic** (sorted-walk, machine-independent) walk returning the
+/// lines containing `query` (case-insensitive substring). Mirrors `search_files`'
+/// skip rules (heavy/dependency dirs + `.git` via `SKIP_DIRS`, binaries via
+/// `SKIP_EXTS`, path-confined to `repo`) and adds two content-specific bounds: files
+/// over `MAX_CONTENT_SEARCH_BYTES` are skipped (too slow to scan live) and at most
+/// `MAX_MATCHES_PER_FILE` lines are taken per file. The walk stops at `limit` total
+/// matches; hitting either cap sets `truncated` so the UI surfaces it. An empty /
+/// whitespace `query` returns no matches (the tree view stays).
+pub fn search_file_contents(
+    repo: impl AsRef<Path>,
+    query: &str,
+    limit: usize,
+) -> ContentSearchResult {
+    let repo = repo.as_ref();
+    let needle = query.trim().to_lowercase();
+    let mut result = ContentSearchResult::default();
+    if needle.is_empty() {
+        return result;
+    }
+    content_search_collect(repo, repo, &needle, limit, &mut result, 0);
+    result
+}
+
+fn content_search_collect(
+    root: &Path,
+    dir: &Path,
+    needle: &str,
+    limit: usize,
+    result: &mut ContentSearchResult,
+    depth: usize,
+) {
+    if result.matches.len() >= limit {
+        result.truncated = true;
+        return;
+    }
+    if depth > MAX_SEARCH_DEPTH {
+        return;
+    }
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    // Sorted walk → the `limit` cut-off is deterministic across machines (like
+    // `search_collect`).
+    let mut entries: Vec<_> = read.flatten().collect();
+    entries.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
+    for entry in entries {
+        if result.matches.len() >= limit {
+            result.truncated = true;
+            return;
+        }
+        let os_name = entry.file_name();
+        let name = os_name.to_string_lossy();
+        let path = entry.path();
+        if path.is_dir() {
+            if SKIP_DIRS.contains(&name.as_ref()) {
+                continue;
+            }
+            content_search_collect(root, &path, needle, limit, result, depth + 1);
+        } else if is_listable(&path) {
+            // Skip oversized files — reading + scanning them would stall the live walk.
+            let too_big = fs::metadata(&path)
+                .map(|m| m.len() > MAX_CONTENT_SEARCH_BYTES)
+                .unwrap_or(true);
+            if too_big {
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(root) else {
+                continue;
+            };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            // Read as UTF-8 text; a non-UTF-8 (binary-ish) or unreadable file is skipped.
+            let Ok(contents) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let mut per_file = 0usize;
+            for (idx, line) in contents.lines().enumerate() {
+                if result.matches.len() >= limit {
+                    result.truncated = true;
+                    return;
+                }
+                if line.to_lowercase().contains(needle) {
+                    if per_file >= MAX_MATCHES_PER_FILE {
+                        // This file has more hits than we show — surface, don't hide.
+                        result.truncated = true;
+                        break;
+                    }
+                    result.matches.push(ContentMatch {
+                        path: rel.clone(),
+                        line: idx + 1,
+                        snippet: make_snippet(line, needle),
+                    });
+                    per_file += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Build a display snippet from a matching `line`: trim surrounding whitespace, and if
+/// still longer than `SNIPPET_MAX_CHARS`, window it around the first match occurrence
+/// with `…` markers so the hit stays visible. Char-based throughout (never slices a
+/// `str` at a non-boundary), so it's safe for any UTF-8 line.
+fn make_snippet(line: &str, needle: &str) -> String {
+    let trimmed = line.trim();
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= SNIPPET_MAX_CHARS {
+        return trimmed.to_string();
+    }
+    // Locate the match as a char index. `.find` returns a valid byte boundary in the
+    // lowercased string, so counting chars up to it is panic-free; using that count
+    // against the original char vec is approximate only when lowercasing changes char
+    // counts (rare), which at worst shifts the window slightly.
+    let lowered = trimmed.to_lowercase();
+    let match_char = lowered
+        .find(needle)
+        .map(|b| lowered[..b].chars().count())
+        .unwrap_or(0)
+        .min(chars.len());
+    let start = match_char.saturating_sub(SNIPPET_CONTEXT_CHARS);
+    let end = (start + SNIPPET_MAX_CHARS).min(chars.len());
+    let start = end.saturating_sub(SNIPPET_MAX_CHARS);
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    out.extend(&chars[start..end]);
+    if end < chars.len() {
+        out.push('…');
+    }
+    out
 }
 
 /// A file worth listing in the viewer: not an obvious binary by extension.
@@ -360,6 +527,88 @@ mod tests {
         let all_notes = search_files(&dir, "note-", None, 1000);
         assert_eq!(all_notes.len(), 600);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_file_contents_matches_lines_case_insensitively_with_snippets() {
+        let dir = tmp("content-search");
+        fs::write(
+            dir.join("a.ts"),
+            "import { useStore } from \"./store\";\nconst x = 1;\nUSESTORE_AGAIN();\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/b.rs"), "// nothing here\nfn main() {}\n").unwrap();
+        // Skipped: node_modules dir, a binary ext, and `.git`.
+        fs::create_dir_all(dir.join("node_modules")).unwrap();
+        fs::write(dir.join("node_modules/c.ts"), "useStore everywhere").unwrap();
+        fs::write(dir.join("logo.png"), "useStore").unwrap();
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        fs::write(dir.join(".git/config"), "useStore").unwrap();
+
+        let res = search_file_contents(&dir, "usestore", SEARCH_RESULT_CAP);
+        // Two hits in a.ts (line 1 + line 3), none from skipped locations.
+        assert_eq!(res.matches.len(), 2);
+        assert!(!res.truncated);
+        assert_eq!(res.matches[0].path, "a.ts");
+        assert_eq!(res.matches[0].line, 1);
+        assert!(res.matches[0].snippet.contains("useStore"));
+        assert_eq!(res.matches[1].line, 3);
+        // Skipped sources never appear.
+        assert!(res.matches.iter().all(|m| m.path == "a.ts"));
+
+        // Empty query → no content matches (the tree stays).
+        assert!(search_file_contents(&dir, "   ", SEARCH_RESULT_CAP)
+            .matches
+            .is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_file_contents_caps_per_file_and_total_and_flags_truncation() {
+        let dir = tmp("content-search-caps");
+        // One file with many matching lines → capped at MAX_MATCHES_PER_FILE, flagged.
+        let many = (0..20)
+            .map(|i| format!("needle line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(dir.join("dense.txt"), many).unwrap();
+        let capped = search_file_contents(&dir, "needle", SEARCH_RESULT_CAP);
+        assert_eq!(capped.matches.len(), MAX_MATCHES_PER_FILE);
+        assert!(capped.truncated);
+
+        // A tiny global limit truncates across files too.
+        fs::write(dir.join("other.txt"), "needle once\n").unwrap();
+        let limited = search_file_contents(&dir, "needle", 2);
+        assert_eq!(limited.matches.len(), 2);
+        assert!(limited.truncated);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_file_contents_skips_oversized_files() {
+        let dir = tmp("content-search-big");
+        // A file just over the content-search size cap is skipped even though it matches.
+        let big = "z".repeat((MAX_CONTENT_SEARCH_BYTES + 16) as usize) + "\nneedle\n";
+        fs::write(dir.join("big.txt"), big).unwrap();
+        fs::write(dir.join("small.txt"), "needle\n").unwrap();
+        let res = search_file_contents(&dir, "needle", SEARCH_RESULT_CAP);
+        assert_eq!(res.matches.len(), 1);
+        assert_eq!(res.matches[0].path, "small.txt");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn make_snippet_windows_long_lines_around_the_match() {
+        // Short line: returned trimmed, unchanged.
+        assert_eq!(make_snippet("  hello world  ", "world"), "hello world");
+        // Long line with the match far in: windowed with ellipsis markers, match kept.
+        let long = format!("{}MATCH{}", "a".repeat(300), "b".repeat(300));
+        let snip = make_snippet(&long, "match");
+        assert!(snip.contains("MATCH"));
+        assert!(snip.starts_with('…'));
+        assert!(snip.ends_with('…'));
+        assert!(snip.chars().count() <= SNIPPET_MAX_CHARS + 2); // + the two … markers
     }
 
     #[test]

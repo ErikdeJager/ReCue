@@ -185,6 +185,7 @@ pub fn run() {
             commands::update_schedule,
             commands::list_dir,
             commands::search_files,
+            commands::search_file_contents,
             commands::read_text_file,
             commands::write_text_file,
             commands::list_skills,

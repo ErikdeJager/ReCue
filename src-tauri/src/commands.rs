@@ -445,6 +445,22 @@ pub fn search_files(
     crate::files::search_files(&repo, &query, ext.as_deref(), limit)
 }
 
+/// Search a repo's viewable files **by content** for the in-tree search (#202) —
+/// case-insensitive substring over file lines, returning `{ path, line, snippet }`
+/// matches plus a `truncated` flag. Bounded server-side (size cap per file, per-file
+/// match cap, total result cap) so it scales to large repos; deterministic order.
+#[tauri::command]
+pub fn search_file_contents(
+    repo: String,
+    query: String,
+    limit: Option<usize>,
+) -> crate::files::ContentSearchResult {
+    let limit = limit
+        .unwrap_or(crate::files::SEARCH_RESULT_CAP)
+        .clamp(1, crate::files::SEARCH_RESULT_CAP * 8);
+    crate::files::search_file_contents(&repo, &query, limit)
+}
+
 /// Read a repo-relative text file for the file viewer (#40/#44); the path is
 /// validated to stay inside `repo` (rejects traversal).
 #[tauri::command]

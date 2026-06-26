@@ -1,8 +1,8 @@
 # Task 202
 
-### 202. [ ] File-tree search: filename + content matches with inline snippet preview, in-panel
+### 202. [x] File-tree search: filename + content matches with inline snippet preview, in-panel
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-26
 
@@ -74,30 +74,45 @@ results, snippet mini-viewer, and reveal/open actions.
 
 **Subtasks**
 
-1. [ ] Backend `search_file_contents` + `ContentMatch` (bounded walk, size/per-file/result
-   caps, deterministic order, `.git`/binary skipped) + Rust unit tests.
-2. [ ] Tauri command + IPC wrapper + TS type.
-3. [ ] FileTree search input (debounced) toggling tree ↔ results; run filename + content
-   searches in parallel.
-4. [ ] Results UI: Files / In files groups; content snippet "mini viewer" with the match
-   highlighted; result count + capped-results note + empty state.
-5. [ ] Per-result actions: **Reveal in tree** (expand-to-path + scroll + highlight) and
-   **Open** in a file viewer (reuse the existing open path); row-click = Open.
-6. [ ] **Verify** — `npm run build`, `npm run lint`, `npm test`, `cargo test` green. Manual
-   (or note as runtime-unverified): typing a filename fragment lists files; typing a string in
-   some file lists content hits with snippets; Reveal expands the tree to the file; Open opens
-   it in a viewer; large/binary/`.git` files are excluded; results stay bounded on a big repo.
+1. [x] Backend `search_file_contents` (`files.rs`) + `ContentMatch`/`ContentSearchResult`
+   structs: a sorted, deterministic walk reusing `SKIP_DIRS` (incl. `.git`) + `SKIP_EXTS`,
+   skipping files > `MAX_CONTENT_SEARCH_BYTES` (2 MB) and non-UTF-8 reads, capping at
+   `MAX_MATCHES_PER_FILE` (3) per file + a total `limit`, with a `truncated` flag set on either
+   cap (no silent truncation). `make_snippet` trims + windows long lines around the match
+   (char-safe). 4 Rust unit tests (match/case/skip, per-file + total caps + truncation,
+   oversized-skip, snippet windowing).
+2. [x] Tauri command `search_file_contents` (`commands.rs`, clamped limit) + `lib.rs`
+   registration; IPC `searchFileContents` + `ContentMatch`/`ContentSearchResult` types in
+   `ipc.ts` (alongside `DirEntry` — same module the lazy-tree types live in).
+3. [x] `FileTree` search input (debounced 200 ms) in the toolbar; non-empty (debounced) query
+   replaces the tree with a results view; filename (`searchFiles`) + content
+   (`searchFileContents`) searches run **in parallel** (latest-wins via a `cancelled` guard),
+   rendering as each resolves.
+4. [x] Results UI: **Files** + **In files** groups; each content hit shows `path:line` + a mono
+   **snippet "mini viewer"** with the match `<mark>`-highlighted (case-insensitive re-find);
+   a result count header, per-group "more matches not shown" cap notes (filename-limit hit /
+   backend `truncated`), and a "No matches." empty state + "Searching…".
+5. [x] Per-result actions: a **Reveal in tree** icon button (`revealInTree` — lazy-loads every
+   ancestor level via `listDir`, expands them, exits the results view, then scrolls the row
+   into view + briefly highlights it) and **Open** (row-click → `openFileFromTree`, the same
+   path a tree file-click uses).
+6. [x] **Verify** — `npm run build` ✓, `npm run lint` ✓, `npm test` (288) ✓, `cargo test` (87,
+   +4) ✓, `cargo clippy` ✓, `cargo fmt` ✓, prettier ✓. The live in-panel UX (typing →
+   results → reveal/open) is **runtime-unverified** in this autonomous loop (no GUI) — see
+   Notes; the backend walk is unit-tested and the UI reuses established tree/open machinery.
 
 **Acceptance criteria**
 
-- [ ] A search input inside the file-tree panel returns **both filename and content** matches
-      as the user types (debounced), without a separate panel.
-- [ ] Content matches show the matching **snippet inline** (mini viewer, match highlighted).
-- [ ] Each result can **reveal** the file in the tree (ancestors lazy-expanded + scrolled to)
-      and **open** it in a file viewer.
-- [ ] Backend search is bounded (size/per-file/result caps), skips `.git`/heavy/binary, and is
-      path-validated + deterministic; truncation is surfaced, not silent.
-- [ ] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass.
+- [x] A search input inside the file-tree panel returns **both filename and content** matches
+      as the user types (debounced), without a separate panel (tree ↔ results toggle in place).
+- [x] Content matches show the matching **snippet inline** (mono mini viewer, match
+      `<mark>`-highlighted; long lines windowed around the hit).
+- [x] Each result can **reveal** the file in the tree (ancestors lazy-expanded + scrolled to +
+      highlighted) and **open** it in a file viewer (row-click).
+- [x] Backend search is bounded (2 MB per-file size cap, 3-per-file cap, result cap), skips
+      `.git`/heavy/binary, is path-confined + deterministic (sorted walk), and surfaces
+      truncation via the `truncated` flag (no silent cap).
+- [x] `npm run build`, `npm run lint`, `npm test`, and `cargo test` pass.
 
 **Notes**
 
@@ -116,3 +131,37 @@ results, snippet mini-viewer, and reveal/open actions.
 - **References:** `files.rs` `search_files`/`search_collect` (~136), `SKIP_DIRS`/`SKIP_EXTS`/
   `SEARCH_RESULT_CAP`/`MAX_SEARCH_DEPTH` (~38–46), `FileTree.tsx` (`listDir`, ~283 lines),
   `ipc.ts`. CLAUDE.md "File access is read-mostly" + lazy tree/picker (#56/#167/#179).
+
+**Implementation notes (2026-06-26 — done)**
+
+- **Backend** mirrors `search_files` exactly (sorted/deterministic walk, same
+  `SKIP_DIRS`/`SKIP_EXTS`/path-confinement) but reads file contents. Two content-specific
+  bounds beyond the result cap: a **2 MB per-file size cap** (`MAX_CONTENT_SEARCH_BYTES`,
+  smaller than the viewer's 5 MB read cap because search is a hot path) and a **3-matches-
+  per-file cap** (`MAX_MATCHES_PER_FILE`). Either the global `limit` or a per-file cap being
+  hit sets `ContentSearchResult.truncated`, so the UI can say "more not shown" — honouring the
+  #179 no-silent-truncation rule. Non-UTF-8 files fail `read_to_string` and are skipped
+  (a cheap binary filter on top of `SKIP_EXTS`).
+- **Snippet** = the trimmed matching line; if still > 200 chars it's windowed around the first
+  match with `…` markers. `make_snippet` is fully char-based (it never byte-slices a `str`), so
+  it's panic-safe on any UTF-8; the frontend re-finds the (case-insensitive) match to highlight
+  it, so the backend needn't return a match column.
+- **Types in `ipc.ts`** (not a new `src/types` file): `ContentMatch`/`ContentSearchResult` sit
+  next to `DirEntry`, the established home for the lazy-tree/file-access IPC types. Minor
+  deviation from the card's "+ src/types" wording, chosen for consistency.
+- **Reveal-in-tree** is a new in-panel expand-to-path (distinct from the OS `revealPath` #130):
+  it `listDir`s each ancestor level (so the row mounts), expands them, leaves the results view,
+  then a `revealTarget` + ref + effect scrolls the row into view and flashes an accent
+  highlight (`reveal-flash`, dropped under reduced-motion via the global killswitch). **Open**
+  reuses `openFileFromTree(repoPath, file, "markdown")` — the exact tree-click path; row-click
+  defaults to Open.
+- **Decisions:** no ±1 **context lines** in the snippet (the plan made them optional) — a
+  single matched line keeps highlighting clean and the payload small. Content "Open" can't jump
+  to the matched **line** (the file viewer has no line-jump API; out of scope) — the `:line` is
+  shown for reference. Filename results are display-capped at 100 (`FILE_RESULT_LIMIT`) with
+  their own "more not shown" note.
+- **Runtime-unverified (autonomous loop, no GUI):** the live typing → dual-results → reveal/open
+  flow. The backend walk + snippet windowing are unit-tested (87 Rust tests, +4) and the UI
+  reuses the established lazy-tree + file-open machinery; all automated gates pass. Recommend a
+  `npm run tauri dev` pass on a file-tree panel (type a name fragment → Files group; type a
+  code string → In files group with highlighted snippets; Reveal expands+scrolls; Open opens).

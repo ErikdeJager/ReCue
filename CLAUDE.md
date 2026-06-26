@@ -353,7 +353,7 @@ even though it works in `tauri dev`.
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, settings, sidebar width)
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + list (local+remote #180) + checkout + worktree (#74) + fetch (#180) + pull --ff-only (#181)
-│   ├── src/files.rs        # Repo file access (lazy list_dir tree + search_files picker, read/write_text_file #141, path-validated)
+│   ├── src/files.rs        # Repo file access (lazy list_dir tree + search_files picker + search_file_contents in-tree content search #202, read/write_text_file #141, path-validated)
 │   ├── src/skills.rs        # Read-only scan of .claude skills/commands for prompt autocomplete (#114)
 │   ├── Info.plist          # Partial plist (mic + speech-recognition usage strings), merged into the bundle
 │   ├── tauri.conf.json     # Window, bundle, build config

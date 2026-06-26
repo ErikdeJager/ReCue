@@ -215,6 +215,39 @@ export const searchFiles = (
     limit: limit ?? null,
   });
 
+/** One content-search hit (#202): a matching line inside a file. */
+export interface ContentMatch {
+  /** Repo-relative path (POSIX `/`). */
+  path: string;
+  /** 1-based line number of the match. */
+  line: number;
+  /** The matching line, trimmed + clamped (windowed around the match for long
+   *  lines); the UI re-finds + highlights the case-insensitive match in it. */
+  snippet: string;
+}
+
+/** Result of `searchFileContents` (#202): the bounded matches + a `truncated` flag
+ *  set when the global or a per-file cap was hit (so the UI can say "more not shown"). */
+export interface ContentSearchResult {
+  matches: ContentMatch[];
+  truncated: boolean;
+}
+
+/** Search a repo's viewable files **by content** (#202) — case-insensitive substring
+ *  over file lines, returning `{ path, line, snippet }` matches. Bounded server-side
+ *  (per-file size cap, per-file match cap, result cap) so it scales to large repos;
+ *  empty `query` returns no matches. */
+export const searchFileContents = (
+  repo: string,
+  query: string,
+  limit?: number,
+) =>
+  invoke<ContentSearchResult>("search_file_contents", {
+    repo,
+    query,
+    limit: limit ?? null,
+  });
+
 /** Read a repo-relative text file (validated inside the repo, #40/#44). */
 export const readTextFile = (repo: string, file: string) =>
   invoke<string>("read_text_file", { repo, file });
