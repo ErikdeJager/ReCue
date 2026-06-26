@@ -3255,3 +3255,65 @@ new" slot). #193 (mock) can set `update.notes` to exercise the slot before a rea
 
 ---
 
+### 193. [x] Dev-only mock update — drive the update UI without a real release
+
+**Status:** Done
+**Depends on:** #190, #191, #192
+**Created:** 2026-06-26
+
+**Description**
+
+Until a real signing key + published release exist, the in-app update UI (#190 indicator +
+confirm/freeze/progress flow, #191 Settings "Updates" pane, #192 "what's new" notes) can't be
+exercised — `checkForUpdate()` always returns "no update". Add a **dev-only mock** so a
+developer can fake an available update in a dev run and watch the whole UI react end-to-end:
+indicator appears, pane shows version + patch notes, "Update now" runs a simulated download
+(progress bar + freeze overlay), and the post-update toast fires.
+
+**What shipped** (commit `1f81eeb`, 2026-06-26) — **frontend-only, dev-gated** (no Rust):
+
+- **Mock engine in `updater.ts`** (the module that holds the real `Update`): a module-level
+  flag (`setMockUpdate`/`isMockUpdate`) makes `checkForUpdate` return fake data and
+  `downloadAndRelaunch` run a `setInterval` 0→100 loop with **no** real `relaunch()`. So the
+  same `installUpdate` flow (#190) drives both real and mock — it just checks `isMockUpdate()`
+  after the await to fire the post-update toast instead of relaunching.
+- **Store actions** `mockUpdate({version?,notes?})` (defaults `9.9.9` + a `SAMPLE_UPDATE_NOTES`
+  markdown changelog, so it also exercises the #192 render; `notes:null` omits) and
+  `clearUpdate()` drive the `update` slice + arm `updater.setMockUpdate`; `mockProgress` /
+  `mockError` reuse the existing `setUpdateState`.
+- **"Insert a command" = a dev `window` global:** new `src/devMock.ts` registers
+  `window.__claudecue = { mockUpdate, mockProgress, mockError, clearUpdate }` (with a
+  `declare global` augmentation); `main.tsx` imports it behind `if (import.meta.env.DEV)`. A
+  convenience **"Simulate update (dev)"** button (`FlaskConical`) appears in the #191 pane,
+  also `DEV`-gated.
+- **Dev-only footprint verified:** Vite replaces `import.meta.env.DEV` with `false` in
+  production, dead-code-eliminating `devMock.ts` + the `window.__claudecue` registration + the
+  button — confirmed **0** occurrences of `__claudecue`/`registerDevMock`/"Simulate update" in
+  `dist/`. The `mockUpdate`/`setMockUpdate` code stays in the prod bundle but is **inert**
+  (only the stripped helper/button call it); the lone artifact is the ~200-char
+  `SAMPLE_UPDATE_NOTES` dead string.
+
+**Key files touched:** new `src/devMock.ts`; `src/updater.ts` (mock engine), `src/store.ts`
+(`mockUpdate`/`clearUpdate` + `installUpdate` mock completion + `SAMPLE_UPDATE_NOTES`) +
+`src/store.test.ts` (+1), `src/main.tsx` (dev-guard import), `src/components/Settings/Settings.tsx`
+(dev button).
+
+**Dependencies:** #190 (`update` slice/`updater.ts`/`installUpdate`/indicator), #191 (Updates
+pane), #192 (`update.notes` + patch-notes render) — the mock drives every field all three
+read; this introduced the codebase's first `import.meta.env.DEV` dev-only path.
+
+**Notes**
+
+- **Autonomous refine (2026-06-26):** the user wasn't responding; decisions logged in
+  `ASSUMPTIONS.md` — "insert a command" = a dev-gated `window.__claudecue` console helper
+  (primary) + a convenience button; simulated install (timer progress + toast, no real
+  relaunch) behind a mock flag in `updater.ts` so the same `installUpdate` serves both; the
+  mock sets `update.notes` (hence depending on #192).
+- **Runtime-unverified** in this autonomous loop (no GUI session): the live `tauri dev`
+  walkthrough (console `mockUpdate()` → indicator + pane + notes → "Update now" → animated
+  progress under the freeze overlay → "Updated to v9.9.9" toast). The store mock actions +
+  updater arming are unit-tested and prod tree-shaking is verified. `npm run build` /
+  `npm run lint` / `npm test` (270, +1) all green; no Rust changes.
+
+---
+

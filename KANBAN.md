@@ -35,9 +35,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #193 — Dev-only mock update — drive the update UI without a real release
-	Plan: TASK-193.md
-	Depends on: #190, #191, #192
 - [ ] #194 — Kanban: optional card checkbox (render plain `- bullet` lines as cards)
 	Plan: TASK-194.md
 	Depends on: none
