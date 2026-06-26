@@ -298,7 +298,7 @@ pub fn list_branches(cwd: impl AsRef<Path>) -> BranchList {
 /// are shown instead).
 pub fn fetch_remotes(cwd: impl AsRef<Path>) -> Result<(), String> {
     let cwd = cwd.as_ref();
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .arg("-C")
         .arg(cwd)
         .args(["fetch", "--prune"])
@@ -330,7 +330,7 @@ pub fn fetch_remotes(cwd: impl AsRef<Path>) -> Result<(), String> {
 /// Never panics. (`--ff-only` fetches then fast-forwards, so no separate fetch.)
 pub fn pull_ff(cwd: impl AsRef<Path>) -> Result<String, String> {
     let cwd = cwd.as_ref();
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .arg("-C")
         .arg(cwd)
         .args(["pull", "--ff-only"])
@@ -718,7 +718,7 @@ fn run_git_raw(cwd: &Path, args: &[&str]) -> Option<String> {
 /// exit 0 or 1, and `None` for ≥2 (a real error) or a spawn failure. Used **only**
 /// for the `--no-index` untracked-file pass — `run_git_raw` stays strict elsewhere.
 fn run_git_raw_allow_diff(cwd: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .arg("-C")
         .arg(cwd)
         .args(args)

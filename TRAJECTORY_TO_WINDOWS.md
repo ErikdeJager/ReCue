@@ -198,3 +198,40 @@ keyboard, and bundle config are all correctly guarded.
   ConPTY reflow). Not changed without runtime testing.
 
 No new functional Windows defects found this pass.
+
+## 2026-06-26
+
+### Rebase onto `main` (#179–#191) — re-audit of newly-merged features
+
+Rebased `windows_port` onto `origin/main`, pulling in tasks #179–#191. The two Windows
+commits replayed cleanly except one semantic conflict in `FileTree.tsx` (main's #167/#118
+**lazy** file tree — `listDir`/`DirEntry` — superseded the old `listFiles`/`buildFileTree`
+version the Windows commit had patched). Resolved by re-applying the Windows abstractions
+(`platform` signal + `joinPath`/`revealLabel` in the right-click menu) onto main's lazy
+model; the #184 "Copy relative path" item auto-merged correctly (relative paths stay `/`).
+
+Re-audited every new feature against the port abstractions. The frontend was already clean —
+all new `⌘` display literals route through `kbdHint`, all shortcut handlers use `metaKey ||
+ctrlKey`, #182 markdown links open via `openUrl`→`os_open`→`explorer.exe`, and #184
+copy-absolute-path / reveal use `joinPath`/`revealLabel` in both `FileTree` and `Sidebar`.
+Tasks #186–#191 are Refine-only (task-doc commits, no source). One backend defect class:
+
+- **Bug**: three **new** git invocations from main used a bare `Command::new("git")` instead
+  of `git::hidden_command("git")`, so on Windows they pop a transient `conhost` window (the
+  Iteration-2 console-flash class). All three run on hot paths: `fetch_remotes` (#180, `git
+  fetch --prune` on the new-session branch picker), `pull_ff` (#181, `git pull --ff-only`
+  from the repo/worktree context menus), and `run_git_raw_allow_diff` (#183, `git diff
+  --no-index` for untracked files on every diff refresh). They compile and pass tests, so the
+  rebase couldn't surface them — found by the standing "re-audit each new main feature" pass.
+  **Fix**: routed all three through `hidden_command("git")`. Verified: 95 Rust tests pass,
+  clippy + `cargo fmt --check` clean.
+  **Files**: `src-tauri/src/git.rs`
+  **macOS**: Preserved — `hidden_command` is the identity (`Command::new`) on unix; the
+  `CREATE_NO_WINDOW` flag is `#[cfg(windows)]`-only, so macOS runs the identical command.
+
+### Still needs manual Windows verification (carried + new)
+
+- (Carried) xterm `windowsPty` backend/buildNumber; `claude.cmd` packaged spawn; NSIS+MSI
+  install; `explorer.exe` open/reveal/url; themed scrollbars on WebView2.
+- (New) The #180 remote-branch fetch, #181 Pull, and #183 untracked-diff actions run without
+  a `conhost` flash on a real Windows build.
