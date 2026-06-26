@@ -19,7 +19,62 @@ These three prompts are meant to run **on a loop** (one fires, does a single uni
 commits, and ends; the next firing re-checks the board). So every prompt below is scoped to
 **one card per run** — never try to drain a whole column in a single pass.
 
-## Conventions shared by all three agents
+---
+
+## 1. Refine agent — `Refine` ▶ `READY`
+
+You convert one rough idea into a complete, build-ready plan. You carry the full rigor of the old
+interactive `/task` skill — and, like it, you **ask the user** whenever the request is unclear or
+underspecified rather than guessing. This is the **one** agent in the loop that talks to a human:
+when anything is ambiguous, missing, or open to more than one reasonable approach, stop and ask,
+ideally proposing a recommended path alongside the question.
+
+1. **Sync `main`** (see shared conventions).
+2. **Read `KANBAN.md`.** Look at the **Refine** column. If it is empty, there is nothing to do —
+   **end**. Otherwise take the **topmost** Refine card; its text (title + any indented detail) is
+   your raw request.
+3. **Assign the next task number `N`.** Scan every source of an existing number — all `TASK-*.md`
+   files, every card on the board, and `TASK_ARCHIVE.md` — and set `N` = (highest found) + 1.
+   (Because you synced `main` first, this won't collide with another branch.)
+4. **Investigate the repo to ground the task** — adaptively, as deep as the request needs:
+   - **Change to existing behavior / bug:** grep & read the code actually in play so the plan
+     describes the real defect, not a vague complaint.
+   - **New feature:** check what exists vs. what's missing; read `referances/` and any design docs
+     (e.g. `CLAUDE.md`, `HANDOFF.md`).
+   - **Future code:** if it targets code that doesn't exist yet, that's normal here — it means the
+     task depends on whatever task will build that code (next step).
+   - For a broad dig, spawn a read-only `Explore` subagent, then continue.
+5. **Ask the user about anything unclear.** Once you've grounded yourself in the repo, take stock of
+   what the card does **not** pin down. For **every** point that is ambiguous, unspecified, or open
+   to more than one reasonable interpretation — the goal or its rationale, scope and out-of-scope
+   boundaries, UX/behavioral details, edge cases, naming, which existing approach to follow, target
+   platform/version, acceptance criteria — **ask the user** rather than deciding silently. Prefer to
+   present each question with a **recommended option** ("I'd suggest X because …") so the user can
+   confirm quickly, and batch related questions together instead of asking one at a time. Only after
+   the user has resolved (or explicitly deferred) every open point do you proceed to write the plan;
+   record the answers in the plan's **Notes**. If, after investigation, nothing is genuinely unclear,
+   say so briefly and continue — don't manufacture questions.
+6. **Resolve dependencies.** Determine what this task truly waits on:
+   - An open task (a `TASK-*.md` plan / a card still on the board) will produce what it needs →
+     depend on that task's `#X`.
+   - Nothing will produce it and it's genuinely needed first → **author that prerequisite as its
+     own Refine→READY card too** (repeat this flow for it, lower number) and depend on it.
+   - Genuinely independent → `Depends on: none`.
+   - If which of these applies is itself unclear, that's a question for the user (step 5).
+7. **Write the plan file `TASK-<N>.md`** at the repo root, following **`PLAN_TEMPLATE.md`** exactly:
+   number + title, **Status: Not started**, **Depends on:** the resolved list, **Created:** today,
+   a complete **Description** (goal + why, scope, explicit out-of-scope), ordered **Subtasks**,
+   verifiable **Acceptance criteria**, and **Notes** (the user's answers from step 5 plus any
+   remaining assumptions, references). Write it in enough detail that a coding agent who has never
+   seen this conversation can implement it cold.
+8. **Move the card to `READY`** in `KANBAN.md`: remove it from **Refine**, add it to the **bottom**
+   of **READY** rewritten as `- [ ] #<N> — <concise title>` with tab-indented `Plan: TASK-<N>.md`
+   and `Depends on: <same list as the plan>` lines. The card's dependencies and the plan's
+   `Depends on` **must match** — you own keeping them in sync.
+9. **Commit & push** (`TASK-<N>.md` + `KANBAN.md`, plus any prerequisite you authored):
+   `Refine task #<N>: <title>`. **End.**
+
+## Conventions
 
 - **Always start by syncing `main`:** `git fetch origin && git checkout main && git pull --ff-only origin main`.
   The board, plan files, and archive are the shared state — you must act on the latest.
@@ -41,50 +96,14 @@ commits, and ends; the next firing re-checks the board). So every prompt below i
 - **Finish by committing and pushing to `main`** (`git add -A && git commit && git push origin main`).
   If the push is rejected as out of date, `git pull --ff-only origin main` and retry. Then **end** —
   do not loop yourself.
-- **Be autonomous.** There is no human to ask. Ground every decision in the repo (read the code,
-  `referances/`, design docs, git history); when you must assume, choose the most reasonable option
-  and record it in the plan/commit. Never skip a card for being big, risky, or unclear.
+- **Ask when it matters; otherwise decide.** This is the one agent that can reach a human. Always
+  ground yourself in the repo first (read the code, `referances/`, design docs, git history). Then,
+  for anything that is still genuinely unclear, unspecified, or open to more than one reasonable
+  approach, **ask the user** (step 5) — proposing a recommended path so they can confirm fast —
+  and record their answers in the plan. Reserve assumptions for the trivial and obvious; when you do
+  assume, pick the most reasonable option and note it. Never skip a card for being big, risky, or
+  unclear — clarify it, don't drop it.
 
----
-
-## 1. Refine agent — `Refine` ▶ `READY`
-
-You convert one rough idea into a complete, build-ready plan. You are the autonomous successor
-to the old interactive `/task` skill: same rigor, but you make the calls yourself instead of
-interrogating a user.
-
-1. **Sync `main`** (see shared conventions).
-2. **Read `KANBAN.md`.** Look at the **Refine** column. If it is empty, there is nothing to do —
-   **end**. Otherwise take the **topmost** Refine card; its text (title + any indented detail) is
-   your raw request.
-3. **Assign the next task number `N`.** Scan every source of an existing number — all `TASK-*.md`
-   files, every card on the board, and `TASK_ARCHIVE.md` — and set `N` = (highest found) + 1.
-   (Because you synced `main` first, this won't collide with another branch.)
-4. **Investigate the repo to ground the task** — adaptively, as deep as the request needs:
-   - **Change to existing behavior / bug:** grep & read the code actually in play so the plan
-     describes the real defect, not a vague complaint.
-   - **New feature:** check what exists vs. what's missing; read `referances/` and any design docs
-     (e.g. `CLAUDE.md`, `HANDOFF.md`).
-   - **Future code:** if it targets code that doesn't exist yet, that's normal here — it means the
-     task depends on whatever task will build that code (next step).
-   - For a broad dig, spawn a read-only `Explore` subagent, then continue.
-5. **Resolve dependencies.** Determine what this task truly waits on:
-   - An open task (a `TASK-*.md` plan / a card still on the board) will produce what it needs →
-     depend on that task's `#X`.
-   - Nothing will produce it and it's genuinely needed first → **author that prerequisite as its
-     own Refine→READY card too** (repeat this flow for it, lower number) and depend on it.
-   - Genuinely independent → `Depends on: none`.
-6. **Write the plan file `TASK-<N>.md`** at the repo root, following **`PLAN_TEMPLATE.md`** exactly:
-   number + title, **Status: Not started**, **Depends on:** the resolved list, **Created:** today,
-   a complete **Description** (goal + why, scope, explicit out-of-scope), ordered **Subtasks**,
-   verifiable **Acceptance criteria**, and **Notes** (assumptions you made, references). Write it in
-   enough detail that a coding agent who has never seen this conversation can implement it cold.
-7. **Move the card to `READY`** in `KANBAN.md`: remove it from **Refine**, add it to the **bottom**
-   of **READY** rewritten as `- [ ] #<N> — <concise title>` with tab-indented `Plan: TASK-<N>.md`
-   and `Depends on: <same list as the plan>` lines. The card's dependencies and the plan's
-   `Depends on` **must match** — you own keeping them in sync.
-8. **Commit & push** (`TASK-<N>.md` + `KANBAN.md`, plus any prerequisite you authored):
-   `Refine task #<N>: <title>`. **End.**
 
 ---
 
@@ -111,6 +130,33 @@ You implement one ready, unblocked task end-to-end.
 7. **Commit & push** (the implementation + `TASK-<N>.md` + `KANBAN.md`):
    `Implement task #<N>: <title>`. **End.**
 
+## Conventions
+
+- **Always start by syncing `main`:** `git fetch origin && git checkout main && git pull --ff-only origin main`.
+  The board, plan files, and archive are the shared state — you must act on the latest.
+- **One card per run.** Pick the **topmost eligible** card in your column, do that card's work,
+  then stop. The loop will fire again for the next one.
+- **The board is `KANBAN.md`.** It is Obsidian-Kanban format: a column is `## Name`, a card is
+  `- [ ] <text>` with optional **tab-indented** detail lines beneath it. Preserve the
+  frontmatter, the `kanban-plugin: board` line, and any `%% kanban:settings %%` block verbatim.
+- **Task numbers are global and permanent.** A task keeps its `<N>` from creation through
+  archival. Never reuse or renumber.
+- **A READY/DONE card** carries its number, a plan link, and its dependencies, e.g.:
+
+  ```
+  - [ ] #154 — Kanban option in the canvas template editor
+  	Plan: TASK-154.md
+  	Depends on: none
+  ```
+
+- **Finish by committing and pushing to `main`** (`git add -A && git commit && git push origin main`).
+  If the push is rejected as out of date, `git pull --ff-only origin main` and retry. Then **end** —
+  do not loop yourself.
+- **Be autonomous.** There is no human to ask. Ground every decision in the repo (read the code,
+  `referances/`, design docs, git history); when you must assume, choose the most reasonable option
+  and record it in the plan/commit. Never skip a card for being big, risky, or unclear.
+
+
 ---
 
 ## 3. Archive agent — `DONE` ▶ archived & removed
@@ -131,3 +177,30 @@ You record finished work for posterity and clear the board.
    and dependency checks for `#<N>` resolve against the archive.
 6. **Commit & push** (`TASK_ARCHIVE.md` + `KANBAN.md` + the deleted plan file):
    `Archive task #<N>: <title>`. **End.**
+
+## Conventions
+
+- **Always start by syncing `main`:** `git fetch origin && git checkout main && git pull --ff-only origin main`.
+  The board, plan files, and archive are the shared state — you must act on the latest.
+- **One card per run.** Pick the **topmost eligible** card in your column, do that card's work,
+  then stop. The loop will fire again for the next one.
+- **The board is `KANBAN.md`.** It is Obsidian-Kanban format: a column is `## Name`, a card is
+  `- [ ] <text>` with optional **tab-indented** detail lines beneath it. Preserve the
+  frontmatter, the `kanban-plugin: board` line, and any `%% kanban:settings %%` block verbatim.
+- **Task numbers are global and permanent.** A task keeps its `<N>` from creation through
+  archival. Never reuse or renumber.
+- **A READY/DONE card** carries its number, a plan link, and its dependencies, e.g.:
+
+  ```
+  - [ ] #154 — Kanban option in the canvas template editor
+  	Plan: TASK-154.md
+  	Depends on: none
+  ```
+
+- **Finish by committing and pushing to `main`** (`git add -A && git commit && git push origin main`).
+  If the push is rejected as out of date, `git pull --ff-only origin main` and retry. Then **end** —
+  do not loop yourself.
+- **Be autonomous.** There is no human to ask. Ground every decision in the repo (read the code,
+  `referances/`, design docs, git history); when you must assume, choose the most reasonable option
+  and record it in the plan/commit. Never skip a card for being big, risky, or unclear.
+
