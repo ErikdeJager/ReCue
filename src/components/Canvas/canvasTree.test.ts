@@ -4,8 +4,12 @@ import type { CanvasContent, CanvasNode } from "../../types";
 import {
   appendLeaf,
   collectLeaves,
+  collectSplits,
   computeSessionOwners,
   displayedLayout,
+  equalize,
+  equalizeSplit,
+  leafCount,
   leafIds,
   leafRects,
   moveLeaf,
@@ -161,6 +165,130 @@ describe("canvas BSP tree (#46)", () => {
     expect(next.b).toBe(sibling); // unaffected subtree keeps its identity
     // A missing leaf id leaves the tree untouched (same ref).
     expect(updateLeafContent(tree, "nope", { file: "x.md" })).toBe(tree);
+  });
+});
+
+describe("canvas distribute / equalize (#186)", () => {
+  // A 3-panel row nests binary: split(l1, split(l2, l3)). Start uneven so the
+  // distribute has work to do.
+  const threeRow = (): CanvasNode => ({
+    type: "split",
+    id: "outer",
+    dir: "row",
+    sizes: [50, 50],
+    a: leaf("l1"),
+    b: {
+      type: "split",
+      id: "inner",
+      dir: "row",
+      sizes: [50, 50],
+      a: leaf("l2"),
+      b: leaf("l3"),
+    },
+  });
+  // Each leaf's rendered share of the canvas (area %), from leafRects.
+  const areas = (tree: CanvasNode): Record<string, number> =>
+    Object.fromEntries(leafRects(tree).map((r) => [r.id, (r.w * r.h) / 100]));
+
+  it("counts leaves in a subtree", () => {
+    expect(leafCount(leaf("solo"))).toBe(1);
+    expect(leafCount(threeRow())).toBe(3);
+  });
+
+  it("equalize is a no-op (same reference) for a single leaf", () => {
+    const solo = leaf("solo");
+    expect(equalize(solo)).toBe(solo);
+  });
+
+  it("distributes a 3-panel row to equal thirds (leaf-count weighting)", () => {
+    const even = equalize(threeRow());
+    if (even.type !== "split") throw new Error("expected split");
+    // Outer split weighted 1 vs 2 leaves; inner split 1 vs 1.
+    expect(even.sizes[0]).toBeCloseTo(100 / 3, 6);
+    expect(even.sizes[1]).toBeCloseTo(200 / 3, 6);
+    expect(even.b).toMatchObject({ sizes: [50, 50] });
+    // Every leaf ends at an equal third of the canvas area.
+    for (const id of ["l1", "l2", "l3"]) {
+      expect(areas(even)[id]).toBeCloseTo(100 / 3, 4);
+    }
+  });
+
+  it("distributes a mixed row/col tree to equal area per leaf", () => {
+    // root(col): a = row(p1,p2), b = col(p3, row(p4,p5)) → 5 leaves total.
+    const mixed: CanvasNode = {
+      type: "split",
+      id: "root",
+      dir: "col",
+      sizes: [20, 80],
+      a: {
+        type: "split",
+        id: "a",
+        dir: "row",
+        sizes: [10, 90],
+        a: leaf("p1"),
+        b: leaf("p2"),
+      },
+      b: {
+        type: "split",
+        id: "b",
+        dir: "col",
+        sizes: [30, 70],
+        a: leaf("p3"),
+        b: {
+          type: "split",
+          id: "c",
+          dir: "row",
+          sizes: [60, 40],
+          a: leaf("p4"),
+          b: leaf("p5"),
+        },
+      },
+    };
+    const even = equalize(mixed);
+    const a = areas(even);
+    for (const id of ["p1", "p2", "p3", "p4", "p5"]) {
+      expect(a[id]).toBeCloseTo(100 / 5, 4);
+    }
+  });
+
+  it("is idempotent — re-equalizing an even tree returns the same reference", () => {
+    const even = equalize(threeRow());
+    expect(equalize(even)).toBe(even);
+  });
+
+  it("equalizeSplit only touches the named subtree", () => {
+    const tree: CanvasNode = {
+      type: "split",
+      id: "root",
+      dir: "col",
+      sizes: [70, 30],
+      a: {
+        type: "split",
+        id: "top",
+        dir: "row",
+        sizes: [80, 20],
+        a: leaf("tl"),
+        b: leaf("tr"),
+      },
+      b: leaf("bot"),
+    };
+    const next = equalizeSplit(tree, "top");
+    if (next.type !== "split") throw new Error("expected split");
+    expect(next.sizes).toEqual([70, 30]); // outer untouched
+    expect(next.b).toBe(tree.b); // sibling subtree keeps identity
+    expect((next.a as { sizes: [number, number] }).sizes).toEqual([50, 50]);
+    // Unknown id, or a leaf id, leaves the whole tree unchanged (same ref).
+    expect(equalizeSplit(tree, "nope")).toBe(tree);
+    expect(equalizeSplit(tree, "bot")).toBe(tree);
+  });
+
+  it("collectSplits lists every split with its child ids + sizes", () => {
+    const splits = collectSplits(threeRow());
+    expect(splits.map((s) => s.id)).toEqual(["outer", "inner"]);
+    expect(splits[0]).toMatchObject({ id: "outer", aId: "l1", bId: "inner" });
+    expect(splits[1]).toMatchObject({ id: "inner", aId: "l2", bId: "l3" });
+    expect(collectSplits(leaf("solo"))).toEqual([]);
+    expect(collectSplits(null)).toEqual([]);
   });
 });
 

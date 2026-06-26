@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronDown,
   ExternalLink,
+  Grid2x2,
   LayoutTemplate,
   Plus,
   X,
@@ -149,10 +150,17 @@ function CanvasTabs() {
   const addCanvas = useStore((s) => s.addCanvas);
   const reorderCanvases = useStore((s) => s.reorderCanvases);
   const popOutCanvas = useStore((s) => s.popOutCanvas);
+  const equalizeCanvas = useStore((s) => s.equalizeCanvas);
   const openTemplateEditor = useStore((s) => s.openTemplateEditor);
   const openTemplateManager = useStore((s) => s.openTemplateManager);
   const openTemplateUse = useStore((s) => s.openTemplateUse);
   const hasTemplates = useStore((s) => s.canvasTemplates.length > 0);
+
+  // "Distribute evenly" (#186) is only meaningful with ≥2 panels — i.e. the
+  // active canvas's layout is a `split` (a null/leaf layout has nothing to even).
+  const activeLayout =
+    canvases.find((c) => c.id === activeCanvasId)?.layout ?? null;
+  const canEqualize = !!activeLayout && activeLayout.type === "split";
 
   // Templates ▾ menu (#117): a small dropdown near the + with "New template…" /
   // "Manage templates…". Closes on outside-click, Escape, or a selection.
@@ -243,6 +251,18 @@ function CanvasTabs() {
         aria-label="New canvas"
       >
         <Plus size={14} strokeWidth={1.5} />
+      </button>
+      {/* "Distribute evenly" (#186): rebalance the active canvas so every panel is
+          equal area. Disabled when there's nothing to even (<2 panels). */}
+      <button
+        type="button"
+        className={styles.tabAdd}
+        onClick={() => equalizeCanvas()}
+        disabled={!canEqualize}
+        title="Distribute panels evenly"
+        aria-label="Distribute panels evenly"
+      >
+        <Grid2x2 size={14} strokeWidth={1.5} />
       </button>
       {/* Templates ▾ menu (#117). */}
       <div className={styles.templatesWrap} ref={templatesRef}>

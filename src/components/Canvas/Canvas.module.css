@@ -124,9 +124,14 @@
     color var(--dur-fast) var(--ease-out);
 }
 
-.tabAdd:hover {
+.tabAdd:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.tabAdd:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 /* --- Templates ▾ menu (#117) --- */

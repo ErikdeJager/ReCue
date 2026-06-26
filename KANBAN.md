@@ -15,9 +15,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #186 — Distribute Canvas panels evenly (button + border double-click)
-	Plan: TASK-186.md
-	Depends on: none
 - [ ] #187 — "Save current canvas as template" (seed Template Editor from a live canvas)
 	Plan: TASK-187.md
 	Depends on: none
@@ -38,4 +35,8 @@ kanban-plugin: board
 	Depends on: #190, #191
 
 ## DONE
+
+- [ ] #186 — Distribute Canvas panels evenly (button + border double-click)
+	Plan: TASK-186.md
+	Depends on: none
 

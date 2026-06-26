@@ -7,6 +7,8 @@ import { create } from "zustand";
 import {
   appendLeaf,
   collectLeaves,
+  equalize,
+  equalizeSplit,
   moveLeaf,
   removeLeaf,
   setLeafContent,
@@ -738,6 +740,10 @@ export interface AppState {
   reorderOverview: (repoPath: string, orderedKeys: string[]) => Promise<void>;
   /** Replace the active Canvas tab's layout tree and persist (#58). */
   setActiveCanvasLayout: (tree: CanvasNode | null) => void;
+  /** Distribute the active Canvas tab's panels evenly (#186): rebalance split
+   * sizes so every leaf is equal area. No `splitId` → the whole canvas (tab-strip
+   * button); a `splitId` → just that split's subtree (border double-click). */
+  equalizeCanvas: (splitId?: string) => void;
   /** Begin lifting an existing panel out of the active tab at drag start (#155):
    * record the transient `liftedLeaf` so the Canvas renders without it (reflow).
    * No layout write — the persisted `canvases` blob is untouched until commit. */
@@ -1981,6 +1987,22 @@ export const useStore = create<AppState>()((set, get) => ({
     void ipc
       .setCanvases({ canvases: next, activeId: activeCanvasId })
       .catch(() => {});
+  },
+
+  // Distribute the active tab's panels evenly (#186): equalize the whole layout
+  // (no splitId, the tab-strip button) or just one split's subtree (the border
+  // double-click). Persist + broadcast via setActiveCanvasLayout; CanvasSurface's
+  // reconcile effect then pushes the new sizes into the live Groups imperatively,
+  // so the relayout is remount-free (a busy agent keeps its terminal scrollback).
+  // No-op when there's no active layout or it's already even (same reference).
+  equalizeCanvas: (splitId) => {
+    const { canvases, activeCanvasId } = get();
+    const layout =
+      canvases.find((c) => c.id === activeCanvasId)?.layout ?? null;
+    if (!layout) return;
+    const next = splitId ? equalizeSplit(layout, splitId) : equalize(layout);
+    if (next === layout) return;
+    get().setActiveCanvasLayout(next);
   },
 
   // Switch a Canvas file panel to another file in place (#90): update the active

@@ -1,8 +1,8 @@
 # Task 186
 
-### 186. [ ] Distribute Canvas panels evenly (tab-strip button + border double-click)
+### 186. [x] Distribute Canvas panels evenly (tab-strip button + border double-click)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-26
 
@@ -97,80 +97,74 @@ strip, so the button is main-window-only — acceptable).
 
 **Subtasks**
 
-1. [ ] **Pure ops in `canvasTree.ts`:**
-   - [ ] `leafCount(node: CanvasNode): number` — leaves in the subtree.
-   - [ ] `equalize(node: CanvasNode): CanvasNode` — return a tree where **every** split's
-         `sizes` = `[leafCount(a)/(leafCount(a)+leafCount(b))*100, …]`; recurse into
-         children first. Preserve object identity for subtrees whose sizes are already
-         equal (mirrors `updateSizes`/`removeLeaf`), so an already-even region doesn't
-         needlessly re-render.
-   - [ ] `equalizeSplit(tree: CanvasNode, splitId: string): CanvasNode` — find the split
-         with `id === splitId` and replace its subtree with `equalize(subtree)`,
-         identity-preserving elsewhere; return the tree unchanged if not found or if the
-         id is a leaf.
-   - [ ] `collectSplits(tree: CanvasNode | null): { id: string; aId: string; bId: string; sizes: [number, number] }[]`
-         — every split node (used by the reconcile effect to drive `setLayout`).
-2. [ ] **Unit tests in `canvasTree.test.ts`:**
-   - [ ] single leaf → `equalize` is a no-op (same reference); `leafCount` = 1.
-   - [ ] 3-panel row `split(leaf1, split(leaf2, leaf3))` → outer sizes `[33.33…, 66.66…]`,
-         inner `[50, 50]`; assert each leaf's rendered share via `leafRects` ≈ 33.33
-         (use `toBeCloseTo`).
-   - [ ] nested **mixed** row/col tree → every leaf's `leafRects` area ≈ `100/total`.
-   - [ ] already-even tree → `equalize` returns the **same reference** (idempotent).
-   - [ ] `equalizeSplit` only touches the named subtree (sizes outside it unchanged /
-         same reference); unknown id and leaf id → tree unchanged.
-3. [ ] **Store action `equalizeCanvas(splitId?: string)`** (`store.ts`): read the active
-   layout (as `setActiveCanvasLayout` does), compute `equalize(layout)` when no `splitId`
-   else `equalizeSplit(layout, splitId)`, and commit via `setActiveCanvasLayout` (persist
-   + broadcast). No-op when there's no active layout. Add to the store type + `useStore`.
-4. [ ] **CanvasSurface — imperative reconcile (remount-free):**
-   - [ ] Keep `const groupHandles = useRef<Map<string, GroupImperativeHandle>>(new Map())`.
-         In `renderNode`, give each `Group` a callback `groupRef={(h) => { h ?
-         groupHandles.current.set(node.id, h) : groupHandles.current.delete(node.id); }}`.
-         (Import `GroupImperativeHandle` from `react-resizable-panels`; confirm the export
-         name — `useGroupRef`/`useGroupCallbackRef` hooks also exist.)
-   - [ ] Add `useEffect(() => { for (const s of collectSplits(rawLayout)) { const h =
-         groupHandles.current.get(s.id); if (!h) continue; const cur = h.getLayout();
-         if (already-matches `s.sizes` within ~0.5%) continue; h.setLayout({ [s.aId]:
-         s.sizes[0], [s.bId]: s.sizes[1] }); } }, [rawLayout])`. The
-         "already-matches" guard makes the effect a **no-op on user drag-resize** (the
-         store already holds the dragged values) and only does real work after a
-         programmatic equalize — preventing any feedback with `onLayoutChanged`.
-   - [ ] Separator: `disableDoubleClick` + `onDoubleClick={() =>
-         equalizeCanvas(node.id)}` (wire `equalizeCanvas` from the store). Keep the
-         existing `className={styles.handle}`.
-5. [ ] **CanvasTabs — "Distribute evenly" button:** next to `+`/`▾ Templates`, reuse
-   `styles.tabAdd`, a Lucide icon that reads as "even grid" (e.g. `LayoutGrid` or
-   `Grid2x2`), `title="Distribute panels evenly"` / matching `aria-label`. `onClick={() =>
-   equalizeCanvas()}`. **Disable** (greyed) when the active canvas has `<2` panels
-   (`layout` is null or a `leaf` — i.e. nothing to equalize); derive from the store's
-   `canvases`/`activeCanvasId` (already read here).
-6. [ ] **Styling** (`Canvas.module.css`): the button reuses `.tabAdd`; optionally add a
-   subtle hover affordance / `title` on `.handle` so the double-click is discoverable.
-7. [ ] **Verify** — `npm run build`, `npm run lint`, `npm test` green; Rust untouched.
-   Manually (or note as runtime-unverified): (a) 3 panels in a row → button → equal
-   thirds; (b) a mixed nested layout → button → all panels equal area; (c) double-click a
-   border → only that region evens out; (d) reload → sizes persisted; (e) pop a canvas out
-   (#84) and equalize in one window → the other window updates; (f) a **busy agent
-   terminal keeps its scrollback** through an equalize (pool intact, no remount).
+1. [x] **Pure ops in `canvasTree.ts`:**
+   - [x] `leafCount(node: CanvasNode): number` — leaves in the subtree.
+   - [x] `equalize(node: CanvasNode): CanvasNode` — every split's `sizes` =
+         `[leafCount(a)/(leafCount(a)+leafCount(b))*100, …]`; recurses children first;
+         identity-preserving when children **and** sizes already match (so already-even
+         regions don't re-render and the op is idempotent).
+   - [x] `equalizeSplit(tree, splitId)` — replaces only the named split's subtree with
+         `equalize(subtree)`, identity-preserving elsewhere; unchanged when not found / a
+         leaf id.
+   - [x] `collectSplits(tree)` → `{ id, aId, bId, sizes }[]` for every split (drives the
+         reconcile effect's `setLayout`).
+2. [x] **Unit tests in `canvasTree.test.ts`** (7 new `it`s, all green): `leafCount`;
+   single-leaf `equalize` no-op (same ref); 3-panel row → outer `[100/3, 200/3]` /
+   inner `[50,50]` with each leaf area ≈ 33.33 via `leafRects`; mixed 5-leaf row/col →
+   each leaf area ≈ 20; idempotent (re-equalize returns same ref); `equalizeSplit` scoping
+   (sibling identity kept, outer sizes untouched, unknown/leaf id → same ref);
+   `collectSplits` listing.
+3. [x] **Store action `equalizeCanvas(splitId?: string)`** (`store.ts`, beside
+   `setActiveCanvasLayout`): reads the active layout, computes `equalize` (no id) or
+   `equalizeSplit`, no-ops when there's no layout or it's already even (same ref), else
+   commits via `setActiveCanvasLayout` (persist + broadcast). Added to the store type +
+   imports.
+4. [x] **CanvasSurface — imperative reconcile (remount-free):**
+   - [x] `groupHandles = useRef<Map<string, GroupImperativeHandle>>(new Map())`; each
+         `Group` gets `groupRef={(handle) => handle ? set(node.id, handle) :
+         delete(node.id)}`. (`GroupImperativeHandle` imported from
+         `react-resizable-panels`; verified the `groupRef` prop + handle's
+         `getLayout`/`setLayout` against the installed `dist/*.d.ts`.)
+   - [x] `useEffect(..., [rawLayout])` walks `collectSplits(rawLayout)`, and for each split
+         with a registered handle whose live sizes differ from target by ≥0.5% calls
+         `handle.setLayout({ [aId], [bId] })`. The tolerance guard makes it a no-op on
+         user drag-resize and structural remounts (no feedback with `onLayoutChanged`),
+         doing real work only right after an equalize.
+   - [x] Separator: `disableDoubleClick` + `onDoubleClick={() => equalizeCanvas(node.id)}`
+         + a discoverability `title`; keeps `className={styles.handle}`.
+5. [x] **CanvasTabs — "Distribute evenly" button:** next to `+`/`▾ Templates`, reuses
+   `styles.tabAdd`, Lucide `Grid2x2`, `title`/`aria-label` "Distribute panels evenly",
+   `onClick={() => equalizeCanvas()}`, **disabled** when the active canvas's layout is
+   null or a leaf (`<2` panels), derived from `canvases`/`activeCanvasId`.
+6. [x] **Styling** (`Canvas.module.css`): added `.tabAdd:disabled` (greyed, `opacity .4`,
+   default cursor) + scoped the hover to `:not(:disabled)`. (Left `.handle`'s cursor
+   alone — the `title` tooltip covers discoverability without overriding the resize
+   cursor.)
+7. [x] **Verify** — `npm run build`, `npm run lint`, `npm test` (251) all green; **no Rust
+   changes**. The interactive checks (a)–(f) are **runtime-unverified** in this autonomous
+   loop (no GUI session); the logic is covered by unit tests + the verified imperative-API
+   types. See Notes.
 
 **Acceptance criteria**
 
-- [ ] `equalize`, `equalizeSplit`, `leafCount`, `collectSplits` exist in `canvasTree.ts`
+- [x] `equalize`, `equalizeSplit`, `leafCount`, `collectSplits` exist in `canvasTree.ts`
       with passing unit tests covering: 3-panel row → equal thirds, mixed nested → equal
       area, idempotent on an already-even tree, and `equalizeSplit` scoping.
-- [ ] A **"Distribute evenly"** button is present in the Canvas tab strip; clicking it
-      makes **every panel in the active canvas the same size**, applied **instantly** with
-      **no terminal remount** (a busy agent keeps its scrollback). It is disabled when the
-      active canvas has fewer than 2 panels.
-- [ ] **Double-clicking the border between two panels** equalizes the panels under that
-      split (its region) instantly; the library's built-in Separator double-click is
-      suppressed (`disableDoubleClick`) so there's no conflicting behavior.
-- [ ] The equalized sizes **persist across reload** and **sync to a detached canvas
-      window** (#84).
-- [ ] No change to add-time `[50,50]` halving; the agent **header-bar** drag/rename target
-      is untouched.
-- [ ] `npm run build`, `npm run lint`, `npm test` pass; no Rust changes.
+- [x] A **"Distribute evenly"** button is present in the Canvas tab strip; clicking it
+      calls `equalizeCanvas()` → equal-area sizes pushed into the live Groups via the
+      imperative handle (no `key` bump → **no terminal remount**, pool intact). Disabled
+      when the active canvas has fewer than 2 panels. _(Behaviour runtime-unverified — see
+      Notes; logic unit-tested.)_
+- [x] **Double-clicking the border between two panels** calls `equalizeCanvas(node.id)`
+      (equalizes that split's region); the library's built-in Separator double-click is
+      suppressed via `disableDoubleClick`.
+- [x] The equalized sizes **persist across reload** (written through
+      `setActiveCanvasLayout` → `ipc.setCanvases`) and **sync to a detached canvas window**
+      (#84) (same broadcast path as resize; the other window's reconcile effect re-applies
+      them). _(Cross-window sync runtime-unverified — inherits the existing resize path.)_
+- [x] No change to add-time `[50,50]` halving (`splitLeaf` untouched); the agent
+      **header-bar** drag/rename target (`styles.panelHeader`) is untouched.
+- [x] `npm run build`, `npm run lint`, `npm test` pass; no Rust changes.
 
 **Notes**
 
@@ -209,3 +203,40 @@ strip, so the button is main-window-only — acceptable).
   `CanvasSurface.tsx` `renderNode`/`commitResize`/`activeLayout`; `CanvasTabs.tsx`
   (`+`/Templates controls); CLAUDE.md "Canvas (#46/#47/#58)" + the #84 cross-window sync
   note.
+
+**Implementation notes (2026-06-26 — done)**
+
+- Implemented exactly as planned. Files changed: `canvasTree.ts` (+`leafCount`,
+  `equalize`, `equalizeSplit`, `collectSplits`), `canvasTree.test.ts` (+7 tests),
+  `store.ts` (+`equalizeCanvas` action/type/import), `CanvasSurface.tsx` (groupRef
+  registry + reconcile effect + Separator double-click), `CanvasTabs.tsx` (button),
+  `Canvas.module.css` (`.tabAdd:disabled`). **No backend/Rust changes.**
+- **Imperative-API verification:** confirmed against
+  `node_modules/react-resizable-panels/dist/react-resizable-panels.d.ts` that `Group`
+  takes a `groupRef?: Ref<GroupImperativeHandle | null>` and the handle exposes
+  `getLayout()` / `setLayout({ [panelId]: number })`, and that `Separator` forwards
+  `onDoubleClick` (props extend `HTMLAttributes`) and accepts `disableDoubleClick`. So a
+  callback `groupRef` and our own double-click handler are both valid; the build
+  type-checks them.
+- **No feedback loop:** `equalizeCanvas` persists the equalized tree first (via
+  `setActiveCanvasLayout`), then the `[rawLayout]` effect makes the live Group match. The
+  ≥0.5% tolerance guard means: (a) a user drag-resize writes the dragged sizes to the
+  store, the effect sees the Group already at those sizes → no-op; (b) after an equalize,
+  `setLayout` may fire `onLayoutChanged` → `commitResize` writes the applied (clamped)
+  sizes back → the effect re-runs and finds a match → converges in one extra pass. No
+  remount (no `key` bump), so the #18 pooled terminals reparent and keep scrollback.
+- **Two distinct tools (refine-agent UX decision, kept):** the tab-strip button
+  equalizes the **whole** active canvas; the **border double-click** equalizes only that
+  split's **subtree**. Changing the border to equalize the whole canvas is a one-liner
+  (`equalizeCanvas()` instead of `equalizeCanvas(node.id)`).
+- **Runtime-unverified (autonomous loop, no GUI session):** subtask-7 checks (a)–(f) —
+  button → equal thirds; mixed → equal area; border double-click scoping; persist across
+  reload; cross-window (#84) sync; busy-terminal scrollback survives. The pure layout math
+  is unit-tested and the imperative wiring uses the verified API + the existing
+  persist/broadcast path (identical to drag-resize), but the DOM gestures and live Group
+  `setLayout` behaviour were not exercised in a running app. Mirrors the #84 precedent of
+  recording runtime-unverified UI behaviour. Recommend a quick manual pass when next
+  running `npm run tauri dev`.
+- **Edge case (unchanged from plan):** `<Panel minSize="10%">` clamps each side to ≥10%,
+  so perfect equal area isn't reachable past ~10 panels in one nesting chain; fine for
+  typical 2–6-panel canvases. No special handling.

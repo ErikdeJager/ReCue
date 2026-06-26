@@ -1,4 +1,4 @@
-import { type ReactElement, useEffect } from "react";
+import { type ReactElement, useEffect, useRef } from "react";
 import { DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   Copy,
@@ -8,7 +8,13 @@ import {
   Maximize2,
   X,
 } from "lucide-react";
-import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
+import {
+  Group,
+  type GroupImperativeHandle,
+  type Layout,
+  Panel,
+  Separator,
+} from "react-resizable-panels";
 
 import { FORK_UNAVAILABLE_REASON, repoName, sessionLabel } from "../../paths";
 import { repoColor, useStore } from "../../store";
@@ -22,6 +28,7 @@ import WorktreeViewsBadge from "../WorktreeViewsBadge/WorktreeViewsBadge";
 import { focusTerminal } from "../Terminal/terminalPool";
 import {
   collectLeaves,
+  collectSplits,
   displayedLayout,
   removeLeaf,
   updateSizes,
@@ -375,10 +382,44 @@ export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
   const activeCanvasId = useStore((s) => s.activeCanvasId);
   const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
   const setActiveCanvasLayout = useStore((s) => s.setActiveCanvasLayout);
+  const equalizeCanvas = useStore((s) => s.equalizeCanvas);
   const liftedLeaf = useStore((s) => s.liftedLeaf);
 
   const rawLayout =
     canvases.find((c) => c.id === activeCanvasId)?.layout ?? null;
+
+  // Imperative handles of the live Groups, keyed by split id (#186). A Group's
+  // `defaultLayout` is initial-only and can't re-apply to a mounted Group, so the
+  // equalize action (the first size-only programmatic change) commits the new tree
+  // to the store and this effect pushes the sizes into each Group via `setLayout`
+  // — remount-free, so a busy agent terminal keeps its scrollback (the #18 pool is
+  // untouched). The "already matches" guard makes it a no-op on user drag-resize
+  // (the store already holds the dragged values) and on structural changes (a
+  // remounted Group's `defaultLayout` is already correct), so real work happens
+  // only right after an equalize. Driven off `rawLayout` (the persisted tree); a
+  // transient drag-lift doesn't change it, so the effect doesn't fire mid-lift.
+  const groupHandles = useRef<Map<string, GroupImperativeHandle>>(new Map());
+  useEffect(() => {
+    for (const split of collectSplits(rawLayout)) {
+      const handle = groupHandles.current.get(split.id);
+      if (!handle) continue;
+      const cur = handle.getLayout();
+      const a = cur[split.aId];
+      const b = cur[split.bId];
+      if (
+        typeof a === "number" &&
+        typeof b === "number" &&
+        Math.abs(a - split.sizes[0]) < 0.5 &&
+        Math.abs(b - split.sizes[1]) < 0.5
+      ) {
+        continue; // already at the target sizes → don't fight the live Group
+      }
+      handle.setLayout({
+        [split.aId]: split.sizes[0],
+        [split.bId]: split.sizes[1],
+      });
+    }
+  }, [rawLayout]);
   // While a panel is lifted (#155, drag in progress), render a derived layout with
   // that leaf removed so the rest reflow and the lifted panel can't self-target;
   // the persisted layout is untouched (commit/cancel handle the write/restore).
@@ -437,6 +478,10 @@ export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
         id={node.id}
         className={styles.group}
         orientation={node.dir === "row" ? "horizontal" : "vertical"}
+        groupRef={(handle) => {
+          if (handle) groupHandles.current.set(node.id, handle);
+          else groupHandles.current.delete(node.id);
+        }}
         defaultLayout={{
           [node.a.id]: node.sizes[0],
           [node.b.id]: node.sizes[1],
@@ -448,7 +493,15 @@ export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
         <Panel id={node.a.id} minSize="10%">
           {renderNode(node.a)}
         </Panel>
-        <Separator className={styles.handle} />
+        {/* Double-click the border to distribute this region's panels evenly
+            (#186). We own the gesture (`disableDoubleClick` suppresses the lib's
+            built-in, which only resets to a Panel `defaultSize` we never set). */}
+        <Separator
+          className={styles.handle}
+          disableDoubleClick
+          onDoubleClick={() => equalizeCanvas(node.id)}
+          title="Double-click to distribute panels evenly"
+        />
         <Panel id={node.b.id} minSize="10%">
           {renderNode(node.b)}
         </Panel>

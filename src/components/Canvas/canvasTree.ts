@@ -233,6 +233,73 @@ export function appendLeaf(
   };
 }
 
+/** Number of leaves in the subtree (used to weight an equal-area distribute). */
+export function leafCount(node: CanvasNode): number {
+  if (node.type === "leaf") return 1;
+  return leafCount(node.a) + leafCount(node.b);
+}
+
+/**
+ * Rebalance so **every leaf has equal area** (#186, the design-tool "distribute"):
+ * each split's `sizes` are set proportional to the **leaf count** of each child
+ * subtree (`[na/(na+nb), nb/(na+nb)] * 100`). By induction every leaf ends at
+ * `1/total` regardless of how rows/cols nest — and a simple N-panel row collapses
+ * to exactly equal shares (a 3-panel row → true thirds), unlike resetting each
+ * split to `[50,50]` (which leaves a 3-panel row at 50/25/25). Recurses children
+ * first; a subtree already even (same children identity **and** matching sizes)
+ * keeps its object identity (mirrors `updateSizes`/`removeLeaf`), so an
+ * already-even region doesn't needlessly re-render and the op is idempotent.
+ */
+export function equalize(node: CanvasNode): CanvasNode {
+  if (node.type === "leaf") return node;
+  const a = equalize(node.a);
+  const b = equalize(node.b);
+  const na = leafCount(a);
+  const nb = leafCount(b);
+  const total = na + nb || 1;
+  const sizes: [number, number] = [(na / total) * 100, (nb / total) * 100];
+  if (
+    a === node.a &&
+    b === node.b &&
+    node.sizes[0] === sizes[0] &&
+    node.sizes[1] === sizes[1]
+  ) {
+    return node;
+  }
+  return { ...node, a, b, sizes };
+}
+
+/**
+ * Equalize **only** the subtree rooted at the split `splitId` (#186, the border
+ * double-click evens out just the region that border divides) — every other split
+ * keeps its sizes and identity. Returns the tree unchanged when `splitId` isn't
+ * found or names a leaf.
+ */
+export function equalizeSplit(tree: CanvasNode, splitId: string): CanvasNode {
+  if (tree.type === "leaf") return tree;
+  if (tree.id === splitId) return equalize(tree);
+  const a = equalizeSplit(tree.a, splitId);
+  const b = equalizeSplit(tree.b, splitId);
+  return a === tree.a && b === tree.b ? tree : { ...tree, a, b };
+}
+
+/**
+ * Every split node as `{ id, aId, bId, sizes }`, top-down (#186). The
+ * CanvasSurface reconcile effect walks this to push equalized sizes into each
+ * live `Group` via its imperative handle (a size-only change `defaultLayout`
+ * can't re-apply), keeping the relayout remount-free so pooled terminals survive.
+ */
+export function collectSplits(
+  tree: CanvasNode | null,
+): { id: string; aId: string; bId: string; sizes: [number, number] }[] {
+  if (!tree || tree.type === "leaf") return [];
+  return [
+    { id: tree.id, aId: tree.a.id, bId: tree.b.id, sizes: tree.sizes },
+    ...collectSplits(tree.a),
+    ...collectSplits(tree.b),
+  ];
+}
+
 /** A leaf id with its rectangle (percent of the canvas, 0–100). */
 export interface LeafRect {
   id: string;
