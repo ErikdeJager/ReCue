@@ -2188,3 +2188,50 @@ Frontend-only (no backend change — same `overviewPanels` / `canvases` data sou
 
 ---
 
+### 176. [x] Configurable Overview panel minimum width (Settings → Appearance)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-26
+
+**Description**
+
+Made the Overview "agent wall" column **minimum width** user-configurable, replacing the hard-coded
+`360px` floor in `.card { flex: 1 0 360px }`. The original request ("increase the min width slightly")
+was upgraded by the user into a **Settings** preference: the floor is now an adjustable value defaulting
+to **400px** (so users who never open Settings still get the slight increase). Columns still
+`flex-grow` to fill a wide wall — only the shrink floor / horizontal-scroll threshold is governed.
+
+**Approach — a CSS variable driven by the setting.** The value flows through the existing Settings draft
+→ Save → `applySettingsEffects` pipeline (#100/#102/#107): on Save, `applySettingsEffects` imperatively
+sets `--overview-card-min` on `:root` (alongside the accent tokens / reduce-motion class), and `.card`
+reads `flex: 1 0 var(--overview-card-min, 400px)` — so saving reflows the already-mounted wall live, and
+the `400px` CSS fallback covers first paint before JS runs. No backend change: the `settings` blob stays
+opaque, and `mergeSettings` back-fills the new key over `DEFAULT_SETTINGS` so an older `sessions.json`
+upgrades cleanly to the 400 default.
+
+**What shipped** (commit `edf3dda`, 2026-06-26)
+
+- **Type + default:** `overviewPanelMinWidth: number` added to the `Settings` interface
+  (`src/types/index.ts`) with a `400` default in `DEFAULT_SETTINGS` (`src/store.ts`).
+- **Apply effect:** `applySettingsEffects` sets `root.style.setProperty("--overview-card-min",
+  \`${s.overviewPanelMinWidth}px\`)` inside the DOM-guarded block.
+- **CSS:** `Overview.module.css` `.card` now uses `flex: 1 0 var(--overview-card-min, 400px)`.
+- **Settings UI:** a `Slider` (range **320–600px, step 20**, default 400) in the **Appearance** section,
+  wired to the modal draft like the Terminal font-size/line-height sliders (applies on Save; Cancel /
+  Escape / scrim discard).
+- **Test:** a `store.test.ts` case confirming `mergeSettings` back-fills `overviewPanelMinWidth === 400`
+  for a persisted blob lacking the key.
+
+**Key files touched:** `src/types/index.ts`, `src/store.ts`, `src/components/Overview/Overview.module.css`,
+`src/components/Settings/Settings.tsx`, `src/store.test.ts`. Frontend-only (no Rust change).
+
+**Notes**
+
+- Refine-agent defaults (user said "whatever you prefer"): default 400px, Appearance section, Slider
+  range 320–600/step 20.
+- All green: `npm run build`, `npm run lint`, `npm test`, `npm run format:check`, `cargo test`,
+  `npm run lint:rust`.
+
+---
+
