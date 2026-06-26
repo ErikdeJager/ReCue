@@ -24,6 +24,7 @@ import type {
   ScheduledSession,
   SessionView,
 } from "./types";
+import { isMockUpdate } from "./updater";
 
 function session(id: string): SessionView {
   return {
@@ -329,6 +330,30 @@ describe("app store", () => {
     useStore.getState().setUpdateState({ status: "error", error: "boom" });
     expect(useStore.getState().update.status).toBe("error");
     expect(useStore.getState().update.error).toBe("boom");
+  });
+
+  it("mockUpdate/clearUpdate arm + reset the dev mock (#193)", () => {
+    // Default args → an available update with sample notes + the updater mock armed.
+    useStore.getState().mockUpdate();
+    let u = useStore.getState().update;
+    expect(u.status).toBe("available");
+    expect(u.version).toBe("9.9.9");
+    expect(u.notes).toBeTruthy();
+    expect(isMockUpdate()).toBe(true);
+
+    // Custom version; `notes: null` explicitly omits the notes.
+    useStore.getState().mockUpdate({ version: "1.2.3", notes: null });
+    u = useStore.getState().update;
+    expect(u.version).toBe("1.2.3");
+    expect(u.notes).toBeNull();
+
+    // Clear → idle + the updater mock disarmed (so real checks resume).
+    useStore.getState().clearUpdate();
+    u = useStore.getState().update;
+    expect(u.status).toBe("idle");
+    expect(u.version).toBeNull();
+    expect(u.notes).toBeNull();
+    expect(isMockUpdate()).toBe(false);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   Bot,
   Database,
   Download,
+  FlaskConical,
   FolderOpen,
   MousePointerClick,
   Palette,
@@ -100,6 +101,7 @@ function SettingsModal() {
   const updateState = useStore((s) => s.update);
   const checkForUpdate = useStore((s) => s.checkForUpdate);
   const installUpdate = useStore((s) => s.installUpdate);
+  const mockUpdate = useStore((s) => s.mockUpdate);
 
   const [draft, setDraft] = useState<SettingsType>(saved);
   const [section, setSection] = useState<Section>(
@@ -479,6 +481,19 @@ function SettingsModal() {
                     </span>
                     <PatchNotes notes={currentNotes} />
                   </div>
+                )}
+
+                {/* Dev-only (#193): fake an available update to exercise the whole
+                    flow without a real release. Tree-shaken from production builds. */}
+                {import.meta.env.DEV && (
+                  <button
+                    type="button"
+                    className={styles.dataButton}
+                    onClick={() => mockUpdate()}
+                  >
+                    <FlaskConical size={15} strokeWidth={1.5} />
+                    Simulate update (dev)
+                  </button>
                 )}
               </div>
             )}

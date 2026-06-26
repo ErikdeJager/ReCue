@@ -20,10 +20,28 @@ export interface UpdateInfo {
   notes: string | null;
 }
 
+// Dev-only mock (#193): when set (via the `window.__claudecue` helpers, dev gated),
+// `checkForUpdate` / `downloadAndRelaunch` use fake data + a timer-driven progress
+// loop instead of the real plugin — so the whole update UI is exercisable without a
+// signed release. Always null in production (the registrar is tree-shaken out).
+let mock: UpdateInfo | null = null;
+
+/** Arm/disarm the dev mock update (#193). */
+export function setMockUpdate(info: UpdateInfo | null): void {
+  mock = info;
+}
+
+/** Whether a dev mock update is armed (#193) — `installUpdate` uses this to fire the
+ *  post-update toast instead of relaunching. */
+export function isMockUpdate(): boolean {
+  return mock !== null;
+}
+
 /** Check the configured endpoint for a newer published release. Returns the new
  *  version + notes (and stashes the pending `Update`), or null when up to date /
- *  offline / outside Tauri / no signed release. */
+ *  offline / outside Tauri / no signed release. A dev mock (#193) short-circuits. */
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  if (mock) return mock;
   const update = await check();
   pending = update;
   return update
@@ -40,6 +58,12 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
 export async function downloadAndRelaunch(
   onProgress?: (percent: number) => void,
 ): Promise<void> {
+  if (mock) {
+    // Dev mock (#193): simulate the download (0→100) and skip the real relaunch —
+    // the store's `installUpdate` fires the post-update toast on return instead.
+    await simulateProgress(onProgress);
+    return;
+  }
   if (!pending) throw new Error("no pending update");
   let total = 0;
   let downloaded = 0;
@@ -62,4 +86,22 @@ export async function downloadAndRelaunch(
     }
   });
   await relaunch();
+}
+
+/** Dev mock (#193): drive `onProgress` 0→100 over ~1.2s, then resolve. */
+function simulateProgress(
+  onProgress?: (percent: number) => void,
+): Promise<void> {
+  return new Promise((resolve) => {
+    let pct = 0;
+    onProgress?.(0);
+    const id = setInterval(() => {
+      pct = Math.min(100, pct + 10);
+      onProgress?.(pct);
+      if (pct >= 100) {
+        clearInterval(id);
+        resolve();
+      }
+    }, 120);
+  });
 }

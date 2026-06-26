@@ -142,6 +142,17 @@ export function versionIncreased(from: string, to: string): boolean {
   return false;
 }
 
+/** Sample markdown changelog for the dev mock update (#193) — exercises the #192
+ * patch-notes render (headings, bullets, an inline link) in the "What's new" slot. */
+const SAMPLE_UPDATE_NOTES = [
+  "### Features",
+  "- A brand-new **mock** feature, for testing the update UI.",
+  "- Renders [release notes](https://github.com/ErikdeJager/ClaudeCue) inline.",
+  "",
+  "### Fixes",
+  "- Fixed a simulated bug that never really existed.",
+].join("\n");
+
 /**
  * Classify a session exit (#63). A **clean** exit — `claude` exits **code 0**
  * while the app is running and the kill was not user-initiated (Remove/Forget) —
@@ -744,6 +755,12 @@ export interface AppState {
   /** Drive the updater state directly (#190) — used by the dev mock (#193) to
    * exercise every state without a real release. */
   setUpdateState: (next: Partial<AppState["update"]>) => void;
+  /** Dev mock (#193): fake an available update (version + sample/custom markdown
+   * notes) so the indicator + Updates pane + patch-notes render light up, and arm
+   * `updater`'s mock so `installUpdate` simulates the download + post-update toast. */
+  mockUpdate: (opts?: { version?: string; notes?: string | null }) => void;
+  /** Dev mock (#193): clear the mock + reset the updater state to idle. */
+  clearUpdate: () => void;
   /** Add an existing folder to recents without spawning an agent (#172 sidebar
    * background menu → "New folder…"): opens the native folder picker and persists
    * the choice so it shows as a folder group immediately. Cancel = no-op; an already
@@ -1575,7 +1592,14 @@ export const useStore = create<AppState>()((set, get) => ({
       await updater.downloadAndRelaunch((percent) =>
         set((s) => ({ update: { ...s.update, progress: percent } })),
       );
-      // On success the app relaunches into the new version (#190).
+      // Real mode relaunches into the new version and never returns here (#190).
+      // Dev mock (#193): no relaunch — fire the post-update toast and reset to idle,
+      // mirroring the real boot-time post-update step.
+      if (updater.isMockUpdate()) {
+        const version = get().update.version;
+        get().pushToast(`Updated to v${version}`, "success");
+        get().clearUpdate();
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Update failed";
       set((s) => ({
@@ -1585,6 +1609,38 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
   setUpdateState: (next) => set((s) => ({ update: { ...s.update, ...next } })),
+  mockUpdate: (opts) => {
+    const version = opts?.version ?? "9.9.9";
+    // `notes: undefined` → the sample changelog (exercises #192); `notes: null`
+    // explicitly omits notes.
+    const notes = opts && "notes" in opts ? opts.notes : SAMPLE_UPDATE_NOTES;
+    updater.setMockUpdate({ version, notes: notes ?? null });
+    set((s) => ({
+      update: {
+        ...s.update,
+        status: "available",
+        version,
+        notes: notes ?? null,
+        progress: 0,
+        confirming: false,
+        error: undefined,
+      },
+    }));
+  },
+  clearUpdate: () => {
+    updater.setMockUpdate(null);
+    set((s) => ({
+      update: {
+        ...s.update,
+        status: "idle",
+        version: null,
+        notes: null,
+        progress: 0,
+        confirming: false,
+        error: undefined,
+      },
+    }));
+  },
 
   addFolder: async () => {
     // Native folder picker (#172): cancel returns null → no-op.
