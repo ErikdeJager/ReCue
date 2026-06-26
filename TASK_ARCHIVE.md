@@ -2286,3 +2286,45 @@ so it inherits the item for free).
 
 ---
 
+### 178. [x] Terminal panel: a little vertical margin so the bottom row isn't cut off
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-26
+
+**Description**
+
+`claude`'s last terminal row — typically its prompt / input line — rendered flush against (and
+partially clipped by) the panel's bottom edge, reading as half a row of missing text. The fix gives
+the terminal balanced vertical breathing room so the final row is always fully visible with a small
+margin, top and bottom.
+
+**What shipped** (commit `3162010`, 2026-06-26)
+
+- A **single one-line CSS change** in `src/components/Terminal/Terminal.module.css`: the shared
+  `.terminal` rule's padding went from `var(--space-6) var(--space-8)` (6px vertical) to
+  `var(--space-12) var(--space-8)` (12px vertical), with horizontal padding unchanged. No
+  `--space-10` token exists, so `--space-12` is the nearest balanced choice. An explanatory comment
+  was added inline.
+- Because `.terminal` is the **one pooled xterm node** the terminal pool reparents between slots
+  (`terminalPool.ts`), this single edit fixes **every** context at once — Overview cards (#11),
+  Canvas panels (#47), and shell-terminal items (#72) — with no per-context differentiation.
+- The fix is **both visual and structural**: FitAddon measures the element's content box, so the
+  larger vertical padding reduces the height it sees and makes the terminal claim one fewer row
+  whenever the last would otherwise clip — no FitAddon / xterm row-math change needed.
+
+**Key files touched:** `src/components/Terminal/Terminal.module.css` (the only modified source file).
+Frontend-only, no Rust change, no `terminalPool.ts` / FitAddon / PTY-sizing change.
+
+**Notes**
+
+- Refine Q&A decisions (2026-06-26): CSS-padding-only approach (explicitly **not** investigating the
+  FitAddon row-rounding layer); balanced top + bottom at ~10–12px each.
+- `npm run build`, `npm run lint`, and `npm test` (248 tests) pass. **Runtime caveat:** the GUI visual
+  tuning steps (running `npm run tauri dev` and eyeballing bottom-row clearance / resize refit across
+  the three contexts) were **not** runtime-verified — implemented headlessly with no display. The value
+  follows the plan's endorsed default; if the row still clips or the gap looks unbalanced when run
+  interactively, the vertical token is a one-line nudge (e.g. up to `--space-16` or down to `--space-8`).
+
+---
+
