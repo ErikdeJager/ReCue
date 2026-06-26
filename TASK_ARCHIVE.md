@@ -3186,3 +3186,72 @@ provides; #193 (mock) is how these panes are exercised before a real signed rele
 
 ---
 
+### 192. [x] Patch notes: baked-in per-version JSON, release-carried notes, settings view
+
+**Status:** Done
+**Depends on:** #190, #191
+**Created:** 2026-06-26
+
+**Description**
+
+Add **patch notes** to the app: a small per-version JSON authored in-repo, a settings view
+that shows them, the key "smart" requirement — a way to read the notes of an update **that
+isn't installed yet** — and a CI guard that notes were authored for each version bump. Sits on
+top of #190 (updater skeleton + gated pipeline) and #191 (Settings → Updates pane with a
+labelled "What's new" slot); this task fills that slot and wires the pipeline.
+
+**What shipped** (commit `40487f0`, 2026-06-26) — **frontend + CI** (no Rust):
+
+- **The "read not-yet-installed notes" solution:** the running (older) app on version X can't
+  read version Y's baked JSON, so Y's notes ride **in the release** — the pipeline renders
+  Y's `src/patchnotes/Y.json` → the GitHub release body, `tauri-action` writes it into
+  `latest.json`'s `notes`, `check()` surfaces it as `update.body`, the store keeps it as a new
+  `update.notes` field (#190 slice extended), and #191's "What's new" slot renders it as
+  markdown — so the user reads the upcoming version's notes **before installing**.
+- **Patch-notes data + loader:** one JSON file per version under `src/patchnotes/<version>.json`
+  (`{version,date,changes:[{category,items[]}]}`, categories `feature`/`fix`/`improvement`/
+  `other`; seeded `0.0.1.json`). A pure `src/patchnotes.ts` eager-loads them via
+  `import.meta.glob`, normalizes best-effort, and exposes `allPatchnotes` (semver-desc) +
+  `patchnotesFor`/`latestPatchnotes` + `patchnotesToMarkdown` (+ 6 unit tests). A new
+  `PatchNotes` type in `src/types`.
+- **Render:** a `components/PatchNotes/PatchNotes.tsx` renders grouped category headings +
+  bullet lists, item text via the existing react-markdown + remark-gfm stack with the shared
+  #182 external-link components (a `p`-unwrap for inline bullets — no new markdown dep). In
+  #191's pane: the **available update's** `update.notes` renders under "What's new in
+  v<newVersion>", and the **current** version's baked-in `patchnotesFor(appVer)` renders under
+  "What's new in this version".
+- **Pipeline** (`.github/workflows/release.yml` from #190): a **notes-up-to-date guard** — a
+  `has_notes` output asserting `src/patchnotes/<version>.json` exists **and** its `version`
+  matches the bumped config version (the `release` job now gates on `should_release &&
+  has_notes && has_key`, else ends green) — plus **release-body generation** via a new
+  `scripts/patchnotes-to-md.mjs` (version → markdown, mirroring `patchnotesToMarkdown`; flowed
+  through a `$GITHUB_OUTPUT` heredoc into `releaseBody`). ESLint now treats `scripts/**/*.mjs`
+  as Node.
+
+**Key files touched:** new `src/patchnotes/0.0.1.json`, `src/patchnotes.ts` (+ `.test.ts`),
+`src/components/PatchNotes/{PatchNotes.tsx,.module.css}`, `scripts/patchnotes-to-md.mjs`;
+`src/types/index.ts` (`PatchNotes`), `src/store.ts` + `src/updater.ts` (`update.notes`),
+`src/components/Settings/Settings.tsx` (+ `.module.css`, the #191 pane), `.github/workflows/release.yml`,
+`eslint.config.js`, `CLAUDE.md`.
+
+**Dependencies:** #190 (updater `body`/`update` slice/pipeline) + #191 (Updates pane + "What's
+new" slot). #193 (mock) can set `update.notes` to exercise the slot before a real release.
+
+**Notes**
+
+- **Autonomous refine (2026-06-26):** the user wasn't responding; decisions logged in
+  `ASSUMPTIONS.md` — smart solution = carry notes in the release (`latest.json` notes /
+  `update.body`); one JSON file per version, normalized best-effort; render with the existing
+  react-markdown stack; pipeline guards that the notes file exists + matches and generates the
+  body from it; extend #190's `update` slice with `notes`.
+- **Dual rendering source** kept in sync by mirroring the same category-label + heading/bullet
+  shape: `patchnotesToMarkdown` (TS, in-app) and `scripts/patchnotes-to-md.mjs` (Node, release
+  body — can't import TS).
+- **Runtime-unverified** in this autonomous loop (no GUI session + no signed release): the live
+  Updates-pane render and a real release's `update.body`. The pure loader/markdown is
+  unit-tested (6 cases), the script runs locally (`node scripts/patchnotes-to-md.mjs 0.0.1`),
+  and the workflow YAML parses with the 3-guard `if:`. `npm run build` / `npm run lint` /
+  `npm test` (269, +6) all green; no Rust changes.
+
+---
+

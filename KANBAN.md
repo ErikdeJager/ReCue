@@ -38,9 +38,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #192 — Patch notes: baked-in per-version JSON, release-carried notes, settings view
-	Plan: TASK-192.md
-	Depends on: #190, #191
 - [ ] #193 — Dev-only mock update — drive the update UI without a real release
 	Plan: TASK-193.md
 	Depends on: #190, #191, #192
