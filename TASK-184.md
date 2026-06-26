@@ -1,8 +1,8 @@
 # TASK-184
 
-### 184. [ ] File tree context menu: offer both "Copy absolute path" and "Copy relative path"
+### 184. [x] File tree context menu: offer both "Copy absolute path" and "Copy relative path"
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-26
 

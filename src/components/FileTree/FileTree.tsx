@@ -29,7 +29,8 @@ interface FileMenu {
  * expand/collapse on click (state lives in local component state, not persisted);
  * clicking a file opens it in the file viewer; right-clicking a file offers
  * Open in file viewer / Open as Kanban board (`.md` only) / Reveal in Finder / Copy
- * path. Folders have no menu. No backend change — same data source as `FilePicker`.
+ * absolute path / Copy relative path (#184). Folders have no menu. No backend change
+ * — same data source as `FilePicker`.
  */
 function FileTree({ repoPath }: { repoPath: string }) {
   const openFileFromTree = useStore((s) => s.openFileFromTree);
@@ -82,7 +83,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
     event.stopPropagation();
     setMenu({
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 200)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 160)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 200)),
       file,
     });
   };
@@ -226,7 +227,18 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 setMenu(null);
               }}
             >
-              Copy path
+              Copy absolute path
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.menuItem}
+              onClick={() => {
+                void copyToClipboard(menu.file, "path");
+                setMenu(null);
+              }}
+            >
+              Copy relative path
             </button>
           </div>
         </>
