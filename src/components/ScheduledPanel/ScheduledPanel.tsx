@@ -117,6 +117,11 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
               : ` · will check out ${branch}`
             : ""}
         </span>
+        {/* Read-only worktree intent (#198): the agent launches into an isolated
+            worktree, created on this branch at fire time. */}
+        {schedule.worktree && (
+          <span className={styles.worktreeBadge}>worktree</span>
+        )}
       </div>
 
       <label className={styles.field}>

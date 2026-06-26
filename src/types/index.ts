@@ -91,6 +91,9 @@ export interface ScheduledSession {
   create_branch?: boolean;
   /** Base for the new branch when `create_branch` (absent = HEAD) (#125). */
   branch_base?: string | null;
+  /** Launch into an isolated git worktree (#198/#74), created at fire time on
+   * `branch` (existing, or new when `create_branch`); absent/false = in-folder. */
+  worktree?: boolean;
   name?: string | null;
   prompt?: string | null;
   fire_at: number;

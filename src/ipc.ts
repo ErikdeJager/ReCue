@@ -304,6 +304,7 @@ export const createSchedule = (
   at: number,
   createBranch = false,
   base: string | null = null,
+  worktree = false,
 ) =>
   invoke<ScheduledSession>("create_schedule", {
     cwd,
@@ -313,6 +314,7 @@ export const createSchedule = (
     at,
     createBranch,
     base,
+    worktree,
   });
 
 /** All pending scheduled sessions (#93). */

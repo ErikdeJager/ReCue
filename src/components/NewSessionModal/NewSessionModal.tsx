@@ -20,6 +20,7 @@ import { repoName } from "../../paths";
 import { useStore } from "../../store";
 import { toLocalInput } from "../../time";
 import type { BranchList, SkillInfo } from "../../types";
+import Checkbox from "../Checkbox/Checkbox";
 import SkillAutocomplete from "../SkillAutocomplete/SkillAutocomplete";
 import { moveFolderHighlight } from "./folderNav";
 import styles from "./NewSessionModal.module.css";
@@ -103,6 +104,9 @@ function NewSessionModal() {
   const [fireAt, setFireAt] = useState("");
   const [prompt, setPrompt] = useState("");
   const [schedName, setSchedName] = useState("");
+  // Launch the scheduled agent into an isolated worktree (#198) — created at fire
+  // time on the chosen branch. Git folders only (a worktree needs a branch).
+  const [worktree, setWorktree] = useState(false);
   // Slash-command skills for the chosen folder (#114) — feeds the prompt
   // autocomplete; best-effort, so it degrades to an empty list (no dropdown).
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -144,6 +148,7 @@ function NewSessionModal() {
     setFireAt(toLocalInput(new Date(Date.now() + DEFAULT_LEAD_MS)));
     setPrompt("");
     setSchedName("");
+    setWorktree(false);
     setPickerActive(false);
     setAddBranchActive(false);
     setNewBranchName("");
@@ -626,9 +631,12 @@ function NewSessionModal() {
     const ms = new Date(fireAt).getTime();
     if (!Number.isFinite(ms)) return;
     const useNewBranch = addBranchActive && !!newBranchName.trim();
+    // A worktree schedule (#198) always needs a branch (its worktree is on one),
+    // even the current branch — so pass `selectedBranch` regardless of `willCheckout`.
+    const useWorktree = worktree && folderIsGit;
     const branchArg = useNewBranch
       ? newBranchName.trim()
-      : willCheckout
+      : useWorktree || willCheckout
         ? (selectedBranch ?? null)
         : null;
     setBusy(true);
@@ -640,6 +648,7 @@ function NewSessionModal() {
       Math.floor(ms / 1000),
       useNewBranch,
       useNewBranch ? newBranchBase : null,
+      useWorktree,
     );
     if (ok) close();
     else setBusy(false);
@@ -1261,6 +1270,19 @@ function NewSessionModal() {
               onChange={(event) => setSchedName(event.currentTarget.value)}
               aria-label="Custom name"
             />
+
+            {/* Isolated worktree (#198): a scheduled flow has no live keypress at fire
+                time, so an explicit toggle replaces the immediate path's ⌘⏎. Git folders
+                only — a worktree is created on the chosen branch at fire time. */}
+            {folderIsGit && (
+              <div className={styles.scheduleWorktree}>
+                <Checkbox
+                  checked={worktree}
+                  onChange={setWorktree}
+                  label="Start in an isolated worktree"
+                />
+              </div>
+            )}
 
             <div className={styles.actions}>
               <button type="button" className={styles.cancel} onClick={close}>

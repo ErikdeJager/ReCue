@@ -686,6 +686,7 @@ pub fn create_schedule(
     agent: Option<String>,
     create_branch: Option<bool>,
     base: Option<String>,
+    worktree: Option<bool>,
 ) -> Result<ScheduledSession, SessionError> {
     // New-branch intent (#125): when create_branch is set, `branch` is the new branch
     // name (created at fire time) and `base` its base (empty/None = HEAD).
@@ -700,6 +701,9 @@ pub fn create_schedule(
         } else {
             None
         },
+        // Launch into an isolated worktree (#198): created at fire time on `branch`
+        // (existing or, with create_branch, new).
+        worktree: worktree.unwrap_or(false),
         name: name.filter(|n| !n.trim().is_empty()),
         prompt: prompt.filter(|p| !p.trim().is_empty()),
         fire_at: at,
@@ -759,22 +763,44 @@ pub fn fire_due_schedules(app: &AppHandle) {
     }
     let manager = app.state::<SessionManager>();
     for sched in due {
-        if let Some(branch) = &sched.branch {
-            // Best-effort; a failure still spawns in the folder. New-branch schedules
-            // (#125) create + check out the branch at fire time (reusing #124's write);
-            // existing-branch schedules check out as before (#93).
-            let _ = if sched.create_branch {
-                git::create_branch(
-                    &sched.cwd,
-                    branch,
-                    sched.branch_base.as_deref().unwrap_or(""),
-                )
-            } else {
-                git::checkout_branch(&sched.cwd, branch)
-            };
-        }
+        // Worktree schedule (#198): create the isolated worktree at fire time and spawn
+        // the seeded agent there (`worktree_parent = repo`, so it nests like any worktree
+        // agent #74). A worktree-creation failure emits `schedule://error` and skips —
+        // there's no folder to fall back into. The in-folder path (#93/#125) keeps its
+        // best-effort branch checkout/create and spawns in `cwd`.
+        let (spawn_cwd, worktree_parent) = if sched.worktree {
+            match prepare_worktree_for_schedule(&store, &sched) {
+                Ok(dest) => (dest, Some(sched.cwd.clone())),
+                Err(message) => {
+                    let _ = app.emit(
+                        "schedule://error",
+                        ScheduleErrorPayload {
+                            id: sched.id,
+                            message,
+                        },
+                    );
+                    continue;
+                }
+            }
+        } else {
+            if let Some(branch) = &sched.branch {
+                // Best-effort; a failure still spawns in the folder. New-branch schedules
+                // (#125) create + check out the branch at fire time (reusing #124's write);
+                // existing-branch schedules check out as before (#93).
+                let _ = if sched.create_branch {
+                    git::create_branch(
+                        &sched.cwd,
+                        branch,
+                        sched.branch_base.as_deref().unwrap_or(""),
+                    )
+                } else {
+                    git::checkout_branch(&sched.cwd, branch)
+                };
+            }
+            (sched.cwd.clone(), None)
+        };
         match manager.spawn_session_with_prompt(
-            &sched.cwd,
+            &spawn_cwd,
             sched.name.clone(),
             sched.prompt.as_deref(),
             &sched.agent,
@@ -783,10 +809,10 @@ pub fn fire_due_schedules(app: &AppHandle) {
                 let record = PersistedSession {
                     id: info.id.clone(),
                     claude_session_id: info.id,
-                    repo_path: sched.cwd.clone(),
+                    repo_path: spawn_cwd,
                     name: sched.name.clone(),
                     created_at: now_secs(),
-                    worktree_parent: None,
+                    worktree_parent,
                     auto_name: None,
                     has_been_active: false,
                     agent: sched.agent.clone(),
@@ -795,6 +821,7 @@ pub fn fire_due_schedules(app: &AppHandle) {
                     forkable: false,
                 };
                 let _ = store.add_session(record.clone());
+                // Touch the repo (not the worktree folder) as the recent.
                 let _ = store.touch_recent(&sched.cwd);
                 let _ = app.emit(
                     "schedule://fired",
@@ -815,6 +842,34 @@ pub fn fire_due_schedules(app: &AppHandle) {
             }
         }
     }
+}
+
+/// Create (or reuse) the isolated worktree for a worktree schedule (#198) at fire time
+/// and return its folder path. With `create_branch`, `git worktree add -b <branch>`
+/// for the new branch; otherwise `git worktree add <branch>` (reusing the folder if it
+/// already exists, like `spawn_worktree_agent`). A missing branch or git failure is
+/// returned as an error string for the caller to surface (`schedule://error`).
+fn prepare_worktree_for_schedule(
+    store: &Store,
+    sched: &ScheduledSession,
+) -> Result<String, String> {
+    let branch = sched
+        .branch
+        .as_deref()
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| "worktree schedule has no branch".to_string())?;
+    let dest = worktree_path(store, &sched.cwd, branch).map_err(|e| e.to_string())?;
+    if sched.create_branch {
+        git::worktree_add_new_branch(
+            &sched.cwd,
+            branch,
+            sched.branch_base.as_deref().unwrap_or(""),
+            &dest,
+        )?;
+    } else if !dest.is_dir() {
+        git::worktree_add(&sched.cwd, branch, &dest)?;
+    }
+    Ok(dest.to_string_lossy().to_string())
 }
 
 /// `#` followed by 3/4/6/8 hex digits.

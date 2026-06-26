@@ -122,6 +122,11 @@ pub struct ScheduledSession {
     /// Base for the new branch when `create_branch` (None/empty = HEAD) (#125).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_base: Option<String>,
+    /// Launch into an isolated git worktree (#198/#74): the worktree (on the existing
+    /// `branch`, or a new branch when `create_branch`) is created at **fire time**.
+    /// `default` (false) keeps existing records as in-folder schedules.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worktree: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -600,6 +605,7 @@ mod tests {
             branch: None,
             create_branch: false,
             branch_base: None,
+            worktree: false,
             name: None,
             prompt: None,
             fire_at,
@@ -877,15 +883,18 @@ mod tests {
         s.branch = Some("feature/x".to_string());
         s.create_branch = true;
         s.branch_base = Some("main".to_string());
+        s.worktree = true;
         store.add_schedule(s).unwrap();
 
         let loaded = &Store::load(&path).schedules()[0];
         assert_eq!(loaded.branch.as_deref(), Some("feature/x"));
         assert!(loaded.create_branch);
         assert_eq!(loaded.branch_base.as_deref(), Some("main"));
+        assert!(loaded.worktree);
 
-        // An older record without the new-branch fields loads with defaults
-        // (create_branch = false → checkout-existing semantics, #125 back-compat).
+        // An older record without the new-branch / worktree fields loads with defaults
+        // (create_branch = false → checkout-existing semantics; worktree = false, #125
+        // / #198 back-compat).
         let legacy =
             r#"{"schedules":[{"id":"old","cwd":"/r","branch":"dev","fire_at":1,"created_at":0}]}"#;
         let legacy_path = temp_path("sched-legacy");
@@ -894,6 +903,7 @@ mod tests {
         assert_eq!(old.branch.as_deref(), Some("dev"));
         assert!(!old.create_branch);
         assert_eq!(old.branch_base, None);
+        assert!(!old.worktree);
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&legacy_path);

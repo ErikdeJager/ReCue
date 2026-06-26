@@ -144,6 +144,11 @@
   border-color: var(--accent);
 }
 
+/* "Start in an isolated worktree" toggle in the schedule step (#198). */
+.scheduleWorktree {
+  margin-bottom: var(--space-12);
+}
+
 .recents {
   display: flex;
   max-height: 200px;

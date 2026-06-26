@@ -1056,6 +1056,7 @@ export interface AppState {
     at: number,
     createBranch?: boolean,
     base?: string | null,
+    worktree?: boolean,
   ) => Promise<boolean>;
   /** Cancel a pending scheduled session (#93). */
   cancelSchedule: (id: string) => Promise<void>;
@@ -3338,6 +3339,7 @@ export const useStore = create<AppState>()((set, get) => ({
     at,
     createBranch = false,
     base = null,
+    worktree = false,
   ) => {
     try {
       const record = await ipc.createSchedule(
@@ -3348,6 +3350,7 @@ export const useStore = create<AppState>()((set, get) => ({
         at,
         createBranch,
         base,
+        worktree,
       );
       // Newest-first; surface the (possibly new) folder in recents immediately.
       set((s) => ({

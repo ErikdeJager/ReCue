@@ -30,6 +30,17 @@
   white-space: nowrap;
 }
 
+/* Read-only "worktree" marker (#198) — the schedule launches into an isolated
+   worktree, created at fire time. */
+.worktreeBadge {
+  flex-shrink: 0;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chip);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+}
+
 .field {
   display: flex;
   flex-direction: column;

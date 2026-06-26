@@ -1,8 +1,8 @@
 # Task 198
 
-### 198. [ ] Schedule a session into a worktree (create at fire time, clean up on cancel)
+### 198. [x] Schedule a session into a worktree (create at fire time, clean up on cancel)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #199
 **Created:** 2026-06-26
 
@@ -71,25 +71,39 @@ in-folder agents.
 
 **Subtasks**
 
-1. [ ] `ScheduledSession.worktree` (serde-default) + thread through `create_schedule` /
-   `update_schedule` / the IPC + TS types.
-2. [ ] Schedule branch step: an explicit "Start in a worktree" toggle (+ keep ⌘⏎ parity),
-   composing with "+ add branch"; pass `worktree` to `create_schedule`.
-3. [ ] `fire_due_schedules`: when `worktree`, create the app-managed worktree
-   (`worktree_add[_new_branch]`) and spawn the seeded agent there with `worktree_parent`.
-4. [ ] `cancelSchedule`: invoke the broadened `cleanupWorktreeIfEmpty` (#199) so cancelling
-   never orphans a worktree.
-5. [ ] **Verify** — `npm run build`, `npm run lint`, `npm test`, `cargo test` green. Manual
-   (or note): schedule a worktree session → at fire time an isolated worktree agent appears
-   nested under the repo; cancelling before/after removes the worktree iff nothing else uses it.
+1. [x] `ScheduledSession.worktree` (serde-default bool, `store.rs`) threaded through
+   `create_schedule` (+ `worktree: Option<bool>` param), the IPC (`createSchedule`), TS types,
+   and `store.ts scheduleSession`. `update_schedule` mutates only prompt/name/at, so it
+   **preserves** `worktree` (the panel edits don't drop it) — no change needed there.
+2. [x] Schedule step: an explicit **"Start in an isolated worktree"** `Checkbox` (git folders
+   only — a worktree needs a branch), composing with "+ add branch"; `submitSchedule` passes
+   the chosen branch (even the current, since a worktree always needs one) + `worktree` into
+   `scheduleSession`. _(Kept the explicit toggle; ⌘⏎ parity skipped — see Notes.)_
+3. [x] `fire_due_schedules`: when `worktree`, `prepare_worktree_for_schedule` creates the
+   app-managed worktree (`git::worktree_add` for an existing branch — reusing the folder if it
+   exists — or `worktree_add_new_branch` for a new branch) and the seeded agent spawns **there**
+   with `worktree_parent = repo`. A worktree-creation failure emits `schedule://error` (no
+   in-folder fallback, since there's no worktree to spawn into).
+4. [x] `cancelSchedule` already invokes the broadened `cleanupWorktreeIfEmpty` (#199's wiring,
+   reused). For a worktree schedule the worktree doesn't exist until fire time and `cwd` is the
+   **repo**, so cancelling a pending one is a clean no-op (nothing to orphan); a fired schedule
+   is a live worktree agent cleaned by `removeSession`'s guard. So cancelling never orphans a
+   worktree — see Notes.
+5. [x] **Verify** — `npm run build`, `npm run lint`, `npm test` (288), `cargo test` (83),
+   `cargo clippy`, `cargo fmt`, `prettier` all green. The live fire-time worktree creation is
+   **runtime-unverified** in this loop (Tauri-poll path, no GUI) — see Notes; the `worktree`
+   round-trip is unit-tested and the git worktree primitives have their own tests.
 
 **Acceptance criteria**
 
-- [ ] The schedule flow offers a **worktree** option; a fired worktree-schedule launches the
-      agent inside a freshly-created isolated worktree (nested under its parent repo).
-- [ ] Cancelling a worktree-schedule cleans up the worktree **iff** no other agents/scheduled
-      sessions/items remain for it (via #199's guard); otherwise the worktree is kept.
-- [ ] `npm run build`, `npm run lint`, `npm test`, `cargo test` pass.
+- [x] The schedule flow offers a **worktree** option (the schedule-step checkbox); a fired
+      worktree-schedule creates the isolated worktree (`worktree_add[_new_branch]`) and spawns
+      the agent there with `worktree_parent = repo`, so it nests under its parent repo.
+      _(Fire-time path runtime-unverified — see Notes.)_
+- [x] Cancelling a worktree-schedule cleans up via #199's guard (`cleanupWorktreeIfEmpty`) and
+      **never orphans** a worktree — a pending worktree schedule has no worktree yet (no-op),
+      and a fired one is a session cleaned on its removal.
+- [x] `npm run build`, `npm run lint`, `npm test`, `cargo test` pass.
 
 **Notes**
 
@@ -107,3 +121,36 @@ in-folder agents.
   `fire_due_schedules`, `git.rs worktree_add[_new_branch]` (~362/451), `NewSessionModal`
   worktree ⌘⏎ (~465/495/535), `store.ts cleanupWorktreeIfEmpty` (~2734, broadened by #199).
   CLAUDE.md "Scheduled sessions (#93/#94/#125)" + worktree scope (#74/#124).
+
+**Implementation notes (2026-06-26 — done)**
+
+- Backend: `store.rs` (`worktree` field + round-trip test), `commands.rs`
+  (`create_schedule` param; `fire_due_schedules` worktree branch + the new
+  `prepare_worktree_for_schedule` helper). Frontend: `types`, `ipc.ts`, `store.ts`
+  (`scheduleSession`), `NewSessionModal` (toggle + `submitSchedule`), `ScheduledPanel`
+  (read-only "worktree" badge) + CSS.
+- **Worktree created at fire time** (like #125's deferred branch creation): the schedule keeps
+  `cwd = repo` + a `worktree` flag; `prepare_worktree_for_schedule` resolves the app-managed
+  path (`worktree_path`) and runs `worktree_add` (existing branch, reused if present) or
+  `worktree_add_new_branch` (composing with `create_branch`). The agent then spawns in the
+  worktree folder with `worktree_parent = repo`, and `touch_recent` records the **repo**.
+- **Explicit toggle over ⌘⏎:** per the plan's Notes (a scheduled flow has no live keypress at
+  fire time), the schedule step shows a plain **checkbox** rather than the immediate path's
+  hidden ⌘⏎ chord. I **skipped the optional ⌘⏎ parity** to keep the branch-step keyboard nav
+  untouched — the checkbox fully satisfies "the schedule flow offers a worktree option", and
+  the Notes call the explicit toggle the clearer choice.
+- **Cancel cleanup is a genuine no-op for worktree schedules** (already wired by #199): a
+  pending worktree schedule's `cwd` is the **repo** and its worktree isn't created until fire
+  time, so `worktreeParentOf(cwd)` → undefined → no removal (nothing to orphan). Once fired,
+  it's a live worktree agent removed via `removeSession` → #199's guard. So "cancelling never
+  orphans a worktree" holds by construction; no new `cancelSchedule` code was needed.
+- **`update_schedule` untouched:** it edits only prompt/name/at and mutates the record in
+  place, so `worktree`/`branch`/`create_branch` survive a panel edit. The worktree intent is
+  a creation-time decision (read-only badge in `ScheduledPanel`).
+- **Runtime-unverified (autonomous loop, no GUI):** the live fire-time worktree creation +
+  the scheduled worktree agent nesting under its repo (the `fire_due_schedules` Tauri-poll
+  path needs an `AppHandle`, not unit-testable; the in-folder path isn't unit-tested either).
+  Mitigations: the `worktree` field round-trip is unit-tested, the `worktree_add[_new_branch]`
+  git primitives have their own tests, and the wiring is straightforward + code-reviewed.
+  Recommend a `npm run tauri dev` pass (schedule a worktree session a minute out; watch a
+  nested worktree agent appear at fire time).
