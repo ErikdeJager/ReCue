@@ -69,3 +69,25 @@ judgment with "see if this … has good UX"):
   `closeTemplateEditor` (mirrors the mounted-only-while-open editor). The draft is unsaved
   until the user hits Save (consistent with "New template…").
 - **Depends on: none** — the whole template system (#117/#118) is already shipped.
+
+---
+
+## TASK-188 — Double-click header to rename the agent
+
+- **Renamable = agents only.** Non-agent panels (file/diff/terminal/kanban/filetree) have
+  derived titles with no custom-name concept; scheduled panels have their own name editor
+  (#94). Double-clicking their header is a no-op.
+- **Surfaces = Canvas panel headers + Overview agent card headers** (the "drag bars"). The
+  sidebar already has inline rename via its row context menu (#57) and its rows aren't
+  header bars, so it's left unchanged.
+- **Reuse the existing inline-rename machine** (sidebar #57 / `CanvasTabs` double-click):
+  input seeds the current custom name, placeholder = the derived label, **empty commit
+  clears** the custom name (reverts to auto-title/branch) via `renameSession`'s
+  `trim()→null`. Enter/blur commit, Escape cancels, `committed` guard prevents double-commit.
+- **Coexists with dragging** via the existing 4px PointerSensor activation distance; the
+  rename `<input>` stops `pointerdown` so the header's drag listeners can't grab it.
+  `preventDefault` on the double-click stops title-text selection.
+- **Distinct DOM target from #186** (separator double-click = distribute evenly); the header
+  double-click = rename. No conflict.
+- **Depends on: none** — `renameSession`, draggable headers (#70/#144), and the inline-rename
+  pattern are all shipped.
