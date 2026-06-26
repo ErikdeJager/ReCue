@@ -533,13 +533,42 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
   new window can invoke commands + listen to events.
 - **Builds & distribution:** `npm run tauri build` produces a local **unsigned**
   macOS `.app`/`.dmg` (Gatekeeper warns on first open — no code signing /
-  notarization). There is **no in-app auto-update and no release pipeline**: the
-  repo is private and the #15 updater (Tauri updater/process plugins, the baked-in
-  minisign pubkey, and the release workflow) was removed in **#62**. The bundle ships
-  a partial `src-tauri/Info.plist` (auto-merged by the Tauri CLI in both `dev` and
-  `build`) declaring `NSMicrophoneUsageDescription` / `NSSpeechRecognitionUsageDescription`
-  so voice dictation works inside a session's PTY (macOS attributes a child process's
-  mic request to the responsible app — ClaudeCue).
+  notarization). An **in-app auto-update skeleton** (#190, **re-introducing** the #15
+  updater that **#62 removed** and rebuilding it richer) is **wired but inert until a
+  real minisign signing keypair is generated** (deferred to a later task):
+  - **Plugins:** `tauri-plugin-updater` + `tauri-plugin-process` (Rust + JS), inited
+    in `lib.rs`; `capabilities/default.json` grants `updater:default` +
+    `process:allow-restart`. `tauri.conf.json` carries a `plugins.updater` block with
+    the GitHub-releases `latest.json` `endpoints` and a **placeholder `pubkey`** (the
+    old #15 public key — valid format, but its private key is deferred), and
+    **`createUpdaterArtifacts` is intentionally OFF** so a local `npm run tauri build`
+    keeps emitting an unsigned `.app`/`.dmg` **with no key**.
+  - **Frontend:** `src/updater.ts` wraps `check()` / `downloadAndInstall` (progress) /
+    `relaunch()`; the store `update` slice (`status`/`version`/`progress`/`error`/
+    `confirming`, driven by `checkForUpdate`/`openUpdateConfirm`/`cancelUpdate`/
+    `installUpdate`, plus `setUpdateState` for the #193 mock) powers a **sidebar-footer
+    `UpdateIndicator`** (above the Settings gear, hidden when idle) → a confirm
+    `UpdateModal` → a **full-window input-blocking install overlay with a progress
+    bar** → relaunch. A persisted **`last_version`** (Rust scalar, like `sidebar_width`)
+    is compared to `app_version()` on boot to show a one-time **"Updated to v…" toast**
+    (#190 — the post-update step; also the mock's hook).
+  - **Pipeline:** `.github/workflows/release.yml` on push to `main` gates on **BOTH** a
+    version bump (config version > latest `v*` tag) **and** the
+    `TAURI_SIGNING_PRIVATE_KEY` secret being present; either missing → the build job is
+    skipped and the run ends green with a notice. When both hold it builds a universal
+    macOS bundle + a **draft** GitHub release via `tauri-action`.
+  - **Today it no-ops:** no signed release exists and the pubkey is a placeholder, so
+    `checkForUpdate` returns null and the indicator stays hidden. **Activation** later
+    needs only the deferred "provide signing key" task: generate the minisign keypair,
+    bake the real `pubkey` + flip `createUpdaterArtifacts` on, and add the
+    `TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]` GitHub secrets — no other code change. The
+    interactive flow is runtime-exercised by the dev mock (#193). _(This reverses the
+    earlier #62 "no in-app auto-update / no release pipeline" rule; Apple
+    notarization stays out of scope — the updater is minisign-only.)_
+  The bundle ships a partial `src-tauri/Info.plist` (auto-merged by the Tauri CLI in
+  both `dev` and `build`) declaring `NSMicrophoneUsageDescription` /
+  `NSSpeechRecognitionUsageDescription` so voice dictation works inside a session's PTY
+  (macOS attributes a child process's mic request to the responsible app — ClaudeCue).
 - **Styling:** CSS Modules (`*.module.css` next to each component) that consume
   the design tokens in `src/styles/tokens.css`. The reset, base styles,
   scrollbars, keyframes, and the `prefers-reduced-motion` killswitch live in

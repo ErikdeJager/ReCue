@@ -8,9 +8,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #190 — Auto-update skeleton: gated release pipeline + in-app update UI (keys deferred)
-	Plan: TASK-190.md
-	Depends on: none
 - [ ] #191 — Settings → "Updates" section: check for updates + review what will be installed
 	Plan: TASK-191.md
 	Depends on: #190
@@ -49,3 +46,7 @@ kanban-plugin: board
 	Depends on: none
 
 ## DONE
+
+- [ ] #190 — Auto-update skeleton: gated release pipeline + in-app update UI (keys deferred)
+	Plan: TASK-190.md
+	Depends on: none

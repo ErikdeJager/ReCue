@@ -34,6 +34,7 @@ import TemplateManager from "./components/TemplateManager/TemplateManager";
 import TemplateUseModal from "./components/TemplateUseModal/TemplateUseModal";
 import { reconcileTerminals } from "./components/Terminal/terminalPool";
 import Toaster from "./components/Toaster/Toaster";
+import UpdateModal from "./components/Update/UpdateModal";
 import { useStore } from "./store";
 import { useKeyboardNav } from "./useKeyboardNav";
 import { IS_MAIN_WINDOW, ownedHere } from "./windowContext";
@@ -158,6 +159,7 @@ function MainApp() {
       <NewSessionModal />
       {createPanelOpen && <CreatePanelModal />}
       <Settings />
+      <UpdateModal />
       {canvasClosePromptId && <CanvasCloseModal />}
       {templateUseOpen && <TemplateUseModal />}
       {templateManagerOpen && <TemplateManager />}

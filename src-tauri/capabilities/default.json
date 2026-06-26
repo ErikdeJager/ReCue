@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Capability for the main window and detached canvas windows (#84)",
   "windows": ["main", "canvas-*"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }

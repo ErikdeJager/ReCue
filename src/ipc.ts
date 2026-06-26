@@ -347,6 +347,11 @@ export const getSidebarCollapsed = () =>
   invoke<boolean | null>("get_sidebar_collapsed");
 export const setSidebarCollapsed = (collapsed: boolean) =>
   invoke<void>("set_sidebar_collapsed", { collapsed });
+/** Last-seen app version (#190), persisted separately so boot can detect a
+ * self-update and toast the new version. `null` on first launch. */
+export const getLastVersion = () => invoke<string | null>("get_last_version");
+export const setLastVersion = (version: string) =>
+  invoke<void>("set_last_version", { version });
 /** Clear the recents list (#100 Settings → Data). */
 export const clearRecents = () => invoke<void>("clear_recents");
 /** Reveal the app-data folder (where sessions.json lives) in Finder (#100). */

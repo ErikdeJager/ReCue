@@ -998,6 +998,21 @@ pub fn set_sidebar_collapsed(store: State<'_, Store>, collapsed: bool) -> Result
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+/// The app version observed on the previous run (#190); `None` on first launch.
+#[tauri::command]
+pub fn get_last_version(store: State<'_, Store>) -> Option<String> {
+    store.last_version()
+}
+
+/// Persist the app version seen this run (#190), so the next boot can detect an
+/// update and show a one-time "Updated to v…" toast.
+#[tauri::command]
+pub fn set_last_version(store: State<'_, Store>, version: String) -> Result<(), SessionError> {
+    store
+        .set_last_version(version)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
 /// untouched — only the recently-used folder list is emptied.
 #[tauri::command]

@@ -27,6 +27,7 @@ import { applyTerminalSettings } from "./components/Terminal/terminalPool";
 import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
 import { effectiveRepo, repoName } from "./paths";
+import * as updater from "./updater";
 import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
 import type {
   BranchList,
@@ -121,6 +122,24 @@ function isSessionError(
     "kind" in value &&
     "message" in value
   );
+}
+
+/** True if semver `to` is strictly higher than `from` — a numeric component-wise
+ * compare ignoring any pre-release/build suffix. Drives the post-update toast
+ * (#190): a downgrade or no-change must NOT toast "Updated to v…". */
+export function versionIncreased(from: string, to: string): boolean {
+  const parse = (v: string) =>
+    v.split(/[.+-]/).map((n) => Number.parseInt(n, 10) || 0);
+  const a = parse(from);
+  const b = parse(to);
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (y > x) return true;
+    if (y < x) return false;
+  }
+  return false;
 }
 
 /**
@@ -639,6 +658,18 @@ export interface AppState {
    * type step and opens straight at the folder step for that type; `null` = ⌘K
    * (start at the type step). */
   createPanelType: string | null;
+  /** In-app updater state (#190, Tauri updater plugin). `status` drives the sidebar
+   * indicator + the confirm/install modal; `confirming` opens the confirm dialog
+   * (only meaningful while `available`); `progress` (0–100) feeds the install
+   * overlay's bar. Inert today (no signed release) but shaped so the mock (#193) can
+   * drive every state. */
+  update: {
+    status: "idle" | "checking" | "available" | "downloading" | "error";
+    version: string | null;
+    progress: number;
+    error?: string;
+    confirming: boolean;
+  };
   /** Pending scheduled sessions (#93), newest-first; main window only. */
   schedules: ScheduledSession[];
   /** Application settings (#100), merged with defaults on load. */
@@ -692,6 +723,18 @@ export interface AppState {
   openCreatePanel: (type?: string) => void;
   /** Close the Create-panel launcher (#189). */
   closeCreatePanel: () => void;
+  /** Check for an update (#190); best-effort — sets `available`+`version` or stays
+   * idle. Called on boot and (later) the Settings "Check for updates" button. */
+  checkForUpdate: () => Promise<void>;
+  /** Open / cancel the update confirm dialog (#190). */
+  openUpdateConfirm: () => void;
+  cancelUpdate: () => void;
+  /** Download + install the pending update (#190): `downloading` with a live
+   * `progress`, then relaunch; on failure → `error` + a toast. */
+  installUpdate: () => Promise<void>;
+  /** Drive the updater state directly (#190) — used by the dev mock (#193) to
+   * exercise every state without a real release. */
+  setUpdateState: (next: Partial<AppState["update"]>) => void;
   /** Add an existing folder to recents without spawning an agent (#172 sidebar
    * background menu → "New folder…"): opens the native folder picker and persists
    * the choice so it shows as a folder group immediately. Cancel = no-op; an already
@@ -1274,6 +1317,12 @@ export const useStore = create<AppState>()((set, get) => ({
   newSessionInitialBranches: null,
   createPanelOpen: false,
   createPanelType: null,
+  update: {
+    status: "idle",
+    version: null,
+    progress: 0,
+    confirming: false,
+  },
   schedules: [],
   settings: DEFAULT_SETTINGS,
   settingsOpen: false,
@@ -1465,6 +1514,52 @@ export const useStore = create<AppState>()((set, get) => ({
     set({ createPanelOpen: true, createPanelType: type ?? null }),
   closeCreatePanel: () =>
     set({ createPanelOpen: false, createPanelType: null }),
+
+  // In-app updater (#190). Best-effort check on boot: returns null today (no signed
+  // release / placeholder pubkey), so the indicator stays hidden. Structured so the
+  // mock (#193) can `setUpdateState` any status.
+  checkForUpdate: async () => {
+    set((s) => ({ update: { ...s.update, status: "checking" } }));
+    try {
+      const info = await updater.checkForUpdate();
+      set((s) => ({
+        update: info
+          ? { ...s.update, status: "available", version: info.version }
+          : { ...s.update, status: "idle" },
+      }));
+    } catch {
+      // Offline, no update, or running outside Tauri — stay idle (no error UI for a
+      // background check).
+      set((s) => ({ update: { ...s.update, status: "idle" } }));
+    }
+  },
+  openUpdateConfirm: () =>
+    set((s) => ({ update: { ...s.update, confirming: true } })),
+  cancelUpdate: () =>
+    set((s) => ({ update: { ...s.update, confirming: false } })),
+  installUpdate: async () => {
+    set((s) => ({
+      update: {
+        ...s.update,
+        status: "downloading",
+        progress: 0,
+        confirming: false,
+      },
+    }));
+    try {
+      await updater.downloadAndRelaunch((percent) =>
+        set((s) => ({ update: { ...s.update, progress: percent } })),
+      );
+      // On success the app relaunches into the new version (#190).
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Update failed";
+      set((s) => ({
+        update: { ...s.update, status: "error", error: message },
+      }));
+      get().pushToast("Update failed", "error");
+    }
+  },
+  setUpdateState: (next) => set((s) => ({ update: { ...s.update, ...next } })),
 
   addFolder: async () => {
     // Native folder picker (#172): cancel returns null → no-op.
@@ -1766,6 +1861,25 @@ export const useStore = create<AppState>()((set, get) => ({
       } catch {
         // Backend unreachable; leave schedules as-is.
       }
+    }
+    // In-app updater (#190) — main window only. (1) Post-update toast: if the
+    // running version is higher than the one recorded last boot, the app just
+    // self-updated → toast it, then record the running version. (2) Best-effort
+    // update check (inert today — placeholder pubkey + no signed release).
+    if (IS_MAIN_WINDOW) {
+      try {
+        const running = await ipc.appVersion();
+        const last = await ipc.getLastVersion();
+        if (last && versionIncreased(last, running)) {
+          get().pushToast(`Updated to v${running}`, "success");
+        }
+        if (last !== running) {
+          void ipc.setLastVersion(running).catch(() => {});
+        }
+      } catch {
+        // Outside Tauri / command missing — skip the version compare.
+      }
+      void get().checkForUpdate();
     }
   },
 

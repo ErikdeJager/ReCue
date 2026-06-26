@@ -88,7 +88,16 @@ Artifacts land in `src-tauri/target/release/bundle/` (`macos/ClaudeCue.app` and
 
 > No code signing or notarization — Gatekeeper warns on first open (right-click →
 > **Open**, or allow it under **System Settings → Privacy & Security**). The build is a
-> **local, unsigned** artifact: there is no in-app auto-update and no release pipeline.
+> **local, unsigned** artifact.
+>
+> An **in-app auto-update skeleton** (#190) is wired but **inert until a minisign signing
+> keypair is generated** (deferred): the Tauri updater/process plugins, a sidebar update
+> indicator → confirm/install-with-progress modal → relaunch, a post-update toast, and a
+> gated `.github/workflows/release.yml` that builds a **draft** release **only** when the
+> app version is bumped **and** a `TAURI_SIGNING_PRIVATE_KEY` secret is configured. With
+> no key (today) `tauri build` stays unsigned and the pipeline no-ops; a later "provide
+> signing key" task bakes the real pubkey, flips `createUpdaterArtifacts` on, and adds the
+> secrets to switch it on. Apple notarization remains out of scope (minisign only).
 
 ## Develop scripts
 

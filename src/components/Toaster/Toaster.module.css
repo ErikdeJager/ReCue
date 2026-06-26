@@ -29,6 +29,10 @@
   border-color: var(--diff-del-fg);
 }
 
+.success {
+  border-color: var(--status-done);
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;

@@ -192,6 +192,11 @@ pub struct PersistedState {
     /// files loading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_collapsed: Option<bool>,
+    /// The app version observed on the last run (#190): compared to the running
+    /// `app_version()` on boot to show a one-time "Updated to v…" toast after a
+    /// self-update. `None` until first written; `default` keeps old files loading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_version: Option<String>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -467,6 +472,16 @@ impl Store {
     /// Persist the sidebar collapsed flag (#168).
     pub fn set_sidebar_collapsed(&self, collapsed: bool) -> io::Result<()> {
         self.update(|state| state.sidebar_collapsed = Some(collapsed))
+    }
+
+    /// The app version seen on the previous run (#190); `None` on first launch.
+    pub fn last_version(&self) -> Option<String> {
+        self.with(|state| state.last_version.clone())
+    }
+
+    /// Persist the app version observed this run (#190).
+    pub fn set_last_version(&self, version: String) -> io::Result<()> {
+        self.update(|state| state.last_version = Some(version))
     }
 
     /// All pending scheduled sessions (#93).

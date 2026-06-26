@@ -17,7 +17,7 @@ function Toaster() {
         <button
           key={toast.id}
           type="button"
-          className={`${styles.toast} ${toast.tone === "error" ? styles.error : ""}`}
+          className={`${styles.toast} ${toast.tone === "error" ? styles.error : ""} ${toast.tone === "success" ? styles.success : ""}`}
           onClick={() => dismiss(toast.id)}
           title="Dismiss"
           aria-label={`Dismiss notification: ${toast.message}`}

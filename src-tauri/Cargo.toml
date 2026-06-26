@@ -25,6 +25,11 @@ portable-pty = "0.9.0"
 thiserror = "2.0.18"
 uuid = { version = "1.23.3", features = ["v4"] }
 tauri-plugin-dialog = "2.7.1"
+# In-app auto-update skeleton (#190, re-introducing #15 removed by #62). Inert until
+# a real signing keypair is generated (deferred) — see `tauri.conf.json` placeholder
+# pubkey + `createUpdaterArtifacts` off.
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
 
 [lints.clippy]
 all = "warn"

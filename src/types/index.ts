@@ -296,7 +296,7 @@ export interface PersistedCanvases {
   activeId: string;
 }
 
-export type ToastTone = "info" | "error";
+export type ToastTone = "info" | "error" | "success";
 
 export interface Toast {
   id: string;

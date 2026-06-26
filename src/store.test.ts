@@ -15,6 +15,7 @@ import {
   repoColor,
   repoOrder,
   useStore,
+  versionIncreased,
 } from "./store";
 import type {
   CanvasContent,
@@ -292,6 +293,38 @@ describe("app store", () => {
     useStore.getState().closeNewSession();
     expect(useStore.getState().newSessionOpen).toBe(false);
     expect(useStore.getState().newSessionRepo).toBeNull();
+  });
+
+  it("drives the updater confirm dialog (#190)", () => {
+    useStore
+      .getState()
+      .setUpdateState({ status: "available", version: "1.2.3" });
+    expect(useStore.getState().update.confirming).toBe(false);
+    useStore.getState().openUpdateConfirm();
+    expect(useStore.getState().update.confirming).toBe(true);
+    expect(useStore.getState().update.status).toBe("available");
+    useStore.getState().cancelUpdate();
+    expect(useStore.getState().update.confirming).toBe(false);
+  });
+
+  it("setUpdateState drives every updater state for the mock (#190/#193)", () => {
+    useStore.getState().setUpdateState({ status: "downloading", progress: 42 });
+    expect(useStore.getState().update.status).toBe("downloading");
+    expect(useStore.getState().update.progress).toBe(42);
+    useStore.getState().setUpdateState({ status: "error", error: "boom" });
+    expect(useStore.getState().update.status).toBe("error");
+    expect(useStore.getState().update.error).toBe("boom");
+  });
+});
+
+describe("versionIncreased (#190)", () => {
+  it("is true only when the new version is strictly higher", () => {
+    expect(versionIncreased("0.0.1", "0.0.2")).toBe(true);
+    expect(versionIncreased("0.0.9", "0.0.10")).toBe(true); // numeric, not lexical
+    expect(versionIncreased("0.1.0", "1.0.0")).toBe(true);
+    expect(versionIncreased("0.0.1", "0.0.1")).toBe(false); // unchanged
+    expect(versionIncreased("0.0.2", "0.0.1")).toBe(false); // downgrade
+    expect(versionIncreased("1.2.0", "1.2.0-beta")).toBe(false); // pre-release ≤
   });
 });
 

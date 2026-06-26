@@ -38,6 +38,7 @@ import {
 } from "../../store";
 import type { ScheduledSession, SessionView } from "../../types";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
+import UpdateIndicator from "../Update/UpdateIndicator";
 import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import ViewsMenu from "../ViewsMenu/ViewsMenu";
 import styles from "./Sidebar.module.css";
@@ -1589,6 +1590,10 @@ function Sidebar() {
           </div>
         </>
       )}
+
+      {/* In-app update box (#190): directly above the footer/Settings gear, hidden
+          unless an update is available/failed; collapses to its icon in the rail. */}
+      <UpdateIndicator />
 
       {/* Footer (#100): a thin bottom bar pinned below the scrolling repo list,
           holding the Settings gear and (#168) the collapse/expand chevron. When

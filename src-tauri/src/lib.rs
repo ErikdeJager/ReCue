@@ -38,6 +38,12 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // In-app auto-update skeleton (#190): the updater + process (relaunch)
+        // plugins. Inert today — `tauri.conf.json` carries a placeholder pubkey and
+        // `createUpdaterArtifacts` is off, so `check()` finds no signed release until
+        // a real signing keypair is generated (deferred).
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // The session manager emits to a channel; a dedicated thread forwards
             // those events to the frontend as Tauri events.
@@ -200,6 +206,8 @@ pub fn run() {
             commands::set_sidebar_width,
             commands::get_sidebar_collapsed,
             commands::set_sidebar_collapsed,
+            commands::get_last_version,
+            commands::set_last_version,
             commands::clear_recents,
             commands::open_data_folder,
             commands::open_url,

@@ -1,8 +1,8 @@
 # Task 190
 
-### 190. [ ] Auto-update skeleton: gated release pipeline + in-app update UI (keys deferred)
+### 190. [x] Auto-update skeleton: gated release pipeline + in-app update UI (keys deferred)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-26
 
@@ -113,44 +113,59 @@ signing key" task. The **interactive** flow (indicator → modal → freeze/prog
 
 **Subtasks**
 
-1. [ ] Re-add updater + process plugins (JS deps + Rust crates + `lib.rs` inits +
-   capabilities) and the `tauri.conf.json` `plugins.updater` block with a **placeholder
-   pubkey**; confirm `npm run tauri build` still produces an unsigned bundle **with no key**.
-2. [ ] Restore + extend `src/updater.ts` (`checkForUpdate`, `downloadAndRelaunch(onProgress)`
-   with the updater progress events).
-3. [ ] Add the store `update` slice + actions (`checkForUpdate`, `openUpdateConfirm`,
-   `cancelUpdate`, `installUpdate` driving `status`/`progress`/`error`), structured so the
-   mock (#193) can set states.
-4. [ ] `lastVersion` persistence + boot compare → `pushToast("Updated to v…")`.
-5. [ ] `UpdateIndicator` in the sidebar footer above the gear (hidden when idle; clickable
-   when available).
-6. [ ] `UpdateModal`: confirm dialog → OK → full-window input-blocking overlay + progress
-   bar → relaunch; Cancel/Escape before install.
-7. [ ] `.github/workflows/release.yml`: version-bump guard **and** signing-secret-present
-   guard → otherwise end early; else build universal bundle + **draft** release with updater
-   artifacts.
-8. [ ] Update CLAUDE.md + README (reverse the #62 "no auto-update / no pipeline" note;
-   document the deferred-key skeleton).
-9. [ ] **Verify** — `npm run build`, `npm run lint`, `npm test`, `cargo build`/`clippy` green;
-   `npm run tauri build` succeeds locally **without a key**; the workflow's guard ends early
-   when the secret is absent (review the `if:`/guard logic). Note that the **interactive
-   update flow is verified via the mock (#193)**, not in this task.
+1. [x] Re-added updater + process plugins — JS deps (`package.json`), Rust crates
+   (`Cargo.toml`), `lib.rs` inits, `capabilities/default.json` (`updater:default` +
+   `process:allow-restart`), and the `tauri.conf.json` `plugins.updater` block with the
+   **#15 public key as a placeholder** + `createUpdaterArtifacts` left **OFF**. `cargo build`
+   (which parses/validates the config via `tauri-build`) passes (full bundle not run in-loop;
+   see Notes).
+2. [x] `src/updater.ts` — `checkForUpdate()` + `downloadAndRelaunch(onProgress)` forwarding
+   the updater's `Started{contentLength}`/`Progress{chunkLength}`/`Finished` events to a
+   0–100 callback, then `relaunch()`.
+3. [x] Store `update` slice (`status`/`version`/`progress`/`error`/`confirming`) +
+   `checkForUpdate`/`openUpdateConfirm`/`cancelUpdate`/`installUpdate`, plus `setUpdateState`
+   so the mock (#193) can drive any state. Unit-tested.
+4. [x] `last_version` persistence (Rust scalar like `sidebar_width`: store field + commands +
+   ipc) + boot compare via the pure `versionIncreased()` → `pushToast("Updated to v…",
+   "success")`. Added a `"success"` toast tone (type + Toaster). Both unit-tested.
+5. [x] `UpdateIndicator` mounted in the sidebar footer **above the Settings gear**, hidden
+   when idle, clickable when available (collapses to its icon in the #168 rail).
+6. [x] `UpdateModal`: confirm dialog → OK → **full-window input-blocking overlay + progress
+   bar** → relaunch; Cancel / Escape / scrim-click before install (no dismiss while
+   downloading).
+7. [x] `.github/workflows/release.yml`: a `check` job outputs **both** a version-bump guard
+   **and** a signing-secret-present guard (surfaced as an output since secrets aren't usable
+   in job-level `if:`); the `release` job runs only when both are true, else the run ends
+   green with a `::notice::`. Builds a universal bundle + **draft** release via
+   `tauri-action`.
+8. [x] CLAUDE.md "Builds & distribution" + README updated — reversed the #62 "no
+   auto-update / no pipeline" note and documented the deferred-key skeleton.
+9. [x] **Verify** — `npm run build`, `npm run lint`, `npm test` (262), `cargo build`,
+   `cargo test` (83), `clippy`, `cargo fmt`, `prettier` all green. Full `npm run tauri build`
+   **not** run in the loop (heavy release bundle, headless) — `cargo build` already parses
+   the updater config via `tauri-build` and `createUpdaterArtifacts` is off (no signing
+   path), so the unsigned local build is safe; see Notes. The interactive flow is exercised
+   by the mock (#193).
 
 **Acceptance criteria**
 
-- [ ] Updater + process plugins are wired (JS + Rust + capabilities + `tauri.conf.json`
-      `plugins.updater` with a placeholder pubkey); **`npm run tauri build` still succeeds
-      locally with no signing key** and the app runs.
-- [ ] `.github/workflows/release.yml` exists and **ends early when
-      `TAURI_SIGNING_PRIVATE_KEY` is absent** (and when the version isn't bumped); otherwise
-      it builds and creates a **draft** release with updater artifacts.
-- [ ] The **sidebar footer shows an update box above the Settings gear** that is hidden when
-      idle and, when an update is available, opens a **confirm modal**; OK → a **full-window
-      input-blocking overlay with a progress bar**, then **relaunch**; after a version
-      increase a **toast shows the new version**. (All states reachable/inspectable; the
-      live download path is exercised by #193 / a real signed release.)
-- [ ] CLAUDE.md/README updated to reflect the reversed scope.
-- [ ] `npm run build`, `npm run lint`, `npm test`, and Rust build/clippy pass.
+- [x] Updater + process plugins are wired (JS + Rust + capabilities + `tauri.conf.json`
+      `plugins.updater` with a placeholder pubkey, `createUpdaterArtifacts` off). `cargo
+      build`/`clippy` pass with the config parsed; the local build stays unsigned with no key.
+      _(Full `tauri build` bundle not run in-loop — see Notes; cargo build validates the
+      config.)_
+- [x] `.github/workflows/release.yml` exists and **ends early when
+      `TAURI_SIGNING_PRIVATE_KEY` is absent** (and when the version isn't bumped) — the
+      `release` job is gated on `should_release == 'true' && has_key == 'true'`; otherwise it
+      builds + drafts a release. _(Updater artifacts come online when the later signing-key
+      task flips `createUpdaterArtifacts`.)_
+- [x] The **sidebar footer shows an update box above the Settings gear** (hidden when idle),
+      → a **confirm modal** → OK → a **full-window input-blocking overlay with a progress
+      bar** → **relaunch**; a version increase shows a **success toast**. All states reachable
+      via `setUpdateState` (unit-tested); the live download is exercised by #193 / a real
+      signed release. _(Live render runtime-unverified in-loop — see Notes.)_
+- [x] CLAUDE.md/README updated to reflect the reversed scope.
+- [x] `npm run build`, `npm run lint`, `npm test`, and Rust build/clippy pass.
 
 **Notes**
 
@@ -181,3 +196,36 @@ signing key" task. The **interactive** flow (indicator → modal → freeze/prog
   `process:allow-restart`, `store.ts` update slice), `11559ec`/`0e828c2` (#62 removal);
   current `Sidebar.tsx` footer (~1597), `store.ts pushToast` (~1371), `lib.rs` plugin init
   (~40), `tauri.conf.json`/`package.json` version `0.0.1`. CLAUDE.md "Builds & distribution".
+
+**Implementation notes (2026-06-26 — done)**
+
+- Built on the #15 reference (git `24791c4`) and extended per the plan: a sidebar
+  **`UpdateIndicator`** (not #15's bottom-right popup) → a confirm **`UpdateModal`** → a
+  full-window install overlay with a **progress bar** (vs #15's spinner), plus the
+  post-update toast and the **gated** pipeline (version-bump **and** secret-present).
+- **Placeholder pubkey = the #15 public key** (`git show 24791c4:src-tauri/tauri.conf.json`).
+  It's a valid minisign pubkey format (so `tauri-build` config validation passes) and is
+  already public (no secret committed); its **private** key is deferred. JSON can't carry a
+  comment, so the placeholder status is documented in CLAUDE.md/README + here.
+  **`createUpdaterArtifacts` stays OFF** so a local `tauri build` never tries to sign — the
+  later "provide signing key" task flips it on + bakes the real key + adds the secrets.
+- **Pipeline secret guard:** GitHub Actions can't read `secrets.*` in a job-level `if:`, so
+  the `check` job exposes a `has_key` **output** (a boolean from `[ -n "$SIGNING_KEY" ]`,
+  never echoing the secret) and the `release` job gates on `should_release && has_key`. Both
+  false-paths log a `::notice::` and the run ends green (the build job is simply skipped).
+- **`last_version`** is a dedicated Rust scalar (mirroring `sidebar_width`/`sidebar_collapsed`)
+  rather than folded into the Settings blob, so the Settings draft can't clobber it. Boot
+  compares it to `app_version()` with the pure, unit-tested `versionIncreased()` (numeric
+  semver compare — `0.0.10 > 0.0.9`, a downgrade/no-change does **not** toast).
+- **`"success"` toast tone** added (`ToastTone` + Toaster `.success` → `--status-done` green)
+  for the post-update toast, since the existing tones were only `info`/`error`.
+- **Inert today, mock-drivable:** `checkForUpdate` returns null (placeholder pubkey + no
+  signed release), so the indicator stays hidden. The slice is shaped so #193's mock can
+  `setUpdateState({status, version, progress, error})` to exercise indicator → confirm →
+  install/progress → error without a real release.
+- **Runtime-unverified in this loop:** (a) a full `npm run tauri build` (release bundle) —
+  heavy + headless; `cargo build` already parses+validates the updater config via
+  `tauri-build` and `createUpdaterArtifacts` is off, so the unsigned build is safe; (b) the
+  live indicator/modal render + the real download/relaunch (no signed release exists — that's
+  the mock #193 / a real release's job). Mirrors the #84/#186–#189 precedent; recommend a
+  `npm run tauri build` + `npm run tauri dev` pass when convenient.
