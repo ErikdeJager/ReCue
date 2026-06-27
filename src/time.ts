@@ -34,7 +34,10 @@ export function parseResetsAt(raw: string | null): number | null {
 }
 
 /** Compact reset countdown for the usage bar (#154): "2h 14m" / "14m" / "<1m". */
-export function formatResetCountdown(resetsAtMs: number, nowMs: number): string {
+export function formatResetCountdown(
+  resetsAtMs: number,
+  nowMs: number,
+): string {
   const minutes = Math.floor((resetsAtMs - nowMs) / 60_000);
   if (minutes <= 0) return "<1m";
   const h = Math.floor(minutes / 60);

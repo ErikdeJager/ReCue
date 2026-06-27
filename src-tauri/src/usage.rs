@@ -52,15 +52,19 @@ pub fn claude_session_usage() -> Option<UsageSnapshot> {
 }
 
 /// Read the OAuth access token: the prompt-free file first, then the Keychain.
+/// The Keychain step is macOS-only (`read_token_from_keychain` is a no-op stub
+/// elsewhere), so on **Windows** the credentials file is the sole source — which is
+/// canonical there anyway, since Windows has no Keychain and `claude` stores the
+/// token in `%USERPROFILE%\.claude\.credentials.json` (#140).
 fn read_oauth_token() -> Option<String> {
     read_token_from_file().or_else(read_token_from_keychain)
 }
 
-/// `~/.claude/.credentials.json` — prompt-free. Located via `$HOME` like `title.rs`.
-/// Often absent on macOS (where the Keychain is canonical), present on Linux.
+/// `~/.claude/.credentials.json` — prompt-free. Located via the cross-platform
+/// `home_dir()` (`$HOME` on unix, `%USERPROFILE%` on Windows, #140) like `title.rs`.
+/// Often absent on macOS (where the Keychain is canonical), present on Windows/Linux.
 fn read_token_from_file() -> Option<String> {
-    let home = std::env::var_os("HOME")?;
-    let path = std::path::PathBuf::from(home)
+    let path = crate::path_env::home_dir()?
         .join(".claude")
         .join(".credentials.json");
     let raw = std::fs::read_to_string(path).ok()?;
@@ -70,7 +74,9 @@ fn read_token_from_file() -> Option<String> {
 /// macOS Keychain item `Claude Code-credentials` — its password value is the same
 /// JSON blob. NOTE: the first access triggers a one-time Keychain allow-prompt
 /// (ClaudeCue is a different app than `claude`); a denial errors here and we fail
-/// open (bar hidden).
+/// open (bar hidden). The `security` CLI is macOS-only, so this is gated to macOS;
+/// on Windows/Linux the credentials file above is the sole token source.
+#[cfg(target_os = "macos")]
 fn read_token_from_keychain() -> Option<String> {
     let out = std::process::Command::new("security")
         .args([
@@ -85,6 +91,14 @@ fn read_token_from_keychain() -> Option<String> {
         return None;
     }
     token_from_json(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Non-macOS stub: there is no Keychain (Windows/Linux), so the credentials file is
+/// the only source. Keeps `read_oauth_token`'s `.or_else(...)` chain identical
+/// across platforms.
+#[cfg(not(target_os = "macos"))]
+fn read_token_from_keychain() -> Option<String> {
+    None
 }
 
 /// Tolerant token extraction: `claudeAiOauth.accessToken` (the macOS shape) else a

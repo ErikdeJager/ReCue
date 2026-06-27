@@ -33,7 +33,9 @@ describe("formatResetCountdown (#154)", () => {
   const now = Date.parse("2026-04-11T07:00:00Z");
 
   it("formats hours and minutes", () => {
-    expect(formatResetCountdown(now + (2 * 60 + 14) * 60_000, now)).toBe("2h 14m");
+    expect(formatResetCountdown(now + (2 * 60 + 14) * 60_000, now)).toBe(
+      "2h 14m",
+    );
   });
 
   it("formats minutes only under an hour", () => {

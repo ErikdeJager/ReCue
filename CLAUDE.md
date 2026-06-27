@@ -106,10 +106,11 @@ even though it works in `tauri dev`.
   `claude`'s width-specific TUI redraw). Scrollback replays once at creation;
   resizes are debounced + applied only while visible. The pool's `createHost`
   **linkifies `http`/`https` URLs** (a `WebLinksAddon`) so a **⌘-click** opens the
-  default browser via the dependency-free Rust `open_url` (http/https only, no shell) —
-  for both agent and shell terminals (#109). `open_url` is **cross-platform** (#217):
-  macOS `open`, Windows `cmd /C start`, else `xdg-open` — so the same path (and the
-  #210 feedback button) opens the browser on Windows too, not a folder.
+  default browser via the dependency-free Rust `open_url` (http/https only, so no
+  shell-injection vector even where the opener is `cmd`) — for both agent and shell
+  terminals (#109). `open_url` is **cross-platform** (#217): macOS `open`, Windows
+  `cmd /C start "" <url>`, else `xdg-open` — so the same path (and the #210 feedback
+  button) opens the browser on Windows too, not a File Explorer folder.
 - **Overview customization:** columns are grouped by repo (#36) — by a session's
   pure **`effectiveRepo`** (`paths.ts`), so a worktree agent (#74) sits in its
   **parent repo's** cluster sharing its color, text-badged "worktree" rather than
@@ -432,7 +433,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > **Windows and macOS**. **#139** got it compiling + green on both (`#[cfg(...)]`-gated Rust,
 > `cfg(unix)` POSIX-shell tests, `.gitattributes` LF normalization so `cargo fmt`/`prettier`
 > pass on a Windows checkout, + a coverage push). **#140** made it *function* on Windows:
-> PowerShell terminals, `explorer.exe` for open/reveal/url, a no-op login-shell PATH probe, a
+> PowerShell terminals, `explorer.exe` for open/reveal (and, until #217, URLs), a no-op login-shell PATH probe, a
 > cross-platform `home_dir()` (`USERPROFILE`), and `claude.cmd` resolution via `PATHEXT` +
 > launch through `cmd.exe /C`. **#143** finished it: a platform-neutral bundle description
 > (NSIS+MSI), a backend `platform()` signal cached once in the store, OS-appropriate display
@@ -452,10 +453,26 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > reads `Ctrl+…` / "Reveal in Explorer" on Windows (e.g. #162 ⌘S, #168 ⌘B, #172 ⌘N, the #204
 > schedule-step **Worktree ⌘⏎** button, and the #206 **New tab ⌘T** add-button hint + menu kbd).
 > New keyboard *handling* stays `metaKey || ctrlKey`, so a Ctrl shortcut fires on Windows for
-> free. A new feature that **opens a URL** reuses the http/https-only `open_url` (`os_open` →
-> `explorer.exe` on Windows), so the #210 sidebar **feedback button** works unchanged; and
-> user-facing copy that names the platform (the #208 first-release patch note) reads "macOS and
-> Windows".
+> free. **Opening a URL** uses the http/https-only `open_url`, which since **#217** is
+> platform-cfg — macOS `open`, **Windows `cmd /C start "" <url>`**, else `xdg-open` — *not*
+> `os_open`/`explorer.exe`: `explorer.exe <url>` opened a File Explorer window instead of the
+> browser, so the #210 sidebar **feedback button** (and the #109 ⌘/Ctrl-click link path) now
+> reach the browser on Windows. `os_open` (`explorer.exe`) still backs the **folder** opens
+> (`reveal_path`/`open_data_folder`). User-facing copy that names the platform (the #208
+> first-release patch note) reads "macOS and Windows".
+>
+> **Rebased `main` features #211–#217 + the usage bar (#154).** #211 (drag-reorder sidebar
+> folders), #212 (resync a worktree/branch label after an in-terminal `git checkout`, on the
+> busy→idle edge), #213 (worktree header uses the normal open-view button + a static badge),
+> #214 (narrower collapsed rail), and #215/#216 (update-indicator margin/hover/attention
+> animation) are all path-key-/git-/CSS-based and platform-neutral, so they carry over unchanged.
+> The **#154 five-hour usage bar** needed Windows work: `usage.rs` reads the OAuth token from
+> `~/.claude/.credentials.json` via the cross-platform **`home_dir()`** (`%USERPROFILE%` on
+> Windows, #140) instead of a raw `$HOME`, and the macOS-Keychain fallback (the `security` CLI)
+> is `#[cfg(target_os = "macos")]`-gated with a non-macOS `None` stub — so on Windows the
+> credentials file is the sole token source (canonical there, as Windows has no Keychain). The
+> bar stays fail-open everywhere (any miss → it hides). #217's cross-platform `open_url` (above)
+> was authored on `main`; the rebase keeps it and drops the port's earlier `os_open` URL route.
 
 ## v1 scope decisions / out of scope
 

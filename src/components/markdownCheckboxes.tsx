@@ -38,7 +38,10 @@ export function isExternalHref(href: string | undefined): boolean {
  * an `http(s)` href is then opened in the system browser via the #109 `openUrl` →
  * Rust `open_url` path. Non-web schemes are simply neutralized.
  */
-function onLinkClick(event: MouseEvent<HTMLAnchorElement>, href?: string): void {
+function onLinkClick(
+  event: MouseEvent<HTMLAnchorElement>,
+  href?: string,
+): void {
   event.preventDefault();
   if (isExternalHref(href)) void openUrl(href!).catch(() => {});
 }

@@ -43,7 +43,9 @@
 .fill {
   width: 0; /* starts empty; the live width is set inline */
   height: 100%;
-  background: var(--accent); /* inherits the user's custom accent automatically */
+  background: var(
+    --accent
+  ); /* inherits the user's custom accent automatically */
   /* Auto-dropped by global.css prefers-reduced-motion + body.reduce-motion (#102). */
   transition:
     width var(--dur-slow) var(--ease-out),

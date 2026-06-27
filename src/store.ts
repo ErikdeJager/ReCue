@@ -1807,7 +1807,10 @@ export const useStore = create<AppState>()((set, get) => ({
   startUsagePolling: () => {
     if (!IS_MAIN_WINDOW || usagePollTimer) return; // main-window only, idempotent
     void get().refreshUsage();
-    usagePollTimer = setInterval(() => void get().refreshUsage(), USAGE_POLL_MS);
+    usagePollTimer = setInterval(
+      () => void get().refreshUsage(),
+      USAGE_POLL_MS,
+    );
   },
   stopUsagePolling: () => {
     if (usagePollTimer) {

@@ -51,7 +51,9 @@ function UsageBar() {
   const critical = pct >= 95;
   const rounded = Math.round(pct);
   const countdown =
-    resetsAtMs != null ? `Resets in ${formatResetCountdown(resetsAtMs, now)}` : "";
+    resetsAtMs != null
+      ? `Resets in ${formatResetCountdown(resetsAtMs, now)}`
+      : "";
   const label = `Claude 5-hour usage ${rounded} percent${
     countdown ? `, ${countdown}` : ""
   }`;
