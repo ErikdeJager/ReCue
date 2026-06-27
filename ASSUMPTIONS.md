@@ -558,3 +558,31 @@ Decided autonomously (user not answering):
 - **Prefer `margin-left:auto` on the collapse button over `justify-content:space-between`
   on `.footer`** — with three flex items, `space-between` would also spread Settings and
   Feedback apart rather than keeping them grouped left. **Depends on: none.**
+
+## TASK-220 — Make Ctrl+V paste (text + images) work in terminals on Windows
+
+Card: on Windows, terminals can't receive pasted text/images; fix paste. Grounded via an
+Explore sweep — root cause: no clipboard addon/plugin and no custom key handler, so macOS
+⌘V works (native WebKit paste → xterm) but Windows **Ctrl+V** is treated as the control
+byte `^V` (0x16) and never pastes. Decided autonomously (user not answering):
+
+- **Clipboard read = the Tauri clipboard-manager plugin**, not
+  `navigator.clipboard.readText()` (unreliable/permission-gated under WebView2). Adds a
+  JS+Rust dependency + a `clipboard-manager:*` capability — the smallest robust option.
+- **Intercept via `attachCustomKeyEventHandler`** on Windows for **Ctrl+V and
+  Ctrl+Shift+V**, returning `false` so xterm doesn't also emit `^V`. macOS keeps native
+  ⌘V and leaves Ctrl+V as `^V`. Gated by the store `platform` signal (`isWindows`).
+- **Ctrl+C stays SIGINT** — copy (Ctrl+C / Ctrl+Shift+C / copy-on-selection) is **out of
+  scope**; the card is paste-only.
+- **Paste injection = `term.paste(text)`** (respects bracketed-paste mode) over raw
+  `writeStdin`, so multi-line paste works like macOS.
+- **Images = save the clipboard image to a temp PNG and paste its file path** (Claude
+  accepts image paths) — chosen because it doesn't depend on Claude's internal clipboard
+  mechanism and, since the key is fully intercepted, can't double-handle. The image path
+  + the live `claude` CLI on Windows **can't be unit-tested here** (GUI + ConPTY +
+  clipboard) → flagged for real-box verification recorded in `TRAJECTORY_TO_WINDOWS.md`,
+  per the CLAUDE.md untestable-path rule. If Windows testing shows Claude needs a
+  different image signal, adjust that path only — the **text** paste fix stands.
+- **Assumption:** the Windows `claude` attaches an image given its file path in the
+  prompt (per its image-paste / drag-drop support). **Depends on: none** (self-contained;
+  it adds its own clipboard dependency).
