@@ -4376,3 +4376,55 @@ cadence mirrors the #97 title reader.
 
 ---
 
+### 213. [x] Worktree agent header — use the normal "open view" button + a static "worktree" badge
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-27
+
+**Description**
+
+On **Overview agent cards** and **Canvas agent panel headers**, a worktree agent was treated
+differently from a normal agent: instead of the normal `OpenViewButton` (the icon that opens the
+Views / "New session here" popover), it showed a **clickable** "worktree" text button
+(`WorktreeViewsBadge`) — which wrapped the **same** `ViewsPopover`, so the two triggers were
+functionally identical, only the affordance differed. This task unifies them: a worktree agent now
+shows the **same** `OpenViewButton` as a normal agent, and "worktree" becomes a **non-clickable
+static badge** (an indicator only, styled like the existing "fork" badge).
+
+**What shipped** (commit `31f77e7`, 2026-06-27) — frontend-only:
+
+- **`Overview.tsx`:** removed the `!session.worktreeParent` gate so `OpenViewButton` renders for
+  worktree agents too (scoped to `session.repoPath`, which **is** the worktree folder — so views
+  still open in the worktree), and replaced `<WorktreeViewsBadge>` with a static
+  `<span className={styles.worktreeBadge}>worktree</span>`.
+- **`CanvasSurface.tsx`:** the same two changes for the Canvas agent panel header.
+- **Component removal:** `WorktreeViewsBadge` became unused and was deleted (component +
+  `WorktreeViewsBadge.module.css`); a stray reference in `ViewsMenu.tsx` was cleaned up.
+- **Static badge:** reuses the existing `worktreeBadge` CSS class (same as "fork"), so a worktree
+  badge and a fork badge read cleanly together.
+- **Docs:** `CLAUDE.md` updated — worktree agents now use the standard `OpenViewButton`, and
+  "worktree" on the Overview/Canvas headers is a static badge.
+
+**Key files touched:** `src/components/Overview/Overview.tsx`,
+`src/components/Canvas/CanvasSurface.tsx`, `src/components/ViewsMenu/ViewsMenu.tsx`, deleted
+`src/components/WorktreeViewsBadge/{WorktreeViewsBadge.tsx,WorktreeViewsBadge.module.css}`, plus
+`CLAUDE.md`. Normal agents and the sidebar are unchanged.
+
+**Dependencies:** none. Builds on the existing `OpenViewButton` / `ViewsPopover` (#82 Views menu)
+and the worktree agent model (#74/#96); the static badge reuses the "fork" badge styling (#126).
+
+**Notes**
+
+- "the same context-menu button as a normal agent" referred to the **`OpenViewButton`** (views
+  popover trigger on the Overview/Canvas headers) — the affordance that actually differed.
+  Worktree agents already shared the sidebar `SessionRow` context menu, so the sidebar needed no
+  change.
+- The worktree `OpenViewButton`'s `repoPath` is `session.repoPath` (the worktree folder),
+  preserving "open a view in this worktree."
+- **Autonomous refine (2026-06-27):** decided in the refine loop with the user not answering — see
+  `ASSUMPTIONS.md`. The interactive eyeball (icon button + static badge on real worktree
+  Overview/Canvas headers) is **runtime-unverified** in this headless loop; lint/build/test pass.
+
+---
+

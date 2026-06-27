@@ -1,6 +1,6 @@
-### 216. [ ] One-time attention animation on the update indicator when it first appears
+### 216. [x] One-time attention animation on the update indicator when it first appears
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #215
 **Created:** 2026-06-27
 
@@ -56,26 +56,26 @@ Implementation approach (recommended):
 
 **Subtasks**
 
-1. [ ] Add `@keyframes update-announce` (glow/border pulse, finite count, ends at the
+1. [x] Add `@keyframes update-announce` (glow/border pulse, finite count, ends at the
    normal resting style) to `Update.module.css` + an `.indicatorAnnounce` class.
-2. [ ] In `UpdateIndicator.tsx`, apply `.indicatorAnnounce` only on the first
+2. [x] In `UpdateIndicator.tsx`, apply `.indicatorAnnounce` only on the first
    appearance in a session, guarded by a session-once flag (module-level ref or a
    store `update.announced` flag) so it never loops/replays.
-3. [ ] Confirm it settles to the #215 resting look and doesn't shift sidebar layout.
-4. [ ] Verify it is disabled under reduced motion (`body.reduce-motion`).
-5. [ ] Exercise via the dev mock (#193): `clearUpdate()` then `mockUpdate(...)` to see
+3. [x] Confirm it settles to the #215 resting look and doesn't shift sidebar layout.
+4. [x] Verify it is disabled under reduced motion (`body.reduce-motion`).
+5. [x] Exercise via the dev mock (#193): `clearUpdate()` then `mockUpdate(...)` to see
    the first-appearance animation; toggle collapse to confirm it doesn't replay.
    `npm run lint` + `npm run build`.
 
 **Acceptance criteria**
 
-- [ ] The first time the update indicator appears after app open, it plays a single
+- [x] The first time the update indicator appears after app open, it plays a single
       finite attention animation (ping/glow/border), then rests at the normal #215 look.
-- [ ] It does **not** loop, and does **not** replay on re-render (collapse toggle) or
+- [x] It does **not** loop, and does **not** replay on re-render (collapse toggle) or
       when the status flips away and back within the same session.
-- [ ] No sidebar layout shift while it animates.
-- [ ] The animation is disabled under reduced motion.
-- [ ] `npm run lint` and `npm run build` pass.
+- [x] No sidebar layout shift while it animates.
+- [x] The animation is disabled under reduced motion.
+- [x] `npm run lint` and `npm run build` pass.
 
 **Notes**
 
