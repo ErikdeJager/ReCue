@@ -25,6 +25,23 @@ describe("file type detection (#44)", () => {
     expect(prismLang("gradle.properties")).toBe("properties");
   });
 
+  it("highlights the extended language set (#227)", () => {
+    expect(detectMode("Service.cs")).toBe("code");
+    expect(prismLang("Service.cs")).toBe("csharp");
+    expect(prismLang("main.go")).toBe("go");
+    expect(prismLang("init.lua")).toBe("lua");
+    expect(prismLang("schema.sql")).toBe("sql");
+    expect(prismLang("app.rb")).toBe("ruby");
+    expect(prismLang("index.php")).toBe("php");
+    expect(prismLang("page.phtml")).toBe("php");
+    // Gradle: Groovy DSL vs Kotlin DSL by extension.
+    expect(prismLang("build.gradle")).toBe("groovy");
+    expect(prismLang("build.gradle.kts")).toBe("kotlin");
+    expect(prismLang("Build.kt")).toBe("kotlin");
+    // POM is XML → markup via the existing mapping (no new entry needed).
+    expect(prismLang("pom.xml")).toBe("markup");
+  });
+
   it("highlights .env dotfiles by filename (no extension) (#150)", () => {
     expect(detectMode(".env")).toBe("code");
     expect(prismLang(".env")).toBe("properties");

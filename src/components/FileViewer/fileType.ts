@@ -39,6 +39,19 @@ const LANG_BY_EXT: Record<string, string> = {
   properties: "properties",
   yaml: "yaml",
   yml: "yaml",
+  // Extended curated set (#227): C#, Go, Lua, SQL, Ruby, PHP, and Gradle (Groovy DSL
+  // `.gradle`; Kotlin DSL `.gradle.kts`/`.kt`). POM (`pom.xml`) needs no entry — it's
+  // XML → `markup` already. `fileExt("build.gradle.kts")` is "kts" (last segment).
+  cs: "csharp",
+  go: "go",
+  lua: "lua",
+  sql: "sql",
+  rb: "ruby",
+  php: "php",
+  phtml: "php",
+  gradle: "groovy",
+  kts: "kotlin",
+  kt: "kotlin",
 };
 
 /** Lowercase extension of a path, or "" for none (dotfiles count as none). */

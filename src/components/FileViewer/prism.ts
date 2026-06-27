@@ -16,6 +16,19 @@ import "prismjs/components/prism-ini"; // INI / .env / config (#150)
 import "prismjs/components/prism-properties"; // .properties / .env (#150)
 import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-markdown";
+// Additional curated languages (#227). Dependency order matters: clike-based grammars
+// (csharp/kotlin/groovy) come after core (clike ships in Prism core), and
+// markup-templating MUST precede php (php extends it) — a wrong order silently
+// disables the grammar, dropping it to the plain-text fallback.
+import "prismjs/components/prism-csharp"; // C# (.cs) — extends clike
+import "prismjs/components/prism-kotlin"; // Gradle Kotlin DSL (.gradle.kts/.kt) — extends clike
+import "prismjs/components/prism-groovy"; // Gradle Groovy DSL (.gradle) — extends clike
+import "prismjs/components/prism-go"; // Go (.go)
+import "prismjs/components/prism-lua"; // Lua (.lua)
+import "prismjs/components/prism-sql"; // SQL (.sql)
+import "prismjs/components/prism-ruby"; // Ruby (.rb)
+import "prismjs/components/prism-markup-templating"; // required by php (must precede it)
+import "prismjs/components/prism-php"; // PHP (.php) — depends on markup-templating
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

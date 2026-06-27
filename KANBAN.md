@@ -10,9 +10,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #227 — Extend file-viewer syntax highlighting to more languages (C#, Go, Lua, SQL, Ruby, PHP, Gradle)
-	Plan: TASK-227.md
-	Depends on: none
 - [ ] #228 — Make agents in the collapsed sidebar rail clickable (left-click select + right-click menu)
 	Plan: TASK-228.md
 	Depends on: none
@@ -27,3 +24,5 @@ kanban-plugin: board
 
 - [x] #226 — Replace agent-header worktree badge with a folder + branch indicator
 	Plan: TASK-226.md
+- [x] #227 — Extend file-viewer syntax highlighting to more languages (C#, Go, Lua, SQL, Ruby, PHP, Gradle)
+	Plan: TASK-227.md
