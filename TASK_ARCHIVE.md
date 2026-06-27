@@ -4169,3 +4169,45 @@ one JSON file — no code/pipeline change.
 
 ---
 
+### 209. [x] Fix the missing space between "Current version" and the version number in Settings → Updates
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-27
+
+**Description**
+
+In **Settings → Updates**, the line above the "Check for updates" button rendered as
+**"Current version0.0.1"** — label and version number stuck together with no space. **Root
+cause:** `.fieldLabel` (`Settings.module.css`) is `display: flex; align-items: baseline;
+justify-content: space-between;` (intended to push the label left, the value right), but its
+wrapping `.updates` container is `align-items: flex-start`, so `.field`/`.fieldLabel`
+**shrink-wrap to content instead of stretching**. With no extra width, `space-between` has
+nothing to distribute and the text node `"Current version"` sits directly adjacent to the
+`.fieldValue` span. The same class backs the "Update available" field (identical latent
+`Update availablev1.2.3` bug). **CSS-only** fix.
+
+**What shipped** (commit `9444554`, 2026-06-27):
+
+- **`Settings.module.css` `.fieldLabel`:** added `gap: var(--space-8)` (with an explanatory
+  comment). The gap separates the label text node from the `.fieldValue` span whether the row is
+  shrink-wrapped (the actual case → a fixed gap) or stretched (space-between still spreads them,
+  gap as the minimum) — fixing both "Current version 0.0.1" and the "Update available" field with
+  one line and **no markup change** (no `{" "}` hack, no colon). No change to `.field`,
+  `.fieldValue`, `.updates`, or the version string shown.
+
+**Key files touched:** `src/components/Settings/Settings.module.css` (`.fieldLabel`).
+
+**Dependencies:** none — a one-line CSS fix, independent of any task.
+
+**Notes**
+
+- **Autonomous refine (2026-06-27):** decision logged in `ASSUMPTIONS.md` under TASK-209 — the
+  `gap`-on-`.fieldLabel` root-cause fix chosen over a per-instance `{" "}` JSX space, since it's
+  general and also corrects the "Update available" field.
+- **Runtime-unverified** in this headless loop: the Settings → Updates eyeball (and the
+  "Update available" state via the #193 dev mock). CSS-only, no test impact; `prettier --check`,
+  `npm run build`, and `npm run lint` all pass.
+
+---
+
