@@ -5046,3 +5046,52 @@ repo header.
 
 ---
 
+### 226. [x] Replace the agent-header "worktree" badge with a folder + branch indicator (every agent)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+On an agent's header (Overview card + Canvas panel), the standalone **"worktree" badge** (#213) is
+removed in favor of a **`folder · branch` indicator shown for every agent** — mirroring how the
+Kanban / file panel headers show `folder · branch`. So a normal agent reads e.g. `myrepo · main`
+and a worktree agent reads `myrepo · feature-x` (parent repo + its isolated branch) rather than a
+separate "worktree" tag.
+
+**What shipped** (commit `b781d0e`, 2026-06-28) — frontend-only:
+
+- **Overview `SessionCard` (`src/components/Overview/Overview.tsx`):** removed the
+  `worktreeParent`-gated `worktreeBadge`; added a `.meta`/`.metaText` indicator after the name
+  rendering `repoName(effectiveRepo(session))` + (when known) ` · ${branch}`, shown for every
+  agent. The fork badge is kept.
+- **Canvas `LeafPanel` (`src/components/Canvas/CanvasSurface.tsx`):** stopped nulling `metaText`
+  for agents — it now computes `metaRepo = content.kind === "agent" && session ?
+  effectiveRepo(session) : repoPath` and `metaText = repoName(metaRepo) + (branch ? · branch :
+  "")`, so the existing `{metaText && …}` render shows `folder · branch`; removed the
+  `worktreeParent`-gated badge (fork badge kept).
+- **Folder = `effectiveRepo` (parent repo)** so a worktree agent reads the meaningful "myrepo",
+  not the sanitized worktree-folder basename; **branch = `branches[repoPath]`** (the worktree's own
+  branch), already kept fresh by #212. The `worktreeBadge` CSS class is retained (still used by the
+  fork badge + the #218 ScheduleCard).
+
+**Key files touched:** `src/components/Overview/Overview.tsx` (SessionCard header),
+`src/components/Canvas/CanvasSurface.tsx` (LeafPanel `metaText` for agents). No CSS class removed.
+
+**Dependencies:** none — builds on shipped #213 (the badge it replaces), #96 (`effectiveRepo`), and
+#212 (`branches`). Independent of #225 (which badges **sidebar folder** headers — a different
+component).
+
+**Notes**
+
+- **Cross-platform:** pure frontend; `repoName`/`effectiveRepo` already split on `/` or `\` (#143);
+  renders identically on macOS and Windows.
+- **Out of scope (deliberate boundaries):** the #218 ScheduleCard "worktree" badge is left as-is
+  (this card is about **agent** headers; a scheduled card already shows `repoName(cwd) · branch`),
+  the fork badge is kept (distinct provenance marker), and the sidebar's own worktree sub-grouping
+  is unrelated/unchanged. Minor redundancy when an auto-named agent's name is already its branch is
+  accepted (matches how non-agent panels always show the context line).
+
+---
+
