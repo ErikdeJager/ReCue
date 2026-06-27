@@ -638,3 +638,24 @@ template…"; Templates ▾ holds management only). Decided autonomously (user n
 - **#206 (⌘T) preserved** — the keybind still creates a new tab; its hint stays on the +
   tooltip + keyboard legend; only the `<kbd>` inside the removed + menu item is dropped.
 - **Depends on: none** — refines shipped #205/#206/#117/#118 code.
+
+## TASK-223 — Add a "distribute panels evenly" button to the Template Editor
+
+Card: the canvas has an evenly-distribute button (#186); add the same to the template
+editor. Grounded: the pure `equalize(node)` op (`canvasTree.ts:253`) is reusable on any
+`CanvasNode` tree; the Template Editor holds its tree in local `layout` state and renders
+splits with react-resizable-panels `Group` + initial-only `defaultLayout`. Decided
+autonomously (user not answering):
+
+- **Reuse the shipped pure `equalize` op + the same `Grid2x2` "Distribute panels evenly"
+  icon/label** as the live canvas (#186), placed in the editor toolbar next to "Save
+  template".
+- **Visual update via a one-shot surface remount nonce**, not the live canvas's imperative
+  Group-ref `setLayout`. The live canvas avoids remount to protect the terminal pool; the
+  Template Editor's blocks are **inert** (no PTYs), so keying the surface on an
+  equalize-only nonce to re-read the initial-only `defaultLayout` is the simplest reliable
+  approach. Normal drag-resize must not bump the nonce.
+- **Gate disabled when < 2 leaves**; equalized sizes persist on Save like any edit.
+- **Button only — no border double-click gesture** (the card asks for "the same button";
+  #186's separator-double-click half is out of scope). **Depends on: none** (builds on
+  shipped #186 + #117).

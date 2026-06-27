@@ -6,8 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] Add an "evenly distribute" button inside the template editor. The canvas already has a button to evenly distribute its panels; add the same option in the template editor so all items in a template can be evenly distributed too.
-
 - [ ] In Canvas templates, support full paths (folders + filename) for a file block, not just a bare filename, plus a choice between relative and absolute path. Relative resolves from the project root; absolute resolves from the filesystem root.
 
 - [ ] Show a subtle, slightly grayed-out branch badge next to each folder name in the left panel, displaying that folder's current branch. It should stay in sync when the branch changes from any source (agent, user typing in a terminal, etc.), so it likely needs polling/checking to pick up checkouts.
@@ -34,6 +32,10 @@ kanban-plugin: board
 
 - [ ] #222 — Revert Canvas "+" to a plain new-tab button; move "from template" into Templates menu
 	Plan: TASK-222.md
+	Depends on: none
+
+- [ ] #223 — Add a "distribute panels evenly" button to the Template Editor
+	Plan: TASK-223.md
 	Depends on: none
 
 ## DONE
