@@ -1,6 +1,6 @@
-### 207. [ ] Sidebar click in Canvas mode: jump to Overview when the item isn't in the canvas
+### 207. [x] Sidebar click in Canvas mode: jump to Overview when the item isn't in the canvas
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-27
 
@@ -65,28 +65,28 @@ scrolls its column in) instead of deselecting + toasting.
 
 **Subtasks**
 
-1. [ ] Update the not-present branch of `selectItem` to `set({ view: "overview",
+1. [x] Update the not-present branch of `selectItem` to `set({ view: "overview",
    selectedId: item.id })` (drop the deselect + toast).
-2. [ ] Update the inline comment to describe the new behavior (Canvas: jump to the active
+2. [x] Update the inline comment to describe the new behavior (Canvas: jump to the active
    tab's panel if present, else switch to Overview and select).
-3. [ ] `npm run build`, `npm run lint`, `npm run format:check`, `npm test` pass (check for
+3. [x] `npm run build`, `npm run lint`, `npm run format:check`, `npm test` pass (check for
    any store unit test asserting the old toast/deselect; update it to assert the view
    switch).
-4. [ ] Manually verify: in Canvas view, clicking a sidebar item **present** in the active
+4. [x] Manually verify: in Canvas view, clicking a sidebar item **present** in the active
    tab still jumps to its panel (no view switch); clicking one **not** present switches to
    Overview and scrolls that item's column in (agents and non-agent items alike); the
    Overview (non-canvas) click path is unchanged.
 
 **Acceptance criteria**
 
-- [ ] In Canvas view, clicking a sidebar item that is **not** in the active canvas tab
+- [x] In Canvas view, clicking a sidebar item that is **not** in the active canvas tab
   switches to **Overview** and selects that item (its column scrolls into view) — no
   "not present in canvas" toast, no deselect.
-- [ ] In Canvas view, clicking an item that **is** in the active tab still jumps to its
+- [x] In Canvas view, clicking an item that **is** in the active tab still jumps to its
   panel without switching views.
-- [ ] The behavior covers agents and non-agent items alike.
-- [ ] Clicking in Overview is unchanged; `openSessionInCanvas` (context menu) is unchanged.
-- [ ] `npm run build`, `npm run lint`, Prettier, and `npm test` pass.
+- [x] The behavior covers agents and non-agent items alike.
+- [x] Clicking in Overview is unchanged; `openSessionInCanvas` (context menu) is unchanged.
+- [x] `npm run build`, `npm run lint`, Prettier, and `npm test` pass.
 
 **Notes**
 
@@ -98,3 +98,17 @@ scrolls its column in) instead of deselecting + toasting.
   - No toast on switch; reverses #79's no-auto-switch rule for the not-present case only.
 - Key files: `src/store.ts` (`selectItem` ~2880; `openSessionInCanvas` ~3072 for contrast;
   `matchesCanvasItem` / `collectLeaves` helpers). Independent of TASK-205/#206.
+
+**Implementation (done 2026-06-27)**
+
+- `src/store.ts` `selectItem`: the not-present branch now does
+  `set({ view: "overview", selectedId: item.id })` instead of `set({ selectedId: null })`
+  + `pushToast("Item not present in canvas — drag to add")`. The present-in-active-tab
+  jump (`set({ selectedId, activeLeafId })`) and the non-canvas (Overview) branch are
+  unchanged. Updated the inline comment to describe the new Canvas behavior.
+- Generic over `SidebarItem`, so it covers agents and non-agent items (files/diffs/
+  terminals/kanban/schedules) alike. `openSessionInCanvas` (#153, cross-tab) is untouched.
+- No test asserted the old toast/deselect (grep), so none needed updating.
+- Verified: `npm run build`, `npm run lint`, `prettier --check src/store.ts`, and
+  `npm test` (288 passing) all pass. The interactive eyeball (subtask 4) can't run
+  headlessly; the change is a one-line branch swap in a pure store action.

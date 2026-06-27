@@ -2884,8 +2884,9 @@ export const useStore = create<AppState>()((set, get) => ({
       set({ selectedId: item.id });
       return;
     }
-    // Canvas (#79): jump to the item's panel if it's in the active tab, else
-    // toast + deselect. Never switches the view or tab.
+    // Canvas (#79/#207): jump to the item's panel if it's in the active tab;
+    // else switch to Overview and select it. Tabs are never switched here —
+    // cross-tab "bring into a canvas" stays with openSessionInCanvas (#153).
     const layout =
       s.canvases.find((c) => c.id === s.activeCanvasId)?.layout ?? null;
     const match = collectLeaves(layout).find((l) =>
@@ -2894,8 +2895,10 @@ export const useStore = create<AppState>()((set, get) => ({
     if (match) {
       set({ selectedId: item.id, activeLeafId: match.id });
     } else {
-      set({ selectedId: null });
-      get().pushToast("Item not present in canvas — drag to add");
+      // Not in the active canvas tab (#207): instead of a dead-end toast +
+      // deselect, go to Overview and select the item — Overview renders a column
+      // for every sidebar item (#174), so the user lands on what they clicked.
+      set({ view: "overview", selectedId: item.id });
     }
   },
 

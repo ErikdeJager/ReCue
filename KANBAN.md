@@ -12,13 +12,11 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #207 — Sidebar click in Canvas mode: jump to Overview when the item isn't in the canvas
-	Plan: TASK-207.md
-	Depends on: none
-
 
 ## DONE
 
 - [ ] #206 — Add a ⌘T keybind to create a new Canvas tab, and surface it in the UI
 	Plan: TASK-206.md
+- [ ] #207 — Sidebar click in Canvas mode: jump to Overview when the item isn't in the canvas
+	Plan: TASK-207.md
 
