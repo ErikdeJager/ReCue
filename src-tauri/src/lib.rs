@@ -45,6 +45,9 @@ pub fn run() {
         // a real signing keypair is generated (deferred).
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // OS clipboard (#220): backs terminal paste on Windows — JS reads text
+        // (capability-gated), `save_clipboard_image` reads the image Rust-side.
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // The session manager emits to a channel; a dedicated thread forwards
             // those events to the frontend as Tauri events.
@@ -224,6 +227,7 @@ pub fn run() {
             commands::clear_recents,
             commands::open_data_folder,
             commands::open_url,
+            commands::save_clipboard_image,
             commands::reveal_path,
             commands::reveal_file_in_finder,
             commands::app_version,

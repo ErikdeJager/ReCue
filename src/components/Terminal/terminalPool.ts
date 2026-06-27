@@ -24,8 +24,17 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
-import { openUrl, resizePty, sessionScrollback, writeStdin } from "../../ipc";
+import {
+  clipboardReadText,
+  openUrl,
+  resizePty,
+  saveClipboardImage,
+  sessionScrollback,
+  writeStdin,
+} from "../../ipc";
 import { onSessionOutput } from "../../outputBus";
+import { isWindows } from "../../platform";
+import { useStore } from "../../store";
 import { IS_MAIN_WINDOW } from "../../windowContext";
 import { terminalsToDispose } from "./poolReconcile";
 import styles from "./Terminal.module.css";
@@ -169,6 +178,40 @@ function createHost(sessionId: string): TerminalHost {
     if (event.metaKey || event.ctrlKey) void openUrl(uri).catch(() => {});
   });
   term.loadAddon(webLinks);
+
+  // Windows paste (#220): by terminal convention xterm forwards Ctrl+V as the literal
+  // control byte ^V (0x16) rather than pasting, so on Windows we intercept the
+  // Ctrl+V / Ctrl+Shift+V chord, read the OS clipboard ourselves, and paste it —
+  // returning false so xterm does NOT also emit ^V. macOS is untouched: ⌘V keeps its
+  // native paste and Ctrl+V stays ^V (we only act when `isWindows`). Ctrl+C is never
+  // touched, so it remains the agent's SIGINT. Platform is read live from the store
+  // (set once at boot, long before any keystroke). Shared by agent + shell terminals.
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== "keydown") return true;
+    if (!isWindows(useStore.getState().platform)) return true;
+    const isPaste =
+      event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      (event.key === "v" || event.key === "V");
+    if (!isPaste) return true;
+    // Read text first; fall back to an image (saved as a temp PNG, its path pasted so
+    // claude attaches it). `term.paste` respects bracketed-paste mode (multi-line OK).
+    void (async () => {
+      try {
+        const text = await clipboardReadText();
+        if (text) {
+          term.paste(text);
+          return;
+        }
+        const imagePath = await saveClipboardImage();
+        if (imagePath) term.paste(imagePath);
+      } catch {
+        // best-effort: nothing pastes on a clipboard failure
+      }
+    })();
+    return false;
+  });
 
   const safeFit = () => {
     try {

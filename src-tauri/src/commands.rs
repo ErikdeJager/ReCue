@@ -1260,6 +1260,70 @@ pub fn open_url(url: String) -> Result<(), SessionError> {
     Ok(())
 }
 
+/// Save the OS clipboard image (#220) to a temp PNG and return its absolute path, so
+/// the terminal paste handler can paste that path into `claude` (which attaches the
+/// referenced image). Errors when the clipboard holds no image — the frontend maps
+/// that to "no image" and falls back to text. Cross-platform: the clipboard plugin and
+/// `std::env::temp_dir()` both work on macOS and Windows. The image is read Rust-side
+/// (no IPC capability needed for a backend `ClipboardExt` call).
+#[tauri::command]
+pub fn save_clipboard_image(app: AppHandle) -> Result<String, SessionError> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let image = app
+        .clipboard()
+        .read_image()
+        .map_err(|e| SessionError::Io(format!("no clipboard image: {e}")))?;
+    let (width, height) = (image.width(), image.height());
+    let rgba = image.rgba();
+    if width == 0 || height == 0 || rgba.is_empty() {
+        return Err(SessionError::Io("clipboard image is empty".to_string()));
+    }
+    let dir = std::env::temp_dir();
+    cleanup_stale_paste_images(&dir);
+    let path = dir.join(format!("claudecue-paste-{}.png", Uuid::new_v4()));
+    let file = std::fs::File::create(&path).map_err(|e| SessionError::Io(e.to_string()))?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    writer
+        .write_image_data(rgba)
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    writer
+        .finish()
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Best-effort removal of leftover `claudecue-paste-*.png` temp files older than an
+/// hour (#220), so repeated image pastes don't accumulate. A just-written file (the
+/// one about to be pasted) is far younger than the cutoff, so it's never swept. All
+/// errors are ignored — cleanup must never block a paste.
+fn cleanup_stale_paste_images(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with("claudecue-paste-") && name.ends_with(".png")) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age.as_secs() > 3600);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Reveal a folder in the OS file manager (#129 repo context menu → "Reveal in
 /// Finder"/"…Explorer"). Opens the folder itself (not a select-in-parent). Runs
 /// **without a shell** (`os_open`), so there is no injection vector; the path is a

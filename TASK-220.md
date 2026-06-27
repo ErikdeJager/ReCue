@@ -1,6 +1,6 @@
-### 220. [ ] Make Ctrl+V paste (text + images) work in terminals on Windows
+### 220. [x] Make Ctrl+V paste (text + images) work in terminals on Windows
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 

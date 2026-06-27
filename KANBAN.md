@@ -20,11 +20,9 @@ kanban-plugin: board
 
 - [ ] Extend the syntax highlighting (same languages as the file viewer task) to the diff viewer, so diffs are syntax-highlighted too.
 
-## READY
+- [ ] Add a "commits" option to the diff viewer that lists previous commits. Clicking any commit shows what changed in that commit in the diff viewer.
 
-- [ ] #220 — Make Ctrl+V paste (text + images) work in terminals on Windows
-	Plan: TASK-220.md
-	Depends on: none
+## READY
 
 - [ ] #221 — Fix the terminal font rendering "jiggly" on Windows (JetBrains Mono / WebGL atlas)
 	Plan: TASK-221.md
@@ -45,4 +43,7 @@ kanban-plugin: board
 
 - [x] #219 — Move the sidebar collapse button to the far right of the footer row
 	Plan: TASK-219.md
+
+- [x] #220 — Make Ctrl+V paste (text + images) work in terminals on Windows
+	Plan: TASK-220.md
 

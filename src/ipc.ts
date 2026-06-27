@@ -4,6 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
@@ -420,6 +421,29 @@ export const openDataFolder = () => invoke<void>("open_data_folder");
 /** Open an http/https URL in the default browser (#109) — ⌘-click on a linkified
  * terminal URL. The backend rejects any non-http(s) scheme. */
 export const openUrl = (url: string) => invoke<void>("open_url", { url });
+
+/** Read the OS clipboard's text (#220, terminal paste on Windows) via the
+ * clipboard-manager plugin — reliable under WebView2, unlike `navigator.clipboard`.
+ * Returns null when the clipboard holds no text or the read fails. */
+export async function clipboardReadText(): Promise<string | null> {
+  try {
+    const text = await readClipboardText();
+    return text && text.length > 0 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Save the OS clipboard **image** (#220) to a temp PNG and return its absolute path,
+ * or null when the clipboard holds no image / the save fails. The terminal paste
+ * handler pastes the path into `claude`, which attaches the referenced image. */
+export async function saveClipboardImage(): Promise<string | null> {
+  try {
+    return await invoke<string>("save_clipboard_image");
+  } catch {
+    return null;
+  }
+}
 /** Reveal a folder in Finder (#129 repo menu → "Reveal in Finder") — `open <path>`. */
 export const revealPath = (path: string) =>
   invoke<void>("reveal_path", { path });

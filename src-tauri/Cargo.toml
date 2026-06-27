@@ -34,6 +34,13 @@ tauri-plugin-process = "2.3.1"
 # usage endpoint. ureq keeps the OAuth token in-process (never argv/logs, unlike a
 # curl shell-out) and its rustls backend needs no system TLS. Used only by usage.rs.
 ureq = { version = "2", features = ["json", "tls"] }
+# Terminal paste on Windows (#220): the cross-platform OS clipboard. Read-text is
+# called from JS (gated by the `clipboard-manager:allow-read-text` capability); the
+# image read is done Rust-side in `save_clipboard_image` (ClipboardExt, no capability).
+tauri-plugin-clipboard-manager = "2.3.2"
+# Encode a clipboard image (raw RGBA) to a temp PNG for image paste (#220) — claude
+# attaches the file when its path is pasted. Pure-Rust, no system deps.
+png = "0.18.1"
 
 [lints.clippy]
 all = "warn"

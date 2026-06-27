@@ -292,3 +292,37 @@ future pass doesn't "fix" them into regressions.
   affects seeded/scheduled launches of a `.cmd` agent (interactive prompts typed into the TUI
   are unaffected). On a Windows box, schedule an agent with a prompt containing `50%` /
   `%USERPROFILE%` and confirm whether the text arrives verbatim; fix only if it manifests.
+
+## 2026-06-28
+
+### Terminal paste on Windows (#220)
+
+Implemented Ctrl+V paste in agent + shell terminals on Windows (the macOS ⌘V already
+works via xterm's native paste). xterm forwards **Ctrl+V** as the literal control byte
+`^V` (0x16) by terminal convention rather than pasting, so a Windows-gated
+`attachCustomKeyEventHandler` (`terminalPool.ts`) intercepts **Ctrl+V / Ctrl+Shift+V**,
+reads the OS clipboard via the new `tauri-plugin-clipboard-manager`, and pastes via
+`term.paste()` (bracketed-paste-aware), returning `false` so no stray `^V` reaches the
+PTY. Text is read in JS (`readText`, capability-gated); an image is read Rust-side
+(`save_clipboard_image` → temp PNG via the `png` crate), its path pasted so `claude`
+attaches it. macOS is fully gated out (only acts when `isWindows(platform)`), so ⌘V is
+native and Ctrl+V stays `^V`; **Ctrl+C is never touched** (still SIGINT). Cross-platform
+primitives only (`std::env::temp_dir()`, the clipboard plugin) — no OS-specific code in
+shared paths beyond the `isWindows` gate.
+
+#### Still needs manual Windows verification (#220)
+
+- **Text paste (high confidence, still real-box-pending)**: on a Windows build, copy
+  multi-line text, focus an agent terminal, press **Ctrl+V** → the text must arrive
+  intact (multi-line preserved by bracketed paste) with **no stray `^V`/0x16**; repeat
+  with **Ctrl+Shift+V**. Confirm a shell terminal pastes too (shared `createHost`).
+  Confirm macOS ⌘V still pastes and Ctrl+V still emits `^V` (gated off on macOS).
+- **Image paste (best-effort, assumption-dependent)**: copy an image (e.g. a screenshot),
+  press **Ctrl+V** in an agent terminal with no text on the clipboard → expect the image
+  written to a temp PNG (`%TEMP%\claudecue-paste-*.png`) and its path pasted, with
+  `claude` attaching it. **Assumption to confirm:** the Windows `claude` CLI attaches an
+  image when given its file path in the prompt. If real-box testing shows it needs a
+  different signal (e.g. it reads the OS clipboard on a specific keystroke), adjust the
+  image branch to forward whatever `claude` consumes — the **text** paste stands
+  regardless. Verify the temp PNG is created and (after an hour) opportunistically swept
+  by `cleanup_stale_paste_images`.
