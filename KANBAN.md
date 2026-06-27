@@ -40,9 +40,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [x] #218 — Nest scheduled worktree sessions under a worktree sub-group + Overview badge
-	Plan: TASK-218.md
-
 - [x] #219 — Move the sidebar collapse button to the far right of the footer row
 	Plan: TASK-219.md
 

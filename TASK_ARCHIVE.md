@@ -4614,3 +4614,81 @@ folder. The fix makes `open_url` open the URL in the **OS default browser cross-
 
 ---
 
+### 218. [x] Nest scheduled worktree sessions under a worktree sub-group (sidebar) + worktree badge on Overview
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+A session **scheduled for a worktree** (#198 — via the worktree button or **Ctrl/⌘+Enter** in the
+schedule step of the new-session modal) showed its pending item under the **parent repo's
+in-folder location** in the sidebar, instead of nested under a **worktree** sub-group the way a
+**live** worktree agent (#74) does — and its Overview card was missing the "worktree" badge. Root
+cause: a `ScheduledSession` stores only `cwd = <parent repo>` plus a `worktree` flag and the
+`branch` intent — **no worktree path** (the worktree folder is created only at fire time by
+`prepare_worktree_for_schedule`), and the sidebar groups schedule rows by parent repo while the
+worktree sub-group rendering iterated **live agents only**. This task nests a pending worktree
+schedule under the proper worktree sub-group and badges it as a worktree everywhere a live
+worktree agent is.
+
+**What shipped** (commit `c6e572d`, 2026-06-28) — the fix hinges on the worktree destination being
+**deterministic and fully computable at schedule time** (`worktree_path(store, cwd, branch)`
+depends only on the data dir + parent repo + branch, all known at create time, incl. a
+`create_branch` new branch), so it's persisted on the schedule and reused byte-for-byte at fire
+time:
+
+- **Backend — persist the worktree path (`src-tauri/src/store.rs`, `src-tauri/src/commands.rs`):**
+  added `worktree_path: Option<String>` to `ScheduledSession` (`#[serde(default,
+  skip_serializing_if = "Option::is_none")]` so older `sessions.json` records load as `None`).
+  `create_schedule` now computes `worktree_path(&store, &cwd, branch)` (→ `to_string_lossy`) when
+  `worktree == true` with a non-empty branch, else `None`. `prepare_worktree_for_schedule`
+  **prefers the stored `sched.worktree_path`** (recompute fallback for pre-#218 records), so the
+  fired live session's `repo_path` is **byte-identical** to the schedule's stored path and the
+  sub-group merges cleanly on fire (no duplicate sub-group, no orphaned row).
+- **TS type mirror (`src/types/index.ts`):** added `worktree_path?: string | null` to
+  `ScheduledSession` (snake_case, matching the other serde-as-is fields).
+- **Pure grouping helpers (`src/paths.ts` + `src/paths.test.ts`):** extracted
+  `scheduleNestsUnderWorktree(schedule)` (true only for a worktree schedule with a computed
+  `worktree_path`) and `worktreeGroupPaths(worktreeAgents, worktreeSchedules)` (ordered, deduped
+  union of live worktree-agent folders and schedules' `worktree_path` — live paths first), with
+  Vitest coverage: a live agent + a schedule on the same path collapse to one sub-group, a
+  schedule-only path still produces a sub-group, non-worktree schedules stay at the parent level.
+- **Sidebar nesting (`src/components/Sidebar/Sidebar.tsx`):** the repo group now builds
+  `worktreePaths` from the union helper, **excludes** worktree schedules (with a `worktree_path`)
+  from the parent-repo schedule filter, and renders each worktree path's pending `ScheduleRow`s
+  under the **full existing `WorktreeHeader`** (branch label + worktree cue + open-view `+` +
+  context menu), preferring the live `branches[wt]` else the schedule's `branch` for the label.
+- **Overview badge (`src/components/Overview/Overview.tsx`):** the `ScheduleCard` header now
+  renders the static `styles.worktreeBadge` "worktree" span when `schedule.worktree`, mirroring a
+  live worktree agent's card; `ScheduledPanel` already badged (confirmed, no change).
+
+**Key files touched:** `src-tauri/src/store.rs` (struct field + serde round-trip test),
+`src-tauri/src/commands.rs` (`create_schedule` compute, `prepare_worktree_for_schedule` prefer
+stored path), `src/types/index.ts` (TS mirror), `src/paths.ts` + `src/paths.test.ts` (pure
+grouping helpers + tests), `src/components/Sidebar/Sidebar.tsx` (worktree sub-group nesting),
+`src/components/Overview/Overview.tsx` (schedule-card worktree badge).
+
+**Dependencies:** none. Builds on #198 (schedule-into-worktree), #74 (worktree agents + sidebar
+sub-group / `WorktreeHeader`), #93/#94 (scheduled sessions + `ScheduledPanel`), #125
+(create-branch-at-fire-time intent on the schedule), and the cross-platform `worktree_path` /
+`repoName` path helpers (#143).
+
+**Notes**
+
+- **Cross-platform:** no new OS-specific code — the worktree path is computed entirely by the
+  existing `worktree_path` helper (OS-native separators, `sanitize_seg` / `windows_safe_seg`),
+  grouping is string/path-key equality, and labels split on `/` or `\` via `repoName`, so the fix
+  walks identically on macOS and Windows (the fired live session's `repo_path` matches the stored
+  key because both flow through `worktree_path`).
+- **Back-compat:** worktree schedules created **before** #218 have `worktree_path = None`, so they
+  keep grouping at the parent level until re-created — and still fire correctly via the recompute
+  fallback. The `ScheduledPanel` edit flow (#94) only edits time/name/prompt, so the stored path
+  can't go stale after creation.
+- **Out of scope:** unchanged *when* the worktree folder is physically created (still fire time);
+  non-worktree schedules still group by `cwd`; the `ScheduleRow` itself gains no separate badge
+  (the surrounding `WorktreeHeader` supplies the worktree cue).
+
+---
+
