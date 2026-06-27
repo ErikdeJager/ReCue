@@ -27,7 +27,4 @@ kanban-plugin: board
 	Depends on: none
 
 ## DONE
-
-- [x] #227 — Extend file-viewer syntax highlighting to more languages (C#, Go, Lua, SQL, Ruby, PHP, Gradle)
-	Plan: TASK-227.md
 - [ ] 

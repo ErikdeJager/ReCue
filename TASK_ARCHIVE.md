@@ -5095,3 +5095,50 @@ component).
 
 ---
 
+### 227. [x] Extend file-viewer syntax highlighting to more languages (C#, Go, Lua, SQL, Ruby, PHP, Gradle…)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+The universal **FileViewer** already syntax-highlights a curated set of languages via Prism.js
+(#44/#150). This extends the curated set to cover the rest of the user's list — the missing ones
+being **C#, Go, Lua, SQL, Ruby, PHP, and Gradle** (Java/Rust/JS/TS/HTML/CSS/JSON/YAML/Python and
+Maven `pom.xml`→XML were already covered) — keeping it fast and non-blocking.
+
+**What shipped** (commit `61226a7`, 2026-06-28) — frontend-only, **static imports** (deliberately
+not lazy-loaded):
+
+- **`src/components/FileViewer/prism.ts`:** added the missing Prism component imports **in
+  dependency order** — `prism-csharp` / `prism-kotlin` / `prism-groovy` (extend clike, after core),
+  `prism-go`, `prism-lua`, `prism-sql`, `prism-ruby`, and **`prism-markup-templating` before
+  `prism-php`** (php extends it; a wrong order silently disables the grammar).
+- **`src/components/FileViewer/fileType.ts`:** added to `LANG_BY_EXT`: `cs: "csharp"`, `go: "go"`,
+  `lua: "lua"`, `sql: "sql"`, `rb: "ruby"`, `php: "php"`, `phtml: "php"`, `gradle: "groovy"` (Groovy
+  DSL), `kts: "kotlin"` + `kt: "kotlin"` (Kotlin DSL). POM needed no entry (`pom.xml`→`markup`
+  already).
+- **Tests (`fileType.test.ts` + a new Prism grammar-resolution test):** assert the new ext→lang
+  mappings and that each grammar actually resolves (guarding the import dependency order).
+
+**Key files touched:** `src/components/FileViewer/prism.ts` (component imports),
+`src/components/FileViewer/fileType.ts` (`LANG_BY_EXT`), `fileType.test.ts` + the new Prism test.
+
+**Dependencies:** none — extends the shipped FileViewer (#44/#150). Note: **#229 (diff-viewer
+syntax highlighting) depends on this task**, reusing the unchanged pure `prismLang` /
+`highlightToHtml` surface.
+
+**Notes**
+
+- **Static, not lazy (deliberate):** per the card's own "lazy only if a naive approach is slow or
+  hard to maintain" criterion — this is a desktop app loading its bundle from local disk, the
+  components are tiny (~KB), and static preserves the **deterministic no-async-flash** UX (lazy
+  would show unhighlighted code then re-highlight). Documented so the choice reads as intentional.
+- **Cross-platform:** pure frontend; language detection is by file extension on repo-relative
+  `/`-separated paths; no OS-specific code; identical on macOS and Windows.
+- **Out of scope:** lazy loading (evaluated + rejected), the diff viewer (the separate #229),
+  markdown render mode + the editable raw textarea (#148), and languages beyond the card's list.
+
+---
+
