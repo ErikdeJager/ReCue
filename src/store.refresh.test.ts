@@ -19,6 +19,7 @@ vi.mock("./ipc", () => ({
   getSettings: vi.fn(),
   getSidebarWidth: vi.fn(),
   getSidebarCollapsed: vi.fn(),
+  getRepoOrder: vi.fn(),
   getCanvasTemplates: vi.fn(),
   setCanvasTemplates: vi.fn(),
   spawnTerminal: vi.fn(),
@@ -56,6 +57,7 @@ function primeIpc(): void {
   m(ipc.getSettings).mockResolvedValue(null);
   m(ipc.getSidebarWidth).mockResolvedValue(null);
   m(ipc.getSidebarCollapsed).mockResolvedValue(null);
+  m(ipc.getRepoOrder).mockResolvedValue([]);
   m(ipc.getCanvasTemplates).mockResolvedValue(null);
   m(ipc.setCanvasTemplates).mockResolvedValue(undefined);
   m(ipc.spawnTerminal).mockResolvedValue(undefined);

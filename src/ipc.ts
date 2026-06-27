@@ -382,6 +382,13 @@ export const getSidebarCollapsed = () =>
   invoke<boolean | null>("get_sidebar_collapsed");
 export const setSidebarCollapsed = (collapsed: boolean) =>
   invoke<void>("set_sidebar_collapsed", { collapsed });
+/** Top-level sidebar folder order (#211), persisted separately from Settings like
+ * the width/collapsed flags above. Empty array until first set; the frontend
+ * merges it with the live repo set (`mergeRepoOrder`) so a missing/partial order
+ * just appends new repos. */
+export const getRepoOrder = () => invoke<string[]>("get_repo_order");
+export const setRepoOrder = (order: string[]) =>
+  invoke<void>("set_repo_order", { order });
 /** Last-seen app version (#190), persisted separately so boot can detect a
  * self-update and toast the new version. `null` on first launch. */
 export const getLastVersion = () => invoke<string | null>("get_last_version");

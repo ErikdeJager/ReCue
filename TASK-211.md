@@ -1,6 +1,6 @@
-### 211. [ ] Reorder folders in the sidebar by dragging them up and down
+### 211. [x] Reorder folders in the sidebar by dragging them up and down
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-27
 
@@ -56,54 +56,54 @@ Grounding (read before implementing):
 
 **Subtasks**
 
-1. [ ] Backend (`src-tauri/src/store.rs` + `lib.rs`): add a persisted
+1. [x] Backend (`src-tauri/src/store.rs` + `lib.rs`): add a persisted
    `repo_order: Vec<String>` value with `get_repo_order` / `set_repo_order` commands,
    mirroring `sidebar_width` (a dedicated value, **not** part of the `settings` blob).
    Register the commands. Add a Rust unit test (round-trip persist/reload).
-2. [ ] `src/ipc.ts`: add `getRepoOrder()` and `setRepoOrder(order: string[])`
+2. [x] `src/ipc.ts`: add `getRepoOrder()` and `setRepoOrder(order: string[])`
    wrappers.
-3. [ ] `src/store.ts`: add `folderOrder: string[]` state, load it on boot (alongside
+3. [x] `src/store.ts`: add `folderOrder: string[]` state, load it on boot (alongside
    the sidebar-width / collapsed load), and a `reorderRepos(ordered: string[])`
    action (optimistic `set` + persist via `setRepoOrder`). Compute the **displayed**
    folder order as `mergeRepoOrder(folderOrder, repoOrder([...recents, ...worktreeParents], sessions…))`
    so spawning a repo appends it and forgetting one drops it without scrambling the
    rest. (Name the state `folderOrder` — do **not** shadow the pure `repoOrder`
    function.)
-4. [ ] `src/components/Sidebar/Sidebar.tsx`: wrap the expanded repo list in a
+4. [x] `src/components/Sidebar/Sidebar.tsx`: wrap the expanded repo list in a
    `SortableContext` (items = `repohead:<repoPath>` keys, `verticalListSortingStrategy`)
    that is a descendant of the app `DndContext`. Make each repo group a
    `useSortable({ id: 'repohead:'+repo })`; spread its `attributes` + `listeners` on
    the **whole `repoHeader`** so the entire header is the grip. Keep the inner
    title/`+`/right-click handlers working (the existing 4px `PointerSensor`
    activation distance already lets a click through without starting a drag).
-5. [ ] `src/App.tsx`: in `onDragStart`/`onDragEnd`, detect a folder-sort drag by the
+5. [x] `src/App.tsx`: in `onDragStart`/`onDragEnd`, detect a folder-sort drag by the
    `repohead:` id prefix and call `reorderRepos(arrayMove(...))`; make sure this drag
    does **not** fall through to the canvas-drop path. Leave all other drag kinds
    (session/file/diff → Canvas, move-leaf) untouched.
-6. [ ] Provide drag feedback consistent with the rest of the app (transform via
+6. [x] Provide drag feedback consistent with the rest of the app (transform via
    `CSS.Translate`/`useSortable`'s `transform`/`transition`; a `rowDragging`-style
    class is fine). No special `DragOverlay` required.
-7. [ ] Tests: a `store.test.ts` test for `reorderRepos` (optimistic + persist, mirror
+7. [x] Tests: a `store.test.ts` test for `reorderRepos` (optimistic + persist, mirror
    the `reorderOverview` test) and for the displayed-order merge; update
    `src/store.refresh.test.ts` to mock `ipc.getRepoOrder` (like `getSidebarCollapsed`).
    Run `npm test` and `cargo test`.
-8. [ ] Docs: update the Sidebar section of `CLAUDE.md` (folders are now
+8. [x] Docs: update the Sidebar section of `CLAUDE.md` (folders are now
    drag-reorderable, order persisted via a dedicated `repo_order` value) and
    `README.md` if it lists sidebar capabilities.
 
 **Acceptance criteria**
 
-- [ ] Dragging a repo header up/down in the expanded sidebar reorders the folder
+- [x] Dragging a repo header up/down in the expanded sidebar reorders the folder
       list; the order **survives an app restart**.
-- [ ] No separate drag handle — grabbing anywhere on the header drags it, while a
+- [x] No separate drag handle — grabbing anywhere on the header drags it, while a
       plain click on the repo title (filter Overview) and the `+` (new session) and a
       right-click (repo menu) all still work.
-- [ ] Sidebar rows (sessions / files / diffs / terminals) still drag **into Canvas**
+- [x] Sidebar rows (sessions / files / diffs / terminals) still drag **into Canvas**
       (app-level dnd unbroken); the right-edge resize handle still works.
-- [ ] The collapsed rail renders folders in the same persisted order.
-- [ ] A newly added repo appends at the end of the saved order; forgetting a repo
+- [x] The collapsed rail renders folders in the same persisted order.
+- [x] A newly added repo appends at the end of the saved order; forgetting a repo
       drops it without scrambling the others.
-- [ ] `npm run lint`, `npm run build` (typecheck), `npm test`, and
+- [x] `npm run lint`, `npm run build` (typecheck), `npm test`, and
       `cargo test --manifest-path src-tauri/Cargo.toml` all pass.
 
 **Notes**

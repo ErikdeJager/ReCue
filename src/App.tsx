@@ -8,6 +8,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import { arrayMove } from "@dnd-kit/sortable";
 
 import Canvas from "./components/Canvas/Canvas";
 import {
@@ -66,6 +67,7 @@ function MainApp() {
   const init = useStore((s) => s.init);
   const beginCanvasLift = useStore((s) => s.beginCanvasLift);
   const cancelCanvasLift = useStore((s) => s.cancelCanvasLift);
+  const reorderRepos = useStore((s) => s.reorderRepos);
   const [dragActive, setDragActive] = useState(false);
 
   const sensors = useSensors(
@@ -106,15 +108,35 @@ function MainApp() {
   // Lift an existing panel out of the layout at drag start (#155) so the rest
   // reflow and a ghost follows the cursor; sidebar→Canvas content drags are unaffected.
   const onDragStart = (event: DragStartEvent) => {
-    setDragActive(true);
-    if (event.active.data.current?.kind === "move-leaf") {
-      beginCanvasLift(String(event.active.data.current.leafId));
+    const data = event.active.data.current;
+    // A sidebar folder reorder (#211) stays within the sidebar — don't light up the
+    // Canvas drop zones for it.
+    if (data?.kind !== "folder-sort") setDragActive(true);
+    if (data?.kind === "move-leaf") {
+      beginCanvasLift(String(data.leafId));
     }
   };
 
   const onDragEnd = (event: DragEndEvent) => {
     setDragActive(false);
     const { active, over } = event;
+    // Sidebar folder reorder (#211): the dragged repo header carries the full
+    // displayed order in its `data`; move it to the dropped-on folder's slot and
+    // persist. Handled here (not in the sidebar) so its SortableContext can live
+    // inside this app-level context without a nested one breaking row→Canvas drags.
+    if (active.data.current?.kind === "folder-sort") {
+      if (!over) return;
+      const overId = String(over.id);
+      if (!overId.startsWith("repohead:")) return; // dropped off the folder list
+      const order = (active.data.current.repos as string[] | undefined) ?? [];
+      const activeRepo = String(active.data.current.repo);
+      const overRepo = overId.slice("repohead:".length);
+      const oldIndex = order.indexOf(activeRepo);
+      const newIndex = order.indexOf(overRepo);
+      if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+      void reorderRepos(arrayMove(order, oldIndex, newIndex));
+      return;
+    }
     // Existing-panel lift (#135/#155): commit to the drop target, or restore when
     // released on nothing. Always resolve the lift — an early `!over` return would
     // strand the panel out of the layout.

@@ -141,15 +141,27 @@
   margin-bottom: var(--space-4);
 }
 
+/* A folder group being drag-reordered (#211): fade it like the row drag (#47). */
+.groupDragging {
+  opacity: 0.6;
+}
+
 /* The repo header is one selector (#68): its hover + active-filter highlight
-   enclose both the title and the "+" as a single rounded control. */
+   enclose both the title and the "+" as a single rounded control. The whole bar is
+   the drag grip (#211 — no separate handle), so it shows a grab cursor; the inner
+   title/+ buttons set their own pointer cursor. */
 .repoHeader {
   display: flex;
   align-items: center;
   height: 30px;
   padding-right: var(--space-8);
   border-radius: var(--radius-chip);
+  cursor: grab;
   transition: background var(--dur-fast) var(--ease-out);
+}
+
+.repoHeader:active {
+  cursor: grabbing;
 }
 
 .repoHeader:hover {

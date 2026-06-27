@@ -753,6 +753,11 @@ export interface AppState {
   /** Whether the sidebar is collapsed to the icon rail (#168), persisted separately
    * from Settings like the width. Main-window-only; a detached canvas has no sidebar. */
   sidebarCollapsed: boolean;
+  /** The user's drag-chosen top-level sidebar folder order (#211): repo paths,
+   * persisted separately from Settings like the width/collapsed flags. The displayed
+   * order is `mergeRepoOrder(folderOrder, repoOrder(...))`, so a spawned repo appends
+   * and a forgotten one drops without scrambling the rest. */
+  folderOrder: string[];
 
   // --- Sync reducers ---
   setView: (view: View) => void;
@@ -827,6 +832,9 @@ export interface AppState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   /** Toggle the sidebar collapsed flag (#168) — the footer chevron + ⌘B. */
   toggleSidebarCollapsed: () => void;
+  /** Persist the drag-reordered top-level sidebar folder order (#211): optimistic
+   * `set` + persist via `setRepoOrder` (main window). */
+  reorderRepos: (ordered: string[]) => Promise<void>;
 
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
@@ -1415,6 +1423,7 @@ export const useStore = create<AppState>()((set, get) => ({
   settingsSection: null,
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
   sidebarCollapsed: false,
+  folderOrder: [],
 
   setView: (view) => set({ view }),
   // Open/close the Settings modal (#100); an optional `section` deep-links to a
@@ -1446,6 +1455,18 @@ export const useStore = create<AppState>()((set, get) => ({
   },
   toggleSidebarCollapsed: () =>
     get().setSidebarCollapsed(!get().sidebarCollapsed),
+  // Persist the drag-reordered top-level folder order (#211): optimistic local set,
+  // then persist (main window only — a detached canvas has no sidebar). Mirrors
+  // `reorderOverview`; a persist failure (e.g. outside Tauri) keeps the local order.
+  reorderRepos: async (ordered) => {
+    set({ folderOrder: ordered });
+    if (!IS_MAIN_WINDOW) return;
+    try {
+      await ipc.setRepoOrder(ordered);
+    } catch {
+      // Persist failed; keep the local order for the session.
+    }
+  },
   // Selection is decoupled from the view (#22): selecting only highlights. The
   // sidebar ViewSwitch is the only thing that changes the view (#75).
   select: (id) => set({ selectedId: id }),
@@ -1897,6 +1918,7 @@ export const useStore = create<AppState>()((set, get) => ({
         rawSidebarWidth,
         rawTemplates,
         rawSidebarCollapsed,
+        rawRepoOrder,
       ] = await Promise.all([
         ipc.listRepoColors(),
         ipc.listOverviewPanels(),
@@ -1908,6 +1930,7 @@ export const useStore = create<AppState>()((set, get) => ({
         ipc.getSidebarWidth(),
         ipc.getCanvasTemplates(),
         ipc.getSidebarCollapsed(),
+        ipc.getRepoOrder(),
       ]);
       // Settings (#100): merge the persisted blob over the defaults and apply its
       // side-effects (live terminal options) before the first paint.
@@ -1920,6 +1943,9 @@ export const useStore = create<AppState>()((set, get) => ({
       );
       // Sidebar collapsed-to-rail flag (#168): default expanded when absent.
       const sidebarCollapsed = rawSidebarCollapsed ?? false;
+      // Top-level folder order (#211): the saved repo paths (empty until first
+      // drag), merged with the live repo set at render via `mergeRepoOrder`.
+      const folderOrder = rawRepoOrder ?? [];
       // Multi-canvas (#58): use the persisted tabs; else migrate the old single
       // canvas_layout into "Canvas 1"; else start with one empty canvas. Persist
       // the migrated shape once so the new field becomes the source of truth.
@@ -1974,6 +2000,7 @@ export const useStore = create<AppState>()((set, get) => ({
         settings,
         sidebarWidth,
         sidebarCollapsed,
+        folderOrder,
         // Saved Canvas templates (#117); absent (null) → none saved yet.
         canvasTemplates: rawTemplates ?? [],
       });

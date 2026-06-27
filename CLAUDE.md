@@ -90,7 +90,7 @@ even though it works in `tauri dev`.
   them.
 - **Views:** the store holds `sessions / selectedId / view / recents / branches /
   canvases / activeCanvasId / claudeMissing / toasts / schedules / settings /
-  sidebarWidth`; the app mounts one of
+  sidebarWidth / folderOrder`; the app mounts one of
   **Overview or Canvas** (#46/#75 — Focus was removed). Each session's xterm is owned
   by a **persistent terminal
   pool** (`Terminal/terminalPool.ts`), created once and **reparented** into the
@@ -311,6 +311,21 @@ even though it works in `tauri dev`.
   clamped to **[180, 560]** (default 260) and **persisted** via a dedicated Rust
   `sidebar_width` value (`get_sidebar_width` / `set_sidebar_width`), kept **separate**
   from the Settings blob so the modal draft can't clobber a drag. Main-window only.
+- **Reorderable folders (#211):** the top-level repo "folders" are **drag-reorderable**
+  — there's **no separate handle**; the whole repo header is the grip (a `useSortable`
+  whose `attributes`/`listeners` sit on the `repoHeader`), while the 4px pointer
+  activation distance lets a plain click on the title (filter Overview) / `+` (new
+  session) / right-click (repo menu) still work. The group is extracted into a
+  **`RepoGroup`** component and the list wrapped in a `SortableContext`
+  (`verticalListSortingStrategy`) that is a **descendant of the app-level `DndContext`**
+  (App.tsx) — never a nested one, which would rebind the sidebar's row drag sources and
+  break drag-into-Canvas; App.tsx's `onDragEnd` detects the `repohead:` drag id and
+  calls `reorderRepos(arrayMove(...))`. The order **persists** via a dedicated Rust
+  `repo_order: Vec<String>` value (`get_repo_order` / `set_repo_order`), kept separate
+  from the Settings blob like `sidebar_width`; the displayed order is `mergeRepoOrder(
+  folderOrder, repoOrder(...))` so a spawned/added repo appends and a forgotten one
+  drops without scrambling the rest. The collapsed rail renders the same persisted
+  order (no drag there — out of scope). Main-window only.
 
 ## Layout
 
@@ -351,7 +366,7 @@ even though it works in `tauri dev`.
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder-launch fix)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
-│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, settings, sidebar width)
+│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, settings, sidebar width, folder order)
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + list (local+remote #180) + checkout + worktree (#74) + fetch (#180) + pull --ff-only (#181)
 │   ├── src/files.rs        # Repo file access (lazy list_dir tree + search_files picker + search_file_contents in-tree content search #202, read/write_text_file #141, path-validated)
 │   ├── src/skills.rs        # Read-only scan of .claude skills/commands for prompt autocomplete (#114)

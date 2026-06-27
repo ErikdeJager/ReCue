@@ -10,9 +10,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #211 — Reorder sidebar folders by dragging (no separate handle)
-	Plan: TASK-211.md
-	Depends on: none
 - [ ] #212 — Keep worktree branch label in sync after an in-terminal checkout
 	Plan: TASK-212.md
 	Depends on: none
@@ -34,4 +31,7 @@ kanban-plugin: board
 
 
 ## DONE
+
+- [ ] #211 — Reorder sidebar folders by dragging (no separate handle)
+	Plan: TASK-211.md
 

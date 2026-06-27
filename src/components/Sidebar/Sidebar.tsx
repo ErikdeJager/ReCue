@@ -1,11 +1,17 @@
 import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   useEffect,
   useRef,
   useState,
 } from "react";
 import { useDraggable } from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   Bug,
@@ -32,6 +38,7 @@ import { FORK_UNAVAILABLE_REASON, repoName, sessionLabel } from "../../paths";
 import { formatFireTime } from "../../time";
 import {
   dedupeBranchLabels,
+  mergeRepoOrder,
   REPO_PALETTE,
   repoColor,
   repoOrder,
@@ -1081,6 +1088,222 @@ function WorktreeHeader({
 }
 
 /**
+ * A top-level repo "folder" group in the expanded sidebar (#211): the repo header
+ * (whose **whole bar is the drag grip** — no separate handle), the repo's sessions /
+ * non-agent items / pending schedules, and any nested worktree sub-groups.
+ *
+ * The group is a dnd-kit **sortable** so the user can drag a folder up/down to
+ * reorder it. The sortable is bound to the **app-level** `DndContext` (App.tsx) — NOT
+ * a new nested context, which would rebind the sidebar's row drag sources (#59) and
+ * break drag-into-Canvas. App.tsx detects the `repohead:` drag id and persists the
+ * new order via `reorderRepos`; the 4px pointer-activation distance lets a plain
+ * click on the title (filter Overview) / `+` (new session) / right-click (repo menu)
+ * still work without starting a drag.
+ */
+function RepoGroup({
+  repo,
+  repos,
+  openRepoMenu,
+  renderPanelRows,
+}: {
+  repo: string;
+  /** The full displayed folder order — carried in the drag `data` so App.tsx can
+   * compute the reordered list without recomputing it. */
+  repos: string[];
+  openRepoMenu: (repo: string, event: ReactMouseEvent) => void;
+  renderPanelRows: (repoKey: string) => ReactNode;
+}) {
+  const sessions = useStore((s) => s.sessions);
+  const branches = useStore((s) => s.branches);
+  const selectedId = useStore((s) => s.selectedId);
+  const selectItem = useStore((s) => s.selectItem);
+  const removeSession = useStore((s) => s.removeSession);
+  const renameSession = useStore((s) => s.renameSession);
+  const startRepoSession = useStore((s) => s.startRepoSession);
+  const cancelSchedule = useStore((s) => s.cancelSchedule);
+  const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
+  const setView = useStore((s) => s.setView);
+  const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
+  const repoColors = useStore((s) => s.repoColors);
+  const sessionBusy = useStore((s) => s.sessionBusy);
+  const sessionActive = useStore((s) => s.sessionActive);
+  const schedules = useStore((s) => s.schedules);
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: `repohead:${repo}`,
+    data: { kind: "folder-sort", repo, repos },
+  });
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+  };
+
+  const repoSessions = sessions.filter(
+    (s) => s.repoPath === repo && !s.worktreeParent,
+  );
+  const isEmpty = repoSessions.length === 0;
+  const isFiltered = overviewRepoFilter === repo;
+  // Primary label = the repo's branch, or the folder name when non-git / not yet
+  // known. All sessions in a group share it, so index duplicates.
+  const baseLabel = (branches[repo] ?? "") || repoName(repo);
+  const rowLabels = dedupeBranchLabels(repoSessions.map(() => baseLabel));
+  // Worktree agents (#74) of this repo, grouped by their worktree folder — rendered
+  // as indented sub-groups below the repo's own sessions/items.
+  const worktreeAgents = sessions.filter((s) => s.worktreeParent === repo);
+  const worktreePaths = [...new Set(worktreeAgents.map((s) => s.repoPath))];
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`${styles.group} ${isDragging ? styles.groupDragging : ""}`}
+    >
+      {/* The whole header is the drag grip (#211): dnd-kit attributes/listeners make
+      it focusable for keyboard + screen-reader drag. The `+` button stops pointerdown
+      so it stays a pure click target; the title stays part of the grip (a <4px click
+      filters Overview, a drag reorders). */}
+      <div
+        className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""} ${isFiltered ? styles.repoActive : ""}`}
+        onContextMenu={(event) => openRepoMenu(repo, event)}
+        {...attributes}
+        {...listeners}
+      >
+        {/* Static repo-colored folder marker (#128, replaces the #115 cube): a
+        non-interactive identity marker. The name still filters Overview on click
+        (#34). */}
+        <span
+          className={styles.repoFolder}
+          style={{ color: repoColor(repo, repoColors) }}
+          aria-hidden
+        >
+          <Folder size={12} strokeWidth={2} />
+        </span>
+        {/* Left-click a repo title filters Overview to it (toggle); right-click opens
+        the #31 context menu. */}
+        <button
+          type="button"
+          className={styles.repoTitle}
+          onClick={() => {
+            setOverviewRepoFilter(repo);
+            setView("overview");
+          }}
+          title={`Filter Overview to ${repoName(repo)}`}
+          aria-pressed={isFiltered}
+        >
+          <span className={styles.repoName}>{repoName(repo)}</span>
+          {!isEmpty && (
+            <span className={styles.count}>{repoSessions.length}</span>
+          )}
+        </button>
+        <button
+          type="button"
+          className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
+          onClick={() => void startRepoSession(repo)}
+          onPointerDown={(event) => event.stopPropagation()}
+          title="New session in this repo"
+          aria-label="New session in this repo"
+        >
+          <Plus size={14} strokeWidth={1.5} />
+        </button>
+      </div>
+
+      {/* Child rows (#59/#74/#93): sessions, non-agent items, schedules, and nested
+      worktree agents — always rendered (#115 removed the #113 collapse gate). */}
+      {repoSessions.map((session, i) => (
+        <SessionRow
+          key={session.id}
+          session={session}
+          // rowLabels has one entry per session; fallback satisfies
+          // noUncheckedIndexedAccess and is never reached at runtime.
+          label={rowLabels[i] ?? baseLabel}
+          selected={session.id === selectedId}
+          busy={sessionBusy[session.id] ?? false}
+          hasBeenActive={sessionActive[session.id] ?? false}
+          onSelect={() =>
+            selectItem({
+              kind: "agent",
+              id: session.id,
+              repoPath: session.repoPath,
+            })
+          }
+          onRemove={() => void removeSession(session.id)}
+          onRename={(name) => void renameSession(session.id, name)}
+        />
+      ))}
+
+      {/* This repo's non-agent items (#59) — the same `overviewPanels` Overview
+      shows, 1:1: file + diff viewers. A click selects/jumps to the item in the
+      current view (#79), the × removes it, and each is draggable into a Canvas. */}
+      {renderPanelRows(repo)}
+
+      {/* Pending scheduled sessions for this repo (#93): name/branch + fire time +
+      cancel. Non-draggable, no rich panel (that's #94). */}
+      {schedules
+        .filter((s) => s.cwd === repo)
+        .map((s) => (
+          <ScheduleRow
+            key={s.id}
+            schedule={s}
+            selected={s.id === selectedId}
+            onOpen={() =>
+              selectItem({ kind: "scheduled", id: s.id, repoPath: s.cwd })
+            }
+            onCancel={() => void cancelSchedule(s.id)}
+          />
+        ))}
+
+      {/* Isolated worktrees (#74), nested under their parent repo: each worktree
+      folder is a sub-group (branch + "worktree" badge) with its agent(s). Their
+      repo_path is the worktree, not this repo. */}
+      {worktreePaths.map((wt) => {
+        const wtAgents = worktreeAgents.filter((s) => s.repoPath === wt);
+        const wtBranch = (branches[wt] ?? "") || repoName(wt);
+        const wtLabels = dedupeBranchLabels(wtAgents.map(() => wtBranch));
+        return (
+          <div key={wt} className={styles.worktreeGroup}>
+            <WorktreeHeader
+              path={wt}
+              branch={wtBranch}
+              parent={wtAgents[0]?.worktreeParent ?? undefined}
+              agentCount={wtAgents.length}
+            />
+            {wtAgents.map((session, i) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                label={wtLabels[i] ?? wtBranch}
+                selected={session.id === selectedId}
+                busy={sessionBusy[session.id] ?? false}
+                hasBeenActive={sessionActive[session.id] ?? false}
+                onSelect={() =>
+                  selectItem({
+                    kind: "agent",
+                    id: session.id,
+                    repoPath: session.repoPath,
+                  })
+                }
+                onRemove={() => void removeSession(session.id)}
+                onRename={(name) => void renameSession(session.id, name)}
+              />
+            ))}
+            {/* Views opened from the worktree badge (#164) are keyed by the worktree
+            path, so they render here under their worktree. */}
+            {renderPanelRows(wt)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * Left sidebar: New session button + sessions grouped by repository. Repos come
  * from persisted recents unioned with active-session repos, so a repo stays
  * listed (greyed, with a coral +) even when it has no active sessions.
@@ -1091,8 +1314,6 @@ function Sidebar() {
   const branches = useStore((s) => s.branches);
   const selectedId = useStore((s) => s.selectedId);
   const selectItem = useStore((s) => s.selectItem);
-  const removeSession = useStore((s) => s.removeSession);
-  const renameSession = useStore((s) => s.renameSession);
   const openNewSession = useStore((s) => s.openNewSession);
   const startRepoSession = useStore((s) => s.startRepoSession);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
@@ -1106,8 +1327,7 @@ function Sidebar() {
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed);
   const toggleSidebarCollapsed = useStore((s) => s.toggleSidebarCollapsed);
   const autoNameOn = useStore((s) => s.settings.autoName);
-  const schedules = useStore((s) => s.schedules);
-  const cancelSchedule = useStore((s) => s.cancelSchedule);
+  const folderOrder = useStore((s) => s.folderOrder);
   const refreshBranches = useStore((s) => s.refreshBranches);
   const forgetRepo = useStore((s) => s.forgetRepo);
   const killAllAgents = useStore((s) => s.killAllAgents);
@@ -1182,9 +1402,16 @@ function Sidebar() {
   const worktreeParents = sessions
     .filter((s) => s.worktreeParent)
     .map((s) => s.worktreeParent as string);
-  const repos = repoOrder(
-    [...recents, ...worktreeParents],
-    sessions.filter((s) => !s.worktreeParent),
+  // Displayed folder order (#211): the user's persisted drag order merged with the
+  // live repo set, so a spawned/added repo appends and a forgotten one drops without
+  // scrambling the rest. With nothing saved this is exactly the default alphabetical
+  // `repoOrder`. Drives both the expanded list and the collapsed rail.
+  const repos = mergeRepoOrder(
+    folderOrder,
+    repoOrder(
+      [...recents, ...worktreeParents],
+      sessions.filter((s) => !s.worktreeParent),
+    ),
   );
   const reposKey = repos.join("\n");
 
@@ -1478,173 +1705,24 @@ function Sidebar() {
               </p>
             )}
 
-            {repos.map((repo) => {
-              const repoSessions = sessions.filter(
-                (s) => s.repoPath === repo && !s.worktreeParent,
-              );
-              const isEmpty = repoSessions.length === 0;
-              const isFiltered = overviewRepoFilter === repo;
-              // Primary label = the repo's branch, or the folder name when non-git /
-              // not yet known. All sessions in a group share it, so index duplicates.
-              const baseLabel = (branches[repo] ?? "") || repoName(repo);
-              const rowLabels = dedupeBranchLabels(
-                repoSessions.map(() => baseLabel),
-              );
-              // Worktree agents (#74) of this repo, grouped by their worktree folder —
-              // rendered as indented sub-groups below the repo's own sessions/items.
-              const worktreeAgents = sessions.filter(
-                (s) => s.worktreeParent === repo,
-              );
-              const worktreePaths = [
-                ...new Set(worktreeAgents.map((s) => s.repoPath)),
-              ];
-
-              return (
-                <div key={repo} className={styles.group}>
-                  <div
-                    className={`${styles.repoHeader} ${isEmpty ? styles.repoEmpty : ""} ${isFiltered ? styles.repoActive : ""}`}
-                    onContextMenu={(event) => openRepoMenu(repo, event)}
-                  >
-                    {/* Static repo-colored folder marker (#128, replaces the #115
-                    cube): a non-interactive identity marker. The name still
-                    filters Overview on click (#34). */}
-                    <span
-                      className={styles.repoFolder}
-                      style={{ color: repoColor(repo, repoColors) }}
-                      aria-hidden
-                    >
-                      <Folder size={12} strokeWidth={2} />
-                    </span>
-                    {/* Left-click a repo title filters Overview to it (toggle);
-                    right-click opens the #31 context menu. */}
-                    <button
-                      type="button"
-                      className={styles.repoTitle}
-                      onClick={() => {
-                        setOverviewRepoFilter(repo);
-                        setView("overview");
-                      }}
-                      title={`Filter Overview to ${repoName(repo)}`}
-                      aria-pressed={isFiltered}
-                    >
-                      <span className={styles.repoName}>{repoName(repo)}</span>
-                      {!isEmpty && (
-                        <span className={styles.count}>
-                          {repoSessions.length}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
-                      onClick={() => void startRepoSession(repo)}
-                      title="New session in this repo"
-                      aria-label="New session in this repo"
-                    >
-                      <Plus size={14} strokeWidth={1.5} />
-                    </button>
-                  </div>
-
-                  {/* Child rows (#59/#74/#93): sessions, non-agent items, schedules,
-                  and nested worktree agents — always rendered (#115 removed the
-                  #113 collapse gate). */}
-                  {repoSessions.map((session, i) => (
-                    <SessionRow
-                      key={session.id}
-                      session={session}
-                      // rowLabels has one entry per session; fallback satisfies
-                      // noUncheckedIndexedAccess and is never reached at runtime.
-                      label={rowLabels[i] ?? baseLabel}
-                      selected={session.id === selectedId}
-                      busy={sessionBusy[session.id] ?? false}
-                      hasBeenActive={sessionActive[session.id] ?? false}
-                      onSelect={() =>
-                        selectItem({
-                          kind: "agent",
-                          id: session.id,
-                          repoPath: session.repoPath,
-                        })
-                      }
-                      onRemove={() => void removeSession(session.id)}
-                      onRename={(name) => void renameSession(session.id, name)}
-                    />
-                  ))}
-
-                  {/* This repo's non-agent items (#59) — the same `overviewPanels`
-                  Overview shows, 1:1: file + diff viewers. A click selects/jumps
-                  to the item in the current view (#79), the × removes it, and each
-                  is draggable into a Canvas (file → file viewer, diff → diff). */}
-                  {renderPanelRows(repo)}
-
-                  {/* Pending scheduled sessions for this repo (#93): name/branch +
-                  fire time + cancel. Non-draggable, no rich panel (that's #94). */}
-                  {schedules
-                    .filter((s) => s.cwd === repo)
-                    .map((s) => (
-                      <ScheduleRow
-                        key={s.id}
-                        schedule={s}
-                        selected={s.id === selectedId}
-                        onOpen={() =>
-                          selectItem({
-                            kind: "scheduled",
-                            id: s.id,
-                            repoPath: s.cwd,
-                          })
-                        }
-                        onCancel={() => void cancelSchedule(s.id)}
-                      />
-                    ))}
-
-                  {/* Isolated worktrees (#74), nested under their parent repo: each
-                  worktree folder is a sub-group (branch + "worktree" badge) with
-                  its agent(s). Their repo_path is the worktree, not this repo. */}
-                  {worktreePaths.map((wt) => {
-                    const wtAgents = worktreeAgents.filter(
-                      (s) => s.repoPath === wt,
-                    );
-                    const wtBranch = (branches[wt] ?? "") || repoName(wt);
-                    const wtLabels = dedupeBranchLabels(
-                      wtAgents.map(() => wtBranch),
-                    );
-                    return (
-                      <div key={wt} className={styles.worktreeGroup}>
-                        <WorktreeHeader
-                          path={wt}
-                          branch={wtBranch}
-                          parent={wtAgents[0]?.worktreeParent ?? undefined}
-                          agentCount={wtAgents.length}
-                        />
-                        {wtAgents.map((session, i) => (
-                          <SessionRow
-                            key={session.id}
-                            session={session}
-                            label={wtLabels[i] ?? wtBranch}
-                            selected={session.id === selectedId}
-                            busy={sessionBusy[session.id] ?? false}
-                            hasBeenActive={sessionActive[session.id] ?? false}
-                            onSelect={() =>
-                              selectItem({
-                                kind: "agent",
-                                id: session.id,
-                                repoPath: session.repoPath,
-                              })
-                            }
-                            onRemove={() => void removeSession(session.id)}
-                            onRename={(name) =>
-                              void renameSession(session.id, name)
-                            }
-                          />
-                        ))}
-                        {/* Views opened from the worktree badge (#164) are keyed by the
-                        worktree path, so they render here under their worktree. */}
-                        {renderPanelRows(wt)}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
+            {/* Drag-to-reorder the top-level folders (#211): a sortable list bound
+            to the **app-level** DndContext (App.tsx) — never a new nested context,
+            which would rebind the sidebar's row drag sources and break drag-into-
+            Canvas. App.tsx detects the `repohead:` drag and persists the new order. */}
+            <SortableContext
+              items={repos.map((r) => `repohead:${r}`)}
+              strategy={verticalListSortingStrategy}
+            >
+              {repos.map((repo) => (
+                <RepoGroup
+                  key={repo}
+                  repo={repo}
+                  repos={repos}
+                  openRepoMenu={openRepoMenu}
+                  renderPanelRows={renderPanelRows}
+                />
+              ))}
+            </SortableContext>
           </div>
         </>
       )}

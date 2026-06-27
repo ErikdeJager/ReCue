@@ -202,6 +202,14 @@ pub struct PersistedState {
     /// self-update. `None` until first written; `default` keeps old files loading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_version: Option<String>,
+    /// The user's chosen top-level sidebar folder order (#211): repo paths in
+    /// drag-reordered order. Kept as a dedicated value (like `sidebar_width`),
+    /// separate from the Settings blob so a Settings draft can't clobber it. Empty
+    /// until first set — the frontend merges it with the live repo set, so a
+    /// missing/partial order just appends new repos. `default` keeps old files
+    /// loading; empty isn't serialized.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repo_order: Vec<String>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -489,6 +497,17 @@ impl Store {
         self.update(|state| state.last_version = Some(version))
     }
 
+    /// The persisted top-level sidebar folder order (#211); empty until first set
+    /// (the frontend merges it with the live repo set).
+    pub fn repo_order(&self) -> Vec<String> {
+        self.with(|state| state.repo_order.clone())
+    }
+
+    /// Persist the sidebar folder order (#211).
+    pub fn set_repo_order(&self, order: Vec<String>) -> io::Result<()> {
+        self.update(|state| state.repo_order = order)
+    }
+
     /// All pending scheduled sessions (#93).
     pub fn schedules(&self) -> Vec<ScheduledSession> {
         self.with(|state| state.schedules.clone())
@@ -697,6 +716,25 @@ mod tests {
         // An empty order drops the repo's entry.
         store.set_overview_order("/repo/a", vec![]).unwrap();
         assert!(!Store::load(&path).overview_order().contains_key("/repo/a"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn repo_order_set_and_persist() {
+        let path = temp_path("repoorder");
+        let store = Store::load(&path);
+        // Unset → empty (the frontend then uses the default alphabetical order).
+        assert!(store.repo_order().is_empty());
+
+        let order = vec!["/repo/b".to_string(), "/repo/a".to_string()];
+        store.set_repo_order(order.clone()).unwrap();
+
+        let reloaded = Store::load(&path);
+        assert_eq!(reloaded.repo_order(), order);
+
+        // An empty order persists as empty (not serialized) and reloads empty.
+        store.set_repo_order(vec![]).unwrap();
+        assert!(Store::load(&path).repo_order().is_empty());
         let _ = fs::remove_file(&path);
     }
 

@@ -1086,6 +1086,20 @@ pub fn set_sidebar_collapsed(store: State<'_, Store>, collapsed: bool) -> Result
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+/// The persisted top-level sidebar folder order (#211); empty until first set.
+#[tauri::command]
+pub fn get_repo_order(store: State<'_, Store>) -> Vec<String> {
+    store.repo_order()
+}
+
+/// Persist the sidebar folder order (#211) — the user's drag-reordered repo paths.
+#[tauri::command]
+pub fn set_repo_order(store: State<'_, Store>, order: Vec<String>) -> Result<(), SessionError> {
+    store
+        .set_repo_order(order)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// The app version observed on the previous run (#190); `None` on first launch.
 #[tauri::command]
 pub fn get_last_version(store: State<'_, Store>) -> Option<String> {

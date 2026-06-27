@@ -462,6 +462,16 @@ describe("overview panels (#38)", () => {
       "s1",
     ]);
   });
+
+  it("reorderRepos persists the top-level folder order (#211)", async () => {
+    await useStore.getState().reorderRepos(["/repo/b", "/repo/a", "/repo/c"]);
+    // Optimistic set lands even though the host-less persist rejects (swallowed).
+    expect(useStore.getState().folderOrder).toEqual([
+      "/repo/b",
+      "/repo/a",
+      "/repo/c",
+    ]);
+  });
 });
 
 describe("repo items — overviewPanels as the single source (#59)", () => {
@@ -573,6 +583,39 @@ describe("mergeRepoOrder (#43)", () => {
 
   it("returns the default order when nothing was saved", () => {
     expect(mergeRepoOrder([], ["a", "b", "c"])).toEqual(["a", "b", "c"]);
+  });
+
+  // The displayed sidebar folder order (#211) is exactly this composition:
+  // mergeRepoOrder(folderOrder, repoOrder(recents, sessions)). Verify the
+  // user's drag order wins, a new repo appends, and a forgotten one drops.
+  it("composes with repoOrder for the displayed folder order (#211)", () => {
+    const recents = ["/x/alpha", "/x/beta", "/x/gamma"];
+    const def = repoOrder(recents, []); // alphabetical default
+    expect(def).toEqual(["/x/alpha", "/x/beta", "/x/gamma"]);
+
+    // User dragged gamma to the top → that order is kept.
+    const saved = ["/x/gamma", "/x/alpha", "/x/beta"];
+    expect(mergeRepoOrder(saved, def)).toEqual([
+      "/x/gamma",
+      "/x/alpha",
+      "/x/beta",
+    ]);
+
+    // A newly added repo (delta) appends after the saved order.
+    const withDelta = repoOrder([...recents, "/x/delta"], []);
+    expect(mergeRepoOrder(saved, withDelta)).toEqual([
+      "/x/gamma",
+      "/x/alpha",
+      "/x/beta",
+      "/x/delta",
+    ]);
+
+    // A forgotten repo (beta) drops without scrambling the rest.
+    const withoutBeta = repoOrder(["/x/alpha", "/x/gamma"], []);
+    expect(mergeRepoOrder(saved, withoutBeta)).toEqual([
+      "/x/gamma",
+      "/x/alpha",
+    ]);
   });
 });
 

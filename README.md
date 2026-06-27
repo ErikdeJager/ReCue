@@ -35,8 +35,9 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
   repo-colored folder. Right-click a repo (new session, a **Views** section to add
   viewers, **reveal in Finder** / **copy path**, change color, **kill all agents** /
   **close all items**, forget), an agent (**rename**, **fork**, **copy session ID**,
-  remove), or any file / diff / terminal / schedule row (**remove**). Drag the
-  sidebar's right edge to resize it.
+  remove), or any file / diff / terminal / schedule row (**remove**). **Drag a repo
+  header up or down to reorder the folders** (no separate handle — the whole header is
+  the grip; the order persists). Drag the sidebar's right edge to resize it.
 - **Schedule sessions** — **⌘⇧N** (or the sidebar's **Schedule session** button) queues
   an agent to launch later at a set time, optionally pre-seeded with a prompt (which has
   **slash-command autocomplete**) and a branch — including a **new branch** created when

@@ -207,6 +207,8 @@ pub fn run() {
             commands::set_sidebar_width,
             commands::get_sidebar_collapsed,
             commands::set_sidebar_collapsed,
+            commands::get_repo_order,
+            commands::set_repo_order,
             commands::get_last_version,
             commands::set_last_version,
             commands::clear_recents,
