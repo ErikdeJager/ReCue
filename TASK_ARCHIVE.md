@@ -4428,3 +4428,45 @@ and the worktree agent model (#74/#96); the static badge reuses the "fork" badge
 
 ---
 
+### 214. [x] Make the collapsed sidebar rail much narrower
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-27
+
+**Description**
+
+When the sidebar is collapsed to its icon rail (#168), the rail was **56px** wide — noticeably
+wider than the ~36px buttons it contains, leaving a large empty gutter (~10px) on each side. This
+task makes the collapsed rail **much narrower** — only slightly wider than its icons/buttons.
+
+**What shipped** (commit `ce0e1b1`, 2026-06-27) — a pure constant + small CSS change:
+
+- **`Sidebar.tsx`:** `SIDEBAR_RAIL_WIDTH` reduced from `56` to `44`, so the collapsed icon rail
+  is only slightly wider than its ~36px buttons (a ~4px gutter each side) instead of a wide empty
+  gutter.
+- **`ViewSwitch.module.css`:** a small companion tweak so the view-switch control still centers/
+  fits at the narrower width.
+- Rail contents (New / Schedule / view-switch buttons, repo folder icons, per-session activity
+  dots, worktree glyphs, the collapsed footer gear/feedback/chevron, and the collapsed
+  `UpdateIndicator` icon) all still center and fit; `overflow: hidden` keeps anything from
+  spilling. No new state, no persistence change; the **expanded** sidebar width (#108) is
+  unaffected.
+
+**Key files touched:** `src/components/Sidebar/Sidebar.tsx`,
+`src/components/ViewSwitch/ViewSwitch.module.css`.
+
+**Dependencies:** none. Tweaks the collapsed-rail constant introduced with the sidebar collapse
+feature (#168); independent of the expanded-width `sidebar_width` value (#108).
+
+**Notes**
+
+- Target **44px** (36px button + ~4px gutter each side) chosen as "only slightly wider"; tunable.
+- **Out of scope (as shipped):** the expanded sidebar width, what the rail displays, and the
+  collapse/expand toggle behaviour.
+- **Autonomous refine (2026-06-27):** decided in the refine loop with the user not answering — see
+  `ASSUMPTIONS.md`. The visual eyeball (rail centering at 44px) is **runtime-unverified** in this
+  headless loop; lint/build/test pass.
+
+---
+
