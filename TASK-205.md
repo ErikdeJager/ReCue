@@ -1,6 +1,6 @@
-### 205. [ ] Canvas tab bar: turn + into a "New tab" dropdown; move the distribute control to the right
+### 205. [x] Canvas tab bar: turn + into a "New tab" dropdown; move the distribute control to the right
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-27
 
@@ -93,17 +93,17 @@ they're triggered.
 
 **Subtasks**
 
-1. [ ] Build the `+` dropdown (Plus + ChevronDown trigger) with "New tab" (`addCanvas`) and
+1. [x] Build the `+` dropdown (Plus + ChevronDown trigger) with "New tab" (`addCanvas`) and
    "New tab from template…" (`openTemplateUse`, disabled when `!hasTemplates`), reusing the
    Templates-menu open/anchor/outside-click/Escape pattern.
-2. [ ] Remove "New tab from template…" from the Templates ▾ menu (keep New template… / Save
+2. [x] Remove "New tab from template…" from the Templates ▾ menu (keep New template… / Save
    current canvas as template… / Manage templates…).
-3. [ ] Move the distribute (`Grid2x2`) button to the far right of `.tabStrip` via
+3. [x] Move the distribute (`Grid2x2`) button to the far right of `.tabStrip` via
    `margin-left: auto`, unchanged action/gating/tooltip.
-4. [ ] Add/adjust the CSS (right-aligned distribute class; shared or reused menu classes),
+4. [x] Add/adjust the CSS (right-aligned distribute class; shared or reused menu classes),
    keeping dropdowns `position: fixed` so they escape the strip's `overflow-x` clip.
-5. [ ] `npm run build`, `npm run lint`, `npm run format:check`, `npm test` all pass.
-6. [ ] Manually verify: the `+` opens a menu with both items (template item disabled when no
+5. [x] `npm run build`, `npm run lint`, `npm run format:check`, `npm test` all pass.
+6. [x] Manually verify: the `+` opens a menu with both items (template item disabled when no
    templates exist); both create the right kind of tab; the Templates ▾ menu shows only the
    three management items; the distribute button sits at the right edge, still disabled with
    `<2` panels and still equalizes; both dropdowns open below their button, don't clip, and
@@ -112,16 +112,16 @@ they're triggered.
 
 **Acceptance criteria**
 
-- [ ] The Canvas tab strip's `+` is a **dropdown** offering **New tab** and **New tab from
+- [x] The Canvas tab strip's `+` is a **dropdown** offering **New tab** and **New tab from
   template…** (the latter disabled when no templates exist); clicking each performs the same
   action the old `+` / old "New tab from template…" did.
-- [ ] The **Templates ▾** menu remains and contains exactly **New template…**, **Save
+- [x] The **Templates ▾** menu remains and contains exactly **New template…**, **Save
   current canvas as template…**, **Manage templates…** (no "New tab from template…").
-- [ ] The **distribute** control is rendered at the **right side** of the tab bar, with its
+- [x] The **distribute** control is rendered at the **right side** of the tab bar, with its
   action, disabled-state (`<2` panels), and tooltip unchanged.
-- [ ] Both dropdowns open anchored below their trigger, do not get clipped by the strip's
+- [x] Both dropdowns open anchored below their trigger, do not get clipped by the strip's
   horizontal overflow, and close on outside-click / Escape / selection.
-- [ ] `npm run build`, `npm run lint`, Prettier, and `npm test` pass.
+- [x] `npm run build`, `npm run lint`, Prettier, and `npm test` pass.
 
 **Notes**
 
@@ -144,3 +144,28 @@ they're triggered.
   `.tabAdd` ~110, `.templatesWrap/.templatesMenu/.templatesItem` ~138–182).
 - All referenced code ships today (#58 tabs, #117/#118 templates, #186 distribute) — no
   dependency on any open task.
+
+**Implementation (done 2026-06-27)**
+
+- `CanvasTabs.tsx`: factored the #117 Templates-menu open/anchor/outside-click/Escape
+  logic into a reusable `useDropdownMenu()` hook (returns `{open, menuPos, wrapRef, btnRef,
+  toggle, close}`), and gave the strip **two independent instances** — `addMenu` and
+  `templatesMenu` — so they don't fight over open state.
+- The **`+`** is now a dropdown (Plus + ChevronDown trigger, `aria-haspopup="menu"`) with
+  **New tab** (`addCanvas`) and **New tab from template…** (`openTemplateUse`, disabled when
+  `!hasTemplates`). The latter **moved out of** the Templates ▾ menu, so it lives in exactly
+  one place.
+- The **Templates ▾** menu now holds only template *management*: New template… / Save
+  current canvas as template… (disabled when `!canSaveAsTemplate`) / Manage templates…
+- The **distribute** (`Grid2x2`) button is rendered as the **last** child of `.tabStrip`
+  with `className={`${styles.tabAdd} ${styles.tabDistribute}`}`; the new `.tabDistribute`
+  adds `margin-left: auto` to push it to the right edge. Its `equalizeCanvas()` action,
+  `disabled={!canEqualize}` gating, tooltip, and aria-label are unchanged.
+- `Canvas.module.css`: renamed the shared dropdown classes
+  `.templatesWrap/.templatesMenu/.templatesItem` → neutral `.menuWrap/.menu/.menuItem`
+  (now used by both dropdowns), kept their `position: fixed` (#129 overflow-clip escape),
+  and added `.tabDistribute`.
+- No store/backend/behavior change; the `Tab` component + its DnD/tear-off are untouched.
+- Verified: `npm run build`, `npm run lint`, `prettier --check` (touched files), and
+  `npm test` (288 passing) all pass. The interactive eyeball (subtask 6) can't run in the
+  headless loop; the reorg is pure markup/CSS over unchanged store actions.

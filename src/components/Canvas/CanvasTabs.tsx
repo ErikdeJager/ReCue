@@ -138,6 +138,52 @@ function Tab({ tab, active }: { tab: CanvasTab; active: boolean }) {
 }
 
 /**
+ * A small fixed-position dropdown menu for the tab strip (#205, factored from the
+ * #117 Templates menu so the "+" and "Templates ▾" dropdowns don't fight): tracks
+ * open state + the anchor rect, and closes on outside-`pointerdown` / Escape. The
+ * menu renders `position: fixed` from `menuPos` so it escapes the strip's
+ * `overflow-x` clip (#129). One instance per menu.
+ */
+function useDropdownMenu() {
+  const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
+    null,
+  );
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setMenuPos({
+        top: rect.bottom + 4,
+        right: window.innerWidth - rect.right,
+      });
+    }
+    setOpen((o) => !o);
+  };
+  const close = () => setOpen(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return { open, menuPos, wrapRef, btnRef, toggle, close };
+}
+
+/**
  * Canvas tab strip (#58): one tab per canvas (active highlighted), a "+" to add
  * an empty canvas, drag-to-reorder. Its own nested DndContext (like the Overview
  * sortable #43) so tab drags don't clash with the app-level drag-into-canvas
@@ -167,45 +213,11 @@ function CanvasTabs() {
   // "Save current canvas as template…" (#187) needs at least one panel to map.
   const canSaveAsTemplate = !!activeLayout;
 
-  // Templates ▾ menu (#117): a small dropdown near the + with "New template…" /
-  // "Manage templates…". Closes on outside-click, Escape, or a selection.
-  const [templatesOpen, setTemplatesOpen] = useState(false);
-  const templatesRef = useRef<HTMLDivElement>(null);
-  const templatesBtnRef = useRef<HTMLButtonElement>(null);
-  // The menu is position: fixed, anchored to the button's viewport rect, so it
-  // escapes the tab strip's overflow clip (#129): `.tabStrip`'s `overflow-x: auto`
-  // forces its computed `overflow-y` to `auto`, which would clip a dropdown sitting
-  // below the 34px strip. Mirrors the sidebar context-menu precedent (#31/#54).
-  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(
-    null,
-  );
-  const toggleTemplates = () => {
-    if (!templatesOpen && templatesBtnRef.current) {
-      const rect = templatesBtnRef.current.getBoundingClientRect();
-      setMenuPos({
-        top: rect.bottom + 4,
-        right: window.innerWidth - rect.right,
-      });
-    }
-    setTemplatesOpen((open) => !open);
-  };
-  useEffect(() => {
-    if (!templatesOpen) return;
-    const onPointer = (event: PointerEvent) => {
-      if (!templatesRef.current?.contains(event.target as Node)) {
-        setTemplatesOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setTemplatesOpen(false);
-    };
-    window.addEventListener("pointerdown", onPointer);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointer);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [templatesOpen]);
+  // Two tab-strip dropdowns (#205): the "+" (tab creation — New tab / New tab from
+  // template…) and "Templates ▾" (template management). Each is an independent
+  // fixed-position menu via useDropdownMenu, so they don't fight over open state.
+  const addMenu = useDropdownMenu();
+  const templatesMenu = useDropdownMenu();
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -248,66 +260,85 @@ function CanvasTabs() {
           ))}
         </SortableContext>
       </DndContext>
-      <button
-        type="button"
-        className={styles.tabAdd}
-        onClick={addCanvas}
-        title="New canvas"
-        aria-label="New canvas"
-      >
-        <Plus size={14} strokeWidth={1.5} />
-      </button>
-      {/* "Distribute evenly" (#186): rebalance the active canvas so every panel is
-          equal area. Disabled when there's nothing to even (<2 panels). */}
-      <button
-        type="button"
-        className={styles.tabAdd}
-        onClick={() => equalizeCanvas()}
-        disabled={!canEqualize}
-        title="Distribute panels evenly"
-        aria-label="Distribute panels evenly"
-      >
-        <Grid2x2 size={14} strokeWidth={1.5} />
-      </button>
-      {/* Templates ▾ menu (#117). */}
-      <div className={styles.templatesWrap} ref={templatesRef}>
+      {/* "+" → New tab dropdown (#205): the single entry point for adding a tab —
+          a blank canvas or one instantiated from a template. */}
+      <div className={styles.menuWrap} ref={addMenu.wrapRef}>
         <button
           type="button"
-          ref={templatesBtnRef}
+          ref={addMenu.btnRef}
           className={styles.tabAdd}
-          onClick={toggleTemplates}
-          title="Templates"
-          aria-label="Templates"
+          onClick={addMenu.toggle}
+          title="New tab"
+          aria-label="New tab"
           aria-haspopup="menu"
-          aria-expanded={templatesOpen}
+          aria-expanded={addMenu.open}
         >
-          <LayoutTemplate size={14} strokeWidth={1.5} />
+          <Plus size={14} strokeWidth={1.5} />
           <ChevronDown size={11} strokeWidth={1.5} />
         </button>
-        {templatesOpen && menuPos && (
+        {addMenu.open && addMenu.menuPos && (
           <div
-            className={styles.templatesMenu}
+            className={styles.menu}
             role="menu"
-            style={{ top: menuPos.top, right: menuPos.right }}
+            style={{ top: addMenu.menuPos.top, right: addMenu.menuPos.right }}
           >
             <button
               type="button"
-              className={styles.templatesItem}
+              className={styles.menuItem}
+              role="menuitem"
+              onClick={() => {
+                addMenu.close();
+                addCanvas();
+              }}
+            >
+              New tab
+            </button>
+            <button
+              type="button"
+              className={styles.menuItem}
               role="menuitem"
               disabled={!hasTemplates}
               onClick={() => {
-                setTemplatesOpen(false);
+                addMenu.close();
                 openTemplateUse();
               }}
             >
               New tab from template…
             </button>
+          </div>
+        )}
+      </div>
+      {/* Templates ▾ menu (#117/#205): template management only — the "New tab from
+          template…" action now lives under the + dropdown above. */}
+      <div className={styles.menuWrap} ref={templatesMenu.wrapRef}>
+        <button
+          type="button"
+          ref={templatesMenu.btnRef}
+          className={styles.tabAdd}
+          onClick={templatesMenu.toggle}
+          title="Templates"
+          aria-label="Templates"
+          aria-haspopup="menu"
+          aria-expanded={templatesMenu.open}
+        >
+          <LayoutTemplate size={14} strokeWidth={1.5} />
+          <ChevronDown size={11} strokeWidth={1.5} />
+        </button>
+        {templatesMenu.open && templatesMenu.menuPos && (
+          <div
+            className={styles.menu}
+            role="menu"
+            style={{
+              top: templatesMenu.menuPos.top,
+              right: templatesMenu.menuPos.right,
+            }}
+          >
             <button
               type="button"
-              className={styles.templatesItem}
+              className={styles.menuItem}
               role="menuitem"
               onClick={() => {
-                setTemplatesOpen(false);
+                templatesMenu.close();
                 openTemplateEditor(null);
               }}
             >
@@ -315,11 +346,11 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.templatesItem}
+              className={styles.menuItem}
               role="menuitem"
               disabled={!canSaveAsTemplate}
               onClick={() => {
-                setTemplatesOpen(false);
+                templatesMenu.close();
                 openTemplateEditorFromCanvas();
               }}
             >
@@ -327,10 +358,10 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.templatesItem}
+              className={styles.menuItem}
               role="menuitem"
               onClick={() => {
-                setTemplatesOpen(false);
+                templatesMenu.close();
                 openTemplateManager();
               }}
             >
@@ -339,6 +370,19 @@ function CanvasTabs() {
           </div>
         )}
       </div>
+      {/* "Distribute evenly" (#186): moved to the right edge of the strip (#205)
+          via .tabDistribute's margin-left:auto. Rebalances the active canvas's
+          panels; disabled when there's nothing to even (<2 panels). */}
+      <button
+        type="button"
+        className={`${styles.tabAdd} ${styles.tabDistribute}`}
+        onClick={() => equalizeCanvas()}
+        disabled={!canEqualize}
+        title="Distribute panels evenly"
+        aria-label="Distribute panels evenly"
+      >
+        <Grid2x2 size={14} strokeWidth={1.5} />
+      </button>
     </div>
   );
 }

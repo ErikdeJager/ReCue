@@ -134,8 +134,16 @@
   opacity: 0.4;
 }
 
-/* --- Templates ▾ menu (#117) --- */
-.templatesWrap {
+/* "Distribute evenly" (#186) pushed to the far right of the strip (#205): the
+   auto left margin shoves it (the last child) to the right edge, away from the
+   add/templates cluster. Combined with .tabAdd in the markup for its base styling. */
+.tabDistribute {
+  margin-left: auto;
+}
+
+/* --- Tab-strip dropdown menus (#117/#205): shared by the "+" (New tab) and
+   "Templates ▾" dropdowns. --- */
+.menuWrap {
   position: relative;
   display: flex;
   flex-shrink: 0;
@@ -146,7 +154,7 @@
    which would clip a menu sitting below the 34px strip. `top`/`right` are set
    inline from the button's viewport rect (CanvasTabs.tsx), mirroring the sidebar
    context menu (#31). */
-.templatesMenu {
+.menu {
   position: fixed;
   z-index: 20;
   display: flex;
@@ -159,7 +167,7 @@
   box-shadow: var(--shadow-popover);
 }
 
-.templatesItem {
+.menuItem {
   padding: var(--space-6) var(--space-8);
   border: 0;
   border-radius: var(--radius-chip);
@@ -172,11 +180,11 @@
   transition: background var(--dur-fast) var(--ease-out);
 }
 
-.templatesItem:hover:not(:disabled) {
+.menuItem:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 
-.templatesItem:disabled {
+.menuItem:disabled {
   color: var(--text-muted);
   cursor: not-allowed;
 }
