@@ -4847,3 +4847,47 @@ rebuild), `TRAJECTORY_TO_WINDOWS.md` (real-box verification log + the documented
 
 ---
 
+### 222. [x] Revert the Canvas "+" to a plain new-tab button; move "from template" back into the Templates menu
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+A partial **revert of #205**: that task had turned the Canvas tab strip's **"+"** into a dropdown
+("New tab" / "New tab from template…"). This restores the "+" to a **plain one-click button that
+creates a new empty canvas tab** and moves **"New tab from template…"** back into the **"Templates
+▾"** dropdown (where it lived before #205, originally #118), while preserving the #206 ⌘T/Ctrl+T
+keybind.
+
+**What shipped** (commit `9e0bf6c`, 2026-06-28) — a focused frontend change in
+`src/components/Canvas/CanvasTabs.tsx`:
+
+- **"+" → plain button:** replaced the `addMenu` dropdown trigger (with its `Plus` + `ChevronDown`,
+  `aria-haspopup`/`aria-expanded`, and the whole two-item menu) with a plain `<button
+  onClick={() => addCanvas()}>` rendering just `Plus`. Kept the "New tab (⌘T/Ctrl+T)"
+  `title`/`aria-label` so #206's hint stays on the button. Removed the now-unused `addMenu =
+  useDropdownMenu()` instance (kept `useDropdownMenu`, `ChevronDown`, `openTemplateUse`,
+  `hasTemplates` — all still used by the Templates menu).
+- **"New tab from template…" → Templates ▾:** added the `openTemplateUse()` item (gated
+  `disabled={!hasTemplates}`) at the **top** of the `templatesMenu`, above the management items
+  (New template… / Save current canvas as template… / Manage templates…).
+
+**Key files touched:** `src/components/Canvas/CanvasTabs.tsx` (the "+" button + Templates menu).
+
+**Dependencies:** none — refines shipped code (#205 dropdown, #206 ⌘T, #117/#118 templates).
+
+**Notes**
+
+- **Cross-platform:** pure UI change, no OS-specific code; the ⌘↔Ctrl hint already routes through
+  `kbdHint`/`isWindows` and the ⌘T/Ctrl+T handler uses `metaKey || ctrlKey`, so it renders and
+  fires identically on macOS (WKWebView) and Windows (WebView2).
+- **Out of scope (as shipped):** the #205 distribute-evenly button position (left at the right edge
+  — the card didn't mention it); the `openTemplateUse` store action + `TemplateUseModal` flow (only
+  the trigger location moved); the Templates management items themselves.
+- **#206 preserved:** ⌘T/Ctrl+T still creates a tab and its hint shows on the "+" tooltip + the
+  keyboard legend; only the in-"+"-menu `<kbd>` hint was dropped with the menu.
+
+---
+

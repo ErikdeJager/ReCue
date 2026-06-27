@@ -26,6 +26,3 @@ kanban-plugin: board
 	Depends on: none
 
 ## DONE
-
-- [x] #222 — Revert Canvas "+" to a plain new-tab button; move "from template" into Templates menu
-	Plan: TASK-222.md
