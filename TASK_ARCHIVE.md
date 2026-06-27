@@ -4563,3 +4563,54 @@ mock.
 
 ---
 
+### 217. [x] Fix the feedback (bug) button opening the documents folder instead of the browser on Windows
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-27
+
+**Description**
+
+The sidebar-footer **feedback (bug) button** (#210) is meant to open the feedback Google Form in
+the user's default browser, but on **Windows** it instead opened the **documents folder**. Root
+cause: the `open_url` Rust command (`open_url` → ipc → the #210 button, also the #109 ⌘-click
+link path) was hardcoded to run `std::process::Command::new("open")`, which is the **macOS** open
+command; on Windows there is no standard `open` URL-opener, so Windows resolved it to opening a
+folder. The fix makes `open_url` open the URL in the **OS default browser cross-platform**.
+
+**What shipped** (commit `68a4cf0`, 2026-06-27) — backend-only, one command:
+
+- **`src-tauri/src/commands.rs`:** `open_url` rewritten with a **platform-`cfg` `Command`** branch
+  (dependency-free): `open <url>` on macOS, `cmd /C start "" <url>` on Windows (the empty `""` is
+  `start`'s title arg so a quoted URL isn't mistaken for the title), `xdg-open <url>` elsewhere.
+  The `is_http_url` **http/https-only guard is preserved**, keeping the no-shell-injection
+  property, and the error still maps to `SessionError::Io`. This fixes both the #210 feedback
+  button and the #109 ⌘-click link-open path on Windows.
+- **`CLAUDE.md`:** noted that `open_url` is now cross-platform (and that the #109 ⌘-click link
+  path benefits too).
+
+**Key files touched:** `src-tauri/src/commands.rs` (the `open_url` command), `CLAUDE.md`.
+
+**Dependencies:** none. Fixes the URL-open path behind the #210 feedback button and the #109
+⌘-click web-links opener.
+
+**Notes**
+
+- **Approach chosen:** the **dependency-free platform-`cfg` `Command`** fallback rather than the
+  plan's recommended `open` crate, because the `open` crate is not in `Cargo.lock` and adding it
+  would need a network fetch unavailable in the build sandbox. The `is_http_url` guard (well
+  unit-tested) is retained.
+- **Scope tension flagged:** `CLAUDE.md` documents ClaudeCue as **macOS-only**, yet this is a
+  Windows bug report. This task fixes only the reported `open_url` path; broader Windows support
+  (the macOS-specific `open`-based `reveal_*` / `open_data_folder` commands, `path_env`
+  login-shell PATH, bundle config) is a larger, separate decision left to the user. The fix is
+  harmless on macOS regardless.
+- **Out of scope (as shipped):** the other `open`-based commands (`reveal_path`,
+  `reveal_file_in_finder`, `open_data_folder`) were intentionally left unchanged.
+- **Autonomous refine (2026-06-27):** decided in the refine loop with the user not answering — see
+  `ASSUMPTIONS.md`. `cargo build` / `clippy` / `fmt` pass on macOS; the **Windows runtime**
+  behaviour (button opens the browser, not a folder) follows from the `cmd /C start` branch but
+  was **not runtime-verified** (macOS-only dev host).
+
+---
+
