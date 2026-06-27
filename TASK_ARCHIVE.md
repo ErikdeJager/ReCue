@@ -4735,3 +4735,63 @@ button) — the two footer buttons it sits beside.
 
 ---
 
+### 220. [x] Make Ctrl+V paste (text + images) work in terminals on Windows
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+On **Windows**, **Ctrl+V** in an agent (or shell) terminal did not paste — by terminal convention
+xterm.js forwards Ctrl+V as the literal control byte **`^V` (0x16)** to the PTY rather than reading
+the clipboard, so neither text nor images reached `claude`. (macOS ⌘V works because WebKit raises a
+native `paste` event xterm handles.) This task intercepts the Windows paste chord, reads the OS
+clipboard, and injects its contents — text and best-effort images — into the terminal, matching the
+macOS paste experience, while leaving macOS behavior byte-for-byte unchanged.
+
+**What shipped** (commit `ee868c7`, 2026-06-28):
+
+- **Clipboard plugin (`package.json`, `src-tauri/Cargo.toml`, `src-tauri/src/lib.rs`,
+  `src-tauri/capabilities/default.json`):** added `@tauri-apps/plugin-clipboard-manager` (JS) +
+  `tauri-plugin-clipboard-manager` (Rust), inited the plugin, and granted the read-text /
+  read-image capabilities (the `navigator.clipboard.readText()` path is unreliable under WebView2,
+  so the plugin is the robust cross-platform read).
+- **Rust image command (`src-tauri/src/commands.rs`, `src/ipc.ts`):** new bounded
+  `save_clipboard_image()` reads the clipboard image and writes it to a temp **PNG** (via the
+  `png` crate), returning the absolute temp-file path; typed IPC wrappers added for clipboard
+  read-text and the image save.
+- **Windows-gated key handler (`src/components/Terminal/terminalPool.ts`):** `createHost` now
+  registers `term.attachCustomKeyEventHandler` that — only when `isWindows(useStore.getState().
+  platform)` — matches the Ctrl+V / Ctrl+Shift+V chord (`ctrlKey && !altKey && !metaKey && key in
+  {v,V}`), reads the clipboard (text first; else an image saved to a temp PNG whose **path** is
+  pasted so claude attaches it), pastes via **`term.paste(...)`** (bracketed-paste-aware, so
+  multi-line text is preserved), and **returns `false`** to suppress the stray `^V`. All other
+  keys (including **Ctrl+C / SIGINT**) pass through untouched. Shared by both agent and shell
+  terminals via `createHost`.
+
+**Key files touched:** `src/components/Terminal/terminalPool.ts` (the custom key handler),
+`src-tauri/src/commands.rs` + `src/ipc.ts` (clipboard read-text + `save_clipboard_image`),
+`src-tauri/src/lib.rs` + `Cargo.toml` + `capabilities/default.json` + `package.json` (plugin +
+permissions), `TRAJECTORY_TO_WINDOWS.md` (real-box verification log).
+
+**Dependencies:** none — a self-contained terminal fix that adds its own clipboard dependency.
+
+**Notes**
+
+- **Cross-platform:** the handler only acts on Windows (gated via the store-cached `platform`
+  signal / `isWindows`); macOS keeps its **native ⌘V**, Ctrl+V stays `^V`, and Ctrl+C stays SIGINT
+  on both. The clipboard plugin and temp-file path (OS temp dir, no hardcoded paths) are
+  cross-platform.
+- **Autonomous decisions (user not answering; logged in `ASSUMPTIONS.md`):** Tauri
+  clipboard-manager plugin over `navigator.clipboard`; `term.paste()` over raw `writeStdin`;
+  intercept Ctrl+V **and** Ctrl+Shift+V on Windows; images saved as a temp PNG with the **path**
+  pasted (claude accepts image paths, independent of its internal clipboard mechanism). Copy
+  (Ctrl+C / copy-on-selection) and a right-click menu were out of scope (paste-only).
+- **Not runtime-verified:** text + **image** paste on a real Windows box (live clipboard + GUI +
+  the `claude` CLI) cannot be unit-tested on CI; flagged for real-box verification in
+  `TRAJECTORY_TO_WINDOWS.md`. The text-paste fix stands regardless; if claude needs a different
+  image signal than a pasted file path, only that branch would need adjusting.
+
+---
+
