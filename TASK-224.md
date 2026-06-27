@@ -1,6 +1,6 @@
-### 224. [ ] Canvas template file block: support full paths + a relative/absolute path choice
+### 224. [x] Canvas template file block: support full paths + a relative/absolute path choice
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 

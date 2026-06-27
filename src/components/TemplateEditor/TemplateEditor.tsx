@@ -12,6 +12,7 @@ import {
 import { Grid2x2, type LucideIcon, X } from "lucide-react";
 import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
 
+import { pickFile } from "../../ipc";
 import { noAutoCapitalize } from "../../inputProps";
 import { useStore } from "../../store";
 import type { CanvasContent, CanvasEdge, CanvasNode } from "../../types";
@@ -109,6 +110,9 @@ function BlockPanel({
   const desc = blockDescriptor(content.kind);
   const Icon = desc?.icon;
   const label = desc?.label ?? content.kind;
+  // File/Kanban block path mode (#224): relative (from the chosen folder, default) or
+  // absolute (a full filesystem path). Absent → relative for back-compat.
+  const fileMode = content.filePathMode ?? "relative";
   return (
     <div className={canvasStyles.panel}>
       <header className={canvasStyles.panelHeader}>
@@ -172,25 +176,89 @@ function BlockPanel({
           </label>
         )}
         {desc?.config === "file" && (
-          <label className={styles.configField}>
-            <span className={styles.configLabel}>File (relative path)</span>
-            <input
-              className={styles.configLine}
-              {...noAutoCapitalize}
-              type="text"
-              value={content.file ?? ""}
-              placeholder="e.g. README.md"
-              onChange={(event) =>
-                onConfig({ file: event.currentTarget.value })
-              }
-              aria-label="File relative path"
-            />
-            <span className={styles.helper}>
-              Resolved inside the folder you pick when you use this template —
-              e.g. type <code>README.md</code> to open that folder&apos;s
-              README.
-            </span>
-          </label>
+          <div className={styles.configField}>
+            {/* Relative ⇄ absolute path choice (#224): relative joins to the folder
+                chosen at use time (subfolders allowed); absolute is a full filesystem
+                path opened via its own parent dir as root (the #163 pattern). */}
+            <span className={styles.configLabel}>Path</span>
+            <div
+              className={styles.pathModeRow}
+              role="radiogroup"
+              aria-label="Path mode"
+            >
+              <button
+                type="button"
+                className={`${styles.pathModeBtn} ${fileMode === "relative" ? styles.pathModeActive : ""}`}
+                onClick={() => onConfig({ filePathMode: "relative" })}
+                role="radio"
+                aria-checked={fileMode === "relative"}
+              >
+                Relative
+              </button>
+              <button
+                type="button"
+                className={`${styles.pathModeBtn} ${fileMode === "absolute" ? styles.pathModeActive : ""}`}
+                onClick={() => onConfig({ filePathMode: "absolute" })}
+                role="radio"
+                aria-checked={fileMode === "absolute"}
+              >
+                Absolute
+              </button>
+            </div>
+            {fileMode === "relative" ? (
+              <>
+                <input
+                  className={styles.configLine}
+                  {...noAutoCapitalize}
+                  type="text"
+                  value={content.file ?? ""}
+                  placeholder="e.g. src/README.md"
+                  onChange={(event) =>
+                    onConfig({ file: event.currentTarget.value })
+                  }
+                  aria-label="Relative file path"
+                />
+                <span className={styles.helper}>
+                  Resolved from the project root you pick when you use this
+                  template; subfolders are allowed — e.g.{" "}
+                  <code>src/components/App.tsx</code>.
+                </span>
+              </>
+            ) : (
+              <>
+                <div className={styles.pathInputRow}>
+                  <input
+                    className={styles.configLine}
+                    {...noAutoCapitalize}
+                    type="text"
+                    value={content.file ?? ""}
+                    placeholder="e.g. /Users/you/notes.md"
+                    onChange={(event) =>
+                      onConfig({ file: event.currentTarget.value })
+                    }
+                    aria-label="Absolute file path"
+                  />
+                  <button
+                    type="button"
+                    className={styles.browseBtn}
+                    onClick={() => {
+                      void pickFile().then((picked) => {
+                        if (picked) onConfig({ file: picked });
+                      });
+                    }}
+                  >
+                    Browse…
+                  </button>
+                </div>
+                <span className={styles.helper}>
+                  Absolute path from the filesystem root, e.g.{" "}
+                  <code>/Users/you/notes.md</code> or{" "}
+                  <code>C:\Users\you\notes.md</code>. This template only
+                  resolves on a machine where that file exists.
+                </span>
+              </>
+            )}
+          </div>
         )}
         {desc?.config === "none" && (
           <p className={styles.blockNote}>

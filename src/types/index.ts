@@ -253,6 +253,12 @@ export interface CanvasContent {
   label?: string;
   repoPath?: string;
   file?: string;
+  /** How an `open-file`/`open-kanban` **template block**'s `file` resolves (#224):
+   * `"relative"` (default / absent) joins it to the folder chosen at template-use time
+   * (subfolders allowed); `"absolute"` treats `file` as a full filesystem path, opened
+   * via its own parent dir as the root (the #163 pattern). Only set on file/kanban
+   * template-block leaves. */
+  filePathMode?: "relative" | "absolute";
   sessionId?: string;
   /** Pending scheduled session this panel shows (#94, kind: "scheduled"). */
   scheduleId?: string;

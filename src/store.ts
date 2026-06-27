@@ -18,6 +18,7 @@ import {
 } from "./components/Canvas/canvasTree";
 import { blockDescriptor } from "./components/Canvas/templateBlocks";
 import {
+  fileBlockTarget,
   instantiateTemplate,
   resolvedContent,
 } from "./components/Canvas/templateInstantiate";
@@ -2720,34 +2721,37 @@ export const useStore = create<AppState>()((set, get) => ({
         registerOverviewPanel(cwd, { id: termId, kind: "terminal" });
         live = resolvedContent(block, cwd, { sessionId: termId });
       } else if (liveKind === "file") {
-        const exists = await ipc.fileExists(cwd, block.file ?? "");
+        // Resolve relative-vs-absolute (#224): absolute opens via its own parent dir.
+        const target = fileBlockTarget(block, cwd);
+        const exists = await ipc.fileExists(target.repoPath, target.file);
         if (!exists) {
           throw new Error(`File not found: ${block.file ?? "(no path)"}`);
         }
         live = resolvedContent(block, cwd, {});
         // Show the opened file in the left panel + Overview (#152); dedups by
         // repo+file so re-opening doesn't add a duplicate row.
-        if (block.file) {
-          registerOverviewPanel(cwd, {
+        if (target.file) {
+          registerOverviewPanel(target.repoPath, {
             id: crypto.randomUUID(),
             kind: "markdown",
-            file: block.file,
+            file: target.file,
           });
         }
       } else if (liveKind === "kanban") {
         // Read-only + gated like `file` (#154): no auto-create of a missing board.
-        const exists = await ipc.fileExists(cwd, block.file ?? "");
+        const target = fileBlockTarget(block, cwd);
+        const exists = await ipc.fileExists(target.repoPath, target.file);
         if (!exists) {
           throw new Error(`File not found: ${block.file ?? "(no path)"}`);
         }
         live = resolvedContent(block, cwd, {});
         // Show the opened board in the left panel + Overview (#152); dedups by
         // repo+file so re-opening doesn't add a duplicate row.
-        if (block.file) {
-          registerOverviewPanel(cwd, {
+        if (target.file) {
+          registerOverviewPanel(target.repoPath, {
             id: crypto.randomUUID(),
             kind: "kanban",
-            file: block.file,
+            file: target.file,
           });
         }
       } else if (liveKind === "diff") {

@@ -4,6 +4,7 @@
 // each pending leaf into live content. Kept dependency-free + id-injected so it's
 // deterministic and unit-testable, like `canvasTree.ts`.
 
+import { splitPath } from "../../paths";
 import type {
   CanvasContent,
   CanvasNode,
@@ -11,6 +12,28 @@ import type {
   CanvasTemplate,
 } from "../../types";
 import { blockDescriptor } from "./templateBlocks";
+
+/**
+ * Where an `open-file`/`open-kanban` block's `file` resolves (#224), as a
+ * `{ repoPath, file }` pair the backend's repo-confined read accepts:
+ * - **relative** (default / absent `filePathMode`): `{ repoPath: cwd, file }` — the
+ *   chosen folder as root; subfolders are allowed (the backend `repo.join` validates).
+ * - **absolute**: split the full path into `{ dir, base }` and use the file's **own
+ *   parent dir** as the root (`{ repoPath: dir, file: base }`) — the #163 pattern, so
+ *   the containment check passes with no backend change. `splitPath` handles `/` and
+ *   `\`, so it's cross-platform. Pure + dependency-light for unit testing.
+ */
+export function fileBlockTarget(
+  block: CanvasContent,
+  cwd: string,
+): { repoPath: string; file: string } {
+  const file = block.file ?? "";
+  if (block.filePathMode === "absolute") {
+    const { dir, base } = splitPath(file);
+    return { repoPath: dir, file: base };
+  }
+  return { repoPath: cwd, file };
+}
 
 /** The pending content a block becomes on instantiation (#118): `kind:"pending"`
  * carrying the originating `block` + the chosen folder, awaiting async resolution. */
@@ -76,12 +99,17 @@ export function resolvedContent(
       return { kind: "agent", sessionId: resolved.sessionId, repoPath: cwd };
     case "terminal":
       return { kind: "terminal", sessionId: resolved.sessionId, repoPath: cwd };
-    case "file":
-      return { kind: "file", repoPath: cwd, file: block.file };
-    case "kanban":
+    case "file": {
+      // Resolve relative-vs-absolute (#224): absolute opens via its own parent dir.
+      const { repoPath, file } = fileBlockTarget(block, cwd);
+      return { kind: "file", repoPath, file };
+    }
+    case "kanban": {
       // Mirror `file`: the live KanbanPanel/CanvasSurface need BOTH refs, so carry
-      // the relative path through (the default branch would drop `file`).
-      return { kind: "kanban", repoPath: cwd, file: block.file };
+      // the resolved path through (the default branch would drop `file`).
+      const { repoPath, file } = fileBlockTarget(block, cwd);
+      return { kind: "kanban", repoPath, file };
+    }
     case "diff":
       return { kind: "diff", repoPath: cwd };
     default:

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CanvasNode, CanvasTemplate } from "../../types";
 import { leafIds } from "./canvasTree";
 import {
+  fileBlockTarget,
   instantiateTemplate,
   pendingContent,
   resolvedContent,
@@ -128,6 +129,77 @@ describe("pendingContent + resolvedContent (#118)", () => {
     expect(resolvedContent({ kind: "open-diff" }, "/repo/x", {})).toEqual({
       kind: "diff",
       repoPath: "/repo/x",
+    });
+  });
+
+  it("maps an absolute file block via its parent dir as root (#224)", () => {
+    expect(
+      resolvedContent(
+        {
+          kind: "open-file",
+          file: "/Users/you/notes.md",
+          filePathMode: "absolute",
+        },
+        "/repo/x",
+        {},
+      ),
+    ).toEqual({ kind: "file", repoPath: "/Users/you", file: "notes.md" });
+  });
+});
+
+describe("fileBlockTarget (#224)", () => {
+  it("resolves a bare relative file from the chosen folder (no filePathMode)", () => {
+    expect(
+      fileBlockTarget({ kind: "open-file", file: "README.md" }, "/repo/x"),
+    ).toEqual({
+      repoPath: "/repo/x",
+      file: "README.md",
+    });
+  });
+
+  it("resolves an explicit relative subpath from the chosen folder", () => {
+    expect(
+      fileBlockTarget(
+        {
+          kind: "open-file",
+          file: "src/components/App.tsx",
+          filePathMode: "relative",
+        },
+        "/repo/x",
+      ),
+    ).toEqual({ repoPath: "/repo/x", file: "src/components/App.tsx" });
+  });
+
+  it("resolves a POSIX absolute path via its own parent dir as root", () => {
+    expect(
+      fileBlockTarget(
+        {
+          kind: "open-file",
+          file: "/Users/you/notes.md",
+          filePathMode: "absolute",
+        },
+        "/repo/x",
+      ),
+    ).toEqual({ repoPath: "/Users/you", file: "notes.md" });
+  });
+
+  it("resolves a Windows absolute path (backslashes) via its parent dir", () => {
+    expect(
+      fileBlockTarget(
+        {
+          kind: "open-file",
+          file: "C:\\Users\\you\\notes.md",
+          filePathMode: "absolute",
+        },
+        "/repo/x",
+      ),
+    ).toEqual({ repoPath: "C:\\Users\\you", file: "notes.md" });
+  });
+
+  it("falls back to relative + empty file when file is unset", () => {
+    expect(fileBlockTarget({ kind: "open-file" }, "/repo/x")).toEqual({
+      repoPath: "/repo/x",
+      file: "",
     });
   });
 });

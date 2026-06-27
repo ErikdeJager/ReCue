@@ -13,9 +13,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #224 — Canvas template file block: support full paths + relative/absolute path choice
-	Plan: TASK-224.md
-	Depends on: none
 - [ ] #225 — Subtle current-branch badge next to each sidebar folder, synced from any source
 	Plan: TASK-225.md
 	Depends on: none
@@ -30,3 +27,5 @@ kanban-plugin: board
 
 - [x] #223 — Add a "distribute panels evenly" button to the Template Editor
 	Plan: TASK-223.md
+- [x] #224 — Canvas template file block: support full paths + relative/absolute path choice
+	Plan: TASK-224.md

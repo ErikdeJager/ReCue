@@ -275,3 +275,67 @@
   font-size: var(--fs-meta-sm);
   line-height: 1.5;
 }
+
+/* Relative ⇄ absolute path segmented control + Browse row (#224). */
+.pathModeRow {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.pathModeBtn {
+  flex: 1;
+  padding: var(--space-2) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.pathModeBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.pathModeActive,
+.pathModeActive:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.pathInputRow {
+  display: flex;
+  gap: var(--space-4);
+  align-items: stretch;
+}
+
+.pathInputRow .configLine {
+  flex: 1;
+}
+
+.browseBtn {
+  flex-shrink: 0;
+  padding: var(--space-4) var(--space-10);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.browseBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
