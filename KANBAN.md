@@ -9,9 +9,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #208 — Rewrite the v0.0.1 patch notes to introduce the app as the first release
-	Plan: TASK-208.md
-	Depends on: none
 - [ ] #209 — Fix the missing space between "Current version" and the version number in Settings → Updates
 	Plan: TASK-209.md
 	Depends on: none
@@ -21,4 +18,7 @@ kanban-plugin: board
 
 
 ## DONE
+
+- [ ] #208 — Rewrite the v0.0.1 patch notes to introduce the app as the first release
+	Plan: TASK-208.md
 

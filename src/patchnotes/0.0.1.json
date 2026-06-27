@@ -3,21 +3,18 @@
   "date": "2026-06-26",
   "changes": [
     {
-      "category": "feature",
+      "category": "welcome",
       "items": [
-        "Overview agent wall of live `claude` terminals, grouped by repository.",
-        "Canvas split-panel workspace with file, git-diff, terminal, and Kanban viewers — tabs can pop out into their own native window.",
-        "Repo-grouped sidebar with a searchable file picker, scheduled sessions, and Canvas templates.",
-        "Keyboard-driven Create-panel launcher (⌘K) and per-type shortcuts.",
-        "In-app auto-update skeleton: a Settings → Updates pane that checks for and installs new releases (inert until signing keys are configured)."
+        "Welcome to ClaudeCue — a macOS app for running and managing many live `claude` coding sessions side by side. This is the first release.",
+        "Every session is a real terminal running the Claude Code CLI; ClaudeCue wraps them with navigation, persistence, git-reading, and a workspace built for juggling several agents at once."
       ]
     },
     {
-      "category": "improvement",
+      "category": "highlights",
       "items": [
-        "Busy/idle activity indicator with a three-state dot (working / finished / idle).",
-        "Inline rename of an agent by double-clicking its panel or card header.",
-        "Distribute Canvas panels evenly from the tab strip or by double-clicking a border."
+        "Overview — an 'agent wall' of all your live sessions, grouped by repository, with an at-a-glance busy/idle status on each.",
+        "Canvas — a split-panel workspace mixing agent terminals with file, git-diff, terminal, and Kanban viewers; tabs can pop out into their own window.",
+        "A repo-grouped sidebar with a searchable file tree, scheduled sessions, reusable Canvas templates, and worktree-isolated agents."
       ]
     }
   ]

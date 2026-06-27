@@ -1,6 +1,6 @@
-### 208. [ ] Rewrite the v0.0.1 patch notes to introduce the app as the first release
+### 208. [x] Rewrite the v0.0.1 patch notes to introduce the app as the first release
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-27
 
@@ -81,20 +81,20 @@ capabilities at a welcoming, high level — not as a list of "recently shipped" 
 
 **Subtasks**
 
-1. [ ] Rewrite `src/patchnotes/0.0.1.json` with intro + highlights framing (valid JSON,
+1. [x] Rewrite `src/patchnotes/0.0.1.json` with intro + highlights framing (valid JSON,
    same schema).
-2. [ ] `npm run build` + `npm test` pass (the patchnotes are eagerly globbed + normalized;
+2. [x] `npm run build` + `npm test` pass (the patchnotes are eagerly globbed + normalized;
    a malformed file would be dropped — confirm it still loads).
-3. [ ] Eyeball Settings → Updates "What's new" (dev mock if needed) to confirm the new
+3. [x] Eyeball Settings → Updates "What's new" (dev mock if needed) to confirm the new
    categories render as headers with their bullet lists.
 
 **Acceptance criteria**
 
-- [ ] `src/patchnotes/0.0.1.json` introduces what ClaudeCue is and frames v0.0.1 as the
+- [x] `src/patchnotes/0.0.1.json` introduces what ClaudeCue is and frames v0.0.1 as the
   first/initial release, rather than listing recently implemented tasks.
-- [ ] It remains valid against the schema (`{version:"0.0.1", date, changes:[{category,
+- [x] It remains valid against the schema (`{version:"0.0.1", date, changes:[{category,
   items[]}]}`) and renders in the Updates pane (categories as headers, items as bullets).
-- [ ] `npm run build` and `npm test` pass.
+- [x] `npm run build` and `npm test` pass.
 
 **Notes**
 
@@ -108,3 +108,15 @@ capabilities at a welcoming, high level — not as a list of "recently shipped" 
   `categoryLabel`), `src/components/PatchNotes/PatchNotes.tsx` (renderer) — last two for
   reference only.
 - Independent of any open task.
+
+**Implementation (done 2026-06-27)**
+
+- Replaced `src/patchnotes/0.0.1.json` with the recommended intro framing: a **"welcome"**
+  category (what ClaudeCue is + "This is the first release.") and a **"highlights"** category
+  (Overview / Canvas / sidebar). Kept `version: "0.0.1"` and `date: "2026-06-26"`; same
+  `{version, date, changes:[{category, items[]}]}` schema; no code/pipeline changes.
+- Verified: `prettier --check`, `npm run build` (Vite eagerly globs + parses the JSON — a
+  malformed file would be dropped, so a clean build confirms it loads), and `npm test`
+  (288 passing, incl. the patchnotes normalization tests) all pass. The "welcome"/
+  "highlights" categories Title-Case via `categoryLabel`, rendering as headers over bullets
+  in Settings → Updates "What's new".
