@@ -1,6 +1,6 @@
-### 226. [ ] Replace the agent-header "worktree" badge with a folder + branch indicator (every agent)
+### 226. [x] Replace the agent-header "worktree" badge with a folder + branch indicator (every agent)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 

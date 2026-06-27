@@ -18,7 +18,12 @@ import {
 
 import { agentSupportsResume } from "../../agents";
 import { noAutoCapitalize } from "../../inputProps";
-import { forkUnavailableReason, repoName, sessionLabel } from "../../paths";
+import {
+  effectiveRepo,
+  forkUnavailableReason,
+  repoName,
+  sessionLabel,
+} from "../../paths";
 import { repoColor, useStore } from "../../store";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
 import { IS_MAIN_WINDOW } from "../../windowContext";
@@ -126,12 +131,15 @@ function LeafPanel({
         )
       : null;
   const titleText = agentLabel ? agentLabel.primary : panelTitle(content);
-  // Agent panels (#95) drop the subtitle line; non-agent panels keep repo·branch.
-  const metaText = agentLabel
-    ? null
-    : repoPath
-      ? `${repoName(repoPath)}${branch ? ` · ${branch}` : ""}`
-      : null;
+  // Folder · branch for every panel — agents included (#226, replacing the #213
+  // "worktree" badge). For an agent the folder is its **parent repo** (`effectiveRepo`,
+  // so a worktree agent reads "myrepo · feature-x", not the worktree-folder basename);
+  // non-agent panels keep their repoPath. Branch = the panel's current branch.
+  const metaRepo =
+    content.kind === "agent" && session ? effectiveRepo(session) : repoPath;
+  const metaText = metaRepo
+    ? `${repoName(metaRepo)}${branch ? ` · ${branch}` : ""}`
+    : null;
 
   // Double-click the header to rename the agent inline (#188) — same state machine
   // as the sidebar rename (#57) and the tab rename (CanvasTabs): seed the current
@@ -272,13 +280,8 @@ function LeafPanel({
             </span>
           )}
           {metaText && <span className={styles.panelMeta}>{metaText}</span>}
-          {/* Worktree agent (#74/#96): "worktree" is a static, non-clickable badge
-              (#213) — the add-view actions live on the standard OpenViewButton below,
-              same as a normal agent. Styled like the "fork" badge. */}
-          {content.kind === "agent" && session?.worktreeParent && (
-            <span className={styles.worktreeBadge}>worktree</span>
-          )}
-          {/* A fork (#126) shares the source's auto-title — a badge distinguishes them. */}
+          {/* A fork (#126) shares the source's auto-title — a badge distinguishes them.
+              (The #213 "worktree" badge was replaced by the folder·branch meta above, #226.) */}
           {content.kind === "agent" && session?.forkedFrom && (
             <span className={styles.worktreeBadge}>fork</span>
           )}

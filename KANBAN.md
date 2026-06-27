@@ -10,9 +10,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #226 — Replace agent-header worktree badge with a folder + branch indicator
-	Plan: TASK-226.md
-	Depends on: none
 - [ ] #227 — Extend file-viewer syntax highlighting to more languages (C#, Go, Lua, SQL, Ruby, PHP, Gradle)
 	Plan: TASK-227.md
 	Depends on: none
@@ -27,3 +24,6 @@ kanban-plugin: board
 	Depends on: none
 
 ## DONE
+
+- [x] #226 — Replace agent-header worktree badge with a folder + branch indicator
+	Plan: TASK-226.md

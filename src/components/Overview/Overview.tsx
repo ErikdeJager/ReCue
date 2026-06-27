@@ -199,9 +199,7 @@ function SessionCard({
     setEditing(false);
   };
 
-  // A worktree agent (#74/#96): the "worktree" cue is now a clickable badge (#164)
-  // opening worktree-scoped add-view actions (`repoPath` is the worktree folder).
-  const title = editing ? (
+  const titleRow = editing ? (
     <input
       className={styles.renameInput}
       {...noAutoCapitalize}
@@ -234,15 +232,24 @@ function SessionCard({
       >
         {primary}
       </span>
-      {/* Worktree agent (#74/#96): "worktree" is a static, non-clickable badge
-          (#213) — the add-view actions live on the standard OpenViewButton below,
-          same as a normal agent. Styled like the "fork" badge. */}
-      {session.worktreeParent && (
-        <span className={styles.worktreeBadge}>worktree</span>
-      )}
       {/* A fork (#126) shares the source's auto-title, so a badge distinguishes them. */}
       {session.forkedFrom && <span className={styles.worktreeBadge}>fork</span>}
     </span>
+  );
+  // Folder · branch indicator for every agent (#226, replacing the #213 "worktree"
+  // badge) — mirrors the Kanban/file panel header. Folder = the parent repo name
+  // (`effectiveRepo`), so a worktree agent reads "myrepo · feature-x" (not the
+  // sanitized worktree-folder basename); branch = the agent's current branch.
+  const title = (
+    <>
+      {titleRow}
+      <span className={styles.meta}>
+        <span className={styles.metaText}>
+          {repoName(effectiveRepo(session))}
+          {branch && ` · ${branch}`}
+        </span>
+      </span>
+    </>
   );
   // Fork is unavailable when the agent can't fork at all (Codex, #142) or the source
   // has no real conversation turn yet (#138, fail-open: only a confident reason
