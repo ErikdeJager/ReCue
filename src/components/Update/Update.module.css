@@ -5,7 +5,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-6);
-  margin: 0 var(--space-8) var(--space-8);
+  /* Tighter inset (#215) — a small gutter still ties it to the footer below. */
+  margin: 0 var(--space-4) var(--space-4);
   padding: var(--space-4) var(--space-8);
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-control);
@@ -14,11 +15,16 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
+/* Hover light-up (#215): an accent-tinted border + faint accent fill so the quiet
+   #203 chip reads as clearly interactive (the icon is already accent). */
 .indicator:hover {
-  background: var(--bg-hover);
+  border-color: var(--accent);
+  background: var(--accent-dim);
   color: var(--text-primary);
 }
 
@@ -32,8 +38,12 @@
   background: transparent;
 }
 
+/* Error variant light-up (#215): same idea in the error color — keep the error
+   border and add a faint error-tinted fill. Wins over `.indicator:hover` (same
+   specificity, later in source order) so the border stays the error color. */
 .indicatorError:hover {
-  background: var(--bg-hover);
+  border-color: var(--status-error);
+  background: var(--status-error-dim);
   color: var(--text-primary);
 }
 

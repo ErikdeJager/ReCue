@@ -45,6 +45,7 @@
   --status-awaiting: #f9e2af; /* Yellow */
   --status-done: #a6e3a1; /* Green */
   --status-error: #f38ba8; /* Red */
+  --status-error-dim: rgba(243, 139, 168, 0.14); /* Red 0.14 (#215) */
   --status-idle: #6c7086; /* Overlay0 */
 
   /* --- Syntax highlighting (Catppuccin Mocha; consumed by the FileViewer #44) --- */

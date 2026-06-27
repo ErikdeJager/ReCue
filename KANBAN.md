@@ -10,9 +10,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #215 — Tighten the update indicator margin + hover light-up
-	Plan: TASK-215.md
-	Depends on: none
 - [ ] #216 — One-time attention animation on the update indicator's first appearance
 	Plan: TASK-216.md
 	Depends on: #215
@@ -27,4 +24,6 @@ kanban-plugin: board
 	Plan: TASK-213.md
 - [ ] #214 — Make the collapsed sidebar rail much narrower
 	Plan: TASK-214.md
+- [ ] #215 — Tighten the update indicator margin + hover light-up
+	Plan: TASK-215.md
 

@@ -1,6 +1,6 @@
-### 215. [ ] Tighten the update indicator's margin + add a hover light-up
+### 215. [x] Tighten the update indicator's margin + add a hover light-up
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-27
 
@@ -51,26 +51,26 @@ chip, not a loud button. Use design tokens only (no off-system colors).
 
 **Subtasks**
 
-1. [ ] Reduce `.indicator` margin to `var(--space-4)` sides/bottom (keep a small
+1. [x] Reduce `.indicator` margin to `var(--space-4)` sides/bottom (keep a small
    inset).
-2. [ ] Add a hover light-up to `.indicator:hover` (accent border + faint accent
+2. [x] Add a hover light-up to `.indicator:hover` (accent border + faint accent
    tint), and add `border-color` to the `.indicator` transition.
-3. [ ] Mirror the light-up on `.indicatorError:hover` with the error color.
-4. [ ] Verify the collapsed-rail chip (`indicatorCollapsed`) still centers and looks
+3. [x] Mirror the light-up on `.indicatorError:hover` with the error color.
+4. [x] Verify the collapsed-rail chip (`indicatorCollapsed`) still centers and looks
    right at the tighter margin (cross-check with #203's centering + the upcoming #214
    narrower rail if both land).
-5. [ ] Exercise via the dev mock (#193, `window.__claudecue.mockUpdate(...)` /
+5. [x] Exercise via the dev mock (#193, `window.__claudecue.mockUpdate(...)` /
    "Simulate update") to see the available + error states; `npm run lint` +
    `npm run build`.
 
 **Acceptance criteria**
 
-- [ ] The update indicator's outer margin is smaller than today but still has a small
+- [x] The update indicator's outer margin is smaller than today but still has a small
       inset (not flush to the sidebar edges).
-- [ ] Hovering the chip produces a clear "light-up" (accent-tinted border + subtle
+- [x] Hovering the chip produces a clear "light-up" (accent-tinted border + subtle
       fill) that eases in/out; the error variant lights up in its error color.
-- [ ] Collapsed-rail icon chip still centers and renders correctly.
-- [ ] `npm run lint` and `npm run build` pass.
+- [x] Collapsed-rail icon chip still centers and renders correctly.
+- [x] `npm run lint` and `npm run build` pass.
 
 **Notes**
 
