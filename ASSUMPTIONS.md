@@ -474,3 +474,44 @@ Decided autonomously:
   visual check; buttons could drop to 34/32 with a ~40px rail for an even tighter look.
 - Pure constant + CSS change, no new state; verify nothing clips (dots, worktree
   glyphs, collapsed footer, collapsed UpdateIndicator icon). **Depends on: none.**
+
+## TASK-215 — Tighten the update indicator margin + hover light-up
+
+Card: reduce the update button's margin (keep a little) + add a hover light-up.
+Decided autonomously (refine loop, user not answering):
+
+- **Margin `var(--space-8)` → `var(--space-4)`** sides/bottom (keep a small inset, not
+  flush). **Hover light-up = accent-tinted border + faint accent fill** (over the
+  current bare `--bg-hover`), with `border-color` added to the transition; error
+  variant lights up in `--status-error`. Token-only; exact values tunable.
+- **Depends on: none.** Sibling **#216** (appearance animation) touches the same
+  `.indicator` element → sequenced after this.
+
+## TASK-216 — One-time attention animation on first appearance
+
+Card: one-time ping/glow/border on the update button when it first appears on app
+open, then normal. Decided autonomously:
+
+- **Per-session one-shot, NOT persisted** ("on app open" = once per session). Guard
+  replays (collapse re-render, status flip) with a module-level/store `announced`
+  flag. Recommended a **glow/border pulse (no reflow)** over a scale ping; finite
+  iteration then settle to #215's resting look. Mirror the `reveal-flash` (#202)
+  one-shot precedent.
+- **Reduced motion handled by the global `body.reduce-motion` killswitch** — no
+  per-rule guard. **Depends on #215** (same `.indicator`/`Update.module.css`; builds
+  on #215's resting style, sequenced lowest-first to avoid edit conflicts).
+
+## TASK-217 — Fix feedback (bug) button opening a folder instead of the browser on Windows
+
+Card: bug button opens the documents folder on Windows instead of the feedback forum
+in the browser. Decided autonomously:
+
+- **Root cause:** `open_url` (commands.rs) is hardcoded to macOS `open`; Windows has no
+  such URL-opener, so it opens a folder. **Fix = cross-platform default-browser open**
+  — recommended the **`open` crate** (`open::that_detached`, handles Windows quoting +
+  shell-free), platform-`cfg` `Command` (`cmd /C start "" <url>` on Windows) as the
+  dep-free fallback. Keep the `is_http_url` guard.
+- **Scope tension flagged:** CLAUDE.md says macOS-only, but this is a Windows bug
+  report → user is evidently on Windows. Task fixes **only** `open_url`; the other
+  `open`-based Finder "reveal" commands and broader Windows support are out of scope
+  and left to the user. Fix is harmless on macOS regardless. **Depends on: none.**

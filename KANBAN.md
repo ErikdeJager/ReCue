@@ -6,9 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] Reduce the update button's margin (keep a little) and add a hover light-up effect
-- [ ] Play a one-time attention-grabbing animation (ping/glow/border) on the update button when it first appears on app open, then leave it looking normal
-- [ ] Fix the bug button on Windows opening the documents folder instead of the feedback forum in the browser
 
 
 ## READY
@@ -24,6 +21,15 @@ kanban-plugin: board
 	Depends on: none
 - [ ] #214 — Make the collapsed sidebar rail much narrower
 	Plan: TASK-214.md
+	Depends on: none
+- [ ] #215 — Tighten the update indicator margin + hover light-up
+	Plan: TASK-215.md
+	Depends on: none
+- [ ] #216 — One-time attention animation on the update indicator's first appearance
+	Plan: TASK-216.md
+	Depends on: #215
+- [ ] #217 — Fix feedback (bug) button opening a folder instead of the browser on Windows
+	Plan: TASK-217.md
 	Depends on: none
 
 
