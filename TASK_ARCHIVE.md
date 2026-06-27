@@ -4470,3 +4470,46 @@ feature (#168); independent of the expanded-width `sidebar_width` value (#108).
 
 ---
 
+### 215. [x] Tighten the update indicator's margin + add a hover light-up
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-27
+
+**Description**
+
+The sidebar-footer **update indicator** chip (`UpdateIndicator`, #190, restyled #203) sat with a
+fairly generous inset and a very quiet hover. This task makes two small visual tweaks the user
+asked for: **reduce its margin** (keeping a little inset) and add a **hover "light-up"** so it
+reads as clearly interactive on hover — staying on-token (the #203 "quiet at rest, clear on
+hover" treatment, not a loud button).
+
+**What shipped** (commit `fe00005`, 2026-06-27) — a token-only restyle:
+
+- **`Update.module.css`:** the `.indicator` outer margin reduced from `var(--space-8)` to
+  `var(--space-4)` (sides + bottom, keeping a small inset). A clear **hover light-up** added to
+  `.indicator:hover` — an accent-tinted border (`--accent`) + a faint `--accent-dim` fill that
+  eases in/out, with `border-color` added to the `transition`. The error variant
+  (`.indicatorError:hover`) lights up in its own error color.
+- **`tokens.css`:** a new on-token `--status-error-dim` (Red at 0.14 alpha, mirroring
+  `--accent-dim`) introduced so the error-variant light-up uses a design token rather than an
+  off-system color.
+- Collapsed-rail centering (`indicatorCollapsed`) is unchanged.
+
+**Key files touched:** `src/components/Update/Update.module.css`, `src/styles/tokens.css`.
+
+**Dependencies:** none. Restyles the update chip from #190/#203; the new `--status-error-dim`
+token mirrors the existing `--accent-dim` pattern. **#216 builds on this** (the first-appearance
+animation touches the same `.indicator` element and was sequenced after #215 to avoid edit
+conflicts).
+
+**Notes**
+
+- **Out of scope (as shipped):** the chip's layout/content, the install overlay/dialog styles,
+  and the first-appearance attention animation (that is #216).
+- **Autonomous refine (2026-06-27):** decided in the refine loop with the user not answering — see
+  `ASSUMPTIONS.md`. Exercised via the #193 dev mock for the available + error states; the visual
+  eyeball is **runtime-unverified** in this headless loop. `npm run lint` + `npm run build` pass.
+
+---
+

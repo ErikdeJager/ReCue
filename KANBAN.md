@@ -17,8 +17,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #215 — Tighten the update indicator margin + hover light-up
-	Plan: TASK-215.md
 - [ ] #216 — One-time attention animation on the update indicator's first appearance
 	Plan: TASK-216.md
 
