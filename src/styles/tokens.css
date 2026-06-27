@@ -48,6 +48,12 @@
   --status-error-dim: rgba(243, 139, 168, 0.14); /* Red 0.14 (#215) */
   --status-idle: #6c7086; /* Overlay0 */
 
+  /* Usage bar critical state (#154): a fixed, vivid red for >=95% — deliberately
+     more saturated / "on the nose" than the soft Catppuccin --status-error, and kept
+     SEPARATE from --accent (which a custom accent overrides) so that a red custom
+     accent never reads as the critical state. */
+  --usage-critical: #ff3b30;
+
   /* --- Syntax highlighting (Catppuccin Mocha; consumed by the FileViewer #44) --- */
   --syn-comment: #6c7086; /* Overlay0 */
   --syn-keyword: #cba6f7; /* Mauve */

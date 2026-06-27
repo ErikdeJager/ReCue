@@ -1,0 +1,57 @@
+/* 5-hour usage bar (#154): doubles as the separator above the sidebar footer. With
+   no usage data the track is a plain full-width hairline (an ordinary separator);
+   with data it fills (accent, or a fixed vivid red at >=95%) and a reset/% meta row
+   sits above it. */
+.usage {
+  display: flex;
+  flex-direction: column;
+}
+
+.meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-8);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+}
+
+.reset {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.percent {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The separator line itself: full width + hairline by default (reads as a normal
+   separator when empty), with the fill growing over it. No inset / radius — it spans
+   edge to edge like the footer border it replaces. */
+.track {
+  width: 100%;
+  height: 2px;
+  overflow: hidden;
+  background: var(--border-hairline);
+}
+
+.fill {
+  width: 0; /* starts empty; the live width is set inline */
+  height: 100%;
+  background: var(--accent); /* inherits the user's custom accent automatically */
+  /* Auto-dropped by global.css prefers-reduced-motion + body.reduce-motion (#102). */
+  transition:
+    width var(--dur-slow) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+/* >=95%: a fixed vivid red, NOT the accent — so a red custom accent can't
+   masquerade as the critical state. */
+.fillCritical {
+  background: var(--usage-critical);
+}

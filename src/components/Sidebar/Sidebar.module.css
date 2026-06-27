@@ -99,7 +99,9 @@
 }
 
 /* Footer (#100): a thin bottom bar pinned below the scrolling repo list, a flex
-   row with room for more quick-action icons later. */
+   row with room for more quick-action icons later. Its top separator is drawn by the
+   usage bar above it (#154) — a plain hairline with no usage data, the thin usage
+   fill once data arrives — so the footer itself has no border. */
 .footer {
   display: flex;
   align-items: center;
@@ -107,7 +109,6 @@
   flex-shrink: 0;
   height: 36px;
   padding: 0 var(--space-8);
-  border-top: 1px solid var(--border-hairline);
 }
 
 .footerButton {

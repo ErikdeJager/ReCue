@@ -47,6 +47,7 @@ import {
 import type { ScheduledSession, SessionView } from "../../types";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import UpdateIndicator from "../Update/UpdateIndicator";
+import UsageBar from "../Usage/UsageBar";
 import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import ViewsMenu from "../ViewsMenu/ViewsMenu";
 import styles from "./Sidebar.module.css";
@@ -1731,6 +1732,11 @@ function Sidebar() {
       {/* In-app update box (#190): directly above the footer/Settings gear, hidden
           unless an update is available/failed; collapses to its icon in the rail. */}
       <UpdateIndicator />
+
+      {/* 5-hour Claude usage (#154): the thin separator above the footer — a plain
+          hairline with no usage data, the thin usage fill (+ reset countdown + %)
+          once data arrives. */}
+      <UsageBar />
 
       {/* Footer (#100): a thin bottom bar pinned below the scrolling repo list,
           holding the Settings gear and (#168) the collapse/expand chevron. When

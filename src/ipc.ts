@@ -413,6 +413,18 @@ export const revealFileInFinder = (path: string) =>
 export const appVersion = () => invoke<string>("app_version");
 export const claudeVersion = () => invoke<string | null>("claude_version");
 
+/** 5-hour Claude session usage (#154). `usedPercent` is 0–100 (clamped in Rust);
+ * `resetsAt` is the raw `resets_at` (an ISO-8601 string or a stringified unix
+ * timestamp). `null` when unavailable (no token, non-Pro/Max, endpoint error, or a
+ * response-shape mismatch). The OAuth token is read + used entirely in Rust — it
+ * never reaches JS. */
+export interface UsageSnapshot {
+  usedPercent: number;
+  resetsAt: string | null;
+}
+export const claudeSessionUsage = () =>
+  invoke<UsageSnapshot | null>("claude_session_usage");
+
 export interface SessionEventHandlers {
   onOutput: (payload: OutputPayload) => void;
   onExited: (payload: ExitPayload) => void;

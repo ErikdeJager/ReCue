@@ -13,6 +13,7 @@ mod pty;
 mod skills;
 mod store;
 mod title;
+mod usage;
 
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -218,6 +219,7 @@ pub fn run() {
             commands::reveal_file_in_finder,
             commands::app_version,
             commands::claude_version,
+            usage::claude_session_usage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

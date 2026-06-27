@@ -30,6 +30,10 @@ tauri-plugin-dialog = "2.7.1"
 # pubkey + `createUpdaterArtifacts` off.
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+# 5-hour usage bar (#154): a single blocking HTTPS GET to the undocumented OAuth
+# usage endpoint. ureq keeps the OAuth token in-process (never argv/logs, unlike a
+# curl shell-out) and its rustls backend needs no system TLS. Used only by usage.rs.
+ureq = { version = "2", features = ["json", "tls"] }
 
 [lints.clippy]
 all = "warn"

@@ -27,6 +27,7 @@ import { applyTerminalSettings } from "./components/Terminal/terminalPool";
 import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
 import { effectiveRepo, repoName, sessionInFilter } from "./paths";
+import { parseResetsAt } from "./time";
 import * as updater from "./updater";
 import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
 import type {
@@ -133,6 +134,13 @@ function scheduleBranchRefresh(): void {
   }, BRANCH_REFRESH_DEBOUNCE_MS);
 }
 
+// 5-hour usage poll (#154): 180s — the OAuth usage endpoint aggressively 429s below
+// that even with the claude-code User-Agent. Module-scoped so the timer survives
+// <UsageBar/> unmounting (the bar returns null when usage is unavailable) and never
+// double-arms.
+const USAGE_POLL_MS = 180_000;
+let usagePollTimer: ReturnType<typeof setInterval> | undefined;
+
 /** Copy of `map` without `key` — returns the same ref when `key` is absent so
  * callers don't trigger needless re-renders. */
 function omitKey<T>(map: Record<string, T>, key: string): Record<string, T> {
@@ -198,6 +206,16 @@ export function versionIncreased(from: string, to: string): boolean {
     if (y < x) return false;
   }
   return false;
+}
+
+/** Whether the active coding agent is Claude (#154) — the single gate the usage bar
+ * + its poller read. The Claude usage endpoint is meaningless for any other agent, so
+ * the bar hides if a Codex session is active. ClaudeCue runs only Claude today
+ * (`agents.rs` DEFAULT_AGENT_ID), so `agent` is never `"codex"` and this is always
+ * true; when a global active-agent / Codex setting lands, gate on it here instead
+ * (e.g. `state.settings.activeAgent !== "codex"`). */
+export function isClaudeActive(state: AppState): boolean {
+  return state.sessions.every((s) => s.agent !== "codex");
 }
 
 /** Sample markdown changelog for the dev mock update (#193) — exercises the #192
@@ -751,6 +769,13 @@ export interface AppState {
      * notes are readable before installing. `null` when none / up to date. */
     notes: string | null;
   };
+  /** 5-hour Claude session usage (#154). `available` false → the bar hides. Fed by a
+   * 180s poll; the OAuth token + HTTP live entirely in Rust. */
+  usage: {
+    usedPercent: number | null;
+    resetsAtMs: number | null;
+    available: boolean;
+  };
   /** Pending scheduled sessions (#93), newest-first; main window only. */
   schedules: ScheduledSession[];
   /** Application settings (#100), merged with defaults on load. */
@@ -832,6 +857,13 @@ export interface AppState {
   mockUpdate: (opts?: { version?: string; notes?: string | null }) => void;
   /** Dev mock (#193): clear the mock + reset the updater state to idle. */
   clearUpdate: () => void;
+  /** Fetch + store the 5-hour Claude usage (#154); fail-open to unavailable. Gated
+   * to Claude (no-op for a non-Claude agent). */
+  refreshUsage: () => Promise<void>;
+  /** Start the 180s usage poll (#154) — main window only, idempotent. */
+  startUsagePolling: () => void;
+  /** Stop the usage poll (#154). */
+  stopUsagePolling: () => void;
   /** Add an existing folder to recents without spawning an agent (#172 sidebar
    * background menu → "New folder…"): opens the native folder picker and persists
    * the choice so it shows as a folder group immediately. Cancel = no-op; an already
@@ -1431,6 +1463,7 @@ export const useStore = create<AppState>()((set, get) => ({
     confirming: false,
     notes: null,
   },
+  usage: { usedPercent: null, resetsAtMs: null, available: false },
   schedules: [],
   settings: DEFAULT_SETTINGS,
   settingsOpen: false,
@@ -1741,6 +1774,40 @@ export const useStore = create<AppState>()((set, get) => ({
         error: undefined,
       },
     }));
+  },
+
+  refreshUsage: async () => {
+    // Gate to Claude (forward-compatible). Non-Claude → hide, don't even call out.
+    if (!isClaudeActive(get())) {
+      set({ usage: { usedPercent: null, resetsAtMs: null, available: false } });
+      return;
+    }
+    try {
+      const snap = await ipc.claudeSessionUsage();
+      set({
+        usage: snap
+          ? {
+              usedPercent: snap.usedPercent,
+              resetsAtMs: parseResetsAt(snap.resetsAt),
+              available: true,
+            }
+          : { usedPercent: null, resetsAtMs: null, available: false },
+      });
+    } catch {
+      // Outside Tauri / command missing → hide; recover on the next tick.
+      set({ usage: { usedPercent: null, resetsAtMs: null, available: false } });
+    }
+  },
+  startUsagePolling: () => {
+    if (!IS_MAIN_WINDOW || usagePollTimer) return; // main-window only, idempotent
+    void get().refreshUsage();
+    usagePollTimer = setInterval(() => void get().refreshUsage(), USAGE_POLL_MS);
+  },
+  stopUsagePolling: () => {
+    if (usagePollTimer) {
+      clearInterval(usagePollTimer);
+      usagePollTimer = undefined;
+    }
   },
 
   addFolder: async () => {
@@ -2070,6 +2137,10 @@ export const useStore = create<AppState>()((set, get) => ({
         // Outside Tauri / command missing — skip the version compare.
       }
       void get().checkForUpdate();
+      // 5-hour usage bar (#154): kick off the 180s poll, kept alive at module scope
+      // so it recovers (the bar unmounts when usage is unavailable). Gated to Claude
+      // inside refreshUsage; re-guards IS_MAIN_WINDOW so a detached window never polls.
+      get().startUsagePolling();
     }
   },
 
