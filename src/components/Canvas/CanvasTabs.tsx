@@ -215,10 +215,9 @@ function CanvasTabs() {
   // "Save current canvas as template…" (#187) needs at least one panel to map.
   const canSaveAsTemplate = !!activeLayout;
 
-  // Two tab-strip dropdowns (#205): the "+" (tab creation — New tab / New tab from
-  // template…) and "Templates ▾" (template management). Each is an independent
-  // fixed-position menu via useDropdownMenu, so they don't fight over open state.
-  const addMenu = useDropdownMenu();
+  // The "Templates ▾" dropdown (#205/#222): template management plus the "New tab from
+  // template…" action (moved back here from the #205 "+" dropdown). A fixed-position
+  // menu via useDropdownMenu. The "+" is now a plain new-tab button (no menu).
   const templatesMenu = useDropdownMenu();
 
   const sensors = useSensors(
@@ -262,59 +261,20 @@ function CanvasTabs() {
           ))}
         </SortableContext>
       </DndContext>
-      {/* "+" → New tab dropdown (#205): the single entry point for adding a tab —
-          a blank canvas or one instantiated from a template. */}
-      <div className={styles.menuWrap} ref={addMenu.wrapRef}>
-        <button
-          type="button"
-          ref={addMenu.btnRef}
-          className={styles.tabAdd}
-          onClick={addMenu.toggle}
-          title={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
-          aria-label={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
-          aria-haspopup="menu"
-          aria-expanded={addMenu.open}
-        >
-          <Plus size={14} strokeWidth={1.5} />
-          <ChevronDown size={11} strokeWidth={1.5} />
-        </button>
-        {addMenu.open && addMenu.menuPos && (
-          <div
-            className={styles.menu}
-            role="menu"
-            style={{ top: addMenu.menuPos.top, right: addMenu.menuPos.right }}
-          >
-            <button
-              type="button"
-              className={styles.menuItem}
-              role="menuitem"
-              onClick={() => {
-                addMenu.close();
-                addCanvas();
-              }}
-            >
-              New tab
-              <kbd className={styles.menuKbd}>
-                {kbdHint(platform, "⌘T", "Ctrl+T")}
-              </kbd>
-            </button>
-            <button
-              type="button"
-              className={styles.menuItem}
-              role="menuitem"
-              disabled={!hasTemplates}
-              onClick={() => {
-                addMenu.close();
-                openTemplateUse();
-              }}
-            >
-              New tab from template…
-            </button>
-          </div>
-        )}
-      </div>
-      {/* Templates ▾ menu (#117/#205): template management only — the "New tab from
-          template…" action now lives under the + dropdown above. */}
+      {/* "+" → create a new empty canvas tab in one click (#222, reverting the #205
+          dropdown). The "from template" entry point lives in the Templates ▾ menu
+          below. ⌘T/Ctrl+T (#206) also creates a tab; its hint stays on this tooltip. */}
+      <button
+        type="button"
+        className={styles.tabAdd}
+        onClick={() => addCanvas()}
+        title={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
+        aria-label={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
+      >
+        <Plus size={14} strokeWidth={1.5} />
+      </button>
+      {/* Templates ▾ menu (#117/#205/#222): "New tab from template…" (the primary "use"
+          action) plus template management (New / Save current / Manage). */}
       <div className={styles.menuWrap} ref={templatesMenu.wrapRef}>
         <button
           type="button"
@@ -338,6 +298,18 @@ function CanvasTabs() {
               right: templatesMenu.menuPos.right,
             }}
           >
+            <button
+              type="button"
+              className={styles.menuItem}
+              role="menuitem"
+              disabled={!hasTemplates}
+              onClick={() => {
+                templatesMenu.close();
+                openTemplateUse();
+              }}
+            >
+              New tab from template…
+            </button>
             <button
               type="button"
               className={styles.menuItem}

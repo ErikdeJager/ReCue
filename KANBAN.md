@@ -14,9 +14,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #222 — Revert Canvas "+" to a plain new-tab button; move "from template" into Templates menu
-	Plan: TASK-222.md
-	Depends on: none
 - [ ] #223 — Add a "distribute panels evenly" button to the Template Editor
 	Plan: TASK-223.md
 	Depends on: none
@@ -31,3 +28,5 @@ kanban-plugin: board
 
 - [x] #221 — Fix the terminal font rendering "jiggly" on Windows (JetBrains Mono / WebGL atlas)
 	Plan: TASK-221.md
+- [x] #222 — Revert Canvas "+" to a plain new-tab button; move "from template" into Templates menu
+	Plan: TASK-222.md

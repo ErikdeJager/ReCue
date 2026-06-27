@@ -1,6 +1,6 @@
-### 222. [ ] Revert the Canvas "+" to a plain new-tab button; move "from template" back into the Templates menu
+### 222. [x] Revert the Canvas "+" to a plain new-tab button; move "from template" back into the Templates menu
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 
