@@ -409,3 +409,68 @@ feedback Google Form. Decided autonomously:
 - **URL used verbatim** as pasted; `?usp=publish-editor` may be a Forms editor-preview link —
   flagged in the plan to swap for the public `…/viewform` URL if it opens the editor.
   **Depends on: none.**
+
+## TASK-211 — Reorder folders in the sidebar by dragging
+
+Card: drag folders up/down to reorder, no separate drag handle. Decided autonomously
+(refine loop, user not answering):
+
+- **Reuse the app-level `DndContext` (App.tsx), don't nest a new one.** The sidebar's
+  draggable rows (`SessionRow`/`FileRow`/…) are bound to that context so they drop into
+  Canvas; a nested context around the repo list would rebind them and break that. Add a
+  `SortableContext` (vertical) inside the sidebar as a descendant, handle the
+  folder-sort drag in App.tsx `onDragEnd` keyed by a `repohead:` id prefix.
+- **Whole repo header is the grip** (no handle) — spread `useSortable` listeners on the
+  header; the existing 4px PointerSensor activation distance keeps the title/`+`/right-
+  click working.
+- **Persist as a dedicated Rust `repo_order: Vec<String>`** (mirror `sidebar_width`
+  #108), separate from the Settings blob so a draft can't clobber it.
+- **Displayed order = `mergeRepoOrder(folderOrder, repoOrder(...))`** (reuse the pure
+  helper) so a spawned repo appends and a forgotten one drops without scrambling.
+- **Collapsed-rail drag reordering + worktree-subgroup reordering are out of scope**;
+  the rail still reflects the saved order (renders the same `repos`). **Depends on: none.**
+
+## TASK-212 — Keep the worktree branch label in sync after an in-terminal checkout
+
+Card: worktree branch label goes stale when the agent `git checkout`s inside the
+worktree. Decided autonomously:
+
+- **Root cause is *when* `refreshBranches` runs, not the backend.** `current_branches`
+  already resolves worktree HEADs and is already called with worktree paths (every
+  session's `repoPath` is included via `repoOrder`). It just isn't re-run after an
+  in-terminal checkout (only on repo-set change + app-initiated spawns/checkouts).
+- **Fix = debounced `refreshBranches()` on the session busy→idle edge**, mirroring the
+  #97 title-reader cadence; chosen over a poll timer (chattier + laggier).
+- **Covers both worktree and normal-repo labels** in one batched call — the worktree is
+  the motivating case, but the identical repo staleness is fixed for free; scoping to
+  worktrees only would help nothing. A small lag (updates at next idle settle) is
+  accepted. **Depends on: none.**
+
+## TASK-213 — Worktree agent header: normal open-view button + static "worktree" badge
+
+Card: "make a worktree agent use the same context-menu button as a normal agent, and
+turn the 'worktree' button into a non-clickable badge." Grounded via an Explore sweep;
+decided autonomously:
+
+- **"the same context-menu button" = the views-popover trigger on Overview/Canvas
+  headers** (`OpenViewButton`). Worktree agents already share the **sidebar** context
+  menu (same `SessionRow`); the affordance that actually differs is the clickable
+  `WorktreeViewsBadge` (text "worktree") shown *instead of* `OpenViewButton`.
+- `OpenViewButton` and `WorktreeViewsBadge` **wrap the same `ViewsPopover`**, so:
+  render `OpenViewButton` for worktree agents too (drop the `!worktreeParent` gate;
+  `repoPath = session.repoPath` is the worktree folder, so views still open in the
+  worktree), and replace the clickable badge with a **static**
+  `<span class={worktreeBadge}>worktree</span>` (same class as the "fork" badge).
+- **Only Overview + Canvas headers**; sidebar already unified, ScheduledPanel badge
+  already static. Remove `WorktreeViewsBadge` if it becomes unused. **Depends on: none.**
+
+## TASK-214 — Make the collapsed sidebar rail much narrower
+
+Card: collapsed rail much narrower, only slightly wider than its icons/buttons.
+Decided autonomously:
+
+- **`SIDEBAR_RAIL_WIDTH` 56 → 44** (36px buttons + ~4px gutter each side). The rail's
+  10px-per-side slack today comes purely from `(56−36)/2`. Final value tunable after a
+  visual check; buttons could drop to 34/32 with a ~40px rail for an even tighter look.
+- Pure constant + CSS change, no new state; verify nothing clips (dots, worktree
+  glyphs, collapsed footer, collapsed UpdateIndicator icon). **Depends on: none.**
