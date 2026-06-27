@@ -38,9 +38,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [x] #219 — Move the sidebar collapse button to the far right of the footer row
-	Plan: TASK-219.md
-
 - [x] #220 — Make Ctrl+V paste (text + images) work in terminals on Windows
 	Plan: TASK-220.md
 

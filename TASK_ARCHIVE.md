@@ -4692,3 +4692,46 @@ sub-group / `WorktreeHeader`), #93/#94 (scheduled sessions + `ScheduledPanel`), 
 
 ---
 
+### 219. [x] Move the sidebar collapse button to the far right of the footer button row
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+In the left panel (sidebar) **footer button row**, the three icon buttons — Settings, Feedback
+(#210), and the collapse/expand toggle (#168) — were all bunched at the left. This task moves the
+**collapse/expand** button to the **far right** edge of the expanded footer row while Settings and
+Feedback stay grouped flush left, without disturbing the collapsed icon rail's vertical stack.
+
+**What shipped** (commit `c6c4291`, 2026-06-28) — a minimal pure-CSS-layout change, no behavior
+changes:
+
+- **`src/components/Sidebar/Sidebar.module.css`:** added a `.footerCollapseToggle { margin-left:
+  auto; }` modifier that pushes the collapse button to the far right of the expanded `.footer`
+  flex row (keeping Settings + Feedback grouped left — chosen over `justify-content:
+  space-between`, which would have spread all three apart). Neutralized it under the collapsed
+  rail with `.footerCollapsed .footerCollapseToggle { margin-left: 0; }`, so the icon stays
+  centered/last in the vertical stack exactly as before.
+- **`src/components/Sidebar/Sidebar.tsx`:** applied the modifier class to the collapse `<button>`
+  (`${styles.footerButton} ${styles.footerCollapseToggle}`), leaving Settings and Feedback, all
+  icons/handlers/tooltips, and the ⌘B / Ctrl+B shortcut untouched.
+
+**Key files touched:** `src/components/Sidebar/Sidebar.module.css` (the two flex rules),
+`src/components/Sidebar/Sidebar.tsx` (modifier class on the collapse button).
+
+**Dependencies:** none. Builds on #168 (the collapse/expand toggle) and #210 (the feedback
+button) — the two footer buttons it sits beside.
+
+**Notes**
+
+- **Cross-platform:** a standard flex `margin-left:auto`, no engine-specific hacks, so it renders
+  identically on macOS (WKWebView) and Windows (WebView2/Chromium); the ⌘↔Ctrl tooltip already
+  routes through `kbdHint` and was untouched.
+- **Out of scope (as shipped):** the collapsed icon rail's vertical stack is unchanged ("far
+  right" is horizontal-only); no change to button order, icons, handlers, tooltips, or
+  `toggleSidebarCollapsed` behavior.
+
+---
+
