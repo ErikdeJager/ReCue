@@ -108,6 +108,11 @@ export interface ScheduledSession {
   /** Launch into an isolated git worktree (#198/#74), created at fire time on
    * `branch` (existing, or new when `create_branch`); absent/false = in-folder. */
   worktree?: boolean;
+  /** The app-managed worktree folder for a worktree schedule (#218), computed at
+   * create time; drives the sidebar worktree sub-group nesting (the same key the
+   * live session uses after firing). Absent for non-worktree schedules and for
+   * schedules created before #218. */
+  worktree_path?: string | null;
   name?: string | null;
   prompt?: string | null;
   fire_at: number;

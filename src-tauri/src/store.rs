@@ -127,6 +127,15 @@ pub struct ScheduledSession {
     /// `default` (false) keeps existing records as in-folder schedules.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worktree: bool,
+    /// The app-managed worktree folder for a worktree schedule (#218), computed at
+    /// **create time** via the deterministic `worktree_path(cwd, branch)` helper.
+    /// Persisted so the sidebar nests the pending schedule under the **same**
+    /// worktree sub-group key the live session will use after firing, and so fire
+    /// time reuses the byte-identical path. `None` for non-worktree schedules and for
+    /// worktree schedules created before #218 (they recompute at fire time and group
+    /// at the parent level until re-created). `default` keeps old records loading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -645,6 +654,7 @@ mod tests {
             create_branch: false,
             branch_base: None,
             worktree: false,
+            worktree_path: None,
             name: None,
             prompt: None,
             fire_at,
@@ -942,6 +952,7 @@ mod tests {
         s.create_branch = true;
         s.branch_base = Some("main".to_string());
         s.worktree = true;
+        s.worktree_path = Some("/data/worktrees/x-1/feature-x".to_string());
         store.add_schedule(s).unwrap();
 
         let loaded = &Store::load(&path).schedules()[0];
@@ -949,10 +960,16 @@ mod tests {
         assert!(loaded.create_branch);
         assert_eq!(loaded.branch_base.as_deref(), Some("main"));
         assert!(loaded.worktree);
+        // The worktree path (#218) round-trips so the sidebar sub-group key + fire-time
+        // path stay identical.
+        assert_eq!(
+            loaded.worktree_path.as_deref(),
+            Some("/data/worktrees/x-1/feature-x")
+        );
 
         // An older record without the new-branch / worktree fields loads with defaults
         // (create_branch = false → checkout-existing semantics; worktree = false, #125
-        // / #198 back-compat).
+        // / #198 back-compat; worktree_path = None, #218).
         let legacy =
             r#"{"schedules":[{"id":"old","cwd":"/r","branch":"dev","fire_at":1,"created_at":0}]}"#;
         let legacy_path = temp_path("sched-legacy");
@@ -962,6 +979,7 @@ mod tests {
         assert!(!old.create_branch);
         assert_eq!(old.branch_base, None);
         assert!(!old.worktree);
+        assert_eq!(old.worktree_path, None);
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&legacy_path);

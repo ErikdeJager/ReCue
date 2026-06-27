@@ -62,6 +62,46 @@ export function effectiveRepo(session: {
 }
 
 /**
+ * Whether a pending scheduled session (#93) nests under a **worktree** sub-group in
+ * the sidebar (#218), rather than at its parent repo's in-folder level. True only
+ * for a worktree schedule whose deterministic `worktree_path` was computed at create
+ * time — so it shares the sub-group key its live session will use after firing. A
+ * worktree schedule created before #218 (no `worktree_path`) stays at the parent
+ * level, as do all non-worktree schedules.
+ */
+export function scheduleNestsUnderWorktree(schedule: {
+  worktree?: boolean | null;
+  worktree_path?: string | null;
+}): boolean {
+  return Boolean(schedule.worktree && schedule.worktree_path);
+}
+
+/**
+ * The ordered, deduped set of worktree sub-group folder paths for a repo (#74/#218):
+ * the union of its live worktree agents' folders (`repoPath`) and the `worktree_path`
+ * of its pending worktree schedules. Live-agent paths come first (in input order),
+ * then any schedule-only paths, so a worktree with **both** a live agent and a
+ * schedule collapses to one sub-group keyed by the shared path, while a worktree that
+ * currently has only a scheduled session still gets its own sub-group.
+ */
+export function worktreeGroupPaths(
+  worktreeAgents: { repoPath: string }[],
+  worktreeSchedules: { worktree_path?: string | null }[],
+): string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  const add = (p: string | null | undefined) => {
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      paths.push(p);
+    }
+  };
+  for (const a of worktreeAgents) add(a.repoPath);
+  for (const s of worktreeSchedules) add(s.worktree_path);
+  return paths;
+}
+
+/**
  * Whether a session is shown under the Overview repo filter (#34/#197). A `repo`
  * filter matches a session's **effective repo** (so a repo filter includes its
  * worktree agents, #96); a **worktree-folder** filter matches the session's actual

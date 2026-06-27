@@ -1,6 +1,6 @@
-### 218. [ ] Nest scheduled worktree sessions under a worktree sub-group (sidebar) + worktree badge on Overview
+### 218. [x] Nest scheduled worktree sessions under a worktree sub-group (sidebar) + worktree badge on Overview
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 

@@ -35,7 +35,13 @@ import {
 import { agentSupportsResume } from "../../agents";
 import { noAutoCapitalize } from "../../inputProps";
 import { openUrl, revealFileInFinder, revealPath } from "../../ipc";
-import { forkUnavailableReason, repoName, sessionLabel } from "../../paths";
+import {
+  forkUnavailableReason,
+  repoName,
+  scheduleNestsUnderWorktree,
+  sessionLabel,
+  worktreeGroupPaths,
+} from "../../paths";
 import { joinPath, kbdHint, revealLabel } from "../../platform";
 import { formatFireTime } from "../../time";
 import {
@@ -1172,7 +1178,14 @@ function RepoGroup({
   // Worktree agents (#74) of this repo, grouped by their worktree folder — rendered
   // as indented sub-groups below the repo's own sessions/items.
   const worktreeAgents = sessions.filter((s) => s.worktreeParent === repo);
-  const worktreePaths = [...new Set(worktreeAgents.map((s) => s.repoPath))];
+  // Pending worktree schedules for this repo (#218): a worktree schedule with a
+  // computed `worktree_path` nests under a worktree sub-group keyed by that path —
+  // the same key the live session uses after it fires — instead of at the parent
+  // repo's in-folder level.
+  const worktreeSchedules = schedules.filter(
+    (s) => s.cwd === repo && scheduleNestsUnderWorktree(s),
+  );
+  const worktreePaths = worktreeGroupPaths(worktreeAgents, worktreeSchedules);
 
   return (
     <div
@@ -1259,9 +1272,11 @@ function RepoGroup({
       {renderPanelRows(repo)}
 
       {/* Pending scheduled sessions for this repo (#93): name/branch + fire time +
-      cancel. Non-draggable, no rich panel (that's #94). */}
+      cancel. Worktree schedules (#218) nest under their worktree sub-group below, so
+      they're excluded here and render at the parent level only when they have no
+      computed worktree path (pre-#218 records). */}
       {schedules
-        .filter((s) => s.cwd === repo)
+        .filter((s) => s.cwd === repo && !scheduleNestsUnderWorktree(s))
         .map((s) => (
           <ScheduleRow
             key={s.id}
@@ -1279,14 +1294,23 @@ function RepoGroup({
       repo_path is the worktree, not this repo. */}
       {worktreePaths.map((wt) => {
         const wtAgents = worktreeAgents.filter((s) => s.repoPath === wt);
-        const wtBranch = (branches[wt] ?? "") || repoName(wt);
+        const wtSchedules = worktreeSchedules.filter(
+          (s) => s.worktree_path === wt,
+        );
+        // Prefer the live checked-out branch; for a not-yet-fired worktree (schedule
+        // only, no live agent) fall back to the schedule's intended branch so the
+        // header reads the real branch, not the sanitized folder basename.
+        const wtBranch =
+          (branches[wt] ?? "") || (wtSchedules[0]?.branch ?? "") || repoName(wt);
         const wtLabels = dedupeBranchLabels(wtAgents.map(() => wtBranch));
         return (
           <div key={wt} className={styles.worktreeGroup}>
             <WorktreeHeader
               path={wt}
               branch={wtBranch}
-              parent={wtAgents[0]?.worktreeParent ?? undefined}
+              parent={
+                wtAgents[0]?.worktreeParent ?? wtSchedules[0]?.cwd ?? undefined
+              }
               agentCount={wtAgents.length}
             />
             {wtAgents.map((session, i) => (
@@ -1306,6 +1330,20 @@ function RepoGroup({
                 }
                 onRemove={() => void removeSession(session.id)}
                 onRename={(name) => void renameSession(session.id, name)}
+              />
+            ))}
+            {/* Pending worktree schedules (#218) nest here alongside live agents,
+            keyed by the shared worktree_path; the schedule's logical home stays the
+            parent repo identity (its cwd) for select/jump. */}
+            {wtSchedules.map((s) => (
+              <ScheduleRow
+                key={s.id}
+                schedule={s}
+                selected={s.id === selectedId}
+                onOpen={() =>
+                  selectItem({ kind: "scheduled", id: s.id, repoPath: s.cwd })
+                }
+                onCancel={() => void cancelSchedule(s.id)}
               />
             ))}
             {/* Views opened from the worktree badge (#164) are keyed by the worktree

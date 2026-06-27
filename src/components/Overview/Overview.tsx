@@ -473,6 +473,12 @@ function ScheduleCard({
       <span className={styles.name}>
         {schedule.name?.trim() || schedule.branch || "Scheduled"}
       </span>
+      {/* Worktree schedule (#218): a static "worktree" badge mirroring the live
+          worktree agent's card (and the ScheduledPanel), so it reads as a worktree
+          everywhere a fired worktree agent does. */}
+      {schedule.worktree && (
+        <span className={styles.worktreeBadge}>worktree</span>
+      )}
       <span className={styles.meta}>
         <span className={styles.metaText}>
           {repoName(schedule.cwd)}

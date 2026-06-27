@@ -735,10 +735,25 @@ pub fn create_schedule(
     // New-branch intent (#125): when create_branch is set, `branch` is the new branch
     // name (created at fire time) and `base` its base (empty/None = HEAD).
     let create_branch = create_branch.unwrap_or(false);
+    let worktree = worktree.unwrap_or(false);
+    let branch = branch.filter(|b| !b.is_empty());
+    // Worktree schedule (#218): compute + persist the deterministic worktree folder
+    // now (it depends only on the data dir + parent repo + branch, all known here, incl.
+    // for a create_branch new branch). The sidebar then nests the pending schedule under
+    // the same sub-group key the live session uses after firing, and fire time reuses
+    // the byte-identical path. `None` (no branch / not a worktree) keeps the old behavior.
+    let worktree_path = if worktree {
+        branch
+            .as_deref()
+            .and_then(|b| worktree_path(&store, &cwd, b).ok())
+            .map(|p| p.to_string_lossy().to_string())
+    } else {
+        None
+    };
     let sched = ScheduledSession {
         id: Uuid::new_v4().to_string(),
         cwd,
-        branch: branch.filter(|b| !b.is_empty()),
+        branch,
         create_branch,
         branch_base: if create_branch {
             base.filter(|b| !b.is_empty())
@@ -747,7 +762,8 @@ pub fn create_schedule(
         },
         // Launch into an isolated worktree (#198): created at fire time on `branch`
         // (existing or, with create_branch, new).
-        worktree: worktree.unwrap_or(false),
+        worktree,
+        worktree_path,
         name: name.filter(|n| !n.trim().is_empty()),
         prompt: prompt.filter(|p| !p.trim().is_empty()),
         fire_at: at,
@@ -902,7 +918,13 @@ fn prepare_worktree_for_schedule(
         .as_deref()
         .filter(|b| !b.is_empty())
         .ok_or_else(|| "worktree schedule has no branch".to_string())?;
-    let dest = worktree_path(store, &sched.cwd, branch).map_err(|e| e.to_string())?;
+    // Prefer the path persisted at create time (#218) so the fired live session's
+    // `repo_path` is byte-identical to the schedule's sidebar sub-group key; fall back
+    // to recomputing for records created before #218 (no stored path).
+    let dest = match sched.worktree_path.as_deref() {
+        Some(p) => PathBuf::from(p),
+        None => worktree_path(store, &sched.cwd, branch).map_err(|e| e.to_string())?,
+    };
     if sched.create_branch {
         git::worktree_add_new_branch(
             &sched.cwd,

@@ -5,8 +5,10 @@ import {
   FORK_UNAVAILABLE_REASON,
   forkUnavailableReason,
   repoName,
+  scheduleNestsUnderWorktree,
   sessionInFilter,
   splitPath,
+  worktreeGroupPaths,
 } from "./paths";
 
 describe("splitPath (#163)", () => {
@@ -124,5 +126,66 @@ describe("forkUnavailableReason (#138/#142)", () => {
     // Even with forkable true, a Codex session can't fork at all.
     const reason = forkUnavailableReason({ agent: "codex", forkable: true });
     expect(reason).toContain("Codex");
+  });
+});
+
+describe("scheduleNestsUnderWorktree (#218)", () => {
+  it("nests a worktree schedule with a computed worktree_path", () => {
+    expect(
+      scheduleNestsUnderWorktree({
+        worktree: true,
+        worktree_path: "/data/worktrees/repo-id/feat",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a non-worktree schedule at the parent level", () => {
+    expect(
+      scheduleNestsUnderWorktree({ worktree: false, worktree_path: null }),
+    ).toBe(false);
+  });
+
+  it("keeps a worktree schedule with no computed path at the parent level (pre-#218)", () => {
+    // A worktree schedule created before #218 has no worktree_path, so it can't be
+    // keyed to a sub-group and stays at the parent level until re-created.
+    expect(
+      scheduleNestsUnderWorktree({ worktree: true, worktree_path: null }),
+    ).toBe(false);
+    expect(scheduleNestsUnderWorktree({ worktree: true })).toBe(false);
+  });
+});
+
+describe("worktreeGroupPaths (#74/#218)", () => {
+  it("collapses a live agent and a schedule on the same path to one sub-group", () => {
+    const wt = "/data/worktrees/repo-id/feat";
+    expect(
+      worktreeGroupPaths([{ repoPath: wt }], [{ worktree_path: wt }]),
+    ).toEqual([wt]);
+  });
+
+  it("produces a sub-group for a schedule-only worktree path", () => {
+    const wt = "/data/worktrees/repo-id/scheduled";
+    expect(worktreeGroupPaths([], [{ worktree_path: wt }])).toEqual([wt]);
+  });
+
+  it("unions live-agent paths (first) with distinct schedule-only paths", () => {
+    const live = "/data/worktrees/repo-id/live";
+    const sched = "/data/worktrees/repo-id/sched";
+    expect(
+      worktreeGroupPaths(
+        [{ repoPath: live }],
+        [{ worktree_path: live }, { worktree_path: sched }],
+      ),
+    ).toEqual([live, sched]);
+  });
+
+  it("dedupes repeated live-agent paths and ignores null schedule paths", () => {
+    const wt = "/data/worktrees/repo-id/feat";
+    expect(
+      worktreeGroupPaths(
+        [{ repoPath: wt }, { repoPath: wt }],
+        [{ worktree_path: null }, { worktree_path: undefined }],
+      ),
+    ).toEqual([wt]);
   });
 });
