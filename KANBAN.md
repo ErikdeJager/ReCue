@@ -6,8 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] Move the left panel collapse button to the right side of the bottom button row. All other buttons stay on the left; the collapse button should sit on the far right (e.g. using justify-between).
-
 - [ ] Paste (Ctrl+V) doesn't work in agent terminals on Windows. When running the app on Windows, agent terminals cannot receive pasted/copied content. This applies to both text and images. Fix so paste (text and images) works in terminals on Windows.
 
 - [ ] Terminal font renders strangely on Windows. In terminal output some characters look weird/jiggly (the "C" character especially), though still readable. Likely the bundled font (JetBrains Mono) isn't installed/loading properly in the terminal on Windows. This issue is Windows-only — ensure the terminal font works correctly on Windows.
@@ -24,6 +22,10 @@ kanban-plugin: board
 
 - [ ] #218 — Nest scheduled worktree sessions under a worktree sub-group + Overview badge
 	Plan: TASK-218.md
+	Depends on: none
+
+- [ ] #219 — Move the sidebar collapse button to the far right of the footer row
+	Plan: TASK-219.md
 	Depends on: none
 
 ## DONE

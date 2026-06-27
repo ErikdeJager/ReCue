@@ -515,3 +515,46 @@ in the browser. Decided autonomously:
   report → user is evidently on Windows. Task fixes **only** `open_url`; the other
   `open`-based Finder "reveal" commands and broader Windows support are out of scope
   and left to the user. Fix is harmless on macOS regardless. **Depends on: none.**
+
+## TASK-218 — Nest scheduled worktree sessions under a worktree sub-group + Overview badge
+
+Card: a session scheduled for a worktree shows in the parent repo's in-folder location
+instead of nested under a worktree like a live worktree agent. The two UX questions were
+**answered by the user before they went silent** (recorded as confirmed, not assumed):
+
+- **Header for a not-yet-fired scheduled worktree = the full existing `WorktreeHeader`**
+  (branch + worktree cue + open-view `+` + Reveal/Copy/Pull/New/Close menu), accepting
+  best-effort failures while the folder doesn't exist yet (Copy path works).
+  _(over a lighter scheduled-only header)_ — **user-confirmed.**
+- **Scope = sidebar nesting + add the "worktree" badge to the Overview schedule card**
+  (the `ScheduledPanel` already shows one). _(over sidebar-only)_ — **user-confirmed.**
+
+Autonomous decisions in the plan:
+
+- **Persist a computed `worktree_path` on `ScheduledSession`** (Rust `Option<String>`
+  serde-default `None` + TS mirror), computed at `create_schedule` via the existing
+  deterministic `worktree_path(store, cwd, branch)`. Rationale: the path is fully
+  determined at schedule time and fire time already computes the identical path, so the
+  scheduled sub-group key equals the live session's `repo_path` after firing → clean
+  merge, no duplicate. The frontend can't compute it (no `data_dir`), so the backend
+  must supply it. Fire time prefers the stored value (recompute fallback for old records).
+- **Old schedules (no `worktree_path`) keep grouping at the parent level** and still fire
+  via the recompute fallback — only their pending-item nesting is unavailable. Accepted.
+- **No separate badge on the sidebar `ScheduleRow`** — the `WorktreeHeader` supplies the
+  worktree cue. **Depends on: none** (worktrees #74, schedules #93/#94, scheduled-worktree
+  #198, sidebar nesting all shipped).
+
+## TASK-219 — Move the sidebar collapse button to the far right of the footer row
+
+Card is precise ("far right", "all other buttons stay on the left", "e.g. justify-between").
+Decided autonomously (user not answering):
+
+- **Collapsed icon-rail left unchanged.** "Far right" is horizontal-only; the collapsed
+  footer is a vertical `flex-direction:column` stack. The new positioning
+  (`margin-left:auto` on the collapse button) must be neutralized under `.footerCollapsed`
+  so the icon stays centered in the rail. _(over reflowing the rail too)_
+- **"All other buttons" = Settings + Feedback only** — the only other buttons in the row;
+  the UpdateIndicator (#190) + usage bar (#154) render above the footer, unaffected.
+- **Prefer `margin-left:auto` on the collapse button over `justify-content:space-between`
+  on `.footer`** — with three flex items, `space-between` would also spread Settings and
+  Feedback apart rather than keeping them grouped left. **Depends on: none.**
