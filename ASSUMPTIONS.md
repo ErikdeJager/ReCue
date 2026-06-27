@@ -374,3 +374,38 @@ branch to `set({ view: "overview", selectedId: item.id })`. Decided autonomously
 - **No toast on switch**; intentionally reverses #79's "never auto-switch Overview↔Canvas"
   for the not-present case only. selectItem is main-window only (no detached edge).
   **Depends on: none.**
+
+## TASK-208 — Rewrite v0.0.1 patch notes as a first-release intro
+
+Content-only rewrite of `src/patchnotes/0.0.1.json` (today an internal changelog). Card:
+introduce what the app is + frame as the first/initial release, not a list of recent
+implementations. Decided autonomously:
+
+- Schema has no free-text intro field, so use two categories — **"welcome"** (what ClaudeCue
+  is + "first release") and **"highlights"** (Overview / Canvas / sidebar at a high level).
+  Arbitrary categories Title-Case via `categoryLabel`.
+- Keep `version` 0.0.1 and `date` 2026-06-26. Provided concrete recommended JSON in the
+  plan; wording polishable. **Depends on: none** (content-only; no code touched).
+
+## TASK-209 — Fix missing space in Settings → Updates "Current version"
+
+"Current version0.0.1" renders stuck. **Root cause:** `.updates` is `align-items:
+flex-start`, so `.field`/`.fieldLabel` shrink-wrap → `.fieldLabel`'s `justify-content:
+space-between` collapses → the label text and `.fieldValue` span sit adjacent. Decided:
+
+- Fix via **`gap: var(--space-8)` on `.fieldLabel`** (one line, `Settings.module.css`) — the
+  root-cause fix; also corrects the identical "Update available" field (same class). Over a
+  per-instance `{" "}` JSX space. **Depends on: none.**
+
+## TASK-210 — Feedback (bug) button in the sidebar footer
+
+Add a Lucide **`Bug`** footer button next to the Settings gear that `openUrl(FORM_URL)`s the
+feedback Google Form. Decided autonomously:
+
+- Placement **after the Settings gear** (Settings → Feedback → collapse chevron); 16px icon
+  matching the gear; reuse `openUrl` (`src/ipc.ts`, the existing `open_url` command) — no new
+  Rust command. No confirm gate (opening a URL is non-destructive). Main-window only (sidebar
+  only renders there). Works in the collapsed rail (`footerCollapsed` stacks it).
+- **URL used verbatim** as pasted; `?usp=publish-editor` may be a Forms editor-preview link —
+  flagged in the plan to swap for the public `…/viewform` URL if it opens the editor.
+  **Depends on: none.**

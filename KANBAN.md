@@ -6,11 +6,18 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] Rewrite the v0.0.1 patch notes: instead of listing recent implementations, introduce what the app is and frame it as the first/initial release
-- [ ] Fix the missing space between "Current version" and the version number shown above the "Check for updates" button
-- [ ] Add a feedback button (bug icon) in the bottom-left next to Settings that opens the bug-report / feature-request Google Form in the browser: https://docs.google.com/forms/d/e/1FAIpQLSf-EOSBcCTLUN-00UhBGj4XJ27ky7d2ZQp8YcOLwAVvTUkXGw/viewform?usp=publish-editor
 
 ## READY
+
+- [ ] #208 — Rewrite the v0.0.1 patch notes to introduce the app as the first release
+	Plan: TASK-208.md
+	Depends on: none
+- [ ] #209 — Fix the missing space between "Current version" and the version number in Settings → Updates
+	Plan: TASK-209.md
+	Depends on: none
+- [ ] #210 — Add a feedback button (bug icon) in the sidebar footer that opens the feedback Google Form
+	Plan: TASK-210.md
+	Depends on: none
 
 
 ## DONE
