@@ -311,3 +311,25 @@ less prominent. Decided autonomously (refine loop, user not answering):
 - **Error variant restyled to match** (inset, single-line, subtle) rather than left as-is.
 - **Collapsed rail:** keep icon-only, but center it (`justify-content: center`/modifier)
   so the new margins don't left-stick the icon. **Depends on: none.**
+
+## TASK-204 — Schedule modal: worktree checkbox → ⌘⏎ button/keybind
+
+The new-session and schedule flows are the **same** `NewSessionModal` but express the
+"isolated worktree" choice differently: new-session uses a "Worktree ⌘⏎" button + ⌘⏎
+keybind in the branch step (#74); schedule uses a checkbox in the schedule step (#198). Card
+asked to unify on the new-session pattern. Decided autonomously (refine loop, user not
+answering):
+
+- **The worktree button lands on the schedule step (the final action step), next to
+  "Schedule", NOT the schedule flow's branch step** — the pattern is "the worktree variant
+  of the *primary action* button," and the schedule flow's primary action is Schedule (the
+  branch step only advances). Keeps the choice on the same screen the checkbox was on.
+- **⌘⏎ / Ctrl+⏎ active across the whole schedule step**, plain ⏎ = normal schedule, and
+  Enter still inserts a newline in the prompt textarea / drives the open #114 skill menu.
+- **`submitSchedule(asWorktree: boolean)` param** over a retained `worktree` state toggled
+  by the button — mirrors the branch step's `create()` vs `createWorktree()` split, avoids
+  a setState-before-submit race. Remove `worktree`/`setWorktree`, the `.scheduleWorktree`
+  CSS, and the now-unused `Checkbox` import.
+- **Backend + `ScheduledPanel` untouched** — `scheduleSession(..., useWorktree)` (#198)
+  already takes the flag; ScheduledPanel only shows a read-only "worktree" badge.
+  **Depends on: none** (all referenced code ships today).
