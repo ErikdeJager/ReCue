@@ -837,3 +837,40 @@ autonomously (user not answering):
   the existing month/day + time. **Inject an optional `now` param** for unit-testing the
   "today" check. Keep the sidebar's full-date hover tooltip. **Depends on: none** (small
   tweak to the shipped #93/#94 time helper).
+
+## TASK-233 — Redesign the in-app Kanban board UI
+
+Card: reinvent the KanbanPanel (checkbox top-left + full-width text + tight padding;
+detail/meta lines as dimmed monospace secondary lines; inline add-card composer; per-column
+header with accent dot + UPPERCASE caps + count + "+"; each column its own accent). Grounded
+via Explore. Decided autonomously (user not answering):
+
+- **No engine change** — the kanban.ts `Card.body` **already round-trips** tab-indented
+  detail lines verbatim (like READY cards' Plan/Depends). The work is **rendering** the
+  body as **dimmed monospace** (restyle `.cardBody`, keep ReactMarkdown so links/task
+  checkboxes #194 still work).
+- **Per-column accent derived from the Catppuccin palette by column index** (reuse
+  `repoColor`/`REPO_PALETTE`) — the markdown format has nowhere to store color and must stay
+  unchanged ("keep it functional with the markdown format").
+- **Inline composer:** Enter submits, Shift+Enter = detail line; first line→title,
+  rest→body; opened by the column "+" and the bottom dashed "+ Add card".
+- **Card stays a drag source** via a whole-card grip + activation-distance guard (no
+  separate grip column), honoring "checkbox top-left + full-width text".
+- **No wireframe file exists** — built from the inline brief; match a wireframe if the user
+  sends one (as for #231). Large but cohesive; splittable if needed. **Depends on: none**
+  (builds on #141–#151/#194/#195 + `repoColor`).
+
+## TASK-234 — Kanban card hover-lift animation (drag affordance)
+
+**Direct user request (2026-06-28):** a Kanban card should "jump up slightly when hovered…
+smooth animation with a little flair so the user understands they can pick it up and drag
+it. But don't overdo it." Decided autonomously (user not answering questions):
+
+- **Subtle CSS-only hover lift**: `.card:not(.cardDragging):hover` → `transform:
+  translateY(-2px)` (≈2–3px) + a subtle `box-shadow` + `cursor: grab`, eased via
+  `--dur-fast`/`--ease-out`. No big scale/rotation ("don't overdo it").
+- **Don't fight dnd-kit**: inline drag transform already overrides the hover transform;
+  additionally don't apply the lift while dragging; `grabbing` cursor during drag.
+- **Reduced-motion aware** (global killswitch / scoped rule disables it).
+- **Depends on #233** — both edit `.card`; the lift layers on the redesigned resting style
+  (sequenced after to avoid conflict/rework).
