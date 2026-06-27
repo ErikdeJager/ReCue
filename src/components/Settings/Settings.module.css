@@ -107,6 +107,10 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  /* Keep the label and its value apart even when `.updates` (align-items:
+     flex-start) shrink-wraps the row, collapsing `space-between` (#209) —
+     otherwise "Current version" abuts the number ("Current version0.0.1"). */
+  gap: var(--space-8);
   color: var(--text-primary);
   font-size: var(--fs-meta);
 }

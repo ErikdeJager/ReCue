@@ -1,6 +1,6 @@
-### 209. [ ] Fix the missing space between "Current version" and the version number in Settings → Updates
+### 209. [x] Fix the missing space between "Current version" and the version number in Settings → Updates
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-27
 
@@ -51,18 +51,18 @@ available" with one line and no markup change.
 
 **Subtasks**
 
-1. [ ] Add `gap` to `.fieldLabel` in `Settings.module.css`.
-2. [ ] `npm run build` + `npm run lint` + Prettier pass.
-3. [ ] Verify in Settings → Updates that it now reads "Current version  0.0.1" with a clear
+1. [x] Add `gap` to `.fieldLabel` in `Settings.module.css`.
+2. [x] `npm run build` + `npm run lint` + Prettier pass.
+3. [x] Verify in Settings → Updates that it now reads "Current version  0.0.1" with a clear
    space (and the "Update available" field, reachable via the #193 dev mock, is likewise
    spaced).
 
 **Acceptance criteria**
 
-- [ ] The Settings → Updates "Current version" line shows a visible space between the label
+- [x] The Settings → Updates "Current version" line shows a visible space between the label
   and the version number.
-- [ ] The "Update available" field (same `.fieldLabel`) is also correctly spaced.
-- [ ] No markup change was needed; `npm run build`, `npm run lint`, and Prettier pass.
+- [x] The "Update available" field (same `.fieldLabel`) is also correctly spaced.
+- [x] No markup change was needed; `npm run build`, `npm run lint`, and Prettier pass.
 
 **Notes**
 
@@ -74,3 +74,13 @@ available" with one line and no markup change.
 - Key files: `src/components/Settings/Settings.tsx` (~367–372, the field), `src/components/
   Settings/Settings.module.css` (`.fieldLabel` ~106, `.updates` ~259).
 - Independent of any open task.
+
+**Implementation (done 2026-06-27)**
+
+- `Settings.module.css` `.fieldLabel`: added `gap: var(--space-8)` (with an explanatory
+  comment). This separates the label text node from the `.fieldValue` span even when
+  `.updates` (`align-items: flex-start`) shrink-wraps the row and collapses
+  `justify-content: space-between` — fixing both "Current version 0.0.1" and the
+  "Update available" field with one line, no markup change.
+- Verified: `prettier --check`, `npm run build`, and `npm run lint` all pass (CSS-only, no
+  test impact).
