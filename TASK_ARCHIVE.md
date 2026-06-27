@@ -5142,3 +5142,52 @@ syntax highlighting) depends on this task**, reusing the unchanged pure `prismLa
 
 ---
 
+### 228. [x] Make agents in the collapsed sidebar rail clickable (left-click select + right-click menu)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+When the sidebar is **collapsed** to the icon rail (#168/#214), agents rendered as **status dots
+only** with no interactivity. This makes each rail agent dot respond to **left-click** (select /
+jump to the agent, with a selected state) and **right-click** (the full agent context menu) —
+matching the expanded sidebar rows — for both normal-repo and worktree agents.
+
+**What shipped** (commit `c10233e`, 2026-06-28) — frontend-only, taking the recommended
+(not-fallback) approach:
+
+- **Shared `AgentContextMenu` (`src/components/Sidebar/Sidebar.tsx`):** extracted the agent
+  right-click menu (Rename / Fork conversation / Copy session ID / Open in canvas / Remove, with
+  the same `canFork`/`forkReason` + `canResume` gating + position clamping) into one component used
+  by **both** the expanded `SessionRow` and the collapsed rail, so they never diverge.
+- **Clickable rail dots:** the `dot()` helper now wraps each `BusyIndicator` in a `<button
+  className={railDot / railDotSelected}>` — `onClick` → `selectItem({ kind:"agent", id, repoPath })`,
+  `onContextMenu` → `preventDefault` + **`stopPropagation`** (so it opens the agent menu, not the
+  rail's background/repo menu) + the shared menu, with `title`/`aria-label` = the agent label and a
+  **selected** state when `s.id === selectedId`. Applied to repo-session and worktree-agent dots.
+- **Rename-from-rail:** since the narrow rail has no room for the inline editor, a new transient
+  store flag **`pendingRenameSessionId`** (`setPendingRenameSession`, `src/store.ts`) is set; the
+  rail's Rename expands the sidebar and the now-visible `SessionRow` consumes the flag on
+  mount/update to auto-begin the inline rename, then clears it.
+- **`Sidebar.module.css`:** added `.railDot` (button reset + hover) and `.railDotSelected` styles
+  (mirroring the expanded `.rowSelected` accent), preserving the dot's footprint/alignment.
+
+**Key files touched:** `src/components/Sidebar/Sidebar.tsx` (shared `AgentContextMenu` + clickable
+`dot()` + rename plumbing), `src/store.ts` (`pendingRenameSessionId` flag),
+`src/components/Sidebar/Sidebar.module.css` (`.railDot`/`.railDotSelected`).
+
+**Dependencies:** none — builds on the shipped collapsed rail (#168/#214) and the `SessionRow`
+agent menu (#57/#131/#132/#142/#153).
+
+**Notes**
+
+- **Cross-platform:** pure frontend; `onContextMenu` + `clientX/clientY` positioning are standard
+  and identical on macOS and Windows; the shared menu inherits its clamping/dismiss behavior.
+- **Out of scope:** drag-into-Canvas from the rail dots (the card was click-only; drag stays on the
+  expanded rows), the rail's repo-folder button + worktree header (already interactive), and
+  non-agent items (they don't appear as rail dots).
+
+---
+

@@ -6,6 +6,8 @@ kanban-plugin: board
 
 ## Refine
 
+- [ ] 
+
 ## READY
 
 - [ ] #230 — Add a "Commits" source to the diff viewer (list commits → show a commit's diff)
@@ -26,7 +28,5 @@ kanban-plugin: board
 
 ## DONE
 
-- [x] #228 — Make agents in the collapsed sidebar rail clickable (left-click select + right-click menu)
-	Plan: TASK-228.md
 - [x] #229 — Syntax-highlight the diff viewer (reusing the file viewer's languages)
 	Plan: TASK-229.md
