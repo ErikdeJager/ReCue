@@ -29,6 +29,3 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #212 — Keep worktree branch label in sync after an in-terminal checkout
-	Plan: TASK-212.md
-

@@ -4323,3 +4323,56 @@ on the title or the `+` still does its normal thing).
 
 ---
 
+### 212. [x] Keep the worktree branch label in the sidebar in sync after an in-terminal checkout
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-27
+
+**Description**
+
+When an agent ran `git checkout <other-branch>` **inside its worktree** (directly in the PTY
+terminal), the sidebar's worktree branch label kept showing the **old** branch until the app was
+restarted. The same staleness affected normal repo headers for an in-terminal checkout. The root
+cause was purely **when** `refreshBranches` ran: only on the top-level repo set changing and after
+app-initiated spawns/checkouts — never after a checkout the agent performed itself in the
+terminal. The backend `git::current_branches` already resolves worktree HEADs and was already
+invoked with worktree paths (a worktree agent's `repoPath` **is** the worktree folder), so **no
+backend change was needed** — only an additional trigger to re-read.
+
+**What shipped** (commit `8ff49c8`, 2026-06-27) — frontend-only:
+
+- **Store (`src/store.ts`):** the **busy→idle edge** (previous `sessionBusy` `true` → now
+  `false`), detected in `setBusy` (the sole caller of the `session://state` handler), schedules a
+  **debounced (~600ms), coalesced** `refreshBranches()` via a module-level timer — mirroring the
+  #97 title-worker cadence (chosen over a periodic poll as less chatty and less laggy). Multiple
+  sessions settling together collapse into a single batched `current_branches` call. Because
+  `refreshBranches` already passes worktree paths (via `repoOrder(recents, sessions)`), this
+  naturally covers **both** worktree labels and normal repo headers in one call.
+- **Tests:** `store.test.ts` + `store.refresh.test.ts` drive a session busy→idle, assert
+  `refreshBranches` runs after the debounce, and that a changed branch from the mocked
+  `ipc.currentBranches` updates `branches[worktreePath]` (and a repo path).
+- **Docs:** a one-line note added to the Git/branch section of `CLAUDE.md` that branch labels
+  refresh on the busy→idle edge (like the title reader), so an in-terminal `git checkout` is
+  reflected.
+
+**Key files touched:** `src/store.ts`, `src/store.test.ts`, `src/store.refresh.test.ts`, plus
+`CLAUDE.md`. No backend / `git.rs` change.
+
+**Dependencies:** none. Reuses the existing `refreshBranches` → `ipc.currentBranches` →
+`git::current_branches` path and the busy/idle edge already emitted by the #42/#112 monitor;
+cadence mirrors the #97 title reader.
+
+**Notes**
+
+- **Trigger = busy→idle edge, debounced**, mirroring the #97 title-worker cadence, chosen over a
+  periodic poll timer (chattier + laggier). A small lag (label updates at the next idle settle,
+  not the instant of checkout) is expected and accepted as in scope.
+- **Why both labels:** scoping to worktrees only would leave the identical repo-header staleness
+  unfixed for no benefit; one batched call covers both.
+- **Autonomous refine (2026-06-27):** decided in the refine loop with the user not answering — see
+  `ASSUMPTIONS.md`. Behaviour is unit-tested; the interactive eyeball (label updating after a real
+  in-terminal checkout) is **runtime-unverified** in this headless loop.
+
+---
+
