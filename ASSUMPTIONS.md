@@ -749,3 +749,21 @@ answering):
 - **Mind Prism dependency order** (markup-templating before php; clike-extenders after
   core) — wrong order silently disables a grammar. **Depends on: none**; the later
   diff-viewer highlighting card depends on **this** (reuses `prismLang`/`highlightToHtml`).
+
+## TASK-228 — Make agents in the collapsed sidebar rail clickable
+
+Card: when the sidebar is collapsed, agents are status-dots-only; make them respond to
+left/right click like the expanded rows. Grounded: the rail `dot()` helper renders a bare
+`<BusyIndicator>` with no handlers; `SessionRow` is the behavior to mirror (left =
+`selectItem` agent; right = menu Rename/Fork/Copy session ID/Open in canvas/Remove).
+Decided autonomously (user not answering):
+
+- **Left-click = `selectItem` select/jump; right-click = the same agent menu** as the
+  expanded row, shared via an extracted `useAgentRowActions`/`agentRowMenuItems` helper so
+  the two never diverge; `stopPropagation` so it opens the agent menu, not the rail
+  background/repo menu. Add a selected state to the active dot.
+- **Rename from the rail = expand the sidebar + auto-begin the inline rename** (the inline
+  editor doesn't fit the narrow rail), via a transient `pendingRenameSessionId` the
+  expanded `SessionRow` consumes. Documented fallback: omit Rename in the rail.
+- **Drag-into-Canvas from the rail is out of scope** (card is click-only). **Depends on:
+  none** (builds on the shipped rail #168/#214 + the SessionRow menu #57/#131/#142/#153).
