@@ -659,3 +659,26 @@ autonomously (user not answering):
 - **Button only — no border double-click gesture** (the card asks for "the same button";
   #186's separator-double-click half is out of scope). **Depends on: none** (builds on
   shipped #186 + #117).
+
+## TASK-224 — Canvas template file block: full paths + relative/absolute choice
+
+Card: open-file template block should support full paths (folders + filename), not just a
+bare filename, plus a relative/absolute choice (relative = project root, absolute =
+filesystem root). Grounded via Explore: the block stores only `file: string`; the editor
+is a bare relative-filename input; instantiation joins `file` to the chosen `cwd`; the
+backend confines to a repo (`repo.join`), so relative subpaths **already** work, and an
+absolute file opens via the shipped **#163 parent-dir-as-root** trick (`splitPath` →
+`{repoPath: parentDir, file: basename}`). Decided autonomously (user not answering):
+
+- **Explicit `filePathMode?: "relative" | "absolute"` field** (default relative when
+  absent) over inferring absolute-ness from the path — matches the card's "choice",
+  clearer on re-edit, back-compatible.
+- **No backend `files.rs` change** — relative subpaths already validate via `repo.join`
+  (treats `/` as a separator on Windows too); absolute reuses the #163 split-to-parent
+  pattern. A shared pure `fileBlockTarget(block, cwd)` helper feeds both
+  `templateInstantiate` and `resolveTemplateBlock`.
+- **Add a "Browse…" picker in absolute mode** (reuse `pickFile`), mirroring #163.
+- **Absolute templates are machine/OS-specific by design** (documented in the helper
+  text); relative ones stay portable (stored `/`-separated). Resolve failures already
+  degrade gracefully (pending + Retry, #118). **Depends on: none** (builds on
+  #117/#118/#163 + the cross-platform `splitPath`/`joinPath` helpers).

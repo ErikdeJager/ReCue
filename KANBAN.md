@@ -6,8 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] In Canvas templates, support full paths (folders + filename) for a file block, not just a bare filename, plus a choice between relative and absolute path. Relative resolves from the project root; absolute resolves from the filesystem root.
-
 - [ ] Show a subtle, slightly grayed-out branch badge next to each folder name in the left panel, displaying that folder's current branch. It should stay in sync when the branch changes from any source (agent, user typing in a terminal, etc.), so it likely needs polling/checking to pick up checkouts.
 
 - [ ] Replace the worktree badge on agent headers with a folder + branch indicator. Like the Kanban board header shows its folder, every agent's header should show the folder and branch that specific agent is working on. Remove the separate worktree badge in favor of this.
@@ -34,6 +32,10 @@ kanban-plugin: board
 
 - [ ] #223 — Add a "distribute panels evenly" button to the Template Editor
 	Plan: TASK-223.md
+	Depends on: none
+
+- [ ] #224 — Canvas template file block: support full paths + relative/absolute path choice
+	Plan: TASK-224.md
 	Depends on: none
 
 ## DONE
