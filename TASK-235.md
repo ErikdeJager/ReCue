@@ -1,8 +1,8 @@
 # TASK-235
 
-### 235. [ ] SkillAutocomplete: open the slash-command dropdown *above* the textarea
+### 235. [x] SkillAutocomplete: open the slash-command dropdown *above* the textarea
 
-**Status:** Not started · _(Not started | In progress | Done)_
+**Status:** Done · _(Not started | In progress | Done)_
 **Depends on:** none · _(independent — touches only the shipped #114 SkillAutocomplete component)_
 **Created:** 2026-06-28
 

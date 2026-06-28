@@ -25,7 +25,11 @@
 .menu {
   position: absolute;
   z-index: 30;
-  top: calc(100% + var(--space-2));
+  /* Anchor to the textarea's top edge and grow upward (#235): both call sites
+     (NewSessionModal schedule step, ScheduledPanel) have UI directly below the
+     prompt, so opening below overlapped it. `max-height` caps the upward growth
+     and `overflow-y: auto` keeps long lists scrollable. */
+  bottom: calc(100% + var(--space-2));
   right: 0;
   left: 0;
   display: flex;
