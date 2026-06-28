@@ -1515,6 +1515,7 @@ function RepoGroup({
   const sessionBusy = useStore((s) => s.sessionBusy);
   const sessionActive = useStore((s) => s.sessionActive);
   const schedules = useStore((s) => s.schedules);
+  const overviewPanels = useStore((s) => s.overviewPanels);
 
   const {
     attributes,
@@ -1536,6 +1537,20 @@ function RepoGroup({
     (s) => s.repoPath === repo && !s.worktreeParent,
   );
   const isEmpty = repoSessions.length === 0;
+  // Branch-line gate (#250): show the repo's own branch line only when the folder
+  // has at least one of its *own* items opened — own sessions, own non-agent panels
+  // (files/diffs/terminals/kanban), or own-folder schedules. A worktree sub-group
+  // does NOT count (it keeps its own WorktreeHeader branch indicator), so a folder
+  // whose only content is a worktree hides the repo's own branch line. Broader than
+  // `isEmpty` (which counts only sessions and drives the greyed header), so it's a
+  // separate flag.
+  const hasOwnSchedules = schedules.some(
+    (s) => s.cwd === repo && !scheduleNestsUnderWorktree(s),
+  );
+  const hasOwnItems =
+    repoSessions.length > 0 ||
+    (overviewPanels[repo]?.length ?? 0) > 0 ||
+    hasOwnSchedules;
   // Split the active highlight (#247): the folder header lights for the "all" filter,
   // the branch line for the "own" filter — never both at once.
   const folderActive =
@@ -1621,7 +1636,7 @@ function RepoGroup({
           (the `branches` map, kept current by the #212 edge + the focus/poll effect
           below); hidden for a non-git / unknown folder. Clicking it filters Overview to
           the repo (toggle), exactly like clicking the repo name (#34). */}
-      {branches[repo] && (
+      {branches[repo] && hasOwnItems && (
         <RepoBranchLine
           repo={repo}
           branch={branches[repo]}

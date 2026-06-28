@@ -2,7 +2,7 @@
 
 ### 250. [ ] Hide a repo folder's branch line when the folder has no own items
 
-**Status:** Not started · _(Not started | In progress | Done)_
+**Status:** Done · _(Not started | In progress | Done)_
 **Depends on:** none
 **Created:** 2026-06-28
 
