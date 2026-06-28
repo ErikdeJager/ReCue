@@ -1,11 +1,14 @@
 name: Release
 
 # On every push to main, release ONLY when the app version was bumped past the latest
-# v* tag. The release body is CONSTRUCTED on the fly from git history — nothing is
-# generated or committed back to the repo:
+# v* tag AND no GitHub release (draft or published) already carries that version's tag.
+# The release body is CONSTRUCTED on the fly from git history — nothing is generated or
+# committed back to the repo:
 #
-#   prepare        — version gate; if releasing, read the current version and ask Claude
-#                    to construct the release body (markdown) from every change since the
+#   prepare        — version gate: the config version must be a strict bump past the
+#                    latest v* tag AND have no existing release (draft or published) for
+#                    v<version>. If releasing, read the current version and ask Claude to
+#                    construct the release body (markdown) from every change since the
 #                    last release tag. No file is written and nothing is committed back.
 #   create-release — open ONE draft GitHub release.
 #   release        — 2-OS matrix (macOS universal + Windows x86_64) builds SIGNED
@@ -14,6 +17,11 @@ name: Release
 #                    (parks the DMG's hidden helper files off-canvas via
 #                    scripts/polish-dmg.sh) and swaps it for the uploaded asset —
 #                    best-effort, so it can never fail the release.
+#   tag            — once the matrix has fully built, tag the triggering commit v<version>.
+#                    A draft never creates the git tag itself, so this tags the commit now
+#                    rather than only when a maintainer later publishes the draft. It also
+#                    makes the prepare gate idempotent: a re-push of the same version then
+#                    sees the tag and skips.
 #
 # A maintainer then PUBLISHES the draft — the updater endpoint
 # /releases/latest/download/latest.json only resolves to a non-draft "latest" release.
@@ -40,23 +48,42 @@ jobs:
           fetch-depth: 0 # need all tags + history for the version gate and the diff range
 
       - id: guard
-        name: Compare config version to the latest tag
+        name: Version gate (bumped past latest tag + no existing release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # 1) Must be a strict version bump past the latest v* tag.
           latest="$(git tag -l 'v*' --sort=-version:refname | head -n1)"
           latest="${latest#v}"
+          should_release=false
           if [ -z "$latest" ]; then
-            echo "No prior tag — releasing v$version."
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "No prior tag — candidate release v$version."
+            should_release=true
           elif [ "$version" != "$latest" ] && \
                [ "$(printf '%s\n%s\n' "$latest" "$version" | sort -V | tail -n1)" = "$version" ]; then
-            echo "Version bumped $latest -> $version — releasing."
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Version bumped $latest -> $version — candidate release."
+            should_release=true
           else
             echo "::notice::Version $version is not higher than $latest — skipping release."
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
           fi
+
+          # 2) Don't double-release: skip if a GitHub release (draft OR published) already
+          #    carries the v$version tag. Drafts don't create a git tag, so the tag check
+          #    above can't catch an unpublished draft left by a previous run on the same
+          #    version — this closes that gap. Fail-open if the API can't be read (the
+          #    version-bump check above remains the primary guard).
+          if [ "$should_release" = "true" ]; then
+            if gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[].tag_name' \
+                 2>/dev/null | grep -qx "v$version"; then
+              echo "::notice::A release for v$version already exists — skipping."
+              should_release=false
+            fi
+          fi
+
+          echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
 
       - name: Install Node
         if: steps.guard.outputs.should_release == 'true'
@@ -223,3 +250,35 @@ jobs:
               data,
             });
             console.log(`Uploaded polished ${name} (${data.length} bytes)`);
+
+  tag:
+    name: Tag the release commit
+    # `needs: release` waits for ALL matrix legs and (with no status function in the `if`)
+    # only runs when every one succeeded — so a failed/skipped build never tags the commit.
+    needs: [prepare, release]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the v<version> tag on the release commit
+        # The release we just built is a DRAFT, and a draft creates no git tag until it is
+        # published. Tag the triggering commit now so the commit is tagged v<version> as
+        # part of the pipeline. When the maintainer later publishes the draft, GitHub finds
+        # this existing tag (same commit) and associates it — no conflict.
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = `v${{ needs.prepare.outputs.version }}`;
+            const sha = `${{ needs.prepare.outputs.sha }}`;
+            const { owner, repo } = context.repo;
+            try {
+              await github.rest.git.createRef({ owner, repo, ref: `refs/tags/${tag}`, sha });
+              console.log(`Tagged ${sha} as ${tag}.`);
+            } catch (e) {
+              // 422 = the ref already exists (a re-run, or the draft was published first).
+              // The commit is tagged either way — don't fail the run.
+              if (e.status === 422) {
+                console.log(`Tag ${tag} already exists — nothing to do.`);
+              } else {
+                throw e;
+              }
+            }
