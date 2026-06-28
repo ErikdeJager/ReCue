@@ -6230,3 +6230,55 @@ gently de-emphasized.
 
 ---
 
+### 249. [x] Canvas tab-strip icon buttons: shrink the new-tab/Templates/Distribute cluster to match the × close button
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+In the Canvas view the tab strip rendered icon buttons at inconsistent sizes: each
+per-tab **`×` close** button (`.tabClose`) was a **20×20px** box, while the **`+`
+new-tab**, **`Templates ▾`**, and **Distribute-evenly** buttons all shared the
+`.tabAdd` class at **24×24px** — so the right-side cluster read visibly bigger than the
+`×`. The user wanted the new-tab button (and, per the confirmed refine decision, the
+whole right-side cluster) to match the `×` button's size, with the `×` itself as the
+unchanged reference.
+
+**What shipped** (commit `3d82b18`, 2026-06-28):
+
+- `src/components/Canvas/Canvas.module.css` — shrank `.tabAdd` from `24×24px` to
+  **`20×20px`**, so the `+` and Distribute buttons (both single-icon, shared via
+  `.tabAdd` / `.tabDistribute`) became 20px squares matching the `×`. Added a new
+  **`.tabMenuTrigger`** modifier for the `Templates ▾` trigger that keeps the 20px
+  height but overrides `width: auto` (`min-width: 20px`, `gap: var(--space-1)`,
+  `padding: 0 var(--space-2)`) so its two icons (`LayoutTemplate` 14px + `ChevronDown`
+  11px) aren't clipped by a 20px square. Also reworded the now-stale `.tabClose`
+  comment that referenced the old "24px add (+) button" to note 20px is the strip's
+  reference icon-button size.
+- `src/components/Canvas/CanvasTabs.tsx` — added `${styles.tabMenuTrigger}` alongside
+  `styles.tabAdd` on the Templates button only; the `+` and Distribute buttons inherit
+  the new 20px `.tabAdd` size with no markup change.
+
+Icon sizes were already all 14px, so only box dimensions changed — purely visual, no
+behavioral change to the dropdowns, drag-reorder, or the Distribute disabled state.
+
+**Key files touched:** `src/components/Canvas/Canvas.module.css` (`.tabAdd` resize +
+new `.tabMenuTrigger` + `.tabClose` comment), `src/components/Canvas/CanvasTabs.tsx`
+(Templates button class).
+
+**Dependencies:** none.
+
+**Notes**
+
+- Refine decision (2026-06-28): match the **whole right-side cluster** to the `×` size
+  (not only the `+`). `Templates ▾` matches height only, keeping auto width for its two
+  icons; the `×` close button is the reference and stays 20×20.
+- **Cross-platform:** a pure CSS Module change using `width`/`height`/`padding`/flex
+  with no `-webkit-`-only properties, vibrancy, or `color-mix` — renders identically on
+  WKWebView (macOS) and WebView2/Chromium (Windows); no `#[cfg]` gating or platform
+  signal involved. `build` / `lint` pass.
+
+---
+
