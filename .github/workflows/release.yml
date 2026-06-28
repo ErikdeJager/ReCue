@@ -1,18 +1,17 @@
 name: Release
 
-# On every push to main, release ONLY when ALL guards pass (#190 + #192):
-#   1. the app version was bumped past the latest v* tag,
-#   2. a matching src/patchnotes/<version>.json exists (#192), AND
-#   3. a signing key secret (TAURI_SIGNING_PRIVATE_KEY) is configured.
-# With no key configured (today — the updater is a deferred-key skeleton) the build
-# job is skipped and the workflow no-ops with a clear notice. Adding the secret + a
-# version bump (with patch notes) later activates it with no further code changes.
+# On every push to main, release ONLY when BOTH guards pass:
+#   1. the app version was bumped past the latest v* tag, AND
+#   2. a matching src/patchnotes/<version>.json exists (#192).
+# The signing key is now configured in repo secrets, so the former deferred-key skip
+# (#190) is gone — the pipeline actually runs and publishes.
 #
-# When all hold, build a universal macOS bundle and create a DRAFT GitHub release
-# carrying the .dmg + the Tauri updater artifacts (.app.tar.gz, .sig, latest.json).
-# The release body is generated from the version's patch notes (#192), which flows
-# into latest.json's `notes` → the app's `update.body`, so an older client can read a
-# not-yet-installed update's notes. A maintainer then publishes the draft.
+# Builds SIGNED Tauri updater artifacts for macOS (universal) AND Windows (x86_64),
+# uploads them to ONE draft GitHub release, and produces a single merged latest.json
+# (darwin-aarch64, darwin-x86_64, windows-x86_64). The release body is generated from
+# the version's patch notes (#192), which flows into latest.json's `notes` → the app's
+# `update.body`. A maintainer then PUBLISHES the draft — the updater endpoint
+# /releases/latest/download/latest.json only resolves to a non-draft "latest" release.
 
 on:
   push:
@@ -27,9 +26,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.guard.outputs.should_release }}
-      has_key: ${{ steps.secret.outputs.has_key }}
       has_notes: ${{ steps.notes.outputs.has_notes }}
       version: ${{ steps.guard.outputs.version }}
+      body: ${{ steps.body.outputs.md }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,26 +53,12 @@ jobs:
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - id: secret
-        name: Check for the signing key
-        env:
-          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          # A boolean only — never echo the secret itself. Secrets aren't available
-          # in job-level `if:`, so the release job gates on this output instead.
-          if [ -n "$SIGNING_KEY" ]; then
-            echo "has_key=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::No TAURI_SIGNING_PRIVATE_KEY secret — skipping release (the updater is a deferred-key skeleton, #190)."
-            echo "has_key=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - id: notes
         name: Require matching patch notes (#192)
         run: |
           # Force per-version patch notes: the release body / latest.json notes come
           # from src/patchnotes/<version>.json, so a missing/mismatched file ends the
-          # release early (the card's "check the version is up to date — if not, end").
+          # release early.
           version="${{ steps.guard.outputs.version }}"
           file="src/patchnotes/${version}.json"
           if [ ! -f "$file" ]; then
@@ -86,23 +71,77 @@ jobs:
             echo "has_notes=true" >> "$GITHUB_OUTPUT"
           fi
 
-  release:
-    name: Build + draft release
+      - id: body
+        name: Generate release notes from patch notes (#192)
+        if: steps.notes.outputs.has_notes == 'true'
+        run: |
+          # Generated ONCE here (Linux runner → bash by default, so the heredoc works)
+          # and exposed as a job output, then fed to tauri-action as releaseBody on
+          # BOTH matrix legs — so the GitHub release body AND latest.json `notes` carry
+          # the patch notes. Doing it here avoids a bash-heredoc step on the Windows
+          # runner (whose default shell is PowerShell).
+          {
+            echo "md<<PATCHNOTES_EOF"
+            node scripts/patchnotes-to-md.mjs "${{ steps.guard.outputs.version }}"
+            echo "PATCHNOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  create-release:
+    name: Create draft release
     needs: check
-    # All guards: a version bump, matching patch notes (#192), AND a configured
-    # signing key. Any missing -> this job is skipped and the workflow ends green.
-    if: >-
-      needs.check.outputs.should_release == 'true' &&
-      needs.check.outputs.has_notes == 'true' &&
-      needs.check.outputs.has_key == 'true'
-    runs-on: macos-latest
+    if: needs.check.outputs.should_release == 'true' && needs.check.outputs.has_notes == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - id: create
+        # Create exactly ONE draft release up front and hand its numeric id to the
+        # matrix. The build legs upload by releaseId (not by tag): GitHub's
+        # get-release-by-tag API doesn't return drafts, so a tag-based matrix can spawn
+        # duplicate drafts — uploading by id is unambiguous.
+        uses: actions/github-script@v7
+        env:
+          RELEASE_BODY: ${{ needs.check.outputs.body }}
+        with:
+          result-encoding: string
+          script: |
+            const tag = `v${{ needs.check.outputs.version }}`;
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `ReCue ${tag}`,
+              body: process.env.RELEASE_BODY,
+              draft: true,
+              prerelease: false,
+            });
+            return data.id.toString();
+
+  release:
+    name: Build + upload (${{ matrix.platform }})
+    needs: [check, create-release]
+    strategy:
+      fail-fast: false
+      # Serialize the legs so the latest.json read-modify-write merge on the shared
+      # release is deterministic (macOS writes the darwin entries; Windows reads that,
+      # appends windows-x86_64, writes back).
+      max-parallel: 1
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: windows-latest
+            args: ""
+            rust_targets: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust (apple targets)
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.rust_targets }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -117,27 +156,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - id: body
-        name: Generate release notes from patch notes (#192)
-        run: |
-          # The version's patch notes → the release body, which tauri-action also
-          # writes into latest.json's `notes` → the app's `update.body`.
-          {
-            echo "md<<PATCHNOTES_EOF"
-            node scripts/patchnotes-to-md.mjs "${{ needs.check.outputs.version }}"
-            echo "PATCHNOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build universal bundle + draft release
+      - name: Build + upload signed updater artifacts
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          args: --target universal-apple-darwin
-          tagName: v${{ needs.check.outputs.version }}
-          releaseName: ReCue v${{ needs.check.outputs.version }}
-          releaseBody: ${{ steps.body.outputs.md }}
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          releaseBody: ${{ needs.check.outputs.body }}
+          args: ${{ matrix.args }}

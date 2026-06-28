@@ -692,18 +692,20 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   (`open_canvas_window`) with the label `canvas-<id>` and a `?canvas=<id>` route, so
   no JS window-create permission is needed — only the `canvas-*` capability so the
   new window can invoke commands + listen to events.
-- **Builds & distribution:** `npm run tauri build` produces a local **unsigned**
-  macOS `.app`/`.dmg` (Gatekeeper warns on first open — no code signing /
-  notarization). An **in-app auto-update skeleton** (#190, **re-introducing** the #15
-  updater that **#62 removed** and rebuilding it richer) is **wired but inert until a
-  real minisign signing keypair is generated** (deferred to a later task):
+- **Builds & distribution:** `npm run tauri build` produces a local **unsigned** (no
+  OS code signing / notarization) macOS `.app`/`.dmg` (Gatekeeper warns on first open)
+  and Windows NSIS/MSI installers — but the **updater artifacts are minisign-signed**.
+  The **in-app auto-update** (#190, **re-introducing** the #15 updater that **#62
+  removed** and rebuilding it richer) is **live** (activated once a real minisign
+  keypair + GitHub secrets were provided):
   - **Plugins:** `tauri-plugin-updater` + `tauri-plugin-process` (Rust + JS), inited
     in `lib.rs`; `capabilities/default.json` grants `updater:default` +
     `process:allow-restart`. `tauri.conf.json` carries a `plugins.updater` block with
-    the GitHub-releases `latest.json` `endpoints` and a **placeholder `pubkey`** (the
-    old #15 public key — valid format, but its private key is deferred), and
-    **`createUpdaterArtifacts` is intentionally OFF** so a local `npm run tauri build`
-    keeps emitting an unsigned `.app`/`.dmg` **with no key**.
+    the GitHub-releases `latest.json` `endpoints` (the `ErikdeJager/ReCue` repo) and the
+    **real `pubkey`** (key id `CE271BFBDBF2D714`, the verbatim contents of the root
+    `.recue-updater.key.pub`), and **`createUpdaterArtifacts` is ON** so each build
+    emits the `.sig` + `latest.json` updater set. The matching **private** key lives in
+    the `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets.
   - **Frontend:** `src/updater.ts` wraps `check()` / `downloadAndInstall` (progress) /
     `relaunch()`; the store `update` slice (`status`/`version`/`progress`/`error`/
     `confirming`, driven by `checkForUpdate`/`openUpdateConfirm`/`cancelUpdate`/
@@ -726,19 +728,22 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
     `update.body`, and the store keeps it as `update.notes` — rendered (markdown) in the
     Updates pane's "What's new" slot so an older client reads them before installing.
   - **Pipeline:** `.github/workflows/release.yml` on push to `main` gates on a
-    version bump (config version > latest `v*` tag), a **matching `src/patchnotes/
-    <version>.json`** (#192 — else end early), **and** the `TAURI_SIGNING_PRIVATE_KEY`
-    secret being present; any missing → the build job is skipped and the run ends green
-    with a notice. When all hold it builds a universal macOS bundle + a **draft** GitHub
-    release via `tauri-action`, its body generated from the version's patch notes.
-  - **Today it no-ops:** no signed release exists and the pubkey is a placeholder, so
-    `checkForUpdate` returns null and the indicator stays hidden. **Activation** later
-    needs only the deferred "provide signing key" task: generate the minisign keypair,
-    bake the real `pubkey` + flip `createUpdaterArtifacts` on, and add the
-    `TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]` GitHub secrets — no other code change. The
-    interactive flow is runtime-exercised by the dev mock (#193). _(This reverses the
-    earlier #62 "no in-app auto-update / no release pipeline" rule; Apple
-    notarization stays out of scope — the updater is minisign-only.)_
+    version bump (config version > latest `v*` tag) **and** a **matching `src/patchnotes/
+    <version>.json`** (#192 — else end early); the deferred-key skip is gone now the
+    secret is configured. When both hold, a `check` job emits the release body once
+    (`scripts/patchnotes-to-md.mjs`), a `create-release` job opens **one** draft GitHub
+    release, and a **2-OS matrix** (`max-parallel: 1`) — **macOS** (`universal-apple-
+    darwin`) + **Windows** (`x86_64-pc-windows-msvc`) — builds **signed** bundles via
+    `tauri-action` and uploads them **by `releaseId`** to that draft, merging one
+    `latest.json` (`darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`). Serialized so
+    the `latest.json` read-modify-write merge is deterministic.
+  - **Releasing:** the pipeline leaves a **draft** — a maintainer **publishes** it (the
+    `/releases/latest/download/latest.json` endpoint only resolves to a published,
+    non-draft "latest" release). Each new release = bump `version` in `tauri.conf.json` +
+    add `src/patchnotes/<version>.json` + push to `main` + publish the draft. The
+    interactive flow is also runtime-exercised by the dev mock (#193). _(This reverses the
+    earlier #62 "no in-app auto-update / no release pipeline" rule; OS code signing /
+    Apple notarization stay out of scope — the update signatures are minisign-only.)_
   The bundle ships a partial `src-tauri/Info.plist` (auto-merged by the Tauri CLI in
   both `dev` and `build`) declaring `NSMicrophoneUsageDescription` /
   `NSSpeechRecognitionUsageDescription` so voice dictation works inside a session's PTY

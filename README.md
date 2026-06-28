@@ -99,14 +99,18 @@ the macOS artifacts and on a Windows host for the Windows installers.
 > **Open**, or allow it under **System Settings → Privacy & Security**; Windows
 > SmartScreen: **More info → Run anyway**). The build is a **local, unsigned** artifact.
 >
-> An **in-app auto-update skeleton** (#190) is wired but **inert until a minisign signing
-> keypair is generated** (deferred): the Tauri updater/process plugins, a sidebar update
-> indicator → confirm/install-with-progress modal → relaunch, a post-update toast, and a
-> gated `.github/workflows/release.yml` that builds a **draft** release **only** when the
-> app version is bumped **and** a `TAURI_SIGNING_PRIVATE_KEY` secret is configured. With
-> no key (today) `tauri build` stays unsigned and the pipeline no-ops; a later "provide
-> signing key" task bakes the real pubkey, flips `createUpdaterArtifacts` on, and adds the
-> secrets to switch it on. Apple notarization remains out of scope (minisign only).
+> **In-app auto-update is live** (#190): the Tauri updater/process plugins, a sidebar
+> update indicator → confirm/install-with-progress modal → relaunch, and a post-update
+> toast. Updates are **minisign-signed** — `createUpdaterArtifacts` is on and the real
+> `pubkey` is baked into `tauri.conf.json`. `.github/workflows/release.yml` runs on every
+> push to `main` and, **when the app version is bumped past the latest tag and a matching
+> `src/patchnotes/<version>.json` exists**, builds **signed** bundles for **macOS
+> (universal) and Windows (x86_64)**, uploads them to one **draft** GitHub release with a
+> merged `latest.json`, and waits for a maintainer to **publish** the draft (the updater's
+> `/releases/latest/download/latest.json` endpoint only resolves to a published release).
+> The signing private key lives in the `TAURI_SIGNING_PRIVATE_KEY` /
+> `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets. OS code signing / Apple notarization
+> remain out of scope (the update signatures are minisign-only).
 
 ## Develop scripts
 
