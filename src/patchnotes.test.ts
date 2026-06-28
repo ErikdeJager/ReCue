@@ -78,10 +78,10 @@ describe("patchnotes (#192)", () => {
   });
 
   it("loads the in-repo seed and exposes it sorted newest-first", () => {
-    // The 0.0.1 seed ships in src/patchnotes/.
-    const seed = patchnotesFor("0.0.1");
+    // The 1.0.0 first-release seed ships in src/patchnotes/.
+    const seed = patchnotesFor("1.0.0");
     expect(seed).not.toBeNull();
-    expect(seed?.version).toBe("0.0.1");
+    expect(seed?.version).toBe("1.0.0");
     expect(seed?.changes.length).toBeGreaterThan(0);
     // allPatchnotes is sorted newest-first; latest is the highest version present.
     expect(latestPatchnotes()).toBe(allPatchnotes[0]);

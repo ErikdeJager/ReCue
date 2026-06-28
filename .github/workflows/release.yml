@@ -67,7 +67,11 @@ jobs:
         run: npm ci
 
       - name: Generate patch notes with Claude (#192)
-        if: steps.guard.outputs.should_release == 'true'
+        # TEMPORARILY DISABLED for the v1.0.0 first public release: the patch notes are
+        # hand-authored (src/patchnotes/1.0.0.json) and must not be touched by the model.
+        # Re-enable for the NEXT release by restoring the original condition:
+        #   if: steps.guard.outputs.should_release == 'true'
+        if: false
         # Summarizes every change since the last release tag into
         # src/patchnotes/<version>.json. No-ops if the file was hand-authored
         # (a manual file always wins). Fails the run if generation fails — we do
