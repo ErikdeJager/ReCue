@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="660" viewBox="0 0 660 660">
+  <!--
+    DMG install-window background for ReCue.
+
+    Dark Catppuccin-Mocha canvas (matches the app's dark-only theme) so the peach
+    ReCue logo — both the header badge and the real draggable .app icon Finder paints
+    on top — stands out. The Finder icons land at the positions set in
+    tauri.conf.json (bundle.macOS.dmg): the app at (180,170), the Applications folder
+    at (480,170); the upper band here is kept clear for them. The lower half carries
+    the first-launch un-quarantine hint + the exact Terminal command.
+
+    Source of truth: edit this SVG, then regenerate dmg-background.png with
+    `scripts/render-dmg-background.sh` (uses macOS qlmanage + sips; no extra deps).
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e1e2e"/>
+      <stop offset="1" stop-color="#181825"/>
+    </linearGradient>
+    <clipPath id="badgeClip">
+      <rect x="252" y="30" width="56" height="56" rx="13"/>
+    </clipPath>
+  </defs>
+
+  <!-- Canvas -->
+  <rect width="660" height="660" fill="url(#bg)"/>
+
+  <!-- Header: peach logo badge + wordmark -->
+  <image x="252" y="30" width="56" height="56" href="icons/icon.png" clip-path="url(#badgeClip)"/>
+  <text x="320" y="69" font-family="-apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="31" font-weight="700" fill="#cdd6f4">ReCue</text>
+
+  <!-- Drag arrow between the (Finder-painted) app icon and Applications folder -->
+  <g stroke="#fab387" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <line x1="258" y1="160" x2="396" y2="160"/>
+    <polyline points="378,146 400,160 378,174"/>
+  </g>
+
+  <!-- Caption under the drag row (Finder draws the "ReCue" / "Applications" labels) -->
+  <text x="330" y="288" text-anchor="middle"
+        font-family="-apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="15.5" fill="#a6adc8">Drag <tspan font-weight="600" fill="#bac2de">ReCue</tspan> onto the <tspan font-weight="600" fill="#bac2de">Applications</tspan> folder to install.</text>
+
+  <!-- Divider -->
+  <line x1="60" y1="322" x2="600" y2="322" stroke="#313244" stroke-width="1"/>
+
+  <!-- First-launch hint -->
+  <!-- warning triangle -->
+  <g transform="translate(60,346)">
+    <path d="M12 1.5 L23 21 H1 Z" fill="none" stroke="#fab387" stroke-width="2.4" stroke-linejoin="round"/>
+    <line x1="12" y1="8.5" x2="12" y2="14.5" stroke="#fab387" stroke-width="2.4" stroke-linecap="round"/>
+    <circle cx="12" cy="17.6" r="1.3" fill="#fab387"/>
+  </g>
+  <text x="94" y="366" font-family="-apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="20" font-weight="700" fill="#fab387">First launch needs one Terminal command</text>
+
+  <!-- Body -->
+  <text font-family="-apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="14.5" fill="#bac2de">
+    <tspan x="60" y="400">ReCue isn't notarized yet, so macOS quarantines it and refuses to open it.</tspan>
+    <tspan x="60" y="423">After dragging it to Applications, run this in Terminal, then open ReCue:</tspan>
+  </text>
+
+  <!-- Command box (terminal styled) -->
+  <text x="60" y="462" font-family="-apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="12.5" font-weight="600" letter-spacing="0.4" fill="#6c7086">RUN IN TERMINAL</text>
+  <rect x="52" y="474" width="556" height="60" rx="11" fill="#11111b" stroke="#45475a" stroke-width="1"/>
+  <rect x="52" y="474" width="5" height="60" rx="2.5" fill="#fab387"/>
+  <text y="511" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="15.5">
+    <tspan x="76" fill="#6c7086">$</tspan><tspan x="96" fill="#cdd6f4">xattr -dr com.apple.quarantine /Applications/ReCue.app</tspan>
+  </text>
+
+  <!-- Footer -->
+  <text x="60" y="566" font-family="-apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="13" fill="#6c7086">You only need to do this once.</text>
+</svg>
