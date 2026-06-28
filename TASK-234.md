@@ -1,6 +1,6 @@
-### 234. [ ] Kanban card hover-lift animation (drag affordance)
+### 234. [x] Kanban card hover-lift animation (drag affordance)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** #233
 **Created:** 2026-06-28
 

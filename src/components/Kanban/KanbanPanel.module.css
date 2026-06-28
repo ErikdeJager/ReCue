@@ -326,12 +326,32 @@
   padding: var(--space-6) var(--space-8);
   transition:
     border-color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 
-/* Subtle lift on hover / keyboard focus (#161) — the card reads as interactive. */
-.card:hover {
+/* Subtle hover-lift (#234, layered on #161): a ~2px rise + soft shadow + grab cursor
+   signal the card is draggable — eased in and out via `.card`'s transition. Excluded
+   while dragging (`.cardPlaceholder`) and on the floating `.cardOverlay` so it never
+   fights dnd-kit's inline drag transform; `:active` shows grabbing. */
+.card:not(.cardPlaceholder):not(.cardOverlay):hover {
   border-color: var(--border-strong);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+  cursor: grab;
+}
+
+.card:not(.cardPlaceholder):not(.cardOverlay):active {
+  cursor: grabbing;
+}
+
+/* Reduced motion (#234): the global killswitch only zeroes the transition duration,
+   so neutralize the lift itself — no movement, just the calm border/cursor cue. */
+:global(body.reduce-motion)
+  .card:not(.cardPlaceholder):not(.cardOverlay):hover {
+  transform: none;
+  box-shadow: none;
 }
 
 .card:focus-within {
