@@ -443,7 +443,8 @@
 }
 
 .cardDone .cardTitle {
-  text-decoration: line-through;
+  /* No strikethrough (#248): the checkmark already signals "done". Keep just a subtle
+     muted-gray dim so a completed card stays gently de-emphasized. */
   color: var(--text-muted);
 }
 

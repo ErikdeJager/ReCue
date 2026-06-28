@@ -1,8 +1,8 @@
 # TASK-248
 
-### 248. [ ] Don't strike through a completed Kanban card's text (keep a subtle dim + the checkmark)
+### 248. [x] Don't strike through a completed Kanban card's text (keep a subtle dim + the checkmark)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 
