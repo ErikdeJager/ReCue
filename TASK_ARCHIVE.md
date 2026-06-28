@@ -12,11 +12,11 @@ whose dependencies are all complete can run in parallel. The automation skills
 
 ## Project context
 
-**ClaudeCue** — a **macOS** desktop app (**Rust + Tauri 2 + React/TypeScript**) for
+**ReCue** — a **macOS** desktop app (**Rust + Tauri 2 + React/TypeScript**) for
 running and managing many live `claude` CLI sessions at once: an **Overview** "agent
 wall" of real terminals, a **Canvas** split-panel workspace (with file, **git-diff**,
 and terminal viewers), and a repo-grouped **sidebar**. Each session is a **real PTY running
-`claude`** — ClaudeCue provides the window chrome, navigation, persistence and
+`claude`** — ReCue provides the window chrome, navigation, persistence and
 git-reading; the terminals come from the Claude Code CLI itself.
 
 **Stack:** Tauri 2 · React + TypeScript + Vite · **Zustand** · plain CSS with
@@ -31,7 +31,7 @@ forget**) · no Skills manager · no Fork · no light mode · no auth · no code
 signing/notarization · a **Settings** screen now exists (#100/#102/#103, reversing the
 v1 "no settings screen" rule) and **Canvas tabs detach into their own native window**
 (#84, reversing "no multi-window") · **git is read-mostly** —
-ClaudeCue reads git (current branch + working-tree diff vs `HEAD`, branch compare #81)
+ReCue reads git (current branch + working-tree diff vs `HEAD`, branch compare #81)
 and never commits; its writes are `git checkout <existing branch>` from the new-session
 flow (#27), `git worktree add`/`remove` for isolated worktree agents (#74), and
 **branch creation** (`git checkout -b` / `git worktree add -b`) via the new-session
@@ -53,7 +53,7 @@ error if missing).
 > Completed tasks are condensed here — number, title, and one line
 > on what each delivered — and their full entries removed from the list below; per-task
 > detail (subtasks, notes, acceptance, implementation reports) lives in git history.
-> This is the running record of what ClaudeCue has shipped.
+> This is the running record of what ReCue has shipped.
 
 **v1 foundation (#1–#14).** The core: a Tauri 2 shell hosting real `claude` PTYs across
 an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sidebar.
@@ -2451,7 +2451,7 @@ remote listing).
 
 **Description**
 
-There was no way to pull a folder's latest changes from inside ClaudeCue — the user had to drop into
+There was no way to pull a folder's latest changes from inside ReCue — the user had to drop into
 a terminal and run `git pull`. This task adds a **"Pull"** item to the sidebar **repo** context menu
 and the **worktree header** context menu that fast-forwards the folder's currently-checked-out branch
 to its upstream and reports the result as a toast. Since you can only pull into the branch checked out
@@ -2512,7 +2512,7 @@ network git write's `GIT_TERMINAL_PROMPT=0` env guard + best-effort error handli
 **Description**
 
 Clicking a link inside **rendered markdown** navigated the Tauri **webview itself** — the React app
-was replaced by the linked page, stranding the user on a web page inside ClaudeCue with no back button
+was replaced by the linked page, stranding the user on a web page inside ReCue with no back button
 or chrome. The cause: the app renders markdown with react-markdown + remark-gfm and (since #173) a
 custom `components` map (`makeCheckboxComponents`) that only overrode the `input` element, so links
 fell through to react-markdown's default plain `<a href>` — which in a Tauri webview performs an
@@ -3282,13 +3282,13 @@ indicator appears, pane shows version + patch notes, "Update now" runs a simulat
   `clearUpdate()` drive the `update` slice + arm `updater.setMockUpdate`; `mockProgress` /
   `mockError` reuse the existing `setUpdateState`.
 - **"Insert a command" = a dev `window` global:** new `src/devMock.ts` registers
-  `window.__claudecue = { mockUpdate, mockProgress, mockError, clearUpdate }` (with a
+  `window.__recue = { mockUpdate, mockProgress, mockError, clearUpdate }` (with a
   `declare global` augmentation); `main.tsx` imports it behind `if (import.meta.env.DEV)`. A
   convenience **"Simulate update (dev)"** button (`FlaskConical`) appears in the #191 pane,
   also `DEV`-gated.
 - **Dev-only footprint verified:** Vite replaces `import.meta.env.DEV` with `false` in
-  production, dead-code-eliminating `devMock.ts` + the `window.__claudecue` registration + the
-  button — confirmed **0** occurrences of `__claudecue`/`registerDevMock`/"Simulate update" in
+  production, dead-code-eliminating `devMock.ts` + the `window.__recue` registration + the
+  button — confirmed **0** occurrences of `__recue`/`registerDevMock`/"Simulate update" in
   `dist/`. The `mockUpdate`/`setMockUpdate` code stays in the prod bundle but is **inert**
   (only the stripped helper/button call it); the lone artifact is the ~200-char
   `SAMPLE_UPDATE_NOTES` dead string.
@@ -3305,7 +3305,7 @@ read; this introduced the codebase's first `import.meta.env.DEV` dev-only path.
 **Notes**
 
 - **Autonomous refine (2026-06-26):** the user wasn't responding; decisions logged in
-  `ASSUMPTIONS.md` — "insert a command" = a dev-gated `window.__claudecue` console helper
+  `ASSUMPTIONS.md` — "insert a command" = a dev-gated `window.__recue` console helper
   (primary) + a convenience button; simulated install (timer progress + toast, no real
   relaunch) behind a mock flag in `updater.ts` so the same `installUpdate` serves both; the
   mock sets `update.notes` (hence depending on #192).
@@ -4132,7 +4132,7 @@ The patch notes for the current version live at `src/patchnotes/0.0.1.json` (the
 system, rendered in **Settings → Updates → "What's new"** and used to generate the GitHub release
 body). They read like an **internal changelog** — enumerating recently implemented features. For
 a **0.0.1 first release** a brand-new user has no prior version to diff against, so the notes
-should **introduce what ClaudeCue is** and frame this as the initial release, presenting the core
+should **introduce what ReCue is** and frame this as the initial release, presenting the core
 capabilities as a product pitch rather than a task-by-task changelog. **Content-only** edit of
 one JSON file — no code/pipeline change.
 
@@ -4141,7 +4141,7 @@ one JSON file — no code/pipeline change.
 - Replaced `src/patchnotes/0.0.1.json`'s changelog-style entries with two intro categories
   (keeping `version: "0.0.1"`, `date: "2026-06-26"`, and the `{version, date, changes:[{category,
   items[]}]}` schema):
-  - **"welcome"** — what ClaudeCue is (a macOS app for running/managing many live `claude`
+  - **"welcome"** — what ReCue is (a macOS app for running/managing many live `claude`
     coding sessions side by side; each session a real terminal running the Claude Code CLI
     wrapped with navigation/persistence/git-reading) + an explicit "This is the first release."
   - **"highlights"** — the headline surfaces at a welcoming level: Overview (the agent wall,
@@ -4600,7 +4600,7 @@ folder. The fix makes `open_url` open the URL in the **OS default browser cross-
   plan's recommended `open` crate, because the `open` crate is not in `Cargo.lock` and adding it
   would need a network fetch unavailable in the build sandbox. The `is_http_url` guard (well
   unit-tested) is retained.
-- **Scope tension flagged:** `CLAUDE.md` documents ClaudeCue as **macOS-only**, yet this is a
+- **Scope tension flagged:** `CLAUDE.md` documents ReCue as **macOS-only**, yet this is a
   Windows bug report. This task fixes only the reported `open_url` path; broader Windows support
   (the macOS-specific `open`-based `reveal_*` / `open_data_folder` commands, `path_env`
   login-shell PATH, bundle config) is a larger, separate decision left to the user. The fix is

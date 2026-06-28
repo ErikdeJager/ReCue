@@ -5,8 +5,8 @@
     {
       "category": "welcome",
       "items": [
-        "Welcome to ClaudeCue — a macOS and Windows app for running and managing many live `claude` coding sessions side by side. This is the first release.",
-        "Every session is a real terminal running the Claude Code CLI; ClaudeCue wraps them with navigation, persistence, git-reading, and a workspace built for juggling several agents at once."
+        "Welcome to ReCue — a macOS and Windows app for running and managing many live `claude` coding sessions side by side. This is the first release.",
+        "Every session is a real terminal running the Claude Code CLI; ReCue wraps them with navigation, persistence, git-reading, and a workspace built for juggling several agents at once."
       ]
     },
     {

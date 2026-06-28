@@ -20,7 +20,7 @@ export interface UpdateInfo {
   notes: string | null;
 }
 
-// Dev-only mock (#193): when set (via the `window.__claudecue` helpers, dev gated),
+// Dev-only mock (#193): when set (via the `window.__recue` helpers, dev gated),
 // `checkForUpdate` / `downloadAndRelaunch` use fake data + a timer-driven progress
 // loop instead of the real plugin — so the whole update UI is exercisable without a
 // signed release. Always null in production (the registrar is tree-shaken out).

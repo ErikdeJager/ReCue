@@ -3,7 +3,7 @@
 //! Claude Code writes an `{"type":"ai-title","aiTitle":"…","sessionId":"…"}` entry
 //! into its per-session log at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`,
 //! refreshing it as the conversation evolves (the latest entry wins). Because
-//! ClaudeCue owns each session's UUID (`claude --session-id <uuid>`, see `pty.rs`),
+//! ReCue owns each session's UUID (`claude --session-id <uuid>`, see `pty.rs`),
 //! it can locate that log by UUID and reuse the title — no extra `claude` process,
 //! no API cost. If there is no `ai-title` yet we fall back to the first prompt
 //! (`{"type":"last-prompt","lastPrompt":"…"}`), trimmed to a short line.

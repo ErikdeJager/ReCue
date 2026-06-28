@@ -73,7 +73,7 @@ fn read_token_from_file() -> Option<String> {
 
 /// macOS Keychain item `Claude Code-credentials` — its password value is the same
 /// JSON blob. NOTE: the first access triggers a one-time Keychain allow-prompt
-/// (ClaudeCue is a different app than `claude`); a denial errors here and we fail
+/// (ReCue is a different app than `claude`); a denial errors here and we fail
 /// open (bar hidden). The `security` CLI is macOS-only, so this is gated to macOS;
 /// on Windows/Linux the credentials file above is the sole token source.
 #[cfg(target_os = "macos")]

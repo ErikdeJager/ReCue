@@ -141,7 +141,7 @@ by theme/batch so a reader gets "context of what was implemented." Suggested sha
 
 > Completed tasks are condensed here and their full entries removed from the list
 > below; full per-task detail (subtasks, notes, acceptance criteria) remains in git
-> history. This is the running record of what ClaudeCue has shipped.
+> history. This is the running record of what ReCue has shipped.
 
 **Foundation (#1–#14).** <one or two sentences on the v1 core that these built.>
 - #1 Project scaffolding — Tauri 2 + React/TS/Vite skeleton.

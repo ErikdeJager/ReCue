@@ -32,7 +32,7 @@ fn default_true() -> bool {
 
 /// A persisted session record.
 ///
-/// `id` is ClaudeCue's own session id; `claude_session_id` is the id handed to
+/// `id` is ReCue's own session id; `claude_session_id` is the id handed to
 /// `claude --session-id` for resume (currently the same UUID). They are kept as
 /// separate fields so the capture mechanism can change without a data migration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -646,7 +646,7 @@ mod tests {
 
     fn temp_path(tag: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
-        path.push(format!("claudecue-store-{tag}-{}.json", std::process::id()));
+        path.push(format!("recue-store-{tag}-{}.json", std::process::id()));
         let _ = fs::remove_file(&path);
         path
     }

@@ -448,7 +448,7 @@ mod tests {
 
     fn tmp(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("claudecue-files-{tag}-{}", std::process::id()));
+        p.push(format!("recue-files-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p
@@ -681,7 +681,7 @@ mod tests {
         // nothing is written outside the repo.
         assert!(write_text_file(&dir, "../escape.md", "x").is_err());
         assert!(write_text_file(&dir, "../../../../../../tmp/escape.md", "x").is_err());
-        assert!(write_text_file(&dir, "/etc/claudecue-escape.md", "x").is_err());
+        assert!(write_text_file(&dir, "/etc/recue-escape.md", "x").is_err());
         assert!(write_text_file(&dir, "nope/deep/x.md", "x").is_err()); // parent missing
         let _ = fs::remove_dir_all(&dir);
     }

@@ -25,7 +25,7 @@ use std::time::Duration;
 /// update prompts, `direnv` chatter, …) can't corrupt the parsed PATH — we read only
 /// what sits between the two markers.
 #[cfg(unix)]
-const MARKER: &str = "__CLAUDECUE_PATH__";
+const MARKER: &str = "__RECUE_PATH__";
 
 /// Hard cap on the login-shell probe so a pathological interactive rc file can never
 /// hang app startup; on timeout we fall back to the well-known dirs below.
@@ -105,7 +105,7 @@ fn login_shell_path() -> Option<String> {
 fn login_shell_path_blocking() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     // `${PATH}` (braced) so the trailing marker can't be read as part of the variable
-    // name (`$PATH__CLAUDECUE_PATH__` would expand a *different* variable).
+    // name (`$PATH__RECUE_PATH__` would expand a *different* variable).
     let script = format!("printf '%s' \"{MARKER}${{PATH}}{MARKER}\"");
 
     let output = std::process::Command::new(shell)

@@ -22,7 +22,7 @@
 /// Codex follow-up): Claude Code. Used as the serde / read-time default everywhere.
 pub const DEFAULT_AGENT_ID: &str = "claude";
 
-/// What differs per coding agent. ClaudeCue's own session/PTY id (a UUID) is
+/// What differs per coding agent. ReCue's own session/PTY id (a UUID) is
 /// unchanged; the spec decides whether/how that id reaches the CLI (e.g. claude's
 /// `--session-id`).
 // Every field is now consumed (#141): `binary_name` + arg builders by the spawn/
@@ -40,7 +40,7 @@ pub struct AgentSpec {
     /// Whether the CLI can resume a prior session by id. Gates boot-restore /
     /// Restart / the copy-resume command (wired in the follow-up).
     pub supports_resume: bool,
-    /// Whether the CLI writes an `ai-title` log ClaudeCue can read for auto-naming
+    /// Whether the CLI writes an `ai-title` log ReCue can read for auto-naming
     /// (#97) — claude does; others fall back to the branch / first prompt.
     pub supports_auto_name: bool,
     /// Shown on the missing-binary screen when this CLI isn't on PATH.

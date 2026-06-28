@@ -319,7 +319,7 @@ shared paths beyond the `isWindows` gate.
   Confirm macOS ⌘V still pastes and Ctrl+V still emits `^V` (gated off on macOS).
 - **Image paste (best-effort, assumption-dependent)**: copy an image (e.g. a screenshot),
   press **Ctrl+V** in an agent terminal with no text on the clipboard → expect the image
-  written to a temp PNG (`%TEMP%\claudecue-paste-*.png`) and its path pasted, with
+  written to a temp PNG (`%TEMP%\recue-paste-*.png`) and its path pasted, with
   `claude` attaching it. **Assumption to confirm:** the Windows `claude` CLI attaches an
   image when given its file path in the prompt. If real-box testing shows it needs a
   different signal (e.g. it reads the OS clipboard on a specific keystroke), adjust the

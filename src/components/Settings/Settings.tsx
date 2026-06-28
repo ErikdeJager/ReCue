@@ -712,7 +712,7 @@ function SettingsModal() {
                 </button>
                 <dl className={styles.about}>
                   <div className={styles.aboutRow}>
-                    <dt>ClaudeCue</dt>
+                    <dt>ReCue</dt>
                     <dd>{appVer || "—"}</dd>
                   </div>
                   <div className={styles.aboutRow}>
