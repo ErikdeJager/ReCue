@@ -54,9 +54,11 @@ const LANG_BY_EXT: Record<string, string> = {
   kt: "kotlin",
 };
 
-/** Lowercase extension of a path, or "" for none (dotfiles count as none). */
+/** Lowercase extension of a path, or "" for none (dotfiles count as none). Splits on
+ * `/` **or** `\` so a path carrying native Windows separators still yields the right
+ * basename (#224 Windows parity); a `/`-only path is unchanged. */
 export function fileExt(file: string): string {
-  const base = file.split("/").pop() ?? file;
+  const base = file.split(/[\\/]/).pop() ?? file;
   const dot = base.lastIndexOf(".");
   return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 }
@@ -65,7 +67,7 @@ export function fileExt(file: string): string {
  * (#150): `.env` / `.env.local` / `.env.*` are KEY=value files with no extension
  * (`fileExt` returns ""), highlighted with the `properties` grammar. */
 function langByFilename(file: string): string | undefined {
-  const base = file.split("/").pop() ?? file;
+  const base = file.split(/[\\/]/).pop() ?? file;
   return base === ".env" || base.startsWith(".env.") ? "properties" : undefined;
 }
 

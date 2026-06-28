@@ -671,7 +671,9 @@ function KanbanRow({
       id: `kanban:${repoPath}:${file}`,
       data: { kind: "kanban", repoPath, file },
     });
-  const name = file.split("/").pop() || file;
+  // Split on `/` **or** `\` (Windows parity, #224) so a Kanban ref with native
+  // separators still shows its basename — matching `Overview.tsx`; `/`-only unchanged.
+  const name = file.split(/[\\/]/).pop() || file;
   const { menu, openMenu, closeMenu } = useRowMenu();
   const style = transform
     ? { transform: CSS.Translate.toString(transform) }

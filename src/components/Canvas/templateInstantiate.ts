@@ -18,10 +18,18 @@ import { blockDescriptor } from "./templateBlocks";
  * `{ repoPath, file }` pair the backend's repo-confined read accepts:
  * - **relative** (default / absent `filePathMode`): `{ repoPath: cwd, file }` — the
  *   chosen folder as root; subfolders are allowed (the backend `repo.join` validates).
+ *   The relative segment is **normalized to `/`** (Windows parity): a template authored
+ *   on Windows may store `src\components\App.tsx`, but the backend reports/accepts repo-
+ *   relative paths `/`-separated on every OS, and `PathBuf::join` treats a backslash as a
+ *   literal filename char on macOS/Linux — so a `\`-typed template would only resolve on
+ *   Windows. Normalizing makes templates portable across OSes; a `/`-only path (the
+ *   common case) is byte-for-byte unchanged, so macOS behavior is preserved.
  * - **absolute**: split the full path into `{ dir, base }` and use the file's **own
  *   parent dir** as the root (`{ repoPath: dir, file: base }`) — the #163 pattern, so
- *   the containment check passes with no backend change. `splitPath` handles `/` and
- *   `\`, so it's cross-platform. Pure + dependency-light for unit testing.
+ *   the containment check passes with no backend change. Absolute paths are machine-
+ *   specific by design (Browse… returns a native path), so the native separators in
+ *   `dir` are kept; `splitPath` handles `/` and `\`, so it's cross-platform. Pure +
+ *   dependency-light for unit testing.
  */
 export function fileBlockTarget(
   block: CanvasContent,
@@ -32,7 +40,7 @@ export function fileBlockTarget(
     const { dir, base } = splitPath(file);
     return { repoPath: dir, file: base };
   }
-  return { repoPath: cwd, file };
+  return { repoPath: cwd, file: file.replace(/\\/g, "/") };
 }
 
 /** The pending content a block becomes on instantiation (#118): `kind:"pending"`

@@ -170,6 +170,21 @@ describe("fileBlockTarget (#224)", () => {
     ).toEqual({ repoPath: "/repo/x", file: "src/components/App.tsx" });
   });
 
+  it("normalizes a relative path's backslashes to `/` so it resolves cross-OS (#224)", () => {
+    // A template authored on Windows may store native separators; the backend
+    // reports/accepts repo-relative paths `/`-separated on every OS, so normalize.
+    expect(
+      fileBlockTarget(
+        {
+          kind: "open-file",
+          file: "src\\components\\App.tsx",
+          filePathMode: "relative",
+        },
+        "/repo/x",
+      ),
+    ).toEqual({ repoPath: "/repo/x", file: "src/components/App.tsx" });
+  });
+
   it("resolves a POSIX absolute path via its own parent dir as root", () => {
     expect(
       fileBlockTarget(

@@ -11,9 +11,13 @@ import { blockPlaceholderLabel } from "../Canvas/templateBlocks";
  * basename, "Diff"/"Terminal"/"Scheduled", a pending template block's label, else
  * the content's `label`. Agents resolve their live label via {@link itemTitle}. */
 export function panelTitle(content: CanvasContent): string {
-  if (content.kind === "file") return content.file?.split("/").pop() ?? "File";
+  // Split on `/` **or** `\` (Windows parity, #224): a file ref can carry native
+  // separators (a Windows-authored template's relative path), so the display basename
+  // is extracted cross-platform — matching `Overview.tsx`. A `/`-only path is unchanged.
+  if (content.kind === "file")
+    return content.file?.split(/[\\/]/).pop() ?? "File";
   if (content.kind === "kanban")
-    return content.file?.split("/").pop() ?? "Kanban";
+    return content.file?.split(/[\\/]/).pop() ?? "Kanban";
   if (content.kind === "diff") return "Diff";
   if (content.kind === "terminal") return "Terminal";
   if (content.kind === "scheduled") return "Scheduled";

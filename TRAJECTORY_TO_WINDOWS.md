@@ -354,3 +354,70 @@ no-op on macOS (already crisp). WebGL is **kept** on Windows by this path.
   visually equivalent at the cost of GPU acceleration on Windows. `isWindows` is already
   imported (from the #220 paste handler). Apply only if the primary fix doesn't fully
   resolve it on a real box; record which path won here.
+
+### Iteration 8 — parity audit of newly-merged features (#222–#234)
+
+Re-audited every feature merged since Iteration 7 (tasks #222–#234: Canvas "+"/Templates
+menu rework, distribute-panels button, **#224 template file block full paths +
+relative/absolute choice**, sidebar/agent-header branch badges, **#227/#229 extended +
+diff syntax highlighting**, **#230 a Commits source for the diff viewer**, **#231 diff
+viewer redesign**, **#232 scheduled-time "today" formatting**, **#233/#234 Kanban
+redesign + hover-lift**) via parallel read-only Explore agents, then hand-verified each
+finding by reading the cited code. The highest-risk recurring class — **new `git`
+invocations** — was clean this time: #230's `git.rs::list_commits` / `commit_diff` both
+run through `run_git_raw` → `git::hidden_command` (the `CREATE_NO_WINDOW` console-flash
+guard), and the only bare `Command::new("git")` is in `#[cfg(test)]` code. Keyboard
+handling (all `metaKey || ctrlKey`), URL/reveal (`openUrl`/`revealLabel`), and #232 time
+formatting (`time.ts` `toLocaleString` with explicit options — locale-driven, not
+platform-driven) were all already correct. Net: one real cross-OS gap in #224's new path
+handling, plus a consistency hardening of basename extraction.
+
+- **Bug (#224)**: `fileBlockTarget` (`templateInstantiate.ts`) returned a template's
+  **relative** `open-file`/`open-kanban` path verbatim. A template authored on Windows
+  may store native separators (`src\components\App.tsx`); the backend reports/accepts
+  repo-relative paths `/`-separated on every OS, and `PathBuf::join` treats a backslash
+  as a **literal filename char** on macOS/Linux — so a `\`-typed template would resolve
+  only on Windows (and mis-title via `split("/")`), breaking cross-OS template
+  portability. (Absolute blocks are machine-specific by design and already split via
+  `splitPath`, which handles `\` — so they were already correct.)
+  **Fix**: normalize the relative segment to `/` in `fileBlockTarget`'s relative branch
+  (`file.replace(/\\/g, "/")`), matching the backend's `/`-separated convention. Added a
+  unit test (`src\components\App.tsx` → `src/components/App.tsx`).
+  **Files**: `src/components/Canvas/templateInstantiate.ts`,
+  `src/components/Canvas/templateInstantiate.test.ts`
+  **macOS**: Preserved — a `/`-only relative path (the common case) is byte-for-byte
+  unchanged by the replace; only a backslash-bearing path (never produced on macOS) is
+  affected.
+
+- **Consistency hardening**: three display-basename extractions still split on `/` only
+  while `Overview.tsx` already used the cross-platform `split(/[\\/]/)` seam. A file ref
+  reaching them can carry native separators (a Windows-authored template relative path),
+  so they were aligned to `split(/[\\/]/)` (`itemTitle.ts` panel titles ×2,
+  `fileType.ts` `fileExt`/`langByFilename`, `Sidebar.tsx` Kanban-row name). On a `/`-only
+  path the output is identical, so macOS is unchanged. `DiffInspector.tsx`/`FileTree.tsx`
+  split on `/` too but operate strictly on backend-reported diff/tree paths (always `/`),
+  so they were left as verified-safe.
+  **Files**: `src/components/ItemContent/itemTitle.ts`,
+  `src/components/FileViewer/fileType.ts`, `src/components/Sidebar/Sidebar.tsx`
+
+- **Verified NOT a bug (left as-is)**: the `color-mix(in srgb, …)` declarations without a
+  preceding plain-color fallback in `Sidebar`/`BusyIndicator`/`CanvasCloseModal` CSS
+  (danger-button tints, dot glows). `color-mix` is supported in evergreen WebView2/Edge
+  ≥111, which Tauri's `downloadBootstrapper` install mode guarantees — confirmed
+  acceptable in Iteration 6. These are pre-existing (not #222–#234) and render correctly
+  on a real Windows box; not churning previously-audited working CSS. (The #231 diff
+  viewer + #233 Kanban redesign CSS introduced **no** `color-mix`/`backdrop-filter`/
+  vibrancy without a fallback.)
+- **Verified clean**: #230 Commits source (backend git all via `hidden_command`; frontend
+  renders only — no shell-out/URL), #232 time formatting, #233/#234 Kanban
+  (`transform: translateY` hover-lift, reduced-motion-gated), #228 collapsed-rail click
+  handlers, #225/#226 branch badges.
+
+Verification: `npm run lint`, `npm run build`, `npm test` (357 tests, incl. the new
+`fileBlockTarget` case) all green. No backend changes, so the Rust suite is unaffected.
+
+#### Still needs manual Windows verification (Iteration 8)
+
+- On a Windows box, build a Canvas template whose **relative** file block path is typed
+  with backslashes (`src\foo\bar.md`), then use that template on **macOS** and confirm the
+  panel opens the file and its title shows `bar.md` (the normalization makes it portable).
