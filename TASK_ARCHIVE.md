@@ -5293,3 +5293,56 @@ later **diff-viewer redesign (#231)** depends on this task to keep "commits" ava
 
 ---
 
+### 231. [x] Redesign the diff viewer UI with selectable display modes (Accordion + Focused single-file)
+
+**Status:** Done
+**Depends on:** #229, #230
+**Created:** 2026-06-28
+
+**Description**
+
+Redesign the `DiffInspector` to be more polished and improve the reading experience, with a
+**setting** to pick the display mode and two modes (default **Focused single-file**), while keeping
+**all existing functionality** (Working / Compare #81 / Commits #230 sources, worktree diffs, the
+Unified/Split toggle, working-tree polling, and #229 syntax highlighting). Implemented to match two
+user-provided wireframes (Accordion 01 + Focused 03, transcribed in the plan).
+
+**What shipped** (commit `610e2f6`, 2026-06-28) — frontend-only, **no backend/type change** (the
+`FileDiff`/`WorkingDiff` data already carried status, +/− counts, and the summary):
+
+- **Setting (`src/types/index.ts`, `src/store.ts`, `src/components/Settings/Settings.tsx`):** added
+  `diffDisplayMode: "focused" | "accordion"` to `Settings` + `DEFAULT_SETTINGS` (**default
+  `"focused"`**), surfaced as a segmented control in Settings → **Behavior** (mirroring
+  `canvasCloseBehavior`), persisted via the existing `settings` blob.
+- **DiffInspector (`DiffInspector.tsx` + `.module.css`):** a local `displayMode` state seeded once
+  from `settings.diffDisplayMode`, plus an **in-panel Focused/Accordion toggle** for quick
+  per-panel switching (the Settings value stays the persistent default). The source
+  (Working/Compare/Commits) + branch pickers + Unified/Split toggle stay above the file display in
+  both modes.
+  - **Focused mode (default):** one file fills the body with a nav strip — **‹ prev**, a center
+    **picker pill** (status badge + filename + `i/N` index + ▾ caret → a jump popover listing
+    files), **› next** (cycles, wraps) — and a file sub-header (path + counts).
+  - **Accordion mode:** single-open file **cards** (status badge + filename with the muted subpath
+    on a second line + `+N −M` counts); expanding one collapses the previously open one and reads
+    its diff inline; the header shows `repo · branch` + "N files changed +X −Y" + Unified/Split.
+- Both modes render the file diff via the existing `DiffFile` → `UnifiedRow`/`SplitRow`, so #229
+  per-line highlighting and the Unified/Split toggle are inherited unchanged.
+
+**Key files touched:** `src/components/DiffInspector/DiffInspector.tsx` + `.module.css` (the two
+modes + in-panel toggle), `src/components/Settings/Settings.tsx` (the Behavior segmented control),
+`src/store.ts` (`DEFAULT_SETTINGS`), `src/types/index.ts` (`Settings.diffDisplayMode`).
+
+**Dependencies:** **#229, #230** — the redesign must preserve **Commits (#230)** and inherit
+**highlighting (#229)**, and all three edit `DiffInspector`, so it landed after them. Also builds
+on #81 (Compare source) and the Settings infrastructure.
+
+**Notes**
+
+- **Cross-platform:** pure frontend; `repo · branch` uses `repoName` (`/` or `\` split, #143); no
+  OS-specific code, no new git/backend calls; renders identically on macOS and Windows.
+- **Out of scope:** new diff data (everything needed already existed), a third display mode, a
+  persisted **per-panel** mode override (a global default + in-panel session toggle is enough —
+  per-panel persistence deferred), and changing the diff sources themselves.
+
+---
+
