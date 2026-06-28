@@ -6194,3 +6194,39 @@ but via a different handler — `onClick` filter here vs `onContextMenu` menu th
 
 ---
 
+### 248. [x] Don't strike through a completed Kanban card's text (keep a subtle dim + the checkmark)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+A **checked** (completed) Kanban card rendered its title with a **strikethrough** plus a
+muted-gray dim. The user found the strikethrough unnecessary — the checkmark already signals
+"done" — and wanted it removed while **keeping** the subtle dim so a completed card stays
+gently de-emphasized.
+
+**What shipped** (commit `824b790`, 2026-06-28):
+
+- `src/components/Kanban/KanbanPanel.module.css` — removed `text-decoration: line-through`
+  from the `.cardDone .cardTitle` rule, keeping `color: var(--text-muted)`. A completed card
+  now shows the checkmark + a gently dimmed (not crossed-out) title. This was the only
+  done/checked strikethrough in the Kanban styles (the card body never carried one), so the
+  one-line change fully addressed the request. Checking/unchecking behavior and unchecked
+  cards are unchanged.
+
+**Key files touched:** `src/components/Kanban/KanbanPanel.module.css` (one-line removal in
+`.cardDone .cardTitle`).
+
+**Dependencies:** none.
+
+**Notes**
+
+- Refine decision (2026-06-28): keep the muted-gray dim, remove only the strikethrough
+  (rather than stripping all done-styling).
+- **Cross-platform:** a one-line CSS change with no OS-divergent code — renders identically
+  on macOS and Windows. `build` / `lint` / `test` pass.
+
+---
+
