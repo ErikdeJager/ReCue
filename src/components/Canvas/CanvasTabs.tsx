@@ -279,7 +279,7 @@ function CanvasTabs() {
         <button
           type="button"
           ref={templatesMenu.btnRef}
-          className={styles.tabAdd}
+          className={`${styles.tabAdd} ${styles.tabMenuTrigger}`}
           onClick={templatesMenu.toggle}
           title="Templates"
           aria-label="Templates"

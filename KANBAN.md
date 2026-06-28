@@ -10,9 +10,9 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #249 — Canvas tab-strip icon buttons: shrink the new-tab/Templates/Distribute cluster to match the × close button
-	Plan: TASK-249.md
-	Depends on: none
 
 ## DONE
+
+- [ ] #249 — Canvas tab-strip icon buttons: shrink the new-tab/Templates/Distribute cluster to match the × close button
+	Plan: TASK-249.md
 

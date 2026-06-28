@@ -85,8 +85,8 @@
 
 .tabClose {
   display: flex;
-  /* Slightly bigger hit area so it's easier to click (#85) — still well under
-     the 24px add (+) button so it doesn't dominate the tab. */
+  /* Slightly bigger hit area so it's easier to click (#85). 20px is the strip's
+     reference icon-button size — the +/Templates/Distribute buttons match it (#249). */
   width: 20px;
   height: 20px;
   flex-shrink: 0;
@@ -109,8 +109,11 @@
 
 .tabAdd {
   display: flex;
-  width: 24px;
-  height: 24px;
+  /* 20px square, matching the per-tab × close button (#249). The + and
+     Distribute buttons are single-icon, so a square is correct; the Templates ▾
+     trigger overrides the width via .tabMenuTrigger to fit its two icons. */
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
@@ -139,6 +142,17 @@
    add/templates cluster. Combined with .tabAdd in the markup for its base styling. */
 .tabDistribute {
   margin-left: auto;
+}
+
+/* "Templates ▾" trigger (#249): keeps the strip's 20px height (from .tabAdd) but
+   takes its natural width — it carries two icons (the label glyph + the chevron),
+   which a 20px square would clip. A tight horizontal padding + small gap let them
+   breathe; min-width holds the 20px square baseline if the icons ever change. */
+.tabMenuTrigger {
+  width: auto;
+  min-width: 20px;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
 }
 
 /* --- Tab-strip dropdown menus (#117/#205): shared by the "+" (New tab) and

@@ -2,7 +2,7 @@
 
 ### 249. [ ] Canvas tab-strip icon buttons: shrink the new-tab/Templates/Distribute cluster to match the × close button
 
-**Status:** Not started · _(Not started | In progress | Done)_
+**Status:** Done · _(Not started | In progress | Done)_
 **Depends on:** none
 **Created:** 2026-06-28
 
