@@ -10,7 +10,10 @@ name: Release
 #   create-release — open ONE draft GitHub release.
 #   release        — 2-OS matrix (macOS universal + Windows x86_64) builds SIGNED
 #                    updater artifacts from the commit that includes the new notes and
-#                    uploads them to the draft, merging one latest.json.
+#                    uploads them to the draft, merging one latest.json. On macOS it then
+#                    polishes the .dmg (parks the DMG's hidden helper files off-canvas via
+#                    scripts/polish-dmg.sh) and swaps it for the uploaded asset —
+#                    best-effort, so it can never fail the release.
 #
 # A maintainer then PUBLISHES the draft — the updater endpoint
 # /releases/latest/download/latest.json only resolves to a non-draft "latest" release.
@@ -197,3 +200,51 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           releaseBody: ${{ needs.prepare.outputs.body }}
           args: ${{ matrix.args }}
+
+      # macOS only: the .dmg tauri-action just built leaves its dot-prefixed helper files
+      # (.background, .VolumeIcon.icns, …) unpositioned, so a user with "show hidden files"
+      # on sees them auto-arranged into the install window. Park them off-canvas. This is
+      # the DMG meant for manual download (NOT an updater artifact, so signatures/latest.json
+      # are untouched). Best-effort — continue-on-error so a hiccup keeps the unpolished DMG.
+      - name: Polish DMG (hide helper files off-canvas)
+        id: polish
+        if: matrix.platform == 'macos-latest'
+        continue-on-error: true
+        run: |
+          dmg="$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg 2>/dev/null | grep -v '/rw\.' | head -1)"
+          if [ -z "$dmg" ]; then echo "::warning::No DMG found to polish."; exit 0; fi
+          chmod +x scripts/polish-dmg.sh
+          ./scripts/polish-dmg.sh "$dmg"
+          echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$dmg")" >> "$GITHUB_OUTPUT"
+
+      - name: Replace release DMG with the polished one
+        if: matrix.platform == 'macos-latest' && steps.polish.outputs.dmg != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          DMG_PATH: ${{ steps.polish.outputs.dmg }}
+          DMG_NAME: ${{ steps.polish.outputs.name }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const release_id = Number(process.env.RELEASE_ID);
+            const name = process.env.DMG_NAME;
+            // Drop the unpolished .dmg asset tauri-action uploaded, then upload the polished
+            // file under the same name. Keyed by release id (drafts aren't tag-resolvable).
+            const assets = await github.rest.repos.listReleaseAssets({ owner, repo, release_id, per_page: 100 });
+            for (const a of assets.data) {
+              if (a.name.endsWith('.dmg')) {
+                await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+                console.log(`Deleted old asset ${a.name}`);
+              }
+            }
+            const data = fs.readFileSync(process.env.DMG_PATH);
+            await github.rest.repos.uploadReleaseAsset({
+              owner, repo, release_id, name,
+              headers: { 'content-type': 'application/x-apple-diskimage', 'content-length': data.length },
+              data,
+            });
+            console.log(`Uploaded polished ${name} (${data.length} bytes)`);
