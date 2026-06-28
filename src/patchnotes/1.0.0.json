@@ -5,8 +5,9 @@
     {
       "category": "welcome",
       "items": [
-        "Welcome to ReCue 1.0 — our first public release! ReCue is a macOS and Windows app for running and managing many live Claude coding sessions side by side.",
-        "Spin up agents across your repositories, keep an eye on them all from the Overview wall, and arrange terminals, files, diffs, and Kanban boards in the Canvas workspace. Thanks for being here from the start — we hope you enjoy it."
+        "Welcome to ReCue! This is the first public release! ReCue is a macOS and Windows app for running and managing many live agent coding sessions side by side.",
+        "Spin up agents across your repositories, keep an eye on them all from the Overview wall, and arrange terminals, files, diffs, and Kanban boards in the Canvas workspace.",
+        "Thanks for trying out ReCue!"
       ]
     }
   ]
