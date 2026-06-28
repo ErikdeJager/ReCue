@@ -6,12 +6,13 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] Define the missing `--space-10` spacing token (or replace its uses) — it's undefined in tokens.css, so `var(--space-10)` silently drops padding to 0 at ~8 sites (FileViewer, DiffInspector, Canvas, TemplateEditor, Kanban)
-
 ## READY
 
 - [ ] #241 — Add an attention-grabbing glowing tooltip beside the sidebar feedback (bug-report) button
 	Plan: TASK-241.md
+	Depends on: none
+- [ ] #242 — Fix the undefined --space-10 token app-wide (replace every use with --space-12)
+	Plan: TASK-242.md
 	Depends on: none
 
 ## DONE
