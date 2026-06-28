@@ -13,7 +13,5 @@ kanban-plugin: board
 
 ## DONE
 
-- [x] #233 — Redesign the in-app Kanban board UI (cards, columns, inline composer, per-column accents)
-	Plan: TASK-233.md
 - [x] #234 — Kanban card hover-lift animation (drag affordance)
 	Plan: TASK-234.md

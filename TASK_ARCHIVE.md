@@ -5384,3 +5384,58 @@ helper:
 
 ---
 
+### 233. [x] Redesign the in-app Kanban board UI (cards, columns, inline composer, per-column accents)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+Reinvent the in-app **KanbanPanel** UI (#141–#151) to be cleaner and use space more efficiently:
+checkbox pinned top-left with card text using the full width, dimmed monospace detail/meta lines,
+an inline add-card composer, and redesigned per-column headers each with their own accent color —
+all without changing the markdown Kanban format.
+
+**What shipped** (commit `0ecc5e5`, 2026-06-28) — UI/CSS only, **engine/markdown format
+unchanged** (the `kanban.ts` model already round-trips per-card detail lines):
+
+- **Card layout (`KanbanPanel.tsx` + `KanbanPanel.module.css`):** restructured so the optional
+  #194 **checkbox sits top-left** with the **title flowing full-width** to its right and tight
+  padding. The **whole card is the drag grip** (via the 4px pointer activation-distance guard, like
+  the sidebar rows / Canvas headers — no separate grip column); interactive controls
+  `stopPropagation` so click-to-edit / checkbox toggle still work.
+- **Detail/meta lines:** restyled `.cardBody` to **dimmed monospace** secondary lines (`--mono`,
+  muted color, small size) beneath the main text — keeping **ReactMarkdown** so links + interactive
+  task checkboxes (#194) still work; only the styling changed (matching READY-card `Plan:` /
+  `Depends on:` styling).
+- **Inline add-card composer:** replaced the immediate-edit flow with a multi-line `<textarea>`
+  (placeholder "Write a card… Shift+Enter for detail lines") + **Add card** / **Cancel** buttons —
+  **Enter submits**, **Shift+Enter** inserts a detail line, **first line → title, rest → body** →
+  `addCard(...)`. Opened by the column-header **"+"** and the bottom **dashed "+ Add card"**.
+- **Column header + accents:** redesigned to an **accent dot + UPPERCASE letter-spaced name + count
+  pill + "+" button** (delete kept, hover-revealed #195). Each column gets a **deterministic accent
+  color** derived from `REPO_PALETTE` by column index (no persistence — the markdown format has
+  nowhere to store color), applied to the dot + a subtle column accent.
+
+**Key files touched:** `src/components/Kanban/KanbanPanel.tsx` (card restructure + composer + column
+header + accent), `src/components/Kanban/KanbanPanel.module.css` (the new card/composer/header
+styles). No `kanban.ts` engine change.
+
+**Dependencies:** none — builds on the shipped KanbanPanel (#141–#151), #194 (optional checkbox),
+#195 (hover actions), and the `repoColor`/`REPO_PALETTE` palette.
+
+**Notes**
+
+- **Cross-platform:** pure frontend; monospace detail lines use the bundled offline `--mono`
+  (JetBrains Mono); column accents derive from the existing palette; plain-color fallbacks ship
+  alongside any `color-mix`; renders identically on macOS (WKWebView) and Windows (WebView2).
+- **Round-trip preserved:** `parseBoard`/`serializeBoard` are untouched, so cards with detail
+  lines, the optional checkbox, the `**Complete**`/`%% kanban:settings %%` blocks, and the
+  Board/Raw toggle (#147/#149) all behave as before.
+- **Out of scope:** the Kanban engine/markdown format, persisting column colors/order in the `.md`,
+  DnD mechanics (#143 — only the grip affordance changed), and new card fields beyond markdown body
+  lines.
+
+---
+
