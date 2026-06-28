@@ -1,17 +1,17 @@
 name: Release
 
 # On every push to main, release ONLY when the app version was bumped past the latest
-# v* tag. Patch notes are now GENERATED automatically (not required to pre-exist):
+# v* tag. The release body is CONSTRUCTED on the fly from git history — nothing is
+# generated or committed back to the repo:
 #
-#   prepare        — version gate; if releasing, generate src/patchnotes/<version>.json
-#                    with Claude (summarizing every change since the last release tag),
-#                    commit it back to main with [skip ci] so the accumulated history is
-#                    baked into this and future builds, and emit the release body.
+#   prepare        — version gate; if releasing, read the current version and ask Claude
+#                    to construct the release body (markdown) from every change since the
+#                    last release tag. No file is written and nothing is committed back.
 #   create-release — open ONE draft GitHub release.
 #   release        — 2-OS matrix (macOS universal + Windows x86_64) builds SIGNED
-#                    updater artifacts from the commit that includes the new notes and
-#                    uploads them to the draft, merging one latest.json. On macOS it then
-#                    polishes the .dmg (parks the DMG's hidden helper files off-canvas via
+#                    updater artifacts from the triggering commit and uploads them to the
+#                    draft, merging one latest.json. On macOS it then polishes the .dmg
+#                    (parks the DMG's hidden helper files off-canvas via
 #                    scripts/polish-dmg.sh) and swaps it for the uploaded asset —
 #                    best-effort, so it can never fail the release.
 #
@@ -27,17 +27,17 @@ permissions:
 
 jobs:
   prepare:
-    name: Version gate + generate patch notes
+    name: Version gate + construct release body
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.guard.outputs.should_release }}
       version: ${{ steps.guard.outputs.version }}
-      sha: ${{ steps.commit.outputs.sha }}
+      sha: ${{ github.sha }}
       body: ${{ steps.body.outputs.md }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # need all tags for the comparison + a base to commit onto
+          fetch-depth: 0 # need all tags + history for the version gate and the diff range
 
       - id: guard
         name: Compare config version to the latest tag
@@ -69,47 +69,23 @@ jobs:
         if: steps.guard.outputs.should_release == 'true'
         run: npm ci
 
-      - name: Generate patch notes with Claude (#192)
+      - id: body
+        name: Construct release body with Claude
         if: steps.guard.outputs.should_release == 'true'
-        # Summarizes every change SINCE THE LAST RELEASE TAG into
-        # src/patchnotes/<version>.json — never the whole history. The range is derived
-        # from the latest v* tag (git tag -l 'v*' --sort=-version:refname), so now that
-        # v1.0.0 is tagged the next release only covers v1.0.0..HEAD (changes since
-        # version one). No-ops if the file was hand-authored (a manual file always wins).
-        # Fails the run if generation fails — we do not ship a release with empty notes.
+        # Asks Claude to summarize every change SINCE THE LAST RELEASE TAG (the range is
+        # derived from the latest v* tag — git tag -l 'v*' --sort=-version:refname — so
+        # with v1.0.0 tagged the next release only covers v1.0.0..HEAD) into the release
+        # body markdown, printed to stdout. NOTHING is written to disk or committed back.
+        # The body feeds the GitHub release AND latest.json's `notes` (→ the app's
+        # update.body) on both matrix legs. Fails the run if construction fails — we do
+        # not ship a release with an empty body. Run on Linux so the heredoc is bash.
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_KEY }}
-        run: node scripts/generate-patchnotes.mjs
-
-      - id: commit
-        name: Commit generated patch notes back to main
-        if: steps.guard.outputs.should_release == 'true'
         run: |
-          version="${{ steps.guard.outputs.version }}"
-          # Persist the notes so they're baked into this build AND glob into every
-          # future build's "previous versions" history. [skip ci] stops this push
-          # from re-triggering the workflow.
-          if [ -n "$(git status --porcelain -- src/patchnotes)" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add "src/patchnotes/${version}.json"
-            git commit -m "Add patch notes for v${version} [skip ci]"
-            git push origin HEAD:main
-            echo "Committed and pushed generated patch notes for v${version}."
-          else
-            echo "Patch notes for v${version} already present — no commit needed."
-          fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - id: body
-        name: Generate release notes markdown from patch notes
-        if: steps.guard.outputs.should_release == 'true'
-        run: |
-          # Feeds the GitHub release body AND latest.json's `notes` (→ the app's
-          # update.body) on both matrix legs. Run on Linux so the heredoc is bash.
+          body="$(node scripts/generate-release-body.mjs)"
           {
             echo "md<<PATCHNOTES_EOF"
-            node scripts/patchnotes-to-md.mjs "${{ steps.guard.outputs.version }}"
+            echo "$body"
             echo "PATCHNOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -122,8 +98,8 @@ jobs:
       release_id: ${{ steps.create.outputs.result }}
     steps:
       - id: create
-        # Create exactly ONE draft release up front (targeting the commit that includes
-        # the generated notes) and hand its numeric id to the matrix. The build legs
+        # Create exactly ONE draft release up front (targeting the triggering commit)
+        # and hand its numeric id to the matrix. The build legs
         # upload by releaseId, not by tag — GitHub's get-release-by-tag API doesn't
         # return drafts, so a tag-based matrix can spawn duplicate drafts.
         uses: actions/github-script@v7
@@ -166,8 +142,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Build from the commit that includes the generated patch notes (baked into
-          # the bundle via import.meta.glob over src/patchnotes/*.json).
+          # Build from the triggering commit (any hand-authored src/patchnotes/*.json is
+          # baked into the bundle via import.meta.glob; the release body is constructed
+          # separately in `prepare` and passed through as needs.prepare.outputs.body).
           ref: ${{ needs.prepare.outputs.sha }}
 
       - name: Install Rust

@@ -717,30 +717,32 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
     (#190 — the post-update step; also the mock's hook). The Settings → **Updates**
     pane (#191) is the manual review-then-install surface (Check for updates / current
     version / status / Update now); the sidebar indicator deep-links to it.
-  - **Patch notes (#192):** per-version notes are authored in-repo as
-    `src/patchnotes/<version>.json` (`{version,date,changes:[{category,items[]}]}`),
-    loaded + normalized by the pure `src/patchnotes.ts` (`import.meta.glob` eager,
-    `patchnotesFor`/`latestPatchnotes`/`patchnotesToMarkdown`) and rendered by
-    `components/PatchNotes` in the Updates pane for the **current** version. For a
-    **not-yet-installed** update, the notes ride **inside the release**: the pipeline
-    generates the release body from the new version's JSON (`scripts/patchnotes-to-md.mjs`),
+  - **Patch notes (#192):** per-version notes for the **current** (installed) version are
+    authored in-repo as `src/patchnotes/<version>.json` (`{version,date,changes:[{category,
+    items[]}]}`), loaded + normalized by the pure `src/patchnotes.ts` (`import.meta.glob`
+    eager, `patchnotesFor`/`latestPatchnotes`/`patchnotesToMarkdown`) and rendered by
+    `components/PatchNotes` in the Updates pane. For a **not-yet-installed** update, the
+    notes ride **inside the release**: the pipeline **constructs** the release body at
+    release time (Claude summarizes every change since the last tag — see Pipeline),
     `tauri-action` writes it into `latest.json`'s `notes`, `check()` returns it as
     `update.body`, and the store keeps it as `update.notes` — rendered (markdown) in the
     Updates pane's "What's new" slot so an older client reads them before installing.
   - **Pipeline:** `.github/workflows/release.yml` on push to `main` gates on a
-    version bump (config version > latest `v*` tag) **and** a **matching `src/patchnotes/
-    <version>.json`** (#192 — else end early); the deferred-key skip is gone now the
-    secret is configured. When both hold, a `check` job emits the release body once
-    (`scripts/patchnotes-to-md.mjs`), a `create-release` job opens **one** draft GitHub
-    release, and a **2-OS matrix** (`max-parallel: 1`) — **macOS** (`universal-apple-
-    darwin`) + **Windows** (`x86_64-pc-windows-msvc`) — builds **signed** bundles via
-    `tauri-action` and uploads them **by `releaseId`** to that draft, merging one
-    `latest.json` (`darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`). Serialized so
-    the `latest.json` read-modify-write merge is deterministic.
+    version bump (config version > latest `v*` tag). When it holds, a `prepare` job asks
+    Claude to **construct the release body** from every change since the last tag
+    (`scripts/generate-release-body.mjs` — reads the current version, prints the body
+    markdown to stdout; **writes/commits nothing**), a `create-release` job opens **one**
+    draft GitHub release with that body, and a **2-OS matrix** (`max-parallel: 1`) —
+    **macOS** (`universal-apple-darwin`) + **Windows** (`x86_64-pc-windows-msvc`) — builds
+    **signed** bundles via `tauri-action` and uploads them **by `releaseId`** to that
+    draft, merging one `latest.json` (`darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`).
+    Serialized so the `latest.json` read-modify-write merge is deterministic.
   - **Releasing:** the pipeline leaves a **draft** — a maintainer **publishes** it (the
     `/releases/latest/download/latest.json` endpoint only resolves to a published,
     non-draft "latest" release). Each new release = bump `version` in `tauri.conf.json` +
-    add `src/patchnotes/<version>.json` + push to `main` + publish the draft. The
+    push to `main` + publish the draft (the release body is constructed automatically);
+    optionally add `src/patchnotes/<version>.json` for the **in-app** current-version
+    "What's new" once that build is installed. The
     interactive flow is also runtime-exercised by the dev mock (#193). _(This reverses the
     earlier #62 "no in-app auto-update / no release pipeline" rule; OS code signing /
     Apple notarization stay out of scope — the update signatures are minisign-only.)_

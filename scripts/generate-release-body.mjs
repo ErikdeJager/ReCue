@@ -1,24 +1,23 @@
-// Generate `src/patchnotes/<version>.json` for the CURRENT app version by asking
+// Construct the GitHub release body (markdown) for the CURRENT app version by asking
 // Claude to summarize everything that changed since the previous release tag into a
-// user-facing changelog (features / fixes / improvements / other). Run by the release
-// pipeline BEFORE the build so the notes are baked into the new image (the FileViewer/
-// Updates pane globs `src/patchnotes/*.json` at build time) and committed back so the
-// accumulated history is available to future builds. Mirrors the JSON shape consumed by
-// `src/patchnotes.ts` + `scripts/patchnotes-to-md.mjs`.
+// user-facing changelog (features / fixes / improvements / other), then rendering it to
+// markdown. The body is printed to STDOUT (all diagnostics go to stderr) so the release
+// pipeline can capture it as the release body AND latest.json's `notes` (→ the app's
+// update.body). This script does NOT write or commit any file — its only job is to read
+// the latest version and construct a release body. Hand-authored per-version notes in
+// `src/patchnotes/<version>.json` (rendered in-app by `src/patchnotes.ts` /
+// `scripts/patchnotes-to-md.mjs`) are a separate, still-supported path.
 //
-//   ANTHROPIC_API_KEY=... node scripts/generate-patchnotes.mjs
+//   ANTHROPIC_API_KEY=... node scripts/generate-release-body.mjs
 //
 // Behavior:
 //   - The version is read from src-tauri/tauri.conf.json (so it always matches the
-//     release gate); the date is today (UTC).
-//   - If src/patchnotes/<version>.json already exists it is LEFT UNTOUCHED — a
-//     hand-authored file always wins, and re-runs are idempotent.
-//   - Only the `changes` are model-generated; `version`/`date` are set here.
-//   - Exits non-zero on any failure (no notes file is half-written) so the pipeline
-//     fails loudly rather than shipping a release with empty notes.
+//     release gate); the changes are summarized from git history since the latest v* tag.
+//   - Exits non-zero on any failure (so the pipeline fails loudly rather than shipping a
+//     release with an empty body).
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
@@ -28,14 +27,6 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(
   readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"),
 ).version;
-const outFile = join(root, "src", "patchnotes", `${version}.json`);
-
-if (existsSync(outFile)) {
-  console.log(
-    `Patch notes for v${version} already exist (${outFile}) — leaving as-is.`,
-  );
-  process.exit(0);
-}
 
 function git(args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -79,15 +70,21 @@ const context =
   `Changes since ${lastTag || "the start of the project"} (release v${version}):\n\n` +
   `Commit messages:\n${commits}\n\nFiles changed:\n${diffstat}`;
 const boundedContext =
-  context.length > MAX_CONTEXT ? `${context.slice(0, MAX_CONTEXT)}\n…(truncated)` : context;
+  context.length > MAX_CONTEXT
+    ? `${context.slice(0, MAX_CONTEXT)}\n…(truncated)`
+    : context;
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
 if (!apiKey) {
-  console.error("ANTHROPIC_API_KEY is not set — cannot generate patch notes.");
+  console.error(
+    "ANTHROPIC_API_KEY is not set — cannot construct the release body.",
+  );
   process.exit(1);
 }
 
-// Schema-constrained output: only the grouped change list. version/date are set here.
+// Schema-constrained output: only the grouped change list. We render it to markdown below
+// (mirroring `src/patchnotes.ts` / `scripts/patchnotes-to-md.mjs`) so the release body
+// matches the in-app patch-notes format.
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -144,7 +141,7 @@ const response = await client.messages.create({
 });
 
 if (response.stop_reason === "refusal") {
-  console.error("Model refused to generate patch notes.");
+  console.error("Model refused to construct the release body.");
   process.exit(1);
 }
 
@@ -191,9 +188,33 @@ if (changes.length === 0) {
   process.exit(1);
 }
 
-const today = new Date().toISOString().slice(0, 10);
-const notes = { version, date: today, changes };
+// Render the grouped changes to markdown — mirrors `patchnotesToMarkdown` in
+// `src/patchnotes.ts` and `scripts/patchnotes-to-md.mjs` so the release body reads the
+// same as the in-app patch notes.
+const CATEGORY_LABELS = {
+  feature: "Features",
+  fix: "Fixes",
+  improvement: "Improvements",
+  other: "Other",
+};
 
-writeFileSync(outFile, `${JSON.stringify(notes, null, 2)}\n`);
-console.log(`Wrote ${outFile}:`);
-console.log(JSON.stringify(notes, null, 2));
+function categoryLabel(category) {
+  const trimmed = String(category ?? "").trim();
+  const known = CATEGORY_LABELS[trimmed.toLowerCase()];
+  if (known) return known;
+  return trimmed ? trimmed[0].toUpperCase() + trimmed.slice(1) : "Other";
+}
+
+const lines = [];
+for (const change of changes) {
+  const items = (change.items ?? []).filter(
+    (i) => typeof i === "string" && i.trim() !== "",
+  );
+  if (items.length === 0) continue;
+  lines.push(`### ${categoryLabel(change.category)}`);
+  for (const item of items) lines.push(`- ${item}`);
+  lines.push("");
+}
+
+// The release body is the ONLY thing written to stdout.
+process.stdout.write(`${lines.join("\n").trim()}\n`);
