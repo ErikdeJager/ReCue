@@ -15,6 +15,3 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #236 — Show the current branch on its own line under each sidebar folder header (reuse the worktree branch indicator)
-	Plan: TASK-236.md
-

@@ -5528,3 +5528,64 @@ the single CSS change fixes both schedule-prompt surfaces at once.
 
 ---
 
+### 236. [x] Show the current branch on its own line under each sidebar folder header (reuse the worktree branch indicator)
+
+**Status:** Done
+**Depends on:** none _(builds on already-shipped code: the #225 inline branch badge + sync, the #212 `branches` map / `refreshBranches`, the #197 worktree Overview filter, and the worktree branch indicator)_
+**Created:** 2026-06-28
+
+**Description**
+
+#225 had shipped each top-level sidebar repo/folder header's current git branch as an
+**inline, truncating badge next to the repo name**, sharing the single header row with the
+name, the session count, and the `+` button. A long branch name truncated early and crowded
+or broke that header layout. This task **moved the branch to its own dedicated line directly
+below the repo header** (above the session rows), restyled to echo the existing **worktree
+branch indicator** (`GitBranch` icon + muted branch text), so a long branch name occupies a
+full line and never competes for header space. The #225 branch **data and sync** were reused
+unchanged — only the rendering location and style changed.
+
+**What shipped** (commit `e0fec7b`, 2026-06-28) — a **pure-frontend** change in
+`src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css`:
+
+- **Removed** the inline `branches[repo] && <span className={styles.repoBranch}>…</span>`
+  badge from inside the `.repoTitle` button in `RepoGroup`, and **deleted** the now-unused
+  `.repoBranch` CSS rule.
+- **Added** a new branch line directly below the `.repoHeader` `<div>` (still inside `.group`,
+  before `repoSessions.map(...)`), rendered only when `branches[repo]` is truthy. It is a
+  `<button type="button">` containing a `GitBranch` icon (`size={12}`, `strokeWidth={1.5}`,
+  `aria-hidden`) plus a `<span>` with the branch text (`title={branches[repo]}`). Its `onClick`
+  runs `setOverviewRepoFilter(repo); setView("overview")` (same toggle as clicking the repo
+  name, #34), with `aria-pressed={isFiltered}` and a `Filter Overview to <repo>` title.
+- **CSS:** a `.repoBranchLine` rule (flex row, `align-items: center`, `gap: --space-6`, full
+  width, `height: 22px`, `padding: 0 --space-8 0 --space-16` so the `GitBranch` icon lands in
+  the same 16px icon column as the repo's Folder marker #128 / the agent rows' activity dots
+  #95 — putting the branch text directly under the repo name; transparent button reset like
+  `.repoTitle`/`.worktreeName`); a `.repoBranchText` (mono, `--text-muted`, `--fs-meta-xs`,
+  ellipsis-truncate with `min-width: 0` safety net); `:hover` → `--text-secondary`; and a
+  `.repoBranchActive` → `--accent` when the repo's Overview filter is active (mirroring
+  `.worktreeActive .worktreeName`). No worktree sub-group left-border framing.
+- **Restored** `.repoName` to `flex: 1` (reverting the #225 `flex: 0 1 auto`) so the name
+  reclaims the header width now that no inline badge shares the row; `.count` stays
+  right-aligned via `margin-left: auto` and the `+` is unaffected.
+
+**Key files touched:** `src/components/Sidebar/Sidebar.tsx` (RepoGroup — remove inline badge,
+add the below-header branch button) and `src/components/Sidebar/Sidebar.module.css`
+(`.repoBranchLine`/`.repoBranchText`/`.repoBranchActive`/`.repoBranchIcon` added, `.repoBranch`
+removed, `.repoName` reverted to `flex: 1`).
+
+**Dependencies:** none — pure rendering change layered on already-shipped, archived work.
+
+**Notes**
+
+- **Out of scope (kept unchanged):** the #225 sync logic (the `branches` map,
+  `refreshBranches`, the #212 busy→idle edge refresh, and the focus/visibility/~15s-poll
+  effect); the collapsed icon rail (no room for a text branch line); worktree sub-group
+  headers (`WorktreeHeader` already shows their own branch); the Overview/Canvas agent-header
+  folder+branch indicator (#226); and all backend code (none needed).
+- **Cross-platform:** pure frontend. Branch reads go through the existing cross-platform
+  `current_branches` git shell-out (no change); plain CSS renders identically in WKWebView
+  (macOS) and WebView2 (Windows) — no `platform`/`#[cfg]` gating needed.
+
+---
+
