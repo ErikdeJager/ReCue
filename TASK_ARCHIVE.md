@@ -5823,3 +5823,54 @@ spacing tokens.
 
 ---
 
+### 241. [x] Add an attention-grabbing glowing tooltip beside the sidebar feedback (bug-report) button
+
+**Status:** Done
+**Depends on:** none _(independent frontend feature on shipped code: #210 feedback button, #216/#217 glow pattern + `openUrl`)_
+**Created:** 2026-06-28
+
+**Description**
+
+The sidebar footer's **feedback / bug-report button** (#210, a `Bug` icon at the bottom-left)
+was easy to miss. This task added an **attention-grabbing, glowing tooltip** to the right of it
+reading **"Report bugs and request features"**, shown automatically on every app launch to draw
+the eye, then auto-hiding.
+
+**What shipped** (commit `7d9c82d`, 2026-06-28) — a **pure-frontend** change in
+`src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css`:
+
+- **State + timer:** `Sidebar()` got a `feedbackNudgeDismissed` state (starts `false`); the
+  nudge shows when `!feedbackNudgeDismissed && !sidebarCollapsed`. A `useEffect` keyed on that
+  visible condition starts a **10s** `setTimeout` to dismiss (cleared on unmount/dismiss), so it
+  appears on **every** launch with no persisted "seen" flag (no backend change).
+- **Dismiss on interaction:** the feedback button got `onMouseEnter` + `onFocus` handlers that
+  dismiss the nudge immediately (clicking implies hover, covering the open-form path); its
+  existing `title`/`aria-label` are unchanged.
+- **Tooltip render (no clipping):** rather than an absolutely-positioned sibling that a footer
+  `overflow` could clip, the pill is rendered at a **fixed position** computed from the button's
+  `getBoundingClientRect()` (`feedbackNudgePos = { top: r.top + r.height/2, left: r.right + 8 }`),
+  so the full text shows at any sidebar width. It is `pointer-events: none` + `aria-hidden="true"`
+  (the button is already labeled). Not rendered in the collapsed icon rail.
+- **Glow styling:** `.feedbackNudge` is a small rounded pill (`--bg-elevated` bg, `--accent`
+  border, accent glow `box-shadow`) with a gentle pulsing animation echoing the #216
+  `update-announce` keyframe (box-shadow/border only → no layout shift). Under reduced motion
+  the pulse drops to a static accent glow (the keyframe resolves to the resting style so a
+  clamped run settles).
+
+**Key files touched:** `src/components/Sidebar/Sidebar.tsx` (nudge state/timer, fixed-position
+pill, button hover/focus dismiss) and `src/components/Sidebar/Sidebar.module.css`
+(`.feedbackNudge` pill + glow/pulse + reduced-motion handling).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **User decisions:** **every launch** (no persistence); **expanded sidebar only** (skip the
+  collapsed rail); text exactly "Report bugs and request features".
+- **Reuse references:** the #216 `update-announce` glow keyframe as the pulse template
+  (reduced-motion safe); `FEEDBACK_FORM_URL` + `openUrl` (#210/#217) unchanged.
+- **Cross-platform:** pure React + CSS; no OS-specific code. The Sidebar mounts only in the
+  main window — renders identically in WKWebView (macOS) and WebView2 (Windows).
+
+---
+
