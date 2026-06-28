@@ -5589,3 +5589,63 @@ removed, `.repoName` reverted to `flex: 1`).
 
 ---
 
+### 237. [x] Persist the diff viewer's display modes (focus/accordion + unified/split) so the last choice becomes the default for new viewers
+
+**Status:** Done
+**Depends on:** none _(builds on shipped code: #231 display mode + the `diffDisplayMode` setting, #230 commits, #81 branch compare)_
+**Created:** 2026-06-28
+
+**Description**
+
+The diff viewer (`DiffInspector`) has an in-panel **focus/accordion** display toggle (#231)
+and a **unified/split** line toggle. Previously, changing either only updated that panel's
+local React state — the choice was **not remembered**, so the next diff viewer opened reverted
+to the global default. This task made the **last-chosen display mode the default for
+newly-opened diff viewers** by persisting both display-style toggles to settings, while keeping
+each open panel's mode independent (only *new* viewers inherit a change). The **source** toggle
+(working / compare / commits) was deliberately left non-persisted.
+
+**What shipped** (commit `483a14e`, 2026-06-28) — a **pure-frontend** change:
+
+- **New setting:** added `diffLineMode: "unified" | "split"` to the `Settings` type
+  (`src/types/index.ts`, beside `diffDisplayMode`) and `diffLineMode: "unified"` to
+  `DEFAULT_SETTINGS` (`src/store.ts`). Older `settings.json` blobs upgrade cleanly via the
+  existing `DEFAULT_SETTINGS` merge — no backend change (settings persist as one opaque blob).
+- **Seed line mode from settings:** in `DiffInspector.tsx`, changed the `mode`
+  (`DiffMode = "unified" | "split"`) state from a hardcoded `useState<DiffMode>("unified")` to
+  `useState<DiffMode>(() => useStore.getState().settings.diffLineMode)` — mirroring how
+  `displayMode` already seeds from `diffDisplayMode`. Seed-once + local-state structure
+  preserved, so already-open panels keep their mode (decision (2)).
+- **Persist on toggle:** added `chooseDisplayMode(next)` and `chooseLineMode(next)` wrappers
+  that set local state **and** call `saveSettings({ ...useStore.getState().settings,
+  diffDisplayMode/diffLineMode: next })` (reading settings at call time so a concurrent change
+  to another field isn't clobbered). The focus/accordion buttons wire to `chooseDisplayMode`,
+  the unified/split buttons to `chooseLineMode`. The `source` toggle was untouched.
+- **Settings control:** added a sibling "Diff line mode" segmented control (Unified / Split,
+  `update("diffLineMode", v)` / `draft.diffLineMode`) beside the existing "Diff display mode"
+  control in `Settings.tsx`, keeping the two display-style toggles symmetric and the
+  single-source-of-truth invariant (Settings reflects the last in-panel choice).
+
+**Key files touched:** `src/types/index.ts` (new `diffLineMode` type field), `src/store.ts`
+(`DEFAULT_SETTINGS` default), `src/components/DiffInspector/DiffInspector.tsx` (seed `mode` from
+settings + `chooseDisplayMode`/`chooseLineMode` persisting wrappers), and
+`src/components/Settings/Settings.tsx` (new "Diff line mode" segmented control).
+
+**Dependencies:** none — pure rendering/settings change layered on shipped, archived work.
+
+**Notes**
+
+- **Single source of truth:** the in-panel toggle writes to the **same** persisted settings
+  value the Settings control drives — no separate "last used" field; `diffDisplayMode` reused,
+  `diffLineMode` added.
+- **Only new viewers:** seed-once + per-panel local state means persisting to settings does not
+  re-read into mounted panels, so open panels keep their mode while newly-mounted panels seed
+  from the updated setting (decision (2) — `displayMode`/`mode` deliberately NOT read live).
+- **Out of scope (unchanged):** the source toggle (working/compare/commits); the selected
+  commit / branch-compare persistence (already handled, #81/#230); any backend change;
+  live-syncing already-open panels.
+- **Cross-platform:** pure frontend; settings persist via the existing cross-platform
+  `set_settings` blob. No OS-specific code — identical on macOS and Windows.
+
+---
+

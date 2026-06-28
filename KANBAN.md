@@ -13,8 +13,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #237 — Persist the diff viewer's display modes (focus/accordion + unified/split) so the last choice becomes the default for new viewers
-	Plan: TASK-237.md
 - [ ] #238 — Overhaul Kanban card interaction + unify the create/edit UI into a single-field composer
 	Plan: TASK-238.md
 
