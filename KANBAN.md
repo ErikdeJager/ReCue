@@ -6,7 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] When a card inside the Kanban has more then one line, it becomes this grayed out description in the UI visually. This is great. But this description text is not draggable. Instead, my mouse selects the text instead of dragging the card around
 - [ ] (left panel) clicking a folder will filter overviewmode to only show contents of that folder. Clicking a worktree branch will filter to only show that worktree. Clicking the top branch (the branch indicator that is not a worktree, but the branch inside the directory) filters THAT branch as well. Meaning that all other worktrees are hidden. The behaviour is different; where clicking the folder shows EVERYTHING for that folder. But clicking the branch shows ONLY that branch, meaning that worktrees are hidden
 - [ ] A Kanban item (card); if it is checked (meaning completed) it corsses out all the text. This is not nessecary, just show the checkmark, thats all.
 
@@ -20,6 +19,9 @@ kanban-plugin: board
 	Depends on: none
 - [ ] #245 — Kanban add/save buttons: Enter shortcut indicator + thinner vertical padding
 	Plan: TASK-245.md
+	Depends on: none
+- [ ] #246 — Make a Kanban card's description body part of the drag surface (no text-selection)
+	Plan: TASK-246.md
 	Depends on: none
 
 ## DONE
