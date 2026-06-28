@@ -1,4 +1,4 @@
-// Dev-only update mock (#193). Registers a small `window.__claudecue` helper so a
+// Dev-only update mock (#193). Registers a small `window.__recue` helper so a
 // developer can fake an available update in a dev run and watch the whole update UI
 // react (the #190 indicator + confirm/freeze/progress flow, the #191 Settings
 // "Updates" pane, the #192 patch-notes render) without a signed release.
@@ -11,7 +11,7 @@ import { useStore } from "./store";
 declare global {
   interface Window {
     /** Dev-only update mock helpers (#193); undefined in production. */
-    __claudecue?: {
+    __recue?: {
       /** Fake an available update → the indicator + Updates pane + notes light up.
        *  `notes` defaults to a sample changelog; pass `null` to omit notes. */
       mockUpdate: (opts?: { version?: string; notes?: string | null }) => void;
@@ -27,7 +27,7 @@ declare global {
 
 export function registerDevMock(): void {
   const state = useStore.getState;
-  window.__claudecue = {
+  window.__recue = {
     mockUpdate: (opts) => state().mockUpdate(opts),
     mockProgress: (percent) =>
       state().setUpdateState({
@@ -42,6 +42,6 @@ export function registerDevMock(): void {
     clearUpdate: () => state().clearUpdate(),
   };
   console.info(
-    "[claudecue] dev update mock ready — try window.__claudecue.mockUpdate()",
+    "[recue] dev update mock ready — try window.__recue.mockUpdate()",
   );
 }

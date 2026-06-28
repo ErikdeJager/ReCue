@@ -1298,7 +1298,7 @@ pub fn save_clipboard_image(app: AppHandle) -> Result<String, SessionError> {
     }
     let dir = std::env::temp_dir();
     cleanup_stale_paste_images(&dir);
-    let path = dir.join(format!("claudecue-paste-{}.png", Uuid::new_v4()));
+    let path = dir.join(format!("recue-paste-{}.png", Uuid::new_v4()));
     let file = std::fs::File::create(&path).map_err(|e| SessionError::Io(e.to_string()))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
@@ -1315,7 +1315,7 @@ pub fn save_clipboard_image(app: AppHandle) -> Result<String, SessionError> {
     Ok(path.to_string_lossy().to_string())
 }
 
-/// Best-effort removal of leftover `claudecue-paste-*.png` temp files older than an
+/// Best-effort removal of leftover `recue-paste-*.png` temp files older than an
 /// hour (#220), so repeated image pastes don't accumulate. A just-written file (the
 /// one about to be pasted) is far younger than the cutoff, so it's never swept. All
 /// errors are ignored — cleanup must never block a paste.
@@ -1327,7 +1327,7 @@ fn cleanup_stale_paste_images(dir: &Path) {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !(name.starts_with("claudecue-paste-") && name.ends_with(".png")) {
+        if !(name.starts_with("recue-paste-") && name.ends_with(".png")) {
             continue;
         }
         let stale = entry
@@ -1403,7 +1403,7 @@ fn explorer_select_arg(path: &str) -> String {
     format!("/select,\"{win_path}\"")
 }
 
-/// The ClaudeCue app version (#100 Settings → About), from the crate version.
+/// The ReCue app version (#100 Settings → About), from the crate version.
 #[tauri::command]
 pub fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()

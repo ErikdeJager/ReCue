@@ -37,11 +37,11 @@ describe("splitPath (#163)", () => {
 
 describe("repoName", () => {
   it("returns the last path segment", () => {
-    expect(repoName("/Users/me/code/claudecue")).toBe("claudecue");
+    expect(repoName("/Users/me/code/recue")).toBe("recue");
   });
 
   it("ignores a trailing slash", () => {
-    expect(repoName("/Users/me/code/claudecue/")).toBe("claudecue");
+    expect(repoName("/Users/me/code/recue/")).toBe("recue");
   });
 
   it("falls back to the input for a root-ish path", () => {
@@ -49,8 +49,8 @@ describe("repoName", () => {
   });
 
   it("splits Windows backslash paths (#143)", () => {
-    expect(repoName("C:\\Users\\me\\code\\claudecue")).toBe("claudecue");
-    expect(repoName("C:\\Users\\me\\code\\claudecue\\")).toBe("claudecue");
+    expect(repoName("C:\\Users\\me\\code\\recue")).toBe("recue");
+    expect(repoName("C:\\Users\\me\\code\\recue\\")).toBe("recue");
     // Mixed separators (a normalized prefix + a raw segment) still take the tail.
     expect(repoName("C:/Users/me\\repo")).toBe("repo");
   });

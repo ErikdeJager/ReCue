@@ -1182,7 +1182,7 @@ mod tests {
     fn missing_binary_is_a_typed_error() {
         let (mgr, _rx) = manager();
         let err = mgr
-            .spawn_program("claudecue-does-not-exist-xyz", &[], &tmp(), None)
+            .spawn_program("recue-does-not-exist-xyz", &[], &tmp(), None)
             .unwrap_err();
         assert!(matches!(err, SessionError::BinaryNotFound(_)));
     }
@@ -1191,7 +1191,7 @@ mod tests {
     fn is_executable_rejects_missing_paths_and_directories() {
         // A path that doesn't exist is never executable (both platforms).
         assert!(!is_executable(Path::new(
-            "claudecue-nonexistent-binary-xyz-12345"
+            "recue-nonexistent-binary-xyz-12345"
         )));
         // A directory is not an executable *file* (`is_file()` is false everywhere).
         assert!(!is_executable(&tmp()));
@@ -1225,10 +1225,10 @@ mod tests {
     fn is_executable_honors_extension_on_windows() {
         let dir = std::env::temp_dir();
         let stamp = Uuid::new_v4();
-        let exe = dir.join(format!("claudecue-test-{stamp}.cmd"));
+        let exe = dir.join(format!("recue-test-{stamp}.cmd"));
         std::fs::write(&exe, b"@echo off\n").expect("write .cmd");
         assert!(is_executable(&exe), "a .cmd file should read as runnable");
-        let data = dir.join(format!("claudecue-test-{stamp}.txt"));
+        let data = dir.join(format!("recue-test-{stamp}.txt"));
         std::fs::write(&data, b"hi").expect("write .txt");
         assert!(
             !is_executable(&data),
@@ -1243,7 +1243,7 @@ mod tests {
     fn is_executable_honors_mode_bits_on_unix() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("claudecue-test-{}", Uuid::new_v4()));
+        let path = dir.join(format!("recue-test-{}", Uuid::new_v4()));
         std::fs::write(&path, b"#!/bin/sh\n").expect("write");
         let set_mode = |mode: u32| {
             let mut perms = std::fs::metadata(&path).unwrap().permissions();
@@ -1262,7 +1262,7 @@ mod tests {
         // The version/presence probe relies on this returning None when the CLI
         // isn't on PATH (both platforms) — that's how `binary_version` reports a
         // missing agent without spawning anything.
-        assert!(resolve_command("claudecue-does-not-exist-xyz-98765").is_none());
+        assert!(resolve_command("recue-does-not-exist-xyz-98765").is_none());
     }
 
     #[cfg(windows)]

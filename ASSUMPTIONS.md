@@ -185,7 +185,7 @@ judgment with "see if this … has good UX"):
 
 ## TASK-193 — Dev-only mock update
 
-- **"Insert a command" = a dev-gated `window.__claudecue` console helper** (`mockUpdate`/
+- **"Insert a command" = a dev-gated `window.__recue` console helper** (`mockUpdate`/
   `mockProgress`/`mockError`/`clearUpdate`), plus an optional dev-only "Simulate update"
   button in the #191 Updates pane.
 - **Dev-only via `import.meta.env.DEV`** — registered under the guard so it's absent from
@@ -381,7 +381,7 @@ Content-only rewrite of `src/patchnotes/0.0.1.json` (today an internal changelog
 introduce what the app is + frame as the first/initial release, not a list of recent
 implementations. Decided autonomously:
 
-- Schema has no free-text intro field, so use two categories — **"welcome"** (what ClaudeCue
+- Schema has no free-text intro field, so use two categories — **"welcome"** (what ReCue
   is + "first release") and **"highlights"** (Overview / Canvas / sidebar at a high level).
   Arbitrary categories Title-Case via `categoryLabel`.
 - Keep `version` 0.0.1 and `date` 2026-06-26. Provided concrete recommended JSON in the

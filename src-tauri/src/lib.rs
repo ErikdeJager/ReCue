@@ -1,4 +1,4 @@
-//! ClaudeCue Tauri backend.
+//! ReCue Tauri backend.
 //!
 //! Hosts the application window and the Tauri command/event surface the React
 //! frontend talks to. The session/PTY core lives in `pty`, JSON persistence in
@@ -59,7 +59,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map(|dir| dir.join("sessions.json"))
-                .unwrap_or_else(|_| PathBuf::from("claudecue-sessions.json"));
+                .unwrap_or_else(|_| PathBuf::from("recue-sessions.json"));
             app.manage(Store::load(&store_path));
 
             let handle = app.handle().clone();

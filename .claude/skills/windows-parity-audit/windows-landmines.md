@@ -1,7 +1,7 @@
 # Windows landmines catalog
 
 The cross-platform pitfalls that recur in a macOS-first Tauri app, and the **established
-ClaudeCue seam** each one must be fixed through. For every category: the *smell*, a
+ReCue seam** each one must be fixed through. For every category: the *smell*, a
 copy-pasteable *grep seed*, why it *breaks on Windows*, and the *fix seam*. The macOS arm
 always keeps its current behavior; the Windows arm is additive and `#[cfg]`/`platform`-gated.
 

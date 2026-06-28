@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ClaudeCue",
+  "productName": "ReCue",
   "version": "0.0.1",
-  "identifier": "com.claudecue.app",
+  "identifier": "com.recue.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "ClaudeCue",
+        "title": "ReCue",
         "width": 1280,
         "height": 832,
         "minWidth": 880,
@@ -27,7 +27,7 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "copyright": "© 2026 ClaudeCue",
+    "copyright": "© 2026 ReCue",
     "shortDescription": "Run and manage many live claude CLI sessions.",
     "longDescription": "A desktop app for running and managing many live claude CLI sessions at once — an Overview agent wall of real terminals, a Canvas split-panel workspace with file, git-diff, and terminal viewers, and a repo-grouped sidebar.",
     "icon": [
@@ -41,7 +41,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/ErikdeJager/ClaudeCue/releases/latest/download/latest.json"
+        "https://github.com/ErikdeJager/ReCue/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk5N0IwMDExRjYyRTg5NzkKUldSNWlTNzJFUUI3bVV3Z0duQ3NmMkJLRld5cmoyL0tITzQ2NGp6anFsdmpYRkp5MWlqU3BjdzkK"
     }

@@ -1,4 +1,4 @@
-// Shared TypeScript types for ClaudeCue.
+// Shared TypeScript types for ReCue.
 //
 // The first group mirrors the Rust backend (see src-tauri/src/{store,git,pty}.rs)
 // so the typed IPC layer and the store share one source of truth; the second

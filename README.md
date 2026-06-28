@@ -1,4 +1,4 @@
-# ClaudeCue
+# ReCue
 
 A **macOS and Windows** desktop app for running and managing many live `claude` CLI
 sessions at once — an **Overview** "agent wall" of real terminals, a **Canvas**
@@ -6,7 +6,7 @@ split-panel workspace (with file, git-diff, and terminal viewers), and a repo-gr
 **sidebar**. Every feature works on both platforms (OS-specific behavior is gated
 behind a single platform abstraction; see [`CLAUDE.md`](CLAUDE.md)).
 
-Each session is a real PTY running the Claude Code CLI. ClaudeCue provides the window
+Each session is a real PTY running the Claude Code CLI. ReCue provides the window
 chrome, navigation, persistence, and read-only git reading; the terminals come from
 `claude` itself.
 
@@ -68,7 +68,7 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
 
 - macOS or Windows
 - [`claude`](https://docs.claude.com/en/docs/claude-code) (Claude Code CLI)
-  **installed and authenticated** on your `PATH` — ClaudeCue runs `claude` for every
+  **installed and authenticated** on your `PATH` — ReCue runs `claude` for every
   session and shows a clear error if it is missing.
 - For building from source: [Node.js](https://nodejs.org/) + npm and
   [Rust](https://www.rust-lang.org/tools/install) (stable) + Cargo.
@@ -88,9 +88,9 @@ npm run tauri build    # builds for the host OS (run it on each platform you tar
 
 Artifacts land in `src-tauri/target/release/bundle/`:
 
-- **macOS** — `macos/ClaudeCue.app` and `dmg/ClaudeCue_<version>_<arch>.dmg`
-- **Windows** — an **NSIS** installer (`nsis/ClaudeCue_<version>_<arch>-setup.exe`) and
-  an **MSI** (`msi/ClaudeCue_<version>_<arch>_<lang>.msi`)
+- **macOS** — `macos/ReCue.app` and `dmg/ReCue_<version>_<arch>.dmg`
+- **Windows** — an **NSIS** installer (`nsis/ReCue_<version>_<arch>-setup.exe`) and
+  an **MSI** (`msi/ReCue_<version>_<arch>_<lang>.msi`)
 
 Each `tauri build` produces the bundle for the OS it runs on; build on a macOS host for
 the macOS artifacts and on a Windows host for the Windows installers.

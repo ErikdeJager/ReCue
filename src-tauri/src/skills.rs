@@ -203,7 +203,7 @@ mod tests {
 
     fn tmp(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("claudecue-skills-{tag}-{}", std::process::id()));
+        p.push(format!("recue-skills-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p

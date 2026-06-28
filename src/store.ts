@@ -211,7 +211,7 @@ export function versionIncreased(from: string, to: string): boolean {
 
 /** Whether the active coding agent is Claude (#154) — the single gate the usage bar
  * + its poller read. The Claude usage endpoint is meaningless for any other agent, so
- * the bar hides if a Codex session is active. ClaudeCue runs only Claude today
+ * the bar hides if a Codex session is active. ReCue runs only Claude today
  * (`agents.rs` DEFAULT_AGENT_ID), so `agent` is never `"codex"` and this is always
  * true; when a global active-agent / Codex setting lands, gate on it here instead
  * (e.g. `state.settings.activeAgent !== "codex"`). */
@@ -224,7 +224,7 @@ export function isClaudeActive(state: AppState): boolean {
 const SAMPLE_UPDATE_NOTES = [
   "### Features",
   "- A brand-new **mock** feature, for testing the update UI.",
-  "- Renders [release notes](https://github.com/ErikdeJager/ClaudeCue) inline.",
+  "- Renders [release notes](https://github.com/ErikdeJager/ReCue) inline.",
   "",
   "### Fixes",
   "- Fixed a simulated bug that never really existed.",

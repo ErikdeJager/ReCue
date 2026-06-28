@@ -463,7 +463,7 @@ export const revealPath = (path: string) =>
  * `revealPath`). */
 export const revealFileInFinder = (path: string) =>
   invoke<void>("reveal_file_in_finder", { path });
-/** ClaudeCue version, and claude's version (best-effort) (#100 Settings → About). */
+/** ReCue version, and claude's version (best-effort) (#100 Settings → About). */
 export const appVersion = () => invoke<string>("app_version");
 export const claudeVersion = () => invoke<string | null>("claude_version");
 /** The host OS family (#143) — "windows" / "macos" / "linux" — for OS-appropriate

@@ -435,7 +435,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
     source === "commits" && selectedCommit
       ? `${selectedCommit.short_sha} · ${selectedCommit.subject}`
       : diff?.summary.branch || "—";
-  // Panel header (#231): "repo · branch" (the wireframe's "ClaudeCue · main").
+  // Panel header (#231): "repo · branch" (the wireframe's "ReCue · main").
   const headerLabel = `${repoName(repoPath)} · ${summaryLabel}`;
 
   // Focused-mode navigation (#231): cycle through the changed files (wraps).

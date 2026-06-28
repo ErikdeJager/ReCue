@@ -1,6 +1,6 @@
 # Cross-platform line-ending normalization (#139 — Windows port).
 #
-# ClaudeCue is now developed on both Windows and macOS. Store every text file as
+# ReCue is now developed on both Windows and macOS. Store every text file as
 # LF in the repo and check it out as LF on all platforms, so a Windows checkout
 # (where core.autocrlf would otherwise inject CRLF) can't break `cargo fmt
 # --check` or `prettier --check` — both of which expect LF. macOS is unaffected

@@ -1,13 +1,13 @@
 # CLAUDE.md
 
-Guidance for working in this repository. ClaudeCue is a **macOS and Windows** desktop
+Guidance for working in this repository. ReCue is a **macOS and Windows** desktop
 app (#139/#140/#143) for running and managing many live `claude` CLI sessions at once.
 Per-OS divergence is `#[cfg(...)]`-gated in Rust and a single store-cached `platform`
 signal in the frontend; the macOS arm is always the original behavior.
 
 ## ⚠️ Cross-platform is a hard requirement (read this first)
 
-**ClaudeCue ships on BOTH macOS and Windows. Every feature, fix, and refactor MUST
+**ReCue ships on BOTH macOS and Windows. Every feature, fix, and refactor MUST
 be functional on both platforms — no exceptions.** This is not aspirational; it is a
 release constraint. macOS-only and Windows-only are both bugs.
 
@@ -53,7 +53,7 @@ show how each existing feature already honors this.
 An **Overview** "agent wall" of real terminals, a **Canvas** split-panel workspace
 (with file, **git-diff**, and terminal viewers), and a repo-grouped **sidebar**. A
 Canvas tab can **pop out into its own native window** for multi-monitor use (#84).
-Each session is a **real PTY running `claude`** — ClaudeCue provides the window
+Each session is a **real PTY running `claude`** — ReCue provides the window
 chrome, navigation, persistence, and git-reading; the terminals come from the
 Claude Code CLI itself.
 
@@ -445,7 +445,7 @@ even though it works in `tauri dev`.
 │   ├── Info.plist          # Partial plist (mic + speech-recognition usage strings), merged into the bundle
 │   ├── tauri.conf.json     # Window, bundle, build config
 │   ├── capabilities/       # Tauri permission capabilities
-│   └── Cargo.toml          # Crate `claudecue` / lib `claudecue_lib`
+│   └── Cargo.toml          # Crate `recue` / lib `recue_lib`
 ├── eslint.config.js        # ESLint flat config (TS + React)
 └── .prettierrc.json        # Prettier config
 ```
@@ -519,7 +519,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 
 ## v1 scope decisions / out of scope
 
-- **Git is read-mostly, with a small set of deliberate writes** — ClaudeCue reads
+- **Git is read-mostly, with a small set of deliberate writes** — ReCue reads
   git (current branch + working-tree diff vs `HEAD`) and never commits. Its writes
   are: (1) **`git checkout <existing branch>`** from the new-session panel
   (#27/#53/#61) — picking a branch checks it out (in the chosen folder, only an
@@ -658,7 +658,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   and **app shutdown keeps records** (`kill_all` doesn't delete them) so they
   auto-resume on next boot (#30) — the only path that "offers to restart."
 - **Window chrome:** the **standard native macOS title bar** (#19) — native
-  traffic lights, native title (`title: "ClaudeCue"`), native drag, no custom
+  traffic lights, native title (`title: "ReCue"`), native drag, no custom
   positioning. The window config carries no `titleBarStyle`/`hiddenTitle`/
   `trafficLightPosition`, and there is no custom `Titlebar` component or
   `data-tauri-drag-region` (the earlier overlay chrome from #3 was removed). The
@@ -718,7 +718,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   The bundle ships a partial `src-tauri/Info.plist` (auto-merged by the Tauri CLI in
   both `dev` and `build`) declaring `NSMicrophoneUsageDescription` /
   `NSSpeechRecognitionUsageDescription` so voice dictation works inside a session's PTY
-  (macOS attributes a child process's mic request to the responsible app — ClaudeCue).
+  (macOS attributes a child process's mic request to the responsible app — ReCue).
 - **Styling:** CSS Modules (`*.module.css` next to each component) that consume
   the design tokens in `src/styles/tokens.css`. The reset, base styles,
   scrollbars, keyframes, and the `prefers-reduced-motion` killswitch live in

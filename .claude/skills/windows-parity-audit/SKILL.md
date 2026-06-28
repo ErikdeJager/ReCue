@@ -1,13 +1,13 @@
 ---
 name: windows-parity-audit
-description: Fan out read-only Explore agents across the whole ClaudeCue codebase to find every place that could break on Windows — hardcoded POSIX paths, raw $HOME, un-gated shell-outs, Cmd-only key handling, macOS-only CSS/WebView effects, open/explorer URL & reveal calls, line endings, missing cfg-gates — then produce a prioritized remediation plan, and optionally apply the fixes, that makes each work on Windows WITHOUT changing the macOS behavior. Use when the user runs /windows-parity-audit, or asks to audit/check/harden Windows compatibility, hunt cross-platform bugs, or verify macOS-and-Windows parity.
+description: Fan out read-only Explore agents across the whole ReCue codebase to find every place that could break on Windows — hardcoded POSIX paths, raw $HOME, un-gated shell-outs, Cmd-only key handling, macOS-only CSS/WebView effects, open/explorer URL & reveal calls, line endings, missing cfg-gates — then produce a prioritized remediation plan, and optionally apply the fixes, that makes each work on Windows WITHOUT changing the macOS behavior. Use when the user runs /windows-parity-audit, or asks to audit/check/harden Windows compatibility, hunt cross-platform bugs, or verify macOS-and-Windows parity.
 argument-hint: [optional: a subsystem to focus on (e.g. "git.rs", "Terminal", "CSS"), or "fix" to also apply the remediations]
 allowed-tools: Read, Grep, Glob, Bash, Agent, Edit, Write, AskUserQuestion, WebFetch
 ---
 
 # Windows parity audit
 
-ClaudeCue ships on **both macOS and Windows** — that is a release constraint, not an
+ReCue ships on **both macOS and Windows** — that is a release constraint, not an
 aspiration (see `CLAUDE.md` → "Cross-platform is a hard requirement"). The app was born
 macOS-first, so the recurring risk is a code path that quietly assumes macOS and breaks
 on Windows. This skill **sweeps the whole codebase with read-only Explore agents**,
@@ -23,7 +23,7 @@ opt-in phase (the user passes `fix`, or asks for it).
 2. **macOS quality is sacrosanct.** Every fix preserves the **macOS arm byte-for-byte**.
    The Windows arm is **additive** — you gate the divergence, you never rewrite the
    shared/macOS path into something "more portable" that drifts from today's behavior.
-3. **Reuse the established seams — don't reinvent them.** ClaudeCue already has
+3. **Reuse the established seams — don't reinvent them.** ReCue already has
    abstractions for every common divergence (paths, $HOME, shelling out, key handling,
    reveal/open, URLs). A fix that hand-rolls a new one is a defect. The catalog in
    [windows-landmines.md](windows-landmines.md) lists each seam by name.
@@ -96,7 +96,7 @@ right for an audit.
 
 Give **each** agent this brief (adapt the scope line):
 
-> You are auditing **<subsystem>** of ClaudeCue, a Tauri 2 + React/Rust desktop app that
+> You are auditing **<subsystem>** of ReCue, a Tauri 2 + React/Rust desktop app that
 > must run identically well on **macOS and Windows** but was written macOS-first. Read
 > `.claude/skills/windows-parity-audit/windows-landmines.md` for the catalog of pitfall
 > categories, the grep seeds, and the established cross-platform seam each one must use.
@@ -172,5 +172,5 @@ Give the user:
 ## Reference
 
 - **[windows-landmines.md](windows-landmines.md)** — the pitfall catalog: each category's
-  smell, copy-pasteable grep seeds, why it breaks on Windows, and the exact ClaudeCue seam
+  smell, copy-pasteable grep seeds, why it breaks on Windows, and the exact ReCue seam
   the fix must use. Read it during phase 1 and hand it to every Explore agent in phase 2.

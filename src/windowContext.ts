@@ -1,4 +1,4 @@
-// Window identity (#84). ClaudeCue can open a Canvas tab in its own native
+// Window identity (#84). ReCue can open a Canvas tab in its own native
 // window for multi-monitor use. Every window loads the same bundle; a detached
 // canvas window is told which canvas it is via a `?canvas=<id>` URL param, and
 // its Tauri window label is `canvas-<id>` (the backend creates it with that

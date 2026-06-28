@@ -966,7 +966,7 @@ index 0..1
 
     fn unique_dir(tag: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
-        path.push(format!("claudecue-git-{tag}-{}", std::process::id()));
+        path.push(format!("recue-git-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         path
     }
