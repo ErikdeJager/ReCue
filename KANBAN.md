@@ -17,6 +17,3 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #240 — Make the Kanban "Add card" / "Cancel" buttons roomier (fix their dropped padding from the undefined --space-10 token)
-	Plan: TASK-240.md
-

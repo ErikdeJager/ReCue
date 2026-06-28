@@ -5776,3 +5776,50 @@ KanbanPanel.tsx` (name-based accent lookup), and `src/components/Settings/Settin
 
 ---
 
+### 240. [x] Make the Kanban "Add card" / "Cancel" buttons roomier (fix their dropped padding from the undefined `--space-10` token)
+
+**Status:** Done
+**Depends on:** none _(builds on shipped Kanban CSS #233/#238; independent of #239 though both touch `KanbanPanel.module.css` in different rules)_
+**Created:** 2026-06-28
+
+**Description**
+
+The Kanban add-card composer's **"Add card"** and **"Cancel"** buttons looked cramped (text
+flush to the edges). The root cause was a **bug**, not just styling: both declared
+`padding: var(--space-2) var(--space-10)`, but **`--space-10` is undefined** in `tokens.css`
+(the scale is `--space-1/2/4/6/8/12/16/20/24/32`). A `var()` to an undefined property with no
+fallback makes the whole `padding` shorthand invalid-at-computed-value, collapsing it to `0`.
+This task gave the two buttons comfortable padding by replacing the broken token with defined
+spacing tokens.
+
+**What shipped** (commit `2d21f9b`, 2026-06-28) — a **pure-CSS** change in
+`src/components/Kanban/KanbanPanel.module.css`:
+
+- Changed `.composerAdd` padding from `var(--space-2) var(--space-10)` to
+  `var(--space-6) var(--space-12)` (6px vertical, 12px horizontal), with an explanatory comment
+  on the undefined-token bug.
+- Matched `.composerCancel` to the same `var(--space-6) var(--space-12)` so the two buttons stay
+  the same height/size.
+- Font size unchanged (`--fs-meta-sm` = 11px); only padding changed. Because **#238** made the
+  inline-edit **Save**/**Cancel** buttons reuse these same two classes, they inherit the roomier
+  padding too (intended/consistent).
+
+**Key files touched:** `src/components/Kanban/KanbanPanel.module.css` (`.composerAdd` +
+`.composerCancel` padding).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **User decisions:** scope = **just the two Kanban composer buttons** (which also cover #238's
+  edit Save/Cancel via shared classes); **more padding only**, keep 11px text; target
+  ≈`var(--space-6) var(--space-12)`.
+- **Out of scope (flagged for a separate card):** the same undefined-`--space-10` bug at ~6
+  other sites (FileViewer, DiffInspector, Canvas, TemplateEditor) and two other `--space-10`
+  uses elsewhere in `KanbanPanel.module.css` — a companion Refine card tracks fixing it
+  app-wide (became #242). This task did not depend on it.
+- **Cross-platform:** pure CSS, no OS-specific anything — renders identically in WKWebView
+  (macOS) and WebView2 (Windows).
+
+---
+
