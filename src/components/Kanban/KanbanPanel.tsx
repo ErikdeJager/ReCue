@@ -1,5 +1,7 @@
 import {
+  type CSSProperties,
   type FocusEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement,
   useCallback,
   useEffect,
@@ -24,22 +26,13 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
-  Check,
-  Code2,
-  Eye,
-  GripVertical,
-  Pencil,
-  Plus,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Check, Code2, Eye, Pencil, Plus, Trash2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { noAutoCapitalize } from "../../inputProps";
 import { kbdHint } from "../../platform";
-import { useStore } from "../../store";
+import { REPO_PALETTE, useStore } from "../../store";
 import { useAutoSaveFile } from "../../useAutoSaveFile";
 import Checkbox from "../Checkbox/Checkbox";
 import {
@@ -54,7 +47,6 @@ import {
   deleteCard,
   deleteColumn,
   moveCard,
-  newCard,
   renameColumn,
   toggleCard,
   updateCard,
@@ -143,6 +135,12 @@ function SortableCard({
       return;
     onStopEdit();
   };
+  // The whole card is the drag grip (#233, replacing the separate grip column): the
+  // 4px pointer activation distance keeps a plain click (edit / toggle / link) working.
+  // Interactive controls stop pointerdown so they never start a drag.
+  const noDrag = {
+    onPointerDown: (e: ReactPointerEvent) => e.stopPropagation(),
+  };
   return (
     <article
       ref={setNodeRef}
@@ -151,31 +149,26 @@ function SortableCard({
         isDragging ? styles.cardPlaceholder : ""
       }`}
       onBlur={onEditBlur}
+      {...attributes}
+      {...listeners}
     >
       <div className={styles.cardTop}>
-        <button
-          type="button"
-          className={styles.cardGrip}
-          title="Drag to move card"
-          aria-label="Move card"
-          {...attributes}
-          {...listeners}
-        >
-          <GripVertical size={13} strokeWidth={1.5} />
-        </button>
-        {/* A plain-bullet card (#194, `checked === null`) renders no checkbox. */}
+        {/* Checkbox pinned top-left (#233); a plain-bullet card (#194, `checked ===
+            null`) renders no checkbox. */}
         {card.checked !== null && (
-          <Checkbox
-            checked={card.checked}
-            onChange={onToggle}
-            ariaLabel="Card done"
-            className={styles.cardCheck}
-          />
+          <span {...noDrag} className={styles.cardCheck}>
+            <Checkbox
+              checked={card.checked}
+              onChange={onToggle}
+              ariaLabel="Card done"
+            />
+          </span>
         )}
         {editing ? (
           <input
             className={styles.cardTitleInput}
             {...noAutoCapitalize}
+            {...noDrag}
             value={draft?.title ?? ""}
             placeholder="Card title…"
             autoFocus
@@ -206,7 +199,7 @@ function SortableCard({
           card's top-right (#195), out of the title's flex flow so the title gets the
           full row width. Revealed on `.card:hover`/`:focus-within` (so while editing
           the focused input keeps Done visible, and keyboard users reach them). */}
-      <span className={styles.cardActions}>
+      <span className={styles.cardActions} {...noDrag}>
         {editing ? (
           <button
             type="button"
@@ -242,15 +235,16 @@ function SortableCard({
         <textarea
           className={styles.cardBodyInput}
           {...noAutoCapitalize}
+          {...noDrag}
           value={draft?.body ?? ""}
-          placeholder="Markdown body (optional) — tags, dates, links…"
+          placeholder="Detail lines (optional) — tags, dates, links…"
           onChange={(e) => onDraftChange({ body: e.currentTarget.value })}
           aria-label="Card body (markdown)"
           rows={4}
         />
       ) : (
         card.body.trim() && (
-          <div className={styles.cardBody}>
+          <div className={styles.cardBody} {...noDrag}>
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeTaskListPositions]}
@@ -276,17 +270,15 @@ function CardPreview({ card }: { card: Card }) {
       }`}
     >
       <div className={styles.cardTop}>
-        <span className={styles.cardGrip} aria-hidden>
-          <GripVertical size={13} strokeWidth={1.5} />
-        </span>
         {/* A plain-bullet card (#194, `checked === null`) renders no checkbox. */}
         {card.checked !== null && (
-          <Checkbox
-            checked={card.checked}
-            onChange={() => {}}
-            ariaLabel="Card done"
-            className={styles.cardCheck}
-          />
+          <span className={styles.cardCheck}>
+            <Checkbox
+              checked={card.checked}
+              onChange={() => {}}
+              ariaLabel="Card done"
+            />
+          </span>
         )}
         <span className={styles.cardTitle}>
           {card.title.trim() || (
@@ -324,7 +316,8 @@ interface ColumnProps {
   onRename: (name: string) => void;
   onRenameStop: () => void;
   onDelete: () => void;
-  onAddCard: () => void;
+  /** Add a card from the inline composer (#233): first line → title, rest → body. */
+  onComposeCard: (title: string, body: string) => void;
   onCardStartEdit: (idx: number) => void;
   onCardStopEdit: () => void;
   onCardDraftChange: (patch: Partial<CardDraft>) => void;
@@ -334,14 +327,49 @@ interface ColumnProps {
   onCardDelete: (idx: number) => void;
 }
 
-/** One column (status lane): a header (rename / reorder / delete), a droppable,
- * sortable list of cards, and a "+ Add card". */
+/** One column (status lane, #233): a header (accent dot + UPPERCASE name + count pill
+ * + "+"), a droppable sortable card list, and an inline add-card composer opened by
+ * the "+" / the bottom dashed affordance. */
 function BoardColumn(props: ColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: `column:${props.col}` });
   const items = props.cards.map((_, i) => cardId(props.col, i));
+  // Deterministic per-column accent (#233) from the shared palette by column index
+  // (cycling) — the markdown format has nowhere to store a color, so it's derived.
+  const accent =
+    REPO_PALETTE[props.col % REPO_PALETTE.length] ??
+    REPO_PALETTE[0] ??
+    "#cba6f7";
+
+  // Inline add-card composer (#233): first line → title, remaining lines → body.
+  const [composing, setComposing] = useState(false);
+  const [composerText, setComposerText] = useState("");
+  const openComposer = () => {
+    setComposerText("");
+    setComposing(true);
+  };
+  const cancelComposer = () => {
+    setComposing(false);
+    setComposerText("");
+  };
+  const submitComposer = () => {
+    const lines = composerText.replace(/\r\n/g, "\n").split("\n");
+    const title = (lines[0] ?? "").trim();
+    const body = lines.slice(1).join("\n").trimEnd();
+    if (!title && !body.trim()) {
+      cancelComposer();
+      return;
+    }
+    props.onComposeCard(title, body);
+    cancelComposer();
+  };
+
   return (
-    <section className={styles.column}>
+    <section
+      className={styles.column}
+      style={{ "--col-accent": accent } as CSSProperties}
+    >
       <header className={styles.columnHeader}>
+        <span className={styles.colDot} aria-hidden />
         {props.renaming ? (
           <input
             className={styles.columnNameInput}
@@ -366,6 +394,15 @@ function BoardColumn(props: ColumnProps) {
           </button>
         )}
         <span className={styles.count}>{props.cards.length}</span>
+        <button
+          type="button"
+          className={styles.colAdd}
+          onClick={openComposer}
+          title="Add card"
+          aria-label="Add card"
+        >
+          <Plus size={14} strokeWidth={1.5} />
+        </button>
         <span className={styles.columnActions}>
           {/* Columns move per-card via drag (#159) — no whole-column move buttons. */}
           <button
@@ -407,16 +444,61 @@ function BoardColumn(props: ColumnProps) {
           ))}
         </SortableContext>
         {/* Empty-column hint (#161): a subtle cue instead of a bare gap. */}
-        {props.cards.length === 0 && (
+        {props.cards.length === 0 && !composing && (
           <p className={styles.emptyHint}>No cards yet</p>
         )}
-        <button
-          type="button"
-          className={styles.addCard}
-          onClick={props.onAddCard}
-        >
-          <Plus size={13} strokeWidth={1.5} /> Add card
-        </button>
+        {composing ? (
+          <div className={styles.composer}>
+            <textarea
+              className={styles.composerInput}
+              {...noAutoCapitalize}
+              value={composerText}
+              placeholder="Write a card… Shift+Enter for detail lines"
+              autoFocus
+              rows={3}
+              onChange={(e) => setComposerText(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                // Enter submits; Shift+Enter inserts a detail line (#233). IME-safe.
+                if (
+                  e.key === "Enter" &&
+                  !e.shiftKey &&
+                  !e.nativeEvent.isComposing
+                ) {
+                  e.preventDefault();
+                  submitComposer();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelComposer();
+                }
+              }}
+              aria-label="New card"
+            />
+            <div className={styles.composerActions}>
+              <button
+                type="button"
+                className={styles.composerAdd}
+                onClick={submitComposer}
+              >
+                Add card
+              </button>
+              <button
+                type="button"
+                className={styles.composerCancel}
+                onClick={cancelComposer}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={styles.addCard}
+            onClick={openComposer}
+          >
+            <Plus size={13} strokeWidth={1.5} /> Add card
+          </button>
+        )}
       </div>
     </section>
   );
@@ -587,16 +669,12 @@ function KanbanPanel({
     setEditing(null);
     setEditDraft(null);
   };
-  // Add a card and immediately edit it (its draft starts empty).
-  const addCardAndEdit = (col: number) => {
+  // Add a card from the inline composer (#233): first line → title, rest → body.
+  // Unlike the old immediate-edit flow, the card is added complete (no edit mode).
+  const addComposedCard = (col: number, title: string, body: string) => {
     commitCardDraft();
     if (renamingCol !== null) commitRenameDraft();
-    const idx = board.columns[col]?.cards.length ?? 0;
-    mutate(addCard(board, col, newCard()));
-    setEditDraft({ title: "", body: "" });
-    setEditing({ col, idx });
-    setRenamingCol(null);
-    setRenameDraft(null);
+    mutate(addCard(board, col, { title, body, checked: false }));
   };
   // Start renaming a column: commit in-flight drafts first, then seed the name.
   const startColumnRename = (col: number) => {
@@ -743,7 +821,9 @@ function KanbanPanel({
                 onRename={(name) => setRenameDraft(name)}
                 onRenameStop={() => stopColumnRename()}
                 onDelete={() => deleteColumnAt(col)}
-                onAddCard={() => addCardAndEdit(col)}
+                onComposeCard={(title, body) =>
+                  addComposedCard(col, title, body)
+                }
                 onCardStartEdit={(idx) => startCardEdit(col, idx)}
                 onCardStopEdit={() => stopCardEdit()}
                 onCardDraftChange={(patch) =>

@@ -1,6 +1,6 @@
-### 233. [ ] Redesign the in-app Kanban board UI (cards, columns, inline composer, per-column accents)
+### 233. [x] Redesign the in-app Kanban board UI (cards, columns, inline composer, per-column accents)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 

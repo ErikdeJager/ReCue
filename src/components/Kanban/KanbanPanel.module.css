@@ -153,6 +153,9 @@
   min-height: 0;
   background: var(--bg-sidebar);
   border: 1px solid var(--border-hairline);
+  /* Per-column accent (#233): a subtle top stripe in the column's derived color
+     (--col-accent, set inline). The dot in the header matches. */
+  border-top: 2px solid var(--col-accent, var(--border-strong));
   border-radius: var(--radius-control);
   overflow: hidden;
 }
@@ -163,6 +166,38 @@
   gap: var(--space-6);
   padding: var(--space-6) var(--space-8) var(--space-6) var(--space-12);
   border-bottom: 1px solid var(--border-hairline);
+}
+
+/* Status-colored dot at the left of the column header (#233) — the column's accent. */
+.colDot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-dot);
+  background: var(--col-accent, var(--text-muted));
+}
+
+/* Always-visible "+" add-card button in the column header (#233). */
+.colAdd {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-chip);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.colAdd:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
 .columnName {
@@ -325,8 +360,10 @@
 
 .cardTop {
   display: flex;
-  align-items: center;
-  gap: var(--space-4);
+  /* Pin the checkbox to the top-left so the title flows full-width to its right and
+     wraps full-width below (#233). */
+  align-items: flex-start;
+  gap: var(--space-6);
 }
 
 /* Grip reveals on card hover / focus-within (#161) so cards read uncluttered. */
@@ -354,7 +391,10 @@
 }
 
 .cardCheck {
+  display: inline-flex;
   flex: 0 0 auto;
+  /* Nudge to align with the first line of the title text (#233). */
+  margin-top: 1px;
 }
 
 .cardTitle {
@@ -459,15 +499,18 @@
   line-height: 1.5;
 }
 
-/* Card markdown body — a compact slice of the FileViewer markdown styling, just
-   what a small card needs (paragraphs, inline/code blocks, lists, links). */
+/* Card markdown body — rendered as dimmed, monospace **detail/meta lines** beneath
+   the main text (#233), like a READY card's `Plan:`/`Depends on:` lines. Aligned
+   under the title (past the top-left checkbox). Keeps ReactMarkdown so links +
+   interactive task checkboxes (#173/#194) still work — only the style is "secondary". */
 .cardBody {
-  margin-top: var(--space-6);
+  margin-top: var(--space-4);
   padding-left: calc(
-    13px + var(--space-4)
-  ); /* align under the title (past grip) */
-  font-size: var(--fs-meta-sm);
-  color: var(--text-secondary);
+    16px + var(--space-6)
+  ); /* align under the title (past checkbox) */
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+  color: var(--text-muted);
   line-height: 1.5;
   word-break: break-word;
 }
@@ -576,6 +619,63 @@
 .addCard:hover {
   color: var(--text-primary);
   border-color: var(--text-muted);
+}
+
+/* Inline add-card composer (#233): a multi-line textarea + Add/Cancel buttons,
+   opened by the column "+" and the bottom dashed affordance. */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.composerInput {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  background: var(--bg-base);
+  border: 1px solid var(--col-accent, var(--border-strong));
+  border-radius: var(--radius-chip);
+  padding: var(--space-6);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
+}
+.composerInput::placeholder {
+  color: var(--text-muted);
+}
+.composerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+.composerAdd {
+  appearance: none;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-chip);
+  padding: var(--space-2) var(--space-10);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+}
+.composerAdd:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.composerCancel {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  padding: var(--space-2) var(--space-10);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+}
+.composerCancel:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
 .addColumn {
