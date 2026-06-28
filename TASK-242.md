@@ -1,8 +1,8 @@
 # TASK-242
 
-### 242. [ ] Fix the undefined `--space-10` token app-wide (replace every use with `--space-12`)
+### 242. [x] Fix the undefined `--space-10` token app-wide (replace every use with `--space-12`)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 
@@ -63,12 +63,12 @@ may have already removed the two Kanban composer-button uses):
 
 **Acceptance criteria**
 
-- [ ] **No** `var(--space-10)` reference remains anywhere in `src/`.
-- [ ] **No** `--space-10` token is added to `tokens.css` (the scale is unchanged).
-- [ ] Every previously-affected control now has real (12px) horizontal padding — its text
+- [x] **No** `var(--space-10)` reference remains anywhere in `src/`.
+- [x] **No** `--space-10` token is added to `tokens.css` (the scale is unchanged).
+- [x] Every previously-affected control now has real (12px) horizontal padding — its text
       no longer sits flush to the edges (the padding is no longer silently dropped to 0).
-- [ ] Vertical padding at each site is unchanged (still `--space-2` / `--space-4`).
-- [ ] `npm run build`, `npm run lint`, `npm test` pass. Pure CSS — identical on macOS and
+- [x] Vertical padding at each site is unchanged (still `--space-2` / `--space-4`).
+- [x] `npm run build`, `npm run lint`, `npm test` pass. Pure CSS — identical on macOS and
       Windows.
 
 **Notes**

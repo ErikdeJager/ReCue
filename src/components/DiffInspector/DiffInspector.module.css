@@ -525,7 +525,7 @@
   width: 100%;
   align-items: center;
   gap: var(--space-8);
-  padding: var(--space-4) var(--space-10);
+  padding: var(--space-4) var(--space-12);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--bg-base);

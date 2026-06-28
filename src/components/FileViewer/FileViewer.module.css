@@ -46,7 +46,7 @@
 .saveBtn {
   flex-shrink: 0;
   margin-right: auto;
-  padding: var(--space-2) var(--space-10);
+  padding: var(--space-2) var(--space-12);
   border: 1px solid var(--accent);
   border-radius: var(--radius-control);
   background: var(--accent);
