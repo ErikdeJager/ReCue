@@ -1515,6 +1515,7 @@ function Sidebar() {
   const [feedbackNudgePos, setFeedbackNudgePos] = useState<{
     top: number;
     left: number;
+    maxWidth: number;
   } | null>(null);
   const feedbackBtnRef = useRef<HTMLButtonElement | null>(null);
   const showFeedbackNudge = !feedbackNudgeDismissed && !sidebarCollapsed;
@@ -1529,11 +1530,18 @@ function Sidebar() {
     const btn = feedbackBtnRef.current;
     if (btn) {
       const r = btn.getBoundingClientRect();
-      setFeedbackNudgePos({ top: r.top + r.height / 2, left: r.right + 8 });
+      // The sidebar's left edge is at viewport x=0 and its width is `sidebarWidth`,
+      // so clamp the pill's width to stay inside the panel (8px gutter at the edge)
+      // — it overlays the space to the right of the icon and never spills past the
+      // sidebar's right edge.
+      const left = r.right + 8;
+      const RIGHT_INSET = 8;
+      const maxWidth = Math.max(0, sidebarWidth - left - RIGHT_INSET);
+      setFeedbackNudgePos({ top: r.top + r.height / 2, left, maxWidth });
     }
     const timer = setTimeout(() => setFeedbackNudgeDismissed(true), 10000);
     return () => clearTimeout(timer);
-  }, [showFeedbackNudge]);
+  }, [showFeedbackNudge, sidebarWidth]);
   const closeMenu = () => {
     setMenu(null);
     setMenuMode("menu");
@@ -2046,10 +2054,14 @@ function Sidebar() {
         {showFeedbackNudge && feedbackNudgePos && (
           <div
             className={styles.feedbackNudge}
-            style={{ top: feedbackNudgePos.top, left: feedbackNudgePos.left }}
+            style={{
+              top: feedbackNudgePos.top,
+              left: feedbackNudgePos.left,
+              maxWidth: feedbackNudgePos.maxWidth,
+            }}
             aria-hidden="true"
           >
-            Report bugs and request features
+            Report bugs &amp; features
           </div>
         )}
         {/* Collapse/expand (#168) sits at the far right of the expanded footer row
