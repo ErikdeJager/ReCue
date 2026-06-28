@@ -26,7 +26,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Check, Code2, Eye, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Code2, Eye, Pencil, Plus, Trash2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -67,37 +67,49 @@ function parseCardId(id: string): [number, number] | null {
   return m ? [Number(m[1]), Number(m[2])] : null;
 }
 
-/** The in-progress title/body of the card being edited (#160) — held locally and
- * committed to the board buffer once, on confirm (Done / blur-out / Enter / switch),
- * instead of writing on every keystroke. */
-type CardDraft = { title: string; body: string };
+/** Split a single composer/edit textarea value into a card's title + body using ONE
+ * rule for both create and edit (#238), so the two parses can't diverge: first line →
+ * title (trimmed), remaining lines → body (joined, trailing whitespace trimmed). */
+function splitCardText(text: string): { title: string; body: string } {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const title = (lines[0] ?? "").trim();
+  const body = lines.slice(1).join("\n").trimEnd();
+  return { title, body };
+}
 
 interface CardProps {
   id: string;
   card: Card;
   editing: boolean;
-  /** The local edit draft while this card is being edited (#160); null otherwise. */
-  draft: CardDraft | null;
+  /** The single-field edit text while this card is being edited (#238) — first line is
+   * the title, the rest the body; held locally and committed once on confirm (Save /
+   * blur-out / Enter / switch) via `splitCardText`. null when not editing. */
+  editText: string | null;
   onStartEdit: () => void;
   onStopEdit: () => void;
-  onDraftChange: (patch: Partial<CardDraft>) => void;
+  /** Discard the edit and return to view mode (#238 — Cancel / Escape). */
+  onCancelEdit: () => void;
+  onEditTextChange: (text: string) => void;
   onToggle: () => void;
   /** Toggle a task-list checkbox inside the rendered body (#173) → new body markdown. */
   onBodyToggle: (nextBody: string) => void;
   onDelete: () => void;
 }
 
-/** One card — view mode (checkbox + title + rendered markdown body + edit/delete)
- * or edit mode (title input + markdown body textarea). Draggable by its grip
- * handle only, so the body textarea + buttons stay usable. */
+/** One card — view mode (checkbox + title + rendered markdown body + a hover/focus
+ * pencil/trash overlay) or edit mode (a single composer-style textarea + a flow
+ * Save/Cancel/Delete row). The whole card surface (incl. the title) is the drag grip
+ * (#233/#238); only interactive controls (checkbox, body links/checkboxes, the editor)
+ * stop the drag. */
 function SortableCard({
   id,
   card,
   editing,
-  draft,
+  editText,
   onStartEdit,
   onStopEdit,
-  onDraftChange,
+  onCancelEdit,
+  onEditTextChange,
   onToggle,
   onBodyToggle,
   onDelete,
@@ -125,10 +137,11 @@ function SortableCard({
       }),
     [card.body, onBodyToggle],
   );
-  // Commit-on-confirm (#160): while editing, the title/body bind to the local
-  // `draft` (no per-keystroke write). The edit commits once when focus leaves the
-  // whole card — but NOT when it moves between the card's own controls (title ↔
-  // body ↔ Done), so editing both fields doesn't prematurely commit/exit.
+  // Commit-on-confirm (#160): while editing, the text binds to the local `editText`
+  // (no per-keystroke write). The edit commits once when focus leaves the whole card
+  // (click-away = commit, #238) — but NOT when it moves to one of the card's own
+  // controls (Save/Cancel/Delete), so clicking those doesn't prematurely commit. Cancel
+  // discards before any commit runs.
   const onEditBlur = (event: FocusEvent<HTMLElement>) => {
     if (!editing) return;
     if (event.currentTarget.contains(event.relatedTarget as Node | null))
@@ -152,108 +165,132 @@ function SortableCard({
       {...attributes}
       {...listeners}
     >
-      <div className={styles.cardTop}>
-        {/* Checkbox pinned top-left (#233); a plain-bullet card (#194, `checked ===
-            null`) renders no checkbox. */}
-        {card.checked !== null && (
-          <span {...noDrag} className={styles.cardCheck}>
-            <Checkbox
-              checked={card.checked}
-              onChange={onToggle}
-              ariaLabel="Card done"
-            />
-          </span>
-        )}
-        {editing ? (
-          <input
-            className={styles.cardTitleInput}
+      {editing ? (
+        // Single-field editor (#238): one composer-style textarea + a flow action row,
+        // so create and edit share the same shape. `noDrag` on the wrapper stops a
+        // pointerdown on the textarea/buttons from starting a card drag. The actions
+        // render below the textarea (never overlaying the text, the #195 defect).
+        <div className={styles.cardEdit} {...noDrag}>
+          <textarea
+            className={styles.cardEditInput}
             {...noAutoCapitalize}
-            {...noDrag}
-            value={draft?.title ?? ""}
-            placeholder="Card title…"
+            value={editText ?? ""}
+            placeholder="Write a card… Shift+Enter for detail lines"
             autoFocus
-            onChange={(e) => onDraftChange({ title: e.currentTarget.value })}
+            rows={3}
+            onChange={(e) => onEditTextChange(e.currentTarget.value)}
             onKeyDown={(e) => {
-              // Enter confirms a single-line title (the textarea keeps newlines).
-              if (e.key === "Enter") {
+              // Enter commits; Shift+Enter inserts a detail line; Escape discards
+              // (mirroring the add-card composer). IME-safe.
+              if (
+                e.key === "Enter" &&
+                !e.shiftKey &&
+                !e.nativeEvent.isComposing
+              ) {
                 e.preventDefault();
                 onStopEdit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                onCancelEdit();
               }
             }}
-            aria-label="Card title"
-          />
-        ) : (
-          <button
-            type="button"
-            className={styles.cardTitle}
-            onClick={onStartEdit}
-            title="Edit card"
-          >
-            {card.title.trim() || (
-              <span className={styles.untitled}>Untitled</span>
-            )}
-          </button>
-        )}
-      </div>
-      {/* Actions live in a hover/focus-revealed cluster absolutely positioned in the
-          card's top-right (#195), out of the title's flex flow so the title gets the
-          full row width. Revealed on `.card:hover`/`:focus-within` (so while editing
-          the focused input keeps Done visible, and keyboard users reach them). */}
-      <span className={styles.cardActions} {...noDrag}>
-        {editing ? (
-          <button
-            type="button"
-            className={styles.cardBtn}
-            onClick={onStopEdit}
-            title="Done editing"
-            aria-label="Done editing"
-          >
-            <Check size={13} strokeWidth={1.5} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            className={styles.cardBtn}
-            onClick={onStartEdit}
-            title="Edit card"
             aria-label="Edit card"
+          />
+          {/* preventDefault on mousedown keeps focus in the textarea so clicking a
+              button doesn't blur it first (#238): without this, the article's
+              commit-on-blur (onEditBlur) would fire before the click — and on WKWebView,
+              where a clicked button doesn't take focus, `relatedTarget` is null so the
+              blur reads as "left the card" and commits, making Cancel save instead of
+              discard. Keyboard focus (Tab) is unaffected. */}
+          <div
+            className={styles.cardEditActions}
+            onMouseDown={(e) => e.preventDefault()}
           >
-            <Pencil size={12} strokeWidth={1.5} />
-          </button>
-        )}
-        <button
-          type="button"
-          className={styles.cardBtn}
-          onClick={onDelete}
-          title="Delete card"
-          aria-label="Delete card"
-        >
-          <Trash2 size={12} strokeWidth={1.5} />
-        </button>
-      </span>
-      {editing ? (
-        <textarea
-          className={styles.cardBodyInput}
-          {...noAutoCapitalize}
-          {...noDrag}
-          value={draft?.body ?? ""}
-          placeholder="Detail lines (optional) — tags, dates, links…"
-          onChange={(e) => onDraftChange({ body: e.currentTarget.value })}
-          aria-label="Card body (markdown)"
-          rows={4}
-        />
-      ) : (
-        card.body.trim() && (
-          <div className={styles.cardBody} {...noDrag}>
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeTaskListPositions]}
-              components={bodyComponents}
+            <button
+              type="button"
+              className={styles.composerAdd}
+              onClick={onStopEdit}
             >
-              {card.body}
-            </ReactMarkdown>
+              Save
+            </button>
+            <button
+              type="button"
+              className={styles.composerCancel}
+              onClick={onCancelEdit}
+            >
+              Cancel
+            </button>
+            {/* Delete pushed to the right, away from Save/Cancel (#238). */}
+            <button
+              type="button"
+              className={styles.cardEditDelete}
+              onClick={onDelete}
+              title="Delete card"
+              aria-label="Delete card"
+            >
+              <Trash2 size={13} strokeWidth={1.5} /> Delete
+            </button>
           </div>
-        )
+        </div>
+      ) : (
+        <>
+          <div className={styles.cardTop}>
+            {/* Checkbox pinned top-left (#233); a plain-bullet card (#194, `checked
+                === null`) renders no checkbox. */}
+            {card.checked !== null && (
+              <span {...noDrag} className={styles.cardCheck}>
+                <Checkbox
+                  checked={card.checked}
+                  onChange={onToggle}
+                  ariaLabel="Card done"
+                />
+              </span>
+            )}
+            {/* The title is plain display text and part of the drag surface (#238):
+                clicking it drags the card, never opens edit (which is pencil-only). */}
+            <div className={styles.cardTitle}>
+              {card.title.trim() || (
+                <span className={styles.untitled}>Untitled</span>
+              )}
+            </div>
+          </div>
+          {/* Edit/Delete in a hover/focus-revealed cluster absolutely positioned in
+              the card's top-right (#195), out of the title's flex flow so the title
+              gets the full row width. View mode only (#238 — edit uses the flow row
+              above); revealed on `.card:hover`/`:focus-within` so keyboard users reach
+              them. */}
+          <span className={styles.cardActions} {...noDrag}>
+            <button
+              type="button"
+              className={styles.cardBtn}
+              onClick={onStartEdit}
+              title="Edit card"
+              aria-label="Edit card"
+            >
+              <Pencil size={12} strokeWidth={1.5} />
+            </button>
+            <button
+              type="button"
+              className={styles.cardBtn}
+              onClick={onDelete}
+              title="Delete card"
+              aria-label="Delete card"
+            >
+              <Trash2 size={12} strokeWidth={1.5} />
+            </button>
+          </span>
+          {card.body.trim() && (
+            <div className={styles.cardBody} {...noDrag}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeTaskListPositions]}
+                components={bodyComponents}
+              >
+                {card.body}
+              </ReactMarkdown>
+            </div>
+          )}
+        </>
       )}
     </article>
   );
@@ -310,8 +347,8 @@ interface ColumnProps {
   renameValue: string;
   confirmingDelete: boolean;
   editingCard: number | null;
-  /** The edit draft for this column's editing card (#160), or null. */
-  editDraft: CardDraft | null;
+  /** The single-field edit text for this column's editing card (#238), or null. */
+  editText: string | null;
   onRenameStart: () => void;
   onRename: (name: string) => void;
   onRenameStop: () => void;
@@ -320,7 +357,8 @@ interface ColumnProps {
   onComposeCard: (title: string, body: string) => void;
   onCardStartEdit: (idx: number) => void;
   onCardStopEdit: () => void;
-  onCardDraftChange: (patch: Partial<CardDraft>) => void;
+  onCardCancelEdit: () => void;
+  onCardEditTextChange: (text: string) => void;
   onCardToggle: (idx: number) => void;
   /** A body task-list checkbox toggled (#173) → that card's new body markdown. */
   onCardBodyToggle: (idx: number, nextBody: string) => void;
@@ -352,9 +390,9 @@ function BoardColumn(props: ColumnProps) {
     setComposerText("");
   };
   const submitComposer = () => {
-    const lines = composerText.replace(/\r\n/g, "\n").split("\n");
-    const title = (lines[0] ?? "").trim();
-    const body = lines.slice(1).join("\n").trimEnd();
+    // Shared parse (#238): the same first-line→title / rest→body rule the inline card
+    // editor uses, so create + edit can't diverge.
+    const { title, body } = splitCardText(composerText);
     if (!title && !body.trim()) {
       cancelComposer();
       return;
@@ -433,10 +471,11 @@ function BoardColumn(props: ColumnProps) {
               id={cardId(props.col, idx)}
               card={card}
               editing={props.editingCard === idx}
-              draft={props.editingCard === idx ? props.editDraft : null}
+              editText={props.editingCard === idx ? props.editText : null}
               onStartEdit={() => props.onCardStartEdit(idx)}
               onStopEdit={props.onCardStopEdit}
-              onDraftChange={props.onCardDraftChange}
+              onCancelEdit={props.onCardCancelEdit}
+              onEditTextChange={props.onCardEditTextChange}
               onToggle={() => props.onCardToggle(idx)}
               onBodyToggle={(body) => props.onCardBodyToggle(idx, body)}
               onDelete={() => props.onCardDelete(idx)}
@@ -545,10 +584,10 @@ function KanbanPanel({
   const [editing, setEditing] = useState<{ col: number; idx: number } | null>(
     null,
   );
-  // Commit-on-confirm drafts (#160): the editing card's title/body and the renaming
-  // column's name live here while typing — NOT in the save buffer — so keystrokes
-  // don't trigger per-keystroke writes; they're flushed once on confirm.
-  const [editDraft, setEditDraft] = useState<CardDraft | null>(null);
+  // Commit-on-confirm drafts (#160): the editing card's single-field text (#238) and
+  // the renaming column's name live here while typing — NOT in the save buffer — so
+  // keystrokes don't trigger per-keystroke writes; they're flushed once on confirm.
+  const [editText, setEditText] = useState<string | null>(null);
   const [renamingCol, setRenamingCol] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
   const [confirmDeleteCol, setConfirmDeleteCol] = useState<number | null>(null);
@@ -576,7 +615,7 @@ function KanbanPanel({
     didInitView.current = false;
     setShowRaw(false);
     setEditing(null);
-    setEditDraft(null);
+    setEditText(null);
     setRenamingCol(null);
     setRenameDraft(null);
     setConfirmDeleteCol(null);
@@ -634,13 +673,15 @@ function KanbanPanel({
 
   // --- Commit-on-confirm editing (#160) ---
   // Write the in-flight CARD draft to the buffer once, only if it actually changed
-  // (a no-op edit shouldn't write). Callers also clear `editing`/`editDraft`.
+  // (a no-op edit shouldn't write). Callers also clear `editing`/`editText`.
   const commitCardDraft = () => {
-    if (!editing || !editDraft) return;
+    if (!editing || editText === null) return;
     const card = board.columns[editing.col]?.cards[editing.idx];
     if (!card) return;
-    if (card.title !== editDraft.title || card.body !== editDraft.body) {
-      mutate(updateCard(board, editing.col, editing.idx, editDraft));
+    // Split the single edit field the SAME way the composer does (#238).
+    const { title, body } = splitCardText(editText);
+    if (card.title !== title || card.body !== body) {
+      mutate(updateCard(board, editing.col, editing.idx, { title, body }));
     }
   };
   // Write the in-flight COLUMN-rename draft once, only if it changed.
@@ -658,16 +699,24 @@ function KanbanPanel({
       commitCardDraft();
     if (renamingCol !== null) commitRenameDraft();
     const card = board.columns[col]?.cards[idx];
-    setEditDraft({ title: card?.title ?? "", body: card?.body ?? "" });
+    // Seed the single edit field from the card: title on line 1, body below (#238).
+    setEditText(
+      card ? card.title + (card.body ? "\n" + card.body : "") : "",
+    );
     setEditing({ col, idx });
     setRenamingCol(null);
     setRenameDraft(null);
   };
-  // Confirm a card edit: commit once, then leave edit mode.
+  // Confirm a card edit: commit once, then leave edit mode (Save / Enter / blur-out).
   const stopCardEdit = () => {
     commitCardDraft();
     setEditing(null);
-    setEditDraft(null);
+    setEditText(null);
+  };
+  // Discard a card edit without committing (#238 — Cancel / Escape).
+  const cancelCardEdit = () => {
+    setEditing(null);
+    setEditText(null);
   };
   // Add a card from the inline composer (#233): first line → title, rest → body.
   // Unlike the old immediate-edit flow, the card is added complete (no edit mode).
@@ -683,7 +732,7 @@ function KanbanPanel({
     setRenameDraft(board.columns[col]?.name ?? "");
     setRenamingCol(col);
     setEditing(null);
-    setEditDraft(null);
+    setEditText(null);
   };
   // Confirm a column rename (blur/Enter): commit once, then leave rename mode.
   const stopColumnRename = () => {
@@ -700,7 +749,7 @@ function KanbanPanel({
     setRenameDraft("New column");
     setRenamingCol(idx);
     setEditing(null);
-    setEditDraft(null);
+    setEditText(null);
   };
 
   const deleteColumnAt = (col: number) => {
@@ -712,7 +761,7 @@ function KanbanPanel({
     setConfirmDeleteCol(null);
     if (editing?.col === col) {
       setEditing(null);
-      setEditDraft(null);
+      setEditText(null);
     }
     if (renamingCol === col) {
       setRenamingCol(null);
@@ -816,7 +865,7 @@ function KanbanPanel({
                 renameValue={renameDraft ?? column.name}
                 confirmingDelete={confirmDeleteCol === col}
                 editingCard={editing?.col === col ? editing.idx : null}
-                editDraft={editing?.col === col ? editDraft : null}
+                editText={editing?.col === col ? editText : null}
                 onRenameStart={() => startColumnRename(col)}
                 onRename={(name) => setRenameDraft(name)}
                 onRenameStop={() => stopColumnRename()}
@@ -826,12 +875,8 @@ function KanbanPanel({
                 }
                 onCardStartEdit={(idx) => startCardEdit(col, idx)}
                 onCardStopEdit={() => stopCardEdit()}
-                onCardDraftChange={(patch) =>
-                  setEditDraft((d) => ({
-                    ...(d ?? { title: "", body: "" }),
-                    ...patch,
-                  }))
-                }
+                onCardCancelEdit={() => cancelCardEdit()}
+                onCardEditTextChange={(t) => setEditText(t)}
                 onCardToggle={(idx) => mutate(toggleCard(board, col, idx))}
                 onCardBodyToggle={(idx, body) =>
                   mutate(updateCard(board, col, idx, { body }))
@@ -839,7 +884,7 @@ function KanbanPanel({
                 onCardDelete={(idx) => {
                   if (editing?.col === col && editing.idx === idx) {
                     setEditing(null);
-                    setEditDraft(null);
+                    setEditText(null);
                   }
                   mutate(deleteCard(board, col, idx));
                 }}

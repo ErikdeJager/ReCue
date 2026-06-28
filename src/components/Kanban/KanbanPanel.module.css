@@ -417,33 +417,19 @@
   margin-top: 1px;
 }
 
+/* Plain display text + part of the drag surface (#238 — no longer a click-to-edit
+   button), so no `cursor: text`; the card's grab cursor governs. */
 .cardTitle {
   flex: 1;
   min-width: 0;
-  appearance: none;
-  background: none;
-  border: none;
   /* A little right room so a long title's first line doesn't sit under the
      hover-revealed top-right actions (#195); the gradient backdrop covers the rest. */
   padding: 0 var(--space-20) 0 0;
   text-align: left;
-  cursor: text;
   font-size: var(--fs-meta);
   color: var(--text-primary);
   line-height: 1.4;
   word-break: break-word;
-}
-
-.cardTitleInput {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg-base);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-chip);
-  /* Extra right padding so the editing input's text clears the Done button (#195). */
-  padding: var(--space-2) var(--space-24) var(--space-2) var(--space-6);
-  color: var(--text-primary);
-  font-size: var(--fs-meta);
 }
 
 .untitled {
@@ -456,12 +442,12 @@
   color: var(--text-muted);
 }
 
-/* Edit/Delete in a hover/focus-revealed cluster, absolutely positioned in the
-   card's top-right (#195) — out of the title's flex flow so the title spans the
-   full row at rest. Uncluttered by default; always shown while editing (the focused
-   input keeps the card `:focus-within`) and reachable by keyboard (`:focus-within`).
-   A left→right card-colored gradient fades a long title cleanly under the buttons
-   instead of hard-clipping it. */
+/* Edit (pencil) / Delete (trash) in a hover/focus-revealed cluster, absolutely
+   positioned in the card's top-right (#195) — out of the title's flex flow so the
+   title spans the full row at rest. View mode only (#238 — edit uses the flow action
+   row). Uncluttered by default; reachable by keyboard (`:focus-within`). A left→right
+   card-colored gradient fades a long title cleanly under the buttons instead of
+   hard-clipping it. */
 .cardActions {
   position: absolute;
   top: var(--space-4);
@@ -504,19 +490,57 @@
   background: var(--bg-hover);
 }
 
-.cardBodyInput {
+/* Inline single-field card editor (#238): a composer-style textarea + a flow action
+   row, mirroring the add-card composer (`.composer*`) so create + edit share one shape.
+   Replaces the old two-input (`.cardTitleInput` + `.cardBodyInput`) surface and fixes
+   the "buttons overlay the text" defect (#195) — the actions render in normal flow
+   below the textarea, never on top. */
+.cardEdit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.cardEditInput {
   display: block;
   width: 100%;
-  margin-top: var(--space-6);
   resize: vertical;
   background: var(--bg-base);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-chip);
   padding: var(--space-6);
   color: var(--text-primary);
-  font-family: var(--mono);
+  font-family: inherit;
   font-size: var(--fs-meta-sm);
   line-height: 1.5;
+}
+.cardEditInput::placeholder {
+  color: var(--text-muted);
+}
+.cardEditActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+/* Delete pushed to the right edge, away from Save/Cancel (#238); a subtle danger
+   control (it only turns red on hover) so destructive isn't the loud default. */
+.cardEditDelete {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-left: auto;
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  padding: var(--space-2) var(--space-10);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+}
+.cardEditDelete:hover {
+  color: var(--status-error);
+  border-color: var(--status-error);
+  background: var(--bg-hover);
 }
 
 /* Card markdown body — rendered as dimmed, monospace **detail/meta lines** beneath

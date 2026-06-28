@@ -1,8 +1,8 @@
 # TASK-238
 
-### 238. [ ] Overhaul Kanban card interaction + unify the create/edit UI into a single-field composer (drag-only card surface, non-overlaying buttons)
+### 238. [x] Overhaul Kanban card interaction + unify the create/edit UI into a single-field composer (drag-only card surface, non-overlaying buttons)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 
@@ -141,23 +141,23 @@ composer-style UI:**
 
 **Acceptance criteria**
 
-- [ ] Clicking anywhere on a card's surface or **title** initiates a **drag** (4px
+- [x] Clicking anywhere on a card's surface or **title** initiates a **drag** (4px
       activation) and **never** opens edit. The title is plain display text.
-- [ ] **Edit** is reachable only via the **pencil** button; **delete** only via the
+- [x] **Edit** is reachable only via the **pencil** button; **delete** only via the
       **trash** button (view mode) and the **Delete** button (edit mode).
-- [ ] **Edit uses a single textarea** seeded with the card's title + body: first line =
+- [x] **Edit uses a single textarea** seeded with the card's title + body: first line =
       title, **Shift+Enter** adds detail lines, **Enter** commits. Title and body
       round-trip correctly through `splitCardText` (no data loss vs. the markdown format).
-- [ ] The edit action buttons (**Save**, **Cancel**, **Delete**) render in **normal flow
+- [x] The edit action buttons (**Save**, **Cancel**, **Delete**) render in **normal flow
       below the textarea** and **never overlay** the text. Layout: Save + Cancel left,
       Delete right-aligned.
-- [ ] **Save** (and **Enter**, and **clicking away**) commit the edit; **Cancel** (and
+- [x] **Save** (and **Enter**, and **clicking away**) commit the edit; **Cancel** (and
       **Escape**) discard it and return to view mode; **Delete** removes the card.
-- [ ] Body **task-list checkboxes** and **links**, plus the card's **done-checkbox**,
+- [x] Body **task-list checkboxes** and **links**, plus the card's **done-checkbox**,
       remain clickable in view mode (clicking them does not start a drag).
-- [ ] The create composer, drag/drop, DragOverlay, column ops, Board/Raw toggle, and the
+- [x] The create composer, drag/drop, DragOverlay, column ops, Board/Raw toggle, and the
       markdown serialization are unchanged. `npm run build` / `lint` / `test` pass.
-- [ ] Pure frontend — identical on macOS and Windows (the one platform-specific bit, the
+- [x] Pure frontend — identical on macOS and Windows (the one platform-specific bit, the
       `kbdHint` for the Raw Save button, is untouched).
 
 **Notes**
