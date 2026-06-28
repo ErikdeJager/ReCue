@@ -139,32 +139,34 @@
   margin-left: auto;
 }
 
-/* Feedback nudge (#241): a glowing, auto-dismissing tooltip beside the footer
-   feedback button. position:fixed (anchored to the button's measured rect) so it
-   escapes `.sidebar`'s overflow:hidden and shows its full text at any sidebar width.
-   pointer-events:none so it never blocks the button's hover/click. The glow pulse
-   mirrors the #216 update-announce pattern (box-shadow only → no layout shift); both
-   keyframes resolve to the resting glow, so the reduced-motion clamp (global.css:
-   duration→0, iterations→1) settles to a static glow rather than a hard cut. */
+/* Feedback nudge (#241): a small, auto-dismissing tooltip beside the footer
+   feedback button, overlaying the panel in the space to the right of the icon.
+   position:fixed (anchored to the button's measured rect) so it escapes
+   `.sidebar`'s overflow:hidden; its inline `max-width` is clamped to the sidebar's
+   right edge (Sidebar.tsx) so it never spills past the panel — the text wraps as a
+   safety net instead. pointer-events:none so it never blocks the button's
+   hover/click. The faint glow pulse mirrors the #216 update-announce pattern
+   (box-shadow only → no layout shift); both keyframes resolve to the resting glow,
+   so the reduced-motion clamp (global.css: duration→0, iterations→1) settles to a
+   static glow rather than a hard cut. */
 .feedbackNudge {
   position: fixed;
   z-index: 60;
   transform: translateY(-50%);
-  padding: var(--space-6) var(--space-12);
+  padding: var(--space-4) var(--space-8);
   border: 1px solid var(--accent);
   border-radius: var(--radius-chip);
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-size: var(--fs-meta-sm);
-  white-space: nowrap;
   pointer-events: none;
   box-shadow:
     0 0 0 1px var(--accent-dim),
-    0 0 10px 1px var(--accent-dim),
+    0 0 6px 0 var(--accent-dim),
     var(--shadow-popover);
   animation:
     feedback-nudge-in 0.18s var(--ease-out),
-    feedback-nudge-pulse 1.4s var(--ease-out) 3;
+    feedback-nudge-pulse 1.2s var(--ease-out) 2;
 }
 
 @keyframes feedback-nudge-in {
@@ -181,13 +183,13 @@
   100% {
     box-shadow:
       0 0 0 1px var(--accent-dim),
-      0 0 10px 1px var(--accent-dim),
+      0 0 6px 0 var(--accent-dim),
       var(--shadow-popover);
   }
   50% {
     box-shadow:
-      0 0 0 2px var(--accent),
-      0 0 16px 3px var(--accent-dim),
+      0 0 0 1px var(--accent),
+      0 0 10px 1px var(--accent-dim),
       var(--shadow-popover);
   }
 }
