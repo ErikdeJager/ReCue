@@ -673,14 +673,18 @@
   gap: var(--space-6);
 }
 .composerAdd {
+  /* Lay the label + the ⏎ chip out inline (#245). */
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
   appearance: none;
   border: 1px solid var(--accent);
   border-radius: var(--radius-chip);
-  /* Roomier padding (#240): the old `--space-10` was an undefined token, which made
-     the whole `padding` shorthand invalid and collapse to 0 — text sat flush to the
-     edges. Defined tokens (6px vertical, 12px horizontal) give comfortable breathing
-     room. Shared with #238's inline-edit Save/Cancel buttons. */
-  padding: var(--space-6) var(--space-12);
+  /* Padding (#240/#245): the old `--space-10` was an undefined token, which made the
+     whole `padding` shorthand invalid and collapse to 0 — text sat flush to the edges.
+     #245 thinned the vertical padding (6px → 4px) for a slimmer button, horizontal
+     unchanged. Shared with #238's inline-edit Save/Cancel buttons (kept size-matched). */
+  padding: var(--space-4) var(--space-12);
   background: var(--accent);
   color: var(--accent-fg);
   font-size: var(--fs-meta-sm);
@@ -691,15 +695,29 @@
   border-color: var(--accent-hover);
 }
 .composerCancel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
   appearance: none;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-chip);
-  /* Match .composerAdd's roomier padding (#240) so the two buttons stay the same size. */
-  padding: var(--space-6) var(--space-12);
+  /* Match .composerAdd's padding (#240/#245 — 4px vertical, 12px horizontal) so the
+     two buttons stay the same size. No ⏎ chip here (Cancel doesn't submit on Enter). */
+  padding: var(--space-4) var(--space-12);
   background: transparent;
   color: var(--text-secondary);
   font-size: var(--fs-meta-sm);
   cursor: pointer;
+}
+
+/* Muted monospace keyboard chip beside a submit/save label (#245), mirroring the
+   app-wide `.btnKbd` (NewSessionModal). The ⏎ glyph is platform-neutral — no
+   ⌘↔Ctrl branch needed. */
+.btnKbd {
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  font-weight: 400;
+  opacity: 0.7;
 }
 .composerCancel:hover {
   color: var(--text-primary);

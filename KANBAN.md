@@ -8,9 +8,6 @@ kanban-plugin: board
 
 ## READY
 
-- [ ] #245 — Kanban add/save buttons: Enter shortcut indicator + thinner vertical padding
-	Plan: TASK-245.md
-	Depends on: none
 - [ ] #246 — Make a Kanban card's description body part of the drag surface (no text-selection)
 	Plan: TASK-246.md
 	Depends on: none
@@ -28,4 +25,7 @@ kanban-plugin: board
 	Depends on: none
 - [ ] #244 — Remove the Delete button from Kanban card edit mode (Save + Cancel only)
 	Plan: TASK-244.md
+	Depends on: none
+- [ ] #245 — Kanban add/save buttons: Enter shortcut indicator + thinner vertical padding
+	Plan: TASK-245.md
 	Depends on: none

@@ -211,7 +211,7 @@ function SortableCard({
               className={styles.composerAdd}
               onClick={onStopEdit}
             >
-              Save
+              Save <kbd className={styles.btnKbd}>⏎</kbd>
             </button>
             <button
               type="button"
@@ -507,7 +507,7 @@ function BoardColumn(props: ColumnProps) {
                 className={styles.composerAdd}
                 onClick={submitComposer}
               >
-                Add card
+                Add card <kbd className={styles.btnKbd}>⏎</kbd>
               </button>
               <button
                 type="button"

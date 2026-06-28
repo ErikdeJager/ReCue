@@ -1,8 +1,8 @@
 # TASK-245
 
-### 245. [ ] Kanban add/save buttons: Enter shortcut indicator + thinner vertical padding
+### 245. [x] Kanban add/save buttons: Enter shortcut indicator + thinner vertical padding
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 
