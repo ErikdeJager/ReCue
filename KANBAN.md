@@ -20,6 +20,3 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #245 — Kanban add/save buttons: Enter shortcut indicator + thinner vertical padding
-	Plan: TASK-245.md
-	Depends on: none

@@ -6037,3 +6037,51 @@ blocked the other.)
 
 ---
 
+### 245. [x] Kanban add/save buttons: Enter shortcut indicator + thinner vertical padding
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+Two small presentational tweaks to the Kanban card **action buttons** that submit text:
+(1) the card composer's **"Add card"** submit button and the inline editor's **"Save"**
+button both commit on **Enter**, so they should show a keyboard indicator for it — an
+inline muted `<kbd>⏎</kbd>` chip, matching the app-wide pattern (e.g. NewSessionModal's
+"Schedule ⏎"); and (2) the buttons read too tall — reduce their **vertical** padding only,
+keeping width (horizontal padding) unchanged.
+
+**What shipped** (commit `158df57`, 2026-06-28):
+
+- `src/components/Kanban/KanbanPanel.module.css` — added a `.btnKbd` chip style mirroring
+  the app convention (muted monospace: `var(--mono)`, `--fs-meta-sm`, `opacity: 0.7`); gave
+  `.composerAdd` and `.composerCancel` `display: inline-flex; align-items: center; gap:
+  var(--space-6)` so the label + chip sit inline; and thinned the buttons' vertical padding
+  from `var(--space-6)` (6px) to `var(--space-4)` (4px), leaving horizontal `var(--space-12)`
+  unchanged so width is identical and Add/Save stay height-matched with their Cancel partner.
+- `src/components/Kanban/KanbanPanel.tsx` — rendered a literal `⏎` (U+23CE) chip beside the
+  two **submit** labels: edit-mode **Save** and composer **Add card**. The per-column
+  "+ Add card" toggle and the **Cancel** buttons get **no** chip (Cancel still gets the
+  thinner padding to stay size-matched). No behavior change: Enter commits, Shift+Enter
+  inserts a detail line, Escape cancels.
+
+**Key files touched:** `src/components/Kanban/KanbanPanel.tsx` (chip on the two submit
+buttons), `src/components/Kanban/KanbanPanel.module.css` (new `.btnKbd`, inline-flex layout,
+thinner vertical padding).
+
+**Dependencies:** none. (Touches the same `cardEditActions` region as #244, but neither
+blocked the other.)
+
+**Notes**
+
+- Reused the app's existing `<kbd className={styles.btnKbd}>⏎</kbd>` chip pattern rather
+  than inventing a new style. The `⏎` glyph is platform-neutral, so **no** `kbdHint` /
+  Cmd-vs-Ctrl branch was used (that helper is only for ⌘↔Ctrl divergence).
+- "A bit thinner" → vertical padding 6px → 4px, the natural next step down on the curated
+  `1/2/4/6/8/12/…` scale; adjustable if it reads too tight in-app.
+- **Cross-platform:** pure frontend React/CSS with a platform-neutral glyph — renders
+  identically on macOS and Windows. `build` / `lint` / `test` pass.
+
+---
+
