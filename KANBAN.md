@@ -11,9 +11,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #247 — Overview filter: clicking the repo's own branch line shows only that branch (hide worktrees)
-	Plan: TASK-247.md
-	Depends on: none
 - [ ] #248 — Don't strike through a completed Kanban card's text (keep a subtle dim + the checkmark)
 	Plan: TASK-248.md
 	Depends on: none

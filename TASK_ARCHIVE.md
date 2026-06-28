@@ -6132,3 +6132,65 @@ and to stop the mouse selecting the body text.
 
 ---
 
+### 247. [x] Overview filter: clicking the repo's own branch line shows only that branch (hide worktrees)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+The sidebar has three click-to-filter affordances for the **Overview** wall, and the user
+wanted them to mean three different things: (1) click a **repo folder header** → show
+**everything** for that folder (own agents + all worktree agents) — unchanged; (2) click a
+**worktree branch** → show **only that worktree** — unchanged; (3) click the repo's **own
+branch line** (#236, the GitBranch + branch name under the folder header) → show **only
+that branch**, i.e. the repo's own non-worktree directory agents, with **all of its
+worktrees hidden** — the new behavior. Previously #1 and #3 were identical: both called
+`setOverviewRepoFilter(repo)` with the same path, and a bare path couldn't carry the "own
+vs all" intent — so a filter **mode** was needed alongside the path.
+
+**What shipped** (commit `72a467d`, 2026-06-28):
+
+- **New filter model** — `OverviewFilter = { path: string; mode: "all" | "own" } | null`
+  replacing the bare `overviewRepoFilter: string | null` (transient, so no migration).
+  `setOverviewRepoFilter(path, mode?="all")` toggles on **path AND mode** (clicking the
+  branch line while the folder "all" filter is active switches to "own"; clicking the active
+  affordance again clears).
+- **`src/paths.ts`** — `sessionInFilter` made mode-aware: `"own"` →
+  `session.repoPath === filter.path && !session.worktreeParent`; `"all"` → the prior logic
+  (own + worktree agents via `effectiveRepo`).
+- **`src/store.ts`** — `overviewClusters` threads `OverviewFilter`; `folderInFilter` + a
+  worktree-schedule-aware schedule predicate exclude worktree-path panels and worktree
+  schedules under `"own"` while `"all"` keeps them; `forgetRepo` compares
+  `overviewRepoFilter?.path`.
+- **`src/components/Sidebar/Sidebar.tsx`** — folder click → `"all"`, branch-line click →
+  `"own"`, worktree click → `"all"`; the single `isFiltered` highlight was split into
+  `folderActive` (header, `"all"`) and `branchActive` (branch line, `"own"`), including the
+  collapsed rail.
+- **`src/components/Overview/Overview.tsx`** — filter-bar label distinguishes the modes
+  ("Showing <repo>" vs "Showing <repo> · this branch").
+- **`src/useKeyboardNav.ts`** — updated to the new shape so the wall and Shift+←/→ nav stay
+  in sync. Tests updated/added in `src/paths.test.ts` and `src/store.test.ts` proving
+  `"own"` excludes worktree agents/panels/schedules and `"all"` keeps them.
+
+**Key files touched:** `src/paths.ts`, `src/store.ts`, `src/components/Sidebar/Sidebar.tsx`,
+`src/components/Overview/Overview.tsx`, `src/useKeyboardNav.ts`, plus `src/paths.test.ts` /
+`src/store.test.ts`.
+
+**Dependencies:** none. (Shares the `repoBranchLine` element with #243's right-click menu
+but via a different handler — `onClick` filter here vs `onContextMenu` menu there.)
+
+**Notes**
+
+- **"own" hides** worktree agents + worktree-path panels + worktree schedules; **keeps** the
+  repo's own agents/panels/schedules — the natural reading of "shows ONLY that branch,
+  worktrees hidden". The filter only affects the Overview wall (+ its keyboard nav); the
+  sidebar tree itself stays unfiltered.
+- `overviewRepoFilter` is transient (not persisted), so changing its type needed no
+  migration.
+- **Cross-platform:** pure frontend filter/state logic + CSS-class toggling — no paths,
+  shell-outs, native open/reveal, or platform key handling. `build` / `lint` / `test` pass.
+
+---
+
