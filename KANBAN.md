@@ -6,8 +6,6 @@ kanban-plugin: board
 
 ## Refine
 
-- [ ] A Kanban item (card); if it is checked (meaning completed) it corsses out all the text. This is not nessecary, just show the checkmark, thats all.
-
 ## READY
 
 - [ ] #245 — Kanban add/save buttons: Enter shortcut indicator + thinner vertical padding
@@ -18,6 +16,9 @@ kanban-plugin: board
 	Depends on: none
 - [ ] #247 — Overview filter: clicking the repo's own branch line shows only that branch (hide worktrees)
 	Plan: TASK-247.md
+	Depends on: none
+- [ ] #248 — Don't strike through a completed Kanban card's text (keep a subtle dim + the checkmark)
+	Plan: TASK-248.md
 	Depends on: none
 
 ## DONE
