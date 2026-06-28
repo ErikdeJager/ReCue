@@ -4,6 +4,7 @@
 
 import { create } from "zustand";
 
+import { agentCaps, SELECTABLE_AGENTS } from "./agents";
 import { canvasToTemplate } from "./components/Canvas/canvasToTemplate";
 import {
   appendLeaf,
@@ -32,6 +33,7 @@ import { parseResetsAt } from "./time";
 import * as updater from "./updater";
 import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
 import type {
+  AgentInfo,
   BranchList,
   CanvasContent,
   CanvasEdge,
@@ -209,14 +211,12 @@ export function versionIncreased(from: string, to: string): boolean {
   return false;
 }
 
-/** Whether the active coding agent is Claude (#154) — the single gate the usage bar
- * + its poller read. The Claude usage endpoint is meaningless for any other agent, so
- * the bar hides if a Codex session is active. ReCue runs only Claude today
- * (`agents.rs` DEFAULT_AGENT_ID), so `agent` is never `"codex"` and this is always
- * true; when a global active-agent / Codex setting lands, gate on it here instead
- * (e.g. `state.settings.activeAgent !== "codex"`). */
+/** Whether every active session runs Claude (#154) — the single gate the usage bar
+ * + its poller read. The Claude usage endpoint is meaningless for any other agent
+ * (Codex / OpenCode are untested and have no usage feed), so the bar hides whenever a
+ * non-Claude session is active. A legacy `null` agent predates #101 and is Claude. */
 export function isClaudeActive(state: AppState): boolean {
-  return state.sessions.every((s) => s.agent !== "codex");
+  return state.sessions.every((s) => (s.agent ?? "claude") === "claude");
 }
 
 /** Sample markdown changelog for the dev mock update (#193) — exercises the #192
@@ -546,6 +546,9 @@ export const DEFAULT_SETTINGS: Settings = {
   autoName: true,
   autoSave: true,
   defaultAgent: "claude",
+  // False so the first-launch agent picker runs once for new AND existing installs
+  // (an older sessions.json lacks the key → merges to false → detected next launch).
+  onboarded: false,
 };
 
 /** Merge a persisted (possibly partial / null) settings blob over the defaults so
@@ -817,6 +820,13 @@ export interface AppState {
   settings: Settings;
   /** Whether the Settings modal is open (#100). */
   settingsOpen: boolean;
+  /** Whether the first-launch coding-agent picker is open. Opened by `maybeOnboardAgent`
+   * only when 2+ agent CLIs are installed; not persisted (the `onboarded` settings flag
+   * is what prevents re-prompting). */
+  onboardingOpen: boolean;
+  /** The installed agents offered in the onboarding picker (presence-checked via
+   * `agent_info`); the modal renders these as the pickable rows. */
+  onboardingChoices: AgentInfo[];
   /** The section the Settings modal should open at (#191): set when a caller
    * deep-links (e.g. the updater indicator → "updates"); `null` = the default
    * (Terminal). The modal seeds its initial section from this and it's cleared on
@@ -933,6 +943,15 @@ export interface AppState {
   setRepoColor: (path: string, color: string) => Promise<void>;
   /** Apply + persist application settings (#100) and run their side-effects. */
   saveSettings: (settings: Settings) => Promise<void>;
+  /** First-launch agent detection: if not yet `onboarded`, presence-check the
+   * selectable CLIs. 0 installed → no-op (re-checks next launch); exactly 1 → silently
+   * make it the default (+ a toast if it's an untested agent); 2+ → open the picker. */
+  maybeOnboardAgent: () => Promise<void>;
+  /** Picker confirm: record `id` as the default agent and mark onboarding done. */
+  chooseOnboardingAgent: (id: string) => Promise<void>;
+  /** Picker dismiss (Escape / scrim): keep the current default but mark onboarding
+   * done so it doesn't re-prompt. */
+  dismissOnboarding: () => void;
   /** Add / close / reorder a repo's extra Overview panels (optimistic + persisted, #38).
    * Returns the new panel's id on add, the **existing** panel's id on a dedup hit
    * (#175 — so a caller can select/focus it), or `null` on a real failure (e.g. a
@@ -1512,6 +1531,8 @@ export const useStore = create<AppState>()((set, get) => ({
   schedules: [],
   settings: DEFAULT_SETTINGS,
   settingsOpen: false,
+  onboardingOpen: false,
+  onboardingChoices: [],
   settingsSection: null,
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
   sidebarCollapsed: false,
@@ -1994,6 +2015,9 @@ export const useStore = create<AppState>()((set, get) => ({
     // overridden (unlike `refresh`, which can re-run).
     if (IS_MAIN_WINDOW) {
       get().setView(get().settings.defaultView);
+      // First-launch coding-agent picker: detect installed CLIs once and auto-pick /
+      // prompt as needed (main window only — a detached canvas has no onboarding).
+      void get().maybeOnboardAgent();
     }
     // Learn the current detached-window set — a just-opened window may have missed
     // the `canvas://windows` broadcast that fired before it began listening (#84).
@@ -2231,6 +2255,57 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Persist failed (e.g. outside Tauri); the change stays for the session.
     }
+  },
+
+  maybeOnboardAgent: async () => {
+    if (get().settings.onboarded) return;
+    // Presence-check each selectable CLI via `agent_info` (version === null ⇒ missing).
+    // Best-effort: a failed probe (e.g. outside Tauri) counts as not installed.
+    const infos = await Promise.all(
+      SELECTABLE_AGENTS.map((a) =>
+        ipc.agentInfo(a.id).catch((): AgentInfo | null => null),
+      ),
+    );
+    const installed = infos.filter(
+      (i): i is AgentInfo => !!i && i.version != null,
+    );
+    if (installed.length === 0) {
+      // None installed yet — leave `onboarded` false so we re-check next launch and
+      // auto-pick once the user installs one. The ClaudeMissing screen guides them.
+      return;
+    }
+    const only = installed.length === 1 ? installed[0] : null;
+    if (only) {
+      await get().saveSettings({
+        ...get().settings,
+        defaultAgent: only.id,
+        onboarded: true,
+      });
+      if (agentCaps(only.id).id !== "claude") {
+        get().pushToast(
+          `Using ${only.display_name} — it's untested; Claude Code is the recommended agent.`,
+          "info",
+        );
+      }
+      return;
+    }
+    // 2+ installed: let the user choose. `onboarded` is set only once they pick.
+    set({ onboardingOpen: true, onboardingChoices: installed });
+  },
+
+  chooseOnboardingAgent: async (id) => {
+    set({ onboardingOpen: false });
+    await get().saveSettings({
+      ...get().settings,
+      defaultAgent: id,
+      onboarded: true,
+    });
+  },
+
+  dismissOnboarding: () => {
+    set({ onboardingOpen: false });
+    // Keep the current default but don't re-prompt.
+    void get().saveSettings({ ...get().settings, onboarded: true });
   },
 
   // Extra Overview panels (#38) — the single per-repo item source (#59): each is

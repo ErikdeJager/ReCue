@@ -17,6 +17,12 @@
 //! missing-binary wording) land in **#142**. Claude's behavior is byte-for-byte
 //! unchanged. **Verify the `codex` invocation against the installed CLI** (same
 //! discipline as the claude-flag note in CLAUDE.md Conventions) if flags change.
+//!
+//! Later: the **`opencode`** spec joins as a third (untested) agent. Like Codex it owns
+//! its own session identity (no app `--session-id`), so resume/fork/auto-name are gated
+//! off. OpenCode's bare positional is a **project directory**, not a prompt, so a seeded
+//! launch passes the prompt via `opencode --prompt "<text>"` (best-effort — **verify
+//! against the installed `opencode` CLI**); an interactive session is the bare TUI.
 
 /// The agent id stored on records written before #101 (and the only agent until the
 /// Codex follow-up): Claude Code. Used as the serde / read-time default everywhere.
@@ -60,6 +66,13 @@ impl AgentSpec {
             // app session id we mint is ignored for Codex (resume/fork are gated off
             // this iteration since Codex's id isn't app-ownable).
             "codex" => trimmed.map(|p| vec![p.to_string()]).unwrap_or_default(),
+            // OpenCode owns its own session identity (no app `--session-id`); a bare
+            // positional is a **project directory**, so a seeded prompt goes through
+            // `--prompt` (best-effort — **VERIFY against the installed opencode CLI**).
+            // No prompt → the bare TUI in cwd.
+            "opencode" => trimmed
+                .map(|p| vec!["--prompt".to_string(), p.to_string()])
+                .unwrap_or_default(),
             // Claude: `claude --session-id <uuid> ["<prompt>"]` (verified, #30/#93).
             _ => {
                 let mut args = vec!["--session-id".to_string(), session_id.to_string()];
@@ -119,12 +132,28 @@ const CODEX: AgentSpec = AgentSpec {
     install_hint: "Install the Codex CLI and make sure `codex` is on your PATH.",
 };
 
+/// The OpenCode CLI spec — a third, **untested** agent. Like Codex it owns its own
+/// session identity (no app-passed `--session-id`), so resume/fork by id and the
+/// claude-style auto-name log are gated off (both flags `false`). A bare positional
+/// is a project directory, so a seeded session passes the prompt via `--prompt`
+/// (best-effort, see `spawn_args`). New interactive sessions (the bare `opencode`
+/// TUI) work. **Verify the exact `opencode` invocation against the installed CLI.**
+const OPENCODE: AgentSpec = AgentSpec {
+    id: "opencode",
+    display_name: "OpenCode",
+    binary_name: "opencode",
+    supports_resume: false,
+    supports_auto_name: false,
+    install_hint: "Install OpenCode and make sure `opencode` is on your PATH.",
+};
+
 /// Resolve an agent id to its spec (#141). An unknown id — including a legacy
 /// record's defaulted `"claude"` or any unrecognized value — falls back to Claude,
 /// so nothing ever fails to resolve.
 pub fn agent_spec(id: &str) -> AgentSpec {
     match id {
         "codex" => CODEX,
+        "opencode" => OPENCODE,
         _ => CLAUDE,
     }
 }
@@ -189,6 +218,36 @@ mod tests {
         assert!(spec.spawn_args("ignored-uuid", None).is_empty());
         // A seeded session passes only the positional prompt (trimmed).
         assert_eq!(spec.spawn_args("ignored-uuid", Some("  hi  ")), vec!["hi"]);
+        // A blank prompt is dropped → a plain new session.
+        assert!(spec.spawn_args("ignored-uuid", Some("   ")).is_empty());
+    }
+
+    #[test]
+    fn opencode_spec_has_no_resume_or_auto_name() {
+        let spec = agent_spec("opencode");
+        assert_eq!(spec.id, "opencode");
+        assert_eq!(spec.binary_name, "opencode");
+        assert!(
+            !spec.supports_resume,
+            "OpenCode resume/fork is gated off (owns its own session id)"
+        );
+        assert!(
+            !spec.supports_auto_name,
+            "OpenCode has no claude-style ai-title log"
+        );
+    }
+
+    #[test]
+    fn opencode_spawn_args_use_prompt_flag_not_positional() {
+        let spec = agent_spec("opencode");
+        // No `--session-id` and no bare positional (that would be a project DIR) —
+        // a plain new session is just `opencode`.
+        assert!(spec.spawn_args("ignored-uuid", None).is_empty());
+        // A seeded session passes the prompt through `--prompt` (trimmed).
+        assert_eq!(
+            spec.spawn_args("ignored-uuid", Some("  hi  ")),
+            vec!["--prompt", "hi"]
+        );
         // A blank prompt is dropped → a plain new session.
         assert!(spec.spawn_args("ignored-uuid", Some("   ")).is_empty());
     }

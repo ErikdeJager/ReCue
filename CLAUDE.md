@@ -348,7 +348,8 @@ even though it works in `tauri dev`.
   **Terminal** (font size / line height via the custom **`Slider`** #122 + cursor
   blink → the live pooled xterms via `terminalPool.applyTerminalSettings`),
   **Sessions** (the #97 auto-name toggle + the #142 **Coding agent** selector →
-  `defaultAgent`),
+  `defaultAgent`, now claude / codex / **opencode** with an inline "untested" caution
+  for the non-claude picks),
   **Appearance** (an accent swatch over the Catppuccin palette + a reduce-motion
   toggle), **Behavior** (default launch view + confirm-destructive gating #103 + the
   Canvas tab-close default `canvasCloseBehavior`: Ask / Always kill / Never kill #137),
@@ -379,6 +380,24 @@ even though it works in `tauri dev`.
   (`forkUnavailableReason`, `paths.ts`), copy-resume / Copy-session-ID are hidden for a
   non-resumable agent, and `ClaudeMissing` reads the selected agent's `agent_info` to name
   the right CLI + install hint. Selecting Claude leaves everything exactly as before.
+  A later task adds the **`opencode`** spec — a third, **untested** agent. Like Codex it
+  owns its own session identity (no app `--session-id`), so resume/fork/auto-name are
+  gated off (`uses_claude_log=false`, `forkable:false`). OpenCode's bare positional is a
+  **project directory**, not a prompt, so a seeded launch passes the prompt via
+  `opencode --prompt "<text>"` (best-effort — **verify against the installed `opencode`
+  CLI**); an interactive session is the bare TUI in cwd. The **five-hour usage bar**
+  (#154) is Claude-only: `isClaudeActive` now hides it whenever **any** non-claude
+  (codex *or* opencode) session is active.
+- **First-launch agent picker:** on boot (main window only) `maybeOnboardAgent` runs once
+  — gated by a new `onboarded` flag in the settings blob (defaults `false`, so an existing
+  install also runs the one-time check on its next launch; preserved across "Reset to
+  defaults"). It presence-checks each `SELECTABLE_AGENTS` CLI via `agent_info`
+  (`version === null` ⇒ missing): **0 installed** → no-op (re-checks next launch; the
+  `ClaudeMissing` screen guides install); **exactly 1** → silently set it as
+  `defaultAgent` (+ an "untested" toast if it's codex/opencode); **2+** → open the
+  `OnboardingModal` (`components/Onboarding`) to pick — Claude badged "Recommended",
+  codex/opencode "Untested", Escape/scrim keeps the current default. Picking / dismissing
+  sets `onboarded` so it never re-prompts.
 - **Resizable sidebar (#108):** a thin right-edge drag handle sets the sidebar width,
   clamped to **[180, 560]** (default 260) and **persisted** via a dedicated Rust
   `sidebar_width` value (`get_sidebar_width` / `set_sidebar_width`), kept **separate**
@@ -426,15 +445,15 @@ even though it works in `tauri dev`.
 │   │                       #   ScheduledPanel (#94), Settings (#100), BusyIndicator,
 │   │                       #   TemplateEditor + TemplateManager (#117) + TemplateUseModal (#118),
 │   │                       #   Checkbox, Slider (#122), SkillAutocomplete (#114),
-│   │                       #   NewSessionModal, Toaster, ViewSwitch,
-│   │                       #   ClaudeMissing, EmptyState
+│   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
+│   │                       #   Toaster, ViewSwitch, ClaudeMissing, EmptyState
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
 │   ├── src/lib.rs          # App builder, state wiring, event forwarding, schedule poll loop (#93)
 │   ├── src/main.rs         # Binary entry point
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
-│   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog) (#101)
+│   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder-launch fix)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
@@ -628,8 +647,13 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   flags, update `pty.rs` (`spawn_session` / `spawn_session_with_prompt` /
   `resume_session` / `fork_session`) and note it here. Since **#101** these
   spawn/resume paths resolve a pluggable **`AgentSpec`** (`agents.rs`) keyed by each
-  record's stored `agent` (serde-default `"claude"`) rather than hardcoding the binary
-  — claude remains the only agent and its flags are unchanged. A **fork** (#126)
+  record's stored `agent` (serde-default `"claude"`) rather than hardcoding the binary.
+  The catalog also holds **`codex`** (#141) and **`opencode`** — both **untested**; the
+  same **verify-against-the-installed-CLI** discipline applies to each spec's flags as to
+  claude's. OpenCode owns its own session identity (no `--session-id`) and a bare
+  positional is a project directory, so its `spawn_args` seeds a prompt via
+  `opencode --prompt "<text>"` (best-effort, flagged in-code for real-CLI verification),
+  else the bare `opencode` TUI; resume/fork/auto-name are gated off like Codex. A **fork** (#126)
   branches a source agent's conversation into a **new parallel session**:
   `claude --session-id <new> --resume <source> --fork-session` (`AgentSpec::fork_args`
   / `pty.rs fork_session` / the `fork_session` command), **verified** against claude

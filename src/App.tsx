@@ -27,6 +27,7 @@ import CanvasWindow from "./components/CanvasWindow/CanvasWindow";
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
 import CreatePanelModal from "./components/CreatePanelModal/CreatePanelModal";
 import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
+import OnboardingModal from "./components/Onboarding/OnboardingModal";
 import Overview from "./components/Overview/Overview";
 import Settings from "./components/Settings/Settings";
 import Sidebar from "./components/Sidebar/Sidebar";
@@ -64,6 +65,7 @@ function MainApp() {
   const templateUseOpen = useStore((s) => s.templateUseOpen);
   const createPanelOpen = useStore((s) => s.createPanelOpen);
   const canvasClosePromptId = useStore((s) => s.canvasClosePromptId);
+  const onboardingOpen = useStore((s) => s.onboardingOpen);
   const init = useStore((s) => s.init);
   const beginCanvasLift = useStore((s) => s.beginCanvasLift);
   const cancelCanvasLift = useStore((s) => s.cancelCanvasLift);
@@ -186,6 +188,7 @@ function MainApp() {
       {templateUseOpen && <TemplateUseModal />}
       {templateManagerOpen && <TemplateManager />}
       {templateEditorOpen && <TemplateEditor />}
+      {onboardingOpen && <OnboardingModal />}
     </div>
   );
 }

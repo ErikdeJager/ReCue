@@ -265,8 +265,14 @@ export interface Settings {
    * (FileViewer raw/text + Kanban Board/Raw). */
   autoSave: boolean;
   /** Coding-agent CLI for **newly created** sessions (#142). Existing sessions keep
-   * their recorded `agent` (#101). `"claude"` (default) or `"codex"`. */
+   * their recorded `agent` (#101). `"claude"` (default), `"codex"`, or `"opencode"`
+   * — the latter two are untested; Claude Code is recommended. */
   defaultAgent: string;
+  /** Whether the first-launch coding-agent picker has run. Defaults `false`, so an
+   * existing install also runs the one-time detection on its next launch (auto-pick
+   * if exactly one CLI is installed, the picker modal if 2+). Set once, then never
+   * re-prompts. Kept in the settings blob (no separate Rust scalar). */
+  onboarded: boolean;
 }
 
 // --- Canvas (#46): a recursive binary split-panel (BSP) layout tree ---

@@ -7,6 +7,7 @@ import {
   adjacentSessionId,
   DEFAULT_SETTINGS,
   dedupeBranchLabels,
+  isClaudeActive,
   isCleanExit,
   kanbanColumnColor,
   mergeRepoOrder,
@@ -20,12 +21,14 @@ import {
   worktreeHasItems,
 } from "./store";
 import type {
+  AgentInfo,
   CanvasContent,
   CanvasNode,
   OverviewPanel,
   ScheduledSession,
   SessionView,
 } from "./types";
+import * as ipc from "./ipc";
 import { isMockUpdate } from "./updater";
 
 function session(id: string): SessionView {
@@ -1667,5 +1670,104 @@ describe("forkability gating (#138)", () => {
     // An unknown id (e.g. a shell terminal also poked by the title worker) is a no-op.
     s().setForkable("missing", false);
     expect(s().sessions).toHaveLength(1);
+  });
+});
+
+describe("isClaudeActive — usage bar gate (#154)", () => {
+  const withAgent = (id: string, agent?: string): SessionView => ({
+    ...session(id),
+    ...(agent ? { agent } : {}),
+  });
+
+  it("is true when every session is Claude or a legacy null agent", () => {
+    useStore.setState({
+      sessions: [withAgent("a", "claude"), withAgent("b")],
+    });
+    expect(isClaudeActive(useStore.getState())).toBe(true);
+  });
+
+  it("is false when a Codex or OpenCode session is active", () => {
+    useStore.setState({ sessions: [withAgent("a", "opencode")] });
+    expect(isClaudeActive(useStore.getState())).toBe(false);
+    useStore.setState({ sessions: [withAgent("a", "codex"), withAgent("b")] });
+    expect(isClaudeActive(useStore.getState())).toBe(false);
+  });
+});
+
+describe("first-launch agent onboarding", () => {
+  const s = () => useStore.getState();
+  const info = (id: string, installed: boolean): AgentInfo => ({
+    id,
+    display_name: id === "opencode" ? "OpenCode" : id,
+    binary_name: id,
+    install_hint: "",
+    supports_resume: false,
+    supports_auto_name: false,
+    version: installed ? "1.0.0" : null,
+  });
+
+  beforeEach(() => {
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, onboarded: false },
+      onboardingOpen: false,
+      onboardingChoices: [],
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("opens the picker with the installed agents when 2+ are present", async () => {
+    vi.spyOn(ipc, "agentInfo").mockImplementation(async (id: string) =>
+      info(id, id !== "opencode"),
+    );
+    await s().maybeOnboardAgent();
+    expect(s().onboardingOpen).toBe(true);
+    expect(s().onboardingChoices.map((c) => c.id)).toEqual(["claude", "codex"]);
+    // The user hasn't picked yet, so onboarded stays false until they do.
+    expect(s().settings.onboarded).toBe(false);
+  });
+
+  it("auto-selects the sole installed agent without a modal", async () => {
+    vi.spyOn(ipc, "agentInfo").mockImplementation(async (id: string) =>
+      info(id, id === "codex"),
+    );
+    await s().maybeOnboardAgent();
+    expect(s().onboardingOpen).toBe(false);
+    expect(s().settings.defaultAgent).toBe("codex");
+    expect(s().settings.onboarded).toBe(true);
+  });
+
+  it("does nothing (and re-checks next launch) when no agent is installed", async () => {
+    vi.spyOn(ipc, "agentInfo").mockImplementation(async (id: string) =>
+      info(id, false),
+    );
+    await s().maybeOnboardAgent();
+    expect(s().onboardingOpen).toBe(false);
+    expect(s().settings.onboarded).toBe(false);
+  });
+
+  it("skips entirely once already onboarded", async () => {
+    useStore.setState({ settings: { ...DEFAULT_SETTINGS, onboarded: true } });
+    const spy = vi.spyOn(ipc, "agentInfo");
+    await s().maybeOnboardAgent();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("chooseOnboardingAgent records the default, marks onboarded, and closes", async () => {
+    useStore.setState({ onboardingOpen: true });
+    await s().chooseOnboardingAgent("opencode");
+    expect(s().settings.defaultAgent).toBe("opencode");
+    expect(s().settings.onboarded).toBe(true);
+    expect(s().onboardingOpen).toBe(false);
+  });
+
+  it("dismissOnboarding keeps the current default but marks onboarded", () => {
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, defaultAgent: "claude" },
+      onboardingOpen: true,
+    });
+    s().dismissOnboarding();
+    expect(s().settings.defaultAgent).toBe("claude");
+    expect(s().settings.onboarded).toBe(true);
+    expect(s().onboardingOpen).toBe(false);
   });
 });

@@ -18,13 +18,14 @@ import {
   SlidersHorizontal,
   SquareKanban,
   Trash2,
+  TriangleAlert,
   X,
 } from "lucide-react";
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { SELECTABLE_AGENTS } from "../../agents";
+import { agentCaps, agentIsUntested, SELECTABLE_AGENTS } from "../../agents";
 import * as ipc from "../../ipc";
 import { patchnotesFor } from "../../patchnotes";
 import { kbdHint } from "../../platform";
@@ -408,9 +409,9 @@ function SettingsModal() {
                     ))}
                   </div>
                   <p className={styles.helpText}>
-                    Whether the diff viewer shows changes in one column (unified)
-                    or side-by-side (split). The last in-panel choice becomes the
-                    default for newly-opened panels.
+                    Whether the diff viewer shows changes in one column
+                    (unified) or side-by-side (split). The last in-panel choice
+                    becomes the default for newly-opened panels.
                   </p>
                 </div>
               </>
@@ -434,10 +435,17 @@ function SettingsModal() {
                     ))}
                   </div>
                   <span className={styles.fieldHelp}>
-                    The CLI new sessions launch under. Codex sessions can't be
-                    resumed, forked, or auto-named yet. Existing sessions keep
-                    their agent.
+                    The CLI new sessions launch under. Codex and OpenCode
+                    sessions can't be resumed, forked, or auto-named, and have
+                    no usage meter. Existing sessions keep their agent.
                   </span>
+                  {agentIsUntested(draft.defaultAgent) && (
+                    <span className={styles.fieldWarn}>
+                      <TriangleAlert size={13} strokeWidth={2} aria-hidden />
+                      {agentCaps(draft.defaultAgent).displayName} is untested.
+                      Claude Code is the recommended agent.
+                    </span>
+                  )}
                 </div>
                 <Checkbox
                   checked={draft.autoName}
@@ -455,12 +463,14 @@ function SettingsModal() {
                 <span className={styles.fieldLabel}>Column colors</span>
                 <p className={styles.helpText}>
                   Color board columns by name — applied to every Kanban board. A
-                  column whose name isn't listed gets a stable color hashed from its
-                  name.
+                  column whose name isn't listed gets a stable color hashed from
+                  its name.
                 </p>
                 <div className={styles.kanbanColors}>
                   {draft.kanbanColumnColors.map((row, i) => {
-                    const setRow = (patch: Partial<{ name: string; color: string }>) =>
+                    const setRow = (
+                      patch: Partial<{ name: string; color: string }>,
+                    ) =>
                       update(
                         "kanbanColumnColors",
                         draft.kanbanColumnColors.map((r, j) =>
@@ -478,7 +488,9 @@ function SettingsModal() {
                           className={styles.kanbanColorName}
                           value={row.name}
                           placeholder="Column name"
-                          onChange={(e) => setRow({ name: e.currentTarget.value })}
+                          onChange={(e) =>
+                            setRow({ name: e.currentTarget.value })
+                          }
                           aria-label="Column name"
                         />
                         <div className={styles.swatches}>
@@ -501,7 +513,9 @@ function SettingsModal() {
                           <label
                             className={`${styles.swatch} ${styles.swatchCustom} ${customActive ? styles.swatchActive : ""}`}
                             style={
-                              customActive ? { background: row.color } : undefined
+                              customActive
+                                ? { background: row.color }
+                                : undefined
                             }
                             title="Custom color"
                           >
@@ -512,7 +526,9 @@ function SettingsModal() {
                               type="color"
                               className={styles.colorInput}
                               value={row.color || "#cba6f7"}
-                              onChange={(e) => setRow({ color: e.currentTarget.value })}
+                              onChange={(e) =>
+                                setRow({ color: e.currentTarget.value })
+                              }
                               aria-label="Custom color"
                             />
                           </label>
@@ -523,7 +539,9 @@ function SettingsModal() {
                           onClick={() =>
                             update(
                               "kanbanColumnColors",
-                              draft.kanbanColumnColors.filter((_, j) => j !== i),
+                              draft.kanbanColumnColors.filter(
+                                (_, j) => j !== i,
+                              ),
                             )
                           }
                           title="Remove"
@@ -728,7 +746,11 @@ function SettingsModal() {
             <button
               type="button"
               className={styles.resetButton}
-              onClick={() => setDraft(DEFAULT_SETTINGS)}
+              // Preserve the one-time onboarding flag across a reset so it doesn't
+              // re-trigger the first-launch agent picker next launch.
+              onClick={() =>
+                setDraft({ ...DEFAULT_SETTINGS, onboarded: saved.onboarded })
+              }
             >
               Reset to defaults
             </button>

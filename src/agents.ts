@@ -30,9 +30,19 @@ const CODEX_CAPS: AgentCaps = {
   supportsAutoName: false,
 };
 
+// OpenCode — a third, untested agent. Owns its own session identity, so (like Codex)
+// it can't resume/fork by id or auto-name. Keep in sync with the Rust `OPENCODE` spec.
+const OPENCODE_CAPS: AgentCaps = {
+  id: "opencode",
+  displayName: "OpenCode",
+  supportsResume: false,
+  supportsAutoName: false,
+};
+
 const CATALOG: Record<string, AgentCaps> = {
   claude: CLAUDE_CAPS,
   codex: CODEX_CAPS,
+  opencode: OPENCODE_CAPS,
 };
 
 /** Capability flags for an agent id; an unknown / missing id falls back to Claude
@@ -46,5 +56,15 @@ export function agentSupportsResume(agent: string | null | undefined): boolean {
   return agentCaps(agent).supportsResume;
 }
 
+/** Agent ids that are experimental/untested — Claude Code is the recommended agent.
+ * Drives the "untested" warnings in the onboarding picker + the Settings selector. */
+export function agentIsUntested(agent: string | null | undefined): boolean {
+  return agentCaps(agent).id !== "claude";
+}
+
 /** The selectable coding agents for the Settings selector (#142), in display order. */
-export const SELECTABLE_AGENTS: AgentCaps[] = [CLAUDE_CAPS, CODEX_CAPS];
+export const SELECTABLE_AGENTS: AgentCaps[] = [
+  CLAUDE_CAPS,
+  CODEX_CAPS,
+  OPENCODE_CAPS,
+];
