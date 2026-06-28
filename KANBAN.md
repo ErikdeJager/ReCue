@@ -20,9 +20,6 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #243 — Give the repo's branch line its own right-click context menu
-	Plan: TASK-243.md
-	Depends on: none
 - [ ] #244 — Remove the Delete button from Kanban card edit mode (Save + Cancel only)
 	Plan: TASK-244.md
 	Depends on: none

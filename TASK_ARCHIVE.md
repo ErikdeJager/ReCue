@@ -5923,3 +5923,71 @@ remains in `src/`.
 
 ---
 
+### 243. [x] Give the repo's own branch line (#236) its own right-click context menu
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-28
+
+**Description**
+
+Each top-level repo "folder" group renders, on its own line below the folder header, the
+repo's **current branch** (the `GitBranch` icon + branch name added by #236). That branch
+line was a left-click-only `<button>` (filter Overview to the repo) with **no
+`onContextMenu`** — asymmetric with a **worktree's** branch header, which already had a
+rich right-click menu. This task gave the **regular branch** (the repo's own checked-out
+directory, not a worktree) an equivalent right-click menu — but, because it's the real
+repo directory rather than an app-managed worktree, it offers **no** "Forget folder" /
+"remove" / "close-the-tree" action; its only destructive items operate on the folder's
+*contents* (Kill all agents / Close all items). The repo **header** menu (`openRepoMenu`)
+and the **worktree** menu were left byte-for-byte unchanged — this is a new, separate,
+deliberately-overlapping menu on the branch line only.
+
+**What shipped** (commit `d637446`, 2026-06-28):
+
+- **New `fetchFolder` store action** (`src/store.ts`) mirroring `pullFolder`: calls the
+  existing `ipc.fetchRemotes(cwd)` (`git fetch --prune` via the already-registered
+  `fetch_remotes` backend command — no new Rust, no new capability), toasts
+  "Fetched <repo name>" on success (or git's stderr on error), then calls
+  `refreshBranches()` so any branch movement is reflected.
+- **`RepoBranchLine` component** (`src/components/Sidebar/Sidebar.tsx`), extracted from the
+  inline branch-line button and mirroring the `WorktreeHeader` pattern (own `useRowMenu()`
+  + local mode state + an inline `styles.menu` overlay). The existing filter `onClick`,
+  `aria-pressed`, and titles were preserved verbatim; an `onContextMenu={openMenu}` was
+  added. `RepoGroup` renders it in place of the old inline button under the same
+  `branches[repo] &&` guard.
+- **Branch-line menu** (in order): New session → Views (file / diff / terminal / kanban via
+  the shared `ViewsMenu`) → Reveal in Finder/Explorer → Copy path → **Copy branch name**
+  (new) → Pull → **Fetch** (new) → Change color… (the same swatch palette + custom-color
+  picker as the header menu) → Kill all agents (shown only when agents run) → Close all
+  items (shown when agents/panels exist). Destructive-action gating, counts
+  (`runningAll` / `agentCount` / `panelCount`, including worktree agents), and the
+  `confirmDestructive` confirm steps mirror the header menu's logic exactly. **No** Forget
+  folder and **no** worktree-style remove.
+- Left-click still filters Overview; the new `onContextMenu` sits on a sibling of
+  `repoHeader` (which carries the dnd-kit drag listeners), so folder drag-reorder (#211)
+  is unaffected. Reused existing menu CSS — no new styles. `build` / `lint` / `test` pass.
+
+**Key files touched:** `src/components/Sidebar/Sidebar.tsx` (new `RepoBranchLine`
+component + menu, ~+330 lines), `src/store.ts` (new `fetchFolder` action). No backend
+changes (reused `fetch_remotes`).
+
+**Dependencies:** none (builds on #236's branch line and #181's `pullFolder`, both already
+shipped).
+
+**Notes**
+
+- **User-confirmed scope (step-5 Q&A, 2026-06-28):** the branch line gets its own slim,
+  separate menu; the header menu stays unchanged. Destructive actions = Kill all agents +
+  Close all items only (Forget folder / worktree-remove dropped). Extra non-destructive
+  items beyond the header set: **Copy branch name** and **Fetch**.
+- The branch line only renders for a git folder with a known current branch
+  (`branches[repo]`), so Pull / Fetch / Copy-branch-name always have a real branch to act
+  on; the menu naturally never appears for a non-git folder.
+- **Cross-platform:** all actions reuse existing seams — `revealLabel`/`revealPath`,
+  `copyToClipboard`, `pullFolder`, the new `fetchFolder` (its `git fetch` goes through the
+  Rust `hidden_command` `CREATE_NO_WINDOW` guard, so no console flash on Windows),
+  `ViewsMenu`, `REPO_PALETTE`/`setRepoColor`. No OS-divergent code added.
+
+---
+
