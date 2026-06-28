@@ -1,8 +1,8 @@
 # TASK-244
 
-### 244. [ ] Remove the Delete button from Kanban card edit mode (Save + Cancel only)
+### 244. [x] Remove the Delete button from Kanban card edit mode (Save + Cancel only)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 

@@ -521,27 +521,6 @@
   align-items: center;
   gap: var(--space-6);
 }
-/* Delete pushed to the right edge, away from Save/Cancel (#238); a subtle danger
-   control (it only turns red on hover) so destructive isn't the loud default. */
-.cardEditDelete {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-4);
-  margin-left: auto;
-  appearance: none;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-chip);
-  padding: var(--space-2) var(--space-12);
-  background: transparent;
-  color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
-  cursor: pointer;
-}
-.cardEditDelete:hover {
-  color: var(--status-error);
-  border-color: var(--status-error);
-  background: var(--bg-hover);
-}
 
 /* Card markdown body — rendered as dimmed, monospace **detail/meta lines** beneath
    the main text (#233), like a READY card's `Plan:`/`Depends on:` lines. Aligned

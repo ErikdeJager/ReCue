@@ -140,8 +140,8 @@ function SortableCard({
   // Commit-on-confirm (#160): while editing, the text binds to the local `editText`
   // (no per-keystroke write). The edit commits once when focus leaves the whole card
   // (click-away = commit, #238) — but NOT when it moves to one of the card's own
-  // controls (Save/Cancel/Delete), so clicking those doesn't prematurely commit. Cancel
-  // discards before any commit runs.
+  // controls (Save/Cancel), so clicking those doesn't prematurely commit. Cancel
+  // discards before any commit runs. (Delete lives only on the view-mode card now, #244.)
   const onEditBlur = (event: FocusEvent<HTMLElement>) => {
     if (!editing) return;
     if (event.currentTarget.contains(event.relatedTarget as Node | null))
@@ -219,16 +219,6 @@ function SortableCard({
               onClick={onCancelEdit}
             >
               Cancel
-            </button>
-            {/* Delete pushed to the right, away from Save/Cancel (#238). */}
-            <button
-              type="button"
-              className={styles.cardEditDelete}
-              onClick={onDelete}
-              title="Delete card"
-              aria-label="Delete card"
-            >
-              <Trash2 size={13} strokeWidth={1.5} /> Delete
             </button>
           </div>
         </div>
