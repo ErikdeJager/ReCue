@@ -5874,3 +5874,52 @@ pill, button hover/focus dismiss) and `src/components/Sidebar/Sidebar.module.css
 
 ---
 
+### 242. [x] Fix the undefined `--space-10` token app-wide (replace every use with `--space-12`)
+
+**Status:** Done
+**Depends on:** none _(independent of #240, which fixed the two Kanban composer buttons specifically — this swept up every other site)_
+**Created:** 2026-06-28
+
+**Description**
+
+`var(--space-10)` was used as horizontal padding at several sites, but **`--space-10` is never
+defined** — the spacing scale in `tokens.css` is deliberately `--space-1/2/4/6/8/12/16/20/24/32`
+(it skips 10). A `var()` to an undefined custom property with no fallback is
+invalid-at-computed-value, so the entire `padding` shorthand at each site computed to **`0`** and
+the controls silently lost their horizontal padding (same root cause as #240, fixed here
+everywhere else). This task **replaced every remaining `var(--space-10)` with `var(--space-12)`**
+(the nearest defined token, 12px) — keeping the curated scale intact (not re-adding a `--space-10`
+step) and restoring comfortable padding, matching #240's precedent.
+
+**What shipped** (commit `cb89343`, 2026-06-28) — a **pure-CSS** change replacing the
+horizontal `var(--space-10)` with `var(--space-12)` (vertical `--space-2`/`--space-4` left
+unchanged) across all remaining sites:
+
+- `src/components/Canvas/Canvas.module.css`
+- `src/components/DiffInspector/DiffInspector.module.css`
+- `src/components/FileViewer/FileViewer.module.css`
+- `src/components/Kanban/KanbanPanel.module.css` (the two non-composer sites + remaining uses)
+- `src/components/TemplateEditor/TemplateEditor.module.css`
+
+No `--space-10` token was added to `tokens.css` (scale unchanged); no `var(--space-10)` reference
+remains in `src/`.
+
+**Key files touched:** `Canvas.module.css`, `DiffInspector.module.css`, `FileViewer.module.css`,
+`KanbanPanel.module.css`, `TemplateEditor.module.css` (each `var(--space-10)` →
+`var(--space-12)`).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Why replace, not define:** the scale curates its steps and intentionally omits 10; re-adding
+  it to satisfy stray references would degrade the design system. Replacing with the nearest
+  defined step (`--space-12`) removes the broken references and restores comfortable padding
+  consistently — standardizing the horizontal step on `--space-12` (matching #240).
+- **Optional hardening (mentioned, out of scope):** a future stylelint rule / CI grep could fail
+  the build on any `var(--space-N)` that isn't a defined token, preventing this class of silent
+  bug from recurring.
+- **Cross-platform:** pure CSS — renders identically in WKWebView (macOS) and WebView2 (Windows).
+
+---
+
