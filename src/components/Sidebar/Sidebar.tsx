@@ -1500,6 +1500,35 @@ function Sidebar() {
     x: number;
     y: number;
   } | null>(null);
+  // Feedback nudge (#241): a one-shot glowing tooltip beside the footer feedback
+  // button, shown on every launch (no persistence — plain state). Auto-hides after
+  // 10s or as soon as the button is hovered/focused; never shown in the collapsed
+  // rail (no horizontal room). The pill is position:fixed (it escapes `.sidebar`'s
+  // overflow:hidden so the full text shows at any width), anchored to the button's
+  // measured rect.
+  const [feedbackNudgeDismissed, setFeedbackNudgeDismissed] = useState(false);
+  const [feedbackNudgePos, setFeedbackNudgePos] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
+  const feedbackBtnRef = useRef<HTMLButtonElement | null>(null);
+  const showFeedbackNudge = !feedbackNudgeDismissed && !sidebarCollapsed;
+  // Start the 10s countdown when the nudge first becomes visible and measure the
+  // button so the fixed pill anchors to it. Re-runs if it becomes visible again
+  // (e.g. expanding after a collapsed launch); cleared on dismiss/unmount.
+  useEffect(() => {
+    if (!showFeedbackNudge) {
+      setFeedbackNudgePos(null);
+      return;
+    }
+    const btn = feedbackBtnRef.current;
+    if (btn) {
+      const r = btn.getBoundingClientRect();
+      setFeedbackNudgePos({ top: r.top + r.height / 2, left: r.right + 8 });
+    }
+    const timer = setTimeout(() => setFeedbackNudgeDismissed(true), 10000);
+    return () => clearTimeout(timer);
+  }, [showFeedbackNudge]);
   const closeMenu = () => {
     setMenu(null);
     setMenuMode("menu");
@@ -1990,16 +2019,34 @@ function Sidebar() {
           <SettingsIcon size={16} strokeWidth={1.5} />
         </button>
         {/* Feedback (#210): opens the bug-report / feature-request Google Form in
-            the default browser. Stacks with the others in the collapsed rail. */}
+            the default browser. Stacks with the others in the collapsed rail.
+            Hovering/focusing it dismisses the #241 nudge. */}
         <button
+          ref={feedbackBtnRef}
           type="button"
           className={styles.footerButton}
           onClick={() => void openUrl(FEEDBACK_FORM_URL)}
+          onMouseEnter={() => setFeedbackNudgeDismissed(true)}
+          onFocus={() => setFeedbackNudgeDismissed(true)}
           title="Send feedback"
           aria-label="Send feedback"
         >
           <Bug size={16} strokeWidth={1.5} />
         </button>
+        {/* Attention nudge (#241): a glowing pill to the right of the feedback button,
+            position:fixed (anchored to the button's measured rect) so it escapes the
+            sidebar's overflow clip and shows its full text at any width.
+            pointer-events:none + aria-hidden so it never blocks the button or
+            double-announces (the button is already labeled). */}
+        {showFeedbackNudge && feedbackNudgePos && (
+          <div
+            className={styles.feedbackNudge}
+            style={{ top: feedbackNudgePos.top, left: feedbackNudgePos.left }}
+            aria-hidden="true"
+          >
+            Report bugs and request features
+          </div>
+        )}
         {/* Collapse/expand (#168) sits at the far right of the expanded footer row
             (#219, `margin-left:auto`); Settings + Feedback stay grouped left. The
             `.footerCollapsed` rail neutralizes that margin so the icon stays centered

@@ -1,8 +1,8 @@
 # TASK-241
 
-### 241. [ ] Add an attention-grabbing glowing tooltip beside the sidebar feedback (bug-report) button
+### 241. [x] Add an attention-grabbing glowing tooltip beside the sidebar feedback (bug-report) button
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-28
 
@@ -83,18 +83,18 @@ features"**, to draw the eye to it.
 
 **Acceptance criteria**
 
-- [ ] On app launch (expanded sidebar), a **glowing** tooltip reading **"Report bugs and
+- [x] On app launch (expanded sidebar), a **glowing** tooltip reading **"Report bugs and
       request features"** appears **to the right** of the bottom-left feedback (bug) button.
-- [ ] It **auto-hides after ~10 seconds**, and **immediately when the user hovers/focuses**
+- [x] It **auto-hides after ~10 seconds**, and **immediately when the user hovers/focuses**
       the feedback button (whichever first).
-- [ ] It appears on **every** launch (no persisted "seen" state).
-- [ ] It is **not** shown when the sidebar is **collapsed**.
-- [ ] The glow/pulse respects reduced motion (static glow, no animation under
+- [x] It appears on **every** launch (no persisted "seen" state).
+- [x] It is **not** shown when the sidebar is **collapsed**.
+- [x] The glow/pulse respects reduced motion (static glow, no animation under
       `body.reduce-motion` / `prefers-reduced-motion`); the tooltip causes **no layout
       shift** and does not block the button's click/hover.
-- [ ] The feedback button still opens the feedback form on click; its `title`/`aria-label`
+- [x] The feedback button still opens the feedback form on click; its `title`/`aria-label`
       are unchanged.
-- [ ] `npm run build`, `npm run lint`, `npm test` pass. Pure frontend — identical on macOS
+- [x] `npm run build`, `npm run lint`, `npm test` pass. Pure frontend — identical on macOS
       and Windows (the Sidebar mounts only in the main window).
 
 **Notes**
