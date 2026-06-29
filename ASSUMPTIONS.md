@@ -1150,3 +1150,44 @@ directive (2026-06-26) all interpretation calls below were made autonomously.
   the #163 parent-dir-as-root consent trick; import via `pickFile` + `read_text_file` +
   validated `parseTemplateJson` + `saveTemplate` (fresh id). Add `dialog:allow-save`
   capability if missing. No new backend write command. `deps: none`.
+
+## Task 276 — Kanban: Enter creates card + reopens composer
+- `submitComposer` success path stops calling `cancelComposer()`; instead clears text + keeps
+  `composing=true` + re-focuses. Empty Enter / Escape still close. `deps: 257` (built on the
+  resized composer; same file).
+
+## Task 277 — Kanban: transient undo on card delete
+- New panel-local `lastDeleted {col,idx,card}` (component state → non-persisted) captured
+  before `deleteCard`; new pure `insertCardAt` op (kanbanOps) for undo; undo affordance
+  rendered at the deleted spot in BoardColumn; overwritten by the next delete; cleared on
+  file switch. `deps: 276` (serialize the kanban-UI cluster 257→276→277).
+
+## Task 278 — Diff seen marker (3-state)
+- Client-side per-file **content digest** (`status|add|del|hash(hunks)`) detects
+  changed-since-seen (no backend metadata). **Persisted in a dedicated Rust `diff_seen`
+  scalar** (`{repoPath:{filePath:digest}}`), kept out of the settings blob (so the Settings
+  draft can't clobber it). Icons-only (Eye/Check/AlertCircle), button + `s` keybind (works
+  with a single file; plain key, cross-platform), both Focused + Accordion, visible hints.
+  `deps: 258` (shared DiffInspector; interacts with occurrence ordering).
+
+## Task 279 — Scheduled worktree duplicate top-level folder
+- Cause: `onFired` prepends the **worktree folder** to `recents` → a phantom top-level
+  RepoGroup (live-only artifact; backend adds the parent `sched.cwd` instead). Fix: for a
+  worktree session, `onFired` adds the **parent** (or nothing) to recents, matching the
+  interactive worktree path + a restart. `deps: 259`.
+
+## Task 280 — Canvas "no longer pending" (fire + detached)
+- (1) On fire, **rewrite scheduled canvas leaves** to the new live session id (pure
+  `rewriteScheduledLeaves`, preserve leaf id; persist via `setCanvases` which broadcasts
+  `canvas://changed`). (2) Detached windows are schedule-blind (main-window-only gating):
+  **load schedules in detached windows + sync** (prefer a `schedule://changed` broadcast
+  mirroring `canvas://changed`; minimal fallback = re-`listSchedules` on
+  `schedule://fired`/`canvas://changed`). `deps: 279` (both edit `onFired`).
+
+## Task 281 — Release v1.0.2
+- Bump `tauri.conf.json` + `package.json` to 1.0.2; author `src/patchnotes/1.0.2.json`
+  (categories feature/improvement/fix, user-facing prose, **regenerated from
+  `git log v1.0.1..HEAD` + TASK_ARCHIVE at implementation time**). The *implementing* agent
+  performs the bump (refine lane never bumps). Push to main triggers the pipeline → draft →
+  maintainer publishes. Out of scope: build/sign/publish. Mirrors #256.
+- **`deps:` ALL of 257–280** — the release gates on every refined task being implemented.
