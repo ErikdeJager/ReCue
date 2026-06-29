@@ -2170,11 +2170,19 @@ export const useStore = create<AppState>()((set, get) => ({
         if (IS_MAIN_WINDOW) {
           await ipc.subscribeScheduleEvents({
             onFired: ({ id, session }) => {
+              // The recent to surface is the *parent repo* for a worktree session
+              // (its `repo_path` is the app-managed worktree folder), else the
+              // session's own folder. This mirrors the backend, which touches
+              // `sched.cwd` (the parent repo) — never the worktree dir — so the
+              // worktree shows only as a sub-group under its parent, not as a
+              // duplicate empty top-level folder (#279). The interactive worktree
+              // spawn path likewise never adds the worktree dir to recents.
+              const recentPath = session.worktree_parent ?? session.repo_path;
               set((s) => ({
                 schedules: s.schedules.filter((x) => x.id !== id),
                 recents: [
-                  session.repo_path,
-                  ...s.recents.filter((r) => r !== session.repo_path),
+                  recentPath,
+                  ...s.recents.filter((r) => r !== recentPath),
                 ],
               }));
               get().upsertSession(toSessionView(session));
