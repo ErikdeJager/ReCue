@@ -1,6 +1,6 @@
 /* 5-hour usage bar (#154): doubles as the separator above the sidebar footer. With
    no usage data the track is a plain full-width hairline (an ordinary separator);
-   with data it fills (accent, or a fixed vivid red at >=95%) and a reset/% meta row
+   with data it fills (accent, or a fixed vivid red at >=90%) and a reset/% meta row
    sits above it. */
 .usage {
   display: flex;
@@ -52,7 +52,7 @@
     background var(--dur-fast) var(--ease-out);
 }
 
-/* >=95%: a fixed vivid red, NOT the accent — so a red custom accent can't
+/* >=90%: a fixed vivid red, NOT the accent — so a red custom accent can't
    masquerade as the critical state. */
 .fillCritical {
   background: var(--usage-critical);

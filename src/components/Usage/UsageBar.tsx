@@ -12,7 +12,7 @@ import styles from "./Usage.module.css";
  *   full-width hairline — an ordinary separator between the footer buttons and the
  *   panel contents above.
  * - Usage received: the same hairline track fills left→right with the % of the
- *   5-hour limit used (accent fill; a fixed vivid `--usage-critical` red at >=95%),
+ *   5-hour limit used (accent fill; a fixed vivid `--usage-critical` red at >=90%),
  *   and a meta row above it shows the reset countdown (left) and the % (right). At
  *   0% the fill is empty, so the bar still reads as a plain separator — but "0%" is
  *   shown on the right.
@@ -48,7 +48,8 @@ function UsageBar() {
   }
 
   const pct = Math.max(0, Math.min(100, usedPercent));
-  const critical = pct >= 95;
+  // Critical (red) state once usage reaches 90% of the 5-hour limit.
+  const critical = pct >= 90;
   const rounded = Math.round(pct);
   const countdown =
     resetsAtMs != null
