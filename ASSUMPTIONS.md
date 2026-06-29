@@ -1065,3 +1065,34 @@ directive (2026-06-26) all interpretation calls below were made autonomously.
   `term.write` in terminalPool; (C) drop the per-chunk `sessions.find` reconnecting scan.
 - **Out of scope:** changing reader chunk size / backend time-window batching (keeps latency
   predictable + the diff reviewable). `deps: none`, parallel with 260.
+
+## Task 262 — Terminal last line below the screen
+- #178 already added vertical padding; bug persists intermittently due to **sub-row fit
+  rounding** (line-height makes the real cell taller than FitAddon assumes → one row too
+  many → last row clipped). Fix = more bottom padding (≈20px) **plus** a conservative fit
+  guard (reduce rows by one when the rendered height would overflow the content box,
+  best-effort via xterm metrics, guarded). `deps: none`.
+
+## Task 263 — Modal opens slowly
+- **Card's guess corrected:** the remote `git fetch` is already async/off the open path.
+  Real cause = a pre-open `await ipc.listBranches(repo)` in `store.ts startRepoSession`
+  gating the per-repo modal. Fix = open immediately with `initialBranches: null`; the
+  modal's existing branch-detection effect fills the list async. `deps: none`.
+
+## Task 264 — File tree auto-refresh
+- **Polling chosen over fs-watch** (no `notify` crate; card sanctions polling). Reuse the
+  existing `fileTreeRefresh` per-repo signal (re-lists loaded levels, preserves expansion).
+  Triggers: busy→idle edge re-list (not just re-tint), a ~5s visibility-gated poll, and
+  window focus. `deps: none`.
+
+## Task 265 — Scheduled worktree card header (3 lines)
+- Cause: `ScheduleCard` drops name/worktree-badge/meta as three direct children of the
+  `.titleBlock` flex-column → 3 rows + full-width badge. Fix = wrap name+badge in the
+  existing `.agentTitle` row (mirror `SessionCard`). Pure UI; `deps: none`.
+
+## Task 266 — Checkout branch in repo context menu
+- New `"checkout"` `menuMode` sub-panel (mirrors the `"color"` sub-mode) with a branch
+  picker (local + cached remote via `sortBranches`) + create-new. New store actions
+  `checkoutFolderBranch`/`createFolderBranch` (model on `pullFolder`); **no agent spawned**
+  (distinct from `spawnSession`'s checkout). Reuse existing `checkout_branch`/`create_branch`
+  commands (no backend change). Show the running-agents destructive advisory. `deps: none`.
