@@ -7272,3 +7272,83 @@ header note), `src-tauri/src/commands.rs` (wrappers + reserved-name guard),
 
 ---
 
+### 268. [x] Natural-language launch-time input for scheduled sessions
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+Replaced the two `datetime-local` launch-time widgets (the New Session modal schedule step
+and the ScheduledPanel) with a single free-text field that parses natural-language
+time/duration — `1h`, `1 hour`, `30m`, `15:00`, `6pm`/`6 PM`/`6 pm`, `9:30am`, `tomorrow
+9am`, explicit dates — with a persistent helper hint and a **live "Starts <date/time>"
+preview** as the user types. Unparseable/empty input disables submit/save and shows a gentle
+message.
+
+**What shipped** (commit `686f7f7`, PR
+[#19](https://github.com/ErikdeJager/ReCue/pull/19), merged `3f7476e`, 2026-06-30):
+
+- **Custom parser in `src/time.ts`** — `parseWhen(input, now)` returning `{ at, label } |
+  null`: relative durations (incl. compound "1h 30m" / "90 min"), clock times
+  (`15:00`/`6pm`/`9:30am`) rolled to tomorrow if already past `now`, `today`/`tomorrow`
+  prefixes, and an explicit-date `new Date(...)` fallback (future-only). **No new date
+  dependency** (ReCue's offline/bundled ethos). Covered by `time.test.ts` (every card
+  example + past-rolls-to-tomorrow + invalid→null).
+- **Both surfaces swapped** — `NewSessionModal.tsx` (schedule step) and `ScheduledPanel.tsx`
+  now use a text input + static hint + live preview; `submitSchedule` / the debounced
+  `queueSave` derive `fire_at` from `parseWhen(...).at` and block submit/save when the parse
+  is null. `formatFireTime` still renders the preview/cards.
+
+**Key files/areas touched:** `src/time.ts` (+ `time.test.ts`),
+`src/components/NewSessionModal/{NewSessionModal.tsx,NewSessionModal.module.css}`,
+`src/components/ScheduledPanel/{ScheduledPanel.tsx,ScheduledPanel.module.css}`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): a **custom parser,
+  no new date lib** (offline ethos); **a bare time already past today rolls to tomorrow**
+  (relative durations always future, explicit dates as-is); free-text field + static hint +
+  live preview replacing both `datetime-local` widgets; invalid input disables submit.
+- **Cross-platform:** pure TS in the WebView, no OS branch; the free-text field also
+  sidesteps `datetime-local`'s inconsistent native picker across WKWebView/WebView2.
+  `npm test` (parser) / `build` / `lint` green.
+
+---
+
+### 272. [x] Usage meter turns red starting at 90% (not 95%)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+The five-hour usage bar now enters its critical (red `--usage-critical`) state at **≥90%**
+usage instead of ≥95%. Trivial, self-contained threshold change.
+
+**What shipped** (commit `3c81051`, PR
+[#20](https://github.com/ErikdeJager/ReCue/pull/20), merged `a0be2b6`, 2026-06-30):
+
+- `UsageBar.tsx` — `const critical = pct >= 90;` (was `>= 95`); the `.fillCritical` red is
+  applied above that. Surrounding "95%" doc comments in `UsageBar.tsx` and `Usage.module.css`
+  updated to "90%". No other usage-bar behavior (visibility gating, collapsed-rail variant,
+  reduced-motion) changed.
+
+**Key files/areas touched:** `src/components/Usage/UsageBar.tsx`,
+`src/components/Usage/Usage.module.css` (comments).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): one-line threshold
+  change + matching comment updates; nothing else touched.
+- **Cross-platform:** pure threshold/CSS-comment change, identical on both platforms.
+  `npm run build` / `lint` green.
+
+---
+
