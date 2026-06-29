@@ -6391,3 +6391,73 @@ overlap.)
 
 ---
 
+### 252. [x] Color file-tree rows by git status (new = green, edited = yellow, deleted = red)
+
+**Status:** Done
+**Depends on:** none _(builds on shipped #167 lazy FileTree, #183 untracked-as-Added,
+#212 busy→idle refresh cadence; no open task gated it)_
+**Created:** 2026-06-29
+
+**Description**
+
+The repo **file tree** (`FileTree.tsx`, #167 — the single component rendered in the
+sidebar, an Overview column, a Canvas panel, and a Canvas-template block) rendered every
+row in neutral `--text-primary`/`--text-muted` regardless of git state. This task makes
+the tree **git-aware**: each row is tinted to reflect its working-tree status vs `HEAD`
+so a glance shows what an agent (or the user) has changed — new/untracked files green,
+modified files yellow, deletions red — reusing the existing on-system status tokens
+(`--status-done`/`-awaiting`/`-error`) with no off-system colors.
+
+**What shipped** (commit `c30a8ca`, 2026-06-29):
+
+- **Backend — lightweight `file_statuses(repo)` git read** (`src-tauri/src/git.rs`,
+  +186 lines incl. tests): one `git -c core.quotepath=false status --porcelain=v1 -z
+  --untracked-files=all` via the cross-platform `hidden_command`/`run_git` seam (no
+  console flash, never a bare `Command`). A pure `-z` porcelain parser maps `??`→`Added`,
+  index/worktree `D`→`Deleted`, added→`Added`, else→`Modified`; **renames** (`R`/`C`,
+  carrying a second NUL `old` field) emit `Deleted` for the old path **and** `Added` for
+  the new (mirroring the diff rename convention). Bounded + fail-open (non-git dir / no
+  commits → empty `Vec`). Unit-tested as a pure `&str → Vec<FileStatusEntry>` against
+  added/modified/deleted/untracked/rename fixtures.
+- **IPC + types** — `file_statuses` registered in `commands.rs` + `lib.rs`; `fileStatuses(repo)`
+  wrapper in `src/ipc.ts`; `FileChangeStatus` (`"A"|"M"|"D"`) + `FileStatusEntry` in
+  `src/types/index.ts` (serde-mirrored).
+- **Store** (`src/store.ts`, +62) — `fileStatuses: Record<repoPath, Record<path, FileChangeStatus>>`
+  (mirroring `branches`) + `refreshFileStatuses()` over the same repo set as `refreshBranches`
+  via `Promise.allSettled` (fail-open per repo). Triggered on app load, on each session
+  **busy→idle** edge (reusing #212's 600 ms debounced `scheduleBranchRefresh`), after
+  app-initiated checkout/branch writes, and from the tree's Refresh/mount.
+- **FileTree rendering** (`FileTree.tsx` +72, `FileTree.module.css` +43, pure helpers in
+  new `FileTree/fileStatus.ts` +85 with `fileStatus.test.ts` +109): file rows tint
+  name+icon (`.statusAdded`/`.statusModified`); folders **roll up** to the
+  highest-severity descendant (red > yellow > green) via a precomputed prefix index;
+  **deleted "ghost" rows** render as red, struck-through (`line-through; opacity:.7`),
+  non-openable rows in their still-rendered parent level, with the red ancestor roll-up
+  covering collapsed/missing parents. Applies to all FileTree surfaces automatically.
+
+**Key files/areas touched:** `src-tauri/src/git.rs` (new `file_statuses` + porcelain
+parser + tests), `commands.rs`, `lib.rs`; `src/ipc.ts`, `src/types/index.ts`,
+`src/store.ts` (`fileStatuses` map + `refreshFileStatuses`), `src/store.refresh.test.ts`;
+`src/components/FileTree/{FileTree.tsx,FileTree.module.css,fileStatus.ts,fileStatus.test.ts}`,
+`src/components/Sidebar/Sidebar.tsx`; docs in `CLAUDE.md`.
+
+**Dependencies:** none. Read-only git addition consistent with the "git is read-mostly"
+rule (no new write).
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): deletions
+  surface as a red ghost row **plus** a red ancestor roll-up (not folder-red only);
+  folders roll up new/edited too (IDE convention, not just deletions per the literal
+  card); coloring = tint name+icon (color-only, no status letter badge); data source is
+  the new lightweight `file_statuses` rather than the heavyweight `working_diff` to keep
+  the busy→idle refresh cheap and leave the diff viewer untouched; status state lives in
+  the store for once-per-repo fetching.
+- **Cross-platform:** the only OS-sensitive primitive is the git shell-out, which reuses
+  `run_git`/`hidden_command`; both porcelain `-z` and `list_dir` paths are repo-relative
+  POSIX so the status lookup is identical on macOS and Windows; colors are CSS tokens
+  only (no platform-divergent CSS), so no `#[cfg]` gating needed. `npm run build` / `lint`
+  / `test` and `cargo test` all green.
+
+---
+

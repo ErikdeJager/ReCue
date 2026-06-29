@@ -19,7 +19,3 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #252 — Color file-tree rows by git status (new = green, edited = yellow, deleted = red)
-	Plan: TASK-252.md
-	Depends on: none
-
