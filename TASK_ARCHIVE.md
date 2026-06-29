@@ -6845,3 +6845,58 @@ path**; the dominant global-lag fix on the **output delivery path** is the paral
 
 ---
 
+### 261. [x] Fix global UI lag — shrink the output IPC payload and throttle terminal writes
+
+**Status:** Done
+**Depends on:** none _(parallel with #260, the stdin-path half of the same "input lag" PLAN card)_
+**Created:** 2026-06-30
+
+**Description**
+
+Heavy terminal output caused ~0.5s lag **everywhere** — including non-terminal React inputs
+(the Kanban textarea, file viewers). Root cause: PTY output bytes were emitted to the
+WebView as a **JSON integer array** (`Vec<u8>` → `[27,91,49,…]`, ~4 chars/byte, one event
+per 8 KB `read()`), so the single WebView main thread had to `JSON.parse` a multi-KB array
+of numbers and `Uint8Array.from(...)` it before every `term.write` — saturating the one JS
+thread so React keystroke handling queued behind it. (Bytes were already correctly kept out
+of Zustand via `outputBus`/`terminalPool`, so the fix is payload size + write scheduling,
+not store churn.) This is the **output-delivery** half of the "input lag" card; the parallel
+#260 fixed the **stdin write-path** lock contention.
+
+**What shipped** (commit `1b1384b`, PR
+[#11](https://github.com/ErikdeJager/ReCue/pull/11), merged `afaf849`, 2026-06-30):
+
+- **(A) Base64 payload** — `OutputPayload` changed from `bytes: Vec<u8>` to `b64: String`
+  (TS `OutputPayload { id, b64 }`), encoded in the emit/forwarder path via the `base64 =
+  "0.22"` crate. Replaces a multi-KB `JSON.parse` + number-array alloc with a compact string
+  + a tight decode loop. New `src/decodeOutput.ts` (`decodeOutputB64` — `atob` → `Uint8Array`
+  byte loop, works in both WKWebView and WebView2) with `decodeOutput.test.ts`; a Rust
+  round-trip unit test (`output_base64_round_trips`).
+- **(B) rAF-coalesced writes** — `terminalPool.ts` now buffers incoming chunks per host and
+  flushes them in **one `term.write` per `requestAnimationFrame`** (FIFO order preserved; a
+  steady stream still flushes ~60×/s; a pending flush is forced on host teardown so no tail
+  bytes are lost).
+- **(C) Hot-path cleanup** — dropped the per-chunk `sessions.find(...).reconnecting` linear
+  scan in `store.ts onOutput`.
+- **`TRAJECTORY_TO_WINDOWS.md` note** — heavy-output render should be spot-checked on
+  Windows WebView2.
+
+**Key files/areas touched:** `src-tauri/src/{commands.rs,lib.rs}`, `src-tauri/Cargo.toml`,
+`src/types/index.ts`, `src/store.ts`, `src/components/Terminal/terminalPool.ts`,
+`src/decodeOutput.ts` + `decodeOutput.test.ts`; `TRAJECTORY_TO_WINDOWS.md`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): chose **base64**
+  as the portable, low-risk baseline over a Tauri v2 binary `Channel` (pick one, not both).
+  **Out of scope** (deliberately): changing the reader's 8 KB chunk size or adding backend
+  time-window batching — kept latency predictable and the diff reviewable. A→C above are
+  sufficient.
+- **Cross-platform:** base64 encode/decode + rAF flushing are platform-neutral (pure Rust +
+  WebView JS); `atob` exists in both WKWebView and WebView2, no `#[cfg]`. `cargo test` /
+  `npm test` (new decode test) / `build` / `lint` green.
+
+---
+
