@@ -937,3 +937,27 @@ Decided autonomously (refine loop, user not answering — standing directive 202
 - **Cross-platform:** `fs` move (no shell, no `hidden_command`); GUI drag can't be CI-tested →
   implement for both OSes, log the real-box check (WebView2 drop, fractional-DPR hit-test,
   cross-volume move) in `TRAJECTORY_TO_WINDOWS.md`. **Depends on: none.**
+
+## TASK-254 — Render Mermaid diagrams in rendered markdown (file viewer)
+
+Card: "Markdown mermaid integration… generate mermaid diagrams in markdown render view if a
+mermaid diagram is detected." Grounded: `FileViewer` renders markdown via react-markdown +
+remark-gfm (no raw HTML); its `components` come from the shared `makeCheckboxComponents`
+(`markdownCheckboxes.tsx`, already overriding `a`/`input`) — a `code` override is the hook;
+`mermaid` is not yet a dependency. Decided autonomously (refine loop, user not answering —
+standing directive 2026-06-26):
+
+- **Library = `mermaid`, lazy-loaded (dynamic import) + bundled offline** (no CDN, per the
+  fonts-offline rule); large lib → only loads when a diagram is present.
+- **Detection = the ` ```mermaid ` language fence only** (GitHub/Obsidian convention), not
+  heuristic sniffing of untagged blocks.
+- **Scope = FileViewer rendered markdown only**, via an **opt-in `mermaid` flag** on the
+  shared factory, so Kanban/PatchNotes/Settings markdown stay unchanged (Kanban = future).
+- **Invalid diagram → fall back to the raw code block + a subtle error**, never crash.
+- **Dark theme + `securityLevel: "strict"` + an offline font** (fits the dark UI + no-raw-HTML
+  policy); token `themeVariables` is optional polish.
+- **`code` override:** intercept `className` `language-mermaid` → `<MermaidBlock>`; else render
+  the default `<code>` faithfully (FileViewer overrides no `code` today). Async render via
+  `mermaid.render(useId(), chart)` → `dangerouslySetInnerHTML`, latest-wins guard.
+- **Cross-platform:** pure WebView SVG, no native/path/shell code, no platform branching;
+  works on WKWebView + WebView2 alike. **Depends on: none.** (Adds the `mermaid` npm dep.)
