@@ -158,7 +158,7 @@ function BlockPanel({
           </label>
         )}
         {desc?.config === "prompt" && (
-          <label className={styles.configField}>
+          <label className={`${styles.configField} ${styles.configFieldGrow}`}>
             <span className={styles.configLabel}>
               Initial prompt (optional)
             </span>
