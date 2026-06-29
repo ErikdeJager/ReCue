@@ -1332,6 +1332,11 @@ export interface AppState {
     name: string | null,
     at: number,
   ) => Promise<void>;
+  /** Fire a pending scheduled session immediately (#269) — the "Start now" button.
+   * Triggers the same backend firing path as a natural fire; the resulting
+   * `schedule://fired` event drives the scheduled→live transition (`onFired`). On a
+   * spawn failure the schedule stays and an error toast is shown. */
+  startScheduleNow: (id: string) => Promise<void>;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
   /** Fast-forward `cwd`'s current branch to its upstream — `git pull --ff-only`
    * (#181, sidebar repo / worktree "Pull"). Toasts the result (summary or git
@@ -4089,6 +4094,21 @@ export const useStore = create<AppState>()((set, get) => ({
       ),
     }));
     await ipc.updateSchedule(id, prompt, name, at).catch(() => {});
+  },
+
+  startScheduleNow: async (id) => {
+    // The backend fires the schedule and emits `schedule://fired`, which `onFired`
+    // turns into the live agent (removing the schedule). On a spawn failure the
+    // schedule is kept (backend re-adds it; the frontend store still has it), so we
+    // just toast — no optimistic removal here.
+    try {
+      await ipc.fireScheduleNow(id);
+    } catch (err) {
+      get().pushToast(
+        isSessionError(err) ? err.message : "Could not start scheduled agent",
+        "error",
+      );
+    }
   },
 
   copyToClipboard: async (text, label) => {

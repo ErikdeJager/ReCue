@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { GitBranch } from "lucide-react";
+import { GitBranch, Play } from "lucide-react";
 
 import { noAutoCapitalize } from "../../inputProps";
 import { listSkills } from "../../ipc";
@@ -33,6 +33,11 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
   );
   const updateSchedule = useStore((s) => s.updateSchedule);
   const cancelSchedule = useStore((s) => s.cancelSchedule);
+  const startScheduleNow = useStore((s) => s.startScheduleNow);
+
+  // Disable "Start now" while the spawn is in flight (the schedule disappears on
+  // success via `schedule://fired`; on failure it stays and the button re-enables).
+  const [starting, setStarting] = useState(false);
 
   // Local editing buffers, seeded from the record (and re-seeded when the id
   // changes or the record first loads — not on our own save echoes).
@@ -212,6 +217,19 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
           onClick={() => void cancelSchedule(scheduleId)}
         >
           Cancel schedule
+        </button>
+        <button
+          type="button"
+          className={styles.startNow}
+          disabled={starting}
+          onClick={() => {
+            setStarting(true);
+            void startScheduleNow(scheduleId).finally(() => setStarting(false));
+          }}
+          title="Launch this agent now instead of waiting"
+        >
+          <Play size={13} strokeWidth={1.5} aria-hidden />
+          {starting ? "Starting…" : "Start now"}
         </button>
       </div>
     </div>

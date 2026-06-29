@@ -5,7 +5,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { Clock, Copy, GitFork, GripVertical, Maximize2, X } from "lucide-react";
+import {
+  Clock,
+  Copy,
+  GitFork,
+  GripVertical,
+  Maximize2,
+  Play,
+  X,
+} from "lucide-react";
 import {
   closestCenter,
   DndContext,
@@ -461,10 +469,12 @@ interface ScheduleCardProps {
   selected: boolean;
   onSelect: () => void;
   onCancel: () => void;
+  onStartNow: () => Promise<void>;
 }
 
 /** A pending scheduled-session card in the Overview cluster (#94): the shared
- * ScheduledPanel body framed like the other columns, with a clock cue + cancel. */
+ * ScheduledPanel body framed like the other columns, with a clock cue, a
+ * "Start now" control (#269), and cancel. */
 function ScheduleCard({
   schedule,
   branch,
@@ -473,8 +483,12 @@ function ScheduleCard({
   selected,
   onSelect,
   onCancel,
+  onStartNow,
 }: ScheduleCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
+  // Disable "Start now" while the spawn is in flight (the card vanishes on success
+  // via `schedule://fired`; on failure it stays and the button re-enables).
+  const [starting, setStarting] = useState(false);
   const title = (
     <>
       {/* Title row (#265): name + optional badge live in a flex row (like
@@ -501,6 +515,20 @@ function ScheduleCard({
   );
   const actions = (
     <>
+      {/* Start now (#269): fire the schedule immediately instead of waiting. */}
+      <button
+        type="button"
+        className={styles.action}
+        disabled={starting}
+        onClick={() => {
+          setStarting(true);
+          void onStartNow().finally(() => setStarting(false));
+        }}
+        title="Start now"
+        aria-label="Start now"
+      >
+        <Play size={15} strokeWidth={1.5} />
+      </button>
       {/* Maximize into big mode (#157). */}
       <button
         type="button"
@@ -594,6 +622,7 @@ function Overview() {
   const sessionActive = useStore((s) => s.sessionActive);
   const schedules = useStore((s) => s.schedules);
   const cancelSchedule = useStore((s) => s.cancelSchedule);
+  const startScheduleNow = useStore((s) => s.startScheduleNow);
   // PTY ownership across windows (#84) is resolved inside the shared ItemContent
   // (#157) now — an agent owned by a detached canvas window shows a note there.
 
@@ -798,6 +827,7 @@ function Overview() {
                         selected={item.schedule.id === selectedId}
                         onSelect={() => select(item.schedule.id)}
                         onCancel={() => void cancelSchedule(item.schedule.id)}
+                        onStartNow={() => startScheduleNow(item.schedule.id)}
                       />
                     );
                   }

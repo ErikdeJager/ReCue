@@ -425,6 +425,14 @@ export const updateSchedule = (
   at: number,
 ) => invoke<void>("update_schedule", { id, prompt, name, at });
 
+/** Fire a pending scheduled session **immediately** (#269) — the "Start now" button.
+ * The backend takes the schedule out, spawns its agent now (seeded with the prompt,
+ * in the right folder/worktree), and emits `schedule://fired` (same scheduled→live
+ * transition as a natural fire). On a spawn failure the schedule is kept intact and
+ * the command rejects so the UI can toast. */
+export const fireScheduleNow = (id: string) =>
+  invoke<void>("fire_schedule_now", { id });
+
 /** Application settings (#100): an opaque persisted blob the store merges with its
  * TS defaults (so an older file with no `settings` upgrades cleanly). */
 export const getSettings = () =>

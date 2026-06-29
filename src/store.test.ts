@@ -1614,6 +1614,36 @@ describe("left panel as source of truth (#152)", () => {
     expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(0);
   });
 
+  it("startScheduleNow fires the schedule and does not toast on success (#269)", async () => {
+    const spy = vi.spyOn(ipc, "fireScheduleNow").mockResolvedValue();
+    useStore.setState({
+      schedules: [{ id: "sch1", cwd: "/repo/x", fire_at: 0, created_at: 0 }],
+      toasts: [],
+    });
+    await s().startScheduleNow("sch1");
+    expect(spy).toHaveBeenCalledWith("sch1");
+    // The scheduled→live transition is driven by the `schedule://fired` event
+    // (onFired), not by this action — so no optimistic removal and no toast here.
+    expect(s().toasts).toHaveLength(0);
+  });
+
+  it("startScheduleNow toasts the error and leaves the schedule intact on failure (#269)", async () => {
+    vi.spyOn(ipc, "fireScheduleNow").mockRejectedValue({
+      kind: "Spawn",
+      message: "boom",
+    });
+    useStore.setState({
+      schedules: [{ id: "sch1", cwd: "/repo/x", fire_at: 0, created_at: 0 }],
+      toasts: [],
+    });
+    await s().startScheduleNow("sch1");
+    // The schedule stays (the backend keeps it; onFired never ran), and the error
+    // surfaces as a toast.
+    expect(s().schedules).toHaveLength(1);
+    expect(s().toasts.at(-1)?.message).toBe("boom");
+    expect(s().toasts.at(-1)?.tone).toBe("error");
+  });
+
   it("leaves unrelated Canvas panels untouched", async () => {
     useStore.setState({
       overviewPanels: { "/repo/x": [{ id: "p1", kind: "diff" }] },
