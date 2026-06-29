@@ -58,6 +58,23 @@
   font-size: var(--fs-meta-sm);
 }
 
+/* Natural-language launch-time field (#268): a static syntax hint + a live
+   interpretation line. These stack under the input via the .field flex column. */
+.timeHint {
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+}
+
+.timePreview {
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-sm);
+}
+
+.timeError {
+  color: var(--status-error);
+  font-size: var(--fs-meta-sm);
+}
+
 .input {
   width: 100%;
   padding: var(--space-4) var(--space-8);

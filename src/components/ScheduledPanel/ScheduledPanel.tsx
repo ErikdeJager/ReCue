@@ -5,7 +5,12 @@ import { noAutoCapitalize } from "../../inputProps";
 import { listSkills } from "../../ipc";
 import { repoName } from "../../paths";
 import { useStore } from "../../store";
-import { toLocalInput } from "../../time";
+import {
+  formatFireTime,
+  parseWhen,
+  SCHEDULE_TIME_HINT,
+  toLocalInput,
+} from "../../time";
 import type { SkillInfo } from "../../types";
 import SkillAutocomplete from "../SkillAutocomplete/SkillAutocomplete";
 import styles from "./ScheduledPanel.module.css";
@@ -33,9 +38,16 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
   // changes or the record first loads — not on our own save echoes).
   const [prompt, setPrompt] = useState(schedule?.prompt ?? "");
   const [name, setName] = useState(schedule?.name ?? "");
-  const [fireAt, setFireAt] = useState(
+  // The launch time is a free-text natural-language field (#268). `fireText` is what
+  // the user sees/edits; `fireSecs` is the last VALID resolved unix time, seeded from
+  // the record. Decoupling them means editing the name/prompt re-saves the existing
+  // time (not a re-parse of the seeded text), so the time never drifts; only editing
+  // the time field itself moves `fireSecs`. The seed is the machine `toLocalInput`
+  // value, which `parseWhen` round-trips exactly.
+  const [fireText, setFireText] = useState(
     schedule ? toLocalInput(new Date(schedule.fire_at * 1000)) : "",
   );
+  const [fireSecs, setFireSecs] = useState(schedule?.fire_at ?? 0);
   // Slash-command skills for this schedule's folder (#114) — the prompt
   // autocomplete; best-effort, so a failure just leaves the list empty.
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -61,7 +73,8 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
     if (!schedule) return;
     setPrompt(schedule.prompt ?? "");
     setName(schedule.name ?? "");
-    setFireAt(toLocalInput(new Date(schedule.fire_at * 1000)));
+    setFireText(toLocalInput(new Date(schedule.fire_at * 1000)));
+    setFireSecs(schedule.fire_at);
     // Seed once per schedule (id appears / changes); not on field echoes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scheduleId, schedule?.id]);
@@ -80,24 +93,35 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
   }
 
   // Debounced persist of all three mutable fields (#93 update command takes them
-  // together). An invalid/empty time falls back to the stored fire time.
-  const queueSave = (
-    nextPrompt: string,
-    nextName: string,
-    nextFire: string,
-  ) => {
+  // together). The launch time is passed already resolved (unix secs) by the
+  // callers, so name/prompt edits keep the last valid time as-is (#268).
+  const queueSave = (nextPrompt: string, nextName: string, secs: number) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const ms = new Date(nextFire).getTime();
-      const at = Number.isFinite(ms) ? Math.floor(ms / 1000) : schedule.fire_at;
       void updateSchedule(
         scheduleId,
         nextPrompt.trim() || null,
         nextName.trim() || null,
-        at,
+        secs,
       );
     }, SAVE_DEBOUNCE_MS);
   };
+
+  // The launch-time field changed (#268): show the new text immediately; only when
+  // it parses do we move the resolved time + persist. An unreadable value keeps the
+  // last valid `fireSecs` (and the preview shows a gentle "couldn't read" note).
+  const onFireTextChange = (value: string) => {
+    setFireText(value);
+    const when = parseWhen(value, new Date());
+    if (when) {
+      const secs = Math.floor(when.at.getTime() / 1000);
+      setFireSecs(secs);
+      queueSave(prompt, name, secs);
+    }
+  };
+
+  // Live interpretation of the current launch-time text, for the preview line.
+  const fireWhen = parseWhen(fireText, new Date());
 
   const branch = schedule.branch ?? "";
   return (
@@ -128,14 +152,25 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
         <span className={styles.label}>Launch time</span>
         <input
           className={styles.input}
-          type="datetime-local"
-          value={fireAt}
-          onChange={(event) => {
-            setFireAt(event.currentTarget.value);
-            queueSave(prompt, name, event.currentTarget.value);
-          }}
+          {...noAutoCapitalize}
+          type="text"
+          value={fireText}
+          placeholder="e.g. 1h, 15:00, 6pm, tomorrow 9am"
+          onChange={(event) => onFireTextChange(event.currentTarget.value)}
           aria-label="Launch time"
         />
+        <span className={styles.timeHint}>{SCHEDULE_TIME_HINT}</span>
+        {fireText.trim() !== "" &&
+          (fireWhen ? (
+            <span className={styles.timePreview} aria-live="polite">
+              Starts {formatFireTime(Math.floor(fireWhen.at.getTime() / 1000))}{" "}
+              · {fireWhen.label}
+            </span>
+          ) : (
+            <span className={styles.timeError} aria-live="polite">
+              Couldn’t read that time.
+            </span>
+          ))}
       </label>
 
       <label className={styles.field}>
@@ -148,7 +183,7 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
           placeholder="Custom name…"
           onChange={(event) => {
             setName(event.currentTarget.value);
-            queueSave(prompt, event.currentTarget.value, fireAt);
+            queueSave(prompt, event.currentTarget.value, fireSecs);
           }}
           aria-label="Custom name"
         />
@@ -161,7 +196,7 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
           value={prompt}
           onChange={(next) => {
             setPrompt(next);
-            queueSave(next, name, fireAt);
+            queueSave(next, name, fireSecs);
           }}
           skills={skills}
           placeholder="Initial prompt for claude (optional)…"

@@ -144,6 +144,27 @@
   border-color: var(--accent);
 }
 
+/* Natural-language launch-time field (#268): a static syntax hint + a live
+   interpretation line below the free-text input. The input keeps .search's
+   margin-bottom, so these sit just beneath it. */
+.timeHint {
+  margin: 0 0 var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+}
+
+.timePreview {
+  margin: 0 0 var(--space-12);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-sm);
+}
+
+.timeError {
+  margin: 0 0 var(--space-12);
+  color: var(--status-error);
+  font-size: var(--fs-meta-sm);
+}
+
 .recents {
   display: flex;
   max-height: 200px;

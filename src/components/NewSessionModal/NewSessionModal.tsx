@@ -19,7 +19,7 @@ import {
 import { repoName } from "../../paths";
 import { kbdHint } from "../../platform";
 import { useStore } from "../../store";
-import { toLocalInput } from "../../time";
+import { formatFireTime, parseWhen, SCHEDULE_TIME_HINT } from "../../time";
 import type { BranchList, SkillInfo } from "../../types";
 import SkillAutocomplete from "../SkillAutocomplete/SkillAutocomplete";
 import { moveFolderHighlight } from "./folderNav";
@@ -47,9 +47,10 @@ const remoteShortName = (ref: string) => {
   return i === -1 ? ref : ref.slice(i + 1);
 };
 
-// Default lead time for a new schedule (#93): 5 minutes out, so the prefilled
-// launch time is sensibly in the future.
-const DEFAULT_LEAD_MS = 5 * 60 * 1000;
+// Default launch time for a new schedule (#93/#268): the natural-language field is
+// seeded with a short relative duration, so the prefilled time is sensibly future
+// and demonstrates the accepted syntax.
+const DEFAULT_WHEN = "in 5 min";
 
 /**
  * Start-a-new-agent panel — a two-step, keyboard-driven flow (#66, rework of
@@ -101,7 +102,8 @@ function NewSessionModal() {
   // `fetchingRemotes` shows a "fetching…" hint while the on-open `git fetch` runs.
   const [selectedRemote, setSelectedRemote] = useState<string | null>(null);
   const [fetchingRemotes, setFetchingRemotes] = useState(false);
-  // Schedule step (#93): launch time (datetime-local string), optional prompt + name.
+  // Schedule step (#93/#268): launch time as a free-text natural-language string
+  // (parsed by `parseWhen`), optional prompt + name.
   const [fireAt, setFireAt] = useState("");
   const [prompt, setPrompt] = useState("");
   const [schedName, setSchedName] = useState("");
@@ -143,7 +145,7 @@ function NewSessionModal() {
     setQuery("");
     setBusy(false);
     setBranchQuery("");
-    setFireAt(toLocalInput(new Date(Date.now() + DEFAULT_LEAD_MS)));
+    setFireAt(DEFAULT_WHEN);
     setPrompt("");
     setSchedName("");
     setPickerActive(false);
@@ -620,16 +622,18 @@ function NewSessionModal() {
 
   const backFromSchedule = () => setStep(folderIsGit ? "branch" : "folder");
 
-  // Create the schedule from the launch-time step (#93): parse the local
-  // datetime-local value → unix secs, carry the optional branch/name/prompt. A
-  // "+ add branch" intent (#125) records the new branch (created at fire time).
-  // `asWorktree` is the worktree variant of the action (#204) — the "Worktree ⌘⏎"
-  // button / keybind, mirroring the branch step's create() vs createWorktree()
-  // split. Git folders only (a worktree needs a branch), so it's gated on folderIsGit.
+  // Create the schedule from the launch-time step (#93/#268): parse the
+  // natural-language launch time → unix secs (blocking on an unreadable value),
+  // carry the optional branch/name/prompt. A "+ add branch" intent (#125) records
+  // the new branch (created at fire time). `asWorktree` is the worktree variant of
+  // the action (#204) — the "Worktree ⌘⏎" button / keybind, mirroring the branch
+  // step's create() vs createWorktree() split. Git folders only (a worktree needs a
+  // branch), so it's gated on folderIsGit.
   const submitSchedule = async (asWorktree: boolean) => {
     if (!cwd || busy) return;
-    const ms = new Date(fireAt).getTime();
-    if (!Number.isFinite(ms)) return;
+    const when = parseWhen(fireAt, new Date());
+    if (!when) return;
+    const fireSecs = Math.floor(when.at.getTime() / 1000);
     const useNewBranch = addBranchActive && !!newBranchName.trim();
     // A worktree schedule (#198) always needs a branch (its worktree is on one),
     // even the current branch — so pass `selectedBranch` regardless of `willCheckout`.
@@ -645,7 +649,7 @@ function NewSessionModal() {
       branchArg,
       schedName.trim() || null,
       prompt.trim() || null,
-      Math.floor(ms / 1000),
+      fireSecs,
       useNewBranch,
       useNewBranch ? newBranchBase : null,
       useWorktree,
@@ -833,6 +837,12 @@ function NewSessionModal() {
       first.focus();
     }
   };
+
+  // Live interpretation of the natural-language launch time (#268) — drives the
+  // preview line and gates the schedule submit/worktree buttons. Recomputed on each
+  // render (cheap, pure) so a fresh `now` keeps "tomorrow" rolling current.
+  const scheduleWhen =
+    step === "schedule" ? parseWhen(fireAt, new Date()) : null;
 
   return (
     <div className={styles.overlay} onClick={close}>
@@ -1261,11 +1271,27 @@ function NewSessionModal() {
             <input
               ref={fireAtRef}
               className={styles.search}
-              type="datetime-local"
+              {...noAutoCapitalize}
+              type="text"
               value={fireAt}
               onChange={(event) => setFireAt(event.currentTarget.value)}
+              placeholder="e.g. 1h, 15:00, 6pm, tomorrow 9am"
               aria-label="Launch time"
             />
+            {/* Persistent helper + a live interpretation of what was typed (#268). */}
+            <p className={styles.timeHint}>{SCHEDULE_TIME_HINT}</p>
+            {fireAt.trim() !== "" &&
+              (scheduleWhen ? (
+                <p className={styles.timePreview} aria-live="polite">
+                  Starts{" "}
+                  {formatFireTime(Math.floor(scheduleWhen.at.getTime() / 1000))}{" "}
+                  · {scheduleWhen.label}
+                </p>
+              ) : (
+                <p className={styles.timeError} aria-live="polite">
+                  Couldn’t read that time.
+                </p>
+              ))}
 
             <p className={styles.label}>Prompt (optional)</p>
             <SkillAutocomplete
@@ -1302,7 +1328,7 @@ function NewSessionModal() {
                   type="button"
                   className={styles.cancel}
                   onClick={() => void submitSchedule(true)}
-                  disabled={!cwd || busy || !fireAt}
+                  disabled={!cwd || busy || !scheduleWhen}
                   title="Schedule into an isolated git worktree"
                 >
                   Worktree{" "}
@@ -1314,7 +1340,7 @@ function NewSessionModal() {
               <button
                 type="submit"
                 className={styles.create}
-                disabled={!cwd || busy || !fireAt}
+                disabled={!cwd || busy || !scheduleWhen}
               >
                 Schedule <kbd className={styles.btnKbd}>⏎</kbd>
               </button>
