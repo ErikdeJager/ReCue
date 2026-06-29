@@ -205,6 +205,7 @@ pub fn run() {
             commands::list_schedules,
             commands::cancel_schedule,
             commands::update_schedule,
+            commands::fire_schedule_now,
             commands::list_dir,
             commands::search_files,
             commands::search_file_contents,

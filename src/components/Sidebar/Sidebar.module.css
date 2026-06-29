@@ -610,6 +610,39 @@
   color: var(--text-primary);
 }
 
+/* Start now (#269): mirrors the cancel button — hidden until row hover, accent on
+   hover. The ▶ launches the scheduled agent immediately. */
+.scheduleStart {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.scheduleRow:hover .scheduleStart {
+  opacity: 1;
+}
+
+.scheduleStart:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.scheduleStart:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
 .fileMain {
   display: flex;
   flex: 1;

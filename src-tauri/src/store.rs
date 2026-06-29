@@ -573,6 +573,21 @@ impl Store {
         due
     }
 
+    /// Atomically remove and return the schedule with `id`, if any (#269). Like
+    /// `take_due_schedules` but for a single id — the "Start now" button takes the
+    /// schedule out under the lock (so the poll loop can't also fire it) before
+    /// spawning. `None` means it was unknown or already fired. On a spawn failure the
+    /// caller re-`add_schedule`s it so the schedule is kept intact.
+    pub fn take_schedule(&self, id: &str) -> Option<ScheduledSession> {
+        let mut taken = None;
+        let _ = self.update(|state| {
+            if let Some(pos) = state.schedules.iter().position(|s| s.id == id) {
+                taken = Some(state.schedules.remove(pos));
+            }
+        });
+        taken
+    }
+
     fn with<R>(&self, read: impl FnOnce(&PersistedState) -> R) -> R {
         let guard = self
             .inner
@@ -947,6 +962,35 @@ mod tests {
 
         store.remove_schedule("s2").unwrap();
         assert!(Store::load(&path).schedules().is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn take_schedule_removes_one_by_id_and_persists() {
+        let path = temp_path("take-schedule");
+        let store = Store::load(&path);
+        store.add_schedule(sched("s1", 5000)).unwrap();
+        store.add_schedule(sched("s2", 6000)).unwrap();
+
+        // An unknown id takes nothing and leaves both schedules intact.
+        assert!(store.take_schedule("missing").is_none());
+        assert_eq!(store.schedules().len(), 2);
+
+        // Taking s1 returns it and removes it from the persisted set; s2 remains.
+        let taken = store.take_schedule("s1").expect("s1 taken");
+        assert_eq!(taken.id, "s1");
+        let reloaded = Store::load(&path);
+        assert_eq!(
+            reloaded
+                .schedules()
+                .iter()
+                .map(|s| s.id.clone())
+                .collect::<Vec<_>>(),
+            vec!["s2".to_string()]
+        );
+
+        // Taking the same id again is a no-op (already gone).
+        assert!(store.take_schedule("s1").is_none());
         let _ = fs::remove_file(&path);
     }
 

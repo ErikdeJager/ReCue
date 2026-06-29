@@ -25,6 +25,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PanelsTopLeft,
+  Play,
   Plus,
   Settings as SettingsIcon,
   SquareKanban,
@@ -190,20 +191,25 @@ function filePathMenuItems(
 }
 
 /** A pending scheduled-session row (#93/#94): a dnd-kit draggable item (drops into
- * Canvas as a scheduled panel), click selects/jumps to it (#79), × cancels. The
- * whole label is the drag handle; a small activation distance keeps clicks working.
- * Right-click opens a single-item **Cancel** menu (#132). */
+ * Canvas as a scheduled panel), click selects/jumps to it (#79), ▶ starts it now
+ * (#269), × cancels. The whole label is the drag handle; a small activation distance
+ * keeps clicks working. Right-click opens a single-item **Cancel** menu (#132). */
 function ScheduleRow({
   schedule,
   selected,
   onOpen,
   onCancel,
+  onStartNow,
 }: {
   schedule: ScheduledSession;
   selected: boolean;
   onOpen: () => void;
   onCancel: () => void;
+  onStartNow: () => Promise<void>;
 }) {
+  // Disable ▶ while the spawn is in flight (the row vanishes on success via
+  // `schedule://fired`; on failure it stays and the button re-enables).
+  const [starting, setStarting] = useState(false);
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: `schedule:${schedule.id}`,
@@ -247,6 +253,19 @@ function ScheduleRow({
       </button>
       <button
         type="button"
+        className={styles.scheduleStart}
+        disabled={starting}
+        onClick={() => {
+          setStarting(true);
+          void onStartNow().finally(() => setStarting(false));
+        }}
+        title="Start now"
+        aria-label={`Start scheduled session ${label} now`}
+      >
+        <Play size={13} strokeWidth={1.5} />
+      </button>
+      <button
+        type="button"
         className={styles.scheduleCancel}
         onClick={onCancel}
         title="Cancel schedule"
@@ -256,7 +275,10 @@ function ScheduleRow({
       </button>
       <RowContextMenu
         menu={menu}
-        items={[{ label: "Cancel", onActivate: onCancel, danger: true }]}
+        items={[
+          { label: "Start now", onActivate: () => void onStartNow() },
+          { label: "Cancel", onActivate: onCancel, danger: true },
+        ]}
         onClose={closeMenu}
       />
     </div>
@@ -1508,6 +1530,7 @@ function RepoGroup({
   const renameSession = useStore((s) => s.renameSession);
   const startRepoSession = useStore((s) => s.startRepoSession);
   const cancelSchedule = useStore((s) => s.cancelSchedule);
+  const startScheduleNow = useStore((s) => s.startScheduleNow);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
   const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
@@ -1688,6 +1711,7 @@ function RepoGroup({
               selectItem({ kind: "scheduled", id: s.id, repoPath: s.cwd })
             }
             onCancel={() => void cancelSchedule(s.id)}
+            onStartNow={() => startScheduleNow(s.id)}
           />
         ))}
 
@@ -1748,6 +1772,7 @@ function RepoGroup({
                   selectItem({ kind: "scheduled", id: s.id, repoPath: s.cwd })
                 }
                 onCancel={() => void cancelSchedule(s.id)}
+                onStartNow={() => startScheduleNow(s.id)}
               />
             ))}
             {/* Views opened from the worktree badge (#164) are keyed by the worktree

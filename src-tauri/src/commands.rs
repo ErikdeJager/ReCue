@@ -880,85 +880,114 @@ pub fn fire_due_schedules(app: &AppHandle) {
     }
     let manager = app.state::<SessionManager>();
     for sched in due {
-        // Worktree schedule (#198): create the isolated worktree at fire time and spawn
-        // the seeded agent there (`worktree_parent = repo`, so it nests like any worktree
-        // agent #74). A worktree-creation failure emits `schedule://error` and skips —
-        // there's no folder to fall back into. The in-folder path (#93/#125) keeps its
-        // best-effort branch checkout/create and spawns in `cwd`.
-        let (spawn_cwd, worktree_parent) = if sched.worktree {
-            match prepare_worktree_for_schedule(&store, &sched) {
-                Ok(dest) => (dest, Some(sched.cwd.clone())),
-                Err(message) => {
-                    let _ = app.emit(
-                        "schedule://error",
-                        ScheduleErrorPayload {
-                            id: sched.id,
-                            message,
-                        },
-                    );
-                    continue;
-                }
-            }
-        } else {
-            if let Some(branch) = &sched.branch {
-                // Best-effort; a failure still spawns in the folder. New-branch schedules
-                // (#125) create + check out the branch at fire time (reusing #124's write);
-                // existing-branch schedules check out as before (#93).
-                let _ = if sched.create_branch {
-                    git::create_branch(
-                        &sched.cwd,
-                        branch,
-                        sched.branch_base.as_deref().unwrap_or(""),
-                    )
-                } else {
-                    git::checkout_branch(&sched.cwd, branch)
-                };
-            }
-            (sched.cwd.clone(), None)
-        };
-        match manager.spawn_session_with_prompt(
+        // The poll loop **drops** a schedule whose spawn failed (no infinite retry),
+        // surfacing it as `schedule://error`. "Start now" (#269) keeps it instead.
+        if let Err(message) = fire_one_schedule(&store, &manager, app, &sched) {
+            let _ = app.emit(
+                "schedule://error",
+                ScheduleErrorPayload {
+                    id: sched.id,
+                    message,
+                },
+            );
+        }
+    }
+}
+
+/// Fire a **single** schedule immediately (#269) — the "Start now" button. Takes the
+/// schedule out of the store by id (atomic, like `take_due_schedules` but for one id,
+/// so the poll loop can't also fire it), then runs the shared firing path. On success
+/// the schedule is gone and `schedule://fired` moves it to a live agent — byte-identical
+/// to a natural fire (same seeded prompt, folder/worktree, persisted record). On failure
+/// the schedule is **re-added** (kept intact so the user can retry) and the error is
+/// returned for the UI to toast. An unknown / already-fired id is a no-op success (the
+/// frontend already removed it, or the poll loop just fired it).
+#[tauri::command]
+pub fn fire_schedule_now(app: AppHandle, id: String) -> Result<(), SessionError> {
+    let store = app.state::<Store>();
+    let Some(sched) = store.take_schedule(&id) else {
+        return Ok(());
+    };
+    let manager = app.state::<SessionManager>();
+    if let Err(message) = fire_one_schedule(&store, &manager, &app, &sched) {
+        // Keep the schedule intact so the user can fix the cause and try again.
+        let _ = store.add_schedule(sched);
+        return Err(SessionError::Spawn(message));
+    }
+    Ok(())
+}
+
+/// Fire one schedule (#93/#269): prepare its worktree (or check out / create its
+/// in-folder branch), spawn the seeded agent, persist the new live session + recent,
+/// and emit `schedule://fired` so the frontend moves it scheduled→live. Returns the
+/// error message on failure — the **caller** decides whether to drop the schedule
+/// (the poll loop → `schedule://error`) or keep it (`fire_schedule_now`); this helper
+/// never emits `schedule://error` itself. Shared by the poll loop and "Start now".
+fn fire_one_schedule(
+    store: &Store,
+    manager: &SessionManager,
+    app: &AppHandle,
+    sched: &ScheduledSession,
+) -> Result<(), String> {
+    // Worktree schedule (#198/#259): reuse the isolated worktree created eagerly at
+    // schedule time (`prepare_worktree_for_schedule` is idempotent — it only creates
+    // when the folder is missing, e.g. a pre-#259 record), and spawn the seeded agent
+    // there (`worktree_parent = repo`, so it nests like any worktree agent #74). A
+    // worktree-prep failure aborts — there's no folder to fall back into. The in-folder
+    // path (#93/#125) keeps its best-effort branch checkout/create and spawns in `cwd`.
+    let (spawn_cwd, worktree_parent) = if sched.worktree {
+        let dest = prepare_worktree_for_schedule(store, sched)?;
+        (dest, Some(sched.cwd.clone()))
+    } else {
+        if let Some(branch) = &sched.branch {
+            // Best-effort; a failure still spawns in the folder. New-branch schedules
+            // (#125) create + check out the branch at fire time (reusing #124's write);
+            // existing-branch schedules check out as before (#93).
+            let _ = if sched.create_branch {
+                git::create_branch(
+                    &sched.cwd,
+                    branch,
+                    sched.branch_base.as_deref().unwrap_or(""),
+                )
+            } else {
+                git::checkout_branch(&sched.cwd, branch)
+            };
+        }
+        (sched.cwd.clone(), None)
+    };
+    let info = manager
+        .spawn_session_with_prompt(
             &spawn_cwd,
             sched.name.clone(),
             sched.prompt.as_deref(),
             &sched.agent,
-        ) {
-            Ok(info) => {
-                let record = PersistedSession {
-                    id: info.id.clone(),
-                    claude_session_id: info.id,
-                    repo_path: spawn_cwd,
-                    name: sched.name.clone(),
-                    created_at: now_secs(),
-                    worktree_parent,
-                    auto_name: None,
-                    has_been_active: false,
-                    agent: sched.agent.clone(),
-                    forked_from: None,
-                    // Prompt-seeded, but its log materializes only once it runs (#138).
-                    forkable: false,
-                };
-                let _ = store.add_session(record.clone());
-                // Touch the repo (not the worktree folder) as the recent.
-                let _ = store.touch_recent(&sched.cwd);
-                let _ = app.emit(
-                    "schedule://fired",
-                    ScheduleFiredPayload {
-                        id: sched.id,
-                        session: record,
-                    },
-                );
-            }
-            Err(error) => {
-                let _ = app.emit(
-                    "schedule://error",
-                    ScheduleErrorPayload {
-                        id: sched.id,
-                        message: error.to_string(),
-                    },
-                );
-            }
-        }
-    }
+        )
+        .map_err(|e| e.to_string())?;
+    let record = PersistedSession {
+        id: info.id.clone(),
+        claude_session_id: info.id,
+        repo_path: spawn_cwd,
+        name: sched.name.clone(),
+        created_at: now_secs(),
+        worktree_parent,
+        auto_name: None,
+        has_been_active: false,
+        agent: sched.agent.clone(),
+        forked_from: None,
+        // Prompt-seeded, but its log materializes only once it runs (#138).
+        forkable: false,
+    };
+    let _ = store.add_session(record.clone());
+    // Touch the repo (not the worktree folder) as the recent.
+    let _ = store.touch_recent(&sched.cwd);
+    let _ = app.emit(
+        "schedule://fired",
+        ScheduleFiredPayload {
+            id: sched.id.clone(),
+            session: record,
+        },
+    );
+    Ok(())
 }
 
 /// Create (or reuse) the isolated worktree for a worktree schedule (#198) at fire time
