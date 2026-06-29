@@ -906,3 +906,34 @@ loop, user not answering — standing directive 2026-06-26):
   shell-out is OS-sensitive and it reuses the established hidden-command seam; both
   porcelain and `list_dir` paths are POSIX-`/` repo-relative so the lookup matches on
   macOS and Windows (no `#[cfg]` needed). **Depends on: none.**
+
+## TASK-253 — Drag OS files into the file tree to move them into the repo
+
+Card: "Allow for files to be dragged into ReCue, especially the file tree. Items should be
+moved to this location once they are dropped in. User can also drag and drop into folders or
+the root of the file tree. There is visual UI feedback…" Grounded: no OS drag-drop wiring
+exists; in-app DnD is dnd-kit on a `PointerSensor` (won't clash with an OS file drop, which
+comes via Tauri's webview drag-drop event); `files.rs confine()` is the write-validation
+pattern; `pushToast` exists; `core:default` covers drag-drop events for `["main","canvas-*"]`.
+Decided autonomously (refine loop, user not answering — standing directive 2026-06-26):
+
+- **Move, not copy** — the card says "moved" twice. Implemented safely (same-volume
+  `fs::rename`; cross-volume copy-then-remove so a failure can't lose data). Flagged that
+  drag-from-Finder often *copies*; copy / a modifier-key toggle is a one-line follow-up.
+- **Scope = external OS files → tree folders/root only.** "Drag into folders or the root"
+  reads as *where incoming files land*, not intra-tree reorg (separate dnd-kit interaction,
+  future card). Keeps `Depends on: none`.
+- **Collisions refuse (no overwrite)**; auto-suffix noted as alternative. **No confirm gate**
+  (drag is intentional + move is data-safe).
+- **Drop resolution = window-global Tauri `onDragDropEvent` + DOM hit-test**
+  (`data-filetree-droptarget`/`-repo` markers + `elementFromPoint`), because the event isn't
+  bound to a DOM element. **Physical→CSS position via `devicePixelRatio`** (Retina + Windows
+  fractional scaling). Listener registered in the main shell **and** the detached
+  `CanvasWindow` (each its own webview).
+- **Directories moved recursively.** Backend `move_into_repo` derives the basename from the
+  source `Path` (no frontend `splitPath`); destination confined to repo, source intentionally
+  unconfined (user's explicit drag, like #163 native-dialog consent). Adds the **second**
+  `files.rs` write after `write_text_file` (#141) — update CLAUDE.md's read-mostly note.
+- **Cross-platform:** `fs` move (no shell, no `hidden_command`); GUI drag can't be CI-tested →
+  implement for both OSes, log the real-box check (WebView2 drop, fractional-DPR hit-test,
+  cross-volume move) in `TRAJECTORY_TO_WINDOWS.md`. **Depends on: none.**
