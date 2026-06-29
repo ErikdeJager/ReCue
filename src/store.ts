@@ -53,6 +53,7 @@ import type {
   CanvasNode,
   CanvasTab,
   CanvasTemplate,
+  DiffSeenMap,
   FileStatusCode,
   OverviewPanel,
   ScheduledSession,
@@ -144,6 +145,18 @@ const clampSidebarWidth = (w: number): number =>
   Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, Math.round(w)));
 // Debounce the persist so a drag's many updates don't spam IPC (state updates live).
 let sidebarWidthPersistTimer: ReturnType<typeof setTimeout> | undefined;
+
+// Diff "seen" markers (#278): the live map updates immediately; the persist is
+// debounced so toggling several files in a row (button or `s` keybind) coalesces into
+// one write, like the sidebar-width persist above.
+let diffSeenPersistTimer: ReturnType<typeof setTimeout> | undefined;
+function persistDiffSeen(): void {
+  if (diffSeenPersistTimer) clearTimeout(diffSeenPersistTimer);
+  diffSeenPersistTimer = setTimeout(() => {
+    diffSeenPersistTimer = undefined;
+    void ipc.setDiffSeen(useStore.getState().diffSeen).catch(() => {});
+  }, 300);
+}
 
 // Branch-label refresh debounce (#212): an in-terminal `git checkout` settles on a
 // session's busy→idle edge, so re-read branch labels then (mirrors the #97 title
@@ -949,6 +962,11 @@ export interface AppState {
    * order is `mergeRepoOrder(folderOrder, repoOrder(...))`, so a spawned repo appends
    * and a forgotten one drops without scrambling the rest. */
   folderOrder: string[];
+  /** Per-repo diff "seen" review markers (#278): a content digest per reviewed changed
+   * file, `{ [repoPath]: { [filePath]: digest } }`. The `DiffInspector` derives each
+   * file's NotSeen/Seen/ChangedSinceSeen state from this. Persisted separately from the
+   * Settings blob (loaded in every window so a detached canvas's diff panel reads it). */
+  diffSeen: DiffSeenMap;
   /** Transient "begin renaming this agent" request (#228): set by the collapsed-rail
    * Rename action (which first expands the sidebar, since the narrow rail has no room
    * for the inline editor); the now-visible expanded `SessionRow` consumes it on mount
@@ -1044,6 +1062,13 @@ export interface AppState {
   /** Persist the drag-reordered top-level sidebar folder order (#211): optimistic
    * `set` + persist via `setRepoOrder` (main window). */
   reorderRepos: (ordered: string[]) => Promise<void>;
+  /** Mark a diff file as "seen" (#278): store its current content `digest` under
+   * `[repoPath][filePath]` (optimistic + debounced persist). A later content change
+   * makes the stored digest stale → the file reads as ChangedSinceSeen. */
+  markDiffSeen: (repoPath: string, filePath: string, digest: string) => void;
+  /** Clear a diff file's "seen" marker (#278) back to NotSeen (optimistic + debounced
+   * persist); drops the repo's entry once empty so the map stays tidy. */
+  clearDiffSeen: (repoPath: string, filePath: string) => void;
 
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
@@ -1725,6 +1750,7 @@ export const useStore = create<AppState>()((set, get) => ({
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
   sidebarCollapsed: false,
   folderOrder: [],
+  diffSeen: {},
   pendingRenameSessionId: null,
 
   setView: (view) => set({ view }),
@@ -1769,6 +1795,34 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Persist failed; keep the local order for the session.
     }
+  },
+  // Diff "seen" markers (#278): optimistic local set, then a debounced persist of the
+  // whole map (toggling a few files coalesces into one write). Persisted from any
+  // window — a diff panel lives in the main window AND a detached canvas (#84).
+  markDiffSeen: (repoPath, filePath, digest) => {
+    set((s) => ({
+      diffSeen: {
+        ...s.diffSeen,
+        [repoPath]: { ...s.diffSeen[repoPath], [filePath]: digest },
+      },
+    }));
+    persistDiffSeen();
+  },
+  clearDiffSeen: (repoPath, filePath) => {
+    set((s) => {
+      const repo = s.diffSeen[repoPath];
+      if (!repo || !(filePath in repo)) return {}; // nothing to clear
+      const rest = { ...repo };
+      delete rest[filePath];
+      const next = { ...s.diffSeen };
+      if (Object.keys(rest).length === 0) {
+        delete next[repoPath]; // drop the now-empty repo entry
+      } else {
+        next[repoPath] = rest;
+      }
+      return { diffSeen: next };
+    });
+    persistDiffSeen();
   },
   // Selection is decoupled from the view (#22): selecting only highlights. The
   // sidebar ViewSwitch is the only thing that changes the view (#75).
@@ -2304,6 +2358,7 @@ export const useStore = create<AppState>()((set, get) => ({
         rawTemplates,
         rawSidebarCollapsed,
         rawRepoOrder,
+        rawDiffSeen,
       ] = await Promise.all([
         ipc.listRepoColors(),
         ipc.listOverviewPanels(),
@@ -2316,6 +2371,7 @@ export const useStore = create<AppState>()((set, get) => ({
         ipc.getCanvasTemplates(),
         ipc.getSidebarCollapsed(),
         ipc.getRepoOrder(),
+        ipc.getDiffSeen(),
       ]);
       // Settings (#100): merge the persisted blob over the defaults and apply its
       // side-effects (live terminal options) before the first paint.
@@ -2331,6 +2387,10 @@ export const useStore = create<AppState>()((set, get) => ({
       // Top-level folder order (#211): the saved repo paths (empty until first
       // drag), merged with the live repo set at render via `mergeRepoOrder`.
       const folderOrder = rawRepoOrder ?? [];
+      // Diff "seen" markers (#278): the persisted `{ repoPath: { filePath: digest } }`
+      // map, or empty until first marked. Loaded in every window (a diff panel lives in
+      // the main window and a detached canvas alike).
+      const diffSeen = (rawDiffSeen as DiffSeenMap | null) ?? {};
       // Multi-canvas (#58): use the persisted tabs; else migrate the old single
       // canvas_layout into "Canvas 1"; else start with one empty canvas. Persist
       // the migrated shape once so the new field becomes the source of truth.
@@ -2386,6 +2446,7 @@ export const useStore = create<AppState>()((set, get) => ({
         sidebarWidth,
         sidebarCollapsed,
         folderOrder,
+        diffSeen,
         // Saved Canvas templates (#117); absent (null) → none saved yet.
         canvasTemplates: rawTemplates ?? [],
       });

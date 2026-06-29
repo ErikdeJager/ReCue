@@ -224,6 +224,14 @@ pub struct PersistedState {
     /// loading; empty isn't serialized.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repo_order: Vec<String>,
+    /// Per-repo diff "seen" review markers (#278): a content digest per reviewed
+    /// changed file, keyed `{ repoPath: { filePath: digest } }`, stored opaquely as
+    /// JSON (the frontend owns the shape + digest). Kept as a dedicated value (like
+    /// `repo_order` / `sidebar_width`), separate from the Settings blob so a Settings
+    /// draft can't clobber it. `null` until first written; `default` keeps old files
+    /// loading.
+    #[serde(default)]
+    pub diff_seen: serde_json::Value,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -522,6 +530,17 @@ impl Store {
         self.update(|state| state.repo_order = order)
     }
 
+    /// The per-repo diff "seen" markers (#278) — opaque JSON; `null` until first
+    /// written (the frontend owns the `{ repoPath: { filePath: digest } }` shape).
+    pub fn diff_seen(&self) -> serde_json::Value {
+        self.with(|state| state.diff_seen.clone())
+    }
+
+    /// Replace the per-repo diff "seen" markers and persist (#278).
+    pub fn set_diff_seen(&self, diff_seen: serde_json::Value) -> io::Result<()> {
+        self.update(|state| state.diff_seen = diff_seen)
+    }
+
     /// All pending scheduled sessions (#93).
     pub fn schedules(&self) -> Vec<ScheduledSession> {
         self.with(|state| state.schedules.clone())
@@ -787,6 +806,25 @@ mod tests {
         // An empty order persists as empty (not serialized) and reloads empty.
         store.set_repo_order(vec![]).unwrap();
         assert!(Store::load(&path).repo_order().is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn diff_seen_set_and_persist() {
+        let path = temp_path("diffseen");
+        let store = Store::load(&path);
+        // Defaults to null (nothing marked seen yet).
+        assert!(store.diff_seen().is_null());
+
+        let map = serde_json::json!({
+            "/repo/a": { "src/main.rs": "abc123", "README.md": "def456" }
+        });
+        store.set_diff_seen(map.clone()).unwrap();
+        assert_eq!(Store::load(&path).diff_seen(), map);
+
+        // Clearing back to null persists too.
+        store.set_diff_seen(serde_json::Value::Null).unwrap();
+        assert!(Store::load(&path).diff_seen().is_null());
         let _ = fs::remove_file(&path);
     }
 

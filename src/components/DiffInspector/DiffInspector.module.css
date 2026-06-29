@@ -624,6 +624,82 @@
   padding: var(--space-6) var(--space-12);
   border-bottom: 1px solid var(--border-hairline);
 }
+
+/* --- Per-file "seen" review marker (#278) --- */
+
+/* Accordion: a flex row pairing the (clickable) card header button with the seen toggle
+   as a sibling, so the toggle isn't nested inside the header <button>. */
+.cardHeaderRow {
+  display: flex;
+  align-items: center;
+}
+.cardHeaderRow .cardHeader {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Toggle button + its keybind hint. */
+.seenWrap {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-4);
+}
+.accordion .seenWrap {
+  padding-right: var(--space-8);
+}
+.seenButton {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: transparent;
+  cursor: pointer;
+}
+.seenButton:hover {
+  background: var(--bg-hover);
+}
+.seenButton:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Read-only state icon (focused-mode picker list). */
+.seenIcon {
+  flex-shrink: 0;
+}
+
+/* Tri-state tints — reuse the on-system status tokens (no hardcoded colors), so the
+   marker reads identically on macOS and Windows. */
+.seenNot {
+  color: var(--text-muted);
+}
+.seenDone {
+  color: var(--status-done);
+}
+.seenChanged {
+  color: var(--status-awaiting);
+}
+
+/* Small key-cap "S" hint, mirroring the arrow-key affordances elsewhere in the panel. */
+.seenHint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chip);
+  background: var(--bg-base);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+  line-height: 1.4;
+}
 .focusPath {
   overflow: hidden;
   flex: 1;

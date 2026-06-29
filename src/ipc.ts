@@ -13,6 +13,7 @@ import type {
   CanvasNode,
   CanvasTemplate,
   CommitInfo,
+  DiffSeenMap,
   ExitPayload,
   FileStatusEntry,
   ForkablePayload,
@@ -482,6 +483,13 @@ export const setSidebarCollapsed = (collapsed: boolean) =>
 export const getRepoOrder = () => invoke<string[]>("get_repo_order");
 export const setRepoOrder = (order: string[]) =>
   invoke<void>("set_repo_order", { order });
+/** Per-repo diff "seen" review markers (#278): a content digest per reviewed file,
+ * `{ [repoPath]: { [filePath]: digest } }`, persisted separately from the Settings
+ * blob (like the sidebar width / repo order) so a Settings draft can't clobber it.
+ * `null` until first written. */
+export const getDiffSeen = () => invoke<DiffSeenMap | null>("get_diff_seen");
+export const setDiffSeen = (seen: DiffSeenMap) =>
+  invoke<void>("set_diff_seen", { seen });
 /** Last-seen app version (#190), persisted separately so boot can detect a
  * self-update and toast the new version. `null` on first launch. */
 export const getLastVersion = () => invoke<string | null>("get_last_version");

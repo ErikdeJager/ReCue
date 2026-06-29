@@ -7,9 +7,12 @@ import {
   useState,
 } from "react";
 import {
+  AlertCircle,
+  CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Eye,
   RefreshCw,
 } from "lucide-react";
 
@@ -32,9 +35,87 @@ import type {
 
 import { prismLang } from "../FileViewer/fileType";
 import { highlightToHtml } from "../FileViewer/prism";
+import { type SeenState, fileDigest, seenState } from "./diffSeen";
 import { type DisplayMode, diffNavDelta } from "./diffNav";
 import { type DiffSortOrder, reconcileOccurrence, sortFiles } from "./diffSort";
 import styles from "./DiffInspector.module.css";
+
+/** Icon + copy + tint per "seen" review state (#278). Icons only, no text labels — the
+ * `label` rides on the button's `title`/`aria-label`. Tints reuse the on-system status
+ * tokens (no hardcoded colors), so it's identical on macOS and Windows. */
+const SEEN_META: Record<
+  SeenState,
+  { Icon: typeof Eye; label: string; cls: string }
+> = {
+  notSeen: {
+    Icon: Eye,
+    label: "Not seen — mark as reviewed",
+    cls: styles.seenNot ?? "",
+  },
+  seen: {
+    Icon: CheckCheck,
+    label: "Seen — click to mark as not seen",
+    cls: styles.seenDone ?? "",
+  },
+  changed: {
+    Icon: AlertCircle,
+    label: "Changed since you marked it seen — re-mark as reviewed",
+    cls: styles.seenChanged ?? "",
+  },
+};
+
+/** Per-file "seen" toggle button (#278): icon reflects the tri-state; clicking toggles
+ * Seen↔NotSeen (a ChangedSinceSeen file re-marks to Seen). When `showHint`, a small `S`
+ * key-cap is shown beside it (the panel-scoped `s` keybind toggles the active file). */
+function SeenToggle({
+  state,
+  onToggle,
+  showHint,
+}: {
+  state: SeenState;
+  onToggle: () => void;
+  showHint?: boolean;
+}) {
+  const { Icon, label, cls } = SEEN_META[state];
+  return (
+    <span className={styles.seenWrap}>
+      <button
+        type="button"
+        className={`${styles.seenButton} ${cls}`}
+        // Stop the click from also hitting an enclosing row/card-header handler.
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+        aria-pressed={state === "seen"}
+        aria-keyshortcuts="s"
+        title={`${label} (S)`}
+        aria-label={label}
+      >
+        <Icon size={15} strokeWidth={1.75} />
+      </button>
+      {showHint && (
+        <kbd className={styles.seenHint} aria-hidden="true">
+          S
+        </kbd>
+      )}
+    </span>
+  );
+}
+
+/** Read-only "seen" state icon (#278) — for the focused-mode file picker list, where a
+ * row already toggles selection; surfaces each file's review state at a glance. */
+function SeenIcon({ state }: { state: SeenState }) {
+  const { Icon, label, cls } = SEEN_META[state];
+  return (
+    <Icon
+      size={14}
+      strokeWidth={1.75}
+      className={`${styles.seenIcon} ${cls}`}
+      aria-label={label}
+    />
+  );
+}
 
 /** Human label for a file's status code (badge tooltip, #231). */
 function statusLabel(status: FileDiff["status"]): string {
@@ -282,6 +363,11 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
   // Already-open panels keep their own local mode (they only seed once at mount), so
   // this never retroactively re-syncs them.
   const saveSettings = useStore((s) => s.saveSettings);
+  // Per-file "seen" review markers (#278): the persisted digest map (this repo's slice)
+  // + the mark/clear actions. `repoSeen` is the `{ filePath: digest }` for this repo.
+  const repoSeen = useStore((s) => s.diffSeen[repoPath]);
+  const markDiffSeen = useStore((s) => s.markDiffSeen);
+  const clearDiffSeen = useStore((s) => s.clearDiffSeen);
   const chooseDisplayMode = (next: DisplayMode) => {
     setDisplayMode(next);
     void saveSettings({
@@ -500,14 +586,28 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
     setPickerOpen(false);
   };
 
-  // Arrow-key file navigation (#255), **panel-scoped** so multiple diff panels (Overview
-  // columns, Canvas panels, detached windows) never move each other. Focused mode: ←/→
+  // Per-file "seen" review state + toggle (#278). `seenFor` derives a file's tri-state
+  // from this repo's stored digest; `toggleSeen` marks Seen (storing the current digest)
+  // or, when already Seen, clears it back to NotSeen. A ChangedSinceSeen file re-marks to
+  // Seen (storing the new digest). Keyed by `path`, so it works in both layouts.
+  const seenFor = (file: FileDiff): SeenState =>
+    seenState(file, repoSeen?.[file.path]);
+  const toggleSeen = (file: FileDiff) => {
+    if (seenFor(file) === "seen") {
+      clearDiffSeen(repoPath, file.path);
+    } else {
+      markDiffSeen(repoPath, file.path, fileDigest(file));
+    }
+  };
+
+  // Arrow-key file navigation (#255) + the `s` seen-toggle (#278), **panel-scoped** so
+  // multiple diff panels (Overview columns, Canvas panels, detached windows) never affect
+  // each other. The modifier + typing-context guards apply to both. Focused mode: ←/→
   // step files (Up/Down stay free for body scroll); Accordion mode: ↑/↓ step the open
-  // card. Plain unmodified arrows only — identical on macOS and Windows (no
-  // metaKey||ctrlKey). Ignored while a text input / select / branch-or-commit picker /
-  // the focused-mode file-picker listbox has focus, and when there are <2 files.
+  // card. Plain unmodified keys only — identical on macOS and Windows (no
+  // metaKey||ctrlKey). Arrow nav is ignored when there are <2 files; the `s` toggle works
+  // with a single file too (it acts on the active/open file).
   const onPanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (orderedFiles.length < 2) return;
     if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
       return;
     if (
@@ -517,6 +617,14 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
     ) {
       return;
     }
+    // `s` toggles the active/open file's seen marker (works with any file count).
+    if (event.key === "s" || event.key === "S") {
+      if (!activeFile) return;
+      event.preventDefault();
+      toggleSeen(activeFile);
+      return;
+    }
+    if (orderedFiles.length < 2) return;
     const delta = diffNavDelta(event.key, displayMode);
     if (delta === null) return;
     event.preventDefault();
@@ -753,19 +861,26 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
                 key={file.path}
                 className={`${styles.card} ${open ? styles.cardOpen : ""}`}
               >
-                <button
-                  type="button"
-                  ref={open ? openCardRef : undefined}
-                  className={styles.cardHeader}
-                  onClick={() => setSelectedFile(file.path)}
-                  aria-expanded={open}
-                  aria-keyshortcuts="ArrowUp ArrowDown"
-                  title={file.path}
-                >
-                  <StatusBadge status={file.status} />
-                  <FileLabel path={file.path} />
-                  <CountsPair add={file.add} del={file.del} />
-                </button>
+                <div className={styles.cardHeaderRow}>
+                  <button
+                    type="button"
+                    ref={open ? openCardRef : undefined}
+                    className={styles.cardHeader}
+                    onClick={() => setSelectedFile(file.path)}
+                    aria-expanded={open}
+                    aria-keyshortcuts="ArrowUp ArrowDown"
+                    title={file.path}
+                  >
+                    <StatusBadge status={file.status} />
+                    <FileLabel path={file.path} />
+                    <CountsPair add={file.add} del={file.del} />
+                  </button>
+                  <SeenToggle
+                    state={seenFor(file)}
+                    onToggle={() => toggleSeen(file)}
+                    showHint={open}
+                  />
+                </div>
                 {open && (
                   <div className={styles.cardBody}>
                     <DiffFile file={file} mode={mode} />
@@ -833,6 +948,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
                         <span className={styles.pickerItemPath}>
                           {file.path}
                         </span>
+                        <SeenIcon state={seenFor(file)} />
                         <CountsPair add={file.add} del={file.del} />
                       </button>
                     ))}
@@ -856,6 +972,11 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
             <div className={styles.focusSubheader}>
               <span className={styles.focusPath}>{activeFile.path}</span>
               <CountsPair add={activeFile.add} del={activeFile.del} />
+              <SeenToggle
+                state={seenFor(activeFile)}
+                onToggle={() => toggleSeen(activeFile)}
+                showHint
+              />
             </div>
           )}
           <div className={styles.body}>

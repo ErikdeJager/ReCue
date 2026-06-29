@@ -1336,6 +1336,22 @@ pub fn set_repo_order(store: State<'_, Store>, order: Vec<String>) -> Result<(),
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+/// The per-repo diff "seen" review markers (#278); `null` until first written.
+#[tauri::command]
+pub fn get_diff_seen(store: State<'_, Store>) -> serde_json::Value {
+    store.diff_seen()
+}
+
+/// Persist the per-repo diff "seen" markers (#278) — opaque JSON owned by the
+/// frontend (`{ repoPath: { filePath: digest } }`). Kept separate from the Settings
+/// blob so a Settings draft can't clobber it.
+#[tauri::command]
+pub fn set_diff_seen(store: State<'_, Store>, seen: serde_json::Value) -> Result<(), SessionError> {
+    store
+        .set_diff_seen(seen)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// The app version observed on the previous run (#190); `None` on first launch.
 #[tauri::command]
 pub fn get_last_version(store: State<'_, Store>) -> Option<String> {

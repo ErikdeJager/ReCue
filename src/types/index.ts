@@ -175,6 +175,12 @@ export interface WorkingDiff {
   files: FileDiff[];
 }
 
+/** Per-repo diff "seen" review markers (#278): a content digest per reviewed file,
+ * keyed `{ [repoPath]: { [filePath]: digest } }`. A file is "Seen" when its current
+ * content digest equals the stored one, "ChangedSinceSeen" when it differs, and
+ * "NotSeen" when absent. Persisted opaquely (the frontend owns the digest shape). */
+export type DiffSeenMap = Record<string, Record<string, string>>;
+
 /** One commit in a folder's history (#230, mirrors `git::CommitInfo`) — the diff
  * viewer's "Commits" source list. */
 export interface CommitInfo {
