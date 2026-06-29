@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -29,7 +30,18 @@ import {
 import { noAutoCapitalize } from "../../inputProps";
 import { joinPath, revealLabel } from "../../platform";
 import { useStore } from "../../store";
+import type { FileStatusCode } from "../../types";
+import { buildFolderRollup, deletedChildrenAt } from "./fileStatus";
 import styles from "./FileTree.module.css";
+
+/** Map a working-tree status to its tint class (green/yellow/red), or "" when the
+ * path is unchanged. Drives the file/folder row coloring (#252). */
+function statusClass(status: FileStatusCode | undefined): string {
+  if (status === "A") return styles.statusAdded ?? "";
+  if (status === "M") return styles.statusModified ?? "";
+  if (status === "D") return styles.statusDeleted ?? "";
+  return "";
+}
 
 /** Right-click menu state: the cursor position + the file the menu targets. */
 interface FileMenu {
@@ -69,6 +81,17 @@ function FileTree({ repoPath }: { repoPath: string }) {
   const openFileFromTree = useStore((s) => s.openFileFromTree);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const platform = useStore((s) => s.platform);
+  // Git working-tree status for this repo (#252): repo-relative path → "A"|"M"|"D".
+  // Undefined = not loaded / non-git → no coloring. The map is shared in the store so
+  // every FileTree instance for a repo reads one fetch; it's refreshed on busy→idle.
+  const statusMap = useStore((s) => s.fileStatuses[repoPath]);
+  const refreshFileStatuses = useStore((s) => s.refreshFileStatuses);
+  // Precompute the folder roll-up once per status-map change so each folder row's
+  // tint is an O(1) lookup rather than a re-scan of the whole map.
+  const folderRollup = useMemo(
+    () => buildFolderRollup(statusMap ?? {}),
+    [statusMap],
+  );
   // Children keyed by directory path ("" = repo root); a missing key = not yet loaded.
   const [children, setChildren] = useState<Record<string, DirEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -110,6 +133,13 @@ function FileTree({ repoPath }: { repoPath: string }) {
     setExpanded(new Set());
     load("");
   }, [repoPath, nonce, load]);
+
+  // Refresh this repo's git status coloring (#252) on mount, on repo change, and when
+  // the user hits Refresh (`nonce`) — so opening the tree shows current state at once,
+  // even with no agent running. (Busy→idle edges refresh it via the store scheduler.)
+  useEffect(() => {
+    void refreshFileStatuses(repoPath);
+  }, [repoPath, nonce, refreshFileStatuses]);
 
   // Clear the search when the repo changes (a stale query shouldn't carry over).
   useEffect(() => {
@@ -281,17 +311,20 @@ function FileTree({ repoPath }: { repoPath: string }) {
         </p>
       );
     }
-    return entries.map((node) => {
-      const indent = { paddingLeft: `${8 + depth * 14}px` };
+    const indent = { paddingLeft: `${8 + depth * 14}px` };
+    const rows = entries.map((node) => {
       if (node.is_dir) {
         const isOpen = expanded.has(node.path);
         const Chevron = isOpen ? ChevronDown : ChevronRight;
         const FolderIcon = isOpen ? FolderOpen : Folder;
+        // A folder is tinted in its highest-severity descendant's color (#252) — so a
+        // collapsed folder still shows that something inside it changed (red wins).
+        const cls = statusClass(folderRollup.get(node.path));
         return (
           <div key={node.path}>
             <button
               type="button"
-              className={styles.row}
+              className={`${styles.row}${cls ? ` ${cls}` : ""}`}
               style={indent}
               onClick={() => toggle(node.path)}
               title={node.path}
@@ -315,12 +348,15 @@ function FileTree({ repoPath }: { repoPath: string }) {
         );
       }
       const isRevealed = node.path === revealTarget;
+      // Tint the file name + icon by its working-tree status (#252): green = new,
+      // yellow = edited; unchanged files keep the default styling.
+      const cls = statusClass(statusMap?.[node.path]);
       return (
         <button
           key={node.path}
           ref={isRevealed ? revealRef : undefined}
           type="button"
-          className={`${styles.row}${isRevealed ? ` ${styles.revealed}` : ""}`}
+          className={`${styles.row}${isRevealed ? ` ${styles.revealed}` : ""}${cls ? ` ${cls}` : ""}`}
           style={indent}
           onClick={() => openFile(node.path)}
           onContextMenu={(event) => openMenu(event, node.path)}
@@ -336,6 +372,34 @@ function FileTree({ repoPath }: { repoPath: string }) {
         </button>
       );
     });
+    // Deleted files at this level (#252): a file removed from a folder that still
+    // renders gets a red, struck-through, non-openable "ghost" row so the user sees
+    // *what* was removed in place. Appended after the real entries, sorted by name.
+    // (A deletion whose own parent directory no longer exists shows only via the red
+    // ancestor roll-up — acceptable, since that level never renders.)
+    const existing = new Set(entries.map((e) => e.name));
+    const ghosts = deletedChildrenAt(statusMap ?? {}, path, existing).map(
+      (name) => {
+        const rel = path ? `${path}/${name}` : name;
+        return (
+          <div
+            key={`ghost:${rel}`}
+            className={styles.ghost}
+            style={indent}
+            title={`${rel} (deleted)`}
+          >
+            <FileText
+              size={13}
+              strokeWidth={1.5}
+              className={styles.fileIcon}
+              aria-hidden
+            />
+            <span className={styles.name}>{name}</span>
+          </div>
+        );
+      },
+    );
+    return ghosts.length > 0 ? [...rows, ...ghosts] : rows;
   };
 
   // The search results view (#202) — shown while a (debounced) query is active.

@@ -6,11 +6,10 @@ kanban-plugin: board
 
 ## Refine
 
+- [ ] In the diff view I want to be able to use the arrow keys (or some other keyboard shortcut) to jump between files when in focussed mode. Also look at accordion mode for a way to jump between items
+
 ## READY
 
-- [ ] #252 — Color file-tree rows by git status (new = green, edited = yellow, deleted = red)
-	Plan: TASK-252.md
-	Depends on: none
 - [ ] #253 — Drag OS files into the file tree to move them into the repo
 	Plan: TASK-253.md
 	Depends on: none
@@ -19,4 +18,8 @@ kanban-plugin: board
 	Depends on: none
 
 ## DONE
+
+- [ ] #252 — Color file-tree rows by git status (new = green, edited = yellow, deleted = red)
+	Plan: TASK-252.md
+	Depends on: none
 

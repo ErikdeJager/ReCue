@@ -1,6 +1,6 @@
-### 252. [ ] Color file-tree rows by git status (new = green, edited = yellow, deleted = red)
+### 252. [x] Color file-tree rows by git status (new = green, edited = yellow, deleted = red)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-29
 
@@ -88,45 +88,45 @@ separator handling needed in the lookup path.
 
 1. [ ] **Backend: a lightweight `file_statuses` reader** (`src-tauri/src/files.rs`
    or `git.rs` — put it with the other git reads in `git.rs`).
-   - [ ] Add `pub fn file_statuses(cwd) -> Vec<FileStatusEntry>` returning
+   - [x] Add `pub fn file_statuses(cwd) -> Vec<FileStatusEntry>` returning
      `{ path: String, status: FileStatus }` where `FileStatus` is the **existing**
      enum (`git.rs`, serde `"M"`/`"A"`/`"D"`). Run **one** git call via the existing
      cross-platform `run_git` / `hidden_command` seam (the `CREATE_NO_WINDOW` guard —
      **never** a bare `Command`): `git -c core.quotepath=false status --porcelain=v1
      -z --untracked-files=all`.
-   - [ ] Parse the `-z` (NUL-separated) porcelain: each entry is `XY<space>path`.
+   - [x] Parse the `-z` (NUL-separated) porcelain: each entry is `XY<space>path`.
      Map to status: `??` → `Added`; index/worktree `D` → `Deleted`; `A`/added → 
      `Added`; otherwise (`M`, `MM`, type-change, etc.) → `Modified`. **Renames**
      (`R`/`C`, which under `-z` carry a second NUL-separated `old` field) → emit
      `Deleted` for the old path **and** `Added` for the new path (mirrors the
      `parse_unified_diff` rename-as-add+del convention, git.rs:14). Skip the
      symbolic/empty entries safely.
-   - [ ] Non-git dir / repo with no commits → return `Vec::new()` (non-erroring),
+   - [x] Non-git dir / repo with no commits → return `Vec::new()` (non-erroring),
      matching `working_diff`'s fail-open behavior. Bound the result with a cap
      constant (e.g. reuse the spirit of `MAX_UNTRACKED_FILES`) so a pathological
      working tree can't produce an unbounded IPC payload.
-   - [ ] Unit-test the porcelain parser as a pure `&str -> Vec<FileStatusEntry>`
+   - [x] Unit-test the porcelain parser as a pure `&str -> Vec<FileStatusEntry>`
      function against fixtures (added / modified / deleted / untracked / rename),
      plus a temp-repo integration test gated like the existing `git.rs` ones (skip
      when `git` is unavailable / on the `cfg(unix)`-only shell paths as the file
      already does).
 
 2. [ ] **Expose the command + types.**
-   - [ ] Register the `#[tauri::command] file_statuses` in `commands.rs` + `lib.rs`
+   - [x] Register the `#[tauri::command] file_statuses` in `commands.rs` + `lib.rs`
      invoke handler (follow `working_diff`/`list_dir`).
-   - [ ] Add the `fileStatuses(repo)` wrapper to `src/ipc.ts` and a `FileChangeStatus`
+   - [x] Add the `fileStatuses(repo)` wrapper to `src/ipc.ts` and a `FileChangeStatus`
      (`"A" | "M" | "D"`) + `FileStatusEntry` type to `src/types/` (mirror the backend
      serde names exactly).
 
 3. [ ] **Store: hold + refresh the status map** (`src/store.ts`).
-   - [ ] Add `fileStatuses: Record<string, Record<string, FileChangeStatus>>`
+   - [x] Add `fileStatuses: Record<string, Record<string, FileChangeStatus>>`
      (repoPath → { repo-relative path → status }), initialized `{}`, mirroring
      `branches`.
-   - [ ] Add `refreshFileStatuses()` that, for the same repo set as `refreshBranches`
+   - [x] Add `refreshFileStatuses()` that, for the same repo set as `refreshBranches`
      (`repoOrder(get().recents, get().sessions)`), calls `ipc.fileStatuses(repo)` per
      repo via `Promise.allSettled`, builds each `{ path → status }` map, and `set`s
      `fileStatuses`. Fail-open per repo (leave a repo's prior map on error).
-   - [ ] Trigger it: (a) wherever the initial `refreshBranches()` runs on app load;
+   - [x] Trigger it: (a) wherever the initial `refreshBranches()` runs on app load;
      (b) on the **busy→idle** edge — extend `scheduleBranchRefresh()` (store.ts:138)
      to also `void useStore.getState().refreshFileStatuses()` (or add a sibling
      debounced scheduler on the same 600 ms cadence) so it coalesces a burst of
@@ -134,27 +134,27 @@ separator handling needed in the lookup path.
      `refreshBranches()` (checkout / pull / branch create) for immediacy.
 
 4. [ ] **FileTree rendering** (`FileTree.tsx` + `FileTree.module.css`).
-   - [ ] Read `const fileStatuses = useStore((s) => s.fileStatuses[repoPath])` (an
+   - [x] Read `const fileStatuses = useStore((s) => s.fileStatuses[repoPath])` (an
      empty/undefined map = no coloring). Trigger a `refreshFileStatuses()` on mount
      for `repoPath` (so opening the tree shows current state immediately, even with
      no session active) and from the existing **Refresh** button
      (`setNonce` handler — also call the store refresh for this repo).
-   - [ ] **(a) File rows:** look up `fileStatuses[node.path]`; apply a status class
+   - [x] **(a) File rows:** look up `fileStatuses[node.path]`; apply a status class
      (`statusAdded` / `statusModified`) tinting the name text + file icon. No entry =
      unchanged (current styling).
-   - [ ] **(b) Folder roll-up:** compute, per rendered folder, the highest-severity
+   - [x] **(b) Folder roll-up:** compute, per rendered folder, the highest-severity
      status among descendants by scanning the status map for keys under `node.path +
      "/"` (red > yellow > green). Tint the folder name in that color. To stay cheap,
      precompute once per render a structure (e.g. a `Set`/`Map` of folder-prefix →
      rolled-up status) from the status map rather than re-scanning per folder.
-   - [ ] **(c) Deleted ghost rows:** for the directory level being rendered (`path`),
+   - [x] **(c) Deleted ghost rows:** for the directory level being rendered (`path`),
      find every `D` entry whose parent directory equals `path` and that is **not**
      already a real entry, and render a synthetic red, dimmed, `line-through`,
      non-`onClick` row (a `<div>`/disabled `<button>`) with the deleted file's name +
      a `title="deleted"`. Keep them visually distinct from a live red (none exists —
      only deletions are red on files). Order them after the real entries at that level
      (or interleave alphabetically — implementer's choice; document it).
-   - [ ] Add the new CSS classes to `FileTree.module.css` using the tokens:
+   - [x] Add the new CSS classes to `FileTree.module.css` using the tokens:
      `.statusAdded { color: var(--status-done); }`,
      `.statusModified { color: var(--status-awaiting); }`,
      `.statusDeleted { color: var(--status-error); }` (+ `text-decoration:
@@ -163,11 +163,11 @@ separator handling needed in the lookup path.
      are designed for it). No animation; no `prefers-reduced-motion` concern.
 
 5. [ ] **Tests.**
-   - [ ] Rust: the porcelain-parser unit tests from Subtask 1.
-   - [ ] Frontend (Vitest): a pure helper for the **folder roll-up** severity
+   - [x] Rust: the porcelain-parser unit tests from Subtask 1.
+   - [x] Frontend (Vitest): a pure helper for the **folder roll-up** severity
      (`rollUpStatus(statusMap, folderPath)` or the prefix-index builder) and for the
      **deleted-children-at-level** computation, tested independently of React.
-   - [ ] `npm run build` (type-check) + `npm run lint` + `npm test` +
+   - [x] `npm run build` (type-check) + `npm run lint` + `npm test` +
      `cargo test --manifest-path src-tauri/Cargo.toml` all green.
 
 6. [ ] **Docs.** Update `CLAUDE.md` (the FileTree #167 bullet + the `files.rs`/`git.rs`
@@ -177,28 +177,28 @@ separator handling needed in the lookup path.
 
 **Acceptance criteria**
 
-- [ ] In the file tree, a **new/untracked** file's row name reads **green**
+- [x] In the file tree, a **new/untracked** file's row name reads **green**
   (`--status-done`), a **modified** file's **yellow** (`--status-awaiting`), with no
   coloring on unchanged files.
-- [ ] A **deleted** file is visible as a **red** (`--status-error`) row in its parent
+- [x] A **deleted** file is visible as a **red** (`--status-error`) row in its parent
   folder (strikethrough, non-openable) when that folder level is rendered, **and** its
   ancestor folders' names are tinted **red** so the deletion is discoverable while
   those folders are collapsed.
-- [ ] A folder containing only added (or only modified) descendants has its name
+- [x] A folder containing only added (or only modified) descendants has its name
   tinted green (resp. yellow); a folder mixing changes uses the highest-severity color
   (red > yellow > green).
-- [ ] The coloring updates without an app restart after an agent edits files —
+- [x] The coloring updates without an app restart after an agent edits files —
   specifically on the session **busy→idle** edge (reusing #212's cadence) and via the
   FileTree **Refresh** button; it appears on first open of the tree.
-- [ ] The same coloring shows in **every** FileTree surface (sidebar / Overview /
+- [x] The same coloring shows in **every** FileTree surface (sidebar / Overview /
   Canvas / template block).
-- [ ] A **non-git** folder (or out-of-repo file opened via Browse…) shows no coloring
+- [x] A **non-git** folder (or out-of-repo file opened via Browse…) shows no coloring
   and no error (fail-open).
-- [ ] **Works on both macOS and Windows:** the git call goes through
+- [x] **Works on both macOS and Windows:** the git call goes through
   `run_git`/`hidden_command` (no console flash, no bare `Command`), porcelain `-z`
   paths and `list_dir` paths are both repo-relative POSIX so the status lookup matches
   on both OSes, and only CSS tokens (no platform-divergent CSS) drive the colors.
-- [ ] `npm run build`, `npm run lint`, `npm test`, and the Rust test suite pass.
+- [x] `npm run build`, `npm run lint`, `npm test`, and the Rust test suite pass.
 
 **Notes**
 

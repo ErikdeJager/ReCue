@@ -9,7 +9,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
 use uuid::Uuid;
 
-use crate::git::{self, BranchList, CommitInfo, WorkingDiff};
+use crate::git::{self, BranchList, CommitInfo, FileStatusEntry, WorkingDiff};
 use crate::pty::{SessionError, SessionManager};
 use crate::store::{OverviewPanel, PersistedSession, ScheduledSession, Store};
 
@@ -973,6 +973,15 @@ pub fn current_branches(paths: Vec<String>) -> std::collections::HashMap<String,
 #[tauri::command]
 pub fn working_diff(cwd: String) -> WorkingDiff {
     git::working_diff(cwd)
+}
+
+/// Lightweight per-file git status for the FileTree coloring (#252) — one
+/// `git status --porcelain` per repo (no hunk parse, no per-untracked spawn, unlike
+/// `working_diff`). A non-git / clean folder returns an empty list (fail-open, like
+/// `working_diff`); the result is bounded server-side.
+#[tauri::command]
+pub fn file_statuses(repo: String) -> Vec<FileStatusEntry> {
+    git::file_statuses(repo)
 }
 
 #[tauri::command]

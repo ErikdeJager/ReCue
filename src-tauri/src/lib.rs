@@ -207,6 +207,7 @@ pub fn run() {
             commands::current_branch,
             commands::current_branches,
             commands::working_diff,
+            commands::file_statuses,
             commands::list_branches,
             commands::list_commits,
             commands::commit_diff,

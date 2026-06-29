@@ -1792,6 +1792,7 @@ function Sidebar() {
   const autoNameOn = useStore((s) => s.settings.autoName);
   const folderOrder = useStore((s) => s.folderOrder);
   const refreshBranches = useStore((s) => s.refreshBranches);
+  const refreshFileStatuses = useStore((s) => s.refreshFileStatuses);
   const forgetRepo = useStore((s) => s.forgetRepo);
   const killAllAgents = useStore((s) => s.killAllAgents);
   const closeAllItems = useStore((s) => s.closeAllItems);
@@ -1923,9 +1924,12 @@ function Sidebar() {
 
   useEffect(() => {
     // Refresh branch labels only when the set of repos changes — not on every
-    // session mutation (exit, output) that allocates a new sessions array.
+    // session mutation (exit, output) that allocates a new sessions array. The
+    // FileTree git-status coloring (#252) refreshes on the same cadence so an open
+    // tree shows current state right after boot / a repo being added.
     void refreshBranches();
-  }, [refreshBranches, reposKey]);
+    void refreshFileStatuses();
+  }, [refreshBranches, refreshFileStatuses, reposKey]);
 
   // Keep the repo branch badges (#225) in sync with **external** checkouts — a `git
   // checkout` in a terminal of an idle repo (no busy→idle edge, #212) or in another

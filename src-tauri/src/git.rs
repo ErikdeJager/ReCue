@@ -99,6 +99,17 @@ pub struct WorkingDiff {
     pub files: Vec<FileDiff>,
 }
 
+/// One file's working-tree status (#252) — the lightweight per-file signal the
+/// FileTree coloring reads (green = added, yellow = modified, red = deleted). `path`
+/// is repo-relative POSIX (`/`-separated, via `core.quotepath=false`), matching
+/// `files::list_dir`, so the frontend lookup is a direct string-keyed hit on both
+/// macOS and Windows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FileStatusEntry {
+    pub path: String,
+    pub status: FileStatus,
+}
+
 /// Branches of a folder: the currently checked-out one, the local branches
 /// (`all`), and the remote-tracking branches (`remote`, qualified `<remote>/<name>`,
 /// #180). A non-git folder yields `{ current: "", all: [], remote: [] }`.
@@ -201,6 +212,38 @@ pub fn working_diff(cwd: impl AsRef<Path>) -> WorkingDiff {
         },
         files,
     }
+}
+
+/// Lightweight per-file working-tree status vs `HEAD` (#252) for the FileTree
+/// coloring. Unlike `working_diff` (which parses every hunk *and* spawns one `git`
+/// per untracked file), this is a **single** `git status --porcelain` call. Non-git
+/// folders and repos with no commits return an empty, non-erroring result (a status
+/// run there exits non-zero → `run_git_raw` yields `None` → empty), matching
+/// `working_diff`'s fail-open behavior. Bounded by `MAX_STATUS_FILES` so a
+/// pathological working tree can't produce an unbounded IPC payload.
+pub fn file_statuses(cwd: impl AsRef<Path>) -> Vec<FileStatusEntry> {
+    /// Cap the per-file status payload (mirrors `working_diff`'s `MAX_UNTRACKED_FILES`
+    /// spirit) so an enormous untracked tree stays bounded over IPC.
+    const MAX_STATUS_FILES: usize = 5000;
+    let cwd = cwd.as_ref();
+    // `-z` (NUL-separated, no quoting) is robust to spaces/newlines in paths;
+    // `--untracked-files=all` lists every new file (so a freshly-created file colors
+    // green), `core.quotepath=false` keeps non-ASCII paths raw (matching `list_dir`).
+    let out = run_git_raw(
+        cwd,
+        &[
+            "-c",
+            "core.quotepath=false",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
+    )
+    .unwrap_or_default();
+    let mut entries = parse_porcelain_z(&out);
+    entries.truncate(MAX_STATUS_FILES);
+    entries
 }
 
 /// Two-dot `git diff <base> <target>` (#81) — the head-to-head difference,
@@ -713,6 +756,69 @@ pub fn parse_unified_diff(diff: &str) -> Vec<FileDiff> {
     files
 }
 
+/// Parse `git status --porcelain=v1 -z` output into per-file statuses (#252). The
+/// stream is a sequence of NUL-terminated records, each `XY<space>PATH`; a
+/// **renamed/copied** entry (`R`/`C` in the index column) carries a *second*
+/// NUL-separated field — the original path. Git's `-z` order for a rename is
+/// `XY<space><new>\0<old>\0` (verified against git 2.x), so we emit `Added` for the
+/// new path and `Deleted` for the consumed original — mirroring `parse_unified_diff`'s
+/// rename-as-add+del convention. Mapping for the rest: `??` (untracked) → `Added`; a
+/// `D` in either column → `Deleted`; an `A` in either column → `Added`; everything
+/// else (`M`, type-change, unmerged `U…`) → `Modified`. Ignored (`!!`) and malformed
+/// records are skipped. Pure — unit-tested against fixtures with no repo on disk.
+fn parse_porcelain_z(out: &str) -> Vec<FileStatusEntry> {
+    let fields: Vec<&str> = out.split('\u{0}').collect();
+    let mut entries: Vec<FileStatusEntry> = Vec::new();
+    let mut i = 0;
+    while i < fields.len() {
+        let field = fields[i];
+        i += 1;
+        // A valid record is "XY PATH": 2 status chars + a space + ≥1 path char. Bytes
+        // 0..=2 are always ASCII (status + space), so byte index 3 is a char boundary.
+        if field.len() < 4 {
+            continue;
+        }
+        let bytes = field.as_bytes();
+        let (x, y) = (bytes[0], bytes[1]);
+        let path = &field[3..];
+        // Renamed/copied: `path` is the NEW name; the next field is the original path.
+        if x == b'R' || x == b'C' {
+            entries.push(FileStatusEntry {
+                path: path.to_string(),
+                status: FileStatus::Added,
+            });
+            if let Some(orig) = fields.get(i) {
+                i += 1;
+                if !orig.is_empty() {
+                    entries.push(FileStatusEntry {
+                        path: (*orig).to_string(),
+                        status: FileStatus::Deleted,
+                    });
+                }
+            }
+            continue;
+        }
+        let status = if x == b'!' {
+            // Ignored (only with --ignored, which we don't pass) — never color it.
+            continue;
+        } else if x == b'?' {
+            // Untracked (`??`) — a brand-new file reads as Added (green).
+            FileStatus::Added
+        } else if x == b'D' || y == b'D' {
+            FileStatus::Deleted
+        } else if x == b'A' || y == b'A' {
+            FileStatus::Added
+        } else {
+            FileStatus::Modified
+        };
+        entries.push(FileStatusEntry {
+            path: path.to_string(),
+            status,
+        });
+    }
+    entries
+}
+
 /// Parse `@@ -old[,n] +new[,m] @@ ...` into the (old_start, new_start) line nums.
 fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
     let body = line.strip_prefix("@@ ")?;
@@ -962,6 +1068,53 @@ index 0..1
         assert!(parse_unified_diff("").is_empty());
     }
 
+    // --- Porcelain status parser tests (pure, no repo) (#252) ---
+
+    #[test]
+    fn porcelain_parses_added_modified_deleted_and_untracked() {
+        // NUL-separated records: staged add, worktree-modified, worktree-deleted,
+        // staged-delete, and an untracked file.
+        let out =
+            "A  added.txt\u{0} M mod.txt\u{0} D del.txt\u{0}D  staged-del.txt\u{0}?? new.txt\u{0}";
+        let entries = parse_porcelain_z(out);
+        let by = |p: &str| entries.iter().find(|e| e.path == p).map(|e| e.status);
+        assert_eq!(by("added.txt"), Some(FileStatus::Added));
+        assert_eq!(by("mod.txt"), Some(FileStatus::Modified));
+        assert_eq!(by("del.txt"), Some(FileStatus::Deleted));
+        assert_eq!(by("staged-del.txt"), Some(FileStatus::Deleted));
+        assert_eq!(by("new.txt"), Some(FileStatus::Added));
+        assert_eq!(entries.len(), 5);
+    }
+
+    #[test]
+    fn porcelain_maps_a_rename_to_add_new_plus_delete_old() {
+        // `git status -z` emits a rename as `R  <new>\0<old>\0` (new path first).
+        let out = "R  new.txt\u{0}old.txt\u{0}";
+        let entries = parse_porcelain_z(out);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, "new.txt");
+        assert_eq!(entries[0].status, FileStatus::Added);
+        assert_eq!(entries[1].path, "old.txt");
+        assert_eq!(entries[1].status, FileStatus::Deleted);
+    }
+
+    #[test]
+    fn porcelain_handles_subdir_paths_and_skips_malformed() {
+        // Subdir paths stay repo-relative POSIX; an empty / too-short record is skipped.
+        let out = "\u{0} M src/a/b.rs\u{0}AM src/new.rs\u{0}";
+        let entries = parse_porcelain_z(out);
+        // `AM` (staged add + worktree modify) is a new file → Added (A wins over M).
+        let by = |p: &str| entries.iter().find(|e| e.path == p).map(|e| e.status);
+        assert_eq!(by("src/a/b.rs"), Some(FileStatus::Modified));
+        assert_eq!(by("src/new.rs"), Some(FileStatus::Added));
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn porcelain_empty_yields_no_entries() {
+        assert!(parse_porcelain_z("").is_empty());
+    }
+
     // --- Integration tests (real `git`; skip if unavailable) ---
 
     fn unique_dir(tag: &str) -> PathBuf {
@@ -1106,6 +1259,39 @@ index 0..1
         assert!(diff.summary.adds >= 2);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_statuses_reports_added_modified_deleted_and_untracked() {
+        let Some(dir) = init_repo("file-statuses") else {
+            return;
+        };
+        // Commit two tracked files, then modify one, delete the other, and add a new
+        // untracked file in a subdir.
+        fs::write(dir.join("keep.txt"), "v1\n").unwrap();
+        fs::write(dir.join("gone.txt"), "bye\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        fs::write(dir.join("keep.txt"), "v2\n").unwrap();
+        fs::remove_file(dir.join("gone.txt")).unwrap();
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("sub/new.txt"), "new\n").unwrap();
+
+        let entries = file_statuses(&dir);
+        let by = |p: &str| entries.iter().find(|e| e.path == p).map(|e| e.status);
+        assert_eq!(by("keep.txt"), Some(FileStatus::Modified));
+        assert_eq!(by("gone.txt"), Some(FileStatus::Deleted));
+        // Subdir paths stay repo-relative POSIX so the frontend lookup matches.
+        assert_eq!(by("sub/new.txt"), Some(FileStatus::Added));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_statuses_empty_for_non_git_folder() {
+        let plain = unique_dir("file-statuses-plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert!(file_statuses(&plain).is_empty());
+        let _ = fs::remove_dir_all(&plain);
     }
 
     #[test]

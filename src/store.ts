@@ -6,6 +6,7 @@ import { create } from "zustand";
 
 import { agentCaps, SELECTABLE_AGENTS } from "./agents";
 import { canvasToTemplate } from "./components/Canvas/canvasToTemplate";
+import { statusMapsEqual } from "./components/FileTree/fileStatus";
 import {
   appendLeaf,
   collectLeaves,
@@ -46,6 +47,7 @@ import type {
   CanvasNode,
   CanvasTab,
   CanvasTemplate,
+  FileStatusCode,
   OverviewPanel,
   ScheduledSession,
   SessionRecord,
@@ -132,7 +134,9 @@ let sidebarWidthPersistTimer: ReturnType<typeof setTimeout> | undefined;
 // Branch-label refresh debounce (#212): an in-terminal `git checkout` settles on a
 // session's busy→idle edge, so re-read branch labels then (mirrors the #97 title
 // reader's cadence). Coalesce a burst of sessions settling together into a single
-// `current_branches` call, like `sidebarWidthPersistTimer`.
+// `current_branches` call, like `sidebarWidthPersistTimer`. The same edge is exactly
+// when an agent's file edits land, so the FileTree git-status coloring (#252) is
+// refreshed on the same debounced tick.
 const BRANCH_REFRESH_DEBOUNCE_MS = 600;
 let branchRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleBranchRefresh(): void {
@@ -140,6 +144,7 @@ function scheduleBranchRefresh(): void {
   branchRefreshTimer = setTimeout(() => {
     branchRefreshTimer = undefined;
     void useStore.getState().refreshBranches();
+    void useStore.getState().refreshFileStatuses();
   }, BRANCH_REFRESH_DEBOUNCE_MS);
 }
 
@@ -729,6 +734,11 @@ export interface AppState {
   recents: string[];
   /** Current branch per repo path (from git reading); "" when unknown/non-git. */
   branches: Record<string, string>;
+  /** Per-repo git working-tree status (#252): repoPath → { repo-relative POSIX path
+   * → "A"|"M"|"D" }. Tints the FileTree rows; refreshed once-per-repo (mirroring
+   * `branches`) on load, on each session busy→idle edge, and via the tree's Refresh
+   * button. A missing repo key / empty map = no coloring (clean or non-git). */
+  fileStatuses: Record<string, Record<string, FileStatusCode>>;
   /** Assigned per-repo colors, path → hex (#35); unassigned repos derive a default. */
   repoColors: Record<string, string>;
   /** Per-repo ordered list of extra (non-agent) Overview panels (#38). */
@@ -958,6 +968,10 @@ export interface AppState {
   init: () => Promise<void>;
   refresh: () => Promise<void>;
   refreshBranches: () => Promise<void>;
+  /** Re-read git file statuses (#252) — one repo when `repo` is given (the FileTree
+   * mount / Refresh path), else every repo in the sidebar set (load / busy→idle /
+   * git-write paths). Fail-open per repo (a failed read leaves the prior map). */
+  refreshFileStatuses: (repo?: string) => Promise<void>;
   /** Assign a repo's color (optimistic + persisted) (#35). */
   setRepoColor: (path: string, color: string) => Promise<void>;
   /** Apply + persist application settings (#100) and run their side-effects. */
@@ -1511,6 +1525,7 @@ export const useStore = create<AppState>()((set, get) => ({
   overviewRepoFilter: null,
   recents: [],
   branches: {},
+  fileStatuses: {},
   repoColors: {},
   overviewPanels: {},
   overviewOrder: {},
@@ -2261,6 +2276,35 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Backend unreachable; leave branches as-is.
     }
+  },
+
+  refreshFileStatuses: async (repo) => {
+    // Scope: one repo for the FileTree's own mount/Refresh (cheap, immediate), or the
+    // whole sidebar repo set (mirroring `refreshBranches`) for the load / busy→idle /
+    // git-write paths so any open tree reflects an agent's edits without a restart.
+    const repos = repo ? [repo] : repoOrder(get().recents, get().sessions);
+    if (repos.length === 0) return;
+    // One `git status --porcelain` per repo, in parallel; a failed repo is left as-is.
+    const results = await Promise.allSettled(
+      repos.map((r) => ipc.fileStatuses(r)),
+    );
+    set((s) => {
+      let changed = false;
+      const next = { ...s.fileStatuses };
+      results.forEach((res, i) => {
+        if (res.status !== "fulfilled") return; // fail-open: keep the prior map
+        const r = repos[i] as string;
+        const map: Record<string, FileStatusCode> = {};
+        for (const entry of res.value) map[entry.path] = entry.status;
+        // Skip the write when nothing changed so the FileTree selector stays stable
+        // (no needless re-render on a busy→idle settle that didn't touch files).
+        if (!statusMapsEqual(s.fileStatuses[r], map)) {
+          next[r] = map;
+          changed = true;
+        }
+      });
+      return changed ? { fileStatuses: next } : {};
+    });
   },
 
   setRepoColor: async (path, color) => {
@@ -3207,6 +3251,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().pushToast(`Started ${record.name ?? cwd}`);
       // A checkout (or a brand-new repo) can change the branch label — refresh.
       void get().refreshBranches();
+      // A checkout / branch-create can change which files differ from HEAD — refresh
+      // the FileTree coloring too (#252).
+      void get().refreshFileStatuses();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -3234,6 +3281,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().select(record.id);
       get().pushToast(`Started isolated worktree on ${branch}`);
       void get().refreshBranches();
+      // A checkout / branch-create can change which files differ from HEAD — refresh
+      // the FileTree coloring too (#252).
+      void get().refreshFileStatuses();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -3269,6 +3319,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().select(record.id);
       get().pushToast(`Created ${name} & started`);
       void get().refreshBranches();
+      // A checkout / branch-create can change which files differ from HEAD — refresh
+      // the FileTree coloring too (#252).
+      void get().refreshFileStatuses();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -3290,6 +3343,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().select(record.id);
       get().pushToast(`Created ${name} worktree & started`);
       void get().refreshBranches();
+      // A checkout / branch-create can change which files differ from HEAD — refresh
+      // the FileTree coloring too (#252).
+      void get().refreshFileStatuses();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -3606,9 +3662,7 @@ export const useStore = create<AppState>()((set, get) => ({
         view: clearSelection ? "overview" : s.view,
         // Drop a now-dangling Overview filter on the forgotten repo (#34/#247).
         overviewRepoFilter:
-          s.overviewRepoFilter?.path === repoPath
-            ? null
-            : s.overviewRepoFilter,
+          s.overviewRepoFilter?.path === repoPath ? null : s.overviewRepoFilter,
       };
     });
     // One summary toast (#83) listing everything removed, omitting zero parts.

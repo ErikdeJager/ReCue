@@ -28,6 +28,7 @@ vi.mock("./ipc", () => ({
   listBranches: vi.fn(),
   spawnSession: vi.fn(),
   currentBranches: vi.fn(),
+  fileStatuses: vi.fn(),
 }));
 
 import * as ipc from "./ipc";
@@ -71,6 +72,7 @@ function primeIpc(): void {
     created_at: 0,
   });
   m(ipc.currentBranches).mockResolvedValue({});
+  m(ipc.fileStatuses).mockResolvedValue([]);
 }
 
 beforeEach(() => {

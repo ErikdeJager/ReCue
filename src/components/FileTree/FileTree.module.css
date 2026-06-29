@@ -157,6 +157,49 @@
   animation: reveal-flash var(--dur-slow) var(--ease-out);
 }
 
+/* ── Git-status coloring (#252) ──────────────────────────────────────────────
+   Tint a row's name (and, for files, the icon) by its working-tree status vs HEAD,
+   using the on-system status tokens (green = new, yellow = edited, red = deleted).
+   Applied to `.row`, so it covers file rows and folder roll-up rows; folder icons
+   keep the repo accent (only the name is tinted for a folder). */
+.statusAdded .name,
+.statusAdded .fileIcon {
+  color: var(--status-done);
+}
+
+.statusModified .name,
+.statusModified .fileIcon {
+  color: var(--status-awaiting);
+}
+
+.statusDeleted .name,
+.statusDeleted .fileIcon {
+  color: var(--status-error);
+}
+
+/* A deleted file's "ghost" row (#252): non-interactive (a plain <div>), dimmed, red,
+   struck-through — shows what was removed from a folder that still renders. */
+.ghost {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-8);
+  color: var(--status-error);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+  cursor: default;
+  opacity: 0.7;
+}
+
+.ghost .fileIcon {
+  color: var(--status-error);
+}
+
+.ghost .name {
+  text-decoration: line-through;
+}
+
 /* ── Search results (#202) ───────────────────────────────────────────────── */
 .results {
   display: flex;

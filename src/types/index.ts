@@ -139,6 +139,14 @@ export interface ScheduleErrorPayload {
 export type FileStatusCode = "M" | "A" | "D";
 export type HunkLineKind = "hunk" | "context" | "add" | "del";
 
+/** One file's working-tree git status (#252, mirrors `git::FileStatusEntry`) — the
+ * lightweight per-file signal the FileTree colors by. `path` is repo-relative POSIX
+ * (`/`), matching `DirEntry.path`, so the lookup is a direct string key on both OSes. */
+export interface FileStatusEntry {
+  path: string;
+  status: FileStatusCode;
+}
+
 export interface HunkLine {
   type: HunkLineKind;
   old_no?: number;

@@ -138,6 +138,23 @@ even though it works in `tauri dev`.
   (debounced ~600ms, #212 — mirroring the #97 title reader's cadence), so an
   **in-terminal `git checkout`** (incl. inside a worktree) updates the sidebar's
   branch/worktree label by the next idle settle without an app restart.
+- **File-tree git status (#252):** the **FileTree** (`components/FileTree`) tints each
+  row by its working-tree state vs `HEAD` — file names/icons **green** for new
+  (`A`/untracked), **yellow** for edited (`M`); folder names roll up to their
+  highest-severity descendant (red > yellow > green) so a collapsed/vanished subtree
+  still flags a change; a **deleted** file shows a red, struck-through, non-openable
+  **ghost row** in its (still-rendered) parent plus the red ancestor roll-up. Backed by
+  a **lightweight** `file_statuses(repo)` read — one `git -c core.quotepath=false status
+  --porcelain=v1 -z --untracked-files=all` (no hunk parse, unlike `working_diff`; a
+  rename surfaces as add(new)+del(old)), bounded + fail-open (non-git/clean → empty).
+  The store's `fileStatuses` map (repoPath → { repo-relative POSIX path → `A`/`M`/`D` })
+  is filled once-per-repo by `refreshFileStatuses` — on app load + repo-set change, on
+  the same debounced **busy→idle** edge as the branch refresh (#212), after
+  app-initiated checkout/branch-create writes, and from the FileTree's **Refresh**
+  button / mount. Pure roll-up + deleted-children helpers in `FileTree/fileStatus.ts`.
+  Coloring uses only the on-system `--status-done/-awaiting/-error` tokens, so it's
+  identical on macOS and Windows (the only OS-sensitive primitive is the `git`
+  shell-out, which goes through the shared `hidden_command` console-flash guard).
 - **Views:** the store holds `sessions / selectedId / view / recents / branches /
   canvases / activeCanvasId / claudeMissing / toasts / schedules / settings /
   sidebarWidth / folderOrder`; the app mounts one of
@@ -458,7 +475,7 @@ even though it works in `tauri dev`.
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, settings, sidebar width, folder order)
-│   ├── src/git.rs          # Git: branch + diff + compare (#81) + list (local+remote #180) + checkout + worktree (#74) + fetch (#180) + pull --ff-only (#181)
+│   ├── src/git.rs          # Git: branch + diff + compare (#81) + per-file status (#252) + list (local+remote #180) + checkout + worktree (#74) + fetch (#180) + pull --ff-only (#181)
 │   ├── src/files.rs        # Repo file access (lazy list_dir tree + search_files picker + search_file_contents in-tree content search #202, read/write_text_file #141, path-validated)
 │   ├── src/skills.rs        # Read-only scan of .claude skills/commands for prompt autocomplete (#114)
 │   ├── Info.plist          # Partial plist (mic + speech-recognition usage strings), merged into the bundle

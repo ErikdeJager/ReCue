@@ -14,6 +14,7 @@ import type {
   CanvasTemplate,
   CommitInfo,
   ExitPayload,
+  FileStatusEntry,
   ForkablePayload,
   NamePayload,
   OutputPayload,
@@ -298,6 +299,12 @@ export const currentBranches = (paths: string[]) =>
 
 export const workingDiff = (cwd: string) =>
   invoke<WorkingDiff>("working_diff", { cwd });
+
+/** Lightweight per-file git status for the FileTree coloring (#252) — one
+ * `git status --porcelain` per repo (no hunk parse), repo-relative POSIX paths.
+ * Non-git / clean folders return an empty list (fail-open); bounded server-side. */
+export const fileStatuses = (repo: string) =>
+  invoke<FileStatusEntry[]>("file_statuses", { repo });
 
 /** Two-dot branch comparison for the diff viewer (#81): git diff base target. */
 export const compareBranches = (cwd: string, base: string, target: string) =>
