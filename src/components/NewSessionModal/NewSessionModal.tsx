@@ -86,6 +86,10 @@ function NewSessionModal() {
   // Branches preloaded by the per-repo start path (#127): when set, open straight at
   // the branch step seeded with these (no folder step, no second list_branches).
   const initialBranches = useStore((s) => s.newSessionInitialBranches);
+  // Per-repo start (#263): open straight at the branch step but WITHOUT preloaded
+  // branches — the modal appears instantly and loads them itself. A non-git folder
+  // resolves to no branches and spawns directly + closes (the #127 no-modal behavior).
+  const atBranch = useStore((s) => s.newSessionAtBranch);
 
   const [step, setStep] = useState<"folder" | "branch" | "schedule">("folder");
   const [cwd, setCwd] = useState<string | null>(null);
@@ -135,6 +139,10 @@ function NewSessionModal() {
   // the branch-detection effect keeps the seeded branches (skips its own reload) until
   // cwd settles to this repo, then clears it (a later folder change reloads normally).
   const preloadCwd = useRef<string | null>(null);
+  // Marks a per-repo branch-step open whose branches load lazily (#263): the
+  // branch-detection effect, on resolving the folder as non-git (no branches), spawns
+  // directly + closes instead of showing the (empty) branch step. Consumed once.
+  const autoBranchStep = useRef(false);
   // The element focused before the dialog opened, restored on close (a11y #49).
   const openerRef = useRef<HTMLElement | null>(null);
 
@@ -172,14 +180,27 @@ function NewSessionModal() {
       );
       // Tell the detection effect to keep these seeded branches (skip its reload).
       preloadCwd.current = prefillRepo;
+      autoBranchStep.current = false;
+    } else if (atBranch && prefillRepo) {
+      // #263: per-repo start without preloaded branches — open instantly at the branch
+      // step with the list still loading. The detection effect (deps [open, cwd]) does
+      // the list_branches and fills it; here we only set the step + clear the seed, and
+      // flag the auto branch-step so a non-git resolution spawns directly + closes.
+      setStep("branch");
+      setCwd(prefillRepo);
+      setBranches(null);
+      setSelectedBranch(null);
+      preloadCwd.current = null;
+      autoBranchStep.current = true;
     } else {
       setStep("folder");
       setCwd(prefillRepo ?? mostRecent);
       setBranches(null);
       setSelectedBranch(null);
       preloadCwd.current = null;
+      autoBranchStep.current = false;
     }
-  }, [open, prefillRepo, initialBranches]);
+  }, [open, prefillRepo, initialBranches, atBranch]);
 
   // Focus the recents search whenever the folder step is shown (open or Back) —
   // or the folder picker when there are no recents to search.
@@ -209,10 +230,22 @@ function NewSessionModal() {
       setSelectedBranch(null);
       return;
     }
+    const folder = cwd;
     let cancelled = false;
     void listBranches(cwd)
       .then((bl) => {
         if (cancelled) return;
+        // #263: a per-repo branch-step open (no preloaded branches) that resolves to a
+        // non-git folder has no branch to pick — spawn directly + close, preserving
+        // #127's no-modal behavior now that the modal opened instantly. Consume the flag.
+        if (autoBranchStep.current) {
+          autoBranchStep.current = false;
+          if (bl.all.length === 0) {
+            useStore.getState().closeNewSession();
+            void useStore.getState().spawnSession(folder);
+            return;
+          }
+        }
         setBranches(bl);
         setSelectedBranch(
           bl.all.includes(bl.current)
@@ -229,11 +262,18 @@ function NewSessionModal() {
         setNewBranchBase(bl.current || sortBranches(bl.all)[0] || "");
       })
       .catch(() => {
-        if (!cancelled) {
-          setBranches({ all: [], current: "", remote: [] });
-          setSelectedBranch(null);
-          setSelectedRemote(null);
+        if (cancelled) return;
+        // #263: a failed detection on a per-repo branch-step open reads as non-git too
+        // (matches the old startRepoSession catch) — spawn directly + close.
+        if (autoBranchStep.current) {
+          autoBranchStep.current = false;
+          useStore.getState().closeNewSession();
+          void useStore.getState().spawnSession(folder);
+          return;
         }
+        setBranches({ all: [], current: "", remote: [] });
+        setSelectedBranch(null);
+        setSelectedRemote(null);
       });
     return () => {
       cancelled = true;
@@ -390,6 +430,10 @@ function NewSessionModal() {
     !!branches && branches.all.length > BRANCH_FILTER_THRESHOLD;
   const folderResolved = branches !== null;
   const folderIsGit = !!branches && branches.all.length > 0;
+  // #263: the per-repo "+" opens the branch step before branches have loaded — show a
+  // "loading…" affordance and gate its actions until the list resolves. The folder→branch
+  // and #127 paths already have branches when the branch step shows, so this is inert there.
+  const branchesLoading = step === "branch" && branches === null;
 
   // Remote branches (#180): in git order, filtered by the same branch filter.
   // Hidden in schedule mode (selecting one is an immediate pull-&-start, not a
@@ -456,7 +500,8 @@ function NewSessionModal() {
   };
 
   const create = async () => {
-    if (!cwd || !canCreate) return;
+    // #263: no-op while the branch step is still loading its list (no selection yet).
+    if (!cwd || !canCreate || branchesLoading) return;
     setBusy(true);
     // No custom name from creation anymore (#66) — naming is via rename (#57),
     // display is #67. spawnSession sends a null name to the backend.
@@ -864,6 +909,8 @@ function NewSessionModal() {
             if (pickerActive) void pick();
             else void advanceFromFolder();
           } else if (step === "branch") {
+            // #263: ignore Enter while branches are still loading (no selection yet).
+            if (branchesLoading) return;
             if (addBranchActive) {
               if (scheduleMode) goToScheduleFromBranch();
               else void confirmAddBranch();
@@ -1010,9 +1057,11 @@ function NewSessionModal() {
               aria-label="Branch"
               onKeyDown={onBranchKeyDown}
             >
-              {branchList.length === 0 &&
-              remoteList.length === 0 &&
-              !fetchingRemotes ? (
+              {branchesLoading ? (
+                <p className={styles.empty}>Loading branches…</p>
+              ) : branchList.length === 0 &&
+                remoteList.length === 0 &&
+                !fetchingRemotes ? (
                 <p className={styles.empty}>No matching branches.</p>
               ) : (
                 <>
@@ -1092,17 +1141,19 @@ function NewSessionModal() {
                 existing branches — outside the listbox (like #123's folder picker)
                 so its own Enter/click activates it, not the list's start handler.
                 Both modes: in schedule mode (#125) it records intent (created at fire
-                time) instead of creating now. */}
-            <button
-              type="button"
-              aria-selected={addBranchActive}
-              className={`${styles.branch} ${styles.addBranch} ${addBranchActive ? styles.branchActive : ""}`}
-              onClick={() => setAddBranchActive(true)}
-              title="Create a new branch"
-            >
-              <Plus size={13} strokeWidth={1.5} />
-              <span className={styles.branchName}>add branch</span>
-            </button>
+                time) instead of creating now. Hidden while branches load (#263). */}
+            {!branchesLoading && (
+              <button
+                type="button"
+                aria-selected={addBranchActive}
+                className={`${styles.branch} ${styles.addBranch} ${addBranchActive ? styles.branchActive : ""}`}
+                onClick={() => setAddBranchActive(true)}
+                title="Create a new branch"
+              >
+                <Plus size={13} strokeWidth={1.5} />
+                <span className={styles.branchName}>add branch</span>
+              </button>
+            )}
 
             {/* Inline new-branch form (#124/#125): name + base dropdown (default
                 current branch). New-session: Enter creates + starts, ⌘⏎ as a worktree.
@@ -1210,6 +1261,7 @@ function NewSessionModal() {
                   disabled={
                     !cwd ||
                     busy ||
+                    branchesLoading ||
                     (addBranchActive
                       ? !newBranchName.trim()
                       : isRemoteActive
@@ -1232,7 +1284,9 @@ function NewSessionModal() {
                 type="submit"
                 className={styles.create}
                 disabled={
-                  !canCreate || (addBranchActive && !newBranchName.trim())
+                  !canCreate ||
+                  branchesLoading ||
+                  (addBranchActive && !newBranchName.trim())
                 }
               >
                 {scheduleMode

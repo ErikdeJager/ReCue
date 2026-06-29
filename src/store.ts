@@ -879,6 +879,12 @@ export interface AppState {
    * **directly at the branch step** for `newSessionRepo`, seeded with this list (no
    * folder step, no second `list_branches`). `null` for the folder-step open. */
   newSessionInitialBranches: BranchList | null;
+  /** The per-repo start path (#263) opens the modal **directly at the branch step**
+   * for `newSessionRepo` *without* pre-fetching branches, so it appears instantly;
+   * the modal then loads branches asynchronously (and spawns directly + closes for a
+   * non-git folder). `true` only via `startRepoSession`; the folder-step opens (global
+   * ⌘N / schedule) leave it `false`. */
+  newSessionAtBranch: boolean;
   /** The ⌘K "Create panel" launcher (#189): a keyboard-first modal to spawn any
    * panel type (session / file / diff / terminal / kanban / filetree) in a chosen
    * repo-or-worktree, reusing the existing creation actions. */
@@ -976,10 +982,11 @@ export interface AppState {
   dismissToast: (id: string) => void;
   openNewSession: (repo?: string) => void;
   /** Start a session for a known repo (#127): the sidebar context-menu "New session"
-   * + the inline per-repo "+". Skips the redundant folder step — a git folder opens
-   * the modal **straight at the branch step**; a non-git folder spawns immediately
-   * with **no modal**. (The global ⌘N / button still uses `openNewSession`.) */
-  startRepoSession: (repo: string) => Promise<void>;
+   * + the inline per-repo "+". Skips the redundant folder step and opens the modal
+   * **instantly** at the branch step (#263, `newSessionAtBranch`) — the modal loads
+   * branches asynchronously, and a non-git folder spawns immediately with **no modal**
+   * (resolved after the open). (The global ⌘N / button still uses `openNewSession`.) */
+  startRepoSession: (repo: string) => void;
   /** Open the modal in schedule mode (#93). */
   openSchedule: (repo?: string) => void;
   /** Open the ⌘K "Create panel" launcher (#189). `type` (set by ⌘⌥1–6) pre-selects
@@ -1660,6 +1667,7 @@ export const useStore = create<AppState>()((set, get) => ({
   newSessionRepo: null,
   scheduleMode: false,
   newSessionInitialBranches: null,
+  newSessionAtBranch: false,
   createPanelOpen: false,
   createPanelType: null,
   update: {
@@ -1858,28 +1866,22 @@ export const useStore = create<AppState>()((set, get) => ({
       scheduleMode: false,
       // Folder-step open (global ⌘N / button): the modal loads branches itself (#127).
       newSessionInitialBranches: null,
+      newSessionAtBranch: false,
     }),
-  startRepoSession: async (repo) => {
-    // The folder is known (#127), so skip the folder step. Resolve its branches once:
-    // a git folder opens the modal straight at the branch step (seeded, no second
-    // list_branches); a non-git / empty / detection-failed folder spawns immediately
-    // with no modal (mirrors the modal's advanceFromFolder non-git path, #66).
-    let bl: BranchList;
-    try {
-      bl = await ipc.listBranches(repo);
-    } catch {
-      bl = { all: [], current: "" };
-    }
-    if (bl.all.length > 0) {
-      set({
-        newSessionOpen: true,
-        newSessionRepo: repo,
-        scheduleMode: false,
-        newSessionInitialBranches: bl,
-      });
-    } else {
-      void get().spawnSession(repo);
-    }
+  startRepoSession: (repo) => {
+    // The folder is known (#127), so skip the folder step. Open the modal **instantly**
+    // at the branch step (#263) — don't await `list_branches` first, which used to gate
+    // the modal's appearance on a Tauri round-trip + git shell-out. The modal then loads
+    // branches asynchronously (its own branch-detection effect) and, for a non-git /
+    // empty / detection-failed folder, spawns directly + closes (preserving #127's
+    // no-modal behavior, just deferred to after the open).
+    set({
+      newSessionOpen: true,
+      newSessionRepo: repo,
+      scheduleMode: false,
+      newSessionInitialBranches: null,
+      newSessionAtBranch: true,
+    });
   },
   openSchedule: (repo) =>
     set({
@@ -1887,6 +1889,7 @@ export const useStore = create<AppState>()((set, get) => ({
       newSessionRepo: repo ?? null,
       scheduleMode: true,
       newSessionInitialBranches: null,
+      newSessionAtBranch: false,
     }),
   closeNewSession: () =>
     set({
@@ -1894,6 +1897,7 @@ export const useStore = create<AppState>()((set, get) => ({
       newSessionRepo: null,
       scheduleMode: false,
       newSessionInitialBranches: null,
+      newSessionAtBranch: false,
     }),
 
   // ⌘K / ⌘⌥1–6 Create-panel launcher (#189): pure open/close. The modal itself
