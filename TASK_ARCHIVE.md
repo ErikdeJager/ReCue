@@ -6531,3 +6531,58 @@ read-mostly" rule.
 
 ---
 
+### 254. [x] Render Mermaid diagrams in rendered markdown (file viewer)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-29
+
+**Description**
+
+When a markdown file contains a Mermaid diagram (a fenced ` ```mermaid ` block), the
+FileViewer's **Rendered** view now displays it as a proper SVG chart instead of a raw
+code block (the editable Raw view still shows the fence as text). Per the card:
+"Markdown mermaid integration … generate mermaid diagrams in markdown render view if a
+mermaid diagram is detected." Detection is the standard ` ```mermaid ` language fence
+only (the GitHub/Obsidian convention) — not heuristic sniffing of untagged blocks.
+
+**What shipped** (commit `087f2ce`, 2026-06-29):
+
+- **Dependency** — `mermaid` (^11.16) added to `package.json`, **lazy-loaded** via dynamic
+  `import()` so a diagram-free file never pulls it (the build emits a separate
+  ~621 KB `mermaid.core` chunk; the entry grows only ~2.5 KB). Bundled/offline, no CDN.
+- **Pure helpers** — `src/components/FileViewer/mermaid.ts` (+59, with `mermaid.test.ts`
+  +46): `loadMermaid` (one-time `initialize`: `theme:"dark"`, `securityLevel:"strict"`
+  DOMPurify-sanitized, a system/sans `fontFamily` so nothing is fetched),
+  `renderMermaidSvg` (returns the SVG or `null` on any failure), and `isMermaidClassName`.
+- **`MermaidBlock.tsx`** (+74) — renders the SVG with a stable `useId`-derived DOM id, a
+  latest-wins async guard, and a "Rendering diagram…" placeholder; an invalid diagram
+  falls back to the original code block + a muted `--status-error` note and never crashes
+  the viewer.
+- **Opt-in `code` override** — `MermaidCode` is wired only at the FileViewer call site
+  (`FileViewer.tsx` +10), so Kanban / PatchNotes / Settings markdown are unaffected and
+  every non-mermaid fence renders unchanged.
+- **Styling** — token-only `.mermaid` wrapper in `FileViewer.module.css` (+35): centered,
+  panel-width-constrained, horizontal scroll for wide diagrams; no platform-divergent CSS.
+
+**Key files/areas touched:** `src/components/FileViewer/{mermaid.ts,mermaid.test.ts,
+MermaidBlock.tsx,FileViewer.tsx,FileViewer.module.css}`, `package.json` /
+`package-lock.json`; docs in `CLAUDE.md`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): library =
+  `mermaid` (de-facto standard), lazy-loaded + bundled offline; detection = the
+  ` ```mermaid ` fence only; scope = the FileViewer's rendered markdown only via an
+  opt-in flag (Kanban/PatchNotes/Settings stay unchanged — Kanban mermaid a possible
+  future card); invalid diagrams fall back to the raw block + a subtle error (never
+  crash); dark theme + `securityLevel:"strict"` + offline font.
+- **Cross-platform:** pure WebView SVG — no native/path/shell code, no platform
+  branching — identical on WKWebView (macOS) and WebView2 (Windows); fully dev-testable
+  on both, so nothing was added to `TRAJECTORY_TO_WINDOWS.md`. `npm run build` (mermaid
+  in its own chunk) / `lint` (0 warnings) / `test` (402) + `cargo test` (119) all green.
+
+---
+

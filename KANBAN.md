@@ -14,7 +14,3 @@ kanban-plugin: board
 
 ## DONE
 
-- [ ] #254 — Render Mermaid diagrams in rendered markdown (file viewer)
-	Plan: TASK-254.md
-	Depends on: none
-
