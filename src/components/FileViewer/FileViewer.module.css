@@ -408,3 +408,38 @@
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
+
+/* Mermaid diagram (#254): a fenced ```mermaid block rendered as an SVG in the
+   rendered-markdown view. Centered, constrained to the panel width (horizontal
+   scroll if the diagram is wider), on a readable surface within the dark theme.
+   Token-only; the SVG is static (no animation → no reduced-motion concern). */
+.mermaid {
+  display: flex;
+  justify-content: center;
+  margin: var(--space-12) 0;
+  padding: var(--space-12);
+  overflow-x: auto;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* While the lazy mermaid chunk loads / the diagram renders. */
+.mermaidLoading {
+  margin: var(--space-12) 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  font-style: italic;
+}
+
+/* Subtle note shown beneath the original code block when a diagram fails to parse. */
+.mermaidError {
+  margin: var(--space-4) 0 var(--space-12);
+  color: var(--status-error);
+  font-size: var(--fs-meta-sm);
+}

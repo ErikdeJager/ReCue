@@ -1,6 +1,6 @@
-### 254. [ ] Render Mermaid diagrams in rendered markdown (file viewer)
+### 254. [x] Render Mermaid diagrams in rendered markdown (file viewer)
 
-**Status:** Not started
+**Status:** Done
 **Depends on:** none
 **Created:** 2026-06-29
 
@@ -63,35 +63,35 @@ diagrams in markdown render view if a mermaid diagram is detected."
    `npm run build` should show mermaid in its own async chunk, not the entry.
 
 2. [ ] **A `MermaidBlock` component** (e.g. `src/components/FileViewer/MermaidBlock.tsx`).
-   - [ ] Lazy-import mermaid on first render: `const mermaid = (await
+   - [x] Lazy-import mermaid on first render: `const mermaid = (await
      import("mermaid")).default;`. Initialize **once** (module-level guard) with
      `mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel:
      "strict", fontFamily: <a bundled/system font, not a web font> })` — `securityLevel:
      "strict"` sandboxes output (DOMPurify, no scripts/click handlers), consistent with
      the no-raw-HTML policy; the font choice keeps it **offline** (no web-font fetch).
-   - [ ] Render asynchronously: on mount / when the `chart` source changes, call
+   - [x] Render asynchronously: on mount / when the `chart` source changes, call
      `await mermaid.render(uniqueId, chart)` and set the resulting `svg` into state,
      injected via `dangerouslySetInnerHTML` (safe under strict mode). Use a **stable
      unique id** (React `useId()`, sanitized to a valid id) — mermaid requires a unique
      DOM id per render. Guard against the async race (a `cancelled` flag / latest-wins)
      so a fast source change doesn't paint a stale diagram.
-   - [ ] While loading, show a subtle placeholder ("Rendering diagram…"). On a
+   - [x] While loading, show a subtle placeholder ("Rendering diagram…"). On a
      `mermaid.render` throw (invalid syntax), **catch** and render a fallback: the
      original fenced code as a `<pre><code class="language-mermaid">` plus a small,
      muted error line (token-styled, e.g. `--status-error` text). Never throw to the
      viewer.
 
 3. [ ] **Wire the `code` override (opt-in).**
-   - [ ] Add an optional `mermaid?: boolean` to `makeCheckboxComponents` (or compose a
+   - [x] Add an optional `mermaid?: boolean` to `makeCheckboxComponents` (or compose a
      separate `mermaidCodeComponent` merged in only when requested) so the FileViewer
      enables it and **Kanban/PatchNotes/Settings do not**.
-   - [ ] In the `code` override: when the node is a **fenced block** whose `className`
+   - [x] In the `code` override: when the node is a **fenced block** whose `className`
      includes `language-mermaid`, render `<MermaidBlock chart={String(children)} />`;
      **otherwise pass through the default rendering faithfully**
      (`<code className={className}>{children}</code>`) so normal inline/code blocks are
      unchanged. (FileViewer doesn't currently override `code`, so the default must be
      preserved exactly.)
-   - [ ] Enable it at the FileViewer call site: pass `mermaid: true` (the only site).
+   - [x] Enable it at the FileViewer call site: pass `mermaid: true` (the only site).
 
 4. [ ] **Styling** (`FileViewer.module.css`): a `.mermaid` wrapper that centers the SVG,
    constrains it to the panel width (`max-width: 100%`, horizontal scroll if a diagram
@@ -108,34 +108,34 @@ diagrams in markdown render view if a mermaid diagram is detected."
    `TRAJECTORY_TO_WINDOWS.md` unless a WebView2-specific SVG quirk surfaces.)
 
 6. [ ] **Tests + docs.**
-   - [ ] Vitest: a small pure helper if extracted (e.g. `isMermaidClassName(className)`
+   - [x] Vitest: a small pure helper if extracted (e.g. `isMermaidClassName(className)`
      → boolean) and a render-fallback smoke test (mocking the dynamic import) verifying
      an invalid chart yields the code-block fallback rather than throwing. Keep mermaid
      itself out of the unit run (mock the dynamic import) so tests stay fast/offline.
-   - [ ] `npm run build` + `npm run lint` + `npm test` + `cargo test` green (Rust
+   - [x] `npm run build` + `npm run lint` + `npm test` + `cargo test` green (Rust
      unaffected — frontend-only change).
-   - [ ] Update `CLAUDE.md`: the Stack line (react-markdown + remark-gfm + Prism) and
+   - [x] Update `CLAUDE.md`: the Stack line (react-markdown + remark-gfm + Prism) and
      the FileViewer notes to mention **Mermaid rendering in the FileViewer's rendered
      markdown** (lazy-loaded, dark, strict, offline). Add the new component to the
      Layout's `components/` list.
 
 **Acceptance criteria**
 
-- [ ] A markdown file containing a ` ```mermaid ` block shows the **diagram** in the
+- [x] A markdown file containing a ` ```mermaid ` block shows the **diagram** in the
   FileViewer's **Rendered** view, and the **raw ` ```mermaid ` source** in the Raw view.
-- [ ] A non-mermaid code fence (e.g. ` ```ts `) renders exactly as before (unchanged).
-- [ ] An **invalid** mermaid diagram shows the original code block + a subtle error
+- [x] A non-mermaid code fence (e.g. ` ```ts `) renders exactly as before (unchanged).
+- [x] An **invalid** mermaid diagram shows the original code block + a subtle error
   note and does **not** crash or blank the viewer.
-- [ ] Mermaid is **lazy-loaded** — a markdown file with no mermaid block does not pull
+- [x] Mermaid is **lazy-loaded** — a markdown file with no mermaid block does not pull
   the mermaid chunk; the initial bundle is not enlarged.
-- [ ] Mermaid is **bundled/offline** (no CDN) and fetches **no web font** at render.
-- [ ] Diagrams render in a **dark** theme consistent with the app and are **sandboxed**
+- [x] Mermaid is **bundled/offline** (no CDN) and fetches **no web font** at render.
+- [x] Diagrams render in a **dark** theme consistent with the app and are **sandboxed**
   (`securityLevel: "strict"`, no embedded HTML/JS).
-- [ ] **Works on both macOS and Windows** (pure WebView SVG; no native/path/shell code;
+- [x] **Works on both macOS and Windows** (pure WebView SVG; no native/path/shell code;
   no platform branching).
-- [ ] Kanban card bodies, PatchNotes, and Settings markdown are **unaffected** (the
+- [x] Kanban card bodies, PatchNotes, and Settings markdown are **unaffected** (the
   override is opt-in, enabled only in the FileViewer).
-- [ ] `npm run build`, `npm run lint`, `npm test`, and the Rust suite pass.
+- [x] `npm run build`, `npm run lint`, `npm test`, and the Rust suite pass.
 
 **Notes**
 

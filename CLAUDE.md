@@ -75,7 +75,9 @@ even though it works in `tauri dev`.
   JS/TS/JSX, Rust, Python, JSON/YAML/TOML, CSS, markup, Bash, **Java**, **INI/.env/
   .properties** #150) — both in the universal **`FileViewer`** (#40/#44), whose **raw
   markdown / plain-text** view is an editable, auto-saving `<textarea>` (#148); the same
-  markdown stack also renders the markdown **Kanban board** (#141–#151). **dnd-kit**
+  markdown stack also renders the markdown **Kanban board** (#141–#151). **mermaid**
+  (#254 — lazy-loaded, bundled/offline, never a CDN) renders ` ```mermaid ` fences as
+  diagrams in the FileViewer's rendered markdown only. **dnd-kit**
   (`@dnd-kit/core` + `/sortable` — the app's one drag-and-drop system, #43; also Kanban
   card DnD #143), **react-resizable-panels** (Canvas split resizing, #46)
 - **Backend (Rust, `src-tauri/`):** **`portable-pty`** for terminals, JSON
@@ -297,7 +299,17 @@ even though it works in `tauri dev`.
   `useAutoSaveFile(repoPath, file, active)` hook (`src/useAutoSaveFile.ts` — read +
   hot-reload poll + debounced `writeTextFile` + a dirty/focus reconcile that pauses the
   poll while editing + IME-safe + a "Saving…/Saved" status), while rendered markdown, the
-  Prism **code** view, and large files stay read-only (#148). A **markdown Kanban board**
+  Prism **code** view, and large files stay read-only (#148). In **rendered** markdown a
+  ` ```mermaid ` fenced block renders as a **Mermaid SVG diagram** (#254): an **opt-in**
+  react-markdown `code` override (`MermaidCode`, wired only at the FileViewer call site —
+  so Kanban/PatchNotes/Settings markdown are unaffected) renders `MermaidBlock`, which
+  **lazy-loads** mermaid (its own async chunk — diagram-free files never pull it) and
+  one-time-initializes it (`theme:"dark"`, `securityLevel:"strict"` DOMPurify-sanitized,
+  a system/sans `fontFamily` so nothing is fetched — **bundled/offline**). An invalid
+  diagram falls back to the original code block + a muted error note, never crashing; the
+  Raw view shows the fence as text. Pure helpers (`isMermaidClassName`/`renderMermaidSvg`)
+  live in `components/FileViewer/mermaid.ts`. Pure WebView SVG, so identical on macOS and
+  Windows (no native/path/shell code). A **markdown Kanban board**
   is a first-class content kind (`kind:"kanban"`, reusing the `file` panel's refs +
   `overview_panels`, no new blob): the pure `parseBoard`/`serializeBoard` engine
   (`components/Kanban/kanban.ts`, **Obsidian-Kanban** format — `## column` + `- [ ] card`,
@@ -471,7 +483,7 @@ even though it works in `tauri dev`.
 │   ├── components/         # React components (CSS Module alongside each):
 │   │                       #   Sidebar, Overview, Canvas (+ CanvasSurface),
 │   │                       #   CanvasWindow (#84), CanvasCloseModal (#137),
-│   │                       #   Terminal, FileViewer, FilePicker,
+│   │                       #   Terminal, FileViewer (+ MermaidBlock #254), FilePicker,
 │   │                       #   FileSwitcher (#90), DiffInspector, DetachedNote (#84),
 │   │                       #   Kanban (engine + KanbanPanel, #141–#151),
 │   │                       #   ScheduledPanel (#94), Settings (#100), BusyIndicator,

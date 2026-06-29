@@ -6461,3 +6461,73 @@ rule (no new write).
 
 ---
 
+### 253. [x] Drag OS files into the file tree to move them into the repo (drop on folders/root, with drop-target feedback)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-29
+
+**Description**
+
+Let the user **drag files (or folders) from the operating system** (Finder / Explorer,
+the desktop, a download) **into ReCue's file tree** and drop them onto a **folder row**
+or the tree **root** to **move** them into that repo location, with **live visual
+feedback** showing exactly where the file will land while dragging. Works across every
+FileTree surface — sidebar, Overview column, Canvas panel, detached canvas window — and
+on both macOS and Windows. This adds the **second** deliberate `files.rs` write
+(`move_into_repo`, after #141's `write_text_file`), narrowing the "file access is
+read-mostly" rule.
+
+**What shipped** (commit `abcc09f`, 2026-06-29):
+
+- **Backend — `move_into_repo(repo, dest_subdir, source)`** (`src-tauri/src/files.rs`,
+  +166 incl. tests): confines **only the destination** to the repo via the existing
+  `confine` (the source is the user's dragged OS path = explicit consent, like #163's
+  native dialog); derives the basename from the source `Path::file_name()` (separator
+  handling stays in Rust); **refuses name collisions** (no overwrite); data-safe move —
+  same-volume `std::fs::rename`, else cross-volume recursive copy **then** remove (keyed
+  on `EXDEV` / `ERROR_NOT_SAME_DEVICE`), so a mid-op failure never loses the original; no
+  shell-out. Returns the new repo-relative path. Exposed as a Tauri command in
+  `commands.rs` + `lib.rs` + `ipc.moveIntoRepo`.
+- **Frontend OS-drop wiring** — new `src/osFileDrop.ts` (+88, with `osFileDrop.test.ts`
+  +69) subscribes each window's webview to Tauri's window-global `onDragDropEvent` (wired
+  from `App.tsx` **and** the detached `CanvasWindow` — each is its own document/webview);
+  on `over`/`drop` it converts `payload.position` physical→CSS px via `devicePixelRatio`
+  (correct under macOS Retina and Windows fractional scaling) and hit-tests with
+  `elementFromPoint` → `closest("[data-filetree-droptarget]")` (pure `resolveDropTarget`)
+  to resolve repo + dir.
+- **Store** (`src/store.ts`, +82, `store.test.ts` +29) — transient
+  `fileDropTarget {repo,dir}` highlight + `moveFilesIntoRepo(repo, destSubdir, sources)`
+  which moves each path via `Promise.allSettled` (fail-open per file), bumps a per-repo
+  `fileTreeRefresh` signal, and `pushToast`s a concise result (`moveResultMessage`).
+- **FileTree** (`FileTree.tsx` +49, `FileTree.module.css` +10) — root container +
+  folder/file/ghost rows carry `data-filetree-repo` / `data-filetree-droptarget` (a file
+  row resolves to its parent dir); the hovered target gets a token-only `.dropTarget`
+  highlight (accent outline + `--accent-dim`); a successful drop reloads just the affected
+  levels via the refresh signal (no full tree reset). dnd-kit (pointer events) is a
+  separate input stream and is untouched.
+
+**Key files/areas touched:** `src-tauri/src/files.rs` (new `move_into_repo` + tests),
+`commands.rs`, `lib.rs`; `src/osFileDrop.ts` (+test), `src/store.ts` (+test), `src/ipc.ts`;
+`src/components/FileTree/{FileTree.tsx,FileTree.module.css}`, `src/App.tsx`,
+`src/components/CanvasWindow/CanvasWindow.tsx`; docs `CLAUDE.md` + `TRAJECTORY_TO_WINDOWS.md`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): **move, not
+  copy** (card says "moved"; implemented data-safe); scope = **external OS files →
+  tree folders/root only** (intra-tree reorg left as a future card); **collisions
+  refuse** rather than overwrite; **no confirm gate** (a drag is intentional + the move
+  is data-safe); directories moved recursively.
+- **Cross-platform:** `onDragDropEvent` fires on WKWebView (macOS) and WebView2
+  (Windows); source paths pass to Rust untouched (no `splitPath`); the move uses
+  `std::fs` (cross-device copy+remove fallback on both); highlight is token-only CSS.
+  This is a GUI drag gesture CI can't exercise — the real-box checks (WebView2 drop,
+  fractional-DPR hit-test, macOS Retina hit-test, cross-volume move) are logged in
+  `TRAJECTORY_TO_WINDOWS.md`. `npm run build` / `lint` / `test` (397) + `cargo test`
+  (119) + clippy + fmt all green.
+
+---
+

@@ -12,6 +12,7 @@ import {
   rehypeTaskListPositions,
 } from "../markdownCheckboxes";
 import { detectMode, prismLang } from "./fileType";
+import { MermaidCode } from "./MermaidBlock";
 import { highlightToHtml } from "./prism";
 import styles from "./FileViewer.module.css";
 
@@ -77,13 +78,18 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
   // Clickable task-list checkboxes in the rendered markdown (#173): a toggle flips
   // the source marker and routes through `setText` (so the #162 save mode applies).
   // Memoized on the buffer so the map isn't rebuilt every render. `setText` is stable.
+  // Mermaid diagrams in rendered markdown (#254): merge the opt-in `code` override
+  // (a ` ```mermaid ` block → an SVG diagram; every other code fence unchanged) — wired
+  // only here, so Kanban / PatchNotes / Settings markdown stay unaffected.
   const markdownComponents = useMemo(
-    () =>
-      makeCheckboxComponents({
+    () => ({
+      ...makeCheckboxComponents({
         source: text ?? "",
         interactive: true,
         onToggle: setText,
       }),
+      code: MermaidCode,
+    }),
     [text, setText],
   );
 
