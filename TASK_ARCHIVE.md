@@ -6636,3 +6636,61 @@ DiffInspector.module.css,diffNav.ts,diffNav.test.ts}`; docs in `CLAUDE.md`.
 
 ---
 
+### 256. [x] Release v1.0.1 — version bump, patch notes, green test/lint suite, push to main
+
+**Status:** Done
+**Depends on:** none _(cuts the release containing #252–#255)_
+**Created:** 2026-06-29
+
+**Description**
+
+Cut **v1.0.1**, the first incremental release after the v1.0.0 launch — an
+**intentional, user-requested version bump** (explicitly overriding the standing
+never-bump guard for this one release task; the implementing agent performs the bump,
+the archiver/refine agents never do). Bump the version in both version files, author the
+first real in-app changelog, run the full green suite, and push directly to `main` to
+trigger the release pipeline.
+
+**What shipped** (commit `c258ba5`, 2026-06-29):
+
+- **Version bump 1.0.0 → 1.0.1** in `src-tauri/tauri.conf.json` (the release pipeline's
+  version gate), `package.json`, and the `package-lock.json` root fields (kept in sync).
+- **`src/patchnotes/1.0.1.json`** — the first real changelog (the in-app Settings →
+  Updates "What's new"), summarizing the changes since v1.0.0 in user-facing prose, in
+  the `{version,date,changes:[{category,items}]}` schema validated by
+  `normalizePatchNotes`: file-tree git-status coloring (#252), drag OS files into the
+  file tree (#253), Mermaid diagrams in the rendered markdown viewer (#254 — all
+  `feature`), and diff-viewer keyboard navigation (#255 — `improvement`).
+- **Prettier-only reformat** of `src/components/Kanban/KanbanPanel.tsx` (no logic change)
+  so `npm run format:check` is clean for the release.
+
+The change list was derived authoritatively from `git log v1.0.0..HEAD` (the four
+`Implement task #252–#255` commits). Pushing to `main` triggers the release workflow
+(gate sees `1.0.1 > v1.0.0`), which produces a **draft** GitHub release + signed
+macOS/Windows bundles + merged `latest.json` that **a maintainer must publish** for the
+updater to serve it; the pipeline tags the commit `v1.0.1`.
+
+**Key files/areas touched:** `src-tauri/tauri.conf.json`, `package.json`,
+`package-lock.json`, `src/patchnotes/1.0.1.json` (new), `src/components/Kanban/KanbanPanel.tsx`
+(format-only).
+
+**Dependencies:** none (it packages the already-shipped #252–#255).
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): bump **both**
+  version files (gate reads `tauri.conf.json`, but a stale `package.json` would be
+  inconsistent); patch-notes categories `feature`/`improvement` (not the launch `welcome`
+  group), items written as user-facing prose; change list regenerated from
+  `git log v1.0.0..HEAD`; **push directly to `main`, no branch/PR** (required to trigger
+  the on-push release pipeline). The version bump is the user-requested exception to the
+  never-bump rule.
+- **No feature/behavior code changed** beyond the version + patch notes + a format-only
+  fix. Cross-platform integrity preserved (version + JSON + format change, no
+  platform-specific code); the shared CI suite stays green and the pipeline builds both OS
+  bundles. Full suite green: `npm run build` / `lint` / `format:check` / `test` (405) +
+  clippy (`-D warnings`) + `cargo test` (119) + `cargo fmt`. **Maintainer must publish the
+  resulting draft release** for it to go live.
+
+---
+
