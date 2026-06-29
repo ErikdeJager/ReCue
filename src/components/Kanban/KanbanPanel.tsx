@@ -177,7 +177,7 @@ function SortableCard({
             value={editText ?? ""}
             placeholder="Write a card… Shift+Enter for detail lines"
             autoFocus
-            rows={3}
+            rows={5}
             onChange={(e) => onEditTextChange(e.currentTarget.value)}
             onKeyDown={(e) => {
               // Enter commits; Shift+Enter inserts a detail line; Escape discards
@@ -487,7 +487,7 @@ function BoardColumn(props: ColumnProps) {
               value={composerText}
               placeholder="Write a card… Shift+Enter for detail lines"
               autoFocus
-              rows={3}
+              rows={5}
               onChange={(e) => setComposerText(e.currentTarget.value)}
               onKeyDown={(e) => {
                 // Enter submits; Shift+Enter inserts a detail line (#233). IME-safe.
