@@ -1013,3 +1013,55 @@ autonomously (refine loop, user not answering — standing directive 2026-06-26)
   release infra / updater / keys. Run full green suite: build, lint, format:check, test,
   lint:rust (clippy -D warnings), cargo test. **Depends on: none** (documents already-merged
   work; captures main's state at implementation time).
+
+---
+
+# 2026-06-30 batch — PLAN column drained (tasks 257–281)
+
+The PLAN column held 23 terse cards. Sketched their dependency picture, then refined them
+into 25 tasks (#257–#281). Card "input lag/multithreading" → two independent tasks (260
+stdin-lock, 261 output-path); card "scheduled worktree" → two tasks (259 eager creation,
+279 duplicate-folder). The release card (281) depends on all 24 others. Per the standing
+directive (2026-06-26) all interpretation calls below were made autonomously.
+
+## Task 257 — Larger / resizable Kanban card inputs
+- Pure sizing change: `rows={3}`→`rows={5}` on the composer + inline-edit textareas, add
+  `min-height: 88px` / `max-height: 320px`; `resize: vertical` already present (the drag
+  affordance). No behavioral change. **Foundational** for 276/277.
+
+## Task 258 — Diff sort by occurrence (default) vs alphabetical
+- "By occurrence" has **no backend metadata** — derived client-side: track the order a file
+  first becomes changed (a `path→seq` map per panel); re-change never reorders; a file that
+  leaves the diff then reappears is "new" (bottom). **The occurrence sequence is per-panel-
+  session, not persisted**; only the sort-mode *preference* is persisted (in the settings
+  blob, mirroring `diffDisplayMode`). On fresh mount the list seeds from git's order.
+- Default = occurrence (per card). Pure ordering helper extracted + unit-tested.
+- **Foundational** for 278 (seen-marker), which interacts with occurrence ordering.
+
+## Task 259 — Eager worktree+branch creation at schedule time
+- Chose **option 1 (create eagerly at `create_schedule`)** over lazy creation: far cleaner
+  support — every "create item in worktree" path just works once folder+branch exist; lazy
+  creation would need to intercept every such path. Cost: a worktree exists for the pending
+  schedule's lifetime; cleaned up on cancel (ref-counted, dirty worktree kept — #74 policy).
+- **Worktree-creation failure at schedule time is surfaced inline and the schedule is not
+  created** (same UX as immediate-worktree validation). Fire path made idempotent (skip
+  creation when the worktree dir already exists, both create-branch and existing-branch).
+- `deps: none`. Yields the dependent **Task 279** (duplicate top-level folder fix).
+
+## Task 260 — Stdin write-path lock contention (input lag, part 1)
+- Root cause: `write_stdin`/`resize_pty`/`scrollback` hold the **global** `sessions` mutex
+  across **blocking** PTY writes/resize/256KB-snapshot, so a backpressured terminal stalls
+  every other terminal's keystrokes. Fix: per-session `Arc<Mutex>` for `writer`/`master`
+  (already so for `child`/`scrollback`); clone the Arc under the brief global lock, drop it,
+  then do the blocking op under the per-session lock. **Chose the per-session-lock approach
+  over a per-session writer thread** (lower risk, sufficient); thread variant only if this
+  proves insufficient. `deps: none`, parallel with 261.
+
+## Task 261 — Output payload + write throttling (input lag, part 2)
+- Root cause: output bytes shipped as a **JSON integer array** (`Vec<u8>`→`[27,91,...]`),
+  ~4 chars/byte, one event per 8KB read → saturates the single WebView main thread, lagging
+  even React inputs. Fix: (A) **base64** payload (cheap `atob` decode) — chosen baseline over
+  a Tauri binary `Channel` (portable, low-risk; pick one not both); (B) **rAF-coalesced**
+  `term.write` in terminalPool; (C) drop the per-chunk `sessions.find` reconnecting scan.
+- **Out of scope:** changing reader chunk size / backend time-window batching (keeps latency
+  predictable + the diff reviewable). `deps: none`, parallel with 260.
