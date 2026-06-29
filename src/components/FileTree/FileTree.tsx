@@ -93,6 +93,11 @@ function FileTree({ repoPath }: { repoPath: string }) {
   // every FileTree instance for a repo reads one fetch; it's refreshed on busy→idle.
   const statusMap = useStore((s) => s.fileStatuses[repoPath]);
   const refreshFileStatuses = useStore((s) => s.refreshFileStatuses);
+  // Register this tree so the disk-change visibility poll (#264) only re-lists/re-tints
+  // repos with an open tree (bounded churn). Ref-counted, so several trees for the same
+  // repo coexist and StrictMode's double-mount nets out correctly.
+  const registerFileTree = useStore((s) => s.registerFileTree);
+  const unregisterFileTree = useStore((s) => s.unregisterFileTree);
   // Precompute the folder roll-up once per status-map change so each folder row's
   // tint is an O(1) lookup rather than a re-scan of the whole map.
   const folderRollup = useMemo(
@@ -104,6 +109,8 @@ function FileTree({ repoPath }: { repoPath: string }) {
   const dropTarget = useStore((s) =>
     s.fileDropTarget?.repo === repoPath ? s.fileDropTarget.dir : null,
   );
+  // Re-list signal: bumped after an OS drop-move (#253) and on the disk-change poll /
+  // busy→idle edge (#264) to surface files created/removed on disk.
   const moveRefresh = useStore((s) => s.fileTreeRefresh[repoPath] ?? 0);
   // Children keyed by directory path ("" = repo root); a missing key = not yet loaded.
   const [children, setChildren] = useState<Record<string, DirEntry[]>>({});
@@ -154,8 +161,17 @@ function FileTree({ repoPath }: { repoPath: string }) {
     void refreshFileStatuses(repoPath);
   }, [repoPath, nonce, refreshFileStatuses]);
 
-  // After an OS file-drop move (#253), reload every currently-loaded level so the
-  // moved-in item appears **without** a full reset (expansion state is preserved).
+  // Register/unregister this open tree with the store so the disk-change poll (#264)
+  // refreshes only repos that actually have a tree mounted.
+  useEffect(() => {
+    registerFileTree(repoPath);
+    return () => unregisterFileTree(repoPath);
+  }, [repoPath, registerFileTree, unregisterFileTree]);
+
+  // When the re-list signal bumps — an OS file-drop move (#253) or the disk-change
+  // poll / busy→idle edge (#264) — reload every currently-loaded level so files
+  // created/removed on disk appear **without** a full reset (expansion state and the
+  // scroll position are preserved; rows are keyed by path so React reconciles in place).
   // `childrenRef` mirrors `children` so the effect can read the latest loaded levels
   // without depending on `children` (which would re-run it on every load).
   const childrenRef = useRef(children);
