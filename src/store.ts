@@ -1272,6 +1272,21 @@ export interface AppState {
    * success ("Fetched <repo>") or git's error, then refreshes branch labels so any
    * branch movement is reflected. */
   fetchFolder: (cwd: string) => Promise<void>;
+  /** Check out an existing local branch in `repo` from the sidebar repo menu (#266) —
+   * `git checkout <branch>`, **no agent spawn** (unlike `spawnSession`'s checkout).
+   * Toasts success ("Checked out <branch>") or the git error, then refreshes the
+   * branch label (#212) + file-tree status coloring (#252). */
+  checkoutFolderBranch: (repo: string, branch: string) => Promise<void>;
+  /** Create + check out a new branch `name` from `base` (empty = HEAD) in `repo` from
+   * the sidebar repo menu (#266) — `git checkout -b`, **no agent spawn**. Resolves
+   * `true` on success (toasting), else the git error string for inline display (an
+   * invalid / already-existing name, unknown base). Also pulls a remote-tracking ref
+   * into a local branch (base = the remote ref), reusing the #124/#180 pattern. */
+  createFolderBranch: (
+    repo: string,
+    name: string,
+    base: string,
+  ) => Promise<true | string>;
 }
 
 /**
@@ -3910,5 +3925,39 @@ export const useStore = create<AppState>()((set, get) => ({
       const message = isSessionError(err) ? err.message : "Fetch failed";
       get().pushToast(`Fetch failed: ${message}`, "error");
     }
+  },
+
+  checkoutFolderBranch: async (repo, branch) => {
+    // `git checkout <existing branch>` in the folder (#266), with **no** agent spawn
+    // (the distinction from `spawnSession`'s checkout). A failed checkout — a dirty
+    // tree conflict or unknown branch — surfaces as an error toast and leaves state
+    // untouched (git never half-switches).
+    try {
+      await ipc.checkoutBranch(repo, branch);
+      get().pushToast(`Checked out ${branch}`);
+      // Both the branch label (#212) and which files differ from HEAD (#252) change —
+      // refresh both so the sidebar + file-tree coloring follow.
+      await get().refreshBranches();
+      void get().refreshFileStatuses(repo);
+    } catch (err) {
+      const message = isSessionError(err) ? err.message : "Checkout failed";
+      get().pushToast(`Checkout failed: ${message}`, "error");
+    }
+  },
+
+  createFolderBranch: async (repo, name, base) => {
+    // `git checkout -b <name> [<base>]` in the folder (#266), **no** agent spawn.
+    // Validation errors (invalid / already-existing name, unknown base) are returned
+    // for inline display; a remote ref base pulls it into a local tracking branch
+    // (reusing the #124/#180 create-branch write).
+    try {
+      await ipc.createBranch(repo, name, base);
+    } catch (err) {
+      return isSessionError(err) ? err.message : "Could not create branch";
+    }
+    get().pushToast(`Created ${name}`);
+    await get().refreshBranches();
+    void get().refreshFileStatuses(repo);
+    return true;
   },
 }));

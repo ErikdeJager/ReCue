@@ -827,6 +827,141 @@
   }
 }
 
+/* --- Repo "Checkout branch…" picker (#266): a sub-panel of the repo context menu,
+   mirroring the color picker's role. Lists local + cached-remote branches and an
+   inline create-new form; checks out in the folder (no agent spawn). --- */
+.checkout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 232px;
+}
+
+/* Non-blocking destructive-checkout advisory (#266): a compact yellow warning line
+   shown when agents are running in the folder. */
+.checkoutWarning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  border-radius: var(--radius-chip);
+  background: color-mix(in srgb, var(--status-awaiting) 14%, transparent);
+  color: var(--status-awaiting);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.35;
+}
+
+.checkoutWarnIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.checkoutFilter {
+  width: 100%;
+  padding: var(--space-4) var(--space-6);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+}
+
+.checkoutFilter::placeholder {
+  color: var(--text-muted);
+}
+
+.checkoutList {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.checkoutBranch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  width: 100%;
+  padding: var(--space-4) var(--space-6);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.checkoutBranch:hover:not([aria-disabled="true"]) {
+  background: var(--bg-hover);
+}
+
+/* The folder's current branch: marked + non-selectable. */
+.checkoutBranchCurrent {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.checkoutBranch[aria-disabled="true"] {
+  cursor: default;
+}
+
+.checkoutBranchName {
+  overflow: hidden;
+  flex: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.checkoutCurrent {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+}
+
+.checkoutRemoteHeader {
+  margin: var(--space-4) 0 var(--space-2);
+  padding: 0 var(--space-6);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+.checkoutEmpty {
+  padding: var(--space-6);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}
+
+/* "Create new branch" toggle reuses .menuItem but adds the icon row layout. */
+.checkoutCreateToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.checkoutCreate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.checkoutCreateBase {
+  padding: 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+}
+
+.checkoutError {
+  padding: 0 var(--space-6);
+  color: var(--status-error);
+  font-size: var(--fs-meta-sm);
+}
+
 /* --- Worktree sub-group (#74/#240): an isolated worktree under its parent repo,
    rendered flush at the repo's own level (no indent / left rail) — a "worktree"
    badge on the header is the sole worktree cue. Just vertical spacing keeps it a

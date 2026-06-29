@@ -14,6 +14,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  AlertTriangle,
   Bug,
   Clock,
   FileDiff,
@@ -34,7 +35,12 @@ import {
 
 import { agentSupportsResume } from "../../agents";
 import { noAutoCapitalize } from "../../inputProps";
-import { openUrl, revealFileInFinder, revealPath } from "../../ipc";
+import {
+  listBranches,
+  openUrl,
+  revealFileInFinder,
+  revealPath,
+} from "../../ipc";
 import {
   forkUnavailableReason,
   repoName,
@@ -52,7 +58,7 @@ import {
   repoOrder,
   useStore,
 } from "../../store";
-import type { ScheduledSession, SessionView } from "../../types";
+import type { BranchList, ScheduledSession, SessionView } from "../../types";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import UpdateIndicator from "../Update/UpdateIndicator";
 import UsageBar from "../Usage/UsageBar";
@@ -64,6 +70,25 @@ import styles from "./Sidebar.module.css";
  * ~36px buttons (a ~4px gutter each side). The persisted `sidebarWidth` is left
  * untouched while collapsed, so expanding restores it. */
 const SIDEBAR_RAIL_WIDTH = 44;
+
+/** Branch ordering for the repo-menu "Checkout branch…" picker (#266) — mirrors the
+ * new-session modal's helpers: pin the well-known branches to the top, then git
+ * order. (The picker UI isn't shared, so the tiny logic is replicated here.) */
+const CHECKOUT_BRANCH_PRIORITY = ["main", "master", "dev", "develop"];
+const checkoutBranchRank = (b: string) => {
+  const i = CHECKOUT_BRANCH_PRIORITY.indexOf(b);
+  return i === -1 ? CHECKOUT_BRANCH_PRIORITY.length : i;
+};
+const sortCheckoutBranches = (all: string[]) =>
+  all.slice().sort((a, b) => checkoutBranchRank(a) - checkoutBranchRank(b));
+/** The local name a remote-tracking ref pulls into (`origin/feature/foo` →
+ * `feature/foo`); matches the backend dedup split (#180). */
+const checkoutRemoteShort = (ref: string) => {
+  const i = ref.indexOf("/");
+  return i === -1 ? ref : ref.slice(i + 1);
+};
+/** Show the checkout picker's filter input only once the list is long enough (#266). */
+const CHECKOUT_FILTER_THRESHOLD = 4;
 
 /** Bug-report / feature-request Google Form, opened by the footer feedback button
  * (#210) in the default browser via the http/https-only `open_url` (#109). */
@@ -1780,6 +1805,8 @@ function Sidebar() {
   const startRepoSession = useStore((s) => s.startRepoSession);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const pullFolder = useStore((s) => s.pullFolder);
+  const checkoutFolderBranch = useStore((s) => s.checkoutFolderBranch);
+  const createFolderBranch = useStore((s) => s.createFolderBranch);
   const openSchedule = useStore((s) => s.openSchedule);
   const addFolder = useStore((s) => s.addFolder);
   const platform = useStore((s) => s.platform);
@@ -1815,8 +1842,18 @@ function Sidebar() {
     y: number;
   } | null>(null);
   const [menuMode, setMenuMode] = useState<
-    "menu" | "confirm" | "confirm-kill" | "confirm-close" | "color"
+    "menu" | "confirm" | "confirm-kill" | "confirm-close" | "color" | "checkout"
   >("menu");
+  // Checkout-branch picker (#266): the repo menu's "Checkout branch…" sub-mode loads
+  // the folder's branches (cached remotes only — no network), filters them, and offers
+  // an inline create-new form. State is reset whenever the sub-mode (re)opens.
+  const [checkoutList, setCheckoutList] = useState<BranchList | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutFilter, setCheckoutFilter] = useState("");
+  const [checkoutCreating, setCheckoutCreating] = useState(false);
+  const [checkoutNewName, setCheckoutNewName] = useState("");
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
   // Collapsed-rail agent right-click menu (#228): the clicked session + clamped pos.
   const [railMenu, setRailMenu] = useState<{
     session: SessionView;
@@ -2004,6 +2041,49 @@ function Sidebar() {
       ).length
     : 0;
   const menuPanelCount = menu ? (overviewPanels[menu.repo]?.length ?? 0) : 0;
+
+  // Load the folder's branches when the checkout sub-mode opens (#266). Cached
+  // remotes only — no `fetchRemotes` network read, keeping the menu snappy. Reset
+  // the picker state on each (re)open / repo change.
+  useEffect(() => {
+    if (menuMode !== "checkout" || !menu) return;
+    const repo = menu.repo;
+    setCheckoutList(null);
+    setCheckoutLoading(true);
+    setCheckoutFilter("");
+    setCheckoutCreating(false);
+    setCheckoutNewName("");
+    setCheckoutError(null);
+    setCheckoutBusy(false);
+    let cancelled = false;
+    void listBranches(repo)
+      .then((bl) => {
+        if (!cancelled) setCheckoutList(bl);
+      })
+      .catch(() => {
+        if (!cancelled) setCheckoutList({ all: [], current: "", remote: [] });
+      })
+      .finally(() => {
+        if (!cancelled) setCheckoutLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [menuMode, menu]);
+
+  // Filtered + ordered branch rows for the checkout picker (#266): locals pinned-then-
+  // git-order, remotes in git order, both narrowed by the filter input.
+  const checkoutQuery = checkoutFilter.trim().toLowerCase();
+  const checkoutLocals = checkoutList
+    ? sortCheckoutBranches(checkoutList.all).filter(
+        (b) => !checkoutQuery || b.toLowerCase().includes(checkoutQuery),
+      )
+    : [];
+  const checkoutRemotes = checkoutList
+    ? (checkoutList.remote ?? []).filter(
+        (r) => !checkoutQuery || r.toLowerCase().includes(checkoutQuery),
+      )
+    : [];
 
   // Drag-to-resize the sidebar (#108): a right-edge handle with pointer capture so
   // the drag tracks even when the pointer leaves the thin handle. The store clamps
@@ -2435,7 +2515,199 @@ function Sidebar() {
             style={{ left: menu.x, top: menu.y }}
             role="menu"
           >
-            {menuMode === "color" ? (
+            {menuMode === "checkout" ? (
+              <div className={styles.checkout}>
+                {/* Destructive-checkout advisory (#266, mirrors the new-session modal):
+                    non-blocking, but visible — a checkout rewrites the working tree of
+                    any agents running in this folder. */}
+                {menuRunning > 0 && (
+                  <div className={styles.checkoutWarning} role="alert">
+                    <AlertTriangle
+                      size={13}
+                      strokeWidth={1.5}
+                      className={styles.checkoutWarnIcon}
+                    />
+                    <span>
+                      {menuRunning} agent{menuRunning === 1 ? "" : "s"} running
+                      here — checkout changes their working tree.
+                    </span>
+                  </div>
+                )}
+                {checkoutLoading ? (
+                  <p className={styles.checkoutEmpty}>Loading branches…</p>
+                ) : (
+                  <>
+                    {(checkoutList?.all.length ?? 0) >
+                      CHECKOUT_FILTER_THRESHOLD && (
+                      <input
+                        className={styles.checkoutFilter}
+                        {...noAutoCapitalize}
+                        type="text"
+                        value={checkoutFilter}
+                        placeholder="Filter branches…"
+                        onChange={(event) =>
+                          setCheckoutFilter(event.currentTarget.value)
+                        }
+                        aria-label="Filter branches"
+                        autoFocus={!checkoutCreating}
+                      />
+                    )}
+                    <div
+                      className={styles.checkoutList}
+                      role="listbox"
+                      aria-label="Branch"
+                    >
+                      {checkoutLocals.length === 0 &&
+                      checkoutRemotes.length === 0 ? (
+                        <p className={styles.checkoutEmpty}>
+                          No matching branches.
+                        </p>
+                      ) : (
+                        <>
+                          {checkoutLocals.map((b) => {
+                            const isCurrent = b === checkoutList?.current;
+                            return (
+                              <button
+                                key={b}
+                                type="button"
+                                role="option"
+                                aria-selected={isCurrent}
+                                aria-disabled={isCurrent || checkoutBusy}
+                                className={`${styles.checkoutBranch} ${isCurrent ? styles.checkoutBranchCurrent : ""}`}
+                                onClick={() => {
+                                  if (isCurrent || checkoutBusy) return;
+                                  void checkoutFolderBranch(menu.repo, b);
+                                  closeMenu();
+                                }}
+                                title={b}
+                              >
+                                <GitBranch
+                                  size={13}
+                                  strokeWidth={1.5}
+                                  className={styles.menuIcon}
+                                />
+                                <span className={styles.checkoutBranchName}>
+                                  {b}
+                                </span>
+                                {isCurrent && (
+                                  <span className={styles.checkoutCurrent}>
+                                    current
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {checkoutRemotes.length > 0 && (
+                            <>
+                              <p className={styles.checkoutRemoteHeader}>
+                                Remote branches
+                              </p>
+                              {checkoutRemotes.map((r) => (
+                                <button
+                                  key={r}
+                                  type="button"
+                                  role="option"
+                                  aria-disabled={checkoutBusy}
+                                  className={styles.checkoutBranch}
+                                  onClick={() => {
+                                    if (checkoutBusy) return;
+                                    setCheckoutBusy(true);
+                                    setCheckoutError(null);
+                                    void createFolderBranch(
+                                      menu.repo,
+                                      checkoutRemoteShort(r),
+                                      r,
+                                    ).then((res) => {
+                                      if (res === true) closeMenu();
+                                      else {
+                                        setCheckoutError(res);
+                                        setCheckoutBusy(false);
+                                      }
+                                    });
+                                  }}
+                                  title={`${r} — check out as a local branch`}
+                                >
+                                  <GitBranch
+                                    size={13}
+                                    strokeWidth={1.5}
+                                    className={styles.menuIcon}
+                                  />
+                                  <span className={styles.checkoutBranchName}>
+                                    {r}
+                                  </span>
+                                </button>
+                              ))}
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
+                    {/* Create + check out a new branch off the current one (#266). */}
+                    {checkoutCreating ? (
+                      <div className={styles.checkoutCreate}>
+                        <input
+                          className={styles.checkoutFilter}
+                          {...noAutoCapitalize}
+                          type="text"
+                          value={checkoutNewName}
+                          placeholder="New branch name…"
+                          onChange={(event) => {
+                            setCheckoutNewName(event.currentTarget.value);
+                            setCheckoutError(null);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              const name = checkoutNewName.trim();
+                              if (!name || checkoutBusy) return;
+                              setCheckoutBusy(true);
+                              setCheckoutError(null);
+                              void createFolderBranch(
+                                menu.repo,
+                                name,
+                                branches[menu.repo] ?? "",
+                              ).then((res) => {
+                                if (res === true) closeMenu();
+                                else {
+                                  setCheckoutError(res);
+                                  setCheckoutBusy(false);
+                                }
+                              });
+                            }
+                          }}
+                          aria-label="New branch name"
+                          autoFocus
+                        />
+                        <span className={styles.checkoutCreateBase}>
+                          from {branches[menu.repo] || "HEAD"} — ↵ to create
+                        </span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className={`${styles.menuItem} ${styles.checkoutCreateToggle}`}
+                        onClick={() => {
+                          setCheckoutCreating(true);
+                          setCheckoutError(null);
+                        }}
+                      >
+                        <Plus
+                          size={13}
+                          strokeWidth={1.5}
+                          className={styles.menuIcon}
+                        />
+                        Create new branch
+                      </button>
+                    )}
+                    {checkoutError && (
+                      <p className={styles.checkoutError} role="alert">
+                        {checkoutError}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : menuMode === "color" ? (
               <div className={styles.colorPicker}>
                 <div className={styles.swatches}>
                   {REPO_PALETTE.map((hex) => {
@@ -2576,6 +2848,19 @@ function Sidebar() {
                     }}
                   >
                     Pull
+                  </button>
+                )}
+                {/* Checkout branch… (#266): pick an existing local/remote branch or
+                    create a new one and `git checkout` it in this folder (no agent
+                    spawn). Gated like Pull on a known current branch (git folder). */}
+                {branches[menu.repo] && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={styles.menuItem}
+                    onClick={() => setMenuMode("checkout")}
+                  >
+                    Checkout branch…
                   </button>
                 )}
                 <div className={styles.menuSeparator} role="separator" />
