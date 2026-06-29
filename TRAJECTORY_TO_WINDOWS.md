@@ -458,3 +458,37 @@ folder/root **moves** them into the repo. Built cross-platform from the start �
   another drive letter; macOS: another mounted volume) and confirm the copy-then-remove
   fallback moves it intact and removes the source. The same-volume rename + collision +
   validation paths are covered by the Rust unit tests.
+
+## 2026-06-30
+
+### Eager worktree creation for scheduled sessions (#259)
+
+A worktree schedule now creates its worktree folder **and** branch **eagerly at schedule
+time** (`create_schedule`), instead of lazily at fire time — so the user can open/create
+items inside the worktree before it fires. Fire (`prepare_worktree_for_schedule`) is now
+**idempotent** (the `!dest.is_dir()` guard wraps both the existing-branch and create-branch
+arms), and cancelling a pending worktree schedule frees the worktree **ref-counted** via the
+existing async `remove_worktree`. Platform-neutral by construction —
+
+- **All worktree writes go through the existing `git.rs` helpers** (`worktree_add`,
+  `worktree_add_new_branch`, `worktree_remove`), which already shell out via
+  `hidden_command()` (the `CREATE_NO_WINDOW` console-flash guard) and are cfg-correct; no
+  new OS-specific code. The worktree path is built by the existing `worktree_path()` helper
+  (app-data dir via `data_dir()`, never a raw `$HOME`) with the `windows_safe_seg`
+  reserved-device-name/trailing-dot guard already applied (#74/#140).
+- **Removal reuses the already-async `remove_worktree` command** (`async` + `spawn_blocking`,
+  #200) driven from the frontend `cleanupWorktreeIfEmpty`, so a large worktree delete never
+  freezes either webview — identical on macOS and Windows.
+- **No new path/string handling on the frontend** — the cancel ref-count keys off the
+  schedule's `worktree_path` string as-is (no `splitPath`/`joinPath`).
+
+#### Still needs manual Windows verification (#259)
+
+- **`git worktree add` at schedule time + `git worktree remove` on cancel** on a Windows
+  build: schedule a worktree session (existing branch and a new branch), confirm the
+  worktree folder + branch appear immediately under the parent repo, open a terminal inside
+  it before it fires, let it fire (agent launches in the same folder), and cancel a separate
+  pending worktree schedule to confirm the folder is removed (a dirty/in-use worktree is
+  kept, never force-deleted). The git-shell-out + path logic is the same on both OSes (and
+  the `prepare_worktree_for_schedule` idempotency + `worktree_add` guard are covered by Rust
+  unit tests), but the end-to-end schedule→fire flow needs the GUI, which CI can't drive.

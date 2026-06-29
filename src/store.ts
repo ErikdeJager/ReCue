@@ -88,22 +88,24 @@ const worktreeParents = new Map<string, string>();
  * Whether a worktree folder `dest` is still referenced by any item (#199): a session
  * (`repoPath === dest` — including an exited-but-still-shown agent with a Restart
  * overlay), an `overviewPanels[dest]` entry (file/diff/terminal/kanban/filetree, #164),
- * or a scheduled session targeting it (`cwd === dest`, #198). Pure — the auto-delete
- * guard keeps the worktree exactly as long as ANY item of ANY type points at it, and
- * removes it only once none remain.
+ * a scheduled session created **inside** it (`cwd === dest`, #198), or a worktree
+ * schedule that **targets** it (`worktree_path === dest`, #259 — its `cwd` is the
+ * parent repo, but its eagerly-created worktree folder is `worktree_path`). Pure — the
+ * auto-delete guard keeps the worktree exactly as long as ANY item of ANY type points
+ * at it, and removes it only once none remain.
  */
 export function worktreeHasItems(
   state: {
     sessions: readonly { repoPath: string }[];
     overviewPanels: Record<string, readonly unknown[]>;
-    schedules: readonly { cwd: string }[];
+    schedules: readonly { cwd: string; worktree_path?: string | null }[];
   },
   dest: string,
 ): boolean {
   return (
     state.sessions.some((s) => s.repoPath === dest) ||
     (state.overviewPanels[dest]?.length ?? 0) > 0 ||
-    state.schedules.some((sc) => sc.cwd === dest)
+    state.schedules.some((sc) => sc.cwd === dest || sc.worktree_path === dest)
   );
 }
 
@@ -1234,7 +1236,9 @@ export interface AppState {
   /** Clear a folder's workspace — kill all its agents AND remove all its non-agent
    * items (each terminal's shell killed) — but keep the folder in recents (#91). */
   closeAllItems: (repoPath: string) => Promise<void>;
-  /** Create a scheduled session (#93); resolves true on success. */
+  /** Create a scheduled session (#93). Resolves `true` on success, else an error
+   * message for inline display (e.g. a worktree schedule's bad/duplicate branch —
+   * its worktree + branch are created eagerly at schedule time, #259). */
   scheduleSession: (
     cwd: string,
     branch: string | null,
@@ -1244,7 +1248,7 @@ export interface AppState {
     createBranch?: boolean,
     base?: string | null,
     worktree?: boolean,
-  ) => Promise<boolean>;
+  ) => Promise<true | string>;
   /** Cancel a pending scheduled session (#93). */
   cancelSchedule: (id: string) => Promise<void>;
   /** Update a schedule's prompt / name / fire time (#93). */
@@ -3816,11 +3820,11 @@ export const useStore = create<AppState>()((set, get) => ({
       get().pushToast(`Scheduled for ${new Date(at * 1000).toLocaleString()}`);
       return true;
     } catch (err) {
-      get().pushToast(
-        isSessionError(err) ? err.message : "Could not schedule session",
-        "error",
-      );
-      return false;
+      // Return the error for inline display in the modal (#259 — a worktree schedule
+      // now creates its worktree + branch eagerly, so a bad/duplicate branch must be
+      // shown so the user can fix it), matching `createBranchSession`. `create_schedule`
+      // only does git + persistence (no agent spawn), so there's no BinaryNotFound here.
+      return isSessionError(err) ? err.message : "Could not schedule session";
     }
   },
 
@@ -3831,11 +3835,21 @@ export const useStore = create<AppState>()((set, get) => ({
     pruneCanvasLeaves((c) => c.kind === "scheduled" && c.scheduleId === id);
     await ipc.cancelSchedule(id).catch(() => {});
     get().pushToast("Schedule canceled");
-    // Worktree auto-delete guard (#199): a schedule can target a worktree (#198) —
-    // cancelling the last item there frees the worktree. No-op for a repo folder.
+    // Worktree auto-delete guard. Two shapes:
+    // 1. A **worktree schedule** (#198/#259) whose worktree + branch were created
+    //    eagerly at schedule time: its `cwd` is the parent repo and its folder is
+    //    `worktree_path`. Cancelling frees that folder (ref-counted via the existing
+    //    async `remove_worktree`; a dirty/in-use worktree is kept, never force-deleted),
+    //    and the sidebar sub-group disappears once no item points at it.
+    // 2. A schedule created **inside** an existing worktree folder (#199): its `cwd`
+    //    is the worktree folder; resolve its parent and free it when empty.
     if (schedule) {
-      const wtParent = worktreeParentOf(get(), schedule.cwd);
-      if (wtParent) void get().cleanupWorktreeIfEmpty(wtParent, schedule.cwd);
+      if (schedule.worktree && schedule.worktree_path) {
+        void get().cleanupWorktreeIfEmpty(schedule.cwd, schedule.worktree_path);
+      } else {
+        const wtParent = worktreeParentOf(get(), schedule.cwd);
+        if (wtParent) void get().cleanupWorktreeIfEmpty(wtParent, schedule.cwd);
+      }
     }
   },
 

@@ -764,6 +764,32 @@ pub fn create_schedule(
     } else {
         None
     };
+    // Worktree schedule (#259): create the worktree folder + (for a create_branch
+    // schedule) its branch **eagerly, at schedule time** — not lazily at fire time —
+    // so the user can open/create items inside the worktree before it fires. Once the
+    // folder and branch exist, every "create item in this worktree" path (new agent,
+    // terminal, file/diff/kanban viewer, nested schedule) just works with no
+    // special-casing (the previous create-at-fire-time design surfaced "branch doesn't
+    // exist" when the user tried to add such an item first). A creation failure is
+    // returned to the caller so the New-Session modal surfaces it inline and the
+    // schedule is **not** persisted; fire time reuses this folder (idempotent — see
+    // `prepare_worktree_for_schedule`). Cancel removes it (ref-counted, frontend-side).
+    if worktree {
+        if let (Some(branch), Some(dest)) = (branch.as_deref(), worktree_path.as_deref()) {
+            let dest = Path::new(dest);
+            // `git worktree add` fails if the folder already exists; reuse it when it
+            // does (e.g. a second worktree schedule on the same existing branch), like
+            // `spawn_worktree_agent`.
+            if !dest.is_dir() {
+                if create_branch {
+                    git::worktree_add_new_branch(&cwd, branch, base.as_deref().unwrap_or(""), dest)
+                        .map_err(SessionError::Git)?;
+                } else {
+                    git::worktree_add(&cwd, branch, dest).map_err(SessionError::Git)?;
+                }
+            }
+        }
+    }
     let sched = ScheduledSession {
         id: Uuid::new_v4().to_string(),
         cwd,
@@ -939,15 +965,24 @@ fn prepare_worktree_for_schedule(
         Some(p) => PathBuf::from(p),
         None => worktree_path(store, &sched.cwd, branch).map_err(|e| e.to_string())?,
     };
-    if sched.create_branch {
-        git::worktree_add_new_branch(
-            &sched.cwd,
-            branch,
-            sched.branch_base.as_deref().unwrap_or(""),
-            &dest,
-        )?;
-    } else if !dest.is_dir() {
-        git::worktree_add(&sched.cwd, branch, &dest)?;
+    // Idempotent (#259): the worktree (and its branch, for a create_branch schedule)
+    // is now created **eagerly at schedule time** (`create_schedule`), so by fire time
+    // `dest` already exists — skip creation and just spawn the agent into it. Only a
+    // pre-#259 schedule (or one whose eager creation was somehow skipped) still creates
+    // here. The `!dest.is_dir()` guard now wraps **both** arms (the existing-branch arm
+    // already had it; the create_branch arm would otherwise fail re-creating an
+    // existing branch/folder).
+    if !dest.is_dir() {
+        if sched.create_branch {
+            git::worktree_add_new_branch(
+                &sched.cwd,
+                branch,
+                sched.branch_base.as_deref().unwrap_or(""),
+                &dest,
+            )?;
+        } else {
+            git::worktree_add(&sched.cwd, branch, &dest)?;
+        }
     }
     Ok(dest.to_string_lossy().to_string())
 }
@@ -1578,5 +1613,94 @@ mod tests {
             explorer_select_arg("C:\\repo\\sub dir\\a.md"),
             "/select,\"C:\\repo\\sub dir\\a.md\""
         );
+    }
+
+    // --- #259: worktree schedules create their worktree eagerly + fire idempotently ---
+
+    fn git_in(dir: &Path, args: &[&str]) -> bool {
+        git::hidden_command("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// A fresh temp git repo with one commit, or `None` if git is unavailable (the
+    /// test then skips, like the `git.rs` integration tests).
+    fn schedule_test_repo(tag: &str) -> Option<PathBuf> {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("recue-cmd-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).ok()?;
+        if !git_in(&dir, &["init", "-q"]) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return None;
+        }
+        git_in(&dir, &["config", "user.email", "t@test.dev"]);
+        git_in(&dir, &["config", "user.name", "Test"]);
+        git_in(&dir, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.join("a.txt"), "x\n").ok()?;
+        if !(git_in(&dir, &["add", "-A"])
+            && git_in(&dir, &["commit", "-q", "--no-verify", "-m", "init"]))
+        {
+            let _ = std::fs::remove_dir_all(&dir);
+            return None;
+        }
+        Some(dir)
+    }
+
+    #[test]
+    fn prepare_worktree_for_schedule_is_idempotent_when_dest_exists() {
+        let Some(repo) = schedule_test_repo("prep-wt") else {
+            return;
+        };
+        // A Store whose data dir is a sibling temp dir, so `worktree_path` resolves a
+        // real folder under it (the worktree lives at <data>/worktrees/<repo-id>/<branch>).
+        let mut data = std::env::temp_dir();
+        data.push(format!("recue-cmd-prep-data-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        std::fs::create_dir_all(&data).unwrap();
+        let store = Store::load(data.join("sessions.json"));
+
+        let repo_str = repo.to_string_lossy().to_string();
+        let dest = worktree_path(&store, &repo_str, "feat-x").unwrap();
+        // git `worktree add` creates the leaf, but make the intermediate dirs exist so
+        // the test doesn't depend on that detail.
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let sched = ScheduledSession {
+            id: "s1".to_string(),
+            cwd: repo_str.clone(),
+            branch: Some("feat-x".to_string()),
+            create_branch: true,
+            branch_base: None,
+            worktree: true,
+            worktree_path: Some(dest.to_string_lossy().to_string()),
+            name: None,
+            prompt: None,
+            fire_at: 0,
+            created_at: 0,
+            agent: "claude".to_string(),
+        };
+
+        // First call creates the worktree + its new branch (the eager-create at
+        // schedule time, exercised here directly).
+        let p1 = prepare_worktree_for_schedule(&store, &sched).expect("first prepare");
+        assert!(Path::new(&p1).is_dir());
+        assert!(git::list_branches(&repo).all.iter().any(|b| b == "feat-x"));
+
+        // Second call (the fire path) is a no-op because `dest` already exists: it must
+        // NOT try to recreate the branch (which would now error "already exists") and
+        // returns the same folder. This is the #259 create-eagerly-then-fire flow.
+        let p2 =
+            prepare_worktree_for_schedule(&store, &sched).expect("second prepare is idempotent");
+        assert_eq!(p1, p2);
+
+        let _ = git::worktree_remove(&repo, Path::new(&p1), true);
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&data);
     }
 }
