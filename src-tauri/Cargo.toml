@@ -41,6 +41,12 @@ tauri-plugin-clipboard-manager = "2.3.2"
 # Encode a clipboard image (raw RGBA) to a temp PNG for image paste (#220) — claude
 # attaches the file when its path is pasted. Pure-Rust, no system deps.
 png = "0.18.1"
+# base64-encode PTY output before emitting `session://output` (#261). serde renders a
+# `Vec<u8>` as a JSON integer array (~4 chars/byte) that the single WebView main thread
+# must `JSON.parse` — under heavy output that starved React inputs everywhere. base64 is
+# ~1.33 chars/byte and decodes with a tight `atob` loop. Already in the dep tree
+# (transitive); pulling it direct adds no new compile. Pure-Rust, platform-neutral.
+base64 = "0.22"
 
 [lints.clippy]
 all = "warn"

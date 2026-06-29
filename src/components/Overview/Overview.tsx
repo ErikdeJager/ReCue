@@ -477,15 +477,20 @@ function ScheduleCard({
   const maximizeItem = useStore((s) => s.maximizeItem);
   const title = (
     <>
-      <span className={styles.name}>
-        {schedule.name?.trim() || schedule.branch || "Scheduled"}
+      {/* Title row (#265): name + optional badge live in a flex row (like
+          SessionCard's `.agentTitle`), so `.titleBlock` (a column) stacks just two
+          lines — title row, then meta — instead of three with a full-width badge. */}
+      <span className={styles.agentTitle}>
+        <span className={styles.name}>
+          {schedule.name?.trim() || schedule.branch || "Scheduled"}
+        </span>
+        {/* Worktree schedule (#218): a static "worktree" badge mirroring the live
+            worktree agent's card (and the ScheduledPanel), so it reads as a worktree
+            everywhere a fired worktree agent does. */}
+        {schedule.worktree && (
+          <span className={styles.worktreeBadge}>worktree</span>
+        )}
       </span>
-      {/* Worktree schedule (#218): a static "worktree" badge mirroring the live
-          worktree agent's card (and the ScheduledPanel), so it reads as a worktree
-          everywhere a fired worktree agent does. */}
-      {schedule.worktree && (
-        <span className={styles.worktreeBadge}>worktree</span>
-      )}
       <span className={styles.meta}>
         <span className={styles.metaText}>
           {repoName(schedule.cwd)}

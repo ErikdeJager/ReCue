@@ -461,6 +461,63 @@ folder/root **moves** them into the repo. Built cross-platform from the start �
 
 ## 2026-06-30
 
+### Per-session PTY locks — terminal input lag fix (#260)
+
+`SessionManager` previously held the **global** `Mutex<HashMap<String, Session>>` across the
+**blocking** PTY work: `write_stdin` did `write_all`/`flush` under that lock, `resize_pty`
+did `master.resize()`, and `scrollback` did the 256 KB ring copy. A busy agent that wasn't
+draining its stdin would block `write_all`, and because the global lock was held, *every
+other* session's keystrokes / resizes / scrollback snapshots queued behind it (cross-terminal
+input stall). The `Session.writer` and `Session.master` are now `Arc<Mutex<…>>` (mirroring
+`child`/`scrollback`); each method clones the per-session `Arc` under a brief global lock,
+**drops the global guard**, then does the blocking op under the per-session lock — so a
+backpressured/flooding session can no longer stall another's input.
+
+- **Platform-neutral.** `portable-pty`'s `MasterPty`/writer are the same trait objects on
+  macOS and Windows (ConPTY); wrapping them in `Arc<Mutex>` needs **no `#[cfg]`** and the
+  lock-hold change is identical on both OSes. All 119 Rust tests stay green.
+
+#### Still needs manual verification (both OSes, #260)
+
+- **Keystroke-under-load**: run an agent that floods output (a long build) in one terminal,
+  type rapidly in a second terminal, and confirm keystrokes appear without the multi-hundred-ms
+  lag — and that resizing/mounting a terminal while another floods doesn't stall. CI can't
+  exercise PTY backpressure.
+- **Windows ConPTY backpressure**: re-confirm the same on a Windows box — ConPTY's stdin
+  buffering/backpressure differs from a unix PTY, so the "full stdin buffer blocks `write_all`"
+  path should be spot-checked there specifically.
+
+### Shrink the output IPC payload + throttle terminal writes (#261)
+
+Heavy terminal output (a long build/log) was stalling React inputs everywhere (the Kanban
+textarea, a second terminal) because each ~8 KB PTY read was emitted as a serde JSON
+**integer array** (`[27,91,49,...]`, ~4 chars/byte) the single WebView main thread had to
+`JSON.parse` + `Uint8Array.from(number[])`. The fix is platform-neutral, with **no
+`#[cfg]` branch**:
+
+- **Backend** base64-encodes the chunk in the `lib.rs` event forwarder
+  (`commands::encode_output`, the `base64` crate — already in the dep tree); the
+  `session://output` payload field is now `b64: String` instead of `bytes: Vec<u8>`. Pure
+  Rust, byte-identical on macOS and Windows (Rust unit test `output_base64_round_trips`).
+- **Frontend** decodes with `decodeOutputB64` (`atob` + a tight byte loop — `atob` exists
+  in both WKWebView and WebView2) and `terminalPool.ts` coalesces the frame's chunks into
+  **one `term.write` per `requestAnimationFrame`** (both available in both WebViews). No
+  OS-sensitive primitive anywhere.
+
+#### Still needs manual Windows verification (#261)
+
+- **Heavy-output render is byte-identical on WebView2**: on a Windows build, run a flooding
+  command (e.g. a long `cargo build` / a large log `type`) in one terminal and confirm the
+  TUI renders correctly (no dropped/reordered bytes, `claude`'s width-specific redraw
+  intact) — the base64 round-trip + rAF coalescing must not garble output on WebView2 as it
+  doesn't on WKWebView. CI can't drive a live terminal flood.
+- **Responsiveness under flood**: with that flood running, confirm typing in a Kanban card
+  textarea and in a second terminal stays responsive on Windows (the whole point of the
+  task). Re-confirm on macOS.
+- **Detached canvas window**: confirm a detached window still renders its owned PTYs
+  correctly under heavy output (the encode happens once in the forwarder; `emit` still
+  broadcasts to every window).
+
 ### Terminal last-row bottom clearance (#262)
 
 The terminal's last row (claude's prompt / input line) could fall below the visible

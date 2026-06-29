@@ -67,7 +67,16 @@ pub fn run() {
                 for event in rx {
                     let _ = match event {
                         SessionEvent::Output { id, bytes } => {
-                            handle.emit("session://output", commands::OutputPayload { id, bytes })
+                            // base64-encode here (off the per-session reader thread) so the
+                            // `session://output` payload is a compact string, not a multi-KB
+                            // JSON integer array the WebView main thread must JSON.parse (#261).
+                            handle.emit(
+                                "session://output",
+                                commands::OutputPayload {
+                                    id,
+                                    b64: commands::encode_output(&bytes),
+                                },
+                            )
                         }
                         SessionEvent::Exited { id, code } => {
                             handle.emit("session://exited", commands::ExitPayload { id, code })

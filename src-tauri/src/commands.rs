@@ -14,10 +14,27 @@ use crate::pty::{SessionError, SessionManager};
 use crate::store::{OverviewPanel, PersistedSession, ScheduledSession, Store};
 
 /// Payload for the `session://output` event.
+///
+/// PTY output is carried as a **base64 string**, not a `Vec<u8>` (#261): serde
+/// serializes a byte vector as a JSON integer array (`[27,91,49,...]`, ~4 chars per
+/// byte), so an 8 KB read ballooned to ~25–40 KB of JSON that the single WebView main
+/// thread had to `JSON.parse` + `Uint8Array.from(number[])` before writing to xterm.
+/// Under heavy output that saturated the main thread and stalled React keystroke
+/// handling everywhere (the Kanban textarea, other terminals). base64 is ~1.33 chars
+/// per byte and decodes with a tight `atob` byte loop. The encode happens in the event
+/// forwarder (`lib.rs`); the field is named `b64` so the wire shape is unambiguous.
+/// Platform-neutral — `atob` exists in both WKWebView (macOS) and WebView2 (Windows).
 #[derive(Clone, Serialize)]
 pub struct OutputPayload {
     pub id: String,
-    pub bytes: Vec<u8>,
+    pub b64: String,
+}
+
+/// Encode a chunk of PTY output as base64 for the `session://output` event (#261).
+/// Pure Rust, identical on macOS and Windows; the WebView decodes it with `atob`.
+pub fn encode_output(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 /// Payload for the `session://exited` event.
@@ -1512,6 +1529,25 @@ pub fn agent_info(agent: String) -> AgentInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_base64_round_trips() {
+        use base64::Engine as _;
+        let cases: &[&[u8]] = &[
+            b"",
+            b"hello",
+            // ESC [ 0 m and a smattering of high bytes / nulls (a TUI control burst).
+            &[0x1b, b'[', b'0', b'm'],
+            &[0u8, 27, 91, 49, 255, 254, 0, 128, 10, 13],
+        ];
+        for case in cases {
+            let encoded = encode_output(case);
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(&encoded)
+                .expect("valid base64");
+            assert_eq!(&decoded, case, "round-trip must be byte-exact");
+        }
+    }
 
     #[test]
     fn http_url_accepts_http_and_https() {

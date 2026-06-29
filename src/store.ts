@@ -27,6 +27,7 @@ import {
 import { serializeBoard } from "./components/Kanban/kanban";
 import { defaultBoard } from "./components/Kanban/kanbanOps";
 import { applyTerminalSettings } from "./components/Terminal/terminalPool";
+import { decodeOutputB64 } from "./decodeOutput";
 import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
 import {
@@ -69,6 +70,12 @@ let toastSeq = 0;
 // are suppressed during this window to avoid a wall of them (#30). Module-local
 // (no component reacts to it), like `toastSeq`.
 let booting = false;
+// Ids of sessions still in the boot "reconnecting" window (#30). Mirrors the
+// per-session `reconnecting` flag, but lets the output hot path clear it with an
+// O(1) Set check instead of scanning every session on each chunk (#261). Seeded in
+// `refresh`, drained in `markConnected`/`markExited`/`markRunning`, cleared when the
+// reconnect backstop fires.
+const reconnectingIds = new Set<string>();
 // Subscribe to session events exactly once: StrictMode double-invokes the init
 // effect in dev, which would otherwise register duplicate listeners and
 // double-fire every exit toast (#32).
@@ -1698,14 +1705,16 @@ export const useStore = create<AppState>()((set, get) => ({
     pruneCanvasLeaves((c) => c.kind === "agent" && c.sessionId === id);
   },
 
-  markExited: (id, code) =>
+  markExited: (id, code) => {
+    reconnectingIds.delete(id); // no longer reconnecting (#261)
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, exitedCode: code, reconnecting: false } : x,
       ),
       // An exited session is not working — clear any busy flag (#42).
       sessionBusy: omitKey(s.sessionBusy, id),
-    })),
+    }));
+  },
 
   setBusy: (id, busy) => {
     const wasBusy = get().sessionBusy[id] ?? false;
@@ -1756,19 +1765,23 @@ export const useStore = create<AppState>()((set, get) => ({
       };
     }),
 
-  markRunning: (id) =>
+  markRunning: (id) => {
+    reconnectingIds.delete(id); // no longer reconnecting (#261)
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, exitedCode: undefined, reconnecting: false } : x,
       ),
-    })),
+    }));
+  },
 
-  markConnected: (id) =>
+  markConnected: (id) => {
+    reconnectingIds.delete(id); // drained on the first live output (#261)
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, reconnecting: false } : x,
       ),
-    })),
+    }));
+  },
 
   setClaudeMissing: (missing) => set({ claudeMissing: missing }),
 
@@ -1982,12 +1995,17 @@ export const useStore = create<AppState>()((set, get) => ({
       eventsSubscribed = true;
       try {
         await ipc.subscribeSessionEvents({
-          onOutput: ({ id, bytes }) => {
-            emitSessionOutput(id, Uint8Array.from(bytes));
-            // First live output proves a reconnecting session is alive — clear
-            // the flag. A plain read keeps output off the re-render path; the
-            // setter only runs on the one transition (#30).
-            if (get().sessions.find((x) => x.id === id)?.reconnecting) {
+          onOutput: ({ id, b64 }) => {
+            // Decode the compact base64 payload with a tight byte loop instead of a
+            // multi-KB JSON.parse, then feed the bytes straight to the outputBus (off
+            // the React re-render path) (#261).
+            emitSessionOutput(id, decodeOutputB64(b64));
+            // First live output proves a reconnecting session is alive — clear the
+            // flag exactly once. An O(1) Set check keeps this per-chunk hot path off
+            // a linear scan over every session (#261); `markConnected` does the one
+            // store write (it also drains the Set) (#30).
+            if (reconnectingIds.has(id)) {
+              reconnectingIds.delete(id);
               get().markConnected(id);
             }
           },
@@ -2131,6 +2149,9 @@ export const useStore = create<AppState>()((set, get) => ({
         ...toSessionView(r),
         reconnecting: true,
       }));
+      // Mirror the reconnecting flag into the Set the output hot path checks (#261).
+      reconnectingIds.clear();
+      for (const v of views) reconnectingIds.add(v.id);
       set({
         sessions: views,
         recents,
@@ -2146,6 +2167,7 @@ export const useStore = create<AppState>()((set, get) => ({
       // its scrollback still replays the conversation).
       setTimeout(() => {
         booting = false;
+        reconnectingIds.clear(); // backstop fired — none are reconnecting now (#261)
         if (get().sessions.some((x) => x.reconnecting)) {
           set((s) => ({
             sessions: s.sessions.map((x) =>
