@@ -584,6 +584,7 @@ export const DEFAULT_SETTINGS: Settings = {
   canvasCloseBehavior: "ask",
   diffDisplayMode: "focused",
   diffLineMode: "unified",
+  diffSortOrder: "occurrence",
   // The three default-board lanes (#239), seeded with their hashed-name colors so the
   // Settings list matches what an unconfigured board shows out of the box; editable.
   kanbanColumnColors: ["To Do", "Doing", "Done"].map((name) => ({

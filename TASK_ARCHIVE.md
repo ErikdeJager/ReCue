@@ -6693,3 +6693,155 @@ updater to serve it; the pipeline tags the commit `v1.0.1`.
 
 ---
 
+### 257. [x] Larger, vertically resizable Kanban card input fields
+
+**Status:** Done
+**Depends on:** none _(the foundational Kanban-input task; later cards build on the same KanbanPanel files)_
+**Created:** 2026-06-30
+
+**Description**
+
+The two card-editing textareas in the in-app Kanban board panel — the **add-card
+composer** and the **inline card editor** — were too thin (started at `rows={3}` with no
+`min-height`), so the existing `resize: vertical` drag handle was barely usable. This is a
+pure sizing/affordance change: make both textareas comfortably taller by default and
+genuinely vertically resizable by dragging, with no behavioral change to add/edit/save.
+
+**What shipped** (commit `da0e56d`, PR
+[#8](https://github.com/ErikdeJager/ReCue/pull/8), merged `15c270f`, 2026-06-30):
+
+- **Taller default** — `rows={3}` → `rows={5}` on both `KanbanPanel.tsx` textareas (the
+  `SortableCard` inline editor and the `BoardColumn` add-card composer).
+- **Floored + capped drag range** — `KanbanPanel.module.css` adds `min-height: 88px`
+  (~5 lines, so a drag can't shrink it below a usable size) and `max-height: 320px` (so a
+  very tall drag never blows out the board layout — the textarea scrolls internally past
+  that) to both `.cardEditInput` and `.composerInput`. `resize: vertical` was already
+  present (the drag handle); no JS added.
+- The Raw-view editor (`.rawEditor`, `resize: none`) was intentionally left untouched.
+
+**Key files/areas touched:** `src/components/Kanban/KanbanPanel.tsx` (two `rows`),
+`src/components/Kanban/KanbanPanel.module.css` (`.cardEditInput` / `.composerInput`
+min/max-height).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): `rows={5}` as the
+  taller default; `min-height: 88px` / `max-height: 320px` as the floor/cap; reuse the
+  already-present `resize: vertical` rather than any JS drag handle; leave width, padding,
+  and font tokens unchanged (stay on-system).
+- **Cross-platform:** pure CSS + `rows` props rendered in the WebView — identical on
+  WKWebView (macOS) and WebView2 (Windows); `resize: vertical` and the `::-webkit-resizer`
+  handle render on both, so no platform branch. Frontend-only; Rust unaffected.
+- **Foundational** for the later Kanban-input cards (Enter-creates-and-reopens-composer,
+  undo-on-delete) that build on the same `KanbanPanel` files.
+
+---
+
+### 258. [x] Diff viewer — sort changes by occurrence (default) or alphabetical, persisted
+
+**Status:** Done
+**Depends on:** none _(builds on shipped #231 display modes + #237 mode persistence)_
+**Created:** 2026-06-30
+
+**Description**
+
+The `DiffInspector` previously rendered changed files in git's emission order with no
+client-side sort. This adds two user-chosen, **persisted** file-ordering modes: **By
+occurrence** (the new default) places a file at the **bottom** of the list the first time
+it appears as changed and never reorders it on a re-change (a file that leaves the diff and
+reappears is treated as new → bottom) — so an agent's edits read top-to-bottom in the order
+they happened; and **Alphabetical** (case-insensitive A→Z). Both Focused and Accordion
+modes, the `i/N` counter, prev/next, and keyboard nav step through the displayed order.
+
+**What shipped** (commit `33cc843`, PR
+[#9](https://github.com/ErikdeJager/ReCue/pull/9), merged `8c3e7b9`, 2026-06-30):
+
+- **Persisted preference** — `Settings.diffSortOrder: "occurrence" | "alphabetical"` added
+  to `src/types/index.ts`, default `"occurrence"` in `DEFAULT_SETTINGS` (`store.ts`). Lives
+  in the frontend-owned settings blob (opaque `serde_json::Value` on the Rust side), so
+  **no Rust change** and old blobs upgrade via `mergeSettings`.
+- **Pure ordering helper** — new `DiffInspector/diffSort.ts` exports `DiffSortOrder`,
+  `reconcileOccurrence(prev, paths, counter)` (assigns the next counter to any newly-seen
+  path, keeps existing positions, drops vanished paths) and `sortFiles(files, mode, seq)`.
+  Unit-tested in `diffSort.test.ts` (append order, re-seen keeps position, vanish→reappear
+  at bottom, case-insensitive stable alphabetical).
+- **Wired into `DiffInspector.tsx`** — `sortOrder` seeded once from the global setting at
+  mount; a `seq` map reconciled on each poll of `diff`; `orderedFiles = sortFiles(...)`
+  feeds the Focused picker, the `i/N` index, `stepFile` wraparound, and the Accordion
+  cards. A segmented **Recent / A–Z** toggle in the header (next to the display/line-mode
+  toggles, reusing their `.mode`/`.modeActive` styling) writes back via
+  `saveSettings({ ...settings, diffSortOrder: next })`.
+
+**Key files/areas touched:** `src/components/DiffInspector/{DiffInspector.tsx,
+DiffInspector.module.css,diffSort.ts,diffSort.test.ts}`, `src/types/index.ts`,
+`src/store.ts`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): "by occurrence"
+  has **no backend metadata**, so it's derived client-side from a per-panel `path→seq` map;
+  the **occurrence sequence is per-panel-session, NOT persisted** — only the sort-mode
+  *preference* persists (mirroring `diffDisplayMode`). On a fresh mount the list seeds from
+  git's order, then tracks occurrence going forward. Default = occurrence (per the card).
+- **Cross-platform:** pure TS/CSS in the WebView — no platform branch; Rust unaffected.
+  `npm test` (new `diffSort.test.ts`) / `build` / `lint` green.
+- **Foundational** for the planned "seen / not-seen / changed-since-seen" diff marker
+  (#278), which interacts with occurrence ordering and edits the same `DiffInspector.tsx` +
+  `Settings` surface — they must be serialized.
+
+---
+
+### 260. [x] Fix terminal input lag — don't hold the global session lock across blocking PTY writes
+
+**Status:** Done
+**Depends on:** none _(parallel with #261, the output-path half of the same "input lag" PLAN card)_
+**Created:** 2026-06-30
+
+**Description**
+
+Typing in one terminal stalled (~0.5s) whenever another terminal was busy/backpressured.
+Root cause: `SessionManager` held its **single global `Mutex<HashMap<String, Session>>`**
+across **blocking** PTY work — `write_stdin` did `writer.write_all()` + `flush()` while
+holding the global guard, so when a busy agent stopped draining its stdin and the PTY input
+buffer filled, `write_all` blocked and **every other session's keystroke** (plus every
+`resize_pty` and `scrollback` snapshot) queued behind it. `resize_pty` (across
+`master.resize()`) and `scrollback` (across a 256 KB ring copy) had the same flaw. This
+moves the blocking per-session work off the global lock so a flooding/blocked terminal can
+no longer delay other sessions. Behavior is otherwise unchanged. (This is the **input/write
+path**; the dominant global-lag fix on the **output delivery path** is the parallel #261.)
+
+**What shipped** (commit `871cde2`, PR
+[#10](https://github.com/ErikdeJager/ReCue/pull/10), merged `feba4f6`, 2026-06-30):
+
+- **Per-session `writer` + `master` locks** — `Session.writer` and `Session.master` became
+  `Arc<Mutex<Box<…>>>` (mirroring the already-wrapped `child`/`scrollback`), wrapped at the
+  spawn site.
+- **Blocking ops off the global lock** — `write_stdin`, `resize_pty`, and `scrollback` now
+  lock the global map **only** to `get(id)` and **clone the relevant `Arc<Mutex<…>>`**, drop
+  the global guard, then do the blocking `write_all`+`flush` / `resize()` / `snapshot()`
+  under the per-session lock. Map mutations (`spawn`/`kill_session`/`kill_all`) stay under
+  the global lock as fast ops.
+- **`TRAJECTORY_TO_WINDOWS.md` note** — records that the keystroke-under-load behavior
+  (PTY backpressure) should be spot-checked on a real box, incl. Windows ConPTY.
+
+**Key files/areas touched:** `src-tauri/src/pty.rs` (`Session` struct, `spawn_with_id`,
+`write_stdin`, `resize_pty`, `scrollback`); `TRAJECTORY_TO_WINDOWS.md`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): chose the
+  **per-session-lock approach over a per-session writer thread** (lower risk and sufficient;
+  the thread variant is reserved only if this proves insufficient). The `activity` stamp
+  keeps using its own brief mutex.
+- **Cross-platform:** `portable-pty`'s writer/master are the same abstraction on macOS and
+  Windows (ConPTY); wrapping them in `Arc<Mutex>` is platform-neutral, no `#[cfg]`. Flagged
+  in `TRAJECTORY_TO_WINDOWS.md` for a real-box ConPTY check. `cargo test` green.
+
+---
+

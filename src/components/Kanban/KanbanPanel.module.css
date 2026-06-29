@@ -509,6 +509,12 @@
 .cardEditInput {
   display: block;
   width: 100%;
+  /* A comfortably tall default (~5 lines) with a vertical drag handle (#257).
+     min-height keeps a drag from shrinking it below a usable size; max-height
+     caps how tall a drag can grow it so the board layout never blows out (the
+     textarea scrolls internally past that). */
+  min-height: 88px;
+  max-height: 320px;
   resize: vertical;
   background: var(--bg-base);
   border: 1px solid var(--border-strong);
@@ -665,6 +671,11 @@
 .composerInput {
   display: block;
   width: 100%;
+  /* Match the inline card editor (#257): a tall default with a vertical drag
+     handle, floored by min-height and capped by max-height so a drag stays
+     within a usable range and never overflows the board. */
+  min-height: 88px;
+  max-height: 320px;
   resize: vertical;
   background: var(--bg-base);
   border: 1px solid var(--col-accent, var(--border-strong));
