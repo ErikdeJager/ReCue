@@ -210,10 +210,16 @@
 
 .configField {
   display: flex;
-  flex: 1;
-  min-height: 0;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+/* The new-agent prompt field is the only config field that should fill the block
+   body — sibling fields (the agent-name input + its helper) stay content-sized so
+   they don't claim half the height and cap the prompt textarea at ~half. */
+.configFieldGrow {
+  flex: 1;
+  min-height: 0;
 }
 
 .configLabel {
@@ -223,7 +229,7 @@
 
 .configInput {
   flex: 1;
-  min-height: 56px;
+  min-height: 140px;
   width: 100%;
   padding: var(--space-6) var(--space-8);
   border: 1px solid var(--border-strong);
@@ -279,11 +285,13 @@
 /* Relative ⇄ absolute path segmented control + Browse row (#224). */
 .pathModeRow {
   display: flex;
+  justify-content: flex-start;
   gap: var(--space-2);
 }
 
 .pathModeBtn {
-  flex: 1;
+  flex: 0 0 auto;
+  min-width: 72px;
   padding: var(--space-2) var(--space-8);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
