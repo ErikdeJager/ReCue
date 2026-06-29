@@ -1096,3 +1096,36 @@ directive (2026-06-26) all interpretation calls below were made autonomously.
   `checkoutFolderBranch`/`createFolderBranch` (model on `pullFolder`); **no agent spawned**
   (distinct from `spawnSession`'s checkout). Reuse existing `checkout_branch`/`create_branch`
   commands (no backend change). Show the running-agents destructive advisory. `deps: none`.
+
+## Task 267 — File-tree folder/file context menu (new folder, delete)
+- Folder rows get a new context menu (New folder…/Delete folder); file rows gain Delete.
+  Two new path-validated `files.rs` writes — `create_dir` + `delete_path` (the 3rd/4th
+  deliberate writes) — strictly confined (canonicalize, `starts_with` repo, **refuse repo
+  root**, reject symlinks/`..`, no clobber), reserved-name guard for new folders. Deletes
+  confirm-gated (Settings #103). Refresh via the existing `fileTreeRefresh` bump. `deps: none`.
+
+## Task 268 — Natural-language launch-time input
+- **Custom parser in `time.ts`, no new date lib** (offline ethos). Covers durations
+  (1h/30m/1 hour), clock times (15:00/6pm/9:30am), today/tomorrow prefixes, explicit-date
+  fallback. **A bare time already past today rolls to tomorrow.** Free-text input + static
+  hint + live "Starts <date/time>" preview, replacing both `datetime-local` widgets. Invalid
+  input disables submit. `deps: none`.
+
+## Task 269 — Start now button
+- New backend `fire_schedule_now(id)` command, extracted from a shared `fire_one_schedule`
+  helper factored out of `fire_due_schedules`; reuses the existing `schedule://fired` →
+  `onFired` transition. Button in ScheduledPanel + Overview card + sidebar row.
+- **`deps: 259`** — serialized after eager-worktree (both restructure the fire path; avoids
+  a risky merge in worktree/spawn code and guarantees fire-now reuses the eager worktree).
+
+## Task 270 — Gray out gitignored files/folders
+- Add `--ignored=matching` to the `git status` read + a `FileStatus::Ignored` ("I") variant;
+  parser stops dropping `!` entries. Frontend: `statusIgnored` tint (`--text-muted`).
+  **Ignored is kept OUT of the folder severity roll-up** (an ignored child must not gray a
+  tracked parent); a folder grays only when the directory itself is ignored. `deps: none`.
+
+## Task 271 — Copy button on rendered markdown code blocks
+- A `pre` override added to FileViewer's `markdownComponents` (alongside the existing
+  `code: MermaidCode`) renders a hover-revealed Copy button per fenced block, using
+  `store.copyToClipboard`. **Scoped to FileViewer only** (Mermaid precedent) — Kanban/
+  PatchNotes/Settings unaffected; inline code + mermaid diagrams excluded. `deps: none`.
