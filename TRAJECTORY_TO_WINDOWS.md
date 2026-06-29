@@ -458,3 +458,31 @@ folder/root **moves** them into the repo. Built cross-platform from the start �
   another drive letter; macOS: another mounted volume) and confirm the copy-then-remove
   fallback moves it intact and removes the source. The same-volume rename + collision +
   validation paths are covered by the Rust unit tests.
+
+## 2026-06-30
+
+### Per-session PTY locks — terminal input lag fix (#260)
+
+`SessionManager` previously held the **global** `Mutex<HashMap<String, Session>>` across the
+**blocking** PTY work: `write_stdin` did `write_all`/`flush` under that lock, `resize_pty`
+did `master.resize()`, and `scrollback` did the 256 KB ring copy. A busy agent that wasn't
+draining its stdin would block `write_all`, and because the global lock was held, *every
+other* session's keystrokes / resizes / scrollback snapshots queued behind it (cross-terminal
+input stall). The `Session.writer` and `Session.master` are now `Arc<Mutex<…>>` (mirroring
+`child`/`scrollback`); each method clones the per-session `Arc` under a brief global lock,
+**drops the global guard**, then does the blocking op under the per-session lock — so a
+backpressured/flooding session can no longer stall another's input.
+
+- **Platform-neutral.** `portable-pty`'s `MasterPty`/writer are the same trait objects on
+  macOS and Windows (ConPTY); wrapping them in `Arc<Mutex>` needs **no `#[cfg]`** and the
+  lock-hold change is identical on both OSes. All 119 Rust tests stay green.
+
+#### Still needs manual verification (both OSes, #260)
+
+- **Keystroke-under-load**: run an agent that floods output (a long build) in one terminal,
+  type rapidly in a second terminal, and confirm keystrokes appear without the multi-hundred-ms
+  lag — and that resizing/mounting a terminal while another floods doesn't stall. CI can't
+  exercise PTY backpressure.
+- **Windows ConPTY backpressure**: re-confirm the same on a Windows box — ConPTY's stdin
+  buffering/backpressure differs from a unix PTY, so the "full stdin buffer blocks `write_all`"
+  path should be spot-checked there specifically.
