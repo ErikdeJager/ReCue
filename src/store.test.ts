@@ -224,6 +224,92 @@ describe("app store", () => {
     vi.useRealTimers();
   });
 
+  it("bumpFileTreeRefresh increments one repo's re-list counter (#253/#264)", () => {
+    useStore.setState({ fileTreeRefresh: {}, fileTreeMounts: {} });
+    useStore.getState().bumpFileTreeRefresh("/repo/a");
+    expect(useStore.getState().fileTreeRefresh["/repo/a"]).toBe(1);
+    useStore.getState().bumpFileTreeRefresh("/repo/a");
+    expect(useStore.getState().fileTreeRefresh["/repo/a"]).toBe(2);
+    // An untouched repo isn't created.
+    expect(useStore.getState().fileTreeRefresh["/repo/b"]).toBeUndefined();
+  });
+
+  it("bumpFileTreeRefresh() bumps only repos with a mounted tree (#264)", () => {
+    useStore.setState({
+      fileTreeRefresh: {},
+      fileTreeMounts: { "/repo/a": 1, "/repo/b": 2 },
+    });
+    useStore.getState().bumpFileTreeRefresh();
+    expect(useStore.getState().fileTreeRefresh["/repo/a"]).toBe(1);
+    expect(useStore.getState().fileTreeRefresh["/repo/b"]).toBe(1);
+    // No mounted trees → no-op (no churn when nothing is open).
+    useStore.setState({ fileTreeRefresh: {}, fileTreeMounts: {} });
+    useStore.getState().bumpFileTreeRefresh();
+    expect(useStore.getState().fileTreeRefresh).toEqual({});
+  });
+
+  it("register/unregisterFileTree ref-counts open trees (#264)", () => {
+    useStore.setState({ fileTreeMounts: {} });
+    const { registerFileTree, unregisterFileTree } = useStore.getState();
+    registerFileTree("/repo/a");
+    registerFileTree("/repo/a");
+    expect(useStore.getState().fileTreeMounts["/repo/a"]).toBe(2);
+    // One unmount leaves the other instance registered.
+    unregisterFileTree("/repo/a");
+    expect(useStore.getState().fileTreeMounts["/repo/a"]).toBe(1);
+    // The last unmount drops the key entirely (not a lingering 0).
+    unregisterFileTree("/repo/a");
+    expect(useStore.getState().fileTreeMounts["/repo/a"]).toBeUndefined();
+    expect("/repo/a" in useStore.getState().fileTreeMounts).toBe(false);
+  });
+
+  it("refreshOpenFileTrees re-lists + re-tints only mounted repos (#264)", () => {
+    const statuses = vi.fn();
+    useStore.setState({
+      fileTreeRefresh: {},
+      fileTreeMounts: { "/repo/a": 1, "/repo/b": 1 },
+      refreshFileStatuses: statuses,
+    });
+    useStore.getState().refreshOpenFileTrees();
+    // Re-list both open trees …
+    expect(useStore.getState().fileTreeRefresh["/repo/a"]).toBe(1);
+    expect(useStore.getState().fileTreeRefresh["/repo/b"]).toBe(1);
+    // … and re-tint each (one scoped status read per open repo).
+    expect(statuses).toHaveBeenCalledTimes(2);
+    expect(statuses).toHaveBeenCalledWith("/repo/a");
+    expect(statuses).toHaveBeenCalledWith("/repo/b");
+  });
+
+  it("refreshOpenFileTrees is a no-op when no tree is open (#264)", () => {
+    const statuses = vi.fn();
+    useStore.setState({
+      fileTreeRefresh: {},
+      fileTreeMounts: {},
+      refreshFileStatuses: statuses,
+    });
+    useStore.getState().refreshOpenFileTrees();
+    expect(statuses).not.toHaveBeenCalled();
+    expect(useStore.getState().fileTreeRefresh).toEqual({});
+  });
+
+  it("also re-lists open trees on the busy→idle settle, debounced (#264)", () => {
+    vi.useFakeTimers();
+    const bump = vi.fn();
+    useStore.setState({
+      refreshBranches: vi.fn(),
+      refreshFileStatuses: vi.fn(),
+      bumpFileTreeRefresh: bump,
+    });
+    const setBusy = useStore.getState().setBusy;
+    setBusy("s1", true); // idle→busy: no refresh
+    expect(bump).not.toHaveBeenCalled();
+    setBusy("s1", false); // busy→idle: schedules the debounced refresh
+    expect(bump).not.toHaveBeenCalled(); // still debounced
+    vi.advanceTimersByTime(600);
+    expect(bump).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it("setOverviewRepoFilter toggles, switches, and clears (#34)", () => {
     // Default mode is "all" (folder click).
     useStore.getState().setOverviewRepoFilter("/repo/x");

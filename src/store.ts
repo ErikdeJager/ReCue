@@ -145,7 +145,35 @@ function scheduleBranchRefresh(): void {
     branchRefreshTimer = undefined;
     void useStore.getState().refreshBranches();
     void useStore.getState().refreshFileStatuses();
+    // A finished turn is exactly when an agent's just-written files land. The
+    // git-status re-tint above can't add a *new* row (rows come only from `list_dir`),
+    // so also re-list every open tree's loaded levels so created/removed files appear
+    // right after the agent settles, without collapsing expanded folders (#264).
+    useStore.getState().bumpFileTreeRefresh();
   }, BRANCH_REFRESH_DEBOUNCE_MS);
+}
+
+// FileTree disk-change refresh (#264): a tree's rows come only from `list_dir`, so a
+// file created/removed on disk (by an agent or the user) isn't shown until that level
+// is re-listed. A gentle visibility poll (every ~5s, paused while the window is hidden)
+// plus a focus/visibility backstop re-list every mounted tree's loaded levels (and
+// re-tint its git statuses) — so changes appear within a few seconds without a manual
+// Refresh and without losing expanded folders. Bounded: only repos with an open tree
+// are touched, and only their already-loaded levels are re-fetched (even on huge repos).
+const FILE_TREE_POLL_MS = 5_000;
+let fileTreePollTimer: ReturnType<typeof setInterval> | undefined;
+let fileTreeFocusListener: (() => void) | undefined;
+let fileTreeVisibilityListener: (() => void) | undefined;
+// Coalesce a poll tick + a focus/visibility event landing close together into one
+// refresh, so they never double-fire.
+const FILE_TREE_REFRESH_DEBOUNCE_MS = 400;
+let fileTreeRefreshDebounce: ReturnType<typeof setTimeout> | undefined;
+function scheduleOpenFileTreeRefresh(): void {
+  if (fileTreeRefreshDebounce) clearTimeout(fileTreeRefreshDebounce);
+  fileTreeRefreshDebounce = setTimeout(() => {
+    fileTreeRefreshDebounce = undefined;
+    useStore.getState().refreshOpenFileTrees();
+  }, FILE_TREE_REFRESH_DEBOUNCE_MS);
 }
 
 // 5-hour usage poll (#154): 180s — the OAuth usage endpoint aggressively 429s below
@@ -763,9 +791,14 @@ export interface AppState {
    * tree. Set by the window-global drag-drop listener; read by every FileTree to
    * highlight the precise drop target. Transient (never persisted). */
   fileDropTarget: { repo: string; dir: string } | null;
-  /** Per-repo monotonic counter bumped after a successful drop-move (#253) so each
-   * FileTree reloads its visible levels (the moved-in file appears) without a reset. */
+  /** Per-repo monotonic counter bumped to make each FileTree re-list its visible
+   * levels in place — without a reset, so expanded folders are preserved. Bumped after
+   * a successful drop-move (#253) and on the disk-change poll / busy→idle edge (#264). */
   fileTreeRefresh: Record<string, number>;
+  /** Repos with a FileTree currently mounted in this window (#264, ref-counted) — the
+   * disk-change visibility poll only re-lists/re-tints trees the user actually has open,
+   * so background churn stays bounded. Per-window (each window has its own store). */
+  fileTreeMounts: Record<string, number>;
   /** Assigned per-repo colors, path → hex (#35); unassigned repos derive a default. */
   repoColors: Record<string, string>;
   /** Per-repo ordered list of extra (non-agent) Overview panels (#38). */
@@ -999,6 +1032,24 @@ export interface AppState {
    * mount / Refresh path), else every repo in the sidebar set (load / busy→idle /
    * git-write paths). Fail-open per repo (a failed read leaves the prior map). */
   refreshFileStatuses: (repo?: string) => Promise<void>;
+  /** Bump the FileTree re-list signal (#253/#264): one repo when `repo` is given, else
+   * every repo with a mounted tree. Each mounted FileTree re-fetches its currently
+   * loaded directory levels in place — surfacing files created/removed on disk —
+   * **without** collapsing expanded folders. */
+  bumpFileTreeRefresh: (repo?: string) => void;
+  /** Register a mounted FileTree for `repo` (#264, ref-counted) so the disk-change poll
+   * only refreshes trees the user actually has open. Call on mount. */
+  registerFileTree: (repo: string) => void;
+  /** Unregister a mounted FileTree for `repo` (#264). Call on unmount. */
+  unregisterFileTree: (repo: string) => void;
+  /** Re-list + re-tint every mounted FileTree (#264) — the disk-change poll + focus
+   * backstop. No-op when no tree is open or the window is hidden. */
+  refreshOpenFileTrees: () => void;
+  /** Start the FileTree disk-change visibility poll (#264) — runs in any window (main
+   * or a detached canvas) that can show a tree; idempotent. */
+  startFileTreePolling: () => void;
+  /** Stop the disk-change poll + its focus/visibility listeners (#264). */
+  stopFileTreePolling: () => void;
   /** Set/clear the FileTree OS-drag drop target highlight (#253); no-ops when the
    * target is unchanged so a stream of "over" events doesn't churn re-renders. */
   setFileDropTarget: (target: { repo: string; dir: string } | null) => void;
@@ -1566,6 +1617,7 @@ export const useStore = create<AppState>()((set, get) => ({
   fileStatuses: {},
   fileDropTarget: null,
   fileTreeRefresh: {},
+  fileTreeMounts: {},
   repoColors: {},
   overviewPanels: {},
   overviewOrder: {},
@@ -2115,6 +2167,10 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Outside Tauri; leave "" → the macOS-default labels.
     }
+    // FileTree disk-change poll (#264): runs in *any* window that can show a tree (the
+    // main shell or a detached canvas), each refreshing only its own mounted trees, so
+    // files created/removed on disk surface within a few seconds. Idempotent.
+    get().startFileTreePolling();
   },
 
   refresh: async () => {
@@ -2347,6 +2403,91 @@ export const useStore = create<AppState>()((set, get) => ({
     });
   },
 
+  bumpFileTreeRefresh: (repo) => {
+    // One repo (a drop-move on it, #253), or every repo with an open tree (the
+    // disk-change poll / busy→idle edge, #264). Bumping the counter makes each mounted
+    // FileTree re-list its loaded levels in place — no reset, so expansion is preserved.
+    const repos = repo ? [repo] : Object.keys(get().fileTreeMounts);
+    if (repos.length === 0) return;
+    set((s) => {
+      const next = { ...s.fileTreeRefresh };
+      for (const r of repos) next[r] = (next[r] ?? 0) + 1;
+      return { fileTreeRefresh: next };
+    });
+  },
+
+  registerFileTree: (repo) => {
+    set((s) => ({
+      fileTreeMounts: {
+        ...s.fileTreeMounts,
+        [repo]: (s.fileTreeMounts[repo] ?? 0) + 1,
+      },
+    }));
+  },
+
+  unregisterFileTree: (repo) => {
+    set((s) => {
+      const cur = s.fileTreeMounts[repo] ?? 0;
+      if (cur <= 1) return { fileTreeMounts: omitKey(s.fileTreeMounts, repo) };
+      return { fileTreeMounts: { ...s.fileTreeMounts, [repo]: cur - 1 } };
+    });
+  },
+
+  refreshOpenFileTrees: () => {
+    // Backstop for disk changes outside an agent's busy→idle edge (#264). No-op while
+    // the window is hidden (so a backgrounded window does no work) or no tree is open.
+    if (typeof document !== "undefined" && document.hidden) return;
+    const repos = Object.keys(get().fileTreeMounts);
+    if (repos.length === 0) return;
+    // Re-list loaded levels (new/removed files appear) + re-tint git statuses. Scoped
+    // to open trees so the cost stays bounded even with many sidebar repos.
+    get().bumpFileTreeRefresh();
+    for (const r of repos) void get().refreshFileStatuses(r);
+  },
+
+  startFileTreePolling: () => {
+    // Per-window (main or detached canvas) — each window has its own mounted-tree set
+    // and module-scoped timer. Idempotent; no-op outside a browser env.
+    if (fileTreePollTimer || typeof window === "undefined") return;
+    fileTreePollTimer = setInterval(() => {
+      // Pause the work while hidden (the timer keeps ticking but does nothing) and when
+      // no tree is open, so an idle/backgrounded window incurs no IPC or re-render.
+      if (document.hidden) return;
+      if (Object.keys(get().fileTreeMounts).length === 0) return;
+      scheduleOpenFileTreeRefresh();
+    }, FILE_TREE_POLL_MS);
+    // Refresh immediately on regaining focus / becoming visible (catches changes made
+    // while backgrounded), sharing the debounce so focus + the poll don't double-fire.
+    fileTreeFocusListener = () => scheduleOpenFileTreeRefresh();
+    window.addEventListener("focus", fileTreeFocusListener);
+    fileTreeVisibilityListener = () => {
+      if (!document.hidden) scheduleOpenFileTreeRefresh();
+    };
+    document.addEventListener("visibilitychange", fileTreeVisibilityListener);
+  },
+
+  stopFileTreePolling: () => {
+    if (fileTreePollTimer) {
+      clearInterval(fileTreePollTimer);
+      fileTreePollTimer = undefined;
+    }
+    if (fileTreeFocusListener) {
+      window.removeEventListener("focus", fileTreeFocusListener);
+      fileTreeFocusListener = undefined;
+    }
+    if (fileTreeVisibilityListener) {
+      document.removeEventListener(
+        "visibilitychange",
+        fileTreeVisibilityListener,
+      );
+      fileTreeVisibilityListener = undefined;
+    }
+    if (fileTreeRefreshDebounce) {
+      clearTimeout(fileTreeRefreshDebounce);
+      fileTreeRefreshDebounce = undefined;
+    }
+  },
+
   setFileDropTarget: (target) => {
     set((s) => {
       const cur = s.fileDropTarget;
@@ -2376,12 +2517,7 @@ export const useStore = create<AppState>()((set, get) => ({
     if (moved > 0) {
       // Bump the per-repo refresh signal so the FileTree reloads its visible levels
       // (the moved-in item appears), and re-read git statuses (new files → green).
-      set((s) => ({
-        fileTreeRefresh: {
-          ...s.fileTreeRefresh,
-          [repo]: (s.fileTreeRefresh[repo] ?? 0) + 1,
-        },
-      }));
+      get().bumpFileTreeRefresh(repo);
       void get().refreshFileStatuses(repo);
     }
     get().pushToast(
