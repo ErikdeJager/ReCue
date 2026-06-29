@@ -6900,3 +6900,94 @@ not store churn.) This is the **output-delivery** half of the "input lag" card; 
 
 ---
 
+### 262. [x] Terminal's last line falls below the visible area — guarantee bottom clearance
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+A terminal's lowest row sometimes rendered **below the panel fold**, so the input/prompt
+line was clipped out of view and only clearing the terminal fixed it. #178 had already added
+vertical `.terminal` padding, but the bug persisted intermittently. Root cause: **sub-row
+fit rounding** — the user-configurable line-height makes the *rendered* cell height slightly
+larger than `FitAddon` assumes, so `floor(contentHeight / cellHeight)` can yield one row too
+many; the real painted height (`rows × actualCellHeight`) then exceeds the content box and
+the last row is clipped. It depended on font-size/line-height/panel-height, hence
+intermittent.
+
+**What shipped** (commit `0a3347c`, PR
+[#13](https://github.com/ErikdeJager/ReCue/pull/13), merged `324c445`, 2026-06-30):
+
+- **More bottom clearance** — `.terminal` padding switched to explicit sides
+  `var(--space-12) var(--space-8) var(--space-20) var(--space-8)` (≈20px bottom, larger than
+  the top) so a one-row rounding error is absorbed visually. Tokens only; horizontal/top
+  unchanged.
+- **Conservative fit guard** — in `terminalPool.ts` after `fit.fit()`, the rendered pixel
+  height (`term.rows × actualCellHeight` from xterm's measured cell metrics) is compared to
+  the host's content-box height; if the last row would overflow, `term.resize(term.cols,
+  term.rows - 1)` runs before `resizePty`, so the PTY is always told a row count that fully
+  fits. Best-effort via xterm metrics and guarded (never throws — falls back to padding-only
+  behavior). Runs on every fit path (reparent, window resize, Settings font-size refit).
+- **`TRAJECTORY_TO_WINDOWS.md` note** — last-row clearance should be spot-checked on a
+  Windows box at a couple of font sizes (ConPTY + WebView2 font metrics can differ).
+
+**Key files/areas touched:** `src/components/Terminal/Terminal.module.css` (`.terminal`
+padding), `src/components/Terminal/terminalPool.ts` (row-fit guard); `TRAJECTORY_TO_WINDOWS.md`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): do **both** the
+  padding bump (the guaranteed-visible part the card asks for) and the fit guard (robust
+  across font sizes); read the actual cell height from xterm's metrics with a try/catch
+  fallback rather than relying on internals.
+- **Cross-platform:** pure CSS + WebView measurement, no OS branch; the cell-height read is
+  identical under WKWebView and WebView2. Flagged in `TRAJECTORY_TO_WINDOWS.md` for a
+  real-box check. `npm run build` / `lint` green.
+
+---
+
+### 265. [x] Fix the scheduled-worktree card header (three lines / full-width worktree badge)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+A scheduled session **in a worktree** rendered an ugly three-line Overview card header with
+the "worktree" badge stretched full-width. Cause: `ScheduleCard` (Overview.tsx) dropped its
+`.name`, the conditional `.worktreeBadge`, and `.meta` as **three direct children** of
+`.titleBlock` (a `flex-direction: column` with default `align-items: stretch`), so each
+became its own full-width row. The working `SessionCard` avoids this by wrapping name + badge
+in a `.agentTitle` row.
+
+**What shipped** (commit `73d814f`, PR
+[#12](https://github.com/ErikdeJager/ReCue/pull/12), merged `8b8afcf`, 2026-06-30):
+
+- **Two-line header** — `ScheduleCard`'s title now wraps the `.name` span **and** the
+  conditional `.worktreeBadge` together inside the existing `styles.agentTitle` row
+  (mirroring `SessionCard`), leaving `.meta` as the second child of `.titleBlock`. Result:
+  a clean title-row (name + compact, content-hugging "worktree" badge) above the meta line —
+  two lines, not three; the badge no longer stretches (the row's `align-items: center` +
+  the badge's existing `flex-shrink: 0`). The header's right-side `.actions` stay aligned
+  via the unchanged `PanelColumn` `.header` justify-between.
+
+**Key files/areas touched:** `src/components/Overview/Overview.tsx` (`ScheduleCard` title
+wrap). No CSS change needed (reused `.agentTitle`).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): reuse the existing
+  `.agentTitle` row class rather than adding new CSS; a non-worktree scheduled card is
+  unchanged (name + meta, no badge).
+- **Cross-platform:** pure CSS/markup, identical on both platforms. `npm run build` / `lint`
+  green.
+
+---
+
