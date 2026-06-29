@@ -7352,3 +7352,245 @@ usage instead of ≥95%. Trivial, self-contained threshold change.
 
 ---
 
+### 269. [x] "Start now" button on scheduled sessions
+
+**Status:** Done
+**Depends on:** 259
+**Created:** 2026-06-30
+
+**Description**
+
+A pending scheduled session now has a **Start now** control (in the ScheduledPanel, the
+Overview ScheduleCard, and the sidebar schedule row) that fires the schedule **immediately**
+— spawning its agent now instead of waiting for the launch time / the 5s poll. A worktree
+schedule fires into its (eagerly-created, per #259) worktree without duplicate creation.
+
+**What shipped** (commit `a544883`, PR
+[#22](https://github.com/ErikdeJager/ReCue/pull/22), merged `8d1f70d`, 2026-06-30):
+
+- **Backend refactor + new command** — extracted the per-schedule firing body from
+  `fire_due_schedules`'s loop into a shared `fire_one_schedule(...)` helper (worktree prep →
+  spawn-with-prompt → persist → emit `schedule://fired`/`schedule://error`); both the poll
+  loop and the new **`fire_schedule_now(id)`** command call it. `fire_schedule_now` takes the
+  schedule out of the store by id (errors if not found / already fired) then fires it,
+  reusing #259's idempotent `prepare_worktree_for_schedule`.
+- **Frontend** — `ipc.fireScheduleNow(id)`; store `startScheduleNow(id)` → the resulting
+  `schedule://fired` event drives the existing `onFired` scheduled→live transition (no extra
+  store work; toast on error); a **Start now** button (Play icon, disabled while in flight)
+  in the ScheduledPanel, Overview ScheduleCard, and sidebar ScheduleRow.
+
+**Key files/areas touched:** `src-tauri/src/commands.rs` (`fire_one_schedule` extraction,
+`fire_schedule_now`), `src-tauri/src/lib.rs` (register), `src/ipc.ts`, `src/store.ts`,
+`src/components/{ScheduledPanel/ScheduledPanel.tsx,Overview/Overview.tsx,Sidebar/Sidebar.tsx}`.
+
+**Dependencies:** 259 (eager-worktree creation).
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): a shared
+  `fire_one_schedule` helper factored out of `fire_due_schedules` rather than duplicating the
+  fire body; reuse the existing `schedule://fired` → `onFired` path so "start now" needs no
+  new transition logic.
+- **Serialized after #259** (`deps: 259`): both restructure the schedule firing path, so
+  building "start now" on the corrected, idempotent fire path avoids a risky merge in
+  worktree/spawn code and guarantees fire-now reuses an eagerly-created worktree.
+- **Cross-platform:** reuses existing cfg-correct spawn/worktree paths; pure command + button
+  wiring, no OS branch. `cargo test` / `npm run build` / `lint` green.
+
+---
+
+### 270. [x] Gray out gitignored files and folders in the file tree
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+Files and folders that git ignores now render **dimmed/grayed** in the FileTree, distinct
+from the tracked-status (add/edit/delete) tints. The `file_statuses` read previously dropped
+ignored entries entirely.
+
+**What shipped** (commit `1003da5`, PR
+[#23](https://github.com/ErikdeJager/ReCue/pull/23), merged `2593492`, 2026-06-30):
+
+- **Backend** — added **`--ignored=matching`** to the single `git status` read so ignored
+  paths are emitted per-file; a new `FileStatus::Ignored` variant (serde `"I"`);
+  `parse_porcelain_z` now emits `Ignored` for `!` entries instead of `continue`-ing past
+  them (still capped by `MAX_STATUS_FILES`). Parser tests extended for the `!`→Ignored case.
+- **Frontend** — `FileStatusCode = "M"|"A"|"D"|"I"`; `FileTree.tsx` `statusClass()` maps
+  `"I"` → `styles.statusIgnored`; **ignored is kept OUT of the folder severity roll-up** (an
+  ignored child must not gray a tracked parent) — a folder grays only when the directory's
+  **own** path is ignored, via an `isIgnored` helper. `.statusIgnored` dims the name/icons
+  with `--text-muted`; tracked A/M/D tints take priority.
+
+**Key files/areas touched:** `src-tauri/src/git.rs` (`--ignored=matching`,
+`FileStatus::Ignored`, parser + tests), `src/types/index.ts`,
+`src/components/FileTree/{fileStatus.ts,FileTree.tsx,FileTree.module.css}`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): `--ignored=matching`
+  (per-file, not the dir-collapsing default) so paths key exactly; **ignored excluded from
+  the roll-up severity** (folder grays only when itself ignored); ignored tint lower priority
+  than tracked status. Additive — existing `"M"/"A"/"D"` codes unchanged (also used by
+  #252/#264).
+- **Cross-platform:** the only OS-sensitive primitive is the `git` shell-out (already via
+  `hidden_command`); tints use on-system tokens (`--text-muted`), no `#[cfg]`. `cargo test` /
+  `npm test` / `build` / `lint` green.
+
+---
+
+### 271. [x] Copy button on rendered markdown code blocks (FileViewer)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+Each fenced code block in **rendered markdown inside the FileViewer** now shows a small
+hover-revealed **Copy** button that copies the snippet's raw text to the clipboard with the
+existing "Copied" toast. Scoped to the FileViewer only (the Mermaid precedent), so
+Kanban/PatchNotes/Settings markdown are unaffected; inline code and mermaid diagrams are
+excluded.
+
+**What shipped** (commit `0e5df54`, PR
+[#24](https://github.com/ErikdeJager/ReCue/pull/24), merged `4de2e10`, 2026-06-30):
+
+- **`pre` override** added to FileViewer's `markdownComponents` (a `CodeBlockWithCopy`
+  component, alongside the existing `code: MermaidCode`) — it renders the default `<pre>`
+  content plus an absolutely-positioned Copy button (Lucide `Copy`), revealed on
+  `:hover`/`:focus-within`. The snippet text is extracted from the child `code` element
+  (`String(...)`, trailing newline stripped) and copied via the store's
+  `copyToClipboard(snippet, "code")`. Inline code (no fenced block) and mermaid fences get
+  no button (mermaid short-circuits through the `code` override).
+- CSS additions in `FileViewer.module.css` (relative wrapper, absolute top-right hidden-until-
+  hover button, accessible focus).
+
+**Key files/areas touched:** `src/components/FileViewer/FileViewer.tsx`
+(`CodeBlockWithCopy` + `pre` override), `src/components/FileViewer/FileViewer.module.css`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): a `pre` override
+  (not a `code`-only one) so the button positions over the whole block; **FileViewer-scoped**
+  (Mermaid precedent); the in-app web clipboard **write** via `copyToClipboard` (distinct
+  from the Tauri terminal-paste read path).
+- **Cross-platform:** `navigator.clipboard.writeText` works in both WKWebView and WebView2;
+  pure WebView UI, no OS branch. `npm run build` / `lint` green.
+
+---
+
+### 273. [x] Make the Canvas-tabs "+" icon the same visual size as its neighbors
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+The "+" add-tab glyph in the Canvas tab strip read as smaller than its neighbors (Templates
+▾, Distribute). The button boxes were already 20px-equal — the thin Lucide `Plus` cross just
+*looked* lighter than the stroke-heavier `LayoutTemplate`/`Grid2x2`. Trivial icon-weight fix.
+
+**What shipped** (commit `b9474bc`, PR
+[#21](https://github.com/ErikdeJager/ReCue/pull/21), merged `4eaab7c`, 2026-06-30):
+
+- `CanvasTabs.tsx` — bumped `<Plus size={14} strokeWidth={1.5} />` to
+  `<Plus size={16} strokeWidth={2} />` so the glyph occupies a footprint comparable to its
+  neighbors. The button box stays 20px; hit-area, hover, and disabled styling unchanged.
+
+**Key files/areas touched:** `src/components/Canvas/CanvasTabs.tsx` (the `Plus` icon
+size/strokeWidth).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): grow the glyph (not
+  the box) to match the visual weight of `LayoutTemplate`/`Grid2x2`.
+- **Cross-platform:** pure icon-size prop, identical on both platforms. `npm run build` /
+  `lint` green.
+
+---
+
+### 274. [x] Fix Template Editor block-config layout (path-mode buttons + prompt height)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+Two layout bugs in the Canvas `TemplateEditor`'s block-config panel (the card's "Kanban
+template editor"): the `open-file` block's **Relative / Absolute** path-mode buttons
+stretched to full width, and the `new-agent` ("start session") block's **prompt textarea**
+only filled about half the available height. Pure CSS fix.
+
+**What shipped** (commit `a8ce2f1`, PR
+[#25](https://github.com/ErikdeJager/ReCue/pull/25), merged `a7deba5`, 2026-06-30):
+
+- **Path-mode buttons** — `.pathModeBtn` dropped `flex: 1` for `flex: 0 0 auto` + a
+  `min-width: 72px`, so the Relative/Absolute pair renders as a compact, tidy segmented pair
+  instead of stretched full-width bars.
+- **Prompt textarea** — `.configInput`/`.configField` flex to fill the block body (raised
+  `min-height` to `140px`, kept `flex: 1` with `min-height: 0` on the wrapping label/column),
+  so the prompt fills the available height and stays scrollable for long prompts.
+
+**Key files/areas touched:** `src/components/TemplateEditor/TemplateEditor.module.css`
+(`.pathModeBtn`, `.pathModeRow`, `.configInput`, `.configField`).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): the card's "Kanban
+  template editor" = the Canvas `TemplateEditor` (the only template-editing surface);
+  compact path-mode pair via `flex: 0 0 auto` + `min-width`; raise the prompt textarea's
+  `min-height` and let it flex rather than restructuring the markup.
+- **Cross-platform:** pure CSS, identical on both platforms. `npm run build` / `lint` green.
+
+---
+
+### 276. [x] Kanban — pressing Enter creates a card and reopens a fresh composer
+
+**Status:** Done
+**Depends on:** 257
+**Created:** 2026-06-30
+
+**Description**
+
+In the Kanban add-card composer, pressing **Enter** now creates the card **and keeps the
+composer open with an empty, focused input**, so the user can type the next card without
+re-clicking "+ Add card". An empty Enter (or Escape) still closes the composer. Built on the
+resized composer from #257.
+
+**What shipped** (commit `9aa03eb`, PR
+[#26](https://github.com/ErikdeJager/ReCue/pull/26), merged `baa2ca6`, 2026-06-30):
+
+- `KanbanPanel.tsx` `BoardColumn` — `submitComposer`'s **success path** no longer calls
+  `cancelComposer()`; instead it clears the text (`setComposerText("")`), keeps `composing =
+  true`, and re-focuses the textarea via a new `composerRef`. The **empty** submit path still
+  calls `cancelComposer()` (closes), so an empty Enter exits the add flow. Escape/blur
+  unchanged; the IME guard (don't submit mid-composition) and card-text parsing (first line
+  title / rest body) are preserved.
+
+**Key files/areas touched:** `src/components/Kanban/KanbanPanel.tsx` (`submitComposer`,
+`composerRef` + re-focus).
+
+**Dependencies:** 257 (built on the resized Kanban composer; same file/region).
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): keep the composer
+  mounted and just clear + re-focus on a successful Enter; empty Enter / Escape still close.
+- **Cross-platform:** pure React state/focus logic, Enter-only (no `metaKey || ctrlKey`),
+  identical on both platforms. `npm run build` / `lint` green.
+
+---
+
