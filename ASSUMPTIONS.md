@@ -1129,3 +1129,24 @@ directive (2026-06-26) all interpretation calls below were made autonomously.
   `code: MermaidCode`) renders a hover-revealed Copy button per fenced block, using
   `store.copyToClipboard`. **Scoped to FileViewer only** (Mermaid precedent) — Kanban/
   PatchNotes/Settings unaffected; inline code + mermaid diagrams excluded. `deps: none`.
+
+## Task 272 — Usage meter red at 90%
+- One-line threshold change `pct >= 95` → `pct >= 90` in `UsageBar.tsx` + matching comment
+  updates. `deps: none`.
+
+## Task 273 — Canvas "+" tab icon size
+- The button boxes are already 20px-equal; the `Plus` glyph just *looks* lighter than
+  `LayoutTemplate`/`Grid2x2`. Fix = bump `<Plus size={14}>` → `size={16}` (and strokeWidth
+  if needed). `deps: none`.
+
+## Task 274 — Template editor block-config layout
+- "Kanban template editor" = the **Canvas `TemplateEditor`**. Two CSS fixes: path-mode
+  buttons `.pathModeBtn` drop `flex:1` → `flex:0 0 auto` + min-width (compact pair); prompt
+  `.configInput`/`.configField` flex to fill (raise min-height ~140px). `deps: none`.
+
+## Task 275 — Export/import Canvas templates
+- User's "Kanban template" = the **Canvas Template** system. **Import included** (round-trip
+  for sharing). Export via native save dialog + `write_text_file(parentDir, base)` reusing
+  the #163 parent-dir-as-root consent trick; import via `pickFile` + `read_text_file` +
+  validated `parseTemplateJson` + `saveTemplate` (fresh id). Add `dialog:allow-save`
+  capability if missing. No new backend write command. `deps: none`.
