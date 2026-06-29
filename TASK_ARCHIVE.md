@@ -6991,3 +6991,126 @@ wrap). No CSS change needed (reused `.agentTitle`).
 
 ---
 
+### 259. [x] Create the worktree + branch eagerly when a session is scheduled into a worktree
+
+**Status:** Done
+**Depends on:** none _(unblocks the dependent #279 + #280 scheduled-worktree-lifecycle cards)_
+**Created:** 2026-06-30
+
+**Description**
+
+When a session was scheduled with the **worktree** option, the worktree folder and its
+branch didn't exist yet — so creating any other item inside that worktree before it fired
+failed with "branch doesn't exist" (especially for a new branch created in the schedule
+modal). Decision (option 1, recorded in `ASSUMPTIONS.md`): **create the worktree directory +
+branch eagerly at schedule-creation time** rather than lazily on first item-creation —
+far cleaner support, since once the folder and branch exist *every* "create item in this
+worktree" path just works with no special-casing. Cost: a worktree lives for the pending
+schedule's lifetime, cleaned up (ref-counted) on cancel. (The card's second observation —
+a started scheduled worktree showing up as a duplicate top-level folder — is split into the
+dependent #279.)
+
+**What shipped** (commit `99e2ea7`, PR
+[#14](https://github.com/ErikdeJager/ReCue/pull/14), merged `4e8ee3a`, 2026-06-30):
+
+- **Eager creation at `create_schedule` (commands.rs)** — when `worktree == true`, after
+  computing the deterministic `worktree_path`, it `git::worktree_add_new_branch(...)` (new
+  branch) or `git::worktree_add(...)` (existing branch), guarded by `!dest.is_dir()`. On
+  error the schedule is **not persisted** and the error propagates so the New-Session modal
+  surfaces it inline (same UX as the immediate-worktree validation path).
+- **Idempotent fire** — `prepare_worktree_for_schedule` now wraps **both** arms
+  (create-branch and existing-branch) in a single `!dest.is_dir()` guard, so a fire on an
+  already-created worktree just spawns the agent in it (handles pre-#259 schedules / any
+  skipped eager-create too). New Rust unit tests:
+  `prepare_worktree_for_schedule_is_idempotent_when_dest_exists`, plus a `git.rs`
+  worktree add/guard/remove round-trip test.
+- **Ref-counted cleanup on cancel (frontend `store.ts`)** — cancelling a pending worktree
+  schedule frees its folder via the existing async `remove_worktree` path through a new
+  `cleanupWorktreeIfEmpty`, and the worktree **auto-delete guard** (`worktreeUsesPath`) now
+  also treats a worktree schedule **targeting** a path (`worktree_path === dest`, its `cwd`
+  being the parent repo) — alongside a schedule created *inside* a worktree (`cwd === dest`)
+  — as a user of the worktree, so a dirty/in-use worktree is kept and never force-deleted
+  (the #74 policy). `createSchedule` propagates the backend error string for inline modal
+  display (mirroring `createBranchSession`). Covered by new `store.test.ts` cases.
+- **`TRAJECTORY_TO_WINDOWS.md` note** — worktree create/remove on schedule should be
+  spot-checked on Windows.
+
+**Key files/areas touched:** `src-tauri/src/commands.rs` (`create_schedule`,
+`prepare_worktree_for_schedule`), `src-tauri/src/git.rs` (tests), `src/store.ts`
+(`createSchedule` error propagation, `cancelSchedule` cleanup, `worktreeUsesPath` guard),
+`src/store.test.ts`, `src/components/NewSessionModal/NewSessionModal.tsx` (inline error);
+`TRAJECTORY_TO_WINDOWS.md`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): chose **eager
+  creation at schedule time (option 1)** over lazy creation; a worktree-creation failure at
+  schedule time is **surfaced inline and the schedule is not created**; fire made idempotent
+  for both branch cases. The ref-counted cleanup landed in the **frontend store** (reusing
+  the existing `remove_worktree` + worktree-in-use guard) rather than the backend
+  `cancel_schedule`, achieving the same dirty-safe, ref-counted removal.
+- **Cross-platform:** all git work goes through the existing `git.rs` helpers
+  (`hidden_command()` console-flash guard, cfg-correct); `worktree_path` uses the app-data
+  dir, no raw `$HOME`. Flagged in `TRAJECTORY_TO_WINDOWS.md` for a real-box check.
+  `cargo test` / `npm test` / `build` / `lint` green.
+- **Unblocks** the dependent #279 (duplicate top-level folder when a scheduled worktree
+  starts) and #280 (canvas "no longer pending" bug), which build on the corrected
+  scheduled-worktree lifecycle.
+
+---
+
+### 264. [x] File tree should refresh when files change on disk (poll + busy→idle re-list)
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+The FileTree didn't reflect files created/deleted on disk (by agents or externally) until a
+manual Refresh — new files never appeared. The existing `refreshFileStatuses` only **re-tints
+existing rows** (and synthesizes deleted-file ghosts); rows themselves come only from
+`list_dir` results, so a newly *created* file needs a re-list. Decision (recorded in
+`ASSUMPTIONS.md`): use **polling + event-driven re-list**, not a native fs-watcher — no
+`notify`/fs-watch crate is in `Cargo.toml`, a watcher adds a cross-platform native dependency
++ per-repo event plumbing, and the card explicitly sanctions polling. Reuse the existing
+per-repo `fileTreeRefresh` signal, which re-lists every currently-loaded level **in place,
+preserving expansion**.
+
+**What shipped** (commit `e522237`, PR
+[#15](https://github.com/ErikdeJager/ReCue/pull/15), merged `4bed471`, 2026-06-30):
+
+- **`bumpFileTreeRefresh(repo?)` store action** — factored out of the inline bump in
+  `moveFilesIntoRepo`; incrementing `fileTreeRefresh[repo]` triggers the existing in-place
+  re-list effect in `FileTree.tsx` (expansion preserved).
+- **Busy→idle re-list** — at the busy→idle edge (where the branch + file-status refreshes
+  already debounce), it now also `bumpFileTreeRefresh()` so new files appear right after an
+  agent settles, in addition to the existing re-tint.
+- **Gentle visibility-gated poll** — a `FILE_TREE_POLL_MS = 5000` `setInterval` that runs
+  only while `!document.hidden`, bumping the re-list + `refreshFileStatuses`; re-lists touch
+  only already-loaded levels so cost stays bounded on huge repos. A `400ms` debounce keeps
+  focus + poll from double-firing.
+- **Window-focus refresh** — catches changes made while the app was backgrounded.
+- Manual **Refresh** button (full reset) kept as-is. New `store.test.ts` cases cover the
+  bump action and gating.
+
+**Key files/areas touched:** `src/store.ts` (`bumpFileTreeRefresh`, busy→idle bump,
+visibility/focus poll + debounce), `src/components/FileTree/FileTree.tsx`,
+`src/store.test.ts`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): **polling over
+  fs-watch** (card-sanctioned, no new native dep); ~5s interval + busy→idle re-list + focus
+  refresh as the trigger set; reuse the existing `fileTreeRefresh` re-list path (preserves
+  expansion) rather than a tree reset; poll paused while the document is hidden.
+- **Cross-platform:** pure frontend timers over the existing `list_dir`/`file_statuses`
+  reads (already cfg-correct via `hidden_command`) — no OS-specific code, identical on both
+  platforms. `npm run build` / `lint` / `test` green.
+
+---
+
