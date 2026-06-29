@@ -26,6 +26,10 @@ import {
 } from "./components/Canvas/templateInstantiate";
 import { serializeBoard } from "./components/Kanban/kanban";
 import { defaultBoard } from "./components/Kanban/kanbanOps";
+import {
+  parseTemplateJson,
+  serializeTemplate,
+} from "./components/TemplateManager/templateIo";
 import { applyTerminalSettings } from "./components/Terminal/terminalPool";
 import { decodeOutputB64 } from "./decodeOutput";
 import * as ipc from "./ipc";
@@ -36,6 +40,7 @@ import {
   repoName,
   scheduleNestsUnderWorktree,
   sessionInFilter,
+  splitPath,
 } from "./paths";
 import { parseResetsAt } from "./time";
 import * as updater from "./updater";
@@ -1224,6 +1229,11 @@ export interface AppState {
   duplicateTemplate: (id: string) => void;
   /** Delete a saved template (#117). */
   deleteTemplate: (id: string) => void;
+  /** Export a saved template to a user-chosen `.json` file for sharing (#275). */
+  exportTemplate: (id: string) => Promise<void>;
+  /** Import a template from a user-chosen `.json` file (#275): validates the shape,
+   * then adds it to the list with a fresh id. */
+  importTemplate: () => Promise<void>;
   /** Open / close the "New tab from template" chooser (#118). */
   openTemplateUse: () => void;
   closeTemplateUse: () => void;
@@ -3140,6 +3150,56 @@ export const useStore = create<AppState>()((set, get) => ({
     set({ canvasTemplates: next });
     void ipc.setCanvasTemplates(next).catch(() => {});
     get().pushToast("Template deleted");
+  },
+
+  // Export / import a template as JSON (#275): the data model is already plain JSON,
+  // so export = write a (pretty, id-stripped) blob to a user-chosen file and import =
+  // read + validate + add with a fresh id. Native dialogs are the user's consent and
+  // `read_text_file`/`write_text_file` (the #163 pattern) confine each to the chosen
+  // file's own directory — no new backend command, platform-neutral.
+  exportTemplate: async (id) => {
+    const template = get().canvasTemplates.find((t) => t.id === id);
+    if (!template) return;
+    try {
+      const path = await ipc.saveFileDialog(`${template.name}.json`);
+      if (!path) return; // cancelled
+      const { dir, base } = splitPath(path);
+      await ipc.writeTextFile(dir, base, serializeTemplate(template));
+      get().pushToast(`Exported "${template.name}"`, "success");
+    } catch {
+      get().pushToast("Export failed", "error");
+    }
+  },
+
+  importTemplate: async () => {
+    try {
+      const path = await ipc.pickFile({
+        title: "Import template",
+        extensions: ["json"],
+      });
+      if (!path) return; // cancelled
+      const { dir, base } = splitPath(path);
+      const text = await ipc.readTextFile(dir, base);
+      const parsed = parseTemplateJson(text);
+      if (!parsed) {
+        get().pushToast("Not a valid template file", "error");
+        return;
+      }
+      // Add directly (mint a fresh id) so a single "Imported …" toast fires rather
+      // than saveTemplate's "Template created". A duplicate name is fine — the
+      // manager lists by id.
+      const imported = {
+        id: crypto.randomUUID(),
+        name: parsed.name,
+        layout: parsed.layout,
+      };
+      const next = [...get().canvasTemplates, imported];
+      set({ canvasTemplates: next });
+      void ipc.setCanvasTemplates(next).catch(() => {});
+      get().pushToast(`Imported "${imported.name}"`, "success");
+    } catch {
+      get().pushToast("Import failed", "error");
+    }
   },
 
   // Canvas-template instantiation (#118): open a new tab from a template against one

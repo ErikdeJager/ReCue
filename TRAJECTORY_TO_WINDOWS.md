@@ -572,3 +572,34 @@ existing async `remove_worktree`. Platform-neutral by construction —
   kept, never force-deleted). The git-shell-out + path logic is the same on both OSes (and
   the `prepare_worktree_for_schedule` idempotency + `worktree_add` guard are covered by Rust
   unit tests), but the end-to-end schedule→fire flow needs the GUI, which CI can't drive.
+
+## 2026-06-30
+
+### Export / import Canvas templates as JSON (#275)
+
+The Template Manager gains per-row **Export** (write a template to a user-chosen `.json`)
+and a footer **Import** (read + validate a `.json`, add with a fresh id). Platform-neutral
+by construction — no OS branch:
+
+- **Export** uses the Tauri dialog plugin's `save()` (the new `ipc.saveFileDialog`) to get a
+  user-chosen absolute path, then writes via the existing `write_text_file` confined to that
+  file's own directory (the #163/#253 pattern): the path is split with **`splitPath`** (which
+  already handles `/` **or** `\`, #163) into `{ dir, base }`, so a Windows
+  `C:\Users\me\layout.json` reassembles correctly. `dialog:default` already grants
+  `allow-save` (verified in the dialog plugin's `default.toml`), so **no capability change**
+  was needed.
+- **Import** uses the existing `open()` picker (`ipc.pickFile`, now accepting an optional
+  `extensions` filter `["json"]`) → `read_text_file` (same `splitPath` confinement) →
+  pure `parseTemplateJson` validation → add with a fresh `crypto.randomUUID()` id. A
+  malformed/foreign file is rejected with an error toast, leaving existing templates intact.
+- The validation + serialization (`src/components/TemplateManager/templateIo.ts`) is pure
+  string/JSON work with a unit test — identical on both OSes.
+
+#### Still needs manual Windows verification (#275)
+
+- **The native save dialog + write path on Windows**: in a Windows build, open Manage
+  templates, Export a template (confirm the save dialog defaults to `<name>.json` and the
+  written file is readable JSON at the chosen location), then Import it back (confirm the
+  `.json` filter, that it appears in the list, and instantiates as a new tab). CI can't drive
+  the GUI/native dialog; the path split (`splitPath`) + file IO are the same shared
+  cross-platform seams the FileSwitcher Browse… (#163) already uses on Windows.
