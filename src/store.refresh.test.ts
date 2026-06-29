@@ -202,65 +202,43 @@ describe("forkSession (#126)", () => {
   });
 });
 
-describe("startRepoSession (#127)", () => {
-  it("git folder: opens the modal at the branch step with preloaded branches (no spawn)", async () => {
+describe("startRepoSession (#127/#263)", () => {
+  it("opens the modal instantly at the branch step — no pre-open list_branches, no spawn", () => {
     useStore.setState({
       newSessionOpen: false,
       newSessionRepo: null,
       newSessionInitialBranches: null,
+      newSessionAtBranch: false,
       scheduleMode: false,
     });
-    const bl = { all: ["main", "dev"], current: "main" };
-    m(ipc.listBranches).mockResolvedValue(bl);
 
-    await useStore.getState().startRepoSession("/repo/g");
+    // #263: synchronous open — the modal renders at once and loads branches itself.
+    useStore.getState().startRepoSession("/repo/g");
 
     const s = useStore.getState();
     expect(s.newSessionOpen).toBe(true);
     expect(s.newSessionRepo).toBe("/repo/g");
-    expect(s.newSessionInitialBranches).toEqual(bl);
+    // No preloaded branches: the modal loads them asynchronously (loading affordance).
+    expect(s.newSessionInitialBranches).toBeNull();
+    // The branch-step flag tells the modal to open straight at the branch step.
+    expect(s.newSessionAtBranch).toBe(true);
     expect(s.scheduleMode).toBe(false);
+    // The slow pre-open round-trip is gone, and nothing is spawned synchronously.
+    expect(ipc.listBranches).not.toHaveBeenCalled();
     expect(ipc.spawnSession).not.toHaveBeenCalled();
   });
 
-  it("non-git folder: spawns directly with no modal", async () => {
-    useStore.setState({
-      sessions: [],
-      newSessionOpen: false,
-      newSessionRepo: null,
-      newSessionInitialBranches: null,
-    });
-    m(ipc.listBranches).mockResolvedValue({ all: [], current: "" });
-
-    await useStore.getState().startRepoSession("/repo/plain");
-
-    expect(useStore.getState().newSessionOpen).toBe(false);
-    expect(ipc.spawnSession).toHaveBeenCalledWith(
-      "/repo/plain",
-      undefined,
-      undefined,
-      "claude",
-    );
+  it("clears the branch-step flag when the folder-step open (⌘N) is used", () => {
+    useStore.setState({ newSessionAtBranch: true });
+    useStore.getState().openNewSession();
+    expect(useStore.getState().newSessionAtBranch).toBe(false);
   });
 
-  it("listBranches failure: treated as non-git → direct spawn", async () => {
-    useStore.setState({
-      sessions: [],
-      newSessionOpen: false,
-      newSessionRepo: null,
-      newSessionInitialBranches: null,
-    });
-    m(ipc.listBranches).mockRejectedValue(new Error("nope"));
-
-    await useStore.getState().startRepoSession("/repo/err");
-
-    expect(useStore.getState().newSessionOpen).toBe(false);
-    expect(ipc.spawnSession).toHaveBeenCalledWith(
-      "/repo/err",
-      undefined,
-      undefined,
-      "claude",
-    );
+  it("clears the branch-step flag on close", () => {
+    useStore.getState().startRepoSession("/repo/g");
+    expect(useStore.getState().newSessionAtBranch).toBe(true);
+    useStore.getState().closeNewSession();
+    expect(useStore.getState().newSessionAtBranch).toBe(false);
   });
 });
 
