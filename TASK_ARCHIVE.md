@@ -7639,3 +7639,104 @@ scheduled-worktree sidebar/`onFired` path).
 
 ---
 
+### 275. [x] Export / import Canvas templates (JSON) for sharing
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+From the Template Manager, a user can now **Export** a template to a `.json` file and
+**Import** a template from a `.json` file — enabling sharing between machines/developers.
+(The card's "Kanban template" = the app's **Canvas Template** system, the only template
+feature; #274's "Kanban template editor" is the same `TemplateEditor`.) Import was included
+alongside export so the round-trip — the point of "share with other developers" — is
+complete.
+
+**What shipped** (commit `65d8519`, PR
+[#28](https://github.com/ErikdeJager/ReCue/pull/28), merged `c1e3ad2`, 2026-06-30):
+
+- **Export** — a per-template store `exportTemplate(id)` opens a native save dialog
+  (`ipc.saveFileDialog(`${name}.json`)`) and writes pretty-printed JSON via
+  `write_text_file(parentDir, base)` — reusing the **#163 parent-dir-as-root consent trick**
+  (the absolute path `/a/b/c.json` addressed as `{ repoPath: "/a/b", file: "c.json" }`), so
+  **no new backend write command**. A per-row Export button in the manager.
+- **Import** — `importTemplate()` uses `pickFile` (json) → `read_text_file` → the validated
+  `parseTemplateJson` → `saveTemplate({ name, layout })` (mints a fresh id), toasting the
+  result. A footer Import button.
+- **Validation** — new pure `templateIo.ts` `parseTemplateJson(text)` guards the foreign
+  blob's shape (a `name` string + a `layout` that is a `CanvasNode | null`) before it ever
+  reaches the templates blob; a malformed/foreign import is rejected with a toast, leaving
+  existing templates intact. Covered by `templateIo.test.ts`.
+- The existing `dialog:default` capability already covers the save dialog, so **no
+  capability change** was needed. `TRAJECTORY_TO_WINDOWS.md` notes the save-dialog + write
+  path should be spot-checked on Windows.
+
+**Key files/areas touched:** `src/components/TemplateManager/{TemplateManager.tsx,
+TemplateManager.module.css,templateIo.ts,templateIo.test.ts}`, `src/store.ts`
+(`exportTemplate`/`importTemplate`), `src/ipc.ts` (`saveFileDialog`); `TRAJECTORY_TO_WINDOWS.md`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): the "Kanban
+  template" is the Canvas Template system; **import included** (complete round-trip); reuse
+  the #163 parent-dir-as-root consent trick + `write_text_file`/`read_text_file` rather than
+  a new backend command; import re-mints a fresh id (so two machines can't collide); a
+  validated `parseTemplateJson` guards the blob; `dialog:default` already covered `save()`
+  so no extra capability grant.
+- **Cross-platform:** native save/open dialogs + `read_text_file`/`write_text_file` are
+  platform-neutral (backend reassembles paths; `splitPath` handles `/` or `\`), no OS branch;
+  flagged in `TRAJECTORY_TO_WINDOWS.md` for a real-box check. `npm test` (parser) / `build` /
+  `lint` green.
+
+---
+
+### 277. [x] Kanban — transient "undo" button after deleting a card
+
+**Status:** Done
+**Depends on:** 276
+**Created:** 2026-06-30
+
+**Description**
+
+Deleting a Kanban card now shows a small **Undo** affordance at the deleted card's former
+position; clicking it restores the card with its content at the same spot. Only the **most
+recent** deletion is undoable — a new delete moves the affordance to the new spot and
+discards the previous one. Transient: component state only, never persisted (gone on file
+switch / reopen / restart).
+
+**What shipped** (commit `353e36f`, PR
+[#29](https://github.com/ErikdeJager/ReCue/pull/29), merged `6b0d84f`, 2026-06-30):
+
+- **Capture-before-delete** — the inline `onCardDelete` handler reads the card and sets a new
+  panel-local `lastDeleted = { col, idx, card }` before `mutate(deleteCard(...))`; each delete
+  overwrites it (so the affordance moves to the newest deletion and the previous one vanishes
+  — the spec's behavior for free).
+- **Pure insert op** — new `insertCardAt(board, col, idx, card)` in `kanbanOps.ts` (splice
+  back at `idx`, clamped) + unit test.
+- **Undo affordance** — a slim `UndoRow` (`Undo2` icon + "Undo") rendered at the deleted
+  index in `BoardColumn`; clicking it `mutate(insertCardAt(...))` and clears `lastDeleted`.
+- **Transience** — `lastDeleted` is plain component state (never routed through
+  `mutate`/`serializeBoard`) and is cleared in the per-file reset effect, so it never
+  persists. Auto-save reflects the final board after delete and after undo.
+
+**Key files/areas touched:** `src/components/Kanban/KanbanPanel.tsx` (`lastDeleted`,
+`UndoRow`, capture + reset), `src/components/Kanban/kanbanOps.ts` (`insertCardAt` + test),
+`src/components/Kanban/KanbanPanel.module.css`.
+
+**Dependencies:** 276 (serialize the kanban-UI cluster 257 → 276 → 277, all editing
+`KanbanPanel.tsx`/`BoardColumn`).
+
+**Notes**
+
+- **Autonomous decisions** (per the standing `ASSUMPTIONS.md` deferral): single-level undo
+  via panel-local `lastDeleted` overwritten by the next delete; a pure `insertCardAt` op (no
+  insert-at-index existed); kept until the next delete or a file switch (no timeout).
+- **Cross-platform:** pure React/TS, identical on both platforms. `npm test` (`insertCardAt`)
+  / `build` / `lint` green.
+
+---
+
