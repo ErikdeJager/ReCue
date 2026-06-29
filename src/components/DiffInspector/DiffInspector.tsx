@@ -2,6 +2,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -32,6 +33,7 @@ import type {
 import { prismLang } from "../FileViewer/fileType";
 import { highlightToHtml } from "../FileViewer/prism";
 import { type DisplayMode, diffNavDelta } from "./diffNav";
+import { type DiffSortOrder, reconcileOccurrence, sortFiles } from "./diffSort";
 import styles from "./DiffInspector.module.css";
 
 /** Human label for a file's status code (badge tooltip, #231). */
@@ -264,6 +266,12 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
   const [displayMode, setDisplayMode] = useState<DisplayMode>(
     () => useStore.getState().settings.diffDisplayMode,
   );
+  // File ordering (#258): `occurrence` (default — newly-changed files append to the
+  // bottom, re-changes don't reorder) vs `alphabetical`. Seeded once from the global
+  // setting; the in-panel toggle overrides it for this panel/session and persists back.
+  const [sortOrder, setSortOrder] = useState<DiffSortOrder>(
+    () => useStore.getState().settings.diffSortOrder,
+  );
   // Focused-mode file picker popover open state (#231).
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -284,6 +292,10 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
   const chooseLineMode = (next: DiffMode) => {
     setMode(next);
     void saveSettings({ ...useStore.getState().settings, diffLineMode: next });
+  };
+  const chooseSortOrder = (next: DiffSortOrder) => {
+    setSortOrder(next);
+    void saveSettings({ ...useStore.getState().settings, diffSortOrder: next });
   };
 
   // Signature of the last applied diff (skip re-render when a poll finds no
@@ -429,9 +441,43 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
     };
   }, [active, source, load]);
 
-  const files = diff?.files ?? [];
+  const files = useMemo(() => diff?.files ?? [], [diff]);
+
+  // Occurrence tracking (#258): remember the order in which files first became changed,
+  // so "occurrence" mode appends a newly-changed file to the **bottom** and never
+  // reorders a file that re-changes. The sequence is **per-panel-session** (not
+  // persisted — only the mode preference is): on (re)mount it seeds from git's emission
+  // order, then tracks occurrence going forward. `reconcileOccurrence` is idempotent
+  // when the path set is unchanged, so recomputing it during render (incl. StrictMode's
+  // double-invoke) is safe. Keyed on the path set so it only advances when files change.
+  const seqRef = useRef<{ seq: Record<string, number>; counter: number }>({
+    seq: {},
+    counter: 0,
+  });
+  const pathsSig = files.map((file) => file.path).join("\n");
+  const seq = useMemo(() => {
+    const next = reconcileOccurrence(
+      seqRef.current.seq,
+      files.map((file) => file.path),
+      seqRef.current.counter,
+    );
+    seqRef.current = next;
+    return next.seq;
+    // `files` is recomputed from `pathsSig`; depending on the signature avoids churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathsSig]);
+
+  // The displayed list: ordered by the chosen mode. Used everywhere `files` drove the
+  // list before (the picker, the i/N index, nav wraparound, the accordion cards).
+  const orderedFiles = useMemo(
+    () => sortFiles(files, sortOrder, seq),
+    [files, sortOrder, seq],
+  );
+
   const activeFile =
-    files.find((file) => file.path === selectedFile) ?? files[0] ?? null;
+    orderedFiles.find((file) => file.path === selectedFile) ??
+    orderedFiles[0] ??
+    null;
 
   const selectedCommit = commits.find((c) => c.sha === commitSha);
   // Header label: the selected commit (short sha · subject) in Commits mode, else the
@@ -445,12 +491,12 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
 
   // Focused-mode navigation (#231): cycle through the changed files (wraps).
   const activeIndex = activeFile
-    ? files.findIndex((f) => f.path === activeFile.path)
+    ? orderedFiles.findIndex((f) => f.path === activeFile.path)
     : -1;
   const stepFile = (delta: number) => {
-    if (files.length === 0) return;
-    const i = (activeIndex + delta + files.length) % files.length;
-    setSelectedFile(files[i]?.path ?? null);
+    if (orderedFiles.length === 0) return;
+    const i = (activeIndex + delta + orderedFiles.length) % orderedFiles.length;
+    setSelectedFile(orderedFiles[i]?.path ?? null);
     setPickerOpen(false);
   };
 
@@ -461,7 +507,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
   // metaKey||ctrlKey). Ignored while a text input / select / branch-or-commit picker /
   // the focused-mode file-picker listbox has focus, and when there are <2 files.
   const onPanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (files.length < 2) return;
+    if (orderedFiles.length < 2) return;
     if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
       return;
     if (
@@ -535,6 +581,31 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
                 title="Accordion files"
               >
                 Accordion
+              </button>
+            </div>
+            {/* File ordering (#258): occurrence (newest-changed at the bottom) vs A–Z. */}
+            <div className={styles.modeToggle}>
+              <button
+                type="button"
+                className={
+                  sortOrder === "occurrence" ? styles.modeActive : styles.mode
+                }
+                aria-pressed={sortOrder === "occurrence"}
+                onClick={() => chooseSortOrder("occurrence")}
+                title="Order by when each file first changed (newest at the bottom)"
+              >
+                Recent
+              </button>
+              <button
+                type="button"
+                className={
+                  sortOrder === "alphabetical" ? styles.modeActive : styles.mode
+                }
+                aria-pressed={sortOrder === "alphabetical"}
+                onClick={() => chooseSortOrder("alphabetical")}
+                title="Order alphabetically (A–Z)"
+              >
+                A–Z
               </button>
             </div>
             <div className={styles.modeToggle}>
@@ -667,7 +738,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
         </div>
       </div>
 
-      {files.length === 0 ? (
+      {orderedFiles.length === 0 ? (
         <div className={styles.empty}>{emptyMessage}</div>
       ) : displayMode === "accordion" ? (
         // Accordion (#231): single-open file cards — exactly one is expanded
@@ -675,7 +746,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
         // the diff you read is never ambiguous. Inline `DiffFile` keeps Unified/Split
         // + #229 highlighting.
         <div className={styles.accordion}>
-          {files.map((file) => {
+          {orderedFiles.map((file) => {
             const open = file.path === activeFile?.path;
             return (
               <div
@@ -713,7 +784,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
               type="button"
               className={styles.navArrow}
               onClick={() => stepFile(-1)}
-              disabled={files.length < 2}
+              disabled={orderedFiles.length < 2}
               title="Previous file (←)"
               aria-label="Previous file"
               aria-keyshortcuts="ArrowLeft"
@@ -734,7 +805,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
                   {activeFile ? (activeFile.path.split("/").pop() ?? "—") : "—"}
                 </span>
                 <span className={styles.pickerIndex}>
-                  {activeIndex + 1}/{files.length}
+                  {activeIndex + 1}/{orderedFiles.length}
                 </span>
                 <ChevronDown size={14} strokeWidth={1.5} />
               </button>
@@ -745,7 +816,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
                     onClick={() => setPickerOpen(false)}
                   />
                   <div className={styles.pickerMenu} role="listbox">
-                    {files.map((file) => (
+                    {orderedFiles.map((file) => (
                       <button
                         key={file.path}
                         type="button"
@@ -773,7 +844,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
               type="button"
               className={styles.navArrow}
               onClick={() => stepFile(1)}
-              disabled={files.length < 2}
+              disabled={orderedFiles.length < 2}
               title="Next file (→)"
               aria-label="Next file"
               aria-keyshortcuts="ArrowRight"
