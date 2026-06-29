@@ -271,7 +271,11 @@ function CanvasTabs() {
         title={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
         aria-label={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
       >
-        <Plus size={14} strokeWidth={1.5} />
+        {/* #273: the Plus glyph is a sparse cross, so at size 14/1.5 it reads
+            visually smaller than the denser LayoutTemplate/Grid2x2 neighbors. A
+            larger 16px glyph + heavier 2px stroke gives it comparable mass while
+            the 20px button box (hit-area/hover/disabled) stays unchanged. */}
+        <Plus size={16} strokeWidth={2} />
       </button>
       {/* Templates ▾ menu (#117/#205/#222): "New tab from template…" (the primary "use"
           action) plus template management (New / Save current / Manage). */}
