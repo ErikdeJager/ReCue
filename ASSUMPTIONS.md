@@ -874,3 +874,35 @@ it. But don't overdo it." Decided autonomously (user not answering questions):
 - **Reduced-motion aware** (global killswitch / scoped rule disables it).
 - **Depends on #233** — both edit `.card`; the lift layers on the redesigned resting style
   (sequenced after to avoid conflict/rework).
+
+## TASK-252 — Color file-tree rows by git status
+
+Card: "File tree should show git changes. Green for new and yellow for edited files. If
+something was deleted out of a folder, it should be marked in red." Grounded: the single
+`FileTree` (#167) renders only on-disk entries via `list_dir` (repo-relative POSIX paths);
+`working_diff` already yields per-file `M`/`A`/`D` (untracked-as-Added #183); the
+`--status-done`/`-awaiting`/`-error` tokens are the established green/yellow/red; #212's
+`scheduleBranchRefresh` busy→idle cadence is the refresh hook. Decided autonomously (refine
+loop, user not answering — standing directive 2026-06-26):
+
+- **Deletions = a red strikethrough "ghost" row in the parent folder + a red ancestor
+  roll-up**, not folder-red only. The card's "marked in red" is best served by showing
+  *what* was deleted in place; the roll-up covers collapsed/missing parents. Fallback if
+  ghost-row injection fights the lazy tree: red ancestor roll-up alone.
+- **Folders roll up new/edited too** (highest-severity descendant color, red>yellow>green),
+  not just deletions — IDE convention, reuses the same machinery the deletion rule needs,
+  restrictable to red-only later.
+- **Color = tint name text + icon** (no dot/letter badge) — reads the card's "green for
+  new / yellow for edited" as coloring the file label.
+- **New lightweight `file_statuses` (`git status --porcelain=v1 -z --untracked-files=all`)
+  via `run_git`/`hidden_command`**, not the heavyweight `working_diff` (full hunks + a git
+  spawn per untracked file), to keep the busy→idle refresh cheap; `working_diff` reuse is
+  the fallback. Renames → del(old)+add(new), mirroring `parse_unified_diff`.
+- **Status held in the store (`fileStatuses`, mirroring `branches`)**, refreshed once per
+  repo on load + the #212 busy→idle edge + the FileTree Refresh button — not per FileTree
+  instance.
+- **Out of scope:** coloring #202 search results, staged/unstaged split, diff-on-click for
+  a ghost row, non-git folders (fail-open, no coloring). Cross-platform: only the git
+  shell-out is OS-sensitive and it reuses the established hidden-command seam; both
+  porcelain and `list_dir` paths are POSIX-`/` repo-relative so the lookup matches on
+  macOS and Windows (no `#[cfg]` needed). **Depends on: none.**
