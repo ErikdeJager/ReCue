@@ -96,6 +96,32 @@ function cssToken(name: string, fallback: string): string {
 }
 
 /**
+ * The CSS-pixel height of one rendered terminal row (#262), read from xterm's
+ * render metrics. xterm exposes no public getter for this, so we read the
+ * internal render service **defensively**: any shape change (or a not-yet-measured
+ * terminal) returns `undefined` and the caller falls back to the FitAddon-only
+ * behavior — it never throws. This is a pure WebView measurement (xterm's own cell
+ * sizing), identical under WKWebView (macOS) and WebView2 (Windows).
+ */
+function rowHeightCss(term: XTerm): number | undefined {
+  try {
+    const core = (
+      term as unknown as {
+        _core?: {
+          _renderService?: {
+            dimensions?: { css?: { cell?: { height?: number } } };
+          };
+        };
+      }
+    )._core;
+    const h = core?._renderService?.dimensions?.css?.cell?.height;
+    return typeof h === "number" && h > 0 ? h : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * A lazily-created off-screen layer that holds terminals not currently shown in
  * a view. It is laid out (positioned, sized) so a parked terminal stays
  * measurable — xterm misbehaves at 0×0 — without being visible or interactive.
@@ -238,6 +264,31 @@ function createHost(sessionId: string): TerminalHost {
     if (host.slot === null) return;
     if (container.offsetWidth === 0 || container.offsetHeight === 0) return;
     safeFit();
+    // Conservative bottom-clearance guard (#262). FitAddon picks
+    // rows = floor(contentHeight / cellHeight) from xterm's measured cell height,
+    // but the *painted* row can be a hair taller (sub-pixel rounding at certain
+    // font-size/line-height combos), so rows × cellHeight can exceed the padded
+    // content box and push the last row — claude's prompt / input line — below the
+    // panel's bottom edge (the reported "last line falls out of view" bug, which
+    // only a clear used to fix). When that would happen, tell the PTY one fewer row
+    // so the last line is always fully visible. Best-effort: a failed metrics read
+    // (`rowHeightCss` → undefined) or `term.resize` just keeps the FitAddon result,
+    // never throwing. Pure WebView measurement, identical on macOS / Windows.
+    const cellH = rowHeightCss(term);
+    if (cellH !== undefined && term.rows > 1) {
+      const cs = getComputedStyle(container);
+      const padV =
+        (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+      const contentH = container.clientHeight - padV;
+      // Tolerate sub-pixel rounding; only shave when a full visible row is clipped.
+      if (contentH > 0 && term.rows * cellH > contentH + 1) {
+        try {
+          term.resize(term.cols, term.rows - 1);
+        } catch {
+          // keep the FitAddon result on any resize failure
+        }
+      }
+    }
     void resizePty(sessionId, term.cols, term.rows).catch(() => {});
   };
   const scheduleResize = () => {

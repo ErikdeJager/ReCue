@@ -458,3 +458,28 @@ folder/root **moves** them into the repo. Built cross-platform from the start �
   another drive letter; macOS: another mounted volume) and confirm the copy-then-remove
   fallback moves it intact and removes the source. The same-volume rename + collision +
   validation paths are covered by the Rust unit tests.
+
+## 2026-06-30
+
+### Terminal last-row bottom clearance (#262)
+
+The terminal's last row (claude's prompt / input line) could fall below the visible
+panel at certain font-size / line-height combos, fixable only by clearing. The fix is
+pure CSS + a WebView measurement — no OS branch:
+
+- **Extra bottom padding** on `.terminal` (`20px` bottom vs `12px` top) so a one-row
+  sub-pixel rounding error is absorbed visually. Token-only, identical on both OSes.
+- **Conservative fit guard** in `terminalPool.ts` `applyResize`: after `fit.fit()`, if
+  the painted height (`term.rows × cellHeight`) would overflow the padded content box,
+  the PTY is told one fewer row. The cell height is read from xterm's render metrics
+  (internal, guarded with try/catch + a `undefined` fallback so it never throws) — the
+  same metric under WKWebView and WebView2.
+
+#### Still needs manual Windows verification (#262)
+
+- **Last-row clearance on WebView2 / ConPTY**: on a Windows build, run a full-screen
+  TUI (claude) and spot-check that the bottom input line stays fully visible — at the
+  default font size and at the **smallest and largest** Settings font sizes — while
+  shrinking the panel/window to awkward heights and after switching views (reparent).
+  ConPTY + WebView2 font metrics can round differently than WKWebView, so confirm the
+  guard + padding hold there too. CI can't drive the GUI render.

@@ -22,13 +22,16 @@
 .terminal {
   position: absolute;
   inset: 0;
-  /* Balanced vertical breathing room (12px top + bottom) so claude's last row —
-     its prompt / input line — clears the panel's bottom edge instead of reading as
-     half a clipped row (#178). FitAddon measures this element's content box, so the
-     larger vertical padding also makes it claim one fewer row when the last would be
-     cut off — a fix that's both visual and structurally correct. Horizontal padding
-     unchanged. */
-  padding: var(--space-12) var(--space-8);
+  /* Vertical breathing room so claude's last row — its prompt / input line — clears
+     the panel's bottom edge instead of reading as half a clipped row (#178). FitAddon
+     measures this element's content box, so the vertical padding also makes it claim
+     one fewer row when the last would be cut off — a fix that's both visual and
+     structurally correct. The BOTTOM gets extra room (20px vs 12px top, #262) so a
+     one-row sub-pixel rounding error at certain font-size/line-height combos is
+     absorbed visually and the input line is never clipped below the fold; the
+     terminalPool fit guard tells the PTY one fewer row whenever the painted height
+     would still overflow this box. Horizontal padding unchanged. */
+  padding: var(--space-12) var(--space-8) var(--space-20) var(--space-8);
 }
 
 .exitOverlay {
