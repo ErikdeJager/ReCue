@@ -374,6 +374,7 @@ function BoardColumn(props: ColumnProps) {
   // Inline add-card composer (#233): first line → title, remaining lines → body.
   const [composing, setComposing] = useState(false);
   const [composerText, setComposerText] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const openComposer = () => {
     setComposerText("");
     setComposing(true);
@@ -387,11 +388,16 @@ function BoardColumn(props: ColumnProps) {
     // editor uses, so create + edit can't diverge.
     const { title, body } = splitCardText(composerText);
     if (!title && !body.trim()) {
+      // An empty submit (or Enter on a blank composer) closes the add flow.
       cancelComposer();
       return;
     }
     props.onComposeCard(title, body);
-    cancelComposer();
+    // #276: keep the composer open with an empty, focused input so the user can
+    // rapidly add the next card without re-clicking "+ Add card". Escape (or an
+    // empty Enter, handled above) still closes it.
+    setComposerText("");
+    composerRef.current?.focus();
   };
 
   return (
@@ -482,6 +488,7 @@ function BoardColumn(props: ColumnProps) {
         {composing ? (
           <div className={styles.composer}>
             <textarea
+              ref={composerRef}
               className={styles.composerInput}
               {...noAutoCapitalize}
               value={composerText}
