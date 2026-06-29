@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Code2, Eye } from "lucide-react";
+import type { ComponentPropsWithoutRef } from "react";
+import { Code2, Copy, Eye } from "lucide-react";
+import type { Element, ElementContent } from "hast";
 import ReactMarkdown from "react-markdown";
+import type { ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { noAutoCapitalize } from "../../inputProps";
@@ -42,6 +45,75 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   );
 }
 
+/** Concatenate all descendant text of a hast node (a code block's source text). */
+function hastText(node: ElementContent): string {
+  if (node.type === "text") return node.value;
+  if (node.type === "element") return node.children.map(hastText).join("");
+  return "";
+}
+
+/**
+ * Pull the raw source text + `language-*` tag out of a markdown code block's hast
+ * `pre` node (its child `<code>`). Returns `null` when there is no `<code>` child —
+ * i.e. not a code block (no such `pre` exists without raw HTML, which is disabled) —
+ * so such a `pre` renders untouched.
+ */
+function preCodeInfo(
+  node: Element | undefined,
+): { text: string; lang: string | null } | null {
+  const code = node?.children.find(
+    (child): child is Element =>
+      child.type === "element" && child.tagName === "code",
+  );
+  if (!code) return null;
+  const className = code.properties?.className;
+  const classes = Array.isArray(className) ? className.map(String) : [];
+  const langClass = classes.find((c) => c.startsWith("language-"));
+  return {
+    text: hastText(code),
+    lang: langClass ? langClass.slice("language-".length) : null,
+  };
+}
+
+/**
+ * Rendered-markdown `pre` override (#271) — wraps a fenced code block so a small
+ * **Copy** button (revealed on hover/focus) can copy the snippet's raw text. The
+ * wrapper is the positioning context, so the button stays pinned to the block's
+ * top-right even when the `<pre>` scrolls horizontally; the `<pre>` keeps its
+ * `.markdown pre` styling and Prism token spans untouched. Wired only at the
+ * FileViewer call site (like the `MermaidCode` override), so Kanban / PatchNotes /
+ * Settings markdown are unaffected. **Mermaid** fences render their own diagram via
+ * the `code` override, so they're excluded here (guarded on the `language-mermaid`
+ * class); a non-code `pre` is left untouched. Pure WebView UI + `navigator.clipboard`
+ * (via the store's `copyToClipboard`), so it behaves identically on macOS and Windows.
+ */
+function CodeBlockWithCopy({
+  node,
+  children,
+  ...rest
+}: ComponentPropsWithoutRef<"pre"> & ExtraProps) {
+  const copyToClipboard = useStore((s) => s.copyToClipboard);
+  const info = preCodeInfo(node);
+  if (!info || info.lang === "mermaid") {
+    return <pre {...rest}>{children}</pre>;
+  }
+  const snippet = info.text.replace(/\n$/, "");
+  return (
+    <div className={styles.codeBlock}>
+      <pre {...rest}>{children}</pre>
+      <button
+        type="button"
+        className={styles.copyCode}
+        onClick={() => void copyToClipboard(snippet, "code")}
+        title="Copy code"
+        aria-label="Copy code"
+      >
+        <Copy size={13} strokeWidth={1.5} />
+      </button>
+    </div>
+  );
+}
+
 /**
  * Universal file viewer (#44) — the single content component reused by Overview
  * columns (#41) and Canvas panels (#47). Markdown renders formatted with an
@@ -80,7 +152,8 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
   // Memoized on the buffer so the map isn't rebuilt every render. `setText` is stable.
   // Mermaid diagrams in rendered markdown (#254): merge the opt-in `code` override
   // (a ` ```mermaid ` block → an SVG diagram; every other code fence unchanged) — wired
-  // only here, so Kanban / PatchNotes / Settings markdown stay unaffected.
+  // only here, so Kanban / PatchNotes / Settings markdown stay unaffected. The `pre`
+  // override (#271) adds a hover Copy button to fenced code blocks, also FileViewer-only.
   const markdownComponents = useMemo(
     () => ({
       ...makeCheckboxComponents({
@@ -89,6 +162,7 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
         onToggle: setText,
       }),
       code: MermaidCode,
+      pre: CodeBlockWithCopy,
     }),
     [text, setText],
   );

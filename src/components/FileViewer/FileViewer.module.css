@@ -340,6 +340,54 @@
   line-height: 1.5;
 }
 
+/* Copy button on a rendered-markdown fenced code block (#271). The wrapper is the
+   positioning context so the button stays pinned to the block's top-right even when
+   the <pre> scrolls horizontally; the <pre> keeps its `.markdown pre` styling. The
+   button is revealed only on hover / keyboard focus (and is `pointer-events: none`
+   while hidden, so it never blocks text selection over the block's top edge). It sits
+   on the darker `--bg-base` so it stands out against the elevated code surface.
+   Token-only → identical on macOS and Windows. */
+.codeBlock {
+  position: relative;
+}
+
+.copyCode {
+  position: absolute;
+  top: var(--space-6);
+  right: var(--space-6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  background: var(--bg-base);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.codeBlock:hover .copyCode,
+.codeBlock:focus-within .copyCode {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.copyCode:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.copyCode:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .markdown blockquote {
   margin: var(--space-8) 0;
   padding-left: var(--space-12);
