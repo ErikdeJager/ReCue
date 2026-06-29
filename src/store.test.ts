@@ -970,6 +970,33 @@ describe("worktreeHasItems (#199)", () => {
     ).toBe(true);
   });
 
+  it("counts a worktree schedule by its worktree_path (#259 — its cwd is the parent repo)", () => {
+    // A worktree schedule's `cwd` is the PARENT repo, not the worktree folder; its
+    // eagerly-created worktree (#259) lives at `worktree_path`. So matching only `cwd`
+    // would miss it and wrongly free a worktree another pending schedule still uses.
+    expect(
+      worktreeHasItems(
+        {
+          ...empty,
+          schedules: [{ cwd: "/work/parent-repo", worktree_path: dest }],
+        },
+        dest,
+      ),
+    ).toBe(true);
+    // A worktree schedule for a DIFFERENT folder does not count.
+    expect(
+      worktreeHasItems(
+        {
+          ...empty,
+          schedules: [
+            { cwd: "/work/parent-repo", worktree_path: "/data/other" },
+          ],
+        },
+        dest,
+      ),
+    ).toBe(false);
+  });
+
   it("ignores items belonging to other folders", () => {
     expect(
       worktreeHasItems(

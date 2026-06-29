@@ -1441,6 +1441,39 @@ index 0..1
     }
 
     #[test]
+    fn worktree_add_existing_branch_round_trips_and_guards_existing_dir() {
+        // Backs the #259 eager-create + idempotent-fire path: `worktree_add` on an
+        // existing branch creates the folder, re-adding to the **same** folder errors
+        // (so callers must guard with `!dest.is_dir()`), and `worktree_remove`
+        // (non-force) cleans up a clean worktree.
+        let Some(dir) = init_repo("wt-existing") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        // A branch that isn't checked out in the main worktree (git refuses to add a
+        // worktree for a branch already checked out elsewhere).
+        assert!(git_in(&dir, &["branch", "feat"]));
+
+        let dest = unique_dir("wt-existing-dest");
+        assert!(worktree_add(&dir, "feat", &dest).is_ok());
+        assert!(dest.is_dir());
+        assert_eq!(current_branch(&dest), "feat");
+
+        // Re-adding to the same (now-existing) dir fails — this is exactly why
+        // `create_schedule` / `prepare_worktree_for_schedule` guard on `!dest.is_dir()`
+        // (#259) and reuse the folder instead.
+        assert!(worktree_add(&dir, "feat", &dest).is_err());
+
+        // A clean worktree is removable without `--force`.
+        assert!(worktree_remove(&dir, &dest, false).is_ok());
+        assert!(!dest.is_dir());
+
+        let _ = fs::remove_dir_all(&dest);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn list_branches_includes_remotes_excludes_head_and_dedups() {
         let Some(dir) = init_repo("remote-branches") else {
             return;

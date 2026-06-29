@@ -118,6 +118,10 @@ function NewSessionModal() {
   const [newBranchName, setNewBranchName] = useState("");
   const [newBranchBase, setNewBranchBase] = useState("");
   const [branchError, setBranchError] = useState<string | null>(null);
+  // Inline error on the schedule step (#259): a worktree schedule now creates its
+  // worktree + branch eagerly at schedule time, so a bad/duplicate branch surfaces here
+  // (like `branchError` on the branch step) instead of only as a toast.
+  const [schedError, setSchedError] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const fireAtRef = useRef<HTMLInputElement>(null);
@@ -150,6 +154,7 @@ function NewSessionModal() {
     setAddBranchActive(false);
     setNewBranchName("");
     setBranchError(null);
+    setSchedError(null);
     setSelectedRemote(null);
     setFetchingRemotes(false);
     if (initialBranches && prefillRepo) {
@@ -640,7 +645,8 @@ function NewSessionModal() {
         ? (selectedBranch ?? null)
         : null;
     setBusy(true);
-    const ok = await scheduleSession(
+    setSchedError(null);
+    const result = await scheduleSession(
       cwd,
       branchArg,
       schedName.trim() || null,
@@ -650,8 +656,14 @@ function NewSessionModal() {
       useNewBranch ? newBranchBase : null,
       useWorktree,
     );
-    if (ok) close();
-    else setBusy(false);
+    // `true` on success; else an error string (e.g. a worktree schedule's bad/duplicate
+    // branch — its worktree is created eagerly now, #259) shown inline so the user can
+    // fix it. Stay open on error.
+    if (result === true) close();
+    else {
+      setSchedError(result);
+      setBusy(false);
+    }
   };
 
   // Filter as the user types; keep a folder selected (the top match) so Enter
@@ -1288,6 +1300,14 @@ function NewSessionModal() {
               onChange={(event) => setSchedName(event.currentTarget.value)}
               aria-label="Custom name"
             />
+
+            {/* Inline error (#259): a worktree schedule creates its worktree + branch
+                eagerly, so a bad/duplicate branch is shown here for the user to fix. */}
+            {schedError && (
+              <p className={styles.branchError} role="alert">
+                {schedError}
+              </p>
+            )}
 
             <div className={styles.actions}>
               <button type="button" className={styles.cancel} onClick={close}>
