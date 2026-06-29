@@ -185,10 +185,10 @@ export interface CommitInfo {
   subject: string;
 }
 
-/** Payload of the `session://output` event. */
+/** Payload of the `session://output` event — base64-encoded PTY bytes (#261). */
 export interface OutputPayload {
   id: string;
-  bytes: number[];
+  b64: string;
 }
 
 /** Payload of the `session://exited` event. */

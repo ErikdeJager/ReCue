@@ -252,14 +252,47 @@ function createHost(sessionId: string): TerminalHost {
     void writeStdin(sessionId, data).catch(() => {});
   });
 
+  // rAF-coalesced writes (#261): under heavy output (a long build/log) a separate
+  // `term.write` per ~8 KB IPC chunk floods the single WebView main thread, starving
+  // React's keystroke handling everywhere (the Kanban textarea, a second terminal).
+  // Instead buffer the frame's chunks and flush them in ONE `term.write` on the next
+  // animation frame, so a burst costs one parse + one repaint per frame. Ordering is
+  // preserved (FIFO), and a steady stream still flushes ~60×/s so latency stays low.
+  let writeBuffer: Uint8Array[] = [];
+  let writeRaf: number | undefined;
+  const flushWrites = () => {
+    writeRaf = undefined;
+    if (writeBuffer.length === 0) return;
+    const chunks = writeBuffer;
+    writeBuffer = [];
+    // Concatenate the frame's chunks so xterm parses the whole burst in a single
+    // write — much cheaper than one write call per chunk.
+    let total = 0;
+    for (const c of chunks) total += c.length;
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      merged.set(c, offset);
+      offset += c.length;
+    }
+    term.write(merged);
+  };
+  const scheduleFlush = () => {
+    if (writeRaf === undefined) writeRaf = requestAnimationFrame(flushWrites);
+  };
+
   // Buffer live output until the historical scrollback has been replayed, so
   // history and live bytes do not interleave. Because the host outlives the
   // views, this runs exactly ONCE per session — never again on a view switch.
   let replayed = false;
   const pending: Uint8Array[] = [];
   const unsubscribe = onSessionOutput(sessionId, (bytes) => {
-    if (replayed) term.write(bytes);
-    else pending.push(bytes);
+    if (!replayed) {
+      pending.push(bytes);
+      return;
+    }
+    writeBuffer.push(bytes);
+    scheduleFlush();
   });
 
   let disposed = false;
@@ -324,6 +357,10 @@ function createHost(sessionId: string): TerminalHost {
   host.dispose = () => {
     disposed = true;
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+    // Flush any buffered tail bytes (and cancel the pending frame) before the term
+    // goes away, so a final burst isn't dropped on teardown (#261).
+    if (writeRaf !== undefined) cancelAnimationFrame(writeRaf);
+    flushWrites();
     observer.disconnect();
     unsubscribe();
     dataSub.dispose();
