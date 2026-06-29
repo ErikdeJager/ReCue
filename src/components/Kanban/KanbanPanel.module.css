@@ -317,6 +317,35 @@
   background: var(--accent-dim);
 }
 
+/* Transient "undo delete" affordance (#277): a slim, minimal row at the just-deleted
+   card's former spot. Accent-tinted dashed pill so it reads as an ephemeral cue, not
+   a card. On-system tokens only, so it's identical on macOS and Windows. */
+.undoRow {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  width: 100%;
+  appearance: none;
+  background: var(--accent-dim);
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-chip);
+  padding: var(--space-4) var(--space-8);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.undoRow:hover {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
 .card {
   /* Positioning context for the hover/focus-revealed top-right actions (#195). */
   position: relative;

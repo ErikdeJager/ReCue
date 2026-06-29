@@ -8,6 +8,7 @@ import {
   defaultBoard,
   deleteCard,
   deleteColumn,
+  insertCardAt,
   moveCard,
   moveColumn,
   newCard,
@@ -59,6 +60,49 @@ describe("kanbanOps card mutations (#143)", () => {
 
   it("deleteCard removes one card", () => {
     expect(titles(deleteCard(board(), 0, 0), 0)).toEqual(["B"]);
+  });
+
+  it("insertCardAt splices a card in at the index (#277)", () => {
+    expect(titles(insertCardAt(board(), 0, 1, newCard("X")), 0)).toEqual([
+      "A",
+      "X",
+      "B",
+    ]);
+    expect(titles(insertCardAt(board(), 0, 0, newCard("X")), 0)).toEqual([
+      "X",
+      "A",
+      "B",
+    ]);
+  });
+
+  it("insertCardAt clamps an out-of-range index to the column bounds (#277)", () => {
+    expect(titles(insertCardAt(board(), 0, 99, newCard("X")), 0)).toEqual([
+      "A",
+      "B",
+      "X",
+    ]);
+    expect(titles(insertCardAt(board(), 0, -5, newCard("Y")), 0)).toEqual([
+      "Y",
+      "A",
+      "B",
+    ]);
+  });
+
+  it("insertCardAt is a no-op for an out-of-range column (#277)", () => {
+    expect(insertCardAt(board(), 9, 0, newCard("X"))).toEqual(board());
+  });
+
+  it("deleteCard then insertCardAt round-trips a card back to its spot (#277)", () => {
+    const original = board();
+    const deleted = deleteCard(original, 0, 1); // remove B
+    expect(titles(deleted, 0)).toEqual(["A"]);
+    const restored = insertCardAt(deleted, 0, 1, {
+      title: "B",
+      body: "",
+      checked: false,
+    });
+    expect(titles(restored, 0)).toEqual(["A", "B"]);
+    expect(restored).toEqual(original);
   });
 
   it("toggleCard flips checked", () => {

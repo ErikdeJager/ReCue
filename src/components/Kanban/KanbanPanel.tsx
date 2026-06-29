@@ -1,6 +1,7 @@
 import {
   type CSSProperties,
   type FocusEvent,
+  Fragment,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
   useCallback,
@@ -26,7 +27,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Code2, Eye, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Code2, Eye, Pencil, Plus, Trash2, Undo2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -46,6 +47,7 @@ import {
   addColumn,
   deleteCard,
   deleteColumn,
+  insertCardAt,
   moveCard,
   renameColumn,
   toggleCard,
@@ -65,6 +67,15 @@ const cardId = (col: number, idx: number) => `card:${col}:${idx}`;
 function parseCardId(id: string): [number, number] | null {
   const m = /^card:(\d+):(\d+)$/.exec(id);
   return m ? [Number(m[1]), Number(m[2])] : null;
+}
+
+/** The most recently deleted card + where it sat (#277), for the transient Undo
+ * affordance. Plain component state — never routed through the save buffer, so it
+ * doesn't persist across reopening the board or an app restart. */
+interface DeletedCard {
+  col: number;
+  idx: number;
+  card: Card;
 }
 
 /** Split a single composer/edit textarea value into a card's title + body using ONE
@@ -331,6 +342,22 @@ function CardPreview({ card }: { card: Card }) {
   );
 }
 
+/** The transient "undo delete" affordance (#277), rendered at the deleted card's
+ * former spot. Not a sortable — a plain button — so it never starts a card drag. */
+function UndoRow({ onUndo }: { onUndo: () => void }) {
+  return (
+    <button
+      type="button"
+      className={styles.undoRow}
+      onClick={onUndo}
+      title="Undo delete"
+      aria-label="Undo delete"
+    >
+      <Undo2 size={12} strokeWidth={1.5} /> Undo
+    </button>
+  );
+}
+
 interface ColumnProps {
   col: number;
   name: string;
@@ -357,6 +384,10 @@ interface ColumnProps {
   /** A body task-list checkbox toggled (#173) → that card's new body markdown. */
   onCardBodyToggle: (idx: number, nextBody: string) => void;
   onCardDelete: (idx: number) => void;
+  /** Where to render the transient Undo affordance in this column (#277), or null
+   * when the last delete wasn't here (or there's nothing to undo). */
+  undoIdx: number | null;
+  onUndo: () => void;
 }
 
 /** One column (status lane, #233): a header (accent dot + UPPERCASE name + count pill
@@ -465,24 +496,34 @@ function BoardColumn(props: ColumnProps) {
       >
         <SortableContext items={items} strategy={verticalListSortingStrategy}>
           {props.cards.map((card, idx) => (
-            <SortableCard
-              key={cardId(props.col, idx)}
-              id={cardId(props.col, idx)}
-              card={card}
-              editing={props.editingCard === idx}
-              editText={props.editingCard === idx ? props.editText : null}
-              onStartEdit={() => props.onCardStartEdit(idx)}
-              onStopEdit={props.onCardStopEdit}
-              onCancelEdit={props.onCardCancelEdit}
-              onEditTextChange={props.onCardEditTextChange}
-              onToggle={() => props.onCardToggle(idx)}
-              onBodyToggle={(body) => props.onCardBodyToggle(idx, body)}
-              onDelete={() => props.onCardDelete(idx)}
-            />
+            <Fragment key={cardId(props.col, idx)}>
+              {/* Transient Undo at the deleted card's spot (#277): render it before
+                  the card now occupying that index, so it sits exactly where the
+                  removed card was. */}
+              {props.undoIdx === idx && <UndoRow onUndo={props.onUndo} />}
+              <SortableCard
+                id={cardId(props.col, idx)}
+                card={card}
+                editing={props.editingCard === idx}
+                editText={props.editingCard === idx ? props.editText : null}
+                onStartEdit={() => props.onCardStartEdit(idx)}
+                onStopEdit={props.onCardStopEdit}
+                onCancelEdit={props.onCardCancelEdit}
+                onEditTextChange={props.onCardEditTextChange}
+                onToggle={() => props.onCardToggle(idx)}
+                onBodyToggle={(body) => props.onCardBodyToggle(idx, body)}
+                onDelete={() => props.onCardDelete(idx)}
+              />
+            </Fragment>
           ))}
+          {/* The deleted card was last in (or beyond) the column → undo at the end. */}
+          {props.undoIdx !== null && props.undoIdx >= props.cards.length && (
+            <UndoRow onUndo={props.onUndo} />
+          )}
         </SortableContext>
-        {/* Empty-column hint (#161): a subtle cue instead of a bare gap. */}
-        {props.cards.length === 0 && !composing && (
+        {/* Empty-column hint (#161): a subtle cue instead of a bare gap (but not
+            while an Undo affordance is showing, #277). */}
+        {props.cards.length === 0 && !composing && props.undoIdx === null && (
           <p className={styles.emptyHint}>No cards yet</p>
         )}
         {composing ? (
@@ -591,6 +632,12 @@ function KanbanPanel({
   const [renamingCol, setRenamingCol] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
   const [confirmDeleteCol, setConfirmDeleteCol] = useState<number | null>(null);
+  // The most recently deleted card (#277): a transient, in-memory-only record that
+  // backs a single Undo affordance at its former spot. Each delete overwrites it
+  // (so the affordance moves to the newest deletion and the previous one vanishes);
+  // clicking Undo or switching files clears it. Never routed through the save
+  // buffer, so it doesn't persist across reopening the board or an app restart.
+  const [lastDeleted, setLastDeleted] = useState<DeletedCard | null>(null);
   // The card currently being dragged (#161), for the DragOverlay floating preview.
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   // The per-file Board/Raw default is applied once on first load (#147), so later
@@ -619,6 +666,8 @@ function KanbanPanel({
     setRenamingCol(null);
     setRenameDraft(null);
     setConfirmDeleteCol(null);
+    // Drop any pending Undo (#277) so it never survives a file switch / reopen.
+    setLastDeleted(null);
   }, [repoPath, file]);
   useEffect(() => {
     if (text !== null && !didInitView.current) {
@@ -765,6 +814,8 @@ function KanbanPanel({
       setRenamingCol(null);
       setRenameDraft(null);
     }
+    // A pending Undo's stored col/idx would dangle once the lanes shift (#277).
+    setLastDeleted(null);
     mutate(deleteColumn(board, col));
   };
 
@@ -884,7 +935,25 @@ function KanbanPanel({
                     setEditing(null);
                     setEditText(null);
                   }
+                  // Capture the card before removing it (#277) so a single transient
+                  // Undo can restore it at the same spot. Overwrites any prior pending
+                  // undo, so only the newest deletion is undoable.
+                  const deleted = board.columns[col]?.cards[idx];
+                  if (deleted) setLastDeleted({ col, idx, card: deleted });
                   mutate(deleteCard(board, col, idx));
+                }}
+                undoIdx={lastDeleted?.col === col ? lastDeleted.idx : null}
+                onUndo={() => {
+                  if (!lastDeleted) return;
+                  mutate(
+                    insertCardAt(
+                      board,
+                      lastDeleted.col,
+                      lastDeleted.idx,
+                      lastDeleted.card,
+                    ),
+                  );
+                  setLastDeleted(null);
                 }}
               />
             ))}

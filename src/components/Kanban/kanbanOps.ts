@@ -47,6 +47,23 @@ export function addCard(board: Board, colIdx: number, card: Card): Board {
   }));
 }
 
+/** Insert a card back into a column at a specific index (#277 — the undo of
+ * `deleteCard`). The index is clamped to `[0, column length]`, so an out-of-range
+ * idx appends; an out-of-range column leaves the board unchanged. */
+export function insertCardAt(
+  board: Board,
+  colIdx: number,
+  cardIdx: number,
+  card: Card,
+): Board {
+  return replaceColumn(board, colIdx, (c) => {
+    const cards = c.cards.slice();
+    const clamped = Math.max(0, Math.min(cardIdx, cards.length));
+    cards.splice(clamped, 0, card);
+    return { ...c, cards };
+  });
+}
+
 export function updateCard(
   board: Board,
   colIdx: number,
