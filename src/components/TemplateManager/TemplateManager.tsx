@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Copy, Download, Pencil, Plus, Trash2, Upload, X } from "lucide-react";
 
 import { noAutoCapitalize } from "../../inputProps";
 import { useStore } from "../../store";
@@ -18,6 +18,8 @@ function TemplateManager() {
   const renameTemplate = useStore((s) => s.renameTemplate);
   const duplicateTemplate = useStore((s) => s.duplicateTemplate);
   const deleteTemplate = useStore((s) => s.deleteTemplate);
+  const exportTemplate = useStore((s) => s.exportTemplate);
+  const importTemplate = useStore((s) => s.importTemplate);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -153,6 +155,15 @@ function TemplateManager() {
                   </button>
                   <button
                     type="button"
+                    className={styles.iconBtn}
+                    onClick={() => void exportTemplate(t.id)}
+                    title="Export to JSON"
+                    aria-label={`Export ${t.name}`}
+                  >
+                    <Download size={14} strokeWidth={1.5} />
+                  </button>
+                  <button
+                    type="button"
                     className={`${styles.iconBtn} ${styles.danger} ${confirmId === t.id ? styles.dangerArmed : ""}`}
                     onClick={() => onDelete(t.id)}
                     onMouseLeave={() =>
@@ -176,6 +187,14 @@ function TemplateManager() {
         </div>
 
         <footer className={styles.footer}>
+          <button
+            type="button"
+            className={styles.importBtn}
+            onClick={() => void importTemplate()}
+            title="Import a template from a JSON file"
+          >
+            <Upload size={14} strokeWidth={1.5} /> Import
+          </button>
           <button
             type="button"
             className={styles.newBtn}

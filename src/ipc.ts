@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type {
   AgentInfo,
@@ -42,12 +42,37 @@ export async function pickDirectory(): Promise<string | null> {
 
 /** Native open-file picker (#163). Returns the chosen absolute file path, or null
  * if cancelled. The dialog is the user's explicit consent to open that file; it is
- * then read/written confined to its own parent directory (see `splitPath`). */
-export async function pickFile(): Promise<string | null> {
+ * then read/written confined to its own parent directory (see `splitPath`). An
+ * optional `extensions` filter (without the dot, e.g. `["json"]`) narrows the picker
+ * to those types (#275 — importing a template). */
+export async function pickFile(opts?: {
+  title?: string;
+  extensions?: string[];
+}): Promise<string | null> {
   const selection = await open({
     directory: false,
     multiple: false,
-    title: "Open file",
+    title: opts?.title ?? "Open file",
+    filters: opts?.extensions
+      ? [{ name: "Files", extensions: opts.extensions }]
+      : undefined,
+  });
+  return typeof selection === "string" ? selection : null;
+}
+
+/** Native save-file dialog (#275 — exporting a template). Returns the chosen
+ * absolute path (the user may rename / relocate), or null if cancelled. The file is
+ * then written confined to its own parent directory (see `splitPath`), the dialog
+ * being the user's explicit consent. Cross-platform: the path is reassembled by the
+ * OS dialog, and `splitPath` handles `/` or `\`. */
+export async function saveFileDialog(
+  defaultName: string,
+  extensions: string[] = ["json"],
+): Promise<string | null> {
+  const selection = await save({
+    title: "Export template",
+    defaultPath: defaultName,
+    filters: [{ name: "JSON", extensions }],
   });
   return typeof selection === "string" ? selection : null;
 }
