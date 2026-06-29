@@ -197,8 +197,13 @@ struct Session {
     name: Option<String>,
     #[allow(dead_code)]
     cwd: PathBuf,
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    // `master` and `writer` are wrapped in their own `Arc<Mutex<…>>` (mirroring
+    // `child`/`scrollback`, #260) so a *blocking* PTY op — a `write_all` to a
+    // backpressured stdin, or a `resize()` — runs under a **per-session** lock,
+    // never the global `sessions` map lock. Otherwise one flooded/blocked session
+    // would stall every other session's keystrokes, resizes, and scrollback reads.
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     scrollback: Arc<Mutex<Scrollback>>,
     // Reader thread; detached on drop (it finishes when the PTY closes).
@@ -394,28 +399,42 @@ impl SessionManager {
                 }
             }
         }
-        let mut sessions = self.lock_sessions()?;
-        let session = sessions
-            .get_mut(id)
-            .ok_or_else(|| SessionError::SessionNotFound(id.to_string()))?;
-        session
-            .writer
+        // Hold the global map lock only long enough to clone the per-session writer
+        // handle, then drop it (#260). The blocking `write_all`/`flush` — which can
+        // stall when the child isn't draining a full stdin buffer — runs under the
+        // per-session writer lock, so a backpressured session never delays another
+        // session's keystrokes.
+        let writer = {
+            let sessions = self.lock_sessions()?;
+            let session = sessions
+                .get(id)
+                .ok_or_else(|| SessionError::SessionNotFound(id.to_string()))?;
+            Arc::clone(&session.writer)
+        };
+        let mut writer = writer
+            .lock()
+            .map_err(|_| SessionError::Io("writer lock poisoned".to_string()))?;
+        writer
             .write_all(data.as_bytes())
             .map_err(|e| SessionError::Io(e.to_string()))?;
-        session
-            .writer
-            .flush()
-            .map_err(|e| SessionError::Io(e.to_string()))
+        writer.flush().map_err(|e| SessionError::Io(e.to_string()))
     }
 
     /// Resize a session's PTY to match the frontend terminal.
     pub fn resize_pty(&self, id: &str, cols: u16, rows: u16) -> Result<(), SessionError> {
-        let sessions = self.lock_sessions()?;
-        let session = sessions
-            .get(id)
-            .ok_or_else(|| SessionError::SessionNotFound(id.to_string()))?;
-        session
-            .master
+        // Clone the per-session master under the brief global lock, then drop it
+        // (#260) so a slow `resize()` can't stall other sessions' operations.
+        let master = {
+            let sessions = self.lock_sessions()?;
+            let session = sessions
+                .get(id)
+                .ok_or_else(|| SessionError::SessionNotFound(id.to_string()))?;
+            Arc::clone(&session.master)
+        };
+        let master = master
+            .lock()
+            .map_err(|_| SessionError::Io("master lock poisoned".to_string()))?;
+        master
             .resize(PtySize {
                 rows,
                 cols,
@@ -464,12 +483,17 @@ impl SessionManager {
 
     /// Snapshot a session's retained scrollback (for terminal replay on mount).
     pub fn scrollback(&self, id: &str) -> Result<Vec<u8>, SessionError> {
-        let sessions = self.lock_sessions()?;
-        let session = sessions
-            .get(id)
-            .ok_or_else(|| SessionError::SessionNotFound(id.to_string()))?;
-        let scrollback = session
-            .scrollback
+        // Clone the per-session scrollback Arc under the brief global lock, then drop
+        // it (#260) so the full ring-buffer copy in `snapshot()` — run on every
+        // terminal mount/replay — doesn't block other sessions' map operations.
+        let scrollback = {
+            let sessions = self.lock_sessions()?;
+            let session = sessions
+                .get(id)
+                .ok_or_else(|| SessionError::SessionNotFound(id.to_string()))?;
+            Arc::clone(&session.scrollback)
+        };
+        let scrollback = scrollback
             .lock()
             .map_err(|_| SessionError::Io("scrollback lock poisoned".to_string()))?;
         Ok(scrollback.snapshot())
@@ -595,6 +619,10 @@ impl SessionManager {
 
         let scrollback = Arc::new(Mutex::new(Scrollback::new(SCROLLBACK_CAP)));
         let child = Arc::new(Mutex::new(child));
+        // Wrap the writer + master in per-session locks (#260) so blocking writes /
+        // resizes never hold the global `sessions` map lock.
+        let writer = Arc::new(Mutex::new(writer));
+        let master = Arc::new(Mutex::new(pair.master));
         let events = self.event_sender()?;
 
         // Register this session's activity stamps for the busy heuristic (#42/#55);
@@ -632,7 +660,7 @@ impl SessionManager {
         let session = Session {
             name: name.clone(),
             cwd: cwd.to_path_buf(),
-            master: pair.master,
+            master,
             writer,
             child,
             scrollback,
