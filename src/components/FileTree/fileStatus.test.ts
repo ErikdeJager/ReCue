@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFolderRollup,
   deletedChildrenAt,
+  isIgnored,
   statusMapsEqual,
   type FileStatusMap,
 } from "./fileStatus";
@@ -53,6 +54,38 @@ describe("buildFolderRollup", () => {
 
   it("returns an empty roll-up for an empty map", () => {
     expect(buildFolderRollup({}).size).toBe(0);
+  });
+
+  it("keeps gitignored entries out of the roll-up (no graying a tracked parent)", () => {
+    // `src/secret.key` is ignored; `src` has no *tracked* change, so it must not roll up.
+    const map: FileStatusMap = { "src/secret.key": "I" };
+    expect(buildFolderRollup(map).size).toBe(0);
+  });
+
+  it("rolls up only the tracked change when an ignored sibling shares the folder", () => {
+    const map: FileStatusMap = { "src/a.ts": "M", "src/cache.tmp": "I" };
+    const rollup = buildFolderRollup(map);
+    // The ignored sibling is invisible to the roll-up; `src` reflects only the edit.
+    expect(rollup.get("src")).toBe("M");
+  });
+});
+
+describe("isIgnored", () => {
+  it("is true only when the path's own status is gitignored", () => {
+    const map: FileStatusMap = { ".env": "I", "src/a.ts": "M" };
+    expect(isIgnored(map, ".env")).toBe(true);
+    expect(isIgnored(map, "src/a.ts")).toBe(false);
+    expect(isIgnored(map, "unknown")).toBe(false);
+  });
+
+  it("treats a wholly-ignored directory (keyed by its own path) as ignored", () => {
+    // The backend strips the trailing slash, so `build/` arrives as `build`.
+    const map: FileStatusMap = { build: "I" };
+    expect(isIgnored(map, "build")).toBe(true);
+  });
+
+  it("is false for an undefined map", () => {
+    expect(isIgnored(undefined, "anything")).toBe(false);
   });
 });
 

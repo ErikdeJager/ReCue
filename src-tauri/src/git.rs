@@ -40,6 +40,8 @@ pub(crate) fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 }
 
 /// File status in a working-tree diff (renames surface as a delete + an add).
+/// `Ignored` (#270) is only produced by `file_statuses` (the FileTree coloring),
+/// which passes `--ignored=matching`; the hunk-parsing diff paths never emit it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum FileStatus {
     #[serde(rename = "M")]
@@ -48,6 +50,8 @@ pub enum FileStatus {
     Added,
     #[serde(rename = "D")]
     Deleted,
+    #[serde(rename = "I")]
+    Ignored,
 }
 
 /// Row type within a hunk.
@@ -229,6 +233,10 @@ pub fn file_statuses(cwd: impl AsRef<Path>) -> Vec<FileStatusEntry> {
     // `-z` (NUL-separated, no quoting) is robust to spaces/newlines in paths;
     // `--untracked-files=all` lists every new file (so a freshly-created file colors
     // green), `core.quotepath=false` keeps non-ASCII paths raw (matching `list_dir`).
+    // `--ignored=matching` (#270) surfaces gitignored paths so the FileTree can dim
+    // them: matching mode lists each individually-ignored file (e.g. `.env`) and
+    // collapses a wholly-ignored directory to a single `dir/` summary entry (rather
+    // than every file inside it) — keeping the payload bounded and keyable by path.
     let out = run_git_raw(
         cwd,
         &[
@@ -238,6 +246,7 @@ pub fn file_statuses(cwd: impl AsRef<Path>) -> Vec<FileStatusEntry> {
             "--porcelain=v1",
             "-z",
             "--untracked-files=all",
+            "--ignored=matching",
         ],
     )
     .unwrap_or_default();
@@ -762,10 +771,13 @@ pub fn parse_unified_diff(diff: &str) -> Vec<FileDiff> {
 /// NUL-separated field — the original path. Git's `-z` order for a rename is
 /// `XY<space><new>\0<old>\0` (verified against git 2.x), so we emit `Added` for the
 /// new path and `Deleted` for the consumed original — mirroring `parse_unified_diff`'s
-/// rename-as-add+del convention. Mapping for the rest: `??` (untracked) → `Added`; a
-/// `D` in either column → `Deleted`; an `A` in either column → `Added`; everything
-/// else (`M`, type-change, unmerged `U…`) → `Modified`. Ignored (`!!`) and malformed
-/// records are skipped. Pure — unit-tested against fixtures with no repo on disk.
+/// rename-as-add+del convention. Mapping for the rest: `!!` (gitignored, #270, only
+/// emitted with `--ignored`) → `Ignored`; `??` (untracked) → `Added`; a `D` in either
+/// column → `Deleted`; an `A` in either column → `Added`; everything else (`M`,
+/// type-change, unmerged `U…`) → `Modified`. A wholly-ignored directory surfaces as
+/// `dir/` (trailing slash, matching mode) — the slash is stripped so it keys by the
+/// directory path like `list_dir`'s folder rows. Malformed records are skipped. Pure —
+/// unit-tested against fixtures with no repo on disk.
 fn parse_porcelain_z(out: &str) -> Vec<FileStatusEntry> {
     let fields: Vec<&str> = out.split('\u{0}').collect();
     let mut entries: Vec<FileStatusEntry> = Vec::new();
@@ -799,8 +811,9 @@ fn parse_porcelain_z(out: &str) -> Vec<FileStatusEntry> {
             continue;
         }
         let status = if x == b'!' {
-            // Ignored (only with --ignored, which we don't pass) — never color it.
-            continue;
+            // Gitignored (`!!`, #270, emitted by `file_statuses`'s `--ignored=matching`)
+            // — the FileTree dims it.
+            FileStatus::Ignored
         } else if x == b'?' {
             // Untracked (`??`) — a brand-new file reads as Added (green).
             FileStatus::Added
@@ -810,6 +823,14 @@ fn parse_porcelain_z(out: &str) -> Vec<FileStatusEntry> {
             FileStatus::Added
         } else {
             FileStatus::Modified
+        };
+        // A wholly-ignored directory surfaces as `dir/` (matching mode, #270); strip the
+        // trailing slash so it keys by the directory path, matching `list_dir`'s folder
+        // rows. Only ignored dir entries carry a slash, so this never touches a file.
+        let path = if status == FileStatus::Ignored {
+            path.strip_suffix('/').unwrap_or(path)
+        } else {
+            path
         };
         entries.push(FileStatusEntry {
             path: path.to_string(),
@@ -1111,6 +1132,33 @@ index 0..1
     }
 
     #[test]
+    fn porcelain_emits_ignored_for_bang_records() {
+        // `--ignored=matching` emits `!!` records: a single ignored file, and a
+        // wholly-ignored directory as `dir/` (trailing slash) — stripped to `dir`.
+        let out = "!! .env\u{0}!! build/\u{0}!! src/secret.key\u{0}";
+        let entries = parse_porcelain_z(out);
+        let by = |p: &str| entries.iter().find(|e| e.path == p).map(|e| e.status);
+        assert_eq!(by(".env"), Some(FileStatus::Ignored));
+        // The directory's trailing slash is stripped so it keys like a folder row.
+        assert_eq!(by("build"), Some(FileStatus::Ignored));
+        assert_eq!(by("build/"), None);
+        assert_eq!(by("src/secret.key"), Some(FileStatus::Ignored));
+        assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
+    fn porcelain_mixes_ignored_with_tracked_changes() {
+        // Ignored records coexist with real changes; each keeps its own status.
+        let out = " M mod.txt\u{0}!! .env\u{0}?? new.txt\u{0}";
+        let entries = parse_porcelain_z(out);
+        let by = |p: &str| entries.iter().find(|e| e.path == p).map(|e| e.status);
+        assert_eq!(by("mod.txt"), Some(FileStatus::Modified));
+        assert_eq!(by(".env"), Some(FileStatus::Ignored));
+        assert_eq!(by("new.txt"), Some(FileStatus::Added));
+        assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
     fn porcelain_empty_yields_no_entries() {
         assert!(parse_porcelain_z("").is_empty());
     }
@@ -1282,6 +1330,34 @@ index 0..1
         assert_eq!(by("gone.txt"), Some(FileStatus::Deleted));
         // Subdir paths stay repo-relative POSIX so the frontend lookup matches.
         assert_eq!(by("sub/new.txt"), Some(FileStatus::Added));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_statuses_marks_gitignored_files_and_dirs() {
+        let Some(dir) = init_repo("file-statuses-ignored") else {
+            return;
+        };
+        // Ignore a single file and a whole directory; commit the .gitignore so the
+        // rest of the tree is clean.
+        fs::write(dir.join(".gitignore"), ".env\nbuilt/\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        // Now create the ignored paths on disk.
+        fs::write(dir.join(".env"), "SECRET=1\n").unwrap();
+        fs::create_dir_all(dir.join("built")).unwrap();
+        fs::write(dir.join("built/out.js"), "x\n").unwrap();
+
+        let entries = file_statuses(&dir);
+        let by = |p: &str| entries.iter().find(|e| e.path == p).map(|e| e.status);
+        // The ignored file is flagged Ignored.
+        assert_eq!(by(".env"), Some(FileStatus::Ignored));
+        // A wholly-ignored directory keys by its dir path (trailing slash stripped),
+        // and matching mode does not list the individual files inside it.
+        assert_eq!(by("built"), Some(FileStatus::Ignored));
+        assert_eq!(by("built/out.js"), None);
+        // The committed .gitignore is tracked + clean, so it isn't reported at all.
+        assert_eq!(by(".gitignore"), None);
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -136,7 +136,7 @@ export interface ScheduleErrorPayload {
   message: string;
 }
 
-export type FileStatusCode = "M" | "A" | "D";
+export type FileStatusCode = "M" | "A" | "D" | "I";
 export type HunkLineKind = "hunk" | "context" | "add" | "del";
 
 /** One file's working-tree git status (#252, mirrors `git::FileStatusEntry`) — the

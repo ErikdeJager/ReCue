@@ -31,15 +31,16 @@ import { noAutoCapitalize } from "../../inputProps";
 import { joinPath, revealLabel } from "../../platform";
 import { useStore } from "../../store";
 import type { FileStatusCode } from "../../types";
-import { buildFolderRollup, deletedChildrenAt } from "./fileStatus";
+import { buildFolderRollup, deletedChildrenAt, isIgnored } from "./fileStatus";
 import styles from "./FileTree.module.css";
 
-/** Map a working-tree status to its tint class (green/yellow/red), or "" when the
- * path is unchanged. Drives the file/folder row coloring (#252). */
+/** Map a working-tree status to its tint class (green/yellow/red, or dimmed gray for
+ * gitignored #270), or "" when the path is unchanged. Drives file/folder coloring (#252). */
 function statusClass(status: FileStatusCode | undefined): string {
   if (status === "A") return styles.statusAdded ?? "";
   if (status === "M") return styles.statusModified ?? "";
   if (status === "D") return styles.statusDeleted ?? "";
+  if (status === "I") return styles.statusIgnored ?? "";
   return "";
 }
 
@@ -88,9 +89,10 @@ function FileTree({ repoPath }: { repoPath: string }) {
   const openFileFromTree = useStore((s) => s.openFileFromTree);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const platform = useStore((s) => s.platform);
-  // Git working-tree status for this repo (#252): repo-relative path → "A"|"M"|"D".
-  // Undefined = not loaded / non-git → no coloring. The map is shared in the store so
-  // every FileTree instance for a repo reads one fetch; it's refreshed on busy→idle.
+  // Git working-tree status for this repo (#252): repo-relative path → "A"|"M"|"D"|"I"
+  // ("I" = gitignored, #270). Undefined = not loaded / non-git → no coloring. The map is
+  // shared in the store so every FileTree instance for a repo reads one fetch; it's
+  // refreshed on busy→idle.
   const statusMap = useStore((s) => s.fileStatuses[repoPath]);
   const refreshFileStatuses = useStore((s) => s.refreshFileStatuses);
   // Register this tree so the disk-change visibility poll (#264) only re-lists/re-tints
@@ -363,8 +365,13 @@ function FileTree({ repoPath }: { repoPath: string }) {
         const Chevron = isOpen ? ChevronDown : ChevronRight;
         const FolderIcon = isOpen ? FolderOpen : Folder;
         // A folder is tinted in its highest-severity descendant's color (#252) — so a
-        // collapsed folder still shows that something inside it changed (red wins).
-        const cls = statusClass(folderRollup.get(node.path));
+        // collapsed folder still shows that something inside it changed (red wins). A
+        // tracked change always wins; otherwise a folder whose *own* path is gitignored
+        // is dimmed gray (#270) — an ignored child never grays a tracked parent.
+        const cls = statusClass(
+          folderRollup.get(node.path) ??
+            (isIgnored(statusMap, node.path) ? "I" : undefined),
+        );
         // OS-drop target (#253): a drop on this folder row lands inside it; highlight
         // it while the drag hovers here.
         const drop = dropTarget === node.path ? ` ${styles.dropTarget}` : "";
@@ -398,7 +405,8 @@ function FileTree({ repoPath }: { repoPath: string }) {
       }
       const isRevealed = node.path === revealTarget;
       // Tint the file name + icon by its working-tree status (#252): green = new,
-      // yellow = edited; unchanged files keep the default styling.
+      // yellow = edited, dimmed gray = gitignored (#270); unchanged files keep the
+      // default styling.
       const cls = statusClass(statusMap?.[node.path]);
       return (
         <button

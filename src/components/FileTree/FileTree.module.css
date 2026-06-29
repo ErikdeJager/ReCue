@@ -177,6 +177,17 @@
   color: var(--status-error);
 }
 
+/* Gitignored rows (#270): dim the name + icons (including a folder's normally
+   accent-tinted icon) to read as muted/grayed — distinguishing ignored files/folders
+   from tracked ones. Lower priority than the A/M/D tints above (a row only ever gets
+   one status class; a tracked change always wins in the JS that picks the class). */
+.statusIgnored .name,
+.statusIgnored .fileIcon,
+.statusIgnored .folderIcon {
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
 /* A deleted file's "ghost" row (#252): non-interactive (a plain <div>), dimmed, red,
    struck-through — shows what was removed from a folder that still renders. */
 .ghost {
