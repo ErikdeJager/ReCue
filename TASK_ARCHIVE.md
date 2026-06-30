@@ -7793,3 +7793,73 @@ ordering).
 
 ---
 
+### 280. [x] Fix Canvas "no longer pending" for scheduled agents (on fire + detached windows)
+
+**Status:** Done
+**Depends on:** 279
+**Created:** 2026-06-30
+
+**Description**
+
+Two bugs where a Canvas panel holding a **scheduled agent** wrongly showed
+`ScheduledPanel`'s "This schedule is no longer pending." message:
+
+1. **On fire (main window):** when a schedule fired, the panel showed "no longer pending"
+   instead of the newly-started **live agent terminal**.
+2. **Detached window:** popping that Canvas into its own window (#84) showed "no longer
+   pending" **immediately**, even while the schedule was still pending.
+
+Root causes: (1) `onFired` upserted a new live `PersistedSession` (new id) and removed the
+schedule but **never rewrote the Canvas leaf**, which stayed `{ kind:"scheduled", scheduleId }`
+→ `ScheduledPanel` couldn't find the removed schedule → "no longer pending". (2) Schedules
+were **main-window-only** (`listSchedules`/`subscribeScheduleEvents` gated on `IS_MAIN_WINDOW`),
+so a detached `CanvasWindow` had an empty `schedules` array and hit the `!schedule` gone-state.
+
+**What shipped** (commit `a08a85b`, PR
+[#31](https://github.com/ErikdeJager/ReCue/pull/31), merged `e3e0a94`, 2026-06-30):
+
+- **Part 1 — rewrite scheduled leaves on fire.** New pure `canvasSchedule.ts`
+  `rewriteScheduledLeaves(canvases, scheduleId, newContent)` walks every Canvas tab's BSP
+  layout and replaces any leaf whose content is `{ kind:"scheduled", scheduleId }` with the
+  live agent content — **preserving the leaf id** so the #18 pooled terminal reparents into the
+  same slot (mirrors `moveLeaf`/`pruneCanvasLeaves`); returns the **same array reference** when
+  nothing matched (caller skips a redundant persist). Unchanged subtrees keep object identity.
+  `onFired` (`store.ts`) calls it after upserting the live session and persists via the existing
+  `setCanvases` → `set_canvases` path, which **broadcasts `canvas://changed`** so both the main
+  window and any detached window holding that leaf flip to the live terminal. Unit-tested in
+  `canvasSchedule.test.ts`.
+- **Part 2 — make detached windows schedule-aware (option (a), the broadcast).**
+  `listSchedules()` now runs on boot in **every** window (no longer `IS_MAIN_WINDOW`-gated) so a
+  pending scheduled leaf has its data to render the editable `ScheduledPanel`. A new Rust
+  `broadcast_schedules` helper emits **`schedule://changed`** (the full `schedules` array) after
+  every schedule mutation — `create_schedule` / `update_schedule` / `cancel_schedule` /
+  `fire_due_schedules` / `fire_schedule_now` — mirroring `canvas://changed`; detached windows
+  listen and replace their `schedules` slice (live edits to a pending schedule's time/prompt
+  show in the detached window too). Detached windows also subscribe to **`schedule://fired`** to
+  upsert the fired session locally, so the rewritten agent leaf (synced via `canvas://changed`)
+  can render its terminal. The `!schedule` "no longer pending" message now only shows on a
+  genuine cancel.
+
+**Key files/areas touched:** `src/components/Canvas/{canvasSchedule.ts,canvasSchedule.test.ts}`
+(pure rewrite helper + test), `src/store.ts` (`onFired` leaf rewrite + persist; ungated
+detached schedule load; `schedule://changed`/`schedule://fired` subscriptions),
+`src-tauri/src/commands.rs` (`broadcast_schedules` + emit after every schedule mutation),
+`src/ipc.ts` (`schedule://changed` subscription wiring), `TRAJECTORY_TO_WINDOWS.md` (notes the
+detached-window real-box check per the #84 precedent).
+
+**Dependencies:** 279 (both edit `onFired`; serialized after the corrected
+scheduled-worktree lifecycle so the `onFired` changes stay coherent).
+
+**Notes**
+
+- **Decision:** chose **option (a)** from the plan — a dedicated `schedule://changed` broadcast
+  — over the minimal re-`listSchedules`-on-events fallback, for correctness (live updates to a
+  pending schedule propagate to detached windows). Documented in `ASSUMPTIONS.md` §Task 280.
+- **Cross-platform:** pure cross-window event/state logic; Tauri events are global on both
+  platforms, so identical on macOS/Windows (no path/shell/OS branch). The detached-window
+  fire/sync path is flagged in `TRAJECTORY_TO_WINDOWS.md` for a real-box check (GUI multi-window,
+  not CI-unit-testable). `npm test` (`rewriteScheduledLeaves`) / `build` / `lint` /
+  `lint:rust` green.
+
+---
+
