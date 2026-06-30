@@ -1216,3 +1216,23 @@ directive (2026-06-26) all interpretation calls below were made autonomously.
   code since the port stabilized (#202/#231/#237/#252/#253/#254/#255/#275/#277/#278). Out of
   scope: the version bump/patch notes (Task 281) and performing the real-box manual checks
   (those are logged for a maintainer, not run in CI).
+
+## Task 283
+
+- **"Next column" = the immediately adjacent column to the right** in document/array order
+  (`board.columns[fromCol + 1]`). Columns render left-to-right in `columns` order, so "move all
+  one column to the right" is unambiguous; the **rightmost column gets no button** (nothing to
+  its right, and no left variant was requested).
+- **An empty column shows no button.** The pure op no-ops on an empty source, and a dead button
+  is noise — so the button renders only when `canMoveRight && cards.length > 0`.
+- **Cards append into the target** (after its existing cards), matching `moveCard`/`addCard`
+  which both append, rather than prepend.
+- **Moved cards keep their `checked` state** — no auto-"complete" even when the target is the
+  Obsidian `**Complete**` lane. Drag-moves preserve `checked` verbatim; this op matches that, and
+  `complete` is inert outside parse/serialize.
+- **No confirm gate.** The move is non-destructive and trivially reversible (one markdown write;
+  target cards untouched), so it is not gated behind `settings.confirmDestructive`, consistent
+  with the ungated drag card-moves.
+- **Icon/placement:** a single right-arrow lucide icon (`ArrowRightToLine`/`ChevronsRight`) in the
+  existing hover-revealed `.columnActions` header span, reusing `styles.colBtn` — no new CSS, no
+  new column-level chrome beyond this one button.
