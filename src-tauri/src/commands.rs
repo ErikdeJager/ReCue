@@ -795,12 +795,22 @@ pub fn list_canvas_windows(app: AppHandle) -> Vec<String> {
     detached_canvas_ids(&app, None)
 }
 
+/// Broadcast the full pending-schedule list (#280) so **every** window — incl. a
+/// detached canvas window (#84) that can hold a scheduled panel but doesn't own
+/// schedule mutations — stays in sync after any create / update / cancel / fire.
+/// Mirrors `canvas://changed`. Tauri events are global, so this is identical on
+/// macOS and Windows (no OS-specific path/shell/key code).
+fn broadcast_schedules(app: &AppHandle, store: &Store) {
+    let _ = app.emit("schedule://changed", store.schedules());
+}
+
 /// Create a scheduled session (#93): persist a record that the poll loop fires at
 /// `at` (unix secs). `branch` (a non-current branch to check out), `name`, and
 /// `prompt` are optional; the backend owns the id + `created_at`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // a flat Tauri command surface (cwd + branch/new-branch + name/prompt/at/agent)
 pub fn create_schedule(
+    app: AppHandle,
     store: State<'_, Store>,
     cwd: String,
     branch: Option<String>,
@@ -879,6 +889,8 @@ pub fn create_schedule(
     store
         .add_schedule(sched.clone())
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Keep every window's pending-schedule list in sync (#280).
+    broadcast_schedules(&app, &store);
     Ok(sched)
 }
 
@@ -890,16 +902,24 @@ pub fn list_schedules(store: State<'_, Store>) -> Vec<ScheduledSession> {
 
 /// Cancel a pending scheduled session (#93).
 #[tauri::command]
-pub fn cancel_schedule(store: State<'_, Store>, id: String) -> Result<(), SessionError> {
+pub fn cancel_schedule(
+    app: AppHandle,
+    store: State<'_, Store>,
+    id: String,
+) -> Result<(), SessionError> {
     store
         .remove_schedule(&id)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Keep every window's pending-schedule list in sync (#280).
+    broadcast_schedules(&app, &store);
+    Ok(())
 }
 
 /// Update a schedule's prompt / name / fire time (#93) — the full surface #94's
 /// panel edits (so #94 needs no Rust changes).
 #[tauri::command]
 pub fn update_schedule(
+    app: AppHandle,
     store: State<'_, Store>,
     id: String,
     prompt: Option<String>,
@@ -913,7 +933,11 @@ pub fn update_schedule(
             name.filter(|n| !n.trim().is_empty()),
             at,
         )
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Keep every window's pending-schedule list in sync (#280) — esp. a detached
+    // canvas window, where a live edit to a pending schedule must reach its panel.
+    broadcast_schedules(&app, &store);
+    Ok(())
 }
 
 /// Fire any due schedules (#93): for each, optionally check out its branch, spawn
@@ -941,6 +965,9 @@ pub fn fire_due_schedules(app: &AppHandle) {
             );
         }
     }
+    // The due schedules were taken atomically up front, so the pending list shrank
+    // regardless of per-schedule outcome — sync every window (#280).
+    broadcast_schedules(app, &store);
 }
 
 /// Fire a **single** schedule immediately (#269) — the "Start now" button. Takes the
@@ -961,8 +988,12 @@ pub fn fire_schedule_now(app: AppHandle, id: String) -> Result<(), SessionError>
     if let Err(message) = fire_one_schedule(&store, &manager, &app, &sched) {
         // Keep the schedule intact so the user can fix the cause and try again.
         let _ = store.add_schedule(sched);
+        // Re-add restores the pending list — sync every window (#280).
+        broadcast_schedules(&app, &store);
         return Err(SessionError::Spawn(message));
     }
+    // Fired & removed (`take_schedule`) — sync every window (#280).
+    broadcast_schedules(&app, &store);
     Ok(())
 }
 

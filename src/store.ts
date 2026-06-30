@@ -6,6 +6,7 @@ import { create } from "zustand";
 
 import { agentCaps, SELECTABLE_AGENTS } from "./agents";
 import { canvasToTemplate } from "./components/Canvas/canvasToTemplate";
+import { rewriteScheduledLeaves } from "./components/Canvas/canvasSchedule";
 import { statusMapsEqual } from "./components/FileTree/fileStatus";
 import {
   appendLeaf,
@@ -1372,6 +1373,10 @@ export interface AppState {
    * `schedule://fired` event drives the scheduled→live transition (`onFired`). On a
    * spawn failure the schedule stays and an error toast is shown. */
   startScheduleNow: (id: string) => Promise<void>;
+  /** Apply a cross-window pending-schedule list broadcast by the backend (#280,
+   * `schedule://changed`). Keeps a detached canvas window's `schedules` slice in sync
+   * (so a scheduled panel renders + reflects live edits); a no-op when unchanged. */
+  applyScheduleSync: (schedules: ScheduledSession[]) => void;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
   /** Fast-forward `cwd`'s current branch to its upstream — `git pull --ff-only`
    * (#181, sidebar repo / worktree "Pull"). Toasts the result (summary or git
@@ -2228,43 +2233,83 @@ export const useStore = create<AppState>()((set, get) => ({
           onCanvasesChanged: ({ canvases }) => get().applyCanvasSync(canvases),
           onWindowsChanged: (ids) => get().setDetachedCanvasIds(ids),
         });
-        // Scheduled sessions (#93): the backend engine fires schedules into live
-        // agents — the main window listens to move them scheduled→live (and to
-        // surface a failed spawn). Schedules are a main-window-only surface.
-        if (IS_MAIN_WINDOW) {
-          await ipc.subscribeScheduleEvents({
-            onFired: ({ id, session }) => {
-              // The recent to surface is the *parent repo* for a worktree session
-              // (its `repo_path` is the app-managed worktree folder), else the
-              // session's own folder. This mirrors the backend, which touches
-              // `sched.cwd` (the parent repo) — never the worktree dir — so the
-              // worktree shows only as a sub-group under its parent, not as a
-              // duplicate empty top-level folder (#279). The interactive worktree
-              // spawn path likewise never adds the worktree dir to recents.
-              const recentPath = session.worktree_parent ?? session.repo_path;
-              set((s) => ({
-                schedules: s.schedules.filter((x) => x.id !== id),
-                recents: [
-                  recentPath,
-                  ...s.recents.filter((r) => r !== recentPath),
-                ],
-              }));
-              get().upsertSession(toSessionView(session));
-              get().pushToast(
-                `Scheduled agent started${session.name ? `: ${session.name}` : ""}`,
-              );
-            },
-            onError: ({ id, message }) => {
+        // Scheduled sessions (#93/#280): the backend engine fires schedules into live
+        // agents. The **main** window owns the scheduled→live transition; a **detached**
+        // canvas window (#84) also listens because it can hold a scheduled panel, so it
+        // must follow the same fire (and keep its own `schedules` slice in sync). Both
+        // subscribe; the per-window behavior is branched inside each handler. (Tauri
+        // events are global on macOS and Windows alike, so this path is identical.)
+        await ipc.subscribeScheduleEvents({
+          onFired: ({ id, session }) => {
+            get().upsertSession(toSessionView(session));
+            if (!IS_MAIN_WINDOW) {
+              // Detached canvas (#280): reflect the fire locally so the rewritten
+              // agent leaf (arriving via `canvas://changed`) finds its session and
+              // renders the terminal instead of "Session closed." The main window
+              // owns the leaf rewrite, persistence, recents, and toast.
               set((s) => ({
                 schedules: s.schedules.filter((x) => x.id !== id),
               }));
+              return;
+            }
+            // The recent to surface is the *parent repo* for a worktree session
+            // (its `repo_path` is the app-managed worktree folder), else the
+            // session's own folder. This mirrors the backend, which touches
+            // `sched.cwd` (the parent repo) — never the worktree dir — so the
+            // worktree shows only as a sub-group under its parent, not as a
+            // duplicate empty top-level folder (#279). The interactive worktree
+            // spawn path likewise never adds the worktree dir to recents.
+            const recentPath = session.worktree_parent ?? session.repo_path;
+            set((s) => ({
+              schedules: s.schedules.filter((x) => x.id !== id),
+              recents: [
+                recentPath,
+                ...s.recents.filter((r) => r !== recentPath),
+              ],
+            }));
+            // Rewrite any Canvas leaf showing this pending schedule into the live
+            // agent (#280), in place (same leaf id → the #18 pooled terminal
+            // reparents), then persist so the main window — and any detached canvas
+            // holding it (via `canvas://changed`) — render the agent rather than the
+            // now-removed schedule's "no longer pending" panel.
+            const liveContent: CanvasContent = {
+              kind: "agent",
+              sessionId: session.id,
+              repoPath: session.repo_path,
+            };
+            const { canvases, activeCanvasId } = get();
+            const nextCanvases = rewriteScheduledLeaves(
+              canvases,
+              id,
+              liveContent,
+            );
+            if (nextCanvases !== canvases) {
+              set({ canvases: nextCanvases });
+              void ipc
+                .setCanvases({
+                  canvases: nextCanvases,
+                  activeId: activeCanvasId,
+                })
+                .catch(() => {});
+            }
+            get().pushToast(
+              `Scheduled agent started${session.name ? `: ${session.name}` : ""}`,
+            );
+          },
+          onError: ({ id, message }) => {
+            set((s) => ({
+              schedules: s.schedules.filter((x) => x.id !== id),
+            }));
+            // Only the main window toasts the failure (it owns the schedule surface).
+            if (IS_MAIN_WINDOW) {
               get().pushToast(
                 message || "Scheduled agent failed to start",
                 "error",
               );
-            },
-          });
-        }
+            }
+          },
+          onChanged: (schedules) => get().applyScheduleSync(schedules),
+        });
       } catch {
         // Event subscription only works inside the Tauri webview.
         eventsSubscribed = false;
@@ -2466,14 +2511,15 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Backend unreachable; leave colors/panels/order/canvas/width as-is.
     }
-    // Scheduled sessions (#93) — main-window-only surface; re-armed timers live in
-    // the backend, so the frontend just lists the pending ones.
-    if (IS_MAIN_WINDOW) {
-      try {
-        set({ schedules: await ipc.listSchedules() });
-      } catch {
-        // Backend unreachable; leave schedules as-is.
-      }
+    // Scheduled sessions (#93) — re-armed timers live in the backend, so the frontend
+    // just lists the pending ones. Loaded in **every** window (#280), not only the
+    // main one: a detached canvas (#84) can hold a scheduled panel, which needs the
+    // schedule's data to render (else it falsely shows "no longer pending"). Live
+    // mutations + the fire then sync via `schedule://changed` / `schedule://fired`.
+    try {
+      set({ schedules: await ipc.listSchedules() });
+    } catch {
+      // Backend unreachable; leave schedules as-is.
     }
     // In-app updater (#190) — main window only. (1) Post-update toast: if the
     // running version is higher than the one recorded last boot, the app just
@@ -4223,6 +4269,16 @@ export const useStore = create<AppState>()((set, get) => ({
       ),
     }));
     await ipc.updateSchedule(id, prompt, name, at).catch(() => {});
+  },
+
+  // Apply a cross-window pending-schedule list broadcast by the backend (#280,
+  // `schedule://changed`). The main window owns schedule mutations and already tracks
+  // them canonically (so this is usually a no-op echo, skipped by the equality guard);
+  // a **detached** canvas window relies on it to keep its scheduled panel's data fresh
+  // — incl. live edits to a pending schedule's time/prompt/name made in the main window.
+  applyScheduleSync: (schedules) => {
+    if (JSON.stringify(get().schedules) === JSON.stringify(schedules)) return;
+    set({ schedules });
   },
 
   startScheduleNow: async (id) => {
