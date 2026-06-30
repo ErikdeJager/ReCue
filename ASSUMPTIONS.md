@@ -1236,3 +1236,27 @@ directive (2026-06-26) all interpretation calls below were made autonomously.
 - **Icon/placement:** a single right-arrow lucide icon (`ArrowRightToLine`/`ChevronsRight`) in the
   existing hover-revealed `.columnActions` header span, reusing `styles.colBtn` — no new CSS, no
   new column-level chrome beyond this one button.
+
+## Task 284
+
+- **Chosen chord: ⌘⇧M / Ctrl+⇧M (Cmd/Ctrl+Shift+M).** Picked for zero Claude-instance conflict on
+  both OSes: the global handler intercepts in capture phase + `stopPropagation`, macOS never
+  routes ⌘-combos to the terminal, and on Windows `Ctrl+Shift+letter` is **not** a readline/TUI
+  control code (those are bare `Ctrl+letter`), so nothing the Claude TUI uses is shadowed. M =
+  Maximize/big Mode (matches the `Maximize2` icon).
+- **Rejected alternatives (recorded so the implementer doesn't re-litigate):** `⌘M` — collides
+  with the macOS-system *minimize*; `⌘⏎` — already the worktree-create gesture in the
+  NewSessionModal (#74/#204); `⌘E`/`Ctrl+E` — shadows the Windows readline *end-of-line*; bound
+  app letters S/N/B/K/T and `⌘⇧N` (schedule) are taken.
+- **Toggle semantics:** one chord both opens (when closed) and closes (when open) — `if
+  (maximizedItem) closeMaximized() else maximize the selected item`. Pressing it with **nothing
+  selected** is a **safe no-op** (no empty modal).
+- **"Selected item" = `selectedId`,** resolved to a `CanvasContent` the same way the existing
+  click-to-maximize buttons supply one — preferring the active Canvas leaf's `content` in Canvas
+  view, else mapping the session/schedule/Overview-panel id (reusing `overviewPanelToContent`).
+- **Works in both windows and both views** (Overview + Canvas, main + detached canvas) — not
+  gated on `IS_MAIN_WINDOW`, since big mode is mounted in the detached window too.
+- **Discoverability:** the chord hint is appended to the existing `Maximize2` button tooltips via
+  `kbdHint`/the cached `platform` signal (⌘ on macOS, Ctrl on Windows) — never a hardcoded ⌘.
+- The Windows keyboard path is a GUI real-box check; logged to `TRAJECTORY_TO_WINDOWS.md` if it
+  can't be unit-verified, per the cross-platform requirement.
