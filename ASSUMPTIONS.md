@@ -1306,3 +1306,23 @@ directive (2026-06-26) all interpretation calls below were made autonomously.
 - **Pure render-order change, no scroll cap added.** The card's concern ("button moved off
   screen") is solved by ordering the button first; adding a `max-height`/scroll to the notes
   slot is not required and is out of scope.
+
+## Task 287
+
+- **"The install available popup in the bottom left" = the sidebar-footer `UpdateIndicator`
+  chip** (`src/components/Update/UpdateIndicator.tsx`), shown above the Settings gear when an
+  update is available. It is the only update-related element with a "blinking" animation (the
+  #216 `update-announce` 3× pulse) and the only one positioned bottom-left.
+- **The new effect is a CONTINUOUS (infinite) gentle glow, not a one-shot.** The card asks for
+  something "easy to spot"; the existing one-shot pulse only shows for ~2s on first appearance,
+  so it is replaced with a slow, low-intensity infinite breathing glow that runs the whole time
+  the update is available. **This deliberately overrides #216's one-shot `updateAnnounced`
+  guard**, which is removed.
+- **"Glowing border with a transition in color" = a soft accent box-shadow + a border-color
+  that eases within the accent family** (accent ↔ accent-hover), never going fully transparent
+  (which is what made the old pulse read as a blink).
+- **Reduced motion = static glow.** Because the global killswitch only zeroes animation timing,
+  the glow class also sets a static resting box-shadow/border (matching the 0%/100% keyframe), so
+  reduce-motion users still see a clearly-distinguished static glowing border.
+- **Scope = the available state only.** The "Update failed" error variant keeps its current
+  treatment (no glow added).
