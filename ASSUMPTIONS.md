@@ -1260,3 +1260,28 @@ directive (2026-06-26) all interpretation calls below were made autonomously.
   `kbdHint`/the cached `platform` signal (⌘ on macOS, Ctrl on Windows) — never a hardcoded ⌘.
 - The Windows keyboard path is a GUI real-box check; logged to `TRAJECTORY_TO_WINDOWS.md` if it
   can't be unit-verified, per the cross-platform requirement.
+
+## Task 285
+
+- **"Near the agent on that branch/worktree" = insert immediately after the agent that shares the
+  new panel's folder.** A worktree agent's `repoPath` *is* the worktree folder, and every panel
+  entry point already passes that folder as `addOverviewPanel`'s `repoPath`, so the anchor is the
+  session with `s.repoPath === repoPath` (the worktree agent; for a normal repo, that repo's
+  agent). On a tie, prefer the **selected** agent in that folder.
+- **A "specific branch" is identified by its folder, not a new branch field.** ReCue tracks
+  branch per repo path and a worktree is the concrete per-branch folder; folder identity is what
+  the entry points already carry, so no new plumbing/field is introduced.
+- **Reposition only when an agent shares the folder.** If no agent runs in the panel's folder
+  (the ordinary "add a panel to a repo" case), the established **append-at-end** behavior is left
+  untouched — this is an additive nicety for the worktree/active-agent case, not a global
+  reordering of all panel creation.
+- **Implemented inside `addOverviewPanel`** (one source of truth) so all entry points — worktree
+  card header `OpenViewButton`, sidebar `WorktreeHeader` `ViewsMenu`, ExtraPanel header,
+  `CreatePanelModal`, `openFileFromTree` — benefit at once. **Dedup hits and terminal-spawn
+  failures do not reposition.**
+- **Persistence reuses `reorderOverview` → `set_overview_order`** (the existing drag path); the
+  render order is computed via the same `overviewClusters`/`mergeRepoOrder` the UI uses so it
+  can't drift, and a later manual drag still wins and persists.
+- **Overview-only.** The sidebar already nests a worktree's agents and panels together under its
+  `WorktreeHeader`, so adjacency there is inherent; only the Overview cluster's intra-order needed
+  fixing.
