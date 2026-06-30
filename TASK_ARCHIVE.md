@@ -8255,3 +8255,102 @@ CSS, no store/updater logic, no backend/Rust/native code, no IPC or persistence.
 
 ---
 
+### 287. [x] Replace update-available indicator's blinking pulse with a continuous glowing border
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+The sidebar-footer **"Update available"** chip (the `UpdateIndicator`, bottom-left above the
+Settings gear) no longer plays the **#216 one-shot blink** — a `update-announce` ring that
+pulsed transparent→bright→transparent **3×** on first appearance and then went quiet. It now
+carries a **subtle, continuous glowing accent border** that gently breathes color + intensity on
+a slow ease-in-out loop and **persists the whole time the update is available** — calm but easy
+to spot, and never flashing fully off (the transparent frame was what read as a "blink"). Under
+**reduced motion** (OS setting or Settings → Appearance "Reduce motion") it reduces to a
+**static** accent glow, still clearly distinguished from the quiet resting chip. The **error**
+variant ("Update failed") is unchanged (no glow), and click behavior (opens Settings → Updates),
+the collapsed-rail layout, and all updater store logic are untouched.
+
+**What shipped** (commit `5463de5`, PR
+[#39](https://github.com/ErikdeJager/ReCue/pull/39), merged `0ff0bb8`, 2026-06-30):
+
+- **`src/components/Update/Update.module.css`** — removed `@keyframes update-announce` +
+  `.indicatorAnnounce` (the 3× pulse). Added `@keyframes update-glow` (accent ↔ accent-hover
+  border, soft accent box-shadow that never goes transparent) + `.indicatorGlow`, which sets a
+  **static resting glow first** (border-color + box-shadow matching the 0%/100% keyframe) and
+  then `animation: update-glow 2.6s ease-in-out infinite` over it. Box-shadow + border only → no
+  layout shift; because the 0%/100% frame equals the static glow, the `global.css` reduced-motion
+  killswitch (which only zeroes animation timing) holds a visible static accent glow.
+- **`src/components/Update/UpdateIndicator.tsx`** — deleted the module-level `updateAnnounced`
+  one-shot guard, the `announce` computation, and the `onAnimationEnd` handler (no "play once" to
+  track now). The available (non-error) state applies `styles.indicatorGlow`, the error state
+  keeps `styles.indicatorError` — `${isError ? indicatorError : indicatorGlow}`. Comments
+  refreshed to describe the continuous glow.
+
+**Key files/areas touched:** `src/components/Update/Update.module.css` (keyframe + class swap),
+`src/components/Update/UpdateIndicator.tsx` (drop one-shot guard, apply glow class). No
+store/updater logic, IPC, persistence, or backend/Rust/native code.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 287): "the install available popup in the bottom
+  left" = the sidebar-footer `UpdateIndicator` chip (the only bottom-left update element with the
+  disliked blink); the new effect is **continuous/infinite**, deliberately **superseding #216's
+  one-shot `updateAnnounced` guard** (removed) so it's easy to spot at any time, not just for ~2s
+  on first appearance; "glowing border with a transition in color" = a soft accent box-shadow +
+  border easing **within the accent family** (accent ↔ accent-hover), never fully transparent;
+  **reduced motion = static glow** (the killswitch only zeroes timing, so the static resting
+  box-shadow/border survives); scope is the **available state only** (error variant unchanged).
+- **Cross-platform:** pure WebView CSS + a className swap, no native/path/shell surface, so it
+  behaves identically on macOS and Windows. `--accent`/`--accent-hover`/`--accent-dim` already
+  move together with a custom accent (`accentCompanions`, #107), so a user accent recolors the
+  glow for free. Project checks green: `npm run build` / `lint` / `test`.
+
+---
+
+### 288. [x] Use a simple ">" chevron for the Kanban "move all cards right" button
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+The per-column **"Move all cards right"** button on the in-app **Kanban board** (the #283
+move-all button in `KanbanPanel.tsx`) now renders a plain **`>` chevron** (Lucide
+`ChevronRight`) instead of the `ArrowRightToLine` (→|) icon — it reads more simply as "move to
+the next column." Pure icon-glyph swap: the same size (`13`), stroke width (`1.5`), placement,
+`title` ("Move all cards right"), `aria-label`, visibility condition (only when there's a column
+to the right and the column has cards), and `moveAllCardsRight` click handler are all preserved.
+This is the **app's** Kanban UI, not the development pipeline's `KANBAN.md` board files.
+
+**What shipped** (commit `aae6e8c`, PR
+[#38](https://github.com/ErikdeJager/ReCue/pull/38), merged `301e31a`, 2026-06-30):
+
+- **`src/components/Kanban/KanbanPanel.tsx`** — replaced the `lucide-react` import
+  `ArrowRightToLine` → `ChevronRight` (kept alphabetized, sorts before `Code2`) and the single
+  JSX usage in the move-all button (`<ChevronRight size={13} strokeWidth={1.5} />`).
+  `ArrowRightToLine` had no other usage, so the import swap is clean (2 insertions / 2 deletions,
+  one file).
+
+**Key files/areas touched:** `src/components/Kanban/KanbanPanel.tsx` (import + one JSX usage).
+No behavior, styling, visibility logic, IPC, persistence, or backend/Rust/native code.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 288): "a simple '>' arrow" = Lucide `ChevronRight`
+  (the closest single-glyph `>` chevron in the project's lucide-react set); **glyph only** —
+  size/stroke/title/aria-label/visibility/handler all preserved; this targets the **app's**
+  Kanban board UI (the #283 button), not the dev pipeline `KANBAN.md` files.
+- **Cross-platform:** a pure icon swap (no native/path/shell surface), identical on macOS and
+  Windows. Project checks green: `npm run build` / `lint` / `test`.
+
+---
+
