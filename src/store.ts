@@ -5,6 +5,7 @@
 import { create } from "zustand";
 
 import { agentCaps, SELECTABLE_AGENTS } from "./agents";
+import { overviewPanelToContent } from "./components/Canvas/canvasDrop";
 import { canvasToTemplate } from "./components/Canvas/canvasToTemplate";
 import { rewriteScheduledLeaves } from "./components/Canvas/canvasSchedule";
 import { statusMapsEqual } from "./components/FileTree/fileStatus";
@@ -883,6 +884,62 @@ function leafItemId(
   return null;
 }
 
+/**
+ * Resolve the currently **selected** item (`selectedId`) to the live `CanvasContent`
+ * big mode (#157) would maximize — the keyboard ⌘E/Ctrl+E toggle's "what to open"
+ * (#284). It must yield **exactly** the descriptor the click-to-maximize buttons pass
+ * (Overview.tsx / CanvasSurface.tsx), so the keybind and a click open the same item.
+ *
+ * Resolution, most-precise first:
+ *   1. **Canvas leaf** — if a leaf in the active tab maps back to `selectedId`
+ *      (`leafItemId`), return that leaf's `content` verbatim (no reconstruction). In
+ *      Canvas view `selectedId` tracks the active leaf, and a detached canvas window
+ *      only has leaves, so this is the path there.
+ *   2. **By id across the store** — a session → `agent`, a schedule → `scheduled`, an
+ *      Overview panel → `overviewPanelToContent(panel, repoKey)` (the panel's map key
+ *      preserves a worktree-keyed repoPath).
+ * `null` when nothing is selected or the id resolves to no live item. Pure + unit-tested.
+ */
+export function contentForSelected(state: {
+  selectedId: string | null;
+  canvases: CanvasTab[];
+  activeCanvasId: string;
+  sessions: SessionView[];
+  schedules: ScheduledSession[];
+  overviewPanels: Record<string, OverviewPanel[]>;
+}): CanvasContent | null {
+  const { selectedId } = state;
+  if (!selectedId) return null;
+
+  // 1. Active Canvas tab — return the matching leaf's content directly.
+  const activeLayout =
+    state.canvases.find((c) => c.id === state.activeCanvasId)?.layout ?? null;
+  for (const leaf of collectLeaves(activeLayout)) {
+    if (leafItemId(leaf.content, state.overviewPanels) === selectedId) {
+      return leaf.content;
+    }
+  }
+
+  // 2. Resolve the id against sessions / schedules / Overview panels.
+  const session = state.sessions.find((s) => s.id === selectedId);
+  if (session) {
+    return { kind: "agent", sessionId: session.id, repoPath: session.repoPath };
+  }
+  const schedule = state.schedules.find((s) => s.id === selectedId);
+  if (schedule) {
+    return {
+      kind: "scheduled",
+      scheduleId: schedule.id,
+      repoPath: schedule.cwd,
+    };
+  }
+  for (const [repoKey, panels] of Object.entries(state.overviewPanels)) {
+    const panel = panels.find((p) => p.id === selectedId);
+    if (panel) return overviewPanelToContent(panel, repoKey);
+  }
+  return null;
+}
+
 export interface AppState {
   // --- State ---
   sessions: SessionView[];
@@ -1279,6 +1336,10 @@ export interface AppState {
   maximizeItem: (content: CanvasContent) => void;
   /** Close big mode (#157): restore the item to its panel/column. */
   closeMaximized: () => void;
+  /** Toggle big mode for the **selected** item via ⌘E / Ctrl+E (#284): when open,
+   * close it (same chord); when closed, maximize the item `selectedId` resolves to
+   * (`contentForSelected`) — a no-op when nothing maximizable is selected. */
+  toggleMaximizeSelected: () => void;
   /** Add a new empty Canvas tab (default "Canvas N") and select it (#58). */
   addCanvas: () => void;
   /** Close a Canvas tab; always keeps ≥1 (closing the last leaves an empty one) (#58). */
@@ -3244,6 +3305,17 @@ export const useStore = create<AppState>()((set, get) => ({
   maximizeItem: (content) => set({ maximizedItem: content }),
   closeMaximized: () => {
     if (get().maximizedItem) set({ maximizedItem: null });
+  },
+  // ⌘E / Ctrl+E (#284): same chord opens/closes. Open → close (regardless of what's
+  // selected); closed → maximize the selected item, or no-op if nothing resolves.
+  toggleMaximizeSelected: () => {
+    const s = get();
+    if (s.maximizedItem) {
+      s.closeMaximized();
+      return;
+    }
+    const content = contentForSelected(s);
+    if (content) s.maximizeItem(content);
   },
 
   // Canvas templates (#117): the editor builds a draft layout of inert blocks with

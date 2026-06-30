@@ -42,6 +42,7 @@ import {
   sessionInFilter,
   sessionLabel,
 } from "../../paths";
+import { kbdHint } from "../../platform";
 import { formatFireTime } from "../../time";
 import type { OverviewPanel, ScheduledSession, SessionView } from "../../types";
 import { overviewPanelToContent } from "../Canvas/canvasDrop";
@@ -163,6 +164,7 @@ function SessionCard({
   onRemove,
 }: SessionCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
+  const platform = useStore((s) => s.platform);
   const renameSession = useStore((s) => s.renameSession);
   // Agent label (#95): a single line showing only the primary — the custom name if
   // set, else the branch (folder name when non-git). No subtitle, no repo dot; repo
@@ -316,7 +318,7 @@ function SessionCard({
             repoPath: session.repoPath,
           })
         }
-        title="Open in big mode"
+        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
         aria-label="Open in big mode"
       >
         <Maximize2 size={15} strokeWidth={1.5} />
@@ -391,6 +393,7 @@ function ExtraPanel({
   const setOverviewPanelFile = useStore((s) => s.setOverviewPanelFile);
   const moveOverviewPanelToFile = useStore((s) => s.moveOverviewPanelToFile);
   const maximizeItem = useStore((s) => s.maximizeItem);
+  const platform = useStore((s) => s.platform);
   const content = overviewPanelToContent(panel, repoPath);
   const title = (
     <>
@@ -428,7 +431,7 @@ function ExtraPanel({
         type="button"
         className={styles.action}
         onClick={() => maximizeItem(content)}
-        title="Open in big mode"
+        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
         aria-label="Open in big mode"
       >
         <Maximize2 size={15} strokeWidth={1.5} />
@@ -486,6 +489,7 @@ function ScheduleCard({
   onStartNow,
 }: ScheduleCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
+  const platform = useStore((s) => s.platform);
   // Disable "Start now" while the spawn is in flight (the card vanishes on success
   // via `schedule://fired`; on failure it stays and the button re-enables).
   const [starting, setStarting] = useState(false);
@@ -540,7 +544,7 @@ function ScheduleCard({
             repoPath: schedule.cwd,
           })
         }
-        title="Open in big mode"
+        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
         aria-label="Open in big mode"
       >
         <Maximize2 size={15} strokeWidth={1.5} />

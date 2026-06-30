@@ -743,3 +743,25 @@ logic (pure cross-window events, global on both OSes) — **all confirmed cross-
   `explorer.exe` open/reveal/url, themed scrollbars, the #253 drag-drop + DPR hit-test, the
   #275 export/import dialog, the #259/#280 worktree/detached-window flows) — none re-opened by
   this pass; they remain real-box spot-checks for a maintainer.
+
+### Keyboard shortcut ⌘E / Ctrl+E to toggle big mode for the selected item (#284)
+
+A single global shortcut toggles big mode (#157) for the currently selected item: closed →
+maximize the selected item, open → close (same chord). Wired in the shared global handler
+`src/useKeyboardNav.ts` (capture phase, mounted in both the main and detached canvas windows)
+via the established `(e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.code === "KeyE"`
+detection — so the **same key handling fires ⌘E on macOS and Ctrl+E on Windows with no extra
+code** (the `metaKey || ctrlKey` convention), and `e.code` (physical key) keeps it
+layout-robust like the existing digit shortcuts. The store action `toggleMaximizeSelected`
+(+ the pure, unit-tested `contentForSelected`) and the Maximize2 button tooltips route the
+displayed chord through `kbdHint(platform, "⌘E", "Ctrl+E")` (Overview.tsx ×3,
+CanvasSurface.tsx) — never a hardcoded glyph. No native/path/shell code touched.
+
+#### Still needs manual Windows verification (#284)
+
+- **Keyboard real-box check (GUI path, can't be unit-tested).** On a Windows build: with an
+  item selected in **Overview**, in **Canvas**, and in a **detached canvas window**, press
+  **Ctrl+E** — confirm it opens that item in big mode, and a second **Ctrl+E** closes it; that
+  it never reaches a focused `claude`/terminal PTY (capture-phase `stopPropagation`), doesn't
+  collide with any browser/WebView2 default, and that the Maximize2 tooltips read **"Ctrl+E"**.
+  Re-confirm macOS still toggles on **⌘E** with the **⌘E** tooltip.

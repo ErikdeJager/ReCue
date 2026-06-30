@@ -24,6 +24,7 @@ import {
   repoName,
   sessionLabel,
 } from "../../paths";
+import { kbdHint } from "../../platform";
 import { repoColor, useStore } from "../../store";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
 import { IS_MAIN_WINDOW } from "../../windowContext";
@@ -90,6 +91,7 @@ function LeafPanel({
   const setLeafFile = useStore((s) => s.setLeafFile);
   const setLeafFileAbsolute = useStore((s) => s.setLeafFileAbsolute);
   const maximizeItem = useStore((s) => s.maximizeItem);
+  const platform = useStore((s) => s.platform);
   const renameSession = useStore((s) => s.renameSession);
   const isActive = leaf.id === activeLeafId;
 
@@ -359,7 +361,7 @@ function LeafPanel({
               type="button"
               className={styles.panelClose}
               onClick={() => maximizeItem(content)}
-              title="Open in big mode"
+              title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
               aria-label="Open in big mode"
             >
               <Maximize2 size={14} strokeWidth={1.5} />

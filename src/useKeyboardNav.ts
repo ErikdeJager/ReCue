@@ -11,6 +11,7 @@
 //   ⌘⌥1 … ⌘⌥6          Create-panel launcher straight to the folder step  (#189)
 //                      for type N (session/file/diff/terminal/kanban/tree)
 //   ⌘T / Ctrl+T        new Canvas tab (switches to Canvas view)           (#206)
+//   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
 //
 // xterm forwards keystrokes to the PTY when a terminal is focused, so the
 // listener runs in the **capture phase on window** — it fires before xterm's
@@ -142,6 +143,24 @@ export function useKeyboardNav(): void {
             addCanvas();
           }
         }
+        return;
+      }
+
+      // ⌘E / Ctrl+E — toggle big mode (#157) for the selected item (#284). Same chord
+      // opens (the selected item) and closes. Works in both windows (big mode is a
+      // per-window overlay), so NOT gated on IS_MAIN_WINDOW. ⌘/Ctrl-based + capture
+      // `stopPropagation`, so it never reaches a focused claude/terminal; matched on
+      // `e.code` (physical key, like the digit shortcuts) for layout robustness.
+      // Opening with nothing selected is a safe no-op.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.code === "KeyE"
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        useStore.getState().toggleMaximizeSelected();
         return;
       }
 

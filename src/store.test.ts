@@ -6,6 +6,7 @@ import {
   adjacentId,
   adjacentSessionId,
   anchorAgentForPanel,
+  contentForSelected,
   DEFAULT_SETTINGS,
   dedupeBranchLabels,
   isClaudeActive,
@@ -2166,5 +2167,169 @@ describe("first-launch agent onboarding", () => {
     expect(s().settings.defaultAgent).toBe("claude");
     expect(s().settings.onboarded).toBe(true);
     expect(s().onboardingOpen).toBe(false);
+  });
+});
+
+describe("contentForSelected (#284, big-mode keybind resolution)", () => {
+  // Minimal store-shaped state for the pure helper. Each field defaults empty; a
+  // test overrides only what it needs.
+  const base = {
+    selectedId: null as string | null,
+    canvases: [
+      { id: "canvas-1", name: "Canvas 1", layout: null as CanvasNode | null },
+    ],
+    activeCanvasId: "canvas-1",
+    sessions: [] as SessionView[],
+    schedules: [] as ScheduledSession[],
+    overviewPanels: {} as Record<string, OverviewPanel[]>,
+  };
+
+  it("returns null when nothing is selected", () => {
+    expect(contentForSelected({ ...base, selectedId: null })).toBeNull();
+  });
+
+  it("returns null for an unknown selected id", () => {
+    expect(contentForSelected({ ...base, selectedId: "nope" })).toBeNull();
+  });
+
+  it("resolves a selected session id to an agent content", () => {
+    const sess: SessionView = {
+      id: "s1",
+      claudeSessionId: "s1",
+      repoPath: "/repo/a",
+      name: null,
+      createdAt: 0,
+    };
+    expect(
+      contentForSelected({ ...base, selectedId: "s1", sessions: [sess] }),
+    ).toEqual({ kind: "agent", sessionId: "s1", repoPath: "/repo/a" });
+  });
+
+  it("resolves a selected schedule id to a scheduled content (repoPath = cwd)", () => {
+    const sch: ScheduledSession = {
+      id: "sch1",
+      cwd: "/repo/b",
+      fire_at: 0,
+      created_at: 0,
+    };
+    expect(
+      contentForSelected({ ...base, selectedId: "sch1", schedules: [sch] }),
+    ).toEqual({ kind: "scheduled", scheduleId: "sch1", repoPath: "/repo/b" });
+  });
+
+  it("resolves a selected markdown panel id via overviewPanelToContent", () => {
+    const panels: Record<string, OverviewPanel[]> = {
+      "/repo/c": [{ id: "p1", kind: "markdown", file: "README.md" }],
+    };
+    expect(
+      contentForSelected({
+        ...base,
+        selectedId: "p1",
+        overviewPanels: panels,
+      }),
+    ).toEqual({ kind: "file", repoPath: "/repo/c", file: "README.md" });
+  });
+
+  it("resolves a selected diff/terminal/kanban/filetree panel id", () => {
+    const panels: Record<string, OverviewPanel[]> = {
+      "/repo/c": [
+        { id: "pd", kind: "diff" },
+        { id: "pt", kind: "terminal" },
+        { id: "pk", kind: "kanban", file: "board.md" },
+        { id: "pf", kind: "filetree" },
+      ],
+    };
+    const pick = (id: string) =>
+      contentForSelected({ ...base, selectedId: id, overviewPanels: panels });
+    expect(pick("pd")).toEqual({ kind: "diff", repoPath: "/repo/c" });
+    expect(pick("pt")).toEqual({
+      kind: "terminal",
+      sessionId: "pt",
+      repoPath: "/repo/c",
+    });
+    expect(pick("pk")).toEqual({
+      kind: "kanban",
+      repoPath: "/repo/c",
+      file: "board.md",
+    });
+    expect(pick("pf")).toEqual({ kind: "filetree", repoPath: "/repo/c" });
+  });
+
+  it("preserves a worktree-keyed repoPath for the panel's map key", () => {
+    const panels: Record<string, OverviewPanel[]> = {
+      "/repo/c/.worktrees/feat": [{ id: "pd", kind: "diff" }],
+    };
+    expect(
+      contentForSelected({ ...base, selectedId: "pd", overviewPanels: panels }),
+    ).toEqual({ kind: "diff", repoPath: "/repo/c/.worktrees/feat" });
+  });
+
+  it("returns the active Canvas leaf's content verbatim when it maps to the selection", () => {
+    const leafContent = {
+      kind: "agent",
+      sessionId: "s9",
+      repoPath: "/repo/z",
+    };
+    const layout: CanvasNode = {
+      type: "leaf",
+      id: "leaf-abc",
+      content: leafContent,
+    };
+    const sess: SessionView = {
+      id: "s9",
+      claudeSessionId: "s9",
+      repoPath: "/repo/z",
+      name: null,
+      createdAt: 0,
+    };
+    const result = contentForSelected({
+      ...base,
+      selectedId: "s9", // the item id (leafItemId), not the leaf id
+      canvases: [{ id: "canvas-1", name: "Canvas 1", layout }],
+      sessions: [sess],
+    });
+    // The exact leaf content object is returned (no reconstruction).
+    expect(result).toBe(leafContent);
+  });
+});
+
+describe("toggleMaximizeSelected (#284)", () => {
+  const s = () => useStore.getState();
+
+  it("opens big mode for the selected session when closed", () => {
+    useStore.setState({
+      sessions: [
+        {
+          id: "s1",
+          claudeSessionId: "s1",
+          repoPath: "/repo/a",
+          name: null,
+          createdAt: 0,
+        },
+      ],
+      selectedId: "s1",
+      maximizedItem: null,
+    });
+    s().toggleMaximizeSelected();
+    expect(s().maximizedItem).toEqual({
+      kind: "agent",
+      sessionId: "s1",
+      repoPath: "/repo/a",
+    });
+  });
+
+  it("closes big mode (same chord) regardless of selection when already open", () => {
+    useStore.setState({
+      selectedId: null,
+      maximizedItem: { kind: "diff", repoPath: "/repo/a" },
+    });
+    s().toggleMaximizeSelected();
+    expect(s().maximizedItem).toBeNull();
+  });
+
+  it("is a no-op when closed and nothing maximizable is selected", () => {
+    useStore.setState({ selectedId: null, maximizedItem: null });
+    s().toggleMaximizeSelected();
+    expect(s().maximizedItem).toBeNull();
   });
 });
