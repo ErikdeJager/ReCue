@@ -603,3 +603,36 @@ by construction — no OS branch:
   `.json` filter, that it appears in the list, and instantiates as a new tab). CI can't drive
   the GUI/native dialog; the path split (`splitPath`) + file IO are the same shared
   cross-platform seams the FileSwitcher Browse… (#163) already uses on Windows.
+
+### Canvas "no longer pending" for scheduled agents — on fire + detached windows (#280)
+
+Two fixes for a scheduled agent dragged into a Canvas panel:
+
+1. **On fire**, the scheduled leaf is rewritten in place into the live agent
+   (`rewriteScheduledLeaves`, pure + unit-tested, preserves the leaf id so the #18
+   pooled terminal reparents) and the canvases are persisted via the existing
+   `setCanvases` → `canvas://changed` path, so the panel shows the live terminal
+   instead of "This schedule is no longer pending."
+2. **Detached windows** now load schedules (`listSchedules` is no longer
+   main-window-gated) and stay in sync via a new **`schedule://changed`** broadcast
+   (Rust `broadcast_schedules`, emitted after every create/update/cancel/fire),
+   mirroring `canvas://changed`. Detached windows also subscribe to
+   `schedule://fired` to upsert the fired session locally so the rewritten agent leaf
+   renders its terminal (not "Session closed.").
+
+Platform-neutral by construction: this is pure frontend cross-window event/state logic
+plus a Tauri event emit. **Tauri events are global on macOS and Windows alike**, and
+there is no OS-specific path/shell/key code in any of the touched files
+(`src/components/Canvas/canvasSchedule.ts`, `src/store.ts`, `src/ipc.ts`,
+`src-tauri/src/commands.rs`).
+
+#### Still needs manual Windows verification (#280)
+
+- **Detached-window spawn can't be driven on CI** (the #84/#105 precedent). On a Windows
+  build: (a) drag a scheduled agent into a Canvas panel and let it fire — confirm the panel
+  becomes the live agent terminal, not "no longer pending"; (b) with the schedule still
+  pending, pop the canvas out into a detached window — confirm it shows the **editable**
+  pending panel (and that a time/prompt edit in the main window reflects there); (c) let it
+  fire while detached — confirm the detached panel becomes the live agent terminal too; and
+  (d) cancel a schedule — confirm its panel/leaf is removed and the gone state shows only
+  when truly cancelled.

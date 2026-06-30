@@ -630,10 +630,15 @@ export interface ScheduleEventHandlers {
   onFired: (payload: ScheduleFiredPayload) => void;
   /** A schedule's spawn failed (#93) — it's dropped, not retried. */
   onError: (payload: ScheduleErrorPayload) => void;
+  /** The full pending-schedule list changed (#280) — emitted after any backend
+   * create/update/cancel/fire so every window (incl. a detached canvas #84) can keep
+   * its `schedules` slice in sync. Mirrors `canvas://changed`. */
+  onChanged: (schedules: ScheduledSession[]) => void;
 }
 
-/** Subscribe to scheduled-session events (#93): `schedule://fired` (a schedule
- * became a live agent) and `schedule://error`. Returns an unlisten fn. */
+/** Subscribe to scheduled-session events (#93/#280): `schedule://fired` (a schedule
+ * became a live agent), `schedule://error`, and `schedule://changed` (the pending
+ * list changed). Returns an unlisten fn. */
 export async function subscribeScheduleEvents(
   handlers: ScheduleEventHandlers,
 ): Promise<UnlistenFn> {
@@ -645,8 +650,13 @@ export async function subscribeScheduleEvents(
     "schedule://error",
     (event) => handlers.onError(event.payload),
   );
+  const unlistenChanged = await listen<ScheduledSession[]>(
+    "schedule://changed",
+    (event) => handlers.onChanged(event.payload),
+  );
   return () => {
     unlistenFired();
     unlistenError();
+    unlistenChanged();
   };
 }
