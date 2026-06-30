@@ -7863,3 +7863,73 @@ scheduled-worktree lifecycle so the `onFired` changes stay coherent).
 
 ---
 
+### 282. [x] Windows parity audit + remediation (pre-v1.0.2 release gate)
+
+**Status:** Done
+**Depends on:** 280
+**Created:** 2026-06-30
+
+**Description**
+
+A **fix-mode** Windows-parity audit run as the **pre-release gate for v1.0.2** (Task 281):
+a grep-driven, single-agent sweep of **all 13 landmine categories**
+(`.claude/skills/windows-parity-audit/windows-landmines.md`) across `src/`, `src-tauri/src/`,
+the CSS, and the build/bundle/CI config — every grep seed run and **every hit confirmed by
+reading the cited code** against ReCue's established cross-platform seams. Findings fixed
+through the named seam with the divergence gated, the **macOS arm byte-for-byte**, the Windows
+arm additive. The audit (scope · findings · fixes · pending real-box checks) was recorded in
+the tracked `TRAJECTORY_TO_WINDOWS.md` so the deliverable is durable and the PR diff non-empty
+even given the port's maturity.
+
+**What shipped** (commit `3bae702`, PR
+[#32](https://github.com/ErikdeJager/ReCue/pull/32), merged `d4acfdd`, 2026-06-30):
+
+- **One confirmed defect fixed (Medium — clipboard write).** `store.ts` `copyToClipboard`
+  (every "Copy session ID / path / branch name", the FileViewer code-block **Copy** button,
+  the file-tree Copy-path) wrote via **`navigator.clipboard.writeText`**, which **WebView2**
+  rejects with *"Document is not focused"* for a copy fired from a context menu / hover button
+  (WebView2 is stricter than WKWebView about document focus) — so a copy that succeeds on
+  macOS could toast **"Copy failed"** on Windows. This is the **write-side twin of the #220
+  read defect** (which had already moved the clipboard *read* to the
+  `tauri-plugin-clipboard-manager` but left the *write* on the Web API). **Fix through the
+  same #220 seam:** new `ipc.clipboardWriteText` (the plugin's `writeText`), and
+  `copyToClipboard` now **routes the write through the plugin on Windows** (gated by
+  `isWindows(get().platform)` — the native OS clipboard needs no document focus), keeping
+  **`navigator.clipboard.writeText` on macOS byte-for-byte** in the `else` branch. Granted the
+  additive `clipboard-manager:allow-write-text` capability.
+- **All 12 other categories swept clean / already-seamed** (confirmed by reading, not
+  re-flagged): POSIX paths (`Path::join` / `\`→`/` normalization / `joinPath`/`splitPath`),
+  home dir (`path_env::home_dir()`), shell-outs (`git::hidden_command`), CLI resolution
+  (`resolve_command`/`find_on_path`/`launch_target`), URLs vs reveal (`open_url` / `os_open` /
+  `explorer /select`), keyboard (`metaKey || ctrlKey`), platform copy (`kbdHint`/`revealLabel`),
+  `cfg`-gating (every arm paired), reserved names (`windows_safe_seg`/`validate_new_segment`),
+  CSS/WebView (`-webkit-` paired with standard; `color-mix()` evergreen-only; `::-webkit-scrollbar`),
+  build/CI (NSIS+MSI + 2-OS matrix), and line endings (`.gitattributes` `eol=lf`).
+- **Newest code re-verified** (#202/#252/#253/#254/#255/#275/#277/#278/#267/#154 + Task 280's
+  cross-window schedule events) — all confirmed cross-platform-correct.
+
+**Key files/areas touched:** `src/ipc.ts` (`clipboardWriteText` plugin write seam),
+`src/store.ts` (`copyToClipboard` Windows-gated route via `isWindows`),
+`src-tauri/capabilities/default.json` (`clipboard-manager:allow-write-text`),
+`TRAJECTORY_TO_WINDOWS.md` (Iteration 9 audit entry — scope · the one finding · the 12
+clean/already-seamed categories · pending real-box checks). No `CLAUDE.md` change (no new seam
+— reused the #220 clipboard-manager seam).
+
+**Dependencies:** 280 (the audit had to cover the **final** shipping feature set, so it gated
+on the last in-flight feature fix; order is **280 → 282 → 281**; 257–279 already archived).
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 282): run the audit in **fix mode** (audit →
+  confirm → apply), not report-only; **always append a dated `TRAJECTORY_TO_WINDOWS.md` entry**
+  for a guaranteed non-empty deliverable; the implementer ran the **grep seeds itself**
+  (single-agent — `worktree-implementer` has no `Agent` fan-out) rather than the skill's Explore
+  fan-out.
+- **Cross-platform:** the single fix is `isWindows`-gated with the macOS `else` branch
+  unchanged; the Windows clipboard-write path (and the carried xterm/installer/GUI items) are
+  logged in `TRAJECTORY_TO_WINDOWS.md` for a real-box check (WebView2 copy-from-context-menu is
+  not CI-testable). Full green suite: `npm run build` / `lint` / `format:check` / `test` /
+  `lint:rust` + `cargo test`.
+
+---
+
