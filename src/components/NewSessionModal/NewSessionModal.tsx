@@ -1365,7 +1365,6 @@ function NewSessionModal() {
               value={prompt}
               onChange={setPrompt}
               skills={skills}
-              placeholder="Initial prompt for claude…"
               rows={3}
               ariaLabel="Initial prompt"
             />
