@@ -47,28 +47,40 @@
   color: var(--text-primary);
 }
 
-/* One-time attention pulse (#216) the first time the chip appears in a session: an
-   accent ring + glow that pulses a few times, then settles to the resting (#215)
-   look (0%/100% == resting). Box-shadow + border only → no layout shift. Auto-
-   disabled under body.reduce-motion / prefers-reduced-motion via the global.css
-   killswitch (which also clamps iteration-count to 1), and the keyframe ends at
-   the resting style so a clamped run still settles correctly. */
-@keyframes update-announce {
+/* Continuous attention glow (#287, superseding the #216 one-shot pulse): while an
+   update is available the chip carries a soft accent border that gently breathes
+   color + intensity on a slow ease-in-out loop — calm but easy to spot, and it
+   never flashes fully off (no on/off blink). It persists the whole time the chip
+   is shown (not a one-shot). Box-shadow + border only → no layout shift.
+   The 0%/100% frame *equals* the static resting glow set on `.indicatorGlow`, so
+   under body.reduce-motion / prefers-reduced-motion the global.css killswitch
+   (which clamps animation duration + iteration-count) holds that frame — leaving a
+   visible static accent glow, clearly distinct from the quiet resting chip. */
+@keyframes update-glow {
   0%,
   100% {
-    border-color: var(--border-hairline);
-    box-shadow: 0 0 0 0 transparent;
-  }
-  50% {
     border-color: var(--accent);
     box-shadow:
-      0 0 0 2px var(--accent-dim),
+      0 0 0 1px var(--accent-dim),
+      0 0 6px 0 var(--accent-dim);
+  }
+  50% {
+    border-color: var(--accent-hover);
+    box-shadow:
+      0 0 0 1px var(--accent),
       0 0 12px 2px var(--accent-dim);
   }
 }
 
-.indicatorAnnounce {
-  animation: update-announce 0.7s var(--ease-out) 3;
+.indicatorGlow {
+  /* Static resting glow first (also the reduced-motion fallback — survives the
+     global.css killswitch, which only zeroes animation timing, never a static
+     box-shadow/border-color), then the slow continuous breathe over it. */
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent-dim),
+    0 0 6px 0 var(--accent-dim);
+  animation: update-glow 2.6s ease-in-out infinite;
 }
 
 /* Accent stays on the icon through hover — the only color touch on the chip. */

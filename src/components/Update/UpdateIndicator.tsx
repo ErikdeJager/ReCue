@@ -3,14 +3,6 @@ import { Download } from "lucide-react";
 import { useStore } from "../../store";
 import styles from "./Update.module.css";
 
-// One-shot guard (#216): the announce animation plays once per app session — the
-// first time the indicator appears for an *available* update. Module-level (shared
-// across remounts) and deliberately NOT persisted, so it replays on a fresh app
-// open. Set on `animationend` rather than at render so it's robust to React
-// StrictMode's dev double-mount (the throwaway mount is unmounted before its
-// animation ends, so the flag is set by the surviving mount that actually plays).
-let updateAnnounced = false;
-
 /**
  * Sidebar-footer update box (#190), mounted directly above the Settings gear.
  * Hidden while the updater is idle/checking/downloading; when an update is
@@ -18,6 +10,12 @@ let updateAnnounced = false;
  * Settings at the Updates section** (#191 — the review-then-install surface).
  * Collapses to just its icon in the narrow rail (#168). An `error` status shows a
  * compact "Update failed" that also opens the Updates pane.
+ *
+ * While an update is available the chip carries a continuous, gentle glowing
+ * accent border (#287, `styles.indicatorGlow` — superseding the #216 one-shot
+ * pulse): a slow breathing border/shadow that persists the whole time the update
+ * is available and reduces to a static glow under reduced motion. The error
+ * variant gets no glow.
  *
  * Inert today (no signed release → `checkForUpdate` returns null), but every state
  * is reachable via the dev mock (#193).
@@ -32,22 +30,12 @@ function UpdateIndicator() {
   if (status !== "available" && status !== "error") return null;
   const isError = status === "error";
 
-  // Play the one-time attention pulse (#216) only on the first *available*
-  // appearance this session (not for the error variant). The element only mounts
-  // when it appears, so the CSS animation can't replay on a re-render (collapse
-  // toggle / hover); the flag additionally guards a status flip away-and-back.
-  const announce = !isError && !updateAnnounced;
-
   return (
     <button
       type="button"
-      className={`${styles.indicator} ${isError ? styles.indicatorError : ""} ${
-        collapsed ? styles.indicatorCollapsed : ""
-      } ${announce ? styles.indicatorAnnounce : ""}`}
-      onAnimationEnd={() => {
-        // The announce pulse finished (its only animation) — never replay it.
-        updateAnnounced = true;
-      }}
+      className={`${styles.indicator} ${
+        isError ? styles.indicatorError : styles.indicatorGlow
+      } ${collapsed ? styles.indicatorCollapsed : ""}`}
       onClick={() => setSettingsOpen(true, "updates")}
       title={
         isError
