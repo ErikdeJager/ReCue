@@ -1,0 +1,19 @@
+{
+  "version": "1.0.3",
+  "date": "2026-06-30",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "Move every card in a Kanban column to the next column at once with a new button on the column header.",
+        "Toggle big mode for the selected item with ⌘E / Ctrl+E — press it to maximize the focused agent or panel, and press it again to return."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "Opening a new file, diff, terminal, or Kanban panel for a folder that already has a running agent — like a worktree — now places it right next to that agent in the Overview, instead of at the far end of the repo's cluster."
+      ]
+    }
+  ]
+}
