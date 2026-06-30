@@ -9,6 +9,7 @@ import {
   deleteCard,
   deleteColumn,
   insertCardAt,
+  moveAllCardsRight,
   moveCard,
   moveColumn,
   newCard,
@@ -175,6 +176,85 @@ describe("kanbanOps column mutations (#143)", () => {
       "Done",
       "To Do",
     ]);
+  });
+});
+
+describe("kanbanOps moveAllCardsRight (#283)", () => {
+  // A three-lane board so "columns ≥2 untouched" is observable.
+  function board3(): Board {
+    return {
+      frontmatter: null,
+      columns: [
+        {
+          name: "To Do",
+          complete: false,
+          cards: [
+            { title: "A", body: "", checked: false },
+            { title: "B", body: "", checked: true },
+          ],
+        },
+        {
+          name: "Doing",
+          complete: false,
+          cards: [{ title: "C", body: "", checked: false }],
+        },
+        {
+          name: "Done",
+          complete: true,
+          cards: [{ title: "D", body: "", checked: true }],
+        },
+      ],
+      settingsBlock: null,
+    };
+  }
+
+  it("moves every card from column 0 into column 1, appended after its cards", () => {
+    const b = moveAllCardsRight(board3(), 0);
+    expect(titles(b, 0)).toEqual([]); // source emptied
+    expect(titles(b, 1)).toEqual(["C", "A", "B"]); // appended after existing "C"
+    expect(titles(b, 2)).toEqual(["D"]); // columns ≥2 untouched
+  });
+
+  it("preserves each moved card's checked state (no auto-complete)", () => {
+    const b = moveAllCardsRight(board3(), 0);
+    // A (false) and B (true) keep their checked verbatim even into a Complete lane.
+    expect(b.columns[1]?.cards).toEqual([
+      { title: "C", body: "", checked: false },
+      { title: "A", body: "", checked: false },
+      { title: "B", body: "", checked: true },
+    ]);
+  });
+
+  it("keeps the moved cards' relative order after the target's existing cards", () => {
+    const b = moveAllCardsRight(board3(), 1); // Doing → Done
+    expect(titles(b, 1)).toEqual([]);
+    expect(titles(b, 2)).toEqual(["D", "C"]);
+  });
+
+  it("is a no-op on the rightmost column", () => {
+    const b = board3();
+    expect(moveAllCardsRight(b, b.columns.length - 1)).toEqual(b);
+  });
+
+  it("is a no-op on an empty source column", () => {
+    const b = board3();
+    b.columns[0]!.cards = [];
+    expect(moveAllCardsRight(b, 0)).toEqual(b);
+  });
+
+  it("is a no-op for an out-of-range source column", () => {
+    expect(moveAllCardsRight(board3(), -1)).toEqual(board3());
+    expect(moveAllCardsRight(board3(), 9)).toEqual(board3());
+  });
+
+  it("does not mutate the original board (new column arrays)", () => {
+    const original = board3();
+    const snapshot = board3();
+    const next = moveAllCardsRight(original, 0);
+    expect(original).toEqual(snapshot); // original untouched
+    expect(next.columns[0]).not.toBe(original.columns[0]);
+    expect(next.columns[1]).not.toBe(original.columns[1]);
+    expect(next.columns[1]?.cards).not.toBe(original.columns[1]?.cards);
   });
 });
 

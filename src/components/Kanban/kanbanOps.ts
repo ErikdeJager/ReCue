@@ -185,3 +185,26 @@ export function moveColumn(
   cols.splice(clamped, 0, col);
   return { ...board, columns: cols };
 }
+
+/**
+ * Move EVERY card in `fromCol` into the column immediately to its right (#283),
+ * appending them after that column's existing cards. No-op if `fromCol` is the
+ * rightmost column, out of range, or already empty. Cards keep their `checked`
+ * state (no auto-complete), consistent with a drag-move.
+ */
+export function moveAllCardsRight(board: Board, fromCol: number): Board {
+  const target = fromCol + 1;
+  const source = board.columns[fromCol];
+  const dest = board.columns[target];
+  if (!source || !dest || source.cards.length === 0) return board;
+  return {
+    ...board,
+    columns: board.columns.map((c, i) =>
+      i === fromCol
+        ? { ...c, cards: [] }
+        : i === target
+          ? { ...c, cards: [...c.cards, ...source.cards] }
+          : c,
+    ),
+  };
+}

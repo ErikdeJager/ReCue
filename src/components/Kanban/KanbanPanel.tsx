@@ -27,7 +27,16 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Code2, Eye, Pencil, Plus, Trash2, Undo2, X } from "lucide-react";
+import {
+  ArrowRightToLine,
+  Code2,
+  Eye,
+  Pencil,
+  Plus,
+  Trash2,
+  Undo2,
+  X,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -48,6 +57,7 @@ import {
   deleteCard,
   deleteColumn,
   insertCardAt,
+  moveAllCardsRight,
   moveCard,
   renameColumn,
   toggleCard,
@@ -374,6 +384,10 @@ interface ColumnProps {
   onRename: (name: string) => void;
   onRenameStop: () => void;
   onDelete: () => void;
+  /** Move every card in this column into the column to its right (#283). */
+  onMoveAllRight: () => void;
+  /** False for the rightmost column (nothing to its right). */
+  canMoveRight: boolean;
   /** Add a card from the inline composer (#233): first line → title, rest → body. */
   onComposeCard: (title: string, body: string) => void;
   onCardStartEdit: (idx: number) => void;
@@ -472,7 +486,19 @@ function BoardColumn(props: ColumnProps) {
           <Plus size={14} strokeWidth={1.5} />
         </button>
         <span className={styles.columnActions}>
-          {/* Columns move per-card via drag (#159) — no whole-column move buttons. */}
+          {/* Move every card one column to the right (#283) — shown only when
+              there's a column to the right and this one has cards to move. */}
+          {props.canMoveRight && props.cards.length > 0 && (
+            <button
+              type="button"
+              className={styles.colBtn}
+              onClick={props.onMoveAllRight}
+              title="Move all cards right"
+              aria-label="Move all cards to the next column"
+            >
+              <ArrowRightToLine size={13} strokeWidth={1.5} />
+            </button>
+          )}
           <button
             type="button"
             className={`${styles.colBtn} ${props.confirmingDelete ? styles.colBtnDanger : ""}`}
@@ -919,6 +945,8 @@ function KanbanPanel({
                 onRename={(name) => setRenameDraft(name)}
                 onRenameStop={() => stopColumnRename()}
                 onDelete={() => deleteColumnAt(col)}
+                onMoveAllRight={() => mutate(moveAllCardsRight(board, col))}
+                canMoveRight={col < board.columns.length - 1}
                 onComposeCard={(title, body) =>
                   addComposedCard(col, title, body)
                 }
