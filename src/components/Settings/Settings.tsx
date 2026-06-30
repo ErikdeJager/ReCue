@@ -630,6 +630,33 @@ function SettingsModal() {
                         </span>
                       </span>
 
+                      {/* The install action sits directly under the label, above
+                          the (potentially long) release notes (#286) — so a long
+                          "What's new" block can never push the button below the
+                          scrollable fold where it's unreachable. */}
+                      {updateState.status === "downloading" ? (
+                        <div className={styles.updateProgress}>
+                          <div className={styles.progressTrack}>
+                            <div
+                              className={styles.progressBar}
+                              style={{ width: `${updateState.progress}%` }}
+                            />
+                          </div>
+                          <span className={styles.fieldValue}>
+                            Installing… {updateState.progress}%
+                          </span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className={styles.updateNow}
+                          onClick={() => void installUpdate()}
+                        >
+                          <Download size={15} strokeWidth={1.5} />
+                          Update now &amp; restart
+                        </button>
+                      )}
+
                       {/* "What will be installed" (#192): the release-carried notes
                           (markdown from latest.json → update.body), so a
                           not-yet-installed version's notes are readable here. */}
@@ -657,29 +684,6 @@ function SettingsModal() {
                           )}
                         </div>
                       </div>
-
-                      {updateState.status === "downloading" ? (
-                        <div className={styles.updateProgress}>
-                          <div className={styles.progressTrack}>
-                            <div
-                              className={styles.progressBar}
-                              style={{ width: `${updateState.progress}%` }}
-                            />
-                          </div>
-                          <span className={styles.fieldValue}>
-                            Installing… {updateState.progress}%
-                          </span>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          className={styles.updateNow}
-                          onClick={() => void installUpdate()}
-                        >
-                          <Download size={15} strokeWidth={1.5} />
-                          Update now &amp; restart
-                        </button>
-                      )}
                     </div>
                   )}
 
