@@ -1,0 +1,43 @@
+{
+  "version": "1.0.2",
+  "date": "2026-06-30",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "Type a launch time naturally when scheduling a session — `1h`, `30m`, `tomorrow 9am`, `6pm`, or an explicit date — with a live preview of exactly when it will start.",
+        "Start a scheduled session right away with the new Start now button, instead of waiting for its launch time.",
+        "Mark files as reviewed in the diff viewer: each changed file shows a Seen / Not-seen / Changed-since-seen marker you toggle with a click or the `s` key, and it remembers where you left off across restarts.",
+        "Right-click folders and files in the file tree to create a new folder or delete an item, with a confirmation step for deletes.",
+        "Switch a folder to a different branch — or create a new one — straight from the repo's right-click menu with the new \"Checkout branch…\" action, without starting an agent.",
+        "Export and import Canvas templates as JSON files to share your layouts between machines or with other developers.",
+        "Copy a fenced code block from a rendered markdown file with a hover Copy button.",
+        "Undo an accidental Kanban card deletion — a transient Undo button appears where the card was and restores it in place."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "Snappier typing and a more responsive interface under heavy terminal output — keystrokes no longer stall when another terminal is busy or producing a flood of output.",
+        "The New Session and Schedule Session windows now open instantly and load their branch list in the background.",
+        "Order changed files in the diff viewer by when they changed (newest at the bottom) or alphabetically, and your choice is remembered.",
+        "The file tree keeps itself up to date as files are created or deleted on disk — by agents or outside the app — without a manual refresh.",
+        "Gitignored files and folders now appear dimmed in the file tree, distinct from added, edited, and deleted files.",
+        "Larger, vertically resizable card input fields in the Kanban board.",
+        "In the Kanban board, pressing Enter adds a card and keeps the composer open so you can keep typing the next one.",
+        "The five-hour usage bar turns red starting at 90% (previously 95%)."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "A terminal's last line no longer slips below the visible area, so the prompt always stays in view.",
+        "Scheduled worktree sessions are tidied up — the worktree and its branch are now created up front, it no longer shows up as a duplicate top-level folder when it starts, and its card header lays out cleanly.",
+        "A Canvas panel holding a scheduled agent now shows the live terminal once the schedule fires — and stays correct when popped out into its own window — instead of reading \"no longer pending\".",
+        "Fixed the Template Editor's block-config layout (compact path-mode buttons and a taller prompt field).",
+        "The Canvas tabs \"+\" button now matches the visual size of its neighbors.",
+        "Copy buttons (markdown code blocks and the like) now work reliably on both macOS and Windows."
+      ]
+    }
+  ]
+}
