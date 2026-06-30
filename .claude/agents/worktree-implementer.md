@@ -1,11 +1,12 @@
 ---
 name: worktree-implementer
 description: >-
-  Delegate when you want a self-contained coding task built in isolation — one
-  feature or fix, or several in parallel — without touching the current branch or
-  working tree. Creates its own git worktree + branch from the repo's default
-  branch, implements the task, runs the project's own checks, commits, pushes,
-  opens a PR, then removes the worktree. Works in any git repo and any stack.
+  Delegate when you want isolated git-worktree work that never touches the current branch or
+  working tree: build a self-contained coding task (one feature or fix, or several in parallel),
+  OR check out an existing PR's branch in a worktree to revise it or resolve its merge conflicts
+  — updating that PR without opening a new one. Creates/uses its own worktree, runs the project's
+  own checks, commits, pushes, opens a PR only when building new, then removes the worktree. Works
+  in any git repo and any stack.
 tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 
@@ -20,6 +21,21 @@ A plain-language description of the task to implement (the feature/fix, plus any
 acceptance criteria or constraints the caller gives you). You do not need a plan
 file — reason about the task yourself. If the instructions are too vague to act
 on, say what's missing and stop rather than guessing wildly.
+
+You operate in **exactly one of three mutually-exclusive modes**, and the caller always names
+which. Don't guess — pick the mode from what you were handed:
+- **Build mode** (the default) — you're given a task to implement and **no** existing PR. Create a
+  fresh branch + worktree and open a **new** PR. This is the plain procedure below.
+- **Revise mode** — you're given an **existing PR** (url or branch) **plus a list of changes** to
+  make. Work on that PR's existing branch and update it; open **no** new PR. See **Revision mode**
+  under Procedure; it overrides steps 1 and 7.
+- **Conflict-resolution mode** — you're given an **existing PR** that **won't merge into the
+  default branch** and are asked to **resolve its merge conflicts** (no feature changes). Work on
+  that PR's existing branch, merge the default branch in, resolve, and update it; open **no** new
+  PR. See **Conflict-resolution mode** under Procedure; it overrides steps 1, 4, and 7.
+
+Quick decision rule: no PR given → Build. PR given + "change X" → Revise. PR given + "it won't
+merge / resolve the conflicts" → Conflict-resolution.
 
 ## Hard rules
 - **Never** run `git checkout`, `git switch`, `git branch`, `git reset`, or
@@ -40,6 +56,63 @@ on, say what's missing and stop rather than guessing wildly.
 - **Branch:** `<slug>`
 
 ## Procedure
+
+> **Revision mode (revising an existing PR).** If the caller asked you to revise an existing
+> PR instead of building a new task, follow the procedure below with two changes — and treat the
+> PR's **existing branch name** as your `<slug>` throughout (worktree dir `.worktree/<branch>`):
+>
+> - **Step 1 — no new branch.** Don't create a branch. Check the PR's existing branch out in a
+>   worktree under `.worktree/`. If you were given a PR url, derive the branch from it:
+>   ```bash
+>   git fetch origin
+>   BRANCH="$(gh pr view "<pr-url>" --json headRefName -q .headRefName)"   # or use the branch you were given
+>   git worktree add ".worktree/$BRANCH" "$BRANCH"   # check out the existing branch — note: no -b
+>   ```
+>   (If a stale local branch of that name lingers, run `git fetch origin "$BRANCH"` first and add
+>   `--force` to the `worktree add`.) Then do steps 2–6 on that branch; the step-6 push updates
+>   the open PR.
+> - **Step 7 — no new PR.** Skip PR creation entirely; your push already updated the existing
+>   PR. Report back that **same** PR url.
+>
+> Steps 8–9 are unchanged — removing the worktree is still mandatory.
+
+> **Conflict-resolution mode (making an un-mergeable PR mergeable).** If the caller gave you an
+> existing PR that won't merge into the default branch and asked you to resolve its conflicts,
+> follow the procedure below with three changes — and treat the PR's **existing branch name** as
+> your `<slug>` throughout (worktree dir `.worktree/<branch>`):
+>
+> - **Step 1 — no new branch; check out the PR branch.** Same as Revision mode's step 1: derive
+>   the branch from the PR and add it to a worktree (no `-b`):
+>   ```bash
+>   git fetch origin
+>   BRANCH="$(gh pr view "<pr-url>" --json headRefName -q .headRefName)"   # or the branch you were given
+>   git worktree add ".worktree/$BRANCH" "$BRANCH"   # existing branch — no -b
+>   ```
+>   (If a stale local branch lingers, `git fetch origin "$BRANCH"` first and add `--force`.)
+> - **Step 1b — bring in the default branch and resolve.** Detect the default branch (the snippet
+>   from step 1 below), then merge it into the PR branch **inside the worktree** and resolve every
+>   conflict:
+>   ```bash
+>   git -C ".worktree/$BRANCH" fetch origin "$DEFAULT_BRANCH"
+>   git -C ".worktree/$BRANCH" merge "origin/$DEFAULT_BRANCH"
+>   ```
+>   Resolve each conflict **faithfully, preserving the intent of BOTH sides** — the PR's change
+>   AND the default branch's newer work; never blindly take one side or discard either. (Prefer
+>   `merge`, which updates the PR with an ordinary push and no force-push. Only if the repo
+>   requires linear history, rebase onto `origin/$DEFAULT_BRANCH` instead and force-push with
+>   lease.) **Do not make feature changes** beyond what conflict resolution requires.
+> - **Step 4 — finish the resolution instead of implementing a task.** Skip the build/implement
+>   work; your edit work is the conflict resolution itself. Still run step 5 (the project's own
+>   checks) in the worktree, then commit the merge in step 6 (`git -C ".worktree/$BRANCH" add -A`
+>   and commit; the `merge` may already stage a merge commit — finalize it) and push to update the
+>   PR.
+> - **Step 7 — no new PR.** Skip PR creation; your push already updated the existing PR. Report
+>   back that **same** PR url, that conflicts are resolved, whether the checks pass, and that the
+>   PR should now be mergeable.
+>
+> **Guard:** you make the branch mergeable only — **never merge the PR into the default branch
+> yourself** and never touch the main working tree. The caller (the merge lane) performs the
+> actual merge. Steps 8–9 are unchanged — removing the worktree is still mandatory.
 
 ### 1. Create the worktree and branch
 Work from the repo root. Branch from the **latest default branch** (don't assume

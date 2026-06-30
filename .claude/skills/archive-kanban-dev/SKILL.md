@@ -1,15 +1,15 @@
 ---
-name: archive-tasks
+name: archive-kanban-dev
 description: >-
   The archive lane of the kanban-dev-pima board: drain the ARCHIVE column of KANBAN.md — for each
   finished card write a permanent TASK_ARCHIVE.md entry (what shipped, key assumptions, PR, deps),
   delete its PLAN-<N>.md, remove the card, and commit & push the archive — then park on a Monitor
   watching ARCHIVE and resume automatically when a merged card arrives. Invoke once as
-  /archive-tasks in its own terminal; it loops itself via a Monitor (never /loop).
+  /archive-kanban-dev in its own terminal; it loops itself via a Monitor (never /loop).
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Monitor, TaskStop, TaskList
 ---
 
-# archive-tasks — lane orchestrator
+# archive-kanban-dev — lane orchestrator
 
 You are the **archive** lane of a Kanban development board (`kanban-dev-pima`). You record
 finished cards permanently and clean up their transient files. You **loop yourself**: drain every
@@ -18,7 +18,10 @@ merged card arrives, the Monitor wakes you. You never stop the session.
 
 **Stay on the current branch the entire time — never run `git checkout`/`switch`/`branch`.**
 This lane commits only `TASK_ARCHIVE.md` (the file it changes). `ASSUMPTIONS.md` is also
-tracked, but `plan-tasks` commits & pushes that; the board and plans stay git-ignored.
+tracked, but the plan lane commits & pushes that; the board and plans stay git-ignored. **You may
+directly commit and push `TASK_ARCHIVE.md` on the current branch whenever the task needs it — do
+so directly, without asking for confirmation.** (That stays on the branch you're already on; it
+does not contradict the never-`checkout`/`switch`/`branch` rule above.)
 
 **How you loop (read this first — it replaces `/loop`).** The *only* tools you use to wait and
 resume are `Monitor` (to wait), `TaskStop` (to retire the one that fired), and `TaskList` (to
@@ -32,11 +35,21 @@ The board lives at the repo root in `KANBAN.md`, with columns `## PLAN`, `## IMP
 
 - **`PLAN-<N>.md`** — the task's plan (git-ignored); you delete it once archived.
 - **`ASSUMPTIONS.md`** — `## Task <N>` sections written during planning (**tracked**;
-  committed & pushed by `plan-tasks`). You read it for context but don't modify it here.
+  committed & pushed by the plan lane). You read it for context but don't modify it here.
 - **`TASK_ARCHIVE.md`** — the **permanent, tracked** record you append to. Distinct from the
   `## ARCHIVE` board column: that column is transient staging for merged cards awaiting
   archival; this file is the durable history. Downstream cards' dependencies are considered
   satisfied when their task appears in the `## ARCHIVE` column **or** here.
+
+### Concurrent writes — the board is shared, so retry on conflict
+
+`KANBAN.md` is written **live by the other lane agents** the whole time you work, so a board
+`Edit`/`Write` can fail or land on stale content because another agent wrote to it between
+your read and your write. This is **expected**, not a reason to give up or skip the move.
+When a board edit fails or conflicts: **re-read `KANBAN.md` and retry the edit.** If it keeps
+failing, **wait 3–10 seconds** (pick a random delay in that range) to give the other agents
+room to finish their write, then re-read and retry — repeat until your edit lands. Never
+abandon moving a card just because a write didn't take on the first attempt.
 
 ## Processing playbook — drain the ARCHIVE column
 
