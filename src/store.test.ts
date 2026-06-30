@@ -5,6 +5,7 @@ import {
   accentCompanions,
   adjacentId,
   adjacentSessionId,
+  anchorAgentForPanel,
   DEFAULT_SETTINGS,
   dedupeBranchLabels,
   isClaudeActive,
@@ -14,6 +15,7 @@ import {
   mergeSettings,
   moveResultMessage,
   overviewClusterKeys,
+  placeAfterAnchor,
   REPO_PALETTE,
   repoColor,
   repoOrder,
@@ -792,6 +794,166 @@ describe("mergeRepoOrder (#43)", () => {
       "/x/gamma",
       "/x/alpha",
     ]);
+  });
+});
+
+describe("placeAfterAnchor (#285)", () => {
+  it("inserts id immediately after anchorId, removing a prior occurrence", () => {
+    // The new key starts at the end of the cluster (mergeRepoOrder appends it).
+    expect(placeAfterAnchor(["a", "b", "p"], "p", "a")).toEqual([
+      "a",
+      "p",
+      "b",
+    ]);
+  });
+
+  it("returns the input unchanged (same reference) when anchorId is absent", () => {
+    const input = ["a", "b", "p"];
+    expect(placeAfterAnchor(input, "p", "zzz")).toBe(input);
+  });
+
+  it("is idempotent when id already directly follows anchorId", () => {
+    expect(placeAfterAnchor(["a", "p", "b"], "p", "a")).toEqual([
+      "a",
+      "p",
+      "b",
+    ]);
+  });
+
+  it("preserves the relative order of the other keys", () => {
+    expect(placeAfterAnchor(["x", "a", "y", "p", "z"], "p", "a")).toEqual([
+      "x",
+      "a",
+      "p",
+      "y",
+      "z",
+    ]);
+  });
+
+  it("returns the input unchanged when id equals anchorId", () => {
+    const input = ["a", "b", "c"];
+    expect(placeAfterAnchor(input, "a", "a")).toBe(input);
+  });
+});
+
+describe("anchorAgentForPanel (#285)", () => {
+  const base = {
+    sessions: [
+      ovSession("wt", "/repo/P/wt", 1, "/repo/P"),
+      ovSession("p1", "/repo/P", 2),
+      ovSession("p2", "/repo/P", 3),
+    ],
+    // Cluster render order for parent P (createdAt order, panel appended).
+    clusterKeys: ["wt", "p1", "p2", "panel"],
+  };
+
+  it("anchors to the worktree's own agent for a worktree-folder panel", () => {
+    expect(
+      anchorAgentForPanel({
+        ...base,
+        repoPath: "/repo/P/wt",
+        selectedId: null,
+      }),
+    ).toBe("wt");
+  });
+
+  it("anchors to the last folder agent in render order when none selected", () => {
+    expect(
+      anchorAgentForPanel({ ...base, repoPath: "/repo/P", selectedId: null }),
+    ).toBe("p2");
+  });
+
+  it("prefers the selected agent when it runs in the folder", () => {
+    expect(
+      anchorAgentForPanel({ ...base, repoPath: "/repo/P", selectedId: "p1" }),
+    ).toBe("p1");
+  });
+
+  it("ignores a selection that isn't an agent in this folder", () => {
+    // wt is selected but the panel is scoped to the parent repo P, not the worktree.
+    expect(
+      anchorAgentForPanel({ ...base, repoPath: "/repo/P", selectedId: "wt" }),
+    ).toBe("p2");
+  });
+
+  it("returns null when no agent runs in the folder", () => {
+    expect(
+      anchorAgentForPanel({ ...base, repoPath: "/repo/Q", selectedId: null }),
+    ).toBeNull();
+  });
+});
+
+describe("addOverviewPanel places a panel next to its agent (#285)", () => {
+  const add = () => useStore.getState().addOverviewPanel;
+  const order = (repo: string) => useStore.getState().overviewOrder[repo];
+
+  it("places a worktree-folder panel right after the worktree agent in the parent cluster", async () => {
+    useStore.setState({
+      sessions: [
+        ovSession("wt", "/repo/P/wt", 1, "/repo/P"),
+        ovSession("p1", "/repo/P", 2),
+      ],
+      overviewPanels: {},
+      overviewOrder: {},
+      schedules: [],
+    });
+    const id = await add()("/repo/P/wt", "diff");
+    // Default order would append the panel last ([wt, p1, id]); instead it lands
+    // right after the worktree agent, ahead of the parent repo's own agent.
+    expect(order("/repo/P")).toEqual(["wt", id, "p1"]);
+  });
+
+  it("places a repo panel after the repo's agent, ahead of an existing panel", async () => {
+    useStore.setState({
+      sessions: [ovSession("a1", "/repo/P", 1)],
+      overviewPanels: {
+        "/repo/P": [{ id: "pX", kind: "markdown", file: "x.md" }],
+      },
+      overviewOrder: {},
+      schedules: [],
+    });
+    const id = await add()("/repo/P", "diff");
+    expect(order("/repo/P")).toEqual(["a1", id, "pX"]);
+  });
+
+  it("anchors after the selected agent when one in the folder is selected", async () => {
+    useStore.setState({
+      sessions: [ovSession("a1", "/repo/P", 1), ovSession("a2", "/repo/P", 2)],
+      overviewPanels: {},
+      overviewOrder: {},
+      schedules: [],
+      selectedId: "a1",
+    });
+    const id = await add()("/repo/P", "diff");
+    // Without the selection tie-break the anchor would be the last agent (a2).
+    expect(order("/repo/P")).toEqual(["a1", id, "a2"]);
+  });
+
+  it("does not write an order when no agent runs in the folder", async () => {
+    useStore.setState({
+      sessions: [],
+      overviewPanels: {},
+      overviewOrder: {},
+      schedules: [],
+    });
+    await add()("/repo/P", "diff");
+    expect(order("/repo/P")).toBeUndefined();
+  });
+
+  it("a dedup hit returns the existing id and does not reposition", async () => {
+    useStore.setState({
+      sessions: [ovSession("a1", "/repo/P", 1)],
+      overviewPanels: {},
+      overviewOrder: {},
+      schedules: [],
+    });
+    const id1 = await add()("/repo/P", "diff");
+    expect(order("/repo/P")).toEqual(["a1", id1]);
+    // A sentinel order proves the deduped re-add leaves overviewOrder untouched.
+    useStore.setState({ overviewOrder: { "/repo/P": ["sentinel"] } });
+    const id2 = await add()("/repo/P", "diff");
+    expect(id2).toBe(id1);
+    expect(order("/repo/P")).toEqual(["sentinel"]);
   });
 });
 

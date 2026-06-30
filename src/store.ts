@@ -386,6 +386,30 @@ export function mergeRepoOrder(saved: string[], present: string[]): string[] {
 }
 
 /**
+ * Place `id` immediately **after** `anchorId` within an ordered key list (#285) —
+ * removing any prior occurrence of `id` first (so a key created at the end of a
+ * cluster lands next to the agent it belongs with). If `anchorId` isn't present (or
+ * is `id` itself), the input is returned **unchanged** (same reference). Idempotent:
+ * an `id` already directly after `anchorId` round-trips to the same order. Pure —
+ * drives `addOverviewPanel`'s "next to the worktree/branch agent" insertion and is
+ * unit-tested.
+ */
+export function placeAfterAnchor(
+  orderedKeys: string[],
+  id: string,
+  anchorId: string,
+): string[] {
+  if (anchorId === id || !orderedKeys.includes(anchorId)) return orderedKeys;
+  const without = orderedKeys.filter((key) => key !== id);
+  const anchorIdx = without.indexOf(anchorId);
+  return [
+    ...without.slice(0, anchorIdx + 1),
+    id,
+    ...without.slice(anchorIdx + 1),
+  ];
+}
+
+/**
  * The id to select when moving `delta` (+1 next / -1 prev) through `sessions` in
  * displayed (left-to-right wall) order, with wrap-around at the ends. With
  * nothing currently selected, returns the first session; returns null only when
@@ -550,6 +574,65 @@ export function overviewClusterKeys(input: {
   filter: OverviewFilter;
 }): string[] {
   return overviewClusters(input).flatMap((c) => c.keys);
+}
+
+/**
+ * Resolve the agent a newly-created Overview panel should sit beside (#285), or
+ * `null` when there's none — so a plain repo-level panel keeps appending at the end.
+ * The anchor is an agent running in this **exact** folder (`repoPath`): the currently
+ * **selected** such agent wins (so a panel opened from a specific agent's header lands
+ * by *that* agent), else the **last** folder agent in the cluster's render order (so a
+ * worktree panel lands right after the worktree's agent block, not amid the parent
+ * repo's own agents). `clusterKeys` is the parent cluster's full rendered order. Pure.
+ */
+export function anchorAgentForPanel(input: {
+  sessions: SessionView[];
+  repoPath: string;
+  selectedId: string | null;
+  clusterKeys: string[];
+}): string | null {
+  const { sessions, repoPath, selectedId, clusterKeys } = input;
+  const folderAgentIds = new Set(
+    sessions.filter((s) => s.repoPath === repoPath).map((s) => s.id),
+  );
+  if (folderAgentIds.size === 0) return null;
+  if (selectedId && folderAgentIds.has(selectedId)) return selectedId;
+  let anchor: string | null = null;
+  for (const key of clusterKeys) if (folderAgentIds.has(key)) anchor = key;
+  return anchor;
+}
+
+/**
+ * Splice a freshly-added Overview panel `id` next to the agent it belongs with (#285)
+ * and persist the cluster's new order via `reorderOverview`. No-op (leaving the
+ * append-at-end default) when no agent runs in `repoPath`. Called by `addOverviewPanel`
+ * after the panel is in state, so `overviewClusters` already includes it.
+ */
+async function repositionPanelAfterAgent(
+  get: () => AppState,
+  repoPath: string,
+  id: string,
+): Promise<void> {
+  const state = get();
+  const parent = worktreeParentOf(state, repoPath) ?? repoPath;
+  const cluster = overviewClusters({
+    sessions: state.sessions,
+    overviewPanels: state.overviewPanels,
+    overviewOrder: state.overviewOrder,
+    schedules: state.schedules,
+    filter: null,
+  }).find((c) => c.repo === parent);
+  const keys = cluster?.keys ?? [];
+  const anchorId = anchorAgentForPanel({
+    sessions: state.sessions,
+    repoPath,
+    selectedId: state.selectedId,
+    clusterKeys: keys,
+  });
+  if (!anchorId) return; // no agent in this folder → keep append-at-end
+  // `anchorId` is always present in `keys` (it's derived from them), so this is a
+  // real reorder; persist it exactly as a manual drag would.
+  await get().reorderOverview(parent, placeAfterAnchor(keys, id, anchorId));
 }
 
 /**
@@ -2877,6 +2960,16 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Persist failed (e.g. outside Tauri); keep the local layout for the session.
     }
+    // Place the new panel **next to the agent it belongs with** (#285). A
+    // worktree-scoped panel is keyed by the worktree folder but clusters under the
+    // parent repo (#164), so by default it renders in the panel block — separated
+    // from its worktree agent by every other agent in the cluster. Instead, if an
+    // agent is running in this exact folder (`repoPath`), splice the new panel
+    // immediately after it in the parent cluster's Overview order. Every creation
+    // path funnels through here, so this is the single source of truth; a repo with
+    // no agent in `repoPath` keeps the append-at-end behavior. Done after the
+    // `set`/persist above so `overviewClusters` sees the just-added panel id.
+    await repositionPanelAfterAgent(get, repoPath, panel.id);
     return panel.id;
   },
 
