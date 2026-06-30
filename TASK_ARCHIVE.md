@@ -8000,3 +8000,63 @@ implemented and on the pre-release Windows-parity audit landing first. Must run 
 
 ---
 
+### 283. [x] "Move all cards to next column" button on each Kanban column
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-06-30
+
+**Description**
+
+Each non-rightmost, non-empty column of ReCue's in-app **markdown Kanban board**
+(`KanbanPanel`) now shows a header **"move all cards right"** button that, in one click, moves
+**every** card in that column into the immediately adjacent column to the right (appended after
+that column's existing cards). There is **no** left-move counterpart, and the **rightmost
+column** (nothing to its right) and **empty columns** (nothing to move) show no button. The
+move round-trips through the existing Obsidian-Kanban markdown format and the auto-save buffer
+exactly like every other Kanban mutation.
+
+**What shipped** (commit `466df21`, PR
+[#34](https://github.com/ErikdeJager/ReCue/pull/34), merged `f1340dc`, 2026-06-30):
+
+- **New pure op** `moveAllCardsRight(board, fromCol)` in
+  `src/components/Kanban/kanbanOps.ts` (in the column-mutations section): returns a new `Board`
+  with `fromCol` emptied and its cards **appended** into `fromCol + 1` (matching
+  `moveCard`/`addCard`, which append). Immutable and **no-op-safe** — returns the board
+  unchanged when `fromCol` is the rightmost column, out of range (negative / beyond length), or
+  already empty. Moved cards **keep their `checked` state** (no auto-"complete" even into the
+  `**Complete**` lane), consistent with drag-moves.
+- **Column-header button** in `src/components/Kanban/KanbanPanel.tsx`: a lucide
+  `ArrowRightToLine` (`size={13}`) button reusing the existing `styles.colBtn` class (no new
+  CSS), rendered in the hover/focus-revealed `.columnActions` span **before** the Delete
+  button, only when `props.canMoveRight && props.cards.length > 0`. New `ColumnProps` fields
+  `onMoveAllRight: () => void` + `canMoveRight: boolean`; wired in the `board.columns.map(...)`
+  render as `onMoveAllRight={() => mutate(moveAllCardsRight(board, col))}` and
+  `canMoveRight={col < board.columns.length - 1}`, so it persists/hot-reloads via the same
+  `mutate` → `serializeBoard` → `setText` → debounced `write_text_file` path as every other edit.
+- **Unit tests** in `src/components/Kanban/kanbanOps.test.ts` (`describe("kanbanOps
+  moveAllCardsRight (#283)")`): append-into-next + source-emptied + columns≥2 untouched +
+  `checked` preserved + relative order kept, and no-ops on the rightmost / empty / out-of-range
+  source, plus an immutability assertion.
+
+**Key files/areas touched:** `src/components/Kanban/kanbanOps.ts` (new op),
+`src/components/Kanban/KanbanPanel.tsx` (icon import, `ColumnProps`, header button, column-map
+wire-up), `src/components/Kanban/kanbanOps.test.ts` (tests). No CSS, no backend, no native code.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 283): "next column" = the immediately adjacent
+  column to the **right** in document/array order (`columns[fromCol + 1]`); the **rightmost
+  column gets no button** and **no left variant** was requested; an **empty column shows no
+  button**; cards **append** into the target; moved cards **keep `checked`** (no auto-complete);
+  **no confirm gate** (non-destructive, trivially reversible — one markdown write, target cards
+  untouched), consistent with the ungated drag card-moves; a single right-arrow lucide icon in
+  the existing hover-revealed `.columnActions` span reusing `styles.colBtn` (no new CSS).
+- **Cross-platform:** pure React/TS + Obsidian-Kanban markdown round-trip — identical on
+  macOS/Windows; no path, shell, native, or `#[cfg]` concerns. Project checks green:
+  `npm run build` / `lint` / `format:check` / `test` (incl. the new `kanbanOps` tests).
+
+---
+
