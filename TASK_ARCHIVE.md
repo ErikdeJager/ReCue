@@ -8961,3 +8961,75 @@ dest) shows git's stderr inline in the modal without starting a session or addin
 
 ---
 
+### 297. [x] Per-agent opt-out for auto-continue-after-limit
+
+**Status:** Done
+**Depends on:** Task 296
+
+**Description**
+
+Refined the auto-continue feature (#296) with **fine-grained per-agent control**. When the global
+"Auto continue after limit reset" option is on, each **Claude** agent's **Overview card** and
+**Canvas panel** now show a small **"Auto continue after limit reset"** checkbox (checked = active
+for that agent). **Unchecking it disables auto-continue for that one agent only** — the others and
+the global setting are untouched — giving the user full control over which agents get the
+Enter/`continue`/Enter nudge when the usage window resets.
+
+The opt-out is **persisted on the session record** (`auto_continue_disabled: bool`), so a disabled
+long-running/resumed agent stays disabled across app restarts. The control is shown **only for
+Claude agents AND only when the global `autoContinueAfterLimit` (#296) is enabled** — when the global
+option is off or the agent isn't Claude there is nothing to opt out of, so it's hidden.
+
+**What shipped** (commit
+[`fa14d1a`](https://github.com/ErikdeJager/ReCue/commit/fa14d1a), PR
+[#49](https://github.com/ErikdeJager/ReCue/pull/49), merged `87f707e`, 2026-07-01):
+
+- **Backend** (`src-tauri/src/store.rs`, `commands.rs`, `lib.rs`): a `#[serde(default)]
+  auto_continue_disabled: bool` field added to `PersistedSession` (default `false` = active, so old
+  `sessions.json` upgrades cleanly, mirroring the `has_been_active`/`agent`/`forked_from` pattern); a
+  `set_session_auto_continue(id, disabled)` store method (finds + mutates + persists the record) + the
+  matching `set_session_auto_continue` command (registered in `lib.rs`).
+- **Frontend plumbing** (`src/types/index.ts`, `ipc.ts`, `store.ts`): `autoContinueDisabled?: boolean`
+  added to the session types; `toSessionView` maps `record.autoContinueDisabled ?? false`; a
+  `setSessionAutoContinue` IPC wrapper; a `setAutoContinueDisabled(id, disabled)` store action
+  (optimistic session update → `ipc.setSessionAutoContinue`, so both surfaces stay in sync).
+- **Fire-step exclusion** (`store.ts` + `src/store.autoContinue.test.ts`): the #296 fire step now
+  **filters out** sessions with `autoContinueDisabled === true` — done by excluding them from the
+  `liveClaudeIds` fed into the pure `evaluateAutoContinue` reducer at the call site (keeping the
+  reducer agnostic), so both the captured arm-set and the fire-set omit disabled agents. A unit test
+  asserts that with two live Claude sessions (one disabled), only the enabled one is nudged on reset.
+- **UI** (`src/components/AutoContinueToggle/` new — `.tsx` + `.module.css`; `Overview.tsx`,
+  `Canvas/CanvasSurface.tsx`): a small reusable `<AutoContinueToggle session={...} />` built on the
+  shared `Checkbox` — renders **nothing** unless `settings.autoContinueAfterLimit === true` AND the
+  agent is Claude; `checked={!session.autoContinueDisabled}`, compact styling. Placed on the
+  `AgentCard` (Overview) and the Canvas agent panel, where the click **stops propagation** so it never
+  starts the #144 panel-header drag.
+
+**Key files/areas touched:** `src-tauri/src/store.rs`, `commands.rs`, `lib.rs`;
+`src/types/index.ts`, `src/ipc.ts`, `src/store.ts`; `src/components/AutoContinueToggle/` (new),
+`Overview/Overview.tsx`, `Canvas/CanvasSurface.tsx`; test `src/store.autoContinue.test.ts`;
+`TRAJECTORY_TO_WINDOWS.md` (+310 / −2 across 12 files).
+
+**Dependencies:** Task 296 (the global auto-continue feature this refines; its fire step is where the
+per-agent exclusion is applied) — which in turn depends on #294.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 297): the opt-out is **persisted** on the record (not a
+  transient map) so it survives restarts — true "full control" — and is auto-cleaned when the session
+  is removed. **Default = inherit the global setting** (a new agent is not disabled; unchecking only
+  ever *disables* within an already-enabled global feature — there is deliberately no per-agent
+  *enable* when the global option is off). Placed on the two agent surfaces with room for chrome; the
+  cramped 10px sidebar row is left unchanged (out of scope).
+- **Cross-platform:** a `#[serde(default)]` record field + a tiny command + frontend UI, no
+  OS-specific code → identical on macOS and Windows. The `#[serde(default)]` field means an older
+  binary simply ignores it (clean rollback). Project checks green: `npm run build` / `lint` / `test`
+  (incl. the extended fire-step exclusion test), `npm run format:check`, `npm run lint:rust`,
+  `cargo test`, `cargo fmt --check`.
+- **Note:** during this card's landing, its in-progress implementation briefly appeared as
+  uncommitted changes in the **main** working tree (the `AutoContinueToggle` files); it committed
+  cleanly to `fa14d1a`. The archive of the concurrent Task 295 was pushed via a temporary worktree to
+  avoid disturbing it — no data was lost.
+
+---
+
