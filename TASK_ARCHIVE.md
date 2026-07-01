@@ -8544,3 +8544,98 @@ menu items.
 
 ---
 
+### 292. [x] Fix macOS permissions — mic/voice & folder access prompt repeatedly and never work
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Using an agent's **voice input** inside a ReCue session triggered the macOS microphone prompt
+repeatedly (~5×) and, even after pressing **Allow** every time, the mic never worked; the same
+prompt-repeatedly-then-fail happened for protected-folder access (e.g. Downloads). Diagnosed as a
+**macOS TCC (Transparency, Consent & Control) + code-signing** problem with **one shared root
+cause** (mic *and* folders), **not** app logic — ReCue has no mic/audio/folder code; the request
+comes from the child `claude` process, attributed to ReCue as the responsible process. Confirmed
+against Apple's TCC model and `anthropics/claude-code#33023`:
+
+1. The mic entitlement **`com.apple.security.device.audio-input`** was **absent from ReCue's code
+   signature** — `NSMicrophoneUsageDescription` in Info.plist alone is **not sufficient**, and
+   entitlements are only honored under the **Hardened Runtime**. So the prompt appeared (usage
+   string) but access was silently denied after "Allow".
+2. TCC only **persists** a grant for an app with a **stable code signature**; ReCue was unsigned/
+   ad-hoc (no entitlements file, no Hardened Runtime, no Apple identity — the pipeline's "signed"
+   meant only the **minisign updater** artifacts), so macOS treated each launch as new and
+   re-prompted → "asks 5×, still fails."
+
+This **deliberately reverses** the project's long-standing *"no code signing / notarization"*
+scope decision (the direct cause of the bug), mirroring prior reversals (Settings #100,
+multi-window #84, Fork #126). The fix introduces macOS code signing + Hardened Runtime +
+entitlements — **macOS-bundle-only**; no runtime Rust/TS/CSS touched, Windows and Linux unchanged.
+
+**What shipped** (commit
+[`a62c37c`](https://github.com/ErikdeJager/ReCue/commit/a62c37c), PR
+[#43](https://github.com/ErikdeJager/ReCue/pull/43), merged `0e8e1c1`, 2026-07-01):
+
+- **`src-tauri/Entitlements.plist`** (new) — the code-signature entitlements:
+  `com.apple.security.device.audio-input` (the missing mic piece) +
+  `com.apple.security.cs.disable-library-validation` (so a Hardened-Runtime app with a non-Apple/
+  ad-hoc signature still launches). **App Sandbox deliberately NOT enabled** (ReCue must spawn
+  PTYs + read the user's repos; folder access is TCC-governed, not sandbox-governed).
+- **`src-tauri/tauri.conf.json`** — `bundle.macOS.entitlements: "Entitlements.plist"` so the Tauri
+  v2 macOS bundler signs the app **with** those entitlements under the Hardened Runtime
+  (`--options runtime`). The `dmg` block and `identifier` (`com.recue.app`) are untouched.
+- **`src-tauri/Info.plist`** — added the protected-folder usage strings
+  `NSDownloadsFolderUsageDescription`, `NSDocumentsFolderUsageDescription`,
+  `NSDesktopFolderUsageDescription`, `NSRemovableVolumesUsageDescription` (so folder prompts show
+  a real, ReCue-attributed reason). The existing mic/speech strings are unchanged.
+- **`scripts/sign-macos-local.sh`** (new, executable) — a local re-sign helper
+  (`codesign --force --deep --options runtime --entitlements … --sign "${SIGN_IDENTITY:--}"`) so a
+  user **with no Apple Developer account** can produce a working, entitlement-bearing,
+  Hardened-Runtime build (self-signed cert for a stable signature, or ad-hoc per-build), with
+  verification + `tccutil reset` recovery lines.
+- **`.github/workflows/release.yml`** — the macOS leg gains **guarded** Developer-ID signing +
+  notarization env (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
+  `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`) passed to `tauri-action`,
+  gated on `matrix.platform == 'macos-latest'` and `secrets.*` — **absent secrets → empty → today's
+  ad-hoc behavior, build never breaks**. The Windows leg never sees Apple env; the minisign updater
+  env is unchanged.
+- **`docs/macos-permissions.md`** (new) — explains the entitlement/Hardened-Runtime/signing fix,
+  the local self-signed build steps, the CI secrets needed for notarized releases, and the
+  one-time recovery for users on the old broken build (`tccutil reset Microphone com.recue.app`).
+- **`CLAUDE.md`** — amended the "no code signing / notarization" scope note to record this
+  reversal (macOS signing/entitlements now exist *for permissions*; still no App Sandbox, and no
+  notarization until the maintainer adds the secrets).
+
+**Key files/areas touched:** `src-tauri/Entitlements.plist` (new), `src-tauri/tauri.conf.json`,
+`src-tauri/Info.plist`, `scripts/sign-macos-local.sh` (new), `.github/workflows/release.yml`,
+`docs/macos-permissions.md` (new), `CLAUDE.md`. **No** runtime Rust/TS/CSS.
+
+**Dependencies:** none (code-wise).
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 292): one shared root cause for mic + Downloads; kept
+  it **one card** (not split local-fix vs CI-notarization) delivering both the always-free
+  entitlements/Info.plist/Hardened-Runtime config + local signing script **and** the guarded
+  Developer-ID+notarize CI wiring; entitlements kept **minimal** (audio-input +
+  disable-library-validation, no App Sandbox, no JIT entitlements unless a launch failure proves
+  them needed); folder symptom fixed by the same signing-persistence fix + the four usage strings.
+- **External provisioning:** fully persistent, Gatekeeper-clean **notarized** distribution still
+  requires the maintainer to add an **Apple Developer ID** cert + the CI secrets — a paid-account
+  decision. The task ships the config, script, and guarded CI **now**; adding the secrets later
+  flips on notarized signing with no further code change. A user's own machine is fixed today via
+  the local self-signed/ad-hoc script.
+- **Cross-platform:** every change is macOS-bundle-scoped (Info.plist / Entitlements.plist /
+  `bundle.macOS` / the macOS matrix leg). Windows and Linux legs + all runtime code are
+  byte-for-byte unchanged. Automated checks are regression guards only (no runtime code changed):
+  `npm run build` / `lint` / `test`, `cargo test` / `clippy` / `fmt`. **Verification is largely
+  manual on a real Mac** (a GUI/TCC/signing path that can't be CI-tested, like the #84/#105
+  precedent): mic prompt appears **once** → Allow → voice works → ReCue listed under Privacy &
+  Security → Microphone → relaunch does **not** re-prompt; same one-prompt-then-persist for
+  Downloads. Also to confirm on a real box: that the mic request is attributed to **ReCue** (not
+  the system Dictation service) — the entitlement fix only helps if ReCue is the responsible
+  process (which the "ReCue wants mic" prompt strongly implies).
+
+---
+
