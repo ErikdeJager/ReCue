@@ -504,21 +504,28 @@ pub fn clone_repo(url: &str, dest: impl AsRef<Path>) -> Result<(), String> {
     }
 }
 
-/// Ensure `cwd` has `main` checked out (#295) — the "checks out main; creates main if
-/// it doesn't exist" step run right after `clone_repo`. If a local `main` already
-/// exists (the common case, or a repo whose default already is `main`) → check it out;
-/// otherwise create + check out `main` from the cloned HEAD (`git checkout -b main`),
-/// which also covers a repo whose default is `master` and an unborn/empty clone. The
-/// membership guard means an existing `main` never errors (`create_branch` refuses an
-/// already-existing name). Returns git's error on failure. Reuses the existing
-/// `checkout_branch` / `create_branch` writes (both via `hidden_command`), so it's
-/// identical on macOS and Windows.
-pub fn ensure_main(cwd: impl AsRef<Path>) -> Result<(), String> {
+/// Ensure `cwd` has **some** branch checked out (#298) — the post-`clone_repo` step.
+/// `git clone` already leaves HEAD on the remote's **default branch** (`main`,
+/// `master`, `develop`, …), so the job here is **not** to force `main` but only to
+/// guarantee a checked-out branch exists:
+/// - If the repo already has a current branch (the common case) → **do nothing**,
+///   leaving the remote's default branch checked out exactly as cloned.
+/// - If the repo has **no** branch at all (an unborn HEAD — a truly empty / branch-less
+///   clone) → create + check out `main` from HEAD (`git checkout -b main`) so the repo
+///   has a usable branch, matching a fresh `git init`.
+///
+/// The branch-less case is detected via `list_branches(cwd).all` being empty (an unborn
+/// repo has no `refs/heads`). Returns git's error on a real failure. Reuses the existing
+/// `create_branch` write (via `hidden_command`), so it's identical on macOS and Windows.
+pub fn ensure_checked_out_branch(cwd: impl AsRef<Path>) -> Result<(), String> {
     let cwd = cwd.as_ref();
-    if list_branches(cwd).all.iter().any(|b| b == "main") {
-        checkout_branch(cwd, "main")
-    } else {
+    if list_branches(cwd).all.is_empty() {
+        // Unborn / branch-less clone (empty repo): fabricate `main` so there's a
+        // checked-out branch to work on.
         create_branch(cwd, "main", "")
+    } else {
+        // A default branch is already checked out — leave it exactly as cloned.
+        Ok(())
     }
 }
 
@@ -1589,9 +1596,10 @@ index 0..1
     }
 
     #[test]
-    fn clone_into_dest_then_ensure_main_creates_or_checks_out_main() {
-        // Build a source repo whose default branch is `master`, so `ensure_main` must
-        // *create* `main` from HEAD (the "creates main if it doesn't exist" path).
+    fn clone_master_default_stays_on_master_and_creates_no_main() {
+        // Build a source repo whose default branch is `master`. After the post-clone
+        // step (#298) the clone must stay on `master` — `git clone` already leaves HEAD
+        // there — and NO `main` may be fabricated.
         let Some(origin) = init_repo("clone-origin") else {
             return;
         };
@@ -1615,27 +1623,32 @@ index 0..1
             let _ = fs::remove_dir_all(&dest);
             return;
         }
-        // A test identity so the branch-create checkout can proceed cleanly.
+        // A test identity so any branch write could proceed cleanly.
         git_in(&dest, &["config", "user.email", "t@test.dev"]);
         git_in(&dest, &["config", "user.name", "Test"]);
 
-        // No local `main` yet (the origin was `master`).
+        // The clone came down on `master` (the remote's default).
+        assert_eq!(current_branch(&dest), "master");
         assert!(!list_branches(&dest).all.iter().any(|b| b == "main"));
-        assert!(ensure_main(&dest).is_ok());
-        assert_eq!(current_branch(&dest), "main");
 
-        // Idempotent: a second `ensure_main` (now `main` exists) just checks it out.
-        assert!(ensure_main(&dest).is_ok());
-        assert_eq!(current_branch(&dest), "main");
+        // The post-clone step leaves the default branch alone — no `main` fabricated.
+        assert!(ensure_checked_out_branch(&dest).is_ok());
+        assert_eq!(current_branch(&dest), "master");
+        assert!(!list_branches(&dest).all.iter().any(|b| b == "main"));
+
+        // Idempotent: a second call is still a no-op.
+        assert!(ensure_checked_out_branch(&dest).is_ok());
+        assert_eq!(current_branch(&dest), "master");
+        assert!(!list_branches(&dest).all.iter().any(|b| b == "main"));
 
         let _ = fs::remove_dir_all(&origin);
         let _ = fs::remove_dir_all(&dest);
     }
 
     #[test]
-    fn ensure_main_checks_out_existing_main() {
-        // A repo whose default already is `main`: `ensure_main` just checks it out
-        // (never erroring on the already-existing branch).
+    fn clone_main_default_stays_on_main() {
+        // A repo whose default already is `main`: the post-clone step leaves it on
+        // `main`, unchanged.
         let Some(origin) = init_repo("main-origin") else {
             return;
         };
@@ -1648,14 +1661,44 @@ index 0..1
             let _ = fs::remove_dir_all(&origin);
             return;
         }
-        // Move HEAD off `main` so `ensure_main` has to switch back to it.
-        assert!(create_branch(&origin, "feature", "").is_ok());
-        assert_eq!(current_branch(&origin), "feature");
 
-        assert!(ensure_main(&origin).is_ok());
-        assert_eq!(current_branch(&origin), "main");
+        let dest = unique_dir("main-clone-dest");
+        let origin_url = origin.to_string_lossy().to_string();
+        if super::clone_repo(&origin_url, &dest).is_err() {
+            let _ = fs::remove_dir_all(&origin);
+            let _ = fs::remove_dir_all(&dest);
+            return;
+        }
+        git_in(&dest, &["config", "user.email", "t@test.dev"]);
+        git_in(&dest, &["config", "user.name", "Test"]);
+
+        assert_eq!(current_branch(&dest), "main");
+        assert!(ensure_checked_out_branch(&dest).is_ok());
+        assert_eq!(current_branch(&dest), "main");
 
         let _ = fs::remove_dir_all(&origin);
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn ensure_checked_out_branch_creates_main_for_branchless_repo() {
+        // A branch-less / unborn repo (a truly empty clone: no commits, no branches):
+        // the post-clone step must fabricate + check out `main`, and not error.
+        let Some(dir) = init_repo("branchless") else {
+            return;
+        };
+        // Fresh `git init` — no commit yet, so no `refs/heads` at all.
+        assert!(list_branches(&dir).all.is_empty());
+
+        assert!(ensure_checked_out_branch(&dir).is_ok());
+        // `main` is now the checked-out (still unborn) branch. On an unborn HEAD
+        // `current_branch` reports "" (no commit), so assert via the symbolic ref.
+        assert_eq!(
+            run_git(&dir, &["symbolic-ref", "--short", "HEAD"]).as_deref(),
+            Some("main"),
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

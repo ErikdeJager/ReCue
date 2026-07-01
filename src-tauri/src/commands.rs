@@ -477,15 +477,16 @@ pub fn add_recent(store: State<'_, Store>, path: String) -> Result<(), SessionEr
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
-/// Clone the git repo at `url` into `<parent>/<repo-name>` (#295), ensure it has `main`
-/// checked out (creating `main` from HEAD when the repo has none), register the folder
-/// in recents, and return the absolute destination path — the frontend then starts a
-/// session there. The dest is built with `PathBuf::join` (never string concat) and is
-/// refused if it already exists non-empty (no overwrite — data safety). Clone errors
-/// (bad URL, auth required, network, existing dest) surface as a typed
-/// `SessionError::Git` carrying git's stderr for inline display; `GIT_TERMINAL_PROMPT=0`
-/// makes an authed/private remote fail fast. Cross-platform (git via `hidden_command`;
-/// no raw `$HOME`).
+/// Clone the git repo at `url` into `<parent>/<repo-name>` (#295), ensure it has a
+/// branch checked out — `git clone` already leaves HEAD on the remote's **default
+/// branch** (`main`/`master`/…), so this only fabricates a `main` for a truly empty /
+/// branch-less clone (#298) — register the folder in recents, and return the absolute
+/// destination path — the frontend then starts a session there. The dest is built with
+/// `PathBuf::join` (never string concat) and is refused if it already exists non-empty
+/// (no overwrite — data safety). Clone errors (bad URL, auth required, network, existing
+/// dest) surface as a typed `SessionError::Git` carrying git's stderr for inline display;
+/// `GIT_TERMINAL_PROMPT=0` makes an authed/private remote fail fast. Cross-platform (git
+/// via `hidden_command`; no raw `$HOME`).
 #[tauri::command]
 pub fn clone_repo(
     store: State<'_, Store>,
@@ -517,7 +518,7 @@ pub fn clone_repo(
         )));
     }
     git::clone_repo(url, &dest).map_err(SessionError::Git)?;
-    git::ensure_main(&dest).map_err(SessionError::Git)?;
+    git::ensure_checked_out_branch(&dest).map_err(SessionError::Git)?;
     let dest_str = dest.to_string_lossy().to_string();
     store
         .touch_recent(&dest_str)

@@ -136,15 +136,6 @@
   line-height: 1.5;
 }
 
-.code {
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-chip);
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-  font-family: var(--mono);
-  font-size: var(--fs-meta-xs);
-}
-
 .error {
   margin: 0 0 var(--space-16);
   padding: var(--space-8);

@@ -11,11 +11,13 @@ import styles from "./CloneRepoModal.module.css";
  * The Clone Repo modal (#295) — opened from the sidebar ⋯ session-options menu (#294)
  * and the background context menu's "Clone Repo…". Takes a **git URL** and a
  * **destination parent directory** (native folder dialog via `pickDirectory`), then
- * clones into `<parent>/<repo-name>`, ensures `main` is checked out (creating it if the
- * repo has none), registers the folder as a repo, and starts a `claude` session on
- * `main` — all via the store `cloneRepo` action. A "Cloning…" busy state disables the
- * inputs and blocks double-submits; a clone failure (bad URL / auth / network / existing
- * dest) shows git's stderr inline and closes nothing.
+ * clones into `<parent>/<repo-name>`. `git clone` already lands the working tree on the
+ * repository's **default branch** (`main` / `master` / …), so the backend only fabricates
+ * a `main` for a truly empty / branch-less clone (#298); the folder is registered as a
+ * repo and a `claude` session starts on that default branch — all via the store
+ * `cloneRepo` action. A "Cloning…" busy state disables the inputs and blocks
+ * double-submits; a clone failure (bad URL / auth / network / existing dest) shows git's
+ * stderr inline and closes nothing.
  *
  * Store-driven (`cloneRepoOpen` + `closeCloneRepo`/`cloneRepo`), centered, focus-trapped
  * (Tab stays inside), Escape / outside-click close, URL auto-focused, Enter submits.
@@ -161,8 +163,8 @@ function CloneRepoModal() {
             </button>
           </div>
           <p className={styles.hint}>
-            The repo clones into a new folder here (named for the URL) and
-            starts on <code className={styles.code}>main</code>.
+            The repo clones into a new folder here (named for the URL) and opens
+            on its default branch.
           </p>
 
           {error && (
