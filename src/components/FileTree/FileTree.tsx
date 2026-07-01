@@ -28,6 +28,7 @@ import {
   searchFiles,
 } from "../../ipc";
 import { noAutoCapitalize } from "../../inputProps";
+import { splitPath } from "../../paths";
 import { joinPath, revealLabel } from "../../platform";
 import { useStore } from "../../store";
 import type { FileStatusCode } from "../../types";
@@ -61,9 +62,10 @@ interface FileMenu {
   isDir: boolean;
 }
 
-/** Inline menu step (#267): the base item list, the New-folder name input, or the
- * delete confirm (only used when confirm-destructive is on). */
-type MenuMode = "menu" | "newFolder" | "confirmDelete";
+/** Inline menu step (#267/#291): the base item list, the New-folder name input, the
+ * Rename name input (#291), or the delete confirm (only used when confirm-destructive
+ * is on). */
+type MenuMode = "menu" | "newFolder" | "rename" | "confirmDelete";
 
 /** Debounce before a typed query hits the backend (#202) — coalesces keystrokes. */
 const SEARCH_DEBOUNCE_MS = 200;
@@ -84,7 +86,8 @@ const CONTENT_RESULT_LIMIT = 200;
  * Clicking a file opens it in the file viewer; right-clicking a file offers Open in
  * file viewer / Open as Kanban board (`.md` only) / Reveal in Finder / Copy absolute
  * path / Copy relative path (#184) / Delete (#267). Right-clicking a **folder** offers
- * New folder… / Delete folder (#267). Deletes are confirm-gated by the Settings
+ * New folder… / Rename… / Reveal in Finder / Copy absolute path / Copy relative path
+ * (#291) / Delete folder (#267). Deletes are confirm-gated by the Settings
  * confirm-destructive toggle (#103) and remove recursively; the tree refreshes in
  * place after any create/delete (the per-repo `fileTreeRefresh` signal, #253 pattern).
  *
@@ -100,6 +103,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const createFolder = useStore((s) => s.createFolder);
   const deleteTreePath = useStore((s) => s.deleteTreePath);
+  const renameTreePath = useStore((s) => s.renameTreePath);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const platform = useStore((s) => s.platform);
   // Git working-tree status for this repo (#252): repo-relative path → "A"|"M"|"D"|"I"
@@ -136,6 +140,10 @@ function FileTree({ repoPath }: { repoPath: string }) {
   const [menuMode, setMenuMode] = useState<MenuMode>("menu");
   const [newFolderName, setNewFolderName] = useState("");
   const newFolderRef = useRef<HTMLInputElement | null>(null);
+  // The Rename name draft + its input (#291); reset with the menu like the New-folder
+  // draft so a prior rename never leaks into the next right-click.
+  const [renameName, setRenameName] = useState("");
+  const renameRef = useRef<HTMLInputElement | null>(null);
   const [nonce, setNonce] = useState(0);
   // Paths with an in-flight `list_dir` — guards against double-loading on re-render.
   const inFlight = useRef<Set<string>>(new Set());
@@ -267,6 +275,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
     setMenu(null);
     setMenuMode("menu");
     setNewFolderName("");
+    setRenameName("");
   }, []);
 
   // Dismiss the context menu on Escape.
@@ -282,6 +291,16 @@ function FileTree({ repoPath }: { repoPath: string }) {
   // Focus the New-folder input when that step opens so the user can type at once.
   useEffect(() => {
     if (menu && menuMode === "newFolder") newFolderRef.current?.focus();
+  }, [menu, menuMode]);
+
+  // Focus + select the Rename input when that step opens (#291): the field is seeded
+  // with the current name, so selecting it lets the user type a replacement at once.
+  useEffect(() => {
+    if (menu && menuMode === "rename") {
+      const input = renameRef.current;
+      input?.focus();
+      input?.select();
+    }
   }, [menu, menuMode]);
 
   // Once a reveal target is set (and the tree re-rendered with its ancestors expanded),
@@ -344,6 +363,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
     event.stopPropagation();
     setMenuMode("menu");
     setNewFolderName("");
+    setRenameName("");
     setMenu({
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 200)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - 200)),
@@ -364,6 +384,28 @@ function FileTree({ repoPath }: { repoPath: string }) {
     closeMenu();
     void createFolder(repoPath, target).then(() => {
       setExpanded((prev) => new Set([...prev, parent]));
+      inFlight.current.delete(parent);
+      load(parent);
+    });
+  };
+
+  // Rename the menu's target file/folder in place (#291), then reload its parent level
+  // so the new name shows without a full reset (siblings' expansion preserved; the
+  // store also bumps `fileTreeRefresh`). A blank / separator-only name is a no-op, an
+  // unchanged name just closes, and the backend rejects reserved / colliding names.
+  const submitRename = () => {
+    if (!menu) return;
+    const name = renameName.trim();
+    if (!name || name.includes("/") || name.includes("\\")) return;
+    const { dir, base } = splitPath(menu.path);
+    if (name === base) {
+      closeMenu();
+      return;
+    }
+    const to = dir ? `${dir}/${name}` : name;
+    const parent = dir;
+    closeMenu();
+    void renameTreePath(repoPath, menu.path, to).then(() => {
       inFlight.current.delete(parent);
       load(parent);
     });
@@ -744,6 +786,36 @@ function FileTree({ repoPath }: { repoPath: string }) {
                   Create
                 </button>
               </div>
+            ) : menuMode === "rename" ? (
+              // Rename name input (#291): Enter renames, Escape (global) cancels. The
+              // field is seeded with the current name (focused + selected on open).
+              <div className={styles.menuForm}>
+                <input
+                  ref={renameRef}
+                  className={styles.menuInput}
+                  type="text"
+                  value={renameName}
+                  spellCheck={false}
+                  {...noAutoCapitalize}
+                  placeholder="Rename folder"
+                  aria-label="Rename folder"
+                  onChange={(event) => setRenameName(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      submitRename();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className={styles.menuFormBtn}
+                  disabled={!renameName.trim()}
+                  onClick={submitRename}
+                >
+                  Rename
+                </button>
+              </div>
             ) : menuMode === "confirmDelete" ? (
               <button
                 type="button"
@@ -754,7 +826,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 {menu.isDir ? "Delete folder & its contents?" : "Delete file?"}
               </button>
             ) : menu.isDir ? (
-              // ── Folder menu (#267) ──
+              // ── Folder menu (#267 + Rename / Reveal / Copy paths #291) ──
               <>
                 <button
                   type="button"
@@ -763,6 +835,53 @@ function FileTree({ repoPath }: { repoPath: string }) {
                   onClick={() => setMenuMode("newFolder")}
                 >
                   New folder…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    setRenameName(splitPath(menu.path).base);
+                    setMenuMode("rename");
+                  }}
+                >
+                  Rename…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    void revealPath(joinPath(platform, repoPath, menu.path));
+                    closeMenu();
+                  }}
+                >
+                  {revealLabel(platform)}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    void copyToClipboard(
+                      joinPath(platform, repoPath, menu.path),
+                      "path",
+                    );
+                    closeMenu();
+                  }}
+                >
+                  Copy absolute path
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    void copyToClipboard(menu.path, "path");
+                    closeMenu();
+                  }}
+                >
+                  Copy relative path
                 </button>
                 <button
                   type="button"

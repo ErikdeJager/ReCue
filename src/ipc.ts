@@ -326,6 +326,14 @@ export const createDir = (repo: string, path: string) =>
 export const deletePath = (repo: string, path: string) =>
   invoke<void>("delete_path", { repo, path });
 
+/** Rename (or move within the repo) the repo-relative file/folder `from` to `to`
+ * (#291). Both endpoints are confined to the repo (source inside + not the root,
+ * destination's parent inside); the new leaf name is validated (no separators, `.`/
+ * `..`, or — on Windows — a reserved device name) and a collision is refused. Returns
+ * the destination's repo-relative POSIX path. */
+export const renamePath = (repo: string, from: string, to: string) =>
+  invoke<string>("rename_path", { repo, from, to });
+
 /** Best-effort slash-invokable skills/commands for `cwd` (#114) — the
  * scheduled-prompt autocomplete. Reads project + user `.claude/{skills,commands}`,
  * project shadowing user; a missing dir just yields fewer entries (never throws). */

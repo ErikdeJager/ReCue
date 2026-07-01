@@ -567,6 +567,21 @@ pub fn delete_path(repo: String, path: String) -> Result<(), SessionError> {
     crate::files::delete_path(&repo, &path).map_err(SessionError::Io)
 }
 
+/// Rename (or move within the repo) the repo-relative file/directory `from` to `to`
+/// (#291 — the fifth deliberate file write, backing the file-tree folder/file
+/// **Rename**). The destination's new leaf name is guarded (`validate_new_segment` —
+/// no separators / `.`/`..` / Windows reserved device names), then
+/// `files::rename_path` confines both endpoints to the repo (source inside + not the
+/// root; destination's parent inside) and refuses to clobber an existing item. Returns
+/// the destination repo-relative POSIX path for the in-place tree refresh.
+#[tauri::command]
+pub fn rename_path(repo: String, from: String, to: String) -> Result<String, SessionError> {
+    let trimmed = to.trim().trim_end_matches(['/', '\\']);
+    let name = trimmed.rsplit(['/', '\\']).next().unwrap_or("");
+    validate_new_segment(name)?;
+    crate::files::rename_path(&repo, &from, trimmed).map_err(SessionError::Io)
+}
+
 /// Best-effort slash-invokable skills/commands for a folder (#114) — the
 /// scheduled-prompt autocomplete. Reads project `<cwd>/.claude` + user `~/.claude`
 /// (project shadows user); a missing/unreadable dir simply yields fewer entries.

@@ -1257,6 +1257,10 @@ export interface AppState {
    * recursive for a folder). On success refreshes the tree + git statuses and toasts;
    * a confinement / not-found error toasts and no-ops. */
   deleteTreePath: (repo: string, path: string) => Promise<void>;
+  /** Rename (or move within the repo) the repo-relative file/folder `from` to `to` in
+   * the FileTree (#291). On success refreshes the tree + git statuses and toasts; a
+   * confinement / collision / invalid-name error toasts and no-ops. */
+  renameTreePath: (repo: string, from: string, to: string) => Promise<void>;
   /** Assign a repo's color (optimistic + persisted) (#35). */
   setRepoColor: (path: string, color: string) => Promise<void>;
   /** Apply + persist application settings (#100) and run their side-effects. */
@@ -2895,6 +2899,26 @@ export const useStore = create<AppState>()((set, get) => ({
     }));
     void get().refreshFileStatuses(repo);
     get().pushToast("Deleted", "success");
+  },
+
+  renameTreePath: async (repo, from, to) => {
+    try {
+      await ipc.renamePath(repo, from, to);
+    } catch (err) {
+      get().pushToast(
+        isSessionError(err) ? err.message : "Could not rename",
+        "error",
+      );
+      return;
+    }
+    set((s) => ({
+      fileTreeRefresh: {
+        ...s.fileTreeRefresh,
+        [repo]: (s.fileTreeRefresh[repo] ?? 0) + 1,
+      },
+    }));
+    void get().refreshFileStatuses(repo);
+    get().pushToast("Renamed", "success");
   },
 
   setRepoColor: async (path, color) => {

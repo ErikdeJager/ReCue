@@ -14,9 +14,12 @@
 //! genuinely destructive one, so it keeps hard safety rails: the target must
 //! canonicalize **strictly inside** the repo, it **refuses the repo root itself**, and
 //! it **never follows a symlink** (a symlinked leaf is rejected, so a delete can't
-//! reach the link's target outside the repo). All four reject `..`/symlink/out-of-repo
-//! targets and use only `std::fs` (no shell-out), so they behave identically on
-//! macOS/Windows.
+//! reach the link's target outside the repo). The folder/file **Rename** (#291) adds
+//! the **fifth**: `rename_path` renames an in-repo file/dir — the *source* must
+//! canonicalize inside the repo (and not be the root), the *destination*'s parent must
+//! canonicalize inside the repo, and it refuses to clobber an existing item. All
+//! reject `..`/symlink/out-of-repo targets and use only `std::fs` (no shell-out), so
+//! they behave identically on macOS/Windows.
 
 use serde::Serialize;
 use std::fs;
@@ -570,6 +573,45 @@ pub fn create_dir(repo: impl AsRef<Path>, path: &str) -> Result<(), String> {
     fs::create_dir(canon_parent.join(name)).map_err(|e| e.to_string())
 }
 
+/// Rename (or move within the repo) the repo-relative file or directory at `from` to
+/// `to` (#291 — the **fifth** deliberate `files.rs` write, backing the file-tree
+/// folder/file **Rename**). Both endpoints are confined to the repo, with these rails:
+///   - `from` must canonicalize **inside** the repo (rejecting `..`/symlink escapes)
+///     and must **not equal the repo root** (we never rename the repository itself);
+///   - `to`'s **parent** directory is canonicalized the way `create_dir` validates a
+///     new path — it must exist and be **inside** the repo (so `..` / absolute /
+///     out-of-repo destinations are rejected). `to` itself must **not already exist**
+///     (no clobber, mirroring `move_into_repo`).
+///
+/// Only `fs::rename` is used (same-volume within one repo — a folder and its contents
+/// move atomically). Returns the destination **repo-relative POSIX** path (matching
+/// `list_dir`). No shell-out, so it behaves identically on macOS/Windows.
+pub fn rename_path(repo: impl AsRef<Path>, from: &str, to: &str) -> Result<String, String> {
+    let repo = repo.as_ref();
+    let canon_repo = repo.canonicalize().map_err(|e| e.to_string())?;
+    // Confine the source: it must exist inside the repo and not be the repo root.
+    let src = confine(repo, from)?;
+    if src == canon_repo {
+        return Err("refusing to rename the repository root".to_string());
+    }
+    // Resolve the destination without requiring it to exist: its parent must
+    // canonicalize inside the repo (rejects `..`/absolute/out-of-repo), and the leaf
+    // must not already exist.
+    let target = repo.join(to);
+    if target.symlink_metadata().is_ok() {
+        return Err("a file or folder with that name already exists".to_string());
+    }
+    let parent = target.parent().ok_or("invalid path")?;
+    let canon_parent = parent.canonicalize().map_err(|e| e.to_string())?;
+    if !canon_parent.starts_with(&canon_repo) {
+        return Err("path is outside the repository".to_string());
+    }
+    let name = target.file_name().ok_or("invalid file name")?;
+    let dst = canon_parent.join(name);
+    fs::rename(&src, &dst).map_err(|e| e.to_string())?;
+    Ok(to.replace('\\', "/").trim_matches('/').to_string())
+}
+
 /// Delete the repo-relative file or directory at `path` (#267 — the **fourth**
 /// deliberate `files.rs` write, and the genuinely destructive one; a directory is
 /// removed **recursively**). Hard safety rails, all enforced before any removal:
@@ -994,6 +1036,57 @@ mod tests {
         // A missing target errors clearly (nothing to remove).
         assert!(delete_path(&dir, "nope.md").is_err());
         assert_eq!(read_text_file(&dir, "keep.md").unwrap(), "x");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn renames_a_file_and_a_folder_inside_the_repo() {
+        let dir = tmp("rename-ok");
+        fs::write(dir.join("old.md"), "x").unwrap();
+        fs::create_dir_all(dir.join("folder/nested")).unwrap();
+        fs::write(dir.join("folder/a.txt"), "a").unwrap();
+        fs::write(dir.join("folder/nested/b.txt"), "b").unwrap();
+
+        // Rename a top-level file — the returned path is repo-relative POSIX.
+        let rel = rename_path(&dir, "old.md", "new.md").unwrap();
+        assert_eq!(rel, "new.md");
+        assert!(!dir.join("old.md").exists());
+        assert_eq!(read_text_file(&dir, "new.md").unwrap(), "x");
+
+        // Rename a folder — its whole subtree moves with it.
+        let rel = rename_path(&dir, "folder", "renamed").unwrap();
+        assert_eq!(rel, "renamed");
+        assert!(!dir.join("folder").exists());
+        assert_eq!(read_text_file(&dir, "renamed/a.txt").unwrap(), "a");
+        assert_eq!(read_text_file(&dir, "renamed/nested/b.txt").unwrap(), "b");
+
+        // Rename a file that lives inside a subdir (parent path preserved).
+        let rel = rename_path(&dir, "renamed/a.txt", "renamed/z.txt").unwrap();
+        assert_eq!(rel, "renamed/z.txt");
+        assert!(!dir.join("renamed/a.txt").exists());
+        assert_eq!(read_text_file(&dir, "renamed/z.txt").unwrap(), "a");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_refuses_clobber_root_and_out_of_repo() {
+        let dir = tmp("rename-reject");
+        fs::write(dir.join("keep.md"), "keep").unwrap();
+        fs::write(dir.join("taken.md"), "taken").unwrap();
+        // No-clobber: the destination already exists.
+        assert!(rename_path(&dir, "keep.md", "taken.md").is_err());
+        assert_eq!(read_text_file(&dir, "keep.md").unwrap(), "keep");
+        assert_eq!(read_text_file(&dir, "taken.md").unwrap(), "taken");
+        // The repo root itself is never renamable.
+        assert!(rename_path(&dir, "", "elsewhere").is_err());
+        // A missing source errors clearly.
+        assert!(rename_path(&dir, "nope.md", "whatever.md").is_err());
+        // Traversal / absolute destinations escape the repo → rejected, source intact.
+        assert!(rename_path(&dir, "keep.md", "../escape.md").is_err());
+        assert!(rename_path(&dir, "keep.md", "../../../../tmp/recue-rename-escape.md").is_err());
+        // A destination whose parent level doesn't exist is rejected too.
+        assert!(rename_path(&dir, "keep.md", "nope/deep.md").is_err());
+        assert_eq!(read_text_file(&dir, "keep.md").unwrap(), "keep");
         let _ = fs::remove_dir_all(&dir);
     }
 

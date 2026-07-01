@@ -214,6 +214,7 @@ pub fn run() {
             commands::move_into_repo,
             commands::create_dir,
             commands::delete_path,
+            commands::rename_path,
             commands::list_skills,
             commands::file_exists,
             commands::is_git_repo,
