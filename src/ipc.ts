@@ -409,6 +409,13 @@ export const checkoutBranch = (cwd: string, branch: string) =>
 export const createBranch = (cwd: string, name: string, base: string) =>
   invoke<void>("create_branch", { cwd, name, base });
 
+/** Clone the git repo at `url` into `<parent>/<repo-name>`, ensure `main` is checked
+ * out (creating it if the repo has none), register the folder in recents, and resolve
+ * with the absolute destination path (#295). Rejects with a typed git error (bad URL /
+ * auth / network / existing dest) for inline display in the Clone Repo modal. */
+export const cloneRepo = (url: string, parent: string) =>
+  invoke<string>("clone_repo", { url, parent });
+
 /** Start an agent in an isolated worktree on a **new** branch `name` (from `base`,
  * empty = HEAD) of `repo` — the ⌘⏎ create-branch-as-worktree path (#124). */
 export const spawnWorktreeAgentNewBranch = (

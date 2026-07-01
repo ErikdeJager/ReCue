@@ -2010,6 +2010,7 @@ function Sidebar() {
   const createFolderBranch = useStore((s) => s.createFolderBranch);
   const openSchedule = useStore((s) => s.openSchedule);
   const openRecurring = useStore((s) => s.openRecurring);
+  const openCloneRepo = useStore((s) => s.openCloneRepo);
   const addFolder = useStore((s) => s.addFolder);
   const platform = useStore((s) => s.platform);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
@@ -2127,11 +2128,12 @@ function Sidebar() {
     bgMenu.openMenu(event);
   };
   // The ⋯ overflow menu (#294) next to "Schedule session": extra session-creation
-  // options. Reuses the shared cursor-menu primitive; later cards (Clone Repo #295,
-  // Auto-continue #296) add entries here.
+  // options. Reuses the shared cursor-menu primitive; later cards (Auto-continue #296)
+  // add entries here.
   const dotsMenu = useRowMenu();
   const dotsMenuItems: RowMenuItem[] = [
     { label: "Recurring session…", onActivate: () => openRecurring() },
+    { label: "Clone Repo…", onActivate: () => openCloneRepo() },
   ];
   // App-wide bulk-action counts (#293) — every running agent (the #91 `exitedCode
   // === undefined` predicate) and every non-agent item, across all folders.
@@ -2147,6 +2149,7 @@ function Sidebar() {
     { label: "New session", onActivate: () => openNewSession() },
     { label: "Schedule session", onActivate: () => openSchedule() },
     { label: "Recurring session…", onActivate: () => openRecurring() },
+    { label: "Clone Repo…", onActivate: () => openCloneRepo() },
     {
       label: sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar",
       onActivate: () => toggleSidebarCollapsed(),

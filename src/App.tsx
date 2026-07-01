@@ -25,6 +25,7 @@ import {
 import CanvasCloseModal from "./components/CanvasCloseModal/CanvasCloseModal";
 import CanvasWindow from "./components/CanvasWindow/CanvasWindow";
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
+import CloneRepoModal from "./components/CloneRepoModal/CloneRepoModal";
 import CreatePanelModal from "./components/CreatePanelModal/CreatePanelModal";
 import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
 import OnboardingModal from "./components/Onboarding/OnboardingModal";
@@ -185,6 +186,7 @@ function MainApp() {
       <Toaster />
       <BigModeModal />
       <NewSessionModal />
+      <CloneRepoModal />
       {createPanelOpen && <CreatePanelModal />}
       <Settings />
       <UpdateModal />

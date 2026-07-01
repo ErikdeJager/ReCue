@@ -1122,6 +1122,10 @@ export interface AppState {
    * non-git folder). `true` only via `startRepoSession`; the folder-step opens (global
    * ⌘N / schedule) leave it `false`. */
   newSessionAtBranch: boolean;
+  /** The Clone Repo modal (#295): a git-URL + destination-parent picker that clones a
+   * repo, ensures `main`, registers the folder, and starts a session there. Opened
+   * from the sidebar ⋯ menu (#294) + background context menu. */
+  cloneRepoOpen: boolean;
   /** The ⌘K "Create panel" launcher (#189): a keyboard-first modal to spawn any
    * panel type (session / file / diff / terminal / kanban / filetree) in a chosen
    * repo-or-worktree, reusing the existing creation actions. */
@@ -1236,6 +1240,15 @@ export interface AppState {
   /** Open the modal in recurring mode (#294) — the ⋯ overflow menu's "Recurring
    * session…". */
   openRecurring: (repo?: string) => void;
+  /** Open / close the Clone Repo modal (#295) — the ⋯ overflow menu + background
+   * context menu's "Clone Repo…". */
+  openCloneRepo: () => void;
+  closeCloneRepo: () => void;
+  /** Clone the git repo at `url` into the chosen `parent` dir (#295): clone → ensure
+   * `main` → register the folder → start a session on `main`. Resolves `true` on
+   * success (closing the modal), else the git error string for inline display (bad
+   * URL / auth / network / existing dest). */
+  cloneRepo: (url: string, parent: string) => Promise<true | string>;
   /** Open the ⌘K "Create panel" launcher (#189). `type` (set by ⌘⌥1–6) pre-selects
    * a panel type and skips the type step; omitted = open at the type step. */
   openCreatePanel: (type?: string) => void;
@@ -2005,6 +2018,7 @@ export const useStore = create<AppState>()((set, get) => ({
   recurringMode: false,
   newSessionInitialBranches: null,
   newSessionAtBranch: false,
+  cloneRepoOpen: false,
   createPanelOpen: false,
   createPanelType: null,
   update: {
@@ -2270,6 +2284,8 @@ export const useStore = create<AppState>()((set, get) => ({
       newSessionInitialBranches: null,
       newSessionAtBranch: false,
     }),
+  openCloneRepo: () => set({ cloneRepoOpen: true }),
+  closeCloneRepo: () => set({ cloneRepoOpen: false }),
   closeNewSession: () =>
     set({
       newSessionOpen: false,
@@ -4137,6 +4153,29 @@ export const useStore = create<AppState>()((set, get) => ({
       // for every sidebar item (#174), so the user lands on what they clicked.
       set({ view: "overview", selectedId: item.id });
     }
+  },
+
+  cloneRepo: async (url, parent) => {
+    // The backend clones into `<parent>/<repo-name>`, ensures `main`, registers the
+    // folder in recents, and returns the absolute dest path. A clone failure (bad URL /
+    // auth / network / existing dest) returns the git error string for inline display —
+    // no session started, no recent added (the backend only touches recents on success).
+    let dest: string;
+    try {
+      dest = await ipc.cloneRepo(url, parent);
+    } catch (err) {
+      return isSessionError(err) ? err.message : "Could not clone repository";
+    }
+    // Show the group instantly (the backend already persisted the recent); the spawn
+    // below re-prepends it too, which is a harmless no-op dedupe.
+    set((s) => ({ recents: [dest, ...s.recents.filter((r) => r !== dest)] }));
+    // Start a normal interactive agent on the already-checked-out `main`. `spawnSession`
+    // selects it and refreshes branches + file statuses so the sidebar group shows its
+    // `main` label + file-status colors. A spawn failure toasts on its own; the clone
+    // still succeeded (the folder stays), so the modal closes either way.
+    await get().spawnSession(dest);
+    get().pushToast(`Cloned ${repoName(dest)}`);
+    return true;
   },
 
   spawnSession: async (cwd, name, branch) => {
