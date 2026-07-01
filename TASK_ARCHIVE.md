@@ -8639,3 +8639,73 @@ entitlements — **macOS-bundle-only**; no runtime Rust/TS/CSS touched, Windows 
 
 ---
 
+### 293. [x] Global "Kill all agents" / "Close all items" on the sidebar's empty-area menu
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Right-clicking the **empty base area of the left Sidebar** (the repo-list background — not a repo
+header, agent, or item row) now offers two **app-wide** teardown actions that complement the
+existing per-repo (#91) versions:
+
+- **Kill all agents** — kills + forgets **every running agent across all folders** (including
+  worktree agents, with the existing #74 ref-counted worktree cleanup), leaving non-agent items
+  intact; one summary toast ("Killed N agent(s)").
+- **Close all items** — kills all agents **and** removes all non-agent items (file/diff viewers +
+  shell terminals, killing their PTYs) across all folders, while **keeping folders in `recents`
+  and leaving schedules alone** (mirroring per-repo *Close all items*, not the more destructive
+  Forget-folder path); one summary toast.
+
+Both are appended to the **existing** target-guarded background menu (#172) — no new trigger was
+built, so the collapsed rail's empty area and the "No repositories yet." hint are covered for
+free. The items are **conditionally shown** (Kill all agents only when ≥1 agent runs app-wide;
+Close all items only when ≥1 agent runs **or** ≥1 non-agent item exists), so the menu never offers
+a no-op destructive item. The **`confirmDestructive`** setting (#103) is honored via a small
+backward-compatible inline-confirm on the flat menu.
+
+**What shipped** (commit
+[`bc39c44`](https://github.com/ErikdeJager/ReCue/commit/bc39c44), PR
+[#44](https://github.com/ErikdeJager/ReCue/pull/44), merged `077a89f`, 2026-07-01):
+
+- **`src/store.ts`** — two new actions `killAllAgentsGlobal` / `closeAllItemsGlobal` (+ type
+  decls) that compute the authoritative parent-folder set once
+  (`worktreeParent ?? repoPath` ∪ `recents` ∪ `overviewPanels` keys) and iterate the existing
+  **module-level helpers** `killAgentsInRepo` / `closeRepoItems` (not the per-repo public actions,
+  to avoid per-folder toast spam), so worktree agents are killed via their parent with correct
+  ref-counted cleanup and exactly one summary toast (matching the per-repo toast wording,
+  incl. "Nothing to close" when empty).
+- **`src/components/Sidebar/Sidebar.tsx`** — extended `RowMenuItem` with an optional
+  `confirmLabel` and `RowContextMenu` with a backward-compatible **inline two-step confirm**
+  (first click on a `confirmLabel` row swaps it into a danger confirm button showing the label;
+  the menu stays open until confirmed — every existing caller omits `confirmLabel` and is
+  unaffected). Appended the two danger items to `bgMenuItems` with the count-gating + confirm
+  labels (Close all items only requires confirmation when it would actually kill agents, mirroring
+  per-repo).
+- **`src/store.test.ts`** — three tests: `killAllAgentsGlobal` kills every agent across folders
+  while leaving items; `closeAllItemsGlobal` kills agents **and** clears every folder's items; and
+  the empty-workspace "Nothing to close" toast path.
+
+**Key files/areas touched:** `src/store.ts`, `src/components/Sidebar/Sidebar.tsx`,
+`src/store.test.ts`. No CSS change (reused `menuItemDanger`/`menuDanger`). No backend/Rust/IPC
+changes.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 293): append to the **existing** #172 background menu
+  rather than building a new trigger; global *Close all items* mirrors per-repo #91 semantics
+  (keep folders in recents, do **not** cancel schedules / forget folders); items shown
+  conditionally; honor `confirmDestructive` via the small `confirmLabel` `RowContextMenu`
+  extension (not a modal), confirming *Close all items* only when it would kill agents; reuse
+  `killAgentsInRepo`/`closeRepoItems` over the parent-folder set so no agent is missed or
+  double-killed and #74 worktree cleanup stays correct.
+- **Cross-platform:** pure frontend/store using the existing `ipc.killSession` + `overviewPanels`
+  persistence — no paths, shell-outs, or OS-specific code — so macOS and Windows behave
+  identically. Per-repo Kill/Close menu items and their actions are unchanged. Project checks
+  green: `npm run build` / `lint` / `test` (incl. the three new store tests).
+
+---
+
