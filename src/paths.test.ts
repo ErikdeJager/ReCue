@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  cloneRepoName,
   effectiveRepo,
   FORK_UNAVAILABLE_REASON,
   forkUnavailableReason,
@@ -53,6 +54,30 @@ describe("repoName", () => {
     expect(repoName("C:\\Users\\me\\code\\recue\\")).toBe("recue");
     // Mixed separators (a normalized prefix + a raw segment) still take the tail.
     expect(repoName("C:/Users/me\\repo")).toBe("repo");
+  });
+});
+
+describe("cloneRepoName (#299)", () => {
+  it("takes the last path segment and strips a trailing .git", () => {
+    expect(cloneRepoName("https://github.com/owner/repo.git")).toBe("repo");
+    expect(cloneRepoName("https://github.com/owner/repo")).toBe("repo");
+  });
+
+  it("handles the SCP form (git@host:owner/repo.git)", () => {
+    expect(cloneRepoName("git@github.com:owner/repo.git")).toBe("repo");
+  });
+
+  it("ignores a trailing slash", () => {
+    expect(cloneRepoName("https://host/owner/repo/")).toBe("repo");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(cloneRepoName("  https://host/owner/repo.git  ")).toBe("repo");
+  });
+
+  it("falls back to 'repo' when the derived name is empty", () => {
+    expect(cloneRepoName("")).toBe("repo");
+    expect(cloneRepoName("   ")).toBe("repo");
   });
 });
 

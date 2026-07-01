@@ -34,6 +34,21 @@ export function repoName(path: string): string {
 }
 
 /**
+ * Derive the folder name `git clone <url>` would create from a repo URL (#299) —
+ * a **pure** mirror of the Rust `git::repo_dir_name`, used to label the in-flight
+ * "phantom" clone folder in the sidebar before the real dest path exists. Trims
+ * whitespace + a trailing `/`, takes the segment after the last `/` **or** `:` (so an
+ * SCP-form `git@host:owner/repo.git` yields `repo`), strips a trailing `.git`, and
+ * falls back to `"repo"` when empty. String-only, so identical on macOS and Windows.
+ */
+export function cloneRepoName(url: string): string {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  const last = trimmed.split(/[/:]/).pop() ?? trimmed;
+  const name = last.replace(/\.git$/, "");
+  return name.length > 0 ? name : "repo";
+}
+
+/**
  * Split an absolute path into its parent `dir` and `base` filename (#163). Used to
  * open an out-of-repo file `/a/b/c.md` as `{ repoPath: "/a/b", file: "c.md" }`, so
  * the existing repo-confined read/write validates against the file's own directory.

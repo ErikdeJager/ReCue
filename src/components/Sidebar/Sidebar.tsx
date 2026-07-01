@@ -1995,6 +1995,39 @@ function RepoGroup({
 }
 
 /**
+ * A "phantom" repo folder for a clone in progress (#299). Rendered at the top of the
+ * repo list, **outside** the drag-reorder `SortableContext` — so it's inert: no
+ * `useSortable`, no context menu, no `+`/new-session, no sessions. It mirrors a repo
+ * header's shape (folder marker + name) but dimmed, with a muted "Cloning…" hint and an
+ * **indeterminate** progress bar underneath. Under reduced-motion the bar stops
+ * animating but stays visibly filled (the global killswitch handles the keyframes), so
+ * the affordance survives on both macOS (WKWebView) and Windows (WebView2).
+ */
+function PhantomRepo({ name }: { name: string }) {
+  return (
+    <div className={styles.group}>
+      <div className={styles.phantomHeader}>
+        <span className={styles.repoFolder} aria-hidden>
+          <Folder size={12} strokeWidth={2} />
+        </span>
+        <span className={styles.phantomName} title={`Cloning ${name}`}>
+          {name}
+        </span>
+        <span className={styles.phantomHint}>Cloning…</span>
+      </div>
+      {/* Indeterminate: `role="progressbar"` with no `aria-valuenow` (#299). */}
+      <div
+        className={styles.phantomTrack}
+        role="progressbar"
+        aria-label={`Cloning ${name}`}
+      >
+        <div className={styles.phantomBar} />
+      </div>
+    </div>
+  );
+}
+
+/**
  * Left sidebar: New session button + sessions grouped by repository. Repos come
  * from persisted recents unioned with active-session repos, so a repo stays
  * listed (greyed, with a coral +) even when it has no active sessions.
@@ -2041,6 +2074,9 @@ function Sidebar() {
   );
   const toggleAutoContinue = useStore((s) => s.toggleAutoContinue);
   const folderOrder = useStore((s) => s.folderOrder);
+  // In-flight clones (#299): each shows a transient, non-draggable "phantom" folder +
+  // progress bar in the repo list (and a dimmed indicator in the collapsed rail).
+  const cloningRepos = useStore((s) => s.cloningRepos);
   const refreshBranches = useStore((s) => s.refreshBranches);
   const refreshFileStatuses = useStore((s) => s.refreshFileStatuses);
   const forgetRepo = useStore((s) => s.forgetRepo);
@@ -2487,6 +2523,19 @@ function Sidebar() {
       </button>
       <ViewSwitch compact />
       <div className={styles.railRepos} onContextMenu={openBgMenu}>
+        {/* In-flight clones in the collapsed rail (#299): a minimal, inert dimmed +
+        pulsing folder icon per phantom (no branch line / dots fit the narrow rail), so
+        a running clone is still visible when collapsed. */}
+        {cloningRepos.map((clone) => (
+          <div
+            key={clone.id}
+            className={styles.railPhantom}
+            title={`Cloning ${clone.name}…`}
+            aria-label={`Cloning ${clone.name}`}
+          >
+            <Folder size={18} strokeWidth={2} />
+          </div>
+        ))}
         {repos.map((repo) => {
           const repoSessions = sessions.filter(
             (s) => s.repoPath === repo && !s.worktreeParent,
@@ -2690,11 +2739,19 @@ function Sidebar() {
           </div>
 
           <div className={styles.repos} onContextMenu={openBgMenu}>
-            {repos.length === 0 && (
+            {repos.length === 0 && cloningRepos.length === 0 && (
               <p className={styles.emptyHint} onContextMenu={bgMenu.openMenu}>
                 No repositories yet.
               </p>
             )}
+
+            {/* In-flight clones (#299): rendered at the top and OUTSIDE the sortable
+            context below, so they're never part of the drag-reorder set and stay inert
+            (no repo menu / sessions). Each resolves into a real folder (or vanishes on
+            error) independently, keyed by its own clone id. */}
+            {cloningRepos.map((clone) => (
+              <PhantomRepo key={clone.id} name={clone.name} />
+            ))}
 
             {/* Drag-to-reorder the top-level folders (#211): a sortable list bound
             to the **app-level** DndContext (App.tsx) — never a new nested context,
