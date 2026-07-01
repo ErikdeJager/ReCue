@@ -9100,3 +9100,76 @@ progress bar) builds on this corrected branch behavior.
 
 ---
 
+### 300. [x] Fix recurring-session bugs — immediate "now" spawn + duplicate/ghost panels
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Fixed two original bugs in **recurring sessions** (#294): (A) a recurring created with the **"now"**
+first-fire option didn't spawn its first agent until after the first interval elapsed, and (B)
+creating a recurring produced **two panels** with identical parameters — only one showing the running
+agent, the other blank. Both are now correct: "now" spawns immediately, and exactly **one** card
+appears, showing the live agent's terminal, with the child agent never surfacing as its own
+standalone column.
+
+**Root causes** (per `ASSUMPTIONS.md` §Task 300):
+- **Two panels:** the store's `createRecurring` optimistic add (`recurrings: [record, ...s.recurrings]`)
+  was **not idempotent** — no dedupe by id — so it raced the backend's `recurring://changed`
+  broadcast (and, for a "now" recurring, the immediate poll-fire broadcast), producing two records
+  with the same id → two identical cards. A pooled xterm (#18) attaches to only one DOM node, so one
+  card showed the terminal and the other was blank.
+- **"now" not immediate:** the create path already sent `first_fire_at = now`, but the 5s poll loop
+  **sleeps 5s before** its first fire and only ticks every 5s, so the first run was never truly
+  instant; meanwhile the visible card immediately read "next run in {interval}", reinforcing the
+  perception of a delayed first run.
+
+**What shipped** (commit
+[`0e259ee`](https://github.com/ErikdeJager/ReCue/commit/0e259ee), PR
+[#54](https://github.com/ErikdeJager/ReCue/pull/54), merged `c80a3c6`, 2026-07-01):
+
+- **Immediate first fire (backend — `src-tauri/src/commands.rs`):** `create_recurring` now takes
+  `app: AppHandle` + `manager: State<SessionManager>` (mirroring `fire_due_recurrings`) and, after
+  `store.add_recurring(rec)` returns (store lock released, so no deadlock/re-entrancy), fires the
+  first child **at create time** when `first_fire_at <= now` by reusing `fire_one_recurring` —
+  rotating `current_session_id` + advancing `next_fire_at` **before** the returned record and the
+  `recurring://changed` broadcast reach the frontend. This makes "now" instant AND closes the
+  create↔poll race that drove the duplicate/blank card. It's **best-effort** (mirroring the poll
+  path): a failure keeps the record, advances its time, and emits `recurring://error` rather than
+  failing the whole create. A **future** `first_fire_at` is left for the poll loop (≤5s granularity,
+  no regression). The post-fire record is returned so the frontend add already owns the child. After
+  the immediate fire, `next_fire_at = now + interval`, so `take_due_recurrings` won't re-fire it
+  (no double spawn).
+- **Idempotent optimistic adds (frontend — `src/store.ts`):** `createRecurring` now dedupes by id
+  (`recurrings: [record, ...s.recurrings.filter((x) => x.id !== record.id)]`), and the **same fix**
+  was applied to the sibling `createSchedule` (`schedules: [record, ...s.schedules.filter((x) =>
+  x.id !== record.id)]`) — the identical latent pattern, low-risk hardening against the same class
+  of duplicate for one-shot schedules.
+- **Hardened `onFired` (frontend — `src/store.ts`):** a fired child whose recurring record hasn't
+  landed yet (the fired event beating the create's optimistic add) is now **stashed and adopted**
+  once the record is present, so a recurring child is **never** rendered as its own standalone
+  column even transiently. The `set` still updates `current_session_id` + `next_fire_at` for the
+  matching record when present.
+- **Tests (`src/store.test.ts`, +118):** cover the idempotent adds (a raced `changed` broadcast
+  can't duplicate a recurring/schedule) and the `onFired` ownership (a child stays owned / never
+  standalone). Backend covers the `first_fire_at <= now` immediate-fire decision.
+
+**Key files/areas touched:** `src-tauri/src/commands.rs` (+33), `src/store.ts` (+128/−23),
+`src/store.test.ts` (+118) — 3 files, +256 / −23.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 300): no data-model or poll-cadence redesign, no "run
+  now" button for existing recurrings — only the create-time "now" and the duplicate/ghost bugs were
+  in scope. The three edits (immediate-fire branch, idempotent adds, `onFired` guard) are separable
+  for independent rollback.
+- **Cross-platform:** all changes are OS-neutral Rust command wiring + frontend store logic (no
+  paths, shell-outs, or platform APIs), so behavior is identical on macOS and Windows. The worktree
+  branch/folder prep in `create_recurring` already goes through the shared git helpers. Project
+  checks green: `npm run build` / `lint` / `test`, `npm run format:check`, `cargo test`, clippy, fmt.
+
+---
+
