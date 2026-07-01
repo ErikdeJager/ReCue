@@ -2662,8 +2662,12 @@ function Sidebar() {
               className={styles.scheduleButton}
               onClick={() => openSchedule()}
             >
-              <Clock size={15} strokeWidth={1.5} />
-              Schedule session
+              <Clock
+                size={15}
+                strokeWidth={1.5}
+                className={styles.scheduleIcon}
+              />
+              <span className={styles.scheduleLabel}>Schedule session</span>
               <kbd className={styles.kbd}>
                 {kbdHint(platform, "⌘⇧N", "Ctrl+Shift+N")}
               </kbd>

@@ -88,6 +88,23 @@
   color: var(--text-primary);
 }
 
+/* The clock icon keeps its intrinsic 15px at every sidebar width — only the
+   label truncates (#301). */
+.scheduleIcon {
+  flex-shrink: 0;
+}
+
+/* Label truncates to a single line with an ellipsis rather than wrapping when
+   the sidebar is narrow (#301). */
+.scheduleLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
 /* ⋯ overflow button (#294): a square ghost button matching the schedule button's
    height, opening the extra-session-options dropdown. */
 .dotsButton {
@@ -95,7 +112,9 @@
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  width: 30px;
+  /* Narrower horizontal footprint (#301); height still comes from the row's
+     align-items: stretch so it matches the schedule button exactly. */
+  width: 24px;
   padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
@@ -114,6 +133,7 @@
 
 .kbd {
   margin-left: auto;
+  flex-shrink: 0;
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
   font-weight: 400;
