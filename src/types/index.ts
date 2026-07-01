@@ -136,6 +136,54 @@ export interface ScheduleErrorPayload {
   message: string;
 }
 
+/** An active recurring session (#294, mirrors `store::RecurringSession`). A
+ * persistent, repeating agent: each time `next_fire_at` (unix secs, local clock)
+ * passes, the poll loop kills the current child and spawns a **fresh** `claude`
+ * seeded with `prompt`, rotating `current_session_id` in place (its sidebar row /
+ * Overview card / Canvas panel key on `id`, so no new surface is ever created). */
+export interface RecurringSession {
+  id: string;
+  cwd: string;
+  /** Branch to use before spawning each child (checkout, or new when `create_branch`);
+   * absent = none. Mirrors `ScheduledSession`. */
+  branch?: string | null;
+  create_branch?: boolean;
+  branch_base?: string | null;
+  /** Launch each child into an isolated git worktree (#74), created eagerly at
+   * create time on `branch`; absent/false = in-folder. */
+  worktree?: boolean;
+  /** The app-managed worktree folder for a worktree recurring, computed at create
+   * time; drives the sidebar worktree sub-group nesting. Absent for non-worktree. */
+  worktree_path?: string | null;
+  name?: string | null;
+  prompt?: string | null;
+  /** Repeat interval in seconds (minimum 60). Each fire advances `next_fire_at`. */
+  interval_secs: number;
+  /** Next time (unix secs) a fresh child should be spawned. */
+  next_fire_at: number;
+  /** The live child agent this recurring currently owns (rotated each cycle), or
+   * absent before the first fire / after a child exits. */
+  current_session_id?: string | null;
+  created_at: number;
+  /** The coding agent to launch (#101); `"claude"` for older records. */
+  agent?: string;
+}
+
+/** Payload of the `recurring://fired` event (#294): a recurring rotated its child.
+ * `session` is the freshly-spawned child; `next_fire_at` the advanced time. */
+export interface RecurringFiredPayload {
+  id: string;
+  session: SessionRecord;
+  next_fire_at: number;
+}
+
+/** Payload of the `recurring://error` event (#294): a recurring's spawn failed. The
+ * record is KEPT (time still advanced) — one failure never wedges the poll. */
+export interface RecurringErrorPayload {
+  id: string;
+  message: string;
+}
+
 export type FileStatusCode = "M" | "A" | "D" | "I";
 export type HunkLineKind = "hunk" | "context" | "add" | "del";
 
@@ -323,6 +371,8 @@ export interface CanvasContent {
   sessionId?: string;
   /** Pending scheduled session this panel shows (#94, kind: "scheduled"). */
   scheduleId?: string;
+  /** Recurring session this panel shows (#294, kind: "recurring"). */
+  recurringId?: string;
   /** Initial prompt for a `new-agent` **template block** (#117) — pre-sent to the
    * agent when the template is instantiated (#118), like a scheduled session (#93).
    * Only set on template-block leaves, never on live content. */

@@ -16,6 +16,7 @@ import {
   mergeSettings,
   moveResultMessage,
   overviewClusterKeys,
+  ownedChildSessionIds,
   placeAfterAnchor,
   REPO_PALETTE,
   repoColor,
@@ -1251,11 +1252,59 @@ describe("overviewClusterKeys (#174)", () => {
     });
     expect(ids).toEqual(["s2"]);
   });
+
+  it("adds a recurring column and hides its owned child agent (#294)", () => {
+    // A recurring in beta owns child agent "child-1" (a live session). The recurring
+    // shows as one column keyed on its id; the child is filtered out of the wall.
+    const child = ovSession("child-1", "/work/beta", 9);
+    const ids = overviewClusterKeys({
+      sessions: [s2, child],
+      overviewPanels: {},
+      overviewOrder: {},
+      schedules: [],
+      recurrings: [
+        {
+          id: "rec-beta",
+          cwd: "/work/beta",
+          interval_secs: 3600,
+          next_fire_at: 0,
+          created_at: 0,
+          current_session_id: "child-1",
+        },
+      ],
+      filter: null,
+    });
+    // alpha's own agent, then beta's recurring column — the child never appears.
+    expect(ids).toEqual(["s2", "rec-beta"]);
+    expect(ids).not.toContain("child-1");
+  });
+});
+
+describe("ownedChildSessionIds (#294)", () => {
+  it("collects each recurring's current child, skipping unset ones", () => {
+    const ids = ownedChildSessionIds([
+      { current_session_id: "c1" },
+      { current_session_id: null },
+      { current_session_id: "c2" },
+      {},
+    ]);
+    expect([...ids].sort()).toEqual(["c1", "c2"]);
+  });
+
+  it("is empty when no recurrings have a live child", () => {
+    expect(ownedChildSessionIds([]).size).toBe(0);
+    expect(ownedChildSessionIds([{ current_session_id: null }]).size).toBe(0);
+  });
 });
 
 describe("worktreeHasItems (#199)", () => {
   const dest = "/data/worktrees/repo-id/feat";
-  const empty = { sessions: [], overviewPanels: {}, schedules: [] };
+  const empty = {
+    sessions: [],
+    overviewPanels: {},
+    schedules: [],
+    recurrings: [],
+  };
 
   it("is false for a worktree with no items (→ safe to remove)", () => {
     expect(worktreeHasItems(empty, dest)).toBe(false);
@@ -1315,6 +1364,30 @@ describe("worktreeHasItems (#199)", () => {
     ).toBe(false);
   });
 
+  it("counts a recurring session targeting the worktree folder (#294)", () => {
+    // A recurring created inside the worktree (`cwd === dest`) …
+    expect(
+      worktreeHasItems({ ...empty, recurrings: [{ cwd: dest }] }, dest),
+    ).toBe(true);
+    // … or a worktree recurring whose eager worktree is `worktree_path`.
+    expect(
+      worktreeHasItems(
+        {
+          ...empty,
+          recurrings: [{ cwd: "/work/parent-repo", worktree_path: dest }],
+        },
+        dest,
+      ),
+    ).toBe(true);
+    // A recurring for a different folder does not count.
+    expect(
+      worktreeHasItems(
+        { ...empty, recurrings: [{ cwd: "/work/other" }] },
+        dest,
+      ),
+    ).toBe(false);
+  });
+
   it("ignores items belonging to other folders", () => {
     expect(
       worktreeHasItems(
@@ -1322,6 +1395,7 @@ describe("worktreeHasItems (#199)", () => {
           sessions: [{ repoPath: "/work/other" }],
           overviewPanels: { "/work/other": [{ id: "p" }] },
           schedules: [{ cwd: "/work/other" }],
+          recurrings: [{ cwd: "/work/other" }],
         },
         dest,
       ),
@@ -1333,18 +1407,24 @@ describe("worktreeHasItems (#199)", () => {
       sessions: [{ repoPath: dest }],
       overviewPanels: { [dest]: [{ id: "p" }] },
       schedules: [{ cwd: dest }],
+      recurrings: [{ cwd: dest }],
     };
     expect(worktreeHasItems(full, dest)).toBe(true);
-    // Drop the agent → still has a panel + schedule.
+    // Drop the agent → still has a panel + schedule + recurring.
     expect(worktreeHasItems({ ...full, sessions: [] }, dest)).toBe(true);
-    // Drop the panel too → still has the schedule.
+    // Drop the panel too → still has the schedule + recurring.
     expect(
       worktreeHasItems(
-        { sessions: [], overviewPanels: {}, schedules: [{ cwd: dest }] },
+        {
+          sessions: [],
+          overviewPanels: {},
+          schedules: [{ cwd: dest }],
+          recurrings: [{ cwd: dest }],
+        },
         dest,
       ),
     ).toBe(true);
-    // Drop the schedule → empty → removable.
+    // Everything gone → empty → removable.
     expect(worktreeHasItems(empty, dest)).toBe(false);
   });
 });

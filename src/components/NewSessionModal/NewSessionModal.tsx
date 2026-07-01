@@ -7,6 +7,7 @@ import {
   FolderOpen,
   GitBranch,
   Plus,
+  RefreshCw,
 } from "lucide-react";
 
 import { noAutoCapitalize } from "../../inputProps";
@@ -19,7 +20,13 @@ import {
 import { repoName } from "../../paths";
 import { kbdHint } from "../../platform";
 import { useStore } from "../../store";
-import { formatFireTime, parseWhen, SCHEDULE_TIME_HINT } from "../../time";
+import {
+  formatFireTime,
+  type IntervalUnit,
+  intervalToSeconds,
+  parseWhen,
+  SCHEDULE_TIME_HINT,
+} from "../../time";
 import type { BranchList, SkillInfo } from "../../types";
 import SkillAutocomplete from "../SkillAutocomplete/SkillAutocomplete";
 import { moveFolderHighlight } from "./folderNav";
@@ -84,6 +91,12 @@ function NewSessionModal() {
   );
   const scheduleMode = useStore((s) => s.scheduleMode);
   const scheduleSession = useStore((s) => s.scheduleSession);
+  const recurringMode = useStore((s) => s.recurringMode);
+  const createRecurring = useStore((s) => s.createRecurring);
+  // Both schedule + recurring modes defer creation to a final step (no immediate
+  // spawn / worktree-in-branch / remote-pull) — several branch-step behaviors gate
+  // on this shared flag rather than `scheduleMode` alone (#294).
+  const deferMode = scheduleMode || recurringMode;
   // Branches preloaded by the per-repo start path (#127): when set, open straight at
   // the branch step seeded with these (no folder step, no second list_branches).
   const initialBranches = useStore((s) => s.newSessionInitialBranches);
@@ -92,7 +105,9 @@ function NewSessionModal() {
   // resolves to no branches and spawns directly + closes (the #127 no-modal behavior).
   const atBranch = useStore((s) => s.newSessionAtBranch);
 
-  const [step, setStep] = useState<"folder" | "branch" | "schedule">("folder");
+  const [step, setStep] = useState<
+    "folder" | "branch" | "schedule" | "recurring"
+  >("folder");
   const [cwd, setCwd] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -111,6 +126,10 @@ function NewSessionModal() {
   const [fireAt, setFireAt] = useState("");
   const [prompt, setPrompt] = useState("");
   const [schedName, setSchedName] = useState("");
+  // Recurring step (#294): the repeat interval (amount + unit). First run reuses the
+  // `fireAt` field (default "now" for recurring); prompt/name are shared with schedule.
+  const [intervalAmount, setIntervalAmount] = useState("1");
+  const [intervalUnit, setIntervalUnit] = useState<IntervalUnit>("hour");
   // Slash-command skills for the chosen folder (#114) — feeds the prompt
   // autocomplete; best-effort, so it degrades to an empty list (no dropdown).
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -157,9 +176,13 @@ function NewSessionModal() {
     setQuery("");
     setBusy(false);
     setBranchQuery("");
-    setFireAt(DEFAULT_WHEN);
+    // Recurring defaults its first run to "now" (immediate); schedule uses a short
+    // future duration so the demo time is sensibly in the future (#294).
+    setFireAt(recurringMode ? "now" : DEFAULT_WHEN);
     setPrompt("");
     setSchedName("");
+    setIntervalAmount("1");
+    setIntervalUnit("hour");
     setPickerActive(false);
     setAddBranchActive(false);
     setNewBranchName("");
@@ -202,7 +225,7 @@ function NewSessionModal() {
       preloadCwd.current = null;
       autoBranchStep.current = false;
     }
-  }, [open, prefillRepo, initialBranches, atBranch]);
+  }, [open, prefillRepo, initialBranches, atBranch, recurringMode]);
 
   // Focus the recents search whenever the folder step is shown (open or Back) —
   // or the folder picker when there are no recents to search.
@@ -289,7 +312,7 @@ function NewSessionModal() {
   // Runs for both the folder→branch path and the #127 preload (whose seeded
   // branches may lack `remote`). New-session only — schedule mode is unchanged.
   useEffect(() => {
-    if (!open || step !== "branch" || scheduleMode || !cwd) return;
+    if (!open || step !== "branch" || deferMode || !cwd) return;
     const folder = cwd;
     let cancelled = false;
     setFetchingRemotes(true);
@@ -311,7 +334,7 @@ function NewSessionModal() {
     return () => {
       cancelled = true;
     };
-  }, [open, step, cwd, scheduleMode]);
+  }, [open, step, cwd, deferMode]);
 
   // Branch step: focus the filter (when shown) else the selected branch button.
   useEffect(() => {
@@ -339,17 +362,17 @@ function NewSessionModal() {
     return () => clearTimeout(timer);
   }, [addBranchActive]);
 
-  // Schedule step (#93): focus the launch-time input when it's shown.
+  // Schedule / recurring step: focus the launch-time input when it's shown (#93/#294).
   useEffect(() => {
-    if (!open || step !== "schedule") return;
+    if (!open || (step !== "schedule" && step !== "recurring")) return;
     const timer = setTimeout(() => fireAtRef.current?.focus(), 0);
     return () => clearTimeout(timer);
   }, [open, step]);
 
   // Load the chosen folder's slash-command skills for the prompt autocomplete
-  // (#114, schedule mode only). Best-effort: any failure leaves the list empty.
+  // (#114, schedule/recurring modes only). Best-effort: failure → empty list.
   useEffect(() => {
-    if (!open || !scheduleMode || !cwd) {
+    if (!open || !deferMode || !cwd) {
       setSkills([]);
       return;
     }
@@ -364,7 +387,7 @@ function NewSessionModal() {
     return () => {
       cancelled = true;
     };
-  }, [open, scheduleMode, cwd]);
+  }, [open, deferMode, cwd]);
 
   // Escape closes the popover.
   useEffect(() => {
@@ -440,7 +463,7 @@ function NewSessionModal() {
   // Remote branches (#180): in git order, filtered by the same branch filter.
   // Hidden in schedule mode (selecting one is an immediate pull-&-start, not a
   // schedule), so the schedule flow is unchanged.
-  const sortedRemotes = scheduleMode ? [] : (branches?.remote ?? []);
+  const sortedRemotes = deferMode ? [] : (branches?.remote ?? []);
   const remoteList = bq
     ? sortedRemotes.filter((r) => r.toLowerCase().includes(bq))
     : sortedRemotes;
@@ -488,7 +511,7 @@ function NewSessionModal() {
   // A remote row is the active selection (a pull-&-start, which checks out a new
   // local branch in the folder → destructive when agents already run there).
   const isRemoteActive =
-    !scheduleMode && selectedRemote !== null && !addBranchActive;
+    !deferMode && selectedRemote !== null && !addBranchActive;
   const isDestructive = willCheckout && runningInFolder > 0;
   const canCreate = !!cwd && !busy;
 
@@ -611,7 +634,7 @@ function NewSessionModal() {
   const onNewBranchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      if (scheduleMode) goToScheduleFromBranch();
+      if (deferMode) goToDeferFromBranch();
       else if (event.metaKey || event.ctrlKey) void confirmAddBranchWorktree();
       else void confirmAddBranch();
       return;
@@ -645,7 +668,7 @@ function NewSessionModal() {
       );
     }
     if (bl.all.length > 0) setStep("branch");
-    else if (scheduleMode) setStep("schedule");
+    else if (deferMode) setStep(recurringMode ? "recurring" : "schedule");
     else void create();
   };
 
@@ -654,23 +677,24 @@ function NewSessionModal() {
     setStep("folder");
   };
 
-  // Schedule mode (#93): advance the branch step → the launch-time step.
-  const goToSchedule = () => {
+  // Schedule / recurring mode (#93/#294): advance the branch step → the final step
+  // (launch-time for schedule, interval for recurring).
+  const goToDeferStep = () => {
     if (!cwd || busy) return;
-    setStep("schedule");
+    setStep(recurringMode ? "recurring" : "schedule");
   };
 
-  // Schedule mode + "+ add branch" (#125): validate the new-branch name, then advance
-  // to the launch-time step (the branch is created when the schedule fires, not now).
-  const goToScheduleFromBranch = () => {
+  // Schedule / recurring + "+ add branch" (#125/#294): validate the new-branch name,
+  // then advance (the branch is created at create/fire time, not now).
+  const goToDeferFromBranch = () => {
     if (addBranchActive && !newBranchName.trim()) {
       setBranchError("Enter a branch name");
       return;
     }
-    goToSchedule();
+    goToDeferStep();
   };
 
-  const backFromSchedule = () => setStep(folderIsGit ? "branch" : "folder");
+  const backFromDeferStep = () => setStep(folderIsGit ? "branch" : "folder");
 
   // Create the schedule from the launch-time step (#93/#268): parse the
   // natural-language launch time → unix secs (blocking on an unreadable value),
@@ -708,6 +732,55 @@ function NewSessionModal() {
     // `true` on success; else an error string (e.g. a worktree schedule's bad/duplicate
     // branch — its worktree is created eagerly now, #259) shown inline so the user can
     // fix it. Stay open on error.
+    if (result === true) close();
+    else {
+      setSchedError(result);
+      setBusy(false);
+    }
+  };
+
+  // Resolve the recurring first-run time (#294): a blank / "now" field runs on the
+  // next poll tick (≤5s); anything else is parsed like the schedule step. Returns unix
+  // secs, or null when the text is present but unreadable.
+  const resolveFirstFire = (): number | null => {
+    const raw = fireAt.trim().toLowerCase();
+    if (raw === "" || raw === "now") return Math.floor(Date.now() / 1000);
+    const when = parseWhen(fireAt, new Date());
+    return when ? Math.floor(when.at.getTime() / 1000) : null;
+  };
+
+  // Create the recurring session from the recurring step (#294): compute the interval
+  // seconds (amount + unit, floored at 1 min), resolve the first-run time, carry the
+  // branch/name/prompt exactly like `submitSchedule`. `asWorktree` is the "Worktree
+  // ⌘⏎" variant (git folders only).
+  const submitRecurring = async (asWorktree: boolean) => {
+    if (!cwd || busy) return;
+    const firstFire = resolveFirstFire();
+    if (firstFire === null) return;
+    const intervalSecs = intervalToSeconds(
+      Number(intervalAmount),
+      intervalUnit,
+    );
+    const useNewBranch = addBranchActive && !!newBranchName.trim();
+    const useWorktree = asWorktree && folderIsGit;
+    const branchArg = useNewBranch
+      ? newBranchName.trim()
+      : useWorktree || willCheckout
+        ? (selectedBranch ?? null)
+        : null;
+    setBusy(true);
+    setSchedError(null);
+    const result = await createRecurring(
+      cwd,
+      branchArg,
+      schedName.trim() || null,
+      prompt.trim() || null,
+      intervalSecs,
+      firstFire,
+      useNewBranch,
+      useNewBranch ? newBranchBase : null,
+      useWorktree,
+    );
     if (result === true) close();
     else {
       setSchedError(result);
@@ -820,9 +893,10 @@ function NewSessionModal() {
   };
 
   // ⌘⏎ in the branch step: start in an isolated worktree (#74) — a remote row pulls
-  // into a worktree (#180), else the selected local branch. No worktree in schedule.
+  // into a worktree (#180), else the selected local branch. In a defer mode
+  // (schedule/recurring) it advances to the final step instead of spawning.
   const startWorktreeFromBranch = () => {
-    if (scheduleMode) return;
+    if (deferMode) return;
     if (selectedRemote !== null) void confirmRemoteWorktree();
     else void createWorktree();
   };
@@ -849,9 +923,9 @@ function NewSessionModal() {
   const onBranchKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      // Schedule mode (#93): advance to the launch-time step. Else ⌘⏎ = worktree
-      // (#74/#180), plain Enter = normal start (a remote row pulls + starts, #180).
-      if (scheduleMode) goToSchedule();
+      // Schedule / recurring mode (#93/#294): advance to the final step. Else ⌘⏎ =
+      // worktree (#74/#180), plain Enter = normal start (a remote row pulls + starts).
+      if (deferMode) goToDeferStep();
       else if (event.metaKey || event.ctrlKey) startWorktreeFromBranch();
       else if (selectedRemote !== null) void confirmRemoteCheckout();
       else void create();
@@ -871,12 +945,13 @@ function NewSessionModal() {
     // any schedule-step field; when the prompt's skill menu is open SkillAutocomplete
     // intercepts Enter to drive the menu (#114), so this only runs with it closed.
     if (
-      step === "schedule" &&
+      (step === "schedule" || step === "recurring") &&
       event.key === "Enter" &&
       (event.metaKey || event.ctrlKey)
     ) {
       event.preventDefault();
-      void submitSchedule(true);
+      if (step === "recurring") void submitRecurring(true);
+      else void submitSchedule(true);
       return;
     }
     if (event.key !== "Tab" || !formRef.current) return;
@@ -899,7 +974,21 @@ function NewSessionModal() {
   // preview line and gates the schedule submit/worktree buttons. Recomputed on each
   // render (cheap, pure) so a fresh `now` keeps "tomorrow" rolling current.
   const scheduleWhen =
-    step === "schedule" ? parseWhen(fireAt, new Date()) : null;
+    step === "schedule" || step === "recurring"
+      ? parseWhen(fireAt, new Date())
+      : null;
+  // Recurring's first-run field also accepts blank / "now" as immediate (#294).
+  const recurringFirstOk =
+    step === "recurring" &&
+    (fireAt.trim() === "" ||
+      fireAt.trim().toLowerCase() === "now" ||
+      scheduleWhen !== null);
+  const intervalOk = Number(intervalAmount) >= 1;
+  const modalTitle = recurringMode
+    ? "Recurring session"
+    : scheduleMode
+      ? "Schedule session"
+      : "New session";
 
   return (
     <div className={styles.overlay} onClick={close}>
@@ -908,7 +997,7 @@ function NewSessionModal() {
         className={styles.popover}
         role="dialog"
         aria-modal="true"
-        aria-label={scheduleMode ? "Schedule session" : "New session"}
+        aria-label={modalTitle}
         onClick={(event) => event.stopPropagation()}
         onKeyDown={onTrapKeyDown}
         onSubmit={(event) => {
@@ -922,11 +1011,14 @@ function NewSessionModal() {
             // #263: ignore Enter while branches are still loading (no selection yet).
             if (branchesLoading) return;
             if (addBranchActive) {
-              if (scheduleMode) goToScheduleFromBranch();
+              if (deferMode) goToDeferFromBranch();
               else void confirmAddBranch();
-            } else if (scheduleMode) goToSchedule();
+            } else if (deferMode) goToDeferStep();
             else if (selectedRemote !== null) void confirmRemoteCheckout();
             else void create();
+          } else if (step === "recurring") {
+            // Plain ⏎ = create the recurring; ⌘⏎ (worktree) via onTrapKeyDown.
+            void submitRecurring(false);
           } else {
             // Plain ⏎ = normal schedule; ⌘⏎ (worktree) is handled in onTrapKeyDown.
             void submitSchedule(false);
@@ -934,12 +1026,14 @@ function NewSessionModal() {
         }}
       >
         <h2 className={styles.title}>
-          {scheduleMode ? (
+          {recurringMode ? (
+            <RefreshCw size={15} strokeWidth={2} className={styles.titleIcon} />
+          ) : scheduleMode ? (
             <Clock size={15} strokeWidth={2} className={styles.titleIcon} />
           ) : (
             <Plus size={15} strokeWidth={2} className={styles.titleIcon} />
           )}
-          {scheduleMode ? "Schedule session" : "New session"}
+          {modalTitle}
         </h2>
 
         {step === "folder" ? (
@@ -1210,7 +1304,7 @@ function NewSessionModal() {
               </div>
             )}
 
-            {!scheduleMode &&
+            {!deferMode &&
               (isDestructive || addBranchActive || isRemoteActive) &&
               runningInFolder > 0 && (
                 <div className={styles.warning}>
@@ -1255,9 +1349,9 @@ function NewSessionModal() {
                 Cancel <kbd className={styles.btnKbd}>esc</kbd>
               </button>
               {/* Isolated worktree (#74): its own folder + separate checkout. Not
-                  offered when scheduling (#93 part 1 schedules a normal agent). When
-                  "+ add branch" is active, it creates the new branch as a worktree (#124). */}
-              {!scheduleMode && (
+                  offered when scheduling / recurring (the worktree option moves to the
+                  final step's "Worktree ⌘⏎"). "+ add branch" creates it as a worktree. */}
+              {!deferMode && (
                 <button
                   type="button"
                   className={styles.cancel}
@@ -1299,7 +1393,7 @@ function NewSessionModal() {
                   (addBranchActive && !newBranchName.trim())
                 }
               >
-                {scheduleMode
+                {deferMode
                   ? "Next"
                   : addBranchActive
                     ? "Create & start"
@@ -1312,12 +1406,13 @@ function NewSessionModal() {
           </>
         ) : (
           <>
-            {/* Schedule step (#93): launch time + optional prompt + optional name.
-                Back returns to the branch step (git) or the folder step (non-git). */}
+            {/* Final step (#93/#294): schedule = launch time; recurring = interval +
+                first run. Both carry an optional prompt + name. Back returns to the
+                branch step (git) or the folder step (non-git). */}
             <button
               type="button"
               className={styles.folderBack}
-              onClick={backFromSchedule}
+              onClick={backFromDeferStep}
               aria-label="Back"
             >
               <ChevronLeft size={14} strokeWidth={1.5} />
@@ -1333,7 +1428,41 @@ function NewSessionModal() {
               <span className={styles.folderBackHint}>back</span>
             </button>
 
-            <p className={styles.label}>Launch time</p>
+            {/* Recurring: the repeat interval (#294). */}
+            {step === "recurring" && (
+              <>
+                <p className={styles.label}>Repeat every</p>
+                <div className={styles.intervalRow}>
+                  <input
+                    className={styles.intervalAmount}
+                    {...noAutoCapitalize}
+                    type="number"
+                    min={1}
+                    value={intervalAmount}
+                    onChange={(event) =>
+                      setIntervalAmount(event.currentTarget.value)
+                    }
+                    aria-label="Repeat amount"
+                  />
+                  <select
+                    className={styles.intervalUnit}
+                    value={intervalUnit}
+                    onChange={(event) =>
+                      setIntervalUnit(event.currentTarget.value as IntervalUnit)
+                    }
+                    aria-label="Repeat unit"
+                  >
+                    <option value="minute">Minutes</option>
+                    <option value="hour">Hours</option>
+                    <option value="day">Days</option>
+                  </select>
+                </div>
+              </>
+            )}
+
+            <p className={styles.label}>
+              {step === "recurring" ? "First run" : "Launch time"}
+            </p>
             <input
               ref={fireAtRef}
               className={styles.search}
@@ -1341,15 +1470,24 @@ function NewSessionModal() {
               type="text"
               value={fireAt}
               onChange={(event) => setFireAt(event.currentTarget.value)}
-              placeholder="e.g. 1h, 15:00, 6pm, tomorrow 9am"
-              aria-label="Launch time"
+              placeholder={
+                step === "recurring"
+                  ? "now, or e.g. 1h, 15:00, tomorrow 9am"
+                  : "e.g. 1h, 15:00, 6pm, tomorrow 9am"
+              }
+              aria-label={step === "recurring" ? "First run" : "Launch time"}
             />
             {/* Persistent helper + a live interpretation of what was typed (#268). */}
             <p className={styles.timeHint}>{SCHEDULE_TIME_HINT}</p>
             {fireAt.trim() !== "" &&
-              (scheduleWhen ? (
+              (step === "recurring" &&
+              ["", "now"].includes(fireAt.trim().toLowerCase()) ? (
                 <p className={styles.timePreview} aria-live="polite">
-                  Starts{" "}
+                  Runs now, then {intervalOk ? "on" : ""} the interval.
+                </p>
+              ) : scheduleWhen ? (
+                <p className={styles.timePreview} aria-live="polite">
+                  {step === "recurring" ? "First runs" : "Starts"}{" "}
                   {formatFireTime(Math.floor(scheduleWhen.at.getTime() / 1000))}{" "}
                   · {scheduleWhen.label}
                 </p>
@@ -1380,8 +1518,8 @@ function NewSessionModal() {
               aria-label="Custom name"
             />
 
-            {/* Inline error (#259): a worktree schedule creates its worktree + branch
-                eagerly, so a bad/duplicate branch is shown here for the user to fix. */}
+            {/* Inline error (#259/#294): a worktree schedule/recurring creates its
+                worktree + branch eagerly, so a bad/duplicate branch surfaces here. */}
             {schedError && (
               <p className={styles.branchError} role="alert">
                 {schedError}
@@ -1392,17 +1530,28 @@ function NewSessionModal() {
               <button type="button" className={styles.cancel} onClick={close}>
                 Cancel <kbd className={styles.btnKbd}>esc</kbd>
               </button>
-              {/* Isolated worktree (#198/#204): the worktree variant of the primary
-                  Schedule action — mirroring the new-session branch step's "Worktree ⌘⏎"
-                  button + keybind, replacing the old schedule-step checkbox. Git folders
-                  only; the worktree is created on the chosen branch at fire time. */}
+              {/* Isolated worktree (#198/#204/#294): the worktree variant of the
+                  primary action — mirroring the branch step's "Worktree ⌘⏎". Git
+                  folders only; the worktree is created on the chosen branch. */}
               {folderIsGit && (
                 <button
                   type="button"
                   className={styles.cancel}
-                  onClick={() => void submitSchedule(true)}
-                  disabled={!cwd || busy || !scheduleWhen}
-                  title="Schedule into an isolated git worktree"
+                  onClick={() =>
+                    step === "recurring"
+                      ? void submitRecurring(true)
+                      : void submitSchedule(true)
+                  }
+                  disabled={
+                    step === "recurring"
+                      ? !cwd || busy || !intervalOk || !recurringFirstOk
+                      : !cwd || busy || !scheduleWhen
+                  }
+                  title={
+                    step === "recurring"
+                      ? "Repeat into an isolated git worktree"
+                      : "Schedule into an isolated git worktree"
+                  }
                 >
                   Worktree{" "}
                   <kbd className={styles.btnKbd}>
@@ -1413,9 +1562,14 @@ function NewSessionModal() {
               <button
                 type="submit"
                 className={styles.create}
-                disabled={!cwd || busy || !scheduleWhen}
+                disabled={
+                  step === "recurring"
+                    ? !cwd || busy || !intervalOk || !recurringFirstOk
+                    : !cwd || busy || !scheduleWhen
+                }
               >
-                Schedule <kbd className={styles.btnKbd}>⏎</kbd>
+                {step === "recurring" ? "Create" : "Schedule"}{" "}
+                <kbd className={styles.btnKbd}>⏎</kbd>
               </button>
             </div>
           </>

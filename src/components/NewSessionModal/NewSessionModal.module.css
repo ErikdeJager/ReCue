@@ -122,6 +122,40 @@
   border-color: var(--accent);
 }
 
+/* Recurring interval (#294): an amount input + unit select on one row. */
+.intervalRow {
+  display: flex;
+  margin-bottom: var(--space-8);
+  gap: var(--space-8);
+}
+
+.intervalAmount {
+  width: 90px;
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+}
+
+.intervalUnit {
+  flex: 1;
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+}
+
+.intervalAmount:focus,
+.intervalUnit:focus {
+  border-color: var(--accent);
+}
+
 /* Optional prompt for a scheduled session (#93) — multi-line, mirrors .search. */
 .promptInput {
   width: 100%;

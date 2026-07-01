@@ -32,6 +32,8 @@ export function sameItem(a: CanvasContent, b: CanvasContent): boolean {
       return a.repoPath === b.repoPath;
     case "scheduled":
       return !!a.scheduleId && a.scheduleId === b.scheduleId;
+    case "recurring":
+      return !!a.recurringId && a.recurringId === b.recurringId;
     default:
       return false;
   }
@@ -70,6 +72,7 @@ export function itemStillPresent(
     sessions: { id: string }[];
     overviewPanels: Record<string, OverviewPanel[]>;
     schedules: { id: string }[];
+    recurrings: { id: string }[];
     canvases: { layout: CanvasNode | null }[];
   },
 ): boolean {
@@ -78,6 +81,9 @@ export function itemStillPresent(
   }
   if (content.kind === "scheduled") {
     return state.schedules.some((s) => s.id === content.scheduleId);
+  }
+  if (content.kind === "recurring") {
+    return state.recurrings.some((r) => r.id === content.recurringId);
   }
   const inOverview = Object.entries(state.overviewPanels).some(
     ([repo, panels]) =>
@@ -129,6 +135,9 @@ export function payloadToContent(
   if (data.kind === "scheduled" && typeof data.scheduleId === "string") {
     return { kind: "scheduled", scheduleId: data.scheduleId, repoPath };
   }
+  if (data.kind === "recurring" && typeof data.recurringId === "string") {
+    return { kind: "recurring", recurringId: data.recurringId, repoPath };
+  }
   return null;
 }
 
@@ -166,6 +175,13 @@ function isDuplicate(tree: CanvasNode | null, content: CanvasContent): boolean {
       (l) =>
         l.content.kind === "scheduled" &&
         l.content.scheduleId === content.scheduleId,
+    );
+  }
+  if (content.kind === "recurring") {
+    return leaves.some(
+      (l) =>
+        l.content.kind === "recurring" &&
+        l.content.recurringId === content.recurringId,
     );
   }
   if (content.kind === "kanban") {

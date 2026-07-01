@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatFireTime,
+  formatInterval,
+  formatNextRun,
   formatResetCountdown,
+  intervalToSeconds,
   parseResetsAt,
   parseWhen,
+  secondsToInterval,
   toLocalInput,
 } from "./time";
 
@@ -27,6 +31,78 @@ describe("parseResetsAt (#154)", () => {
     expect(parseResetsAt(null)).toBeNull();
     expect(parseResetsAt("")).toBeNull();
     expect(parseResetsAt("not a date")).toBeNull();
+  });
+});
+
+describe("intervalToSeconds (#294)", () => {
+  it("converts each unit", () => {
+    expect(intervalToSeconds(5, "minute")).toBe(300);
+    expect(intervalToSeconds(2, "hour")).toBe(7200);
+    expect(intervalToSeconds(3, "day")).toBe(259200);
+  });
+
+  it("floors at 60s (1 minute)", () => {
+    // A sub-minute amount is impossible via the unit list, but a rounding-to-zero
+    // or blank amount must never produce a hot-looping interval.
+    expect(intervalToSeconds(0, "minute")).toBe(60);
+    expect(intervalToSeconds(-5, "hour")).toBe(60);
+    expect(intervalToSeconds(Number.NaN, "day")).toBe(60);
+  });
+
+  it("rounds a fractional amount", () => {
+    expect(intervalToSeconds(1.4, "hour")).toBe(3600);
+    expect(intervalToSeconds(2.6, "minute")).toBe(180);
+  });
+});
+
+describe("secondsToInterval (#294)", () => {
+  it("prefers the largest whole unit", () => {
+    expect(secondsToInterval(86400)).toEqual({ amount: 1, unit: "day" });
+    expect(secondsToInterval(7200)).toEqual({ amount: 2, unit: "hour" });
+    expect(secondsToInterval(300)).toEqual({ amount: 5, unit: "minute" });
+  });
+
+  it("falls back to minutes when not whole hours/days", () => {
+    // 90000s = 25h, not a whole day → hours.
+    expect(secondsToInterval(90000)).toEqual({ amount: 25, unit: "hour" });
+    // 5400s = 90m, not a whole hour → minutes.
+    expect(secondsToInterval(5400)).toEqual({ amount: 90, unit: "minute" });
+  });
+
+  it("floors below the 60s minimum", () => {
+    expect(secondsToInterval(30)).toEqual({ amount: 1, unit: "minute" });
+  });
+
+  it("round-trips with intervalToSeconds", () => {
+    for (const secs of [60, 300, 3600, 7200, 86400, 172800]) {
+      const { amount, unit } = secondsToInterval(secs);
+      expect(intervalToSeconds(amount, unit)).toBe(secs);
+    }
+  });
+});
+
+describe("formatInterval (#294)", () => {
+  it("pluralizes", () => {
+    expect(formatInterval(3600)).toBe("every 1 hour");
+    expect(formatInterval(7200)).toBe("every 2 hours");
+    expect(formatInterval(60)).toBe("every 1 minute");
+    expect(formatInterval(86400)).toBe("every 1 day");
+  });
+});
+
+describe("formatNextRun (#294)", () => {
+  const now = Date.parse("2026-04-11T07:00:00Z");
+
+  it("reads 'now' when due", () => {
+    expect(formatNextRun(Math.floor(now / 1000) - 10, now)).toBe(
+      "next run now",
+    );
+  });
+
+  it("reads a relative countdown when future", () => {
+    expect(formatNextRun(Math.floor(now / 1000) + 5 * 60, now)).toBe(
+      "next run in 5m",
+    );
   });
 });
 

@@ -768,3 +768,38 @@ CanvasSurface.tsx) — never a hardcoded glyph. No native/path/shell code touche
   it never reaches a focused `claude`/terminal PTY (capture-phase `stopPropagation`), doesn't
   collide with any browser/WebView2 default, and that the Maximize2 tooltips read **"Ctrl+E"**.
   Re-confirm macOS still toggles on **⌘E** with the **⌘E** tooltip.
+
+### #294 — Three-dots session-options menu + Recurring sessions
+
+Adds a **⋯ overflow button** next to the sidebar "Schedule session" button opening a dropdown
+(reusing the shared `RowContextMenu`) whose first item is **"Recurring session…"**, plus a new
+**recurring** mode in the New Session modal and a persistent `RecurringSession` backend model.
+A recurring session owns a **rotating child agent**: each interval the poll loop (shared with
+the #93 schedule poll, same 5s tick) kills the previous child and spawns a fresh seeded one
+**in place** — the sidebar row / Overview card / Canvas panel key on the recurring id, so only
+the hosted child terminal swaps. All of it is path-key / token / reused-git-seam based:
+
+- **No new shell-outs** — worktree recurrings reuse the same `git worktree add [-b]` /
+  `checkout_branch` / `create_branch` calls (already `hidden_command`-guarded) as worktree
+  schedules; the deterministic `worktree_path` helper is shared. `path_env::home_dir()` is
+  untouched (no raw `$HOME`), and the child spawn goes through the existing
+  `spawn_session_with_prompt` → `AgentSpec` path (PATHEXT / `cmd.exe /C` resolution intact).
+- **Frontend parity** — the ⋯ button + dropdown + `RecurringPanel` / `RecurringCard` /
+  `RecurringRow` use only design tokens + existing CSS patterns (`::-webkit-scrollbar`-safe,
+  no macOS-only effects); the "next run in …" label + interval helpers (`intervalToSeconds` /
+  `secondsToInterval` / `formatInterval` / `formatNextRun`) are pure + unit-tested; the modal's
+  ⌘⏎ "Worktree" keybind routes through `kbdHint` and `metaKey || ctrlKey` like #204.
+- **Cross-platform-neutral rotation** — the fresh-child spawn reuses the #261 replay-dedupe
+  path (which already fixed the ConPTY stray-`C`), so a rotated child repaints cleanly on both
+  OSes. Tauri `recurring://*` events are global, identical on macOS and Windows.
+
+#### Still needs manual Windows verification (#294)
+
+- **Child rotation on ConPTY (GUI/PTY path, can't be unit-tested).** On a Windows build: create
+  a recurring session (e.g. every 1 minute, prompt "say hi", first run now) → confirm a child
+  agent spawns within ~5s and its terminal shows in the Overview card / a Canvas panel; wait one
+  interval and confirm the child is **replaced in the same card/panel** (no new sidebar row /
+  column / panel appears) and the relaunched `claude.cmd` TUI **repaints cleanly** (no stray
+  `C`, no doubled paint) under ConPTY. Confirm cancelling kills the child and removes the
+  surfaces, and that a worktree recurring's folder is cleaned up (ref-counted). Re-confirm the
+  same on macOS.

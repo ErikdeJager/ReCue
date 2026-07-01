@@ -53,13 +53,23 @@
   background: var(--accent-hover);
 }
 
+/* Schedule session (#93) + the ⋯ overflow button (#294) sit in one flex row so the
+   overflow menu tucks against the right edge of the schedule button. */
+.scheduleActionRow {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-4);
+  margin: 0 var(--space-12) var(--space-12);
+}
+
 /* Schedule session (#93): a secondary, ghost-style button under the accent New
-   session button — same shape, lower emphasis. */
+   session button — same shape, lower emphasis. Fills the action row (#294). */
 .scheduleButton {
   display: flex;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: var(--space-6);
-  margin: 0 var(--space-12) var(--space-12);
   padding: var(--space-4) var(--space-12);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
@@ -74,6 +84,30 @@
 }
 
 .scheduleButton:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ⋯ overflow button (#294): a square ghost button matching the schedule button's
+   height, opening the extra-session-options dropdown. */
+.dotsButton {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.dotsButton:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
@@ -581,6 +615,18 @@
   color: var(--text-muted);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
+}
+
+/* "recurring" badge on a recurring row (#294): a small static chip distinguishing it
+   from a one-shot schedule, styled like the worktree/fork badges. */
+.recurringBadge {
+  flex-shrink: 0;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chip);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+  line-height: 1.4;
 }
 
 .scheduleCancel {

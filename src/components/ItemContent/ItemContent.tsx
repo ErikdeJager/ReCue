@@ -10,6 +10,7 @@ import FileTree from "../FileTree/FileTree";
 import FileViewer from "../FileViewer/FileViewer";
 import KanbanPanel from "../Kanban/KanbanPanel";
 import MaximizedNote from "../MaximizedNote/MaximizedNote";
+import RecurringPanel from "../RecurringPanel/RecurringPanel";
 import ScheduledPanel from "../ScheduledPanel/ScheduledPanel";
 import Terminal from "../Terminal/Terminal";
 import styles from "./ItemContent.module.css";
@@ -98,6 +99,9 @@ function ItemContent({
   }
   if (content.kind === "scheduled" && content.scheduleId) {
     return <ScheduledPanel scheduleId={content.scheduleId} />;
+  }
+  if (content.kind === "recurring" && content.recurringId) {
+    return <RecurringPanel recurringId={content.recurringId} />;
   }
   // A pending/erroring template panel (#118): loading → live, or error + Retry.
   if (content.kind === "pending" && leafId) {

@@ -77,16 +77,31 @@ export function scheduleNestsUnderWorktree(schedule: {
 }
 
 /**
+ * Whether a recurring session (#294) nests under a **worktree** sub-group in the
+ * sidebar, rather than at its parent repo's in-folder level. True only for a worktree
+ * recurring whose deterministic `worktree_path` was computed at create time — so it
+ * shares the sub-group key its child agent uses. Mirrors `scheduleNestsUnderWorktree`.
+ */
+export function recurringNestsUnderWorktree(recurring: {
+  worktree?: boolean | null;
+  worktree_path?: string | null;
+}): boolean {
+  return Boolean(recurring.worktree && recurring.worktree_path);
+}
+
+/**
  * The ordered, deduped set of worktree sub-group folder paths for a repo (#74/#218):
- * the union of its live worktree agents' folders (`repoPath`) and the `worktree_path`
- * of its pending worktree schedules. Live-agent paths come first (in input order),
- * then any schedule-only paths, so a worktree with **both** a live agent and a
- * schedule collapses to one sub-group keyed by the shared path, while a worktree that
- * currently has only a scheduled session still gets its own sub-group.
+ * the union of its live worktree agents' folders (`repoPath`), the `worktree_path` of
+ * its pending worktree schedules, and (#294) its worktree recurrings. Live-agent paths
+ * come first (in input order), then any schedule/recurring-only paths, so a worktree
+ * with a live agent + a schedule + a recurring collapses to one sub-group keyed by the
+ * shared path, while a worktree that currently has only a scheduled/recurring session
+ * still gets its own sub-group.
  */
 export function worktreeGroupPaths(
   worktreeAgents: { repoPath: string }[],
   worktreeSchedules: { worktree_path?: string | null }[],
+  worktreeRecurrings: { worktree_path?: string | null }[] = [],
 ): string[] {
   const seen = new Set<string>();
   const paths: string[] = [];
@@ -98,6 +113,7 @@ export function worktreeGroupPaths(
   };
   for (const a of worktreeAgents) add(a.repoPath);
   for (const s of worktreeSchedules) add(s.worktree_path);
+  for (const r of worktreeRecurrings) add(r.worktree_path);
   return paths;
 }
 

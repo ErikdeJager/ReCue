@@ -40,12 +40,13 @@ import { isWindows } from "./platform";
 import {
   effectiveRepo,
   type OverviewFilter,
+  recurringNestsUnderWorktree,
   repoName,
   scheduleNestsUnderWorktree,
   sessionInFilter,
   splitPath,
 } from "./paths";
-import { parseResetsAt } from "./time";
+import { formatInterval, parseResetsAt } from "./time";
 import * as updater from "./updater";
 import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
 import type {
@@ -59,6 +60,7 @@ import type {
   DiffSeenMap,
   FileStatusCode,
   OverviewPanel,
+  RecurringSession,
   ScheduledSession,
   SessionRecord,
   SessionView,
@@ -115,14 +117,37 @@ export function worktreeHasItems(
     sessions: readonly { repoPath: string }[];
     overviewPanels: Record<string, readonly unknown[]>;
     schedules: readonly { cwd: string; worktree_path?: string | null }[];
+    recurrings: readonly { cwd: string; worktree_path?: string | null }[];
   },
   dest: string,
 ): boolean {
   return (
     state.sessions.some((s) => s.repoPath === dest) ||
     (state.overviewPanels[dest]?.length ?? 0) > 0 ||
-    state.schedules.some((sc) => sc.cwd === dest || sc.worktree_path === dest)
+    state.schedules.some(
+      (sc) => sc.cwd === dest || sc.worktree_path === dest,
+    ) ||
+    // A recurring created inside the worktree (`cwd === dest`) or a worktree
+    // recurring targeting it (`worktree_path === dest`, its `cwd` is the parent)
+    // still references it (#294) — keep the worktree until neither remains.
+    state.recurrings.some((r) => r.cwd === dest || r.worktree_path === dest)
   );
+}
+
+/**
+ * The set of session ids **owned** by a recurring session (#294) — its rotating child
+ * agent. These are real tracked sessions, but they render only inside the recurring
+ * surfaces (never their own sidebar row / Overview column / Canvas panel), so the
+ * sidebar + Overview session lists exclude them. Pure.
+ */
+export function ownedChildSessionIds(
+  recurrings: readonly { current_session_id?: string | null }[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const r of recurrings) {
+    if (r.current_session_id) ids.add(r.current_session_id);
+  }
+  return ids;
 }
 
 /** Resolve a worktree folder's parent repo (#199) — from a live session of the
@@ -472,9 +497,21 @@ export function overviewClusters(input: {
   overviewPanels: Record<string, OverviewPanel[]>;
   overviewOrder: Record<string, string[]>;
   schedules: ScheduledSession[];
+  recurrings?: RecurringSession[];
   filter: OverviewFilter;
 }): { repo: string; keys: string[] }[] {
-  const { sessions, overviewPanels, overviewOrder, schedules, filter } = input;
+  const {
+    overviewPanels,
+    overviewOrder,
+    schedules,
+    recurrings = [],
+    filter,
+  } = input;
+  // Exclude recurring-owned child agents (#294): they render only inside the
+  // recurring surfaces, never as their own column. The recurring itself is a column
+  // keyed on its own id (added below).
+  const ownedChildren = ownedChildSessionIds(recurrings);
+  const sessions = input.sessions.filter((s) => !ownedChildren.has(s.id));
 
   // A worktree agent's panels are keyed by the worktree folder (#164) but cluster
   // under the worktree's **parent** repo (#96). Built first so the filter predicate
@@ -500,6 +537,10 @@ export function overviewClusters(input: {
   const scheduleInFilter = (sc: ScheduledSession) =>
     folderInFilter(sc.cwd) &&
     !(filter?.mode === "own" && scheduleNestsUnderWorktree(sc));
+  // Recurrings mirror schedules (#294): an "own" filter hides worktree recurrings.
+  const recurringInFilter = (r: RecurringSession) =>
+    folderInFilter(r.cwd) &&
+    !(filter?.mode === "own" && recurringNestsUnderWorktree(r));
 
   // Narrow agents by the filter (a worktree filter matches `repoPath`, a repo filter
   // the effective repo, #197).
@@ -537,6 +578,9 @@ export function overviewClusters(input: {
   for (const sc of schedules) {
     if (scheduleInFilter(sc)) repoSet.add(sc.cwd);
   }
+  for (const r of recurrings) {
+    if (recurringInFilter(r)) repoSet.add(r.cwd);
+  }
   const repoList = [...repoSet].sort((a, b) => {
     const byName = repoName(a)
       .toLowerCase()
@@ -555,7 +599,15 @@ export function overviewClusters(input: {
     const scheduleIds = schedules
       .filter((sc) => sc.cwd === repo && scheduleInFilter(sc))
       .map((sc) => sc.id);
-    const defaultKeys = [...agentIds, ...panelIds, ...scheduleIds];
+    const recurringIds = recurrings
+      .filter((r) => r.cwd === repo && recurringInFilter(r))
+      .map((r) => r.id);
+    const defaultKeys = [
+      ...agentIds,
+      ...panelIds,
+      ...scheduleIds,
+      ...recurringIds,
+    ];
     if (defaultKeys.length === 0) continue; // drop empty clusters
     const keys = mergeRepoOrder(overviewOrder[repo] ?? [], defaultKeys);
     clusters.push({ repo, keys });
@@ -572,6 +624,7 @@ export function overviewClusterKeys(input: {
   overviewPanels: Record<string, OverviewPanel[]>;
   overviewOrder: Record<string, string[]>;
   schedules: ScheduledSession[];
+  recurrings?: RecurringSession[];
   filter: OverviewFilter;
 }): string[] {
   return overviewClusters(input).flatMap((c) => c.keys);
@@ -621,6 +674,7 @@ async function repositionPanelAfterAgent(
     overviewPanels: state.overviewPanels,
     overviewOrder: state.overviewOrder,
     schedules: state.schedules,
+    recurrings: state.recurrings,
     filter: null,
   }).find((c) => c.repo === parent);
   const keys = cluster?.keys ?? [];
@@ -813,6 +867,7 @@ type SidebarItem = {
     | "file"
     | "diff"
     | "scheduled"
+    | "recurring"
     | "kanban"
     | "filetree";
   repoPath?: string;
@@ -845,6 +900,8 @@ function matchesCanvasItem(content: CanvasContent, item: SidebarItem): boolean {
       return content.kind === "filetree" && content.repoPath === item.repoPath;
     case "scheduled":
       return content.kind === "scheduled" && content.scheduleId === item.id;
+    case "recurring":
+      return content.kind === "recurring" && content.recurringId === item.id;
   }
 }
 
@@ -861,6 +918,9 @@ function leafItemId(
   }
   if (content.kind === "scheduled") {
     return content.scheduleId ?? null;
+  }
+  if (content.kind === "recurring") {
+    return content.recurringId ?? null;
   }
   const panels = overviewPanels[content.repoPath ?? ""] ?? [];
   if (content.kind === "file") {
@@ -906,6 +966,7 @@ export function contentForSelected(state: {
   activeCanvasId: string;
   sessions: SessionView[];
   schedules: ScheduledSession[];
+  recurrings?: RecurringSession[];
   overviewPanels: Record<string, OverviewPanel[]>;
 }): CanvasContent | null {
   const { selectedId } = state;
@@ -931,6 +992,14 @@ export function contentForSelected(state: {
       kind: "scheduled",
       scheduleId: schedule.id,
       repoPath: schedule.cwd,
+    };
+  }
+  const recurring = (state.recurrings ?? []).find((r) => r.id === selectedId);
+  if (recurring) {
+    return {
+      kind: "recurring",
+      recurringId: recurring.id,
+      repoPath: recurring.cwd,
     };
   }
   for (const [repoKey, panels] of Object.entries(state.overviewPanels)) {
@@ -1039,6 +1108,10 @@ export interface AppState {
   /** The same modal opened in **schedule** mode (#93): folder → branch → a final
    * time/prompt/name step that creates a scheduled session instead of spawning. */
   scheduleMode: boolean;
+  /** The same modal opened in **recurring** mode (#294): folder → branch → a final
+   * interval/first-run/prompt/name step that creates a repeating session. Mutually
+   * exclusive with `scheduleMode`. */
+  recurringMode: boolean;
   /** Branches preloaded by the per-repo start path (#127): when set, the modal opens
    * **directly at the branch step** for `newSessionRepo`, seeded with this list (no
    * folder step, no second `list_branches`). `null` for the folder-step open. */
@@ -1082,6 +1155,8 @@ export interface AppState {
   };
   /** Pending scheduled sessions (#93), newest-first; main window only. */
   schedules: ScheduledSession[];
+  /** Active recurring sessions (#294), newest-first; loaded in every window. */
+  recurrings: RecurringSession[];
   /** Application settings (#100), merged with defaults on load. */
   settings: Settings;
   /** Whether the Settings modal is open (#100). */
@@ -1158,6 +1233,9 @@ export interface AppState {
   startRepoSession: (repo: string) => void;
   /** Open the modal in schedule mode (#93). */
   openSchedule: (repo?: string) => void;
+  /** Open the modal in recurring mode (#294) — the ⋯ overflow menu's "Recurring
+   * session…". */
+  openRecurring: (repo?: string) => void;
   /** Open the ⌘K "Create panel" launcher (#189). `type` (set by ⌘⌥1–6) pre-selects
    * a panel type and skips the type step; omitted = open at the type step. */
   openCreatePanel: (type?: string) => void;
@@ -1538,6 +1616,34 @@ export interface AppState {
    * `schedule://changed`). Keeps a detached canvas window's `schedules` slice in sync
    * (so a scheduled panel renders + reflects live edits); a no-op when unchanged. */
   applyScheduleSync: (schedules: ScheduledSession[]) => void;
+  /** Create a recurring session (#294). Resolves `true` on success, else an error
+   * message for inline display (e.g. a worktree recurring's bad/duplicate branch). */
+  createRecurring: (
+    cwd: string,
+    branch: string | null,
+    name: string | null,
+    prompt: string | null,
+    intervalSecs: number,
+    firstFireAt: number,
+    createBranch?: boolean,
+    base?: string | null,
+    worktree?: boolean,
+  ) => Promise<true | string>;
+  /** Cancel a recurring session (#294): kill its child + remove the record + prune its
+   * Canvas leaves + ref-counted worktree cleanup (mirrors `cancelSchedule`). */
+  cancelRecurring: (id: string) => Promise<void>;
+  /** Update a recurring's prompt / name / interval / next-run time (#294). */
+  updateRecurring: (
+    id: string,
+    prompt: string | null,
+    name: string | null,
+    intervalSecs: number,
+    nextFireAt: number,
+  ) => Promise<void>;
+  /** Apply a cross-window recurring-list broadcast by the backend (#294,
+   * `recurring://changed`) — keeps a detached canvas window's `recurrings` slice in
+   * sync; a no-op when unchanged. */
+  applyRecurringSync: (recurrings: RecurringSession[]) => void;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
   /** Fast-forward `cwd`'s current branch to its upstream — `git pull --ff-only`
    * (#181, sidebar repo / worktree "Pull"). Toasts the result (summary or git
@@ -1896,6 +2002,7 @@ export const useStore = create<AppState>()((set, get) => ({
   newSessionOpen: false,
   newSessionRepo: null,
   scheduleMode: false,
+  recurringMode: false,
   newSessionInitialBranches: null,
   newSessionAtBranch: false,
   createPanelOpen: false,
@@ -1909,6 +2016,7 @@ export const useStore = create<AppState>()((set, get) => ({
   },
   usage: { usedPercent: null, resetsAtMs: null, available: false },
   schedules: [],
+  recurrings: [],
   settings: DEFAULT_SETTINGS,
   settingsOpen: false,
   onboardingOpen: false,
@@ -2123,6 +2231,7 @@ export const useStore = create<AppState>()((set, get) => ({
       newSessionOpen: true,
       newSessionRepo: repo ?? null,
       scheduleMode: false,
+      recurringMode: false,
       // Folder-step open (global ⌘N / button): the modal loads branches itself (#127).
       newSessionInitialBranches: null,
       newSessionAtBranch: false,
@@ -2138,6 +2247,7 @@ export const useStore = create<AppState>()((set, get) => ({
       newSessionOpen: true,
       newSessionRepo: repo,
       scheduleMode: false,
+      recurringMode: false,
       newSessionInitialBranches: null,
       newSessionAtBranch: true,
     });
@@ -2147,6 +2257,16 @@ export const useStore = create<AppState>()((set, get) => ({
       newSessionOpen: true,
       newSessionRepo: repo ?? null,
       scheduleMode: true,
+      recurringMode: false,
+      newSessionInitialBranches: null,
+      newSessionAtBranch: false,
+    }),
+  openRecurring: (repo) =>
+    set({
+      newSessionOpen: true,
+      newSessionRepo: repo ?? null,
+      scheduleMode: false,
+      recurringMode: true,
       newSessionInitialBranches: null,
       newSessionAtBranch: false,
     }),
@@ -2155,6 +2275,7 @@ export const useStore = create<AppState>()((set, get) => ({
       newSessionOpen: false,
       newSessionRepo: null,
       scheduleMode: false,
+      recurringMode: false,
       newSessionInitialBranches: null,
       newSessionAtBranch: false,
     }),
@@ -2345,6 +2466,33 @@ export const useStore = create<AppState>()((set, get) => ({
             get().setForkable(id, forkable);
           },
           onExited: ({ id, code }) => {
+            // Recurring child rotation/crash (#294): a session owned as a recurring's
+            // *current* child that exits — killed on rotation, or crashed on its own —
+            // must NOT surface a "Process exited" overlay or toast (it's an internal,
+            // rotating agent, not a user agent). The rotation-order race (its exit vs
+            // the `recurring://fired` swapping `current_session_id`) is also covered by
+            // `intentionalKills` in `onFired` below (which handles the case where the
+            // record already points at the *new* child by the time this exit lands).
+            const owningRec = get().recurrings.find(
+              (r) => r.current_session_id === id,
+            );
+            if (owningRec) {
+              intentionalKills.delete(id);
+              if (IS_MAIN_WINDOW) {
+                // Clear the pointer so the panel shows "next run in…" until the next
+                // fire (a genuine crash); a rotation's `onFired` sets the fresh child.
+                // Drop the dead child so its pooled xterm reconciles away.
+                set((s) => ({
+                  recurrings: s.recurrings.map((r) =>
+                    r.id === owningRec.id
+                      ? { ...r, current_session_id: null }
+                      : r,
+                  ),
+                }));
+                get().dropSession(id);
+              }
+              return;
+            }
             // Session lifecycle (forget / toast / kill) is owned by the **main**
             // window (#84) — it's the source of truth for the session list. A
             // detached canvas window is a renderer: it only reflects the exit
@@ -2472,6 +2620,57 @@ export const useStore = create<AppState>()((set, get) => ({
             }
           },
           onChanged: (schedules) => get().applyScheduleSync(schedules),
+        });
+        // Recurring sessions (#294): the backend poll rotates each recurring's child
+        // agent. Both windows subscribe (a detached canvas #84 can hold a recurring
+        // panel, so it must follow the rotation + keep its `recurrings` slice fresh).
+        await ipc.subscribeRecurringEvents({
+          onFired: ({ id, session, next_fire_at }) => {
+            // The previous child (if any) is being retired; swap it for the fresh one
+            // in a single state update so the survivor is never transiently dropped.
+            const prev = get().recurrings.find(
+              (r) => r.id === id,
+            )?.current_session_id;
+            get().upsertSession(toSessionView(session));
+            set((s) => ({
+              recurrings: s.recurrings.map((r) =>
+                r.id === id
+                  ? {
+                      ...r,
+                      current_session_id: session.id,
+                      next_fire_at,
+                    }
+                  : r,
+              ),
+            }));
+            if (prev && prev !== session.id) {
+              // Swallow the old child's pending exit event (the kill lands async) so
+              // it never shows a "Process exited" overlay/toast, then drop it.
+              intentionalKills.add(prev);
+              get().dropSession(prev);
+            }
+            // Surface the (possibly new) folder in recents — main window only, and
+            // the *parent repo* for a worktree child (mirrors the backend).
+            if (IS_MAIN_WINDOW) {
+              const recentPath = session.worktree_parent ?? session.repo_path;
+              set((s) => ({
+                recents: [
+                  recentPath,
+                  ...s.recents.filter((r) => r !== recentPath),
+                ],
+              }));
+            }
+          },
+          onError: ({ message }) => {
+            // The record is kept + re-armed backend-side; just toast (main window).
+            if (IS_MAIN_WINDOW) {
+              get().pushToast(
+                message || "Recurring agent failed to start",
+                "error",
+              );
+            }
+          },
+          onChanged: (recurrings) => get().applyRecurringSync(recurrings),
         });
       } catch {
         // Event subscription only works inside the Tauri webview.
@@ -2685,6 +2884,14 @@ export const useStore = create<AppState>()((set, get) => ({
       set({ schedules: await ipc.listSchedules() });
     } catch {
       // Backend unreachable; leave schedules as-is.
+    }
+    // Recurring sessions (#294) — the backend re-arms them; the frontend just lists
+    // them. Loaded in every window like schedules (a detached canvas #84 can hold a
+    // recurring panel). Live mutations + rotations sync via `recurring://*`.
+    try {
+      set({ recurrings: await ipc.listRecurrings() });
+    } catch {
+      // Backend unreachable; leave recurrings as-is.
     }
     // In-app updater (#190) — main window only. (1) Post-update toast: if the
     // running version is higher than the one recorded last boot, the app just
@@ -4333,6 +4540,13 @@ export const useStore = create<AppState>()((set, get) => ({
     const scheduleIds = get()
       .schedules.filter((sc) => sc.cwd === repoPath)
       .map((sc) => sc.id);
+    // Recurring sessions for this folder (#294) — cancel them for the same reason: a
+    // forgotten folder must not keep spawning repeating agents.
+    const recurringIds = get()
+      .recurrings.filter(
+        (r) => r.cwd === repoPath || worktreeDests.includes(r.cwd),
+      )
+      .map((r) => r.id);
     // Kill + forget every session's process (kill_session also drops its record),
     // then drop the folder from persisted recents so it can't reappear on restart.
     // Mark them intentional so their exit events don't each pop a toast (#32).
@@ -4351,6 +4565,9 @@ export const useStore = create<AppState>()((set, get) => ({
     await Promise.all(
       scheduleIds.map((id) => ipc.cancelSchedule(id).catch(() => {})),
     );
+    await Promise.all(
+      recurringIds.map((id) => ipc.cancelRecurring(id).catch(() => {})),
+    );
     set((s) => {
       const clearSelection = s.selectedId != null && ids.includes(s.selectedId);
       return {
@@ -4359,6 +4576,9 @@ export const useStore = create<AppState>()((set, get) => ({
         ),
         recents: s.recents.filter((r) => r !== repoPath),
         schedules: s.schedules.filter((sc) => sc.cwd !== repoPath),
+        recurrings: s.recurrings.filter(
+          (r) => r.cwd !== repoPath && !worktreeDests.includes(r.cwd),
+        ),
         selectedId: clearSelection ? null : s.selectedId,
         view: clearSelection ? "overview" : s.view,
         // Drop a now-dangling Overview filter on the forgotten repo (#34/#247).
@@ -4373,6 +4593,7 @@ export const useStore = create<AppState>()((set, get) => ({
     if (itemCount > 0)
       parts.push(`${itemCount} view${itemCount === 1 ? "" : "s"}`);
     if (scheduleIds.length > 0) parts.push(`${scheduleIds.length} scheduled`);
+    if (recurringIds.length > 0) parts.push(`${recurringIds.length} recurring`);
     get().pushToast(
       parts.length > 0
         ? `Forgot folder + ${parts.join(" + ")}`
@@ -4548,6 +4769,102 @@ export const useStore = create<AppState>()((set, get) => ({
         "error",
       );
     }
+  },
+
+  createRecurring: async (
+    cwd,
+    branch,
+    name,
+    prompt,
+    intervalSecs,
+    firstFireAt,
+    createBranch = false,
+    base = null,
+    worktree = false,
+  ) => {
+    try {
+      const record = await ipc.createRecurring(
+        cwd,
+        branch,
+        name,
+        prompt,
+        intervalSecs,
+        firstFireAt,
+        createBranch,
+        base,
+        worktree,
+        // The recurring launches under the agent chosen at create time (#142).
+        get().settings.defaultAgent,
+      );
+      set((s) => ({
+        recurrings: [record, ...s.recurrings],
+        recents: [cwd, ...s.recents.filter((r) => r !== cwd)],
+      }));
+      get().pushToast(
+        `Recurring session created (${formatInterval(intervalSecs)})`,
+      );
+      return true;
+    } catch (err) {
+      // Inline error for the modal (a worktree recurring's bad/duplicate branch is
+      // created eagerly, like a worktree schedule #259).
+      return isSessionError(err)
+        ? err.message
+        : "Could not create recurring session";
+    }
+  },
+
+  cancelRecurring: async (id) => {
+    const recurring = get().recurrings.find((x) => x.id === id);
+    set((s) => ({ recurrings: s.recurrings.filter((x) => x.id !== id) }));
+    // A recurring cancelled from the left panel also leaves every Canvas tab (#294).
+    pruneCanvasLeaves((c) => c.kind === "recurring" && c.recurringId === id);
+    // Drop its live child locally (the backend kills it) so its column/terminal go.
+    if (recurring?.current_session_id) {
+      const child = recurring.current_session_id;
+      intentionalKills.add(child);
+      get().dropSession(child);
+    }
+    await ipc.cancelRecurring(id).catch(() => {});
+    get().pushToast("Recurring session canceled");
+    // Worktree auto-delete guard, mirroring `cancelSchedule` (#199/#259):
+    // 1. A worktree recurring: its `cwd` is the parent repo, its folder `worktree_path`.
+    // 2. A recurring created inside an existing worktree folder: `cwd` is the worktree.
+    if (recurring) {
+      if (recurring.worktree && recurring.worktree_path) {
+        void get().cleanupWorktreeIfEmpty(
+          recurring.cwd,
+          recurring.worktree_path,
+        );
+      } else {
+        const wtParent = worktreeParentOf(get(), recurring.cwd);
+        if (wtParent)
+          void get().cleanupWorktreeIfEmpty(wtParent, recurring.cwd);
+      }
+    }
+  },
+
+  updateRecurring: async (id, prompt, name, intervalSecs, nextFireAt) => {
+    set((s) => ({
+      recurrings: s.recurrings.map((x) =>
+        x.id === id
+          ? {
+              ...x,
+              prompt,
+              name,
+              interval_secs: intervalSecs,
+              next_fire_at: nextFireAt,
+            }
+          : x,
+      ),
+    }));
+    await ipc
+      .updateRecurring(id, prompt, name, intervalSecs, nextFireAt)
+      .catch(() => {});
+  },
+
+  applyRecurringSync: (recurrings) => {
+    if (JSON.stringify(get().recurrings) === JSON.stringify(recurrings)) return;
+    set({ recurrings });
   },
 
   copyToClipboard: async (text, label) => {

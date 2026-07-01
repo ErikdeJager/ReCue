@@ -26,11 +26,12 @@ function BigModeModal() {
   // Lifecycle inputs (#157 subtask 7): auto-close when the item is gone.
   const overviewPanels = useStore((s) => s.overviewPanels);
   const schedules = useStore((s) => s.schedules);
+  const recurrings = useStore((s) => s.recurrings);
   const canvases = useStore((s) => s.canvases);
 
   // Auto-close when the maximized item no longer resolves to a live session /
-  // panel / schedule (agent exited or removed, panel closed, schedule fired) — no
-  // orphaned overlay.
+  // panel / schedule / recurring (agent exited or removed, panel closed, schedule
+  // fired, recurring cancelled) — no orphaned overlay.
   useEffect(() => {
     if (!maximizedItem) return;
     if (
@@ -38,6 +39,7 @@ function BigModeModal() {
         sessions,
         overviewPanels,
         schedules,
+        recurrings,
         canvases,
       })
     ) {
@@ -48,6 +50,7 @@ function BigModeModal() {
     sessions,
     overviewPanels,
     schedules,
+    recurrings,
     canvases,
     closeMaximized,
   ]);

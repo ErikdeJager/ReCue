@@ -24,6 +24,9 @@ import type {
   OutputPayload,
   OverviewPanel,
   PersistedCanvases,
+  RecurringErrorPayload,
+  RecurringFiredPayload,
+  RecurringSession,
   ScheduledSession,
   ScheduleErrorPayload,
   ScheduleFiredPayload,
@@ -471,6 +474,60 @@ export const updateSchedule = (
 export const fireScheduleNow = (id: string) =>
   invoke<void>("fire_schedule_now", { id });
 
+/** Create a recurring session (#294); `firstFireAt` is the first-run time in unix
+ * secs (now = immediate), `intervalSecs` the repeat cadence (floored at 60 backend).
+ * When `createBranch` is true, `branch` is a **new** branch created at create time
+ * from `base` (null = HEAD); otherwise `branch` is an existing branch to check out. */
+export const createRecurring = (
+  cwd: string,
+  branch: string | null,
+  name: string | null,
+  prompt: string | null,
+  intervalSecs: number,
+  firstFireAt: number,
+  createBranch = false,
+  base: string | null = null,
+  worktree = false,
+  agent?: string,
+) =>
+  invoke<RecurringSession>("create_recurring", {
+    cwd,
+    branch,
+    name,
+    prompt,
+    intervalSecs,
+    firstFireAt,
+    createBranch,
+    base,
+    worktree,
+    agent: agent ?? null,
+  });
+
+/** All active recurring sessions (#294). */
+export const listRecurrings = () =>
+  invoke<RecurringSession[]>("list_recurrings");
+
+/** Cancel a recurring session (#294): kills its current child (if any) + forgets the
+ * record. The worktree cleanup (ref-counted) is done store-side. */
+export const cancelRecurring = (id: string) =>
+  invoke<void>("cancel_recurring", { id });
+
+/** Update a recurring session's prompt / name / interval / next-run time (#294). */
+export const updateRecurring = (
+  id: string,
+  prompt: string | null,
+  name: string | null,
+  intervalSecs: number,
+  nextFireAt: number,
+) =>
+  invoke<void>("update_recurring", {
+    id,
+    prompt,
+    name,
+    intervalSecs,
+    nextFireAt,
+  });
+
 /** Application settings (#100): an opaque persisted blob the store merges with its
  * TS defaults (so an older file with no `settings` upgrades cleanly). */
 export const getSettings = () =>
@@ -677,6 +734,42 @@ export async function subscribeScheduleEvents(
   );
   const unlistenChanged = await listen<ScheduledSession[]>(
     "schedule://changed",
+    (event) => handlers.onChanged(event.payload),
+  );
+  return () => {
+    unlistenFired();
+    unlistenError();
+    unlistenChanged();
+  };
+}
+
+export interface RecurringEventHandlers {
+  /** A recurring rotated its child into a fresh live session (#294). */
+  onFired: (payload: RecurringFiredPayload) => void;
+  /** A recurring's spawn failed (#294) — the record is kept, time advanced. */
+  onError: (payload: RecurringErrorPayload) => void;
+  /** The full recurring list changed (#294) — emitted after any backend
+   * create/update/cancel/fire so every window (incl. a detached canvas #84) keeps
+   * its `recurrings` slice in sync. Mirrors `schedule://changed`. */
+  onChanged: (recurrings: RecurringSession[]) => void;
+}
+
+/** Subscribe to recurring-session events (#294): `recurring://fired` (a child
+ * rotated), `recurring://error`, and `recurring://changed` (the list changed).
+ * Returns an unlisten fn. */
+export async function subscribeRecurringEvents(
+  handlers: RecurringEventHandlers,
+): Promise<UnlistenFn> {
+  const unlistenFired = await listen<RecurringFiredPayload>(
+    "recurring://fired",
+    (event) => handlers.onFired(event.payload),
+  );
+  const unlistenError = await listen<RecurringErrorPayload>(
+    "recurring://error",
+    (event) => handlers.onError(event.payload),
+  );
+  const unlistenChanged = await listen<RecurringSession[]>(
+    "recurring://changed",
     (event) => handlers.onChanged(event.payload),
   );
   return () => {

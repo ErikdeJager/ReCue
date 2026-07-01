@@ -152,6 +152,59 @@ pub struct ScheduledSession {
     pub agent: String,
 }
 
+/// A recurring session (#294): a persistent, repeating agent. Unlike a one-shot
+/// `ScheduledSession`, a recurring record **stays** in the store as long as it is
+/// active and re-arms itself. Each time `next_fire_at` passes, the poll loop kills
+/// the current child agent (if any) and spawns a **fresh** `claude` seeded with
+/// `prompt`, rotating `current_session_id` in place (its sidebar row / Overview card
+/// / Canvas panel key on the recurring `id`, so no new surface is ever created).
+/// The branch / worktree fields mirror `ScheduledSession` (created eagerly at create
+/// time, reused every cycle). Times are unix secs on the local clock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecurringSession {
+    pub id: String,
+    pub cwd: String,
+    /// Branch to use before spawning. When `create_branch` is false this is an
+    /// existing branch to check out (only set for a non-current one); when true it's
+    /// the **new** branch name created at create time (mirrors `ScheduledSession`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// When true, `branch` was created + checked out (from `branch_base` / HEAD)
+    /// rather than checking out an existing branch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub create_branch: bool,
+    /// Base for the new branch when `create_branch` (None/empty = HEAD).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_base: Option<String>,
+    /// Launch each child into an isolated git worktree (#74), created eagerly at
+    /// create time on `branch`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worktree: bool,
+    /// The app-managed worktree folder for a worktree recurring, computed at create
+    /// time via the deterministic `worktree_path(cwd, branch)` helper; reused every
+    /// cycle. `None` for non-worktree recurrings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// The repeat interval in seconds (minimum 60 — enforced frontend-side). Each
+    /// fire advances `next_fire_at` by this amount.
+    pub interval_secs: u64,
+    /// The next time (unix secs) a fresh child should be spawned.
+    pub next_fire_at: u64,
+    /// The live child agent this recurring currently owns (rotated each cycle), or
+    /// `None` before the first fire. A child is a normal tracked `PersistedSession`
+    /// but is rendered only inside the recurring surfaces (never its own row/column).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_session_id: Option<String>,
+    pub created_at: u64,
+    /// The coding agent to launch (#101); defaults to `"claude"` for older records.
+    #[serde(default = "default_agent")]
+    pub agent: String,
+}
+
 /// The on-disk shape of the persistence file.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistedState {
@@ -191,6 +244,10 @@ pub struct PersistedState {
     /// `fire_at`. `default` keeps old files loading.
     #[serde(default)]
     pub schedules: Vec<ScheduledSession>,
+    /// Active recurring sessions (#294): persistent repeating agents that re-arm
+    /// themselves. `default` (empty) keeps old files loading.
+    #[serde(default)]
+    pub recurrings: Vec<RecurringSession>,
     /// Application settings (#100), stored opaquely as JSON — the frontend owns the
     /// shape and supplies defaults, so an older file without it upgrades cleanly.
     #[serde(default)]
@@ -605,6 +662,85 @@ impl Store {
             }
         });
         taken
+    }
+
+    // --- Recurring sessions (#294) ---
+
+    /// All active recurring sessions (#294).
+    pub fn recurrings(&self) -> Vec<RecurringSession> {
+        self.with(|state| state.recurrings.clone())
+    }
+
+    /// A single recurring session by id, if present (#294).
+    pub fn recurring(&self, id: &str) -> Option<RecurringSession> {
+        self.with(|state| state.recurrings.iter().find(|r| r.id == id).cloned())
+    }
+
+    /// Add a recurring session (replacing any with the same id) and persist (#294).
+    pub fn add_recurring(&self, rec: RecurringSession) -> io::Result<()> {
+        self.update(|state| {
+            state.recurrings.retain(|x| x.id != rec.id);
+            state.recurrings.push(rec);
+        })
+    }
+
+    /// Cancel (remove) a recurring session by id and persist (#294).
+    pub fn remove_recurring(&self, id: &str) -> io::Result<()> {
+        self.update(|state| state.recurrings.retain(|x| x.id != id))
+    }
+
+    /// Update a recurring session's mutable fields (prompt / name / interval / next
+    /// fire time) and persist (#294) — the editor panel's edits; a no-op for an
+    /// unknown id.
+    pub fn update_recurring(
+        &self,
+        id: &str,
+        prompt: Option<String>,
+        name: Option<String>,
+        interval_secs: u64,
+        next_fire_at: u64,
+    ) -> io::Result<()> {
+        self.update(|state| {
+            if let Some(r) = state.recurrings.iter_mut().find(|r| r.id == id) {
+                r.prompt = prompt;
+                r.name = name;
+                r.interval_secs = interval_secs;
+                r.next_fire_at = next_fire_at;
+            }
+        })
+    }
+
+    /// Atomically **clone** (do NOT remove) every recurring due at/before `now`
+    /// (#294). Unlike `take_due_schedules`, recurring records persist and re-arm, so
+    /// this returns copies; the caller marks each fired (rotating the child + advancing
+    /// `next_fire_at`) via `mark_recurring_fired`. On boot this reports anything overdue
+    /// while closed (one catch-up run).
+    pub fn take_due_recurrings(&self, now: u64) -> Vec<RecurringSession> {
+        self.with(|state| {
+            state
+                .recurrings
+                .iter()
+                .filter(|r| r.next_fire_at <= now)
+                .cloned()
+                .collect()
+        })
+    }
+
+    /// Mark a recurring session fired (#294): set its live `current_session_id` to the
+    /// freshly-spawned child and advance `next_fire_at`, atomically, then persist. A
+    /// no-op for an unknown id (it was cancelled while firing).
+    pub fn mark_recurring_fired(
+        &self,
+        id: &str,
+        new_session_id: Option<String>,
+        next_fire_at: u64,
+    ) -> io::Result<()> {
+        self.update(|state| {
+            if let Some(r) = state.recurrings.iter_mut().find(|r| r.id == id) {
+                r.current_session_id = new_session_id;
+                r.next_fire_at = next_fire_at;
+            }
+        })
     }
 
     fn with<R>(&self, read: impl FnOnce(&PersistedState) -> R) -> R {
@@ -1069,6 +1205,108 @@ mod tests {
         assert_eq!(old.branch_base, None);
         assert!(!old.worktree);
         assert_eq!(old.worktree_path, None);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&legacy_path);
+    }
+
+    fn recur(id: &str, interval_secs: u64, next_fire_at: u64) -> RecurringSession {
+        RecurringSession {
+            id: id.to_string(),
+            cwd: "/repo/x".to_string(),
+            branch: None,
+            create_branch: false,
+            branch_base: None,
+            worktree: false,
+            worktree_path: None,
+            name: None,
+            prompt: None,
+            interval_secs,
+            next_fire_at,
+            current_session_id: None,
+            created_at: 0,
+            agent: default_agent(),
+        }
+    }
+
+    #[test]
+    fn recurrings_add_take_due_mark_fired_update_cancel_and_persist() {
+        let path = temp_path("recurrings");
+        let store = Store::load(&path);
+        store.add_recurring(recur("r1", 3600, 100)).unwrap(); // due
+        store.add_recurring(recur("r2", 3600, 5000)).unwrap(); // future
+
+        // Only r1 is due at t=1000; it is CLONED (not removed) — both persist.
+        let due = store.take_due_recurrings(1000);
+        assert_eq!(
+            due.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+            vec!["r1".to_string()]
+        );
+        assert_eq!(
+            store.recurrings().len(),
+            2,
+            "recurrings persist after firing"
+        );
+
+        // Marking r1 fired rotates its child + advances next_fire_at atomically.
+        store
+            .mark_recurring_fired("r1", Some("child-1".to_string()), 1000 + 3600)
+            .unwrap();
+        let after = Store::load(&path);
+        let r1 = after.recurring("r1").expect("r1 present");
+        assert_eq!(r1.current_session_id.as_deref(), Some("child-1"));
+        assert_eq!(r1.next_fire_at, 4600);
+        // r1 is no longer due at the same `now` (its time advanced past it).
+        assert!(store.take_due_recurrings(1000).is_empty());
+
+        // Update r1's editable fields, then cancel it.
+        store
+            .update_recurring("r1", Some("go".into()), Some("nightly".into()), 7200, 9000)
+            .unwrap();
+        let r1 = Store::load(&path).recurring("r1").expect("r1 present");
+        assert_eq!(r1.prompt.as_deref(), Some("go"));
+        assert_eq!(r1.name.as_deref(), Some("nightly"));
+        assert_eq!(r1.interval_secs, 7200);
+        assert_eq!(r1.next_fire_at, 9000);
+
+        store.remove_recurring("r1").unwrap();
+        let ids = Store::load(&path)
+            .recurrings()
+            .iter()
+            .map(|r| r.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["r2".to_string()]);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn recurring_worktree_intent_round_trips_and_old_files_default() {
+        let path = temp_path("recur-wt");
+        let store = Store::load(&path);
+        let mut r = recur("rw", 86400, 100);
+        r.branch = Some("feature/x".to_string());
+        r.create_branch = true;
+        r.branch_base = Some("main".to_string());
+        r.worktree = true;
+        r.worktree_path = Some("/data/worktrees/x-1/feature-x".to_string());
+        r.current_session_id = Some("child".to_string());
+        store.add_recurring(r).unwrap();
+
+        let loaded = Store::load(&path).recurring("rw").expect("rw present");
+        assert_eq!(loaded.branch.as_deref(), Some("feature/x"));
+        assert!(loaded.create_branch);
+        assert!(loaded.worktree);
+        assert_eq!(
+            loaded.worktree_path.as_deref(),
+            Some("/data/worktrees/x-1/feature-x")
+        );
+        assert_eq!(loaded.current_session_id.as_deref(), Some("child"));
+        assert_eq!(loaded.agent, "claude");
+
+        // An old sessions.json (no `recurrings` field) loads with an empty list.
+        let legacy_path = temp_path("recur-legacy");
+        fs::write(&legacy_path, r#"{"sessions":[]}"#).unwrap();
+        assert!(Store::load(&legacy_path).recurrings().is_empty());
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&legacy_path);

@@ -12,6 +12,7 @@ import {
   GripVertical,
   Maximize2,
   Play,
+  RefreshCw,
   X,
 } from "lucide-react";
 import {
@@ -34,7 +35,12 @@ import { CSS } from "@dnd-kit/utilities";
 
 import { agentSupportsResume } from "../../agents";
 import { noAutoCapitalize } from "../../inputProps";
-import { overviewClusters, repoColor, useStore } from "../../store";
+import {
+  overviewClusters,
+  ownedChildSessionIds,
+  repoColor,
+  useStore,
+} from "../../store";
 import {
   effectiveRepo,
   forkUnavailableReason,
@@ -43,8 +49,13 @@ import {
   sessionLabel,
 } from "../../paths";
 import { kbdHint } from "../../platform";
-import { formatFireTime } from "../../time";
-import type { OverviewPanel, ScheduledSession, SessionView } from "../../types";
+import { formatFireTime, formatInterval, formatNextRun } from "../../time";
+import type {
+  OverviewPanel,
+  RecurringSession,
+  ScheduledSession,
+  SessionView,
+} from "../../types";
 import { overviewPanelToContent } from "../Canvas/canvasDrop";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import EmptyState from "../EmptyState/EmptyState";
@@ -590,13 +601,116 @@ function ScheduleCard({
   );
 }
 
+interface RecurringCardProps {
+  recurring: RecurringSession;
+  branch: string;
+  color: string;
+  groupStart: boolean;
+  selected: boolean;
+  onSelect: () => void;
+  onCancel: () => void;
+}
+
+/** A recurring-session card in the Overview cluster (#294): the shared RecurringPanel
+ * body framed like the other columns, keyed on the recurring id so a fire only swaps
+ * the hosted child terminal. */
+function RecurringCard({
+  recurring,
+  branch,
+  color,
+  groupStart,
+  selected,
+  onSelect,
+  onCancel,
+}: RecurringCardProps) {
+  const maximizeItem = useStore((s) => s.maximizeItem);
+  const platform = useStore((s) => s.platform);
+  const title = (
+    <>
+      <span className={styles.agentTitle}>
+        <span className={styles.name}>
+          {recurring.name?.trim() || recurring.branch || "Recurring"}
+        </span>
+        <span className={styles.worktreeBadge}>recurring</span>
+        {recurring.worktree && (
+          <span className={styles.worktreeBadge}>worktree</span>
+        )}
+      </span>
+      <span className={styles.meta}>
+        <span className={styles.metaText}>
+          {repoName(recurring.cwd)}
+          {branch && ` · ${branch}`} · {formatInterval(recurring.interval_secs)}{" "}
+          · {formatNextRun(recurring.next_fire_at)}
+        </span>
+      </span>
+    </>
+  );
+  const actions = (
+    <>
+      <button
+        type="button"
+        className={styles.action}
+        onClick={() =>
+          maximizeItem({
+            kind: "recurring",
+            recurringId: recurring.id,
+            repoPath: recurring.cwd,
+          })
+        }
+        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+        aria-label="Open in big mode"
+      >
+        <Maximize2 size={15} strokeWidth={1.5} />
+      </button>
+      <button
+        type="button"
+        className={styles.action}
+        onClick={onCancel}
+        title="Cancel recurring session"
+        aria-label="Cancel recurring session"
+      >
+        <X size={15} strokeWidth={1.5} />
+      </button>
+    </>
+  );
+  return (
+    <PanelColumn
+      id={recurring.id}
+      color={color}
+      groupStart={groupStart}
+      selected={selected}
+      title={title}
+      leading={
+        <RefreshCw
+          size={14}
+          strokeWidth={1.5}
+          className={styles.scheduleLeadIcon}
+          aria-hidden
+        />
+      }
+      actions={actions}
+      onClickBody={onSelect}
+    >
+      <ItemContent
+        content={{
+          kind: "recurring",
+          recurringId: recurring.id,
+          repoPath: recurring.cwd,
+        }}
+        active
+      />
+    </PanelColumn>
+  );
+}
+
 type ColumnItem =
   | { kind: "agent"; session: SessionView }
   // `repoKey` is the panel's own `overviewPanels` key (#164) — the worktree path
   // for a worktree-opened view, else the cluster's repo — so it renders/removes
   // against the right folder even when shown under a parent cluster.
   | { kind: "panel"; panel: OverviewPanel; repoKey: string }
-  | { kind: "schedule"; schedule: ScheduledSession };
+  | { kind: "schedule"; schedule: ScheduledSession }
+  | { kind: "recurring"; recurring: RecurringSession };
 
 /**
  * The Overview "agent wall" (#38): a customizable arrangement of equal-width
@@ -607,7 +721,7 @@ type ColumnItem =
  * persists per repo.
  */
 function Overview() {
-  const sessions = useStore((s) => s.sessions);
+  const allSessions = useStore((s) => s.sessions);
   const branches = useStore((s) => s.branches);
   const selectedId = useStore((s) => s.selectedId);
   const select = useStore((s) => s.select);
@@ -627,8 +741,15 @@ function Overview() {
   const schedules = useStore((s) => s.schedules);
   const cancelSchedule = useStore((s) => s.cancelSchedule);
   const startScheduleNow = useStore((s) => s.startScheduleNow);
+  const recurrings = useStore((s) => s.recurrings);
+  const cancelRecurring = useStore((s) => s.cancelRecurring);
   // PTY ownership across windows (#84) is resolved inside the shared ItemContent
   // (#157) now — an agent owned by a detached canvas window shows a note there.
+
+  // Recurring-owned child agents (#294) render only inside the recurring card, never
+  // as their own column — exclude them from the session lists that drive the wall.
+  const ownedChildIds = ownedChildSessionIds(recurrings);
+  const sessions = allSessions.filter((s) => !ownedChildIds.has(s.id));
 
   // Drag with a small activation distance so clicking the handle doesn't start a
   // drag; keyboard sensor makes reordering accessible (#43).
@@ -654,7 +775,12 @@ function Overview() {
   const anyPanels = Object.values(overviewPanels).some(
     (list) => list.length > 0,
   );
-  if (sessions.length === 0 && !anyPanels && schedules.length === 0) {
+  if (
+    sessions.length === 0 &&
+    !anyPanels &&
+    schedules.length === 0 &&
+    recurrings.length === 0
+  ) {
     return <EmptyState onNewSession={() => openNewSession()} />;
   }
 
@@ -712,11 +838,13 @@ function Overview() {
     overviewPanels,
     overviewOrder,
     schedules,
+    recurrings,
     filter,
   }).map(({ repo, keys }) => {
     const agents = ordered.filter((s) => effectiveRepo(s) === repo);
     const extras = panelsByCluster.get(repo) ?? [];
     const repoSchedules = schedules.filter((sc) => sc.cwd === repo);
+    const repoRecurrings = recurrings.filter((r) => r.cwd === repo);
     const byKey = new Map<string, ColumnItem>();
     for (const s of agents) byKey.set(s.id, { kind: "agent", session: s });
     for (const e of extras) {
@@ -728,6 +856,9 @@ function Overview() {
     }
     for (const sc of repoSchedules) {
       byKey.set(sc.id, { kind: "schedule", schedule: sc });
+    }
+    for (const r of repoRecurrings) {
+      byKey.set(r.id, { kind: "recurring", recurring: r });
     }
     const items = keys
       .map((k) => byKey.get(k))
@@ -832,6 +963,20 @@ function Overview() {
                         onSelect={() => select(item.schedule.id)}
                         onCancel={() => void cancelSchedule(item.schedule.id)}
                         onStartNow={() => startScheduleNow(item.schedule.id)}
+                      />
+                    );
+                  }
+                  if (item.kind === "recurring") {
+                    return (
+                      <RecurringCard
+                        key={item.recurring.id}
+                        recurring={item.recurring}
+                        branch={branch}
+                        color={color}
+                        groupStart={groupStart}
+                        selected={item.recurring.id === selectedId}
+                        onSelect={() => select(item.recurring.id)}
+                        onCancel={() => void cancelRecurring(item.recurring.id)}
                       />
                     );
                   }

@@ -23,11 +23,13 @@ import {
   FolderTree,
   GitBranch,
   GitFork,
+  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   PanelsTopLeft,
   Play,
   Plus,
+  RefreshCw,
   Settings as SettingsIcon,
   SquareKanban,
   Terminal as TerminalIcon,
@@ -44,22 +46,29 @@ import {
 } from "../../ipc";
 import {
   forkUnavailableReason,
+  recurringNestsUnderWorktree,
   repoName,
   scheduleNestsUnderWorktree,
   sessionLabel,
   worktreeGroupPaths,
 } from "../../paths";
 import { joinPath, kbdHint, revealLabel } from "../../platform";
-import { formatFireTime } from "../../time";
+import { formatFireTime, formatNextRun } from "../../time";
 import {
   dedupeBranchLabels,
   mergeRepoOrder,
+  ownedChildSessionIds,
   REPO_PALETTE,
   repoColor,
   repoOrder,
   useStore,
 } from "../../store";
-import type { BranchList, ScheduledSession, SessionView } from "../../types";
+import type {
+  BranchList,
+  RecurringSession,
+  ScheduledSession,
+  SessionView,
+} from "../../types";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import UpdateIndicator from "../Update/UpdateIndicator";
 import UsageBar from "../Usage/UsageBar";
@@ -335,6 +344,81 @@ function ScheduleRow({
           { label: "Start now", onActivate: () => void onStartNow() },
           { label: "Cancel", onActivate: onCancel, danger: true },
         ]}
+        onClose={closeMenu}
+      />
+    </div>
+  );
+}
+
+/** A recurring-session row (#294): a dnd-kit draggable (drops into Canvas as a
+ * recurring panel), click selects/jumps to it (#79), × cancels. The whole label is
+ * the drag handle. A small "recurring" badge distinguishes it from a schedule, and a
+ * relative "next run in …" time shows the cadence. Right-click → Cancel menu (#132). */
+function RecurringRow({
+  recurring,
+  selected,
+  onOpen,
+  onCancel,
+}: {
+  recurring: RecurringSession;
+  selected: boolean;
+  onOpen: () => void;
+  onCancel: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: `recurring:${recurring.id}`,
+      data: {
+        kind: "recurring",
+        recurringId: recurring.id,
+        repoPath: recurring.cwd,
+      },
+    });
+  const label =
+    recurring.name?.trim() || recurring.branch || repoName(recurring.cwd);
+  const { menu, openMenu, closeMenu } = useRowMenu();
+  const style = transform
+    ? { transform: CSS.Translate.toString(transform) }
+    : undefined;
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${styles.scheduleRow} ${selected ? styles.scheduleRowSelected : ""} ${isDragging ? styles.scheduleRowDragging : ""}`}
+      style={style}
+      title={formatNextRun(recurring.next_fire_at)}
+      onContextMenu={openMenu}
+    >
+      <button
+        type="button"
+        className={styles.scheduleMain}
+        onClick={onOpen}
+        {...attributes}
+        {...listeners}
+      >
+        <RefreshCw
+          size={13}
+          strokeWidth={1.5}
+          className={styles.scheduleIcon}
+          aria-hidden
+        />
+        <span className={styles.scheduleName}>{label}</span>
+        <span className={styles.recurringBadge}>recurring</span>
+        <span className={styles.scheduleWhen}>
+          {formatNextRun(recurring.next_fire_at).replace("next run ", "")}
+        </span>
+      </button>
+      <button
+        type="button"
+        className={styles.scheduleCancel}
+        onClick={onCancel}
+        title="Cancel recurring session"
+        aria-label={`Cancel recurring session ${label}`}
+      >
+        <X size={13} strokeWidth={1.5} />
+      </button>
+      <RowContextMenu
+        menu={menu}
+        items={[{ label: "Cancel", onActivate: onCancel, danger: true }]}
         onClose={closeMenu}
       />
     </div>
@@ -1264,7 +1348,11 @@ function RepoBranchLine({
   branch: string;
   isFiltered: boolean;
 }) {
-  const sessions = useStore((s) => s.sessions);
+  const allSessions = useStore((s) => s.sessions);
+  const recurrings = useStore((s) => s.recurrings);
+  // Exclude recurring-owned child agents (#294) from the kill counts below.
+  const ownedChildIds = ownedChildSessionIds(recurrings);
+  const sessions = allSessions.filter((s) => !ownedChildIds.has(s.id));
   const overviewPanels = useStore((s) => s.overviewPanels);
   const startRepoSession = useStore((s) => s.startRepoSession);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
@@ -1587,6 +1675,7 @@ function RepoGroup({
   const startRepoSession = useStore((s) => s.startRepoSession);
   const cancelSchedule = useStore((s) => s.cancelSchedule);
   const startScheduleNow = useStore((s) => s.startScheduleNow);
+  const cancelRecurring = useStore((s) => s.cancelRecurring);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
   const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
@@ -1594,7 +1683,11 @@ function RepoGroup({
   const sessionBusy = useStore((s) => s.sessionBusy);
   const sessionActive = useStore((s) => s.sessionActive);
   const schedules = useStore((s) => s.schedules);
+  const recurrings = useStore((s) => s.recurrings);
   const overviewPanels = useStore((s) => s.overviewPanels);
+  // Recurring-owned child agents (#294) render only inside the recurring surfaces,
+  // never as their own sidebar row — filter them out of the session lists below.
+  const ownedChildIds = ownedChildSessionIds(recurrings);
 
   const {
     attributes,
@@ -1613,7 +1706,7 @@ function RepoGroup({
   };
 
   const repoSessions = sessions.filter(
-    (s) => s.repoPath === repo && !s.worktreeParent,
+    (s) => s.repoPath === repo && !s.worktreeParent && !ownedChildIds.has(s.id),
   );
   const isEmpty = repoSessions.length === 0;
   // Branch-line gate (#250): show the repo's own branch line only when the folder
@@ -1626,10 +1719,14 @@ function RepoGroup({
   const hasOwnSchedules = schedules.some(
     (s) => s.cwd === repo && !scheduleNestsUnderWorktree(s),
   );
+  const hasOwnRecurrings = recurrings.some(
+    (r) => r.cwd === repo && !recurringNestsUnderWorktree(r),
+  );
   const hasOwnItems =
     repoSessions.length > 0 ||
     (overviewPanels[repo]?.length ?? 0) > 0 ||
-    hasOwnSchedules;
+    hasOwnSchedules ||
+    hasOwnRecurrings;
   // Split the active highlight (#247): the folder header lights for the "all" filter,
   // the branch line for the "own" filter — never both at once.
   const folderActive =
@@ -1642,7 +1739,9 @@ function RepoGroup({
   const rowLabels = dedupeBranchLabels(repoSessions.map(() => baseLabel));
   // Worktree agents (#74) of this repo, grouped by their worktree folder — rendered
   // as indented sub-groups below the repo's own sessions/items.
-  const worktreeAgents = sessions.filter((s) => s.worktreeParent === repo);
+  const worktreeAgents = sessions.filter(
+    (s) => s.worktreeParent === repo && !ownedChildIds.has(s.id),
+  );
   // Pending worktree schedules for this repo (#218): a worktree schedule with a
   // computed `worktree_path` nests under a worktree sub-group keyed by that path —
   // the same key the live session uses after it fires — instead of at the parent
@@ -1650,7 +1749,15 @@ function RepoGroup({
   const worktreeSchedules = schedules.filter(
     (s) => s.cwd === repo && scheduleNestsUnderWorktree(s),
   );
-  const worktreePaths = worktreeGroupPaths(worktreeAgents, worktreeSchedules);
+  // Worktree recurrings (#294) nest under their worktree sub-group the same way.
+  const worktreeRecurrings = recurrings.filter(
+    (r) => r.cwd === repo && recurringNestsUnderWorktree(r),
+  );
+  const worktreePaths = worktreeGroupPaths(
+    worktreeAgents,
+    worktreeSchedules,
+    worktreeRecurrings,
+  );
 
   return (
     <div
@@ -1771,6 +1878,22 @@ function RepoGroup({
           />
         ))}
 
+      {/* Recurring sessions for this repo (#294): name/branch + "next run in …" +
+      cancel. Worktree recurrings nest under their worktree sub-group below. */}
+      {recurrings
+        .filter((r) => r.cwd === repo && !recurringNestsUnderWorktree(r))
+        .map((r) => (
+          <RecurringRow
+            key={r.id}
+            recurring={r}
+            selected={r.id === selectedId}
+            onOpen={() =>
+              selectItem({ kind: "recurring", id: r.id, repoPath: r.cwd })
+            }
+            onCancel={() => void cancelRecurring(r.id)}
+          />
+        ))}
+
       {/* Isolated worktrees (#74/#240), rendered flush at this repo's own level (no
       indent): each worktree folder is a sub-group — a branch header with a "worktree"
       badge — and its agent(s). Their repo_path is the worktree, not this repo. */}
@@ -1779,12 +1902,16 @@ function RepoGroup({
         const wtSchedules = worktreeSchedules.filter(
           (s) => s.worktree_path === wt,
         );
-        // Prefer the live checked-out branch; for a not-yet-fired worktree (schedule
-        // only, no live agent) fall back to the schedule's intended branch so the
+        const wtRecurrings = worktreeRecurrings.filter(
+          (r) => r.worktree_path === wt,
+        );
+        // Prefer the live checked-out branch; for a worktree with only a pending
+        // schedule / recurring (no live agent) fall back to its intended branch so the
         // header reads the real branch, not the sanitized folder basename.
         const wtBranch =
           (branches[wt] ?? "") ||
           (wtSchedules[0]?.branch ?? "") ||
+          (wtRecurrings[0]?.branch ?? "") ||
           repoName(wt);
         const wtLabels = dedupeBranchLabels(wtAgents.map(() => wtBranch));
         return (
@@ -1831,6 +1958,19 @@ function RepoGroup({
                 onStartNow={() => startScheduleNow(s.id)}
               />
             ))}
+            {/* Worktree recurrings (#294) nest here alongside live agents, keyed by
+            the shared worktree_path; select/jump keeps the parent repo identity. */}
+            {wtRecurrings.map((r) => (
+              <RecurringRow
+                key={r.id}
+                recurring={r}
+                selected={r.id === selectedId}
+                onOpen={() =>
+                  selectItem({ kind: "recurring", id: r.id, repoPath: r.cwd })
+                }
+                onCancel={() => void cancelRecurring(r.id)}
+              />
+            ))}
             {/* Views opened from the worktree badge (#164) are keyed by the worktree
             path, so they render here under their worktree. */}
             {renderPanelRows(wt)}
@@ -1847,7 +1987,12 @@ function RepoGroup({
  * listed (greyed, with a coral +) even when it has no active sessions.
  */
 function Sidebar() {
-  const sessions = useStore((s) => s.sessions);
+  const allSessions = useStore((s) => s.sessions);
+  const recurrings = useStore((s) => s.recurrings);
+  // Recurring-owned child agents (#294) never get their own rail dot / count — they
+  // render only inside the recurring surfaces. Filter them from every session list.
+  const railOwnedChildIds = ownedChildSessionIds(recurrings);
+  const sessions = allSessions.filter((s) => !railOwnedChildIds.has(s.id));
   const recents = useStore((s) => s.recents);
   const branches = useStore((s) => s.branches);
   const selectedId = useStore((s) => s.selectedId);
@@ -1864,6 +2009,7 @@ function Sidebar() {
   const checkoutFolderBranch = useStore((s) => s.checkoutFolderBranch);
   const createFolderBranch = useStore((s) => s.createFolderBranch);
   const openSchedule = useStore((s) => s.openSchedule);
+  const openRecurring = useStore((s) => s.openRecurring);
   const addFolder = useStore((s) => s.addFolder);
   const platform = useStore((s) => s.platform);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
@@ -1980,6 +2126,13 @@ function Sidebar() {
     if (event.target !== event.currentTarget) return;
     bgMenu.openMenu(event);
   };
+  // The ⋯ overflow menu (#294) next to "Schedule session": extra session-creation
+  // options. Reuses the shared cursor-menu primitive; later cards (Clone Repo #295,
+  // Auto-continue #296) add entries here.
+  const dotsMenu = useRowMenu();
+  const dotsMenuItems: RowMenuItem[] = [
+    { label: "Recurring session…", onActivate: () => openRecurring() },
+  ];
   // App-wide bulk-action counts (#293) — every running agent (the #91 `exitedCode
   // === undefined` predicate) and every non-agent item, across all folders.
   const globalRunning = sessions.filter(
@@ -1993,6 +2146,7 @@ function Sidebar() {
     { label: "New folder…", onActivate: () => void addFolder() },
     { label: "New session", onActivate: () => openNewSession() },
     { label: "Schedule session", onActivate: () => openSchedule() },
+    { label: "Recurring session…", onActivate: () => openRecurring() },
     {
       label: sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar",
       onActivate: () => toggleSidebarCollapsed(),
@@ -2045,10 +2199,13 @@ function Sidebar() {
   // live repo set, so a spawned/added repo appends and a forgotten one drops without
   // scrambling the rest. With nothing saved this is exactly the default alphabetical
   // `repoOrder`. Drives both the expanded list and the collapsed rail.
+  // Recurring sessions keep their repo listed even before their first fire adds it to
+  // recents (#294), so a recurring-only folder never vanishes after a restart.
+  const recurringRepos = recurrings.map((r) => r.cwd);
   const repos = mergeRepoOrder(
     folderOrder,
     repoOrder(
-      [...recents, ...worktreeParents],
+      [...recents, ...worktreeParents, ...recurringRepos],
       sessions.filter((s) => !s.worktreeParent),
     ),
   );
@@ -2461,18 +2618,37 @@ function Sidebar() {
             </kbd>
           </button>
 
-          {/* Schedule a session to launch later (#93) — same flow, plus a time step. */}
-          <button
-            type="button"
-            className={styles.scheduleButton}
-            onClick={() => openSchedule()}
-          >
-            <Clock size={15} strokeWidth={1.5} />
-            Schedule session
-            <kbd className={styles.kbd}>
-              {kbdHint(platform, "⌘⇧N", "Ctrl+Shift+N")}
-            </kbd>
-          </button>
+          {/* Schedule a session to launch later (#93) — same flow, plus a time step.
+          The ⋯ overflow button (#294) opens a dropdown of extra session-creation
+          options (Recurring session…, and later cards). */}
+          <div className={styles.scheduleActionRow}>
+            <button
+              type="button"
+              className={styles.scheduleButton}
+              onClick={() => openSchedule()}
+            >
+              <Clock size={15} strokeWidth={1.5} />
+              Schedule session
+              <kbd className={styles.kbd}>
+                {kbdHint(platform, "⌘⇧N", "Ctrl+Shift+N")}
+              </kbd>
+            </button>
+            <button
+              type="button"
+              className={styles.dotsButton}
+              onClick={dotsMenu.openMenu}
+              title="More session options"
+              aria-label="More session options"
+              aria-haspopup="menu"
+            >
+              <MoreHorizontal size={16} strokeWidth={1.5} />
+            </button>
+          </div>
+          <RowContextMenu
+            menu={dotsMenu.menu}
+            items={dotsMenuItems}
+            onClose={dotsMenu.closeMenu}
+          />
 
           <div className={styles.viewSwitch}>
             <ViewSwitch />

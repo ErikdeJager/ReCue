@@ -282,6 +282,7 @@ export function useKeyboardNav(): void {
           overviewPanels: state.overviewPanels,
           overviewOrder: state.overviewOrder,
           schedules: state.schedules,
+          recurrings: state.recurrings,
           filter: state.overviewRepoFilter,
         });
         const id = adjacentId(

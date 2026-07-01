@@ -160,10 +160,14 @@ pub fn run() {
             // agents. Polling (vs per-schedule timers) handles create/update/cancel
             // uniformly and catches up on boot — any schedule whose time passed
             // while the app was closed fires on the first tick.
+            // Recurring sessions (#294) share the same poll tick: fire any due
+            // recurring records (rotate their child agent) alongside due schedules,
+            // and catch up overdue ones on the first tick after boot.
             let scheduler = app.handle().clone();
             thread::spawn(move || loop {
                 thread::sleep(std::time::Duration::from_secs(SCHEDULE_POLL_SECS));
                 commands::fire_due_schedules(&scheduler);
+                commands::fire_due_recurrings(&scheduler);
             });
 
             Ok(())
@@ -207,6 +211,10 @@ pub fn run() {
             commands::cancel_schedule,
             commands::update_schedule,
             commands::fire_schedule_now,
+            commands::create_recurring,
+            commands::list_recurrings,
+            commands::cancel_recurring,
+            commands::update_recurring,
             commands::list_dir,
             commands::search_files,
             commands::search_file_contents,

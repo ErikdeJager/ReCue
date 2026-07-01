@@ -228,3 +228,52 @@ export function formatResetCountdown(
   const m = minutes % 60;
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
+
+// --- Recurring session interval helpers (#294) ---
+
+/** A recurring session's repeat-interval unit. */
+export type IntervalUnit = "minute" | "hour" | "day";
+
+const INTERVAL_UNIT_SECS: Record<IntervalUnit, number> = {
+  minute: 60,
+  hour: 3600,
+  day: 86400,
+};
+
+/** Convert an amount + unit into a repeat interval in seconds (#294), floored at 60
+ * (1 minute) so a bad/blank amount can't produce a hot-looping cadence. A non-finite
+ * / non-positive amount collapses to the 60s floor. Pure + unit-tested. */
+export function intervalToSeconds(amount: number, unit: IntervalUnit): number {
+  if (!Number.isFinite(amount) || amount <= 0) return 60;
+  return Math.max(60, Math.round(amount) * INTERVAL_UNIT_SECS[unit]);
+}
+
+/** Decompose an interval in seconds back into the largest whole { amount, unit }
+ * (#294) — the editor seeds its amount + unit `<select>` from a stored
+ * `interval_secs`. Prefers days, then hours, then minutes (rounded). Pure. */
+export function secondsToInterval(secs: number): {
+  amount: number;
+  unit: IntervalUnit;
+} {
+  const s = Math.max(60, Math.round(secs));
+  if (s % 86400 === 0) return { amount: s / 86400, unit: "day" };
+  if (s % 3600 === 0) return { amount: s / 3600, unit: "hour" };
+  return { amount: Math.max(1, Math.round(s / 60)), unit: "minute" };
+}
+
+/** "every 1 hour" / "every 30 minutes" — a friendly interval label (#294). */
+export function formatInterval(secs: number): string {
+  const { amount, unit } = secondsToInterval(secs);
+  const noun = amount === 1 ? unit : `${unit}s`;
+  return `every ${amount} ${noun}`;
+}
+
+/** "next run now" / "next run in 5m" — a relative next-run label for a recurring
+ * row / card (#294). Reuses `formatResetCountdown` for the compact "2h 14m" form. */
+export function formatNextRun(
+  nextFireAt: number,
+  nowMs: number = Date.now(),
+): string {
+  if (nextFireAt * 1000 <= nowMs) return "next run now";
+  return `next run in ${formatResetCountdown(nextFireAt * 1000, nowMs)}`;
+}

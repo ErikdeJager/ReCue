@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::git::{self, BranchList, CommitInfo, FileStatusEntry, WorkingDiff};
 use crate::pty::{SessionError, SessionManager};
-use crate::store::{OverviewPanel, PersistedSession, ScheduledSession, Store};
+use crate::store::{OverviewPanel, PersistedSession, RecurringSession, ScheduledSession, Store};
 
 /// Payload for the `session://output` event.
 ///
@@ -89,6 +89,24 @@ pub struct ScheduleFiredPayload {
 /// missing); it is dropped rather than retried forever.
 #[derive(Clone, Serialize)]
 pub struct ScheduleErrorPayload {
+    pub id: String,
+    pub message: String,
+}
+
+/// Payload for `recurring://fired` (#294): a recurring session rotated its child —
+/// `session` is the freshly-spawned child agent, `next_fire_at` the advanced time.
+#[derive(Clone, Serialize)]
+pub struct RecurringFiredPayload {
+    pub id: String,
+    pub session: PersistedSession,
+    pub next_fire_at: u64,
+}
+
+/// Payload for `recurring://error` (#294): a recurring session's spawn failed. Unlike
+/// a schedule, the record is **kept** (and `next_fire_at` still advanced), so one
+/// failure can't wedge or hot-loop the poll.
+#[derive(Clone, Serialize)]
+pub struct RecurringErrorPayload {
     pub id: String,
     pub message: String,
 }
@@ -1136,6 +1154,280 @@ fn prepare_worktree_for_schedule(
             )?;
         } else {
             git::worktree_add(&sched.cwd, branch, &dest)?;
+        }
+    }
+    Ok(dest.to_string_lossy().to_string())
+}
+
+// --- Recurring sessions (#294) ---
+
+/// Broadcast the full recurring-session list (#294) so every window — incl. a detached
+/// canvas window (#84) holding a recurring panel — stays in sync after any create /
+/// update / cancel / fire. Mirrors `broadcast_schedules`; Tauri events are global, so
+/// identical on macOS and Windows.
+fn broadcast_recurrings(app: &AppHandle, store: &Store) {
+    let _ = app.emit("recurring://changed", store.recurrings());
+}
+
+/// Create a recurring session (#294): a persistent repeating agent. Mirrors
+/// `create_schedule` — for a worktree recurring the worktree folder + (for a new
+/// branch) its branch are created **eagerly** now so items can be opened inside it
+/// before the first fire (idempotent at fire time). `first_fire_at` seeds
+/// `next_fire_at` (immediate = now); `interval_secs` is the repeat cadence.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // flat Tauri command surface, like create_schedule
+pub fn create_recurring(
+    app: AppHandle,
+    store: State<'_, Store>,
+    cwd: String,
+    branch: Option<String>,
+    name: Option<String>,
+    prompt: Option<String>,
+    interval_secs: u64,
+    first_fire_at: u64,
+    agent: Option<String>,
+    create_branch: Option<bool>,
+    base: Option<String>,
+    worktree: Option<bool>,
+) -> Result<RecurringSession, SessionError> {
+    let create_branch = create_branch.unwrap_or(false);
+    let worktree = worktree.unwrap_or(false);
+    let branch = branch.filter(|b| !b.is_empty());
+    // Enforce a floor of 60s (the frontend also clamps) so a bad interval can't
+    // hot-loop the poll.
+    let interval_secs = interval_secs.max(60);
+    // Deterministic worktree folder (mirrors create_schedule): depends only on the
+    // data dir + parent repo + branch, all known here.
+    let worktree_path = if worktree {
+        branch
+            .as_deref()
+            .and_then(|b| worktree_path(&store, &cwd, b).ok())
+            .map(|p| p.to_string_lossy().to_string())
+    } else {
+        None
+    };
+    // Create the worktree folder + branch eagerly at create time (like #259), so a
+    // creation failure is surfaced inline and the record is not persisted; fire time
+    // reuses this folder (idempotent — see `prepare_worktree_for_recurring`).
+    if worktree {
+        if let (Some(branch), Some(dest)) = (branch.as_deref(), worktree_path.as_deref()) {
+            let dest = Path::new(dest);
+            if !dest.is_dir() {
+                if create_branch {
+                    git::worktree_add_new_branch(&cwd, branch, base.as_deref().unwrap_or(""), dest)
+                        .map_err(SessionError::Git)?;
+                } else {
+                    git::worktree_add(&cwd, branch, dest).map_err(SessionError::Git)?;
+                }
+            }
+        }
+    }
+    let rec = RecurringSession {
+        id: Uuid::new_v4().to_string(),
+        cwd,
+        branch,
+        create_branch,
+        branch_base: if create_branch {
+            base.filter(|b| !b.is_empty())
+        } else {
+            None
+        },
+        worktree,
+        worktree_path,
+        name: name.filter(|n| !n.trim().is_empty()),
+        prompt: prompt.filter(|p| !p.trim().is_empty()),
+        interval_secs,
+        next_fire_at: first_fire_at,
+        current_session_id: None,
+        created_at: now_secs(),
+        agent: agent.unwrap_or_else(|| crate::agents::DEFAULT_AGENT_ID.to_string()),
+    };
+    store
+        .add_recurring(rec.clone())
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_recurrings(&app, &store);
+    Ok(rec)
+}
+
+/// All active recurring sessions (#294).
+#[tauri::command]
+pub fn list_recurrings(store: State<'_, Store>) -> Vec<RecurringSession> {
+    store.recurrings()
+}
+
+/// Cancel a recurring session (#294): kill its current child (if any) + forget both
+/// the child record and the recurring record, then broadcast. The worktree cleanup
+/// (ref-counted) is done frontend-side, mirroring `cancelSchedule`.
+#[tauri::command]
+pub fn cancel_recurring(
+    app: AppHandle,
+    manager: State<'_, SessionManager>,
+    store: State<'_, Store>,
+    id: String,
+) -> Result<(), SessionError> {
+    if let Some(rec) = store.recurring(&id) {
+        if let Some(child) = rec.current_session_id.as_deref() {
+            let _ = manager.kill_session(child);
+            let _ = store.remove_session(child);
+        }
+    }
+    store
+        .remove_recurring(&id)
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_recurrings(&app, &store);
+    Ok(())
+}
+
+/// Update a recurring session's prompt / name / interval / next fire time (#294) — the
+/// editor panel's edits. `interval_secs` is floored at 60.
+#[tauri::command]
+pub fn update_recurring(
+    app: AppHandle,
+    store: State<'_, Store>,
+    id: String,
+    prompt: Option<String>,
+    name: Option<String>,
+    interval_secs: u64,
+    next_fire_at: u64,
+) -> Result<(), SessionError> {
+    store
+        .update_recurring(
+            &id,
+            prompt.filter(|p| !p.trim().is_empty()),
+            name.filter(|n| !n.trim().is_empty()),
+            interval_secs.max(60),
+            next_fire_at,
+        )
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_recurrings(&app, &store);
+    Ok(())
+}
+
+/// Fire any due recurring sessions (#294): the poll-loop entry. For each due record,
+/// rotate its child (kill the old, spawn a fresh seeded one). On error emit
+/// `recurring://error` but KEEP the record and still advance `next_fire_at` so one
+/// failure can't wedge or hot-loop the poll. Called on the same tick as
+/// `fire_due_schedules`; boot catch-up runs on the first tick.
+pub fn fire_due_recurrings(app: &AppHandle) {
+    let store = app.state::<Store>();
+    let due = store.take_due_recurrings(now_secs());
+    if due.is_empty() {
+        return;
+    }
+    let manager = app.state::<SessionManager>();
+    for rec in due {
+        if let Err(message) = fire_one_recurring(&store, &manager, app, &rec) {
+            // Keep the record but advance its time so a persistently-failing folder
+            // can't hot-loop (unlike a schedule, which is dropped).
+            let _ = store.mark_recurring_fired(
+                &rec.id,
+                rec.current_session_id.clone(),
+                now_secs() + rec.interval_secs,
+            );
+            let _ = app.emit(
+                "recurring://error",
+                RecurringErrorPayload {
+                    id: rec.id.clone(),
+                    message,
+                },
+            );
+        }
+    }
+    broadcast_recurrings(app, &store);
+}
+
+/// Fire one recurring session (#294): (a) kill + forget the current child (if any),
+/// (b) prepare the worktree / check out the branch (idempotent, like a schedule), (c)
+/// spawn a **fresh** seeded child, (d) persist it as a normal tracked session, (e)
+/// `mark_recurring_fired` (rotate `current_session_id` + advance `next_fire_at`), and
+/// (f) emit `recurring://fired`. Returns the error string on failure — the caller keeps
+/// the record + advances time.
+fn fire_one_recurring(
+    store: &Store,
+    manager: &SessionManager,
+    app: &AppHandle,
+    rec: &RecurringSession,
+) -> Result<(), String> {
+    // Rotate: kill + forget the previous child so it leaves no lingering "exited"
+    // overlay. Best-effort — an already-dead child just isn't found.
+    if let Some(prev) = rec.current_session_id.as_deref() {
+        let _ = manager.kill_session(prev);
+        let _ = store.remove_session(prev);
+    }
+    // Resolve the spawn folder exactly like a schedule (idempotent worktree prep;
+    // best-effort in-folder branch checkout/create).
+    let (spawn_cwd, worktree_parent) = if rec.worktree {
+        let dest = prepare_worktree_for_recurring(store, rec)?;
+        (dest, Some(rec.cwd.clone()))
+    } else {
+        if let Some(branch) = &rec.branch {
+            let _ = if rec.create_branch {
+                git::create_branch(&rec.cwd, branch, rec.branch_base.as_deref().unwrap_or(""))
+            } else {
+                git::checkout_branch(&rec.cwd, branch)
+            };
+        }
+        (rec.cwd.clone(), None)
+    };
+    let info = manager
+        .spawn_session_with_prompt(
+            &spawn_cwd,
+            rec.name.clone(),
+            rec.prompt.as_deref(),
+            &rec.agent,
+        )
+        .map_err(|e| e.to_string())?;
+    let record = PersistedSession {
+        id: info.id.clone(),
+        claude_session_id: info.id,
+        repo_path: spawn_cwd,
+        name: rec.name.clone(),
+        created_at: now_secs(),
+        worktree_parent,
+        auto_name: None,
+        has_been_active: false,
+        agent: rec.agent.clone(),
+        forked_from: None,
+        forkable: false,
+    };
+    let _ = store.add_session(record.clone());
+    let _ = store.touch_recent(&rec.cwd);
+    let next_fire_at = now_secs() + rec.interval_secs;
+    let _ = store.mark_recurring_fired(&rec.id, Some(record.id.clone()), next_fire_at);
+    let _ = app.emit(
+        "recurring://fired",
+        RecurringFiredPayload {
+            id: rec.id.clone(),
+            session: record,
+            next_fire_at,
+        },
+    );
+    Ok(())
+}
+
+/// Create (or reuse) the isolated worktree for a worktree recurring (#294) and return
+/// its folder path. Idempotent: the worktree is created eagerly at create time, so this
+/// only creates when the folder is missing. Mirrors `prepare_worktree_for_schedule`.
+fn prepare_worktree_for_recurring(store: &Store, rec: &RecurringSession) -> Result<String, String> {
+    let branch = rec
+        .branch
+        .as_deref()
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| "worktree recurring has no branch".to_string())?;
+    let dest = match rec.worktree_path.as_deref() {
+        Some(p) => PathBuf::from(p),
+        None => worktree_path(store, &rec.cwd, branch).map_err(|e| e.to_string())?,
+    };
+    if !dest.is_dir() {
+        if rec.create_branch {
+            git::worktree_add_new_branch(
+                &rec.cwd,
+                branch,
+                rec.branch_base.as_deref().unwrap_or(""),
+                &dest,
+            )?;
+        } else {
+            git::worktree_add(&rec.cwd, branch, &dest)?;
         }
     }
     Ok(dest.to_string_lossy().to_string())
