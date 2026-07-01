@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS code-signing entitlements for ReCue (#292).
+
+  These are the entitlements baked into ReCue's *code signature* — as opposed to
+  the NS*UsageDescription strings in Info.plist, which only supply the prompt copy.
+  macOS TCC (Transparency, Consent & Control) requires BOTH: the usage string AND
+  the matching entitlement in the signature, and entitlements are only honored when
+  the app is signed with the Hardened Runtime (codesign --options runtime). Without
+  the audio-input entitlement, macOS silently denies microphone access even after the
+  user taps "Allow", and — because an unsigned/ad-hoc app has no stable signature —
+  the grant never persists, so the prompt reappears on the next launch/attempt.
+
+  Referenced by src-tauri/tauri.conf.json → bundle.macOS.entitlements and applied by
+  the Tauri v2 macOS bundler (which signs with Hardened Runtime); the local re-sign
+  helper scripts/sign-macos-local.sh applies the same file with --options runtime.
+
+  NOTE: the App Sandbox (com.apple.security.app-sandbox) is deliberately NOT enabled —
+  ReCue spawns child `claude` PTYs and reads the user's repos across the filesystem,
+  which the sandbox would confine. This is a Hardened-Runtime, non-sandboxed signature.
+-->
+<plist version="1.0">
+<dict>
+	<!-- The missing piece: lets the app (and the child processes it is the responsible
+	     process for, e.g. the `claude` CLI / voice-dictation helpers in a session PTY)
+	     reach the microphone. Pairs with NSMicrophoneUsageDescription in Info.plist. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- Allows the Hardened Runtime to load libraries not signed by the same (Apple)
+	     identity — required so an ad-hoc / self-signed local build launches. Harmless
+	     under a real Developer ID signature; without it a self-signed Hardened-Runtime
+	     app fails to launch. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

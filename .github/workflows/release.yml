@@ -192,12 +192,44 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # macOS code signing + notarization so mic/voice and protected-folder permissions
+      # ACTUALLY WORK and PERSIST across relaunches (#292). macOS TCC pins a permission
+      # grant to the app's code signature; an unsigned/ad-hoc app has no stable identity,
+      # so grants never stick and the prompt reappears. A Developer ID signature (Hardened
+      # Runtime + Entitlements.plist's audio-input entitlement) fixes that.
+      #
+      # These are ALL optional and GUARDED: the Apple env below is only populated on the
+      # macOS leg (matrix.platform == 'macos-latest') AND only when the corresponding
+      # secret is set — otherwise each resolves to '' and tauri-action falls back to
+      # today's ad-hoc signing, so the build still succeeds with no secrets configured.
+      # The Windows leg never sees any Apple env. The minisign updater env
+      # (TAURI_SIGNING_PRIVATE_KEY*) is unchanged and applies to both legs.
+      #
+      # To activate NOTARIZED macOS releases a maintainer adds these repo secrets
+      # (Settings ▸ Secrets and variables ▸ Actions):
+      #   APPLE_CERTIFICATE           — base64 of the Developer ID Application .p12
+      #   APPLE_CERTIFICATE_PASSWORD  — the .p12 export password
+      #   APPLE_SIGNING_IDENTITY      — e.g. "Developer ID Application: Name (TEAMID)"
+      #   KEYCHAIN_PASSWORD           — any throwaway password for the CI keychain
+      #   APPLE_ID                    — the Apple ID email (for notarization)
+      #   APPLE_PASSWORD              — an app-specific password for that Apple ID
+      #   APPLE_TEAM_ID               — the 10-char Apple Developer Team ID
+      # See docs/macos-permissions.md for the full setup. Until they are added, releases
+      # remain ad-hoc-signed exactly as before.
       - name: Build + upload signed updater artifacts
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS-only Developer ID signing + notarization (guarded — see comment above).
+          APPLE_CERTIFICATE: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          KEYCHAIN_PASSWORD: ${{ matrix.platform == 'macos-latest' && secrets.KEYCHAIN_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           releaseBody: ${{ needs.prepare.outputs.body }}

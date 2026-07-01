@@ -12,6 +12,15 @@
   the matching NS*UsageDescription key here, macOS silently denies access and the
   app never even appears under System Settings > Privacy & Security > Microphone
   (which is why voice works in Terminal.app/iTerm2 but not inside ReCue).
+
+  The four NS*FolderUsageDescription keys (#292) supply the same prompt copy for
+  the protected-folder categories (Downloads / Documents / Desktop / removable
+  volumes) so a `claude` agent reaching into those directories triggers a single
+  labeled prompt attributed to ReCue. As with the microphone, the usage string is
+  only half the fix — the grant also needs a *stable code signature* to persist
+  (see src-tauri/Entitlements.plist + the macOS signing in tauri.conf.json /
+  release.yml / scripts/sign-macos-local.sh); an unsigned/ad-hoc build re-prompts
+  every launch and never actually works.
 -->
 <plist version="1.0">
 <dict>
@@ -19,5 +28,13 @@
 	<string>ReCue runs agent sessions in the terminal. Microphone access lets the claude CLI and voice-dictation tools you use inside a session capture your voice.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>ReCue runs agent sessions in the terminal. Speech-recognition access lets voice-dictation tools you use inside a session transcribe your speech into the terminal.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>ReCue runs agent sessions in the terminal. Downloads-folder access lets the claude CLI and tools you use inside a session read and write files there on your behalf.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>ReCue runs agent sessions in the terminal. Documents-folder access lets the claude CLI and tools you use inside a session read and write files there on your behalf.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>ReCue runs agent sessions in the terminal. Desktop-folder access lets the claude CLI and tools you use inside a session read and write files there on your behalf.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>ReCue runs agent sessions in the terminal. Removable-volume access lets the claude CLI and tools you use inside a session read and write files on mounted drives on your behalf.</string>
 </dict>
 </plist>
