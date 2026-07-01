@@ -15,9 +15,14 @@ import styles from "./CloneRepoModal.module.css";
  * repository's **default branch** (`main` / `master` / …), so the backend only fabricates
  * a `main` for a truly empty / branch-less clone (#298); the folder is registered as a
  * repo and a `claude` session starts on that default branch — all via the store
- * `cloneRepo` action. A "Cloning…" busy state disables the inputs and blocks
- * double-submits; a clone failure (bad URL / auth / network / existing dest) shows git's
- * stderr inline and closes nothing.
+ * `cloneRepo` action.
+ *
+ * **Non-blocking (#299):** submitting **closes the modal immediately** — the clone then
+ * runs in the background while a transient "phantom" folder + progress bar shows in the
+ * sidebar. Success replaces the phantom with the real repo (+ a `Cloned <name>` toast);
+ * a clone failure (bad URL / auth / network / existing dest) removes the phantom and
+ * surfaces git's error as an **error toast** (no longer inline here). So this modal no
+ * longer has a "Cloning…" busy state — it only guards trivial synchronous validation.
  *
  * Store-driven (`cloneRepoOpen` + `closeCloneRepo`/`cloneRepo`), centered, focus-trapped
  * (Tab stays inside), Escape / outside-click close, URL auto-focused, Enter submits.
@@ -32,7 +37,6 @@ function CloneRepoModal() {
 
   const [url, setUrl] = useState("");
   const [parent, setParent] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -45,7 +49,6 @@ function CloneRepoModal() {
     if (!open) return;
     setUrl("");
     setParent(null);
-    setBusy(false);
     setError(null);
     openerRef.current = document.activeElement as HTMLElement | null;
     const t = setTimeout(() => urlRef.current?.focus(), 0);
@@ -57,35 +60,36 @@ function CloneRepoModal() {
 
   if (!open) return null;
 
-  const canClone = url.trim().length > 0 && !!parent && !busy;
+  const canClone = url.trim().length > 0 && !!parent;
 
   const chooseParent = async () => {
     const dir = await pickDirectory().catch(() => null);
     if (dir) setParent(dir);
   };
 
-  const submit = async () => {
+  // Submit is now synchronous (#299): `cloneRepo` enqueues the phantom + starts the
+  // background clone and returns immediately, so on success we just close the modal.
+  // The clone's own success/failure is reported later via toast.
+  const submit = () => {
     if (!canClone) return;
-    setBusy(true);
     setError(null);
-    const result = await cloneRepo(url.trim(), parent!);
+    const result = cloneRepo(url.trim(), parent!);
     if (result === true) {
       close();
     } else {
       setError(result);
-      setBusy(false);
     }
   };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void submit();
+    submit();
   };
 
   const onDialogKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      if (!busy) close();
+      close();
       return;
     }
     // Focus-trap (a11y #49): keep Tab inside the dialog.
@@ -107,12 +111,7 @@ function CloneRepoModal() {
   };
 
   return (
-    <div
-      className={styles.overlay}
-      onClick={() => {
-        if (!busy) close();
-      }}
-    >
+    <div className={styles.overlay} onClick={() => close()}>
       <div
         ref={dialogRef}
         className={styles.dialog}
@@ -139,7 +138,6 @@ function CloneRepoModal() {
             type="text"
             value={url}
             placeholder="https://github.com/owner/repo.git"
-            disabled={busy}
             onChange={(event) => setUrl(event.currentTarget.value)}
             aria-label="Git URL"
           />
@@ -156,7 +154,6 @@ function CloneRepoModal() {
               type="button"
               className={styles.pickButton}
               onClick={() => void chooseParent()}
-              disabled={busy}
             >
               <FolderOpen size={15} strokeWidth={1.5} />
               Choose…
@@ -174,16 +171,11 @@ function CloneRepoModal() {
           )}
 
           <div className={styles.actions}>
-            <button
-              type="button"
-              className={styles.cancel}
-              onClick={close}
-              disabled={busy}
-            >
+            <button type="button" className={styles.cancel} onClick={close}>
               Cancel
             </button>
             <button type="submit" className={styles.clone} disabled={!canClone}>
-              {busy ? "Cloning…" : "Clone"}
+              Clone
             </button>
           </div>
         </form>

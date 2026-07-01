@@ -456,6 +456,19 @@ export interface Toast {
   tone: ToastTone;
 }
 
+/** A clone in progress (#299): a transient, in-memory "phantom" repo the sidebar
+ * renders with an indeterminate progress bar while the backend `clone_repo` runs off
+ * the main thread. `id` is a locally-generated unique key so two concurrent clones show
+ * their own phantom and resolve independently (removed by id on success/failure);
+ * `name` is derived from the URL (mirrors the backend's clone dir name). Never
+ * persisted — a clone doesn't survive a restart. */
+export interface CloningRepo {
+  id: string;
+  name: string;
+  parent: string;
+  url: string;
+}
+
 /** One grouped block of patch-notes (#192): a category + its bullet items. */
 export interface PatchNotesChange {
   /** A small known set (`feature` / `fix` / `improvement` / `other`),

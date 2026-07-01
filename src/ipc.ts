@@ -416,8 +416,10 @@ export const createBranch = (cwd: string, name: string, base: string) =>
 
 /** Clone the git repo at `url` into `<parent>/<repo-name>`, ensure `main` is checked
  * out (creating it if the repo has none), register the folder in recents, and resolve
- * with the absolute destination path (#295). Rejects with a typed git error (bad URL /
- * auth / network / existing dest) for inline display in the Clone Repo modal. */
+ * with the absolute destination path (#295). Runs **off the main thread** (#299) so the
+ * clone doesn't freeze the UI while the sidebar shows a phantom folder + progress bar.
+ * Rejects with a typed git error (bad URL / auth / network / existing dest), which the
+ * store surfaces as an error toast (the modal closes immediately, #299). */
 export const cloneRepo = (url: string, parent: string) =>
   invoke<string>("clone_repo", { url, parent });
 

@@ -114,6 +114,32 @@ body {
   }
 }
 
+/* Indeterminate clone progress (#299): a 40%-wide stripe swept left→right across the
+   sidebar "phantom" clone track. Translated by its own width so it starts/ends just
+   off each edge. The reduced-motion killswitch below freezes it at the base (a static
+   stripe at the left), keeping the affordance visible without motion. Transform-only,
+   so it renders identically on WKWebView (macOS) + WebView2 (Windows). */
+@keyframes clone-progress {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
+/* Collapsed-rail clone pulse (#299): a gentle opacity breathe on the dimmed folder
+   icon; dropped under reduced-motion, leaving a static dimmed icon. */
+@keyframes clone-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
 /* --- Respect reduced-motion globally --- */
 @media (prefers-reduced-motion: reduce) {
   *,

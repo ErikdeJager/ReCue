@@ -113,6 +113,7 @@ beforeEach(() => {
     sessionActive: {},
     claudeMissing: false,
     toasts: [],
+    cloningRepos: [],
     newSessionOpen: false,
     newSessionRepo: null,
   });
@@ -2601,7 +2602,7 @@ describe("toggleMaximizeSelected (#284)", () => {
   });
 });
 
-describe("cloneRepo (#295)", () => {
+describe("cloneRepo (#295/#299)", () => {
   const s = () => useStore.getState();
 
   it("open/close toggle the modal flag", () => {
@@ -2612,16 +2613,60 @@ describe("cloneRepo (#295)", () => {
     expect(s().cloneRepoOpen).toBe(false);
   });
 
-  it("on success prepends the dest to recents and starts a session there", async () => {
+  it("returns true synchronously and shows a phantom while the clone runs (#299)", () => {
+    // A never-resolving clone so the phantom stays in flight for the assertions.
+    vi.spyOn(ipc, "cloneRepo").mockReturnValue(new Promise<string>(() => {}));
+    const spawnSpy = vi.fn().mockResolvedValue(true);
+    useStore.setState({
+      recents: [],
+      cloningRepos: [],
+      spawnSession: spawnSpy,
+    });
+
+    // The modal relies on a synchronous `true` so it can close immediately.
+    const result = s().cloneRepo(
+      "https://github.com/owner/repo.git",
+      "/parent",
+    );
+
+    expect(result).toBe(true);
+    // A phantom folder, labeled with the URL-derived repo name, is enqueued.
+    expect(s().cloningRepos).toHaveLength(1);
+    expect(s().cloningRepos[0]?.name).toBe("repo");
+    expect(s().cloningRepos[0]?.parent).toBe("/parent");
+    // Nothing has resolved yet — no recent, no session, no toast.
+    expect(s().recents).toEqual([]);
+    expect(spawnSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a trivially-invalid submit synchronously without a phantom (#299)", () => {
+    // Fresh call history (spies persist across tests — no global mock reset).
+    const cloneSpy = vi.spyOn(ipc, "cloneRepo");
+    cloneSpy.mockClear();
+    expect(s().cloneRepo("   ", "/parent")).toBe(
+      "a git URL and a destination folder are required",
+    );
+    expect(s().cloneRepo("https://x/y.git", "  ")).toBe(
+      "a git URL and a destination folder are required",
+    );
+    expect(s().cloningRepos).toEqual([]);
+    expect(cloneSpy).not.toHaveBeenCalled();
+  });
+
+  it("on success removes the phantom, prepends the dest, and starts a session (#299)", async () => {
     const cloneSpy = vi
       .spyOn(ipc, "cloneRepo")
       .mockResolvedValue("/parent/repo");
     // Isolate the action from the real spawn (host-less): stub the store's own
     // `spawnSession` (which cloneRepo delegates to) with a resolving spy.
     const spawnSpy = vi.fn().mockResolvedValue(true);
-    useStore.setState({ recents: ["/existing"], spawnSession: spawnSpy });
+    useStore.setState({
+      recents: ["/existing"],
+      cloningRepos: [],
+      spawnSession: spawnSpy,
+    });
 
-    const result = await s().cloneRepo(
+    const result = s().cloneRepo(
       "https://github.com/owner/repo.git",
       "/parent",
     );
@@ -2631,24 +2676,36 @@ describe("cloneRepo (#295)", () => {
       "https://github.com/owner/repo.git",
       "/parent",
     );
+    // Let the background clone resolve (removes the phantom + does the work).
+    await vi.waitFor(() => expect(s().cloningRepos).toEqual([]));
     // Dest is prepended (and the old recent kept).
     expect(s().recents).toEqual(["/parent/repo", "/existing"]);
     expect(spawnSpy).toHaveBeenCalledWith("/parent/repo");
     expect(s().toasts.at(-1)?.message).toBe("Cloned repo");
   });
 
-  it("on failure returns the git error and adds no recent / no session", async () => {
+  it("on failure removes the phantom, toasts the git error, no recent / session (#299)", async () => {
     vi.spyOn(ipc, "cloneRepo").mockRejectedValue({
       kind: "Git",
       message: "fatal: repository not found",
     });
     const spawnSpy = vi.fn().mockResolvedValue(true);
-    useStore.setState({ recents: [], spawnSession: spawnSpy });
+    useStore.setState({
+      recents: [],
+      cloningRepos: [],
+      spawnSession: spawnSpy,
+    });
 
-    const result = await s().cloneRepo("https://bad/url.git", "/parent");
+    const result = s().cloneRepo("https://bad/url.git", "/parent");
+    expect(result).toBe(true);
+    // Phantom shown while in flight, then dropped when the clone rejects.
+    expect(s().cloningRepos).toHaveLength(1);
+    await vi.waitFor(() => expect(s().cloningRepos).toEqual([]));
 
-    expect(result).toBe("fatal: repository not found");
     expect(s().recents).toEqual([]);
     expect(spawnSpy).not.toHaveBeenCalled();
+    const last = s().toasts.at(-1);
+    expect(last?.message).toBe("fatal: repository not found");
+    expect(last?.tone).toBe("error");
   });
 });

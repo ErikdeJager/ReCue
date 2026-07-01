@@ -363,6 +363,65 @@
   font-size: var(--fs-meta-xs);
 }
 
+/* In-flight clone "phantom" folder (#299): a transient, inert repo-header-like row —
+   dimmed vs a real folder, with a muted "Cloning…" hint and an indeterminate progress
+   bar underneath. It carries no hover/active box (it isn't clickable), sits OUTSIDE the
+   drag-reorder set, and uses only design tokens (+ a plain-color track), so it renders
+   identically on macOS (WKWebView) and Windows (WebView2). */
+.phantomHeader {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding-right: var(--space-8);
+  opacity: 0.75;
+}
+
+/* The clone name — aligned with a real .repoName: the 16px folder inset lives on
+   .repoFolder, and this 8px left pad mirrors the .repoTitle button's padding. */
+.phantomName {
+  flex: 1;
+  min-width: 0;
+  padding-left: var(--space-8);
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phantomHint {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+  font-style: italic;
+}
+
+/* Indeterminate progress bar — a token track with a stripe sweeping across it. The
+   sweep keyframes (`clone-progress`) live in global.css so the reduced-motion killswitch
+   there disables the animation; the stripe then reverts to its base (a static 40%-wide
+   stripe at the left), so the affordance stays visible without motion. */
+.phantomTrack {
+  position: relative;
+  height: 3px;
+  margin: 0 var(--space-8) var(--space-6);
+  overflow: hidden;
+  border-radius: var(--radius-dot);
+  background: var(--bg-hover);
+}
+
+.phantomBar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  border-radius: var(--radius-dot);
+  background: var(--accent);
+  animation: clone-progress 1.2s var(--ease-out) infinite;
+}
+
 /* Current branch on its own line below the repo header (#236, supersedes the #225
    inline badge): a clickable sub-line echoing the worktree branch indicator
    (`.worktreeHeader`/`.worktreeName`) — GitBranch icon + muted mono text — but without
@@ -1227,6 +1286,22 @@
 
 .railFolder:hover {
   background: var(--bg-hover);
+}
+
+/* Collapsed-rail clone indicator (#299): a dimmed, gently pulsing folder icon per
+   in-flight clone (no branch line / dots fit the narrow rail). Non-interactive. The
+   pulse keyframes (`clone-pulse`) live in global.css and are dropped under
+   reduced-motion, leaving a static dimmed icon. */
+.railPhantom {
+  display: flex;
+  width: 36px;
+  height: 32px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.75;
+  animation: clone-pulse 1.4s var(--ease-out) infinite;
 }
 
 /* Active Overview filter (#34) — matches the expanded header's accent-dim box. */

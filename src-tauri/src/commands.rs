@@ -484,16 +484,25 @@ pub fn add_recent(store: State<'_, Store>, path: String) -> Result<(), SessionEr
 /// destination path — the frontend then starts a session there. The dest is built with
 /// `PathBuf::join` (never string concat) and is refused if it already exists non-empty
 /// (no overwrite — data safety). Clone errors (bad URL, auth required, network, existing
-/// dest) surface as a typed `SessionError::Git` carrying git's stderr for inline display;
-/// `GIT_TERMINAL_PROMPT=0` makes an authed/private remote fail fast. Cross-platform (git
-/// via `hidden_command`; no raw `$HOME`).
+/// dest) surface as a typed `SessionError::Git` carrying git's stderr; the frontend now
+/// surfaces them as an error **toast** (the modal closes immediately, #299) rather than
+/// inline. `GIT_TERMINAL_PROMPT=0` makes an authed/private remote fail fast.
+///
+/// **Non-blocking (#299):** a plain `pub fn` Tauri command runs on the main (webview)
+/// thread, so the whole network clone would **freeze the UI**. Marking it `async` moves
+/// it onto the async runtime, and `spawn_blocking` runs the synchronous `git` shell-out
+/// on a dedicated blocking pool so it can't starve that runtime's workers either — the
+/// sidebar "phantom folder" + progress bar (#299) and the rest of the app stay
+/// responsive while the clone runs. The git work needs no `Store`, so it moves cleanly
+/// onto the blocking pool; `touch_recent` (a quick in-memory update + one file write)
+/// runs after it resolves. Cross-platform (git via `hidden_command`; no raw `$HOME`).
 #[tauri::command]
-pub fn clone_repo(
+pub async fn clone_repo(
     store: State<'_, Store>,
     url: String,
     parent: String,
 ) -> Result<String, SessionError> {
-    let url = url.trim();
+    let url = url.trim().to_string();
     if url.is_empty() {
         return Err(SessionError::Git("a git URL is required".to_string()));
     }
@@ -502,24 +511,28 @@ pub fn clone_repo(
             "a destination folder is required".to_string(),
         ));
     }
-    let dir = git::repo_dir_name(url);
-    let dest = PathBuf::from(&parent).join(&dir);
-    // Refuse to clone into an existing non-empty folder (no overwrite). An empty
-    // pre-existing dir is fine — git will populate it — but git itself also refuses a
-    // non-empty one; we check first for a clearer message.
-    if dest.is_dir()
-        && std::fs::read_dir(&dest)
-            .map(|mut entries| entries.next().is_some())
-            .unwrap_or(false)
-    {
-        return Err(SessionError::Git(format!(
-            "Destination already exists: {}",
-            dest.display()
-        )));
-    }
-    git::clone_repo(url, &dest).map_err(SessionError::Git)?;
-    git::ensure_checked_out_branch(&dest).map_err(SessionError::Git)?;
-    let dest_str = dest.to_string_lossy().to_string();
+    let dest_str = tauri::async_runtime::spawn_blocking(move || -> Result<String, SessionError> {
+        let dir = git::repo_dir_name(&url);
+        let dest = PathBuf::from(&parent).join(&dir);
+        // Refuse to clone into an existing non-empty folder (no overwrite). An empty
+        // pre-existing dir is fine — git will populate it — but git itself also refuses a
+        // non-empty one; we check first for a clearer message.
+        if dest.is_dir()
+            && std::fs::read_dir(&dest)
+                .map(|mut entries| entries.next().is_some())
+                .unwrap_or(false)
+        {
+            return Err(SessionError::Git(format!(
+                "Destination already exists: {}",
+                dest.display()
+            )));
+        }
+        git::clone_repo(&url, &dest).map_err(SessionError::Git)?;
+        git::ensure_checked_out_branch(&dest).map_err(SessionError::Git)?;
+        Ok(dest.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))??;
     store
         .touch_recent(&dest_str)
         .map_err(|e| SessionError::Io(e.to_string()))?;

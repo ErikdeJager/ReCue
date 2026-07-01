@@ -44,6 +44,7 @@ import * as ipc from "./ipc";
 import { emitSessionOutput } from "./outputBus";
 import { isWindows } from "./platform";
 import {
+  cloneRepoName,
   effectiveRepo,
   type OverviewFilter,
   recurringNestsUnderWorktree,
@@ -63,6 +64,7 @@ import type {
   CanvasNode,
   CanvasTab,
   CanvasTemplate,
+  CloningRepo,
   DiffSeenMap,
   FileStatusCode,
   OverviewPanel,
@@ -82,6 +84,10 @@ const TOAST_TTL_MS = 3500;
 // still replays the conversation; no live output then arrives to clear the flag).
 const RECONNECT_BACKSTOP_MS = 4000;
 let toastSeq = 0;
+// Monotonic id source for in-flight clone "phantom" folders (#299) — a module-level
+// counter (like `toastSeq`), so each concurrent clone gets a unique key and the two
+// resolve/remove independently. Kept out of state (no component reacts to it).
+let cloneSeq = 0;
 // True during the boot resume window. A boot-resume failure prints its error
 // (e.g. "No conversation found") then exits — both arrive here — so exit toasts
 // are suppressed during this window to avoid a wall of them (#30). Module-local
@@ -1238,6 +1244,12 @@ export interface AppState {
    * repo, ensures `main`, registers the folder, and starts a session there. Opened
    * from the sidebar ⋯ menu (#294) + background context menu. */
   cloneRepoOpen: boolean;
+  /** In-flight clones (#299): the modal closes immediately on submit and the clone
+   * runs in the background, so each pending clone shows a transient, non-draggable
+   * "phantom" folder + indeterminate progress bar in the sidebar until it resolves.
+   * Removed by `id` on success (real repo appears) or failure (error toast).
+   * Transient / in-memory only — never persisted. */
+  cloningRepos: CloningRepo[];
   /** The ⌘K "Create panel" launcher (#189): a keyboard-first modal to spawn any
    * panel type (session / file / diff / terminal / kanban / filetree) in a chosen
    * repo-or-worktree, reusing the existing creation actions. */
@@ -1359,11 +1371,16 @@ export interface AppState {
    * context menu's "Clone Repo…". */
   openCloneRepo: () => void;
   closeCloneRepo: () => void;
-  /** Clone the git repo at `url` into the chosen `parent` dir (#295): clone → ensure
-   * `main` → register the folder → start a session on `main`. Resolves `true` on
-   * success (closing the modal), else the git error string for inline display (bad
-   * URL / auth / network / existing dest). */
-  cloneRepo: (url: string, parent: string) => Promise<true | string>;
+  /** Start cloning the git repo at `url` into the chosen `parent` dir (#295/#299).
+   * **Non-blocking (#299):** enqueues a transient `cloningRepos` "phantom" entry (a
+   * sidebar folder + progress bar) and fires the background `clone_repo` — on resolve
+   * it removes the phantom, registers the real folder, and starts a session on the
+   * checked-out default branch (+ a `Cloned <name>` toast); on reject it removes the
+   * phantom and surfaces the git error as an **error toast** (the modal is already
+   * closed). Returns **synchronously** so the modal can close immediately: `true` once
+   * the phantom is enqueued, or an error string for a trivial validation miss (empty
+   * url / parent). */
+  cloneRepo: (url: string, parent: string) => true | string;
   /** Open the ⌘K "Create panel" launcher (#189). `type` (set by ⌘⌥1–6) pre-selects
    * a panel type and skips the type step; omitted = open at the type step. */
   openCreatePanel: (type?: string) => void;
@@ -2146,6 +2163,7 @@ export const useStore = create<AppState>()((set, get) => ({
   newSessionInitialBranches: null,
   newSessionAtBranch: false,
   cloneRepoOpen: false,
+  cloningRepos: [],
   createPanelOpen: false,
   createPanelType: null,
   update: {
@@ -4345,26 +4363,56 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  cloneRepo: async (url, parent) => {
-    // The backend clones into `<parent>/<repo-name>`, ensures `main`, registers the
-    // folder in recents, and returns the absolute dest path. A clone failure (bad URL /
-    // auth / network / existing dest) returns the git error string for inline display —
-    // no session started, no recent added (the backend only touches recents on success).
-    let dest: string;
-    try {
-      dest = await ipc.cloneRepo(url, parent);
-    } catch (err) {
-      return isSessionError(err) ? err.message : "Could not clone repository";
+  cloneRepo: (url, parent) => {
+    // Non-blocking clone (#299): the modal closes immediately and the network clone
+    // runs in the background, so we enqueue a transient "phantom" folder (a sidebar
+    // group + indeterminate progress bar) and fire `clone_repo` without awaiting it.
+    // Trivial validation only (empty url / parent) is reported synchronously; the real
+    // clone errors (bad URL / auth / network / existing dest) surface as an error toast
+    // below (the modal is already gone, so inline display is no longer the surface).
+    const trimmedUrl = url.trim();
+    if (trimmedUrl.length === 0 || parent.trim().length === 0) {
+      return "a git URL and a destination folder are required";
     }
-    // Show the group instantly (the backend already persisted the recent); the spawn
-    // below re-prepends it too, which is a harmless no-op dedupe.
-    set((s) => ({ recents: [dest, ...s.recents.filter((r) => r !== dest)] }));
-    // Start a normal interactive agent on the already-checked-out `main`. `spawnSession`
-    // selects it and refreshes branches + file statuses so the sidebar group shows its
-    // `main` label + file-status colors. A spawn failure toasts on its own; the clone
-    // still succeeded (the folder stays), so the modal closes either way.
-    await get().spawnSession(dest);
-    get().pushToast(`Cloned ${repoName(dest)}`);
+    const id = `clone-${++cloneSeq}`;
+    const phantom: CloningRepo = {
+      id,
+      name: cloneRepoName(trimmedUrl),
+      parent,
+      url: trimmedUrl,
+    };
+    set((s) => ({ cloningRepos: [...s.cloningRepos, phantom] }));
+    // The backend clones into `<parent>/<repo-name>`, ensures a branch, registers the
+    // folder in recents, and resolves with the absolute dest path — all off the main
+    // thread (#299) so the UI stays responsive. Key the phantom by `id` so two
+    // concurrent clones remove only their own entry.
+    void ipc
+      .cloneRepo(trimmedUrl, parent)
+      .then(async (dest) => {
+        // Real repo takes over: drop the phantom + show the group instantly (the
+        // backend already persisted the recent; the spawn re-prepends it, a harmless
+        // no-op dedupe). `spawnSession` starts a normal interactive agent on the
+        // already-checked-out default branch and refreshes branches + file statuses,
+        // so the group shows its branch label + file-status colors. A spawn failure
+        // toasts on its own; the clone still succeeded (the folder stays).
+        set((s) => ({
+          cloningRepos: s.cloningRepos.filter((c) => c.id !== id),
+          recents: [dest, ...s.recents.filter((r) => r !== dest)],
+        }));
+        await get().spawnSession(dest);
+        get().pushToast(`Cloned ${repoName(dest)}`);
+      })
+      .catch((err) => {
+        // A stuck phantom with no toast is a bug (the modal already closed): drop the
+        // phantom and surface git's error as an error toast.
+        set((s) => ({
+          cloningRepos: s.cloningRepos.filter((c) => c.id !== id),
+        }));
+        get().pushToast(
+          isSessionError(err) ? err.message : "Could not clone repository",
+          "error",
+        );
+      });
     return true;
   },
 
