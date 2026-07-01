@@ -1448,3 +1448,31 @@ Downloads folder. "Investigate the issue and solve it."
 - **All changes are macOS-bundle-only** (Info.plist / Entitlements.plist / `bundle.macOS` /
   release.yml macOS leg) — Windows & Linux untouched, honoring the cross-platform requirement.
   Verification is largely **manual on a real Mac** (a GUI/TCC/signing path that can't be CI-tested).
+
+## Task 293
+
+Card (terse): right-clicking the left panel base (not an item) should offer "Kill all agents" and
+"Close all items" that act on all agents/items across ALL folders.
+
+- **Append to the EXISTING empty-area background menu (#172), not a new menu.** The sidebar
+  already has a target-guarded right-click "background" menu (`openBgMenu` on the repo-list
+  container, only firing on the empty base, feeding `bgMenuItems`→`RowContextMenu`). The two
+  global items are appended there; no new trigger is built. This also covers the collapsed rail's
+  empty area and the "No repositories yet." hint for free.
+- **Global "Close all items" mirrors the per-repo #91 semantics:** kill all agents + remove all
+  non-agent items (file/diff viewers + shell terminals w/ PTYs), but **keep folders in `recents`
+  and do NOT cancel schedules** (cancelling schedules / forgetting folders is the more
+  destructive Forget-folder path, not requested here).
+- **Items shown conditionally, mirroring per-repo:** "Kill all agents" only when ≥1 agent runs
+  app-wide; "Close all items" only when ≥1 agent runs OR ≥1 non-agent item exists — so the menu
+  never offers a no-op destructive item.
+- **Honor `confirmDestructive` (#103) via a small backward-compatible inline-confirm extension to
+  `RowContextMenu`** (an optional `confirmLabel` on `RowMenuItem`; first click swaps to a danger
+  confirm button), rather than adding a modal. The flat background menu can't do the per-repo
+  inline confirm-mode swap today, and every existing caller omitting `confirmLabel` is unaffected.
+  Confirm for "Close all items" only when it would actually kill agents (mirrors per-repo).
+- **Reuse the existing store helpers** (`killAgentsInRepo`/`closeRepoItems`) by iterating the
+  authoritative parent-folder set (`worktreeParent ?? repoPath` ∪ recents ∪ overviewPanels keys),
+  so worktree agents are killed via their parent with correct #74 ref-counted cleanup and one
+  summary toast (no per-folder toast spam).
+- **Pure frontend/store** (no OS-specific code) → identical on macOS and Windows.
