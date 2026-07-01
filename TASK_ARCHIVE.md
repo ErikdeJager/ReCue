@@ -8464,3 +8464,83 @@ recorded here, not in a code change.
 
 ---
 
+### 291. [x] FileTree folder context menu — Copy absolute path, Copy relative path, Reveal, Rename
+
+**Status:** Done
+**Depends on:** none
+**Created:** 2026-07-01
+
+**Description**
+
+The FileTree's right-click menu on a **folder** row previously offered only *New folder…* and
+*Delete folder*. It now gives folders the same locate/copy affordances a **file** row already
+has, **plus in-place renaming**. Right-clicking a folder shows, in order: **New folder…** →
+**Rename…** → **Reveal in Finder** (→ "Reveal in Explorer" on Windows via `revealLabel(platform)`)
+→ **Copy absolute path** → **Copy relative path** → **Delete folder** (danger, last).
+
+- **Copy absolute path** copies the folder's OS-native absolute path
+  (`joinPath(platform, repoPath, folderRelPath)`, backslashes on Windows) and toasts "Copied
+  path"; **Copy relative path** copies the repo-relative POSIX path.
+- **Reveal** opens the folder in the OS file manager (`revealPath`/`reveal_path` → `open` on
+  macOS, `explorer.exe` on Windows) — the established ReCue precedent for revealing *folders*
+  (open the folder, not select-in-parent), reusing the file-menu code verbatim.
+- **Rename…** opens an inline text input seeded with the current folder name (reusing the
+  New-folder inline-form pattern, a new `"rename"` menu mode): Enter (or the confirm button)
+  renames on disk and the tree updates in place with unaffected siblings' expansion preserved;
+  Escape cancels; a blank or unchanged name is a no-op; an invalid/reserved name or an existing
+  target toasts an error and leaves the folder untouched. Not confirm-gated (a rename is
+  reversible, matching the ungated *New folder…*).
+
+The generic new `rename_path` backend command was scoped to the folder menu only; the file menu,
+*New folder…*, and *Delete folder* are unchanged.
+
+**What shipped** (commit
+[`bcc647a`](https://github.com/ErikdeJager/ReCue/commit/bcc647a), PR
+[#42](https://github.com/ErikdeJager/ReCue/pull/42), merged `2129117`, 2026-07-01):
+
+- **`src-tauri/src/files.rs`** — new `rename_path(repo, from, to)`: `confine`s the source
+  (must exist, in-repo; refuses the repo root), resolves the destination's parent without
+  requiring the target to exist (canonicalize parent + `starts_with(canon_repo)`), refuses to
+  overwrite an existing target (no-clobber), then `fs::rename` (same-volume within one repo);
+  returns the destination repo-relative POSIX path. Two `#[cfg(test)]` unit tests cover happy
+  path (file + folder + nested), no-clobber, root-refusal, empty/nonexistent source, and
+  path-escape (`../…`, absolute) rejection.
+- **`src-tauri/src/commands.rs`** — `#[tauri::command] rename_path` wrapper validating the new
+  leaf via `validate_new_segment` (rejects separators/`.`/`..`/empty + Windows-reserved device
+  names through `windows_safe_seg`); I/O errors mapped via `SessionError::Io`.
+- **`src-tauri/src/lib.rs`** — registered `commands::rename_path` in the `invoke_handler`.
+- **`src/ipc.ts`** — `renamePath(repo, from, to)` wrapper.
+- **`src/store.ts`** — `renameTreePath(repo, from, to)` action mirroring `createFolder`/
+  `deleteTreePath` (IPC → error toast+return → bump `fileTreeRefresh[repo]` →
+  `refreshFileStatuses(repo)` → "Renamed" success toast), plus its store-type declaration.
+- **`src/components/FileTree/FileTree.tsx`** — extended `MenuMode` with `"rename"`, added
+  `renameName` state + a focus-and-select effect + `submitRename` (`splitPath` to keep the
+  folder's parent dir, unchanged-name no-op, reload the parent level after), the rename inline
+  form, and the four new folder-branch menu items.
+
+**Key files/areas touched:** `src-tauri/src/files.rs` (+ tests), `commands.rs`, `lib.rs`,
+`src/ipc.ts`, `src/store.ts`, `src/components/FileTree/FileTree.tsx`. No CSS change (the rename
+form reuses the existing `menuForm`/`menuInput` styles). Purely additive — a new command + new
+menu items.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 291): scope is the **folder** branch only —
+  **not** adding Rename to the file menu (the `rename_path` command is generic, so a follow-up
+  could add file Rename cheaply); reveal semantics for a folder = **open** it
+  (`revealPath`/`os_open`), not select-in-parent (`revealFileInFinder`/`open -R` /
+  `explorer /select`), for consistency with ReCue's repo-menu reveal; Rename is inline,
+  Enter-to-commit / Escape-cancel, blank/unchanged = no-op, **not** confirm-gated. Item order
+  keeps the destructive *Delete folder* last. ("relateive" in the card read as "relative".)
+- **Cross-platform:** every primitive is a shared seam — `rename_path` uses
+  `validate_new_segment`/`windows_safe_seg` (Windows-reserved names) + `fs::rename` (both OSes),
+  reveal via `revealPath`/`revealLabel`, copy via `joinPath(platform, …)` + `copyToClipboard`
+  (Windows WebView2 clipboard workaround). No hardcoded `/`, `$HOME`, or Cmd-only handling
+  introduced; macOS behavior unchanged, Windows additive. Project checks green: `npm run build`
+  / `lint` / `test`, `cargo test` (incl. the new `rename_path` tests) / `clippy` / `fmt`. The
+  Explorer reveal / on-disk rename GUI paths are flagged for a real-box Windows check.
+
+---
+
