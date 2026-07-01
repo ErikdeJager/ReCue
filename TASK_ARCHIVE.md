@@ -9033,3 +9033,70 @@ per-agent exclusion is applied) — which in turn depends on #294.
 
 ---
 
+### 298. [x] Clone lands on the repo's default branch (not a forced `main`) + fix misleading modal hint
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Fixed the **Clone Repo** (#295) flow so a cloned repository ends up on the **remote's actual default
+branch** (`main` / `master` / `develop` / …) rather than a fabricated `main`, and corrected the
+modal copy that falsely claimed the clone "starts on `main`". `git clone` already leaves HEAD on the
+remote's default branch for any non-empty repo, so the old post-clone `git::ensure_main` step —
+which created a **new** `main` from HEAD and checked it out for any repo lacking a local `main` — was
+actively wrong for a `master`-default (or any non-`main`-default) repo, landing the user on a
+fabricated `main` instead of the real default. The corrected step leaves the cloned default branch
+exactly as-is and only fabricates `main` for a truly **empty / branch-less (unborn HEAD)** clone, so
+the subsequent `claude` session still has a valid branch.
+
+**What shipped** (commit
+[`f94bae4`](https://github.com/ErikdeJager/ReCue/commit/f94bae4), PR
+[#53](https://github.com/ErikdeJager/ReCue/pull/53), merged `0f4078d`, 2026-07-01):
+
+- **Backend — `src-tauri/src/git.rs`:** renamed `ensure_main` → **`ensure_checked_out_branch`** with
+  a contract-changing body: `if list_branches(cwd).all.is_empty()` (an unborn / empty clone has zero
+  local branches) → `create_branch(cwd, "main", "")` to fabricate a checked-out `main`; otherwise
+  **do nothing** — leave the default branch git already checked out exactly as cloned. Stays
+  fail-open with the same `Result<(), String>` signature (a real git error surfaces as the clone
+  error string, as before).
+- **Backend — `src-tauri/src/commands.rs`:** the `clone_repo` command's call site now invokes
+  `git::ensure_checked_out_branch(&dest)` instead of `ensure_main`; the rest of `clone_repo` (URL
+  parsing, dest-collision rejection, `touch_recent`, returned dest path) is unchanged and still
+  synchronous/blocking (the async/phantom-folder refactor is deliberately left to Task 299).
+- **Backend — tests (`src-tauri/src/git.rs`):** the `ensure_*` unit tests were updated to assert the
+  new behavior — a `master`-default local repo stays on `master` (no fabricated `main`), a
+  `main`-default repo stays on `main`, and a new
+  `ensure_checked_out_branch_creates_main_for_branchless_repo` case asserts a branch-less repo gets a
+  created `main`. Reuses the existing local-git test scaffolding, so they run on both OSes via the
+  shared git shell-out.
+- **Frontend — `src/components/CloneRepoModal/CloneRepoModal.tsx`:** the hint paragraph now reads
+  "The repo clones into a new folder here (named for the URL) and opens on its default branch"
+  (dropping the `<code>main</code>` reference), and the file doc-comment was reworded to match the
+  new default-branch behavior. The now-dead `.code` style was removed from
+  `CloneRepoModal.module.css`.
+
+**Key files/areas touched:** `src-tauri/src/git.rs` (+105/−… incl. tests), `src-tauri/src/commands.rs`,
+`src/components/CloneRepoModal/CloneRepoModal.tsx`, `src/components/CloneRepoModal/CloneRepoModal.module.css`
+(4 files, +94 / −57).
+
+**Dependencies:** none. **Enables:** Task 299 (non-blocking background clone + phantom folder +
+progress bar) builds on this corrected branch behavior.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 298): the primary intent was read as **correctness of the
+  flow**, not merely the copy — so the flow was fixed to land on the real default branch rather than
+  just deleting the misleading comment (both were card-permitted). "IF NO BRANCH EXISTS → create
+  main" was interpreted as the **empty/unborn clone** only. The modal copy was **reworded, not
+  deleted** (a short accurate hint is better UX). The clone command was kept **sync-shaped** here —
+  the non-blocking/phantom-folder work is split into the dependent Task 299 so 298 stays a small, safe
+  correctness fix.
+- **Cross-platform:** the only OS-sensitive primitive is the `git` shell-out, which already goes
+  through the shared `hidden_command` console-flash guard, so the behavior is identical on macOS and
+  Windows; the frontend change is pure copy/CSS. Existing already-cloned repos are unaffected (this
+  only changes what happens during a *new* clone), and reverting `git.rs`/`commands.rs` restores the
+  old forced-`main` behavior (clean rollback).
+
+---
+
