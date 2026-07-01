@@ -2482,3 +2482,55 @@ describe("toggleMaximizeSelected (#284)", () => {
     expect(s().maximizedItem).toBeNull();
   });
 });
+
+describe("cloneRepo (#295)", () => {
+  const s = () => useStore.getState();
+
+  it("open/close toggle the modal flag", () => {
+    expect(s().cloneRepoOpen).toBe(false);
+    s().openCloneRepo();
+    expect(s().cloneRepoOpen).toBe(true);
+    s().closeCloneRepo();
+    expect(s().cloneRepoOpen).toBe(false);
+  });
+
+  it("on success prepends the dest to recents and starts a session there", async () => {
+    const cloneSpy = vi
+      .spyOn(ipc, "cloneRepo")
+      .mockResolvedValue("/parent/repo");
+    // Isolate the action from the real spawn (host-less): stub the store's own
+    // `spawnSession` (which cloneRepo delegates to) with a resolving spy.
+    const spawnSpy = vi.fn().mockResolvedValue(true);
+    useStore.setState({ recents: ["/existing"], spawnSession: spawnSpy });
+
+    const result = await s().cloneRepo(
+      "https://github.com/owner/repo.git",
+      "/parent",
+    );
+
+    expect(result).toBe(true);
+    expect(cloneSpy).toHaveBeenCalledWith(
+      "https://github.com/owner/repo.git",
+      "/parent",
+    );
+    // Dest is prepended (and the old recent kept).
+    expect(s().recents).toEqual(["/parent/repo", "/existing"]);
+    expect(spawnSpy).toHaveBeenCalledWith("/parent/repo");
+    expect(s().toasts.at(-1)?.message).toBe("Cloned repo");
+  });
+
+  it("on failure returns the git error and adds no recent / no session", async () => {
+    vi.spyOn(ipc, "cloneRepo").mockRejectedValue({
+      kind: "Git",
+      message: "fatal: repository not found",
+    });
+    const spawnSpy = vi.fn().mockResolvedValue(true);
+    useStore.setState({ recents: [], spawnSession: spawnSpy });
+
+    const result = await s().cloneRepo("https://bad/url.git", "/parent");
+
+    expect(result).toBe("fatal: repository not found");
+    expect(s().recents).toEqual([]);
+    expect(spawnSpy).not.toHaveBeenCalled();
+  });
+});

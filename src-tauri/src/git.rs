@@ -454,6 +454,74 @@ pub fn fetch_remotes(cwd: impl AsRef<Path>) -> Result<(), String> {
     }
 }
 
+/// Derive the local directory name `git clone <url>` would create from a repo URL
+/// (#295) — a **pure** helper (unit-tested; no filesystem / git). Trims whitespace
+/// and a trailing `/`, takes the segment after the last `/` **or** `:` (so an SCP-form
+/// `git@host:owner/repo.git` yields `repo`), then strips a trailing `.git`. Falls back
+/// to `"repo"` when the result is empty, so the caller always has a safe, non-empty dir
+/// name to `PathBuf::join` onto the chosen parent. Cross-platform (string-only; the
+/// caller builds the actual path with `PathBuf::join`, never string concat).
+pub fn repo_dir_name(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/');
+    // Split on the last '/' or ':' — covers `https://host/owner/repo(.git)`,
+    // `ssh://host/owner/repo`, and the SCP form `git@host:owner/repo.git`.
+    let last = trimmed.rsplit(['/', ':']).next().unwrap_or(trimmed);
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    if name.is_empty() {
+        "repo".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Clone the git repo at `url` into `dest` (#295) — a new deliberate git **network**
+/// write, modeled on `fetch_remotes`. `dest` must not already exist (git creates it);
+/// the caller pre-checks a non-empty existing target. Copies `fetch_remotes`' two
+/// fail-fast env vars — `GIT_TERMINAL_PROMPT=0` + `GIT_SSH_COMMAND=ssh -oBatchMode=yes`
+/// — so an authed/private remote **fails fast** instead of hanging a GUI-launched
+/// process on a credential prompt. `dest` is passed as an `OsStr` arg (no `-C`, since
+/// the repo doesn't exist yet); the path is built by the caller with `PathBuf::join`.
+/// Returns git's trimmed stderr on failure. Cross-platform (shell-out via
+/// `hidden_command`; no raw `$HOME` / POSIX assumptions).
+pub fn clone_repo(url: &str, dest: impl AsRef<Path>) -> Result<(), String> {
+    let output = hidden_command("git")
+        .arg("clone")
+        .arg(url)
+        .arg(dest.as_ref())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "git clone failed".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
+/// Ensure `cwd` has `main` checked out (#295) — the "checks out main; creates main if
+/// it doesn't exist" step run right after `clone_repo`. If a local `main` already
+/// exists (the common case, or a repo whose default already is `main`) → check it out;
+/// otherwise create + check out `main` from the cloned HEAD (`git checkout -b main`),
+/// which also covers a repo whose default is `master` and an unborn/empty clone. The
+/// membership guard means an existing `main` never errors (`create_branch` refuses an
+/// already-existing name). Returns git's error on failure. Reuses the existing
+/// `checkout_branch` / `create_branch` writes (both via `hidden_command`), so it's
+/// identical on macOS and Windows.
+pub fn ensure_main(cwd: impl AsRef<Path>) -> Result<(), String> {
+    let cwd = cwd.as_ref();
+    if list_branches(cwd).all.iter().any(|b| b == "main") {
+        checkout_branch(cwd, "main")
+    } else {
+        create_branch(cwd, "main", "")
+    }
+}
+
 /// Fast-forward the current branch of `cwd` to its upstream — `git pull --ff-only`
 /// (#181). A new deliberate git **network** write invoked from the sidebar repo /
 /// worktree context menus. `--ff-only` advances the branch when possible and refuses
@@ -1163,6 +1231,35 @@ index 0..1
         assert!(parse_porcelain_z("").is_empty());
     }
 
+    // --- URL → dir-name helper tests (pure, no repo) (#295) ---
+
+    #[test]
+    fn repo_dir_name_strips_git_suffix_trailing_slash_and_forms() {
+        // https:// with a `.git` suffix.
+        assert_eq!(repo_dir_name("https://github.com/owner/repo.git"), "repo");
+        // https:// without the suffix.
+        assert_eq!(repo_dir_name("https://github.com/owner/repo"), "repo");
+        // A trailing slash is trimmed before taking the basename.
+        assert_eq!(repo_dir_name("https://github.com/owner/repo/"), "repo");
+        assert_eq!(repo_dir_name("https://github.com/owner/repo.git/"), "repo");
+        // SCP-form `git@host:owner/repo.git` splits on the last `/` → `repo`.
+        assert_eq!(repo_dir_name("git@github.com:owner/repo.git"), "repo");
+        // SCP-form with the org directly after the colon (no `/`).
+        assert_eq!(repo_dir_name("git@github.com:repo.git"), "repo");
+        // ssh:// URL.
+        assert_eq!(repo_dir_name("ssh://git@host.xz/owner/repo.git"), "repo");
+        // A dotted repo name only loses a *trailing* `.git`.
+        assert_eq!(
+            repo_dir_name("https://github.com/owner/my.repo.git"),
+            "my.repo"
+        );
+        // Surrounding whitespace is trimmed.
+        assert_eq!(repo_dir_name("  https://host/owner/repo.git  "), "repo");
+        // Degenerate input falls back to a safe non-empty name.
+        assert_eq!(repo_dir_name(""), "repo");
+        assert_eq!(repo_dir_name("/"), "repo");
+    }
+
     // --- Integration tests (real `git`; skip if unavailable) ---
 
     fn unique_dir(tag: &str) -> PathBuf {
@@ -1489,6 +1586,76 @@ index 0..1
         assert_eq!(current_branch(&dir), "from-base");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clone_into_dest_then_ensure_main_creates_or_checks_out_main() {
+        // Build a source repo whose default branch is `master`, so `ensure_main` must
+        // *create* `main` from HEAD (the "creates main if it doesn't exist" path).
+        let Some(origin) = init_repo("clone-origin") else {
+            return;
+        };
+        if !git_in(&origin, &["checkout", "-q", "-b", "master"]) {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        }
+        fs::write(origin.join("a.txt"), "x\n").unwrap();
+        if !commit_all(&origin, "init") {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        }
+
+        // Clone via the real `super::clone_repo` into a fresh dest (the test module has
+        // its own `clone_repo` helper; disambiguate with `super::`).
+        let dest = unique_dir("clone-dest");
+        let origin_url = origin.to_string_lossy().to_string();
+        if super::clone_repo(&origin_url, &dest).is_err() {
+            // git/clone unavailable in this environment — skip.
+            let _ = fs::remove_dir_all(&origin);
+            let _ = fs::remove_dir_all(&dest);
+            return;
+        }
+        // A test identity so the branch-create checkout can proceed cleanly.
+        git_in(&dest, &["config", "user.email", "t@test.dev"]);
+        git_in(&dest, &["config", "user.name", "Test"]);
+
+        // No local `main` yet (the origin was `master`).
+        assert!(!list_branches(&dest).all.iter().any(|b| b == "main"));
+        assert!(ensure_main(&dest).is_ok());
+        assert_eq!(current_branch(&dest), "main");
+
+        // Idempotent: a second `ensure_main` (now `main` exists) just checks it out.
+        assert!(ensure_main(&dest).is_ok());
+        assert_eq!(current_branch(&dest), "main");
+
+        let _ = fs::remove_dir_all(&origin);
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn ensure_main_checks_out_existing_main() {
+        // A repo whose default already is `main`: `ensure_main` just checks it out
+        // (never erroring on the already-existing branch).
+        let Some(origin) = init_repo("main-origin") else {
+            return;
+        };
+        if !git_in(&origin, &["checkout", "-q", "-b", "main"]) {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        }
+        fs::write(origin.join("a.txt"), "x\n").unwrap();
+        if !commit_all(&origin, "init") {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        }
+        // Move HEAD off `main` so `ensure_main` has to switch back to it.
+        assert!(create_branch(&origin, "feature", "").is_ok());
+        assert_eq!(current_branch(&origin), "feature");
+
+        assert!(ensure_main(&origin).is_ok());
+        assert_eq!(current_branch(&origin), "main");
+
+        let _ = fs::remove_dir_all(&origin);
     }
 
     #[test]

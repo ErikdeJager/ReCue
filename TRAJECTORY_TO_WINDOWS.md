@@ -803,3 +803,37 @@ the hosted child terminal swaps. All of it is path-key / token / reused-git-seam
   `C`, no doubled paint) under ConPTY. Confirm cancelling kills the child and removes the
   surfaces, and that a worktree recurring's folder is cleaned up (ref-counted). Re-confirm the
   same on macOS.
+
+### #295 — Clone Repo (clone a git repo + start a session on main)
+
+Adds a **"Clone Repo…"** entry to the ⋯ session-options menu (#294) + the sidebar background
+context menu, opening a `CloneRepoModal` (git URL + native folder-picker destination). Clone →
+ensure `main` → register the folder → start a session, all through existing cross-platform seams:
+
+- **Git shell-outs via `hidden_command`** — `git::clone_repo` (the new `git clone <url> <dest>`
+  network write) and `git::ensure_main` (reusing `checkout_branch` / `create_branch`) both build
+  their `Command` through the shared `CREATE_NO_WINDOW` console-flash guard, so no `conhost`
+  window flashes on Windows. The clone copies `fetch_remotes`' two fail-fast env vars
+  (`GIT_TERMINAL_PROMPT=0` + `GIT_SSH_COMMAND=ssh -oBatchMode=yes`) so an authed/private remote
+  fails fast instead of hanging the GUI process on a credential prompt.
+- **Path building is backend-only + `PathBuf::join`** — `commands::clone_repo` derives the folder
+  name with the pure `git::repo_dir_name` (unit-tested) and builds `dest = PathBuf::from(parent)
+  .join(dir)` (never string concat), then returns the absolute path as a `String`; the frontend
+  never joins/derives paths (it passes whole paths across IPC), so there are no `/`-vs-`\`
+  assumptions. No raw `$HOME`.
+- **Frontend parity** — the modal uses only design tokens + existing modal patterns
+  (`::-webkit-scrollbar`-safe, `color-mix` with a solid fallback border, no macOS-only effects),
+  the native folder dialog via the already-granted `dialog:default` capability, Escape /
+  outside-click close, and a focus trap. No new keyboard shortcuts.
+
+#### Still needs manual Windows verification (#295)
+
+- **Clone + folder-picker + session spawn (GUI/PTY path, can't be unit-tested).** On a Windows
+  build: ⋯ menu → "Clone Repo…" → paste a public repo URL, **Choose…** a destination folder,
+  click **Clone** → confirm "Cloning…" then the modal closes, the repo appears as a sidebar group
+  on **`main`** (label + file-status colors populated), and a `claude.cmd` session starts in the
+  cloned folder and **repaints cleanly** under ConPTY. Confirm a bad URL and a private/authed URL
+  each **fail fast** (no hang) with git's stderr shown **inline** in the modal (no session/recent
+  added), and that cloning where the derived folder already exists non-empty shows the
+  "Destination already exists" inline error. Verify the dest path is spelled with **backslashes**
+  natively (built by `PathBuf::join`). Re-confirm the whole flow on macOS.

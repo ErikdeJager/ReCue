@@ -238,6 +238,7 @@ pub fn run() {
             commands::pull_branch,
             commands::checkout_branch,
             commands::create_branch,
+            commands::clone_repo,
             commands::spawn_worktree_agent_new_branch,
             commands::compare_branches,
             commands::get_settings,
