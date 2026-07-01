@@ -1352,7 +1352,7 @@ directive (2026-06-26) all interpretation calls below were made autonomously.
 - **`ariaLabel="Initial prompt"` is kept** so the field retains an accessible name without the
   visible placeholder.
 
-## Task 257
+## Task 290
 
 Card (terse): "Resolve any dependency vulnerabilities (if there are any). Make sure to check
 everything properly and audit. If no vulnerabilities are found, you may drop this task."
