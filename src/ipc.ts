@@ -144,6 +144,11 @@ export const killSession = (id: string) => invoke<void>("kill_session", { id });
 export const renameSession = (id: string, name: string) =>
   invoke<void>("rename_session", { id, name });
 
+/** Set a session's per-agent auto-continue opt-out (#297): `disabled = true` excludes
+ * this one Claude agent from the #296 auto-continue fire step. */
+export const setSessionAutoContinue = (id: string, disabled: boolean) =>
+  invoke<void>("set_session_auto_continue", { id, disabled });
+
 export const sessionScrollback = (id: string) =>
   invoke<ScrollbackReply>("session_scrollback", { id });
 

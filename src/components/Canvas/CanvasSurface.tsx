@@ -28,6 +28,7 @@ import { kbdHint } from "../../platform";
 import { repoColor, useStore } from "../../store";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
 import { IS_MAIN_WINDOW } from "../../windowContext";
+import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import ItemContent from "../ItemContent/ItemContent";
 import { itemTitle, panelTitle } from "../ItemContent/itemTitle";
@@ -378,6 +379,12 @@ function LeafPanel({
           </button>
         </span>
       </header>
+      {/* Per-agent auto-continue opt-out (#297): a compact strip below the header, shown
+          only for a Claude agent while the global option is on. It stops pointerdown
+          internally so a click toggles it without starting the #144 header drag. */}
+      {content.kind === "agent" && session && (
+        <AutoContinueToggle session={session} />
+      )}
       <div className={styles.panelBody}>
         <ItemContent content={content} active leafId={leaf.id} />
       </div>

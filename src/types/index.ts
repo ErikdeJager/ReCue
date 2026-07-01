@@ -29,6 +29,10 @@ export interface SessionRecord {
    * on-disk claude log has a real turn, gating the Fork affordance. Defaults true
    * (fail-open) for older records without the field. */
   forkable?: boolean;
+  /** Per-agent auto-continue opt-out (#297): when the global `autoContinueAfterLimit`
+   * (#296) is on, an agent participates unless this is `true`. Absent/false for older
+   * records → inherit the global behavior. */
+  auto_continue_disabled?: boolean;
 }
 
 /** A slash-invokable skill/command (#114, mirrors `skills::SkillInfo`). Powers
@@ -499,4 +503,8 @@ export interface SessionView {
    * Fork affordance is shown unavailable (no-op + explanatory tooltip). Seeded from the
    * record + updated by `session://forkable`. Undefined/true → forkable (fail-open). */
   forkable?: boolean;
+  /** Per-agent auto-continue opt-out (#297): when `true`, this Claude agent is excluded
+   * from the #296 auto-continue fire step even though the global `autoContinueAfterLimit`
+   * is on. Seeded from the record; toggled via the per-agent checkbox. Default false. */
+  autoContinueDisabled?: boolean;
 }

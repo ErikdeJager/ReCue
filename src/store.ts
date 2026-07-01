@@ -322,6 +322,9 @@ function toSessionView(record: SessionRecord): SessionView {
     // Fail-open (#138): undefined (older record) → forkable; only a persisted `false`
     // disables Fork. Live updates arrive via `session://forkable` → setForkable.
     forkable: record.forkable ?? true,
+    // Per-agent auto-continue opt-out (#297): absent/false (older record) → inherit the
+    // global behavior; only a persisted `true` excludes this agent from the fire step.
+    autoContinueDisabled: record.auto_continue_disabled ?? false,
   };
 }
 
@@ -1340,6 +1343,10 @@ export interface AppState {
   /** Toggle the `autoContinueAfterLimit` setting (#296) — backs the ⋯-menu checkable
    * item + the Settings toggle. Persists via `saveSettings`. */
   toggleAutoContinue: () => void;
+  /** Set a single Claude agent's per-agent auto-continue opt-out (#297): `disabled =
+   * true` excludes that agent from the #296 fire step. Optimistically updates the
+   * session then persists via `ipc.setSessionAutoContinue`. */
+  setAutoContinueDisabled: (id: string, disabled: boolean) => void;
   /** Add an existing folder to recents without spawning an agent (#172 sidebar
    * background menu → "New folder…"): opens the native folder picker and persists
    * the choice so it shows as a folder group immediately. Cancel = no-op; an already
@@ -2504,10 +2511,16 @@ export const useStore = create<AppState>()((set, get) => ({
   applyAutoContinue: () => {
     const state = get();
     // Live Claude sessions = running (not exited, the #91 predicate) and running
-    // claude (a legacy null agent predates #101 and is claude).
+    // claude (a legacy null agent predates #101 and is claude). Per-agent opt-out
+    // (#297): an agent whose box is unchecked (`autoContinueDisabled`) is excluded
+    // here, so it never enters the captured arm-set nor the fire-set — the pure #296
+    // reducer stays agnostic while that one agent skips the continue nudge.
     const liveClaudeIds = state.sessions
       .filter(
-        (s) => s.exitedCode === undefined && (s.agent ?? "claude") === "claude",
+        (s) =>
+          s.exitedCode === undefined &&
+          (s.agent ?? "claude") === "claude" &&
+          !s.autoContinueDisabled,
       )
       .map((s) => s.id);
     const { next, fireIds } = evaluateAutoContinue(
@@ -2531,6 +2544,20 @@ export const useStore = create<AppState>()((set, get) => ({
       ...settings,
       autoContinueAfterLimit: !settings.autoContinueAfterLimit,
     });
+  },
+  setAutoContinueDisabled: (id, disabled) => {
+    const session = get().sessions.find((x) => x.id === id);
+    // No-op when the id isn't a tracked session or the flag is unchanged.
+    if (!session || (session.autoContinueDisabled ?? false) === disabled)
+      return;
+    // Optimistic local update so both agent surfaces reflect it immediately; the
+    // fire step (`applyAutoContinue`) reads this same flag on the next usage tick.
+    set((s) => ({
+      sessions: s.sessions.map((x) =>
+        x.id === id ? { ...x, autoContinueDisabled: disabled } : x,
+      ),
+    }));
+    void ipc.setSessionAutoContinue(id, disabled).catch(() => {});
   },
 
   addFolder: async () => {

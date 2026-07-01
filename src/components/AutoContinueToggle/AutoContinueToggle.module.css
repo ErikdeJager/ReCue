@@ -1,0 +1,25 @@
+/* Compact per-agent auto-continue opt-out strip (#297). A thin, unobtrusive row that
+   sits below the agent card / panel header, above the terminal body. */
+.strip {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-2) var(--space-6);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--bg-panel);
+}
+
+/* Shrink the reused Checkbox to card-chrome scale: a smaller box + a compact (#111
+   meta) single-line label that elides in a narrow column. */
+.checkbox {
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.checkbox span:last-child {
+  overflow: hidden;
+  font-size: var(--fs-meta-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

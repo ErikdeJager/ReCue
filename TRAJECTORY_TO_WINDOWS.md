@@ -804,6 +804,35 @@ the hosted child terminal swaps. All of it is path-key / token / reused-git-seam
   surfaces, and that a worktree recurring's folder is cleaned up (ref-counted). Re-confirm the
   same on macOS.
 
+### #297 — Per-agent opt-out for auto-continue-after-limit
+
+Refines #296 with a persisted per-session `auto_continue_disabled` flag: when the global
+"Auto continue after limit reset" option is on, each **Claude** agent's Overview card and
+Canvas panel show a compact **"Auto continue after limit reset"** checkbox (checked =
+participating). Unchecking sets the flag so that one agent is excluded from the #296 fire
+step, without touching the global setting or any other agent. Entirely platform-neutral:
+
+- **Backend** — a `#[serde(default)] auto_continue_disabled: bool` on `PersistedSession`
+  (mirrors `has_been_active`/`forkable`; old `sessions.json` upgrades cleanly) + a
+  `set_session_auto_continue` store method/command. Pure data layer, no shell-out, no `cfg`.
+- **Frontend** — the reused `AutoContinueToggle` (the shared #52 `Checkbox`) is gated to
+  Claude + global-on, uses only design tokens (`--fs-meta-xs`, `::-webkit-scrollbar`-safe,
+  no macOS-only effects), and `stopPropagation`s so it never starts the #144 Canvas header
+  drag. The fire-step exclusion is a `!s.autoContinueDisabled` filter on `liveClaudeIds` in
+  `applyAutoContinue` — the same code path on both OSes, unit-tested in
+  `store.autoContinue.test.ts`.
+
+#### Still needs manual Windows verification (#297)
+
+- **Checkbox render/toggle/persist (GUI path, can't be unit-tested).** On a Windows build:
+  with Claude default + global auto-continue ON, confirm each Claude agent card/panel shows
+  the checkbox (checked); switch the global option OFF and confirm it disappears; spawn a
+  codex/opencode agent and confirm it never shows the checkbox. Uncheck one agent, restart the
+  app, and confirm it stays unchecked and both surfaces (Overview + Canvas) agree. Confirm a
+  click on the Canvas panel's checkbox toggles it **without** starting a panel drag. (A real
+  usage-limit reset is hard to trigger offline — the exclusion is asserted by the unit test.)
+  Re-confirm the same on macOS.
+
 ### #295 — Clone Repo (clone a git repo + start a session on main)
 
 Adds a **"Clone Repo…"** entry to the ⋯ session-options menu (#294) + the sidebar background

@@ -183,6 +183,7 @@ pub fn run() {
             commands::resize_pty,
             commands::kill_session,
             commands::rename_session,
+            commands::set_session_auto_continue,
             commands::session_scrollback,
             commands::list_sessions,
             commands::list_recents,

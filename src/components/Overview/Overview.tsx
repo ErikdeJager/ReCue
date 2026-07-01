@@ -57,6 +57,7 @@ import type {
   SessionView,
 } from "../../types";
 import { overviewPanelToContent } from "../Canvas/canvasDrop";
+import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import EmptyState from "../EmptyState/EmptyState";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
@@ -84,6 +85,10 @@ interface PanelColumnProps {
   /** Optional slot before the title (e.g. the agent activity indicator, #71). */
   leading?: ReactNode;
   actions: ReactNode;
+  /** Optional thin strip rendered between the header and the body (e.g. the #297
+   * per-agent auto-continue toggle). It provides its own chrome, so when it renders
+   * nothing (`null`) no empty bar appears. Not part of the drag handle. */
+  subheader?: ReactNode;
   onClickBody?: () => void;
   children: ReactNode;
 }
@@ -96,6 +101,7 @@ function PanelColumn({
   title,
   leading,
   actions,
+  subheader,
   onClickBody,
   children,
 }: PanelColumnProps) {
@@ -139,6 +145,7 @@ function PanelColumn({
           {actions}
         </div>
       </header>
+      {subheader}
       <div className={styles.body} onClick={onClickBody}>
         {children}
       </div>
@@ -357,6 +364,7 @@ function SessionCard({
       title={title}
       leading={<BusyIndicator busy={busy} hasBeenActive={hasBeenActive} />}
       actions={actions}
+      subheader={<AutoContinueToggle session={session} />}
       onClickBody={onSelect}
     >
       <ItemContent

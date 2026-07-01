@@ -142,6 +142,8 @@ pub fn spawn_session(
         // A freshly spawned session has no log yet → not forkable until its first
         // real turn materializes one (#138); the title worker flips it then.
         forkable: false,
+        // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
+        auto_continue_disabled: false,
     };
     store
         .add_session(record.clone())
@@ -202,6 +204,8 @@ pub fn spawn_worktree_agent(
         // A freshly spawned session has no log yet → not forkable until its first
         // real turn materializes one (#138); the title worker flips it then.
         forkable: false,
+        // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
+        auto_continue_disabled: false,
     };
     store
         .add_session(record.clone())
@@ -241,6 +245,8 @@ pub fn spawn_worktree_agent_new_branch(
         // A freshly spawned session has no log yet → not forkable until its first
         // real turn materializes one (#138); the title worker flips it then.
         forkable: false,
+        // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
+        auto_continue_disabled: false,
     };
     store
         .add_session(record.clone())
@@ -367,6 +373,8 @@ pub fn fork_session(
         // A fresh fork's own log isn't materialized until first interaction (#134),
         // so it isn't forkable yet — the title worker flips it on the first turn (#138).
         forkable: false,
+        // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
+        auto_continue_disabled: false,
     };
     store
         .add_session(record.clone())
@@ -406,6 +414,20 @@ pub fn rename_session(
     };
     store
         .rename_session(&id, name)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
+/// Set a session's per-agent auto-continue opt-out (#297) and persist. `disabled ==
+/// true` excludes that one Claude agent from the #296 auto-continue fire step without
+/// touching the global setting or any other agent.
+#[tauri::command]
+pub fn set_session_auto_continue(
+    store: State<'_, Store>,
+    id: String,
+    disabled: bool,
+) -> Result<(), SessionError> {
+    store
+        .set_session_auto_continue(&id, disabled)
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
@@ -1150,6 +1172,8 @@ fn fire_one_schedule(
         forked_from: None,
         // Prompt-seeded, but its log materializes only once it runs (#138).
         forkable: false,
+        // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
+        auto_continue_disabled: false,
     };
     let _ = store.add_session(record.clone());
     // Touch the repo (not the worktree folder) as the recent.
@@ -1437,6 +1461,8 @@ fn fire_one_recurring(
         agent: rec.agent.clone(),
         forked_from: None,
         forkable: false,
+        // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
+        auto_continue_disabled: false,
     };
     let _ = store.add_session(record.clone());
     let _ = store.touch_recent(&rec.cwd);

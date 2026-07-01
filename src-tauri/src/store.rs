@@ -78,6 +78,13 @@ pub struct PersistedSession {
     /// never wrongly disables Fork; a freshly spawned session (no log yet) is set `false`.
     #[serde(default = "default_true")]
     pub forkable: bool,
+    /// Per-agent opt-out for auto-continue-after-limit (#297): when the global
+    /// `autoContinueAfterLimit` setting (#296) is on, an agent participates unless
+    /// this is `true`. Unchecking the per-agent box sets it `true` so that one agent
+    /// is skipped by the fire step. Defaults `false` (inherit the global behavior) so
+    /// older records (without the field) still deserialize and keep participating.
+    #[serde(default)]
+    pub auto_continue_disabled: bool,
 }
 
 /// A user-added Overview panel (a non-agent column), persisted per repo (#38).
@@ -403,6 +410,29 @@ impl Store {
         let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
             Some(session) if session.forkable != forkable => {
                 session.forkable = forkable;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.persist(&guard)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Set a session's per-agent auto-continue opt-out (#297) and persist **only on
+    /// change**. `disabled == true` excludes that one Claude agent from the #296
+    /// auto-continue fire step without touching the global setting or any other agent.
+    /// A no-op for an unknown id.
+    pub fn set_session_auto_continue(&self, id: &str, disabled: bool) -> io::Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
+            Some(session) if session.auto_continue_disabled != disabled => {
+                session.auto_continue_disabled = disabled;
                 true
             }
             _ => false,
@@ -811,6 +841,7 @@ mod tests {
             agent: default_agent(),
             forked_from: None,
             forkable: true,
+            auto_continue_disabled: false,
         }
     }
 
@@ -1352,6 +1383,41 @@ mod tests {
         let legacy_path = temp_path("forkable-legacy");
         fs::write(&legacy_path, legacy).unwrap();
         assert!(Store::load(&legacy_path).session("old").unwrap().forkable);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&legacy_path);
+    }
+
+    #[test]
+    fn set_session_auto_continue_updates_and_persists_on_change() {
+        let path = temp_path("auto-continue");
+        let store = Store::load(&path);
+        store.add_session(record("s1", "/repo/x")).unwrap();
+        // The fixture defaults false (inherit the global behavior); opt this agent out
+        // and confirm the disabled flag survives a reload (#297).
+        store.set_session_auto_continue("s1", true).unwrap();
+        assert!(store.session("s1").unwrap().auto_continue_disabled);
+        assert!(
+            Store::load(&path)
+                .session("s1")
+                .unwrap()
+                .auto_continue_disabled
+        );
+        // Back on, and an unknown id is a no-op (no panic).
+        store.set_session_auto_continue("s1", false).unwrap();
+        assert!(!store.session("s1").unwrap().auto_continue_disabled);
+        store.set_session_auto_continue("missing", true).unwrap();
+
+        // A legacy record without the field loads as participating (disabled = false).
+        let legacy = r#"{"sessions":[{"id":"old","claude_session_id":"old","repo_path":"/r","name":null,"created_at":0}]}"#;
+        let legacy_path = temp_path("auto-continue-legacy");
+        fs::write(&legacy_path, legacy).unwrap();
+        assert!(
+            !Store::load(&legacy_path)
+                .session("old")
+                .unwrap()
+                .auto_continue_disabled
+        );
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&legacy_path);
