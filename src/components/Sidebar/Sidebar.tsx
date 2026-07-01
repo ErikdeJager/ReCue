@@ -2163,7 +2163,6 @@ function Sidebar() {
       : null;
   const dotsMenuItems: RowMenuItem[] = [
     { label: "Recurring session…", onActivate: () => openRecurring() },
-    { label: "Clone Repo…", onActivate: () => openCloneRepo() },
     ...(autoContinueItem ? [autoContinueItem] : []),
   ];
   // App-wide bulk-action counts (#293) — every running agent (the #91 `exitedCode
