@@ -101,6 +101,38 @@ let eventsSubscribed = false;
 // must not add a second "Session exited" toast on top of the action's toast (#32).
 const intentionalKills = new Set<string>();
 
+// Recurring children (#294) whose `recurring://fired` event arrived BEFORE the record
+// that owns them landed in the frontend `recurrings` array (#300) — e.g. the immediate
+// create-time fire's event beating the command's return / the `recurring://changed`
+// broadcast. Keyed by recurring id → the fired child's `SessionRecord`. Upserting such a
+// child while its owning record is still absent would render it as its own standalone
+// column/row (unowned). We stash it here instead and adopt it (`upsertSession`) only once
+// the record — which the backend already marks with `current_session_id` — is present, so
+// the child is owned the instant it enters `sessions`. Module-level + in-memory like
+// `intentionalKills` (a transient, per-run coordination set).
+const pendingRecurringChildren = new Map<string, SessionRecord>();
+
+/**
+ * Adopt any stashed recurring child (#300) whose owning record — now present in
+ * `recurrings` with `current_session_id` pointing at that child — has arrived. Upserts
+ * the child (so its recurring card can render its terminal) and clears it from the
+ * pending map. A record present but pointing at a *different* child means the pending one
+ * was already superseded (a later rotation), so it's dropped without upserting. Pure but
+ * for the injected `upsert`; safe to call after any `recurrings` mutation.
+ */
+function adoptPendingRecurringChildren(
+  recurrings: readonly RecurringSession[],
+  upsert: (record: SessionRecord) => void,
+): void {
+  if (pendingRecurringChildren.size === 0) return;
+  for (const [recId, child] of [...pendingRecurringChildren]) {
+    const rec = recurrings.find((r) => r.id === recId);
+    if (!rec) continue; // record not here yet — keep waiting.
+    if (rec.current_session_id === child.id) upsert(child);
+    pendingRecurringChildren.delete(recId);
+  }
+}
+
 // Worktree folder → parent repo (#199), recorded whenever the auto-delete guard runs
 // (i.e. an agent of the worktree is removed/exits) so a later **panel/schedule** close
 // can still resolve the worktree's parent after its last agent is gone — the parent is
@@ -154,6 +186,33 @@ export function ownedChildSessionIds(
     if (r.current_session_id) ids.add(r.current_session_id);
   }
   return ids;
+}
+
+/**
+ * Resolve a `recurring://fired` event (#294/#300) against the current `recurrings`: swap
+ * the matching record's `current_session_id` to the fresh `childId` and advance its
+ * `next_fire_at`, reporting whether the record was `present` (so the child can be adopted
+ * — upserted — immediately, already owned) and the `prev` child id it replaced (to retire
+ * the old rotation's agent). When the record is absent the fired event beat the create /
+ * broadcast that brings it in; the caller stashes the child instead of rendering it as a
+ * standalone column. Pure — the store applies the returned array + side effects.
+ */
+export function applyRecurringFire(
+  recurrings: readonly RecurringSession[],
+  id: string,
+  childId: string,
+  nextFireAt: number,
+): { recurrings: RecurringSession[]; present: boolean; prev: string | null } {
+  const match = recurrings.find((r) => r.id === id);
+  return {
+    present: !!match,
+    prev: match?.current_session_id ?? null,
+    recurrings: recurrings.map((r) =>
+      r.id === id
+        ? { ...r, current_session_id: childId, next_fire_at: nextFireAt }
+        : r,
+    ),
+  };
 }
 
 /** Resolve a worktree folder's parent repo (#199) — from a live session of the
@@ -2769,23 +2828,27 @@ export const useStore = create<AppState>()((set, get) => ({
         // panel, so it must follow the rotation + keep its `recurrings` slice fresh).
         await ipc.subscribeRecurringEvents({
           onFired: ({ id, session, next_fire_at }) => {
-            // The previous child (if any) is being retired; swap it for the fresh one
-            // in a single state update so the survivor is never transiently dropped.
-            const prev = get().recurrings.find(
-              (r) => r.id === id,
-            )?.current_session_id;
-            get().upsertSession(toSessionView(session));
-            set((s) => ({
-              recurrings: s.recurrings.map((r) =>
-                r.id === id
-                  ? {
-                      ...r,
-                      current_session_id: session.id,
-                      next_fire_at,
-                    }
-                  : r,
-              ),
-            }));
+            // Swap the retiring child for the fresh one. Order matters (#300): claim the
+            // child in the `recurrings` record FIRST, then `upsertSession` — so the child
+            // is already owned (excluded from Overview/Sidebar) the instant it enters
+            // `sessions`, never flashing as its own standalone column.
+            const { recurrings, present, prev } = applyRecurringFire(
+              get().recurrings,
+              id,
+              session.id,
+              next_fire_at,
+            );
+            if (present) {
+              set({ recurrings });
+              get().upsertSession(toSessionView(session));
+            } else {
+              // The fired event beat the record's arrival (#300 — the immediate
+              // create-time fire's event racing the command return / `recurring://changed`
+              // broadcast). Upserting now would render an unowned standalone column, so
+              // stash the child; `createRecurring` / `applyRecurringSync` adopt it once the
+              // record — which the backend already marks with `current_session_id` — lands.
+              pendingRecurringChildren.set(id, session);
+            }
             if (prev && prev !== session.id) {
               // Swallow the old child's pending exit event (the kill lands async) so
               // it never shows a "Process exited" overlay/toast, then drop it.
@@ -4862,9 +4925,12 @@ export const useStore = create<AppState>()((set, get) => ({
         // on the ScheduledSession so it launches the right CLI at fire time.
         get().settings.defaultAgent,
       );
-      // Newest-first; surface the (possibly new) folder in recents immediately.
+      // Newest-first; surface the (possibly new) folder in recents immediately. Idempotent
+      // add (#300, mirroring `createRecurring`): filter any existing entry with this id so
+      // a `schedule://changed` broadcast (#280) that raced this create can't duplicate the
+      // card.
       set((s) => ({
-        schedules: [record, ...s.schedules],
+        schedules: [record, ...s.schedules.filter((x) => x.id !== record.id)],
         recents: [cwd, ...s.recents.filter((r) => r !== cwd)],
       }));
       get().pushToast(`Scheduled for ${new Date(at * 1000).toLocaleString()}`);
@@ -4962,10 +5028,20 @@ export const useStore = create<AppState>()((set, get) => ({
         // The recurring launches under the agent chosen at create time (#142).
         get().settings.defaultAgent,
       );
+      // Idempotent optimistic add (#300): filter out any existing entry with this id so a
+      // `recurring://changed` broadcast that raced ahead of us (or the record already
+      // synced by it) can't leave TWO cards with the same id — one of which would render a
+      // blank duplicate (a pooled xterm attaches to only one DOM node). Newest-first.
       set((s) => ({
-        recurrings: [record, ...s.recurrings],
+        recurrings: [record, ...s.recurrings.filter((x) => x.id !== record.id)],
         recents: [cwd, ...s.recents.filter((r) => r !== cwd)],
       }));
+      // Immediate-fire path (#300): if the backend fired at create time and its
+      // `recurring://fired` beat this add, adopt the stashed child now that the record
+      // (carrying `current_session_id`) is present, so its card shows the running agent.
+      adoptPendingRecurringChildren(get().recurrings, (r) =>
+        get().upsertSession(toSessionView(r)),
+      );
       get().pushToast(
         `Recurring session created (${formatInterval(intervalSecs)})`,
       );
@@ -5029,8 +5105,16 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   applyRecurringSync: (recurrings) => {
-    if (JSON.stringify(get().recurrings) === JSON.stringify(recurrings)) return;
-    set({ recurrings });
+    if (JSON.stringify(get().recurrings) !== JSON.stringify(recurrings)) {
+      set({ recurrings });
+    }
+    // Adopt any child stashed by `onFired` before its record arrived (#300) — the record
+    // (with `current_session_id` already set) is now here via this broadcast, so the child
+    // can render inside its recurring card without ever having appeared standalone. Runs
+    // even on an equal array (a create's optimistic add may have supplied the record).
+    adoptPendingRecurringChildren(recurrings, (r) =>
+      get().upsertSession(toSessionView(r)),
+    );
   },
 
   copyToClipboard: async (text, label) => {

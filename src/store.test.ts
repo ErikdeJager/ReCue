@@ -6,6 +6,7 @@ import {
   adjacentId,
   adjacentSessionId,
   anchorAgentForPanel,
+  applyRecurringFire,
   contentForSelected,
   DEFAULT_SETTINGS,
   dedupeBranchLabels,
@@ -30,6 +31,7 @@ import type {
   CanvasContent,
   CanvasNode,
   OverviewPanel,
+  RecurringSession,
   ScheduledSession,
   SessionView,
 } from "./types";
@@ -1297,6 +1299,59 @@ describe("ownedChildSessionIds (#294)", () => {
   });
 });
 
+describe("applyRecurringFire (#300)", () => {
+  const rec = (
+    id: string,
+    current: string | null,
+    next: number,
+  ): RecurringSession => ({
+    id,
+    cwd: "/work/x",
+    interval_secs: 3600,
+    next_fire_at: next,
+    created_at: 0,
+    current_session_id: current,
+  });
+
+  it("swaps the matching record's child + advances its time when present", () => {
+    const before = [rec("r1", "old-child", 100), rec("r2", null, 5)];
+    const { recurrings, present, prev } = applyRecurringFire(
+      before,
+      "r1",
+      "new-child",
+      3700,
+    );
+    expect(present).toBe(true);
+    expect(prev).toBe("old-child");
+    expect(recurrings[0]?.current_session_id).toBe("new-child");
+    expect(recurrings[0]?.next_fire_at).toBe(3700);
+    // The unrelated record is untouched.
+    expect(recurrings[1]).toEqual(before[1]);
+    // The fresh child is now owned, so it's excluded from the wall/sidebar.
+    expect(ownedChildSessionIds(recurrings).has("new-child")).toBe(true);
+    expect(ownedChildSessionIds(recurrings).has("old-child")).toBe(false);
+  });
+
+  it("reports the record absent (child must be stashed, not shown standalone)", () => {
+    // The fired event beat the record's arrival: `present:false` tells the store to
+    // stash the child rather than upsert it as its own column.
+    const { present, prev } = applyRecurringFire([], "r1", "new-child", 3700);
+    expect(present).toBe(false);
+    expect(prev).toBeNull();
+  });
+
+  it("reports a null prev for a first fire of a present record", () => {
+    const { present, prev } = applyRecurringFire(
+      [rec("r1", null, 5)],
+      "r1",
+      "first-child",
+      3700,
+    );
+    expect(present).toBe(true);
+    expect(prev).toBeNull();
+  });
+});
+
 describe("worktreeHasItems (#199)", () => {
   const dest = "/data/worktrees/repo-id/feat";
   const empty = {
@@ -1975,6 +2030,69 @@ describe("left panel as source of truth (#152)", () => {
     // Removing the diff panel must not disturb the unrelated file leaf.
     await s().removeOverviewPanel("/repo/x", "p1");
     expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(1);
+  });
+});
+
+describe("idempotent time-based create (#300)", () => {
+  const s = () => useStore.getState();
+
+  it("createRecurring dedupes by id when a broadcast raced the optimistic add", async () => {
+    // Simulate the create↔poll race: a `recurring://changed` broadcast already brought
+    // in the record (with its child owned) before the create's promise resolved.
+    const record: RecurringSession = {
+      id: "rec-1",
+      cwd: "/work/x",
+      interval_secs: 3600,
+      next_fire_at: 4000,
+      created_at: 0,
+      current_session_id: "child-1",
+    };
+    useStore.setState({ recurrings: [record], recents: [] });
+    vi.spyOn(ipc, "createRecurring").mockResolvedValue(record);
+
+    const ok = await s().createRecurring(
+      "/work/x",
+      null,
+      null,
+      null,
+      3600,
+      1000,
+      false,
+      null,
+      false,
+    );
+    expect(ok).toBe(true);
+    // Exactly ONE card for this recurring — never two (one blank duplicate).
+    const matches = s().recurrings.filter((r) => r.id === "rec-1");
+    expect(matches).toHaveLength(1);
+    // The surviving card keeps the fired child owned, so it renders the terminal and the
+    // child is excluded from Overview/Sidebar.
+    expect(matches[0]?.current_session_id).toBe("child-1");
+    expect(ownedChildSessionIds(s().recurrings).has("child-1")).toBe(true);
+  });
+
+  it("scheduleSession dedupes by id when a broadcast raced the optimistic add", async () => {
+    const record: ScheduledSession = {
+      id: "sch-1",
+      cwd: "/work/x",
+      fire_at: 5000,
+      created_at: 0,
+    };
+    useStore.setState({ schedules: [record], recents: [] });
+    vi.spyOn(ipc, "createSchedule").mockResolvedValue(record);
+
+    const ok = await s().scheduleSession(
+      "/work/x",
+      null,
+      null,
+      null,
+      5000,
+      false,
+      null,
+      false,
+    );
+    expect(ok).toBe(true);
+    expect(s().schedules.filter((x) => x.id === "sch-1")).toHaveLength(1);
   });
 });
 

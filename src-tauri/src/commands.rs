@@ -1251,6 +1251,7 @@ fn broadcast_recurrings(app: &AppHandle, store: &Store) {
 pub fn create_recurring(
     app: AppHandle,
     store: State<'_, Store>,
+    manager: State<'_, SessionManager>,
     cwd: String,
     branch: Option<String>,
     name: Option<String>,
@@ -1317,8 +1318,38 @@ pub fn create_recurring(
     store
         .add_recurring(rec.clone())
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Immediate first fire (#300): a "now" recurring (`first_fire_at <= now`) must spawn
+    // its first child **at create time**, not wait up to a full poll tick (5s) for
+    // `fire_due_recurrings`. Firing here — rotating `current_session_id` + advancing
+    // `next_fire_at` BEFORE the returned record and the `recurring://changed` broadcast
+    // reach the frontend — also closes the create↔poll race that could otherwise surface
+    // a duplicate/blank card. The store lock taken by `add_recurring` is already released
+    // (each store op re-acquires it), so `fire_one_recurring` can't deadlock/re-enter it.
+    // Best-effort, mirroring `fire_due_recurrings`: on failure keep the record, advance
+    // its time, and emit `recurring://error` rather than failing the whole create. A
+    // future `first_fire_at` is left for the poll loop to fire when it comes due.
+    if rec.next_fire_at <= now_secs() {
+        if let Err(message) = fire_one_recurring(&store, &manager, &app, &rec) {
+            let _ = store.mark_recurring_fired(
+                &rec.id,
+                rec.current_session_id.clone(),
+                now_secs() + rec.interval_secs,
+            );
+            let _ = app.emit(
+                "recurring://error",
+                RecurringErrorPayload {
+                    id: rec.id.clone(),
+                    message,
+                },
+            );
+        }
+    }
+    // Broadcast AFTER the (possible) immediate fire so `recurring://changed` carries the
+    // rotated `current_session_id` — the frontend's child-exclusion depends on it.
     broadcast_recurrings(&app, &store);
-    Ok(rec)
+    // Return the post-fire record (rotated `current_session_id` + advanced `next_fire_at`)
+    // so the frontend's optimistic add already owns the child — no blank duplicate card.
+    Ok(store.recurring(&rec.id).unwrap_or(rec))
 }
 
 /// All active recurring sessions (#294).
