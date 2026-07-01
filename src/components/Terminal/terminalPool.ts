@@ -37,7 +37,9 @@ import { isWindows } from "../../platform";
 import { useStore } from "../../store";
 import { IS_MAIN_WINDOW } from "../../windowContext";
 import { terminalsToDispose } from "./poolReconcile";
+import { dedupeAgainstScrollback } from "./replayDedupe";
 import styles from "./Terminal.module.css";
+import { windowsPtyOption } from "./windowsPty";
 
 // Coalesce the frames of a view re-tile / inspector slide / window drag into a
 // single resize after layout settles. Long enough to outlast a 200ms CSS slide
@@ -149,6 +151,10 @@ function createHost(sessionId: string): TerminalHost {
   // `className` setter (the class always resolves at runtime).
   container.className = styles.terminal ?? "";
 
+  // ConPTY handling on Windows (absent on macOS, so the constructor is unchanged there).
+  const { platform, windowsBuild } = useStore.getState();
+  const windowsPty = windowsPtyOption(platform, windowsBuild);
+
   const term = new XTerm({
     fontFamily: cssToken(
       "--mono",
@@ -158,6 +164,7 @@ function createHost(sessionId: string): TerminalHost {
     lineHeight: currentTerminalSettings.lineHeight,
     cursorBlink: currentTerminalSettings.cursorBlink,
     allowProposedApi: true,
+    ...(windowsPty ? { windowsPty } : {}),
     theme: {
       background: cssToken("--terminal-bg", "#11111b"),
       foreground: cssToken("--text-primary", "#cdd6f4"),
@@ -335,28 +342,42 @@ function createHost(sessionId: string): TerminalHost {
   // Buffer live output until the historical scrollback has been replayed, so
   // history and live bytes do not interleave. Because the host outlives the
   // views, this runs exactly ONCE per session — never again on a view switch.
+  // Each chunk keeps its absolute end-offset so we can drop the scrollback ↔ live
+  // OVERLAP on a fresh spawn (which otherwise double-paints startup → stray glyph).
   let replayed = false;
-  const pending: Uint8Array[] = [];
-  const unsubscribe = onSessionOutput(sessionId, (bytes) => {
+  let scrollbackEnd = 0;
+  const pending: { bytes: Uint8Array; offset: number }[] = [];
+  const unsubscribe = onSessionOutput(sessionId, (bytes, offset) => {
     if (!replayed) {
-      pending.push(bytes);
+      pending.push({ bytes, offset });
       return;
     }
-    writeBuffer.push(bytes);
+    // After replay, live is always newer than the snapshot, but dedupe defensively in
+    // case a chunk straddling the boundary arrives late.
+    const fresh = dedupeAgainstScrollback(bytes, offset, scrollbackEnd);
+    if (fresh.length === 0) return;
+    writeBuffer.push(fresh);
     scheduleFlush();
   });
 
   let disposed = false;
   void sessionScrollback(sessionId)
-    .then((bytes) => {
-      if (!disposed && bytes.length) term.write(Uint8Array.from(bytes));
+    .then((reply) => {
+      scrollbackEnd = reply.end;
+      if (!disposed && reply.bytes.length) {
+        term.write(Uint8Array.from(reply.bytes));
+      }
     })
     .catch(() => {
-      // no scrollback / backend unavailable
+      // no scrollback / backend unavailable — leave scrollbackEnd at 0 so nothing is
+      // dropped (every live chunk then writes in full).
     })
     .finally(() => {
       if (disposed) return;
-      for (const chunk of pending) term.write(chunk);
+      for (const { bytes, offset } of pending) {
+        const fresh = dedupeAgainstScrollback(bytes, offset, scrollbackEnd);
+        if (fresh.length) term.write(fresh);
+      }
       pending.length = 0;
       replayed = true;
     });

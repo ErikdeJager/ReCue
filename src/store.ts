@@ -1028,6 +1028,10 @@ export interface AppState {
    * — "windows" / "macos" / "linux", or "" until loaded. Drives OS-appropriate
    * display labels (Finder vs Explorer, ⌘ vs Ctrl); keyboard handling is unaffected. */
   platform: string;
+  /** Windows build number (e.g. 22631), read once at boot; `0` on non-Windows or
+   * until loaded. Only consumed under an `isWindows` guard, to set xterm.js's
+   * `windowsPty.buildNumber` for correct ConPTY handling. */
+  windowsBuild: number;
   toasts: Toast[];
   /** New session modal (rendered by #10); `newSessionRepo` optionally prefills it. */
   newSessionOpen: boolean;
@@ -1887,6 +1891,7 @@ export const useStore = create<AppState>()((set, get) => ({
   terminalExits: {},
   claudeMissing: false,
   platform: "",
+  windowsBuild: 0,
   toasts: [],
   newSessionOpen: false,
   newSessionRepo: null,
@@ -2309,11 +2314,12 @@ export const useStore = create<AppState>()((set, get) => ({
       eventsSubscribed = true;
       try {
         await ipc.subscribeSessionEvents({
-          onOutput: ({ id, b64 }) => {
+          onOutput: ({ id, b64, offset }) => {
             // Decode the compact base64 payload with a tight byte loop instead of a
             // multi-KB JSON.parse, then feed the bytes straight to the outputBus (off
-            // the React re-render path) (#261).
-            emitSessionOutput(id, decodeOutputB64(b64));
+            // the React re-render path) (#261). `offset` (absolute end-offset) rides
+            // along so the terminal can dedupe the scrollback ↔ live overlap.
+            emitSessionOutput(id, decodeOutputB64(b64), offset);
             // First live output proves a reconnecting session is alive — clear the
             // flag exactly once. An O(1) Set check keeps this per-chunk hot path off
             // a linear scan over every session (#261); `markConnected` does the one
@@ -2489,11 +2495,13 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Outside Tauri / no windows; leave the (empty) default.
     }
-    // Host OS family (#143), once, for OS-appropriate display labels.
+    // Host OS family (#143), once, for OS-appropriate display labels. On Windows also
+    // read the build number so xterm.js can configure its ConPTY handling.
     try {
       set({ platform: await ipc.platform() });
+      set({ windowsBuild: await ipc.windowsBuild() });
     } catch {
-      // Outside Tauri; leave "" → the macOS-default labels.
+      // Outside Tauri; leave "" / 0 → the macOS-default labels + no windowsPty.
     }
     // FileTree disk-change poll (#264): runs in *any* window that can show a tree (the
     // main shell or a detached canvas), each refreshing only its own mounted trees, so

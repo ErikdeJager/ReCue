@@ -109,14 +109,17 @@ keyboard, and bundle config are all correctly guarded.
   **Files**: `src-tauri/src/commands.rs`
   **macOS**: Preserved — `windows_safe_seg` is `#[cfg(windows)]`; the `#[cfg(unix)]` arm is
   the identity function, and a unix test asserts segments are returned verbatim.
-- **FLAGGED for manual Windows verification (not changed)**: the xterm.js (v6) terminal in
-  `terminalPool.ts` sets no `windowsPty` option. ConPTY output can render with extra blank
-  lines / wrong reflow on resize without it — but the *correct* setting depends on the
-  ConPTY backend's build-number reflow support, and a wrong value makes rendering worse.
-  **What to test on a real Windows box**: open a PowerShell shell terminal (#72) and an
-  agent, type long lines, and resize the panel — watch for duplicated/blank lines or
-  mis-wrapped text. If present, set `windowsPty: { backend: 'conpty', buildNumber }` (gated
-  to Windows via the cached `platform` signal) and re-test; leave unset on macOS.
+- **RESOLVED (stray-`C`-on-spawn fix)**: the xterm.js (v6) terminal in `terminalPool.ts`
+  now sets `windowsPty: { backend: 'conpty', buildNumber }` on Windows (via the pure
+  `windowsPtyOption`, gated on the cached `platform` signal — absent on macOS, so the
+  constructor is unchanged there). The real build number comes from a new Rust
+  `windows_build()` command (`cmd /C ver` via `hidden_command`, parsed by the pure
+  `parse_windows_build`; `0` on non-Windows), read once at boot into the store beside
+  `platform`. This gives ConPTY-correct reflow (enabled at buildNumber ≥ 21376). Note:
+  this was **not** the cause of the reported stray-`C` — that was a scrollback-replay ↔
+  live-output **double-write** on a fresh spawn (fixed platform-neutrally with a
+  byte-offset dedup, `replayDedupe.ts`; see the Output note in `CLAUDE.md`). Still worth a
+  real-box check that long-line wrapping / resize reflow looks right with `windowsPty` on.
 
 ### Iteration 5
 

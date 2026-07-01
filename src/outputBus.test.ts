@@ -10,30 +10,30 @@ describe("outputBus pub/sub", () => {
     const off = onSessionOutput("s1", (b) =>
       seen.push(new TextDecoder().decode(b)),
     );
-    emitSessionOutput("s1", bytes("hello"));
+    emitSessionOutput("s1", bytes("hello"), 5);
     off();
     expect(seen).toEqual(["hello"]);
   });
 
-  it("fans a chunk out to every subscriber of the same id", () => {
+  it("fans a chunk out to every subscriber of the same id, with its offset", () => {
     const a = vi.fn();
     const b = vi.fn();
     const offA = onSessionOutput("s2", a);
     const offB = onSessionOutput("s2", b);
     const chunk = bytes("x");
-    emitSessionOutput("s2", chunk);
+    emitSessionOutput("s2", chunk, 1);
     offA();
     offB();
-    expect(a).toHaveBeenCalledWith(chunk);
-    expect(b).toHaveBeenCalledWith(chunk);
+    expect(a).toHaveBeenCalledWith(chunk, 1);
+    expect(b).toHaveBeenCalledWith(chunk, 1);
   });
 
   it("stops delivering after unsubscribe", () => {
     const listener = vi.fn();
     const off = onSessionOutput("s3", listener);
-    emitSessionOutput("s3", bytes("1"));
+    emitSessionOutput("s3", bytes("1"), 1);
     off();
-    emitSessionOutput("s3", bytes("2"));
+    emitSessionOutput("s3", bytes("2"), 2);
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
@@ -42,7 +42,7 @@ describe("outputBus pub/sub", () => {
     const two = vi.fn();
     const off1 = onSessionOutput("a", one);
     const off2 = onSessionOutput("b", two);
-    emitSessionOutput("a", bytes("only-a"));
+    emitSessionOutput("a", bytes("only-a"), 6);
     off1();
     off2();
     expect(one).toHaveBeenCalledTimes(1);
@@ -50,6 +50,6 @@ describe("outputBus pub/sub", () => {
   });
 
   it("emitting to an id with no subscribers is a no-op", () => {
-    expect(() => emitSessionOutput("nobody", bytes("z"))).not.toThrow();
+    expect(() => emitSessionOutput("nobody", bytes("z"), 1)).not.toThrow();
   });
 });

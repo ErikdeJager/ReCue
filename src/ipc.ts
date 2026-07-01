@@ -27,6 +27,7 @@ import type {
   ScheduledSession,
   ScheduleErrorPayload,
   ScheduleFiredPayload,
+  ScrollbackReply,
   SessionRecord,
   Settings,
   SkillInfo,
@@ -141,7 +142,7 @@ export const renameSession = (id: string, name: string) =>
   invoke<void>("rename_session", { id, name });
 
 export const sessionScrollback = (id: string) =>
-  invoke<number[]>("session_scrollback", { id });
+  invoke<ScrollbackReply>("session_scrollback", { id });
 
 export const listSessions = () => invoke<SessionRecord[]>("list_sessions");
 
@@ -560,6 +561,9 @@ export const claudeVersion = () => invoke<string | null>("claude_version");
 /** The host OS family (#143) — "windows" / "macos" / "linux" — for OS-appropriate
  * display labels (Finder vs Explorer, ⌘ vs Ctrl). */
 export const platform = () => invoke<string>("platform");
+/** The Windows build number (e.g. 22631), or 0 on non-Windows. Used to configure
+ * xterm.js's ConPTY handling (`windowsPty.buildNumber`); read once at boot. */
+export const windowsBuild = () => invoke<number>("windows_build");
 /** Catalog metadata + live presence/version for an agent (#141/#142) — drives the
  * generalized missing-binary screen (`version: null` ⇒ the CLI isn't installed). */
 export const agentInfo = (agent: string) =>

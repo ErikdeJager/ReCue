@@ -5,7 +5,10 @@
 // subscription forwards `session://output` here, and the xterm.js terminal
 // (task #8) subscribes per session and writes bytes straight into xterm.
 
-type OutputListener = (bytes: Uint8Array) => void;
+// `offset` is the absolute end-offset of this chunk (running total of bytes the
+// session has ever produced), forwarded so a terminal can dedupe the scrollback-replay
+// ↔ live-stream overlap on a fresh spawn (the stray-glyph fix).
+type OutputListener = (bytes: Uint8Array, offset: number) => void;
 
 const listeners = new Map<string, Set<OutputListener>>();
 
@@ -28,9 +31,13 @@ export function onSessionOutput(
   };
 }
 
-/** Forward an output chunk to all subscribers of `id`. */
-export function emitSessionOutput(id: string, bytes: Uint8Array): void {
+/** Forward an output chunk (with its absolute end-offset) to all subscribers of `id`. */
+export function emitSessionOutput(
+  id: string,
+  bytes: Uint8Array,
+  offset: number,
+): void {
   const set = listeners.get(id);
   if (!set) return;
-  for (const listener of set) listener(bytes);
+  for (const listener of set) listener(bytes, offset);
 }

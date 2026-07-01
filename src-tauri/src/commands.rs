@@ -28,6 +28,9 @@ use crate::store::{OverviewPanel, PersistedSession, ScheduledSession, Store};
 pub struct OutputPayload {
     pub id: String,
     pub b64: String,
+    /// Absolute end-offset of this chunk (see `SessionEvent::Output`), so the frontend
+    /// can dedupe the scrollback-replay ↔ live-stream overlap on a fresh spawn.
+    pub offset: u64,
 }
 
 /// Encode a chunk of PTY output as base64 for the `session://output` event (#261).
@@ -388,12 +391,22 @@ pub fn rename_session(
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+/// A session's retained scrollback plus its absolute end-offset, so the frontend's
+/// terminal replay can dedupe against the live output stream (the fresh-spawn
+/// double-paint / stray-glyph fix).
+#[derive(Clone, Serialize)]
+pub struct ScrollbackReply {
+    pub bytes: Vec<u8>,
+    pub end: u64,
+}
+
 #[tauri::command]
 pub fn session_scrollback(
     manager: State<'_, SessionManager>,
     id: String,
-) -> Result<Vec<u8>, SessionError> {
-    manager.scrollback(&id)
+) -> Result<ScrollbackReply, SessionError> {
+    let (bytes, end) = manager.scrollback(&id)?;
+    Ok(ScrollbackReply { bytes, end })
 }
 
 #[tauri::command]
@@ -1633,6 +1646,52 @@ pub fn platform() -> String {
     std::env::consts::OS.to_string()
 }
 
+/// The Windows build number (e.g. `19045`, `22631`, `26100`), read once at boot and
+/// cached in the store to configure xterm.js's ConPTY handling
+/// (`windowsPty.buildNumber`, which gates reflow at ≥ 21376). On **non-Windows** this
+/// returns `0` — the frontend only consumes it under an `isWindows` guard, so macOS is
+/// untouched and never even runs the probe. On Windows it shells out to `cmd /C ver`
+/// via `hidden_command` (same `CREATE_NO_WINDOW` path as the `--version` probe, so no
+/// console flash) and parses the bracketed version. Best-effort: any failure ⇒ `0`,
+/// which simply leaves xterm's reflow disabled (today's behavior).
+#[tauri::command]
+pub fn windows_build() -> u32 {
+    #[cfg(windows)]
+    {
+        let out = crate::git::hidden_command("cmd")
+            .args(["/C", "ver"])
+            .output()
+            .ok();
+        out.and_then(|o| {
+            let text = String::from_utf8_lossy(&o.stdout);
+            parse_windows_build(&text)
+        })
+        .unwrap_or(0)
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
+
+/// Parse the Windows build number out of `cmd /C ver` output, e.g.
+/// `"Microsoft Windows [Version 10.0.19045.4046]"` → `Some(19045)` — the **third**
+/// dotted component of the bracketed version. Tolerant of `ver`'s leading blank line
+/// and CRLF line endings. Returns `None` if no `[Version …]` token with at least three
+/// numeric components is found. Pure and gated `any(windows, test)` so the
+/// cross-platform unit test exercises it without dead code in a non-Windows build
+/// (mirrors `explorer_select_arg`).
+#[cfg(any(windows, test))]
+fn parse_windows_build(ver_output: &str) -> Option<u32> {
+    // Find the `[Version <a>.<b>.<c>...]` token and take the third dotted field.
+    let start = ver_output.find("[Version")?;
+    let rest = &ver_output[start..];
+    let close = rest.find(']')?;
+    let inner = &rest[..close]; // "[Version 10.0.19045.4046"
+    let version = inner.rsplit(' ').next()?; // "10.0.19045.4046"
+    version.split('.').nth(2)?.parse::<u32>().ok()
+}
+
 /// `<binary> --version`. Best-effort: `None` if the CLI is missing or errors. This
 /// doubles as the **presence check** — `None` means the binary isn't runnable.
 fn binary_version(binary: &str) -> Option<String> {
@@ -1821,6 +1880,33 @@ mod tests {
             explorer_select_arg("C:\\repo\\sub dir\\a.md"),
             "/select,\"C:\\repo\\sub dir\\a.md\""
         );
+    }
+
+    // --- ConPTY: parse the Windows build number from `cmd /C ver` output ---
+    #[test]
+    fn parse_windows_build_reads_third_dotted_field() {
+        // Win10 22H2, Win11 23H2, Win11 24H2 — always the third `.`-field.
+        assert_eq!(
+            parse_windows_build("Microsoft Windows [Version 10.0.19045.4046]"),
+            Some(19045)
+        );
+        assert_eq!(
+            parse_windows_build("Microsoft Windows [Version 10.0.22631.3155]"),
+            Some(22631)
+        );
+        assert_eq!(
+            parse_windows_build("Microsoft Windows [Version 10.0.26100.1234]"),
+            Some(26100)
+        );
+        // `ver` emits a leading blank line + CRLF endings — must still parse.
+        assert_eq!(
+            parse_windows_build("\r\nMicrosoft Windows [Version 10.0.26200.5001]\r\n"),
+            Some(26200)
+        );
+        // Garbage / missing token / too-few fields → None (caller falls back to 0).
+        assert_eq!(parse_windows_build(""), None);
+        assert_eq!(parse_windows_build("not a version string"), None);
+        assert_eq!(parse_windows_build("[Version 10.0]"), None);
     }
 
     // --- #259: worktree schedules create their worktree eagerly + fire idempotently ---

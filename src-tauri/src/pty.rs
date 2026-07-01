@@ -112,6 +112,9 @@ pub enum SessionEvent {
     Output {
         id: String,
         bytes: Vec<u8>,
+        /// Absolute end-offset of this chunk (running total of bytes ever produced by
+        /// the session). Lets the frontend dedupe the scrollback-replay ↔ live overlap.
+        offset: u64,
     },
     Exited {
         id: String,
@@ -167,6 +170,14 @@ type Activity = Arc<Mutex<HashMap<String, Arc<ActivityState>>>>;
 struct Scrollback {
     buf: VecDeque<u8>,
     cap: usize,
+    /// Monotonic count of **all** bytes ever pushed (never decremented on eviction).
+    /// This is the absolute end-offset of the most recent byte, shared with the live
+    /// output stream (each `Output` event carries the same running offset) so the
+    /// frontend can deduplicate the scrollback-replay ↔ live-stream overlap that
+    /// otherwise double-paints a freshly-spawned session's startup (the stray-glyph
+    /// bug): a live chunk whose end-offset is ≤ the replayed scrollback's end is
+    /// already on screen and is skipped.
+    total: u64,
 }
 
 impl Scrollback {
@@ -174,19 +185,23 @@ impl Scrollback {
         Self {
             buf: VecDeque::new(),
             cap,
+            total: 0,
         }
     }
 
     fn push(&mut self, bytes: &[u8]) {
         self.buf.extend(bytes);
+        self.total = self.total.saturating_add(bytes.len() as u64);
         if self.buf.len() > self.cap {
             let overflow = self.buf.len() - self.cap;
             self.buf.drain(0..overflow);
         }
     }
 
-    fn snapshot(&self) -> Vec<u8> {
-        self.buf.iter().copied().collect()
+    /// The snapshot plus its absolute end-offset (`total`): the scrollback covers
+    /// absolute bytes `[total - snapshot.len(), total)`.
+    fn snapshot(&self) -> (Vec<u8>, u64) {
+        (self.buf.iter().copied().collect(), self.total)
     }
 }
 
@@ -481,8 +496,9 @@ impl SessionManager {
         }
     }
 
-    /// Snapshot a session's retained scrollback (for terminal replay on mount).
-    pub fn scrollback(&self, id: &str) -> Result<Vec<u8>, SessionError> {
+    /// Snapshot a session's retained scrollback (for terminal replay on mount), plus
+    /// its absolute end-offset so the frontend can dedupe the replay ↔ live overlap.
+    pub fn scrollback(&self, id: &str) -> Result<(Vec<u8>, u64), SessionError> {
         // Clone the per-session scrollback Arc under the brief global lock, then drop
         // it (#260) so the full ring-buffer copy in `snapshot()` — run on every
         // terminal mount/replay — doesn't block other sessions' map operations.
@@ -779,13 +795,22 @@ fn reader_loop(
                 let now = base.elapsed().as_millis() as u64;
                 state.last_output.store(now.max(1), Ordering::Relaxed);
                 let chunk = buf[..n].to_vec();
-                if let Ok(mut sb) = scrollback.lock() {
-                    sb.push(&chunk);
-                }
+                // Push to scrollback and read back the running total under the SAME lock,
+                // so the offset stamped on this live event exactly matches the offset the
+                // scrollback snapshot reports — the invariant the frontend dedupe relies on.
+                let offset = match scrollback.lock() {
+                    Ok(mut sb) => {
+                        sb.push(&chunk);
+                        sb.total
+                    }
+                    // Poisoned lock: fall back to a best-effort offset so output still flows.
+                    Err(_) => 0,
+                };
                 if events
                     .send(SessionEvent::Output {
                         id: id.clone(),
                         bytes: chunk,
+                        offset,
                     })
                     .is_err()
                 {
@@ -1201,9 +1226,24 @@ mod tests {
         let mut sb = Scrollback::new(8);
         sb.push(b"abcdef");
         sb.push(b"ghij");
-        let snapshot = sb.snapshot();
+        let (snapshot, end) = sb.snapshot();
         assert_eq!(snapshot.len(), 8);
         assert_eq!(&snapshot, b"cdefghij");
+        // `total` counts ALL bytes ever pushed (6 + 4), even the 2 evicted — so it's the
+        // absolute end-offset the live stream and the dedupe agree on.
+        assert_eq!(end, 10);
+    }
+
+    #[test]
+    fn scrollback_total_is_monotonic_across_eviction() {
+        let mut sb = Scrollback::new(4);
+        sb.push(b"aaaa");
+        sb.push(b"bbbb");
+        sb.push(b"cc");
+        let (snapshot, end) = sb.snapshot();
+        // Only the last 4 bytes are retained, but `total` keeps counting.
+        assert_eq!(&snapshot, b"bbcc");
+        assert_eq!(end, 10);
     }
 
     #[test]
@@ -1565,8 +1605,10 @@ mod tests {
             )
             .expect("spawn sh");
         std::thread::sleep(Duration::from_millis(500));
-        let snapshot = mgr.scrollback(&info.id).expect("scrollback");
+        let (snapshot, end) = mgr.scrollback(&info.id).expect("scrollback");
         assert!(String::from_utf8_lossy(&snapshot).contains("scrollback-marker"));
+        // The end-offset covers at least the replayed bytes (the dedupe invariant).
+        assert!(end >= snapshot.len() as u64 && end >= "scrollback-marker".len() as u64);
         let _ = mgr.kill_session(&info.id);
     }
 

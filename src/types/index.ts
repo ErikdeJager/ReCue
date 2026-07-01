@@ -195,6 +195,16 @@ export interface CommitInfo {
 export interface OutputPayload {
   id: string;
   b64: string;
+  /** Absolute end-offset of this chunk (running total of bytes the session has ever
+   * produced). Lets the terminal replay dedupe the scrollback ↔ live overlap that
+   * otherwise double-paints a freshly-spawned session's startup. */
+  offset: number;
+}
+
+/** A session's retained scrollback plus its absolute end-offset (dedupe boundary). */
+export interface ScrollbackReply {
+  bytes: number[];
+  end: number;
 }
 
 /** Payload of the `session://exited` event. */

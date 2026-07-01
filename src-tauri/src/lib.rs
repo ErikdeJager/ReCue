@@ -66,7 +66,7 @@ pub fn run() {
             thread::spawn(move || {
                 for event in rx {
                     let _ = match event {
-                        SessionEvent::Output { id, bytes } => {
+                        SessionEvent::Output { id, bytes, offset } => {
                             // base64-encode here (off the per-session reader thread) so the
                             // `session://output` payload is a compact string, not a multi-KB
                             // JSON integer array the WebView main thread must JSON.parse (#261).
@@ -75,6 +75,7 @@ pub fn run() {
                                 commands::OutputPayload {
                                     id,
                                     b64: commands::encode_output(&bytes),
+                                    offset,
                                 },
                             )
                         }
@@ -253,6 +254,7 @@ pub fn run() {
             commands::claude_version,
             commands::agent_info,
             commands::platform,
+            commands::windows_build,
             usage::claude_session_usage,
         ])
         .build(tauri::generate_context!())

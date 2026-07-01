@@ -97,7 +97,17 @@ even though it works in `tauri dev`.
   `session://exited` / `session://state` Tauri events. The frontend `ipc.ts`
   subscription routes output **bytes** to `outputBus.ts` (a pub/sub the xterm
   `Terminal` consumes — deliberately *not* React state) and lifecycle +
-  busy/idle to the Zustand `store.ts`.
+  busy/idle to the Zustand `store.ts`. Each `session://output` event **and**
+  `session_scrollback` carry an **absolute byte-offset** (a monotonic `total` on the
+  backend `Scrollback`), so the terminal pool can **dedupe the scrollback-replay ↔
+  live-stream overlap** (`replayDedupe.ts`): on a **fresh spawn**, claude paints its
+  startup *before* its terminal mounts, so the same bytes land in both the fetched
+  scrollback and the buffered live stream — writing both applies the cursor-positioned
+  paint twice, which (because claude spaces with non-erasing cursor-forward `ESC[1C`
+  moves) left a **stray `C`** in the input line on Windows/ConPTY. Dropping any live
+  chunk already covered by the replayed scrollback fixes it; platform-neutral (the race
+  existed on both OSes, it only *manifested* under ConPTY), a resumed session subscribes
+  before any output so it never overlapped.
 - **Busy indicator (#42/#55/#71/#88/#95/#112/#116):** a backend monitor thread (`pty.rs`) derives each
   session's **busy/idle** from output activity (within a ~700ms window) and emits
   `session://state { id, busy }` on transitions only. So **keystroke echo doesn't
