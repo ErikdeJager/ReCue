@@ -483,9 +483,29 @@ pub fn repo_dir_name(url: &str) -> String {
 /// the repo doesn't exist yet); the path is built by the caller with `PathBuf::join`.
 /// Returns git's trimmed stderr on failure. Cross-platform (shell-out via
 /// `hidden_command`; no raw `$HOME` / POSIX assumptions).
+///
+/// **Blobless partial clone (#308).** The clone passes `--filter=blob:none`, so git
+/// downloads the **full commit history + every branch ref** but omits file **blobs**,
+/// fetching them **lazily on demand** — dramatically faster on large/old repos. It is
+/// deliberately **not** `--depth`/shallow and **not** `--single-branch`: history stays
+/// complete (so `claude` can `git log`/`blame`/compare branches) and the wildcard fetch
+/// refspec is preserved (so `fetch_remotes` + the remote-branch picker still see every
+/// branch). git materializes the working tree from the tip blobs at checkout and fetches
+/// older blobs on first read; only old-blob ops (old-commit diff, `blame`, `log -p`, a
+/// worktree of an unfetched branch) trigger a lazy fetch (needs network) — acceptable for
+/// an online dev tool. Downstream reads stay working: `list_branches` (refs, no network),
+/// `fetch_remotes` (wildcard refspec), `working_diff` (HEAD blobs fetched at checkout).
+///
+/// **Graceful degradation — no fallback needed.** A transport that doesn't support the
+/// filter (including a local-path or `file://` clone) **degrades to a full clone and
+/// still exits 0**, emitting only a benign warning on stderr — which is surfaced solely
+/// on a non-zero exit, so it's swallowed on success (no user-facing error). Hence no
+/// manual retry/fallback logic. Cross-platform: the flag applies identically on macOS and
+/// Windows via `hidden_command` (requires git ≥ 2.19, well below the installed 2.55).
 pub fn clone_repo(url: &str, dest: impl AsRef<Path>) -> Result<(), String> {
     let output = hidden_command("git")
         .arg("clone")
+        .arg("--filter=blob:none")
         .arg(url)
         .arg(dest.as_ref())
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1675,6 +1695,53 @@ index 0..1
         assert_eq!(current_branch(&dest), "main");
         assert!(ensure_checked_out_branch(&dest).is_ok());
         assert_eq!(current_branch(&dest), "main");
+
+        let _ = fs::remove_dir_all(&origin);
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn clone_preserves_full_history_not_shallow() {
+        // #308: `git::clone_repo` adds `--filter=blob:none` (a blobless *partial* clone),
+        // which must NOT truncate history. Build an origin with TWO commits on `main`,
+        // clone it via the real `super::clone_repo`, and assert the dest's history depth
+        // matches the origin's (2) — guarding against a future accidental
+        // `--depth`/shallow regression. (Even where the transport ignores the filter and
+        // degrades to a full clone, history is complete, so this holds.)
+        let Some(origin) = init_repo("fullhist-origin") else {
+            return;
+        };
+        if !git_in(&origin, &["checkout", "-q", "-b", "main"]) {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        }
+        fs::write(origin.join("a.txt"), "one\n").unwrap();
+        if !commit_all(&origin, "c1") {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        }
+        fs::write(origin.join("a.txt"), "two\n").unwrap();
+        if !commit_all(&origin, "c2") {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        }
+
+        let dest = unique_dir("fullhist-dest");
+        let origin_url = origin.to_string_lossy().to_string();
+        if super::clone_repo(&origin_url, &dest).is_err() {
+            // git/clone unavailable in this environment — skip.
+            let _ = fs::remove_dir_all(&origin);
+            let _ = fs::remove_dir_all(&dest);
+            return;
+        }
+
+        // Both commits came down — the clone is NOT shallow/depth-limited.
+        let origin_depth = run_git(&origin, &["rev-list", "--count", "HEAD"]);
+        let dest_depth = run_git(&dest, &["rev-list", "--count", "HEAD"]);
+        assert_eq!(dest_depth.as_deref(), Some("2"));
+        assert_eq!(dest_depth, origin_depth);
+        // A branch is present (default `main`), so refs survived the clone.
+        assert!(list_branches(&dest).all.iter().any(|b| b == "main"));
 
         let _ = fs::remove_dir_all(&origin);
         let _ = fs::remove_dir_all(&dest);
