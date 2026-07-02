@@ -1,0 +1,26 @@
+{
+  "version": "1.1.2",
+  "date": "2026-07-02",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "Right-click a file or folder in the file tree to add it straight to your repository's .gitignore, without leaving the app.",
+        "When you open a new tab from a template, you can now give that tab a custom name instead of taking the template's default."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "On macOS, microphone, folder, and system permissions now stick from one launch to the next, so you're no longer prompted for the same access again and again.",
+        "An agent's activity dot now stays a steady blue while it's working through bursts of background output, instead of flickering."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "The progress bar shown while a repository clones is back to a clean, plain loading bar."
+      ]
+    }
+  ]
+}
