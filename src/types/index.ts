@@ -356,6 +356,10 @@ export interface Settings {
    * (Enter → `continue` → Enter). Claude-only — inert unless `defaultAgent` is
    * `"claude"`. Default off. */
   autoContinueAfterLimit: boolean;
+  /** Whether to offer the "Enable auto restart on limit reset" prompt button above the
+   * usage bar when the five-hour limit is reached and auto-continue is off (#309). Default
+   * true (the prompt is shown); turn off to never surface it. */
+  promptEnableAutoContinueAtLimit: boolean;
   /** Whether the first-launch coding-agent picker has run. Defaults `false`, so an
    * existing install also runs the one-time detection on its next launch (auto-pick
    * if exactly one CLI is installed, the picker modal if 2+). Set once, then never

@@ -74,6 +74,24 @@ export interface AutoContinueResult {
 }
 
 /**
+ * Pure predicate: does this usage snapshot read as the five-hour limit reached?
+ * True exactly when usage data is available, `usedPercent` is known, and it has
+ * hit the {@link ARM_THRESHOLD_PCT} arming threshold (`>= 99.5`). Shared by the
+ * reducer's arm branch and the "Enable auto restart on limit reset" prompt button
+ * (#309), so both agree on what "limit reached" means. Frontend-only + pure.
+ */
+export function isLimitReached(usage: {
+  usedPercent: number | null;
+  available: boolean;
+}): boolean {
+  return (
+    usage.available &&
+    usage.usedPercent != null &&
+    usage.usedPercent >= ARM_THRESHOLD_PCT
+  );
+}
+
+/**
  * Pure reducer for the auto-continue machine.
  *
  * - Inert (disarm, no fire) when the feature is off, the default agent isn't Claude,
@@ -107,7 +125,9 @@ export function evaluateAutoContinue(
 
   if (!prev.armed) {
     // Arm when the limit is reached and there are live Claude sessions to nudge.
-    if (used >= ARM_THRESHOLD_PCT && liveClaudeIds.length > 0) {
+    // The early-return above already guaranteed `available` + `usedPercent != null`,
+    // so `isLimitReached` here is equivalent to the old inline `used >= ARM_THRESHOLD_PCT`.
+    if (isLimitReached(usage) && liveClaudeIds.length > 0) {
       return {
         next: {
           armed: true,

@@ -5,6 +5,7 @@ import {
   ARMED_POLL_MS,
   evaluateAutoContinue,
   IDLE_AUTO_CONTINUE,
+  isLimitReached,
   LIMIT_REACHED_PCT,
   RESET_CONFIRM_PCT,
   type AutoContinueConfig,
@@ -31,6 +32,56 @@ describe("evaluateAutoContinue constants", () => {
     expect(ARM_THRESHOLD_PCT).toBe(99.5);
     expect(RESET_CONFIRM_PCT).toBe(90);
     expect(ARMED_POLL_MS).toBe(45_000);
+  });
+});
+
+describe("isLimitReached", () => {
+  it("is true at exactly the arm threshold (99.5%)", () => {
+    expect(
+      isLimitReached({ usedPercent: ARM_THRESHOLD_PCT, available: true }),
+    ).toBe(true);
+  });
+
+  it("is true above the arm threshold (100%)", () => {
+    expect(isLimitReached({ usedPercent: 100, available: true })).toBe(true);
+  });
+
+  it("is false just below the arm threshold", () => {
+    expect(isLimitReached({ usedPercent: 99.4, available: true })).toBe(false);
+    expect(isLimitReached({ usedPercent: 0, available: true })).toBe(false);
+  });
+
+  it("is false when usage data is unavailable, even at 100%", () => {
+    expect(isLimitReached({ usedPercent: 100, available: false })).toBe(false);
+  });
+
+  it("is false when usedPercent is null", () => {
+    expect(isLimitReached({ usedPercent: null, available: true })).toBe(false);
+  });
+
+  it("agrees with the reducer's arm branch at the boundary", () => {
+    // The reducer arms exactly when isLimitReached && there are live Claude ids.
+    const boundary = usage(ARM_THRESHOLD_PCT, 5_000);
+    expect(isLimitReached(boundary)).toBe(true);
+    const { next } = evaluateAutoContinue(
+      IDLE_AUTO_CONTINUE,
+      boundary,
+      1_000,
+      CLAUDE_ON,
+      ["a"],
+    );
+    expect(next.armed).toBe(true);
+
+    const under = usage(ARM_THRESHOLD_PCT - 0.1, 5_000);
+    expect(isLimitReached(under)).toBe(false);
+    const { next: stay } = evaluateAutoContinue(
+      IDLE_AUTO_CONTINUE,
+      under,
+      1_000,
+      CLAUDE_ON,
+      ["a"],
+    );
+    expect(stay.armed).toBe(false);
   });
 });
 

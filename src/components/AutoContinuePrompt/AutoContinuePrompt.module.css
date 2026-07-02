@@ -1,0 +1,90 @@
+/* Sidebar-footer "Enable auto restart on limit reset" prompt (#309), modelled on the
+   #190/#203 update box: a quiet, inset single-line chip directly above the usage bar —
+   hairline border, transparent fill, accent reserved to the icon. Shown only when the
+   five-hour limit is reached and auto-continue is off. */
+.prompt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  /* Same tight inset (#215) as the update box so it ties to the footer below. */
+  margin: 0 var(--space-4) var(--space-4);
+  padding: var(--space-4) var(--space-8);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+/* Hover light-up: an accent-tinted border + faint accent fill so the quiet chip reads
+   as clearly interactive (the icon is already accent). */
+.prompt:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+/* Collapsed rail: icon-only, centered in the inset chip. */
+.promptCollapsed {
+  justify-content: center;
+}
+
+/* Continuous attention glow (mirrors the #287 update-glow): while the prompt is shown
+   the chip carries a soft accent border that gently breathes color + intensity on a
+   slow ease-in-out loop — calm but easy to spot, never a full on/off blink. Box-shadow
+   + border only → no layout shift. The 0%/100% frame *equals* the static resting glow
+   set on `.promptGlow`, so under body.reduce-motion / prefers-reduced-motion the
+   global.css killswitch (which clamps animation duration + iteration-count) holds that
+   frame — leaving a visible static accent glow, distinct from the quiet resting chip. */
+@keyframes auto-continue-prompt-glow {
+  0%,
+  100% {
+    border-color: var(--accent);
+    box-shadow:
+      0 0 0 1px var(--accent-dim),
+      0 0 6px 0 var(--accent-dim);
+  }
+  50% {
+    border-color: var(--accent-hover);
+    box-shadow:
+      0 0 0 1px var(--accent),
+      0 0 12px 2px var(--accent-dim);
+  }
+}
+
+.promptGlow {
+  /* Static resting glow first (also the reduced-motion fallback — survives the
+     global.css killswitch, which only zeroes animation timing, never a static
+     box-shadow/border-color), then the slow continuous breathe over it. */
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent-dim),
+    0 0 6px 0 var(--accent-dim);
+  animation: auto-continue-prompt-glow 2.6s ease-in-out infinite;
+}
+
+/* Accent stays on the icon through hover — the only color touch on the chip. */
+.promptIcon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.promptText {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+.promptTitle {
+  overflow: hidden;
+  font-size: var(--fs-meta-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
