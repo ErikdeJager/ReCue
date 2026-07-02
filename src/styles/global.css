@@ -114,36 +114,18 @@ body {
   }
 }
 
-/* Indeterminate clone progress (#299/#307): a comet-core stripe swept left→right
-   across the sidebar "phantom" clone track (the gradient core lives on `.phantomBar`).
-   Translated by its own width so it starts/ends just off each edge. The reduced-motion
-   killswitch below freezes it at the base (a static stripe at the left), keeping the
-   affordance visible without motion. Transform-only, so it renders identically on
-   WKWebView (macOS) + WebView2 (Windows). */
+/* Indeterminate clone progress (#299): a solid stripe swept left→right across the
+   sidebar "phantom" clone track (the stripe lives on `.phantomBar`). Translated by its
+   own width so it starts/ends just off each edge. The reduced-motion killswitch below
+   freezes it at the base (a static stripe at the left), keeping the affordance visible
+   without motion. Transform-only, so it renders identically on WKWebView (macOS) +
+   WebView2 (Windows). */
 @keyframes clone-progress {
   0% {
     transform: translateX(-110%);
   }
   100% {
     transform: translateX(350%);
-  }
-}
-
-/* Living clone glow (#307): a soft accent halo that gently breathes on the whole
-   phantom clone track, so an in-flight clone reads as "actively working" rather than
-   a frozen bar. Modeled on `update-glow` — the 0%/100% frame *equals* the static
-   resting `box-shadow` set on `.phantomTrack`'s base rule, so under the reduced-motion
-   killswitch below (which only zeroes animation timing, never a static box-shadow) the
-   held frame leaves a visible static accent glow. Box-shadow only → no layout shift;
-   token-based `color-mix` (each with a plain-color fallback at the call site) → renders
-   identically on WKWebView (macOS) + WebView2 (Windows). */
-@keyframes clone-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 5px 0 color-mix(in srgb, var(--accent) 35%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--accent) 55%, transparent);
   }
 }
 
