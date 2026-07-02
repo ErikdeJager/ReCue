@@ -93,6 +93,24 @@ describe("instantiateTemplate (#118)", () => {
     );
     expect(tab.layout).toBeNull();
   });
+
+  it("uses a provided tab name (trimmed) over the template name (#311)", () => {
+    const tab = instantiateTemplate(template, "/repo/x", counter(), " My Tab ");
+    expect(tab.name).toBe("My Tab");
+  });
+
+  it("falls back to the template name for a blank/whitespace tab name (#311)", () => {
+    expect(instantiateTemplate(template, "/repo/x", counter(), "  ").name).toBe(
+      "Dev",
+    );
+    expect(instantiateTemplate(template, "/repo/x", counter(), "").name).toBe(
+      "Dev",
+    );
+    // Omitting the argument entirely also keeps today's behavior.
+    expect(instantiateTemplate(template, "/repo/x", counter()).name).toBe(
+      "Dev",
+    );
+  });
 });
 
 describe("pendingContent + resolvedContent (#118)", () => {

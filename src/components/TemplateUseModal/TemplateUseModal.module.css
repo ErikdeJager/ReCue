@@ -151,6 +151,26 @@
   white-space: nowrap;
 }
 
+.nameInput {
+  width: 100%;
+  margin-bottom: var(--space-4);
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+}
+
+.nameInput::placeholder {
+  color: var(--text-muted);
+}
+
+.nameInput:focus {
+  border-color: var(--accent);
+}
+
 .actions {
   display: flex;
   justify-content: flex-end;

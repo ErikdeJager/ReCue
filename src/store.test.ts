@@ -1613,6 +1613,30 @@ describe("canvas template instantiation (#118)", () => {
     expect(leaf?.content.repoPath).toBe("/repo/x");
   });
 
+  it("useTemplate names the new tab after a provided tab name (#311)", () => {
+    const layout: CanvasNode = {
+      type: "leaf",
+      id: "lt",
+      content: { kind: "new-terminal" },
+    };
+    const id = useStore.getState().saveTemplate("Term", layout, null);
+    useStore.getState().useTemplate(id, "/repo/x", "  Custom Tab  ");
+    const tab = useStore.getState().canvases[0];
+    // The trimmed custom name wins over the template's name ("Term").
+    expect(tab?.name).toBe("Custom Tab");
+  });
+
+  it("useTemplate keeps the template name for a blank tab name (#311)", () => {
+    const layout: CanvasNode = {
+      type: "leaf",
+      id: "lt",
+      content: { kind: "new-terminal" },
+    };
+    const id = useStore.getState().saveTemplate("Term", layout, null);
+    useStore.getState().useTemplate(id, "/repo/x", "   ");
+    expect(useStore.getState().canvases[0]?.name).toBe("Term");
+  });
+
   it("useTemplate appends (removes nothing) when 2+ canvases exist (#142)", () => {
     const layout: CanvasNode = {
       type: "leaf",
