@@ -30,7 +30,19 @@ const READ_CHUNK: usize = 8 * 1024;
 /// Busy heuristic (#42): a session reads as **busy** while output flowed within
 /// this window, and **idle** once it's quiet for longer. The window also
 /// debounces the busy→idle edge so brief gaps between TUI redraws don't flicker.
+/// This is the **fast** settle used for a clean single turn — a normal finished
+/// turn settles to yellow ~700ms after its last output. Once a session's dot
+/// starts *oscillating* (a background process / subagent / paused turn repainting
+/// in bursts >700ms apart) it switches to the longer `BACKGROUND_HOLD_MS` hold so
+/// it holds solid blue instead of flickering blue↔yellow (#315).
 const BUSY_WINDOW_MS: u64 = 700;
+/// Once a session's activity dot starts *oscillating* (output resumes shortly after it went
+/// quiet — a background process / subagent / paused turn repainting in bursts, #315), it enters
+/// a **sticky** busy state and stays blue until output has been quiet for this long, instead of
+/// flickering blue↔yellow every burst. The same window is the "re-arm" threshold: a re-activation
+/// within this long of a busy→idle settle is treated as flicker. A plain single turn (no
+/// re-activation) still settles at `BUSY_WINDOW_MS` and never pays this hold.
+const BACKGROUND_HOLD_MS: u64 = 5_000;
 /// How often the monitor thread re-evaluates each session's busy state (#42).
 const MONITOR_TICK_MS: u64 = 200;
 /// Output is treated as the terminal's **echo of typing** (not Claude working,
@@ -165,6 +177,18 @@ struct ActivityState {
 /// Per-session activity map shared between the reader threads, `write_stdin`, and
 /// the monitor thread (which derives busy/idle), keyed by session id.
 type Activity = Arc<Mutex<HashMap<String, Arc<ActivityState>>>>;
+
+/// Per-session hysteresis state for the busy/idle decision (#315), owned solely by the
+/// monitor thread. `emitted` is the last busy value we sent (dedup); `sticky` means we've
+/// detected flicker/background activity and are holding blue on the longer `BACKGROUND_HOLD_MS`
+/// window; `settled_at` is the ms-timestamp of the last busy→idle emit (0 = none), used to
+/// spot a quick re-activation.
+#[derive(Default)]
+struct BusyDecision {
+    emitted: bool,
+    sticky: bool,
+    settled_at: u64,
+}
 
 /// Bounded byte ring buffer used to replay recent output to late subscribers.
 struct Scrollback {
@@ -836,22 +860,71 @@ fn reader_loop(
     let _ = events.send(SessionEvent::Exited { id, code });
 }
 
+/// Pure busy/idle hysteresis (#315). `active_fast` = real output within `BUSY_WINDOW_MS`
+/// (already echo/has-work-guarded by the caller); `active_hold` = real output within
+/// `BACKGROUND_HOLD_MS` (same guards). Mutates `st` and returns the busy value to emit.
+///
+/// - Normal mode: become busy on fresh `active_fast`; while busy, stay busy only while
+///   `active_fast`, else settle to idle at ~`BUSY_WINDOW_MS` (snappy — a clean single turn).
+/// - On the idle→busy edge, if we settled to idle within `BACKGROUND_HOLD_MS` ago, it's
+///   flickering → go `sticky`.
+/// - Sticky mode: stay busy while `active_hold` (bridges burst gaps up to `BACKGROUND_HOLD_MS`);
+///   only settle to idle after that long fully quiet. Clearing `sticky` happens on the settle.
+///
+/// Note: `active_fast` implies `active_hold` (700ms ⊂ 5000ms), so entering sticky right at the
+/// re-activation and then holding on `active_hold` is consistent. A genuinely quiet stretch
+/// longer than `BACKGROUND_HOLD_MS` (e.g. a long single tool call with no output) legitimately
+/// settles to idle — that is *not* the #315 flicker and is intentionally left to settle.
+fn decide_busy(st: &mut BusyDecision, now: u64, active_fast: bool, active_hold: bool) -> bool {
+    let prev = st.emitted;
+    let busy = if st.sticky { active_hold } else { active_fast };
+
+    // Flicker detection: a re-activation soon after a settle → sticky (background/paused turn).
+    if !prev
+        && busy
+        && !st.sticky
+        && st.settled_at != 0
+        && now.saturating_sub(st.settled_at) <= BACKGROUND_HOLD_MS
+    {
+        st.sticky = true;
+    }
+    // On the busy→idle edge, remember when we settled and leave sticky mode.
+    if prev && !busy {
+        st.settled_at = now;
+        st.sticky = false;
+    }
+    st.emitted = busy;
+    busy
+}
+
 /// Derives each session's busy/idle state from output activity (#42) and emits a
 /// `State` event on every transition (debounced — never per tick). Runs until the
 /// event receiver is dropped (app shutdown).
+///
+/// Two-window hysteresis (#315): a **clean single turn** settles to idle ~`BUSY_WINDOW_MS`
+/// after its last output (snappy yellow "needs input"). But once a session's dot would
+/// otherwise *flicker* — a background process / subagent / paused turn repainting in bursts
+/// more than `BUSY_WINDOW_MS` apart, so it went quiet then re-activated within
+/// `BACKGROUND_HOLD_MS` — that session goes **sticky** and holds solid blue, bridging burst
+/// gaps until output has been fully quiet for `BACKGROUND_HOLD_MS`. The busy-*on* latency and
+/// the #55/#116 echo/has-work guards are unchanged; the sticky decision only affects the
+/// busy→idle settle.
 fn monitor_loop(
     activity: Activity,
     events: Sender<SessionEvent>,
     title_tx: Sender<(String, bool)>,
     base: Instant,
 ) {
-    // Last state we emitted per session, so we only send on change.
-    let mut emitted: HashMap<String, bool> = HashMap::new();
+    // Per-session busy-decision hysteresis state (#315), so we only emit on change and can
+    // hold blue through background bursts. A reused id starts fresh with a `Default`.
+    let mut decisions: HashMap<String, BusyDecision> = HashMap::new();
     loop {
         std::thread::sleep(Duration::from_millis(MONITOR_TICK_MS));
         let now = base.elapsed().as_millis() as u64;
-        // Snapshot (id, busy) under the lock, then release it before sending.
-        let snapshot: Vec<(String, bool, bool)> = {
+        // Snapshot the two raw guarded activity signals per session under the lock, then
+        // release it before sending. Both read the same atomics; `active_fast` gates the
+        // clean-turn settle, `active_hold` the sticky background hold (#315).
+        let snapshot: Vec<(String, bool, bool, bool)> = {
             let map = match activity.lock() {
                 Ok(map) => map,
                 Err(poisoned) => poisoned.into_inner(),
@@ -867,38 +940,41 @@ fn monitor_loop(
                     // fresh interactive session no longer reads as busy (which used
                     // to latch the #112 "needs input" yellow before any prompt).
                     let has_work = inp != 0 || seeded;
-                    // Among that, busy = recent output that arrived meaningfully
-                    // *after* the last keystroke, so the terminal's echo of typing
-                    // doesn't read as Claude working (#55). With no keystrokes yet
-                    // (inp == 0, a seeded session) any recent output counts.
-                    let busy = has_work
-                        && out != 0
-                        && now.saturating_sub(out) < BUSY_WINDOW_MS
-                        && (inp == 0 || out.saturating_sub(inp) >= INPUT_ECHO_MS);
-                    (id.clone(), busy, state.uses_claude_log)
+                    // Output that arrived meaningfully *after* the last keystroke, so the
+                    // terminal's echo of typing doesn't read as Claude working (#55). With
+                    // no keystrokes yet (inp == 0, a seeded session) any recent output counts.
+                    let echo_ok = inp == 0 || out.saturating_sub(inp) >= INPUT_ECHO_MS;
+                    let recent = has_work && out != 0 && echo_ok;
+                    // `active_fast` = output within the fast window (a clean turn's settle);
+                    // `active_hold` = within the longer sticky window (#315). fast ⊂ hold.
+                    let active_fast = recent && now.saturating_sub(out) < BUSY_WINDOW_MS;
+                    let active_hold = recent && now.saturating_sub(out) < BACKGROUND_HOLD_MS;
+                    (id.clone(), active_fast, active_hold, state.uses_claude_log)
                 })
                 .collect()
         };
         // Forget sessions that are gone (killed/exited) so a reused id starts fresh.
-        let live: HashSet<&str> = snapshot.iter().map(|(id, _, _)| id.as_str()).collect();
-        emitted.retain(|id, _| live.contains(id.as_str()));
-        for (id, busy, uses_claude_log) in &snapshot {
-            if emitted.get(id) != Some(busy) {
-                let was = emitted.insert(id.clone(), *busy);
+        let live: HashSet<&str> = snapshot.iter().map(|(id, ..)| id.as_str()).collect();
+        decisions.retain(|id, _| live.contains(id.as_str()));
+        for (id, active_fast, active_hold, uses_claude_log) in &snapshot {
+            let st = decisions.entry(id.clone()).or_default();
+            let prev = st.emitted;
+            let busy = decide_busy(st, now, *active_fast, *active_hold);
+            if prev != busy {
                 if events
                     .send(SessionEvent::State {
                         id: id.clone(),
-                        busy: *busy,
+                        busy,
                     })
                     .is_err()
                 {
                     return; // receiver dropped (app shutting down)
                 }
-                // On a busy→idle edge (a turn just ended, when claude has just
-                // (re)written its `ai-title`) poke the title worker to re-read it
-                // off the hot path (#97). A best-effort send: a dead worker never
-                // stalls the monitor tick.
-                if !*busy && was == Some(true) {
+                // On the *true* busy→idle settle (a turn ended — sticky bursts no longer
+                // flicker one per cycle) poke the title worker to re-read claude's freshly
+                // (re)written `ai-title` off the hot path (#97). Best-effort: a dead worker
+                // never stalls the monitor tick.
+                if !busy && prev {
                     let _ = title_tx.send((id.clone(), *uses_claude_log));
                 }
             }
@@ -1219,6 +1295,87 @@ mod tests {
         // An already-due deadline → zero, so the worker processes it immediately.
         let past = vec![(now - Duration::from_millis(10), "x".to_string(), true)];
         assert_eq!(next_due_wait(&past, now), Some(Duration::ZERO));
+    }
+
+    // Busy/idle hysteresis (#315). These drive the pure `decide_busy` directly with
+    // synthetic `now` / `active_fast` / `active_hold`, so there are no threads or real
+    // timing — they run on every platform alongside the other pure-logic tests.
+
+    #[test]
+    fn decide_busy_settles_a_clean_turn_fast() {
+        // A normal single turn: continuous output, then quiet ONCE (no re-activation) →
+        // settles the instant `active_fast` drops (~BUSY_WINDOW_MS), and never goes sticky.
+        let mut st = BusyDecision::default();
+        // Output flowing → busy (fast window active; hold is a superset, also active).
+        assert!(decide_busy(&mut st, 1_000, true, true));
+        assert!(st.emitted);
+        assert!(!st.sticky);
+        // Quiet past the fast window but within the hold window, and NO prior settle to
+        // re-activate against → settles to idle immediately, staying in normal mode.
+        assert!(!decide_busy(&mut st, 1_800, false, true));
+        assert!(!st.emitted);
+        assert!(!st.sticky, "a clean single turn must not go sticky");
+        assert_eq!(st.settled_at, 1_800);
+    }
+
+    #[test]
+    fn decide_busy_holds_blue_through_background_bursts() {
+        let mut st = BusyDecision::default();
+        // First turn goes busy, then settles once (records settled_at).
+        assert!(decide_busy(&mut st, 1_000, true, true));
+        assert!(!decide_busy(&mut st, 1_800, false, true));
+        assert_eq!(st.settled_at, 1_800);
+        assert!(!st.sticky);
+        // A quick re-activation within BACKGROUND_HOLD_MS of that settle → flicker → sticky.
+        assert!(decide_busy(&mut st, 2_400, true, true));
+        assert!(st.sticky, "a quick re-activation must arm sticky mode");
+        assert!(st.emitted);
+        // Now background bursts arrive >BUSY_WINDOW_MS apart: each tick is quiet on the fast
+        // window but still active on the hold window. Busy must stay TRUE throughout — no
+        // blue→yellow→blue flicker.
+        for now in [3_400_u64, 4_400, 5_400, 6_400] {
+            assert!(
+                decide_busy(&mut st, now, false, true),
+                "sticky must hold blue through burst gaps (now={now})"
+            );
+            assert!(st.emitted);
+            assert!(st.sticky);
+        }
+        // Finally fully quiet past the hold window → emits false exactly once, sticky cleared.
+        assert!(!decide_busy(&mut st, 12_000, false, false));
+        assert!(!st.emitted);
+        assert!(!st.sticky, "settling clears sticky mode");
+        assert_eq!(st.settled_at, 12_000);
+    }
+
+    #[test]
+    fn decide_busy_first_activation_is_not_sticky() {
+        // A session's very first busy edge has no prior settle (settled_at == 0) and must
+        // enter NORMAL mode, never be mis-read as flicker.
+        let mut st = BusyDecision::default();
+        assert_eq!(st.settled_at, 0);
+        assert!(decide_busy(&mut st, 500, true, true));
+        assert!(st.emitted);
+        assert!(!st.sticky, "the first activation must not be sticky");
+    }
+
+    #[test]
+    fn decide_busy_fresh_turn_after_long_idle_is_not_sticky() {
+        let mut st = BusyDecision::default();
+        // A turn runs and settles at t.
+        assert!(decide_busy(&mut st, 1_000, true, true));
+        assert!(!decide_busy(&mut st, 1_800, false, true));
+        let settled = st.settled_at;
+        assert_eq!(settled, 1_800);
+        // A brand-new turn starts well beyond BACKGROUND_HOLD_MS later → NOT flicker, so it
+        // stays in normal mode and settles fast on the next quiet tick.
+        let later = settled + BACKGROUND_HOLD_MS + 1;
+        assert!(decide_busy(&mut st, later, true, true));
+        assert!(!st.sticky, "a fresh turn after a long idle is not flicker");
+        // Next quiet on the fast window → settles immediately (snappy), still not sticky.
+        assert!(!decide_busy(&mut st, later + 800, false, true));
+        assert!(!st.emitted);
+        assert!(!st.sticky);
     }
 
     #[test]

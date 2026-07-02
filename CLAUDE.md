@@ -108,9 +108,13 @@ even though it works in `tauri dev`.
   chunk already covered by the replayed scrollback fixes it; platform-neutral (the race
   existed on both OSes, it only *manifested* under ConPTY), a resumed session subscribes
   before any output so it never overlapped.
-- **Busy indicator (#42/#55/#71/#88/#95/#112/#116):** a backend monitor thread (`pty.rs`) derives each
+- **Busy indicator (#42/#55/#71/#88/#95/#112/#116/#315):** a backend monitor thread (`pty.rs`) derives each
   session's **busy/idle** from output activity (within a ~700ms window) and emits
-  `session://state { id, busy }` on transitions only. So **keystroke echo doesn't
+  `session://state { id, busy }` on transitions only — but once the dot would otherwise
+  *flicker* (a background process / subagent / paused turn repainting in bursts >700ms apart,
+  so it went quiet then re-activated soon after), that session goes **sticky** and holds blue
+  on a ~5s window until output is truly quiet, rather than oscillating blue↔yellow twice a
+  second (#315 — a clean single turn still settles at ~700ms). So **keystroke echo doesn't
   read as busy** (#55), `write_stdin` stamps a per-session `last_input` time and the
   monitor marks busy only when output arrived ≥300ms *after* the last keystroke.
   Busy also requires the session to have **work to do** (#116) — either the user has
