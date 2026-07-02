@@ -5,6 +5,7 @@ import {
   ARMED_POLL_MS,
   evaluateAutoContinue,
   IDLE_AUTO_CONTINUE,
+  isLimitReached,
   LIMIT_REACHED_PCT,
   RESET_CONFIRM_PCT,
   type AutoContinueConfig,
@@ -31,6 +32,28 @@ describe("evaluateAutoContinue constants", () => {
     expect(ARM_THRESHOLD_PCT).toBe(99.5);
     expect(RESET_CONFIRM_PCT).toBe(90);
     expect(ARMED_POLL_MS).toBe(45_000);
+  });
+});
+
+describe("isLimitReached", () => {
+  it("is true at the 99.5 arming threshold", () => {
+    expect(isLimitReached(usage(99.5, 5_000))).toBe(true);
+  });
+
+  it("is true at 100%", () => {
+    expect(isLimitReached(usage(100, 5_000))).toBe(true);
+  });
+
+  it("is false just below the threshold (99.4)", () => {
+    expect(isLimitReached(usage(99.4, 5_000))).toBe(false);
+  });
+
+  it("is false when usedPercent is null", () => {
+    expect(isLimitReached(usage(null, 5_000))).toBe(false);
+  });
+
+  it("is false when usage is unavailable (fail-safe)", () => {
+    expect(isLimitReached(usage(100, 5_000, false))).toBe(false);
   });
 });
 

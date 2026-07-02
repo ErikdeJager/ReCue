@@ -57,6 +57,22 @@ export interface AutoContinueUsage {
   available: boolean;
 }
 
+/**
+ * Whether the five-hour usage window is currently exhausted ("limit reached").
+ * Mirrors the arming predicate in `evaluateAutoContinue`: true only when usage data
+ * is available and `usedPercent` is at/above the arming threshold (99.5). Fail-safe:
+ * returns false whenever usage is unavailable/unknown. Shared so the per-agent
+ * auto-continue checkbox (#305) and the limit-reached promo (#309) agree on one
+ * definition rather than open-coding the threshold.
+ */
+export function isLimitReached(usage: AutoContinueUsage): boolean {
+  return (
+    usage.available &&
+    usage.usedPercent != null &&
+    usage.usedPercent >= ARM_THRESHOLD_PCT
+  );
+}
+
 /** The settings the reducer gates on. */
 export interface AutoContinueConfig {
   /** The `autoContinueAfterLimit` setting. */
