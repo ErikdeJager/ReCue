@@ -2041,3 +2041,50 @@ Not exclusive to mic (also folders/system settings). Investigate and resolve; do
 - Areas touched: `scripts/sign-macos-local.sh`, `package.json` (macOS-only convenience scripts),
   `docs/macos-permissions.md`, optionally a one-clause `CLAUDE.md` note. No Rust/TS/CSS; no
   `Entitlements.plist`/`Info.plist`/`tauri.conf.json`/`release.yml` changes.
+
+## Task 315
+
+**Ask-variant — answers confirmed by the user via clarifying questions.**
+
+Card: "Fix the activity-indicator flicker when an agent runs a background process — the dot
+should always stay blue while a background agent is still busy, instead of rapidly switching
+blue↔yellow (~0.5s)."
+
+Root cause (established from the code): the backend monitor (`src-tauri/src/pty.rs`,
+`monitor_loop`) derives busy/idle from output timing — `busy = true` only while output flowed
+within a **700ms window** (`BUSY_WINDOW_MS`), re-evaluated every 200ms. A background process
+(background bash task, subagent, long tool call) repaints Claude's TUI only intermittently, so
+output arrives in bursts spaced **>700ms apart**: each burst flips busy→true (blue), then 700ms
+of quiet flips it→false (yellow), then the next burst flips it back — the observed flicker. The
+frontend `BusyIndicator` merely mirrors the store's `sessionBusy`, so the fix is purely in the
+backend timing logic.
+
+Clarifying questions asked & **user-confirmed answers**:
+
+1. **Fix approach → "Smart flicker suppression"** (chosen over a blanket longer window, and over
+   parsing Claude's on-screen background-task indicator). A normal, single finished turn still
+   settles to yellow quickly (~700ms, unchanged). Only once the dot starts **oscillating**
+   (output resumes shortly after it went quiet) do we switch that session into a **sticky** mode
+   that holds it solid blue until activity truly stops. Agent-agnostic (pure output timing; works
+   for claude/codex/opencode alike); no TUI parsing.
+2. **Hold duration → "~5 seconds."** Once sticky, hold blue until there has been **no output for
+   ~5s** (`BACKGROUND_HOLD_MS = 5000`), then settle to yellow. The same ~5s window is reused as
+   the "re-arm" window for flicker detection: a re-activation within 5s of a settle is treated as
+   flicker → sticky. Consequence the user accepted: a genuinely-finished **background** task (or a
+   turn with internal >700ms pauses) takes up to ~5s to show the yellow "needs input" dot.
+
+Derived decisions (implementation, not separately asked — natural consequences of the above):
+- Keep `BUSY_WINDOW_MS = 700` for busy-**on** and for the normal (non-sticky) settle, so a plain
+  turn stays snappy. Add one new constant `BACKGROUND_HOLD_MS = 5000` for the sticky hold + the
+  flicker re-arm window.
+- Sticky is entered on an idle→busy edge that occurs within `BACKGROUND_HOLD_MS` of the previous
+  busy→idle settle (guarded so the first-ever activation and an unrelated fresh turn long after a
+  settle are **not** treated as flicker). Sticky is cleared on the true busy→idle settle.
+- The busy→idle **title-worker poke** (#97/#212/#252 branch + file-status refresh) now fires once
+  at the true settle instead of on every flicker cycle — strictly less redundant work; those
+  refreshes are debounced + idempotent, so no downstream change.
+- Factor the per-tick decision into a **pure, unit-tested** helper (mirroring `next_due_wait`) so
+  the hysteresis is covered by tests that run on both macOS and Windows.
+- No frontend/CSS change (`BusyIndicator` and the store `setBusy` dedup already handle it);
+  cross-platform-neutral (pure Rust timing, no OS-specific code).
+
