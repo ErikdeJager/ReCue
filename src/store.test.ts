@@ -2186,6 +2186,22 @@ describe("mergeSettings (#100/#176)", () => {
       mergeSettings({ overviewPanelMinWidth: 520 }).overviewPanelMinWidth,
     ).toBe(520);
   });
+
+  it("defaults promptEnableAutoContinueAtLimit to true and back-fills it (#309)", () => {
+    expect(DEFAULT_SETTINGS.promptEnableAutoContinueAtLimit).toBe(true);
+    // A pre-#309 blob (no key) merges to the shown-by-default true.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.promptEnableAutoContinueAtLimit;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .promptEnableAutoContinueAtLimit,
+    ).toBe(true);
+    // A persisted false (suppressed) is preserved over the default.
+    expect(
+      mergeSettings({ promptEnableAutoContinueAtLimit: false })
+        .promptEnableAutoContinueAtLimit,
+    ).toBe(false);
+  });
 });
 
 describe("openFileFromTree (#175)", () => {

@@ -478,6 +478,23 @@ function SettingsModal() {
                     </span>
                   )}
                 </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    // #309: gates the sidebar-footer "Enable auto restart on
+                    // limit reset" prompt button. Not Claude-gated here — the
+                    // button itself gates on the active set being Claude.
+                    checked={draft.promptEnableAutoContinueAtLimit}
+                    onChange={(v) =>
+                      update("promptEnableAutoContinueAtLimit", v)
+                    }
+                    label="Offer to enable auto continue when the limit is reached"
+                    className={styles.checkRow}
+                  />
+                  <span className={styles.fieldHelp}>
+                    Show a button above the usage bar to turn on auto continue
+                    when the five-hour limit is reached and it's off.
+                  </span>
+                </div>
               </>
             )}
 

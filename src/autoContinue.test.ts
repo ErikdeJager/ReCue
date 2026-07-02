@@ -36,24 +36,63 @@ describe("evaluateAutoContinue constants", () => {
 });
 
 describe("isLimitReached", () => {
-  it("is true at the 99.5 arming threshold", () => {
-    expect(isLimitReached(usage(99.5, 5_000))).toBe(true);
+  it("is true at exactly the arm threshold (99.5%)", () => {
+    expect(
+      isLimitReached({ usedPercent: ARM_THRESHOLD_PCT, available: true }),
+    ).toBe(true);
   });
 
-  it("is true at 100%", () => {
-    expect(isLimitReached(usage(100, 5_000))).toBe(true);
+  it("is true above the arm threshold (100%)", () => {
+    expect(isLimitReached({ usedPercent: 100, available: true })).toBe(true);
   });
 
-  it("is false just below the threshold (99.4)", () => {
-    expect(isLimitReached(usage(99.4, 5_000))).toBe(false);
+  it("is false just below the arm threshold", () => {
+    expect(isLimitReached({ usedPercent: 99.4, available: true })).toBe(false);
+    expect(isLimitReached({ usedPercent: 0, available: true })).toBe(false);
+  });
+
+  it("is false when usage data is unavailable, even at 100%", () => {
+    expect(isLimitReached({ usedPercent: 100, available: false })).toBe(false);
   });
 
   it("is false when usedPercent is null", () => {
-    expect(isLimitReached(usage(null, 5_000))).toBe(false);
+    expect(isLimitReached({ usedPercent: null, available: true })).toBe(false);
   });
 
-  it("is false when usage is unavailable (fail-safe)", () => {
+  it("accepts the full usage slice (structural type)", () => {
+    // The per-agent checkbox (#305) passes the whole store `usage` object; the
+    // narrow param accepts it structurally, with the same threshold behavior as
+    // the `{ usedPercent, available }` literals the #309 prompt button passes.
+    expect(isLimitReached(usage(99.5, 5_000))).toBe(true);
+    expect(isLimitReached(usage(100, 5_000))).toBe(true);
+    expect(isLimitReached(usage(99.4, 5_000))).toBe(false);
+    expect(isLimitReached(usage(null, 5_000))).toBe(false);
     expect(isLimitReached(usage(100, 5_000, false))).toBe(false);
+  });
+
+  it("agrees with the reducer's arm branch at the boundary", () => {
+    // The reducer arms exactly when isLimitReached && there are live Claude ids.
+    const boundary = usage(ARM_THRESHOLD_PCT, 5_000);
+    expect(isLimitReached(boundary)).toBe(true);
+    const { next } = evaluateAutoContinue(
+      IDLE_AUTO_CONTINUE,
+      boundary,
+      1_000,
+      CLAUDE_ON,
+      ["a"],
+    );
+    expect(next.armed).toBe(true);
+
+    const under = usage(ARM_THRESHOLD_PCT - 0.1, 5_000);
+    expect(isLimitReached(under)).toBe(false);
+    const { next: stay } = evaluateAutoContinue(
+      IDLE_AUTO_CONTINUE,
+      under,
+      1_000,
+      CLAUDE_ON,
+      ["a"],
+    );
+    expect(stay.armed).toBe(false);
   });
 });
 

@@ -70,6 +70,7 @@ import type {
   ScheduledSession,
   SessionView,
 } from "../../types";
+import AutoContinuePrompt from "../AutoContinuePrompt/AutoContinuePrompt";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import UpdateIndicator from "../Update/UpdateIndicator";
 import UsageBar from "../Usage/UsageBar";
@@ -2778,6 +2779,11 @@ function Sidebar() {
       {/* In-app update box (#190): directly above the footer/Settings gear, hidden
           unless an update is available/failed; collapses to its icon in the rail. */}
       <UpdateIndicator />
+
+      {/* Auto-restart prompt (#309): directly above the usage bar — offers to enable
+          "auto continue after limit reset" when the Claude 5-hour limit is reached and
+          the setting is off; hidden otherwise / when suppressed in Settings. */}
+      <AutoContinuePrompt />
 
       {/* 5-hour Claude usage (#154): the thin separator above the footer — a plain
           hairline with no usage data, the thin usage fill (+ reset countdown + %)

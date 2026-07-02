@@ -900,6 +900,9 @@ export const DEFAULT_SETTINGS: Settings = {
   autoSave: true,
   defaultAgent: "claude",
   autoContinueAfterLimit: false,
+  // True by default (#309): the "Enable auto restart on limit reset" prompt button
+  // above the usage bar is offered when the limit is hit and auto-continue is off.
+  promptEnableAutoContinueAtLimit: true,
   // False so the first-launch agent picker runs once for new AND existing installs
   // (an older sessions.json lacks the key → merges to false → detected next launch).
   onboarded: false,
@@ -1419,6 +1422,10 @@ export interface AppState {
   /** Toggle the `autoContinueAfterLimit` setting (#296) — backs the ⋯-menu checkable
    * item + the Settings toggle. Persists via `saveSettings`. */
   toggleAutoContinue: () => void;
+  /** Turn ON the `autoContinueAfterLimit` setting (#309) — idempotent (no-op when
+   * already on). Backs the "Enable auto restart on limit reset" prompt button above
+   * the usage bar. Persists via `saveSettings`. */
+  enableAutoContinueAfterLimit: () => void;
   /** Set a single Claude agent's per-agent auto-continue opt-out (#297): `disabled =
    * true` excludes that agent from the #296 fire step. Optimistically updates the
    * session then persists via `ipc.setSessionAutoContinue`. */
@@ -2621,6 +2628,11 @@ export const useStore = create<AppState>()((set, get) => ({
       ...settings,
       autoContinueAfterLimit: !settings.autoContinueAfterLimit,
     });
+  },
+  enableAutoContinueAfterLimit: () => {
+    const settings = get().settings;
+    if (settings.autoContinueAfterLimit) return;
+    void get().saveSettings({ ...settings, autoContinueAfterLimit: true });
   },
   setAutoContinueDisabled: (id, disabled) => {
     const session = get().sessions.find((x) => x.id === id);
