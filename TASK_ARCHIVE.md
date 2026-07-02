@@ -9538,3 +9538,60 @@ still auto-saving); only the duplicate cancel affordance is gone.
 
 ---
 
+### 307. [x] Glowing, alive indeterminate progress bar for an in-progress git clone
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Made the sidebar's background-clone (#299) **"phantom" progress bar** visibly *alive* so a user
+trusts a clone is still working, not stuck. The expanded phantom folder's indeterminate bar now
+shows a bright accent **comet glint sweeping** across a softly **breathing accent glow**, and the
+collapsed-rail clone folder icon gains a subtle accent glow alongside its existing pulse. Purely
+presentational polish of the existing indeterminate affordance — the bar stays **indeterminate** (no
+fake percentage; a real % is Task 308's separate backend concern), and no clone behavior, data, or
+timing changes.
+
+**What shipped** (commit
+[`eaa7575`](https://github.com/ErikdeJager/ReCue/commit/eaa7575), PR
+[#59](https://github.com/ErikdeJager/ReCue/pull/59), merged `18a0d38`, 2026-07-02):
+
+- **New breathing-glow keyframe (`src/styles/global.css`):** added `@keyframes clone-glow` (modeled
+  on the updater's `update-glow`) whose `0%/100%` frame **equals** the static resting glow set on the
+  track's base rule — so the reduced-motion killswitch freezes it to a visible static glow. Animates
+  `box-shadow` only (no layout shift). The existing `clone-progress` transform range is unchanged;
+  its easing is switched to plain `ease-in-out` at the call site so the glint doesn't decelerate
+  mid-track (which could read as a stall).
+- **Glowing/comet bar (`src/components/Sidebar/Sidebar.module.css`):** `.phantomTrack` gained a
+  static resting accent `box-shadow` glow (the reduced-motion fallback) plus the `clone-glow` breathe;
+  `.phantomBar` became a horizontal **comet-core gradient** (dim → bright `--accent-hover` center →
+  dim) instead of a flat rectangle, with the `ease-in-out` sweep; `.railPhantom` gained a subtle
+  static accent `filter: drop-shadow` glow (keeping its `clone-pulse` opacity breathe; the static
+  glow survives reduced motion). Every `color-mix(...)` is preceded by a plain-color fallback.
+
+**Key files/areas touched:** `src/styles/global.css`, `src/components/Sidebar/Sidebar.module.css`
+(2 files, +69/−19).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 307): the "glowing indicator" is a moving accent comet
+  glint + a breathing `box-shadow` glow on the track; the bar **stays indeterminate** —
+  `role="progressbar"` keeps **no `aria-valuenow`** and its accessible name stays `Cloning <name>`
+  (a real % is Task 308's concern, out of scope). Scope covers **both** the expanded phantom bar and
+  the collapsed-rail folder icon. It's **CSS-only** — the existing `.phantomTrack > .phantomBar`
+  markup is reused verbatim, no TSX/logic/Rust/IPC/store change.
+- **Reduced motion:** all sweep/breathe motion stops under OS `prefers-reduced-motion` **or**
+  Settings → Appearance → Reduce motion (`body.reduce-motion`), leaving a **static** accent glow so
+  the bar still reads "working," not a bare gray bar. The track's outset `box-shadow` correctly
+  escapes its `overflow: hidden` (overflow clips children, not the element's own shadow).
+- **Cross-platform:** only `color-mix` (each with a plain-color fallback per repo convention),
+  `linear-gradient`, `box-shadow`, `filter: drop-shadow`, and `transform` — all supported on both
+  WKWebView and WebView2/Chromium, no macOS-only `-webkit-`/vibrancy effect — so it renders
+  identically on macOS and Windows. No runtime logic change, so no new unit tests; checks green:
+  `npm run build` / `lint` / `format:check`.
+
+---
+
