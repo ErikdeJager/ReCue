@@ -225,6 +225,7 @@ pub fn run() {
             commands::create_dir,
             commands::delete_path,
             commands::rename_path,
+            commands::add_to_gitignore,
             commands::list_skills,
             commands::file_exists,
             commands::is_git_repo,

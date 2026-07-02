@@ -697,6 +697,17 @@ pub fn rename_path(repo: String, from: String, to: String) -> Result<String, Ses
     crate::files::rename_path(&repo, &from, trimmed).map_err(SessionError::Io)
 }
 
+/// Append the repo-relative file/folder `path` to the repo-root `.gitignore` (#312 —
+/// the **sixth** deliberate file write, backing the file-tree context menu's **Add to
+/// .gitignore**). `files::add_to_gitignore` confines the item to the repo, anchors the
+/// pattern (`/path` for a file, `/path/` for a directory), creates `.gitignore` if
+/// absent, and skips a line already present. Returns `true` when a line was appended,
+/// `false` when it was already ignored (no write).
+#[tauri::command]
+pub fn add_to_gitignore(repo: String, path: String) -> Result<bool, SessionError> {
+    crate::files::add_to_gitignore(&repo, &path).map_err(SessionError::Io)
+}
+
 /// Best-effort slash-invokable skills/commands for a folder (#114) — the
 /// scheduled-prompt autocomplete. Reads project `<cwd>/.claude` + user `~/.claude`
 /// (project shadows user); a missing/unreadable dir simply yields fewer entries.

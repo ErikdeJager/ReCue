@@ -1507,6 +1507,11 @@ export interface AppState {
    * the FileTree (#291). On success refreshes the tree + git statuses and toasts; a
    * confinement / collision / invalid-name error toasts and no-ops. */
   renameTreePath: (repo: string, from: string, to: string) => Promise<void>;
+  /** Append the repo-relative file/folder `path` to the repo-root `.gitignore` (#312).
+   * On success refreshes the tree + git statuses (a now-ignored, untracked row dims)
+   * and toasts "Added to .gitignore" (or "Already in .gitignore" when the line already
+   * existed); a confinement / IO error toasts and no-ops. */
+  addToGitignore: (repo: string, path: string) => Promise<void>;
   /** Assign a repo's color (optimistic + persisted) (#35). */
   setRepoColor: (path: string, color: string) => Promise<void>;
   /** Apply + persist application settings (#100) and run their side-effects. */
@@ -3378,6 +3383,30 @@ export const useStore = create<AppState>()((set, get) => ({
     }));
     void get().refreshFileStatuses(repo);
     get().pushToast("Renamed", "success");
+  },
+
+  addToGitignore: async (repo, path) => {
+    let added: boolean;
+    try {
+      added = await ipc.addToGitignore(repo, path);
+    } catch (err) {
+      get().pushToast(
+        isSessionError(err) ? err.message : "Could not update .gitignore",
+        "error",
+      );
+      return;
+    }
+    set((s) => ({
+      fileTreeRefresh: {
+        ...s.fileTreeRefresh,
+        [repo]: (s.fileTreeRefresh[repo] ?? 0) + 1,
+      },
+    }));
+    void get().refreshFileStatuses(repo);
+    get().pushToast(
+      added ? "Added to .gitignore" : "Already in .gitignore",
+      added ? "success" : "info",
+    );
   },
 
   setRepoColor: async (path, color) => {

@@ -17,9 +17,12 @@
 //! reach the link's target outside the repo). The folder/file **Rename** (#291) adds
 //! the **fifth**: `rename_path` renames an in-repo file/dir — the *source* must
 //! canonicalize inside the repo (and not be the root), the *destination*'s parent must
-//! canonicalize inside the repo, and it refuses to clobber an existing item. All
-//! reject `..`/symlink/out-of-repo targets and use only `std::fs` (no shell-out), so
-//! they behave identically on macOS/Windows.
+//! canonicalize inside the repo, and it refuses to clobber an existing item. The
+//! file-tree context menu's **Add to .gitignore** (#312) adds the **sixth**:
+//! `add_to_gitignore` appends an item's repo-root-relative pattern to the repo-root
+//! `.gitignore` (creating it if absent), skipping a line already present. All reject
+//! `..`/symlink/out-of-repo targets and use only `std::fs` (no shell-out), so they
+//! behave identically on macOS/Windows (the written pattern is `/`-separated on every OS).
 
 use serde::Serialize;
 use std::fs;
@@ -612,6 +615,60 @@ pub fn rename_path(repo: impl AsRef<Path>, from: &str, to: &str) -> Result<Strin
     Ok(to.replace('\\', "/").trim_matches('/').to_string())
 }
 
+/// Append the repo-relative file/directory at `rel` to the repo-root `.gitignore`
+/// (#312 — the **sixth** deliberate `files.rs` write, backing the file-tree context
+/// menu's **Add to .gitignore**). The item is confined to the repo (`confine` — it must
+/// exist inside the repo, rejecting `..`/symlink/absolute escapes); its type (file vs
+/// directory) picks the pattern shape:
+///   - a file →   `/<rel>`  (leading slash = anchored at the repo root)
+///   - a directory → `/<rel>/`  (trailing slash too, so it matches the directory)
+///
+/// The `.gitignore` is created if absent. If a line equal (after `trim`) to the pattern
+/// already exists, nothing is written and `Ok(false)` is returned (no duplicate);
+/// otherwise the pattern is appended on its own line — inserting a leading newline first
+/// when the existing content doesn't end in one — and `Ok(true)` is returned. Only
+/// `std::fs` is used and the pattern is `/`-separated, so it behaves identically on
+/// macOS/Windows. The literal path is written as-is (no glob-metacharacter escaping —
+/// out of scope for #312).
+pub fn add_to_gitignore(repo: impl AsRef<Path>, rel: &str) -> Result<bool, String> {
+    let repo = repo.as_ref();
+    // Confine the item to the repo (must exist inside it) and learn whether it's a dir.
+    let canon = confine(repo, rel)?;
+    let is_dir = canon.is_dir();
+    // Build the anchored pattern from the repo-relative POSIX path.
+    let norm = rel.replace('\\', "/");
+    let norm = norm.trim_matches('/');
+    if norm.is_empty() {
+        return Err("refusing to gitignore the repository root".to_string());
+    }
+    let pattern = if is_dir {
+        format!("/{norm}/")
+    } else {
+        format!("/{norm}")
+    };
+    // The `.gitignore` sits at the (canonical) repo root.
+    let canon_repo = repo.canonicalize().map_err(|e| e.to_string())?;
+    let gitignore = canon_repo.join(".gitignore");
+    let existing = match fs::read_to_string(&gitignore) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    // Already present (exact line match, ignoring surrounding whitespace)? No-op.
+    if existing.split('\n').any(|line| line.trim() == pattern) {
+        return Ok(false);
+    }
+    // Append on its own line: prepend a newline first if the file doesn't end in one.
+    let mut out = existing;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&pattern);
+    out.push('\n');
+    fs::write(&gitignore, out).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Delete the repo-relative file or directory at `path` (#267 — the **fourth**
 /// deliberate `files.rs` write, and the genuinely destructive one; a directory is
 /// removed **recursively**). Hard safety rails, all enforced before any removal:
@@ -1087,6 +1144,73 @@ mod tests {
         // A destination whose parent level doesn't exist is rejected too.
         assert!(rename_path(&dir, "keep.md", "nope/deep.md").is_err());
         assert_eq!(read_text_file(&dir, "keep.md").unwrap(), "keep");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_to_gitignore_creates_file_and_anchors_file_and_dir_patterns() {
+        let dir = tmp("gitignore-create");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/foo.ts"), "export {}").unwrap();
+        fs::create_dir_all(dir.join("build")).unwrap();
+
+        // A fresh repo with no `.gitignore`: adding a file creates it with `/src/foo.ts`.
+        assert!(add_to_gitignore(&dir, "src/foo.ts").unwrap());
+        assert_eq!(
+            fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            "/src/foo.ts\n"
+        );
+
+        // A directory gets a trailing slash too: `/build/`.
+        assert!(add_to_gitignore(&dir, "build").unwrap());
+        assert_eq!(
+            fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            "/src/foo.ts\n/build/\n"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_to_gitignore_is_idempotent_on_an_exact_line() {
+        let dir = tmp("gitignore-dupe");
+        fs::write(dir.join("secret.env"), "TOKEN=x").unwrap();
+
+        assert!(add_to_gitignore(&dir, "secret.env").unwrap());
+        let after_first = fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert_eq!(after_first, "/secret.env\n");
+
+        // A second identical call is a no-op (`Ok(false)`) and leaves the file byte-identical.
+        assert!(!add_to_gitignore(&dir, "secret.env").unwrap());
+        assert_eq!(
+            fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            after_first
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_to_gitignore_inserts_a_newline_when_the_file_lacks_a_trailing_one() {
+        let dir = tmp("gitignore-nonewline");
+        fs::write(dir.join("a.txt"), "hi").unwrap();
+        // Existing content with NO trailing newline — the new pattern must land on its own line.
+        fs::write(dir.join(".gitignore"), "node_modules").unwrap();
+
+        assert!(add_to_gitignore(&dir, "a.txt").unwrap());
+        assert_eq!(
+            fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            "node_modules\n/a.txt\n"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_to_gitignore_rejects_a_traversal_path_and_writes_nothing() {
+        let dir = tmp("gitignore-escape");
+        fs::write(dir.join("keep.txt"), "x").unwrap();
+        // A path escaping the repo is rejected (confine) — no `.gitignore` is created.
+        assert!(add_to_gitignore(&dir, "../escape").is_err());
+        assert!(add_to_gitignore(&dir, "../../../../etc/hosts").is_err());
+        assert!(!dir.join(".gitignore").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

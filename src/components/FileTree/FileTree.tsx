@@ -85,9 +85,10 @@ const CONTENT_RESULT_LIMIT = 200;
  * lives in local component state (not persisted; refresh reloads from the root).
  * Clicking a file opens it in the file viewer; right-clicking a file offers Open in
  * file viewer / Open as Kanban board (`.md` only) / Reveal in Finder / Copy absolute
- * path / Copy relative path (#184) / Delete (#267). Right-clicking a **folder** offers
- * New folder… / Rename… / Reveal in Finder / Copy absolute path / Copy relative path
- * (#291) / Delete folder (#267). Deletes are confirm-gated by the Settings
+ * path / Copy relative path (#184) / Add to .gitignore (#312) / Delete (#267).
+ * Right-clicking a **folder** offers New folder… / Rename… / Reveal in Finder / Copy
+ * absolute path / Copy relative path (#291) / Add to .gitignore (#312) / Delete folder
+ * (#267). Deletes are confirm-gated by the Settings
  * confirm-destructive toggle (#103) and remove recursively; the tree refreshes in
  * place after any create/delete (the per-repo `fileTreeRefresh` signal, #253 pattern).
  *
@@ -104,6 +105,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
   const createFolder = useStore((s) => s.createFolder);
   const deleteTreePath = useStore((s) => s.deleteTreePath);
   const renameTreePath = useStore((s) => s.renameTreePath);
+  const addToGitignore = useStore((s) => s.addToGitignore);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const platform = useStore((s) => s.platform);
   // Git working-tree status for this repo (#252): repo-relative path → "A"|"M"|"D"|"I"
@@ -886,6 +888,17 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    void addToGitignore(repoPath, menu.path);
+                    closeMenu();
+                  }}
+                >
+                  Add to .gitignore
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   className={styles.menuItemDanger}
                   onClick={requestDelete}
                 >
@@ -954,6 +967,17 @@ function FileTree({ repoPath }: { repoPath: string }) {
                   }}
                 >
                   Copy relative path
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    void addToGitignore(repoPath, menu.path);
+                    closeMenu();
+                  }}
+                >
+                  Add to .gitignore
                 </button>
                 <button
                   type="button"

@@ -343,6 +343,14 @@ export const deletePath = (repo: string, path: string) =>
 export const renamePath = (repo: string, from: string, to: string) =>
   invoke<string>("rename_path", { repo, from, to });
 
+/** Append the repo-relative file/folder `path` to the repo-root `.gitignore` (#312).
+ * The item is confined to the repo; the pattern is anchored (`/path` for a file,
+ * `/path/` for a directory), `.gitignore` is created if absent, and a line already
+ * present is skipped. Resolves `true` when a line was appended, `false` when it was
+ * already ignored (no write). */
+export const addToGitignore = (repo: string, path: string) =>
+  invoke<boolean>("add_to_gitignore", { repo, path });
+
 /** Best-effort slash-invokable skills/commands for `cwd` (#114) — the
  * scheduled-prompt autocomplete. Reads project + user `.claude/{skills,commands}`,
  * project shadowing user; a missing dir just yields fewer entries (never throws). */
