@@ -1,5 +1,5 @@
 /* Recurring-session panel (#294): the shared body for the Overview card + Canvas
-   panel — a header bar (repo/interval/countdown + edit toggle + cancel) over the live
+   panel — a header bar (repo/interval/countdown + edit toggle) over the live
    child terminal, an auto-saving editor, or a "next run in …" placeholder. */
 .panel {
   display: flex;
@@ -77,26 +77,6 @@
 .iconBtnActive {
   border-color: var(--accent);
   color: var(--accent);
-}
-
-.cancel {
-  flex-shrink: 0;
-  padding: var(--space-2) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--fs-meta-xs);
-  cursor: pointer;
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-
-.cancel:hover {
-  border-color: var(--status-error);
-  color: var(--text-primary);
 }
 
 .body {

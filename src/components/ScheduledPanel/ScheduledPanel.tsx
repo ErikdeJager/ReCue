@@ -23,16 +23,16 @@ const SAVE_DEBOUNCE_MS = 600;
  * The pending scheduled-session panel (#94): the shared body for the Overview
  * scheduled card and the Canvas scheduled panel. Shows the target branch + repo
  * and an **editable** launch time, name, and **big prompt** — all **auto-saving**
- * (debounced) to the record via #93's `update_schedule` command — plus a Cancel
- * control. Once the schedule fires (engine, #93), the record is gone and this
- * shows a "no longer pending" note (it becomes a normal live agent elsewhere).
+ * (debounced) to the record via #93's `update_schedule` command — plus a
+ * "Start now" control. Cancelling is done from the surrounding sidebar row /
+ * Overview card × (#306). Once the schedule fires (engine, #93), the record is
+ * gone and this shows a "no longer pending" note (it becomes a live agent elsewhere).
  */
 function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
   const schedule = useStore((s) =>
     s.schedules.find((x) => x.id === scheduleId),
   );
   const updateSchedule = useStore((s) => s.updateSchedule);
-  const cancelSchedule = useStore((s) => s.cancelSchedule);
   const startScheduleNow = useStore((s) => s.startScheduleNow);
 
   // Disable "Start now" while the spawn is in flight (the schedule disappears on
@@ -211,13 +211,6 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
       </label>
 
       <div className={styles.actions}>
-        <button
-          type="button"
-          className={styles.cancel}
-          onClick={() => void cancelSchedule(scheduleId)}
-        >
-          Cancel schedule
-        </button>
         <button
           type="button"
           className={styles.startNow}
