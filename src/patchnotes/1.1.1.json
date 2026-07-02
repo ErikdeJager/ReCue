@@ -1,0 +1,27 @@
+{
+  "version": "1.1.1",
+  "date": "2026-07-02",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "When you hit the five-hour usage limit, a prompt now appears right above the usage bar offering to automatically restart your agents once the limit resets — so you can arm it the moment you need it, without hunting through menus."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "Cloning a repository is noticeably faster: it now fetches file contents on demand instead of downloading the entire history up front, so large repositories become usable much sooner.",
+        "The progress bar shown while a repository clones now glows and animates, making it clear the clone is still working.",
+        "The per-agent auto-continue toggle only appears once you've actually reached the usage limit, keeping the session menu uncluttered until it's relevant.",
+        "Scheduled and recurring session panels no longer show a redundant in-panel Cancel button."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "The schedule-session window no longer opens with an empty Launch time field — it starts pre-filled with a sensible default again."
+      ]
+    }
+  ]
+}
