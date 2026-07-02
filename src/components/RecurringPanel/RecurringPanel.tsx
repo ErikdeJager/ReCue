@@ -42,7 +42,8 @@ const TICK_MS = 30_000;
  * hosted child terminal — no new surface is created. When a child is running it renders
  * that child's pooled terminal; otherwise a "next run in …" placeholder. A small header
  * bar shows the repo/interval/countdown and toggles an **auto-saving** editor (interval
- * amount+unit / next-run time / name / prompt) + Cancel.
+ * amount+unit / next-run time / name / prompt). Cancelling is done from the surrounding
+ * sidebar row / Overview card × (#306).
  */
 function RecurringPanel({ recurringId }: { recurringId: string }) {
   const recurring = useStore((s) =>
@@ -50,7 +51,6 @@ function RecurringPanel({ recurringId }: { recurringId: string }) {
   );
   const sessions = useStore((s) => s.sessions);
   const updateRecurring = useStore((s) => s.updateRecurring);
-  const cancelRecurring = useStore((s) => s.cancelRecurring);
   const owners = useSessionOwners();
 
   const [editing, setEditing] = useState(false);
@@ -314,14 +314,6 @@ function RecurringPanel({ recurringId }: { recurringId: string }) {
           aria-pressed={editing}
         >
           <Pencil size={13} strokeWidth={1.5} />
-        </button>
-        <button
-          type="button"
-          className={styles.cancel}
-          onClick={() => void cancelRecurring(recurringId)}
-          title="Cancel recurring session"
-        >
-          Cancel
         </button>
       </div>
       <div className={styles.body}>{body}</div>

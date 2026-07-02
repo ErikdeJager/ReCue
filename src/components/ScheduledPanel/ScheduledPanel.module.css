@@ -1,5 +1,5 @@
 /* Pending scheduled-session panel (#94): the shared body for the Overview card +
-   Canvas panel — editable launch time / name / prompt (auto-saving) + cancel. */
+   Canvas panel — editable launch time / name / prompt (auto-saving) + "Start now". */
 .panel {
   display: flex;
   width: 100%;
@@ -119,26 +119,6 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-8);
-}
-
-.cancel {
-  padding: var(--space-4) var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-
-.cancel:hover {
-  border-color: var(--status-error);
-  color: var(--text-primary);
 }
 
 /* "Start now" (#269): fire this schedule immediately — a primary accent control. */
