@@ -9720,3 +9720,50 @@ read keeps working.
 
 ---
 
+### 310. [x] Schedule modal opens with an empty "Launch time" field (no "in 5 min" prefill)
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+When the user opens the **Schedule session** modal (⌘⇧N) and reaches the "Launch time" step, the
+input now starts **empty** instead of pre-filled with `in 5 min`, so the user types their own time
+from a blank field that shows its existing placeholder (`e.g. 1h, 15:00, 6pm, tomorrow 9am`) + the
+`SCHEDULE_TIME_HINT` helper line. The empty field keeps the "Schedule" / "Worktree" buttons disabled
+and submit a no-op (existing gating already handles it — `parseWhen("")` → `null`), and it re-blanks
+on every reopen. The **Recurring** modal's separate "First run" field is unchanged (still seeded
+`now` to mean run-immediately).
+
+**What shipped** (commit
+[`5b8ef2d`](https://github.com/ErikdeJager/ReCue/commit/5b8ef2d), PR
+[#62](https://github.com/ErikdeJager/ReCue/pull/62), merged `d0f5ba0`, 2026-07-02):
+
+- **`src/components/NewSessionModal/NewSessionModal.tsx`:** the on-open reset effect's `fireAt` seed
+  changed from `setFireAt(recurringMode ? "now" : DEFAULT_WHEN)` to
+  `setFireAt(recurringMode ? "now" : "")` — blank for the schedule step, `"now"` still for recurring.
+  The now-unused `DEFAULT_WHEN = "in 5 min"` constant (and its comment) was removed to avoid a
+  `no-unused-vars` lint error, and the adjacent comment refreshed to describe the empty schedule field
+  (#310). The input JSX, placeholder, helper line, button `disabled` expressions, and `submitSchedule`
+  were untouched — they already behave correctly for an empty field.
+
+**Key files/areas touched:** `src/components/NewSessionModal/NewSessionModal.tsx` (1 file, +4/−8).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 310): **keep the existing placeholder** — blanking the
+  field simply reveals the already-present placeholder + `SCHEDULE_TIME_HINT` guidance, so no new
+  placeholder was added. **No new submit guard** — the existing gating (`parseWhen("")` → `null`
+  disables both buttons; `submitSchedule` guards `if (!when) return`) already makes an empty field
+  safe. **Scope limited to the schedule step's "Launch time" field** — the recurring "First run"
+  field (`"now"`) and the `ScheduledPanel`/`RecurringPanel` editors (seeded from the record's real
+  `fire_at`/`next_fire_at` via `toLocalInput`) are untouched. The dead `DEFAULT_WHEN` constant was
+  removed rather than left referenced only in a comment.
+- **Cross-platform:** frontend-only and platform-neutral (a React state-seed string) — identical on
+  macOS and Windows, no `#[cfg]`/`platform` branching. No test changes needed; checks green:
+  `npm run build` / `lint` / `test`.
+
+---
+
