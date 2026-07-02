@@ -1900,3 +1900,144 @@ written beforehand. This input field should be empty when the modal is opened."
   avoid an unused-variable lint error, and refresh the adjacent comment.
 - Areas touched: `src/components/NewSessionModal/NewSessionModal.tsx` (remove `DEFAULT_WHEN`; on-open reset
   becomes `setFireAt(recurringMode ? "now" : "")`). Frontend-only + platform-neutral; no test changes.
+
+## Task 311
+
+Card: "The modal opened by clicking 'new tab from template' should also allow the user to enter a custom
+name. The newly created tab will spawn with this name. This is an optional field."
+
+- **Field placement** → on the modal's **step 2 (folder step)**, inserted after the folder picker and
+  before the Cancel / "Open template" actions row (the final confirm step where "Open template" lives).
+  Not on step 1 (template list).
+- **Label** → `Tab name (optional)` (matching NewSessionModal's `Name (optional)` convention, but worded
+  "Tab name" so it's clear it names the Canvas tab, not an agent).
+- **Placeholder** → the chosen template's name (`chosen?.name`, fallback `"Custom name…"`), so the user
+  sees exactly what the tab will be called if they leave it blank.
+- **Blank-field default** → whitespace-only/empty ⇒ the tab is named after the **template**
+  (`tabName.trim() || template.name`), byte-for-byte today's behavior. Entered value is trimmed before use.
+- **Scope of the name** → it names the **Canvas tab** (`CanvasTab.name`), explicitly separate from the
+  template's per-block `new-agent` name (#136), which is untouched.
+- **When it applies** → at instantiation time, threaded through `useTemplate(templateId, cwd, tabName?)` →
+  `instantiateTemplate(template, cwd, genId, tabName?)` — a new optional trailing parameter, additive and
+  backward-compatible.
+- **Toast copy** → unchanged (`Opened template "<template.name>"`), it references the template not the new
+  tab name; called out as optionally changeable but default is no change.
+- **No explicit state reset needed** → the modal is conditionally mounted (`{templateUseOpen && …}`), so the
+  new `tabName` `useState` resets on each open.
+- Areas touched: `src/components/Canvas/templateInstantiate.ts` (+test), `src/store.ts` (+`store.test.ts`),
+  `src/components/TemplateUseModal/TemplateUseModal.tsx` + `.module.css`. Pure frontend, platform-neutral.
+
+## Task 312
+
+Card: "Add to gitignore option inside the context menu of the file tree items (files and folders)."
+
+- **Pattern format — files** → repo-root-relative POSIX path, leading slash, **no** trailing slash,
+  e.g. `/src/foo.ts`.
+- **Pattern format — folders** → leading slash **and** trailing slash, e.g. `/build/` (restricts the
+  pattern to a directory). Dir-vs-file is derived **server-side** from the confined path's metadata, not a
+  frontend flag.
+- **Leading-slash anchoring** chosen deliberately: matches only that exact path from the repo root (no
+  accidental ignore of same-named files elsewhere) and guarantees the written line never begins with `#`/`!`
+  (neutralizes gitignore comment/negation leading-char semantics).
+- **Glob metacharacters in a path are NOT escaped** — literal path written as-is; escaping `*?[]\` is out of
+  scope (real source paths almost never contain them).
+- **Idempotence = exact-line match** (`line.trim() == pattern`); if present ⇒ no write, return `false`. Does
+  not detect equivalent-but-differently-written existing entries (e.g. unanchored `src/foo.ts`).
+- **Create `.gitignore` if absent**; if the existing file's last line lacks a trailing newline, insert one
+  before appending; append `pattern` + `\n`.
+- **Not confirm-gated** — non-destructive, one click writes immediately (unlike Delete).
+- **Toast copy** → appended ⇒ "Added to .gitignore" (success); already present ⇒ "Already in .gitignore"
+  (info); failure ⇒ the typed error or "Could not update .gitignore" (error).
+- **Tree refreshes** on success (bump `fileTreeRefresh[repo]` + `refreshFileStatuses(repo)`). Documented
+  caveat: git does not ignore already-tracked paths, so an already-tracked file/folder won't visually dim
+  (correct git behavior, not a bug).
+- **New Rust surface** → command `add_to_gitignore(repo: String, path: String) -> Result<bool, SessionError>`;
+  `files.rs` helper `add_to_gitignore(repo, rel) -> Result<bool, String>` (the sixth deliberate `files.rs`
+  write). Returned `bool` = "was appended" (drives the toast).
+- **Only the FileTree's `repoPath` root `.gitignore`** is written (same path `file_statuses` runs on); no
+  nested/per-directory `.gitignore`.
+- **Menu item always shown** for both files and folders regardless of git-repo status (writing a `.gitignore`
+  into a non-git folder is harmless); label "Add to .gitignore" (identical macOS/Windows), positioned between
+  "Copy relative path" and Delete, non-danger `menuItem` style.
+- Areas touched: `src-tauri/src/files.rs` (+tests), `src-tauri/src/commands.rs`, `src-tauri/src/lib.rs`
+  (handler reg), `src/ipc.ts`, `src/store.ts`, `src/components/FileTree/FileTree.tsx`.
+
+## Task 313
+
+Card: "The loading bar while cloning a repo looks terrible. Just make it a normal loading bar (revert task
+that made this glow and stuff)."
+
+- **This is a straight CSS-only revert of task #307** (the "glowing, alive indeterminate progress bar",
+  commit `eaa7575`), which added all the glow/shimmer — the card's "revert task that made this glow"
+  maps unambiguously to #307. The plan restores the pre-#307 (#299) plain bar.
+- **The bar stays indeterminate** (a solid accent stripe sliding across a flat track via the pre-existing
+  `clone-progress` sweep), not made determinate — a `git clone` gives no reliable percent. Keeps
+  `role="progressbar"` with no `aria-valuenow`.
+- **Style match** → restore #299's own plain treatment (a `--bg-hover` track + solid `--accent` stripe),
+  already an on-system, token-only pattern consistent with the app's other bars (Update install
+  `.progressBar` + `UsageBar` `.fill` both use a plain `var(--accent)` fill). Not remodeled after another
+  component.
+- **Collapsed-rail glow included in the revert** (not just the expanded bar): #307 added glow to both
+  surfaces, so `.railPhantom`'s `filter: drop-shadow` is removed too, while **keeping** its `clone-pulse`
+  opacity breathe (predates #307). Narrower reading noted: the rail change is the only "beyond the literal
+  loading bar" item and could be dropped.
+- **All bundled #307 tweaks restored** (track `4px→3px`, bar `45%→40%`, timing `1.15s ease-in-out →
+  1.2s var(--ease-out)`) for a faithful revert; cosmetic, could be left as-is without affecting glow removal.
+- **"Cloning…" row layout, dim (`opacity: 0.75`), label, folder marker, resolve-to-real-repo behavior all
+  preserved** — no `Sidebar.tsx` markup change, no `store.ts` change; only CSS values + doc comments.
+- **Exact glow rules to strip:** `src/components/Sidebar/Sidebar.module.css` — `.phantomTrack` (box-shadow
+  lines + `animation: clone-glow`, `height:4px`), `.phantomBar` (comet `linear-gradient` bg — keep solid
+  `background: var(--accent)` fallback — `width:45%`, `clone-progress 1.15s`), `.railPhantom` (two
+  `filter: drop-shadow` lines); `src/styles/global.css` — remove the whole `@keyframes clone-glow` block.
+- Areas touched: `src/components/Sidebar/Sidebar.module.css`, `src/styles/global.css`. No TS/Rust/markup.
+
+## Task 314
+
+Card: "When an agent needs permission on a macOS computer (e.g. mic for voice input) macOS asks a total of
+6 times if ReCue can use the mic; clicking Allow each time doesn't help — the agent can't pick up voice.
+Not exclusive to mic (also folders/system settings). Investigate and resolve; do deep research."
+
+- **Empirically-confirmed root cause** (planner inspected the actual built `ReCue.app` on macOS 26.5.1 with
+  `codesign`/`spctl`): a plain `npm run tauri build` produces a **linker-signed ad-hoc** app —
+  `flags=0x20002(adhoc,linker-signed)`, **Hardened Runtime OFF**, **zero entitlements** (no `audio-input`),
+  a **broken signature** (`Info.plist=not bound`, `Sealed Resources=none`), signing `Identifier=recue-…`
+  (not `com.recue.app`), DR = a per-build `cdhash`. So `tauri build` **never applies** #292's
+  `bundle.macOS.entitlements`/Hardened Runtime — the Tauri macOS bundler only does so when a signing identity
+  is configured. #292 built the machinery; the default local/CI build silently bypasses it → the bug persists.
+- **Both symptoms explained:** (a) "Allow never works" ⇒ the `audio-input` entitlement is absent + Hardened
+  Runtime off, so macOS can't grant even after Allow (same for folders); (b) "asks 6 times / never persists"
+  ⇒ the DR is a per-build `cdhash` + the signature is malformed, so TCC can't record/match a durable grant —
+  every fresh access attempt (voice-tool polling, each new agent child, retries) re-prompts. "6" tracks
+  access attempts, not a constant.
+- **Process-attribution is NOT broken** — portable-pty spawns the child without disclaiming responsibility,
+  so macOS already attributes the TCC request to ReCue. A runtime Rust change
+  (`responsibility_spawnattrs_setdisclaim`) was evaluated and **rejected** (would make it worse). No
+  `pty.rs`/frontend/in-app-UI change warranted.
+- **JIT/unsigned-memory (research item 5) is a non-issue** — `node` execs as its own separately-signed
+  binary (ReCue's entitlements don't govern it) and WKWebView JIT runs in Apple-signed helpers, so no
+  `cs.allow-jit`/`allow-unsigned-executable-memory` needed. `Entitlements.plist` stays as-is.
+- **Chosen fix (scope: bundle/script/docs only, NO runtime code):** (1) harden
+  `scripts/sign-macos-local.sh` to always embed entitlements + Hardened Runtime with `-i com.recue.app`,
+  default to / steer toward a **stable self-signed identity** (auto-detect, optional non-interactive create
+  via `RECUE_CREATE_IDENTITY=1`, loudly-warned ad-hoc fallback — never a silent broken sign), fail-closed
+  verification; (2) add a one-command `npm run build:mac`/`sign:mac` convenience so the re-sign step (whose
+  omission causes the bug) can't be forgotten; (3) rewrite `docs/macos-permissions.md` root-cause + recipe +
+  recovery; optional one-clause `CLAUDE.md` note.
+- **Local vs Apple-account split (recorded honestly):** a **local** build is fully fixable **without an
+  Apple account** via a stable self-signed cert (entitlement present ⇒ Allow works; cert-based DR ⇒ grants
+  persist across rebuilds). A **downloaded release** that "just works" for arbitrary users needs the
+  **Developer-ID + notarization** path (Apple account + the dormant `APPLE_*` CI secrets) — the only thing
+  that also clears Gatekeeper. An optional middle path (sign CI releases with a fixed self-signed cert in a
+  secret ⇒ stable TCC DR without an Apple account, Gatekeeper still warns) was evaluated and chosen to be
+  **documented as future work, not wired** this task.
+- **Verification on a real Mac (CI can't test GUI TCC):** automated criteria assert signature correctness
+  (`codesign -dv` shows `runtime` + `Identifier=com.recue.app`; `codesign -d --entitlements` lists
+  `audio-input`; `codesign --verify --strict` passes; `codesign -d -r -` shows a non-`cdhash` DR identical
+  across two same-cert rebuilds). Manual smoke: `tccutil reset Microphone com.recue.app`, move to
+  `/Applications` (defeat App Translocation), `xattr -dr com.apple.quarantine`, then confirm one prompt →
+  Allow sticks → survives relaunch + rebuild.
+- **Cross-platform** → entirely macOS-scoped; no Windows/Linux code path or behavior change; the signer +
+  npm convenience are macOS-only.
+- Areas touched: `scripts/sign-macos-local.sh`, `package.json` (macOS-only convenience scripts),
+  `docs/macos-permissions.md`, optionally a one-clause `CLAUDE.md` note. No Rust/TS/CSS; no
+  `Entitlements.plist`/`Info.plist`/`tauri.conf.json`/`release.yml` changes.
