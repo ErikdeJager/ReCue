@@ -1852,3 +1852,29 @@ in settings, causing it to not appear)."
 - **Cross-platform / reduced-motion** → frontend-only, on-system tokens only, glow via
   `box-shadow`/`border-color` breathe degrading to a static glow under reduced motion; no `color-mix`
   without fallback, no layout shift — identical on macOS and Windows.
+
+## Task 308
+
+Card: "Cloning git repos is really slow. Maybe because it clones the entire history? … Investigate and
+propose a fix." (User required explicit approval before advancing — **approved** to proceed with the
+blobless partial-clone fix below.)
+
+- **Root cause** → `git::clone_repo` (`src-tauri/src/git.rs` ~line 486) runs a plain
+  `git clone <url> <dest>` with no `--depth`, `--filter`, or `--single-branch`, so it downloads the
+  entire object DB — every commit, tree, and **every version of every file (all blobs) across all
+  history and all branches**. The blob history dominates the bytes on a large repo.
+- **Recommended fix (approved)** → add **`--filter=blob:none`** (a blobless partial clone): full commit
+  history + every branch ref still come down, but file blobs are fetched **lazily on demand**, so the
+  initial clone is far faster. Chosen over `--depth 1` (strips history, cripples agent
+  `git log`/`blame`/`bisect`) and `--single-branch` (would break the #180 remote-branch picker), because
+  it preserves full history + all branches so `claude` agents and ReCue's `list_branches` /
+  `fetch_remotes` / worktrees keep working.
+- **Configurable vs fixed** → **fixed default, no Setting.** Simplest correct default; a toggle would add
+  UX complexity for no real benefit.
+- **Graceful degradation** → **rely on git's built-in fallback** — verified on git 2.55 that when the
+  transport can't apply the filter (unsupported server or a local/`file://` origin), git degrades to a
+  full clone and still exits 0 (only a warning, which `clone_repo` already swallows on the success path).
+  No manual retry logic added.
+- **Scope** → speed fix only; the clone-progress/loading-bar UX is Task 307's concern and is untouched.
+  Backend-only (`src-tauri/src/git.rs`): add the arg, refresh the doc-comment, add one full-history-
+  preservation unit test. Cross-platform (one added arg through the shared `hidden_command`).
