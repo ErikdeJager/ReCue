@@ -1,3 +1,4 @@
+import { isLimitReached } from "../../autoContinue";
 import { useStore } from "../../store";
 import type { SessionView } from "../../types";
 import Checkbox from "../Checkbox/Checkbox";
@@ -19,16 +20,19 @@ interface AutoContinueToggleProps {
  * or any other agent.
  *
  * Renders **nothing** unless the global option is on AND the session is a Claude agent
- * (a legacy null agent predates #101 and is claude) — there's nothing to opt out of for
- * a non-Claude agent or when the feature is off. Frontend-only + platform-neutral, so it
- * behaves identically on macOS and Windows.
+ * (a legacy null agent predates #101 and is claude) AND the 5-hour usage limit has
+ * actually been reached (#305) — there's nothing to opt out of for a non-Claude agent,
+ * when the feature is off, or before the limit is hit (fail-safe hide when usage data is
+ * unavailable/unknown). Frontend-only + platform-neutral, so it behaves identically on
+ * macOS and Windows.
  */
 function AutoContinueToggle({ session, className }: AutoContinueToggleProps) {
   const enabled = useStore((s) => s.settings.autoContinueAfterLimit);
   const setAutoContinueDisabled = useStore((s) => s.setAutoContinueDisabled);
+  const usage = useStore((s) => s.usage);
 
   const isClaude = (session.agent ?? "claude") === "claude";
-  if (!enabled || !isClaude) return null;
+  if (!enabled || !isClaude || !isLimitReached(usage)) return null;
 
   return (
     // stopPropagation so a click can't start the Overview card / #144 Canvas header
