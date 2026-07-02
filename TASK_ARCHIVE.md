@@ -711,3 +711,68 @@ a solid accent stripe sliding across a flat token track, no glow. The bar stays 
   Windows, and the global `body.reduce-motion` killswitch still freezes it to a static solid stripe.
   Checks green: `npm run build` / `lint` / `format:check` / `test`; `grep -rn "clone-glow" src` returns
   nothing.
+
+---
+
+### 312. [x] Add "Add to .gitignore" to the file-tree row context menu
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+The **FileTree** right-click context menu (on both file and folder rows) gained an **"Add to
+.gitignore"** item, placed between "Copy relative path" and Delete. Clicking it appends that item's
+repo-root-relative **anchored** pattern to the repo-root `.gitignore` — `/src/foo.ts` for a file,
+`/build/` for a folder — creating `.gitignore` if absent, never duplicating a line already present,
+and fixing a missing trailing newline before appending. On success the tree re-lists and re-reads
+git status, so a now-ignored (untracked) row dims automatically via the existing #270 ignore
+coloring. This saves hand-editing `.gitignore` for the common "stop tracking this" action.
+
+**What shipped** (commit [`c704f40`](https://github.com/ErikdeJager/ReCue/commit/c704f40), PR
+[#65](https://github.com/ErikdeJager/ReCue/pull/65), merged `9801fb4`, 2026-07-02):
+
+- **`src-tauri/src/files.rs`:** `add_to_gitignore(repo, rel) -> Result<bool, String>` — the **sixth**
+  deliberate, path-validated `files.rs` write. Reuses the shared `confine(repo, rel)` guard (rejects
+  `..`/symlink/absolute escapes; the item must exist inside the repo) and **derives dir-ness
+  server-side** from the confined path's `is_dir()` (so the command signature is just `(repo, path)`,
+  no trusted flag). Normalizes the POSIX `rel` (`\`→`/`, trim slashes), refuses the empty/repo-root
+  pattern, builds `/{norm}` (file) or `/{norm}/` (dir), reads the current `.gitignore` (treating
+  `NotFound` as empty, surfacing other read errors), returns `Ok(false)` on an exact-line match
+  (`line.trim() == pattern`), else appends the pattern on its own line (prepending `\n` when the
+  file doesn't end in one) via `fs::write` and returns `Ok(true)`. Unit tests cover: fresh-repo
+  file create → `/src/foo.ts`, folder → `/build/`, idempotent second call (`false`, byte-identical),
+  trailing-newline insertion, and a traversal path erroring + writing nothing.
+- **`src-tauri/src/commands.rs` / `src-tauri/src/lib.rs`:** the `add_to_gitignore(repo, path) ->
+  Result<bool, SessionError>` `#[tauri::command]` + its registration in the `generate_handler!` list.
+- **`src/ipc.ts`:** `addToGitignore(repo, path) → invoke<boolean>("add_to_gitignore", …)` wrapper.
+- **`src/store.ts`:** an `addToGitignore` action mirroring the other tree writes — on error toasts
+  `isSessionError(err) ? err.message : "Could not update .gitignore"`; on success bumps
+  `fileTreeRefresh[repo]`, calls `refreshFileStatuses(repo)`, and toasts the returned boolean
+  ("Added to .gitignore" success vs "Already in .gitignore" info).
+- **`src/components/FileTree/FileTree.tsx`:** the non-danger "Add to .gitignore" `menuItem` in **both**
+  the folder and file menu branches (between "Copy relative path" and Delete), calling
+  `addToGitignore(repoPath, menu.path)` then `closeMenu()`.
+
+**Key files/areas touched:** `src-tauri/src/files.rs` (+ tests), `src-tauri/src/commands.rs`,
+`src-tauri/src/lib.rs`, `src/ipc.ts`, `src/store.ts`, `src/components/FileTree/FileTree.tsx`
+(6 files, +203/−6).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (per `ASSUMPTIONS.md` §Task 312): patterns are **repo-root-anchored** — a **leading
+  slash** (matches only that exact path from the root, and guarantees the line never starts with
+  `#`/`!`), plus a **trailing slash for folders** (restricts to a directory); **dir-vs-file derived
+  server-side**, not from a frontend flag. **Idempotence = exact-line match** (does not detect an
+  equivalent-but-differently-written existing entry, e.g. an unanchored `src/foo.ts`). **Glob
+  metacharacters are NOT escaped** — the literal path is written as-is (real source paths almost never
+  contain them). **Not confirm-gated** (non-destructive, one click writes). **Only the FileTree's
+  `repoPath`-root `.gitignore`** is touched (no nested per-directory files), and the item is **always
+  shown** for both files and folders regardless of git status (writing into a non-git folder is
+  harmless). **Documented caveat:** git does not ignore already-tracked paths, so an already-tracked
+  file/folder won't visually dim after adding it — correct git behavior, not a bug.
+- **Cross-platform:** `files.rs` uses only `std::fs` (no shell-out) and writes `/`-separated patterns,
+  so it behaves identically on macOS and Windows; the menu label ("Add to .gitignore") is OS-neutral.
+  Checks green: `cargo test` / `npm run lint:rust` / `npm run build` / `lint` / `test`.
