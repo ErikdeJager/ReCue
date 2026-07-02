@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronLeft, FolderOpen, LayoutTemplate } from "lucide-react";
 
 import { pickDirectory } from "../../ipc";
+import { noAutoCapitalize } from "../../inputProps";
 import { repoName } from "../../paths";
 import { useStore } from "../../store";
 import styles from "./TemplateUseModal.module.css";
@@ -24,6 +25,9 @@ function TemplateUseModal() {
   const [step, setStep] = useState<"template" | "folder">("template");
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [cwd, setCwd] = useState<string | null>(recents[0] ?? null);
+  // Optional custom name for the new Canvas tab (#311); blank keeps the template's
+  // name. The modal unmounts on close, so no explicit reset is needed.
+  const [tabName, setTabName] = useState("");
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -42,7 +46,7 @@ function TemplateUseModal() {
 
   const open = () => {
     if (!templateId || !cwd) return;
-    runTemplate(templateId, cwd);
+    runTemplate(templateId, cwd, tabName);
   };
 
   return (
@@ -164,6 +168,16 @@ function TemplateUseModal() {
             {cwd && !recents.includes(cwd) && (
               <p className={styles.path}>{cwd}</p>
             )}
+            <p className={styles.label}>Tab name (optional)</p>
+            <input
+              className={styles.nameInput}
+              type="text"
+              value={tabName}
+              onChange={(event) => setTabName(event.currentTarget.value)}
+              placeholder={chosen?.name ?? "Custom name…"}
+              aria-label="Tab name"
+              {...noAutoCapitalize}
+            />
             <div className={styles.actions}>
               <button type="button" className={styles.cancel} onClick={close}>
                 Cancel

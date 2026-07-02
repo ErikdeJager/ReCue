@@ -1659,8 +1659,10 @@ export interface AppState {
   openTemplateUse: () => void;
   closeTemplateUse: () => void;
   /** Instantiate a template (#118): open a new Canvas tab against `cwd` with each
-   * block pending, then asynchronously resolve every pending panel. */
-  useTemplate: (templateId: string, cwd: string) => void;
+   * block pending, then asynchronously resolve every pending panel. An optional
+   * non-blank `tabName` names the new tab (#311); blank falls back to the template's
+   * name. */
+  useTemplate: (templateId: string, cwd: string, tabName?: string) => void;
   /** (Re)run a pending template panel's block (#118) — initial resolution + Retry.
    * Resolves to live content on success, or sets the panel's inline error. */
   resolveTemplateBlock: (canvasId: string, leafId: string) => Promise<void>;
@@ -3964,10 +3966,15 @@ export const useStore = create<AppState>()((set, get) => ({
   openTemplateUse: () => set({ templateUseOpen: true }),
   closeTemplateUse: () => set({ templateUseOpen: false }),
 
-  useTemplate: (templateId, cwd) => {
+  useTemplate: (templateId, cwd, tabName) => {
     const template = get().canvasTemplates.find((t) => t.id === templateId);
     if (!template) return;
-    const tab = instantiateTemplate(template, cwd, () => crypto.randomUUID());
+    const tab = instantiateTemplate(
+      template,
+      cwd,
+      () => crypto.randomUUID(),
+      tabName,
+    );
     // When the only canvas is empty (a fresh app's default "Canvas 1", no panels),
     // the template replaces it in place rather than leaving an empty tab dangling
     // beside the new one (#142). With 2+ canvases, or a single canvas that has

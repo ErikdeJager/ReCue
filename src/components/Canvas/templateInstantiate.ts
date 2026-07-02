@@ -78,15 +78,20 @@ function instantiateLayout(
 }
 
 /** Instantiate a template into a new `CanvasTab` (#118): same layout shape, leaves
- * pending against `cwd`, named after the template. An empty template → an empty tab. */
+ * pending against `cwd`. The tab is named after the template unless the caller passes
+ * a non-blank `tabName` (#311 — the "New tab from template" modal's optional tab-name
+ * field), which is trimmed and used verbatim; a blank/whitespace-only value falls back
+ * to the template's name (byte-for-byte today's behavior). An empty template → an empty
+ * tab. */
 export function instantiateTemplate(
   template: CanvasTemplate,
   cwd: string,
   genId: () => string,
+  tabName?: string,
 ): CanvasTab {
   return {
     id: genId(),
-    name: template.name,
+    name: tabName?.trim() || template.name,
     layout: template.layout
       ? instantiateLayout(template.layout, cwd, genId)
       : null,
