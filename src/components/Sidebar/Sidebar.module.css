@@ -398,28 +398,51 @@
   font-style: italic;
 }
 
-/* Indeterminate progress bar — a token track with a stripe sweeping across it. The
-   sweep keyframes (`clone-progress`) live in global.css so the reduced-motion killswitch
-   there disables the animation; the stripe then reverts to its base (a static 40%-wide
-   stripe at the left), so the affordance stays visible without motion. */
+/* Indeterminate progress bar (#299/#307) — a token track with a comet-core stripe
+   sweeping across it, the whole bar carrying a softly breathing accent glow so an
+   in-flight clone reads as "actively working" (never a number — the clone is genuinely
+   indeterminate). The sweep + glow keyframes (`clone-progress` / `clone-glow`) live in
+   global.css so the reduced-motion killswitch there disables both animations; the stripe
+   then reverts to its base (a static core stripe at the left) and the glow holds its
+   static resting `box-shadow` (see below) — so the affordance stays visible, and clearly
+   accent-lit, without motion. `overflow: hidden` clips the swept child, not the track's
+   own outset box-shadow, so the glow shows. Token-based `color-mix` (plain-color fallback
+   first) + box-shadow only → no layout shift, identical on WKWebView + WebView2. */
 .phantomTrack {
   position: relative;
-  height: 3px;
+  height: 4px;
   margin: 0 var(--space-8) var(--space-6);
   overflow: hidden;
   border-radius: var(--radius-dot);
   background: var(--bg-hover);
+  /* Static resting glow first (also the reduced-motion fallback — survives the
+     global.css killswitch, which only zeroes animation timing, never a static
+     box-shadow), then the slow continuous breathe over it. Its 0%/100% frame
+     equals this resting glow. */
+  box-shadow: 0 0 5px 0 var(--accent-dim); /* plain-color fallback */
+  box-shadow: 0 0 5px 0 color-mix(in srgb, var(--accent) 35%, transparent);
+  animation: clone-glow 1.9s ease-in-out infinite;
 }
 
+/* The swept "comet" core: a horizontal gradient stripe (dim → bright accent center →
+   dim) so it reads as a moving highlight, not a flat rectangle. The whole-bar glow
+   lives on `.phantomTrack` (an outset shadow here would be clipped by its
+   `overflow: hidden`). Plain-color fallback first, then the token `color-mix` gradient. */
 .phantomBar {
   position: absolute;
   top: 0;
   left: 0;
-  width: 40%;
+  width: 45%;
   height: 100%;
   border-radius: var(--radius-dot);
-  background: var(--accent);
-  animation: clone-progress 1.2s var(--ease-out) infinite;
+  background: var(--accent); /* plain-color fallback */
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 20%, transparent),
+    var(--accent-hover) 50%,
+    color-mix(in srgb, var(--accent) 20%, transparent)
+  );
+  animation: clone-progress 1.15s ease-in-out infinite;
 }
 
 /* Current branch on its own line below the repo header (#236, supersedes the #225
@@ -1288,10 +1311,14 @@
   background: var(--bg-hover);
 }
 
-/* Collapsed-rail clone indicator (#299): a dimmed, gently pulsing folder icon per
-   in-flight clone (no branch line / dots fit the narrow rail). Non-interactive. The
-   pulse keyframes (`clone-pulse`) live in global.css and are dropped under
-   reduced-motion, leaving a static dimmed icon. */
+/* Collapsed-rail clone indicator (#299/#307): a gently pulsing folder icon per
+   in-flight clone (no branch line / dots fit the narrow rail), lit with a subtle accent
+   glow so it too reads as actively working. Non-interactive. The pulse keyframes
+   (`clone-pulse`) live in global.css and are dropped under reduced-motion; the static
+   `filter: drop-shadow` on this base rule survives that killswitch (it zeroes animation
+   timing only, never a static filter), so the icon keeps a visible accent glow at rest.
+   Token-based `color-mix` (plain-color `drop-shadow` fallback first) → identical on
+   WKWebView (macOS) + WebView2 (Windows). */
 .railPhantom {
   display: flex;
   width: 36px;
@@ -1301,6 +1328,10 @@
   justify-content: center;
   color: var(--text-muted);
   opacity: 0.75;
+  filter: drop-shadow(0 0 3px var(--accent-dim)); /* plain-color fallback */
+  filter: drop-shadow(
+    0 0 4px color-mix(in srgb, var(--accent) 45%, transparent)
+  );
   animation: clone-pulse 1.4s var(--ease-out) infinite;
 }
 
