@@ -1740,8 +1740,14 @@ export interface AppState {
   removeSession: (id: string) => Promise<void>;
   /** Set (or clear, when blank) a session's custom name; propagates everywhere (#57). */
   renameSession: (id: string, name: string) => Promise<void>;
-  /** Forget a folder: kill+forget all its sessions and drop it from recents (#31). */
-  forgetRepo: (repoPath: string) => Promise<void>;
+  /** Forget a folder: kill+forget all its sessions and drop it from recents (#31).
+   * `opts.silent` suppresses the summary toast (used by the startup deleted-folder
+   * prune, which shows its own per-folder "not found" toast instead). */
+  forgetRepo: (repoPath: string, opts?: { silent?: boolean }) => Promise<void>;
+  /** Startup-only: drop any sidebar folder whose directory no longer exists on disk,
+   * running the full `forgetRepo` teardown per folder + a per-folder toast. Bails if
+   * *every* folder reads as missing (transient mount/FS issue, e.g. an unmounted drive). */
+  pruneMissingFolders: () => Promise<void>;
   /** Kill + forget every running agent in a folder — incl. its worktree agents
    * (#74) — keeping the folder + its non-agent items (#91). */
   killAllAgents: (repoPath: string) => Promise<void>;
@@ -2929,6 +2935,10 @@ export const useStore = create<AppState>()((set, get) => ({
       // First-launch coding-agent picker: detect installed CLIs once and auto-pick /
       // prompt as needed (main window only — a detached canvas has no onboarding).
       void get().maybeOnboardAgent();
+      // Drop any sidebar folder deleted off-disk since last run (main window only —
+      // avoids a detached canvas racing the same destructive teardown). Fire-and-
+      // forget so a slow disk check never delays the rest of boot.
+      void get().pruneMissingFolders();
     }
     // Learn the current detached-window set — a just-opened window may have missed
     // the `canvas://windows` broadcast that fired before it began listening (#84).
@@ -4845,7 +4855,7 @@ export const useStore = create<AppState>()((set, get) => ({
     await ipc.renameSession(id, trimmed).catch(() => {});
   },
 
-  forgetRepo: async (repoPath) => {
+  forgetRepo: async (repoPath, opts) => {
     // Include this repo's worktree agents (#74) — their repo_path is the worktree
     // folder, not the repo — so forgetting the repo also kills them and removes
     // their worktree folders (forgetRepo is explicitly destructive → force).
@@ -4911,19 +4921,60 @@ export const useStore = create<AppState>()((set, get) => ({
           s.overviewRepoFilter?.path === repoPath ? null : s.overviewRepoFilter,
       };
     });
-    // One summary toast (#83) listing everything removed, omitting zero parts.
-    const parts: string[] = [];
-    if (ids.length > 0)
-      parts.push(`${ids.length} agent${ids.length === 1 ? "" : "s"}`);
-    if (itemCount > 0)
-      parts.push(`${itemCount} view${itemCount === 1 ? "" : "s"}`);
-    if (scheduleIds.length > 0) parts.push(`${scheduleIds.length} scheduled`);
-    if (recurringIds.length > 0) parts.push(`${recurringIds.length} recurring`);
-    get().pushToast(
-      parts.length > 0
-        ? `Forgot folder + ${parts.join(" + ")}`
-        : "Forgot folder",
+    // One summary toast (#83) listing everything removed, omitting zero parts —
+    // suppressed when the caller shows its own (the startup deleted-folder prune).
+    if (!opts?.silent) {
+      const parts: string[] = [];
+      if (ids.length > 0)
+        parts.push(`${ids.length} agent${ids.length === 1 ? "" : "s"}`);
+      if (itemCount > 0)
+        parts.push(`${itemCount} view${itemCount === 1 ? "" : "s"}`);
+      if (scheduleIds.length > 0) parts.push(`${scheduleIds.length} scheduled`);
+      if (recurringIds.length > 0)
+        parts.push(`${recurringIds.length} recurring`);
+      get().pushToast(
+        parts.length > 0
+          ? `Forgot folder + ${parts.join(" + ")}`
+          : "Forgot folder",
+      );
+    }
+  },
+
+  pruneMissingFolders: async () => {
+    // The top-level sidebar folder set, computed exactly as the sidebar does
+    // (Sidebar.tsx) — recents ∪ worktree parents ∪ recurring cwds ∪ non-worktree
+    // session repos, deduped by `repoOrder`. Worktree *child* dirs live under
+    // app-data and aren't shown top-level, so they're not checked here.
+    const s = get();
+    const worktreeParents = [
+      ...new Set(
+        s.sessions.map((x) => x.worktreeParent).filter((p): p is string => !!p),
+      ),
+    ];
+    const recurringRepos = s.recurrings.map((r) => r.cwd);
+    const repos = repoOrder(
+      [...s.recents, ...worktreeParents, ...recurringRepos],
+      s.sessions.filter((x) => !x.worktreeParent),
     );
+    if (repos.length === 0) return;
+    // Check existence in parallel; fail *open* — an IPC error must never forget.
+    const checks = await Promise.all(
+      repos.map(async (path) => ({
+        path,
+        exists: await ipc.dirExists(path).catch(() => true),
+      })),
+    );
+    const missing = checks.filter((c) => !c.exists).map((c) => c.path);
+    const present = checks.length - missing.length;
+    // Bail if nothing is missing, or if *everything* is missing — the latter reads
+    // as a transient FS/mount issue (e.g. an unmounted drive at boot), not real
+    // deletions, and forgetRepo is irreversible.
+    if (missing.length === 0 || present === 0) return;
+    // Full teardown per folder, sequential to avoid `set` races, then our own toast.
+    for (const path of missing) {
+      await get().forgetRepo(path, { silent: true });
+      get().pushToast(`"${repoName(path)}" not found — removed from ReCue`);
+    }
   },
 
   killAllAgents: async (repoPath) => {

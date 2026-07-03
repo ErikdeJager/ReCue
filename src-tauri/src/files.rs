@@ -420,6 +420,14 @@ pub fn file_exists(repo: impl AsRef<Path>, file: &str) -> bool {
     canon_target.starts_with(&canon_repo) && canon_target.is_file()
 }
 
+/// Whether `path` names an existing directory. Absolute-path oriented (unlike the
+/// repo-relative `file_exists`); used to detect sidebar folders deleted off-disk so
+/// startup can prune them. `is_dir()` follows symlinks and returns false on any
+/// error — identical on macOS and Windows, so no `#[cfg]` split is needed.
+pub fn dir_exists(path: impl AsRef<Path>) -> bool {
+    path.as_ref().is_dir()
+}
+
 /// Write `contents` to a repo-relative `file`, validating it stays inside `repo`
 /// (#141 — the app's first arbitrary file write, backing the Kanban editor). The
 /// path is confined to the repo the same way `read_text_file` reads:
@@ -927,6 +935,19 @@ mod tests {
         assert!(!file_exists(&dir, "sub"));
         assert!(!file_exists(&dir, "../../../../etc/hosts"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dir_exists_checks_for_a_present_directory() {
+        let dir = tmp("direxists");
+        fs::write(dir.join("a.md"), "x").unwrap();
+        // A real directory is present; a missing child and a file path are not.
+        assert!(dir_exists(&dir));
+        assert!(!dir_exists(dir.join("nope")));
+        assert!(!dir_exists(dir.join("a.md")));
+        let _ = fs::remove_dir_all(&dir);
+        // Once removed off-disk, the directory no longer exists.
+        assert!(!dir_exists(&dir));
     }
 
     #[test]

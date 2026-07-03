@@ -362,6 +362,11 @@ export const listSkills = (cwd: string) =>
 export const fileExists = (repo: string, file: string) =>
   invoke<boolean>("file_exists", { repo, file });
 
+/** Whether `path` names an existing directory — used at startup to prune sidebar
+ * folders that were deleted off-disk (absolute-path, unlike repo-relative `fileExists`). */
+export const dirExists = (path: string) =>
+  invoke<boolean>("dir_exists", { path });
+
 /** Whether `cwd` is a git work tree (#118) — gates a template `open-diff` block. */
 export const isGitRepo = (cwd: string) =>
   invoke<boolean>("is_git_repo", { cwd });

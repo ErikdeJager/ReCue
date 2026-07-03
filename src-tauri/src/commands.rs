@@ -723,6 +723,13 @@ pub fn file_exists(repo: String, file: String) -> bool {
     crate::files::file_exists(&repo, &file)
 }
 
+/// Whether `path` names an existing directory — used at startup to detect sidebar
+/// folders deleted off-disk (absolute-path oriented, unlike repo-relative `file_exists`).
+#[tauri::command]
+pub fn dir_exists(path: String) -> bool {
+    crate::files::dir_exists(&path)
+}
+
 /// Whether `cwd` is a git work tree (#118) — gates a template's `open-diff` block.
 #[tauri::command]
 pub fn is_git_repo(cwd: String) -> bool {
