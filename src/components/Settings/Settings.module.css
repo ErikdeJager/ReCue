@@ -361,6 +361,16 @@
   cursor: not-allowed;
 }
 
+/* Armed state for the destructive "Clear recents" two-click confirm (#319),
+   mirroring TemplateManager's `.dangerArmed`. Both the base + :hover keep the
+   danger fill so hovering the armed button doesn't revert to the accent border. */
+.dataButtonArmed,
+.dataButtonArmed:hover:not(:disabled) {
+  background: var(--status-error);
+  border-color: var(--status-error);
+  color: var(--accent-fg);
+}
+
 .about {
   display: flex;
   flex-direction: column;
