@@ -1429,3 +1429,67 @@ inner pencil/trash/checkbox focus rings.
   assumption), scoped to a CSS-Module hashed class so it can't leak — identical on WKWebView (macOS)
   and WebView2/Chromium (Windows). Checks green: `npm run build` / `npm run lint` /
   `npm run format:check` / `npm test` (Kanban tests are logic-only; the drop-border check is manual).
+
+---
+
+### 326. [x] Setting to disable session-usage display (and auth-token access)
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Added a user-facing **"Show session usage"** toggle in Settings → Sessions (default **ON** —
+today's behavior) that, when turned off, completely hides the five-hour Claude usage bar (#154)
+**and** completely prevents ReCue from ever reading the Claude OAuth auth token — a privacy option
+for users who don't want the app touching their credentials. The gate lives at the sole frontend
+caller of the usage IPC: `claude_session_usage` (`usage.rs`, `lib.rs:302`) is the **only** code path
+that reads the token (grep-verified), and it is invoked only via `ipc.claudeSessionUsage()` inside
+the store's `refreshUsage`, so guarding that caller fully satisfies "never accesses the token" — no
+Rust change needed.
+
+**What shipped** (commit [`e112f6a`](https://github.com/ErikdeJager/ReCue/commit/e112f6a), PR
+[#77](https://github.com/ErikdeJager/ReCue/pull/77), branch `disable-session-usage-display`,
+2026-07-05):
+
+- **`src/types/index.ts`:** added `showSessionUsage: boolean` to the `Settings` interface (Sessions
+  block).
+- **`src/store.ts`:** `DEFAULT_SETTINGS.showSessionUsage: true`; `refreshUsage` early-returns
+  (before the `isClaudeActive` check) when the setting is off — clearing the `usage` slice to
+  unavailable (guarded to avoid a redundant re-render) and still running `applyAutoContinue()` so
+  the #296 machine disarms; `startUsagePolling` returns early when off (no poll, no token access at
+  boot — `settings` are loaded before it runs); `saveSettings` reacts to a runtime toggle by
+  starting the poll on enable, or stopping it + clearing `usage` + disarming auto-continue on
+  disable.
+- **`src/components/Usage/UsageBar.tsx`:** folds `showSessionUsage` into `showUsage`, so with the
+  setting off (or during the brief window before the store clears `usage`) the bar renders as the
+  ordinary plain hairline separator — not `null` — preserving footer structure while removing all
+  usage data.
+- **`src/components/Settings/Settings.tsx`:** the new "Show session usage" checkbox + help copy
+  ("When off, ReCue never reads your Claude auth token."), placed before the auto-continue rows; and
+  those rows tightened so the "Auto continue after limit reset" checkbox is `disabled` (with a
+  "Requires session usage to be enabled." note) when usage is off — a user can't arm a feature that
+  can't fire.
+- **`src/store.usage.test.ts`** (new): asserts `refreshUsage` leaves `claudeSessionUsage` uncalled
+  (and `usage.available === false`) when `showSessionUsage` is off, and calls it once when on with a
+  Claude session active.
+
+**Key files/areas touched:** `src/types/index.ts`, `src/store.ts`, `src/components/Usage/UsageBar.tsx`,
+`src/components/Settings/Settings.tsx`, `src/store.usage.test.ts` (new). 5 files, frontend-only.
+
+**Dependencies:** none (usage bar #154, auto-continue #296/#309, Settings blob #100/#102 all landed).
+
+**Notes**
+
+- **No Rust changes:** guarding the single frontend choke point is sufficient and cleanest; `usage.rs`
+  / `claude_session_usage` are untouched.
+- **Auto-continue gated for free:** with usage off, `usage.available` is false, so the #296 reducer
+  disarms and the #309 `AutoContinuePrompt` already returns `null` (`isLimitReached` false) — no
+  component-internal change; only the Settings checkbox enablement is additionally tightened.
+- **Older blobs default ON:** `mergeSettings` fills the missing key with `true`, so existing installs
+  see no behavior change.
+- **Independent of sibling #325** (custom-agent, which hides the bar via `isClaudeActive`): both
+  lightly touch `UsageBar`'s render guard — additive, resolved by the merge lane.
+- **Cross-platform:** no OS-specific code added; the only OS-sensitive path (`usage.rs` token read,
+  `home_dir()`/Keychain) is simply not invoked when off — inherently identical on macOS and Windows.
+  Checks green: `npm run build` / `npm run lint` / `npm test`.
