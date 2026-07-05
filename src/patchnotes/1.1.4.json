@@ -1,0 +1,31 @@
+{
+  "version": "1.1.4",
+  "date": "2026-07-05",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "The file viewer now marks uncommitted changes in the gutter, so you can see at a glance which lines you've added or edited.",
+        "Repositories with a GitHub remote now have a \"View on GitHub\" option in the sidebar folder menu to open the repo in your browser.",
+        "You can now point ReCue at a custom coding-agent command in Settings, for agents beyond the built-in choices.",
+        "A new \"Show session usage\" setting lets you hide the five-hour usage bar — and stop the app from reading your login token — if you'd rather not display it.",
+        "Settings now includes a keyboard shortcuts reference so you can look up every shortcut in one place.",
+        "Clearing your recent folders now asks for confirmation first, so you can't wipe the list by accident."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "The five-hour usage bar no longer reads a stale or expired login token, so it reports your usage more reliably.",
+        "The \"New session\" button label now truncates neatly instead of overflowing when it's long."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "Removed a redundant \"+\" add-card button from the Kanban column headers to tidy up the board.",
+        "Kanban cards no longer keep a stray highlight border after you drag them."
+      ]
+    }
+  ]
+}
