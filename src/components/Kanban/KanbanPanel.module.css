@@ -177,29 +177,6 @@
   background: var(--col-accent, var(--text-muted));
 }
 
-/* Always-visible "+" add-card button in the column header (#233). */
-.colAdd {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  appearance: none;
-  border: none;
-  border-radius: var(--radius-chip);
-  background: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
-}
-.colAdd:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-
 .columnName {
   flex: 1;
   min-width: 0;
@@ -691,7 +668,7 @@
 }
 
 /* Inline add-card composer (#233): a multi-line textarea + Add/Cancel buttons,
-   opened by the column "+" and the bottom dashed affordance. */
+   opened by the bottom dashed "+ Add card" affordance. */
 .composer {
   display: flex;
   flex-direction: column;
