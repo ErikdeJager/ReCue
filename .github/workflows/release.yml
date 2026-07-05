@@ -192,36 +192,50 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # macOS code signing + notarization so mic/voice and protected-folder permissions
-      # ACTUALLY WORK and PERSIST across relaunches (#292). macOS TCC pins a permission
-      # grant to the app's code signature; an unsigned/ad-hoc app has no stable identity,
-      # so grants never stick and the prompt reappears. A Developer ID signature (Hardened
-      # Runtime + Entitlements.plist's audio-input entitlement) fixes that.
+      # macOS code signing so mic/voice and protected-folder permissions ACTUALLY WORK and
+      # PERSIST across relaunches (#292/#314). macOS TCC pins a permission grant to the app's
+      # code signature; an unsigned/ad-hoc app has no stable identity, so grants never stick
+      # and the prompt reappears (and, with Hardened Runtime OFF + no audio-input entitlement,
+      # "Allow" can't even grant). A signature with Hardened Runtime + Entitlements.plist's
+      # audio-input entitlement + a stable Designated Requirement fixes both halves — and the
+      # Tauri bundler only applies the entitlements + Hardened Runtime WHEN A SIGNING IDENTITY
+      # IS CONFIGURED, which is why a plain (identity-less) build stays ad-hoc.
       #
-      # Developer ID signing is DORMANT until the maintainer configures the APPLE_* repo
-      # secrets — but it must be dormant by being UNSET, not empty. The Tauri macOS bundler
-      # reads APPLE_CERTIFICATE with std::env::var_os, which returns Some("") for a
-      # present-but-empty variable — so an empty APPLE_CERTIFICATE reads as "a certificate
-      # was provided" and the bundler runs `security import` on empty data, failing the
-      # whole bundle ("SecKeychainItemImport ... parameters were not valid"). Passing the
-      # secrets straight through `env:` (even guarded with `|| ''`) sets them to the empty
-      # STRING, which is exactly that trap. So this step exports the Apple env to the build
-      # ONLY when a real certificate + identity are present; otherwise the vars stay unset
-      # and tauri-action ad-hoc-signs (with the Hardened Runtime + entitlements) as before.
+      # This step supports TWO independent modes, selected purely by which secrets are set:
+      #   * SIGN-ONLY (self-signed, no Apple account): set the 4 signing secrets below. The
+      #     bundler signs with Hardened Runtime + entitlements + a stable cert DR → grants
+      #     work and persist. Gatekeeper still warns on a downloaded build (not notarized).
+      #   * SIGN + NOTARIZE (Developer ID): additionally set the 3 notarization secrets → the
+      #     build is also notarized, clearing Gatekeeper for arbitrary downloaders.
+      #
+      # Two traps this step exists to avoid — the bundler reads these with std::env::var_os,
+      # which returns Some("") for a present-but-empty variable, NOT None:
+      #   1. An empty APPLE_CERTIFICATE reads as "a certificate was provided" → `security
+      #      import` on empty data fails the whole bundle. So the signing vars are exported
+      #      ONLY when the certificate + identity are actually present.
+      #   2. An empty APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID reads as "notarization creds were
+      #      provided" → notarize_auth() matches (Some,Some,Some) and the bundler tries to
+      #      notarize with empty creds → the build FAILS. So the notarization vars are
+      #      exported ONLY when all three are non-empty; otherwise they stay UNSET and the
+      #      bundler cleanly logs "skipping app notarization" and signs-only.
+      # With NO signing secrets, every APPLE_* stays unset and tauri-action ad-hoc-signs
+      # exactly as before — the build still succeeds (signing is opt-in, never mandatory).
       # macOS leg only — the Windows leg never runs it, so it never sees any Apple env.
       #
-      # To activate NOTARIZED macOS releases a maintainer adds these repo secrets
-      # (Settings ▸ Secrets and variables ▸ Actions):
-      #   APPLE_CERTIFICATE           — base64 of the Developer ID Application .p12
-      #   APPLE_CERTIFICATE_PASSWORD  — the .p12 export password
-      #   APPLE_SIGNING_IDENTITY      — e.g. "Developer ID Application: Name (TEAMID)"
-      #   KEYCHAIN_PASSWORD           — any throwaway password for the CI keychain
-      #   APPLE_ID                    — the Apple ID email (for notarization)
-      #   APPLE_PASSWORD              — an app-specific password for that Apple ID
-      #   APPLE_TEAM_ID               — the 10-char Apple Developer Team ID
-      # See docs/macos-permissions.md for the full setup. Until they are added, releases
-      # remain ad-hoc-signed exactly as before.
-      - name: Configure Apple signing (macOS, only when the APPLE_* secrets are set)
+      # Repo secrets (Settings ▸ Secrets and variables ▸ Actions):
+      #   SIGN-ONLY (self-signed — run scripts/gen-macos-ci-cert.sh to set these):
+      #     APPLE_CERTIFICATE           — base64 of the self-signed code-signing .p12
+      #     APPLE_CERTIFICATE_PASSWORD  — the .p12 export password
+      #     APPLE_SIGNING_IDENTITY      — the cert's CN, e.g. "ReCue Self Signed"
+      #     KEYCHAIN_PASSWORD           — any throwaway password for the CI keychain
+      #   + NOTARIZE (Developer ID — optional, needs an Apple account):
+      #     APPLE_SIGNING_IDENTITY becomes "Developer ID Application: Name (TEAMID)"
+      #     APPLE_ID                    — the Apple ID email
+      #     APPLE_PASSWORD              — an app-specific password for that Apple ID
+      #     APPLE_TEAM_ID               — the 10-char Apple Developer Team ID
+      # See docs/macos-permissions.md for the full setup.
+      - name: Configure Apple signing (macOS — sign-only or sign+notarize by which secrets are set)
+        id: applesign
         if: matrix.platform == 'macos-latest'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -232,13 +246,16 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # Only enable Developer ID signing when BOTH the certificate and its identity are
-          # present; otherwise leave every APPLE_* var unset so the bundler ad-hoc-signs.
+          # SIGNING: enable only when BOTH cert + identity are present. The identity string is
+          # opaque to codesign, so this works for a self-signed cert AND a Developer ID cert.
+          # Absent → leave every APPLE_* unset so tauri-action ad-hoc-signs (build succeeds).
           if [ -z "$APPLE_CERTIFICATE" ] || [ -z "$APPLE_SIGNING_IDENTITY" ]; then
-            echo "Apple Developer ID signing DISABLED (APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY not set) — ad-hoc fallback."
+            echo "Apple signing DISABLED (APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY not set) — ad-hoc fallback."
+            echo "signing=disabled" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Apple Developer ID signing ENABLED."
+          echo "Apple signing ENABLED."
+          echo "signing=enabled" >> "$GITHUB_OUTPUT"
           # APPLE_CERTIFICATE is multiline base64 → use the heredoc form of $GITHUB_ENV.
           {
             echo "APPLE_CERTIFICATE<<__RECUE_CERT_EOF__"
@@ -247,10 +264,20 @@ jobs:
             echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
             echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
             echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD"
-            echo "APPLE_ID=$APPLE_ID"
-            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
-            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
           } >> "$GITHUB_ENV"
+
+          # NOTARIZATION: enable ONLY when all three creds are non-empty (see trap #2 above).
+          # Unset otherwise → the bundler skips notarization and signs-only (self-signed).
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            echo "Notarization ENABLED (Developer ID)."
+            {
+              echo "APPLE_ID=$APPLE_ID"
+              echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+          else
+            echo "Notarization DISABLED (sign-only — Gatekeeper will warn on a downloaded build)."
+          fi
 
       - name: Build + upload signed updater artifacts
         uses: tauri-apps/tauri-action@v0
@@ -258,13 +285,38 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS Developer ID signing env (APPLE_*) is injected by the preceding step via
-          # $GITHUB_ENV — and only when the secrets are set, so it stays truly UNSET (not
-          # empty) otherwise. Do NOT re-add empty APPLE_* keys here (see the note above).
+          # macOS signing env (APPLE_*) is injected by the preceding step via $GITHUB_ENV —
+          # and only when the secrets are set, so it stays truly UNSET (not empty) otherwise.
+          # Do NOT re-add empty APPLE_* keys here (see the traps in the note above).
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           releaseBody: ${{ needs.prepare.outputs.body }}
           args: ${{ matrix.args }}
+
+      # macOS only: when signing was enabled, assert the built .app carries the signature
+      # that makes TCC grants work + persist — the necessary+sufficient precondition the
+      # GUI mic prompt can't be exercised for in CI. Skipped on the ad-hoc fallback (signing
+      # disabled) so a no-secrets build stays green. spctl is NOT asserted: a self-signed
+      # (un-notarized) build is EXPECTED to be Gatekeeper-"rejected", which is separate from
+      # TCC. A failure here means the entitlements/Hardened Runtime/identity didn't take.
+      - name: Verify macOS signature (only when signing enabled)
+        if: matrix.platform == 'macos-latest' && steps.applesign.outputs.signing == 'enabled'
+        run: |
+          set -euo pipefail
+          app="$(ls -d src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app 2>/dev/null | head -1)"
+          [ -n "$app" ] || { echo "::error::No .app found to verify"; exit 1; }
+          echo "Verifying $app"
+          info="$(codesign -dv --verbose=4 "$app" 2>&1)"
+          echo "$info"
+          echo "$info" | grep -qi 'flags=.*runtime' || { echo "::error::Hardened Runtime OFF (no 'runtime' flag)"; exit 1; }
+          echo "$info" | grep -q 'Identifier=com.recue.app' || { echo "::error::Identifier is not com.recue.app"; exit 1; }
+          codesign -d --entitlements - "$app" 2>/dev/null | grep -q 'audio-input' \
+            || { echo "::error::audio-input entitlement missing from the signature"; exit 1; }
+          codesign --verify --strict --verbose=2 "$app"
+          dr="$(codesign -d -r - "$app" 2>&1 || true)"
+          echo "$dr"
+          echo "$dr" | grep -qi 'cdhash' && { echo "::error::Designated Requirement is cdhash-based → grants will NOT persist"; exit 1; }
+          echo "Signature OK: Hardened Runtime + audio-input entitlement + stable cert DR."
 
       # macOS only: the .dmg tauri-action just built leaves its dot-prefixed helper files
       # (.background, .VolumeIcon.icns, …) unpositioned, so a user with "show hidden files"

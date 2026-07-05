@@ -1003,3 +1003,97 @@ conditional).
   siblings) to be recorded in `TRAJECTORY_TO_WINDOWS.md` per the Windows-parity convention
   (GUI/WebGL paths can't be unit-tested on CI). Checks green: `npm run build` / `npm run lint` /
   `npm test` (599 tests).
+
+---
+
+### 321. [x] Sign CI release builds so macOS mic/folder permissions actually work + persist (+ one-time re-ask after update)
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Follow-up to #292/#314 that fixes the bug **in the app users actually run**. On macOS, speaking
+to a `claude` agent with voice made macOS ask for the microphone ~5× and clicking **Allow** never
+worked or stuck; the same repeated-prompt-then-fail hit protected folders (Downloads/Documents/
+Desktop). **Root cause:** ReCue spawns `claude` as a child PTY, so macOS TCC attributes the child's
+mic/folder request to the *responsible* app (ReCue) — but the **downloaded release was linker-signed
+ad-hoc**: Hardened Runtime **OFF**, the `com.apple.security.device.audio-input` entitlement
+**absent** (so "Allow" can't grant), and a per-build **`cdhash` Designated Requirement** (so TCC
+can't persist a grant). #292 added the entitlements + usage strings and #314 made a *local*
+`npm run build:mac` self-sign, but the Tauri **bundler only applies the entitlements + Hardened
+Runtime when a signing identity is configured**, and CI had none — so **every CI release stayed
+ad-hoc** (the shipped bug), and #314 was never verified on a real Mac. This task brings a stable,
+entitled, Hardened-Runtime signature to CI releases with a **free self-signed certificate** (no
+Apple account), and guarantees macOS **re-asks** the permission after the fix update.
+
+**What shipped** (commit `ec7396d`, PR #69 — https://github.com/ErikdeJager/ReCue/pull/69, branch
+`fix/permissions`, 2026-07-05):
+
+- **`.github/workflows/release.yml`** — the macOS leg now **signs releases** in one of two modes,
+  selected purely by which secrets are set: **sign-only** with a stable self-signed cert (4 signing
+  secrets, no Apple account) or **Developer-ID + notarize** (all 7). The "Configure Apple signing"
+  step (`id: applesign`) **splits signing from notarization**: it exports the 4 signing vars when
+  cert+identity are present, and the 3 notarization vars **only when all three are non-empty** —
+  fixing the `std::env::var_os` `Some("")` trap where an empty `APPLE_ID`/`APPLE_PASSWORD`/
+  `APPLE_TEAM_ID` made the bundler try to notarize with empty creds and **fail the build**. With
+  **no** signing secrets it prints "ad-hoc fallback" and `exit 0`s (build still succeeds — signing
+  is opt-in). It emits a `signing=enabled|disabled` output that gates a new **`codesign`-assert
+  step** (Hardened Runtime + `audio-input` + non-`cdhash` DR; skipped on the ad-hoc fallback,
+  `spctl` not asserted since a self-signed build is expectedly Gatekeeper-"rejected").
+- **`src-tauri/Entitlements.plist`** — removed the XML comment block; the bundler passes the file
+  **verbatim** to `codesign`, whose AMFI parser can reject an XML comment (`AMFIUnserializeXML:
+  syntax error`). Rationale moved to `docs/macos-permissions.md`.
+- **`scripts/gen-macos-ci-cert.sh`** (new, macOS/`gh`) — one command to generate a fixed self-signed
+  `codeSigning` `.p12` (RSA-2048, 10-yr, **`-legacy`** so macOS `security import` keeps the private
+  key), back it up to `~/.recue-signing/`, and set the 4 signing secrets via `gh` (prints them if
+  `gh` is absent). **Reuses** the backup cert on re-run so the Designated Requirement — and users'
+  granted permissions — stay stable across releases (`RECUE_FORCE_NEW_CERT=1` to rotate).
+  bash-3.2-safe (macOS ships bash 3.2).
+- **`src-tauri/src/store.rs` + `src-tauri/src/lib.rs`** — a persisted one-shot `perm_reprompt_done`
+  scalar drives a **one-time, macOS-only** best-effort `tccutil reset Microphone/SpeechRecognition
+  com.recue.app` at boot: when a user updates from an old ad-hoc build into the signed one the
+  signature (DR) changes so macOS should re-ask, but a stale/denied TCC row can suppress it — the
+  reset clears that so the user is **re-asked once** (and now Allow works), then never nagged again.
+  `#[cfg(target_os = "macos")]`-gated with no non-macOS code path.
+- **Docs** — `docs/macos-permissions.md` (title #321; two live CI modes with secret tables; the
+  `var_os` split; comment-free entitlements; the `gen-macos-ci-cert.sh` recipe; a new "Updating from
+  an older build" section — in-place update = no Gatekeeper warning + the one-time re-ask; summary
+  table row for CI self-signed), `README.md` (stale "ad-hoc"/"dormant" wording fixed), `CLAUDE.md`
+  (three #292/#314 scope notes updated to #292/#314/#321).
+
+**Key files/areas touched:** `.github/workflows/release.yml`, `src-tauri/Entitlements.plist`,
+`scripts/gen-macos-ci-cert.sh` (new), `src-tauri/src/store.rs`, `src-tauri/src/lib.rs`,
+`docs/macos-permissions.md`, `README.md`, `CLAUDE.md` (8 files). **No** version bump / patch notes
+(batched release owns the bump); `tauri.conf.json` untouched.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Decisions** (user-confirmed): sign **releases** with a **free self-signed cert** (not Developer
+  ID — no Apple account); the bug is hit on a **downloaded release**; distribution is **just me / a
+  few Macs**, so the one-time Gatekeeper warning on a fresh download is acceptable; **guarantee a
+  re-ask after this update** (→ the one-time `tccutil reset`); and **maximize automation** — the
+  cert was generated and the 4 signing secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+  `APPLE_SIGNING_IDENTITY`=`ReCue Self Signed`, `KEYCHAIN_PASSWORD`) set on the repo as part of this
+  work, so the next release from `main` self-signs. The `responsibility_spawnattrs_setdisclaim`
+  disclaim stays **rejected** (we *want* ReCue to remain the responsible process); no App Sandbox;
+  no new entitlements.
+- **Verification:** the full self-signed chain was proven **on a real Mac** (the check #314
+  skipped): the `-legacy` p12 imports with its private key and `codesign --options runtime
+  --entitlements <comment-free plist> -i com.recue.app` yields `Identifier=com.recue.app`,
+  `flags=0x10000(runtime)`, the `audio-input` entitlement, and a **cert-based DR** (`identifier
+  "com.recue.app" and certificate leaf = H"…"`, not `cdhash`). `cargo fmt`/`clippy`/`cargo test`
+  (154) / `eslint` / `vitest` (599) / `vite build` / `prettier` all green. The GUI mic-prompt
+  Allow-and-confirm is the one **manual** step (can't script a TCC dialog / speech), to be done on
+  the next signed release; the CI `codesign`-assert step guards the signature shape automatically.
+- **Cross-platform:** entirely macOS-scoped — the signer/helper and the `tccutil` re-ask are
+  `#[cfg(target_os = "macos")]`/macOS-tool-only, and the `release.yml` Windows leg never sees the
+  Apple env, so Windows/Linux build + runtime behavior is byte-for-byte unchanged (no TCC there).
+- **Operational:** the fix only takes effect once a release is built **with** the signing secrets
+  (now set) and **published** (a maintainer publishes the draft; the updater endpoint only resolves
+  a published "latest"). Existing installs get it via the in-app updater — an in-place swap, so **no
+  Gatekeeper warning on update** — then one permission prompt (from the DR change + the one-time
+  reset), Allow, and it persists. Keep `~/.recue-signing/ReCue-CI.p12` and reuse it every release,
+  or grants re-prompt after each update.

@@ -296,6 +296,17 @@ pub struct PersistedState {
     /// loading.
     #[serde(default)]
     pub diff_seen: serde_json::Value,
+    /// One-shot marker (#321): whether the post-update macOS TCC permission re-prompt has
+    /// run. macOS pins a permission grant to the app's code signature (Designated
+    /// Requirement); when a user updates from an old ad-hoc build into a properly-signed
+    /// one the signature changes, so the stale grant no longer matches — but a
+    /// poisoned/denied TCC row can suppress the fresh prompt. On the first boot of a build
+    /// carrying this flag we best-effort `tccutil reset` the mic so macOS re-asks once (and
+    /// now "Allow" actually works); the flag then persists so it never nags again.
+    /// macOS-only (ignored elsewhere). `default` (false) keeps old files loading AND makes
+    /// an existing install run the re-prompt exactly once on its first boot after updating.
+    #[serde(default)]
+    pub perm_reprompt_done: bool,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -604,6 +615,16 @@ impl Store {
     /// Persist the app version observed this run (#190).
     pub fn set_last_version(&self, version: String) -> io::Result<()> {
         self.update(|state| state.last_version = Some(version))
+    }
+
+    /// Whether the one-time post-update macOS permission re-prompt has run (#321).
+    pub fn perm_reprompt_done(&self) -> bool {
+        self.with(|state| state.perm_reprompt_done)
+    }
+
+    /// Mark the one-time macOS permission re-prompt done (#321; persist-on-change).
+    pub fn set_perm_reprompt_done(&self) -> io::Result<()> {
+        self.update(|state| state.perm_reprompt_done = true)
     }
 
     /// The persisted top-level sidebar folder order (#211); empty until first set

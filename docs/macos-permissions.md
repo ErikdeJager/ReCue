@@ -1,13 +1,16 @@
-# macOS permissions: microphone / voice, protected folders, system settings (#292 / #314)
+# macOS permissions: microphone / voice, protected folders, system settings (#292 / #314 / #321)
 
 This document explains why ReCue's macOS permission prompts (microphone / voice
 dictation, protected folders like Downloads / Documents / Desktop, and system
 settings) used to **prompt repeatedly and never actually work**, the **empirically
 confirmed root cause**, and the steps to build, sign, and verify a working `.app` —
-both locally (no Apple account) and in CI (notarized Developer ID releases).
+both locally (no Apple account) and in CI (**self-signed sign-only** or **notarized
+Developer ID** releases).
 
-> This is a **macOS-bundle / script / docs-only** change. Windows and Linux builds and
-> app behavior are byte-for-byte unchanged; no runtime Rust / TypeScript / CSS is touched.
+> **#321** brings the fix to the **shipped** app: `release.yml` now signs CI releases
+> (self-signed with 4 secrets, or Developer-ID + notarized with all 7), and a one-time
+> macOS-only `tccutil reset` at boot re-asks the permission after an update. All macOS-only
+> and `#[cfg]`-gated — Windows and Linux builds/behavior are byte-for-byte unchanged.
 
 ## The symptom
 
@@ -97,6 +100,10 @@ identity** instead of silently reproducing the broken ad-hoc state.
 
   The **App Sandbox** is deliberately **not** enabled — ReCue spawns child `claude`
   PTYs and reads the user's repos across the filesystem, which the sandbox would confine.
+  The file is kept **comment-free** (#321): the Tauri bundler passes it verbatim to
+  `codesign`, whose AMFI entitlements parser can reject an XML comment block
+  (`AMFIUnserializeXML: syntax error`). The rationale that used to live in the file is in
+  this doc instead.
 
 - **`src-tauri/Info.plist`** carries the mic / speech strings plus the four
   protected-folder usage strings (`NSDownloadsFolderUsageDescription`,
@@ -108,9 +115,19 @@ identity** instead of silently reproducing the broken ad-hoc state.
   (fixing the wrong `Identifier`) using a **stable** identity, and **verifies** the
   result — failing loudly if anything is wrong.
 
-- **CI (`.github/workflows/release.yml`)** — the macOS leg has a **guarded** Developer
-  ID sign + notarize path (dormant until the `APPLE_*` secrets are added; absent → the
-  build still succeeds with the ad-hoc fallback).
+- **CI (`.github/workflows/release.yml`)** — the macOS leg now **signs releases** in one
+  of two modes, selected purely by which secrets are set (#321): **sign-only** with a
+  stable self-signed cert (4 signing secrets — no Apple account), or **sign + notarize**
+  with a Developer ID (all 7 secrets). With **no** secrets it falls back to ad-hoc and the
+  build still succeeds. See [Signed releases in CI](#signed-releases-in-ci) below.
+
+- **One-time re-ask after an update (`src-tauri/src/lib.rs`, macOS-only, #321)** — when a
+  user updates from an old ad-hoc build into a properly-signed one, the signature (DR)
+  changes so macOS *should* re-ask — but a stale/denied TCC row can suppress the fresh
+  prompt. On the first boot of a build carrying the persisted `perm_reprompt_done` flag,
+  ReCue best-effort `tccutil reset`s its Microphone / SpeechRecognition grants so the user
+  is re-asked **once** (and now Allow works), then never nags again. `#[cfg(target_os =
+  "macos")]`-gated; a no-op on Windows/Linux.
 
 ## Build + sign locally (no Apple account)
 
@@ -219,38 +236,84 @@ Then:
    prompt, tap **Allow** once, and it works and **persists** across relaunches and
    rebuilds (with a stable identity).
 
-## Notarized releases in CI (for arbitrary downloaders)
+## Signed releases in CI
 
-A **locally** self-signed build fixes **your own machine** with no Apple account (the
-entitlement is present → Allow works; the DR is cert-hash-based → grants persist).
-Gatekeeper still warns on a *downloaded* self-signed build — that is a separate concern
-from TCC.
+The macOS leg of `.github/workflows/release.yml` signs the release, in one of **two
+modes selected purely by which repo secrets are set** (Settings ▸ Secrets and variables ▸
+Actions). Everything is **guarded**: with no signing secrets, the build falls back to
+ad-hoc and still succeeds; the Windows leg and the minisign updater signing
+(`TAURI_SIGNING_PRIVATE_KEY*`) are unaffected in every mode.
 
-A distributed release that "just works" for arbitrary users needs a **Developer
-ID-signed + notarized** build (an Apple account). The macOS leg of
-`.github/workflows/release.yml` produces one once a maintainer adds these repo secrets
-(**Settings ▸ Secrets and variables ▸ Actions**):
+### Mode B — self-signed, sign-only (no Apple account) — the default for this repo
+
+Gives **downloaders** a **stable TCC DR** (grants work + persist across updates) with no
+Apple account. Gatekeeper still warns on first download (right-click ▸ **Open** once).
+
+**One-time setup** — run this once and keep the generated `.p12` (reuse it every release
+so the DR — and users' granted permissions — stay stable):
+
+```bash
+bash scripts/gen-macos-ci-cert.sh
+```
+
+It creates a self-signed code-signing cert (`~/.recue-signing/ReCue-CI.p12`) and sets the
+four **signing** secrets via `gh` (or prints them if `gh` is unavailable):
 
 | Secret | What it is |
 | --- | --- |
-| `APPLE_CERTIFICATE` | base64 of the Developer ID Application `.p12` |
+| `APPLE_CERTIFICATE` | base64 of the self-signed code-signing `.p12` |
 | `APPLE_CERTIFICATE_PASSWORD` | the `.p12` export password |
-| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_SIGNING_IDENTITY` | the cert **CN** — `ReCue Self Signed` |
 | `KEYCHAIN_PASSWORD` | any throwaway password for the CI keychain |
+
+Do **not** set `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` — leaving them unset keeps
+CI in sign-only mode (no notarization attempt). To rotate the cert deliberately (accepting
+a one-time re-prompt for everyone) run `RECUE_FORCE_NEW_CERT=1 bash scripts/gen-macos-ci-cert.sh`.
+
+### Mode A — Developer ID + notarized (Gatekeeper-clean, needs an Apple account)
+
+A distributed release that "just works" (no Gatekeeper warning) for arbitrary users. Add
+**all seven** secrets — the four above (with `APPLE_SIGNING_IDENTITY` = `Developer ID
+Application: Your Name (TEAMID)`) plus:
+
+| Secret | What it is |
+| --- | --- |
 | `APPLE_ID` | the Apple ID email (for notarization) |
 | `APPLE_PASSWORD` | an app-specific password for that Apple ID |
 | `APPLE_TEAM_ID` | the 10-character Apple Developer Team ID |
 
-These are **optional and guarded**: wired into the **macOS** build step only, and only
-when set. With none configured, the build falls back to ad-hoc signing and still
-succeeds — the Windows leg and the minisign updater signing
-(`TAURI_SIGNING_PRIVATE_KEY*`) are unaffected either way. **Notarization is the only
-thing that clears Gatekeeper for a downloader.**
+### Why the workflow splits signing from notarization
 
-> **Documented future middle path (not yet wired):** a **fixed self-signed cert in
-> CI** (the same cert every release) would give downloaders a **stable TCC DR** without
-> an Apple account — so grants would persist for them too — but Gatekeeper would still
-> warn (no notarization). It is a documented option, not currently enabled.
+The Tauri bundler reads these env vars with `std::env::var_os`, which returns `Some("")`
+for a **present-but-empty** variable (not `None`). So the "Configure Apple signing" step:
+
+- exports the **signing** vars only when a real certificate + identity are present (an
+  empty `APPLE_CERTIFICATE` would make `security import` fail the whole bundle); and
+- exports the **notarization** vars only when **all three** are non-empty — otherwise an
+  empty `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` reads as "notarization requested" and
+  the bundler tries to notarize with empty creds and **fails the build**. Left unset, the
+  bundler cleanly logs "skipping app notarization" and signs-only.
+
+A CI step then asserts the built `.app` is correctly signed (Hardened Runtime + the
+`audio-input` entitlement + a non-`cdhash` DR); it's skipped on the ad-hoc fallback.
+
+## Updating from an older build
+
+Existing users get the fix through the **in-app updater**, which is smoother than a fresh
+download:
+
+- The updater replaces the `.app` **in place**, so the updated bundle is **not
+  quarantined** → **no Gatekeeper warning** on update (only a fresh DMG download warns).
+- The old build's signature was ad-hoc; the new one is self-signed — a **different**
+  Designated Requirement — so macOS re-asks the permission once, and the one-time
+  `tccutil reset` (#321) clears any stale/denied TCC row that could otherwise suppress the
+  prompt. Tap **Allow** once; it now works and persists.
+- Every **later** update signed with the **same** cert keeps the DR identical → the grant
+  persists with no re-prompt.
+
+If a prompt still doesn't appear (deeply poisoned state), run the manual recovery above
+(`tccutil reset Microphone com.recue.app`, remove stale **Files and Folders** rows, move
+to `/Applications`).
 
 ## Summary
 
@@ -258,4 +321,5 @@ thing that clears Gatekeeper for a downloader.**
 | --- | --- | --- | --- | --- |
 | Unsigned / ad-hoc (plain `tauri build`) | ❌ | ❌ (`cdhash` DR) | ❌ | — |
 | Local self-signed (`npm run build:mac`) | ✅ | ✅ (cert DR, stable) | ❌ warns | No |
-| Developer ID + notarized (CI secrets) | ✅ | ✅ (Team-ID DR) | ✅ | Yes |
+| **CI self-signed** (`gen-macos-ci-cert.sh`, 4 secrets) | ✅ | ✅ (cert DR, stable) | ❌ warns | No |
+| Developer ID + notarized (all 7 secrets) | ✅ | ✅ (Team-ID DR) | ✅ | Yes |

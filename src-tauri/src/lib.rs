@@ -28,6 +28,22 @@ use store::Store;
 /// for a one-shot launcher and keeps boot catch-up prompt without busy-spinning.
 const SCHEDULE_POLL_SECS: u64 = 5;
 
+/// Best-effort: reset ReCue's microphone / speech-recognition TCC grants so macOS re-asks
+/// once after an update (#321). macOS pins a permission grant to the app's code signature;
+/// when an old ad-hoc build is replaced by a properly-signed one the signature changes and a
+/// stale/denied grant can otherwise suppress the fresh prompt. `tccutil` runs as the user
+/// (no admin), and any failure is ignored — the signature change alone usually re-prompts.
+/// Protected folders have no `tccutil` service name, so those rely on the signature change
+/// (documented in docs/macos-permissions.md). macOS-only.
+#[cfg(target_os = "macos")]
+fn reprompt_macos_permissions() {
+    for service in ["Microphone", "SpeechRecognition"] {
+        let _ = std::process::Command::new("tccutil")
+            .args(["reset", service, "com.recue.app"])
+            .status();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // A bundled `.app` launched from Finder/Dock inherits launchd's minimal PATH, so
@@ -61,6 +77,22 @@ pub fn run() {
                 .map(|dir| dir.join("sessions.json"))
                 .unwrap_or_else(|_| PathBuf::from("recue-sessions.json"));
             app.manage(Store::load(&store_path));
+
+            // One-time post-update permission re-prompt (macOS, #321). When a user updates
+            // from an old ad-hoc build into a properly-signed one, the code signature
+            // (Designated Requirement) changes so macOS should re-ask — but a stale/denied
+            // TCC row from the broken build can suppress the fresh prompt. Best-effort reset
+            // the mic grant once so the user is re-asked (and now "Allow" actually works);
+            // the persisted flag then keeps it from nagging on later boots. macOS-only;
+            // no-op elsewhere. Runs before any session (mic) work.
+            #[cfg(target_os = "macos")]
+            {
+                let store = app.state::<Store>();
+                if !store.perm_reprompt_done() {
+                    reprompt_macos_permissions();
+                    let _ = store.set_perm_reprompt_done();
+                }
+            }
 
             let handle = app.handle().clone();
             thread::spawn(move || {
