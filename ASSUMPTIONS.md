@@ -2216,3 +2216,47 @@ not guessed):
   retained button is unchanged. Verified via grep that no keyboard shortcut or test depends on
   `colAdd`/the header add button.
 - Platform-neutral (pure CSS/React UI change).
+
+## Task 323 — Remove the post-drag focus border on Kanban cards
+
+- Root cause is an app CSS rule, not just a browser default: `KanbanPanel.module.css`
+  `.card:focus-within { border-color: var(--accent); }` fires because dnd-kit (`useSortable`)
+  makes the card `<article>` focusable and restores focus to it after a drag (dnd-kit
+  `RestoreFocus`, default on). The app-wide `:focus-visible { outline: 2px solid var(--accent) }`
+  in `global.css` may also paint an offset ring. Fix suppresses both on the card article via a
+  `.card:focus { border-color: var(--border-hairline); outline: none; }` rule.
+- Preserve the edit-mode accent cue: `.card:focus-within` stays so a card being *edited* (its
+  `<textarea>` focused) still shows the accent border. Interpreted "remove the focus border after
+  dragging" narrowly — scope to `.card:focus` (article itself focused = post-drag/tab).
+- Chose the CSS fix over disabling dnd-kit focus restoration (`restoreFocus: false`), to preserve
+  keyboard drag continuity; CSS approach also covers plain-Tab focus.
+- Accepted accessibility trade-off (recorded in plan): the card article's own keyboard focus ring
+  is also removed. Inner controls, editing, hover lift, and focus restoration are left intact. A
+  narrower mouse-only alternative (`.card:focus:not(:focus-visible)`) is noted as a fallback.
+- Cross-platform: plain `outline: none` + `border-color` revert (no `-webkit-`/macOS-only
+  assumption) — gone on both WKWebView (macOS) and WebView2/Chromium (Windows).
+- CSS-only change: `src/components/Kanban/KanbanPanel.module.css` (one additive `.card:focus` rule).
+
+## Task 326 — Setting to disable session-usage display (and auth-token access)
+
+- Setting name & default: `showSessionUsage`, default `true` (matches today's behaviour). Added to
+  the settings blob (`Settings` type + `DEFAULT_SETTINGS`); older `sessions.json` blobs default to
+  ON via `mergeSettings`.
+- Settings section: placed in **Sessions** (alongside auto-name / auto-continue toggles) — a
+  Claude-session concern, and the auto-continue rows depend on it.
+- "Completely prevents token access" interpretation: the guard lives in the frontend caller
+  (`refreshUsage` early-returns before any `ipc.claudeSessionUsage()`, plus `startUsagePolling`
+  doesn't start when off). Verified `claude_session_usage` (`usage.rs`, `lib.rs:302`) is the SOLE
+  token-read path, so guarding it fully satisfies "never accesses the token." No Rust change.
+- When disabled, UsageBar renders the plain hairline separator (identical to today's no-data
+  state), not `null` — preserving footer structure while removing all usage data.
+- Auto-continue interaction (#296/#309): disabling usage makes auto-continue inert automatically
+  (usage unavailable → reducer disarms; #309 prompt hides). Additionally greys out the "Auto
+  continue after limit reset" Settings checkbox when usage is off, with a "Requires session usage
+  to be enabled." note — so a user can't arm a feature that can't fire.
+- Runtime toggle: wired through `saveSettings` to start/stop the poll immediately and clear the
+  `usage` slice on disable (bar disappears at once), not only on next restart.
+- Areas touched: `src/types/index.ts`, `src/store.ts` (`DEFAULT_SETTINGS`, `refreshUsage`,
+  `startUsagePolling`, `saveSettings`), `src/components/Usage/UsageBar.tsx`,
+  `src/components/Settings/Settings.tsx`, new `src/store.usage.test.ts`. Overlaps sibling 325 on
+  `UsageBar.tsx` render guard (additive, merge-lane resolvable). No Rust changes.
