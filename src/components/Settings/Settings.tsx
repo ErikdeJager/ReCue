@@ -12,6 +12,7 @@ import {
   Download,
   FlaskConical,
   FolderOpen,
+  Keyboard,
   MousePointerClick,
   Palette,
   Plus,
@@ -41,6 +42,7 @@ import { markdownLinkComponents } from "../markdownCheckboxes";
 import PatchNotes from "../PatchNotes/PatchNotes";
 import Slider from "../Slider/Slider";
 import styles from "./Settings.module.css";
+import { SHORTCUT_GROUPS } from "./shortcuts";
 
 type Section =
   | "terminal"
@@ -49,6 +51,7 @@ type Section =
   | "sessions"
   | "kanban"
   | "updates"
+  | "shortcuts"
   | "data";
 
 /** Peach — the default `--accent` token (#102). The Appearance picker maps this
@@ -85,6 +88,11 @@ const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
     id: "updates",
     label: "Updates",
     icon: <RefreshCw size={15} strokeWidth={1.5} />,
+  },
+  {
+    id: "shortcuts",
+    label: "Shortcuts",
+    icon: <Keyboard size={15} strokeWidth={1.5} />,
   },
   {
     id: "data",
@@ -814,6 +822,36 @@ function SettingsModal() {
                     Simulate update (dev)
                   </button>
                 )}
+              </div>
+            )}
+
+            {section === "shortcuts" && (
+              // Read-only keyboard-shortcut reference (#318): grouped, cross-platform
+              // via `kbdHint`. No inputs — nothing here mutates the draft.
+              <div className={styles.shortcutsSection}>
+                <p className={styles.helpText}>
+                  Reference only — shortcuts can&rsquo;t be changed here.
+                </p>
+                {SHORTCUT_GROUPS.map((group) => (
+                  <div key={group.title} className={styles.shortcutGroup}>
+                    <span className={styles.fieldLabel}>{group.title}</span>
+                    <ul className={styles.shortcutList}>
+                      {group.shortcuts.map((shortcut) => (
+                        <li
+                          key={shortcut.description}
+                          className={styles.shortcutRow}
+                        >
+                          <kbd className={styles.shortcutKey}>
+                            {kbdHint(platform, shortcut.mac, shortcut.win)}
+                          </kbd>
+                          <span className={styles.shortcutDesc}>
+                            {shortcut.description}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
               </div>
             )}
 
