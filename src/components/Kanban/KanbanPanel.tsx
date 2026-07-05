@@ -404,9 +404,9 @@ interface ColumnProps {
   onUndo: () => void;
 }
 
-/** One column (status lane, #233): a header (accent dot + UPPERCASE name + count pill
- * + "+"), a droppable sortable card list, and an inline add-card composer opened by
- * the "+" / the bottom dashed affordance. */
+/** One column (status lane, #233): a header (accent dot + UPPERCASE name + count pill),
+ * a droppable sortable card list, and an inline add-card composer opened by the bottom
+ * dashed affordance. */
 function BoardColumn(props: ColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: `column:${props.col}` });
   const items = props.cards.map((_, i) => cardId(props.col, i));
@@ -476,15 +476,6 @@ function BoardColumn(props: ColumnProps) {
           </button>
         )}
         <span className={styles.count}>{props.cards.length}</span>
-        <button
-          type="button"
-          className={styles.colAdd}
-          onClick={openComposer}
-          title="Add card"
-          aria-label="Add card"
-        >
-          <Plus size={14} strokeWidth={1.5} />
-        </button>
         <span className={styles.columnActions}>
           {/* Move every card one column to the right (#283) — shown only when
               there's a column to the right and this one has cards to move. */}
