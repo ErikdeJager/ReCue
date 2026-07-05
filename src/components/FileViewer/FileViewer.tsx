@@ -15,8 +15,10 @@ import {
   rehypeTaskListPositions,
 } from "../markdownCheckboxes";
 import { detectMode, prismLang } from "./fileType";
+import { EOF_DELETION, type GutterMarkers } from "./gutter";
 import { MermaidCode } from "./MermaidBlock";
 import { highlightToHtml } from "./prism";
+import { useFileDiffGutter } from "./useFileDiffGutter";
 import styles from "./FileViewer.module.css";
 
 // Above this, skip render/highlight and show plain raw text so a big file can't
@@ -32,16 +34,74 @@ interface FileViewerProps {
 }
 
 /** Read-only Prism-highlighted code (#44). Prism escapes the source, so the
- * injected markup is its own token spans only — no raw file HTML. */
-function CodeBlock({ code, lang }: { code: string; lang: string }) {
+ * injected markup is its own token spans only — no raw file HTML. When `markers`
+ * are present (the git-diff gutter, #324) the code sits beside a per-line gutter
+ * column inside a shared vertical scroller, so the two stay in lockstep with no JS
+ * scroll-sync. */
+function CodeBlock({
+  code,
+  lang,
+  markers,
+}: {
+  code: string;
+  lang: string;
+  markers: GutterMarkers | null;
+}) {
   const html = useMemo(() => highlightToHtml(code, lang), [code, lang]);
+  const lineCount = useMemo(() => code.split("\n").length, [code]);
+  // No gutter (clean / non-git / no diff) → the plain read-only <pre>, byte-for-byte
+  // the pre-#324 behavior (its own scroller). With a gutter, the <pre> sits inside a
+  // shared vertical scroller beside the gutter column.
+  if (!markers) {
+    return (
+      <pre className={`${styles.raw} ${styles.code}`}>
+        <code
+          className={`language-${lang}`}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      </pre>
+    );
+  }
   return (
-    <pre className={`${styles.raw} ${styles.code}`}>
-      <code
-        className={`language-${lang}`}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    </pre>
+    <div className={styles.codeGutterWrap}>
+      <LineGutter lineCount={lineCount} markers={markers} />
+      <pre className={`${styles.raw} ${styles.code} ${styles.codeWithGutter}`}>
+        <code
+          className={`language-${lang}`}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      </pre>
+    </div>
+  );
+}
+
+/** The left git-diff gutter column (#324) — one cell per source line, aligned to the
+ * code `<pre>` by sharing its font-size / line-height. A green/yellow inset bar marks
+ * an added/modified line; a red dot marks a "removed above" boundary (an
+ * `EOF_DELETION` dot sits at the bottom edge of the last cell). Purely decorative, so
+ * `aria-hidden`. Colors are `--status-*` tokens → identical on WKWebView / WebView2. */
+function LineGutter({
+  lineCount,
+  markers,
+}: {
+  lineCount: number;
+  markers: GutterMarkers;
+}) {
+  const cells = [];
+  for (let n = 1; n <= lineCount; n++) {
+    const change = markers.lines.get(n);
+    const classes = [styles.gutterCell];
+    if (change === "added") classes.push(styles.gutterAdded);
+    else if (change === "modified") classes.push(styles.gutterModified);
+    if (markers.deletions.has(n)) classes.push(styles.gutterDeletion);
+    if (n === lineCount && markers.deletions.has(EOF_DELETION))
+      classes.push(styles.gutterDeletionEof);
+    cells.push(<div key={n} className={classes.join(" ")} />);
+  }
+  return (
+    <div className={styles.diffGutter} aria-hidden="true">
+      {cells}
+    </div>
   );
 }
 
@@ -167,6 +227,24 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
     [text, setText],
   );
 
+  // Derived view flags — computed before the early returns so the gutter hook (which
+  // must run unconditionally, rules of hooks) can key off them. `text` may be null
+  // here; the guards below tolerate it and the null return still short-circuits render.
+  const tooLarge = text !== null && text.length > LARGE_BYTES;
+  const lang = mode === "code" && !tooLarge ? prismLang(file) : undefined;
+  // Git-diff gutter (#324): enabled only for the read-only Prism **code** view — a
+  // curated, not-too-large code file (small files never reach the read-only <pre>, so
+  // the code view is the sole clean, line-addressable target). The hook is a no-op
+  // (returns null) for every other view / when inactive, and fails open.
+  const gutterEnabled = text !== null && lang !== undefined;
+  const markers = useFileDiffGutter(
+    repoPath,
+    file,
+    active,
+    text,
+    gutterEnabled,
+  );
+
   if (error) {
     return <div className={styles.message}>Couldn’t read {file}.</div>;
   }
@@ -174,9 +252,7 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
     return <div className={styles.message}>Loading…</div>;
   }
 
-  const tooLarge = text.length > LARGE_BYTES;
   const renderMarkdown = mode === "markdown" && !showRaw && !tooLarge;
-  const lang = mode === "code" && !tooLarge ? prismLang(file) : undefined;
   // Editable raw text (#148): markdown in Raw mode or a plain-text file, not too
   // large. Rendered markdown, the Prism code view, and large files stay read-only.
   const editable =
@@ -262,7 +338,7 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
           </ReactMarkdown>
         </div>
       ) : lang ? (
-        <CodeBlock code={text} lang={lang} />
+        <CodeBlock code={text} lang={lang} markers={markers} />
       ) : editable ? (
         // Editable raw text, auto-saving via the hook (#148).
         <textarea

@@ -491,3 +491,90 @@
   color: var(--status-error);
   font-size: var(--fs-meta-sm);
 }
+
+/* --- Git-diff gutter (#324) --- */
+/* One shared scroll container for the code view + its left diff gutter, so the two
+   stay in lockstep with NO JS scroll-sync: vertical scroll moves the gutter and code
+   together; horizontal scroll moves the code while the gutter stays pinned via
+   `position: sticky` (below). Used only when there are markers (a dirty file); a clean
+   file renders the plain `.raw`/`.code` <pre> unchanged. */
+.codeGutterWrap {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: row;
+  /* Top-align so each child sizes to its own content height (not stretched to the
+     container), letting THIS container own the vertical scroll cleanly. */
+  align-items: flex-start;
+  overflow: auto;
+  /* Reserve the vertical scrollbar's track (matches `.raw`, #64) so it never overlaps
+     the content nor jumps the layout when it appears. */
+  scrollbar-gutter: stable;
+  background: var(--terminal-bg);
+}
+
+/* The gutter column. `position: sticky; left: 0` pins it to the scrollport's left edge
+   during HORIZONTAL scroll (code slides underneath, masked by the gutter's own
+   terminal-bg + z-index) while vertical scroll carries it along with the code. Its
+   font-size / line-height mirror `.raw`/`.code` exactly and its top padding matches the
+   <pre>'s, so cell N aligns pixel-for-pixel with source line N. */
+.diffGutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex-shrink: 0;
+  padding: var(--space-12) 0;
+  background: var(--terminal-bg);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
+  user-select: none;
+}
+
+.gutterCell {
+  position: relative;
+  width: 12px;
+  /* 1.5em at the shared font-size == one code line box, locking the alignment. */
+  height: 1.5em;
+}
+
+/* Added line → green inset bar; modified → yellow. `--status-*` tokens only, so the
+   gutter renders identically on WKWebView (macOS) and WebView2 (Windows). */
+.gutterAdded {
+  box-shadow: inset 3px 0 0 var(--status-done);
+}
+.gutterModified {
+  box-shadow: inset 3px 0 0 var(--status-awaiting);
+}
+
+/* Removed-content marker: a small red dot straddling the TOP edge of the line just
+   below the removal (`.gutterDeletion` — "content removed above me"), or the BOTTOM
+   edge of the last line for an end-of-file removal (`.gutterDeletionEof`). Separate
+   pseudo-elements so a cell can carry either (or, rarely, both) independently. */
+.gutterDeletion::before,
+.gutterDeletionEof::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-dot);
+  background: var(--status-error);
+}
+.gutterDeletion::before {
+  top: -2.5px;
+}
+.gutterDeletionEof::after {
+  bottom: -2.5px;
+}
+
+/* The code <pre> beside the gutter: it no longer owns the scroll (the wrapper does).
+   Grow to fill the width but never shrink below the longest line (`flex: 1 0 auto`, so
+   the wrapper scrolls horizontally); `overflow: visible` so the pre makes no scrollbars
+   of its own. Keeps `.raw`'s padding + `white-space: pre`; overrides `.raw`'s
+   `overflow`/`flex`/`scrollbar-gutter` (this rule is later in the cascade). */
+.codeWithGutter {
+  flex: 1 0 auto;
+  overflow: visible;
+  scrollbar-gutter: auto;
+}

@@ -267,6 +267,7 @@ pub fn run() {
             commands::github_web_urls,
             commands::working_diff,
             commands::file_statuses,
+            commands::file_diff,
             commands::list_branches,
             commands::list_commits,
             commands::commit_diff,

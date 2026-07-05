@@ -18,6 +18,7 @@ import type {
   CommitInfo,
   DiffSeenMap,
   ExitPayload,
+  FileDiff,
   FileStatusEntry,
   ForkablePayload,
   NamePayload,
@@ -394,6 +395,13 @@ export const workingDiff = (cwd: string) =>
  * Non-git / clean folders return an empty list (fail-open); bounded server-side. */
 export const fileStatuses = (repo: string) =>
   invoke<FileStatusEntry[]>("file_statuses", { repo });
+
+/** Uncommitted working-tree diff for a single file vs `HEAD` (#324) — the source for
+ * the FileViewer code view's per-line git-diff gutter. Returns `null` for a clean /
+ * non-git / no-HEAD file (fail-open, no gutter); an untracked file yields an
+ * all-added diff. */
+export const fileDiff = (repo: string, file: string) =>
+  invoke<FileDiff | null>("file_diff", { repo, file });
 
 /** Two-dot branch comparison for the diff viewer (#81): git diff base target. */
 export const compareBranches = (cwd: string, base: string, target: string) =>

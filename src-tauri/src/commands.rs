@@ -9,7 +9,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
 use uuid::Uuid;
 
-use crate::git::{self, BranchList, CommitInfo, FileStatusEntry, WorkingDiff};
+use crate::git::{self, BranchList, CommitInfo, FileDiff, FileStatusEntry, WorkingDiff};
 use crate::pty::{SessionError, SessionManager};
 use crate::store::{OverviewPanel, PersistedSession, RecurringSession, ScheduledSession, Store};
 
@@ -1664,6 +1664,15 @@ pub fn working_diff(cwd: String) -> WorkingDiff {
 #[tauri::command]
 pub fn file_statuses(repo: String) -> Vec<FileStatusEntry> {
     git::file_statuses(repo)
+}
+
+/// Uncommitted working-tree diff for a **single file** vs `HEAD` (#324) — the source
+/// for the FileViewer code view's per-line git-diff gutter. A thin, path-scoped
+/// `git diff HEAD -- <file>` (untracked files fall back to `--no-index`). Fail-open:
+/// a clean / non-git / no-HEAD file returns `null` (no gutter), never an error.
+#[tauri::command]
+pub fn file_diff(repo: String, file: String) -> Option<FileDiff> {
+    git::file_diff(repo, &file)
 }
 
 // Async + off the main thread (#316) — see the `current_branch` note above.
