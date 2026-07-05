@@ -926,3 +926,80 @@ unchanged. Agent-agnostic (pure output timing, no TUI parsing) and backend-only.
   both. No IPC-shape/persistence/command change (`SessionEvent::State` unchanged; strictly fewer
   events flow). Checks green: `cargo test` / `npm run lint:rust` / `format:rust` / `npm run build` /
   `test`.
+
+---
+
+### 320. [x] Stop a newly-created agent from scrambling the other agents' terminals (shared WebGL glyph atlas)
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Often, right after creating a new agent, the on-screen output of the **other**, already-running
+agents scrambled into garbled/jumbled glyphs (misplaced characters, doubled box-drawing). The
+victims healed the instant `claude` re-rendered its TUI (any width change / reflow), then could
+re-garble on the next spawn. Reported on **macOS**, tied to "right before the Windows release."
+
+Root cause — a **shared WebGL glyph atlas**. Every pooled xterm terminal is constructed with
+**identical** options in `createHost` (same `--mono` family, size, line-height, theme), so
+`@xterm/addon-webgl` hands them all **one shared `TextureAtlas`** (it caches one atlas per
+identical config). Task **#221** (2026-06-28, "Fix the terminal font rendering 'jiggly' on
+Windows") added an async font-load block that calls `webgl.clearTextureAtlas()` on **every**
+terminal creation — needed because the atlas could be built with fallback-font metrics before
+*JetBrains Mono* finished loading. But clearing the **shared** atlas wipes the glyph cache for
+**all** terminals while only the *new* one repaints, so the already-running agents keep pointing
+at glyph slots that no longer exist → jumble, until a reflow (SIGWINCH → `claude` full repaint +
+atlas re-warm) re-rasterizes every glyph. That is exactly why "a width change fixes it," and why
+the *other* agents (not the new one) are the victims.
+
+The fix clears the shared atlas **only once** — the first time the real font has loaded — so a
+later spawn never disturbs the running agents.
+
+**What shipped** (commit [`bc9553f`](https://github.com/ErikdeJager/ReCue/commit/bc9553f), PR
+[#70](https://github.com/ErikdeJager/ReCue/pull/70), branch `fix/font-jumble`, 2026-07-05):
+
+- **`src/components/Terminal/terminalPool.ts`:**
+  - Added a module-level `let fontAtlasRebuilt = false` guard.
+  - In `createHost`'s async font-load block, wrapped the `webgl.clearTextureAtlas()` call
+    (previously unconditional, run on every terminal creation) in `if (webgl && !fontAtlasRebuilt)
+    { fontAtlasRebuilt = true; … }`, so the SHARED atlas is cleared exactly once — by the first
+    terminal to see the loaded font. Everything else in the block is unchanged: the per-terminal
+    `fontFamily` re-measure swap, `term.refresh(0, rows-1)`, and `safeFit()`.
+
+**Key files/areas touched:** `src/components/Terminal/terminalPool.ts` (1 file, guard + one
+conditional).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Why the guard is the fix (validated against xterm internals):** after boot `fontAtlasRebuilt`
+  is already `true`, so a newly-spawned agent **skips** the shared-atlas clear — it never disturbs
+  the atlas the running agents are drawing from. The per-terminal `fontFamily` swap (kept
+  unchanged) is the *real* per-terminal repair: it fires xterm's options-change
+  (`OptionsService.onMultipleOptionChange(['fontFamily',…])` → `RenderService.clear()` →
+  `_clearModel(true)`), a full model clear that re-acquires that terminal's glyphs at the correct
+  metrics. A `refresh()`-all-siblings loop was **deliberately not** added — `Terminal.refresh()`
+  skips unchanged cells in the WebGL `_updateModel`, so it doesn't re-rasterize a sibling's glyphs
+  and can even re-trigger the garble; only a model clear (resize or its own `fontFamily` swap)
+  repairs a sibling, and with the guard there is nothing to repair.
+- **#221's Windows fix preserved:** the *first* terminal still clears + rebuilds the shared atlas
+  with the loaded font, and every terminal still runs the `fontFamily` re-measure, so glyphs stay
+  crisp (no "jiggly"/malformed `C`) on the first and all subsequent spawns. `applyTerminalSettings`
+  (font-size change) is unaffected — a new size is a new atlas config, so xterm derives a fresh
+  correct-metric atlas on its own; the one-time guard never needs resetting.
+- **Not the dedup change:** the other suspect — the `replayDedupe.ts` / byte-offset dedup
+  (`fix/windows-stray-c-on-spawn`) — was ruled out: it is strictly per-session, byte-correct, and
+  byte-identical on macOS (the `windowsPty` option is Windows-only), so it cannot scramble *other*
+  sessions.
+- **Out of scope (follow-up):** with very many terminals, macOS WKWebView can hit its
+  concurrent-WebGL-context cap and fire `webglcontextlost` on an older terminal
+  (`onContextLoss(() => addon.dispose())` drops it to the DOM renderer) — a distinct, rarer vector,
+  not this jumble.
+- **Cross-platform:** platform-neutral — no `#[cfg]`/`isWindows` branch, no CSS/backend change; a
+  no-op under the DOM renderer (detached windows #105, which has no shared GL atlas). macOS bug
+  fixed, Windows unchanged. Windows real-box check (glyphs still crisp, spawns don't scramble
+  siblings) to be recorded in `TRAJECTORY_TO_WINDOWS.md` per the Windows-parity convention
+  (GUI/WebGL paths can't be unit-tested on CI). Checks green: `npm run build` / `npm run lint` /
+  `npm test` (599 tests).
