@@ -900,6 +900,10 @@ export const DEFAULT_SETTINGS: Settings = {
   autoSave: true,
   defaultAgent: "claude",
   autoContinueAfterLimit: false,
+  // True by default (#326): show the five-hour Claude usage bar. Turning it off hides
+  // the bar AND stops ReCue ever reading the Claude OAuth token (the usage IPC is
+  // never invoked) — a privacy opt-out.
+  showSessionUsage: true,
   // True by default (#309): the "Enable auto restart on limit reset" prompt button
   // above the usage bar is offered when the limit is hit and auto-continue is off.
   promptEnableAutoContinueAtLimit: true,
@@ -2563,6 +2567,19 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   refreshUsage: async () => {
+    // Session-usage display disabled (#326): never call the usage IPC — so the Rust
+    // token read never runs — and keep the bar hidden. Still run the auto-continue
+    // reducer so it disarms (fail-open) with no usage data.
+    if (!get().settings.showSessionUsage) {
+      const u = get().usage;
+      if (u.available || u.usedPercent != null || u.resetsAtMs != null) {
+        set({
+          usage: { usedPercent: null, resetsAtMs: null, available: false },
+        });
+      }
+      get().applyAutoContinue();
+      return;
+    }
     // Gate to Claude (forward-compatible). Non-Claude → hide, don't even call out.
     if (!isClaudeActive(get())) {
       set({ usage: { usedPercent: null, resetsAtMs: null, available: false } });
@@ -2591,6 +2608,7 @@ export const useStore = create<AppState>()((set, get) => ({
   },
   startUsagePolling: () => {
     if (!IS_MAIN_WINDOW || usagePollTimer) return; // main-window only, idempotent
+    if (!get().settings.showSessionUsage) return; // #326: no poll, no token access
     void get().refreshUsage();
     usagePollTimer = setInterval(
       () => void get().refreshUsage(),
@@ -3434,8 +3452,22 @@ export const useStore = create<AppState>()((set, get) => ({
 
   saveSettings: async (settings) => {
     // Apply optimistically + run side-effects (live terminals, #100), then persist.
+    const prev = get().settings;
     set({ settings });
     applySettingsEffects(settings);
+    // React to the session-usage toggle at runtime (#326): starting/stopping the poll
+    // is the load-bearing token-access gate, so it must fire immediately on Save.
+    if (settings.showSessionUsage !== prev.showSessionUsage) {
+      if (settings.showSessionUsage) {
+        get().startUsagePolling(); // resume — idempotent, main-window only
+      } else {
+        get().stopUsagePolling();
+        set({
+          usage: { usedPercent: null, resetsAtMs: null, available: false },
+        });
+        get().applyAutoContinue(); // disarm #296 immediately (no usage data)
+      }
+    }
     try {
       await ipc.setSettings(settings);
     } catch {

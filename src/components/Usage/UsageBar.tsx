@@ -8,9 +8,9 @@ import styles from "./Usage.module.css";
  * The thin separator above the sidebar footer (#154), which doubles as a Claude
  * 5-hour session-usage bar.
  *
- * - No usage data (no token, fetch failed, or a non-Claude agent): it's just a plain
- *   full-width hairline — an ordinary separator between the footer buttons and the
- *   panel contents above.
+ * - No usage data (no token, fetch failed, a non-Claude agent, or the "Show session
+ *   usage" setting turned off #326): it's just a plain full-width hairline — an
+ *   ordinary separator between the footer buttons and the panel contents above.
  * - Usage received: the same hairline track fills left→right with the % of the
  *   5-hour limit used (accent fill; a fixed vivid `--usage-critical` red at >=90%),
  *   and a meta row above it shows the reset countdown (left) and the % (right). At
@@ -23,6 +23,7 @@ import styles from "./Usage.module.css";
  */
 function UsageBar() {
   const claudeActive = useStore(isClaudeActive);
+  const showSessionUsage = useStore((s) => s.settings.showSessionUsage);
   const available = useStore((s) => s.usage.available);
   const usedPercent = useStore((s) => s.usage.usedPercent);
   const resetsAtMs = useStore((s) => s.usage.resetsAtMs);
@@ -36,7 +37,8 @@ function UsageBar() {
     return () => clearInterval(id);
   }, []);
 
-  const showUsage = claudeActive && available && usedPercent != null;
+  const showUsage =
+    showSessionUsage && claudeActive && available && usedPercent != null;
 
   // No usage to show → a plain hairline separator.
   if (!showUsage) {

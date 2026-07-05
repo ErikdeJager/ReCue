@@ -356,6 +356,10 @@ export interface Settings {
    * (Enter → `continue` → Enter). Claude-only — inert unless `defaultAgent` is
    * `"claude"`. Default off. */
   autoContinueAfterLimit: boolean;
+  /** Show the five-hour Claude usage bar above the sidebar footer (#154/#326). Default
+   * true. When false the bar is hidden AND ReCue never reads the Claude OAuth token —
+   * the usage IPC (`claude_session_usage`) is not invoked at all. */
+  showSessionUsage: boolean;
   /** Whether to offer the "Enable auto restart on limit reset" prompt button above the
    * usage bar when the five-hour limit is reached and auto-continue is off (#309). Default
    * true (the prompt is shown); turn off to never surface it. */

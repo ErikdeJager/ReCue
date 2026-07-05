@@ -486,20 +486,43 @@ function SettingsModal() {
                 />
                 <div className={styles.field}>
                   <Checkbox
+                    // #326: the privacy toggle gating the usage bar AND the Claude
+                    // OAuth token read. Off → no usage IPC is ever invoked.
+                    checked={draft.showSessionUsage}
+                    onChange={(v) => update("showSessionUsage", v)}
+                    label="Show session usage"
+                    className={styles.checkRow}
+                  />
+                  <span className={styles.fieldHelp}>
+                    Display the five-hour Claude usage bar above the sidebar
+                    footer. When off, ReCue never reads your Claude auth token.
+                  </span>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
                     // Claude-only (#296): shown off + disabled for a non-Claude
                     // default agent (the usage feed the machine reads is Claude's).
+                    // Also requires session usage to be on (#326) — the machine
+                    // reads the same usage feed, which is off when usage is hidden.
                     checked={
                       draft.defaultAgent === "claude" &&
+                      draft.showSessionUsage &&
                       draft.autoContinueAfterLimit
                     }
                     onChange={(v) => update("autoContinueAfterLimit", v)}
-                    disabled={draft.defaultAgent !== "claude"}
+                    disabled={
+                      draft.defaultAgent !== "claude" || !draft.showSessionUsage
+                    }
                     label="Auto continue after limit reset"
                     className={styles.checkRow}
                   />
                   {draft.defaultAgent !== "claude" ? (
                     <span className={styles.fieldHelp}>
                       Requires Claude as the default agent.
+                    </span>
+                  ) : !draft.showSessionUsage ? (
+                    <span className={styles.fieldHelp}>
+                      Requires session usage to be enabled.
                     </span>
                   ) : (
                     <span className={styles.fieldHelp}>
@@ -513,11 +536,14 @@ function SettingsModal() {
                   <Checkbox
                     // #309: gates the sidebar-footer "Enable auto restart on
                     // limit reset" prompt button. Not Claude-gated here — the
-                    // button itself gates on the active set being Claude.
+                    // button itself gates on the active set being Claude. Disabled
+                    // when session usage is off (#326): the prompt can only ever
+                    // appear when usage data exists.
                     checked={draft.promptEnableAutoContinueAtLimit}
                     onChange={(v) =>
                       update("promptEnableAutoContinueAtLimit", v)
                     }
+                    disabled={!draft.showSessionUsage}
                     label="Offer to enable auto continue when the limit is reached"
                     className={styles.checkRow}
                   />
