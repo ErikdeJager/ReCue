@@ -6,6 +6,14 @@
 //! Code's own `/usage` uses — returning a tiny serializable snapshot of the
 //! **five-hour** window's used-percentage + reset time.
 //!
+//! Token selection is **expiry-aware** (#316): recent Claude Code versions can leave
+//! an **expired** access token in `~/.claude/.credentials.json` while keeping a fresh
+//! one in the macOS Keychain, so we prefer the file token only while it is *not*
+//! expired (its `expiresAt`, epoch ms) and otherwise fall through to the Keychain.
+//! A fresh file token short-circuits the Keychain read entirely (no gratuitous
+//! Keychain allow-prompt). Windows/Linux have no Keychain, so the file is the sole
+//! source there — and Claude keeps it fresh there anyway.
+//!
 //! EVERYTHING here is fail-open: a missing token, an HTTP error (401/403/429/5xx),
 //! a response-shape mismatch, or a missing `five_hour` block all return `None` so
 //! the UI simply hides the usage bar. The OAuth token NEVER crosses into JS (only
@@ -17,7 +25,7 @@
 //! CLAUDE.md). The `User-Agent: claude-code/<ver>` header is load-bearing: without
 //! it the endpoint lands in an aggressively rate-limited bucket (persistent 429s).
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -25,8 +33,8 @@ const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 /// The `claude-code/<ver>` prefix is what moves the request off the throttled
 /// bucket; the exact patch version is not validated by the endpoint, so a
-/// roughly-current constant is enough.
-const CLAUDE_CODE_UA: &str = "claude-code/2.1.0";
+/// roughly-current constant is enough (kept loosely in step with the installed CLI).
+const CLAUDE_CODE_UA: &str = "claude-code/2.1.193";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// What the frontend receives. `used_percent` is validated + clamped to 0–100 here;
@@ -41,29 +49,98 @@ pub struct UsageSnapshot {
     pub resets_at: Option<String>,
 }
 
+/// An OAuth access token plus its optional expiry (epoch **milliseconds**). A token
+/// whose expiry is unknown (`None`) is treated as **usable** — we never filter out a
+/// token just because the credentials source omitted or mangled `expiresAt`.
+#[derive(Debug, Clone, PartialEq)]
+struct OauthToken {
+    access_token: String,
+    /// Epoch ms, iff the source carried a numeric `expiresAt` / `expires_at`.
+    expires_at: Option<i64>,
+}
+
+impl OauthToken {
+    /// Expired iff we KNOW the expiry and `now` is at/after it. Unknown expiry ⇒ not
+    /// expired (usable), so a missing/garbled field never hides the bar.
+    fn is_expired(&self, now_ms: i64) -> bool {
+        self.expires_at.is_some_and(|e| now_ms >= e)
+    }
+}
+
 /// Frontend-polled command (~180s cadence). Sync → Tauri runs it off the main
 /// thread, so the bounded blocking call won't freeze the UI. Fail-open: any
 /// failure → `None` → the bar hides.
 #[tauri::command]
 pub fn claude_session_usage() -> Option<UsageSnapshot> {
-    let token = read_oauth_token()?;
-    let body = fetch_usage(&token)?; // token dropped right after this returns
-    parse_snapshot(&body)
+    let token = read_oauth_token()?.access_token; // token dropped right after fetch
+    let Some(body) = fetch_usage(&token) else {
+        usage_diag("http miss");
+        return None;
+    };
+    match parse_snapshot(&body) {
+        Some(snap) => Some(snap),
+        None => {
+            usage_diag("parse miss");
+            None
+        }
+    }
 }
 
-/// Read the OAuth access token: the prompt-free file first, then the Keychain.
-/// The Keychain step is macOS-only (`read_token_from_keychain` is a no-op stub
-/// elsewhere), so on **Windows** the credentials file is the sole source — which is
-/// canonical there anyway, since Windows has no Keychain and `claude` stores the
-/// token in `%USERPROFILE%\.claude\.credentials.json` (#140).
-fn read_oauth_token() -> Option<String> {
-    read_token_from_file().or_else(read_token_from_keychain)
+/// Read the OAuth token, expiry-aware and prompt-frugal (#316): a **fresh** file
+/// token short-circuits and the Keychain is never touched (no allow-prompt). Only a
+/// missing/expired file token falls through to the Keychain, and `select_token`
+/// (pure) picks the non-expired source, preferring the file. The Keychain step is
+/// macOS-only (`read_token_from_keychain` is a no-op stub elsewhere), so on
+/// **Windows/Linux** the credentials file is the sole source — canonical there anyway,
+/// since they have no Keychain and `claude` keeps the file token fresh (#140).
+fn read_oauth_token() -> Option<OauthToken> {
+    let now_ms = now_ms();
+    let file = read_token_from_file();
+    // Common path: a fresh file token — return it WITHOUT reading the Keychain.
+    if file.as_ref().is_some_and(|t| !t.is_expired(now_ms)) {
+        return file;
+    }
+    let keychain = read_token_from_keychain();
+    let picked = select_token(file, keychain, now_ms);
+    match &picked {
+        None => usage_diag("no token"),
+        Some(t) if t.is_expired(now_ms) => usage_diag("token expired, no fresher source"),
+        Some(_) => {}
+    }
+    picked
+}
+
+/// Pure, testable token selector: prefer a **non-expired** token (file first, then
+/// Keychain); if none is fresh, fall back to whichever is present (file preferred)
+/// even when expired — preserving today's fail-open-at-HTTP behavior (the stale token
+/// simply 401s and the bar hides). Empty inputs ⇒ `None`.
+fn select_token(
+    file: Option<OauthToken>,
+    keychain: Option<OauthToken>,
+    now_ms: i64,
+) -> Option<OauthToken> {
+    if file.as_ref().is_some_and(|t| !t.is_expired(now_ms)) {
+        return file;
+    }
+    if keychain.as_ref().is_some_and(|t| !t.is_expired(now_ms)) {
+        return keychain;
+    }
+    file.or(keychain)
+}
+
+/// Current wall-clock epoch **milliseconds**. Fail-open to `0` on the (impossible)
+/// pre-1970 error, which just makes every known-expiry token read as not-yet-expired.
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// `~/.claude/.credentials.json` — prompt-free. Located via the cross-platform
 /// `home_dir()` (`$HOME` on unix, `%USERPROFILE%` on Windows, #140) like `title.rs`.
 /// Often absent on macOS (where the Keychain is canonical), present on Windows/Linux.
-fn read_token_from_file() -> Option<String> {
+fn read_token_from_file() -> Option<OauthToken> {
     let path = crate::path_env::home_dir()?
         .join(".claude")
         .join(".credentials.json");
@@ -77,7 +154,7 @@ fn read_token_from_file() -> Option<String> {
 /// open (bar hidden). The `security` CLI is macOS-only, so this is gated to macOS;
 /// on Windows/Linux the credentials file above is the sole token source.
 #[cfg(target_os = "macos")]
-fn read_token_from_keychain() -> Option<String> {
+fn read_token_from_keychain() -> Option<OauthToken> {
     let out = std::process::Command::new("security")
         .args([
             "find-generic-password",
@@ -94,28 +171,58 @@ fn read_token_from_keychain() -> Option<String> {
 }
 
 /// Non-macOS stub: there is no Keychain (Windows/Linux), so the credentials file is
-/// the only source. Keeps `read_oauth_token`'s `.or_else(...)` chain identical
-/// across platforms.
+/// the only source. Keeps `read_oauth_token`'s fall-through identical across platforms.
 #[cfg(not(target_os = "macos"))]
-fn read_token_from_keychain() -> Option<String> {
+fn read_token_from_keychain() -> Option<OauthToken> {
     None
 }
 
 /// Tolerant token extraction: `claudeAiOauth.accessToken` (the macOS shape) else a
-/// top-level `access_token`. Never logs the value.
-fn token_from_json(raw: &str) -> Option<String> {
+/// top-level `access_token`, plus the matching expiry (`claudeAiOauth.expiresAt` else
+/// top-level `expires_at`, epoch ms). Never logs the value. Missing/garbage expiry ⇒
+/// `expires_at: None` (unknown ⇒ usable). Returns `None` when the access token is
+/// empty/absent.
+fn token_from_json(raw: &str) -> Option<OauthToken> {
     let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
-    let tok = v
-        .get("claudeAiOauth")
+    let oauth = v.get("claudeAiOauth");
+    let tok = oauth
         .and_then(|o| o.get("accessToken"))
         .or_else(|| v.get("access_token"))
         .and_then(|t| t.as_str())?;
     let tok = tok.trim();
     if tok.is_empty() {
-        None
-    } else {
-        Some(tok.to_string())
+        return None;
     }
+    let expires_at = oauth
+        .and_then(|o| o.get("expiresAt"))
+        .or_else(|| v.get("expires_at"))
+        .and_then(value_to_epoch_ms);
+    Some(OauthToken {
+        access_token: tok.to_string(),
+        expires_at,
+    })
+}
+
+/// Read an epoch-millisecond value tolerantly: a JSON integer, a JSON float
+/// (truncated), or a numeric string. Anything else ⇒ `None` (unknown expiry).
+fn value_to_epoch_ms(v: &serde_json::Value) -> Option<i64> {
+    match v {
+        serde_json::Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
+        serde_json::Value::String(s) => {
+            let s = s.trim();
+            s.parse::<i64>()
+                .ok()
+                .or_else(|| s.parse::<f64>().ok().map(|f| f as i64))
+        }
+        _ => None,
+    }
+}
+
+/// A single-line, **token-free** fail-open diagnostic (#316): only a coarse category —
+/// never the token, headers, or response body — so "why did the usage bar vanish?" is
+/// answerable from logs without ever leaking a secret.
+fn usage_diag(category: &str) {
+    eprintln!("usage: {category}");
 }
 
 /// One blocking HTTPS GET. ureq maps any `>= 400` status (incl. 401/403/429) to
@@ -164,22 +271,132 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn tok(access: &str, expires_at: Option<i64>) -> OauthToken {
+        OauthToken {
+            access_token: access.to_string(),
+            expires_at,
+        }
+    }
+
     #[test]
     fn token_from_both_shapes() {
-        assert_eq!(
-            token_from_json(r#"{"claudeAiOauth":{"accessToken":" abc "}}"#).as_deref(),
-            Some("abc")
-        );
-        assert_eq!(
-            token_from_json(r#"{"access_token":"xyz"}"#).as_deref(),
-            Some("xyz")
-        );
+        let t = token_from_json(r#"{"claudeAiOauth":{"accessToken":" abc "}}"#).unwrap();
+        assert_eq!(t.access_token, "abc");
+        assert_eq!(t.expires_at, None);
+
+        let t = token_from_json(r#"{"access_token":"xyz"}"#).unwrap();
+        assert_eq!(t.access_token, "xyz");
+        assert_eq!(t.expires_at, None);
+
         assert_eq!(token_from_json(r#"{"claudeAiOauth":{}}"#), None);
         assert_eq!(
             token_from_json(r#"{"claudeAiOauth":{"accessToken":""}}"#),
             None
         );
         assert_eq!(token_from_json("not json"), None);
+    }
+
+    #[test]
+    fn token_reads_expiry_number_and_string() {
+        // JSON number (macOS shape).
+        let t =
+            token_from_json(r#"{"claudeAiOauth":{"accessToken":"a","expiresAt":1760000000000}}"#)
+                .unwrap();
+        assert_eq!(t.access_token, "a");
+        assert_eq!(t.expires_at, Some(1_760_000_000_000));
+
+        // Numeric string.
+        let t =
+            token_from_json(r#"{"claudeAiOauth":{"accessToken":"a","expiresAt":"1760000000000"}}"#)
+                .unwrap();
+        assert_eq!(t.expires_at, Some(1_760_000_000_000));
+
+        // Top-level snake_case shape.
+        let t = token_from_json(r#"{"access_token":"a","expires_at":1234}"#).unwrap();
+        assert_eq!(t.expires_at, Some(1234));
+
+        // A JSON float truncates to i64.
+        let t = token_from_json(r#"{"access_token":"a","expires_at":1234.9}"#).unwrap();
+        assert_eq!(t.expires_at, Some(1234));
+    }
+
+    #[test]
+    fn token_expiry_absent_or_garbage_is_none() {
+        for raw in [
+            r#"{"claudeAiOauth":{"accessToken":"a"}}"#,
+            r#"{"claudeAiOauth":{"accessToken":"a","expiresAt":"soon"}}"#,
+            r#"{"claudeAiOauth":{"accessToken":"a","expiresAt":null}}"#,
+            r#"{"claudeAiOauth":{"accessToken":"a","expiresAt":true}}"#,
+            r#"{"claudeAiOauth":{"accessToken":"a","expiresAt":{}}}"#,
+        ] {
+            let t = token_from_json(raw).unwrap();
+            assert_eq!(t.access_token, "a");
+            assert_eq!(t.expires_at, None, "raw: {raw}");
+        }
+    }
+
+    #[test]
+    fn is_expired_semantics() {
+        let known = tok("a", Some(1000));
+        assert!(known.is_expired(1000), "at expiry ⇒ expired");
+        assert!(known.is_expired(1001));
+        assert!(!known.is_expired(999));
+        // Unknown expiry ⇒ usable (never filtered out).
+        assert!(!tok("a", None).is_expired(i64::MAX));
+    }
+
+    #[test]
+    fn select_prefers_fresh_and_falls_back() {
+        let now = 1_000_000_i64;
+        let fresh = |id: &str| Some(tok(id, Some(now + 10_000)));
+        let stale = |id: &str| Some(tok(id, Some(now - 10_000)));
+        let unknown = |id: &str| Some(tok(id, None));
+
+        // Fresh file used; Keychain irrelevant.
+        assert_eq!(
+            select_token(fresh("file"), fresh("kc"), now)
+                .unwrap()
+                .access_token,
+            "file"
+        );
+        // Fresh file with no Keychain (Windows/Linux, or macOS Keychain absent).
+        assert_eq!(
+            select_token(fresh("file"), None, now).unwrap().access_token,
+            "file"
+        );
+        // Expired file ⇒ fresh Keychain wins (the #316 bug's fix).
+        assert_eq!(
+            select_token(stale("file"), fresh("kc"), now)
+                .unwrap()
+                .access_token,
+            "kc"
+        );
+        // Missing file ⇒ fresh Keychain used (unchanged fall-through).
+        assert_eq!(
+            select_token(None, fresh("kc"), now).unwrap().access_token,
+            "kc"
+        );
+        // Unknown-expiry file is usable ⇒ preferred over the Keychain.
+        assert_eq!(
+            select_token(unknown("file"), fresh("kc"), now)
+                .unwrap()
+                .access_token,
+            "file"
+        );
+        // All expired ⇒ fall back to file (preferred), even though expired.
+        assert_eq!(
+            select_token(stale("file"), stale("kc"), now)
+                .unwrap()
+                .access_token,
+            "file"
+        );
+        // Only an expired Keychain present ⇒ fall back to it.
+        assert_eq!(
+            select_token(None, stale("kc"), now).unwrap().access_token,
+            "kc"
+        );
+        // Nothing anywhere ⇒ None (bar hides).
+        assert_eq!(select_token(None, None, now), None);
     }
 
     #[test]
