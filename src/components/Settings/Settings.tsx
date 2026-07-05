@@ -28,7 +28,11 @@ import remarkGfm from "remark-gfm";
 
 import { agentCaps, agentIsUntested, SELECTABLE_AGENTS } from "../../agents";
 import * as ipc from "../../ipc";
-import { allPatchnotes, compareVersions, patchnotesFor } from "../../patchnotes";
+import {
+  allPatchnotes,
+  compareVersions,
+  patchnotesFor,
+} from "../../patchnotes";
 import { kbdHint } from "../../platform";
 import { DEFAULT_SETTINGS, REPO_PALETTE, useStore } from "../../store";
 import type { Settings as SettingsType } from "../../types";
@@ -106,6 +110,7 @@ function SettingsModal() {
   const saveSettings = useStore((s) => s.saveSettings);
   const setRecents = useStore((s) => s.setRecents);
   const recentsCount = useStore((s) => s.recents.length);
+  const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const pushToast = useStore((s) => s.pushToast);
   // Deep-link target (#191): the section the opener requested (e.g. the updater
   // indicator → "updates"); else the default (Terminal).
@@ -131,6 +136,10 @@ function SettingsModal() {
     appVer ? compareVersions(n.version, appVer) < 0 : n.version !== appVer,
   );
   const [showHistory, setShowHistory] = useState(false);
+  // Inline two-click confirm for the destructive "Clear recents" button (#319),
+  // honoring the confirm-destructive setting like the app's other destructive
+  // actions (TemplateManager delete, FileTree, Sidebar).
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -190,9 +199,16 @@ function SettingsModal() {
   };
 
   const clearRecents = () => {
+    // First click arms the confirm (unless the user turned off the gate);
+    // the second click (or a single click when unguarded) actually clears.
+    if (confirmDestructive && !confirmingClear) {
+      setConfirmingClear(true);
+      return;
+    }
     void ipc.clearRecents().catch(() => {});
     setRecents([]);
     pushToast("Recent folders cleared");
+    setConfirmingClear(false);
   };
 
   return (
@@ -813,12 +829,22 @@ function SettingsModal() {
                 </button>
                 <button
                   type="button"
-                  className={styles.dataButton}
+                  className={`${styles.dataButton} ${
+                    confirmingClear ? styles.dataButtonArmed : ""
+                  }`}
                   onClick={clearRecents}
+                  onMouseLeave={() => setConfirmingClear(false)}
                   disabled={recentsCount === 0}
+                  title={
+                    confirmingClear
+                      ? "Click again to clear all recent folders"
+                      : undefined
+                  }
                 >
                   <Trash2 size={15} strokeWidth={1.5} />
-                  Clear recents ({recentsCount})
+                  {confirmingClear
+                    ? "Clear all recent folders?"
+                    : `Clear recents (${recentsCount})`}
                 </button>
                 <dl className={styles.about}>
                   <div className={styles.aboutRow}>
