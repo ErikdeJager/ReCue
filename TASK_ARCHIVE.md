@@ -1097,3 +1097,61 @@ Apple account), and guarantees macOS **re-asks** the permission after the fix up
   Gatekeeper warning on update** — then one permission prompt (from the DR change + the one-time
   reset), Allow, and it persists. Keep `~/.recue-signing/ReCue-CI.p12` and reuse it every release,
   or grants re-prompt after each update.
+
+---
+
+### 317. [x] Truncate the "New session" button label with an ellipsis on overflow
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+The sidebar's primary **"New session"** button (⌘N / Ctrl+N) did not truncate its label when the
+sidebar was dragged narrow (toward its 180px minimum, #108) — the "New session" text was a bare
+text node (an anonymous flex item CSS can't target) and `.newButton` lacked `min-width: 0`, so the
+label wrapped to a second line / overflowed and pushed the `+` icon or keyboard hint out of the
+button. The secondary **"Schedule session"** button directly below it already truncated correctly
+(its label lives in a `<span className={styles.scheduleLabel}>` with `overflow:hidden;
+text-overflow:ellipsis; white-space:nowrap`, and the button carries `flex:1; min-width:0`, added by
+#301). The fix mirrors that exact pattern onto the New session button so both behave identically.
+
+**What shipped** (commit [`9435370`](https://github.com/ErikdeJager/ReCue/commit/9435370), PR
+[#71](https://github.com/ErikdeJager/ReCue/pull/71), branch `truncate-new-session-label`,
+2026-07-05):
+
+- **`src/components/Sidebar/Sidebar.tsx`** (expanded "New session" button, ~line 2695): added
+  `className={styles.newIcon}` to the `<Plus size={16} strokeWidth={1.5} />` icon and replaced the
+  bare `New session` text node with `<span className={styles.newLabel}>New session</span>`. The
+  `<kbd>` keyboard hint is untouched.
+- **`src/components/Sidebar/Sidebar.module.css`:** added `min-width: 0` to the existing `.newButton`
+  rule (so the flex button's content can shrink below its intrinsic width — required for the child
+  ellipsis to engage), and two new rules right after `.newButton:hover`: `.newIcon { flex-shrink: 0 }`
+  (so the `+` icon keeps its intrinsic 16px) and `.newLabel { flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; text-align: left }` (the ellipsis rule, mirroring
+  `.scheduleLabel`).
+
+**Key files/areas touched:** `src/components/Sidebar/Sidebar.tsx` (one-line JSX wrap + icon class),
+`src/components/Sidebar/Sidebar.module.css` (`min-width:0` on `.newButton` + new `.newIcon` /
+`.newLabel` rules). 2 files.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Why new, uniquely-named classes (`.newIcon`, `.newLabel`) rather than reusing
+  `.scheduleIcon`/`.scheduleLabel`:** the module has a pre-existing duplicate `.scheduleIcon` rule
+  whose second definition (~line 679) also sets `color: var(--status-running)`; reusing it on the `+`
+  icon would leak that status color, so parallel classes copy only the truncation behavior.
+- **No native `title` tooltip added:** the reference Schedule button has none, and the card asked for
+  the "same behaviour," so the fix omits a hover tooltip to keep the two buttons identical (trivial to
+  add later).
+- **Scope:** limited to the **expanded** top-of-sidebar primary button. The collapsed rail's
+  icon-only button (no label), the other New-session entry points (repo header `+`, worktree `+`,
+  repo context menu), and the Schedule button / `⋯` overflow (#294) are untouched. No change to
+  `openNewSession()`.
+- **Cross-platform:** pure presentational CSS (`text-overflow:ellipsis`, `min-width:0`,
+  `flex-shrink`) with no `-webkit-`-only effects, so it renders identically in WKWebView (macOS) and
+  WebView2/Chromium (Windows) — and the truncation matters on Windows too (the "Ctrl+N" hint is
+  longer). Checks green: `npm run build` / `npm run lint` / `npm run format:check`. No unit test
+  applies (presentational CSS; the Sidebar has no test file).
