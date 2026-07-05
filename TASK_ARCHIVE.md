@@ -1630,3 +1630,72 @@ never computed synchronously on right-click.
   macOS and Windows; no POSIX-only assumptions. Fail-open: non-GitHub/remote-less/non-git folders
   resolve to `None` and hide the item. Checks green: `npm run build` / `npm run lint` / `npm test` /
   `cargo test` / `npm run lint:rust`.
+
+---
+
+### 324. [x] Git-diff gutter in the file viewer (uncommitted change markers)
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Gave the universal `FileViewer`'s **curated code view** (the Prism `CodeBlock`) a left **git-diff
+gutter** that colors each line by its uncommitted working-tree status vs `HEAD` — a **green** bar
+for an added line, a **yellow** bar for a modified line, and a small **red dot** at the boundary
+where content was removed — so a developer sees at a glance what they've changed since the last
+commit. The markers **auto-refresh on a ~2 s poll** (paused when hidden), so they disappear within
+one interval when the change is committed in a terminal (the gutter re-checks whether the diff is
+still present).
+
+**What shipped** (commit [`a0b2b67`](https://github.com/ErikdeJager/ReCue/commit/a0b2b67), PR
+[#80](https://github.com/ErikdeJager/ReCue/pull/80), branch `git-diff-gutter`, 2026-07-05):
+
+- **`src-tauri/src/git.rs`:** a scoped `file_diff(cwd, path) -> Option<FileDiff>` (a thin
+  `git diff HEAD --no-color --no-ext-diff -- <path>` + the existing pure `parse_unified_diff`, with
+  an `is_tracked` check + the #183 `git diff --no-index -- /dev/null <path>` fallback so a brand-new
+  untracked file reads as all-Added; `has_head` guard for an unborn repo). Modeled on
+  `commit_diff`/`compare_branches`, far lighter than whole-repo `working_diff`, fail-open (clean /
+  non-git → `None`). Rust temp-repo unit tests added.
+- **`src-tauri/src/commands.rs` + `lib.rs`:** the `file_diff(repo, file)` `#[tauri::command]`
+  (returning the shared `FileDiff`), registered in `generate_handler!`.
+- **`src/ipc.ts`:** a `fileDiff(repo, file)` wrapper.
+- **`src/components/FileViewer/gutter.ts` (+ `gutter.test.ts`):** a pure, unit-tested
+  `gutterMarkers(hunks)` classifier — walks the hunks grouping each maximal run of `add`/`del` rows
+  into a change block, marks the first `min(d,a)` adds **modified** (yellow) and any insertion tail
+  **added** (green), and records a red-dot **deletion** at the line following a delete-heavy/pure
+  deletion block (an `EOF_DELETION` sentinel for a trailing deletion).
+- **`src/components/FileViewer/useFileDiffGutter.ts`:** a small fetch/poll hook (mirrors
+  `useAutoSaveFile`'s visibility gating) — fetches on mount/active-change, every ~2 s while visible,
+  and on `text` change; enabled only for the code view; fully fail-open.
+- **`src/components/FileViewer/FileViewer.tsx` (+ `FileViewer.module.css`):** wired the hook
+  (`gutterEnabled = lang !== undefined`), extended `CodeBlock` with a `LineGutter` column inside a
+  flex-row **shared vertical scroller** (`.codeGutterWrap` owns vertical scroll so gutter cell _n_
+  lines up with code line _n_ — no JS scroll-sync; the code `<pre>` owns only horizontal scroll so
+  the gutter stays pinned). Marker styles use only `--status-done`/`-awaiting`/`-error` tokens.
+
+**Key files/areas touched:** `src-tauri/src/git.rs`, `commands.rs`, `lib.rs`; `src/ipc.ts`; new
+`FileViewer/gutter.ts` + `gutter.test.ts` + `useFileDiffGutter.ts`; `FileViewer.tsx` +
+`FileViewer.module.css`. 9 files.
+
+**Dependencies:** none (builds on landed infra: `parse_unified_diff`/`working_diff` #39/#183, the
+`FileDiff`/`HunkLine` types, `useAutoSaveFile`'s poll pattern #148, the status tokens).
+
+**Notes**
+
+- **Scope — code view only:** the gutter is deliberately limited to the read-only Prism code view.
+  Rendered markdown has no source lines; the editable `<textarea>` views (markdown Raw / plain-text)
+  have no per-line DOM and their unsaved buffer would diverge from the on-disk diff; large (>256 KB)
+  files degrade to a plain read-only view for perf. So markers only appear where the rendered `text`
+  mirrors disk and each line is addressable.
+- **Marker semantics** follow the VS Code dirty-diff convention (green added / yellow modified / red
+  dot for a removal — the dot only *marks* the removal, it doesn't reveal the removed text). No git
+  write, no staging/revert affordance — read-only (`git diff HEAD` + `git diff --no-index`).
+- **Clears within ~2 s of a commit:** a self-contained poll (not the #212 busy→idle
+  `fileStatuses` signal) guarantees the gutter re-checks and clears regardless of trees/agents.
+- **Cross-platform:** the only OS-sensitive primitive is the `git` shell-out, which reuses the
+  `hidden_command` (CREATE_NO_WINDOW) path; the `/dev/null` untracked arg is already proven on
+  Windows by #183; all colors are `--status-*` tokens and the markers are static (nothing to guard
+  for reduced-motion) — so the gutter renders identically on WKWebView (macOS) and WebView2
+  (Windows). Checks green: `npm run build` / `npm test` / `npm run lint` / `npm run format:check` /
+  `cargo test` / `npm run lint:rust`.
