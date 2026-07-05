@@ -899,6 +899,9 @@ export const DEFAULT_SETTINGS: Settings = {
   autoName: true,
   autoSave: true,
   defaultAgent: "claude",
+  // Launch command for the custom agent (#325); empty until the user sets one. Blank +
+  // `defaultAgent === "custom"` → a custom spawn fails with a clear toast.
+  customAgentCommand: "",
   autoContinueAfterLimit: false,
   // True by default (#326): show the five-hour Claude usage bar. Turning it off hides
   // the bar AND stops ReCue ever reading the Claude OAuth token (the usage IPC is

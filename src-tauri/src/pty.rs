@@ -309,31 +309,62 @@ impl SessionManager {
         cwd: impl AsRef<Path>,
         name: Option<String>,
         agent: &str,
+        custom_command: Option<&str>,
     ) -> Result<SessionInfo, SessionError> {
-        self.spawn_session_with_prompt(cwd, name, None, agent)
+        self.spawn_session_with_prompt(cwd, name, None, agent, custom_command)
     }
 
     /// Spawn a new session for `agent` (#101), optionally pre-seeded with an initial
     /// `prompt` so it boots ready (#93 scheduled sessions). The agent's `AgentSpec`
     /// supplies the binary + the args; for Claude that's `claude --session-id <uuid>
     /// ["<prompt>"]` (the prompt passed positionally) — today's exact, CLI-verified
-    /// (claude 2.1.x) behavior, since Claude is the only agent so far. A blank prompt
-    /// is dropped (a plain new session).
+    /// (claude 2.1.x) behavior. A blank prompt is dropped (a plain new session).
+    ///
+    /// For the **custom** agent (#325) the program + args aren't from a static spec —
+    /// they come from `custom_command` (the user's `customAgentCommand` Settings string),
+    /// parsed as an argv (NOT a shell line) by `parse_custom_command`. A non-blank prompt
+    /// is appended as a trailing positional arg (best-effort seed); an unset / empty
+    /// command is a clear `Spawn` error rather than a phantom `"custom"` binary spawn.
     pub fn spawn_session_with_prompt(
         &self,
         cwd: impl AsRef<Path>,
         name: Option<String>,
         prompt: Option<&str>,
         agent: &str,
+        custom_command: Option<&str>,
     ) -> Result<SessionInfo, SessionError> {
         let id = Uuid::new_v4().to_string();
         let spec = crate::agents::agent_spec(agent);
-        let args = spec.spawn_args(&id, prompt);
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         // A non-blank initial prompt means the agent starts working immediately with
         // no keystrokes (#93), so it counts as "has work" for the busy heuristic
         // (#116) — otherwise it would be stuck gray (never blue/yellow).
-        let seeded = prompt.map(|p| !p.trim().is_empty()).unwrap_or(false);
+        let trimmed_prompt = prompt.map(str::trim).filter(|p| !p.is_empty());
+        let seeded = trimmed_prompt.is_some();
+        if spec.id == "custom" {
+            // Resolve the user's command → (program, args). Missing/blank → clear error.
+            let command = custom_command
+                .ok_or_else(|| SessionError::Spawn("Custom agent command is not set".into()))?;
+            let (program, mut args) = crate::agents::parse_custom_command(command)
+                .ok_or_else(|| SessionError::Spawn("Custom agent command is empty".into()))?;
+            // Best-effort prompt seed: append it as a trailing positional (#325). A
+            // blank/absent prompt launches the bare parsed command.
+            if let Some(p) = trimmed_prompt {
+                args.push(p.to_string());
+            }
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            return self.spawn_with_id(
+                id.clone(),
+                &program,
+                &arg_refs,
+                cwd.as_ref(),
+                name,
+                seeded,
+                // Custom agents can't auto-name (no claude-style ai-title log, #325).
+                false,
+            );
+        }
+        let args = spec.spawn_args(&id, prompt);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.spawn_with_id(
             id.clone(),
             spec.binary_name,
@@ -1410,6 +1441,46 @@ mod tests {
             .spawn_program("recue-does-not-exist-xyz", &[], &tmp(), None)
             .unwrap_err();
         assert!(matches!(err, SessionError::BinaryNotFound(_)));
+    }
+
+    #[test]
+    fn custom_agent_with_no_command_is_a_clear_spawn_error() {
+        // Custom (#325) with no command must fail with a clear `Spawn` error, not a
+        // phantom `"custom"` binary lookup (which would read as BinaryNotFound).
+        let (mgr, _rx) = manager();
+        let err = mgr
+            .spawn_session_with_prompt(tmp(), None, None, "custom", None)
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Spawn(_)));
+        // An all-whitespace command tokenizes to nothing → also a Spawn error.
+        let err = mgr
+            .spawn_session_with_prompt(tmp(), None, None, "custom", Some("   "))
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Spawn(_)));
+    }
+
+    #[test]
+    fn custom_agent_resolves_the_parsed_program_on_path() {
+        // A custom command whose program isn't on PATH surfaces the SAME typed
+        // BinaryNotFound the built-in agents do, naming the parsed program — so the
+        // ClaudeMissing banner can name it (#325). Args after the program don't change
+        // that; the parse is exercised directly in agents.rs's tokenizer tests.
+        let (mgr, _rx) = manager();
+        let err = mgr
+            .spawn_session_with_prompt(
+                tmp(),
+                None,
+                Some("do a thing"),
+                "custom",
+                Some("recue-nonexistent-custom-xyz --flag"),
+            )
+            .unwrap_err();
+        match err {
+            SessionError::BinaryNotFound(program) => {
+                assert_eq!(program, "recue-nonexistent-custom-xyz");
+            }
+            other => panic!("expected BinaryNotFound(program), got {other:?}"),
+        }
     }
 
     #[test]

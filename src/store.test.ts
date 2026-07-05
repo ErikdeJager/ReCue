@@ -2398,6 +2398,16 @@ describe("isClaudeActive — usage bar gate (#154)", () => {
     useStore.setState({ sessions: [withAgent("a", "codex"), withAgent("b")] });
     expect(isClaudeActive(useStore.getState())).toBe(false);
   });
+
+  it("is false when a Custom session is active (#325 — hides the usage bar)", () => {
+    useStore.setState({ sessions: [withAgent("a", "custom")] });
+    expect(isClaudeActive(useStore.getState())).toBe(false);
+    // Mixed with Claude → still hidden (any non-Claude agent gates it off).
+    useStore.setState({
+      sessions: [withAgent("a", "claude"), withAgent("b", "custom")],
+    });
+    expect(isClaudeActive(useStore.getState())).toBe(false);
+  });
 });
 
 describe("first-launch agent onboarding", () => {

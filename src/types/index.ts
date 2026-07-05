@@ -347,9 +347,15 @@ export interface Settings {
    * (FileViewer raw/text + Kanban Board/Raw). */
   autoSave: boolean;
   /** Coding-agent CLI for **newly created** sessions (#142). Existing sessions keep
-   * their recorded `agent` (#101). `"claude"` (default), `"codex"`, or `"opencode"`
-   * — the latter two are untested; Claude Code is recommended. */
+   * their recorded `agent` (#101). `"claude"` (default), `"codex"`, `"opencode"`, or
+   * `"custom"` (#325) — the non-claude ones are untested; Claude Code is recommended. */
   defaultAgent: string;
+  /** Launch command for the **custom** coding agent (#325), used only when
+   * `defaultAgent === "custom"`. An **argv** (a program plus its args, split on spaces,
+   * quote to group) — NOT a shell line (no pipes / redirection / `$VAR` / globbing). The
+   * backend parses it and runs the resolved program cross-platform (PATHEXT / `cmd.exe
+   * /C`). Empty by default; a blank command makes a custom spawn fail with a clear toast. */
+  customAgentCommand: string;
   /** Auto-continue Claude agents after the five-hour usage limit resets (#296): when
    * the limit is hit, ReCue waits for the window to reset (watching the reset time +
    * the usage percentage dropping) then nudges the running Claude agents to resume

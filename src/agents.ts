@@ -39,10 +39,22 @@ const OPENCODE_CAPS: AgentCaps = {
   supportsAutoName: false,
 };
 
+// Custom — a user-defined agent (#325). The program + args come from the
+// `customAgentCommand` Settings string, resolved backend-side at spawn time; the caps
+// mirror the Rust `CUSTOM` spec (owns its own identity → no resume/fork/auto-name, and
+// `agentIsUntested` reads true since its id isn't "claude").
+const CUSTOM_CAPS: AgentCaps = {
+  id: "custom",
+  displayName: "Custom",
+  supportsResume: false,
+  supportsAutoName: false,
+};
+
 const CATALOG: Record<string, AgentCaps> = {
   claude: CLAUDE_CAPS,
   codex: CODEX_CAPS,
   opencode: OPENCODE_CAPS,
+  custom: CUSTOM_CAPS,
 };
 
 /** Capability flags for an agent id; an unknown / missing id falls back to Claude
@@ -62,9 +74,17 @@ export function agentIsUntested(agent: string | null | undefined): boolean {
   return agentCaps(agent).id !== "claude";
 }
 
-/** The selectable coding agents for the Settings selector (#142), in display order. */
+/** The **detectable** coding agents (#142), in display order — Claude / Codex / OpenCode.
+ * Used by first-launch onboarding (`maybeOnboardAgent`), which presence-checks each CLI:
+ * the Custom agent is deliberately **excluded** here (its command is user-defined, so it
+ * can't be auto-detected). */
 export const SELECTABLE_AGENTS: AgentCaps[] = [
   CLAUDE_CAPS,
   CODEX_CAPS,
   OPENCODE_CAPS,
 ];
+
+/** The coding agents offered in the Settings → Sessions selector (#325): the detectable
+ * agents plus the user-defined **Custom** command. Onboarding still uses
+ * `SELECTABLE_AGENTS` (Custom isn't auto-detected). */
+export const SETTINGS_AGENTS: AgentCaps[] = [...SELECTABLE_AGENTS, CUSTOM_CAPS];
