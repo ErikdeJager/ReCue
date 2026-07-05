@@ -202,22 +202,30 @@ jobs:
       # IS CONFIGURED, which is why a plain (identity-less) build stays ad-hoc.
       #
       # This step supports TWO independent modes, selected purely by which secrets are set:
-      #   * SIGN-ONLY (self-signed, no Apple account): set the 4 signing secrets below. The
-      #     bundler signs with Hardened Runtime + entitlements + a stable cert DR → grants
-      #     work and persist. Gatekeeper still warns on a downloaded build (not notarized).
+      #   * SIGN-ONLY (self-signed, no Apple account): set the 4 signing secrets below. We
+      #     build a keychain that TRUSTS the self-signed cert (see the run: block for why)
+      #     and hand the bundler only the identity → it signs with Hardened Runtime +
+      #     entitlements + a stable cert DR → grants work and persist. Gatekeeper still warns
+      #     on a downloaded build (not notarized).
       #   * SIGN + NOTARIZE (Developer ID): additionally set the 3 notarization secrets → the
       #     build is also notarized, clearing Gatekeeper for arbitrary downloaders.
       #
-      # Two traps this step exists to avoid — the bundler reads these with std::env::var_os,
-      # which returns Some("") for a present-but-empty variable, NOT None:
-      #   1. An empty APPLE_CERTIFICATE reads as "a certificate was provided" → `security
-      #      import` on empty data fails the whole bundle. So the signing vars are exported
-      #      ONLY when the certificate + identity are actually present.
-      #   2. An empty APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID reads as "notarization creds were
-      #      provided" → notarize_auth() matches (Some,Some,Some) and the bundler tries to
-      #      notarize with empty creds → the build FAILS. So the notarization vars are
-      #      exported ONLY when all three are non-empty; otherwise they stay UNSET and the
-      #      bundler cleanly logs "skipping app notarization" and signs-only.
+      # KEY POINT: we do the keychain import + TRUST ourselves and pass the bundler ONLY
+      # APPLE_SIGNING_IDENTITY — never APPLE_CERTIFICATE. Handing the bundler the certificate
+      # makes it import into its own fresh keychain and resolve the identity with
+      # `security find-identity -v -p codesigning` (VALID only); a self-signed cert is
+      # untrusted (CSSMERR_TP_NOT_TRUSTED) so it is not "valid" and the bundler dies with
+      # "failed to resolve signing identity" (the v1.1.3 failure). Trusting the cert
+      # (add-trusted-cert, user domain — no sudo) makes it resolve; codesign itself never
+      # needs trust, only that -v lookup does. A real Developer-ID cert is trusted by
+      # default, so the trust step is a harmless no-op for the notarized path.
+      #
+      # Trap to avoid — the bundler reads notarization creds with std::env::var_os, which
+      # returns Some("") for a present-but-empty variable, NOT None: an empty
+      # APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID reads as "creds provided" → the bundler tries
+      # to notarize with empty creds → the build FAILS. So the notarization vars are exported
+      # ONLY when all three are non-empty; otherwise they stay UNSET and the bundler cleanly
+      # skips notarization and signs-only.
       # With NO signing secrets, every APPLE_* stays unset and tauri-action ad-hoc-signs
       # exactly as before — the build still succeeds (signing is opt-in, never mandatory).
       # macOS leg only — the Windows leg never runs it, so it never sees any Apple env.
@@ -246,6 +254,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
           # SIGNING: enable only when BOTH cert + identity are present. The identity string is
           # opaque to codesign, so this works for a self-signed cert AND a Developer ID cert.
           # Absent → leave every APPLE_* unset so tauri-action ad-hoc-signs (build succeeds).
@@ -254,19 +263,54 @@ jobs:
             echo "signing=disabled" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Apple signing ENABLED."
+          echo "Apple signing ENABLED (own keychain, self-signed cert trusted)."
           echo "signing=enabled" >> "$GITHUB_OUTPUT"
-          # APPLE_CERTIFICATE is multiline base64 → use the heredoc form of $GITHUB_ENV.
-          {
-            echo "APPLE_CERTIFICATE<<__RECUE_CERT_EOF__"
-            echo "$APPLE_CERTIFICATE"
-            echo "__RECUE_CERT_EOF__"
-            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
-            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
-            echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD"
-          } >> "$GITHUB_ENV"
 
-          # NOTARIZATION: enable ONLY when all three creds are non-empty (see trap #2 above).
+          # Build a keychain that TRUSTS the cert, then hand the bundler ONLY the identity
+          # name (never APPLE_CERTIFICATE — see the note above for why). This is what makes a
+          # self-signed identity resolve under the bundler's `find-identity -v` lookup.
+          KC="$RUNNER_TEMP/recue-signing.keychain-db"
+          P12="$RUNNER_TEMP/recue-cert.p12"
+          CER="$RUNNER_TEMP/recue-cert.pem"
+          KCPW="${KEYCHAIN_PASSWORD:-$(openssl rand -base64 18 | tr -d '\n')}"
+
+          # Decode the base64 .p12 secret (single-line, from `openssl base64 -A`; -A also
+          # tolerates any wrapping). openssl base64 works on both LibreSSL and OpenSSL 3.
+          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A -out "$P12"
+
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          # Import the identity (cert + private key); grant the code-signing tools access.
+          security import "$P12" -k "$KC" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/pkgbuild -T /usr/bin/productbuild
+          # Trust the (self-signed) cert so find-identity -v treats the identity as valid.
+          # Pull the cert straight from the keychain — no `openssl pkcs12`, which needs the
+          # legacy provider the runner's OpenSSL may lack. add-trusted-cert in the user
+          # domain (-k <keychain>) needs no sudo/GUI auth.
+          security find-certificate -c "$APPLE_SIGNING_IDENTITY" -p "$KC" > "$CER"
+          security add-trusted-cert -r trustRoot -p codeSign -k "$KC" "$CER"
+          # Let codesign use the private key non-interactively.
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
+          # Put our keychain on the user search list so the bundler finds the identity.
+          security list-keychains -d user -s "$KC" \
+            $(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')
+          rm -f "$P12" "$CER"
+
+          # Fail fast here (with a clear message) instead of leaving the bundler to emit its
+          # opaque "failed to resolve signing identity" if trust setup didn't take.
+          if ! security find-identity -v -p codesigning "$KC" | grep -qF "$APPLE_SIGNING_IDENTITY"; then
+            echo "::error::Signing identity '$APPLE_SIGNING_IDENTITY' did not resolve as valid after trust setup."
+            security find-identity -v -p codesigning "$KC" || true
+            exit 1
+          fi
+          echo "Signing identity resolved:"
+          security find-identity -v -p codesigning "$KC"
+
+          # Hand the bundler ONLY the identity name (NOT the certificate — see the note above).
+          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+
+          # NOTARIZATION: enable ONLY when all three creds are non-empty (see the trap above).
           # Unset otherwise → the bundler skips notarization and signs-only (self-signed).
           if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
             echo "Notarization ENABLED (Developer ID)."
