@@ -2167,3 +2167,38 @@ Assume-mode decisions:
   culture); flagged optional since the change is display-only.
 - All additive; no keyboard handlers modified. Overlaps Task 319 only in a distinct region of
   `Settings.tsx` (new `shortcuts` section vs. 319's `data` section) — independently implementable.
+## Task 316
+
+Card: Claude Code was updated recently and the five-hour usage % bar now shows nothing (falls back
+to hidden). Investigate what changed and fix it.
+
+Assume-mode decisions (root cause established empirically on the real machine, claude 2.1.193 —
+not guessed):
+
+- **Root cause is a stale/expired on-disk OAuth token, not an endpoint/schema change.** Evidence:
+  the fresh macOS-Keychain token returns HTTP 200 with exactly the shape ReCue already parses
+  (`five_hour.utilization`, `five_hour.resets_at`), while the on-disk
+  `~/.claude/.credentials.json` token is ~35h old and returns HTTP 401. ReCue reads the file
+  first (`read_token_from_file().or_else(read_token_from_keychain)`), so on macOS it uses the
+  expired file token and never falls through to the fresh Keychain one. Recent Claude Code keeps
+  the canonical token in the Keychain but leaves a stale file behind — contradicting the code's
+  "file often absent on macOS" assumption.
+- **Fix approach: expiry-aware token selection (file → Keychain), not a rewrite of the read
+  pipeline.** The endpoint URL, `oauth-2025-04-20` beta header, User-Agent scheme, and response
+  fields are all still present in the current CLI and confirmed working, so the fix is scoped to
+  token *selection*.
+- **Rejected reading a local usage file:** verified no usage/rate-limit snapshot file exists under
+  `~/.claude`, so the OAuth API remains the sole source (documented as a justified non-goal).
+- **Rejected implementing OAuth token refresh:** using `refreshToken` would race Claude and needs
+  the client-id/token endpoint; since Claude keeps a fresh token in the Keychain, using it is
+  sufficient. If both sources are expired, fail-open (bar hidden) is acceptable.
+- **No frontend changes:** the `UsageSnapshot` shape is unchanged; the bar hides only because the
+  backend returns `None`. Store/IPC/`UsageBar` stay as-is.
+- **Two low-risk hardening items (recommended, not root cause):** bump the stale `CLAUDE_CODE_UA`
+  constant (`claude-code/2.1.0` → current) and add token-free failure diagnostics for future drift.
+- **Schema-drift defensiveness:** `expiresAt` treated as epoch-ms with an "unknown expiry ⇒ usable"
+  guard, so a future field change degrades to today's behavior rather than falsely hiding a working
+  bar. Keychain stays macOS-gated; Windows/Linux (no Keychain, canonical fresh file token)
+  unchanged.
+- Backend-only: `src-tauri/src/usage.rs` (token type + expiry-aware `read_oauth_token`/
+  `select_token`, extended `token_from_json`, UA bump, diagnostics, unit tests).
