@@ -1155,3 +1155,156 @@ text-overflow:ellipsis; white-space:nowrap`, and the button carries `flex:1; min
   WebView2/Chromium (Windows) — and the truncation matters on Windows too (the "Ctrl+N" hint is
   longer). Checks green: `npm run build` / `npm run lint` / `npm run format:check`. No unit test
   applies (presentational CSS; the Sidebar has no test file).
+
+---
+
+### 318. [x] Keyboard shortcuts reference section in Settings
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Added an eighth, **read-only "Shortcuts"** section to the Settings modal
+(`src/components/Settings/Settings.tsx`, #100/#119 — a fixed 720×600 dialog with a left nav + right
+content pane) that lists all of the app's keyboard shortcuts, grouped and labelled, so a user can
+discover the keybinds without digging through code or docs. Purely a reference display — no
+rebinding, no persistence, no change to any keyboard *handler* (`useKeyboardNav.ts` and all
+component handlers untouched).
+
+**What shipped** (commit [`756ed9f`](https://github.com/ErikdeJager/ReCue/commit/756ed9f), PR
+[#72](https://github.com/ErikdeJager/ReCue/pull/72), branch `shortcuts-reference-settings`,
+2026-07-05):
+
+- **`src/components/Settings/shortcuts.ts`** (new, 104 lines): a typed, static `SHORTCUT_GROUPS`
+  list (`Shortcut { mac, win, description }` / `ShortcutGroup { title, shortcuts }`) with four
+  groups — **Sessions**, **Panels & Canvas**, **Navigation**, **Files & Diff** — populated only
+  from the code-verified inventory (global shortcuts from `useKeyboardNav.ts` plus the
+  widely-relevant contextual ones that already carry user-facing hints: `⌘S` save; DiffInspector
+  `←/→`, `↑/↓`, `S`). Each entry stores explicit `mac`/`win` strings; platform-identical chords use
+  the same string for both.
+- **`src/components/Settings/Settings.tsx`:** added `"shortcuts"` to the `Section` union, a
+  `SECTIONS` entry (Lucide `Keyboard` icon, label "Shortcuts") placed just before "Data & About",
+  and a `{section === "shortcuts" && …}` render block mapping `SHORTCUT_GROUPS` → titled groups of
+  `<kbd>` chip + description rows, each chip rendered cross-platform via the already-imported
+  `kbdHint(platform, s.mac, s.win)`.
+- **`src/components/Settings/Settings.module.css`:** new `.shortcutsSection` / `.shortcutGroup` /
+  `.shortcutList` / `.shortcutRow` / `.shortcutKey` / `.shortcutDesc` styles — the `<kbd>` chip
+  modeled on `CanvasCloseModal.module.css`'s `.kbd` (bordered mono chip), using only existing
+  design tokens.
+- **`src/components/Settings/shortcuts.test.ts`** (new): a Vitest data-shape check — `SHORTCUT_GROUPS`
+  non-empty, every group has ≥1 shortcut, every shortcut has non-empty `mac`/`win`/`description`.
+
+**Key files/areas touched:** `src/components/Settings/shortcuts.ts` (new), `Settings.tsx`,
+`Settings.module.css`, `shortcuts.test.ts` (new). 4 files.
+
+**Dependencies:** none (Settings modal #100, fixed size #119, `kbdHint`/`platform` #143, and the
+shortcuts themselves were already shipped).
+
+**Notes**
+
+- **Read-only by design:** the pane contains no inputs/checkboxes/sliders/buttons that mutate
+  `draft` or call `saveSettings` — opening it and clicking around leaves settings unchanged.
+- **Deliberately excluded transient in-dialog accelerators** (CanvasCloseModal K/↵/Esc,
+  CreatePanelModal 1–6/Esc, NewSessionModal `⌘⏎`/in-modal `⌘1–9` recents, generic Esc/Enter) —
+  they're surfaced inline in their own dialogs and would bloat/duplicate a global reference. No
+  shortcuts were invented; every row mirrors a real handler.
+- **The list is a static mirror** of `useKeyboardNav.ts` (not derived from the handlers), so the
+  one maintenance risk is drift if shortcuts change later — accepted as the read-only-reference
+  design.
+- **Cross-platform:** each chip renders `⌘…` on macOS and `Ctrl+…` on Windows via `kbdHint` (whose
+  behavior is already unit-tested by `platform.test.ts`); pure tokens/CSS, identical on
+  WKWebView/WebView2. Checks green: `npm run build` / `npm run lint` / `npm test` / `npm run
+  format:check`.
+
+---
+
+### 319. [x] Confirm before clearing recent folders in Settings
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+The Settings → **Data & About** → "Clear recents (N)" button cleared the recent-folders list
+immediately, so a single misclick silently discarded all remembered folders (no in-app undo). Gated
+it behind the app's established **inline two-click confirm**, honoring the existing
+`confirmDestructive` setting (#103) exactly like every sibling destructive action (TemplateManager
+delete, FileTree delete, Kanban column delete, Sidebar "Forget folder" / "Kill all agents").
+
+**What shipped** (commit [`d0ba229`](https://github.com/ErikdeJager/ReCue/commit/d0ba229), PR
+[#73](https://github.com/ErikdeJager/ReCue/pull/73), branch `confirm-clear-recents`, 2026-07-05):
+
+- **`src/components/Settings/Settings.tsx`:** read `confirmDestructive` from the store; added a
+  local `confirmingClear` `useState`; gated the `clearRecents` handler so that when
+  `confirmDestructive` is on and not yet armed it `setConfirmingClear(true); return;` (arms without
+  clearing), and otherwise runs the existing three lines (`ipc.clearRecents()`, `setRecents([])`,
+  `pushToast("Recent folders cleared")`) and resets the flag. The button relabels to "Clear all
+  recent folders?" while armed (`Trash2` icon kept), gains a `.dataButtonArmed` danger class, a
+  "Click again to clear all recent folders" `title`, and an `onMouseLeave` that cancels the arm.
+  The `disabled={recentsCount === 0}` prop is unchanged.
+- **`src/components/Settings/Settings.module.css`:** added a `.dataButtonArmed` rule mirroring
+  TemplateManager's `.dangerArmed` (red `--status-error` fill + `--accent-fg` text), scoped so its
+  `:hover` keeps the danger fill.
+
+**Key files/areas touched:** `src/components/Settings/Settings.tsx`, `Settings.module.css`. 2 files.
+
+**Dependencies:** none (Settings modal #100 and confirm-destructive gating #103 already shipped).
+
+**Notes**
+
+- **Honors the global toggle, not always-on:** with `confirmDestructive` **off**, the first click
+  clears immediately (current behavior preserved) — matching every sibling action rather than
+  diverging with an always-on confirm.
+- **No backend/IPC/store changes:** the Rust `clear_recents` command, the `setRecents`/`recents`
+  slice, and the IPC layer are untouched; the whole guard is a local state flag + one CSS class.
+- **No armed-state leak:** the Settings modal remounts fresh each open (`Settings()` gates
+  `<SettingsModal/>` on the open flag), and the `onMouseLeave` cancels on pointer-out, so no
+  reset-on-section-change logic was needed.
+- **Cross-platform:** pure React state + CSS tokens (no native dialog / `window.confirm` / path /
+  shell), identical on macOS (WKWebView) and Windows (WebView2). Checks green: `npm run build` /
+  `npm run lint` / `npm run format:check` (the Settings modal is presentational — no unit test).
+
+---
+
+### 322. [x] Remove the redundant header "+" add-card button from Kanban columns
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Each Kanban column header carried a small "+" button that opened the add-card composer — the exact
+same action as the "+ Add card" button inside the column body. Two controls doing the identical
+thing is redundant clutter, so the header "+" was removed; the in-column "+ Add card" button (the
+primary, discoverable one) stays. Both had called the same `openComposer` handler, so removing the
+header one orphaned nothing.
+
+**What shipped** (commit [`27230b9`](https://github.com/ErikdeJager/ReCue/commit/27230b9), PR
+[#74](https://github.com/ErikdeJager/ReCue/pull/74), branch `remove-kanban-header-add-button`,
+2026-07-05):
+
+- **`src/components/Kanban/KanbanPanel.tsx`:** deleted the header `styles.colAdd` `<button>`
+  (a bare `<Plus size={14}/>`, `aria-label="Add card"`) from `BoardColumn`'s `<header>`, and
+  updated the stale `BoardColumn` JSDoc that described the header as containing a "+". Kept
+  `openComposer` (still invoked by the in-column "+ Add card" button) and the Lucide `Plus` import
+  (still used by "+ Add card" and "Add column").
+- **`src/components/Kanban/KanbanPanel.module.css`:** removed the now-dead `.colAdd` / `.colAdd:hover`
+  rules (and their `#233` comment), and updated the `.composer` comment to say the composer is
+  opened only by the bottom "+ Add card" affordance.
+
+**Key files/areas touched:** `src/components/Kanban/KanbanPanel.tsx`, `KanbanPanel.module.css`.
+2 files.
+
+**Dependencies:** none (the Kanban board #141–#151 already landed; this is a self-contained UI tweak).
+
+**Notes**
+
+- **Nothing orphaned:** verified via grep that no keyboard shortcut or test referenced
+  `colAdd`/the header add button, and that `openComposer` + the `Plus` import remain in use — the
+  build/lint would fail loudly otherwise.
+- **In-column add-card unchanged:** the composer, `openComposer`/`submitComposer`/`addComposedCard`,
+  the Raw view, drag-and-drop, and the markdown parse/serialize engine are all untouched.
+- **Cross-platform:** pure React/CSS with on-system design tokens — no OS-specific paths,
+  shell-outs, or key handling, so identical on macOS and Windows. No Rust. Checks green:
+  `npm run build` / `npm run lint` / `npm test` / `npm run format:check`.
