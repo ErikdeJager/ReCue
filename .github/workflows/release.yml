@@ -216,9 +216,10 @@ jobs:
       # `security find-identity -v -p codesigning` (VALID only); a self-signed cert is
       # untrusted (CSSMERR_TP_NOT_TRUSTED) so it is not "valid" and the bundler dies with
       # "failed to resolve signing identity" (the v1.1.3 failure). Trusting the cert
-      # (add-trusted-cert, user domain — no sudo) makes it resolve; codesign itself never
-      # needs trust, only that -v lookup does. A real Developer-ID cert is trusted by
-      # default, so the trust step is a harmless no-op for the notarized path.
+      # (`sudo security add-trusted-cert -d` — the ADMIN trust domain; the user domain would
+      # pop a GUI auth dialog that hangs the headless runner) makes it resolve; codesign
+      # itself never needs trust, only that -v lookup does. A real Developer-ID cert is
+      # trusted by default, so the trust step is a harmless no-op for the notarized path.
       #
       # Trap to avoid — the bundler reads notarization creds with std::env::var_os, which
       # returns Some("") for a present-but-empty variable, NOT None: an empty
@@ -286,10 +287,14 @@ jobs:
             -T /usr/bin/codesign -T /usr/bin/pkgbuild -T /usr/bin/productbuild
           # Trust the (self-signed) cert so find-identity -v treats the identity as valid.
           # Pull the cert straight from the keychain — no `openssl pkcs12`, which needs the
-          # legacy provider the runner's OpenSSL may lack. add-trusted-cert in the user
-          # domain (-k <keychain>) needs no sudo/GUI auth.
+          # legacy provider the runner's OpenSSL may lack. Trust it in the ADMIN domain via
+          # `sudo` (passwordless on GitHub runners): a USER-domain add-trusted-cert pops a
+          # GUI authorization dialog that HANGS the headless runner forever, whereas
+          # `sudo add-trusted-cert -d` writes the system trust store non-interactively. Trust
+          # settings are keyed by the cert, so the identity (cert+key in our build keychain)
+          # then evaluates as valid even though the trust anchor lives in System.keychain.
           security find-certificate -c "$APPLE_SIGNING_IDENTITY" -p "$KC" > "$CER"
-          security add-trusted-cert -r trustRoot -p codeSign -k "$KC" "$CER"
+          sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$CER"
           # Let codesign use the private key non-interactively.
           security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
           # Put our keychain on the user search list so the bundler finds the identity.
