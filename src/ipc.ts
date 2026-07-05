@@ -378,6 +378,14 @@ export const currentBranch = (cwd: string) =>
 export const currentBranches = (paths: string[]) =>
   invoke<Record<string, string>>("current_branches", { paths });
 
+/**
+ * GitHub web URL (`https://github.com/owner/repo`) for many repos in one round-trip
+ * (#327). Only paths whose remote points at github.com are present in the map, so the
+ * sidebar reads presence as "show the View-on-GitHub item".
+ */
+export const githubWebUrls = (paths: string[]) =>
+  invoke<Record<string, string>>("github_web_urls", { paths });
+
 export const workingDiff = (cwd: string) =>
   invoke<WorkingDiff>("working_diff", { cwd });
 

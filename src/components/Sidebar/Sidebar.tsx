@@ -1142,6 +1142,10 @@ function WorktreeHeader({
   const setView = useStore((s) => s.setView);
   const isFiltered = useStore((s) => s.overviewRepoFilter?.path === path);
   const platform = useStore((s) => s.platform);
+  // A worktree shares its parent repo's remote (#327), so read the parent's cached URL.
+  const githubUrl = useStore((s) =>
+    parent ? s.githubUrls[parent] : undefined,
+  );
   const { menu, openMenu, closeMenu } = useRowMenu();
   const [confirming, setConfirming] = useState(false);
   const close = () => {
@@ -1314,6 +1318,23 @@ function WorktreeHeader({
                     Pull
                   </button>
                 )}
+                {/* View on GitHub (#327): open the parent repo's github.com page in the
+                    default browser (http/https-only `openUrl`). Shown only when the
+                    parent's remote resolves to a GitHub URL (cached — no git on open). */}
+                {githubUrl && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={styles.menuItem}
+                    title="Open this repository on GitHub"
+                    onClick={() => {
+                      void openUrl(githubUrl);
+                      close();
+                    }}
+                  >
+                    View on GitHub
+                  </button>
+                )}
                 <div className={styles.menuSeparator} role="separator" />
                 {/* Close the worktree entirely (#166): kill its agents (ref-counted
                     `git worktree remove`, dirty kept) + close its items. Confirm-gated. */}
@@ -1380,6 +1401,7 @@ function RepoBranchLine({
   const platform = useStore((s) => s.platform);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
+  const githubUrl = useStore((s) => s.githubUrls[repo]);
   const { menu, openMenu, closeMenu } = useRowMenu();
   // Mirrors the header menu's `menuMode` minus its `confirm` (forget) mode — this
   // menu never forgets the folder.
@@ -1596,6 +1618,22 @@ function RepoBranchLine({
                 >
                   Fetch
                 </button>
+                {/* View on GitHub (#327): open the folder's github.com page in the
+                    default browser. Shown only when the cached remote is a GitHub URL. */}
+                {githubUrl && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={styles.menuItem}
+                    title="Open this repository on GitHub"
+                    onClick={() => {
+                      void openUrl(githubUrl);
+                      close();
+                    }}
+                  >
+                    View on GitHub
+                  </button>
+                )}
                 <div className={styles.menuSeparator} role="separator" />
                 <button
                   type="button"
@@ -2042,6 +2080,7 @@ function Sidebar() {
   const sessions = allSessions.filter((s) => !railOwnedChildIds.has(s.id));
   const recents = useStore((s) => s.recents);
   const branches = useStore((s) => s.branches);
+  const githubUrls = useStore((s) => s.githubUrls);
   const selectedId = useStore((s) => s.selectedId);
   const selectItem = useStore((s) => s.selectItem);
   // Rail agent dots (#228): select/jump + a shared right-click menu (Remove kills the
@@ -2080,6 +2119,7 @@ function Sidebar() {
   const cloningRepos = useStore((s) => s.cloningRepos);
   const refreshBranches = useStore((s) => s.refreshBranches);
   const refreshFileStatuses = useStore((s) => s.refreshFileStatuses);
+  const refreshGithubUrls = useStore((s) => s.refreshGithubUrls);
   const forgetRepo = useStore((s) => s.forgetRepo);
   const killAllAgents = useStore((s) => s.killAllAgents);
   const closeAllItems = useStore((s) => s.closeAllItems);
@@ -2286,7 +2326,10 @@ function Sidebar() {
     // tree shows current state right after boot / a repo being added.
     void refreshBranches();
     void refreshFileStatuses();
-  }, [refreshBranches, refreshFileStatuses, reposKey]);
+    // Resolve each repo's GitHub web URL (#327) on the same edge so the repo/worktree
+    // menus' "View on GitHub" item is ready before the user right-clicks.
+    void refreshGithubUrls();
+  }, [refreshBranches, refreshFileStatuses, refreshGithubUrls, reposKey]);
 
   // Keep the repo branch badges (#225) in sync with **external** checkouts — a `git
   // checkout` in a terminal of an idle repo (no busy→idle edge, #212) or in another
@@ -3217,6 +3260,23 @@ function Sidebar() {
                     }}
                   >
                     Pull
+                  </button>
+                )}
+                {/* View on GitHub (#327): open this folder's github.com page in the
+                    default browser (http/https-only `openUrl`). Shown only when the
+                    cached remote resolves to a GitHub URL — no git on menu open. */}
+                {githubUrls[menu.repo] && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={styles.menuItem}
+                    title="Open this repository on GitHub"
+                    onClick={() => {
+                      void openUrl(githubUrls[menu.repo]!);
+                      closeMenu();
+                    }}
+                  >
+                    View on GitHub
                   </button>
                 )}
                 {/* Checkout branch… (#266): pick an existing local/remote branch or

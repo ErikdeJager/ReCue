@@ -264,6 +264,7 @@ pub fn run() {
             commands::is_git_repo,
             commands::current_branch,
             commands::current_branches,
+            commands::github_web_urls,
             commands::working_diff,
             commands::file_statuses,
             commands::list_branches,
