@@ -2692,8 +2692,8 @@ function Sidebar() {
             className={styles.newButton}
             onClick={() => openNewSession()}
           >
-            <Plus size={16} strokeWidth={1.5} />
-            New session
+            <Plus size={16} strokeWidth={1.5} className={styles.newIcon} />
+            <span className={styles.newLabel}>New session</span>
             <kbd className={styles.kbd}>
               {kbdHint(platform, "⌘N", "Ctrl+N")}
             </kbd>
