@@ -2202,3 +2202,17 @@ not guessed):
   unchanged.
 - Backend-only: `src-tauri/src/usage.rs` (token type + expiry-aware `read_oauth_token`/
   `select_token`, extended `token_from_json`, UA bump, diagnostics, unit tests).
+
+## Task 322 — Remove the redundant header "+" add-card button from Kanban columns
+
+- The "column top header +" is the `styles.colAdd` `<button>` in `BoardColumn`'s `<header>`
+  (`src/components/Kanban/KanbanPanel.tsx`, a bare `<Plus size={14}/>`); the "'+ Add card' button
+  inside the column" is the `styles.addCard` button at the bottom of the card list. Both call the
+  same `openComposer` handler, so removing the header one orphans nothing.
+- Interpreted the task as also removing the now-dead `.colAdd` / `.colAdd:hover` CSS rules (not
+  just the JSX element), and touching up two stale doc comments that describe the header "+".
+  Kept `.addCard` and the composer fully intact.
+- No new tests planned — this deletes a duplicate control only; existing add-card behavior via the
+  retained button is unchanged. Verified via grep that no keyboard shortcut or test depends on
+  `colAdd`/the header add button.
+- Platform-neutral (pure CSS/React UI change).
