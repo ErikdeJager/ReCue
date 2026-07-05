@@ -383,6 +383,79 @@ pub fn commit_diff(cwd: impl AsRef<Path>, sha: &str) -> Result<WorkingDiff, Stri
     })
 }
 
+/// Uncommitted working-tree diff for a **single file** vs `HEAD` (#324) — the
+/// per-line gutter source in the FileViewer's code view. A thin, path-scoped
+/// `git diff HEAD -- <path>` parsed by `parse_unified_diff`, mirroring `commit_diff`.
+/// **Fail-open:** a clean file, a non-git folder, or a repo with no `HEAD` returns
+/// `None` (the UI then shows no gutter — never an error). A **brand-new untracked**
+/// file has no `HEAD` entry, so it falls back to `git diff --no-index -- /dev/null
+/// <path>` (reusing `working_diff`'s #183 untracked technique — the literal
+/// `/dev/null` arg is accepted by git on Windows too) to synthesize an all-added
+/// diff. Every git call goes through `hidden_command` (the Windows console-flash
+/// guard), the only OS-sensitive primitive here.
+pub fn file_diff(cwd: impl AsRef<Path>, path: &str) -> Option<FileDiff> {
+    if path.trim().is_empty() {
+        return None;
+    }
+    let cwd = cwd.as_ref();
+
+    // Tracked changes vs HEAD. Skipped when the repo has no HEAD (an unborn repo has
+    // no commit to diff against — every file is untracked, handled below).
+    if has_head(cwd) {
+        if let Some(diff) = run_git_raw(
+            cwd,
+            &[
+                "-c",
+                "core.quotepath=false",
+                "diff",
+                "HEAD",
+                "--no-color",
+                "--no-ext-diff",
+                "--",
+                path,
+            ],
+        ) {
+            if let Some(file) = parse_unified_diff(&diff).into_iter().next() {
+                return Some(file);
+            }
+        }
+    }
+
+    // No tracked diff. If the path isn't tracked *and we're inside a git repo* it's a
+    // new file — synthesize its all-added diff against /dev/null (git tolerates the
+    // "differences found" exit 1 via `run_git_raw_allow_diff`, #183). The `is_git_repo`
+    // guard matters because `git diff --no-index` works **outside** a repo too, so a
+    // non-git folder would otherwise report every file as all-added instead of `None`.
+    // Short-circuits: a clean tracked file (`is_tracked` true) skips the repo probe.
+    if !is_tracked(cwd, path) && is_git_repo(cwd) {
+        if let Some(diff) = run_git_raw_allow_diff(
+            cwd,
+            &[
+                "-c",
+                "core.quotepath=false",
+                "diff",
+                "--no-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--",
+                "/dev/null",
+                path,
+            ],
+        ) {
+            return parse_unified_diff(&diff).into_iter().next();
+        }
+    }
+
+    None
+}
+
+/// Whether `path` is tracked in `cwd`'s git index (#324) — decides whether
+/// `file_diff` falls back to the untracked `--no-index` pass. A non-git folder or an
+/// untracked path yields `false` (`ls-files --error-unmatch` exits non-zero → `None`).
+fn is_tracked(cwd: &Path, path: &str) -> bool {
+    run_git(cwd, &["ls-files", "--error-unmatch", "--", path]).is_some()
+}
+
 /// Local branches of `cwd` plus the current one (for the new-session branch
 /// picker). Non-git folders / repos with no branches return an empty list, which
 /// the UI treats as "just spawn here" (no branch picker).
@@ -1525,6 +1598,49 @@ index 0..1
         assert!(diff.summary.adds >= 1 && diff.summary.dels >= 1);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_diff_modified_added_and_clean() {
+        let Some(dir) = init_repo("filediff") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "line1\nline2\nline3\n").unwrap();
+        fs::write(dir.join("other.txt"), "unchanged\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+
+        // A clean tracked file → None (fail-open, no gutter).
+        assert!(file_diff(&dir, "a.txt").is_none());
+        // A blank path → None (guard).
+        assert!(file_diff(&dir, "   ").is_none());
+
+        // A modified tracked file → a FileDiff carrying both add and del hunks,
+        // scoped to just that path (other.txt stays out of it).
+        fs::write(dir.join("a.txt"), "line1\nchanged\nline3\n").unwrap();
+        let fd = file_diff(&dir, "a.txt").expect("modified file yields a diff");
+        assert_eq!(fd.path, "a.txt");
+        assert_eq!(fd.status, FileStatus::Modified);
+        assert!(fd.add >= 1 && fd.del >= 1);
+        assert!(fd.hunks.iter().any(|h| h.kind == HunkLineType::Add));
+        assert!(fd.hunks.iter().any(|h| h.kind == HunkLineType::Del));
+
+        // A brand-new untracked file → an all-added FileDiff (no del rows).
+        fs::write(dir.join("b.txt"), "new1\nnew2\n").unwrap();
+        let nf = file_diff(&dir, "b.txt").expect("untracked file yields a diff");
+        assert_eq!(nf.status, FileStatus::Added);
+        assert!(nf.add >= 2);
+        assert!(nf.hunks.iter().all(|h| h.kind != HunkLineType::Del));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_diff_non_git_folder_is_none() {
+        let plain = unique_dir("filediff-plain");
+        fs::create_dir_all(&plain).unwrap();
+        fs::write(plain.join("x.txt"), "hi\n").unwrap();
+        assert!(file_diff(&plain, "x.txt").is_none());
+        let _ = fs::remove_dir_all(&plain);
     }
 
     #[test]
