@@ -58,10 +58,15 @@ it**; work starts only when the user moves a card into `## PLAN`.) Cards use thi
 
 ```
 - [ ] Task <N>: <fitting title> — PLAN-<N>.md
-  - Dependencies: Task <A>, Task <B>   (the tasks that must land first, or "none")
-  - PR: <url, once opened>
-  - Revise: <what to change — present only when a card was sent back here for rework>
+    - Dependencies: Task <A>, Task <B>   (the tasks that must land first, or "none")
+    - PR: <url, once opened>
+    - Revise: <what to change — present only when a card was sent back here for rework>
 ```
+
+Indent every sub-line under a card (`Dependencies:`, `PR:`, `Revise:`, and any `Build-note:`)
+by **4 spaces**, not 2 — an Obsidian-Kanban board viewer renders a card's tab- or
+4-space-indented lines as its body but **ignores** 2-space-indented ones, so a 2-space indent
+would drop this metadata when the board is opened as a real Kanban board.
 
 - **`PLAN-<N>.md`** — a per-task plan at the repo root (git-ignored). Written by the subagent.
 - **`ASSUMPTIONS.md`** — interpretation notes, one `## Task <N>` section per task

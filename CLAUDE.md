@@ -992,9 +992,16 @@ Card shape (every lane reads/writes it):
 
 ```
 - [ ] Task <N>: <title> — PLAN-<N>.md
-  - Dependencies: <comma-separated task numbers, or "none">
-  - PR: <url, once opened>
+    - Dependencies: <comma-separated task numbers, or "none">
+    - PR: <url, once opened>
 ```
+
+Each sub-line under a card (`Dependencies:`, `PR:`, `Revise:`, `Build-note:`) is indented
+**4 spaces**, not 2 — `KANBAN.md` carries the `kanban-plugin: board` frontmatter so it renders
+as a real Kanban board in ReCue's own in-app Kanban viewer (and any Obsidian-Kanban reader),
+which treats a card's tab-/4-space-indented lines as its body but **drops** 2-space-indented
+ones. The lanes read either indent (they parse the board as agents), so this is purely for
+board-viewer rendering.
 
 **Board files at the repo root.** `KANBAN.md` (the live board) and `PLAN-<N>.md` (per-task
 plans) are **git-ignored / local-only**; `ASSUMPTIONS.md` (refinement decisions) and

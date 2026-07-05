@@ -43,6 +43,11 @@ human, or a future review lane, asking you to redo the landing). Address the not
 re-resolve conflicts via step 2's flow, or re-attempt the merge as asked), **remove the `Revise:`
 line**, then proceed as normal.
 
+Any sub-line you write under a card (a `Revise:` line you clear, or a note you add) is indented
+**4 spaces**, not 2 — an Obsidian-Kanban board viewer renders a card's tab- or 4-space-indented
+lines as its body but **ignores** 2-space-indented ones, so a 2-space indent would drop them when
+the board is opened as a real Kanban board.
+
 ### Concurrent writes — the board is shared, so retry on conflict
 
 `KANBAN.md` is written **live by the other lane agents** the whole time you work, so a board
@@ -82,7 +87,11 @@ For each card:
      fail, **fall back**: leave the card in `## MERGE` with a short note and move on to the next
      card.
 3. **Merge the PR** into the default branch (e.g. `gh pr merge --merge` / `--squash` per the
-   repo's convention).
+   repo's convention). **Delete the PR's source branch once the merge completes** — pass the
+   forge's delete-branch flag (e.g. `gh pr merge --delete-branch`) or delete it via the API
+   right after, so no stale branch is left behind. Delete only through the forge API / `gh`;
+   never `git branch -d`/`-D` in the main working tree (that stays on the never-`checkout`/
+   `switch`/`branch` rule above). If the branch is already gone or protected, note it and move on.
 4. **Fast-forward the local default branch.** `git fetch origin`, then fast-forward the local
    default branch to its remote so it stays current for subsequent merges (without leaving
    the current branch).

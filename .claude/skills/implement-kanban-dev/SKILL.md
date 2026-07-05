@@ -48,10 +48,15 @@ The board lives at the repo root in `KANBAN.md`, with columns `## PLAN`, `## IMP
 
 ```
 - [ ] Task <N>: <title> — PLAN-<N>.md
-  - Dependencies: Task <A>, Task <B>   (the tasks that must land first, or "none")
-  - PR: <url, once opened>
-  - Revise: <what to change — present only when a card was sent back here for rework>
+    - Dependencies: Task <A>, Task <B>   (the tasks that must land first, or "none")
+    - PR: <url, once opened>
+    - Revise: <what to change — present only when a card was sent back here for rework>
 ```
+
+Indent every sub-line under a card (`Dependencies:`, `PR:`, `Revise:`, `Build-note:`) by
+**4 spaces**, not 2 — an Obsidian-Kanban board viewer renders a card's tab- or 4-space-indented
+lines as its body but **ignores** 2-space-indented ones, so a 2-space indent would drop this
+metadata (incl. the `PR:` url you set) when the board is opened as a real Kanban board.
 
 An IMPLEMENT card is **unblocked** when **every** task on its `Dependencies:` line is in the
 `## ARCHIVE` column **or** recorded in `TASK_ARCHIVE.md`. A blocked card waits — skip it until a
