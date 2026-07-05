@@ -2260,3 +2260,28 @@ not guessed):
   `startUsagePolling`, `saveSettings`), `src/components/Usage/UsageBar.tsx`,
   `src/components/Settings/Settings.tsx`, new `src/store.usage.test.ts`. Overlaps sibling 325 on
   `UsageBar.tsx` render guard (additive, merge-lane resolvable). No Rust changes.
+
+## Task 324 — Git-diff gutter in the file viewer (uncommitted change markers)
+
+- How to get per-line status: add a focused `file_diff(repo, file)` command (`git diff HEAD --
+  <path>` + the existing pure `parse_unified_diff`, with the #183 `--no-index /dev/null` fallback
+  for untracked files) rather than reusing whole-repo `working_diff` (too heavy to poll for one
+  open file). Mirrors the scoped `commit_diff`/`compare_branches` read pattern. Add-vs-modify-vs-
+  delete classification stays a pure TS helper (`gutterMarkers`), unit-tested.
+- Scope of views: gutter applies to the Prism `CodeBlock` (curated code) view ONLY. Small
+  non-code/plain-text/markdown-raw files render as an editable `<textarea>` (no per-line DOM, and
+  an unsaved buffer diverges from the on-disk diff); the read-only raw `<pre>` is reached only for
+  >256 KB files. So editable views, rendered markdown, and large files are out of scope.
+- Marker semantics (VS Code dirty-diff convention): pure insertion → green ("added");
+  deletion-then-addition → yellow ("modified"); deletion with no replacement → a red dot at the
+  line boundary (EOF-sentinel for trailing deletions).
+- Refresh trigger = a self-contained ~2 s poll (paused when hidden, plus refetch on content
+  change), rather than the #212 busy→idle `fileStatuses` signal — guarantees the gutter clears
+  within ~2 s of a manual terminal commit regardless of trees/agents.
+- Cross-platform: git shell-out reuses `hidden_command` (CREATE_NO_WINDOW); the `/dev/null`
+  untracked arg is already proven on Windows by #183; colors use
+  `--status-done`/`--status-awaiting`/`--status-error` tokens.
+- Fail-open: any git/parse miss or non-git folder → `file_diff` returns `null` → no gutter.
+- Areas touched: `src-tauri/src/git.rs` (+`commands.rs`,`lib.rs`) for `file_diff`; `src/ipc.ts`;
+  new `src/components/FileViewer/gutter.ts`(+test) and `useFileDiffGutter.ts`; `FileViewer.tsx` +
+  `FileViewer.module.css` for the gutter column.
