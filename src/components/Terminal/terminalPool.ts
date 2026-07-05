@@ -62,6 +62,12 @@ interface TerminalHost {
 const hosts = new Map<string, TerminalHost>();
 let parking: HTMLDivElement | null = null;
 
+// The WebGL glyph atlas is SHARED by every pooled terminal of identical config (xterm's
+// addon-webgl caches one TextureAtlas per config), so it only needs clearing ONCE — the
+// first time the real font has loaded (#221). Guarding it stops a later spawn from wiping
+// the shared atlas out from under the already-running agents (the post-spawn "font jumble").
+let fontAtlasRebuilt = false;
+
 /** Live xterm options (#100): applied to new terminals at creation and to every
  * pooled terminal when the user saves Settings. Defaults match the original
  * hard-coded values, so behavior is unchanged until a setting is saved. */
@@ -418,7 +424,19 @@ function createHost(sessionId: string): TerminalHost {
     // clearing the atlas makes the next render re-rasterize glyphs at the corrected
     // metrics. `refresh` repaints every row; `safeFit` recomputes cols/rows for the
     // possibly-changed cell size.
-    webgl?.clearTextureAtlas();
+    //
+    // The atlas is SHARED across every pooled terminal of identical config, so clear it only
+    // the FIRST time the real font has loaded. Doing it on every spawn wiped the shared atlas
+    // out from under the already-running agents — whose render models still referenced the
+    // old glyph slots — scrambling their output until a reflow re-warmed it (the post-spawn
+    // "font jumble"). Every later terminal shares the already-corrected atlas; the fontFamily
+    // re-measure below still repaints IT (a full model clear via the options-change handler),
+    // so its glyphs are crisp without disturbing anyone else's. No-op with the DOM renderer
+    // (`webgl` undefined, e.g. detached windows #105), which has no shared GL atlas.
+    if (webgl && !fontAtlasRebuilt) {
+      fontAtlasRebuilt = true;
+      webgl.clearTextureAtlas();
+    }
     const family = term.options.fontFamily;
     term.options.fontFamily = "monospace";
     term.options.fontFamily = family;
