@@ -1614,6 +1614,17 @@ pub async fn current_branches(paths: Vec<String>) -> std::collections::HashMap<S
         .unwrap_or_default()
 }
 
+/// GitHub web URL per path, resolved in one call (#327) — mirrors `current_branches`.
+/// Only paths whose remote resolves to a `github.com` repo are present in the map, so
+/// the sidebar reads presence as "show the View-on-GitHub item". Runs the two cheap
+/// local git reads off the main thread; a join error degrades to an empty map.
+#[tauri::command]
+pub async fn github_web_urls(paths: Vec<String>) -> std::collections::HashMap<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git::github_web_urls(&paths))
+        .await
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 pub fn working_diff(cwd: String) -> WorkingDiff {
     git::working_diff(cwd)

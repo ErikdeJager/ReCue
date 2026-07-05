@@ -474,6 +474,89 @@ pub fn repo_dir_name(url: &str) -> String {
     }
 }
 
+/// Normalize a git remote URL to the browsable `https://github.com/owner/repo` web URL,
+/// or `None` when it is not a GitHub remote (#327). **Pure** (no git / filesystem —
+/// unit-tested), like `repo_dir_name` above. Handles every common remote form: HTTPS
+/// (`https://github.com/owner/repo.git`), the SSH SCP shorthand
+/// (`git@github.com:owner/repo.git`), `ssh://git@github.com/owner/repo.git`,
+/// `git://github.com/owner/repo.git`, and `http://`, stripping userinfo, ports, a
+/// trailing `.git` and trailing slashes. The host must be **exactly** `github.com`
+/// (case-insensitive) — GitHub Enterprise (`github.mycompany.com`) and other forges
+/// (`gitlab.com`, `bitbucket.org`) return `None`. Cross-platform (string-only).
+pub fn github_web_url(remote: &str) -> Option<String> {
+    let s = remote.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    // Extract the raw authority (`[user@]host[:port]`) and path.
+    let (authority, path) = if let Some(rest) = s.split_once("://").map(|(_, r)| r) {
+        // scheme://[user@]host[:port]/path — split on the first `/`.
+        match rest.split_once('/') {
+            Some((auth, p)) => (auth, p),
+            None => (rest, ""),
+        }
+    } else if let Some((auth, p)) = s.split_once(':') {
+        // SCP shorthand `[user@]host:owner/repo` — no scheme, no port.
+        (auth, p)
+    } else {
+        return None;
+    };
+
+    // Strip userinfo (`git@` / `user:pass@`) then a port from the authority → host.
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or(authority)
+        .split(':')
+        .next()
+        .unwrap_or(authority)
+        .to_ascii_lowercase();
+    if host != "github.com" {
+        return None;
+    }
+
+    // Clean the path: trim slashes and a trailing `.git`, then take the first two
+    // non-empty segments as owner / repo (case preserved).
+    let path = path.trim().trim_start_matches('/').trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let mut segments = path.split('/').filter(|s| !s.is_empty());
+    let owner = segments.next()?;
+    let repo = segments.next()?;
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("https://github.com/{owner}/{repo}"))
+}
+
+/// The GitHub web URL for `cwd`'s remote, or `None` (non-git / no remote / non-GitHub)
+/// (#327). Prefers `origin`, else the first remote. Best-effort; never panics. The only
+/// git work is two cheap local reads (`git remote` + `git remote get-url <name>`) —
+/// `run_git` routes both through `hidden_command`, so it's identical on macOS/Windows.
+pub fn github_web_url_for(cwd: impl AsRef<Path>) -> Option<String> {
+    let cwd = cwd.as_ref();
+    let remotes = run_git(cwd, &["remote"])?; // one remote name per line
+    let names: Vec<&str> = remotes.lines().filter(|l| !l.is_empty()).collect();
+    let name = if names.contains(&"origin") {
+        "origin"
+    } else {
+        *names.first()?
+    };
+    let url = run_git(cwd, &["remote", "get-url", name])?;
+    github_web_url(&url)
+}
+
+/// GitHub web URL per path, resolved in one call (mirrors `current_branches`, #327).
+/// Only paths that resolve to a GitHub URL are present in the map — non-GitHub /
+/// remote-less / non-git folders are omitted, so the caller reads presence as "show
+/// the View-on-GitHub item".
+pub fn github_web_urls(paths: &[String]) -> HashMap<String, String> {
+    paths
+        .iter()
+        .filter_map(|p| github_web_url_for(p).map(|u| (p.clone(), u)))
+        .collect()
+}
+
 /// Clone the git repo at `url` into `dest` (#295) — a new deliberate git **network**
 /// write, modeled on `fetch_remotes`. `dest` must not already exist (git creates it);
 /// the caller pre-checks a non-empty existing target. Copies `fetch_remotes`' two
@@ -1287,6 +1370,69 @@ index 0..1
         assert_eq!(repo_dir_name("/"), "repo");
     }
 
+    // --- GitHub web-URL normalizer tests (pure, no repo) (#327) ---
+
+    #[test]
+    fn github_web_url_normalizes_forms_and_rejects_non_github() {
+        let want = Some("https://github.com/owner/repo".to_string());
+
+        // HTTPS with / without `.git`.
+        assert_eq!(github_web_url("https://github.com/owner/repo.git"), want);
+        assert_eq!(github_web_url("https://github.com/owner/repo"), want);
+        // Trailing slash.
+        assert_eq!(github_web_url("https://github.com/owner/repo/"), want);
+        assert_eq!(github_web_url("https://github.com/owner/repo.git/"), want);
+        // http:// upgrades to https://.
+        assert_eq!(github_web_url("http://github.com/owner/repo.git"), want);
+        // SCP shorthand `git@github.com:owner/repo.git`.
+        assert_eq!(github_web_url("git@github.com:owner/repo.git"), want);
+        // ssh:// and git:// URLs.
+        assert_eq!(github_web_url("ssh://git@github.com/owner/repo.git"), want);
+        assert_eq!(github_web_url("git://github.com/owner/repo.git"), want);
+        // Userinfo (user:pass@) and an explicit port are stripped.
+        assert_eq!(
+            github_web_url("https://user:pass@github.com:443/owner/repo.git"),
+            want
+        );
+        assert_eq!(
+            github_web_url("ssh://git@github.com:22/owner/repo.git"),
+            want
+        );
+        // Host is case-insensitive; owner/repo case is preserved.
+        assert_eq!(
+            github_web_url("https://GitHub.com/Owner/Repo.git"),
+            Some("https://github.com/Owner/Repo".to_string())
+        );
+        // Surrounding whitespace is trimmed.
+        assert_eq!(github_web_url("  https://github.com/owner/repo  "), want);
+        // A dotted repo name only loses a *trailing* `.git`.
+        assert_eq!(
+            github_web_url("https://github.com/owner/my.repo.git"),
+            Some("https://github.com/owner/my.repo".to_string())
+        );
+        // Deeper paths keep only owner/repo.
+        assert_eq!(
+            github_web_url("https://github.com/owner/repo/tree/main"),
+            want
+        );
+
+        // Non-GitHub hosts / malformed input → None.
+        assert_eq!(github_web_url("https://gitlab.com/owner/repo.git"), None);
+        assert_eq!(github_web_url("git@bitbucket.org:owner/repo.git"), None);
+        assert_eq!(
+            github_web_url("https://github.mycompany.com/owner/repo.git"),
+            None
+        );
+        // Single-segment path (no repo).
+        assert_eq!(github_web_url("https://github.com/owner"), None);
+        assert_eq!(github_web_url("git@github.com:owner"), None);
+        // Garbage / empty.
+        assert_eq!(github_web_url(""), None);
+        assert_eq!(github_web_url("   "), None);
+        assert_eq!(github_web_url("not a url"), None);
+        assert_eq!(github_web_url("/local/path"), None);
+    }
+
     // --- Integration tests (real `git`; skip if unavailable) ---
 
     fn unique_dir(tag: &str) -> PathBuf {
@@ -1535,6 +1681,49 @@ index 0..1
         assert!(!map.get(&repo).unwrap().is_empty());
         assert_eq!(map.get(&nongit).map(String::as_str), Some(""));
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn github_web_urls_resolves_github_remote_and_omits_others() {
+        let Some(dir) = init_repo("ghurls") else {
+            return;
+        };
+        assert!(git_in(
+            &dir,
+            &["remote", "add", "origin", "git@github.com:owner/repo.git"],
+        ));
+
+        let repo = dir.to_string_lossy().into_owned();
+        let nongit = "/definitely/not/a/git/repo".to_string();
+        let map = github_web_urls(&[repo.clone(), nongit.clone()]);
+        assert_eq!(
+            map.get(&repo).map(String::as_str),
+            Some("https://github.com/owner/repo")
+        );
+        // Non-git / remote-less paths are omitted from the map entirely.
+        assert!(!map.contains_key(&nongit));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn github_web_urls_omits_non_github_remote() {
+        let Some(dir) = init_repo("ghurls-gitlab") else {
+            return;
+        };
+        assert!(git_in(
+            &dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://gitlab.com/owner/repo.git"
+            ],
+        ));
+        let repo = dir.to_string_lossy().into_owned();
+        let map = github_web_urls(std::slice::from_ref(&repo));
+        assert!(!map.contains_key(&repo));
         let _ = fs::remove_dir_all(&dir);
     }
 

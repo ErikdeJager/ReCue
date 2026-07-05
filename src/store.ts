@@ -271,12 +271,29 @@ function scheduleBranchRefresh(): void {
     branchRefreshTimer = undefined;
     void useStore.getState().refreshBranches();
     void useStore.getState().refreshFileStatuses();
+    // Re-resolve each repo's GitHub web URL on the same edge (#327) — cheap local
+    // `git remote` reads, so the View-on-GitHub menu item tracks a remote change
+    // (added/removed/retargeted) without a restart.
+    void useStore.getState().refreshGithubUrls();
     // A finished turn is exactly when an agent's just-written files land. The
     // git-status re-tint above can't add a *new* row (rows come only from `list_dir`),
     // so also re-list every open tree's loaded levels so created/removed files appear
     // right after the agent settles, without collapsing expanded folders (#264).
     useStore.getState().bumpFileTreeRefresh();
   }, BRANCH_REFRESH_DEBOUNCE_MS);
+}
+
+/** Shallow-equality of two `path → url` maps (#327) — lets `refreshGithubUrls` skip a
+ *  re-render (referential stability for the sidebar selector) when nothing changed. */
+function urlMapsEqual(
+  a: Record<string, string>,
+  b: Record<string, string>,
+): boolean {
+  if (a === b) return true;
+  const ak = Object.keys(a);
+  if (ak.length !== Object.keys(b).length) return false;
+  for (const k of ak) if (a[k] !== b[k]) return false;
+  return true;
 }
 
 // FileTree disk-change refresh (#264): a tree's rows come only from `list_dir`, so a
@@ -1140,6 +1157,11 @@ export interface AppState {
   recents: string[];
   /** Current branch per repo path (from git reading); "" when unknown/non-git. */
   branches: Record<string, string>;
+  /** GitHub web URL (`https://github.com/owner/repo`) per repo path (#327). Only repos
+   * whose remote points at github.com are present; a missing key = not a GitHub repo,
+   * so the sidebar's "View on GitHub" menu item stays hidden. Refreshed on the same
+   * cadence as `branches` (load / busy→idle edge / repo-set change). */
+  githubUrls: Record<string, string>;
   /** Per-repo git working-tree status (#252): repoPath → { repo-relative POSIX path
    * → "A"|"M"|"D" }. Tints the FileTree rows; refreshed once-per-repo (mirroring
    * `branches`) on load, on each session busy→idle edge, and via the tree's Refresh
@@ -1462,6 +1484,9 @@ export interface AppState {
   init: () => Promise<void>;
   refresh: () => Promise<void>;
   refreshBranches: () => Promise<void>;
+  /** Re-resolve each sidebar repo's GitHub web URL (#327), filling `githubUrls`. Runs on
+   * the same cadence as `refreshBranches`; fail-open (a backend miss leaves the map). */
+  refreshGithubUrls: () => Promise<void>;
   /** Re-read git file statuses (#252) — one repo when `repo` is given (the FileTree
    * mount / Refresh path), else every repo in the sidebar set (load / busy→idle /
    * git-write paths). Fail-open per repo (a failed read leaves the prior map). */
@@ -2144,6 +2169,7 @@ export const useStore = create<AppState>()((set, get) => ({
   overviewRepoFilter: null,
   recents: [],
   branches: {},
+  githubUrls: {},
   fileStatuses: {},
   fileDropTarget: null,
   fileTreeRefresh: {},
@@ -3179,6 +3205,21 @@ export const useStore = create<AppState>()((set, get) => ({
       set({ branches: await ipc.currentBranches(repos) });
     } catch {
       // Backend unreachable; leave branches as-is.
+    }
+  },
+
+  refreshGithubUrls: async () => {
+    const repos = repoOrder(get().recents, get().sessions);
+    if (repos.length === 0) return;
+    try {
+      // One IPC round-trip for all repos (only github.com remotes come back). A full
+      // replace is correct: a repo whose remote stopped being GitHub drops out.
+      const next = await ipc.githubWebUrls(repos);
+      set((s) =>
+        urlMapsEqual(s.githubUrls, next) ? {} : { githubUrls: next },
+      );
+    } catch {
+      // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
     }
   },
 
