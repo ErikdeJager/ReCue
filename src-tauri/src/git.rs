@@ -117,7 +117,7 @@ pub struct FileStatusEntry {
 /// Branches of a folder: the currently checked-out one, the local branches
 /// (`all`), and the remote-tracking branches (`remote`, qualified `<remote>/<name>`,
 /// #180). A non-git folder yields `{ current: "", all: [], remote: [] }`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct BranchList {
     pub current: String,
     pub all: Vec<String>,
