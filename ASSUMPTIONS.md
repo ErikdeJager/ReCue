@@ -2088,3 +2088,82 @@ Derived decisions (implementation, not separately asked — natural consequences
 - No frontend/CSS change (`BusyIndicator` and the store `setBusy` dedup already handle it);
   cross-platform-neutral (pure Rust timing, no OS-specific code).
 
+## Task 317
+
+Card: The "Schedule session" button text ellipsis-truncates on overflow; the same behaviour
+should apply to the "New session" button.
+
+Assume-mode decisions:
+
+- **Current-state confirmation (matches the card).** Verified the real CSS/markup: the
+  **"Schedule session"** button (`.scheduleButton`) already truncates — its label sits in a
+  `<span className={styles.scheduleLabel}>` with `overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap`, and the button carries `flex:1; min-width:0` (#301). The **"New session"**
+  button (`.newButton`) does **not**: its "New session" text is a bare text node (an anonymous
+  flex item CSS can't target) and `.newButton` lacks `min-width:0`. So the fix targets only the
+  New session button, mirroring Schedule exactly — confirming the card's premise (not the
+  "both missing it" fallback).
+- **No native `title` tooltip added.** The reference "Schedule session" button has no `title`, and
+  the card asks for the "same behaviour," so the fix omits a hover tooltip to keep the two buttons
+  identical. Trivial to add later if wanted.
+- **New, uniquely-named CSS classes (`.newIcon`, `.newLabel`) rather than reusing
+  `.scheduleIcon`/`.scheduleLabel`.** The module has a pre-existing duplicate `.scheduleIcon` rule
+  whose second definition also sets `color: var(--status-running)`; reusing it on the `+` icon
+  would leak that status color, so parallel classes copy only the truncation behavior.
+- **Scope limited to the expanded top-of-sidebar primary button.** The collapsed rail's icon-only
+  button (no label) and the other New-session entry points (repo header `+`, worktree `+`, context
+  menus) are out of scope.
+- Pure cross-platform CSS (`text-overflow:ellipsis` + `min-width:0`); identical on macOS/Windows.
+## Task 319
+
+Card: Clearing recent folders inside Settings (removing all folders) should have a confirmation.
+
+Assume-mode decisions:
+
+- **Gate on the existing `confirmDestructive` setting rather than an always-on confirm.** Every
+  sibling destructive action (TemplateManager delete, FileTree delete, KanbanPanel column delete,
+  Sidebar "Forget folder" / "Kill all agents" / "Close worktree") honors the #103
+  `confirmDestructive` toggle: confirm when on (the default), act immediately when off. "Clear
+  recents" mirrors that exactly for consistency — low-stakes but no in-app undo, so a guard is
+  warranted, while respecting the user's global toggle.
+- **Reuse the established inline two-click confirm mechanism, not a new modal or `window.confirm`.**
+  The app's confirm-destructive pattern is a purely-local React inline confirm: first click arms a
+  local `useState` flag and relabels/danger-styles the button; second click performs; `onMouseLeave`
+  cancels. No shared confirm-dialog component and no OS dialog exists. The "Clear recents" button
+  follows the `TemplateManager` delete affordance 1:1 (armed relabel + danger-style class +
+  `onMouseLeave` cancel). Inherently cross-platform (pure React state + CSS tokens; identical on
+  WKWebView/WebView2).
+- **Copy wording:** armed button reads "Clear all recent folders?" (title "Click again to clear all
+  recent folders"); the existing success toast text is kept. Easily adjusted.
+- **No reset-on-section-change logic beyond `onMouseLeave`:** the Settings modal remounts fresh each
+  open, so armed state can't leak across opens — matching TemplateManager.
+- No backend/IPC/store changes; frontend-only (`Settings.tsx` + `Settings.module.css`).
+## Task 318
+
+Card: A read-only Settings page listing all keyboard shortcuts so the user can discover the keybinds.
+
+Assume-mode decisions:
+
+- **Section label & icon:** eighth Settings section named **"Shortcuts"** (short enough for the
+  ~168px nav) with the Lucide `Keyboard` icon (verified present in lucide-react). "Keyboard
+  shortcuts" risked wrapping the nav button.
+- **Nav placement:** inserted just before "Data & About" so that utility/about pane stays last.
+- **Shortcut inventory scope:** the **global** shortcuts from `useKeyboardNav.ts` plus the
+  widely-relevant **contextual** ones that already carry user-facing hints (`⌘S` save; DiffInspector
+  `←/→`, `↑/↓`, `S`). Deliberately **excluded transient in-dialog accelerators** (CanvasCloseModal
+  K/↵/Esc, CreatePanelModal 1–6/Esc, NewSessionModal `⌘⏎`/in-modal `⌘1–9` recents, generic
+  Esc/Enter) — surfaced inline in their own dialogs; would bloat/duplicate a global reference. No
+  shortcuts invented; every entry is code-verified.
+- **Grouping:** four logical groups — Sessions / Panels & Canvas / Navigation / Files & Diff.
+- **Data-module location:** a typed `SHORTCUT_GROUPS` list colocated in a new
+  `src/components/Settings/shortcuts.ts` (next to the consuming section), matching the
+  component-colocation convention rather than a top-level `src/shortcuts.ts`.
+- **Cross-platform rendering:** each shortcut stores explicit `mac`/`win` strings rendered through
+  `kbdHint(platform, mac, win)` (⌘ glyphs on macOS, Ctrl+… on Windows); platform-identical chords
+  (diff arrows, `S`) use the same string for both.
+- **kbd chip styling:** modeled on the existing bordered `.kbd` in `CanvasCloseModal.module.css`,
+  using only existing design tokens.
+- **Optional test:** a small `shortcuts.test.ts` data-shape check recommended (fits the repo's test
+  culture); flagged optional since the change is display-only.
+- All additive; no keyboard handlers modified. Overlaps Task 319 only in a distinct region of
+  `Settings.tsx` (new `shortcuts` section vs. 319's `data` section) — independently implementable.
