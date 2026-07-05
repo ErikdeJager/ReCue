@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
   Bot,
+  ChevronDown,
   Database,
   Download,
   FlaskConical,
@@ -27,7 +28,7 @@ import remarkGfm from "remark-gfm";
 
 import { agentCaps, agentIsUntested, SELECTABLE_AGENTS } from "../../agents";
 import * as ipc from "../../ipc";
-import { patchnotesFor } from "../../patchnotes";
+import { allPatchnotes, compareVersions, patchnotesFor } from "../../patchnotes";
 import { kbdHint } from "../../platform";
 import { DEFAULT_SETTINGS, REPO_PALETTE, useStore } from "../../store";
 import type { Settings as SettingsType } from "../../types";
@@ -124,6 +125,12 @@ function SettingsModal() {
   const [claudeVer, setClaudeVer] = useState<string | null>(null);
   // The running version's baked-in patch notes (#192), shown in the Updates pane.
   const currentNotes = appVer ? patchnotesFor(appVer) : null;
+  // Older versions' notes for the expandable "history" disclosure — previous
+  // versions only, newest-first (allPatchnotes is already sorted newest-first).
+  const historyNotes = allPatchnotes.filter((n) =>
+    appVer ? compareVersions(n.version, appVer) < 0 : n.version !== appVer,
+  );
+  const [showHistory, setShowHistory] = useState(false);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -737,6 +744,45 @@ function SettingsModal() {
                       What&rsquo;s new in this version
                     </span>
                     <PatchNotes notes={currentNotes} />
+                  </div>
+                )}
+
+                {/* Expandable history of every earlier version's notes — an
+                    opt-in disclosure so the pane stays clean by default. */}
+                {historyNotes.length > 0 && (
+                  <div className={styles.historySection}>
+                    <button
+                      type="button"
+                      className={styles.historyToggle}
+                      aria-expanded={showHistory}
+                      onClick={() => setShowHistory((v) => !v)}
+                    >
+                      <ChevronDown
+                        size={14}
+                        strokeWidth={1.5}
+                        className={
+                          showHistory ? undefined : styles.chevronCollapsed
+                        }
+                      />
+                      {showHistory
+                        ? "Hide earlier versions"
+                        : "Show earlier versions"}
+                    </button>
+                    {showHistory && (
+                      <div className={styles.history}>
+                        {historyNotes.map((n) => (
+                          <div key={n.version} className={styles.historyEntry}>
+                            <span className={styles.historyVersion}>
+                              v{n.version}
+                              <span className={styles.historyDate}>
+                                {n.date}
+                              </span>
+                            </span>
+                            <PatchNotes notes={n} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 

@@ -260,6 +260,7 @@ pub fn run() {
             commands::add_to_gitignore,
             commands::list_skills,
             commands::file_exists,
+            commands::dir_exists,
             commands::is_git_repo,
             commands::current_branch,
             commands::current_branches,

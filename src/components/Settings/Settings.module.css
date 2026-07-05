@@ -531,6 +531,73 @@
   background: var(--accent-hover);
 }
 
+/* Expandable "earlier versions" patch-note history — a low-weight disclosure
+   below the current version's notes. */
+.historySection {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+/* Link-style toggle: no chrome, accent text, underlines on hover. */
+.historyToggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--space-4);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.historyToggle:hover {
+  text-decoration: underline;
+}
+
+.historyToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-chip);
+}
+
+/* Chevron points right when collapsed, down when expanded. */
+.chevronCollapsed {
+  transform: rotate(-90deg);
+}
+
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding-left: var(--space-12);
+  border-left: 1px solid var(--border-hairline);
+}
+
+.historyEntry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.historyVersion {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+}
+
+.historyDate {
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+}
+
 /* Action row: Reset (left), Cancel / Save (right). */
 .actions {
   display: flex;
