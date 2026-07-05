@@ -32,6 +32,7 @@
 /* Primary action — slim: icon + label left, a subtle ⌘N hint pushed right. */
 .newButton {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: var(--space-6);
   /* Bottom margin tightened to 4px (#99) so the New ↔ Schedule buttons (#93) read
@@ -51,6 +52,22 @@
 
 .newButton:hover {
   background: var(--accent-hover);
+}
+
+/* Mirror the Schedule button's #301 truncation: the + icon keeps its intrinsic
+   size while the label truncates to a single line with an ellipsis rather than
+   wrapping when the sidebar is dragged narrow (#317). */
+.newIcon {
+  flex-shrink: 0;
+}
+
+.newLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 
 /* Schedule session (#93) + the ⋯ overflow button (#294) sit in one flex row so the
