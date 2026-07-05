@@ -105,11 +105,14 @@ the macOS artifacts and on a Windows host for the Windows installers.
 
 > A from-scratch local build is **unsigned** — first open warns (macOS Gatekeeper:
 > right-click → **Open**, or allow it under **System Settings → Privacy & Security**;
-> Windows SmartScreen: **More info → Run anyway**). macOS builds do carry **Hardened
-> Runtime + entitlements** (#292) so mic/voice and protected-folder permissions work and
-> persist; sign a local build with `scripts/sign-macos-local.sh` (ad-hoc), or add the
-> `APPLE_*` CI secrets to produce a Developer-ID-signed + notarized build. See
-> [`docs/macos-permissions.md`](docs/macos-permissions.md).
+> Windows SmartScreen: **More info → Run anyway**). On macOS, mic/voice and
+> protected-folder permissions only actually work **and persist** once the app is signed
+> with the Hardened Runtime + `Entitlements.plist`'s `audio-input` entitlement + a stable
+> signature (#292/#314/#321) — a plain `tauri build` is ad-hoc and does neither. Sign a
+> **local** build with `npm run build:mac` (stable self-signed, no Apple account), and sign
+> **CI releases** by running `scripts/gen-macos-ci-cert.sh` once to set the 4 self-signed
+> signing secrets (or add all 7 `APPLE_*` secrets for a Developer-ID-signed + **notarized**
+> build). See [`docs/macos-permissions.md`](docs/macos-permissions.md).
 >
 > **In-app auto-update is live** (#190): the Tauri updater/process plugins, a sidebar
 > update indicator → confirm/install-with-progress modal → relaunch, and a post-update

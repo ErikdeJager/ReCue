@@ -773,19 +773,27 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   app's **code signature**, and an unsigned/ad-hoc app has no stable one (so every launch
   looks new), while the mic also needs the **`com.apple.security.device.audio-input`**
   entitlement present in the signature under the **Hardened Runtime** —
-  `NSMicrophoneUsageDescription` alone is not enough. The fix is **macOS-bundle-only** (no
-  runtime Rust/TS/CSS): a new **`src-tauri/Entitlements.plist`** (audio-input +
-  `cs.disable-library-validation`; **no App Sandbox**) wired via
-  `tauri.conf.json` `bundle.macOS.entitlements` (Tauri applies `--options runtime`),
-  four protected-folder `NS*FolderUsageDescription` strings added to `Info.plist`, a
-  documented **`scripts/sign-macos-local.sh`** (self-signed/ad-hoc local re-sign — **works
-  today, no Apple account**), and a **guarded** Developer-ID sign+notarize path in the
-  macOS leg of `release.yml` (**provisioned but dormant** until the maintainer adds a
-  Developer ID cert + the `APPLE_*` secrets; absent → today's ad-hoc fallback, build still
-  succeeds). Windows/Linux untouched. Full walkthrough + recovery
-  (`tccutil reset Microphone com.recue.app`) in **`docs/macos-permissions.md`**. Still no
-  App Sandbox and (until the secrets are added) no notarization — a from-scratch unsigned
-  local build still warns at Gatekeeper.
+  `NSMicrophoneUsageDescription` alone is not enough. The machinery: a
+  **`src-tauri/Entitlements.plist`** (audio-input + `cs.disable-library-validation`; **no App
+  Sandbox**; kept **comment-free** so `codesign`'s AMFI parser accepts it #321) wired via
+  `tauri.conf.json` `bundle.macOS.entitlements`, four protected-folder
+  `NS*FolderUsageDescription` strings in `Info.plist`, and `scripts/sign-macos-local.sh` for
+  a **local** stable self-signed re-sign (**#314**, `npm run build:mac` — no Apple account).
+  **#314** found the real gap: the Tauri bundler only applies the entitlements + Hardened
+  Runtime **when a signing identity is configured**, so a plain `tauri build` — and every CI
+  release with no `APPLE_*` secrets — stayed **ad-hoc** (the shipped bug). **#321** closes it
+  for the **shipped** app: `release.yml` now **signs CI releases** — sign-only with a stable
+  **self-signed** cert (4 secrets, set by **`scripts/gen-macos-ci-cert.sh`**; grants persist,
+  Gatekeeper warns) **or** Developer-ID **sign+notarize** (all 7 secrets; Gatekeeper-clean) —
+  selected purely by which secret subset is present, with a robust split so an empty
+  notarization var can't fail the build and **no secrets still falls back to ad-hoc** (build
+  succeeds). #321 also adds the one **runtime** touch (macOS-only, `#[cfg]`-gated,
+  Windows/Linux no-op): a **one-time `tccutil reset`** at boot (persisted
+  `perm_reprompt_done` flag) so a user updating from an old ad-hoc build is **re-asked once**
+  (and now Allow works), then never nagged again. Full walkthrough + recovery
+  (`tccutil reset Microphone com.recue.app`) in **`docs/macos-permissions.md`**. Still no App
+  Sandbox; notarization stays optional (needs an Apple account) — a self-signed build warns
+  at Gatekeeper on first download but works and persists.
 
 > Status colors were *reserved* design tokens, unused in v1; **#42** put them to use —
 > the busy/idle indicator uses `--status-running` (Blue) and `--status-idle` (#55/#71).
@@ -861,11 +869,12 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   new window can invoke commands + listen to events.
 - **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`
   and Windows NSIS/MSI installers; the **updater artifacts are minisign-signed**. macOS
-  builds now carry **Hardened Runtime + `Entitlements.plist`** (#292, `bundle.macOS.
-  entitlements`) so mic/voice + protected-folder permissions work and persist — a
-  from-scratch local build is still **ad-hoc/self-signed** (sign it with
-  `scripts/sign-macos-local.sh`; Gatekeeper still warns until a Developer ID / notarized
-  build is produced by adding the `APPLE_*` CI secrets — see the macOS-permissions scope
+  builds carry **Hardened Runtime + `Entitlements.plist`** (#292, `bundle.macOS.
+  entitlements`) so mic/voice + protected-folder permissions work and persist — but **only
+  once actually signed with an identity** (#314): a plain `tauri build` is ad-hoc (sign it
+  with `npm run build:mac`), and **CI releases** sign self-signed (4 secrets via
+  `scripts/gen-macos-ci-cert.sh`) or Developer-ID + notarized (all 7 `APPLE_*` secrets),
+  falling back to ad-hoc when no secrets are set (#321 — see the macOS-permissions scope
   note above + `docs/macos-permissions.md`).
   The **in-app auto-update** (#190, **re-introducing** the #15 updater that **#62
   removed** and rebuilding it richer) is **live** (activated once a real minisign
@@ -917,10 +926,11 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
     "What's new" once that build is installed. The
     interactive flow is also runtime-exercised by the dev mock (#193). _(This reverses the
     earlier #62 "no in-app auto-update / no release pipeline" rule; the update signatures
-    are minisign-only. macOS **code signing** now exists for permissions (#292 — Hardened
-    Runtime + entitlements, guarded Developer-ID sign+notarize in `release.yml` that stays
-    dormant until the `APPLE_*` secrets are added); Apple **notarization** is thus
-    provisioned-but-dormant rather than fully out of scope.)_
+    are minisign-only. macOS **code signing** exists for permissions (#292/#314/#321 —
+    Hardened Runtime + entitlements); `release.yml` signs CI releases self-signed (4 secrets)
+    **or** Developer-ID + notarized (all 7 `APPLE_*` secrets), by which subset is set,
+    falling back to ad-hoc with none — so Apple **notarization** is optional (needs an Apple
+    account) rather than the only signed path.)_
   The bundle ships a partial `src-tauri/Info.plist` (auto-merged by the Tauri CLI in
   both `dev` and `build`) declaring `NSMicrophoneUsageDescription` /
   `NSSpeechRecognitionUsageDescription` so voice dictation works inside a session's PTY
