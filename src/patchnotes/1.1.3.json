@@ -1,0 +1,26 @@
+{
+  "version": "1.1.3",
+  "date": "2026-07-05",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "The Updates pane can now expand to show the notes from earlier releases, so you can browse your update history in one place."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "Creating a new agent no longer scrambles the on-screen output of your other running agents.",
+        "Opening the new-session dialog no longer freezes the app for a couple of seconds.",
+        "On macOS, microphone and folder permissions now work correctly in the downloaded app: you're asked once after updating, and the grant sticks from then on instead of being requested again and again."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "Folders you've deleted from disk are now cleared from the sidebar automatically when the app starts."
+      ]
+    }
+  ]
+}
