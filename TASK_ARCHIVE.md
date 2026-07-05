@@ -1308,3 +1308,124 @@ header one orphaned nothing.
 - **Cross-platform:** pure React/CSS with on-system design tokens — no OS-specific paths,
   shell-outs, or key handling, so identical on macOS and Windows. No Rust. Checks green:
   `npm run build` / `npm run lint` / `npm test` / `npm run format:check`.
+
+---
+
+### 316. [x] Fix the 5-hour usage bar reading a stale/expired OAuth token (Keychain fall-through)
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+The sidebar-footer **5-hour Claude usage bar** (#154) stopped showing any data after a recent
+Claude Code update. Root cause (established empirically on a real machine, claude 2.1.193 — **not**
+an endpoint/schema change): recent Claude Code keeps the canonical, refreshed OAuth token in the
+**macOS Keychain** but leaves a **stale `~/.claude/.credentials.json`** on disk. ReCue's
+`read_oauth_token()` read the **file first** (`read_token_from_file().or_else(read_token_from_keychain)`)
+and — because the file existed and yielded a token — never fell through to the fresh Keychain one,
+so the usage GET 401'd and the bar hid. Verified directly: the expired file token → HTTP 401, the
+fresh Keychain token → HTTP 200 with exactly the shape `parse_snapshot` already handles
+(`five_hour.utilization`, `five_hour.resets_at`). The endpoint URL, `oauth-2025-04-20` beta header,
+and response fields are all unchanged. Fix: make token *selection* expiry-aware (prefer a
+non-expired token, file → Keychain).
+
+**What shipped** (commit [`9c41e1b`](https://github.com/ErikdeJager/ReCue/commit/9c41e1b), PR
+[#75](https://github.com/ErikdeJager/ReCue/pull/75), branch `fix-usage-bar-stale-token`,
+2026-07-05) — backend-only, all in **`src-tauri/src/usage.rs`**:
+
+- Introduced a private `OauthToken { access_token, expires_at: Option<i64> }` (epoch **ms**) with
+  `is_expired(now_ms)` whose `map_or(false, …)` makes **unknown expiry ⇒ usable** (schema-drift
+  guard).
+- Extended `token_from_json` → `Option<OauthToken>`: extracts the access token exactly as before
+  (`claudeAiOauth.accessToken` else top-level `access_token`) and additionally reads `expiresAt`
+  (else top-level `expires_at`) tolerantly — a JSON number **or** numeric string; missing/garbage ⇒
+  `None`.
+- `read_token_from_file` / (macOS-gated) `read_token_from_keychain` now return `OauthToken`; the
+  non-macOS keychain stub still returns `None`.
+- Rewrote `read_oauth_token` around a **pure, unit-tested** `select_token(file, keychain, now_ms)`:
+  use the **file** token if present and not expired (the common Windows/Linux + fresh-macOS path —
+  Keychain **not** read, so no gratuitous permission prompt); otherwise the **Keychain** token if
+  fresh (the confirmed-broken macOS case); otherwise fall back to whichever is present (file
+  preferred), preserving today's fail-open-at-HTTP behavior.
+- Hardening: bumped the stale `CLAUDE_CODE_UA` (`claude-code/2.1.0` → current) and added
+  **token-free** fail-open diagnostics categorizing the miss. Added unit tests for expiry-aware
+  selection and the extended parse.
+
+**Key files/areas touched:** `src-tauri/src/usage.rs` (1 file — token type, expiry-aware selection,
+UA bump, diagnostics, tests). No frontend change (the `UsageSnapshot` shape is unchanged; the bar
+only hid because the backend returned `None`).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **No gratuitous Keychain prompt:** when the file token is still fresh the Keychain is never read
+  (short-circuit), so Windows/Linux behavior is byte-for-byte unchanged and macOS doesn't prompt in
+  the common case.
+- **Deliberately not done:** OAuth token *refresh* (would race Claude and needs the client-id/token
+  endpoint — Claude already keeps a fresh Keychain token), a local usage-file reader (verified none
+  exists under `~/.claude`; the OAuth API is the sole source), and any endpoint/beta-header/
+  `parse_snapshot` change (a live 200 confirmed they're still correct). If **all** sources are
+  expired/absent, the command returns `None` (bar hides) — same fail-open as today, no panic.
+- **Cross-platform:** the Keychain path stays `#[cfg(target_os = "macos")]`-gated; Windows/Linux
+  (no Keychain, canonical fresh file token) take the file token unchanged. `home_dir()` untouched.
+  Checks green: `cargo test` (new token-selection + parse tests) / `npm run lint:rust` /
+  `npm run format:rust` / `npm run build` / `npm test`. The real-machine Keychain smoke (expired
+  file + fresh Keychain → bar populates; no prompt when file is fresh) is the one manual step CI
+  can't exercise.
+
+---
+
+### 323. [x] Remove the post-drag focus border on Kanban cards
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+After dragging a card in the in-app Kanban board, the just-dropped card wore a persistent
+accent-colored focus border/outline until the user clicked elsewhere. Two things combined:
+**dnd-kit** makes the card `<article>` focusable (`role="button"` / `tabIndex=0` via its spread
+`attributes`) and **restores focus to it after a drag** (`RestoreFocus`, default on), and two CSS
+rules then painted that focused article — `.card:focus-within { border-color: var(--accent) }`
+(`:focus-within` also matches when the article *itself* holds focus) plus the app-wide
+`:focus-visible { outline: 2px solid var(--accent) }` in `global.css`. The fix suppresses that
+indicator on the card article itself while keeping the hover lift, the **edit-mode** accent border
+(driven by the same `:focus-within` when the edit `<textarea>` descendant is focused), and the
+inner pencil/trash/checkbox focus rings.
+
+**What shipped** (commit [`df6812c`](https://github.com/ErikdeJager/ReCue/commit/df6812c), PR
+[#76](https://github.com/ErikdeJager/ReCue/pull/76), branch `remove-kanban-card-focus-border`,
+2026-07-05) — CSS-only:
+
+- **`src/components/Kanban/KanbanPanel.module.css`:** added a `.card:focus { border-color:
+  var(--border-hairline); outline: none; }` rule **immediately after** the existing
+  `.card:focus-within` rule (source order matters). Same specificity `(0,2,0)` as `:focus-within`,
+  so the later rule wins for the article-focused (post-drag/tab) case and reverts to the resting
+  hairline border; `outline: none` beats the global `:focus-visible` `(0,1,0)` ring. During **edit
+  mode** the article is not `:focus` (only `:focus-within`), so the accent border is preserved; the
+  hover rule `(0,4,0)` still wins when hovered.
+- **`TRAJECTORY_TO_WINDOWS.md`:** recorded the Windows real-box verification note (WebView2 drag
+  → no border), per the Windows-parity convention for GUI paths CI can't exercise.
+
+**Key files/areas touched:** `src/components/Kanban/KanbanPanel.module.css` (one additive rule),
+`TRAJECTORY_TO_WINDOWS.md` (verification note). No `.tsx` / Rust change.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **dnd-kit focus restoration left on:** deliberately did **not** set
+  `accessibility={{ restoreFocus: false }}` — that would harm keyboard drag continuity and wouldn't
+  cover a card focused by plain Tab. The CSS approach hides the indicator without changing focus
+  behavior.
+- **Accessibility trade-off (recorded):** suppressing the card article's own ring also removes the
+  visible ring when a keyboard user Tabs to a card — an intentional consequence of the "should not
+  appear at all" requirement; inner controls, editing, hover, and focus *restoration* are untouched.
+  A narrower mouse-only fallback (`.card:focus:not(:focus-visible)`) is noted for later if keyboard
+  discoverability is reprioritized.
+- **Cross-platform:** plain `outline: none` + a `border-color` revert (no `-webkit-`/macOS-only
+  assumption), scoped to a CSS-Module hashed class so it can't leak — identical on WKWebView (macOS)
+  and WebView2/Chromium (Windows). Checks green: `npm run build` / `npm run lint` /
+  `npm run format:check` / `npm test` (Kanban tests are logic-only; the drop-border check is manual).
