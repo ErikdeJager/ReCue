@@ -2317,3 +2317,43 @@ not guessed):
 - "Untested" marking: reuses `agentIsUntested(id) = id !== "claude"` — custom is untested for free.
 - Areas touched: `src-tauri/src/agents.rs`, `pty.rs`, `commands.rs`; `src/agents.ts`,
   `src/types/index.ts`, `src/store.ts`, `src/components/Settings/Settings.tsx`; `src/store.test.ts`.
+
+---
+
+## TASK-327 — Open the repo's GitHub page from the sidebar folder menu
+
+Add a "View on GitHub" item to the sidebar repo/folder (and worktree header) context menu that
+opens the repository's GitHub page in the browser, shown only when the folder is a git repo with
+a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
+
+- **Which remote** → Prefer `origin`; if absent, use the **first** remote from `git remote`; if
+  the repo has no remote, hide the item. `origin` is the near-universal canonical-remote
+  convention; first-remote fallback covers renamed remotes; hiding when there is none keeps it
+  honest.
+- **What counts as a GitHub remote** → Host must be **exactly `github.com`** (case-insensitive).
+  GitLab/Bitbucket/other hosts **and GitHub Enterprise** hosts hide the item. The card said
+  "github.com only unless trivially generalizable"; GHE hosts aren't reliably detectable, so
+  restricting to `github.com` is the safe reading for a menu literally labelled "View on GitHub".
+  A follow-up could add a configurable enterprise-host list.
+- **URL normalization** → Normalize HTTPS/`http`/SCP-SSH (`git@github.com:owner/repo.git`)/
+  `ssh://`/`git://` forms to `https://github.com/<owner>/<repo>`, stripping trailing `.git`,
+  trailing slash, userinfo, and port; `http://` upgrades to `https://`; owner/repo casing
+  preserved. Any URL not yielding host `github.com` **and** a two-segment `owner/repo` path
+  returns `None` (item hidden). One pure, unit-tested function modeled on `repo_dir_name`.
+- **Menu label & placement** → Label **"View on GitHub"** (platform-neutral, not routed through
+  `kbdHint`/`revealLabel`), placed in the non-destructive utility group right after **Pull**, no
+  leading icon (matching the existing text-only menu items).
+- **Worktree header menu** → **Also** gets the item, resolved from the **parent repo's** cached
+  GitHub URL (`githubUrls[parent]`), since a worktree shares its parent's remotes.
+- **Refresh cadence / caching (the performance constraint)** → A store map `githubUrls` filled by
+  a new `refreshGithubUrls` action, refreshed on the **same cadence as `branches`/`fileStatuses`**:
+  on load + repo-set change and on the debounced busy→idle edge (#212/#252), full-replace +
+  shallow-equality guard. The menu render reads only the cached map — **zero git work at
+  menu-open time** — directly satisfying "the context menu must still open quickly".
+- **Icon** → None, matching the surrounding text-only menu buttons.
+- **Cross-platform** → The new remote-URL read goes through `git::hidden_command()`; the browser
+  open reuses the http/https-only cross-platform `open_url` (#217). Behavior identical on
+  macOS/Windows.
+- Areas touched: `src-tauri/src/git.rs` (pure normalizer + git read + tests), `commands.rs` +
+  `lib.rs` (batched `github_web_urls` command), `src/ipc.ts`, `src/store.ts` (`githubUrls` +
+  `refreshGithubUrls` + cadence wiring), `src/components/Sidebar/Sidebar.tsx`.
