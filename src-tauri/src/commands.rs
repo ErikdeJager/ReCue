@@ -1592,14 +1592,26 @@ fn is_http_url(value: &str) -> bool {
     has_scheme && !value.chars().any(|c| c.is_control() || c.is_whitespace())
 }
 
+// Async + off the main thread (#316): a non-`async` Tauri command runs on the
+// main (webview) thread, so these `git` shell-outs freeze the UI until they
+// return — for `fetch_remotes` that's a 2-3s `git fetch --prune` network stall
+// on the new-session branch step. `spawn_blocking` moves the synchronous git
+// call onto the blocking pool (the #200 `remove_worktree` pattern), keeping the
+// window responsive. Return types are unchanged, so the frontend IPC contract
+// (`src/ipc.ts`) is untouched; a join error (task panic) degrades to the same
+// empty/fail-open value these git helpers already return for a non-git dir.
 #[tauri::command]
-pub fn current_branch(cwd: String) -> String {
-    git::current_branch(cwd)
+pub async fn current_branch(cwd: String) -> String {
+    tauri::async_runtime::spawn_blocking(move || git::current_branch(cwd))
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-pub fn current_branches(paths: Vec<String>) -> std::collections::HashMap<String, String> {
-    git::current_branches(&paths)
+pub async fn current_branches(paths: Vec<String>) -> std::collections::HashMap<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git::current_branches(&paths))
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -1616,9 +1628,12 @@ pub fn file_statuses(repo: String) -> Vec<FileStatusEntry> {
     git::file_statuses(repo)
 }
 
+// Async + off the main thread (#316) — see the `current_branch` note above.
 #[tauri::command]
-pub fn list_branches(cwd: String) -> BranchList {
-    git::list_branches(cwd)
+pub async fn list_branches(cwd: String) -> BranchList {
+    tauri::async_runtime::spawn_blocking(move || git::list_branches(cwd))
+        .await
+        .unwrap_or_default()
 }
 
 /// The latest commits on `cwd`'s HEAD (#230) for the diff viewer's Commits source.
@@ -1643,9 +1658,14 @@ pub fn commit_diff(cwd: String, sha: String) -> Result<WorkingDiff, SessionError
 /// git network read that refreshes remote-tracking refs so `list_branches` can show
 /// remote branches. Failure (offline / auth / no remote) surfaces as a typed
 /// `SessionError::Git` the UI swallows (cached refs are shown instead).
+// Async + off the main thread (#316) — this is the 2-3s new-session freeze: a
+// synchronous `git fetch --prune` network call ran on the webview thread. See
+// the `current_branch` note above.
 #[tauri::command]
-pub fn fetch_remotes(cwd: String) -> Result<(), SessionError> {
-    git::fetch_remotes(&cwd).map_err(SessionError::Git)
+pub async fn fetch_remotes(cwd: String) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || git::fetch_remotes(&cwd).map_err(SessionError::Git))
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
 /// Fast-forward the current branch of `cwd` to its upstream — `git pull --ff-only`
