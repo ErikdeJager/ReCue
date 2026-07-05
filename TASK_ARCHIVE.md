@@ -1493,3 +1493,79 @@ Rust change needed.
 - **Cross-platform:** no OS-specific code added; the only OS-sensitive path (`usage.rs` token read,
   `home_dir()`/Keychain) is simply not invoked when off — inherently identical on macOS and Windows.
   Checks green: `npm run build` / `npm run lint` / `npm test`.
+
+---
+
+### 325. [x] Custom coding-agent command in Settings
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Added a fourth **"Custom"** coding agent to ReCue's pluggable agent system (#101/#141/#142): a user
+picks Custom in Settings → Sessions and types their own launch command (a program + args, e.g.
+`my-agent --foo`) that ReCue runs to start each new session — so any CLI-based agent works, not only
+the three built-ins. A custom agent is treated like the other non-Claude agents: no
+resume/fork/auto-name, marked "untested", and the five-hour usage meter is hidden while a custom
+session is live.
+
+**What shipped** (commit [`f9113bb`](https://github.com/ErikdeJager/ReCue/commit/f9113bb), PR
+[#78](https://github.com/ErikdeJager/ReCue/pull/78), branch `custom-coding-agent-command`,
+2026-07-05):
+
+- **`src-tauri/src/agents.rs`:** a `CUSTOM` `AgentSpec` (`id="custom"`, all caps false, placeholder
+  `binary_name="custom"`) + `"custom" => CUSTOM` in `agent_spec`; two pure, unit-tested helpers —
+  `parse_custom_command(command) -> Option<(program, args)>` (a minimal argv tokenizer: split on
+  whitespace, honoring `"double"`/`'single'` quotes, `None` on empty) and `read_custom_command(
+  settings) -> Option<String>` (reads the opaque `customAgentCommand` key, trimmed/non-empty).
+- **`src-tauri/src/pty.rs`:** threaded a `custom_command: Option<&str>` param through
+  `spawn_session` / `spawn_session_with_prompt`; for `agent == "custom"` it parses the command and,
+  for a seeded launch, appends the prompt as a trailing positional arg (best-effort), then spawns
+  via the existing cross-platform `spawn_with_id` (`uses_claude_log=false`). Non-custom paths
+  unchanged.
+- **`src-tauri/src/commands.rs`:** each spawn site (`spawn_session`, `spawn_worktree_agent`,
+  `spawn_worktree_agent_new_branch`, `fire_due_schedules`, `fire_one_recurring`) resolves the custom
+  command from `store.settings()` and passes it through; `agent_info` gained `store` and, for
+  custom, probes the **configured program**'s `--version` (so `ClaudeMissing` names the user's
+  program) with a `"custom"` fallback.
+- **Frontend:** `src/agents.ts` — `CUSTOM_CAPS` in `CATALOG` + a new `SETTINGS_AGENTS` list
+  (`SELECTABLE_AGENTS` stays `[claude, codex, opencode]` so onboarding never offers the
+  undetectable custom); `src/types/index.ts` + `src/store.ts` — `customAgentCommand: string`
+  (default `""`, back-filled by `mergeSettings`); `src/components/Settings/Settings.tsx`
+  (+`.module.css`) — the Coding-agent control maps over `SETTINGS_AGENTS` (Custom is a 4th segment)
+  and, when Custom is selected, shows a command `<input>` with placeholder + help; the existing
+  "untested" caution and the auto-continue disable (`defaultAgent !== "claude"`) apply for free.
+- **Tests:** `src/agents.test.ts` (`agentCaps("custom")` caps false, `agentIsUntested` true) and
+  `src/store.test.ts` (a `agent: "custom"` session makes `isClaudeActive` false → usage bar hidden),
+  plus the Rust tokenizer/spec unit tests.
+
+**Key files/areas touched:** `agents.rs`, `commands.rs`, `pty.rs` (Rust) + `agents.ts`,
+`agents.test.ts`, `types/index.ts`, `store.ts`, `store.test.ts`, `Settings.tsx`, `Settings.module.css`.
+10 files.
+
+**Dependencies:** none (AgentSpec #101, codex gating #141, selector #142, usage bar/`isClaudeActive`
+#154, Settings blob #100/#102 all landed).
+
+**Notes**
+
+- **Argv, not a shell line:** the custom command is a program + args (quotes group tokens); no
+  pipes/redirection/`&&`/`$VAR`/globbing — a user needing that wraps it themselves (`bash -lc "…"` /
+  `cmd /C "…"`). Documented in code + Settings help.
+- **Seeding is best-effort:** appending the prompt as a trailing positional works for CLIs that
+  accept a positional prompt (Claude/Codex-like) but not arbitrary tools; the interactive
+  (non-seeded) launch always works.
+- **Capabilities gated off** exactly like Codex/OpenCode (owns its own session identity): boot
+  resume skips a custom record (`supports_resume=false`), Restart returns `ResumeUnsupported`, Fork
+  is unavailable, and the label falls back to the branch (no `ai-title` glob). `isClaudeActive`
+  needed **no logic change** — it already treats any non-`"claude"` id (incl. `"custom"`) as
+  non-Claude; a regression test was added instead. Task #326's separate manual "disable usage"
+  setting was left independent.
+- **Clear failure modes:** an empty command fails with a toast (no phantom `"custom"` spawn); a
+  program not on PATH surfaces the `ClaudeMissing` banner naming the parsed program.
+- **Cross-platform:** the parsed program resolves through the shared `find_on_path`/`launch_target`
+  seam (PATHEXT + `cmd.exe /C` for `.cmd`/`.bat`), and the `--version` probe stays behind
+  `hidden_command` (no console flash) — a Windows custom command works exactly like a built-in
+  agent; no hardcoded POSIX invocation. Claude spawn/resume/fork args are byte-for-byte unchanged
+  (guarded by the `agent == "custom"` branch). Checks green: `npm run build` / `npm run lint` /
+  `npm test` / `npm run format:check` / `cargo test` / `npm run lint:rust` / `npm run format:rust`.
