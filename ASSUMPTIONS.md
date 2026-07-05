@@ -2285,3 +2285,35 @@ not guessed):
 - Areas touched: `src-tauri/src/git.rs` (+`commands.rs`,`lib.rs`) for `file_diff`; `src/ipc.ts`;
   new `src/components/FileViewer/gutter.ts`(+test) and `useFileDiffGutter.ts`; `FileViewer.tsx` +
   `FileViewer.module.css` for the gutter column.
+
+## Task 325 — Custom coding-agent command in Settings
+
+- Storage: `customAgentCommand` is a new field in the settings blob (per the card). Backend stores
+  settings as opaque `serde_json::Value`, so it reads the key directly via `store.settings()` at
+  each spawn site — no new Rust scalar/persistence command; works for the Rust schedule/recurring
+  fire loops too.
+- Command shape: the custom command is an argv (program + args), parsed by a simple whitespace/
+  quote tokenizer — NOT a shell line (no pipes, redirection, `&&`, env expansion, globbing;
+  documented in-code + Settings help). Routes through the existing `find_on_path`/`launch_target`
+  seam (PATHEXT + `cmd.exe /C` for `.cmd`/`.bat`), so identical on macOS/Windows.
+- Seeding: interactive launch = the bare parsed command in cwd; a prompt-seeded launch
+  (schedule/recurring/template new-agent) appends the prompt as a trailing positional arg —
+  best-effort, since an arbitrary CLI may not accept a positional prompt.
+- Capabilities: custom owns its own session identity — `supports_resume=false`,
+  `supports_auto_name=false` (like Codex/OpenCode): boot resume skips it, Restart returns
+  `ResumeUnsupported`, Fork unavailable, label falls back to the branch.
+- Usage bar: NO change to `isClaudeActive` — it already treats any non-`"claude"` id (incl.
+  `"custom"`) as non-Claude, so the usage bar hides automatically once a session records
+  `agent: "custom"`. Added a regression test instead of editing the gate. Kept independent of
+  sibling Task 326's manual "disable usage" setting.
+- `agent_info`: for custom, the `--version` probe runs against the configured command's program
+  (not the literal `"custom"`), by adding `store` to the command + resolving the program from
+  settings; `binary_name` becomes that program (fallback `"custom"`). Empty/missing → `version: None`.
+- Onboarding: Custom is excluded from the first-launch picker (an unentered command can't be
+  presence-detected). `SELECTABLE_AGENTS` stays `[claude, codex, opencode]`; a new
+  `SETTINGS_AGENTS` list (adds Custom) backs the Settings selector.
+- Empty command: selecting Custom with a blank command doesn't block Save; the spawn fails with a
+  clear toast, and an unresolvable program surfaces the existing `ClaudeMissing` banner.
+- "Untested" marking: reuses `agentIsUntested(id) = id !== "claude"` — custom is untested for free.
+- Areas touched: `src-tauri/src/agents.rs`, `pty.rs`, `commands.rs`; `src/agents.ts`,
+  `src/types/index.ts`, `src/store.ts`, `src/components/Settings/Settings.tsx`; `src/store.test.ts`.
