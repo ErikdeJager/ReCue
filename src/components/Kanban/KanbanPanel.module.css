@@ -364,6 +364,22 @@
   border-color: var(--accent);
 }
 
+/* #323: dnd-kit makes the card article focusable (role="button" / tabIndex=0 via its
+   spread `attributes`) and RESTORES focus to it after a drag, so a just-dropped card
+   kept a persistent "focused" border — the accent border above (`:focus-within` also
+   matches when the article ITSELF holds focus) plus the app's global keyboard
+   `:focus-visible` outline (src/styles/global.css). Suppress that indicator on the card
+   article itself: drop the outline and revert the border to its resting hairline. The
+   edit `<textarea>` (a descendant) still lights the accent border via `:focus-within`,
+   and the inner pencil/trash/checkbox keep their own `:focus-visible` rings (they match
+   `.card button:focus-visible`, not `.card:focus`). Plain `outline: none` + a
+   `border-color` revert render identically on WKWebView (macOS) and WebView2/Chromium
+   (Windows). */
+.card:focus {
+  border-color: var(--border-hairline);
+  outline: none;
+}
+
 /* The origin slot while a card is dragged (#161): a dashed gap acting as the
    insertion indicator while the live preview rides the cursor in the DragOverlay. */
 .cardPlaceholder {

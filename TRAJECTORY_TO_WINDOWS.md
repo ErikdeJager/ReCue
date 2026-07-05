@@ -866,3 +866,25 @@ ensure `main` → register the folder → start a session, all through existing 
   added), and that cloning where the derived folder already exists non-empty shows the
   "Destination already exists" inline error. Verify the dest path is spelled with **backslashes**
   natively (built by `PathBuf::join`). Re-confirm the whole flow on macOS.
+
+### #323 — Remove the post-drag focus border on Kanban cards
+
+Suppresses the persistent accent border a just-dropped Kanban card wore (dnd-kit's
+`RestoreFocus` re-focuses the dragged `<article>`, which `.card:focus-within` + the app-wide
+`:focus-visible` outline then painted). Pure CSS: a single `.card:focus { border-color:
+var(--border-hairline); outline: none; }` rule added **after** `.card:focus-within` in
+`KanbanPanel.module.css` — standard selectors/properties (`:focus`, `outline: none`, a
+`border-color` revert) with **no** OS-specific assumption, so it renders identically on WKWebView
+(macOS) and WebView2/Chromium (Windows). The edit-mode accent border (driven by `:focus-within`
+when the descendant `<textarea>` holds focus) and the inner control `:focus-visible` rings are
+untouched.
+
+#### Still needs manual Windows verification (#323)
+
+- **Post-drag focus paint (GUI-observable, can't be unit-tested).** On a Windows build (WebView2):
+  open a Kanban board, **drag a card and release** → confirm the dropped card shows **no** accent
+  border and **no** focus outline/ring (identical to a resting card). Then confirm the preserved
+  cues still fire: **hover** a card still lifts (raised border + shadow + grab cursor); clicking
+  the **pencil** to edit still lights the card's accent border via the edit `<textarea>`; and
+  **Tab** to the inner pencil/trash/checkbox still shows their own `:focus-visible` ring.
+  Re-confirm the same on macOS (WKWebView).
