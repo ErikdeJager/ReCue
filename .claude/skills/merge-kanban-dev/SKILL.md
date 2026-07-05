@@ -1,21 +1,26 @@
 ---
 name: merge-kanban-dev
 description: >-
-  The merge lane of the kanban-dev-pima board: drain the MERGE column of KANBAN.md — land each
-  card's pull request onto the default branch (resolving conflicts via the forge API, or by
-  dispatching a worktree-implementer subagent for real code conflicts — never by checking out
-  branches in the main working tree), fast-forward the local default branch, and move the card to
-  ARCHIVE — then park on a Monitor watching MERGE and resume automatically when a new PR is ready.
-  Invoke once as /merge-kanban-dev in its own terminal; it loops itself via a Monitor (never /loop).
+  The merge lane of the kanban-dev-pima board: drain the MERGE column of KANBAN.md — for each
+  card, resolve conflicts (via the forge API, or by dispatching a worktree-implementer subagent for
+  real code conflicts — never by checking out branches in the main working tree), then gate on CI:
+  merge only when the PR's checks have passed (or it has no CI at all), never while they are still
+  running, and dispatch a worktree-implementer in CI-fix mode to repair a PR whose checks failed —
+  land the pull request onto the default branch, fast-forward the local default branch, and move the
+  card to ARCHIVE — then park on a Monitor watching MERGE (and each MERGE PR's CI status) and resume
+  automatically when a PR is ready to land or a card's CI changes. Invoke once as /merge-kanban-dev
+  in its own terminal; it loops itself via a Monitor (never /loop).
 allowed-tools: Read, Edit, Bash, Glob, Grep, Task, Monitor, TaskStop, TaskList
 ---
 
 # merge-kanban-dev — lane orchestrator
 
 You are the **merge** lane of a Kanban development board (`kanban-dev-pima`). You land pull
-requests and move their cards to ARCHIVE. You **loop yourself**: drain every card currently in
-MERGE, then **arm a `Monitor`** on the MERGE column and wait — the moment a new card with an open
-PR arrives, the Monitor wakes you. You never stop the session.
+requests **whose CI has passed** and move their cards to ARCHIVE. You **loop yourself**: drain
+every card in MERGE you can land, then **arm a `Monitor`** on the MERGE column **and each MERGE
+PR's CI status** and wait — a new card with an open PR, or a card's CI concluding, wakes you. You
+never stop the session, and you **never merge a PR whose CI is still running or has failed** — you
+wait for pending checks and repair failed ones (see the CI gate, step 3).
 
 **Stay on the current branch the entire time — never run `git checkout`/`switch`/`branch`.**
 Update PR branches and resolve conflicts through the forge API / CLI (e.g. `gh`), not by checking
@@ -82,20 +87,74 @@ For each card:
      stay on your branch. **Wait** for it — this lane is single-threaded (one resolver at a time;
      no parallel pool). Re-read `KANBAN.md` after it returns (other lanes may have edited the board
      while you waited).
-   - **2c. Re-check and proceed.** On success, the PR should now be mergeable — continue to step 3
-     and merge it. If the subagent reports it couldn't fully resolve the conflicts or the checks
-     fail, **fall back**: leave the card in `## MERGE` with a short note and move on to the next
-     card.
-3. **Merge the PR** into the default branch (e.g. `gh pr merge --merge` / `--squash` per the
+   - **2c. Re-check and proceed.** On success, the PR should now be mergeable — continue to the
+     **CI gate (step 3)**. If the subagent reports it couldn't fully resolve the conflicts or the
+     checks fail, **fall back**: leave the card in `## MERGE` with a short note and move on to the
+     next card. (Resolving conflicts pushes new commits, which re-triggers CI — so the PR will
+     usually be *pending* at the CI gate; that's fine, step 3 handles it by parking, not blocking.)
+3. **CI gate — never merge on red or pending CI.** Read the PR's aggregated check status through
+   the forge API and classify it into one word. The rollup covers both the forge's own CI (e.g.
+   Actions **check-runs**, which carry `.status` + `.conclusion`) **and** external CI reported as
+   commit **statuses** (which carry `.state`), so normalize both shapes — this one command is the
+   generic signal (GitHub example):
+
+   ```bash
+   gh pr view "$PR" --json statusCheckRollup -q '
+     [ .statusCheckRollup[] |
+       if .status then                         # a check-run
+         ( .status as $st | .conclusion as $c |
+           if $st != "COMPLETED" then "PENDING"
+           elif ($c | IN("SUCCESS","NEUTRAL","SKIPPED")) then "PASS" else "FAIL" end )
+       else                                     # an external commit status
+         ( .state as $s |
+           if $s == "SUCCESS" then "PASS"
+           elif ($s | IN("PENDING","EXPECTED")) then "PENDING" else "FAIL" end )
+       end
+     ] as $s |
+     if ($s|length)==0 then "NONE"
+     elif ($s|index("PENDING")) then "PENDING"
+     elif ($s|index("FAIL")) then "FAIL" else "PASS" end'
+   ```
+
+   It prints exactly one of `NONE` / `PENDING` / `PASS` / `FAIL` (pending wins over failed, so you
+   always wait for every check to conclude before deciding). Act on it:
+   - **`NONE`** — the PR has no checks at all. **Skip this gate** and go straight to step 4 (merge).
+   - **`PENDING`** — checks are still running: **do not merge.** Leave the card in `## MERGE` and
+     move on to the next card — the Monitor (below) folds each MERGE PR's CI status into its
+     signature, so it re-wakes this lane the moment the run concludes, and you re-enter this gate.
+   - **`PASS`** — CI is green. **Clear any stale `- CI-fix:` / `- CI-blocked:` sub-line** on the
+     card, then go to step 4 (merge).
+   - **`FAIL`** — every check concluded and at least one failed: repair it, the same way you
+     de-conflict a PR —
+     - **3a. Attempt guard (bound the retries).** Read the card's `- CI-fix: <n>` sub-line
+       (4-space-indented, per the board protocol above). If `n ≥ 2`, **don't dispatch again** —
+       replace it with a terminal `- CI-blocked: <short reason>` note, leave the card in `## MERGE`,
+       and move on to the next card. This guard is what keeps the park-and-re-wake loop finite:
+       without it, every CI conclusion would re-dispatch a fixer forever (it mirrors the implement
+       lane's `- Build-note:` poison-pill).
+     - **3b. Dispatch a fixer.** Otherwise **spawn one `worktree-implementer` subagent in CI-fix
+       mode** (via the `Task` tool): hand it the card's `PR:` url and the failing-check summary, and
+       tell it to make the PR's CI green by fixing the root cause in an isolated worktree — run the
+       project's own checks until they pass, commit, and push to update the PR; **no new PR, and it
+       must not merge.** The subagent never touches the main working tree, so you stay on your
+       branch. **Wait** for it — this lane is single-threaded (one subagent at a time; no parallel
+       pool). Re-read `KANBAN.md` after it returns (other lanes may have edited the board).
+     - **3c. Record the attempt and park it.** On return, set/increment the card's `- CI-fix: <n+1>`
+       sub-line. The fixer's push re-triggers CI, so the PR is now *pending* — leave the card in
+       `## MERGE` and move on to the next card. The Monitor re-wakes you when the new run concludes,
+       and you re-enter this gate (green → merge; still failing → 3a guard → fix again, up to the
+       cap). If the fixer reported it couldn't fix the failures, treat it like reaching the cap:
+       leave a `- CI-blocked: <short reason>` note and move on.
+4. **Merge the PR** into the default branch (e.g. `gh pr merge --merge` / `--squash` per the
    repo's convention). **Delete the PR's source branch once the merge completes** — pass the
    forge's delete-branch flag (e.g. `gh pr merge --delete-branch`) or delete it via the API
    right after, so no stale branch is left behind. Delete only through the forge API / `gh`;
    never `git branch -d`/`-D` in the main working tree (that stays on the never-`checkout`/
    `switch`/`branch` rule above). If the branch is already gone or protected, note it and move on.
-4. **Fast-forward the local default branch.** `git fetch origin`, then fast-forward the local
+5. **Fast-forward the local default branch.** `git fetch origin`, then fast-forward the local
    default branch to its remote so it stays current for subsequent merges (without leaving
    the current branch).
-5. **Move the card** one column to the right — to the next `##` column after the card's current
+6. **Move the card** one column to the right — to the next `##` column after the card's current
    one in `KANBAN.md`. Don't hard-code the target: move to whatever column is immediately to the
    right, so an inserted column is respected. (Here that's `## ARCHIVE`, which hands the card to
    the archive lane and satisfies downstream dependencies.)
@@ -104,26 +163,41 @@ Then loop back to step 1 for the next card.
 
 ## Idle & wait (Monitor) — start a fresh Monitor each time the column drains
 
-When `## MERGE` holds no further card you can land:
+When `## MERGE` holds no further card you can land **right now** (every remaining card is either
+waiting on pending CI, or left behind with a note):
 
 1. **Report** the cards you merged this burst (task, PR merged, new default-branch tip), any you
-   sent a `worktree-implementer` subagent to de-conflict, and any left behind because a
-   conflict-resolver couldn't fully resolve them.
-2. **Arm a new `Monitor`** (`persistent: true`) that watches the MERGE column and emits one line
-   only when it changes:
+   sent a `worktree-implementer` subagent to de-conflict or to **fix failing CI**, any **waiting on
+   pending CI**, and any left behind (a conflict-resolver couldn't fully resolve them, or a card
+   carries a `- CI-blocked:` note after the fix cap).
+2. **Arm a new `Monitor`** (`persistent: true`) that watches the MERGE column **and each MERGE PR's
+   CI status**, emitting one line only when either changes. A card waiting on pending CI is why the
+   Monitor watches CI status — a run concluding is not a column change, so folding each MERGE PR's
+   check rollup into the signature is what re-wakes you when CI settles:
 
    ```bash
-   sig() { awk '/^## MERGE[ \t]*$/{f=1;next} /^## /{f=0} f' KANBAN.md 2>/dev/null | cksum; }
+   sig() {
+     { awk '/^## MERGE[ \t]*$/{f=1;next} /^## /{f=0} f' KANBAN.md
+       for pr in $(awk '/^## MERGE[ \t]*$/{f=1;next} /^## /{f=0} f' KANBAN.md \
+                     | grep -oiE 'https?://[^ )]+/pull/[0-9]+'); do
+         printf '%s ' "$pr"
+         gh pr view "$pr" --json statusCheckRollup \
+           -q '[.statusCheckRollup[] | (.status // .state // "") + ":" + (.conclusion // "")] | sort | join(",")' 2>/dev/null
+         echo
+       done ; } 2>/dev/null | cksum
+   }
    prev=$(sig)
    while true; do
      cur=$(sig)
-     [ "$cur" != "$prev" ] && { echo "MERGE column changed @ $(date -u +%H:%M:%S)"; prev=$cur; }
-     sleep 5
+     [ "$cur" != "$prev" ] && { echo "MERGE column or a PR's CI status changed @ $(date -u +%H:%M:%S)"; prev=$cur; }
+     sleep 30
    done
    ```
 
-   with `description: "MERGE column of KANBAN.md changed (a PR is ready to land)"`. The poll is
-   silent until a card arrives, so it costs nothing while idle.
+   with `description: "MERGE column of KANBAN.md changed, or a MERGE PR's CI status changed (a PR is
+   ready to land, or needs attention)"`. The poll is silent until something changes, so it costs
+   nothing while idle. (It polls every 30s rather than 5s: CI is slow, and each tick makes one forge
+   API call per MERGE PR — a coarser interval keeps that cheap.)
 3. **End your turn.** Stay parked. When the Monitor's notification arrives, **`TaskStop` that
    monitor** (use its id from context, or `TaskList` to find it) so only one is ever alive, then
    return to the processing playbook and drain the column again. Repeat forever.

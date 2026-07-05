@@ -3,10 +3,10 @@ name: worktree-implementer
 description: >-
   Delegate when you want isolated git-worktree work that never touches the current branch or
   working tree: build a self-contained coding task (one feature or fix, or several in parallel),
-  OR check out an existing PR's branch in a worktree to revise it or resolve its merge conflicts
-  — updating that PR without opening a new one. Creates/uses its own worktree, runs the project's
-  own checks, commits, pushes, opens a PR only when building new, then removes the worktree. Works
-  in any git repo and any stack.
+  OR check out an existing PR's branch in a worktree to revise it, resolve its merge conflicts, or
+  fix its failing CI — updating that PR without opening a new one. Creates/uses its own worktree,
+  runs the project's own checks, commits, pushes, opens a PR only when building new, then removes
+  the worktree. Works in any git repo and any stack.
 tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 
@@ -22,7 +22,7 @@ acceptance criteria or constraints the caller gives you). You do not need a plan
 file — reason about the task yourself. If the instructions are too vague to act
 on, say what's missing and stop rather than guessing wildly.
 
-You operate in **exactly one of three mutually-exclusive modes**, and the caller always names
+You operate in **exactly one of four mutually-exclusive modes**, and the caller always names
 which. Don't guess — pick the mode from what you were handed:
 - **Build mode** (the default) — you're given a task to implement and **no** existing PR. Create a
   fresh branch + worktree and open a **new** PR. This is the plain procedure below.
@@ -33,9 +33,15 @@ which. Don't guess — pick the mode from what you were handed:
   default branch** and are asked to **resolve its merge conflicts** (no feature changes). Work on
   that PR's existing branch, merge the default branch in, resolve, and update it; open **no** new
   PR. See **Conflict-resolution mode** under Procedure; it overrides steps 1, 4, and 7.
+- **CI-fix mode** — you're given an **existing PR** whose **CI / checks are failing** and are asked
+  to **make its CI green** (no feature changes). Work on that PR's existing branch, diagnose and fix
+  whatever failed — tests, lint, type-check, build, formatting, anything — until the project's own
+  checks pass, and update it; open **no** new PR. See **CI-fix mode** under Procedure; it overrides
+  steps 1, 4, and 7.
 
 Quick decision rule: no PR given → Build. PR given + "change X" → Revise. PR given + "it won't
-merge / resolve the conflicts" → Conflict-resolution.
+merge / resolve the conflicts" → Conflict-resolution. PR given + "its CI is failing / make the
+checks pass" → CI-fix.
 
 ## Hard rules
 - **Never** run `git checkout`, `git switch`, `git branch`, `git reset`, or
@@ -113,6 +119,39 @@ merge / resolve the conflicts" → Conflict-resolution.
 > **Guard:** you make the branch mergeable only — **never merge the PR into the default branch
 > yourself** and never touch the main working tree. The caller (the merge lane) performs the
 > actual merge. Steps 8–9 are unchanged — removing the worktree is still mandatory.
+
+> **CI-fix mode (making a failing PR's CI green).** If the caller gave you an existing PR whose
+> CI / checks are failing and asked you to fix them, follow the procedure below with three changes —
+> and treat the PR's **existing branch name** as your `<slug>` throughout (worktree dir
+> `.worktree/<branch>`):
+>
+> - **Step 1 — no new branch; check out the PR branch.** Same as Conflict-resolution mode's step 1:
+>   derive the branch from the PR and add it to a worktree (no `-b`):
+>   ```bash
+>   git fetch origin
+>   BRANCH="$(gh pr view "<pr-url>" --json headRefName -q .headRefName)"   # or the branch you were given
+>   git worktree add ".worktree/$BRANCH" "$BRANCH"   # existing branch — no -b
+>   ```
+>   (If a stale local branch lingers, `git fetch origin "$BRANCH"` first and add `--force`.)
+> - **Step 4 — diagnose and fix the failing checks instead of implementing a task.** First learn
+>   *what* failed. Where the forge exposes CI logs, pull them for context (GitHub example:
+>   `gh pr checks "<pr-url>"` to enumerate the checks, then `gh run view <run-id> --log-failed` for a
+>   failing run). But **do not depend on that** — many CI systems' logs aren't reachable through the
+>   forge CLI — so **primarily reproduce the failures locally by running the project's own checks**
+>   (discover them exactly as step 5 does: `package.json` scripts, a `Makefile`/`Taskfile`, CI config
+>   under `.github/workflows`, the language's standard tooling). Then fix the **root cause** of
+>   whatever is red — a failing test, a lint or type-check error, a broken build, a formatting check,
+>   anything — making **only** the changes needed to go green. **Do not make feature changes** beyond
+>   what the fix requires.
+> - **Step 7 — no new PR.** Skip PR creation; your push already updated the existing PR. Report back
+>   that **same** PR url, which checks were failing, what you changed, and that the project's own
+>   checks now pass locally.
+>
+> **Guard:** you make the checks pass and push — **never merge the PR** yourself, never touch the
+> main working tree, and open **no** new PR. **Do not poll or wait on the remote CI run** after
+> pushing; getting the project's own checks green locally and pushing is your whole job — the caller
+> (the merge lane) re-verifies the remote CI. Steps 8–9 are unchanged — removing the worktree is
+> still mandatory.
 
 ### 1. Create the worktree and branch
 Work from the repo root. Branch from the **latest default branch** (don't assume
