@@ -111,6 +111,19 @@ pub struct RecurringErrorPayload {
     pub message: String,
 }
 
+/// The launch command for a **custom** coding agent (#325). The custom agent's real
+/// program + args aren't in a static `AgentSpec` — they come from the user's
+/// `customAgentCommand` in the (opaque) settings blob, read here at spawn time. Returns
+/// `None` for every built-in agent (which use their spec's binary) and when a custom
+/// command isn't set (the spawn path then surfaces a clear "command is not set" error).
+fn custom_command_for(store: &Store, agent: &str) -> Option<String> {
+    if agent == "custom" {
+        crate::agents::read_custom_command(&store.settings())
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
 pub fn spawn_session(
     manager: State<'_, SessionManager>,
@@ -126,8 +139,16 @@ pub fn spawn_session(
     // A non-blank initial prompt pre-seeds the session (#118 Canvas templates),
     // like a scheduled session (#93); omitted/blank → a plain new session.
     let prompt = prompt.filter(|p| !p.trim().is_empty());
-    let info =
-        manager.spawn_session_with_prompt(cwd.as_str(), name.clone(), prompt.as_deref(), &agent)?;
+    // The custom agent's launch command lives in the (opaque) settings blob (#325);
+    // resolve it only for `agent == "custom"`, else pass `None`.
+    let custom = custom_command_for(&store, &agent);
+    let info = manager.spawn_session_with_prompt(
+        cwd.as_str(),
+        name.clone(),
+        prompt.as_deref(),
+        &agent,
+        custom.as_deref(),
+    )?;
     let record = PersistedSession {
         id: info.id.clone(),
         claude_session_id: info.id,
@@ -189,7 +210,8 @@ pub fn spawn_worktree_agent(
         git::worktree_add(&repo, &branch, &dest).map_err(SessionError::Git)?;
     }
     let dest_str = dest.to_string_lossy().to_string();
-    let info = manager.spawn_session(dest_str.as_str(), None, &agent)?;
+    let custom = custom_command_for(&store, &agent);
+    let info = manager.spawn_session(dest_str.as_str(), None, &agent, custom.as_deref())?;
     let record = PersistedSession {
         id: info.id.clone(),
         claude_session_id: info.id,
@@ -230,7 +252,8 @@ pub fn spawn_worktree_agent_new_branch(
     let dest = worktree_path(&store, &repo, &name)?;
     git::worktree_add_new_branch(&repo, &name, &base, &dest).map_err(SessionError::Git)?;
     let dest_str = dest.to_string_lossy().to_string();
-    let info = manager.spawn_session(dest_str.as_str(), None, &agent)?;
+    let custom = custom_command_for(&store, &agent);
+    let info = manager.spawn_session(dest_str.as_str(), None, &agent, custom.as_deref())?;
     let record = PersistedSession {
         id: info.id.clone(),
         claude_session_id: info.id,
@@ -1183,12 +1206,14 @@ fn fire_one_schedule(
         }
         (sched.cwd.clone(), None)
     };
+    let custom = custom_command_for(store, &sched.agent);
     let info = manager
         .spawn_session_with_prompt(
             &spawn_cwd,
             sched.name.clone(),
             sched.prompt.as_deref(),
             &sched.agent,
+            custom.as_deref(),
         )
         .map_err(|e| e.to_string())?;
     let record = PersistedSession {
@@ -1504,12 +1529,14 @@ fn fire_one_recurring(
         }
         (rec.cwd.clone(), None)
     };
+    let custom = custom_command_for(store, &rec.agent);
     let info = manager
         .spawn_session_with_prompt(
             &spawn_cwd,
             rec.name.clone(),
             rec.prompt.as_deref(),
             &rec.agent,
+            custom.as_deref(),
         )
         .map_err(|e| e.to_string())?;
     let record = PersistedSession {
@@ -1663,9 +1690,11 @@ pub fn commit_diff(cwd: String, sha: String) -> Result<WorkingDiff, SessionError
 // the `current_branch` note above.
 #[tauri::command]
 pub async fn fetch_remotes(cwd: String) -> Result<(), SessionError> {
-    tauri::async_runtime::spawn_blocking(move || git::fetch_remotes(&cwd).map_err(SessionError::Git))
-        .await
-        .map_err(|e| SessionError::Io(e.to_string()))?
+    tauri::async_runtime::spawn_blocking(move || {
+        git::fetch_remotes(&cwd).map_err(SessionError::Git)
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
 /// Fast-forward the current branch of `cwd` to its upstream — `git pull --ff-only`
@@ -2196,16 +2225,37 @@ pub struct AgentInfo {
 /// CLI is present (#141) — the backend foundation the #142 missing-binary screen +
 /// agent selector consume. An unknown id resolves to Claude (per `agent_spec`).
 #[tauri::command]
-pub fn agent_info(agent: String) -> AgentInfo {
+pub fn agent_info(store: State<'_, Store>, agent: String) -> AgentInfo {
     let spec = crate::agents::agent_spec(&agent);
+    // The custom agent (#325) has no fixed binary — its real program comes from the
+    // user's `customAgentCommand` in Settings. Resolve it so the presence/version probe
+    // and the ClaudeMissing banner name the **actual** program (falling back to the
+    // "custom" placeholder when unset). Built-in agents keep their spec's binary.
+    let (binary_name, version) = if spec.id == "custom" {
+        match crate::agents::read_custom_command(&store.settings())
+            .and_then(|cmd| crate::agents::parse_custom_command(&cmd))
+            .map(|(program, _args)| program)
+        {
+            Some(program) => {
+                let v = binary_version(&program);
+                (program, v)
+            }
+            None => (spec.binary_name.to_string(), None),
+        }
+    } else {
+        (
+            spec.binary_name.to_string(),
+            binary_version(spec.binary_name),
+        )
+    };
     AgentInfo {
         id: spec.id.to_string(),
         display_name: spec.display_name.to_string(),
-        binary_name: spec.binary_name.to_string(),
+        binary_name,
         install_hint: spec.install_hint.to_string(),
         supports_resume: spec.supports_resume,
         supports_auto_name: spec.supports_auto_name,
-        version: binary_version(spec.binary_name),
+        version,
     }
 }
 

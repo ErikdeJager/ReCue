@@ -899,6 +899,9 @@ export const DEFAULT_SETTINGS: Settings = {
   autoName: true,
   autoSave: true,
   defaultAgent: "claude",
+  // Launch command for the custom agent (#325); empty until the user sets one. Blank +
+  // `defaultAgent === "custom"` → a custom spawn fails with a clear toast.
+  customAgentCommand: "",
   autoContinueAfterLimit: false,
   // True by default (#309): the "Enable auto restart on limit reset" prompt button
   // above the usage bar is offered when the limit is hit and auto-continue is off.

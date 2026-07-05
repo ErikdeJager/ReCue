@@ -26,9 +26,13 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { agentCaps, agentIsUntested, SELECTABLE_AGENTS } from "../../agents";
+import { agentCaps, agentIsUntested, SETTINGS_AGENTS } from "../../agents";
 import * as ipc from "../../ipc";
-import { allPatchnotes, compareVersions, patchnotesFor } from "../../patchnotes";
+import {
+  allPatchnotes,
+  compareVersions,
+  patchnotesFor,
+} from "../../patchnotes";
 import { kbdHint } from "../../platform";
 import { DEFAULT_SETTINGS, REPO_PALETTE, useStore } from "../../store";
 import type { Settings as SettingsType } from "../../types";
@@ -429,7 +433,7 @@ function SettingsModal() {
                 <div className={styles.field}>
                   <span className={styles.fieldLabel}>Coding agent</span>
                   <div className={styles.segmented}>
-                    {SELECTABLE_AGENTS.map((a) => (
+                    {SETTINGS_AGENTS.map((a) => (
                       <button
                         key={a.id}
                         type="button"
@@ -442,10 +446,45 @@ function SettingsModal() {
                     ))}
                   </div>
                   <span className={styles.fieldHelp}>
-                    The CLI new sessions launch under. Codex and OpenCode
-                    sessions can't be resumed, forked, or auto-named, and have
-                    no usage meter. Existing sessions keep their agent.
+                    The CLI new sessions launch under. Codex, OpenCode, and
+                    Custom sessions can't be resumed, forked, or auto-named, and
+                    have no usage meter. Existing sessions keep their agent.
                   </span>
+                  {draft.defaultAgent === "custom" && (
+                    <>
+                      <input
+                        type="text"
+                        className={styles.commandInput}
+                        value={draft.customAgentCommand}
+                        onChange={(e) =>
+                          update("customAgentCommand", e.currentTarget.value)
+                        }
+                        placeholder="my-agent --flag"
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        aria-label="Custom agent command"
+                      />
+                      <span className={styles.fieldHelp}>
+                        The exact command ReCue runs to start each new agent — a
+                        program and its arguments, as you'd type it in a
+                        terminal (split on spaces; quote to group). Resume,
+                        fork, auto-naming, and the usage meter aren't available
+                        for a custom agent.
+                      </span>
+                      {draft.customAgentCommand.trim() === "" && (
+                        <span className={styles.fieldWarn}>
+                          <TriangleAlert
+                            size={13}
+                            strokeWidth={2}
+                            aria-hidden
+                          />
+                          Enter a command — starting a session with none set
+                          will fail.
+                        </span>
+                      )}
+                    </>
+                  )}
                   {agentIsUntested(draft.defaultAgent) && (
                     <span className={styles.fieldWarn}>
                       <TriangleAlert size={13} strokeWidth={2} aria-hidden />

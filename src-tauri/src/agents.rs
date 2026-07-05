@@ -23,6 +23,14 @@
 //! off. OpenCode's bare positional is a **project directory**, not a prompt, so a seeded
 //! launch passes the prompt via `opencode --prompt "<text>"` (best-effort — **verify
 //! against the installed `opencode` CLI**); an interactive session is the bare TUI.
+//!
+//! Finally, the **`custom`** spec (#325) is a **user-defined** agent: the actual program
+//! and its args aren't baked into a static spec — they come from the user's
+//! `customAgentCommand` Settings string, parsed at spawn time by `parse_custom_command`.
+//! Like Codex/OpenCode it owns its own session identity (resume/fork/auto-name gated off),
+//! and is marked untested. The `binary_name` here is a placeholder (`"custom"`); the real
+//! program is resolved from the settings blob (`read_custom_command`) by the spawn path and
+//! the `agent_info` probe.
 
 /// The agent id stored on records written before #101 (and the only agent until the
 /// Codex follow-up): Claude Code. Used as the serde / read-time default everywhere.
@@ -147,6 +155,20 @@ const OPENCODE: AgentSpec = AgentSpec {
     install_hint: "Install OpenCode and make sure `opencode` is on your PATH.",
 };
 
+/// The **user-defined** custom agent spec (#325). Its `binary_name` is a placeholder —
+/// the actual program + args come from the user's `customAgentCommand` Settings string
+/// (parsed by `parse_custom_command`), resolved at spawn time and in the `agent_info`
+/// probe. Like Codex/OpenCode it owns its own session identity, so resume/fork by id and
+/// the claude-style auto-name log are gated off (both flags `false`). Untested by nature.
+const CUSTOM: AgentSpec = AgentSpec {
+    id: "custom",
+    display_name: "Custom",
+    binary_name: "custom",
+    supports_resume: false,
+    supports_auto_name: false,
+    install_hint: "Set a launch command in Settings → Sessions.",
+};
+
 /// Resolve an agent id to its spec (#141). An unknown id — including a legacy
 /// record's defaulted `"claude"` or any unrecognized value — falls back to Claude,
 /// so nothing ever fails to resolve.
@@ -154,8 +176,74 @@ pub fn agent_spec(id: &str) -> AgentSpec {
     match id {
         "codex" => CODEX,
         "opencode" => OPENCODE,
+        "custom" => CUSTOM,
         _ => CLAUDE,
     }
+}
+
+/// Parse a user's **custom launch command** (#325) into `(program, args)`. This is a
+/// minimal **argv** tokenizer — NOT a shell: it splits on ASCII whitespace, honoring
+/// `"double"` and `'single'` quotes (a quoted run groups its tokens and the quotes are
+/// stripped). There is no shell metacharacter handling — no pipes, redirection, `&&`,
+/// `$VAR`, or globbing (the user wraps those themselves, e.g. `bash -lc "…"`). Returns
+/// `None` when the command has no tokens (empty / whitespace only). The first token is
+/// the program; the rest are its args.
+pub fn parse_custom_command(command: &str) -> Option<(String, Vec<String>)> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    // The active quote char, if inside a quoted run (`"` or `'`).
+    let mut quote: Option<char> = None;
+    for ch in command.chars() {
+        match quote {
+            Some(q) => {
+                if ch == q {
+                    // Closing quote — the run ends but the token continues (so
+                    // `a"b"c` → `abc`).
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => {
+                if ch == '"' || ch == '\'' {
+                    quote = Some(ch);
+                    in_token = true;
+                } else if ch.is_whitespace() {
+                    if in_token {
+                        tokens.push(std::mem::take(&mut current));
+                        in_token = false;
+                    }
+                } else {
+                    current.push(ch);
+                    in_token = true;
+                }
+            }
+        }
+    }
+    // Flush a trailing token (including an unterminated quote — treat its contents as
+    // a best-effort token rather than dropping them).
+    if in_token {
+        tokens.push(current);
+    }
+    if tokens.is_empty() {
+        return None;
+    }
+    let program = tokens.remove(0);
+    Some((program, tokens))
+}
+
+/// Read the user's custom-agent command from the (opaque) settings blob (#325). The
+/// frontend owns the settings shape; the backend reads just this one key without a
+/// struct. Returns the trimmed command, or `None` when the key is absent, not a string,
+/// or blank.
+pub fn read_custom_command(settings: &serde_json::Value) -> Option<String> {
+    settings
+        .get("customAgentCommand")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 #[cfg(test)]
@@ -261,5 +349,77 @@ mod tests {
             spec.spawn_args("abc", Some("hi")),
             vec!["--session-id", "abc", "hi"]
         );
+    }
+
+    #[test]
+    fn custom_spec_has_no_resume_or_auto_name() {
+        let spec = agent_spec("custom");
+        assert_eq!(spec.id, "custom");
+        // Placeholder binary — the real program comes from the parsed command (#325).
+        assert_eq!(spec.binary_name, "custom");
+        assert!(
+            !spec.supports_resume,
+            "Custom resume/fork is gated off (owns its own session id)"
+        );
+        assert!(
+            !spec.supports_auto_name,
+            "Custom has no claude-style ai-title log"
+        );
+    }
+
+    #[test]
+    fn parse_custom_command_tokenizes_program_and_args() {
+        // Bare word → program, no args.
+        assert_eq!(
+            parse_custom_command("codex"),
+            Some(("codex".to_string(), vec![]))
+        );
+        // Word + flags.
+        assert_eq!(
+            parse_custom_command("mytool --model gpt-x"),
+            Some((
+                "mytool".to_string(),
+                vec!["--model".to_string(), "gpt-x".to_string()]
+            ))
+        );
+        // Double-quoted group is one arg (quotes stripped).
+        assert_eq!(
+            parse_custom_command(r#"mytool "a b""#),
+            Some(("mytool".to_string(), vec!["a b".to_string()]))
+        );
+        // Single-quoted group likewise.
+        assert_eq!(
+            parse_custom_command("mytool 'a b' c"),
+            Some((
+                "mytool".to_string(),
+                vec!["a b".to_string(), "c".to_string()]
+            ))
+        );
+        // Extra / leading / trailing whitespace collapses.
+        assert_eq!(
+            parse_custom_command("  mytool   --foo  "),
+            Some(("mytool".to_string(), vec!["--foo".to_string()]))
+        );
+        // Empty / whitespace-only → None (no phantom "custom" spawn).
+        assert_eq!(parse_custom_command(""), None);
+        assert_eq!(parse_custom_command("   "), None);
+    }
+
+    #[test]
+    fn read_custom_command_reads_the_settings_key() {
+        // Present + non-blank → the trimmed command.
+        let v = serde_json::json!({ "customAgentCommand": "  mytool --foo  " });
+        assert_eq!(read_custom_command(&v), Some("mytool --foo".to_string()));
+        // Missing key → None.
+        let v = serde_json::json!({ "defaultAgent": "custom" });
+        assert_eq!(read_custom_command(&v), None);
+        // Blank / whitespace-only value → None.
+        let v = serde_json::json!({ "customAgentCommand": "   " });
+        assert_eq!(read_custom_command(&v), None);
+        // Non-string value → None.
+        let v = serde_json::json!({ "customAgentCommand": 42 });
+        assert_eq!(read_custom_command(&v), None);
+        // Null settings blob → None.
+        assert_eq!(read_custom_command(&serde_json::Value::Null), None);
     }
 }

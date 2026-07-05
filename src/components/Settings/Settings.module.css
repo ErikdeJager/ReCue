@@ -128,6 +128,23 @@
   line-height: 1.4;
 }
 
+/* Custom-agent launch command input (#325), under the coding-agent selector. Matches
+   the Kanban column-name input styling so it reads as part of the same settings surface. */
+.commandInput {
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+}
+
+.commandInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* Untested-agent caution under the coding-agent selector. */
 .fieldWarn {
   display: flex;
