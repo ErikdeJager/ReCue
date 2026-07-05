@@ -598,6 +598,54 @@
   font-size: var(--fs-meta-xs);
 }
 
+/* --- Shortcuts pane (#318): a read-only grouped reference of keybinds. --- */
+.shortcutsSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+
+.shortcutGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.shortcutList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.shortcutRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+}
+
+/* Bordered mono chip, modeled on CanvasCloseModal's `.kbd`; a fixed min-width so
+   the descriptions line up in a column. */
+.shortcutKey {
+  flex-shrink: 0;
+  min-width: 96px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+  line-height: 1.6;
+  text-align: center;
+}
+
+.shortcutDesc {
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+}
+
 /* Action row: Reset (left), Cancel / Save (right). */
 .actions {
   display: flex;
