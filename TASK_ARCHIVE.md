@@ -1569,3 +1569,64 @@ session is live.
   agent; no hardcoded POSIX invocation. Claude spawn/resume/fork args are byte-for-byte unchanged
   (guarded by the `agent == "custom"` branch). Checks green: `npm run build` / `npm run lint` /
   `npm test` / `npm run format:check` / `cargo test` / `npm run lint:rust` / `npm run format:rust`.
+
+---
+
+### 327. [x] Open the repo's GitHub page from the sidebar folder menu
+
+**Status:** Done
+**Depends on:** none
+
+**Description**
+
+Added a **"View on GitHub"** item to the left-panel sidebar's repo/folder context menus that opens
+the folder's GitHub repository page in the default browser — shown **only** when the folder is a git
+repo whose remote points at GitHub, hidden otherwise. The menu still opens **instantly**: the
+decision (and the URL) is resolved ahead of time on a fixed refresh cadence and cached in the store,
+never computed synchronously on right-click.
+
+**What shipped** (commit [`b7de41e`](https://github.com/ErikdeJager/ReCue/commit/b7de41e), PR
+[#79](https://github.com/ErikdeJager/ReCue/pull/79), branch `view-on-github-menu`, 2026-07-05):
+
+- **`src-tauri/src/git.rs`:** a pure, unit-tested `github_web_url(remote)` normalizer (HTTPS/`http`/
+  SCP-SSH `git@github.com:owner/repo.git`/`ssh://`/`git://` → `https://github.com/<owner>/<repo>`,
+  stripping `.git`/trailing slash/userinfo/port, `http`→`https`, host must be exactly `github.com`
+  case-insensitive, `None` for GitLab/Bitbucket/GHE/single-segment/garbage), plus
+  `github_web_url_for(cwd)` (prefers `origin`, else the first `git remote`; `run_git` →
+  `hidden_command`, local no-network) and the batched `github_web_urls(paths)` (mirrors
+  `current_branches`, only GitHub-resolving paths present).
+- **`src-tauri/src/commands.rs` + `lib.rs`:** a new async `github_web_urls` command
+  (`spawn_blocking`, keeps the webview thread free), registered in `invoke_handler!`.
+- **`src/ipc.ts`:** a `githubWebUrls(paths)` wrapper.
+- **`src/store.ts`:** a `githubUrls: Record<string,string>` map + init, a `refreshGithubUrls` action
+  (full-replace with a `urlMapsEqual` shallow-equality guard so an idle settle that didn't touch
+  remotes doesn't re-render), wired into the **same cadence** as `branches`/`fileStatuses` — load +
+  repo-set change and the debounced busy→idle edge (#212/#252) — so an in-terminal `git remote
+  add`/`set-url` is picked up.
+- **`src/components/Sidebar/Sidebar.tsx`:** reads the cached `githubUrls`; the "View on GitHub" item
+  (text-only, no icon, placed right after **Pull** in the non-destructive utility group) is rendered
+  in all three repo menus — the **repo header menu**, the **`RepoBranchLine`** menu, and the
+  **`WorktreeHeader`** menu (a worktree uses its **parent** repo's cached URL) — each opening the URL
+  via the already-imported cross-platform http/https-only `openUrl` (#217).
+
+**Key files/areas touched:** `src-tauri/src/git.rs` (normalizer + git read + tests), `commands.rs`,
+`lib.rs`, `src/ipc.ts`, `src/store.ts`, `src/components/Sidebar/Sidebar.tsx`. 6 files.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Menu opens instantly (the performance constraint):** the item's visibility and URL come only
+  from the cached `githubUrls` map — **zero git work at menu-open time**. The only git work is two
+  cheap local `git remote` / `git remote get-url` calls per repo, run off the main thread
+  (`spawn_blocking`) on the debounced branch/file-status cadence.
+- **Assumptions:** prefer `origin` else the first remote (hide if none); host must be exactly
+  `github.com` (GitHub Enterprise hidden — not reliably detectable; a follow-up could add a
+  configurable host list); always the repo root page (no branch/PR/commit/file deep-link); no
+  settings toggle.
+- **Cross-platform:** the only OS-sensitive primitives — the `git` shell-out (guarded by
+  `hidden_command`, no Windows console flash) and the browser open (`open_url` — macOS `open` /
+  Windows `cmd /C start` / `xdg-open`) — are already cross-platform, so behavior is identical on
+  macOS and Windows; no POSIX-only assumptions. Fail-open: non-GitHub/remote-less/non-git folders
+  resolve to `None` and hide the item. Checks green: `npm run build` / `npm run lint` / `npm test` /
+  `cargo test` / `npm run lint:rust`.
