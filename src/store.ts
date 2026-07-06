@@ -4474,6 +4474,20 @@ export const useStore = create<AppState>()((set, get) => ({
 
   selectItem: (item) => {
     const s = get();
+
+    // #334: selecting an agent the active Overview folder filter would hide clears the
+    // filter, so the clicked agent is actually visible/selectable in the wall instead of
+    // silently hidden behind a mismatched folder filter. Reuses `sessionInFilter` — the
+    // exact predicate the Overview wall uses — so an "all"/"own"/worktree filter is judged
+    // the same way the wall renders it. Scoped to agent rows (the card's wording); other
+    // item kinds leave the filter intact.
+    if (item.kind === "agent" && s.overviewRepoFilter) {
+      const sess = s.sessions.find((x) => x.id === item.id);
+      if (sess && !sessionInFilter(sess, s.overviewRepoFilter)) {
+        set({ overviewRepoFilter: null });
+      }
+    }
+
     if (s.view !== "canvas") {
       // Overview (or any non-canvas): select; Overview scrolls its column in.
       set({ selectedId: item.id });

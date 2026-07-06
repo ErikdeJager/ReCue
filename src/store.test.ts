@@ -355,6 +355,87 @@ describe("app store", () => {
     expect(useStore.getState().overviewRepoFilter).toBeNull();
   });
 
+  it("selectItem clears a mismatched Overview folder filter for an agent (#334)", () => {
+    useStore.setState({
+      sessions: [
+        { ...session("a"), repoPath: "/repo/a" },
+        { ...session("b"), repoPath: "/repo/b" },
+      ],
+      overviewRepoFilter: { path: "/repo/a", mode: "all" },
+    });
+    // Selecting an agent in a *different* folder clears the filter and selects it.
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "b", repoPath: "/repo/b" });
+    expect(useStore.getState().overviewRepoFilter).toBeNull();
+    expect(useStore.getState().selectedId).toBe("b");
+  });
+
+  it("selectItem keeps the filter when the agent is in the filtered folder (#334)", () => {
+    useStore.setState({
+      sessions: [{ ...session("a"), repoPath: "/repo/a" }],
+      overviewRepoFilter: { path: "/repo/a", mode: "all" },
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "a", repoPath: "/repo/a" });
+    expect(useStore.getState().overviewRepoFilter).toEqual({
+      path: "/repo/a",
+      mode: "all",
+    });
+    expect(useStore.getState().selectedId).toBe("a");
+  });
+
+  it("selectItem keeps an 'all' filter for a worktree agent of the filtered repo (#334)", () => {
+    useStore.setState({
+      sessions: [ovSession("w", "/repo/a-wt", 0, "/repo/a")],
+      overviewRepoFilter: { path: "/repo/a", mode: "all" },
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "w", repoPath: "/repo/a-wt" });
+    expect(useStore.getState().overviewRepoFilter).toEqual({
+      path: "/repo/a",
+      mode: "all",
+    });
+    expect(useStore.getState().selectedId).toBe("w");
+  });
+
+  it("selectItem clears an 'own' filter for a worktree agent it hides (#334)", () => {
+    useStore.setState({
+      sessions: [ovSession("w", "/repo/a-wt", 0, "/repo/a")],
+      overviewRepoFilter: { path: "/repo/a", mode: "own" },
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "w", repoPath: "/repo/a-wt" });
+    expect(useStore.getState().overviewRepoFilter).toBeNull();
+    expect(useStore.getState().selectedId).toBe("w");
+  });
+
+  it("selectItem does not touch a null filter or a non-agent item's filter (#334)", () => {
+    // No filter → nothing to clear.
+    useStore.setState({
+      sessions: [{ ...session("b"), repoPath: "/repo/b" }],
+      overviewRepoFilter: null,
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "b", repoPath: "/repo/b" });
+    expect(useStore.getState().overviewRepoFilter).toBeNull();
+    expect(useStore.getState().selectedId).toBe("b");
+
+    // A non-agent item in another folder leaves the filter intact (scoped to agents).
+    useStore.setState({ overviewRepoFilter: { path: "/repo/a", mode: "all" } });
+    useStore
+      .getState()
+      .selectItem({ kind: "diff", id: "p1", repoPath: "/repo/b" });
+    expect(useStore.getState().overviewRepoFilter).toEqual({
+      path: "/repo/a",
+      mode: "all",
+    });
+  });
+
   it("forgetRepo drops the repo's sessions + recent, selection, and filter (#31/#34)", async () => {
     useStore.setState({
       sessions: [
