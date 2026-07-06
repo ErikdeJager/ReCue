@@ -2765,3 +2765,42 @@ Consolidate agent header actions (Fork / Copy resume / Watch) into a "…" menu.
 - **Areas touched:** new `src/components/AgentHeaderMenu/` (`.tsx` + `.module.css`); edits to
   `src/components/Overview/Overview.tsx`, `src/components/Canvas/CanvasSurface.tsx`,
   `src/components/BigMode/BigModeModal.tsx`.
+
+## Task 341 — Kanban card editor: auto-continue `-` bullet lists on Shift+Enter
+
+- **Which key fires it:** In the Kanban card editor plain **Enter commits** the card and never
+  inserts a newline; **Shift+Enter is the newline key**. Per the card's "shift+enter" wording,
+  smart continuation fires on **Shift+Enter only**; plain Enter still commits unchanged.
+- **Which textareas are in scope:** "kanban item" was read as **both** card-composition
+  textareas — editing an existing card **and** the Add-card composer — since both compose a
+  card's title+body identically (both already hint "Shift+Enter for detail lines"). The board
+  **Raw**-view textarea and the FileViewer raw-markdown textarea are **out of scope** (separate
+  whole-file markdown surfaces).
+- **Which markers:** **`-` only** (dash), matching the card verbatim and the Kanban `-`
+  convention. `*`, `+`, and ordered (`1.`) lists are **out of scope**; the pure helper centralizes
+  the marker match so a follow-up can extend it in one place.
+- **Task-list items:** `- [ ] `/`- [x] ` are still `-` bullets (and Kanban cards are
+  checklist-oriented), so continuing a task item is **in scope** and produces a **fresh unchecked**
+  `- [ ] ` (a checked source continues unchecked).
+- **Empty bullet on Shift+Enter:** **Terminates the list** — the empty `- ` (or `- [ ] `) prefix
+  is removed and the caret lands on the now-blank line; no second empty bullet is added (standard
+  "double-Enter exits the list"). No new line is inserted in this case.
+- **Indentation:** Leading whitespace (spaces/tabs) is **preserved** on the continued bullet, so
+  nested/indented sub-bullets keep their indent.
+- **Caret / mid-line / selection:** The helper operates on the caret position — mid-line
+  Shift+Enter **splits** the text (right side becomes the new bullet's content); a non-collapsed
+  **selection is replaced** (deleted) before continuing.
+- **Title line not special-cased:** The helper is line-based and doesn't distinguish the title
+  line (line 1); a `-` on the title line would also continue (harmless, keeps the helper pure).
+- **Non-bullet lines & a bare `-`:** Helper returns `null` so the native Shift+Enter newline
+  happens unchanged; a lone `-` with no following space is not a bullet.
+- **Implementation technique:** The textareas are **controlled** React inputs, so on Shift+Enter
+  over a bullet the handler `preventDefault`s, computes `{value, caret}` via the pure helper,
+  pushes it through the existing setter with **`flushSync`**, then restores the caret with
+  `setSelectionRange` (avoids caret flicker).
+- **Cross-platform:** Pure WebView string logic on **Shift+Enter** (no `Cmd`/`Ctrl` chord, no
+  native/path/shell code) — identical on macOS (WKWebView) and Windows (WebView2).
+- **Areas touched:** new `src/components/Kanban/smartList.ts` + `smartList.test.ts` (pure helper +
+  Vitest tests); edits to `src/components/Kanban/KanbanPanel.tsx` (import `flushSync` +
+  `applySmartNewline`, add a module-level key handler, wire it into the two card-textarea
+  `onKeyDown` handlers). No engine, CSS, or backend changes.
