@@ -2454,3 +2454,36 @@ a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
 - **Areas touched:** `src-tauri/src/commands.rs` (six diff/status commands → async
   `spawn_blocking`) and `src-tauri/src/git.rs` (`Default` derives on `DiffSummary`/`WorkingDiff`).
   No frontend files.
+
+## Task 331 — "New session here" on a worktree agent nests under the existing worktree instead of registering a stray sidebar folder
+
+- **"Reuse the existing worktree" = the new agent JOINS the existing worktree's nested sub-group**
+  (same worktree folder `repoPath` → same sub-group; #74 already supports multiple agents per
+  worktree), not a second/separate worktree. Chosen because the card explicitly wants "another
+  agent nested under that same worktree."
+- **Fix spans backend + frontend, not frontend-only.** The Rust `spawn_session` command durably
+  persists `worktree_parent: None` and `touch_recent(worktreeFolder)`, which would re-introduce
+  the stray top-level folder on the next `refresh()`/reboot even if the frontend patched its
+  optimistic state. So the backend must be corrected; the frontend change only keeps the
+  optimistic UI consistent.
+- **Detection method = reuse the recorded `worktree_parent` of an existing session at the same
+  `repo_path`** (mirrors the frontend `worktreeParentOf`), rather than a git-based worktree probe.
+  Chosen for reliability, consistency with how the app already tracks worktree membership, and
+  because it matches an opaque string identifier (separator-agnostic, identical on
+  macOS/Windows) with no path parsing.
+- **The "New session here" UX for a worktree stays an instant, no-modal spawn on the worktree's
+  current branch** (no branch step introduced) — aligns with #213 "scoped to its worktree folder"
+  + #177. Only grouping/recents change, not the spawn flow.
+- **Centralize in the backend `spawn_session` command** so every entry point routing through
+  `ipc.spawnSession` (OpenViewButton "New session here", `NewSessionModal` instant/branch spawn,
+  `CreatePanelModal`, Canvas template `new-agent`, `createBranchSession`) nests correctly at once.
+  Fork (#126) and schedule/recurring (#93/#294) already nest and are left unchanged.
+- **Accepted edge case (out of scope):** a worktree that currently has only a non-agent panel and
+  zero session records (no live/exited agent) can't have its parent resolved from the session
+  store, so its panel's "New session here" would still register a top-level folder. Rare, not the
+  reported bug (a worktree *agent*'s button always has a live session); noted as a known
+  limitation for a follow-up.
+- **Areas touched:** `src-tauri/src/commands.rs` (new `worktree_parent_for_cwd` helper +
+  `spawn_session` sets `worktree_parent`/`touch_recent` parent + Rust test), `src/store.ts`
+  (`spawnSession`/`createBranchSession` optimistic recents use `record.worktree_parent ?? cwd`),
+  `src/store.test.ts` and optionally `src/paths.test.ts` (grouping tests).
