@@ -389,7 +389,13 @@ function NewSessionModal() {
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
+      if (event.key === "Escape") {
+        // (#332) On macOS native fullscreen an unhandled Esc pops the window out of
+        // fullscreen; preventDefault keeps Esc scoped to cancelling the modal. Harmless
+        // on Windows / when not fullscreen.
+        event.preventDefault();
+        close();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
