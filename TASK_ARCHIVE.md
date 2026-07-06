@@ -2008,3 +2008,59 @@ detecting fullscreen state.
   flagged for a manual macOS-fullscreen smoke check per the repo's GUI-path convention; the automated
   checks confirm the event is `preventDefault`ed. Checks green: `npm run build` / `npm run lint` /
   `npm test`.
+
+### 334. [x] Clear the Overview folder filter when selecting an agent it would hide
+
+When the Overview wall is filtered to one folder and the user clicks a sidebar **agent row** belonging
+to a **different** folder — one the active filter would hide — the filter now **clears automatically**,
+so the clicked agent is actually shown and selected in the wall instead of silently disappearing behind
+a mismatched folder filter. **Before:** the Overview folder filter (`overviewRepoFilter`, #34/#197/#247)
+narrows the wall to one repo cluster, but `selectItem` (#79, the sidebar-row select action) only set
+`selectedId` and never touched the filter — so selecting an agent the filter hid pointed `selectedId` at
+a column that wasn't rendered, and nothing appeared to happen (the visible no-op the card reported). The
+fix adds a small early-out guard at the top of `selectItem` that, for an **agent** the current filter
+would hide, clears the filter first — judged by `sessionInFilter`, the exact predicate the wall itself
+uses to render.
+
+**What shipped** (commit [`d7a0b35`](https://github.com/ErikdeJager/ReCue/commit/d7a0b35), PR
+[#86](https://github.com/ErikdeJager/ReCue/pull/86), branch `clear-overview-filter-on-agent-select`,
+2026-07-06; 2 files, +95):
+
+- **`src/store.ts`:** added a `#334` guard at the top of the `selectItem` action (before its
+  `view !== "canvas"` branch) — when `item.kind === "agent"` and a filter is active, it looks the full
+  session up in `s.sessions` (a `SidebarItem` carries only `{ id, kind, repoPath }`, but
+  `sessionInFilter` needs the session's `worktreeParent` to judge `"own"`/worktree cases) and, if
+  `!sessionInFilter(sess, s.overviewRepoFilter)`, sets `overviewRepoFilter: null`. No new import
+  (`sessionInFilter` was already imported). Fail-safe: a not-found session keeps the filter.
+- **`src/store.test.ts`:** 5 new `#334` unit tests beside the existing `setOverviewRepoFilter` tests —
+  mismatched agent clears the filter, same-folder agent keeps it, `"all"`-filter worktree agent of the
+  filtered repo keeps it (visible via `effectiveRepo`, #96), `"own"`-filter worktree agent it hides
+  clears it, and a null filter / a non-agent item both leave the filter untouched.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 334):
+
+- **"Deselect" = clear the filter entirely** (`overviewRepoFilter → null`), not switch it to the clicked
+  agent's folder — the card says "the filter should deselect".
+- **Scoped to agent rows only.** `selectItem` is shared by all sidebar item kinds (files, diffs,
+  terminals, kanban, filetree, scheduled, recurring); the guard fires only for `item.kind === "agent"`,
+  leaving every other kind's filter intact.
+- **Only a mismatch clears it** — selecting an agent already visible under the filter leaves the filter
+  as is; judged by the wall's own `sessionInFilter` (so an `"all"` filter keeps a same-repo worktree
+  agent, an `"own"` filter clears for one it hides).
+- **Runs regardless of view.** The guard is before `selectItem`'s view branching; clearing the filter
+  while in Canvas is harmless (the filter only narrows the Overview wall) and keeps the sidebar's
+  filtered-header highlight consistent on return to Overview.
+- Keyboard navigation (`useKeyboardNav.ts`) steps only through the already-filtered column set, so it
+  can never land on a hidden agent — no change needed, out of scope.
+
+**Key files/areas touched:** `src/store.ts`, `src/store.test.ts`. 2 files. Frontend-only; no Rust.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Cross-platform:** a single additive early-out in one store action reusing the wall's
+  `sessionInFilter` predicate — pure frontend/store logic with no data-model, IPC, Rust, or OS-specific
+  code, so it behaves identically on macOS and Windows (no `platform`/`#[cfg]` gate needed). Idempotent
+  (re-selecting the same agent is a no-op once the filter is null). Checks green: `npm run build` /
+  `npm run lint` / `npm test`.
