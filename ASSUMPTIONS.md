@@ -2416,3 +2416,41 @@ a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
 - **Areas touched:** `src/components/DiffInspector/DiffInspector.module.css` only — add
   `flex-shrink:0` + `min-width:320px` to `.card`, change `.accordion` `overflow-y:auto` →
   `overflow:auto`. Pure WebView CSS (no `.tsx`/Rust/native changes), identical on macOS/Windows.
+
+## Task 330 — Load diff-viewer and file-tree git reads off the webview thread (async)
+
+- **Root cause chosen: blocking Rust I/O on the webview thread, not too-frequent re-fetch or
+  off-screen polling.** `working_diff`, `file_statuses`, `file_diff`, `list_commits`,
+  `commit_diff`, and `compare_branches` are plain synchronous `#[tauri::command] pub fn` in
+  `commands.rs`, so their `git` shell-out + hunk parse blocks the webview thread on every ~1.5s
+  poll — whereas the branch reads (`current_branches`/`list_branches`/`fetch_remotes`) were
+  already moved to `spawn_blocking`. Concrete fix: convert these six reads to `async fn` +
+  `tauri::async_runtime::spawn_blocking`, mirroring the established #200/#299/`fetch_remotes`
+  pattern. Matches the card's ask ("use multi threading/Async to load the diffs in the
+  background").
+- **"Other panels" scope = include the FileTree's `file_statuses`, exclude the rest.** The
+  FileTree status read is the identical one-line mechanism and is the panel the card names, so
+  it's in scope. `file_diff` (FileViewer gutter) and the diff viewer's compare/commit sources are
+  converted in the same sweep for consistency (same pattern, trivial). Excluded
+  `pull_branch`/`checkout_branch`/`create_branch` — user-initiated one-shots, not polled, so not
+  a source of "constant" lag; noted as deferred.
+- **No frontend behavior change.** `src/ipc.ts` uses `invoke<T>()` (Promise-returning) and
+  `lib.rs` registers commands by bare name, so a sync→async conversion is fully transparent to
+  the IPC contract and registration. Left `DiffInspector.tsx`'s poll cadence,
+  `inFlightRef`/`sigRef`, and `JSON.stringify(next)` change-detection untouched.
+- **Rejected the frontend `JSON.stringify`→lighter-fingerprint optimization** to avoid a
+  correctness regression: a summary/counts-only signature could miss a same-count content edit
+  and show a stale diff (the card requires the diff still reflect the latest state). After the
+  git work moves off-thread, the residual stringify is a minor JS cost, not a freeze — so no new
+  frontend pure helper / Vitest test is added.
+- **Fail-open on blocking-task join error via `Default`.** To let `working_diff`'s
+  `spawn_blocking(...).unwrap_or_default()` compile, add `#[derive(Default)]` to `DiffSummary`
+  and `WorkingDiff` in `git.rs` (the other return types — `Vec<...>`, `Option<...>` — already
+  have `Default`). Near-unreachable path (only on a task panic); degrades to the same empty value
+  the sync version could return.
+- **Cross-platform:** `spawn_blocking` is OS-neutral and the moved git calls still go through
+  `git::hidden_command()` (the Windows `CREATE_NO_WINDOW` guard) unchanged; no new `#[cfg]`
+  divergence — both OS arms stay byte-for-byte equivalent.
+- **Areas touched:** `src-tauri/src/commands.rs` (six diff/status commands → async
+  `spawn_blocking`) and `src-tauri/src/git.rs` (`Default` derives on `DiffSummary`/`WorkingDiff`).
+  No frontend files.
