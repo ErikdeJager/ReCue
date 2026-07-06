@@ -1804,3 +1804,69 @@ scrolls horizontally when the panel is narrower than that minimum.
   themed globally via `::-webkit-scrollbar` (honored by both engines) — so it renders the same on
   both OSes. The GUI layout result needs a real-box visual check that CI can't assert. Checks green:
   `npm run build` / `npm run lint` / `npm run format:check`.
+
+### 330. [x] Load diff-viewer and file-tree git reads off the webview thread (async)
+
+Stopped the diff viewer (and the file-tree status coloring) from freezing the UI. The **DiffInspector**
+re-reads the working-tree diff every ~1.5 s (`POLL_MS = 1500`), and each read ran a synchronous `git`
+shell-out **plus a full hunk parse on the webview/main thread** — so on a repo with a large working
+tree (or several diff panels open at once) the app stuttered on every refresh. **Root cause:** the
+diff / file-status git commands were plain synchronous `#[tauri::command] pub fn`, and in Tauri a sync
+command runs on the webview thread, so its git call + parse blocked input/rendering until it returned
+— the exact bug already fixed for the branch reads (`current_branch`/`current_branches`/`list_branches`/
+`fetch_remotes`, #316) and for `remove_worktree` (#200) / `clone_repo` (#299), which were converted to
+`spawn_blocking`. The diff and file-status reads were simply never converted. After this change the git
+work runs on Tauri's blocking thread pool: the UI stays responsive while the diff still refreshes to
+the latest working-tree state within ~1.5 s after an agent's turn (no staleness).
+
+**What shipped** (commit [`210d41c`](https://github.com/ErikdeJager/ReCue/commit/210d41c), PR
+[#83](https://github.com/ErikdeJager/ReCue/pull/83), branch `async-diff-git-reads-330`, 2026-07-06;
+2 files, +52/−15):
+
+- **`src-tauri/src/commands.rs`:** converted six git-read commands from synchronous `fn` to `async fn`
+  running their git call via `tauri::async_runtime::spawn_blocking`, mirroring the existing
+  `current_branches` / `fetch_remotes` pattern, with names/args/return types unchanged and doc-comments
+  refreshed —
+  - `working_diff(cwd) -> WorkingDiff` (the heaviest read; `.unwrap_or_default()` fail-open on a join
+    error),
+  - `file_statuses(repo) -> Vec<FileStatusEntry>` (the FileTree row-coloring read — the "other panel"
+    the card named),
+  - `file_diff(repo, file) -> Option<FileDiff>` (the FileViewer gutter; `.ok().flatten()`),
+  - `list_commits(cwd, limit) -> Vec<CommitInfo>` (clamp kept, then off-thread),
+  - `commit_diff(cwd, sha) -> Result<WorkingDiff, SessionError>` and
+  - `compare_branches(cwd, base, target) -> Result<WorkingDiff, SessionError>` (join error → `SessionError::Io`).
+- **`src-tauri/src/git.rs`:** added `Default` to the `DiffSummary` and `WorkingDiff` derive lists so
+  `working_diff`'s async wrapper can `.unwrap_or_default()` on the (near-unreachable) blocking-task
+  join error. The other return types (`Vec<…>`, `Option<…>`) already have `Default`.
+- **No frontend change:** `src/ipc.ts` wraps each command with `invoke<T>()` (Promise-returning) and
+  `lib.rs` registers them by bare name, so the sync→async conversion is transparent to the IPC contract
+  and registration. `DiffInspector.tsx`'s poll cadence, `inFlightRef`/`sigRef`, and `JSON.stringify(next)`
+  change-detection were left untouched.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 330):
+
+- **Root cause = blocking Rust I/O on the webview thread, not too-frequent re-fetch or off-screen
+  polling.** Fix = `spawn_blocking`, the established #200/#299/`fetch_remotes` pattern; matches the
+  card's ask ("use multi threading/Async to load the diffs in the background").
+- **"Other panels" scope = include the FileTree's `file_statuses`, exclude the rest.** `file_diff` and
+  the diff viewer's compare/commit sources were converted in the same sweep for consistency (same
+  trivial pattern); **excluded** `pull_branch`/`checkout_branch`/`create_branch` — user-initiated
+  one-shots, not polled, so not a source of "constant" lag (noted as deferred).
+- **Rejected the frontend `JSON.stringify`→lighter-fingerprint optimization** to avoid a correctness
+  regression: a summary/counts-only signature could miss a same-count content edit and show a **stale**
+  diff (the card requires the diff still reflect the latest state). Once the git work is off-thread the
+  residual stringify is a minor JS cost, not a freeze — so no new frontend helper/test was added.
+
+**Key files/areas touched:** `src-tauri/src/commands.rs`, `src-tauri/src/git.rs`. 2 files.
+
+**Dependencies:** none (all the diff / file-tree / git plumbing already existed and had landed; this
+only changed the thread the reads run on — orthogonal to the sibling #329 accordion-CSS card).
+
+**Notes**
+
+- **Cross-platform:** `tauri::async_runtime::spawn_blocking` is OS-neutral and the moved git calls
+  still go through `git::hidden_command()` (the Windows `CREATE_NO_WINDOW` console-flash guard)
+  unchanged; **no** new `#[cfg(...)]` divergence — only the thread the identical git work runs on
+  changes, so both OS arms stay byte-for-byte equivalent. The UI-smoothness result needs a real-box
+  visual check on both macOS and Windows (not unit-testable). Checks green: `cargo test` /
+  `npm run lint:rust` / `npm run format:rust` / `npm run build` / `npm run lint` / `npm test`.
