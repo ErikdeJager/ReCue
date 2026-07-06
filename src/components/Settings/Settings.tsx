@@ -298,6 +298,9 @@ function SettingsModal() {
                       </button>
                     ))}
                   </div>
+                  <p className={styles.helpText}>
+                    Dark mode is the recommended experience.
+                  </p>
                 </div>
                 <div className={styles.field}>
                   <span className={styles.fieldLabel}>Accent color</span>
