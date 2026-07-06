@@ -2804,3 +2804,23 @@ Consolidate agent header actions (Fork / Copy resume / Watch) into a "…" menu.
   Vitest tests); edits to `src/components/Kanban/KanbanPanel.tsx` (import `flushSync` +
   `applySmartNewline`, add a module-level key handler, wire it into the two card-textarea
   `onKeyDown` handlers). No engine, CSS, or backend changes.
+
+## Task 342 — Note that Dark mode is the recommended theme in Settings → Appearance
+
+- **Exact wording:** chose **"Dark mode is the recommended experience."** — short, neutral, names
+  no platform, no keyboard shortcut (so no `kbdHint` routing needed; renders identically on macOS
+  and Windows as pure WebView copy).
+- **Placement:** inside the existing Theme `.field` wrapper in the Appearance section of
+  `src/components/Settings/Settings.tsx`, directly **under the Dark/Light segmented toggle** (after
+  the `.segmented` `</div>`, before the `.field` `</div>`). The `.field` wrapper is
+  `flex-direction:column`, so it stacks cleanly with consistent spacing.
+- **Visibility:** **always visible** (static hint), not only when Light is selected — simplest and
+  communicates the recommendation regardless of current selection.
+- **Class/token reused:** the established `.helpText` class in `Settings.module.css`
+  (`color: var(--text-muted); font-size: var(--fs-meta-sm); line-height:1.4`, from #162), already
+  used for muted description lines elsewhere in the same modal. No new CSS class; `--text-muted` is
+  theme-aware in `tokens.css`, so it reads correctly in both Dark and Light.
+- **No test file:** copy-only change with no pure logic; verification is `npm run build` / `lint` /
+  `format:check` plus a `tauri dev` smoke check.
+- **Areas touched:** `src/components/Settings/Settings.tsx` (Appearance → Theme field) only — no
+  CSS or backend changes.
