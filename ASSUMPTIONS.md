@@ -2601,3 +2601,104 @@ a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
 - **Areas touched:** `src-tauri/src/git.rs`, `commands.rs`, `lib.rs`; `src/types/index.ts`,
   `src/ipc.ts`, `src/store.ts`; `src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css` + new
   `diffCounts.ts`/`diffCounts.test.ts`; `src/components/Settings/Settings.tsx`.
+
+## Task 336
+
+Per-agent "watch" notifications — native popup when a watched agent finishes or needs input.
+
+- **Notification mechanism = native OS notification via the Tauri `notification` plugin**
+  (`@tauri-apps/plugin-notification` + `tauri-plugin-notification`), not an in-app toast. Chosen
+  because the card says "popup" and the value of watch is being alerted while the app is unfocused;
+  the plugin is cross-platform (macOS + Windows). No plugin existed, so the plan adds it (Cargo dep,
+  `lib.rs` init, `notification:default` capability, JS dep).
+- **Trigger = the existing busy→idle transition** (the single `setBusy(id,false)` edge in
+  `store.ts`, the same edge that turns the `BusyIndicator` yellow). "Finished what it was doing" and
+  "has a question" are indistinguishable at the monitor level, so one generic notification body
+  ("Finished or awaiting your input") covers both.
+- **Fires on every busy→idle transition** for an effectively-watched agent (each finished turn), not
+  just the first — that is the meaning of "watch." No focus-based suppression (fires regardless of
+  whether ReCue/that agent is focused); noted as a possible future refinement.
+- **Effective watch = `settings.watchAllAgents || session.watch`.** Global default OFF, per-agent
+  default OFF. The two toggle entry points control the **per-agent** flag only (mirroring the
+  auto-continue global+per-agent pattern); when "watch all" is on, all agents notify regardless of
+  their per-agent flag, and per-agent values are retained for when the global switch is turned off.
+- **Notification permission is requested at opt-in time** (when a user turns watch on per-agent or
+  turns on "watch all") and re-checked before each send (`isPermissionGranted`), silently skipping
+  if denied/unavailable — so ReCue never prompts on launch and a denied prompt never breaks the
+  busy→idle path.
+- **Fired only from the main window** (`IS_MAIN_WINDOW` guard) to avoid duplicate notifications from
+  detached canvas windows (session events are window-global); also suppressed during boot-resume.
+- **Recurring-owned child sessions are excluded** from watch notifications (no watch toggle UI;
+  render only inside the recurring surface), so a global "watch all" doesn't spam on each rotation.
+- **Clicking the notification does nothing beyond the OS default** (no focus-window / select-agent
+  deep link) — kept out of scope for cross-platform simplicity.
+- **Reusable action shape for Task 340:** the plan exposes a shared `WatchButton` component +
+  `toggleWatch(id)` store action so Task 340 can fold Watch into its "…" dropdown.
+- **Icon:** lucide `Eye`/`EyeOff` for the toggle (matching the feature name "watch").
+- **Areas touched:** Rust `store.rs`/`commands.rs`/`lib.rs` + `Cargo.toml`/`capabilities` (new
+  `watch` per-session flag, `set_session_watch` command, notification plugin); TS `types/index.ts`,
+  `ipc.ts`, `store.ts` (`setBusy` firing, `setWatch`/`toggleWatch`, `watchAllAgents` setting), new
+  `src/notify.ts` + `src/components/WatchButton/`; `Sidebar.tsx`, `Overview.tsx`,
+  `CanvasSurface.tsx`, `Settings.tsx`; `package.json`; `TRAJECTORY_TO_WINDOWS.md`.
+
+## Task 337
+
+Global search modal (⌘F / Ctrl+F) across agents, terminals & files.
+
+- **Terminal-output search IS included, best-effort.** Rather than shipping the ~256 KB-per-session
+  scrollback to React, a new bounded Rust command `search_session_output` ANSI-strips each live
+  session's retained scrollback and substring-matches server-side (keeping bytes off the React
+  thread, per convention). It covers only live/recently-exited sessions' in-memory scrollback tail
+  (`SCROLLBACK_CAP` ~256 KB) — **not** persisted `~/.claude/projects/*.jsonl` history — is plain
+  case-insensitive substring, ANSI stripping is heuristic, and any failure degrades silently. The
+  implementer may downgrade it to a non-goal if too costly, but the plan includes it.
+- **"Files" = both open file/diff/kanban viewer panels AND files on disk across every sidebar repo**
+  (filename via `search_files` + content via `search_file_contents`), not just open viewers.
+- **Searchable item kinds:** agents, shell terminals, file/diff/kanban viewer panels, and scheduled
+  + recurring sessions — matched by display title/label. Recurring-owned child sessions are excluded
+  (matching Overview).
+- **Main-window only.** ⌘F/Ctrl+F is gated on `IS_MAIN_WINDOW` like ⌘N/⌘K/⌘T, since results
+  navigate the sidebar/Overview which only exist there; a detached canvas window's ⌘F is inert.
+- **Debounce + thresholds:** search is debounced (~180ms); file-content and terminal-output search
+  require query length ≥ 2 (filename/title match at ≥ 1); results capped per repo/kind.
+- **Ranking is a client-side heuristic** (exact > prefix > word-boundary > substring for titles;
+  titles > filenames > content > terminal-output), grouped by repo then item type — not a fuzzy lib.
+- **Activation reuses existing actions:** an open item → `selectItem` (view-aware jump, #79); a
+  not-yet-open file → `addOverviewPanel(repo, "markdown", file)` then `selectItem`; a terminal-output
+  hit → selects its agent. No new Overview↔Canvas switching beyond what `selectItem` already does.
+- **Areas touched:** Rust `src-tauri/src/{pty.rs,commands.rs,lib.rs}` (new scrollback-search
+  command); frontend `src/{ipc.ts,store.ts,useKeyboardNav.ts,App.tsx}`; new
+  `src/components/GlobalSearch/` (component + CSS module + pure `search.ts` ranking/grouping/
+  highlight helper + tests).
+
+## Task 338
+
+Branch ahead/behind indicator (↑/↓ vs upstream) in the sidebar.
+
+- **Scope — which branches get the indicator:** "each branch displayed inside a folder" =
+  the **current/checked-out branch of each folder shown in the sidebar** — the repo's own branch
+  line (`RepoBranchLine`) and each worktree sub-group header (`WorktreeHeader`). The branch *picker*
+  lists (`list_branches`) are **not** annotated. A worktree with only a pending schedule (no live
+  checkout, absent from the `branches` map) gets no badge.
+- **No network fetch / staleness:** reads against the **already-fetched** remote-tracking ref
+  (`git rev-list --left-right --count HEAD...@{upstream}`, purely-local). Does **not** trigger
+  `git fetch` on any refresh tick (could hang/rate-limit a private remote in a GUI process). Counts
+  are **"as of the last fetch"**; a `↓N` appears only after an app Fetch/Pull or an in-terminal
+  fetch observes remote commits. Refreshes on the same cadence as the branch label (load, repo-set
+  change, busy→idle edge, focus/visibility poll) plus immediately after app-initiated
+  fetch/pull/checkout/branch-create.
+- **No Settings toggle:** ships **always-on** with no Settings field — a cheap purely-local git read
+  with no privacy surface (unlike #335's per-file diff read). A reviewer could add a toggle later.
+- **Rendering / format:** `↑N ↓M` using `↑`(U+2191)/`↓`(U+2193); each side shown **only when its
+  count > 0** (ahead-only → `↑N`, behind-only → `↓M`); in-sync (`0/0`), no-upstream, or non-git
+  renders **nothing**. Ahead tinted `--status-done` (green), behind `--status-awaiting` (yellow),
+  muted mono — on-system tokens only.
+- **Map absence semantics:** the batch command **omits** no-upstream/non-git folders from the
+  returned map (mirroring `github_web_urls`), so absence = "no indicator"; a present `{0,0}` is also
+  hidden by the pure badge helper.
+- **Areas touched:** `src-tauri/src/git.rs` (new `AheadBehind` + pure parser + reader),
+  `commands.rs` + `lib.rs` (new `branch_ahead_behind` batch command), `src/types/index.ts`,
+  `src/ipc.ts`, `src/store.ts` (new `branchAheadBehind` map + `refreshBranchAheadBehind` on the
+  branch-refresh cadence), `src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css`, new
+  `src/components/Sidebar/branchStatus.ts` (+ `.test.ts`). Incidental file overlap with Task 336 /
+  Task 337 in `Sidebar.tsx`/`store.ts` — no shared abstraction; merge lane resolves any conflict.
