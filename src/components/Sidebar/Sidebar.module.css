@@ -663,6 +663,26 @@
   display: none;
 }
 
+/* Ahead/behind vs upstream indicator (#338): a small `↑A ↓B` next to the branch label
+   on the repo branch line + worktree header. A fixed, non-shrinking slot so a long
+   branch name ellipsizes first (the branch text is min-width:0;overflow:hidden). */
+.aheadBehind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.ahead {
+  color: var(--status-done);
+}
+.behind {
+  color: var(--status-awaiting);
+}
+
 /* --- Opened-file tree rows (#45) — children of a repo, below its sessions --- */
 .fileRow {
   display: flex;

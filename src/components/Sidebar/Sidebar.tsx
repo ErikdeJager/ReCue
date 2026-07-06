@@ -76,6 +76,7 @@ import UpdateIndicator from "../Update/UpdateIndicator";
 import UsageBar from "../Usage/UsageBar";
 import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import ViewsMenu from "../ViewsMenu/ViewsMenu";
+import { aheadBehindBadge } from "./branchStatus";
 import { diffCountBadge } from "./diffCounts";
 import styles from "./Sidebar.module.css";
 
@@ -1129,6 +1130,31 @@ function TerminalRow({
 }
 
 /**
+ * Ahead/behind vs upstream indicator (#338): a compact `↑A ↓B` next to a branch
+ * label, keyed by the folder `path`. Reads the store's `branchAheadBehind` map (filled
+ * on the same cadence as `branches`) and renders nothing when the folder has no
+ * upstream (absent from the map) or the branch is in sync — so an up-to-date branch
+ * stays clutter-free. Only the non-zero arm(s) draw. Display-only. Shared by
+ * `RepoBranchLine` and `WorktreeHeader`.
+ */
+function BranchAheadBehind({ path }: { path: string }) {
+  const counts = useStore((s) => s.branchAheadBehind[path]);
+  const badge = aheadBehindBadge(counts);
+  if (!badge) return null;
+  return (
+    <span
+      className={styles.aheadBehind}
+      aria-label={`${badge.ahead} ahead, ${badge.behind} behind upstream`}
+    >
+      {badge.ahead > 0 && <span className={styles.ahead}>↑{badge.ahead}</span>}
+      {badge.behind > 0 && (
+        <span className={styles.behind}>↓{badge.behind}</span>
+      )}
+    </span>
+  );
+}
+
+/**
  * A worktree sub-group header (#74): the `GitBranch` icon + branch name +
  * "worktree" badge for an isolated worktree folder, with the worktree's absolute
  * path as its tooltip. Right-click opens a full action menu (#166) mirroring the
@@ -1219,6 +1245,9 @@ function WorktreeHeader({
           {branch}
         </button>
       )}
+      {/* Ahead/behind vs upstream (#338): `↑A ↓B` next to the worktree branch name,
+          before the "worktree" badge. Rail mode stays icon-only (like the badge). */}
+      {!compact && <BranchAheadBehind path={path} />}
       {/* "worktree" badge (#240): now that the sub-group isn't indented, this chip is
           what distinguishes a worktree branch from the repo's own branch line — mirrors
           the Overview/Canvas badge. Right-aligned (the flex:1 name pushes it + the "+"
@@ -1480,6 +1509,9 @@ function RepoBranchLine({
         <span className={styles.repoBranchText} title={branch}>
           {branch}
         </span>
+        {/* Ahead/behind vs upstream (#338): `↑A ↓B` after the branch name; the
+            branch text truncates first (this is flex-shrink:0). */}
+        <BranchAheadBehind path={repo} />
       </button>
       {menu && (
         <>
@@ -2147,6 +2179,7 @@ function Sidebar() {
   const refreshFileStatuses = useStore((s) => s.refreshFileStatuses);
   const refreshGithubUrls = useStore((s) => s.refreshGithubUrls);
   const refreshDiffLineCounts = useStore((s) => s.refreshDiffLineCounts);
+  const refreshBranchAheadBehind = useStore((s) => s.refreshBranchAheadBehind);
   // Depended on by the load effect so flipping the setting off→on refetches counts
   // immediately, without waiting for a busy→idle edge (#335).
   const showDiffLineCounts = useStore((s) => s.settings.showDiffLineCounts);
@@ -2362,11 +2395,15 @@ function Sidebar() {
     // Per-agent line counts (#335) on the same edge; the setting is a dep so an
     // off→on toggle refetches immediately (the action self-guards when off).
     void refreshDiffLineCounts();
+    // Ahead/behind vs upstream (#338) on the same edge so the `↑A ↓B` indicator is
+    // ready right after boot / a repo being added.
+    void refreshBranchAheadBehind();
   }, [
     refreshBranches,
     refreshFileStatuses,
     refreshGithubUrls,
     refreshDiffLineCounts,
+    refreshBranchAheadBehind,
     showDiffLineCounts,
     reposKey,
   ]);
@@ -2381,9 +2418,15 @@ function Sidebar() {
   useEffect(() => {
     const BRANCH_POLL_MS = 15_000;
     let timer: ReturnType<typeof setInterval> | undefined;
+    // Refresh the branch label + its ahead/behind indicator (#338) together, so an
+    // external checkout/commit updates both without a restart.
+    const refreshBranchState = () => {
+      void refreshBranches();
+      void refreshBranchAheadBehind();
+    };
     const startPoll = () => {
       if (timer === undefined) {
-        timer = setInterval(() => void refreshBranches(), BRANCH_POLL_MS);
+        timer = setInterval(refreshBranchState, BRANCH_POLL_MS);
       }
     };
     const stopPoll = () => {
@@ -2396,11 +2439,11 @@ function Sidebar() {
       if (document.hidden) {
         stopPoll();
       } else {
-        void refreshBranches();
+        refreshBranchState();
         startPoll();
       }
     };
-    const onFocus = () => void refreshBranches();
+    const onFocus = () => refreshBranchState();
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisibility);
     if (!document.hidden) startPoll();
@@ -2409,7 +2452,7 @@ function Sidebar() {
       document.removeEventListener("visibilitychange", onVisibility);
       stopPoll();
     };
-  }, [refreshBranches]);
+  }, [refreshBranches, refreshBranchAheadBehind]);
 
   // Escape dismisses the context menu (keyboard-dismissable).
   useEffect(() => {

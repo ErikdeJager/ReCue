@@ -125,6 +125,19 @@ pub struct DiffLineCounts {
     pub removed: u32,
 }
 
+/// Ahead/behind commit counts of a folder's current branch vs its upstream
+/// remote-tracking branch (#338). `ahead` = commits on the local branch not yet on its
+/// upstream; `behind` = commits on the upstream not yet local. Both are **as of the last
+/// `git fetch`** (compared against the local remote-tracking ref; never touches the
+/// network). The sidebar renders these as a small `↑A ↓B` indicator next to the branch
+/// name. Fail-open: a folder with no upstream (detached HEAD / no tracking / no remote)
+/// or any git error yields no entry (no indicator).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+pub struct AheadBehind {
+    pub ahead: u32,
+    pub behind: u32,
+}
+
 /// Branches of a folder: the currently checked-out one, the local branches
 /// (`all`), and the remote-tracking branches (`remote`, qualified `<remote>/<name>`,
 /// #180). A non-git folder yields `{ current: "", all: [], remote: [] }`.
@@ -351,6 +364,45 @@ pub fn diff_line_counts(cwd: impl AsRef<Path>) -> DiffLineCounts {
     }
 
     counts
+}
+
+/// Parse `git rev-list --left-right --count HEAD...@{upstream}` output — a single
+/// tab-separated line `<ahead>\t<behind>` (#338). Pure `&str -> Option<AheadBehind>`, so
+/// it is unit-tested against fixtures with no repo on disk (mirroring `sum_numstat`).
+/// Malformed / empty / non-numeric input yields `None`.
+fn parse_ahead_behind(out: &str) -> Option<AheadBehind> {
+    let line = out.lines().next()?;
+    let mut cols = line.split_whitespace();
+    let ahead = cols.next()?.parse::<u32>().ok()?;
+    let behind = cols.next()?.parse::<u32>().ok()?;
+    Some(AheadBehind { ahead, behind })
+}
+
+/// Ahead/behind commit counts of `cwd`'s current branch vs its upstream remote-tracking
+/// branch (#338). `git rev-list --left-right --count HEAD...@{upstream}` computes this
+/// **locally** against the already-fetched remote-tracking ref (no network), printing
+/// `<ahead>\t<behind>` and exiting 0. When the branch has **no upstream** (no tracking
+/// config, detached HEAD, or no remote) `@{upstream}` fails and git exits non-zero, so
+/// `run_git` yields `None` → this fail-opens to `None` (no indicator). The single git
+/// call routes through `hidden_command` (via `run_git`), so no console flash on Windows.
+pub fn ahead_behind(cwd: impl AsRef<Path>) -> Option<AheadBehind> {
+    let out = run_git(
+        cwd.as_ref(),
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    )?;
+    parse_ahead_behind(&out)
+}
+
+/// Ahead/behind per path, resolved in one call so the sidebar needs one IPC round-trip
+/// instead of one per folder (mirrors `github_web_urls`, #338). Only paths that resolve
+/// to a count are present in the map — a folder with no upstream / non-git is omitted, so
+/// the caller reads absence (and the both-zero case, filtered frontend-side) as "no
+/// indicator".
+pub fn ahead_behind_many(paths: &[String]) -> HashMap<String, AheadBehind> {
+    paths
+        .iter()
+        .filter_map(|p| ahead_behind(p).map(|ab| (p.clone(), ab)))
+        .collect()
 }
 
 /// Two-dot `git diff <base> <target>` (#81) — the head-to-head difference,
@@ -1613,6 +1665,34 @@ index 0..1
         // Empty / whitespace input → (0, 0).
         assert_eq!(sum_numstat(""), (0, 0));
         assert_eq!(sum_numstat("\n\n"), (0, 0));
+    }
+
+    #[test]
+    fn parse_ahead_behind_reads_tab_separated_counts() {
+        // The canonical `git rev-list --left-right --count` output: `<ahead>\t<behind>`.
+        assert_eq!(
+            parse_ahead_behind("2\t1"),
+            Some(AheadBehind { ahead: 2, behind: 1 })
+        );
+        assert_eq!(
+            parse_ahead_behind("2\t1\n"),
+            Some(AheadBehind { ahead: 2, behind: 1 })
+        );
+        // In-sync branch → both zero (still Some; the frontend filters 0/0 to no badge).
+        assert_eq!(
+            parse_ahead_behind("0\t0"),
+            Some(AheadBehind { ahead: 0, behind: 0 })
+        );
+        // `split_whitespace` tolerates spaces too (robustness).
+        assert_eq!(
+            parse_ahead_behind("3 5"),
+            Some(AheadBehind { ahead: 3, behind: 5 })
+        );
+        // Malformed / empty → None (fail-open, no indicator).
+        assert_eq!(parse_ahead_behind(""), None);
+        assert_eq!(parse_ahead_behind("garbage"), None);
+        assert_eq!(parse_ahead_behind("2"), None);
+        assert_eq!(parse_ahead_behind("a\tb"), None);
     }
 
     // --- Integration tests (real `git`; skip if unavailable) ---

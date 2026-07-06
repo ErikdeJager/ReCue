@@ -1692,6 +1692,23 @@ pub async fn diff_line_counts(
     .unwrap_or_default()
 }
 
+/// Ahead/behind commit counts vs each folder's upstream for many folders in one
+/// round-trip (#338) — the sidebar's `↑A ↓B` branch indicator source. Mirrors
+/// `diff_line_counts`: a **batch** async command whose synchronous git work runs on
+/// `spawn_blocking` (#330) so the sidebar refresh never freezes the webview. Each folder
+/// is a single `git rev-list --left-right --count HEAD...@{upstream}` computed **locally**
+/// against the already-fetched remote-tracking ref (no network `git fetch`). Fail-open:
+/// only folders with an upstream are present in the map — no upstream / detached HEAD /
+/// non-git → omitted; a join error (task panic) degrades to an empty map (no indicators).
+#[tauri::command]
+pub async fn branch_ahead_behind(
+    paths: Vec<String>,
+) -> std::collections::HashMap<String, git::AheadBehind> {
+    tauri::async_runtime::spawn_blocking(move || git::ahead_behind_many(&paths))
+        .await
+        .unwrap_or_default()
+}
+
 /// GitHub web URL per path, resolved in one call (#327) — mirrors `current_branches`.
 /// Only paths whose remote resolves to a `github.com` repo are present in the map, so
 /// the sidebar reads presence as "show the View-on-GitHub item". Runs the two cheap

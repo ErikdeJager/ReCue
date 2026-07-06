@@ -208,6 +208,17 @@ export interface DiffLineCounts {
   removed: number;
 }
 
+/** Ahead/behind commit counts of a folder's current branch vs its upstream
+ * remote-tracking branch (#338, mirrors `git::AheadBehind`) — the sidebar's `↑A ↓B`
+ * branch indicator source. `ahead` = local commits not yet on the upstream; `behind`
+ * = upstream commits not yet local. Both are **as of the last `git fetch`** (computed
+ * locally against the remote-tracking ref — no network). A folder with no upstream is
+ * **absent** from the map; a both-zero (in-sync) entry renders nothing. */
+export interface AheadBehind {
+  ahead: number;
+  behind: number;
+}
+
 export interface HunkLine {
   type: HunkLineKind;
   old_no?: number;
