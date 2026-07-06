@@ -4565,7 +4565,13 @@ export const useStore = create<AppState>()((set, get) => ({
         get().settings.defaultAgent,
       );
       get().upsertSession(toSessionView(record));
-      set((s) => ({ recents: [cwd, ...s.recents.filter((r) => r !== cwd)] }));
+      // Touch the parent repo when the backend nested this spawn under an existing
+      // worktree (#331) — so the worktree folder never flashes as a stray top-level
+      // recent before the next refresh. A normal spawn keeps its own folder.
+      const recentPath = record.worktree_parent ?? cwd;
+      set((s) => ({
+        recents: [recentPath, ...s.recents.filter((r) => r !== recentPath)],
+      }));
       get().select(record.id);
       get().pushToast(`Started ${record.name ?? cwd}`);
       // A checkout (or a brand-new repo) can change the branch label — refresh.
@@ -4634,7 +4640,12 @@ export const useStore = create<AppState>()((set, get) => ({
         get().settings.defaultAgent,
       );
       get().upsertSession(toSessionView(record));
-      set((s) => ({ recents: [cwd, ...s.recents.filter((r) => r !== cwd)] }));
+      // Same worktree-nesting recents alignment as `spawnSession` (#331): touch the
+      // parent when the backend nested the spawn under an existing worktree.
+      const recentPath = record.worktree_parent ?? cwd;
+      set((s) => ({
+        recents: [recentPath, ...s.recents.filter((r) => r !== recentPath)],
+      }));
       get().select(record.id);
       get().pushToast(`Created ${name} & started`);
       void get().refreshBranches();

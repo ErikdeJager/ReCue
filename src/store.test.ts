@@ -35,6 +35,7 @@ import type {
   ScheduledSession,
   SessionView,
 } from "./types";
+import { effectiveRepo } from "./paths";
 import * as ipc from "./ipc";
 import { isMockUpdate } from "./updater";
 
@@ -2649,6 +2650,66 @@ describe("toggleMaximizeSelected (#284)", () => {
     useStore.setState({ selectedId: null, maximizedItem: null });
     s().toggleMaximizeSelected();
     expect(s().maximizedItem).toBeNull();
+  });
+});
+
+describe("spawnSession worktree nesting (#331)", () => {
+  const s = () => useStore.getState();
+
+  it("nests a worktree spawn under the parent and touches the parent recent, not the worktree dir", async () => {
+    // The backend resolves `cwd` (a worktree folder) to its parent repo and returns a
+    // record carrying `worktree_parent` — so "New session here" from a worktree agent
+    // nests under the existing worktree sub-group instead of a stray top-level folder.
+    vi.spyOn(ipc, "spawnSession").mockResolvedValue({
+      id: "wt-agent",
+      claude_session_id: "wt-agent",
+      repo_path: "/wt/feat",
+      name: null,
+      created_at: 0,
+      worktree_parent: "/repo",
+    });
+    // Stub the incidental refreshers (host-less no-ops) so the action doesn't reject.
+    useStore.setState({
+      recents: ["/existing"],
+      refreshBranches: vi.fn(),
+      refreshFileStatuses: vi.fn(),
+    });
+
+    const ok = await s().spawnSession("/wt/feat");
+    expect(ok).toBe(true);
+
+    const created = s().sessions.find((x) => x.id === "wt-agent");
+    // The new session groups under the parent (effectiveRepo === parent), so the Sidebar
+    // re-nests it under the existing worktree sub-group.
+    expect(created?.worktreeParent).toBe("/repo");
+    expect(effectiveRepo(created!)).toBe("/repo");
+    // The parent is the recent — the worktree folder never becomes a stray top-level one.
+    expect(s().recents[0]).toBe("/repo");
+    expect(s().recents).not.toContain("/wt/feat");
+  });
+
+  it("a normal (non-worktree) spawn still touches its own folder as the recent", async () => {
+    vi.spyOn(ipc, "spawnSession").mockResolvedValue({
+      id: "plain-agent",
+      claude_session_id: "plain-agent",
+      repo_path: "/repo",
+      name: null,
+      created_at: 0,
+      worktree_parent: null,
+    });
+    useStore.setState({
+      recents: [],
+      refreshBranches: vi.fn(),
+      refreshFileStatuses: vi.fn(),
+    });
+
+    const ok = await s().spawnSession("/repo");
+    expect(ok).toBe(true);
+
+    const created = s().sessions.find((x) => x.id === "plain-agent");
+    expect(created?.worktreeParent).toBeNull();
+    expect(effectiveRepo(created!)).toBe("/repo");
+    expect(s().recents[0]).toBe("/repo");
   });
 });
 

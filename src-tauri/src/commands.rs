@@ -124,6 +124,24 @@ fn custom_command_for(store: &Store, agent: &str) -> Option<String> {
     }
 }
 
+/// The parent repo of an app-managed worktree folder `cwd` (#331), if an agent already
+/// runs there — i.e. a persisted session whose `repo_path == cwd` carries a
+/// `worktree_parent`. Returns `None` for a plain folder (no worktree agent there), so a
+/// normal spawn is unaffected. Matches `cwd` against the exact persisted `repo_path`
+/// string (an opaque identifier), so it is separator-agnostic and identical on macOS and
+/// Windows — no path parsing/normalization. Mirrors the frontend `worktreeParentOf`.
+///
+/// This makes an interactive "New session here" spawn from a worktree agent's
+/// `OpenViewButton` (#213) nest under the existing worktree sub-group rather than
+/// registering the worktree folder as a stray top-level sidebar folder, matching the
+/// schedule/recurring/fork paths which already carry `worktree_parent`.
+fn worktree_parent_for_cwd(sessions: &[PersistedSession], cwd: &str) -> Option<String> {
+    sessions
+        .iter()
+        .find(|s| s.repo_path == cwd && s.worktree_parent.is_some())
+        .and_then(|s| s.worktree_parent.clone())
+}
+
 #[tauri::command]
 pub fn spawn_session(
     manager: State<'_, SessionManager>,
@@ -142,6 +160,13 @@ pub fn spawn_session(
     // The custom agent's launch command lives in the (opaque) settings blob (#325);
     // resolve it only for `agent == "custom"`, else pass `None`.
     let custom = custom_command_for(&store, &agent);
+    // When `cwd` is an existing app-managed worktree (an agent already runs there with a
+    // recorded `worktree_parent`), nest the new session under that parent instead of
+    // registering the worktree folder as a stray top-level sidebar folder (#331). A plain
+    // folder resolves to `None`, so a normal spawn is unchanged. Covers every frontend
+    // entry point routing through `spawn_session` (OpenViewButton "New session here",
+    // NewSessionModal, CreatePanelModal, Canvas template `new-agent`, `createBranchSession`).
+    let worktree_parent = worktree_parent_for_cwd(&store.sessions(), &cwd);
     let info = manager.spawn_session_with_prompt(
         cwd.as_str(),
         name.clone(),
@@ -155,7 +180,7 @@ pub fn spawn_session(
         repo_path: cwd.clone(),
         name,
         created_at: now_secs(),
-        worktree_parent: None,
+        worktree_parent: worktree_parent.clone(),
         auto_name: None,
         has_been_active: false,
         agent,
@@ -169,8 +194,10 @@ pub fn spawn_session(
     store
         .add_session(record.clone())
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Touch the parent repo for a worktree spawn (mirroring the schedule/fire path), the
+    // folder itself otherwise — so the worktree dir never appears as a new recent (#331).
     store
-        .touch_recent(&cwd)
+        .touch_recent(worktree_parent.as_deref().unwrap_or(&cwd))
         .map_err(|e| SessionError::Io(e.to_string()))?;
     Ok(record)
 }
@@ -2319,6 +2346,46 @@ pub fn agent_info(store: State<'_, Store>, agent: String) -> AgentInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a minimal `PersistedSession` for the `worktree_parent_for_cwd` tests (#331) —
+    /// only `repo_path` + `worktree_parent` matter to the resolver.
+    fn mk_session(repo_path: &str, worktree_parent: Option<&str>) -> PersistedSession {
+        PersistedSession {
+            id: "id".into(),
+            claude_session_id: "id".into(),
+            repo_path: repo_path.into(),
+            name: None,
+            created_at: 0,
+            worktree_parent: worktree_parent.map(|s| s.to_string()),
+            auto_name: None,
+            has_been_active: false,
+            agent: "claude".into(),
+            forked_from: None,
+            forkable: false,
+            auto_continue_disabled: false,
+        }
+    }
+
+    #[test]
+    fn worktree_parent_for_cwd_resolves_the_existing_worktree_parent() {
+        // A worktree agent at /wt/feat nesting under /repo, plus a normal agent at /repo.
+        let sessions = vec![
+            mk_session("/wt/feat", Some("/repo")),
+            mk_session("/repo", None),
+        ];
+        // The worktree folder resolves to its parent → a "New session here" spawn nests.
+        assert_eq!(
+            worktree_parent_for_cwd(&sessions, "/wt/feat"),
+            Some("/repo".to_string())
+        );
+        // A plain repo folder (only a non-worktree agent) → None, so a normal spawn is
+        // unaffected and still registers its own top-level folder.
+        assert_eq!(worktree_parent_for_cwd(&sessions, "/repo"), None);
+        // An unknown folder (no session there) → None.
+        assert_eq!(worktree_parent_for_cwd(&sessions, "/other"), None);
+        // No sessions at all → None.
+        assert_eq!(worktree_parent_for_cwd(&[], "/wt/feat"), None);
+    }
 
     #[test]
     fn output_base64_round_trips() {

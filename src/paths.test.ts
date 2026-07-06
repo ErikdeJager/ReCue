@@ -102,6 +102,15 @@ describe("effectiveRepo (#96)", () => {
       effectiveRepo({ repoPath: "/Users/me/code/repo", worktreeParent: null }),
     ).toBe("/Users/me/code/repo");
   });
+
+  it("a 'New session here' worktree spawn groups under the parent and is excluded from the top level (#331)", () => {
+    // A new agent spawned in a worktree folder carries `worktreeParent`, so it groups
+    // under the parent (never a stray top-level folder) and the Sidebar's top-level
+    // filter (`!worktreeParent`) drops it.
+    const wt = { repoPath: "/wt/feat", worktreeParent: "/repo" };
+    expect(effectiveRepo(wt)).toBe("/repo");
+    expect([wt].filter((session) => !session.worktreeParent)).toEqual([]);
+  });
 });
 
 describe("sessionInFilter (#197/#247)", () => {
