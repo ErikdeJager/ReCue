@@ -2636,3 +2636,60 @@ overhaul card — Task 343 — merges trivially; this card does not depend on it
 - **Cross-platform:** identical on macOS and Windows — a single static `<p>` reusing an existing class and
   a theme-aware token, no OS-specific primitive, no Rust/IPC/persistence changes. Extremely low risk;
   rollback is deleting the one line.
+
+### 341. [x] Kanban card editor: auto-continue `-` bullet lists on Shift+Enter
+
+Editing or composing a Kanban card now does **smart list continuation**: pressing **Shift+Enter** while
+the current line is a `-` bullet auto-inserts a fresh `- ` prefix so the list keeps going, and pressing
+Shift+Enter on an **empty** bullet terminates the list instead (the blank `- ` is removed, caret lands on
+the now-plain line). It handles `-` **task-list** items (`- [ ] `/`- [x] `, continuing as a fresh
+**unchecked** box), **preserves leading indentation**, **splits** mid-line text (the part right of the
+caret becomes the new bullet's content), and **replaces** a non-collapsed selection before continuing. In
+this editor plain **Enter still commits/adds the card** and **Escape still cancels** — only Shift+Enter
+gained the behavior, and a non-bullet Shift+Enter still inserts a plain newline unchanged.
+
+**What shipped** (commit [`291aa52`](https://github.com/ErikdeJager/ReCue/commit/291aa52), PR
+[#95](https://github.com/ErikdeJager/ReCue/pull/95), branch `kanban-smart-list-continuation`,
+2026-07-06; 3 files, +139/−3):
+
+- **`src/components/Kanban/smartList.ts` (new):** a pure, DOM-free, dependency-free
+  `applySmartNewline(value, selStart, selEnd) → { value, caret } | null`. Finds the current line via
+  `lastIndexOf("\n", start-1)+1` / `indexOf("\n", start)`, matches the bullet with
+  `/^([ \t]*)- (\[[ xX]\] )?/`; returns `null` for a non-bullet line (so the caller lets the native
+  newline happen), drops the line for an empty bullet (terminate), else splices in
+  `"\n" + indent + "- " + (task ? "[ ] " : "")` and reports the new caret. LF-only (the editor state is
+  already normalized).
+- **`src/components/Kanban/smartList.test.ts` (new):** Vitest coverage for every acceptance case —
+  continue, empty-terminate, indent preserved, task-list continue (incl. checked→unchecked), mid-line
+  split, selection-replace, non-bullet → `null`, bare `-` → `null`.
+- **`src/components/Kanban/KanbanPanel.tsx`:** imports `flushSync` (react-dom) + `applySmartNewline`, adds
+  a module-level `handleSmartBulletKey(e, setValue)` that (on Shift+Enter over a bullet) `preventDefault`s,
+  computes `{value, caret}`, pushes it through the existing setter with **`flushSync`**, then restores the
+  caret via `setSelectionRange` on the captured element — and calls it first in the two card-composition
+  textareas' `onKeyDown` (edit-existing-card → `onEditTextChange`, add-card composer → `setComposerText`).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 341):
+
+- **Fires on Shift+Enter only** — in the Kanban card editor plain **Enter commits** the card (never a
+  newline) and **Shift+Enter is the newline key**, matching the card's "shift+enter" wording; plain
+  Enter/Escape are untouched.
+- **Both card-composition textareas in scope** — editing an existing card **and** the Add-card composer
+  (both compose a card's title+body identically). The board **Raw**-view textarea and the FileViewer
+  raw-markdown textarea are **out of scope** (separate whole-file markdown surfaces).
+- **`-` marker only** (dash), matching the card and the Kanban convention; `*`/`+`/ordered lists are out
+  of scope, but the marker regex is centralized in the pure helper so a follow-up can extend it in one
+  place. **Task-list items are in scope** and continue as a fresh **unchecked** `- [ ] `.
+- **Empty bullet terminates** (no second empty bullet), **indentation preserved**, caret-based **mid-line
+  split** and **selection-replace**. The title line isn't special-cased (line-based helper; harmless).
+- **Controlled-textarea technique:** `flushSync` commits the new controlled value to the DOM node before
+  `setSelectionRange` restores the caret (no flicker); guarded by `isComposing` for IME safety.
+
+**Dependencies:** none (self-contained UI work on the existing Kanban card editor; no engine/CSS/backend
+change).
+
+**Notes**
+
+- **Cross-platform:** pure WebView string logic on **Shift+Enter** — no `Cmd`/`Ctrl` chord and no
+  native/path/shell code, so it is byte-for-byte identical on macOS (WKWebView) and Windows (WebView2).
+  The board `.md` still round-trips through the unchanged `parseBoard`/`serializeBoard`. Checks green:
+  `npm test` / `npm run build` / `npm run lint`.
