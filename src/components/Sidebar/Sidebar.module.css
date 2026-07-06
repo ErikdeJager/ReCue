@@ -602,20 +602,41 @@
   font-size: var(--fs-meta-xs);
 }
 
+/* Trailing slot (#344): the diff-count badge + hover × share one slot. The counts are
+   the only in-flow child (they set the width, clamped to min-width:24px so a no-diff row
+   still reserves the ×'s slot); the × is absolutely positioned over them contributing no
+   width, so the slot stays the same width whether the counts are visible or hidden → zero
+   layout shift on hover. `margin-right` spaces it from the row edge (was on `.diffCounts`/
+   `.remove` before). */
+.trailing {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  min-width: 24px;
+  min-height: 24px;
+  margin-right: var(--space-4);
+}
+
 .remove {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
-  flex-shrink: 0;
-  margin-right: var(--space-4);
   border: 0;
   border-radius: var(--radius-chip);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   opacity: 0;
+  /* Invisible at rest → not a click target over the counts; becomes clickable on hover. */
+  pointer-events: none;
   transition:
     opacity var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
@@ -623,6 +644,7 @@
 
 .row:hover .remove {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .remove:hover {
@@ -637,15 +659,14 @@
   padding-left: var(--space-8);
 }
 
-/* Per-agent added/removed line counts (#335): a fixed, non-shrinking slot on the same
-   row, after the label — so a long agent name ellipsizes rather than pushing the
-   counts off-row (`.rowMain` is flex:1;min-width:0 and `.rowPrimary` already clips). */
+/* Per-agent added/removed line counts (#335): the in-flow child of the `.trailing` slot
+   (#344), so it defines that slot's width — a long agent name ellipsizes rather than
+   pushing the counts off-row (`.rowMain` is flex:1;min-width:0 and `.rowPrimary` already
+   clips). The slot's `margin-right` (not this) spaces it from the row edge. */
 .diffCounts {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  flex-shrink: 0;
-  padding-right: var(--space-4);
   font-family: var(--mono);
   font-size: var(--fs-meta-xs);
   font-variant-numeric: tabular-nums;
@@ -657,10 +678,11 @@
   color: var(--status-error);
 }
 
-/* On hover the row reveals the × (remove) button; hide the diff-count badge so the two
-   don't crowd the row — the × takes its place (#335). */
+/* On hover the row reveals the × (remove) button over the SAME slot; hide the counts
+   with visibility (not display:none) so the slot keeps its width and the name doesn't
+   shift, letting the × land exactly where the counts were (#344). */
 .row:hover .diffCounts {
-  display: none;
+  visibility: hidden;
 }
 
 /* Ahead/behind vs upstream indicator (#338): a small `↑A ↓B` next to the branch label
