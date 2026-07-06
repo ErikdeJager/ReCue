@@ -2351,3 +2351,93 @@ last `git fetch`". End-to-end this mirrors the #335 diff-line-count badge.
   upstream / detached HEAD / non-git / any git error → no map entry, no badge, no toast) and idempotent
   (the store skips a no-op update via `aheadBehindMapsEqual`). Checks green: `cargo test` / `npm run
   lint:rust` / `npm run build` / `npm run lint` / `npm test`.
+
+### 336. [x] Per-agent "watch" notifications — native popup when a watched agent finishes or needs input
+
+A user can now turn on **watch** for a specific agent, and a **native OS notification** pops up the
+moment that agent's turn ends (busy→idle — i.e. it finished, or is waiting for input). Notifications are
+**off by default and opt-in**: watch is a **per-agent** flag toggled from two entry points (the sidebar
+agent context menu and a header button on the Overview card / Canvas panel), with a global
+**"Watch all agents"** setting (also default off) that notifies for every agent regardless of the
+per-agent flag while retaining the per-agent values. A watched agent notifies on **every** busy→idle edge
+(each finished turn), fired only from the main window so a detached canvas window never double-fires. The
+per-agent flag persists across restart via `sessions.json`. This end-to-end mirrors the #297
+auto-continue global+per-agent pattern and reuses the busy→idle edge that flips the `BusyIndicator` yellow.
+
+**What shipped** (commit [`2b45a7f`](https://github.com/ErikdeJager/ReCue/commit/2b45a7f), PR
+[#91](https://github.com/ErikdeJager/ReCue/pull/91), branch `task-336-watch-notifications`, 2026-07-06;
+19 files (incl. lockfiles), +908/−4):
+
+- **Notification plugin (Rust + JS + capability):** `tauri-plugin-notification = "2"` added to
+  `src-tauri/Cargo.toml`, inited in `lib.rs` (`.plugin(tauri_plugin_notification::init())`),
+  `"notification:default"` granted in `capabilities/default.json`, and
+  `@tauri-apps/plugin-notification` added to `package.json`. Cross-platform native toasts (macOS +
+  Windows) — no `#[cfg]` in ReCue code.
+- **Per-session `watch` flag (Rust):** `#[serde(default)] pub watch: bool` added to `SessionRecord`
+  (`store.rs`) and to every `SessionRecord { … }` struct literal across `commands.rs`/`store.rs`; a
+  `Store::set_session_watch(id, watch)` persisting only on change (mirroring `set_session_auto_continue`);
+  a `set_session_watch` Tauri command (`commands.rs`) registered in `lib.rs`'s `invoke_handler!`.
+- **Types + IPC + store (TS):** `watch?: boolean` on `SessionRecord`/`SessionView` and `watchAllAgents:
+  boolean` on `Settings` (`types/index.ts`); a `setSessionWatch(id, watch)` IPC wrapper (`ipc.ts`);
+  `toSessionView` maps `record.watch ?? false`, `DEFAULT_SETTINGS.watchAllAgents = false`, and
+  `setWatch(id, watch)` (optimistic local update + `void ipc.setSessionWatch`) + `toggleWatch(id)` store
+  actions (`store.ts`).
+- **`src/notify.ts` (new):** `notifyAgentReady(title, body)` — ensure-permission (granted → request → bail
+  silently if denied) then `sendNotification`, wrapped best-effort (never throws) — and
+  `ensureNotificationPermission()` used to prompt at opt-in time.
+- **Fire on the busy→idle edge (`store.ts` `setBusy`):** in the existing `wasBusy && !busy` branch, when
+  `IS_MAIN_WINDOW && !booting`, resolve the session, skip recurring-owned children
+  (`ownedChildSessionIds`), compute `effectiveWatch = settings.watchAllAgents || session.watch`, and
+  fire-and-forget `notifyAgentReady(label, "Finished or awaiting your input")`.
+- **Entry points:** a Watch item (lucide `Eye`/`EyeOff`, "Watch" ↔ "Stop watching") in the sidebar
+  `AgentContextMenu`; a new **reusable `WatchButton`** component (`src/components/WatchButton/`) with
+  `aria-pressed` + a `pointerDown` stop-propagation guard (so it never starts the header drag, like
+  `AutoContinueToggle`), inserted into the Overview `SessionCard` header actions and the Canvas agent
+  panel header — both driven by the same store flag, so all three stay in sync. Toggling on also calls
+  `ensureNotificationPermission()`.
+- **Settings → Sessions:** a "Watch all agents" `Checkbox` bound to `watchAllAgents` (default off) with
+  helper copy, requesting permission when switched on.
+- **`TRAJECTORY_TO_WINDOWS.md`:** records that native notification delivery (permission prompt + toast
+  rendering) needs a Windows real-box smoke check (dev builds may not surface Windows toasts until the app
+  is installed / Start-Menu-registered).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 336):
+
+- **Mechanism = native OS notification via the Tauri `notification` plugin**, not an in-app toast (the
+  value of watch is being alerted while the app is unfocused); the plugin abstracts macOS vs Windows.
+- **Trigger = the existing busy→idle transition** — "finished" and "has a question" are indistinguishable
+  at the monitor level, so one generic body ("Finished or awaiting your input") covers both.
+- **Fires on every busy→idle transition** for an effectively-watched agent (not just the first); no
+  focus-based suppression (a future refinement).
+- **Effective watch = `settings.watchAllAgents || session.watch`** (both default off); the two toggle
+  entry points control only the per-agent flag, and "watch all" retains per-agent values for when it's
+  turned back off.
+- **Permission requested at opt-in time** and re-checked before each send (silently skipped if
+  denied/unavailable) — ReCue never prompts on launch, and a denied prompt never breaks the busy→idle
+  path.
+- **Fired only from the main window** (`IS_MAIN_WINDOW`, session events are window-global) and suppressed
+  during boot-resume, so a detached canvas window / boot replay never double-fires.
+- **Recurring-owned child sessions are excluded** (no watch UI, render only in the recurring surface), so
+  "watch all" doesn't spam on each rotation. Clicking the notification does nothing beyond the OS default
+  (no deep link — out of scope for cross-platform simplicity).
+- **Reusable action shape for Task 340:** the shared `WatchButton` + `toggleWatch(id)` are the clean
+  action Task 340's "…" dropdown consolidation folds in.
+
+**Key files/areas touched:** `src-tauri/Cargo.toml`, `capabilities/default.json`, `src-tauri/src/store.rs`,
+`commands.rs`, `lib.rs`; `package.json`; `src/types/index.ts`, `src/ipc.ts`, `src/store.ts`, new
+`src/notify.ts`, new `src/components/WatchButton/`; `src/components/Sidebar/Sidebar.tsx`,
+`Overview/Overview.tsx`, `Canvas/CanvasSurface.tsx`, `Settings/Settings.tsx`; `TRAJECTORY_TO_WINDOWS.md`.
+19 files (incl. lockfiles).
+
+**Dependencies:** none. (**Unblocks Task 340** — the "…" header-action consolidation folds in the
+`WatchButton`/`toggleWatch` action.)
+
+**Notes**
+
+- **Cross-platform:** the only OS-divergent primitive is the notification plugin, which abstracts native
+  delivery on macOS (WKWebView) and Windows (WebView2) — no new `#[cfg]` in ReCue code. Windows dev builds
+  may not render toasts until the app is installed (an OS/dev limitation, flagged in
+  `TRAJECTORY_TO_WINDOWS.md` for real-box verification). Additive & backward-compatible: `watch` is
+  `#[serde(default)]` and `watchAllAgents` merges over `DEFAULT_SETTINGS`, so an older `sessions.json`
+  upgrades cleanly. Best-effort/fail-open (permission denied/unavailable → silent no-op). Checks green:
+  `cargo test` / `npm run lint:rust` / `npm run build` / `npm run lint` / `npm test`.
