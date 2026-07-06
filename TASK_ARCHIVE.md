@@ -1870,3 +1870,81 @@ only changed the thread the reads run on — orthogonal to the sibling #329 acco
   changes, so both OS arms stay byte-for-byte equivalent. The UI-smoothness result needs a real-box
   visual check on both macOS and Windows (not unit-testable). Checks green: `cargo test` /
   `npm run lint:rust` / `npm run format:rust` / `npm run build` / `npm run lint` / `npm test`.
+
+### 331. [x] "New session here" on a worktree agent nests under the existing worktree instead of registering a stray sidebar folder
+
+Starting a new agent from a **worktree** agent's (or worktree panel's) "Open a view or start a session
+in this folder" button (`OpenViewButton` → "New session here", #213/#177) now adds the new agent
+**inside that worktree's existing nested sub-group** (under the parent repo), instead of registering the
+app-managed worktree directory (`<app-data>/worktrees/<repo-id>/<branch>`) as its own brand-new
+top-level sidebar folder. **Root cause:** the interactive Rust `spawn_session` command always persisted
+the new record with `worktree_parent: None` and called `store.touch_recent(&cwd)` with the **worktree
+folder** path — so the new session was treated as a normal session whose `repoPath` was the worktree
+folder (included in `sessions.filter(s => !s.worktreeParent)` and unioned into the top-level
+`repoOrder`), and the worktree folder landed in `recents` (both the optimistic frontend update and the
+durable backend `touch_recent`) → it surfaced as a stray top-level folder. The schedule/recurring
+**fire** path and **fork** (#126) already set `worktree_parent` and touch the parent, so they nested
+correctly; this made the interactive spawn behave the same way.
+
+**What shipped** (commit [`6dd3fb1`](https://github.com/ErikdeJager/ReCue/commit/6dd3fb1), PR
+[#84](https://github.com/ErikdeJager/ReCue/pull/84), branch `worktree-new-session-nesting`, 2026-07-06;
+4 files, +152/−4):
+
+- **`src-tauri/src/commands.rs`:** added a pure `worktree_parent_for_cwd(sessions, cwd) -> Option<String>`
+  resolver — the parent repo of an app-managed worktree folder `cwd` if an agent already runs there (a
+  persisted session whose `repo_path == cwd` carries a `worktree_parent`), else `None` (so a normal spawn
+  is unaffected). It matches `cwd` against the **exact persisted `repo_path` string** (an opaque
+  identifier), so it's separator-agnostic and identical on macOS/Windows with no path parsing. In
+  `spawn_session`, computed `worktree_parent = worktree_parent_for_cwd(&store.sessions(), &cwd)`, set the
+  record's `worktree_parent` from it (replacing the hardcoded `None`), and replaced `touch_recent(&cwd)`
+  with `touch_recent(worktree_parent.as_deref().unwrap_or(&cwd))` — touching the parent for a worktree
+  spawn, the folder itself otherwise. Added a Rust unit test (`mk_session` helper) asserting the resolver
+  returns the parent for a worktree-agent cwd and `None` for a plain/normal-only cwd.
+- **`src/store.ts`:** aligned the optimistic recents update in the `spawnSession` and
+  `createBranchSession` actions to `record.worktree_parent ?? cwd`, so no stray worktree folder flashes
+  before the next refresh. The existing `upsertSession(toSessionView(record))` already picks up the
+  corrected `worktreeParent` from the backend record, so nesting is automatic.
+- **`src/store.test.ts` + `src/paths.test.ts`:** frontend test that spawning into a worktree cwd yields a
+  session whose `worktreeParent`/`effectiveRepo` is the parent and unshifts the **parent** (not the
+  worktree folder) into `recents`; plus a `paths.test.ts` assertion reinforcing the grouping invariant
+  (a `{repoPath:"/wt/feat", worktreeParent:"/repo"}` session has `effectiveRepo === "/repo"` and is
+  excluded from the top-level filter).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 331):
+
+- **"Reuse the existing worktree" = the new agent JOINS the existing worktree's nested sub-group** (same
+  worktree folder `repoPath` → same sub-group; #74 already supports multiple agents per worktree), not a
+  second/separate worktree.
+- **Fix spans backend + frontend, not frontend-only** — the durable backend record (`worktree_parent:
+  None` + `touch_recent(worktreeFolder)`) would re-introduce the stray folder on the next refresh/reboot
+  even if the frontend patched its optimistic state, so the backend is the real fix; the frontend change
+  only keeps the optimistic UI consistent.
+- **Detection = reuse the recorded `worktree_parent` of an existing session at the same `repo_path`**
+  (mirrors the frontend `worktreeParentOf`), not a git worktree probe — reliable, consistent with how
+  the app tracks worktree membership, and an opaque-string match (no path parsing).
+- **Centralized in the backend `spawn_session` command** so every entry point routing through
+  `ipc.spawnSession` (OpenViewButton "New session here", `NewSessionModal` instant/branch spawn,
+  `CreatePanelModal`, Canvas template `new-agent`, `createBranchSession`) nests correctly at once. The
+  worktree "New session here" UX stays an instant, no-modal spawn on the worktree's current branch — only
+  grouping/recents change.
+- **Accepted edge case (out of scope):** a worktree that currently has only a non-agent panel and zero
+  session records can't have its parent resolved from the session store, so its panel's "New session
+  here" would still register a top-level folder — rare, not the reported bug (a worktree *agent*'s button
+  always has a live session); noted as a known limitation for a follow-up.
+
+**Key files/areas touched:** `src-tauri/src/commands.rs`, `src/store.ts`, `src/store.test.ts`,
+`src/paths.test.ts`. 4 files.
+
+**Dependencies:** none (#74 worktrees, #96 `effectiveRepo`, #127 `startRepoSession`, #177 instant "New
+session here", #199 worktree-parent tracking, #213 worktree `OpenViewButton` all landed).
+
+**Notes**
+
+- **Cross-platform:** the fix matches `cwd` against the exact persisted `repo_path` string (the same
+  string the backend produced and the frontend passed back), never parsing/splitting a path — so it
+  behaves byte-for-byte identically with Windows `%USERPROFILE%`/backslash worktree paths and macOS
+  `/`-paths; no new path handling, no `platform`/`joinPath`/`splitPath` needed. The backend change is
+  guarded by `worktree_parent.is_some()`, so an ordinary folder never matches (no regression). The GUI/PTY
+  spawn + restart-persistence check needs a real box (not unit-testable) and was flagged for macOS/Windows
+  smoke verification. Checks green: `npm run build` / `npm run lint` / `npm test` / `cargo test` /
+  `npm run lint:rust` / `npm run format:rust`.
