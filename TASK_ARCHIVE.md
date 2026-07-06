@@ -1948,3 +1948,63 @@ session here", #199 worktree-parent tracking, #213 worktree `OpenViewButton` all
   spawn + restart-persistence check needs a real box (not unit-testable) and was flagged for macOS/Windows
   smoke verification. Checks green: `npm run build` / `npm run lint` / `npm test` / `cargo test` /
   `npm run lint:rust` / `npm run format:rust`.
+
+### 332. [x] Esc-to-cancel in session modals must not exit macOS fullscreen
+
+Pressing **Esc** to cancel a session modal while the ReCue window is in **native macOS fullscreen** no
+longer pops the window out of fullscreen — it now cancels the modal only. **Root cause:** on macOS, an
+Esc keydown that the web content leaves *unhandled* leaks up the responder chain and the OS treats it as
+"exit fullscreen". The `NewSessionModal` (New / Schedule / Recurring session) and `TemplateUseModal`
+(new Canvas tab from template) both closed on Esc via a **window-level** keydown listener that called
+`close()` **without** `event.preventDefault()`, so the keydown read as unhandled and still triggered the
+native fullscreen exit even though the modal also closed. Calling `event.preventDefault()` marks the
+event handled by the web content, suppressing the native default — Esc now stays scoped to cancelling
+the modal. The fix is applied **universally** (no platform gate): `preventDefault()` on Esc is harmless
+on Windows and outside fullscreen (Esc has no destructive default there), and is more robust than
+detecting fullscreen state.
+
+**What shipped** (commit [`401929c`](https://github.com/ErikdeJager/ReCue/commit/401929c), PR
+[#85](https://github.com/ErikdeJager/ReCue/pull/85), branch `esc-cancel-session-modals-fullscreen`,
+2026-07-06; 2 files, +11/−2):
+
+- **`src/components/NewSessionModal/NewSessionModal.tsx`:** in the window-level "Escape closes the
+  popover" keydown listener, added `event.preventDefault()` before `close()`, with a `(#332)`
+  provenance comment noting the macOS-fullscreen reason. Listener registration/cleanup and the
+  `[open, close]` deps left unchanged.
+- **`src/components/TemplateUseModal/TemplateUseModal.tsx`:** the identical one-line
+  `event.preventDefault()` (+ `(#332)` comment) in its window-level Esc keydown listener.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 332):
+
+- **"Session modals" = the create/schedule/manage-session family** — `NewSessionModal`,
+  `TemplateUseModal`, `CloneRepoModal`, `CanvasCloseModal`, `CreatePanelModal`, `OnboardingModal`.
+  **Excluded** the `Settings` modal (not session-specific) and sidebar context-menus/rename inputs
+  (popovers, not modals).
+- **Actual code change is only two files.** An audit of all seven Esc-cancel modals found 5 already
+  call `event.preventDefault()` on Esc; only `NewSessionModal` and `TemplateUseModal` (both
+  `window`-listener wired) omitted it — those are the real fix. The rest were confirmed compliant,
+  no edits.
+- **Universal `preventDefault()`, no platform gate / fullscreen detection** — applied unconditionally
+  rather than only-when-macOS-fullscreen, matching CLAUDE.md's "macOS behavior fixed, Windows
+  unaffected" seam.
+- **No shared `useModalEscape` hook / refactor** — kept the minimal per-modal one-line change since
+  most modals already comply; the smallest correct change wins.
+- **Skill-menu case is unaffected:** `SkillAutocomplete`'s open `/`-menu already `preventDefault()`s
+  **and** `stopPropagation()`s Esc (the React synthetic `stopPropagation` also stops the native
+  event), so the window Esc listener does not fire while the menu is open — Esc still closes just the
+  menu, not the whole modal.
+
+**Key files/areas touched:** `src/components/NewSessionModal/NewSessionModal.tsx`,
+`src/components/TemplateUseModal/TemplateUseModal.tsx`. 2 files. Frontend-only; no Rust.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Cross-platform:** `event.preventDefault()` on the Esc keydown is OS-neutral and applied without any
+  `#[cfg]`/`platform` gate — harmless on Windows and when not fullscreen (Esc has no destructive
+  default there), so both OS arms behave equivalently and Windows Esc-cancel is unchanged. The native
+  macOS fullscreen-exit suppression is WKWebView-only and can't be exercised in jsdom/CI, so it was
+  flagged for a manual macOS-fullscreen smoke check per the repo's GUI-path convention; the automated
+  checks confirm the event is `preventDefault`ed. Checks green: `npm run build` / `npm run lint` /
+  `npm test`.
