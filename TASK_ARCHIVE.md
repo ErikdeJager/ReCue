@@ -1699,3 +1699,51 @@ still present).
   for reduced-motion) — so the gutter renders identically on WKWebView (macOS) and WebView2
   (Windows). Checks green: `npm run build` / `npm test` / `npm run lint` / `npm run format:check` /
   `cargo test` / `npm run lint:rust`.
+
+### 328. [x] Move the five-hour usage fetch off the main thread (async, non-blocking)
+
+Stopped the whole app UI from freezing every time the sidebar-footer **five-hour usage bar** (#154)
+refreshed. The `claude_session_usage` Tauri command was a **synchronous `#[tauri::command] pub fn`**,
+and in Tauri 2 a sync command runs on the **main (webview) event-loop thread** — so its blocking
+credentials read, its up-to-8 s `ureq` HTTPS GET (`HTTP_TIMEOUT`), and the macOS `security`
+subprocess spawn all executed on the thread that drives WKWebView/WebView2, locking rendering **and**
+input until the request returned. This was the exact bug class #316 had already fixed for the git
+commands; the usage command was simply missed by that sweep. After this change the fetch runs on the
+blocking pool and the window stays fully responsive during a refresh (scroll, tab switch, typing in a
+terminal — no freeze).
+
+**What shipped** (commit [`bdcb8d7`](https://github.com/ErikdeJager/ReCue/commit/bdcb8d7), PR
+[#82](https://github.com/ErikdeJager/ReCue/pull/82), branch `usage-async-offload`, 2026-07-06):
+
+- **`src-tauri/src/usage.rs` (only file touched, +21/−4):** the current command body (token read →
+  `fetch_usage` → `parse_snapshot`, with its `usage_diag` breadcrumbs) was extracted **verbatim**
+  into a private, non-command `fn usage_snapshot_blocking() -> Option<UsageSnapshot>`; a new
+  `#[tauri::command] pub async fn claude_session_usage()` wraps it as
+  `tauri::async_runtime::spawn_blocking(usage_snapshot_blocking).await.ok().flatten()`, mirroring the
+  #316 `git::current_branch`/`fetch_remotes` conversion. The stale/incorrect doc comment ("Sync →
+  Tauri runs it off the main thread…") was corrected to describe the async/`spawn_blocking` behavior.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 328 — assume variant):
+
+- **Root cause is the sync Rust command, not the frontend.** `refreshUsage` already `await`s off a
+  `setInterval` (not on any React render path), so no frontend change was needed. "Make it Async
+  (multi thread)" was read as: make the Rust command async and offload its blocking work where the
+  freeze actually lives.
+- **Minimal, precedented fix — `spawn_blocking`, not a new async HTTP client.** Reused the existing
+  blocking `ureq` client rather than pulling in `reqwest`; zero new dependencies, smallest surface.
+- **Return type unchanged** (`Option<UsageSnapshot>`), so the `src/ipc.ts` `invoke<UsageSnapshot |
+  null>` contract and `src/store.ts` `refreshUsage` needed **no changes**; poll cadence
+  (`USAGE_POLL_MS = 180_000` / `ARMED_POLL_MS = 45_000`) left as-is (the card is about lag, not
+  staleness; the endpoint 429s below 180 s).
+- **Fail-open preserved, including a join error.** A token miss / HTTP error / parse mismatch — and a
+  `spawn_blocking` task panic — all collapse to `None` (the bar hides) via `.ok().flatten()`.
+- **Cross-platform parity is inherent.** `spawn_blocking` is OS-agnostic; the macOS Keychain fallback
+  (`#[cfg(target_os = "macos")]`) stays gated inside the moved body, so behavior is byte-for-byte
+  identical on macOS and Windows — only the thread the work runs on changes. The GUI + network
+  responsiveness check needs a real box (not CI-unit-testable) and was flagged for macOS/Windows
+  smoke verification per the CLAUDE.md untestable-path rule.
+
+**Key files/areas touched:** `src-tauri/src/usage.rs`. 1 file.
+
+**Dependencies:** none (all prior usage-bar work — #154, #272, #296, #297, #305, #309, #316, #326 —
+already landed; the change is self-contained and mirrors the #316 spawn_blocking pattern).
