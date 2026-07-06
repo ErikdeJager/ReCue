@@ -1,0 +1,13 @@
+/* Per-agent "watch" toggle (#336). The button inherits its base sizing/hover from the
+   host surface class passed in (`styles.action` in Overview, `styles.panelClose` in
+   Canvas); this only carries the active (watched) accent color. The Eye icon also sets
+   `color: var(--accent)` inline so the accent shows regardless of CSS-module cascade
+   order — this class is the aria/pressed styling hook alongside it. On-system tokens
+   only, so it renders identically on macOS and Windows. */
+.active {
+  color: var(--accent);
+}
+
+.active:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: var(--accent-hover);
+}

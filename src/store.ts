@@ -41,6 +41,7 @@ import {
 import { applyTerminalSettings } from "./components/Terminal/terminalPool";
 import { decodeOutputB64 } from "./decodeOutput";
 import * as ipc from "./ipc";
+import { notifyAgentReady } from "./notify";
 import { emitSessionOutput } from "./outputBus";
 import { isWindows } from "./platform";
 import {
@@ -51,6 +52,7 @@ import {
   repoName,
   scheduleNestsUnderWorktree,
   sessionInFilter,
+  sessionLabel,
   splitPath,
 } from "./paths";
 import { formatInterval, parseResetsAt } from "./time";
@@ -288,6 +290,36 @@ function scheduleBranchRefresh(): void {
   }, BRANCH_REFRESH_DEBOUNCE_MS);
 }
 
+/**
+ * On an agent's busy→idle edge (#336), pop a native OS notification when the agent is
+ * "effectively watched" — either its per-agent `watch` flag is on, or the global
+ * `watchAllAgents` setting is on. Fired **only from the main window** (session events
+ * are window-global — #84 — so a detached canvas window would otherwise double-fire)
+ * and **not during boot resume** (the initial replay would notify for every persisted
+ * agent). Recurring-owned child sessions have no watch UI, so they're skipped. Best-effort
+ * and fire-and-forget: it never awaits and swallows all delivery errors inside `notify.ts`.
+ */
+function maybeNotifyWatched(id: string): void {
+  if (!IS_MAIN_WINDOW || booting) return;
+  const state = useStore.getState();
+  const session = state.sessions.find((x) => x.id === id);
+  if (!session) return;
+  // Recurring children render only inside the recurring surface and have no watch
+  // toggle — never notify for them.
+  if (ownedChildSessionIds(state.recurrings).has(id)) return;
+  const effectiveWatch =
+    state.settings.watchAllAgents || (session.watch ?? false);
+  if (!effectiveWatch) return;
+  // Build the same display label the sidebar/Overview show (custom → auto-title →
+  // branch/folder), honoring the auto-name setting.
+  const label = sessionLabel(
+    session.name,
+    state.settings.autoName ? session.autoName : null,
+    state.branches[session.repoPath] || repoName(session.repoPath),
+  );
+  void notifyAgentReady(label.primary, "Finished or awaiting your input");
+}
+
 /** Shallow-equality of two `path → url` maps (#327) — lets `refreshGithubUrls` skip a
  *  re-render (referential stability for the sidebar selector) when nothing changed. */
 function urlMapsEqual(
@@ -431,6 +463,9 @@ function toSessionView(record: SessionRecord): SessionView {
     // Per-agent auto-continue opt-out (#297): absent/false (older record) → inherit the
     // global behavior; only a persisted `true` excludes this agent from the fire step.
     autoContinueDisabled: record.auto_continue_disabled ?? false,
+    // Per-agent "watch" opt-in (#336): absent/false (older record) → unwatched; a
+    // persisted `true` fires a native notification on this agent's busy→idle edge.
+    watch: record.watch ?? false,
   };
 }
 
@@ -955,6 +990,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // True by default (#309): the "Enable auto restart on limit reset" prompt button
   // above the usage bar is offered when the limit is hit and auto-continue is off.
   promptEnableAutoContinueAtLimit: true,
+  // False by default (#336): watch notifications are opt-in per agent. When turned on,
+  // EVERY agent (except recurring-owned children) notifies on its busy→idle edge.
+  watchAllAgents: false,
   // False so the first-launch agent picker runs once for new AND existing installs
   // (an older sessions.json lacks the key → merges to false → detected next launch).
   onboarded: false,
@@ -1501,6 +1539,14 @@ export interface AppState {
    * true` excludes that agent from the #296 fire step. Optimistically updates the
    * session then persists via `ipc.setSessionAutoContinue`. */
   setAutoContinueDisabled: (id: string, disabled: boolean) => void;
+  /** Set a single agent's per-agent "watch" flag (#336): `watch = true` fires a native
+   * OS notification on that agent's busy→idle edge. Optimistically updates the session
+   * (so both the sidebar menu + header button reflect it) then persists via
+   * `ipc.setSessionWatch`. No-op for an unknown id or an unchanged flag. */
+  setWatch: (id: string, watch: boolean) => void;
+  /** Flip a single agent's "watch" flag (#336) — reads the current value and calls
+   * `setWatch(id, !current)`. Backs the sidebar menu item + the header WatchButton. */
+  toggleWatch: (id: string) => void;
   /** Add an existing folder to recents without spawning an agent (#172 sidebar
    * background menu → "New folder…"): opens the native folder picker and persists
    * the choice so it shows as a folder group immediately. Cancel = no-op; an already
@@ -2431,7 +2477,10 @@ export const useStore = create<AppState>()((set, get) => ({
     // during it has completed — re-read branch labels (debounced) so the sidebar
     // worktree/repo label tracks the new branch without an app restart. This is the
     // single transition point (the `session://state` handler's only caller).
-    if (wasBusy && !busy) scheduleBranchRefresh();
+    if (wasBusy && !busy) {
+      scheduleBranchRefresh();
+      maybeNotifyWatched(id);
+    }
   },
 
   setAutoName: (id, autoName) =>
@@ -2755,6 +2804,22 @@ export const useStore = create<AppState>()((set, get) => ({
       ),
     }));
     void ipc.setSessionAutoContinue(id, disabled).catch(() => {});
+  },
+  setWatch: (id, watch) => {
+    const session = get().sessions.find((x) => x.id === id);
+    // No-op when the id isn't a tracked session or the flag is unchanged.
+    if (!session || (session.watch ?? false) === watch) return;
+    // Optimistic local update so both agent surfaces (sidebar menu + header button)
+    // reflect it immediately; `setBusy` reads this same flag on the busy→idle edge.
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === id ? { ...x, watch } : x)),
+    }));
+    void ipc.setSessionWatch(id, watch).catch(() => {});
+  },
+  toggleWatch: (id) => {
+    const session = get().sessions.find((x) => x.id === id);
+    if (!session) return;
+    get().setWatch(id, !(session.watch ?? false));
   },
 
   addFolder: async () => {

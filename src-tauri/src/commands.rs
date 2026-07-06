@@ -190,6 +190,8 @@ pub fn spawn_session(
         forkable: false,
         // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
         auto_continue_disabled: false,
+        // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
+        watch: false,
     };
     store
         .add_session(record.clone())
@@ -255,6 +257,8 @@ pub fn spawn_worktree_agent(
         forkable: false,
         // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
         auto_continue_disabled: false,
+        // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
+        watch: false,
     };
     store
         .add_session(record.clone())
@@ -297,6 +301,8 @@ pub fn spawn_worktree_agent_new_branch(
         forkable: false,
         // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
         auto_continue_disabled: false,
+        // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
+        watch: false,
     };
     store
         .add_session(record.clone())
@@ -425,6 +431,8 @@ pub fn fork_session(
         forkable: false,
         // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
         auto_continue_disabled: false,
+        // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
+        watch: false,
     };
     store
         .add_session(record.clone())
@@ -478,6 +486,20 @@ pub fn set_session_auto_continue(
 ) -> Result<(), SessionError> {
     store
         .set_session_auto_continue(&id, disabled)
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
+/// Set a session's per-agent "watch" flag (#336) and persist. When `watch == true`
+/// the frontend pops a native OS notification each time this agent finishes a turn /
+/// needs input (its busy→idle edge).
+#[tauri::command]
+pub fn set_session_watch(
+    store: State<'_, Store>,
+    id: String,
+    watch: bool,
+) -> Result<(), SessionError> {
+    store
+        .set_session_watch(&id, watch)
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
@@ -1258,6 +1280,8 @@ fn fire_one_schedule(
         forkable: false,
         // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
         auto_continue_disabled: false,
+        // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
+        watch: false,
     };
     let _ = store.add_session(record.clone());
     // Touch the repo (not the worktree folder) as the recent.
@@ -1580,6 +1604,8 @@ fn fire_one_recurring(
         forkable: false,
         // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
         auto_continue_disabled: false,
+        // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
+        watch: false,
     };
     let _ = store.add_session(record.clone());
     let _ = store.touch_recent(&rec.cwd);
@@ -2387,6 +2413,7 @@ mod tests {
             forked_from: None,
             forkable: false,
             auto_continue_disabled: false,
+            watch: false,
         }
     }
 

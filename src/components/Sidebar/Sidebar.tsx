@@ -18,6 +18,8 @@ import {
   Bug,
   Check,
   Clock,
+  Eye,
+  EyeOff,
   FileDiff,
   FileText,
   Folder,
@@ -45,6 +47,7 @@ import {
   revealFileInFinder,
   revealPath,
 } from "../../ipc";
+import { ensureNotificationPermission } from "../../notify";
 import {
   forkUnavailableReason,
   recurringNestsUnderWorktree,
@@ -482,6 +485,10 @@ function AgentContextMenu({
   const forkSession = useStore((s) => s.forkSession);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const openSessionInCanvas = useStore((s) => s.openSessionInCanvas);
+  // Per-agent "watch" toggle (#336) — the same store flag as the Overview/Canvas
+  // header WatchButton, so the menu item stays in sync with those buttons.
+  const toggleWatch = useStore((s) => s.toggleWatch);
+  const watched = session.watch ?? false;
   // Fork is unavailable (#138/#142) until the source has a real turn, or when the agent
   // can't fork at all (Codex); `forkReason` (Codex takes precedence) is the disabled
   // tooltip. Copy session ID is resume-only (#142).
@@ -570,6 +577,27 @@ function AgentContextMenu({
           />
           Open in canvas
         </button>
+        {/* Per-agent "watch" toggle (#336): pop a native notification when this agent
+            finishes a turn / needs input. Same flag as the header WatchButton. */}
+        <button
+          type="button"
+          role="menuitem"
+          className={`${styles.menuItem} ${styles.menuItemView}`}
+          aria-pressed={watched}
+          onClick={() => {
+            onClose();
+            toggleWatch(session.id);
+            // Ensure notification permission when turning watch on (no-op off).
+            if (!watched) void ensureNotificationPermission();
+          }}
+        >
+          {watched ? (
+            <Eye size={14} strokeWidth={1.5} className={styles.menuIcon} />
+          ) : (
+            <EyeOff size={14} strokeWidth={1.5} className={styles.menuIcon} />
+          )}
+          {watched ? "Stop watching" : "Watch"}
+        </button>
         <div className={styles.menuSeparator} role="separator" />
         <button
           type="button"
@@ -588,11 +616,11 @@ function AgentContextMenu({
 }
 
 /** Clamp a right-click position so the agent menu never overflows the viewport
- * (#131/#153 — 5 items + a separator). Shared by the row + rail menu (#228). */
+ * (#131/#153/#336 — up to 6 items + a separator). Shared by the row + rail menu (#228). */
 function clampAgentMenuPos(clientX: number, clientY: number) {
   return {
     x: Math.max(8, Math.min(clientX, window.innerWidth - 160)),
-    y: Math.max(8, Math.min(clientY, window.innerHeight - 200)),
+    y: Math.max(8, Math.min(clientY, window.innerHeight - 240)),
   };
 }
 

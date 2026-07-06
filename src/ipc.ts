@@ -151,6 +151,11 @@ export const renameSession = (id: string, name: string) =>
 export const setSessionAutoContinue = (id: string, disabled: boolean) =>
   invoke<void>("set_session_auto_continue", { id, disabled });
 
+/** Set a session's per-agent "watch" flag (#336): `watch = true` fires a native OS
+ * notification when this agent finishes a turn / needs input (its busy→idle edge). */
+export const setSessionWatch = (id: string, watch: boolean) =>
+  invoke<void>("set_session_watch", { id, watch });
+
 export const sessionScrollback = (id: string) =>
   invoke<ScrollbackReply>("session_scrollback", { id });
 

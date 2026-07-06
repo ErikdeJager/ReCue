@@ -34,6 +34,7 @@ import ItemContent from "../ItemContent/ItemContent";
 import { itemTitle, panelTitle } from "../ItemContent/itemTitle";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import { focusTerminal } from "../Terminal/terminalPool";
+import WatchButton from "../WatchButton/WatchButton";
 import {
   collectLeaves,
   collectSplits,
@@ -333,6 +334,14 @@ function LeafPanel({
             >
               <GitFork size={14} strokeWidth={1.5} />
             </button>
+          )}
+          {/* Per-agent "watch" toggle (#336) — agents only; notify on busy→idle. */}
+          {content.kind === "agent" && session && (
+            <WatchButton
+              session={session}
+              className={styles.panelClose}
+              iconSize={14}
+            />
           )}
           {/* Copy `claude --resume <id>` (#28) — agents only, re-homed here
               post-Focus (#86). Hidden for non-agent panels and for non-resumable

@@ -66,6 +66,7 @@ import FileSwitcher from "../FileSwitcher/FileSwitcher";
 // big-mode placeholder — one source of truth shared with Canvas + the modal.
 import ItemContent from "../ItemContent/ItemContent";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
+import WatchButton from "../WatchButton/WatchButton";
 import styles from "./Overview.module.css";
 
 /**
@@ -312,6 +313,8 @@ function SessionCard({
       >
         <GitFork size={15} strokeWidth={1.5} />
       </button>
+      {/* Per-agent "watch" toggle (#336) — notify on this agent's busy→idle edge. */}
+      <WatchButton session={session} className={styles.action} iconSize={15} />
       {/* Copy `claude --resume <id>` (#28) — re-homed here post-Focus (#86);
           hidden for non-resumable agents (Codex, #142). */}
       {canResume && (

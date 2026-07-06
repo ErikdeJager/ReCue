@@ -33,6 +33,11 @@ export interface SessionRecord {
    * (#296) is on, an agent participates unless this is `true`. Absent/false for older
    * records → inherit the global behavior. */
   auto_continue_disabled?: boolean;
+  /** Per-agent "watch" opt-in (#336): when `true`, a native OS notification pops up
+   * each time this agent finishes a turn / needs input (its busy→idle edge). Opt-in
+   * per agent; the global `watchAllAgents` setting can force it on. Absent/false for
+   * older records → unwatched. */
+  watch?: boolean;
 }
 
 /** A slash-invokable skill/command (#114, mirrors `skills::SkillInfo`). Powers
@@ -387,6 +392,11 @@ export interface Settings {
    * usage bar when the five-hour limit is reached and auto-continue is off (#309). Default
    * true (the prompt is shown); turn off to never surface it. */
   promptEnableAutoContinueAtLimit: boolean;
+  /** Global master switch for per-agent "watch" notifications (#336): when `true`, EVERY
+   * agent (except recurring-owned children) pops a native OS notification on its busy→idle
+   * edge, regardless of its per-agent `watch` flag (the per-agent flags are retained for
+   * when this is turned back off). Default `false` — watch is otherwise opt-in per agent. */
+  watchAllAgents: boolean;
   /** Whether the first-launch coding-agent picker has run. Defaults `false`, so an
    * existing install also runs the one-time detection on its next launch (auto-pick
    * if exactly one CLI is installed, the picker modal if 2+). Set once, then never
@@ -551,4 +561,9 @@ export interface SessionView {
    * from the #296 auto-continue fire step even though the global `autoContinueAfterLimit`
    * is on. Seeded from the record; toggled via the per-agent checkbox. Default false. */
   autoContinueDisabled?: boolean;
+  /** Per-agent "watch" opt-in (#336): when `true`, a native OS notification pops up each
+   * time this agent finishes a turn / needs input (its busy→idle edge). Seeded from the
+   * record; toggled via the sidebar menu / header WatchButton. Default false. The global
+   * `watchAllAgents` setting can force notifications on regardless of this flag. */
+  watch?: boolean;
 }
