@@ -2536,3 +2536,36 @@ a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
   action; no new imports — `sessionInFilter` is already imported) and `src/store.test.ts` (new
   `#334` unit tests beside the existing `setOverviewRepoFilter` tests). Pure frontend/store logic —
   inherently cross-platform.
+
+## Task 333 — Light mode theme option in Settings (Catppuccin Latte)
+
+- **Light palette = Catppuccin Latte.** Mirrors #33's Mocha remap; enumerated a full Latte-based
+  value for every color token in `tokens.css`. Latte is the natural light sibling and gives proper
+  contrast on light surfaces (the pale Mocha pastels would wash out).
+- **Terminal stays dark in both themes.** claude's TUI is dark-designed. Achieved by keeping
+  `--terminal-bg`/`--terminal-selection` un-overridden and introducing a stable `--terminal-fg`
+  token (value = current foreground) that terminalPool reads instead of the flipping
+  `--text-primary`. Terminals therefore don't need re-theming on a runtime switch.
+- **Mechanism = `data-theme="light"` attribute on `<html>` + a `:root[data-theme="light"]` token
+  override block** (not a `body.light` class). This is load-bearing: the custom accent is written
+  inline on `<html>`, so putting the theme on the same element lets inline correctly win — a
+  `body.light` rule would silently break the custom accent in light mode.
+- **No "System/Auto" option** — explicit Dark/Light only for v1 (out of scope).
+- **`REPO_PALETTE` and the Settings accent-swatch palette are NOT re-themed** — they are persisted
+  brand/identity colors; re-theming would break stored repo colors. Left as-is.
+- **Accent for light mode's default = Latte Peach (`#fe640b`)** with `--accent-fg: #ffffff` for
+  readability; a custom accent still overrides in both themes. Accepted minor caveat: the
+  Appearance "default" swatch chip (`#fab387`) won't exactly match the applied Latte Peach in
+  light mode.
+- **Toggle lives in Settings → Appearance** as a Dark/Light **segmented control** (reusing the
+  existing `styles.segmented` pattern), placed above Accent color.
+- **Accepted minor first-paint flash** (theme applies async in `init()`, same as existing
+  accent/reduce-motion behavior) — not addressed.
+- **CLAUDE.md is updated by the implementer** — this card reverses the documented "Dark theme
+  only" / "no light mode" rules (like #84/#100/#126 reversals); the plan calls out the exact lines
+  and the Settings architecture paragraph.
+- **Areas touched:** `src/types/index.ts` (Settings type), `src/store.ts` (`DEFAULT_SETTINGS` +
+  `applySettingsEffects`), `src/styles/tokens.css` (light token block + `--terminal-fg`),
+  `src/components/Terminal/terminalPool.ts` (foreground token), `src/components/Settings/Settings.tsx`
+  (Appearance toggle), `src/store.test.ts` (tests), `CLAUDE.md` (doc reversal). No backend/Rust
+  changes.
