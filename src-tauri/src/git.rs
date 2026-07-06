@@ -88,7 +88,7 @@ pub struct FileDiff {
 }
 
 /// Top-of-panel summary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct DiffSummary {
     pub branch: String,
     pub files_changed: u32,
@@ -97,7 +97,7 @@ pub struct DiffSummary {
 }
 
 /// The full working-tree diff vs `HEAD`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct WorkingDiff {
     pub summary: DiffSummary,
     pub files: Vec<FileDiff>,
