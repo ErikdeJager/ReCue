@@ -1652,27 +1652,48 @@ pub async fn github_web_urls(paths: Vec<String>) -> std::collections::HashMap<St
         .unwrap_or_default()
 }
 
+// Async + off the main thread (#330): the diff-viewer poll (`DiffInspector`, every
+// ~1.5s) and the FileTree status coloring re-run these `git` shell-outs + hunk parses
+// constantly. A non-`async` Tauri command runs on the main (webview) thread, so on a
+// large working tree (or several open diff panels) each read froze input/rendering
+// until it returned. `spawn_blocking` moves the synchronous git work onto the blocking
+// pool (the #316 branch-read / #200 `remove_worktree` pattern), keeping the window
+// responsive while the diff still refreshes to the latest state after an agent's turn.
+// Return types are unchanged, so the frontend IPC contract (`src/ipc.ts`) is untouched;
+// a join error (task panic) degrades to the same empty/`None`/fail-open value these git
+// helpers already return for a non-git dir. Cross-platform: identical git work, only the
+// thread it runs on changes (still through `git::hidden_command`).
 #[tauri::command]
-pub fn working_diff(cwd: String) -> WorkingDiff {
-    git::working_diff(cwd)
+pub async fn working_diff(cwd: String) -> WorkingDiff {
+    tauri::async_runtime::spawn_blocking(move || git::working_diff(cwd))
+        .await
+        .unwrap_or_default()
 }
 
 /// Lightweight per-file git status for the FileTree coloring (#252) — one
 /// `git status --porcelain` per repo (no hunk parse, no per-untracked spawn, unlike
 /// `working_diff`). A non-git / clean folder returns an empty list (fail-open, like
 /// `working_diff`); the result is bounded server-side.
+// Async + off the main thread (#330) — see the `working_diff` note above.
 #[tauri::command]
-pub fn file_statuses(repo: String) -> Vec<FileStatusEntry> {
-    git::file_statuses(repo)
+pub async fn file_statuses(repo: String) -> Vec<FileStatusEntry> {
+    tauri::async_runtime::spawn_blocking(move || git::file_statuses(repo))
+        .await
+        .unwrap_or_default()
 }
 
 /// Uncommitted working-tree diff for a **single file** vs `HEAD` (#324) — the source
 /// for the FileViewer code view's per-line git-diff gutter. A thin, path-scoped
 /// `git diff HEAD -- <file>` (untracked files fall back to `--no-index`). Fail-open:
 /// a clean / non-git / no-HEAD file returns `null` (no gutter), never an error.
+// Async + off the main thread (#330) — see the `working_diff` note above; a join error
+// flattens to `None` (no gutter), matching the fail-open contract.
 #[tauri::command]
-pub fn file_diff(repo: String, file: String) -> Option<FileDiff> {
-    git::file_diff(repo, &file)
+pub async fn file_diff(repo: String, file: String) -> Option<FileDiff> {
+    tauri::async_runtime::spawn_blocking(move || git::file_diff(repo, &file))
+        .await
+        .ok()
+        .flatten()
 }
 
 // Async + off the main thread (#316) — see the `current_branch` note above.
@@ -1686,19 +1707,29 @@ pub async fn list_branches(cwd: String) -> BranchList {
 /// The latest commits on `cwd`'s HEAD (#230) for the diff viewer's Commits source.
 /// `limit` is clamped to `MAX_COMMITS` so the payload stays bounded on large histories
 /// (the UI surfaces the cap). Non-git / no-commits → empty list (no error).
+// Async + off the main thread (#330) — see the `working_diff` note above; the clamp
+// runs first, then the git read moves onto the blocking pool.
 #[tauri::command]
-pub fn list_commits(cwd: String, limit: Option<u32>) -> Vec<CommitInfo> {
+pub async fn list_commits(cwd: String, limit: Option<u32>) -> Vec<CommitInfo> {
     const MAX_COMMITS: u32 = 100;
     let limit = limit.unwrap_or(MAX_COMMITS).clamp(1, MAX_COMMITS);
-    git::list_commits(cwd, limit)
+    tauri::async_runtime::spawn_blocking(move || git::list_commits(cwd, limit))
+        .await
+        .unwrap_or_default()
 }
 
 /// The diff a single commit introduced (#230) — `git show <sha>` parsed into the same
 /// `WorkingDiff` the body renders. An empty sha / git failure surfaces as a typed
 /// `SessionError::Git`.
+// Async + off the main thread (#330) — see the `working_diff` note above; a join error
+// maps to `SessionError::Io`, mirroring `fetch_remotes`.
 #[tauri::command]
-pub fn commit_diff(cwd: String, sha: String) -> Result<WorkingDiff, SessionError> {
-    git::commit_diff(&cwd, &sha).map_err(SessionError::Git)
+pub async fn commit_diff(cwd: String, sha: String) -> Result<WorkingDiff, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git::commit_diff(&cwd, &sha).map_err(SessionError::Git)
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
 /// Best-effort `git fetch --prune` for the new-session branch picker (#180) — a new
@@ -1743,13 +1774,19 @@ pub fn create_branch(cwd: String, name: String, base: String) -> Result<(), Sess
 
 /// Two-dot branch comparison for the diff viewer (#81) — `git diff base target`,
 /// rendered in the same diff body as `working_diff`.
+// Async + off the main thread (#330) — see the `working_diff` note above; a join error
+// maps to `SessionError::Io`, mirroring `fetch_remotes`.
 #[tauri::command]
-pub fn compare_branches(
+pub async fn compare_branches(
     cwd: String,
     base: String,
     target: String,
 ) -> Result<WorkingDiff, SessionError> {
-    git::compare_branches(&cwd, &base, &target).map_err(SessionError::Git)
+    tauri::async_runtime::spawn_blocking(move || {
+        git::compare_branches(&cwd, &base, &target).map_err(SessionError::Git)
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
 fn now_secs() -> u64 {
