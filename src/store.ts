@@ -58,6 +58,7 @@ import * as updater from "./updater";
 import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
 import type {
   AgentInfo,
+  AheadBehind,
   BranchList,
   CanvasContent,
   CanvasEdge,
@@ -280,6 +281,10 @@ function scheduleBranchRefresh(): void {
     // finished turn is exactly when its file edits land. Self-guards on the setting,
     // so it's a cheap no-op (zero git reads) when the badge is turned off.
     void useStore.getState().refreshDiffLineCounts();
+    // Re-read each folder's ahead/behind vs upstream on the same edge (#338) — an
+    // in-terminal commit/checkout shifts the count. A cheap local `git rev-list`
+    // against the already-fetched remote-tracking ref (no network fetch).
+    void useStore.getState().refreshBranchAheadBehind();
     // A finished turn is exactly when an agent's just-written files land. The
     // git-status re-tint above can't add a *new* row (rows come only from `list_dir`),
     // so also re-list every open tree's loaded levels so created/removed files appear
@@ -315,6 +320,25 @@ function diffCountsMapsEqual(
     const av = a[k];
     const bv = b[k];
     if (!av || !bv || av.added !== bv.added || av.removed !== bv.removed)
+      return false;
+  }
+  return true;
+}
+
+/** Shallow-equality of two `path → {ahead,behind}` maps (#338) — lets
+ *  `refreshBranchAheadBehind` skip a re-render (referential stability for the sidebar
+ *  branch-line / worktree-header selectors) when nothing changed on a refresh tick. */
+function aheadBehindMapsEqual(
+  a: Record<string, AheadBehind>,
+  b: Record<string, AheadBehind>,
+): boolean {
+  if (a === b) return true;
+  const ak = Object.keys(a);
+  if (ak.length !== Object.keys(b).length) return false;
+  for (const k of ak) {
+    const av = a[k];
+    const bv = b[k];
+    if (!av || !bv || av.ahead !== bv.ahead || av.behind !== bv.behind)
       return false;
   }
   return true;
@@ -1216,6 +1240,14 @@ export interface AppState {
    * on — off ⇒ the map stays empty and no `diff_line_counts` git reads run. A missing
    * key / both-zero = a clean tree (no badge). */
   diffLineCounts: Record<string, DiffLineCounts>;
+  /** Ahead/behind commit counts per folder path vs its upstream (#338): repo/worktree
+   * folder path → `{ ahead, behind }`. Powers the sidebar branch-line / worktree-header
+   * `↑A ↓B` indicator. Counts are as of the last `git fetch` (computed locally against
+   * the remote-tracking ref — no network). Only folders with an upstream are present; a
+   * missing key or a both-zero entry renders nothing. Refreshed on the same cadence as
+   * `branches` (load / busy→idle edge / repo-set change / app-initiated fetch-pull-
+   * checkout-create). */
+  branchAheadBehind: Record<string, AheadBehind>;
   /** The FileTree directory currently hovered by an OS file-drag (#253): the repo +
    * repo-relative dir (`""` = root) a drop would land in, or null when not over a
    * tree. Set by the window-global drag-drop listener; read by every FileTree to
@@ -1545,6 +1577,12 @@ export interface AppState {
    * immediately with **no** `diff_line_counts` git reads. One batch IPC round-trip;
    * fail-open (a backend miss leaves the map as-is). */
   refreshDiffLineCounts: () => Promise<void>;
+  /** Re-read each sidebar folder's ahead/behind vs upstream (#338), filling
+   * `branchAheadBehind`. Runs on the same cadence as `refreshBranches`; one batch IPC
+   * round-trip that reads the already-fetched remote-tracking ref (no network fetch).
+   * Full replace so a folder that lost its upstream drops out; fail-open (a backend miss
+   * leaves the map as-is). */
+  refreshBranchAheadBehind: () => Promise<void>;
   /** Bump the FileTree re-list signal (#253/#264): one repo when `repo` is given, else
    * every repo with a mounted tree. Each mounted FileTree re-fetches its currently
    * loaded directory levels in place — surfacing files created/removed on disk —
@@ -2226,6 +2264,7 @@ export const useStore = create<AppState>()((set, get) => ({
   githubUrls: {},
   fileStatuses: {},
   diffLineCounts: {},
+  branchAheadBehind: {},
   fileDropTarget: null,
   fileTreeRefresh: {},
   fileTreeMounts: {},
@@ -3304,6 +3343,23 @@ export const useStore = create<AppState>()((set, get) => ({
         diffCountsMapsEqual(s.diffLineCounts, next)
           ? {}
           : { diffLineCounts: next },
+      );
+    } catch {
+      // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
+    }
+  },
+
+  refreshBranchAheadBehind: async () => {
+    const repos = repoOrder(get().recents, get().sessions);
+    if (repos.length === 0) return;
+    try {
+      // One batch IPC round-trip for every folder (repos + worktree paths). A full
+      // replace is correct: a folder that lost its upstream drops out of the map.
+      const next = await ipc.branchAheadBehind(repos);
+      set((s) =>
+        aheadBehindMapsEqual(s.branchAheadBehind, next)
+          ? {}
+          : { branchAheadBehind: next },
       );
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
@@ -4660,6 +4716,9 @@ export const useStore = create<AppState>()((set, get) => ({
       // the FileTree coloring (#252) and the per-agent line counts (#335) too.
       void get().refreshFileStatuses();
       void get().refreshDiffLineCounts();
+      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
+      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
+      void get().refreshBranchAheadBehind();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4691,6 +4750,9 @@ export const useStore = create<AppState>()((set, get) => ({
       // the FileTree coloring (#252) and the per-agent line counts (#335) too.
       void get().refreshFileStatuses();
       void get().refreshDiffLineCounts();
+      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
+      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
+      void get().refreshBranchAheadBehind();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4735,6 +4797,9 @@ export const useStore = create<AppState>()((set, get) => ({
       // the FileTree coloring (#252) and the per-agent line counts (#335) too.
       void get().refreshFileStatuses();
       void get().refreshDiffLineCounts();
+      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
+      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
+      void get().refreshBranchAheadBehind();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4760,6 +4825,9 @@ export const useStore = create<AppState>()((set, get) => ({
       // the FileTree coloring (#252) and the per-agent line counts (#335) too.
       void get().refreshFileStatuses();
       void get().refreshDiffLineCounts();
+      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
+      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
+      void get().refreshBranchAheadBehind();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -5465,6 +5533,11 @@ export const useStore = create<AppState>()((set, get) => ({
           ? `${repoName(cwd)} already up to date`
           : `Pulled ${repoName(cwd)}`,
       );
+      // A `--ff-only` pull fast-forwards the local branch to its upstream, so the
+      // ahead/behind vs upstream (and the branch label / counts) all shift — refresh
+      // the sidebar's `↑A ↓B` indicator (#338) alongside the branch label.
+      void get().refreshBranches();
+      void get().refreshBranchAheadBehind();
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Pull failed";
       get().pushToast(`Pull failed: ${message}`, "error");
@@ -5482,6 +5555,9 @@ export const useStore = create<AppState>()((set, get) => ({
       await get().refreshBranches();
       // A fetch can fast-forward-adjacent state; keep the per-agent counts fresh (#335).
       void get().refreshDiffLineCounts();
+      // A fetch moves the remote-tracking ref, so ahead/behind vs upstream changes —
+      // re-read the sidebar's `↑A ↓B` indicator (#338).
+      void get().refreshBranchAheadBehind();
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Fetch failed";
       get().pushToast(`Fetch failed: ${message}`, "error");
@@ -5501,6 +5577,8 @@ export const useStore = create<AppState>()((set, get) => ({
       await get().refreshBranches();
       void get().refreshFileStatuses(repo);
       void get().refreshDiffLineCounts();
+      // A checkout switches HEAD to a branch with its own upstream divergence (#338).
+      void get().refreshBranchAheadBehind();
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Checkout failed";
       get().pushToast(`Checkout failed: ${message}`, "error");
@@ -5521,6 +5599,8 @@ export const useStore = create<AppState>()((set, get) => ({
     await get().refreshBranches();
     void get().refreshFileStatuses(repo);
     void get().refreshDiffLineCounts();
+    // A new branch has no upstream yet (or inherits the base's) — refresh `↑A ↓B` (#338).
+    void get().refreshBranchAheadBehind();
     return true;
   },
 }));

@@ -12,6 +12,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type {
   AgentInfo,
+  AheadBehind,
   BranchList,
   CanvasNode,
   CanvasTemplate,
@@ -393,6 +394,13 @@ export const githubWebUrls = (paths: string[]) =>
  * `currentBranches`; each entry is fail-open (non-git / no-HEAD / error → `{0,0}`). */
 export const diffLineCounts = (paths: string[]) =>
   invoke<Record<string, DiffLineCounts>>("diff_line_counts", { paths });
+
+/** Ahead/behind commit counts vs each folder's upstream for many folders in one
+ * round-trip (#338) — the sidebar's `↑A ↓B` branch indicator source. Computed locally
+ * against the already-fetched remote-tracking ref (no network `git fetch`). Only folders
+ * with an upstream are present in the map (no-upstream / non-git are omitted). */
+export const branchAheadBehind = (paths: string[]) =>
+  invoke<Record<string, AheadBehind>>("branch_ahead_behind", { paths });
 
 export const workingDiff = (cwd: string) =>
   invoke<WorkingDiff>("working_diff", { cwd });

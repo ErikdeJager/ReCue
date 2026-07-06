@@ -266,6 +266,7 @@ pub fn run() {
             commands::current_branches,
             commands::github_web_urls,
             commands::diff_line_counts,
+            commands::branch_ahead_behind,
             commands::working_diff,
             commands::file_statuses,
             commands::file_diff,
