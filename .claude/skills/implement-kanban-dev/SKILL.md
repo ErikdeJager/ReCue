@@ -43,8 +43,11 @@ call `ScheduleWakeup`, never create a cron/routine.**
 
 ## Board protocol (shared by every lane)
 
-The board lives at the repo root in `KANBAN.md`, with columns `## PLAN`, `## IMPLEMENT`,
-`## MERGE`, `## ARCHIVE`. Cards use this shape:
+The board lives at the repo root in `KANBAN.md`. Its four **PIMA** lane columns are `## PLAN`,
+`## IMPLEMENT`, `## MERGE`, `## ARCHIVE` — one per lane, in flow order. The board **may also
+contain other columns you (the user) inserted** (a `## BACKLOG` inbox, or a `Ready` / `Review` /
+`Approval` gate placed anywhere to pause the flow for a manual check); those are invisible to
+every lane's automation — see *Your lane boundaries* below. Cards use this shape:
 
 ```
 - [ ] Task <N>: <title> — PLAN-<N>.md
@@ -70,6 +73,35 @@ A card may also be sent **back** into `## IMPLEMENT` carrying a `- Revise: <what
 line (e.g. bounced from a later column for changes). If it already has a `PR:` url, that's a
 **revision of an existing PR** — dispatch it in revision mode (see step 4 below), not as a fresh
 build.
+
+### Your lane boundaries — you own exactly one column
+
+You are the owner of exactly one column: **`## IMPLEMENT`**. These rules are absolute — they do
+**not** change no matter how many other columns the board has or what they are named:
+
+- **Build only from `## IMPLEMENT`.** You pick up cards to build **only** from `## IMPLEMENT`.
+  Never scan, drain, or take a card from any other column — not even one whose name sounds like
+  your job (`Ready`, `To Do`, `Doing`, `In Progress`, …). A card sitting in a column you don't own
+  is **not yours to build**, however ready it looks. (This is the exact trap to avoid: a user who
+  inserts a `Ready` gate between PLAN and IMPLEMENT is staging cards for their own review — those
+  cards are **not** yours until the user moves them into `## IMPLEMENT`.)
+- **Never pull a card into `## IMPLEMENT`.** Cards appear there only because the plan lane advanced
+  them, or a later lane bounced one back with a `Revise:` note. Your only writes to `## IMPLEMENT`
+  are: advance a built card **out** of it, annotate a card in it (a `PR:` / `Build-note:` /
+  `Revise:` line), or leave a blocked card where it is. Moving a card *from another column into*
+  `## IMPLEMENT` is never your job — if you're ever tempted, stop.
+- **Read-only signal columns.** You additionally **read** `## ARCHIVE` (and `TASK_ARCHIVE.md`) to
+  check whether a card's dependencies have landed — that, and only that, is why your Monitor also
+  watches `## ARCHIVE`. This is **read-only**: you never pick up, move, build, or write a card in
+  `## ARCHIVE`.
+- **Advance exactly one column to the right.** When a build's PR opens, move its card to the **very
+  next `##` column** after `## IMPLEMENT`, whatever it is named — never hard-code `## MERGE`, never
+  skip ahead. If you (the user) inserted a review/approval gate immediately right of `## IMPLEMENT`,
+  the card lands **in that gate and waits there for you** — the lane never drains it.
+- **Every other column is invisible to you.** Any column that is not `## IMPLEMENT` and not the
+  read-only `## ARCHIVE` signal does not exist for your work — a `## BACKLOG` inbox, or any gate
+  the user inserts anywhere. Never read it for work, never drain it, never move a card into it
+  (except the single one-step advance above, which may land in a gate).
 
 ### Concurrent writes — the board is shared, so retry on conflict
 
@@ -146,7 +178,8 @@ running.**
    `- Build-note:` to card `N` and remove the stale marker (its slot is already free, since it's no
    longer running).
 4. **Top up the pool.** Compute `capacity = 5 − (running implementer tasks in
-   TaskList)`. While `capacity > 0` and an **eligible** card waits in `## IMPLEMENT`, dispatch one
+   TaskList)`. While `capacity > 0` and an **eligible** card waits in **your own `## IMPLEMENT`
+   column** (never pick up a card from any other column, however suggestively named), dispatch one
    and decrement `capacity`. A card is **eligible** when it is unblocked (every dep in `## ARCHIVE`
    or `TASK_ARCHIVE.md`), **not** already in the in-flight set, and carries **no** unresolved
    `- Build-note:`. To dispatch:

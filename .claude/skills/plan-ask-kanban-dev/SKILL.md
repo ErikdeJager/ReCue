@@ -37,10 +37,12 @@ never arm the `Monitor` just because you're waiting on an answer. Arm the `Monit
 
 ## Board protocol (shared by every lane)
 
-The board lives at the repo root in `KANBAN.md`, with four columns: `## PLAN`,
-`## IMPLEMENT`, `## MERGE`, `## ARCHIVE`. (An optional `## BACKLOG` column may sit to the
-**left** of `## PLAN` — a user-managed inbox for raw ideas. **Never read, plan, or drain
-it**; work starts only when the user moves a card into `## PLAN`.) Cards use this shape:
+The board lives at the repo root in `KANBAN.md`. Its four **PIMA** lane columns —
+`## PLAN`, `## IMPLEMENT`, `## MERGE`, `## ARCHIVE` — are one per lane, in flow order. The
+board **may also contain other columns you (the user) inserted** — a `## BACKLOG` inbox to the
+left of `## PLAN`, or a `Ready` / `Review` / `Approval` gate placed anywhere to pause the flow
+for a manual check. Those extra columns are **yours to manage by hand and invisible to every
+lane's automation** (see *Your lane boundaries* below). Cards use this shape:
 
 ```
 - [ ] Task <N>: <fitting title> — PLAN-<N>.md
@@ -67,6 +69,29 @@ would drop this metadata when the board is opened as a real Kanban board.
   carrying a `- Revise: <what to change>` line (a human, or a future review lane, asking for a
   re-plan). It keeps its original number `N` and `PLAN-<N>.md`. Treat such a card as rework
   (see *Revising a returned card* below), not as a new idea.
+
+### Your lane boundaries — you own exactly one column
+
+You are the owner of exactly one column: **`## PLAN`**. These rules are absolute — they do
+**not** change no matter how many other columns the board has or what they are named:
+
+- **Drain only `## PLAN`.** You pick up work **only** from `## PLAN`. Never scan, plan, or take a
+  card from any other column — not even one whose name sounds planning-adjacent (`Ready`,
+  `To Do`, `Triage`, …). A card sitting in a column you don't own is **not yours**, however
+  ready it looks.
+- **Never pull a card into `## PLAN`.** Cards appear in `## PLAN` only because you (the user)
+  dropped an idea there, or a later lane bounced one back with a `Revise:` note. Your only writes
+  to `## PLAN` are: advance a card **out** of it, or annotate a card already in it. Moving a card
+  *from another column into* `## PLAN` is never your job — if you're ever tempted, stop.
+- **Advance exactly one column to the right.** When a card is refined, move it to the **very next
+  `##` column** after `## PLAN`, whatever it is named — never hard-code the next lane's name,
+  never skip ahead (this is step 7 of the playbook). If you (the user) inserted a gate column
+  immediately right of `## PLAN`, the refined card lands **in that gate and waits there for you** —
+  draining it onward is your job, not the lane's.
+- **Every other column is invisible to you.** Any column that is not `## PLAN` does not exist as
+  far as your work is concerned — the `## BACKLOG` inbox to the left, or any `Ready` / `Review` /
+  `Approval` gate inserted anywhere. Never read it for work, never drain it, never move a card
+  into it (except the single one-step advance above, which may land in a gate).
 
 ### Concurrent writes — the board is shared, so retry on conflict
 

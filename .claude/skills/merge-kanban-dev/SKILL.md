@@ -38,10 +38,12 @@ Idle means *parked on a `Monitor`* — nothing else.
 
 ## Board protocol (shared by every lane)
 
-The board lives at the repo root in `KANBAN.md`, with columns `## PLAN`, `## IMPLEMENT`,
-`## MERGE`, `## ARCHIVE`. Each `## MERGE` card carries the task title and a `PR:` url from the
-build lane. Moving a card to `## ARCHIVE` is what satisfies downstream dependencies and hands it
-to the archive lane.
+The board lives at the repo root in `KANBAN.md`. Its four **PIMA** lane columns are `## PLAN`,
+`## IMPLEMENT`, `## MERGE`, `## ARCHIVE` — one per lane, in flow order; the board **may also
+contain other columns you (the user) inserted** as manual gates, invisible to every lane's
+automation (see *Your lane boundaries* below). Each `## MERGE` card carries the task title and a
+`PR:` url from the build lane. Moving a card to `## ARCHIVE` is what satisfies downstream
+dependencies and hands it to the archive lane.
 
 A card may also be sent **back** into `## MERGE` carrying a `- Revise: <what to change>` line (a
 human, or a future review lane, asking you to redo the landing). Address the note (e.g.
@@ -52,6 +54,30 @@ Any sub-line you write under a card (a `Revise:` line you clear, or a note you a
 **4 spaces**, not 2 — an Obsidian-Kanban board viewer renders a card's tab- or 4-space-indented
 lines as its body but **ignores** 2-space-indented ones, so a 2-space indent would drop them when
 the board is opened as a real Kanban board.
+
+### Your lane boundaries — you own exactly one column
+
+You are the owner of exactly one column: **`## MERGE`**. These rules are absolute — they do
+**not** change no matter how many other columns the board has or what they are named:
+
+- **Land only from `## MERGE`.** You pick up cards to land **only** from `## MERGE`. Never scan,
+  drain, or take a card from any other column — not even one whose name sounds merge-adjacent
+  (`Review`, `Approved`, `Ready to merge`, …). A card sitting in a column you don't own is **not
+  yours**, even if its PR looks ready to land.
+- **Never pull a card into `## MERGE`.** Cards appear there only because the build lane advanced
+  them, or a human placed/bounced one there. Your only writes to `## MERGE` are: advance a landed
+  card **out** of it, or annotate a card already in it (e.g. clearing a `Revise:` line). Moving a
+  card *from another column into* `## MERGE` is never your job — if you're ever tempted, stop.
+- **Advance exactly one column to the right.** When the PR is landed, move its card to the **very
+  next `##` column** after `## MERGE`, whatever it is named — never hard-code `## ARCHIVE`, never
+  skip ahead. If you (the user) inserted a gate immediately right of `## MERGE`, the card lands
+  **in that gate and waits there for you**; note the card then satisfies downstream dependencies
+  only once it actually reaches `## ARCHIVE`, so a gate before `## ARCHIVE` deliberately holds
+  dependents until you approve — that is expected.
+- **Every other column is invisible to you.** Any column that is not `## MERGE` does not exist for
+  your work — a `## BACKLOG` inbox, or any `Review` / `Approval` gate the user inserts anywhere.
+  Never read it for work, never drain it, never move a card into it (except the single one-step
+  advance above, which may land in a gate).
 
 ### Concurrent writes — the board is shared, so retry on conflict
 

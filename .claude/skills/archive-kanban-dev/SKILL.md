@@ -30,8 +30,10 @@ Idle means *parked on a `Monitor`* — nothing else.
 
 ## Board protocol (shared by every lane)
 
-The board lives at the repo root in `KANBAN.md`, with columns `## PLAN`, `## IMPLEMENT`,
-`## MERGE`, `## ARCHIVE`. The supporting files:
+The board lives at the repo root in `KANBAN.md`. Its four **PIMA** lane columns are `## PLAN`,
+`## IMPLEMENT`, `## MERGE`, `## ARCHIVE` — one per lane, in flow order; the board **may also
+contain other columns you (the user) inserted** as manual gates, invisible to every lane's
+automation (see *Your lane boundaries* below). The supporting files:
 
 - **`PLAN-<N>.md`** — the task's plan (git-ignored); you delete it once archived.
 - **`ASSUMPTIONS.md`** — `## Task <N>` sections written during planning (**tracked**;
@@ -40,6 +42,26 @@ The board lives at the repo root in `KANBAN.md`, with columns `## PLAN`, `## IMP
   `## ARCHIVE` board column: that column is transient staging for merged cards awaiting
   archival; this file is the durable history. Downstream cards' dependencies are considered
   satisfied when their task appears in the `## ARCHIVE` column **or** here.
+
+### Your lane boundaries — you own exactly one column
+
+You are the owner of exactly one column: **`## ARCHIVE`**. These rules are absolute — they do
+**not** change no matter how many other columns the board has or what they are named:
+
+- **Archive only from `## ARCHIVE`.** You pick up cards to archive **only** from `## ARCHIVE`.
+  Never scan, drain, or take a card from any other column — not even one whose name sounds
+  archive-adjacent (`Done`, `Merged`, `Shipped`, …). A card sitting in a column you don't own is
+  **not yours**.
+- **Never pull a card into `## ARCHIVE`.** Cards appear there only because the merge lane advanced
+  them (a card reaches `## ARCHIVE` only by that one-step advance). Your only writes to
+  `## ARCHIVE` are: **remove** a card once you've archived it, or annotate a card already in it.
+  Moving a card *from another column into* `## ARCHIVE` is never your job.
+- **You are terminal — you don't advance, you remove.** Archiving ends a card's life on the board:
+  you write its permanent `TASK_ARCHIVE.md` entry and then **delete the card from `## ARCHIVE`**.
+  You never move a card further right, and never touch any column to the right of `## ARCHIVE`.
+- **Every other column is invisible to you.** Any column that is not `## ARCHIVE` does not exist
+  for your work — a `## BACKLOG` inbox, or any gate the user inserts anywhere. Never read it for
+  work, never drain it, never move a card into it.
 
 ### Concurrent writes — the board is shared, so retry on conflict
 
