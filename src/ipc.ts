@@ -16,6 +16,7 @@ import type {
   CanvasNode,
   CanvasTemplate,
   CommitInfo,
+  DiffLineCounts,
   DiffSeenMap,
   ExitPayload,
   FileDiff,
@@ -386,6 +387,12 @@ export const currentBranches = (paths: string[]) =>
  */
 export const githubWebUrls = (paths: string[]) =>
   invoke<Record<string, string>>("github_web_urls", { paths });
+
+/** Summed added/removed line counts vs `HEAD` for many working trees in one
+ * round-trip (#335) — the sidebar's per-agent `+A`/`−D` badge source. Mirrors
+ * `currentBranches`; each entry is fail-open (non-git / no-HEAD / error → `{0,0}`). */
+export const diffLineCounts = (paths: string[]) =>
+  invoke<Record<string, DiffLineCounts>>("diff_line_counts", { paths });
 
 export const workingDiff = (cwd: string) =>
   invoke<WorkingDiff>("working_diff", { cwd });

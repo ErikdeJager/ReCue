@@ -114,6 +114,17 @@ pub struct FileStatusEntry {
     pub status: FileStatus,
 }
 
+/// Summed added/removed line counts of a working tree vs `HEAD` (#335) — the
+/// lightweight per-agent signal the sidebar renders as a green `+A` / red `−D`
+/// badge. Added lines cover tracked edits (`git diff --numstat HEAD`) plus every
+/// untracked (non-ignored) file's line count; removed lines are tracked-only.
+/// Fail-open: a non-git / no-`HEAD` / errored read yields `{ 0, 0 }` (no badge).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+pub struct DiffLineCounts {
+    pub added: u32,
+    pub removed: u32,
+}
+
 /// Branches of a folder: the currently checked-out one, the local branches
 /// (`all`), and the remote-tracking branches (`remote`, qualified `<remote>/<name>`,
 /// #180). A non-git folder yields `{ current: "", all: [], remote: [] }`.
@@ -253,6 +264,93 @@ pub fn file_statuses(cwd: impl AsRef<Path>) -> Vec<FileStatusEntry> {
     let mut entries = parse_porcelain_z(&out);
     entries.truncate(MAX_STATUS_FILES);
     entries
+}
+
+/// Sum the `added` / `removed` columns of `git diff --numstat` output (#335). Each
+/// line is `<added>\t<removed>\t<path>`; a binary file is `-\t-\t<path>` (the `-`
+/// columns parse to 0). Pure `&str -> (u32, u32)`, so it is unit-tested against a
+/// fixture with no repo on disk (mirroring `parse_unified_diff`). Malformed / short
+/// lines contribute 0 rather than erroring.
+fn sum_numstat(out: &str) -> (u32, u32) {
+    let mut added = 0u32;
+    let mut removed = 0u32;
+    for line in out.lines() {
+        let mut cols = line.split('\t');
+        let a = cols.next().and_then(|c| c.parse::<u32>().ok()).unwrap_or(0);
+        let d = cols.next().and_then(|c| c.parse::<u32>().ok()).unwrap_or(0);
+        added = added.saturating_add(a);
+        removed = removed.saturating_add(d);
+    }
+    (added, removed)
+}
+
+/// Count the lines a brand-new (untracked) file contributes to the additions total
+/// (#335). Bounded + fail-open: a read error, an over-cap file, or a binary file all
+/// contribute 0. `cwd.join(rel)` keeps path assembly OS-native (never string concat).
+fn count_new_file_lines(cwd: &Path, rel: &str) -> u32 {
+    /// Skip files larger than this so a huge generated file can't dominate the count.
+    const MAX_UNTRACKED_BYTES: u64 = 2_000_000;
+    let path = cwd.join(rel);
+    // Cheap size gate before reading the whole file into memory.
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > MAX_UNTRACKED_BYTES {
+            return 0;
+        }
+    }
+    let Ok(bytes) = std::fs::read(&path) else {
+        return 0;
+    };
+    if bytes.is_empty() {
+        return 0;
+    }
+    // Binary skip: a NUL byte in the first ~8KB (git's own heuristic window).
+    let probe = &bytes[..bytes.len().min(8192)];
+    if probe.contains(&0) {
+        return 0;
+    }
+    let newlines = bytes.iter().filter(|&&b| b == b'\n').count() as u32;
+    // git counts a final unterminated line, so add 1 when the file doesn't end in \n.
+    if bytes.last() == Some(&b'\n') {
+        newlines
+    } else {
+        newlines.saturating_add(1)
+    }
+}
+
+/// Summed added/removed line counts of a working tree vs `HEAD` (#335) — the sidebar
+/// per-agent badge source. Materially lighter than `working_diff`: **one** `git diff
+/// --numstat HEAD` spawn for all tracked changes (no hunk parse) plus one `ls-files`
+/// spawn, then plain bounded file reads for untracked additions (cheaper than
+/// `working_diff`'s per-file `git diff --no-index` spawns). Every git call routes
+/// through `hidden_command` (via `run_git_raw`), so no console flash on Windows.
+/// Entirely fail-open: a non-git / no-`HEAD` folder or any git error yields `{ 0, 0 }`.
+pub fn diff_line_counts(cwd: impl AsRef<Path>) -> DiffLineCounts {
+    let cwd = cwd.as_ref();
+    let mut counts = DiffLineCounts::default();
+
+    // Tracked changes vs HEAD (only meaningful once the repo has a commit).
+    if has_head(cwd) {
+        if let Some(out) = run_git_raw(
+            cwd,
+            &["-c", "core.quotepath=false", "diff", "--numstat", "HEAD"],
+        ) {
+            let (added, removed) = sum_numstat(&out);
+            counts.added = counts.added.saturating_add(added);
+            counts.removed = counts.removed.saturating_add(removed);
+        }
+    }
+
+    // Untracked (new, non-ignored) files: their whole content counts as additions.
+    // Bounded by MAX_UNTRACKED_FILES (matching `working_diff`) so a pathological
+    // untracked set can't storm file reads. An unborn repo (no HEAD) still gets here.
+    const MAX_UNTRACKED_FILES: usize = 2000;
+    for path in untracked_files(cwd).into_iter().take(MAX_UNTRACKED_FILES) {
+        counts.added = counts
+            .added
+            .saturating_add(count_new_file_lines(cwd, &path));
+    }
+
+    counts
 }
 
 /// Two-dot `git diff <base> <target>` (#81) — the head-to-head difference,
@@ -1506,6 +1604,17 @@ index 0..1
         assert_eq!(github_web_url("/local/path"), None);
     }
 
+    #[test]
+    fn sum_numstat_sums_added_and_removed() {
+        // A mix of an edit, a deletion-only file, a binary file (`-`/`-` columns),
+        // and a pure addition — added = 3 + 0 + 10 = 13, removed = 1 + 5 = 6.
+        let out = "3\t1\tsrc/a.rs\n0\t5\tsrc/b.rs\n-\t-\timg.png\n10\t0\tnew.txt\n";
+        assert_eq!(sum_numstat(out), (13, 6));
+        // Empty / whitespace input → (0, 0).
+        assert_eq!(sum_numstat(""), (0, 0));
+        assert_eq!(sum_numstat("\n\n"), (0, 0));
+    }
+
     // --- Integration tests (real `git`; skip if unavailable) ---
 
     fn unique_dir(tag: &str) -> PathBuf {
@@ -1753,6 +1862,48 @@ index 0..1
         let plain = unique_dir("file-statuses-plain");
         fs::create_dir_all(&plain).unwrap();
         assert!(file_statuses(&plain).is_empty());
+        let _ = fs::remove_dir_all(&plain);
+    }
+
+    #[test]
+    fn diff_line_counts_tracked_edits_and_untracked_additions() {
+        let Some(dir) = init_repo("diff-line-counts") else {
+            return;
+        };
+        // Commit a two-line file, then edit one line (→ +1/−1) and create an
+        // untracked three-line file (→ +3) plus an ignored file (→ excluded).
+        fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        fs::write(dir.join(".gitignore"), "ignored.txt\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        fs::write(dir.join("a.txt"), "one\nTWO\n").unwrap();
+        fs::write(dir.join("new.txt"), "x\ny\nz\n").unwrap();
+        fs::write(dir.join("ignored.txt"), "nope\nnope\n").unwrap();
+
+        let counts = diff_line_counts(&dir);
+        // Tracked edit contributes +1/−1; the untracked new.txt adds 3; the ignored
+        // file is excluded (via `untracked_files`' --exclude-standard).
+        assert_eq!(counts.removed, 1);
+        assert_eq!(counts.added, 4);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diff_line_counts_clean_and_non_git_are_zero() {
+        // A clean repo (no edits) → both zero (no badge).
+        let Some(dir) = init_repo("diff-line-counts-clean") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "one\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        assert_eq!(diff_line_counts(&dir), DiffLineCounts::default());
+        let _ = fs::remove_dir_all(&dir);
+
+        // A plain (non-git) folder → both zero (fail-open, no error).
+        let plain = unique_dir("diff-line-counts-plain");
+        fs::create_dir_all(&plain).unwrap();
+        fs::write(plain.join("loose.txt"), "hi\n").unwrap();
+        assert_eq!(diff_line_counts(&plain), DiffLineCounts::default());
         let _ = fs::remove_dir_all(&plain);
     }
 

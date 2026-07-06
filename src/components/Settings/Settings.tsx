@@ -330,6 +330,12 @@ function SettingsModal() {
                   label="Reduce motion"
                   className={styles.checkRow}
                 />
+                <Checkbox
+                  checked={draft.showDiffLineCounts}
+                  onChange={(v) => update("showDiffLineCounts", v)}
+                  label="Show added/removed line counts on agent rows"
+                  className={styles.checkRow}
+                />
                 <Slider
                   label="Overview panel min width"
                   valueLabel={`${draft.overviewPanelMinWidth}px`}

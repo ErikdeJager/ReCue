@@ -637,6 +637,32 @@
   padding-left: var(--space-8);
 }
 
+/* Per-agent added/removed line counts (#335): a fixed, non-shrinking slot on the same
+   row, after the label — so a long agent name ellipsizes rather than pushing the
+   counts off-row (`.rowMain` is flex:1;min-width:0 and `.rowPrimary` already clips). */
+.diffCounts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-shrink: 0;
+  padding-right: var(--space-4);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+  font-variant-numeric: tabular-nums;
+}
+.diffAdd {
+  color: var(--status-done);
+}
+.diffDel {
+  color: var(--status-error);
+}
+
+/* On hover the row reveals the × (remove) button; hide the diff-count badge so the two
+   don't crowd the row — the × takes its place (#335). */
+.row:hover .diffCounts {
+  display: none;
+}
+
 /* --- Opened-file tree rows (#45) — children of a repo, below its sessions --- */
 .fileRow {
   display: flex;

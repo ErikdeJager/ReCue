@@ -65,6 +65,7 @@ import type {
   CanvasTab,
   CanvasTemplate,
   CloningRepo,
+  DiffLineCounts,
   DiffSeenMap,
   FileStatusCode,
   OverviewPanel,
@@ -275,6 +276,10 @@ function scheduleBranchRefresh(): void {
     // `git remote` reads, so the View-on-GitHub menu item tracks a remote change
     // (added/removed/retargeted) without a restart.
     void useStore.getState().refreshGithubUrls();
+    // Re-read each agent's added/removed line counts on the same edge (#335) — a
+    // finished turn is exactly when its file edits land. Self-guards on the setting,
+    // so it's a cheap no-op (zero git reads) when the badge is turned off.
+    void useStore.getState().refreshDiffLineCounts();
     // A finished turn is exactly when an agent's just-written files land. The
     // git-status re-tint above can't add a *new* row (rows come only from `list_dir`),
     // so also re-list every open tree's loaded levels so created/removed files appear
@@ -293,6 +298,25 @@ function urlMapsEqual(
   const ak = Object.keys(a);
   if (ak.length !== Object.keys(b).length) return false;
   for (const k of ak) if (a[k] !== b[k]) return false;
+  return true;
+}
+
+/** Shallow-equality of two `path → {added,removed}` maps (#335) — lets
+ *  `refreshDiffLineCounts` skip a re-render (referential stability for the row
+ *  selector) when nothing changed on a busy→idle settle that didn't touch counts. */
+function diffCountsMapsEqual(
+  a: Record<string, DiffLineCounts>,
+  b: Record<string, DiffLineCounts>,
+): boolean {
+  if (a === b) return true;
+  const ak = Object.keys(a);
+  if (ak.length !== Object.keys(b).length) return false;
+  for (const k of ak) {
+    const av = a[k];
+    const bv = b[k];
+    if (!av || !bv || av.added !== bv.added || av.removed !== bv.removed)
+      return false;
+  }
   return true;
 }
 
@@ -902,6 +926,9 @@ export const DEFAULT_SETTINGS: Settings = {
   accentColor: "",
   reduceMotion: false,
   overviewPanelMinWidth: 400,
+  // True by default (#335): show the per-agent added/removed line-count badge. Off
+  // hides it AND stops ReCue running any `diff_line_counts` git read.
+  showDiffLineCounts: true,
   defaultView: "overview",
   confirmDestructive: true,
   canvasCloseBehavior: "ask",
@@ -1182,6 +1209,13 @@ export interface AppState {
    * `branches`) on load, on each session busy→idle edge, and via the tree's Refresh
    * button. A missing repo key / empty map = no coloring (clean or non-git). */
   fileStatuses: Record<string, Record<string, FileStatusCode>>;
+  /** Per-agent added/removed line counts (#335): working-tree path (`session.repoPath`)
+   * → `{ added, removed }` vs `HEAD`. Powers the sidebar's `+A`/`−D` row badge.
+   * Refreshed on the same cadence as `branches` (load / busy→idle edge / repo-set
+   * change / app-initiated checkout), but only while `settings.showDiffLineCounts` is
+   * on — off ⇒ the map stays empty and no `diff_line_counts` git reads run. A missing
+   * key / both-zero = a clean tree (no badge). */
+  diffLineCounts: Record<string, DiffLineCounts>;
   /** The FileTree directory currently hovered by an OS file-drag (#253): the repo +
    * repo-relative dir (`""` = root) a drop would land in, or null when not over a
    * tree. Set by the window-global drag-drop listener; read by every FileTree to
@@ -1506,6 +1540,11 @@ export interface AppState {
    * mount / Refresh path), else every repo in the sidebar set (load / busy→idle /
    * git-write paths). Fail-open per repo (a failed read leaves the prior map). */
   refreshFileStatuses: (repo?: string) => Promise<void>;
+  /** Re-read each sidebar repo's added/removed line counts (#335), filling
+   * `diffLineCounts`. Self-guards on `settings.showDiffLineCounts`: off ⇒ returns
+   * immediately with **no** `diff_line_counts` git reads. One batch IPC round-trip;
+   * fail-open (a backend miss leaves the map as-is). */
+  refreshDiffLineCounts: () => Promise<void>;
   /** Bump the FileTree re-list signal (#253/#264): one repo when `repo` is given, else
    * every repo with a mounted tree. Each mounted FileTree re-fetches its currently
    * loaded directory levels in place — surfacing files created/removed on disk —
@@ -2186,6 +2225,7 @@ export const useStore = create<AppState>()((set, get) => ({
   branches: {},
   githubUrls: {},
   fileStatuses: {},
+  diffLineCounts: {},
   fileDropTarget: null,
   fileTreeRefresh: {},
   fileTreeMounts: {},
@@ -3246,6 +3286,24 @@ export const useStore = create<AppState>()((set, get) => ({
       const next = await ipc.githubWebUrls(repos);
       set((s) =>
         urlMapsEqual(s.githubUrls, next) ? {} : { githubUrls: next },
+      );
+    } catch {
+      // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
+    }
+  },
+
+  refreshDiffLineCounts: async () => {
+    // The privacy/perf opt-out (#335): off ⇒ never invoke the git read at all.
+    if (!get().settings.showDiffLineCounts) return;
+    const repos = repoOrder(get().recents, get().sessions);
+    if (repos.length === 0) return;
+    try {
+      // One batch IPC round-trip for every working tree (agents keyed by repoPath).
+      const next = await ipc.diffLineCounts(repos);
+      set((s) =>
+        diffCountsMapsEqual(s.diffLineCounts, next)
+          ? {}
+          : { diffLineCounts: next },
       );
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
@@ -4599,8 +4657,9 @@ export const useStore = create<AppState>()((set, get) => ({
       // A checkout (or a brand-new repo) can change the branch label — refresh.
       void get().refreshBranches();
       // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring too (#252).
+      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
       void get().refreshFileStatuses();
+      void get().refreshDiffLineCounts();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4629,8 +4688,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().pushToast(`Started isolated worktree on ${branch}`);
       void get().refreshBranches();
       // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring too (#252).
+      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
       void get().refreshFileStatuses();
+      void get().refreshDiffLineCounts();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4672,8 +4732,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().pushToast(`Created ${name} & started`);
       void get().refreshBranches();
       // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring too (#252).
+      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
       void get().refreshFileStatuses();
+      void get().refreshDiffLineCounts();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4696,8 +4757,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().pushToast(`Created ${name} worktree & started`);
       void get().refreshBranches();
       // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring too (#252).
+      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
       void get().refreshFileStatuses();
+      void get().refreshDiffLineCounts();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -5418,6 +5480,8 @@ export const useStore = create<AppState>()((set, get) => ({
       await ipc.fetchRemotes(cwd);
       get().pushToast(`Fetched ${repoName(cwd)}`);
       await get().refreshBranches();
+      // A fetch can fast-forward-adjacent state; keep the per-agent counts fresh (#335).
+      void get().refreshDiffLineCounts();
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Fetch failed";
       get().pushToast(`Fetch failed: ${message}`, "error");
@@ -5433,9 +5497,10 @@ export const useStore = create<AppState>()((set, get) => ({
       await ipc.checkoutBranch(repo, branch);
       get().pushToast(`Checked out ${branch}`);
       // Both the branch label (#212) and which files differ from HEAD (#252) change —
-      // refresh both so the sidebar + file-tree coloring follow.
+      // refresh those + the per-agent line counts (#335) so the sidebar follows.
       await get().refreshBranches();
       void get().refreshFileStatuses(repo);
+      void get().refreshDiffLineCounts();
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Checkout failed";
       get().pushToast(`Checkout failed: ${message}`, "error");
@@ -5455,6 +5520,7 @@ export const useStore = create<AppState>()((set, get) => ({
     get().pushToast(`Created ${name}`);
     await get().refreshBranches();
     void get().refreshFileStatuses(repo);
+    void get().refreshDiffLineCounts();
     return true;
   },
 }));
