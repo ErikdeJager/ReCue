@@ -521,6 +521,35 @@ pub fn session_scrollback(
     Ok(ScrollbackReply { bytes, end })
 }
 
+/// One live-terminal-output search hit (#337): a session id, the 1-based line number of
+/// the match in its (ANSI-stripped) scrollback, and the clamped snippet.
+#[derive(Clone, Serialize)]
+pub struct SessionOutputMatch {
+    pub id: String,
+    pub line: u32,
+    pub snippet: String,
+}
+
+/// Search every live session's retained scrollback for `query` (#337) — the global
+/// search modal's terminal-output source. Best-effort: bounded per-session (a few lines
+/// each) and in total (`limit`, default 50), ANSI-stripped server-side, and it never
+/// fails (a blank query / no matches → an empty vec). The scrollback is only the
+/// in-memory tail, so a match older than that window simply isn't surfaced.
+#[tauri::command]
+pub fn search_session_output(
+    manager: State<'_, SessionManager>,
+    query: String,
+    limit: Option<usize>,
+) -> Vec<SessionOutputMatch> {
+    const PER_SESSION: usize = 5;
+    let total = limit.unwrap_or(50).clamp(1, 500);
+    manager
+        .search_output(&query, PER_SESSION, total)
+        .into_iter()
+        .map(|(id, line, snippet)| SessionOutputMatch { id, line, snippet })
+        .collect()
+}
+
 #[tauri::command]
 pub fn list_sessions(store: State<'_, Store>) -> Vec<PersistedSession> {
     store.sessions()

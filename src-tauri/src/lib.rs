@@ -222,6 +222,7 @@ pub fn run() {
             commands::set_session_auto_continue,
             commands::set_session_watch,
             commands::session_scrollback,
+            commands::search_session_output,
             commands::list_sessions,
             commands::list_recents,
             commands::remove_recent,

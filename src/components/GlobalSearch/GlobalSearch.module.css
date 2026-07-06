@@ -1,0 +1,213 @@
+/* ⌘F / Ctrl+F global search modal (#337). A centered launcher over a full-window scrim,
+   like the ⌘K Create-panel launcher (#189) — tokens only, so it reskins with the theme
+   and is identical on macOS / Windows. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+  background: var(--scrim);
+}
+
+.dialog {
+  display: flex;
+  width: 560px;
+  max-width: calc(100vw - var(--space-32));
+  max-height: 74vh;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-window);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  transform-origin: top center;
+  animation: global-search-in var(--dur-slow) var(--ease-out);
+}
+
+.searchRow {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-12) var(--space-16);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.searchIcon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-ui);
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+.input:focus {
+  outline: none;
+}
+
+.kbd {
+  flex-shrink: 0;
+  padding: 0 var(--space-6);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+}
+
+.results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-8);
+}
+
+.hint {
+  margin: 0;
+  padding: var(--space-16);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
+}
+
+.repoGroup {
+  margin-bottom: var(--space-8);
+}
+
+.repoHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-8) var(--space-4);
+}
+
+.repoDot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: var(--radius-dot);
+}
+
+.repoName {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kindGroup {
+  margin-bottom: var(--space-4);
+}
+
+.kindHeader {
+  margin: var(--space-4) 0 var(--space-1);
+  padding: 0 var(--space-8);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.row {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: var(--space-8);
+  padding: var(--space-6) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.rowActive {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.rowIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.rowBody {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.rowTitle {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowLine {
+  margin-left: 1px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+}
+
+.rowSnippet {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowSub {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.mark {
+  border-radius: 2px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+@keyframes global-search-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
