@@ -121,6 +121,35 @@ export function useKeyboardNav(): void {
         return;
       }
 
+      // ⌘F / Ctrl+F — toggle the global search modal (#337): a keyboard-first search
+      // across every open folder's agents, terminals, viewers, files (name + content),
+      // and live terminal output. ⌘/Ctrl-based + capture `stopPropagation`, so the `f`
+      // never reaches a focused claude/terminal (which would otherwise trigger its own
+      // find/forward). The same chord opens and closes. Main window only — swallowed but
+      // inert in a detached canvas window (#84); inert while the new-session or
+      // create-panel modal is open (mirrors ⌘K's guard).
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "f"
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (IS_MAIN_WINDOW) {
+          const {
+            globalSearchOpen,
+            createPanelOpen,
+            newSessionOpen,
+            openGlobalSearch,
+            closeGlobalSearch,
+          } = useStore.getState();
+          if (globalSearchOpen) closeGlobalSearch();
+          else if (!createPanelOpen && !newSessionOpen) openGlobalSearch();
+        }
+        return;
+      }
+
       // ⌘T / Ctrl+T — create a new Canvas tab from anywhere (#206). A *create*
       // action like ⌘N/⌘K: switch to Canvas so the new (active) tab is visible,
       // then addCanvas(). ⌘-based, so it never reaches a focused claude/terminal;

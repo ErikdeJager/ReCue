@@ -1039,7 +1039,7 @@ function applySettingsEffects(s: Settings): void {
 
 /** A clicked sidebar item — an agent/terminal (by PTY id) or a file/diff panel
  * (by repo path + file). Matched against Canvas leaves for view-aware nav (#79). */
-type SidebarItem = {
+export type SidebarItem = {
   id: string;
   kind:
     | "agent"
@@ -1332,6 +1332,10 @@ export interface AppState {
    * type step and opens straight at the folder step for that type; `null` = ⌘K
    * (start at the type step). */
   createPanelType: string | null;
+  /** The ⌘F / Ctrl+F global search modal (#337): a keyboard-first search across every
+   * open folder's agents, terminals, viewers, files (name + content), and live terminal
+   * output. Main-window only; mounted only while open. */
+  globalSearchOpen: boolean;
   /** In-app updater state (#190, Tauri updater plugin). `status` drives the sidebar
    * indicator + the confirm/install modal; `confirming` opens the confirm dialog
    * (only meaningful while `available`); `progress` (0–100) feeds the install
@@ -1460,6 +1464,11 @@ export interface AppState {
   openCreatePanel: (type?: string) => void;
   /** Close the Create-panel launcher (#189). */
   closeCreatePanel: () => void;
+  /** Open the ⌘F / Ctrl+F global search modal (#337) — a keyboard-first search across
+   * every open folder's agents, terminals, viewers, files, and live terminal output. */
+  openGlobalSearch: () => void;
+  /** Close the global search modal (#337). */
+  closeGlobalSearch: () => void;
   /** Check for an update (#190); best-effort — sets `available`+`version` or stays
    * idle. Called on boot and (later) the Settings "Check for updates" button. */
   checkForUpdate: () => Promise<void>;
@@ -2267,6 +2276,7 @@ export const useStore = create<AppState>()((set, get) => ({
   cloningRepos: [],
   createPanelOpen: false,
   createPanelType: null,
+  globalSearchOpen: false,
   update: {
     status: "idle",
     version: null,
@@ -2550,6 +2560,12 @@ export const useStore = create<AppState>()((set, get) => ({
     set({ createPanelOpen: true, createPanelType: type ?? null }),
   closeCreatePanel: () =>
     set({ createPanelOpen: false, createPanelType: null }),
+
+  // ⌘F / Ctrl+F global search modal (#337): pure open/close. The modal itself runs the
+  // in-store title search + async file/output searches and navigates via selectItem /
+  // addOverviewPanel.
+  openGlobalSearch: () => set({ globalSearchOpen: true }),
+  closeGlobalSearch: () => set({ globalSearchOpen: false }),
 
   // In-app updater (#190). Best-effort check on boot: returns null today (no signed
   // release / placeholder pubkey), so the indicator stays hidden. Structured so the

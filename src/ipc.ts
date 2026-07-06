@@ -306,6 +306,25 @@ export const searchFileContents = (
     limit: limit ?? null,
   });
 
+/** One live-terminal-output search hit (#337): the session id, the 1-based line number
+ *  of the match in its (ANSI-stripped) scrollback, and the clamped snippet. Mirrors
+ *  `ContentMatch`. */
+export interface SessionOutputMatch {
+  id: string;
+  line: number;
+  snippet: string;
+}
+
+/** Search every live session's retained scrollback by content (#337) — the global
+ *  search modal's best-effort terminal-output source. Bounded server-side (a few lines
+ *  per session, `limit` total, default 50) and ANSI-stripped; never fails (blank query /
+ *  no matches → empty). Only the in-memory scrollback tail is searched. */
+export const searchSessionOutput = (query: string, limit?: number) =>
+  invoke<SessionOutputMatch[]>("search_session_output", {
+    query,
+    limit: limit ?? null,
+  });
+
 /** Read a repo-relative text file (validated inside the repo, #40/#44). */
 export const readTextFile = (repo: string, file: string) =>
   invoke<string>("read_text_file", { repo, file });

@@ -27,6 +27,7 @@ import CanvasWindow from "./components/CanvasWindow/CanvasWindow";
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
 import CloneRepoModal from "./components/CloneRepoModal/CloneRepoModal";
 import CreatePanelModal from "./components/CreatePanelModal/CreatePanelModal";
+import GlobalSearch from "./components/GlobalSearch/GlobalSearch";
 import NewSessionModal from "./components/NewSessionModal/NewSessionModal";
 import OnboardingModal from "./components/Onboarding/OnboardingModal";
 import Overview from "./components/Overview/Overview";
@@ -66,6 +67,7 @@ function MainApp() {
   const templateManagerOpen = useStore((s) => s.templateManagerOpen);
   const templateUseOpen = useStore((s) => s.templateUseOpen);
   const createPanelOpen = useStore((s) => s.createPanelOpen);
+  const globalSearchOpen = useStore((s) => s.globalSearchOpen);
   const canvasClosePromptId = useStore((s) => s.canvasClosePromptId);
   const onboardingOpen = useStore((s) => s.onboardingOpen);
   const init = useStore((s) => s.init);
@@ -188,6 +190,7 @@ function MainApp() {
       <NewSessionModal />
       <CloneRepoModal />
       {createPanelOpen && <CreatePanelModal />}
+      {globalSearchOpen && <GlobalSearch />}
       <Settings />
       <UpdateModal />
       {canvasClosePromptId && <CanvasCloseModal />}

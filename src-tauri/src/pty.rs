@@ -229,6 +229,132 @@ impl Scrollback {
     }
 }
 
+/// A terminal-output match snippet is clamped to this many characters, mirroring
+/// `files.rs`'s content-search `SNIPPET_MAX_CHARS`; a longer matching line is windowed
+/// around the match (with `…` markers) so the hit stays visible (#337).
+const OUTPUT_SNIPPET_MAX_CHARS: usize = 200;
+/// Characters of leading context kept before the match when a long line is windowed.
+const OUTPUT_SNIPPET_CONTEXT_CHARS: usize = 40;
+
+/// Strip ANSI / terminal control sequences from `s`, best-effort, leaving readable text
+/// (#337). Terminal scrollback is full of CSI color/cursor codes, OSC title sets, and
+/// lone escapes; searching them raw would both miss matches split by escapes and surface
+/// garbage snippets. Handles:
+///   - **CSI** — `ESC [` … a final byte in `@`..=`~` (colors, cursor moves).
+///   - **OSC** — `ESC ]` … terminated by `BEL` (0x07) or `ST` (`ESC \`).
+///   - **Other** `ESC`-prefixed escapes — the `ESC` plus its single following byte.
+///
+/// Printable text plus `\n` and `\t` is kept; other C0 control chars are dropped. Pure +
+/// char-safe (operates on the already-decoded string), so it's identical on macOS/Windows.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // ESC — consume the escape sequence rather than emit it.
+            match chars.peek() {
+                Some('[') => {
+                    // CSI: parameter/intermediate bytes until a final byte @..=~.
+                    chars.next();
+                    while let Some(&p) = chars.peek() {
+                        chars.next();
+                        if ('@'..='~').contains(&p) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    // OSC: text until BEL, or ST (ESC \).
+                    chars.next();
+                    while let Some(&p) = chars.peek() {
+                        if p == '\u{07}' {
+                            chars.next();
+                            break;
+                        }
+                        if p == '\u{1b}' {
+                            chars.next(); // ESC of the ST
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
+                            }
+                            break;
+                        }
+                        chars.next();
+                    }
+                }
+                Some(_) => {
+                    // Other escape (e.g. `ESC =`) — drop ESC + its single following byte.
+                    chars.next();
+                }
+                None => {}
+            }
+            continue;
+        }
+        // Keep printable text + newline/tab; drop other C0 control chars.
+        if c == '\n' || c == '\t' || !c.is_control() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Build a clamped display snippet from a matching terminal-output `line` (#337): trim
+/// surrounding whitespace, and if still longer than `clamp` chars, window it around the
+/// first `needle_lower` occurrence with `…` markers. Char-based throughout (never slices a
+/// `str` at a non-boundary), mirroring `files.rs`'s `make_snippet`.
+fn clamp_output_snippet(line: &str, needle_lower: &str, clamp: usize) -> String {
+    let trimmed = line.trim();
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= clamp {
+        return trimmed.to_string();
+    }
+    let lowered = trimmed.to_lowercase();
+    let match_char = lowered
+        .find(needle_lower)
+        .map(|b| lowered[..b].chars().count())
+        .unwrap_or(0)
+        .min(chars.len());
+    let start = match_char.saturating_sub(OUTPUT_SNIPPET_CONTEXT_CHARS);
+    let end = (start + clamp).min(chars.len());
+    let start = end.saturating_sub(clamp);
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    out.extend(&chars[start..end]);
+    if end < chars.len() {
+        out.push('…');
+    }
+    out
+}
+
+/// Find lines in `text` containing `needle_lower` (already lowercased), returning up to
+/// `per_session` `(1-based line number, clamped snippet)` pairs (#337). Case-insensitive
+/// via a per-line lowercase; each snippet is trimmed + windowed to `clamp` chars around
+/// the match. A blank needle → empty. Pure.
+pub fn match_output_lines(
+    text: &str,
+    needle_lower: &str,
+    per_session: usize,
+    clamp: usize,
+) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    if needle_lower.is_empty() || per_session == 0 {
+        return out;
+    }
+    for (i, line) in text.lines().enumerate() {
+        if out.len() >= per_session {
+            break;
+        }
+        if line.to_lowercase().contains(needle_lower) {
+            let snippet = clamp_output_snippet(line, needle_lower, clamp);
+            if !snippet.is_empty() {
+                out.push((i as u32 + 1, snippet));
+            }
+        }
+    }
+    out
+}
+
 /// A single live (or recently-exited) PTY session.
 struct Session {
     // Retained for persistence / session listing in later tasks (#5, #7).
@@ -568,6 +694,54 @@ impl SessionManager {
             .lock()
             .map_err(|_| SessionError::Io("scrollback lock poisoned".to_string()))?;
         Ok(scrollback.snapshot())
+    }
+
+    /// Search every live session's retained scrollback for `needle` (#337) — the global
+    /// search modal's terminal-output source. For each session: snapshot the scrollback
+    /// bytes (briefly holding only the per-session lock, like `scrollback`), decode
+    /// lossily, strip ANSI, and collect up to `per_session` matching `(id, line, snippet)`
+    /// tuples; stop once `total` matches are gathered. A blank/whitespace needle → empty.
+    /// Best-effort: the scrollback is only the in-memory tail, so this never fails (a
+    /// poisoned lock is skipped rather than propagated).
+    pub fn search_output(
+        &self,
+        needle: &str,
+        per_session: usize,
+        total: usize,
+    ) -> Vec<(String, u32, String)> {
+        let needle_lower = needle.trim().to_lowercase();
+        if needle_lower.is_empty() || total == 0 {
+            return Vec::new();
+        }
+        // Clone the per-session scrollback Arcs under the brief global lock (mirroring
+        // `scrollback`), then drop it before the (potentially large) copies + scans so a
+        // search never blocks other sessions' map operations.
+        let entries: Vec<(String, Arc<Mutex<Scrollback>>)> = match self.lock_sessions() {
+            Ok(sessions) => sessions
+                .iter()
+                .map(|(id, s)| (id.clone(), Arc::clone(&s.scrollback)))
+                .collect(),
+            Err(_) => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        for (id, scrollback) in entries {
+            if out.len() >= total {
+                break;
+            }
+            let bytes = match scrollback.lock() {
+                Ok(sb) => sb.snapshot().0,
+                Err(_) => continue,
+            };
+            let text = String::from_utf8_lossy(&bytes);
+            let stripped = strip_ansi(&text);
+            let cap = per_session.min(total - out.len());
+            for (line, snippet) in
+                match_output_lines(&stripped, &needle_lower, cap, OUTPUT_SNIPPET_MAX_CHARS)
+            {
+                out.push((id.clone(), line, snippet));
+            }
+        }
+        out
     }
 
     /// Number of registered sessions. Currently used only by the (unix-only,
@@ -1307,6 +1481,58 @@ mod tests {
 
     fn tmp() -> PathBuf {
         std::env::temp_dir()
+    }
+
+    // --- Global search: ANSI strip + output line matching (#337) ---
+
+    #[test]
+    fn strip_ansi_removes_color_and_cursor_codes_keeps_text() {
+        // A CSI color sequence around plain text.
+        assert_eq!(strip_ansi("\u{1b}[31mhello\u{1b}[0m world"), "hello world");
+        // A cursor-move CSI (final byte `H`) is dropped, text preserved.
+        assert_eq!(strip_ansi("\u{1b}[2;5Hfoo"), "foo");
+        // An OSC title set terminated by BEL is dropped.
+        assert_eq!(strip_ansi("\u{1b}]0;my title\u{07}bar"), "bar");
+        // An OSC terminated by ST (ESC \) is dropped.
+        assert_eq!(strip_ansi("\u{1b}]0;t\u{1b}\\baz"), "baz");
+        // Plain text (incl. newline / tab) survives untouched.
+        assert_eq!(strip_ansi("a\tb\nc"), "a\tb\nc");
+        // A lone C0 control (e.g. BEL) is dropped, not emitted.
+        assert_eq!(strip_ansi("x\u{07}y"), "xy");
+    }
+
+    #[test]
+    fn match_output_lines_is_case_insensitive_with_line_numbers() {
+        let text = "First line\nSecond has NEEDLE here\nthird needle again\nnothing";
+        let hits = match_output_lines(text, "needle", 10, OUTPUT_SNIPPET_MAX_CHARS);
+        assert_eq!(hits.len(), 2);
+        // 1-based line numbers, case-insensitive match.
+        assert_eq!(hits[0].0, 2);
+        assert!(hits[0].1.contains("NEEDLE"));
+        assert_eq!(hits[1].0, 3);
+        assert!(hits[1].1.contains("needle"));
+    }
+
+    #[test]
+    fn match_output_lines_caps_per_session_and_ignores_blank_needle() {
+        let text = "match a\nmatch b\nmatch c";
+        let hits = match_output_lines(text, "match", 2, OUTPUT_SNIPPET_MAX_CHARS);
+        assert_eq!(hits.len(), 2, "per-session cap honored");
+        // A blank needle yields nothing (never every line).
+        assert!(match_output_lines(text, "", 10, OUTPUT_SNIPPET_MAX_CHARS).is_empty());
+    }
+
+    #[test]
+    fn match_output_lines_windows_long_lines_around_the_match() {
+        let prefix = "z".repeat(400);
+        let line = format!("{prefix}NEEDLE{}", "z".repeat(400));
+        let hits = match_output_lines(&line, "needle", 5, OUTPUT_SNIPPET_MAX_CHARS);
+        assert_eq!(hits.len(), 1);
+        let snip = &hits[0].1;
+        // Windowed: contains the match, is clamped, and has ellipsis markers.
+        assert!(snip.to_lowercase().contains("needle"));
+        assert!(snip.chars().count() <= OUTPUT_SNIPPET_MAX_CHARS + 2);
+        assert!(snip.contains('…'));
     }
 
     #[test]
