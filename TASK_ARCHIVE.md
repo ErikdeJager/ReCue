@@ -2139,3 +2139,81 @@ work. The **terminal area stays dark in both themes** (claude's TUI is dark-desi
   Windows. Fully reversible (set the theme back to Dark) and idempotent (`applySettingsEffects` sets/
   removes the `data-theme` attribute deterministically each call). Checks green: `npm run build` /
   `npm run lint` / `npm run format:check` / `npm test`.
+
+### 335. [x] Per-agent added/removed line counts in the sidebar
+
+Each **sidebar agent (session) row** now shows a compact green **+N** / red **−N** count of lines
+added / removed in that agent's working tree vs `HEAD`, so a user sees at a glance how much each agent
+has changed. The count is computed **off the webview thread** (batched `async` Tauri command on
+`spawn_blocking`, the #330 pattern) on the existing refresh cadence, a long agent **name ellipsizes**
+so the badge stays visible, and a Settings → Appearance toggle (`showDiffLineCounts`, default **on**)
+turns the whole feature off — removing the badge **and** skipping the git reads entirely.
+
+**What shipped** (commit [`6095d97`](https://github.com/ErikdeJager/ReCue/commit/6095d97), PR
+[#88](https://github.com/ErikdeJager/ReCue/pull/88), branch `task-335-diff-line-counts`, 2026-07-06;
+11 files, +397/−6):
+
+- **`src-tauri/src/git.rs`:** a `DiffLineCounts { added, removed }` struct (`Serialize`, `Default`);
+  a pure `sum_numstat(out)` helper parsing `git diff --numstat` (`<added>\t<removed>\t<path>`, a
+  binary `-\t-\t…` row contributes 0); a bounded `count_new_file_lines(cwd, rel)` (size-capped +
+  binary-skipping newline count, +1 for a final unterminated line); and `diff_line_counts(cwd)` — one
+  `git diff --numstat HEAD` for tracked changes plus untracked additions via the existing
+  `untracked_files` (bounded by `MAX_UNTRACKED_FILES`), entirely fail-open. Every git call routes
+  through `hidden_command()` (the Windows console-flash guard). Unit tests: `sum_numstat_sums_added_and_removed`
+  (fixture asserts `(13,6)`), `diff_line_counts_tracked_edits_and_untracked_additions`, and
+  `diff_line_counts_clean_and_non_git_are_zero`.
+- **`src-tauri/src/commands.rs` + `lib.rs`:** an `async fn diff_line_counts(paths: Vec<String>) ->
+  HashMap<String, DiffLineCounts>` command running the git work on `spawn_blocking` (batched — the
+  whole sidebar refresh is one IPC round-trip), registered in `generate_handler!`.
+- **`src/types/index.ts` + `src/ipc.ts`:** a `DiffLineCounts` type, `showDiffLineCounts: boolean` on
+  `Settings`, and a `diffLineCounts(paths)` IPC wrapper.
+- **`src/store.ts`:** a `diffLineCounts: Record<string, DiffLineCounts>` map (keyed by
+  `session.repoPath`), a `refreshDiffLineCounts` action that **self-guards on the setting** (off ⇒ no
+  git read) and skips a no-op re-render via a shallow `diffCountsMapsEqual`, `DEFAULT_SETTINGS.
+  showDiffLineCounts = true`, and wiring into the debounced busy→idle edge (`scheduleBranchRefresh`)
+  and the spawn/checkout refresh sites.
+- **`src/components/Sidebar/diffCounts.ts` (+ `.test.ts`):** a pure `diffCountBadge(counts, enabled)`
+  returning `null` when disabled / no counts / `{0,0}`, else the counts — Vitest covers off / clean /
+  adds-only / dels-only / both / undefined.
+- **`src/components/Sidebar/Sidebar.tsx` + `.module.css`:** the badge rendered in `SessionRow` as a
+  `flex-shrink:0` slot between the label and the × (so the name truncates first), `+N` in
+  `--status-done` green and `−N` (Unicode minus U+2212) in `--status-error` red, mono at
+  `--fs-meta-xs` with tabular numerals, hidden during inline rename; plus a load-effect refresh keyed
+  on the repo set **and** `showDiffLineCounts` so an off→on toggle populates immediately.
+- **`src/components/Settings/Settings.tsx`:** an Appearance `Checkbox` ("Show added/removed line
+  counts on agent rows").
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 335):
+
+- **Scope = sidebar only** ("left panel") — Overview card / Canvas panel headers are out of scope
+  (noted as a possible future extension).
+- **Untracked (non-ignored) files are included in +N** via a bounded, binary-skipping, size-capped
+  newline read — because `git diff --numstat HEAD` alone omits a fresh agent's newly created files
+  and would show a misleading +0. Removed lines come only from tracked numstat.
+- **Map key = the agent's own working-tree path (`session.repoPath`)** so worktree agents key by
+  their own cwd; agents sharing a folder show the same totals (expected).
+- **Setting `showDiffLineCounts` (default on) lives in Appearance**; when off, no badge **and** zero
+  git reads (self-guarded action).
+- **Colors = `--status-done`/`--status-error` tokens** (matching the FileTree #252 tinting), never
+  hardcoded; a clean tree hides the badge (no `+0 −0`).
+- **"Multi-threaded / async / non-blocking" = batched `async` command on `spawn_blocking`** (#330),
+  fetched on the debounced busy→idle / load / checkout cadence — never on the render path. Bounded
+  (`MAX_UNTRACKED_FILES` + per-file byte cap) so it can't storm; the untracked pass can be dropped
+  later with no frontend change if it proves heavy.
+
+**Key files/areas touched:** `src-tauri/src/git.rs`, `commands.rs`, `lib.rs`; `src/types/index.ts`,
+`src/ipc.ts`, `src/store.ts`; `src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css` + new
+`diffCounts.ts`/`diffCounts.test.ts`; `src/components/Settings/Settings.tsx`. 11 files.
+
+**Dependencies:** none (self-contained; reuses `hidden_command`, `untracked_files`, the refresh
+cadence, and `--status-*` tokens).
+
+**Notes**
+
+- **Cross-platform:** the only OS-sensitive primitive is the `git` shell-out, which uses
+  `hidden_command` (no console flash on Windows, no-op on macOS); the file reads use `cwd.join(rel)`
+  (`PathBuf`), never string path concat, and the CSS ellipsis + `--status-*` tokens are OS-neutral —
+  so the badge behaves identically on macOS and Windows. Fail-open (any git miss / non-git folder /
+  join error → zero, badge hidden, no toast) and idempotent (the store skips a no-op update via
+  `diffCountsMapsEqual`). Checks green: `cargo test` / `npm run lint:rust` / `npm run format:rust` /
+  `npm run build` / `npm run lint` / `npm test`.
