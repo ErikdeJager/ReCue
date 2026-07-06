@@ -2702,3 +2702,30 @@ Branch ahead/behind indicator (↑/↓ vs upstream) in the sidebar.
   branch-refresh cadence), `src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css`, new
   `src/components/Sidebar/branchStatus.ts` (+ `.test.ts`). Incidental file overlap with Task 336 /
   Task 337 in `Sidebar.tsx`/`store.ts` — no shared abstraction; merge lane resolves any conflict.
+
+## Task 339
+
+Enter key submits the "New tab from template" modal.
+
+- **Enter semantics per step:** On the **template** step, plain Enter *advances* to the folder step
+  (equivalent to "Continue"), only when a template is selected; on the **folder** step, plain Enter
+  *launches* the template into a new Canvas tab (equivalent to "Open template"), only when the
+  primary button is enabled (`cwd && templateId`). "Complete the launch … once all information is
+  ready" = Enter advances between steps and fires the final launch, gated by the same conditions
+  that enable each step's primary button.
+- **Plain Enter only (no modifiers):** no ⌘/Ctrl variant (unlike NewSessionModal's ⌘⏎ worktree).
+  Enter is identical on macOS/Windows; the handler ignores metaKey/ctrlKey/altKey so it never
+  hijacks a future chord.
+- **Initial focus nudge:** on entering the folder step the optional tab-name input is auto-focused
+  so Enter is immediately live (folder defaults to most-recent, so launch is usually valid on
+  arrival). Chose focusing the input (lets the user optionally name the tab, Enter still submits via
+  implicit form submission) over focusing the launch button.
+- **List Enter acts on the current selection, not a Tab-focused row:** the modal has no arrow-key
+  roving and rows are `type="button"`, so the new list `onKeyDown` runs the step action on the
+  *currently selected* template/folder. Keyboard users change selection with **Space**, then Enter.
+  No auto-select of the first row.
+- **No component test added:** Vitest runs the `node` env (no jsdom) with no component-render tests,
+  so verification is build + lint + manual smoke check.
+- **Areas touched:** single file — `src/components/TemplateUseModal/TemplateUseModal.tsx` (dialog
+  `<div>`→`<form onSubmit>`, step-aware `submitStep`/`onSubmit`/`onListKeyDown`, focus the tab-name
+  input on the folder step, "Continue"/"Open template" `type="submit"`). No store, CSS, or Rust.
