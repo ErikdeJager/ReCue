@@ -2522,3 +2522,76 @@ the `f`), is main-window-only (inert in a detached canvas window), and Escape / 
   mount disables the feature with no other behavioral change. Heaviest path (all-repo content search per
   keystroke) is bounded by the debounce, `length >= 2` gate, per-repo caps, and the already-bounded backend
   commands. Checks green: `cargo test` / `npm run lint:rust` / `npm run build` / `npm run lint` / `npm test`.
+
+### 340. [x] Consolidate agent header actions (Fork / Copy resume / Watch) into a "…" menu
+
+The three secondary agent-panel header actions — **Fork conversation**, **Copy resume command**, and the
+#336 **Watch** toggle — are folded out of separate always-visible icon buttons into a single **"…"
+(`MoreHorizontal`) dropdown menu**, so an agent's Overview card / Canvas panel header stays uncluttered
+while all three stay one click away. The menu is a **shared `AgentHeaderMenu` component** rendered
+identically at every agent-header site, and — as a net-new additive extension — it's also added to the
+**Big-mode** header (agent items only), which previously had only a title + Close. `OpenViewButton`,
+**Maximize** (⌘E/Ctrl+E), and **Remove/Close** stay as direct icon buttons. All the original gating is
+preserved inside the menu: **Fork** is dimmed (`aria-disabled`, no-op click, `forkUnavailableReason`
+tooltip) for a source with no on-disk conversation yet (#138) or a non-forkable agent (Codex/OpenCode/
+Custom, #142), and **Copy resume command** is shown only when `agentSupportsResume(session.agent)`.
+
+**What shipped** (commit [`0598c80`](https://github.com/ErikdeJager/ReCue/commit/0598c80), PR
+[#93](https://github.com/ErikdeJager/ReCue/pull/93), branch `consolidate-agent-header-actions`,
+2026-07-06; 6 files, +296/−122):
+
+- **`src/components/AgentHeaderMenu/AgentHeaderMenu.tsx` + `.module.css` (new):** a self-contained "…"
+  popover modeled on `ViewsPopover`/`ViewsMenu` — a `MoreHorizontal` trigger (`aria-haspopup="menu"`,
+  `aria-expanded`), a `role="menu"` popover positioned per an `align` prop, outside-`mousedown` + `Escape`
+  dismissal, and a root `onPointerDown` `stopPropagation` so opening it never starts the header drag.
+  Three `role="menuitem"` rows: **Fork conversation** (`GitFork`, `aria-disabled={!canFork}` with the
+  `forkUnavailableReason` tooltip, no-op when disabled), **Copy resume command** (`Copy`, rendered only
+  when `agentSupportsResume`, copies `claude --resume <id>` with the existing toast), and **Watch / Stop
+  watching** (`Eye`/`EyeOff` reflecting `session.watch`, calls `toggleWatch(session.id)` +
+  `ensureNotificationPermission()`). Props: `{ session, className?, iconSize?, align? }`. Design-token CSS
+  only (incl. an `.item[aria-disabled="true"]` dimmed/`not-allowed` rule).
+- **`src/components/Overview/Overview.tsx`:** replaced the inline Fork + Copy-resume buttons and the #336
+  standalone `WatchButton` in `SessionCard` actions with `<AgentHeaderMenu … className={styles.action}
+  iconSize={15}/>` (order: OpenView, "…", Maximize, Remove); dropped the `onFork`/`onCopyResume` props +
+  call-site wiring and the now-orphaned `forkSession`/`copyToClipboard` selectors and unused imports.
+- **`src/components/Canvas/CanvasSurface.tsx`:** replaced the agent Fork + Copy-resume buttons and the
+  standalone `WatchButton` in `.panelActions` with `<AgentHeaderMenu … className={styles.panelClose}
+  iconSize={14}/>` (agent leaves only, order: OpenView, "…", Maximize, Close); removed the now-unused
+  `copyToClipboard`/`forkSession` selectors + imports.
+- **`src/components/BigMode/BigModeModal.tsx` + `.module.css`:** for an agent `maximizedItem`, resolves the
+  session and renders `<AgentHeaderMenu … className={styles.close} iconSize={16} align="right"/>` before
+  the Close button (title + Close otherwise unchanged).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 340):
+
+- **Exactly the three named actions move into the "…" menu** — Fork / Copy resume / Watch;
+  `OpenViewButton`, Maximize (⌘E/Ctrl+E), and Remove/Close **stay direct** (primary affordances / a
+  keyboard-shortcut action); the `AutoContinueToggle` strip is untouched.
+- **Menu primitive reused, not new:** a shared `AgentHeaderMenu` modeled on `ViewsPopover`/`ViewsMenu`
+  (render-prop-style popover host, outside-click + Escape dismissal, pointerdown-stopped), `MoreHorizontal`
+  trigger — no refactor of `ViewsPopover`.
+- **Big mode included as a net-new additive extension** (agent items only) for cross-site consistency;
+  flagged droppable. Minor accepted wrinkle: Escape while the popover is open also closes Big mode (both
+  window-level listeners).
+- **Watch is folded in as a menu row, superseding #336's standalone `WatchButton` in the headers** (reusing
+  336's `toggleWatch` + `ensureNotificationPermission`); the `WatchButton` component file is left in place
+  as harmless dead code (deletion out of scope).
+- **Sidebar `AgentContextMenu` explicitly left unchanged** (already a right-click dropdown, not a header).
+- **Per-site trigger styling via a `className` prop** (Overview `styles.action`/15, Canvas
+  `styles.panelClose`/14, Big mode `styles.close`/16); behavior/items identical.
+
+**Key files/areas touched:** new `src/components/AgentHeaderMenu/` (`.tsx` + `.module.css`);
+`src/components/Overview/Overview.tsx`, `src/components/Canvas/CanvasSurface.tsx`,
+`src/components/BigMode/BigModeModal.tsx` (+ `.module.css`). 6 files. Frontend-only — no Rust/IPC/
+persistence changes, no new keyboard shortcuts.
+
+**Dependencies:** Task 336 (consumes its `session.watch`, `toggleWatch(id)`, and
+`src/notify.ts` `ensureNotificationPermission`, and supersedes its header `WatchButton`).
+
+**Notes**
+
+- **Cross-platform:** identical on macOS and Windows — the resume command is the literal
+  `claude --resume <id>` on both, the menu adds no keyboard shortcuts (so no `kbdHint`/`revealLabel`
+  routing needed; the untouched Maximize button keeps its `kbdHint` tooltip), Escape uses
+  `event.key === "Escape"`, and styling is design-tokens only. No Rust / `#[cfg]` changes. Purely additive
+  and reversible. Checks green: `npm run build` / `npm run lint` / `npm test`.
