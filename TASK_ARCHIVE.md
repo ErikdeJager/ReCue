@@ -2217,3 +2217,61 @@ cadence, and `--status-*` tokens).
   join error → zero, badge hidden, no toast) and idempotent (the store skips a no-op update via
   `diffCountsMapsEqual`). Checks green: `cargo test` / `npm run lint:rust` / `npm run format:rust` /
   `npm run build` / `npm run lint` / `npm test`.
+
+### 339. [x] Enter key submits the "New tab from template" modal
+
+The **`TemplateUseModal`** ("New tab from template", #118) now responds to a plain **Enter**: on the
+**template** step Enter advances to the folder step (like clicking **Continue**), and on the **folder**
+step Enter launches the template into a new Canvas tab (like clicking **Open template**) — so a user can
+go template → folder → launch with the keyboard alone instead of being forced to reach for the mouse.
+Each step's Enter is gated by exactly the condition that enables that step's primary button (a template
+selected / `cwd && templateId`), so a disabled primary stays inert.
+
+**What shipped** (commit [`cbca63e`](https://github.com/ErikdeJager/ReCue/commit/cbca63e), PR
+[#89](https://github.com/ErikdeJager/ReCue/pull/89), branch `task-339-enter-submits-template-modal`,
+2026-07-06; 1 file, +40/−7):
+
+- **`src/components/TemplateUseModal/TemplateUseModal.tsx` (single-file change):**
+  - The dialog wrapper is swapped from a `<div>` to a **`<form onSubmit={onSubmit}>`** (same
+    class/role/aria/`stopPropagation`; `.dialog` is selected by class and stays `display:flex`, so the
+    render is byte-identical — no CSS change), mirroring `NewSessionModal`'s form-level submit pattern.
+  - A step-aware **`submitStep()`** helper: on the template step `if (templateId) setStep("folder")`; on
+    the folder step `open()` — and `open()` already no-ops when `!templateId || !cwd` and closes the
+    modal on success (via `useTemplate`), so no extra guard/`close()` is needed and there's no
+    double-launch. `onSubmit` `preventDefault()`s then calls `submitStep()`.
+  - Both `role="listbox"` containers (Templates, Recent folders) get an **`onKeyDown={onListKeyDown}`**
+    that runs `submitStep()` on Enter — needed because the rows are `type="button"`, so Enter on a
+    focused row wouldn't otherwise submit the form (same reason `NewSessionModal` adds a list `onKeyDown`).
+  - The two primary buttons — **Continue** and **Open template** — become `type="submit"` (dropping their
+    `onClick`), keeping their `disabled` guards; **Cancel**, **back**, **Choose folder…**, and the
+    zero-templates **New template…** stay `type="button"` so Enter on them fires their own action.
+  - A `nameRef` on the optional tab-name `<input>` plus a `useEffect` that **focuses it when the folder
+    step opens**, so Enter is immediately live (the folder defaults to the most-recent recent, so launch
+    is usually valid on arrival). The existing Escape `keydown` `useEffect` (#332) is untouched.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 339):
+
+- **Enter semantics per step:** template step advances (= Continue, only with a template selected); folder
+  step launches (= Open template, only when `cwd && templateId`). "Complete the launch once all info is
+  ready" = Enter both advances between steps and fires the final launch, each gated by its primary's
+  enable condition.
+- **Plain Enter only (no modifiers):** the handler ignores `metaKey`/`ctrlKey`/`altKey`, so no ⌘/Ctrl
+  chord is ever hijacked; no ⌘⏎ "worktree" variant (that's a `NewSessionModal` concept, out of scope).
+- **Initial-focus nudge = the tab-name input**, not the launch button — lets the user optionally name the
+  tab while Enter still submits via implicit form submission.
+- **List Enter acts on the current selection, not a Tab-focused row:** the modal has no arrow-key roving,
+  so `onListKeyDown` runs the step action on the currently *selected* row; keyboard users change selection
+  with **Space** first. No auto-select of the first row, no new focus-trap/Tab-cycling.
+- **No component test added:** Vitest runs the `node` env (no jsdom) with no component-render tests, so
+  verification is `npm run build` + `npm run lint` + `npm test` (all pass) + a manual smoke check.
+
+**Key files/areas touched:** `src/components/TemplateUseModal/TemplateUseModal.tsx` only. No store,
+`useTemplate`, CSS, or Rust changes.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Cross-platform:** Enter is the same key on macOS and Windows and no modifier is involved, so nothing
+  OS-specific is needed; the plain-Enter guard keeps it clear of any future ⌘/Ctrl chord. Escape-to-close
+  (#332) is preserved.
