@@ -1668,6 +1668,30 @@ pub async fn current_branches(paths: Vec<String>) -> std::collections::HashMap<S
         .unwrap_or_default()
 }
 
+/// Summed added/removed line counts vs `HEAD` for many working trees in one round-trip
+/// (#335) — the sidebar's per-agent `+A`/`−D` badge source. Mirrors `current_branches`:
+/// a **batch** async command whose synchronous git work runs on `spawn_blocking` (#330)
+/// so the whole sidebar refresh is one off-thread IPC round-trip and never freezes the
+/// webview. Only paths with non-zero counts matter to the UI, but all are returned;
+/// each entry is fail-open (non-git / no-HEAD / git error → `{ 0, 0 }`). A join error
+/// (task panic) degrades to an empty map (no badges), matching the fail-open contract.
+#[tauri::command]
+pub async fn diff_line_counts(
+    paths: Vec<String>,
+) -> std::collections::HashMap<String, git::DiffLineCounts> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|p| {
+                let counts = git::diff_line_counts(&p);
+                (p, counts)
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// GitHub web URL per path, resolved in one call (#327) — mirrors `current_branches`.
 /// Only paths whose remote resolves to a `github.com` repo are present in the map, so
 /// the sidebar reads presence as "show the View-on-GitHub item". Runs the two cheap

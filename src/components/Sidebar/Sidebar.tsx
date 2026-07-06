@@ -76,6 +76,7 @@ import UpdateIndicator from "../Update/UpdateIndicator";
 import UsageBar from "../Usage/UsageBar";
 import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import ViewsMenu from "../ViewsMenu/ViewsMenu";
+import { diffCountBadge } from "./diffCounts";
 import styles from "./Sidebar.module.css";
 
 /** Fixed width of the collapsed sidebar icon rail (#168/#214). Snug around its
@@ -677,6 +678,14 @@ function SessionRow({
     label,
   );
 
+  // Per-agent added/removed line counts (#335): a compact green +N / red −N badge in
+  // its own fixed, non-shrinking slot, keyed by the agent's own working-tree path
+  // (a worktree agent uses its worktree cwd, not the parent repo). `diffCountBadge`
+  // returns null when the setting is off, the counts are absent, or the tree is clean.
+  const showDiffCounts = useStore((s) => s.settings.showDiffLineCounts);
+  const counts = useStore((s) => s.diffLineCounts[session.repoPath]);
+  const badge = diffCountBadge(counts, showDiffCounts);
+
   return (
     <div
       ref={setNodeRef}
@@ -723,6 +732,23 @@ function SessionRow({
         >
           <span className={styles.rowPrimary}>{primary}</span>
         </button>
+      )}
+      {/* Added/removed line counts (#335): a fixed, non-shrinking slot on the SAME row,
+          after the label — so a long name ellipsizes rather than pushing the counts
+          off. Hidden while renaming (the editor takes the row) and on hover (the ×
+          replaces it, styled in Sidebar.module.css). */}
+      {!editing && badge && (
+        <span
+          className={styles.diffCounts}
+          aria-label={`${badge.added} added, ${badge.removed} removed lines`}
+        >
+          {badge.added > 0 && (
+            <span className={styles.diffAdd}>+{badge.added}</span>
+          )}
+          {badge.removed > 0 && (
+            <span className={styles.diffDel}>−{badge.removed}</span>
+          )}
+        </span>
       )}
       <button
         type="button"
@@ -2120,6 +2146,10 @@ function Sidebar() {
   const refreshBranches = useStore((s) => s.refreshBranches);
   const refreshFileStatuses = useStore((s) => s.refreshFileStatuses);
   const refreshGithubUrls = useStore((s) => s.refreshGithubUrls);
+  const refreshDiffLineCounts = useStore((s) => s.refreshDiffLineCounts);
+  // Depended on by the load effect so flipping the setting off→on refetches counts
+  // immediately, without waiting for a busy→idle edge (#335).
+  const showDiffLineCounts = useStore((s) => s.settings.showDiffLineCounts);
   const forgetRepo = useStore((s) => s.forgetRepo);
   const killAllAgents = useStore((s) => s.killAllAgents);
   const closeAllItems = useStore((s) => s.closeAllItems);
@@ -2329,7 +2359,17 @@ function Sidebar() {
     // Resolve each repo's GitHub web URL (#327) on the same edge so the repo/worktree
     // menus' "View on GitHub" item is ready before the user right-clicks.
     void refreshGithubUrls();
-  }, [refreshBranches, refreshFileStatuses, refreshGithubUrls, reposKey]);
+    // Per-agent line counts (#335) on the same edge; the setting is a dep so an
+    // off→on toggle refetches immediately (the action self-guards when off).
+    void refreshDiffLineCounts();
+  }, [
+    refreshBranches,
+    refreshFileStatuses,
+    refreshGithubUrls,
+    refreshDiffLineCounts,
+    showDiffLineCounts,
+    reposKey,
+  ]);
 
   // Keep the repo branch badges (#225) in sync with **external** checkouts — a `git
   // checkout` in a terminal of an idle repo (no busy→idle edge, #212) or in another

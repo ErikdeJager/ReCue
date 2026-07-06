@@ -199,6 +199,15 @@ export interface FileStatusEntry {
   status: FileStatusCode;
 }
 
+/** Summed added/removed line counts of an agent's working tree vs `HEAD` (#335,
+ * mirrors `git::DiffLineCounts`) — the sidebar's per-agent green `+A` / red `−D`
+ * badge source. `added` covers tracked edits plus untracked (new) files; `removed`
+ * is tracked-only. A missing key / both-zero = a clean tree (no badge). */
+export interface DiffLineCounts {
+  added: number;
+  removed: number;
+}
+
 export interface HunkLine {
   type: HunkLineKind;
   old_no?: number;
@@ -316,6 +325,10 @@ export interface Settings {
   /** Overview column minimum width in px (320–600); the floor before columns
    * scroll horizontally (#176). Applied as the `--overview-card-min` CSS var. */
   overviewPanelMinWidth: number;
+  /** Show a compact green `+A` / red `−D` added/removed line-count badge on each
+   * agent's sidebar row (#335). Default on. When off, no badge renders and the store
+   * performs **no** `diff_line_counts` git reads (zero cost). */
+  showDiffLineCounts: boolean;
   // Behavior (wired by a follow-up)
   /** View shown on launch. */
   defaultView: View;
