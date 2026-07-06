@@ -2729,3 +2729,39 @@ Enter key submits the "New tab from template" modal.
 - **Areas touched:** single file — `src/components/TemplateUseModal/TemplateUseModal.tsx` (dialog
   `<div>`→`<form onSubmit>`, step-aware `submitStep`/`onSubmit`/`onListKeyDown`, focus the tab-name
   input on the folder step, "Continue"/"Open template" `type="submit"`). No store, CSS, or Rust.
+
+## Task 340
+
+Consolidate agent header actions (Fork / Copy resume / Watch) into a "…" menu. Depends on Task 336.
+
+- **Which actions go in the "…" menu vs. stay direct:** exactly the three the card names — **Fork
+  conversation**, **Copy resume command**, and **Watch** — move into the "…" dropdown.
+  **`OpenViewButton`, Maximize (⌘E/Ctrl+E), and Remove/Close stay as direct icon buttons** (primary
+  affordances / a keyboard-shortcut action, not named by the card). The `AutoContinueToggle`
+  subheader strip is untouched.
+- **Menu primitive reused:** a new shared `AgentHeaderMenu` component modeled on the existing
+  `ViewsPopover`/`ViewsMenu` pattern (`src/components/ViewsMenu/`) — self-contained popover host
+  (render-prop trigger, outside-click + Escape dismissal, pointerdown-stopped so it never starts the
+  header drag), `role="menuitem"` icon+label rows with design-token CSS. Trigger uses lucide
+  `MoreHorizontal`. Not a new menu system; no refactor of `ViewsPopover`.
+- **Big mode included as an additive extension:** the Big-mode modal header currently has no agent
+  actions (only title + Close), so adding the "…" menu there is net-new. Included (agent items only)
+  for cross-site consistency; flagged as droppable if it complicates. Minor wrinkle: Escape while
+  the popover is open also closes Big mode (both window-level listeners) — acceptable as-is.
+- **Watch is folded in as a menu row, superseding Task 336's standalone `WatchButton` in the
+  headers.** This task removes the two `WatchButton` usages from the Overview + Canvas headers and
+  renders Watch inside the menu (reusing 336's `toggleWatch` + `ensureNotificationPermission`). The
+  `WatchButton` component file is left in place as harmless dead code (deletion optional/out of
+  scope). **Merge/build note:** overlaps Task 336 in `Overview.tsx` + `CanvasSurface.tsx` — 340
+  expects 336's `toggleWatch`/permission helper to exist and replaces its header `WatchButton`.
+- **Sidebar `AgentContextMenu` is explicitly left unchanged** — already a right-click dropdown, not
+  a panel header, so out of scope.
+- **Per-site differences:** the shared component takes a `className` prop so each host styles the
+  trigger with its own icon-button class (Overview `styles.action`/iconSize 15, Canvas
+  `styles.panelClose`/iconSize 14, Big mode `styles.close`/iconSize 16); behavior/items identical.
+- **No cross-platform shortcut routing needed in the menu:** the resume command is the literal
+  `claude --resume <id>` on both OSes and the menu adds no keyboard shortcuts, so `kbdHint`/
+  `revealLabel` aren't required here (the untouched Maximize button keeps its `kbdHint` tooltip).
+- **Areas touched:** new `src/components/AgentHeaderMenu/` (`.tsx` + `.module.css`); edits to
+  `src/components/Overview/Overview.tsx`, `src/components/Canvas/CanvasSurface.tsx`,
+  `src/components/BigMode/BigModeModal.tsx`.
