@@ -2824,3 +2824,90 @@ Consolidate agent header actions (Fork / Copy resume / Watch) into a "…" menu.
   `format:check` plus a `tauri dev` smoke check.
 - **Areas touched:** `src/components/Settings/Settings.tsx` (Appearance → Theme field) only — no
   CSS or backend changes.
+
+## Task 343 — Fix and polish Light-mode theming (Dark unchanged)
+
+- **Root-cause framing:** the theme is 100% token-driven with zero existing per-component
+  `[data-theme]` overrides and no literally-black border colors. All listed bugs diagnosed as one
+  of four token-level causes: (a) 9 non-terminal surfaces reuse the intentionally-dark
+  `--terminal-bg`; (b) the busy sheen uses `--text-primary` (flips dark in Latte); (c) low-contrast
+  Latte `--text-muted`/`--text-secondary`; (d) too-bright Latte accent.
+- **"Kanban background is black" → Canvas panel backdrop.** The Kanban Board view has no bg of its
+  own; it's black only when mounted as a **Canvas panel** (`.panel` backdrop is `--terminal-bg`)
+  and in the **Raw** editor (also `--terminal-bg`). Overview-mounted boards already inherit a light
+  bg. Fix targets the Canvas `.panel` + Kanban `.rawEditor`, not the board itself.
+- **"Borders between agents are black" → dark panel boxes, not literal borders.** Primary fix is
+  the `--content-bg` flip (Canvas agent panels stop being black boxes). One additional Light-only
+  Overview override gives adjacent agent columns an opaque light-slate separator (`#acb0be`, Latte
+  Surface2), since a translucent hairline vanishes against abutting dark terminal bodies. This is
+  the ONLY per-component override.
+- **Clean-CSS convention:** token-layer first (extend the Latte block + two new *alias* tokens
+  whose base value equals the token they replace, so Dark is byte-for-byte identical);
+  per-component overrides only where tokens can't express it, written as
+  `:global([data-theme="light"]) .localClass { … }` (mirroring the existing
+  `:global(body.reduce-motion)` pattern). Only 1 such override total.
+- **New tokens:** `--content-bg` (base `= var(--terminal-bg)`; Latte `#dce0e8`) for the 9
+  non-terminal surfaces incl. rendered markdown; `--busy-sheen` (base `= var(--text-primary)`;
+  Latte `#eff1f5`) for the busy glint.
+- **Contrast targets:** Latte `--text-secondary` #6c6f85→**#5c5f77** (~5:1), `--text-muted`
+  #8c8fa1→**#6c6f85** (~4:1). Muted deliberately lands ~4:1 (not full 4.5:1) to preserve the
+  primary>secondary>muted hierarchy. `--text-primary` unchanged (already ~6:1).
+- **"Slightly darker" accent quantified:** ~11% darker peach — `--accent` #fe640b→**#e05a0a**,
+  `--accent-hover` #ff7a30→**#f56b17**, `--accent-dim` alpha updated, `--accent-fg` kept `#ffffff`.
+  Flagged as tunable.
+- **Custom-accent-wins guarantee:** the custom accent writes `--accent`/`-hover`/`-dim`/`-fg`
+  **inline on `<html>`** (higher specificity than `:root[data-theme="light"]`), so editing the
+  Latte *default* accent tokens does not override it. Verified in `store.ts` `applySettingsEffects`.
+- **Dark-unchanged guarantee:** the base `:root` block only *gains* two alias lines (no existing
+  value edited); every component swap resolves to the same computed color in Dark
+  (`--content-bg`→#11111b, `--busy-sheen`→#cdd6f4); the terminal (`Terminal.module.css .wrapper`,
+  `terminalPool.ts` xterm theme, `--terminal-*` Latte non-override) is untouched. `git diff
+  tokens.css` audit step provided.
+- **color-mix fallback:** **no new `color-mix()` is introduced** — only the input token of the
+  already-shipping busy-sheen color-mix is swapped; everything else is plain hex/`var()`. Identical
+  on WKWebView and WebView2/Chromium; no new plain-color fallback needed.
+- **Beyond-the-listed fixes (all Light-only):** FileViewer rendered-markdown dark-on-dark (via
+  `--content-bg`), FileViewer code/raw/editor/diff-gutter surfaces, the Overview placeholder, and
+  improved accent-as-link-text legibility (side effect of the darker accent). Broader restyling
+  excluded to keep the diff minimal.
+- **No unit-test changes:** CSS-token work; `accentCompanions` (the only theme-related tested
+  logic) is untouched.
+- **Areas touched:** `src/styles/tokens.css` (the bulk), plus `--terminal-bg`→`--content-bg` swaps
+  in `components/FileViewer/FileViewer.module.css`, `components/Canvas/Canvas.module.css`,
+  `components/Overview/Overview.module.css` (+ 1 Light-only separator override),
+  `components/Kanban/KanbanPanel.module.css`, and a one-line busy-sheen swap in
+  `components/BusyIndicator/BusyIndicator.module.css`.
+
+## Task 344 — Sidebar agent rows: overlap diff-line counts and the × in one hover-swapped slot
+
+- **At-rest content for no-diff rows:** matched today's behavior exactly — nothing shows at rest,
+  × on hover. The `.trailing` slot keeps a `min-width:24px` so the × slot is still reserved for
+  clean/no-diff rows, identical to now.
+- **Agent-rows-only scope:** `.row` / `.remove` / `.diffCounts` / `.diffAdd` / `.diffDel` are used
+  **only** by `SessionRow`. Non-agent rows (file/diff/terminal/scheduled/recurring) use their own
+  `.fileClose` / `.scheduleCancel` classes and show no counts; the collapsed rail uses
+  `.railDot*`. All untouched — the swap applies to agent rows only.
+- **Technique = CSS visibility, not conditional render:** the counts keep their conditional React
+  render (`{!editing && badge && …}`, unchanged); the hover-swap is pure CSS with **no** hover
+  React state. The existing `.row:hover .diffCounts` changes from `display:none` to
+  `visibility:hidden` so the counts' box is preserved on hover, keeping the trailing slot width
+  stable.
+- **No-layout-shift approach:** the diff counts are the only in-flow child of a shared `.trailing`
+  wrapper (so they define the slot width, clamped to the ×'s 24px min); the × is
+  `position:absolute; right:0` (out of flow, no width) and overlays the same slot. Because the
+  counts stay `visibility:hidden` (box preserved) on hover, the slot width — and thus the agent
+  name width — never changes rest↔hover. Literal "counts on top of the ×, swap on hover."
+- **× hover/focus trigger preserved:** the × still reveals via the existing
+  `.row:hover .remove { opacity:1 }`; its `onClick`/`title`/`aria-label`/Lucide `<X>` unchanged.
+  Added `pointer-events:none` at rest → `pointer-events:auto` on hover so the overlapping invisible
+  × can't intercept a click over the counts at rest; keyboard focusability of the `<button>` is
+  unchanged.
+- **Counts are non-interactive:** no click behavior today, and stay non-interactive — on hover they
+  simply yield the slot to the ×.
+- **Cross-platform:** pure CSS/DOM hover swap, no OS primitive, reuses existing diff-count color
+  tokens (no new color / no new `color-mix`) — identical on WKWebView and WebView2/Chromium.
+- **No tests:** CSS/markup only; no pure logic, no Rust/IPC/store change.
+- **Areas touched:** `src/components/Sidebar/Sidebar.tsx` (`SessionRow` markup — wrap badge + × in
+  one `.trailing` span) and `src/components/Sidebar/Sidebar.module.css` (new `.trailing`,
+  absolutely-positioned `.remove` with `pointer-events` guard, `.diffCounts` hover →
+  `visibility:hidden`).
