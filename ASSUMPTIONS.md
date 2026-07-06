@@ -2357,3 +2357,31 @@ a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
 - Areas touched: `src-tauri/src/git.rs` (pure normalizer + git read + tests), `commands.rs` +
   `lib.rs` (batched `github_web_urls` command), `src/ipc.ts`, `src/store.ts` (`githubUrls` +
   `refreshGithubUrls` + cadence wiring), `src/components/Sidebar/Sidebar.tsx`.
+
+## Task 328 — Move the five-hour usage fetch off the main thread (async, non-blocking)
+
+- **Root cause is the sync Rust command, not the frontend.** `claude_session_usage` is a
+  synchronous `#[tauri::command] pub fn`; in Tauri 2 sync commands run on the main
+  (webview) event-loop thread, so its blocking `ureq` GET (8s timeout) + credentials file
+  read + macOS `security` subprocess freeze the whole UI. The frontend `refreshUsage`
+  already `await`s off a `setInterval` (not on any render path), so no frontend change is
+  needed. "Make it Async (multi thread)" is interpreted as: make the Rust command async and
+  offload its blocking work — where the actual freeze lives.
+- **Fix approach = `async fn` + `tauri::async_runtime::spawn_blocking`, reusing `ureq`.** Chose
+  the minimal, already-precedented fix (identical to the #316 conversion of git commands
+  `current_branch`/`fetch_remotes`/etc.) rather than swapping in an async HTTP client like
+  `reqwest`. `spawn_blocking` moves the existing blocking client off the main thread with
+  zero new dependencies and the smallest surface area, fully eliminating the freeze.
+- **Poll cadence unchanged.** Kept `USAGE_POLL_MS = 180_000` and `ARMED_POLL_MS = 45_000` — the
+  card is about lag/freeze, not staleness, and the endpoint aggressively 429s below 180s.
+- **Fail-open preserved, including a `spawn_blocking` join error.** A task panic collapses to
+  `None` via `.await.ok().flatten()`, matching "any miss hides the bar"; return type stays
+  `Option<UsageSnapshot>` so no IPC/frontend contract change.
+- **Cross-platform parity is inherent.** `spawn_blocking` is OS-agnostic; the macOS Keychain
+  fallback stays `#[cfg(target_os = "macos")]`-gated inside the moved body, so behavior is
+  byte-for-byte identical on macOS and Windows — only the thread changes. The command's
+  existing doc comment ("Sync → Tauri runs it off the main thread") is factually wrong and is
+  corrected as part of the fix.
+- **Areas touched:** `src-tauri/src/usage.rs` only — extract the current command body into a
+  private `usage_snapshot_blocking()` helper and add a `pub async fn claude_session_usage()`
+  wrapper. No frontend, `lib.rs`, or `ipc.ts` changes.
