@@ -1747,3 +1747,60 @@ terminal — no freeze).
 
 **Dependencies:** none (all prior usage-bar work — #154, #272, #296, #297, #305, #309, #316, #326 —
 already landed; the change is self-contained and mirrors the #316 spawn_blocking pattern).
+
+### 329. [x] DiffInspector accordion cards — enforce a readable min-width and scroll on overflow
+
+Fixed the diff viewer's **Accordion** display mode (#231/#237) so a large diff (many changed files)
+stays usable in narrow Canvas splits and Overview columns. Previously the accordion crushed its file
+cards so small their contents couldn't be read. **Root cause:** `.accordion` is a `flex-direction:
+column` container and each `.card` has `overflow:hidden` — per the CSS Flexbox spec, a flex item
+whose main-axis `overflow` isn't `visible` gets an automatic minimum size of **0**, so with many
+cards the flex algorithm shrank every card toward 0 height and `overflow:hidden` clipped their
+contents instead of the accordion's `overflow-y:auto` scrolling. On the x-axis, `align-items:stretch`
+gave each card exactly the accordion's content width with no floor, so a narrow panel dropped it
+below what's needed to read the header or code body. After this change collapsed cards keep their
+natural height and the list scrolls vertically; cards have a readable minimum width and the accordion
+scrolls horizontally when the panel is narrower than that minimum.
+
+**What shipped** (commit [`89837bf`](https://github.com/ErikdeJager/ReCue/commit/89837bf), PR
+[#81](https://github.com/ErikdeJager/ReCue/pull/81), branch `task-329-diff-accordion-min-width`,
+2026-07-06):
+
+- **`src/components/DiffInspector/DiffInspector.module.css` (only file touched, +19/−1):** three
+  scoped edits, each with an explanatory comment — (1) `.card { flex-shrink: 0 }` so cards keep their
+  natural (content) height and the accordion's existing scroll engages instead of crushing them
+  (cards still don't grow — default `flex-grow:0` — so a short list is unchanged); (2) `.card {
+  min-width: 320px }` so a card's used width is `max(accordion content width, 320px)`, covering both
+  collapsed and expanded cards with one rule; (3) `.accordion` `overflow-y:auto` → `overflow:auto`
+  (both axes) so a card floored at 320px can be scrolled into view horizontally when the panel is
+  narrower, with no horizontal scrollbar when the panel is wide enough. `.card`'s `overflow:hidden`
+  (needed to clip `.cardBody`'s top border to the rounded corners) and `.cardBody`'s
+  `max-height:420px; overflow:auto` cap were kept as-is.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 329):
+
+- **Minimum-width value = 320px (a judgment call).** Readable for the 12px-mono diff body + line-
+  number gutters + the header (badge/filename/± counts), and deliberately **below** the Overview
+  column min (`--overview-card-min` default 400px, #176) so the common Overview case never triggers
+  horizontal scroll — the floor only bites in genuinely narrow Canvas splits.
+- **Fixed px, not the `--overview-card-min` variable** — keeps the diff-card floor local and
+  predictable across Overview/Canvas/BigMode, since that variable means "Overview column width," not
+  "diff card width."
+- **Narrow-panel behavior = horizontal scroll**, mirroring the Overview wall's "overflow horizontally
+  instead of squeezing" precedent, rather than letting the panel dictate a sub-minimum width.
+- **Scope = Accordion only; Focused mode untouched** (separate classes; verified non-regressed). No
+  `DiffInspector.tsx`/logic changes — a pure layout fix.
+
+**Key files/areas touched:** `src/components/DiffInspector/DiffInspector.module.css`. 1 file.
+
+**Dependencies:** none (the DiffInspector and its Accordion mode already exist and are landed —
+#231/#237/#278).
+
+**Notes**
+
+- **Cross-platform:** pure WebView CSS (flexbox `flex-shrink`/`min-width` + `overflow`) with no
+  native/path/shell code and no OS-conditional styling; flexbox + overflow scrolling behave
+  identically under WKWebView (macOS) and WebView2/Chromium (Windows), and scrollbars are already
+  themed globally via `::-webkit-scrollbar` (honored by both engines) — so it renders the same on
+  both OSes. The GUI layout result needs a real-box visual check that CI can't assert. Checks green:
+  `npm run build` / `npm run lint` / `npm run format:check`.
