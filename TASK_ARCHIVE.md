@@ -2441,3 +2441,84 @@ auto-continue global+per-agent pattern and reuses the busy→idle edge that flip
   `#[serde(default)]` and `watchAllAgents` merges over `DEFAULT_SETTINGS`, so an older `sessions.json`
   upgrades cleanly. Best-effort/fail-open (permission denied/unavailable → silent no-op). Checks green:
   `cargo test` / `npm run lint:rust` / `npm run build` / `npm run lint` / `npm test`.
+
+### 337. [x] Global search modal (⌘F / Ctrl+F) across agents, terminals & files
+
+One keystroke — **⌘F on macOS / Ctrl+F on Windows** — now opens a **`GlobalSearch`** modal that searches
+**everything** across every open folder: agents, shell terminals, file/diff/kanban viewer panels,
+scheduled/recurring sessions, **files on disk** (filename **and** content across every sidebar repo), and
+— best-effort — **live agent terminal output**. Results are ranked by relevance and laid out **grouped by
+repo, then by item type**, with a highlighted `path:line` snippet for content/output hits. ↑/↓ move a
+highlighted row and Enter (or click) activates it — jumping to an open item via the existing `selectItem`
+(#79), opening a file viewer for a not-yet-open file, or selecting the agent for a terminal-output hit —
+then closing the modal. The combo is swallowed even while a terminal is focused (the terminal never sees
+the `f`), is main-window-only (inert in a detached canvas window), and Escape / scrim click closes.
+
+**What shipped** (commit [`38e015a`](https://github.com/ErikdeJager/ReCue/commit/38e015a), PR
+[#92](https://github.com/ErikdeJager/ReCue/pull/92), branch `global-search-modal`, 2026-07-06; 11 files,
++1454/−1):
+
+- **`src-tauri/src/pty.rs`:** a **pure** `strip_ansi(&str) -> String` (drops CSI/OSC/lone-`ESC` escapes,
+  keeps printable text + `\n`/`\t`); a **pure** `match_output_lines(text, needle_lower, per_session,
+  clamp)` returning `(1-based line, ~200-char snippet)` per matching line (mirroring `files.rs`'s clamp);
+  and `SessionManager::search_output(needle, per_session, total)` that snapshots each live session's
+  bounded scrollback (`SCROLLBACK_CAP` ~256 KB), lossy-UTF8 + `strip_ansi` + `match_output_lines`, tagging
+  hits with the session id and stopping at `total` — so scrollback bytes never reach React (per
+  convention). Blank needle → empty. Unit tests cover `strip_ansi` and `match_output_lines`.
+- **`src-tauri/src/commands.rs` + `lib.rs`:** a `SessionOutputMatch { id, line, snippet }` struct + a
+  `search_session_output(query, limit?) -> Vec<SessionOutputMatch>` command (per-session cap 5, total
+  `limit.unwrap_or(50)`) that **cannot fail** (empty vec on no-match/blank), registered in
+  `invoke_handler!`.
+- **`src/ipc.ts`:** a `SessionOutputMatch` interface + `searchSessionOutput(query, limit?)` wrapper (plus
+  reuse of the existing `searchFiles`/`searchFileContents`).
+- **`src/store.ts`:** `globalSearchOpen: boolean` state + `openGlobalSearch`/`closeGlobalSearch` actions.
+- **`src/useKeyboardNav.ts`:** a ⌘F/Ctrl+F handler block (`metaKey || ctrlKey`, `!shift`, `!alt`,
+  `key==="f"`) with `preventDefault` + `stopPropagation`, main-window-gated, toggling the modal and not
+  stacking over `newSessionOpen`/`createPanelOpen` (mirrors the ⌘K guard).
+- **`src/components/GlobalSearch/search.ts` (+ `search.test.ts`):** the pure result model
+  (`SearchResult`, `ResultKind`) + `scoreTitle` (exact > prefix > word-boundary > substring, minus match
+  index, short-title bonus), `scoreFilename`/content/output bases (title > filename > content > output),
+  `rankAndGroup` (sort within `(repo, kind)` by score then title; repos ordered like the sidebar; kinds by
+  a fixed `KIND_ORDER`), `splitHighlight` (pure version of FileTree's `renderSnippet`), and `flatOrder`
+  for ↑/↓ nav. Vitest covers ranking order, grouping stability, and highlight segmentation.
+- **`src/components/GlobalSearch/GlobalSearch.tsx` + `.module.css`:** the focus-trapped modal (modeled on
+  `CreatePanelModal`) — autofocused input, ~180ms debounce, a monotonic `requestSeq` ref dropping stale
+  async responses, a `length >= 2` gate for content/output search, per-repo/kind caps, `<mark>`-highlighted
+  snippets, and activation via `selectItem` / `addOverviewPanel`→`selectItem` / agent-select; the
+  ⌘F/Ctrl+F hint routes through `kbdHint`. Tokens-only styling.
+- **`src/App.tsx`:** mounts `{globalSearchOpen && <GlobalSearch />}`.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 337):
+
+- **Terminal-output search IS included, best-effort** — server-side ANSI-strip + substring over each live
+  session's retained in-memory scrollback tail (`SCROLLBACK_CAP` ~256 KB), keeping bytes off the React
+  thread; **not** persisted `~/.claude/projects/*.jsonl` history; any failure degrades silently (the rest
+  of search still works).
+- **"Files" = both open file/diff/kanban viewer panels AND files on disk** across every sidebar repo
+  (filename via `search_files` + content via `search_file_contents`), not just open viewers.
+- **Searchable kinds:** agents, shell terminals, file/diff/kanban panels, scheduled + recurring sessions,
+  and terminal output — matched by title/label; recurring-owned children excluded (matching Overview).
+- **Main-window only** (`IS_MAIN_WINDOW`, like ⌘N/⌘K/⌘T) since results navigate the sidebar/Overview; a
+  detached canvas window's ⌘F is inert.
+- **Debounce ~180ms + query length ≥ 2 for content/output** (filename/title match at ≥ 1); results capped
+  per repo/kind. **Ranking is a client-side heuristic** (not a fuzzy lib), grouped by repo then item type.
+- **Activation reuses existing actions** — open item → `selectItem` (view-aware jump #79); not-yet-open
+  file → `addOverviewPanel(repo, "markdown", file)` then `selectItem`; terminal-output hit → selects its
+  agent; no new Overview↔Canvas switching beyond `selectItem`'s own.
+
+**Key files/areas touched:** `src-tauri/src/pty.rs`, `commands.rs`, `lib.rs`; `src/ipc.ts`, `src/store.ts`,
+`src/useKeyboardNav.ts`, `src/App.tsx`; new `src/components/GlobalSearch/` (component + CSS module + pure
+`search.ts`/`search.test.ts`). 11 files.
+
+**Dependencies:** none (fully additive; reuses `searchFiles`/`searchFileContents`, `selectItem`,
+`addOverviewPanel`, `repoOrder`, `ownedChildSessionIds`, `kbdHint`).
+
+**Notes**
+
+- **Cross-platform:** all new logic is `metaKey || ctrlKey` + pure byte/string handling (no path or
+  shell-outs), identical on macOS (WKWebView) and Windows (WebView2); the visible keyboard hint routes
+  through `kbdHint` so it reads "Ctrl+F" on Windows. Fully additive and safe to re-run — `search_session_output`
+  returns an empty vec on any no-match/blank input and never errors, so removing the ⌘F handler + modal
+  mount disables the feature with no other behavioral change. Heaviest path (all-repo content search per
+  keystroke) is bounded by the debounce, `length >= 2` gate, per-repo caps, and the already-bounded backend
+  commands. Checks green: `cargo test` / `npm run lint:rust` / `npm run build` / `npm run lint` / `npm test`.
