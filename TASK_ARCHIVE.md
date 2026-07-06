@@ -2595,3 +2595,44 @@ persistence changes, no new keyboard shortcuts.
   routing needed; the untouched Maximize button keeps its `kbdHint` tooltip), Escape uses
   `event.key === "Escape"`, and styling is design-tokens only. No Rust / `#[cfg]` changes. Purely additive
   and reversible. Checks green: `npm run build` / `npm run lint` / `npm test`.
+
+### 342. [x] Note that Dark mode is the recommended theme in Settings → Appearance
+
+A small, muted helper line — **"Dark mode is the recommended experience."** — now sits directly under
+the Dark/Light theme toggle in **Settings → Appearance**, gently steering users toward the more polished
+Dark theme (Light being the newer, less-refined option). Pure copy/UX hint: **no behavior change**, no
+new setting, no persistence — the line is **always visible** regardless of which theme is currently
+selected.
+
+**What shipped** (commit [`c36ac3c`](https://github.com/ErikdeJager/ReCue/commit/c36ac3c), PR
+[#94](https://github.com/ErikdeJager/ReCue/pull/94), branch `note-dark-mode-recommended-theme`,
+2026-07-06; 1 file, +3):
+
+- **`src/components/Settings/Settings.tsx`:** inside the Appearance section's existing Theme `.field`
+  wrapper, immediately after the `.segmented` Dark/Light toggle group and before the `.field`'s closing
+  tag, added `<p className={styles.helpText}>Dark mode is the recommended experience.</p>`. The `.field`
+  wrapper is `flex-direction:column`, so the line stacks under the toggle with the wrapper's consistent
+  gap.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 342):
+
+- **Exact wording** chosen as **"Dark mode is the recommended experience."** — short, neutral, names no
+  platform and carries no keyboard shortcut (so no `kbdHint`/`revealLabel` routing; pure WebView copy,
+  identical on macOS and Windows).
+- **Always visible** (static hint), not conditional on the current selection — simplest, and communicates
+  the recommendation regardless of which theme is active.
+- **Reused the established `.helpText` class** (`color: var(--text-muted); font-size: var(--fs-meta-sm);
+  line-height:1.4`, from #162) already used for muted description lines elsewhere in the same modal — **no
+  new CSS class**. Because `--text-muted` is theme-aware in `tokens.css` (Overlay0 in dark, Overlay1 in
+  light), the hint reads correctly and legibly in both themes.
+- **No test file** — copy-only change with no pure logic to unit-test; verification is `npm run build` /
+  `npm run lint` / `npm run format:check` plus a `tauri dev` smoke check.
+
+**Dependencies:** none. (Kept scoped to the single Theme `.field` so the concurrent light-mode theming
+overhaul card — Task 343 — merges trivially; this card does not depend on it.)
+
+**Notes**
+
+- **Cross-platform:** identical on macOS and Windows — a single static `<p>` reusing an existing class and
+  a theme-aware token, no OS-specific primitive, no Rust/IPC/persistence changes. Extremely low risk;
+  rollback is deleting the one line.
