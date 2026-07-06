@@ -2569,3 +2569,35 @@ a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
   `src/components/Terminal/terminalPool.ts` (foreground token), `src/components/Settings/Settings.tsx`
   (Appearance toggle), `src/store.test.ts` (tests), `CLAUDE.md` (doc reversal). No backend/Rust
   changes.
+
+## Task 335 — Per-agent added/removed line counts in the sidebar
+
+- **Scope = sidebar only.** The card says "left panel", so the +N/−N badge is added to sidebar
+  agent (`SessionRow`) rows only. Overview card headers / Canvas panel headers are explicitly out
+  of scope (noted as a possible future extension).
+- **Untracked files are included.** The green +N total includes lines in brand-new untracked
+  (non-`.gitignore`d) files, counted via a bounded, binary-skipping, size-capped newline read in
+  Rust — because `git diff --numstat HEAD` alone would omit a fresh agent's newly created files and
+  show a misleading +0. Removed lines come solely from tracked numstat (untracked files have no
+  removals). Bounded by the existing `MAX_UNTRACKED_FILES` (2000) + a per-file byte cap; can be
+  dropped later with no frontend change if it proves heavy.
+- **Map key = the agent's working-tree path (`session.repoPath`).** Counts are per working tree, so
+  worktree agents key by their own worktree cwd. Multiple agents sharing a folder show the same
+  totals (expected).
+- **Setting: `showDiffLineCounts`, default `true`, in Settings → Appearance** (it's a visual
+  toggle, alongside reduce-motion / Overview-min-width). When off, no badge renders **and** the
+  store performs zero `diff_line_counts` git reads (self-guarded action).
+- **Colors:** additions → `--status-done` (green), removals → `--status-error` (red) — on-system
+  tokens, matching the FileTree #252 tinting convention. No hardcoded colors.
+- **Zero state:** a clean tree (both counts 0) hides the badge entirely (no `+0 −0`). Adds-only
+  shows just `+N`; dels-only shows just `−N`.
+- **Format:** `+123` (green) then `−45` (red) using the Unicode minus `−` (U+2212) to match `+`
+  width, in mono at `--fs-meta-xs` with tabular numerals; the badge is hidden during inline rename
+  to avoid crowding the input. The agent name ellipsizes (`text-overflow: ellipsis`) with the
+  badge in a non-shrinking slot.
+- **"Multi-threaded / async / non-blocking"** is satisfied by a batched `async` Tauri command
+  running the git work on `spawn_blocking` (the established #330 pattern), fetched in the store on
+  the existing debounced busy→idle / load / checkout cadence — never on the render path.
+- **Areas touched:** `src-tauri/src/git.rs`, `commands.rs`, `lib.rs`; `src/types/index.ts`,
+  `src/ipc.ts`, `src/store.ts`; `src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css` + new
+  `diffCounts.ts`/`diffCounts.test.ts`; `src/components/Settings/Settings.tsx`.
