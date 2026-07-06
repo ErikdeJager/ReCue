@@ -2693,3 +2693,57 @@ change).
   native/path/shell code, so it is byte-for-byte identical on macOS (WKWebView) and Windows (WebView2).
   The board `.md` still round-trips through the unchanged `parseBoard`/`serializeBoard`. Checks green:
   `npm test` / `npm run build` / `npm run lint`.
+
+### 344. [x] Sidebar agent rows: overlap diff-line counts and the × in one hover-swapped trailing slot
+
+Each sidebar **agent row** now renders the #335 green/red added/removed line counts and the #57 ×
+(remove) button in **one shared trailing slot**, layered instead of side-by-side. At rest the `+N` / `−N`
+counts show; on row hover they go `visibility:hidden` (keeping their box, so the slot width is preserved)
+and the absolutely-positioned × fades in **over the exact same spot** — a true swap with **zero layout
+shift**, reclaiming the ~24px the always-reserved empty × slot used to take from the agent name at rest.
+A clean/no-diff row (or the setting off) is unchanged — the slot's `min-width:24px` still reserves the ×
+(nothing at rest, × on hover).
+
+**What shipped** (commit [`c1a69d3`](https://github.com/ErikdeJager/ReCue/commit/c1a69d3), PR
+[#96](https://github.com/ErikdeJager/ReCue/pull/96), branch `overlap-diff-counts-remove-slot`,
+2026-07-06; 2 files, +62/−35):
+
+- **`src/components/Sidebar/Sidebar.tsx` (`SessionRow`):** wrapped the existing diff-count badge span
+  (unchanged conditional `{!editing && badge && …}`, `aria-label`, `diffAdd`/`diffDel` spans) and the ×
+  button (unchanged `onClick={onRemove}`, `title`, `aria-label`, Lucide `<X size={14}>`) in a single new
+  `<span className={styles.trailing}>`. No logic/state change; the `AgentContextMenu` block stays a direct
+  child of `.row` after the wrapper.
+- **`src/components/Sidebar/Sidebar.module.css`:** new `.trailing` slot
+  (`position:relative; flex-shrink:0; min-width:24px; margin-right:var(--space-4)`) — the counts are its
+  only in-flow child (they define the slot width, clamped to the ×'s 24px); `.remove` became
+  `position:absolute; right:0; top:50%; translateY(-50%)` (out of flow, contributes no width) with
+  `pointer-events:none` at rest → `pointer-events:auto` on `.row:hover` so the invisible × can't intercept
+  a click over the counts; `.diffCounts` dropped its own `flex-shrink`/`padding-right` (the wrapper owns
+  spacing); and `.row:hover .diffCounts` switched from `display:none` to `visibility:hidden` to keep the
+  slot width stable on hover. `.diffAdd`/`.diffDel` colors (`--status-done`/`--status-error`) unchanged.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 344):
+
+- **No-diff / clean rows match today exactly** — nothing at rest, × on hover; `.trailing`'s
+  `min-width:24px` keeps the ×'s slot reserved.
+- **Agent-rows-only scope** — `.row`/`.remove`/`.diffCounts`/`.diffAdd`/`.diffDel` are used **only** by
+  `SessionRow`; non-agent rows (file/diff/terminal/scheduled/recurring, using `.fileClose`/
+  `.scheduleCancel`) and the collapsed rail (`.railDot*`) are untouched.
+- **Pure-CSS swap, no hover React state** — the counts keep their conditional render; the swap is the
+  `display:none → visibility:hidden` change plus the absolute-overlay ×. Because the counts stay
+  `visibility:hidden` (box preserved) on hover, the slot — and the agent name width — never reflows.
+- **`pointer-events` guard** — the overlapping invisible × can't fire a click over the counts at rest;
+  the `<button>`'s keyboard focusability is unchanged. Counts stay non-interactive (they simply yield the
+  slot to the × on hover).
+
+**Dependencies:** none (builds on the already-shipped #335 sidebar diff counts + the #57 row × button;
+independent of the concurrent Task 343 light-mode work — reuses existing tokens, introduces no new color).
+
+**Notes**
+
+- **Cross-platform:** pure CSS/DOM hover swap using existing tokens (`--status-done`, `--status-error`,
+  `--text-muted`, `--radius-chip`, `--space-*`, `--dur-fast`, `--ease-out`) — no `color-mix`, no
+  `-webkit`-only effect, no native/path/shell/Rust code. `position:absolute` + `opacity`/`visibility`/
+  `pointer-events` render identically on WKWebView (macOS) and WebView2/Chromium (Windows). Presentational
+  and reversible (revert the two files to restore the side-by-side slots). Checks green: `npm run build` /
+  `npm run lint` / `npm run format:check` / `npm test`.
