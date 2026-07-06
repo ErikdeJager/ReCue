@@ -283,6 +283,22 @@ function SettingsModal() {
             {section === "appearance" && (
               <>
                 <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Theme</span>
+                  <div className={styles.segmented}>
+                    {(["dark", "light"] as const).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        className={`${styles.segment} ${draft.theme === t ? styles.segmentActive : ""}`}
+                        onClick={() => update("theme", t)}
+                        aria-pressed={draft.theme === t}
+                      >
+                        {t === "dark" ? "Dark" : "Light"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className={styles.field}>
                   <span className={styles.fieldLabel}>Accent color</span>
                   <div className={styles.swatches}>
                     {REPO_PALETTE.map((color) => {

@@ -898,6 +898,7 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalFontSize: 12.5,
   terminalLineHeight: 1.2,
   terminalCursorBlink: true,
+  theme: "dark",
   accentColor: "",
   reduceMotion: false,
   overviewPanelMinWidth: 400,
@@ -969,7 +970,8 @@ export function accentCompanions(hex: string): {
 }
 
 /** Apply the imperative side-effects of settings: the terminal options to the live
- * pool (#100), the accent tokens (#102/#107), and the reduce-motion class (#102). */
+ * pool (#100), the theme attribute (#333), the accent tokens (#102/#107), and the
+ * reduce-motion class (#102). */
 function applySettingsEffects(s: Settings): void {
   applyTerminalSettings({
     fontSize: s.terminalFontSize,
@@ -982,6 +984,12 @@ function applySettingsEffects(s: Settings): void {
   // track the chosen color; clear all four for the default ("") so the Catppuccin
   // Peach tokens stand.
   const root = document.documentElement;
+  // Theme (#333): light mode sets data-theme="light" on <html> so the light token
+  // block in tokens.css overrides the dark defaults. Set on <html> (the same element
+  // the custom accent writes inline to) so a custom accent still overrides the light
+  // default accent.
+  if (s.theme === "light") root.setAttribute("data-theme", "light");
+  else root.removeAttribute("data-theme");
   if (s.accentColor) {
     const { hover, dim, fg } = accentCompanions(s.accentColor);
     root.style.setProperty("--accent", s.accentColor);

@@ -2212,6 +2212,18 @@ describe("mergeSettings (#100/#176)", () => {
     ).toBe(520);
   });
 
+  it("defaults the theme to dark and back-fills it (#333)", () => {
+    expect(DEFAULT_SETTINGS.theme).toBe("dark");
+    // A pre-#333 blob (no theme key) upgrades cleanly to dark.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.theme;
+    expect(mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>).theme).toBe(
+      "dark",
+    );
+    // A persisted "light" is preserved over the default.
+    expect(mergeSettings({ theme: "light" }).theme).toBe("light");
+  });
+
   it("defaults promptEnableAutoContinueAtLimit to true and back-fills it (#309)", () => {
     expect(DEFAULT_SETTINGS.promptEnableAutoContinueAtLimit).toBe(true);
     // A pre-#309 blob (no key) merges to the shown-by-default true.
