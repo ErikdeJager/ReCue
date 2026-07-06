@@ -1,0 +1,28 @@
+{
+  "version": "1.1.7",
+  "date": "2026-07-06",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "Press ⌘F (Ctrl+F on Windows) to open a global search that looks across everything at once — agents, terminals, file and diff panels, scheduled sessions, and files on disk by name and content — and jump straight to any match.",
+        "You can now watch an individual agent to get a native desktop notification the moment it finishes a turn or needs your input. Turn it on per agent from its menu, or enable \"Watch all agents\" in Settings — both are off by default.",
+        "Each git folder in the sidebar now shows a compact ↑/↓ indicator of how far its branch is ahead of or behind its upstream, so you can spot unpushed commits or a needed pull without opening a terminal."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "An agent's Fork, Copy resume command, and Watch actions are now tucked into a single \"…\" menu on its header, keeping the header uncluttered while every action stays one click away.",
+        "When editing a Kanban card, pressing Shift+Enter on a \"-\" bullet line now automatically starts the next bullet, and pressing it on an empty bullet ends the list.",
+        "Settings → Appearance now notes that Dark is the recommended theme."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "Pressing Enter in the \"New tab from template\" dialog now advances and launches it, so you can go from template to open tab without reaching for the mouse."
+      ]
+    }
+  ]
+}

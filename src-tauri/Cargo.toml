@@ -1,6 +1,6 @@
 [package]
 name = "recue"
-version = "1.1.6"
+version = "1.1.7"
 description = "ReCue — run and manage many live claude CLI sessions"
 authors = ["Erik de Jager"]
 edition = "2021"
