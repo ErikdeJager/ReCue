@@ -1,0 +1,20 @@
+{
+  "version": "1.1.5",
+  "date": "2026-07-06",
+  "changes": [
+    {
+      "category": "fix",
+      "items": [
+        "Choosing \"New session here\" from inside a worktree now nests the new session under that worktree, instead of showing it as a separate top-level entry."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "Opening diffs and browsing the file tree now reads git status in the background, so the app stays responsive on large repositories.",
+        "The five-hour usage bar now fetches its data off the main thread, keeping the interface smooth while it refreshes.",
+        "Diff inspector cards in accordion view now keep a readable minimum width and scroll sideways when a change is too wide, instead of being squeezed."
+      ]
+    }
+  ]
+}
