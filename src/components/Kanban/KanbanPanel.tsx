@@ -2,6 +2,7 @@ import {
   type CSSProperties,
   type FocusEvent,
   Fragment,
+  type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
   useCallback,
@@ -10,6 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   closestCorners,
   DndContext,
@@ -51,6 +53,7 @@ import {
   rehypeTaskListPositions,
 } from "../markdownCheckboxes";
 import { type Board, type Card, parseBoard, serializeBoard } from "./kanban";
+import { applySmartNewline } from "./smartList";
 import {
   addCard,
   addColumn,
@@ -96,6 +99,26 @@ function splitCardText(text: string): { title: string; body: string } {
   const title = (lines[0] ?? "").trim();
   const body = lines.slice(1).join("\n").trimEnd();
   return { title, body };
+}
+
+/** On Shift+Enter over a `-` bullet line, continue/terminate the list in a controlled
+ * textarea (#341). Returns true if it handled the key (caller should stop). Uses flushSync
+ * so the controlled value is committed to the DOM before the caret is restored (no
+ * flicker). A non-bullet Shift+Enter returns false, so the native detail-line newline is
+ * preserved and plain Enter/Escape are untouched. */
+function handleSmartBulletKey(
+  e: KeyboardEvent<HTMLTextAreaElement>,
+  setValue: (next: string) => void,
+): boolean {
+  if (e.key !== "Enter" || !e.shiftKey || e.nativeEvent.isComposing)
+    return false;
+  const el = e.currentTarget;
+  const res = applySmartNewline(el.value, el.selectionStart, el.selectionEnd);
+  if (!res) return false; // not a bullet line → let the native newline happen
+  e.preventDefault();
+  flushSync(() => setValue(res.value));
+  el.setSelectionRange(res.caret, res.caret);
+  return true;
 }
 
 interface CardProps {
@@ -201,8 +224,10 @@ function SortableCard({
             rows={5}
             onChange={(e) => onEditTextChange(e.currentTarget.value)}
             onKeyDown={(e) => {
-              // Enter commits; Shift+Enter inserts a detail line; Escape discards
-              // (mirroring the add-card composer). IME-safe.
+              // Enter commits; Shift+Enter over a `-` bullet continues/terminates the
+              // list (#341), else inserts a detail line; Escape discards (mirroring the
+              // add-card composer). IME-safe.
+              if (handleSmartBulletKey(e, onEditTextChange)) return;
               if (
                 e.key === "Enter" &&
                 !e.shiftKey &&
@@ -555,7 +580,9 @@ function BoardColumn(props: ColumnProps) {
               rows={5}
               onChange={(e) => setComposerText(e.currentTarget.value)}
               onKeyDown={(e) => {
-                // Enter submits; Shift+Enter inserts a detail line (#233). IME-safe.
+                // Enter submits; Shift+Enter over a `-` bullet continues/terminates the
+                // list (#341), else inserts a detail line (#233). IME-safe.
+                if (handleSmartBulletKey(e, setComposerText)) return;
                 if (
                   e.key === "Enter" &&
                   !e.shiftKey &&
