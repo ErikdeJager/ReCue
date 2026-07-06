@@ -2511,3 +2511,28 @@ a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
 - **Areas touched:** `src/components/NewSessionModal/NewSessionModal.tsx` and
   `src/components/TemplateUseModal/TemplateUseModal.tsx` — add `event.preventDefault()` to each
   modal's window-level Esc keydown listener. Frontend-only; no Rust.
+
+## Task 334 — Clear the Overview folder filter when selecting an agent it would hide
+
+- **"Deselect" = clear the filter entirely** (set `overviewRepoFilter` to `null`), not switch the
+  filter to the clicked agent's folder. The card says "the filter should deselect," so it clears.
+- **Scoped to agent rows only.** `selectItem` is shared by all sidebar item kinds (files, diffs,
+  terminals, kanban, filetree, scheduled, recurring), but the card says "agent," so the guard
+  fires only for `item.kind === "agent"`; other item kinds leave the filter intact.
+- **Selecting an agent already visible under the filter leaves the filter intact** — only a
+  *mismatch* (an agent the filter would hide) clears it. Determined via the wall's own
+  `sessionInFilter` predicate.
+- **Judged by the wall's visibility predicate, not raw path equality.** Reusing `sessionInFilter`
+  means: under an `"all"` repo filter a worktree agent of that repo (same cluster via
+  `effectiveRepo`, #96) is considered visible so the filter stays; under an `"own"` filter a
+  same-repo worktree agent is hidden so selecting it clears the filter. This natural consequence
+  matches the card's intent ("the clicked agent should be visible rather than hidden by the
+  mismatched filter").
+- **Applies regardless of view (Overview or Canvas).** The guard runs before `selectItem`'s view
+  branching. Clearing the filter while in Canvas is harmless (the filter only narrows the Overview
+  wall) and keeps the sidebar's filtered-header highlight consistent when the user returns to
+  Overview.
+- **Areas touched:** `src/store.ts` (add a filter-clear guard at the top of the `selectItem`
+  action; no new imports — `sessionInFilter` is already imported) and `src/store.test.ts` (new
+  `#334` unit tests beside the existing `setOverviewRepoFilter` tests). Pure frontend/store logic —
+  inherently cross-platform.
