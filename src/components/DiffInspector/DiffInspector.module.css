@@ -475,11 +475,29 @@
   min-height: 0;
   flex-direction: column;
   gap: var(--space-8);
-  overflow-y: auto;
+  /* Scroll BOTH axes (#329): vertical for the stacked cards (which no longer shrink —
+     see `.card` flex-shrink:0), and horizontal so a card floored at its 320px min-width
+     can be scrolled into view when the panel is narrower than that. When the panel is
+     wide enough, cards stretch to fill and no horizontal scrollbar appears. */
+  overflow: auto;
   padding: var(--space-8);
 }
 .card {
+  /* Keep clipping `.cardBody`'s top border to the rounded corners. Because a flex item
+     whose main-axis overflow isn't `visible` gets an automatic min-size of 0, in this
+     flex-column the accordion would otherwise shrink every card toward 0 height and this
+     `overflow:hidden` would clip its contents — the "crushed sliver" symptom (#329). */
   overflow: hidden;
+  /* Don't let the flex algorithm shrink cards (#329): each keeps its natural (content)
+     height, so the summed height overflows the accordion and its `overflow:auto` scrolls
+     the list. Cards still don't grow (default flex-grow:0), so a short list is unchanged. */
+  flex-shrink: 0;
+  /* Readable width floor (#329): in a flex-column with default align-items:stretch, a
+     card's used width is max(accordion content width, 320px) — it fills the panel when
+     wide and is floored at 320px when narrow (below the 400px `--overview-card-min`, so
+     the common Overview case never triggers horizontal scroll). One rule covers both
+     collapsed and expanded cards; keeps the header + code body legible in narrow splits. */
+  min-width: 320px;
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-control);
   background: var(--bg-elevated);
