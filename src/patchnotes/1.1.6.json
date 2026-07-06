@@ -1,0 +1,20 @@
+{
+  "version": "1.1.6",
+  "date": "2026-07-06",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "Added a Light theme. Choose Dark or Light in Settings → Appearance — the interface switches to a warm Catppuccin Latte palette while terminals stay dark.",
+        "Agent rows in the sidebar now show how many lines each session has added and removed, so you can gauge the size of a change at a glance."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "Selecting an agent that the current Overview folder filter would hide now clears that filter automatically, so the agent you picked stays visible.",
+        "Pressing Escape to cancel a session dialog no longer also drops the app out of macOS fullscreen."
+      ]
+    }
+  ]
+}
