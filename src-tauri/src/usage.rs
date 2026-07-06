@@ -67,11 +67,28 @@ impl OauthToken {
     }
 }
 
-/// Frontend-polled command (~180s cadence). Sync → Tauri runs it off the main
-/// thread, so the bounded blocking call won't freeze the UI. Fail-open: any
-/// failure → `None` → the bar hides.
+/// Frontend-polled command (~180s cadence). Async + off the main thread (#328):
+/// a non-`async` Tauri command runs on the main (webview) thread, so the blocking
+/// credentials read, the up-to-8s `ureq` HTTPS GET, and the macOS `security`
+/// subprocess spawn all executed there and froze the whole native UI until the
+/// request returned. `spawn_blocking` moves the synchronous work onto the blocking
+/// pool (the #316 git-command pattern), keeping the window responsive. The return
+/// type is unchanged, so the frontend IPC contract (`src/ipc.ts`) is untouched.
+/// Fail-open: any failure → `None` → the bar hides; a `spawn_blocking` join error
+/// (task panic) also collapses to `None` via `.ok().flatten()`.
 #[tauri::command]
-pub fn claude_session_usage() -> Option<UsageSnapshot> {
+pub async fn claude_session_usage() -> Option<UsageSnapshot> {
+    tauri::async_runtime::spawn_blocking(usage_snapshot_blocking)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// The blocking usage work run off the main thread by `claude_session_usage`
+/// (#328): read the OAuth token, GET the usage endpoint, parse the snapshot. Every
+/// step is fail-open — a missing token, an HTTP error, or a shape mismatch each
+/// returns `None` (bar hides), with a token-free `usage_diag` breadcrumb.
+fn usage_snapshot_blocking() -> Option<UsageSnapshot> {
     let token = read_oauth_token()?.access_token; // token dropped right after fetch
     let Some(body) = fetch_usage(&token) else {
         usage_diag("http miss");
