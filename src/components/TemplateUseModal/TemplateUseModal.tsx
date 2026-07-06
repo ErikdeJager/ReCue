@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ChevronLeft, FolderOpen, LayoutTemplate } from "lucide-react";
 
 import { pickDirectory } from "../../ipc";
@@ -28,6 +29,7 @@ function TemplateUseModal() {
   // Optional custom name for the new Canvas tab (#311); blank keeps the template's
   // name. The modal unmounts on close, so no explicit reset is needed.
   const [tabName, setTabName] = useState("");
+  const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -39,6 +41,12 @@ function TemplateUseModal() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [close]);
+
+  // Focus the tab-name input when the folder step opens so plain Enter can submit
+  // (launch) immediately — the folder usually defaults to the most-recent recent (#339).
+  useEffect(() => {
+    if (step === "folder") nameRef.current?.focus();
+  }, [step]);
 
   const chosen = templates.find((t) => t.id === templateId);
 
@@ -52,14 +60,38 @@ function TemplateUseModal() {
     runTemplate(templateId, cwd, tabName);
   };
 
+  // Enter-to-submit (#339): advance on the template step, launch on the folder step —
+  // mirrors NewSessionModal's form-level submit. Both `setStep`/`open` already no-op
+  // when their step isn't ready, so a disabled primary stays inert.
+  const submitStep = () => {
+    if (step === "template") {
+      if (templateId) setStep("folder");
+    } else {
+      open(); // open() no-ops when !templateId || !cwd, and closes on success
+    }
+  };
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    submitStep();
+  };
+  // The list rows are `type="button"`, so Enter on a focused row wouldn't submit the
+  // form on its own; run the step action here. Plain Enter only (no ⌘/Ctrl/Alt chord).
+  const onListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" || event.metaKey || event.ctrlKey || event.altKey)
+      return;
+    event.preventDefault();
+    submitStep();
+  };
+
   return (
     <div className={styles.overlay} onClick={close}>
-      <div
+      <form
         className={styles.dialog}
         role="dialog"
         aria-modal="true"
         aria-label="New tab from template"
         onClick={(event) => event.stopPropagation()}
+        onSubmit={onSubmit}
       >
         <header className={styles.header}>
           <LayoutTemplate
@@ -83,6 +115,7 @@ function TemplateUseModal() {
                 className={styles.list}
                 role="listbox"
                 aria-label="Templates"
+                onKeyDown={onListKeyDown}
               >
                 {templates.map((t) => (
                   <button
@@ -117,10 +150,9 @@ function TemplateUseModal() {
                 </button>
               ) : (
                 <button
-                  type="button"
+                  type="submit"
                   className={styles.primary}
                   disabled={!templateId}
-                  onClick={() => setStep("folder")}
                 >
                   Continue
                 </button>
@@ -143,6 +175,7 @@ function TemplateUseModal() {
                 className={styles.list}
                 role="listbox"
                 aria-label="Recent folders"
+                onKeyDown={onListKeyDown}
               >
                 {recents.map((r) => (
                   <button
@@ -173,6 +206,7 @@ function TemplateUseModal() {
             )}
             <p className={styles.label}>Tab name (optional)</p>
             <input
+              ref={nameRef}
               className={styles.nameInput}
               type="text"
               value={tabName}
@@ -186,17 +220,16 @@ function TemplateUseModal() {
                 Cancel
               </button>
               <button
-                type="button"
+                type="submit"
                 className={styles.primary}
                 disabled={!cwd || !templateId}
-                onClick={open}
               >
                 Open template
               </button>
             </div>
           </>
         )}
-      </div>
+      </form>
     </div>
   );
 }
