@@ -762,32 +762,37 @@ function SessionRow({
           <span className={styles.rowPrimary}>{primary}</span>
         </button>
       )}
-      {/* Added/removed line counts (#335): a fixed, non-shrinking slot on the SAME row,
-          after the label — so a long name ellipsizes rather than pushing the counts
-          off. Hidden while renaming (the editor takes the row) and on hover (the ×
-          replaces it, styled in Sidebar.module.css). */}
-      {!editing && badge && (
-        <span
-          className={styles.diffCounts}
-          aria-label={`${badge.added} added, ${badge.removed} removed lines`}
+      {/* Trailing slot (#344): the added/removed line counts (#335) and the hover ×
+          (remove) share ONE slot, layered — the counts are the only in-flow child so
+          they define the slot's width (clamped to the ×'s 24px), and the × is absolutely
+          positioned over them (Sidebar.module.css). At rest the counts show; on row
+          hover they go visibility:hidden and the × fades in over the same spot, so the
+          agent name's width never shifts. Hidden while renaming (the editor takes the
+          row). */}
+      <span className={styles.trailing}>
+        {!editing && badge && (
+          <span
+            className={styles.diffCounts}
+            aria-label={`${badge.added} added, ${badge.removed} removed lines`}
+          >
+            {badge.added > 0 && (
+              <span className={styles.diffAdd}>+{badge.added}</span>
+            )}
+            {badge.removed > 0 && (
+              <span className={styles.diffDel}>−{badge.removed}</span>
+            )}
+          </span>
+        )}
+        <button
+          type="button"
+          className={styles.remove}
+          onClick={onRemove}
+          title="Remove (kill + forget)"
+          aria-label="Remove session"
         >
-          {badge.added > 0 && (
-            <span className={styles.diffAdd}>+{badge.added}</span>
-          )}
-          {badge.removed > 0 && (
-            <span className={styles.diffDel}>−{badge.removed}</span>
-          )}
-        </span>
-      )}
-      <button
-        type="button"
-        className={styles.remove}
-        onClick={onRemove}
-        title="Remove (kill + forget)"
-        aria-label="Remove session"
-      >
-        <X size={14} strokeWidth={1.5} />
-      </button>
+          <X size={14} strokeWidth={1.5} />
+        </button>
+      </span>
 
       {menu && (
         <AgentContextMenu
