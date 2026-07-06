@@ -2385,3 +2385,34 @@ a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
 - **Areas touched:** `src-tauri/src/usage.rs` only — extract the current command body into a
   private `usage_snapshot_blocking()` helper and add a `pub async fn claude_session_usage()`
   wrapper. No frontend, `lib.rs`, or `ipc.ts` changes.
+
+## Task 329 — DiffInspector accordion cards: enforce a readable min-width and scroll on overflow
+
+- **Root cause is the flex crush, not just missing scroll.** The card's `overflow:hidden` gives
+  each accordion card a flexbox automatic-min-size of 0, so `flex-shrink:1` collapses cards
+  toward 0 height when there are many — the "too small to view" / y-overflow symptom. Resolved
+  the y-axis ask by adding `flex-shrink:0` to `.card` so the existing `.accordion
+  { overflow-y:auto }` actually scrolls instead of crushing. Interpreted "allow scrolling on
+  y-overflow" as "make the already-present y-scroll engage."
+- **Minimum-width value = 320px.** The card doesn't specify a number. Picked a fixed 320px:
+  readable for a 12px-mono diff body + line-number gutters and header (badge/filename/counts),
+  and deliberately below the Overview column min (`--overview-card-min` default 400px, #176) so
+  the common Overview case never triggers horizontal scroll — the floor only bites in narrow
+  Canvas splits.
+- **Fixed px, not the `--overview-card-min` variable.** Kept the diff-card floor local and
+  predictable across Overview/Canvas/BigMode, since that variable means "Overview column width,"
+  not "diff card width."
+- **Narrow-panel behavior = horizontal scroll.** The card names only y-overflow scrolling, but
+  enforcing a min-width forces a decision for panels narrower than the min. Chose horizontal
+  scroll (`.accordion` → `overflow:auto` on both axes), mirroring the Overview wall's "overflow
+  horizontally instead of squeezing" precedent, rather than letting the panel dictate a smaller
+  width.
+- **Scope = Accordion only; Focused untouched.** The card says "accordions," so changes are
+  limited to `.accordion`/`.card`. Focused mode uses separate classes and is verified as
+  non-regressed.
+- **Min-width applies to one `.card` rule covering both states.** The card asks for a floor
+  "collapsed and expanded"; a single `min-width` on `.card` satisfies both since the same
+  element wraps header and (when open) body.
+- **Areas touched:** `src/components/DiffInspector/DiffInspector.module.css` only — add
+  `flex-shrink:0` + `min-width:320px` to `.card`, change `.accordion` `overflow-y:auto` →
+  `overflow:auto`. Pure WebView CSS (no `.tsx`/Rust/native changes), identical on macOS/Windows.
