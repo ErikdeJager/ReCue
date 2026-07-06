@@ -2064,3 +2064,78 @@ uses to render.
   code, so it behaves identically on macOS and Windows (no `platform`/`#[cfg]` gate needed). Idempotent
   (re-selecting the same agent is a no-op once the filter is null). Checks green: `npm run build` /
   `npm run lint` / `npm test`.
+
+### 333. [x] Light mode theme option in Settings (Catppuccin Latte)
+
+Added a **Light** theme, selectable in **Settings → Appearance** (a Dark/Light segmented control),
+that reskins the whole UI with a **Catppuccin Latte** palette while keeping the same design language
+(borders, spacing, radii, accent usage). The default stays **Dark** (Mocha, byte-for-byte the prior
+appearance); the choice persists across restarts and applies to detached canvas windows too. This
+card **reverses** CLAUDE.md's documented "Dark theme only" (stack) and "no light mode" (out-of-scope)
+rules — like #84 (single-window), #100 (settings), and #126 (fork) reversed earlier v1 rules.
+Because the app is fully **design-token driven** (every color is a `var(--token)` from
+`src/styles/tokens.css`, with no hardcoded color literals in component CSS), the theme is achieved
+almost entirely by **redefining the color tokens under a selector** — components need no per-component
+work. The **terminal area stays dark in both themes** (claude's TUI is dark-designed).
+
+**What shipped** (commit [`0de534d`](https://github.com/ErikdeJager/ReCue/commit/0de534d), PR
+[#87](https://github.com/ErikdeJager/ReCue/pull/87), branch `light-mode-theme-333`, 2026-07-06;
+7 files, +128/−10):
+
+- **`src/types/index.ts`:** added `theme: "dark" | "light"` to the `Settings` interface.
+- **`src/store.ts`:** `theme: "dark"` in `DEFAULT_SETTINGS` (so an older `sessions.json` lacking
+  `theme` upgrades to `"dark"` via the existing `mergeSettings` spread); in `applySettingsEffects`,
+  a `data-theme` toggle on `<html>` — `root.setAttribute("data-theme", "light")` for light, removed
+  for dark. Runs on boot (`init`) and on `saveSettings`, and — since `CanvasWindow` also calls
+  `init()` — in detached windows too.
+- **`src/styles/tokens.css`:** a `:root[data-theme="light"] { … }` block overriding **only** the
+  color tokens that must flip (surfaces, borders, text, accent = Latte Peach `#fe640b`, diff, status,
+  syntax, a softer popover shadow) with the Catppuccin **Latte** palette; plus a new stable
+  `--terminal-fg` token in `:root` (value `#cdd6f4` = the current foreground). `--terminal-bg` /
+  `--terminal-fg` / `--terminal-selection` / `--usage-critical` are **deliberately not** overridden,
+  so the terminal stays dark. Spacing/radii/type/motion/fonts inherit from `:root`.
+- **`src/components/Terminal/terminalPool.ts`:** the xterm `foreground` now reads `--terminal-fg`
+  (not the flipping `--text-primary`), keeping terminal text light in both themes.
+- **`src/components/Settings/Settings.tsx`:** a Dark/Light segmented control in the Appearance
+  section (above Accent color), reusing the existing `styles.segmented` pattern; applied on Save.
+- **`src/store.test.ts`:** `theme` default/merge assertions (`DEFAULT_SETTINGS.theme === "dark"`, an
+  old blob missing `theme` upgrades to `"dark"`, `mergeSettings({ theme: "light" }).theme === "light"`).
+- **`CLAUDE.md`:** the documentation reversal — "Dark theme only" → "Dark (default) and Light themes
+  (#333)", the out-of-scope "no light mode" reversed with a #333 note, the Settings architecture
+  paragraph updated to mention the `theme` field, the `data-theme="light"` toggle on `<html>`, and
+  that the terminal stays dark.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 333):
+
+- **Light palette = Catppuccin Latte**, the natural light sibling of the #33 Mocha remap (proper
+  contrast on light surfaces; the pale Mocha pastels would wash out).
+- **Mechanism = `data-theme="light"` on `<html>` + a `:root[data-theme="light"]` override block**,
+  *not* a `body.light` class — **load-bearing**: the custom accent (#102/#107) is written **inline on
+  `<html>`**, so putting the theme selector on the same element lets the inline custom accent
+  correctly win; a `body.light` rule on the child would override the inherited inline accent and
+  silently break a custom accent in light mode.
+- **Terminal stays dark in both themes** via the un-overridden `--terminal-bg`/`--terminal-selection`
+  + the new stable `--terminal-fg`; terminals aren't re-themed on a runtime switch (both themes render
+  them dark, so no live re-theme needed).
+- **No "System/Auto" (prefers-color-scheme) option** — explicit Dark/Light only for v1.
+- **`REPO_PALETTE` and the Settings accent-swatch palette are NOT re-themed** — persisted
+  brand/identity colors; re-theming would break stored repo colors.
+- **Accepted minor caveats:** the Appearance "default" accent swatch chip (`#fab387` Mocha Peach)
+  won't exactly match the applied Latte Peach (`#fe640b`) in light mode; and a brief dark first-paint
+  flash on boot (theme applies async in `init()`, identical timing to the existing accent/reduce-motion
+  effects) — neither addressed.
+
+**Key files/areas touched:** `src/types/index.ts`, `src/store.ts`, `src/styles/tokens.css`,
+`src/components/Terminal/terminalPool.ts`, `src/components/Settings/Settings.tsx`, `src/store.test.ts`,
+`CLAUDE.md`. 7 files. Frontend/docs only; no Rust/backend (rides the existing opaque `settings` blob).
+
+**Dependencies:** none (self-contained; uses only the existing settings blob and token layer).
+
+**Notes**
+
+- **Cross-platform:** pure CSS/JS with no OS-specific code — scrollbars already use
+  `::-webkit-scrollbar` (WKWebView + WebView2), `color-mix` tints already ship plain-color fallbacks,
+  and no macOS-only vibrancy is introduced, so the light theme behaves identically on macOS and
+  Windows. Fully reversible (set the theme back to Dark) and idempotent (`applySettingsEffects` sets/
+  removes the `data-theme` attribute deterministically each call). Checks green: `npm run build` /
+  `npm run lint` / `npm run format:check` / `npm test`.
