@@ -305,6 +305,10 @@ export interface Settings {
   /** xterm cursor blink. */
   terminalCursorBlink: boolean;
   // Appearance (wired by a follow-up)
+  /** UI theme (#333): "dark" (default, Catppuccin Mocha) or "light" (Catppuccin
+   * Latte). Applied as a `data-theme` attribute on <html> by applySettingsEffects;
+   * the terminal stays dark in both. */
+  theme: "dark" | "light";
   /** Accent color hex from `REPO_PALETTE`, or "" to use the default token. */
   accentColor: string;
   /** Force reduced motion beyond the OS setting. */

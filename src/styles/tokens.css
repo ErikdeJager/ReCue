@@ -15,6 +15,7 @@
   --bg-elevated: #313244; /* Surface0 */
   --bg-hover: #45475a; /* Surface1 */
   --terminal-bg: #11111b; /* Crust — deep bg so terminal content stands out */
+  --terminal-fg: #cdd6f4; /* terminal text — stays light in both themes (#333) */
   --terminal-selection: rgba(88, 91, 112, 0.5); /* Surface2 — text selection */
   --scrim: rgba(17, 17, 27, 0.8); /* Crust-based full-window dim overlay */
 
@@ -107,4 +108,70 @@
   --dur-fast: 120ms;
   --dur-slow: 180ms;
   --ease-out: ease-out;
+}
+
+/*
+ * Light theme (#333) — Catppuccin Latte remap. Selected in Settings → Appearance;
+ * applied as `data-theme="light"` on <html> by applySettingsEffects. Overrides ONLY
+ * the color tokens that must flip — spacing/radii/type/motion/fonts are inherited
+ * from :root. The terminal deliberately stays dark: --terminal-bg / --terminal-fg /
+ * --terminal-selection (and the fixed --usage-critical) are NOT overridden.
+ *
+ * The selector targets <html> (:root) — the same element the custom accent writes
+ * inline to — so an inline custom accent (specificity: inline) still beats this
+ * light default accent, while clearing the accent falls back to the Latte Peach here.
+ */
+:root[data-theme="light"] {
+  /* --- Surfaces (Catppuccin Latte) --- */
+  --bg-base: #eff1f5; /* Base */
+  --bg-sidebar: #e6e9ef; /* Mantle */
+  --bg-panel: #eff1f5; /* Base */
+  --bg-elevated: #ccd0da; /* Surface0 */
+  --bg-hover: #bcc0cc; /* Surface1 */
+  /* --terminal-bg / --terminal-fg / --terminal-selection: NOT overridden (stay dark) */
+  --scrim: rgba(76, 79, 105, 0.35); /* soft dark dim for modals */
+
+  /* --- Borders (low-alpha Latte Text) --- */
+  --border-hairline: rgba(76, 79, 105, 0.1);
+  --border-strong: rgba(76, 79, 105, 0.18);
+
+  /* --- Text (Latte) --- */
+  --text-primary: #4c4f69; /* Text */
+  --text-secondary: #6c6f85; /* Subtext0 */
+  --text-muted: #8c8fa1; /* Overlay1 */
+
+  /* --- Accent (Latte Peach — brand parity) --- */
+  --accent: #fe640b; /* Peach */
+  --accent-hover: #ff7a30; /* lighter Peach (hover) */
+  --accent-dim: rgba(254, 100, 11, 0.14);
+  --accent-fg: #ffffff; /* readable on the vivid Latte Peach */
+
+  /* --- Diff (Latte) --- */
+  --diff-add-fg: #40a02b; /* Green */
+  --diff-add-bg: rgba(64, 160, 43, 0.14);
+  --diff-del-fg: #d20f39; /* Red */
+  --diff-del-bg: rgba(210, 15, 57, 0.12);
+  --diff-gutter: #9ca0b0; /* Overlay0 */
+
+  /* --- Status colors (Latte accents — chosen for contrast on light surfaces) --- */
+  --status-running: #1e66f5; /* Blue */
+  --status-awaiting: #df8e1d; /* Yellow (gold, readable on light) */
+  --status-done: #40a02b; /* Green */
+  --status-error: #d20f39; /* Red */
+  --status-error-dim: rgba(210, 15, 57, 0.12);
+  --status-idle: #9ca0b0; /* Overlay0 */
+  /* --usage-critical: NOT overridden (the fixed vivid red reads on both) */
+
+  /* --- Syntax highlighting (Catppuccin Latte) --- */
+  --syn-comment: #8c8fa1; /* Overlay1 */
+  --syn-keyword: #8839ef; /* Mauve */
+  --syn-string: #40a02b; /* Green */
+  --syn-number: #fe640b; /* Peach */
+  --syn-function: #1e66f5; /* Blue */
+  --syn-type: #df8e1d; /* Yellow */
+  --syn-punct: #6c6f85; /* Subtext0 */
+  --syn-accent: #ea76cb; /* Pink */
+
+  /* --- Depth — a softer shadow for a light surface --- */
+  --shadow-popover: 0 8px 28px rgba(0, 0, 0, 0.15);
 }

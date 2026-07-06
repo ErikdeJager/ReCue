@@ -173,7 +173,7 @@ function createHost(sessionId: string): TerminalHost {
     ...(windowsPty ? { windowsPty } : {}),
     theme: {
       background: cssToken("--terminal-bg", "#11111b"),
-      foreground: cssToken("--text-primary", "#cdd6f4"),
+      foreground: cssToken("--terminal-fg", "#cdd6f4"),
       cursor: cssToken("--accent", "#fab387"),
       cursorAccent: cssToken("--terminal-bg", "#11111b"),
       selectionBackground: cssToken(

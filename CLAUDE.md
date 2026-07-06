@@ -83,7 +83,8 @@ even though it works in `tauri dev`.
 - **Backend (Rust, `src-tauri/`):** **`portable-pty`** for terminals, JSON
   persistence in the app-data dir, read-only git (shells out to `git`), and the
   Tauri **dialog** (folder picker) plugin
-- Dark theme only
+- Dark (default) and Light themes (#333) — a Catppuccin **Latte** token override
+  selected in Settings → Appearance (the terminal stays dark in both)
 
 ## Architecture (data flow)
 
@@ -450,17 +451,23 @@ even though it works in `tauri dev`.
   **Sessions** (the #97 auto-name toggle + the #142 **Coding agent** selector →
   `defaultAgent`, now claude / codex / **opencode** with an inline "untested" caution
   for the non-claude picks, + the #296 auto-continue-after-limit toggle),
-  **Appearance** (an accent swatch over the Catppuccin palette + a reduce-motion toggle +
+  **Appearance** (a **Dark/Light theme** toggle #333 + an accent swatch over the Catppuccin
+  palette + a reduce-motion toggle +
   the Overview panel min-width #176), **Behavior** (default launch view + confirm-destructive
   gating #103 + the Canvas tab-close default `canvasCloseBehavior`: Ask / Always kill / Never
   kill #137 + the diff display/line/sort defaults #237/#258), **Kanban** (per-column colors by
   name #239), **Updates** (check for updates / current version / "What's new" / update now
   #191), and **Data & About** (open data folder, clear recents, app + agent versions). A
-  modal-local **draft** applies only on **Save** via `applySettingsEffects` (accent
-  overrides `--accent` plus its companions `--accent-hover/-dim/-fg` through
+  modal-local **draft** applies only on **Save** via `applySettingsEffects` (the `theme`
+  field #333 toggles `data-theme="light"` on `<html>` → the `:root[data-theme="light"]`
+  Catppuccin-Latte token block in `tokens.css` reskins the whole UI, while the terminal
+  stays dark via a dedicated `--terminal-fg`; the toggle sits on `<html>` — the same element
+  the custom accent writes inline to — so an inline custom accent still wins in light mode;
+  accent overrides `--accent` plus its companions `--accent-hover/-dim/-fg` through
   `accentCompanions` #107; reduce-motion toggles `body.reduce-motion`). Settings
   persist as an opaque `settings` blob (`get_settings` / `set_settings`) merged over
-  TS-side `DEFAULT_SETTINGS`, so an older `sessions.json` upgrades cleanly.
+  TS-side `DEFAULT_SETTINGS`, so an older `sessions.json` upgrades cleanly (a blob lacking
+  `theme` upgrades to `"dark"`).
 - **Pluggable coding agent (#101):** an `AgentSpec` catalog
   (`src-tauri/src/agents.rs`) is the single source of truth for each agent's binary +
   how it spawns / resumes / seeds a session; the **`claude`** spec preserves today's
@@ -752,14 +759,18 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   (The v1 "no status system" rule was deliberately narrowed by **#42** — a single
   **busy/idle** indicator — and by **#112**, which adds a third "finished / needs
   input" yellow state to that same dot. Still no approval pills or floating status.)
-- No Archive (single **Remove = kill + forget**), no Skills manager, no light mode,
-  no auth. **Fork now exists** (#126 — reverses the v1 "no Fork" rule): a "Fork
+- No Archive (single **Remove = kill + forget**), no Skills manager, no auth.
+  **Light mode now exists** (#333 — reverses the v1 "Dark theme only" / "no light mode"
+  rules, like #84/#100/#126 reversed single-window/settings/fork): a Dark/Light toggle in
+  Settings → Appearance swaps in a Catppuccin **Latte** token block (the terminal stays
+  dark in both). **Fork now exists** (#126 — reverses the v1 "no Fork" rule): a "Fork
   conversation" button on every agent header branches the source agent into a new
   parallel session (see the Spawn note + Conventions).
 - **Settings** now exists (#100/#102/#103 — reverses the v1 "no settings screen"
   rule, as #84 reversed single-window): a sidebar footer gear opens a modal with
   Terminal / Sessions / Appearance / Behavior / Data & About sections (see the
-  architecture note). Still no light mode and no per-session config beyond these.
+  architecture note). A **Dark/Light theme** toggle lives in the Appearance section
+  (#333, default Dark); no per-session config beyond these.
 - **Multi-window** is now supported for **Canvas tabs only** (#84 — reverses the v1
   single-window rule): a canvas can open in its own native window (pop-out button +
   drag tear-off) for multi-monitor use. Detached windows are **per-session** (not
