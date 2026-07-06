@@ -64,6 +64,10 @@ pub fn run() {
         // OS clipboard (#220): backs terminal paste on Windows — JS reads text
         // (capability-gated), `save_clipboard_image` reads the image Rust-side.
         .plugin(tauri_plugin_clipboard_manager::init())
+        // Native OS notifications (#336): backs per-agent "watch" — a native toast
+        // when a watched agent finishes a turn / needs input. Cross-platform (macOS
+        // + Windows), fired from the frontend.
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // The session manager emits to a channel; a dedicated thread forwards
             // those events to the frontend as Tauri events.
@@ -216,6 +220,7 @@ pub fn run() {
             commands::kill_session,
             commands::rename_session,
             commands::set_session_auto_continue,
+            commands::set_session_watch,
             commands::session_scrollback,
             commands::list_sessions,
             commands::list_recents,

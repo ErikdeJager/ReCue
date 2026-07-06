@@ -888,3 +888,36 @@ untouched.
   the **pencil** to edit still lights the card's accent border via the edit `<textarea>`; and
   **Tab** to the inner pencil/trash/checkbox still shows their own `:focus-visible` ring.
   Re-confirm the same on macOS (WKWebView).
+
+### #336 — Per-agent "watch" notifications (native popup on finish / needs input)
+
+Adds an opt-in per-agent "watch" flag (persisted on the session record) that pops a **native
+OS notification** the moment a watched agent reaches its busy→idle edge (finished a turn /
+awaiting input), plus a global "Watch all agents" setting (default off). Delivery goes through
+the **cross-platform** Tauri notification plugin (`tauri-plugin-notification` + the JS
+`@tauri-apps/plugin-notification`), added alongside the other v2 plugins with a
+`notification:default` capability — **native on both macOS and Windows**, so there is **no**
+`#[cfg]` in ReCue code for this feature. The trigger is the existing `store.setBusy` busy→idle
+transition (the same edge that flips the three-state `BusyIndicator` to yellow), guarded with
+`IS_MAIN_WINDOW` + the `booting` flag so a detached canvas window (session events are
+window-global, #84) and the boot-resume replay never double-fire. Permission is ensured lazily
+(`ensureNotificationPermission`) at opt-in time and again before each send; a denied grant just
+silently no-ops (no in-app fallback). Everything else — the flag command/IPC, the store
+`toggleWatch`/`setWatch` actions, the sidebar context-menu item, the reusable `WatchButton`
+header button, and the Settings checkbox — is frontend/pure-Rust and platform-neutral (design
+tokens + on-system icons only; `metaKey || ctrlKey` unaffected — no new shortcuts).
+
+#### Still needs manual Windows verification (#336)
+
+- **Native notification delivery (GUI/OS path, can't be unit-tested).** On a Windows build:
+  turn on **Watch** for an agent (sidebar right-click menu **or** the Overview card / Canvas
+  panel Eye button), grant the permission prompt when asked, then let that agent finish a turn
+  → confirm a **Windows toast** appears with the agent's label as the title and "Finished or
+  awaiting your input" as the body, and that an **unwatched** agent produces no toast. Confirm
+  turning on **Settings → Sessions → "Watch all agents"** makes every agent notify. Important
+  Windows caveat to check: **a dev build may not surface toasts until the app is installed and
+  Start-Menu / AppUserModelID-registered** — so verify against an **installed** (NSIS/MSI)
+  build, not just `tauri dev`. With a detached canvas window open, confirm a watched agent
+  fires **exactly one** notification (not one per window). Re-confirm the whole flow on macOS
+  (Notification Center), where an unsigned/ad-hoc build may need the notification permission
+  allowed for "ReCue" in System Settings.

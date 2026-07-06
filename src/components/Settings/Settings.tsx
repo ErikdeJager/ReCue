@@ -29,6 +29,7 @@ import remarkGfm from "remark-gfm";
 
 import { agentCaps, agentIsUntested, SETTINGS_AGENTS } from "../../agents";
 import * as ipc from "../../ipc";
+import { ensureNotificationPermission } from "../../notify";
 import {
   allPatchnotes,
   compareVersions,
@@ -607,6 +608,25 @@ function SettingsModal() {
                   <span className={styles.fieldHelp}>
                     Show a button above the usage bar to turn on auto continue
                     when the five-hour limit is reached and it's off.
+                  </span>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    // Global master switch for per-agent "watch" (#336): on → EVERY
+                    // agent notifies on busy→idle regardless of its per-agent flag
+                    // (those flags are retained for when this is turned back off).
+                    checked={draft.watchAllAgents}
+                    onChange={(v) => {
+                      update("watchAllAgents", v);
+                      // Request notification permission at opt-in time (turning it on).
+                      if (v) void ensureNotificationPermission();
+                    }}
+                    label="Watch all agents"
+                    className={styles.checkRow}
+                  />
+                  <span className={styles.fieldHelp}>
+                    Pop up a notification whenever any agent finishes a turn or
+                    is waiting for input. Otherwise, turn on watch per agent.
                   </span>
                 </div>
               </>

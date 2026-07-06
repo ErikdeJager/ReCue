@@ -38,6 +38,10 @@ ureq = { version = "2", features = ["json", "tls"] }
 # called from JS (gated by the `clipboard-manager:allow-read-text` capability); the
 # image read is done Rust-side in `save_clipboard_image` (ClipboardExt, no capability).
 tauri-plugin-clipboard-manager = "2.3.2"
+# Native OS notifications (#336): backs per-agent "watch" — a native toast when a
+# watched agent finishes a turn / needs input. Cross-platform (macOS + Windows);
+# the frontend sends the notification, this exposes the plugin + capability.
+tauri-plugin-notification = "2"
 # Encode a clipboard image (raw RGBA) to a temp PNG for image paste (#220) — claude
 # attaches the file when its path is pasted. Pure-Rust, no system deps.
 png = "0.18.1"

@@ -85,6 +85,13 @@ pub struct PersistedSession {
     /// older records (without the field) still deserialize and keep participating.
     #[serde(default)]
     pub auto_continue_disabled: bool,
+    /// Per-agent "watch" opt-in (#336): when `true`, the frontend pops a native OS
+    /// notification each time this agent finishes a turn / needs input (its busy→idle
+    /// edge). Opt-in per agent; a global `watchAllAgents` setting can force it on for
+    /// all agents while this per-agent flag is retained. Defaults `false` so older
+    /// records (without the field) still deserialize and stay unwatched.
+    #[serde(default)]
+    pub watch: bool,
 }
 
 /// A user-added Overview panel (a non-agent column), persisted per repo (#38).
@@ -444,6 +451,28 @@ impl Store {
         let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
             Some(session) if session.auto_continue_disabled != disabled => {
                 session.auto_continue_disabled = disabled;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.persist(&guard)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Set a session's per-agent "watch" flag (#336) and persist **only on change**.
+    /// When `watch == true` the frontend fires a native notification on this agent's
+    /// busy→idle edge. A no-op for an unknown id.
+    pub fn set_session_watch(&self, id: &str, watch: bool) -> io::Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
+            Some(session) if session.watch != watch => {
+                session.watch = watch;
                 true
             }
             _ => false,
@@ -863,6 +892,7 @@ mod tests {
             forked_from: None,
             forkable: true,
             auto_continue_disabled: false,
+            watch: false,
         }
     }
 
@@ -1439,6 +1469,31 @@ mod tests {
                 .unwrap()
                 .auto_continue_disabled
         );
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&legacy_path);
+    }
+
+    #[test]
+    fn set_session_watch_updates_and_persists_on_change() {
+        let path = temp_path("watch");
+        let store = Store::load(&path);
+        store.add_session(record("s1", "/repo/x")).unwrap();
+        // The fixture defaults false (unwatched); turn watch on and confirm the flag
+        // survives a reload (#336).
+        store.set_session_watch("s1", true).unwrap();
+        assert!(store.session("s1").unwrap().watch);
+        assert!(Store::load(&path).session("s1").unwrap().watch);
+        // Back off, and an unknown id is a no-op (no panic).
+        store.set_session_watch("s1", false).unwrap();
+        assert!(!store.session("s1").unwrap().watch);
+        store.set_session_watch("missing", true).unwrap();
+
+        // A legacy record without the field loads as unwatched (watch = false).
+        let legacy = r#"{"sessions":[{"id":"old","claude_session_id":"old","repo_path":"/r","name":null,"created_at":0}]}"#;
+        let legacy_path = temp_path("watch-legacy");
+        fs::write(&legacy_path, legacy).unwrap();
+        assert!(!Store::load(&legacy_path).session("old").unwrap().watch);
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&legacy_path);
