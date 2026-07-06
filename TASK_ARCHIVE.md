@@ -2747,3 +2747,69 @@ independent of the concurrent Task 343 light-mode work — reuses existing token
   `pointer-events` render identically on WKWebView (macOS) and WebView2/Chromium (Windows). Presentational
   and reversible (revert the two files to restore the side-by-side slots). Checks green: `npm run build` /
   `npm run lint` / `npm run format:check` / `npm test`.
+
+### 343. [x] Fix and polish Light-mode theming (readable text, light surfaces, darker accent, light busy sheen; Dark unchanged)
+
+The Light theme (Catppuccin Latte, #333) was largely unusable — dark-on-dark text, black content
+surfaces (Kanban board, rendered markdown, code/diff views, Canvas panels), a too-bright accent, and a
+busy dot whose sweep flashed a **dark ("black") band**. This task made Light actually usable while leaving
+the **Dark theme byte-for-byte unchanged**. The whole fix is token-first: the four root causes were
+(a) 9 non-terminal surfaces reused the intentionally-dark `--terminal-bg`, (b) the busy sheen swept
+`--text-primary` (which is *dark* in Latte), (c) low-contrast Latte `--text-muted`/`--text-secondary`, and
+(d) a too-bright default accent. Fixed by two new **theme-flip alias tokens** whose base value equals the
+token they replace (so Dark is provably identical), Latte-block value edits, and **one** Light-only
+per-component override for the Overview inter-agent separator.
+
+**What shipped** (commit [`843652f`](https://github.com/ErikdeJager/ReCue/commit/843652f), PR
+[#97](https://github.com/ErikdeJager/ReCue/pull/97), branch `fix-light-mode-theming`, 2026-07-06;
+6 files, +42/−18):
+
+- **`src/styles/tokens.css`:** added two alias tokens to the base `:root` (Dark) block —
+  `--content-bg: var(--terminal-bg)` (== #11111b in Dark) and `--busy-sheen: var(--text-primary)`
+  (== #cdd6f4 in Dark) — **no existing base value touched**. In the Latte `:root[data-theme="light"]`
+  block: flipped `--content-bg: #dce0e8` (light sunken well, ~4.6:1 for #5c5f77 text) and
+  `--busy-sheen: #eff1f5` (near-white glint); darkened text `--text-secondary #6c6f85→#5c5f77` (~5:1) and
+  `--text-muted #8c8fa1→#6c6f85` (~4:1, keeping the primary>secondary>muted hierarchy); and darkened the
+  **default** accent `--accent #fe640b→#e05a0a`, `--accent-hover #ff7a30→#f56b17`, `--accent-dim` alpha
+  updated (`--accent-fg` kept `#ffffff`).
+- **Swapped 9 non-terminal surfaces `--terminal-bg → --content-bg`** (each resolves to the same dark
+  color, so Dark is identical): `FileViewer.module.css` `.message`/`.raw`/`.editor`/`.markdown`/
+  `.codeGutterWrap`/`.diffGutter`, `Canvas.module.css` `.panel`, `Overview.module.css` `.placeholder`,
+  `KanbanPanel.module.css` `.rawEditor`. The **real terminal** (`Terminal.module.css .wrapper`) keeps
+  `--terminal-bg` and stays dark.
+- **`BusyIndicator.module.css`:** the `.busy::after` sheen `color-mix` input `--text-primary → --busy-sheen`
+  (no new `color-mix` introduced), so the glint stays light in Latte.
+- **`Overview.module.css`:** the one per-component override —
+  `:global([data-theme="light"]) .card { border-right-color: #acb0be }` + `.cardGroupStart`
+  `border-left-color` (Latte Surface2) — giving adjacent agent columns an opaque light-slate separator
+  (a translucent hairline vanishes against abutting dark terminal bodies).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 343):
+
+- **"Kanban background is black" → the Canvas panel backdrop / Raw editor**, not the board itself (the
+  Board view has no bg of its own; Overview-mounted boards already inherit a light bg). Fixed via
+  `.panel` + `.rawEditor` `--content-bg`.
+- **"Borders between agents are black" → dark panel boxes**, primarily fixed by the `--content-bg` flip;
+  the light-slate Overview separator is the only additional per-component override.
+- **Clean-CSS convention:** token-layer first; the two new tokens are **aliases** (base == replaced token
+  → Dark unchanged); the sole per-component override is `:global([data-theme="light"]) .localClass`,
+  mirroring the existing `:global(body.reduce-motion)` pattern.
+- **Contrast targets:** muted deliberately lands ~4:1 (not full 4.5:1) to preserve the
+  primary>secondary>muted hierarchy; `--text-primary` unchanged (~6:1).
+- **"Slightly darker" accent quantified** as ~11% darker peach; flagged as tunable. **Custom accent still
+  wins** — it writes `--accent`/`-hover`/`-dim`/`-fg` **inline on `<html>`** (higher specificity than
+  `:root[data-theme="light"]`), so editing the Latte default accent doesn't override it.
+- **Dark-unchanged guarantee** enforced via the `git diff tokens.css` audit (base block gains only two
+  alias lines; every component swap resolves to the same dark color; the terminal + xterm theme +
+  `--terminal-*` Latte non-override untouched). No unit-test changes (`accentCompanions` untouched).
+
+**Dependencies:** none. (Concurrent with Task 344, which deliberately reused existing tokens to avoid
+colliding with this light-mode work.)
+
+**Notes**
+
+- **Cross-platform:** all edits are plain hex/`var()` values or a swap of an **already-shipping**
+  `color-mix` input — **no new `color-mix()`** and no `-webkit`-only effect, so no new plain-color
+  fallback is needed and rendering is identical on WKWebView (macOS) and WebView2/Chromium (Windows).
+  CSS-token work only — no TS/Rust, fully idempotent and reversible. Checks green: `npm run build` /
+  `npm run lint` / `npm run format:check` / `npm test`.
