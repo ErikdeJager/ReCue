@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { X } from "lucide-react";
 
 import { useStore } from "../../store";
+import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
 import { itemStillPresent } from "../Canvas/canvasDrop";
 import ItemContent from "../ItemContent/ItemContent";
 import { itemTitle } from "../ItemContent/itemTitle";
@@ -72,6 +73,13 @@ function BigModeModal() {
 
   if (!maximizedItem) return null;
   const title = itemTitle(maximizedItem, sessions, branches, autoNameOn);
+  // The maximized item's live session (agent items only) — powers the shared
+  // "…" menu (#340: Fork / Copy resume / Watch), an additive extension so big mode
+  // offers the same secondary actions as the Overview / Canvas headers.
+  const session =
+    maximizedItem.kind === "agent"
+      ? sessions.find((s) => s.id === maximizedItem.sessionId)
+      : undefined;
 
   return (
     // mousedown (not click) on the scrim closes — a click that starts inside the
@@ -88,6 +96,14 @@ function BigModeModal() {
           <span className={styles.title} title={title}>
             {title}
           </span>
+          {session && (
+            <AgentHeaderMenu
+              session={session}
+              className={styles.close}
+              iconSize={16}
+              align="right"
+            />
+          )}
           <button
             type="button"
             className={styles.close}

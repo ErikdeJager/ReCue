@@ -40,6 +40,11 @@
 
 .title {
   overflow: hidden;
+  /* Grow so the right-side actions (#340 "…" menu + close) sit together on the
+     right rather than the menu floating in the center (was space-between with a
+     single close button); min-width:0 keeps the ellipsis working when it grows. */
+  flex: 1;
+  min-width: 0;
   color: var(--text-primary);
   font-size: var(--fs-meta-sm);
   font-weight: 500;

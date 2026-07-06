@@ -1,0 +1,75 @@
+/* Shared agent header "…" menu chrome (#340). The root anchors the popover; the
+   popover + items mirror the add-view popover (ViewsPopover / ViewsMenu) so every
+   agent-header dropdown looks identical. On-system tokens only. */
+.root {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.popover {
+  position: absolute;
+  top: calc(100% + var(--space-4));
+  z-index: 50;
+  min-width: 180px;
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+/* Anchor under the trigger's left or right edge so it stays on-screen. */
+.alignLeft {
+  left: 0;
+}
+
+.alignRight {
+  right: 0;
+}
+
+/* Menu item rows — icon + label, mirroring ViewsMenu's `.item`. */
+.item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-6) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.item:hover {
+  background: var(--bg-hover);
+}
+
+/* A gated (unavailable) item — dimmed + non-actionable, but still hoverable so its
+   reason tooltip shows (aria-disabled, not the native `disabled` attribute). */
+.item[aria-disabled="true"] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.item[aria-disabled="true"]:hover {
+  background: transparent;
+}
+
+.icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+/* Separates Fork / Copy-resume from the Watch toggle. */
+.sep {
+  height: 1px;
+  margin: var(--space-4) var(--space-8);
+  background: var(--border-hairline);
+}

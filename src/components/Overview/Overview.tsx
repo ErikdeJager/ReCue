@@ -7,8 +7,6 @@ import {
 } from "react";
 import {
   Clock,
-  Copy,
-  GitFork,
   GripVertical,
   Maximize2,
   Play,
@@ -33,7 +31,6 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
-import { agentSupportsResume } from "../../agents";
 import { noAutoCapitalize } from "../../inputProps";
 import {
   overviewClusters,
@@ -43,7 +40,6 @@ import {
 } from "../../store";
 import {
   effectiveRepo,
-  forkUnavailableReason,
   repoName,
   sessionInFilter,
   sessionLabel,
@@ -66,7 +62,7 @@ import FileSwitcher from "../FileSwitcher/FileSwitcher";
 // big-mode placeholder — one source of truth shared with Canvas + the modal.
 import ItemContent from "../ItemContent/ItemContent";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
-import WatchButton from "../WatchButton/WatchButton";
+import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
 import styles from "./Overview.module.css";
 
 /**
@@ -164,8 +160,6 @@ interface SessionCardProps {
   /** The session has been active at least once (#112) → yellow when idle. */
   hasBeenActive: boolean;
   onSelect: () => void;
-  onCopyResume: () => void;
-  onFork: () => void;
   onRemove: () => void;
 }
 
@@ -178,8 +172,6 @@ function SessionCard({
   busy,
   hasBeenActive,
   onSelect,
-  onCopyResume,
-  onFork,
   onRemove,
 }: SessionCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
@@ -280,13 +272,6 @@ function SessionCard({
       </span>
     </>
   );
-  // Fork is unavailable when the agent can't fork at all (Codex, #142) or the source
-  // has no real conversation turn yet (#138, fail-open: only a confident reason
-  // disables it). The reason — Codex takes precedence — is the hover tooltip.
-  const forkReason = forkUnavailableReason(session);
-  const canFork = forkReason === null;
-  // Copy-resume (#28) only applies to agents that resume by id (#142).
-  const canResume = agentSupportsResume(session.agent);
   const actions = (
     <>
       {/* "Open view or start a session" in the agent's folder (#165/#213) — now for
@@ -298,36 +283,14 @@ function SessionCard({
         className={styles.action}
         iconSize={15}
       />
-      {/* Fork the conversation into a new parallel session (#126); gated (#138/#142). */}
-      <button
-        type="button"
+      {/* Secondary actions — Fork (#126) / Copy resume (#28) / Watch (#336) — folded
+          into one "…" dropdown (#340) so the header stays uncluttered; all gating
+          (#138/#142 fork, #142 resume) lives inside the shared menu. */}
+      <AgentHeaderMenu
+        session={session}
         className={styles.action}
-        onClick={() => {
-          if (canFork) onFork();
-        }}
-        aria-disabled={!canFork}
-        title={
-          canFork ? "Fork conversation into a new parallel session" : forkReason
-        }
-        aria-label="Fork conversation"
-      >
-        <GitFork size={15} strokeWidth={1.5} />
-      </button>
-      {/* Per-agent "watch" toggle (#336) — notify on this agent's busy→idle edge. */}
-      <WatchButton session={session} className={styles.action} iconSize={15} />
-      {/* Copy `claude --resume <id>` (#28) — re-homed here post-Focus (#86);
-          hidden for non-resumable agents (Codex, #142). */}
-      {canResume && (
-        <button
-          type="button"
-          className={styles.action}
-          onClick={onCopyResume}
-          title="Copy resume command (claude --resume <id>)"
-          aria-label="Copy resume command"
-        >
-          <Copy size={15} strokeWidth={1.5} />
-        </button>
-      )}
+        iconSize={15}
+      />
       {/* Maximize into big mode (#157). */}
       <button
         type="button"
@@ -736,9 +699,7 @@ function Overview() {
   const branches = useStore((s) => s.branches);
   const selectedId = useStore((s) => s.selectedId);
   const select = useStore((s) => s.select);
-  const copyToClipboard = useStore((s) => s.copyToClipboard);
   const removeSession = useStore((s) => s.removeSession);
-  const forkSession = useStore((s) => s.forkSession);
   const openNewSession = useStore((s) => s.openNewSession);
   const filter = useStore((s) => s.overviewRepoFilter);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
@@ -951,13 +912,6 @@ function Overview() {
                         busy={sessionBusy[session.id] ?? false}
                         hasBeenActive={sessionActive[session.id] ?? false}
                         onSelect={() => select(session.id)}
-                        onCopyResume={() =>
-                          void copyToClipboard(
-                            `claude --resume ${session.id}`,
-                            "resume command",
-                          )
-                        }
-                        onFork={() => void forkSession(session.id)}
                         onRemove={() => void removeSession(session.id)}
                       />
                     );

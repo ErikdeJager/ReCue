@@ -1,13 +1,6 @@
 import { type ReactElement, useEffect, useRef, useState } from "react";
 import { DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
-import {
-  Copy,
-  ExternalLink,
-  GitFork,
-  GripVertical,
-  Maximize2,
-  X,
-} from "lucide-react";
+import { ExternalLink, GripVertical, Maximize2, X } from "lucide-react";
 import {
   Group,
   type GroupImperativeHandle,
@@ -16,14 +9,8 @@ import {
   Separator,
 } from "react-resizable-panels";
 
-import { agentSupportsResume } from "../../agents";
 import { noAutoCapitalize } from "../../inputProps";
-import {
-  effectiveRepo,
-  forkUnavailableReason,
-  repoName,
-  sessionLabel,
-} from "../../paths";
+import { effectiveRepo, repoName, sessionLabel } from "../../paths";
 import { kbdHint } from "../../platform";
 import { repoColor, useStore } from "../../store";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
@@ -33,8 +20,8 @@ import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import ItemContent from "../ItemContent/ItemContent";
 import { itemTitle, panelTitle } from "../ItemContent/itemTitle";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
+import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
 import { focusTerminal } from "../Terminal/terminalPool";
-import WatchButton from "../WatchButton/WatchButton";
 import {
   collectLeaves,
   collectSplits,
@@ -88,8 +75,6 @@ function LeafPanel({
   const repoColors = useStore((s) => s.repoColors);
   const activeLeafId = useStore((s) => s.activeLeafId);
   const setActiveLeaf = useStore((s) => s.setActiveLeaf);
-  const copyToClipboard = useStore((s) => s.copyToClipboard);
-  const forkSession = useStore((s) => s.forkSession);
   const setLeafFile = useStore((s) => s.setLeafFile);
   const setLeafFileAbsolute = useStore((s) => s.setLeafFileAbsolute);
   const maximizeItem = useStore((s) => s.maximizeItem);
@@ -300,6 +285,16 @@ function LeafPanel({
           {content.kind === "agent" && session && (
             <OpenViewButton repoPath={repoPath} className={styles.panelClose} />
           )}
+          {/* Secondary agent actions — Fork (#126) / Copy resume (#28) / Watch (#336)
+              — folded into one shared "…" dropdown (#340); all gating (#138/#142 fork,
+              #142 resume) lives inside the menu. */}
+          {content.kind === "agent" && session && (
+            <AgentHeaderMenu
+              session={session}
+              className={styles.panelClose}
+              iconSize={14}
+            />
+          )}
           {/* "Open view or start a session" in a non-agent panel's folder (#177)
               — file / diff / kanban / filetree / terminal, matching where agents
               have it. Scheduled / pending panels are excluded. */}
@@ -313,56 +308,6 @@ function LeafPanel({
                 repoPath={repoPath}
                 className={styles.panelClose}
               />
-            )}
-          {/* Fork the conversation into a new parallel session (#126) — agents only.
-              Gated (#138/#142): unavailable until the source has a real turn to fork,
-              or when the agent can't fork at all (Codex). */}
-          {content.kind === "agent" && session && (
-            <button
-              type="button"
-              className={styles.panelClose}
-              onClick={() => {
-                if (forkUnavailableReason(session) === null)
-                  void forkSession(session.id);
-              }}
-              aria-disabled={forkUnavailableReason(session) !== null}
-              title={
-                forkUnavailableReason(session) ??
-                "Fork conversation into a new parallel session"
-              }
-              aria-label="Fork conversation"
-            >
-              <GitFork size={14} strokeWidth={1.5} />
-            </button>
-          )}
-          {/* Per-agent "watch" toggle (#336) — agents only; notify on busy→idle. */}
-          {content.kind === "agent" && session && (
-            <WatchButton
-              session={session}
-              className={styles.panelClose}
-              iconSize={14}
-            />
-          )}
-          {/* Copy `claude --resume <id>` (#28) — agents only, re-homed here
-              post-Focus (#86). Hidden for non-agent panels and for non-resumable
-              agents (Codex, #142), which have no `claude --resume` to copy. */}
-          {content.kind === "agent" &&
-            session &&
-            agentSupportsResume(session.agent) && (
-              <button
-                type="button"
-                className={styles.panelClose}
-                onClick={() =>
-                  void copyToClipboard(
-                    `claude --resume ${session.id}`,
-                    "resume command",
-                  )
-                }
-                title="Copy resume command (claude --resume <id>)"
-                aria-label="Copy resume command"
-              >
-                <Copy size={14} strokeWidth={1.5} />
-              </button>
             )}
           {/* Maximize into big mode (#157) — every item except a pending template
               panel (no stable content to maximize yet). */}
