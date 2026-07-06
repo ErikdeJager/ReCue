@@ -2275,3 +2275,79 @@ selected / `cwd && templateId`), so a disabled primary stays inert.
 - **Cross-platform:** Enter is the same key on macOS and Windows and no modifier is involved, so nothing
   OS-specific is needed; the plain-Enter guard keeps it clear of any future ⌘/Ctrl chord. Escape-to-close
   (#332) is preserved.
+
+### 338. [x] Branch ahead/behind indicator (↑/↓ vs upstream) in the sidebar
+
+Each git folder shown in the sidebar now displays a compact **`↑N ↓M`** indicator next to its
+**current-branch label** — on the repo's own branch line (`RepoBranchLine`) and on each worktree
+sub-group header (`WorktreeHeader`) — so a user sees at a glance how far their checked-out branch has
+diverged from its upstream remote-tracking branch, without opening a terminal. `↑N` = local commits not
+yet on the upstream (green `--status-done`); `↓M` = upstream commits not yet local (yellow
+`--status-awaiting`); each side shows **only when its count > 0**, and an in-sync branch (`0/0`), a
+branch with **no upstream**, or a non-git folder renders **nothing**. Counts are read **purely locally**
+against the already-fetched remote-tracking ref — no network on any refresh tick — so they're "as of the
+last `git fetch`". End-to-end this mirrors the #335 diff-line-count badge.
+
+**What shipped** (commit [`6baa3e1`](https://github.com/ErikdeJager/ReCue/commit/6baa3e1), PR
+[#90](https://github.com/ErikdeJager/ReCue/pull/90), branch `task-338-branch-ahead-behind`, 2026-07-06;
+10 files, +317/−4):
+
+- **`src-tauri/src/git.rs`:** an `AheadBehind { ahead, behind }` struct (`Serialize`, `Copy`, `Default`);
+  a **pure, unit-tested** `parse_ahead_behind(&str) -> Option<AheadBehind>` (parses a single
+  `<ahead>\t<behind>` line, tolerant of tab or space separators; malformed/empty → `None`); a fail-open
+  `ahead_behind(cwd)` running `git rev-list --left-right --count HEAD...@{upstream}` (left = ahead, right =
+  behind) — `@{upstream}` exits non-zero without an upstream, so `run_git` → `None` automatically — and a
+  batch `ahead_behind_many(paths)` that **omits** no-upstream/non-git folders from the map (mirroring
+  `github_web_urls`). Every git call routes through `hidden_command` (the Windows console-flash guard).
+  Unit tests cover `"2\t1"`/`"0\t0"`/`"3 5"`(space)/`""`/`"garbage"`.
+- **`src-tauri/src/commands.rs` + `lib.rs`:** an `async fn branch_ahead_behind(paths) ->
+  HashMap<String, git::AheadBehind>` batch command running the git reads on `spawn_blocking` (#330 — off
+  the webview thread, one IPC round-trip), registered in `generate_handler!`.
+- **`src/types/index.ts` + `src/ipc.ts`:** an `AheadBehind` type and a `branchAheadBehind(paths)` IPC
+  wrapper.
+- **`src/store.ts`:** a `branchAheadBehind: Record<string, AheadBehind>` map (keyed by repo/worktree
+  folder path), a `refreshBranchAheadBehind` action (full-replace so a folder that lost its upstream drops
+  out, guarded by a referential-stability `aheadBehindMapsEqual`, fail-open on IPC error), and wiring
+  **alongside every `refreshBranches()`** — the debounced busy→idle edge (`scheduleBranchRefresh`), the
+  spawn/checkout/branch-create actions, and after `fetchFolder`/`pullFolder` (a pull also re-reads the
+  branch label so ahead→0 stays honest).
+- **`src/components/Sidebar/branchStatus.ts` (+ `.test.ts`):** a pure `aheadBehindBadge(counts)` returning
+  `null` for undefined / in-sync `{0,0}`, else the counts — Vitest covers undefined / `{0,0}` / ahead-only
+  / behind-only / both.
+- **`src/components/Sidebar/Sidebar.tsx` + `.module.css`:** the `↑N ↓M` indicator rendered after the
+  branch name in `RepoBranchLine` (keyed by repo) and in `WorktreeHeader` (keyed by the worktree path,
+  `!compact`-gated like the `worktree` badge); a `.aheadBehind` slot (`flex-shrink:0`, muted mono, tabular
+  figures) with `.ahead`/`.behind` token colors, so a long branch name ellipsizes first; plus
+  `refreshBranchAheadBehind` wired into the sidebar's `reposKey` and focus/visibility refresh effects.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 338):
+
+- **Scope = the current/checked-out branch of each sidebar folder** (repo branch line + worktree header);
+  the branch *picker* lists are **not** annotated, and a worktree with only a pending schedule (absent
+  from the `branches` map) gets no badge.
+- **No network fetch / staleness is deliberate:** reads only the already-fetched remote-tracking ref;
+  never triggers `git fetch` on a refresh tick (a network call on every idle edge could hang/rate-limit a
+  private remote in a GUI-launched process). `↓N` appears only after an app Fetch/Pull or an in-terminal
+  fetch observes remote commits — counts are "as of the last fetch".
+- **No Settings toggle** — ships always-on: a cheap purely-local read with no privacy surface (unlike
+  #335's per-file diff read, which is gated). A reviewer could add a toggle later.
+- **Map absence = "no indicator":** the batch command omits no-upstream/non-git folders; a present `{0,0}`
+  is also hidden by the pure badge helper.
+- **Format:** `↑`(U+2191)/`↓`(U+2193), each side only when >0; ahead green (`--status-done`), behind
+  yellow (`--status-awaiting`), muted mono — on-system tokens only.
+
+**Key files/areas touched:** `src-tauri/src/git.rs`, `commands.rs`, `lib.rs`; `src/types/index.ts`,
+`src/ipc.ts`, `src/store.ts`; `src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css` + new
+`branchStatus.ts`/`branchStatus.test.ts`. 10 files.
+
+**Dependencies:** none (self-contained; reuses `run_git`/`hidden_command`, the branch-refresh cadence, and
+`--status-*` tokens; end-to-end mirrors the #335 diff-line-count badge).
+
+**Notes**
+
+- **Cross-platform:** the only OS-sensitive primitive is the `git` shell-out, which routes through
+  `hidden_command` (no console flash on Windows, no-op on macOS); rendering uses on-system CSS tokens +
+  standard `↑`/`↓` glyphs, identical on macOS (WKWebView) and Windows (WebView2). Fail-open everywhere (no
+  upstream / detached HEAD / non-git / any git error → no map entry, no badge, no toast) and idempotent
+  (the store skips a no-op update via `aheadBehindMapsEqual`). Checks green: `cargo test` / `npm run
+  lint:rust` / `npm run build` / `npm run lint` / `npm test`.
