@@ -2487,3 +2487,27 @@ a GitHub remote. Autonomous decisions (assume-mode — subagents can't ask):
   `spawn_session` sets `worktree_parent`/`touch_recent` parent + Rust test), `src/store.ts`
   (`spawnSession`/`createBranchSession` optimistic recents use `record.worktree_parent ?? cwd`),
   `src/store.test.ts` and optionally `src/paths.test.ts` (grouping tests).
+
+## Task 332 — Esc-to-cancel in session modals must not exit macOS fullscreen
+
+- **Which modals count as "session modals":** scoped to the create/schedule/manage-session
+  family — `NewSessionModal` (New/Schedule/Recurring), `TemplateUseModal` (new tab from template →
+  spawns agents), `CloneRepoModal`, `CanvasCloseModal`, `CreatePanelModal`, `OnboardingModal`.
+  Excluded the `Settings` modal (not session-specific) and sidebar context-menus/rename inputs
+  (popovers, not modals).
+- **Actual code changes are only two files.** An audit found that 5 of the 7 Esc-cancel modals
+  already call `event.preventDefault()`. Only `NewSessionModal` (`window` Esc listener) and
+  `TemplateUseModal` (`window` Esc listener) omit it — those are the real fix. The rest are
+  confirmed-compliant, no edits.
+- **Universal `preventDefault()`, no platform gate / no fullscreen detection.** Applied
+  unconditionally rather than only-when-macOS-fullscreen, because `preventDefault()` on Esc is
+  harmless on Windows and when not fullscreen, and it's more robust than detecting fullscreen
+  state. Matches CLAUDE.md's "macOS behavior fixed, Windows unaffected" seam.
+- **No shared hook / refactor.** Kept the minimal per-modal one-line change rather than extracting
+  a `useModalEscape` hook, since most modals already comply — the smallest correct change wins.
+- **Verification is build/lint/test + a manual macOS-fullscreen smoke check.** The native
+  fullscreen-exit path is WKWebView-only and can't be exercised in jsdom/CI, so it's flagged for
+  interactive verification per the repo's GUI-path convention.
+- **Areas touched:** `src/components/NewSessionModal/NewSessionModal.tsx` and
+  `src/components/TemplateUseModal/TemplateUseModal.tsx` — add `event.preventDefault()` to each
+  modal's window-level Esc keydown listener. Frontend-only; no Rust.
