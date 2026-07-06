@@ -81,6 +81,16 @@
   border-left: 1px solid var(--border-strong);
 }
 
+/* Light mode only (#343): adjacent agent cards' dark terminal bodies make a
+   translucent hairline vanish against them, so the inter-column separators need an
+   opaque light-slate color in Latte. Dark is untouched (still the token hairlines). */
+:global([data-theme="light"]) .card {
+  border-right-color: #acb0be; /* Latte Surface2 */
+}
+:global([data-theme="light"]) .cardGroupStart {
+  border-left-color: #acb0be; /* Latte Surface2 */
+}
+
 /* Selected agent (#50): a thin frame in the repo's own color (#35) drawn over the
    card (no layout shift, not clipped, click-through) plus a quiet header tint —
    echoes the sidebar's selected row, now matching the repo badge. The frame
@@ -294,7 +304,7 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-16);
-  background: var(--terminal-bg);
+  background: var(--content-bg);
   color: var(--text-muted);
   font-size: var(--fs-meta);
   text-align: center;

@@ -124,7 +124,7 @@
   min-height: 0;
   align-items: center;
   justify-content: center;
-  background: var(--terminal-bg);
+  background: var(--content-bg);
   color: var(--text-muted);
   font-size: var(--fs-meta);
 }
@@ -142,7 +142,7 @@
      and avoids a layout jump when the scrollbar appears. Covers code mode too —
      CodeBlock rides on .raw. */
   scrollbar-gutter: stable;
-  background: var(--terminal-bg);
+  background: var(--content-bg);
   color: var(--text-secondary);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
@@ -164,7 +164,7 @@
   resize: none;
   overflow: auto;
   scrollbar-gutter: stable;
-  background: var(--terminal-bg);
+  background: var(--content-bg);
   color: var(--text-primary);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
@@ -262,7 +262,7 @@
      edge and avoids a layout shift when it appears. */
   scrollbar-gutter: stable;
   padding: var(--space-16);
-  background: var(--terminal-bg);
+  background: var(--content-bg);
   color: var(--text-secondary);
   font-size: var(--fs-meta);
   line-height: 1.6;
@@ -511,7 +511,7 @@
   /* Reserve the vertical scrollbar's track (matches `.raw`, #64) so it never overlaps
      the content nor jumps the layout when it appears. */
   scrollbar-gutter: stable;
-  background: var(--terminal-bg);
+  background: var(--content-bg);
 }
 
 /* The gutter column. `position: sticky; left: 0` pins it to the scrollport's left edge
@@ -525,7 +525,7 @@
   z-index: 1;
   flex-shrink: 0;
   padding: var(--space-12) 0;
-  background: var(--terminal-bg);
+  background: var(--content-bg);
   font-size: var(--fs-meta-sm);
   line-height: 1.5;
   user-select: none;

@@ -249,7 +249,7 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border-hairline);
-  background: var(--terminal-bg);
+  background: var(--content-bg);
 }
 
 /* The keyboard-focused panel (#76): a subtle accent frame so it's clear which
