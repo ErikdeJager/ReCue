@@ -7,7 +7,10 @@ name: CI
 #   frontend  — ESLint + Prettier + type-check/build + Vitest with a ≥75% line-coverage
 #               gate over the pure-logic surface (UI/components/hooks/store-IPC-wiring are
 #               excluded — see vitest.config.ts; "front end needs only logic tests")
-#   backend   — rustfmt + Clippy (-D warnings) + tests via cargo-llvm-cov with a ≥75% gate
+#   backend   — rustfmt + Clippy (-D warnings) + tests via cargo-llvm-cov with a ≥75% line
+#               gate over the logic surface (the Tauri command/wiring boundary —
+#               commands.rs/lib.rs/main.rs — is excluded, mirroring the frontend's
+#               store.ts/ipc.ts exclusion)
 #
 # There are no automated end-to-end tests yet (the app's e2e/GUI smoke is manual — see
 # TRAJECTORY_TO_WINDOWS.md / TRAJECTORY_TO_LINUX.md); when an e2e suite is added, wire it in
@@ -101,7 +104,11 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      # Runs the full Rust test suite AND enforces the coverage gate: cargo-llvm-cov exits
-      # non-zero if any test fails OR line coverage is below 75%.
-      - name: Tests + coverage gate (lines ≥ 75%)
-        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --fail-under-lines 75
+      # Runs the full Rust test suite AND enforces the coverage gate over the pure-logic
+      # surface: cargo-llvm-cov exits non-zero if any test fails OR logic line coverage is
+      # below 75%. The Tauri IPC/wiring boundary is excluded (mirroring the frontend's
+      # store.ts/ipc.ts exclusion): commands.rs (the #[tauri::command] surface), lib.rs (app
+      # builder + event forwarding + poll loops), main.rs (entry point) — integration code
+      # exercised by the running app, not unit tests. Logic line coverage is ~87%.
+      - name: Tests + coverage gate (logic lines ≥ 75%)
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --ignore-filename-regex '(commands|lib|main)\.rs$' --fail-under-lines 75
