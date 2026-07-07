@@ -1,17 +1,18 @@
 name: CI
 
 # Pull-request gate for `main` (#345 follow-up). Runs on every PR targeting main and
-# must pass before code lands, so only linted, formatted, tested, coverage-gated, and
-# cross-platform-building code reaches main:
+# must pass before code lands, so only linted, formatted, tested, and coverage-gated code
+# reaches main:
 #
-#   frontend  — ESLint + Prettier + type-check/build + Vitest with a ≥75% line-coverage gate
+#   frontend  — ESLint + Prettier + type-check/build + Vitest with a ≥75% line-coverage
+#               gate over the pure-logic surface (UI/components/hooks/store-IPC-wiring are
+#               excluded — see vitest.config.ts; "front end needs only logic tests")
 #   backend   — rustfmt + Clippy (-D warnings) + tests via cargo-llvm-cov with a ≥75% gate
-#   build     — `tauri build --no-bundle` on macOS + Windows + Linux (compiles + links the
-#               whole app on every OS; no installer packaging or signing)
 #
 # There are no automated end-to-end tests yet (the app's e2e/GUI smoke is manual — see
 # TRAJECTORY_TO_WINDOWS.md / TRAJECTORY_TO_LINUX.md); when an e2e suite is added, wire it in
-# as a job here. The heavy release build + signing lives in release.yml (push to main only).
+# as a job here. Cross-platform BUILDS (macOS/Windows/Linux) are covered by release.yml on
+# push to main — a `tauri build` per-OS on every PR is too expensive to run as a gate.
 #
 # NOTE: making these checks *required* to merge is a branch-protection setting on `main`
 # (repo Settings ▸ Branches, or `gh api`), not something a workflow file can enforce itself.
@@ -54,11 +55,11 @@ jobs:
         run: npm run build
 
       # Runs the full Vitest suite AND enforces the coverage gate in one step: vitest exits
-      # non-zero if any test fails OR line coverage is below 75% (the v8 provider is a dev
-      # dependency, driven here via CLI so the local `test`/`test:coverage` scripts are
-      # unchanged).
-      - name: Unit tests + coverage gate (lines ≥ 75%)
-        run: npx vitest run --coverage --coverage.thresholds.lines=75
+      # non-zero if any test fails OR logic-surface line coverage is below 75%. The scope
+      # (logic only, UI excluded) and the 75% threshold both live in vitest.config.ts, so
+      # this is identical to what a developer runs locally.
+      - name: Unit tests + coverage gate (logic lines ≥ 75%)
+        run: npm run test:coverage
 
   backend:
     name: Backend — rustfmt, clippy, test (≥75% coverage)
@@ -104,50 +105,3 @@ jobs:
       # non-zero if any test fails OR line coverage is below 75%.
       - name: Tests + coverage gate (lines ≥ 75%)
         run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --fail-under-lines 75
-
-  build:
-    name: Build — ${{ matrix.platform }}
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [macos-latest, windows-latest, ubuntu-22.04]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Install Linux build dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            build-essential \
-            curl wget file \
-            libssl-dev \
-            patchelf
-
-      # Compile + link the whole app (frontend build runs via tauri's beforeBuildCommand)
-      # on this OS. `--no-bundle` skips installer packaging + updater signing, so no secrets
-      # are needed and fork PRs build too — it still proves the app builds on every platform.
-      - name: Build (compile + link, no bundle)
-        run: npx tauri build --no-bundle
