@@ -647,11 +647,17 @@ impl Store {
     }
 
     /// Whether the one-time post-update macOS permission re-prompt has run (#321).
+    /// Called only from the `#[cfg(target_os = "macos")]` boot path, so allow the
+    /// dead-code lint off-macOS (Windows/Linux) — the persisted field exists on every
+    /// OS, so the method stays compiled + type-checked everywhere.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn perm_reprompt_done(&self) -> bool {
         self.with(|state| state.perm_reprompt_done)
     }
 
     /// Mark the one-time macOS permission re-prompt done (#321; persist-on-change).
+    /// macOS-only caller — see [`Self::perm_reprompt_done`] for the off-macOS lint gate.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn set_perm_reprompt_done(&self) -> io::Result<()> {
         self.update(|state| state.perm_reprompt_done = true)
     }
