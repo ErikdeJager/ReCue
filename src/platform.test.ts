@@ -1,23 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import { isWindows, joinPath, kbdHint, revealLabel } from "./platform";
+import { isLinux, isWindows, joinPath, kbdHint, revealLabel } from "./platform";
 
-describe("platform display helpers (#143)", () => {
+describe("platform display helpers (#143/#345)", () => {
   it("detects Windows only", () => {
     expect(isWindows("windows")).toBe(true);
     expect(isWindows("macos")).toBe(false);
+    expect(isWindows("linux")).toBe(false);
     // "" (before the boot read resolves) is treated as non-Windows → macOS labels.
     expect(isWindows("")).toBe(false);
   });
 
-  it("revealLabel switches Finder ↔ Explorer", () => {
+  it("detects Linux only (#345)", () => {
+    expect(isLinux("linux")).toBe(true);
+    expect(isLinux("macos")).toBe(false);
+    expect(isLinux("windows")).toBe(false);
+    expect(isLinux("")).toBe(false);
+  });
+
+  it("revealLabel switches Finder ↔ Explorer ↔ File Manager", () => {
     expect(revealLabel("windows")).toBe("Reveal in Explorer");
     expect(revealLabel("macos")).toBe("Reveal in Finder");
+    expect(revealLabel("linux")).toBe("Reveal in File Manager");
     expect(revealLabel("")).toBe("Reveal in Finder");
   });
 
-  it("kbdHint picks the platform's string (macOS default before load)", () => {
+  it("kbdHint picks the platform's string (Ctrl on Windows+Linux, macOS default before load)", () => {
     expect(kbdHint("windows", "⌘N", "Ctrl+N")).toBe("Ctrl+N");
+    expect(kbdHint("linux", "⌘N", "Ctrl+N")).toBe("Ctrl+N");
     expect(kbdHint("macos", "⌘N", "Ctrl+N")).toBe("⌘N");
     expect(kbdHint("", "⌘N", "Ctrl+N")).toBe("⌘N");
   });

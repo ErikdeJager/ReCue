@@ -2813,3 +2813,73 @@ colliding with this light-mode work.)
   fallback is needed and rendering is identical on WKWebView (macOS) and WebView2/Chromium (Windows).
   CSS-token work only — no TS/Rust, fully idempotent and reversible. Checks green: `npm run build` /
   `npm run lint` / `npm run format:check` / `npm test`.
+
+### 345. [x] Linux support (Arch/Ubuntu/Mint fully, best-effort others) — `xdg-open`/file-manager reveal, Ctrl-form kbd hints, `$SHELL` fallback, ubuntu-22.04 AppImage CI leg
+
+ReCue now builds, tests, **and runs** on **Linux** alongside macOS and Windows — targeting **Arch,
+Ubuntu, and Mint fully, best-effort for other distros** (#345). The codebase was already ~90%
+Linux-ready: most per-OS divergence uses `#[cfg(unix)]` / `#[cfg(not(windows))]` arms Linux inherits,
+the frontend keyboard handling is `metaKey || ctrlKey`, and the Linux WebView is Chromium (WebKitGTK)
+so every `-webkit-scrollbar` / `color-mix` CSS choice carries over unchanged. The port was a small set
+of **targeted fixes** where a "not-Windows"/`cfg(unix)` arm secretly assumed *macOS* (the macOS `open`
+binary, `open -R`, ⌘ glyphs), plus the CI/bundle and docs. **macOS and Windows behavior is unchanged.**
+
+**What shipped** (branch `feat/linux`, PR [#98](https://github.com/ErikdeJager/ReCue/pull/98),
+2026-07-07):
+
+- **`src-tauri/src/commands.rs`** — `os_open` (backs `open_data_folder` + `reveal_path`) split its
+  non-Windows arm into a macOS `open` arm and a `#[cfg(not(any(macos, windows)))]` → **`xdg-open`** arm.
+  `reveal_file_in_finder` gained an `#[cfg(all(unix, not(target_os = "macos")))]` arm →
+  **`reveal_file_linux`**, a best-effort file-manager **select** via the FreeDesktop
+  `org.freedesktop.FileManager1.ShowItems` D-Bus method (`dbus-send`), falling back to `xdg-open` on the
+  file's parent directory when there is no FileManager1 provider. `reveal_file_linux`'s `cfg` is widened
+  with `, test)` (+ `allow(dead_code)` under `test`) so the macOS host still type-checks it (mirroring
+  the existing `explorer_select_arg` `any(windows, test)` pattern).
+- **`src-tauri/src/pty.rs`** — `default_shell` now keeps macOS's `$SHELL` else `/bin/zsh` byte-for-byte
+  and delegates Linux/BSD to a new `test`-widened `non_macos_unix_shell` (`$SHELL` else first existing
+  of `/bin/bash`, `/bin/sh` — `/bin/zsh` is not a safe Linux default). New unit test
+  `non_macos_unix_shell_is_never_empty`.
+- **`src-tauri/src/path_env.rs`** — no code change (the login-shell PATH probe is `#[cfg(unix)]` and
+  already runs on Linux, restoring the user's real PATH for a `.desktop`/AppImage launch); clarified the
+  module + `restore_user_path` doc comments (were "macOS").
+- **`src/platform.ts`** + **`src/platform.test.ts`** — added `isLinux(platform)`; `kbdHint` now returns
+  the **Ctrl**-form on Windows **and Linux** (⌘ only on macOS) and `revealLabel` returns **"Reveal in
+  File Manager"** on Linux. One-file change fixes all ~50 `kbdHint` and 9 `revealLabel` call sites (they
+  thread the `platform` signal). Added Linux test cases.
+- **`.github/workflows/release.yml`** — added a third release-matrix leg **`ubuntu-22.04`** with
+  `args: --bundles appimage` and an apt step installing the Tauri 2 / AppImage toolchain
+  (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`,
+  `build-essential`, `curl wget file`, `libssl-dev`, `patchelf`). The macOS-only signing/DMG steps are
+  already `matrix.platform == 'macos-latest'`-guarded, so they skip on Linux. tauri-action minisign-signs
+  the AppImage like the other legs and merges a `linux-x86_64` entry into `latest.json` → the **AppImage
+  self-updates**; the leg runs last (serialized `max-parallel: 1`) so the merge appends after darwin +
+  windows.
+- **Docs** — `CLAUDE.md` (the "⚠️ Cross-platform is a hard requirement" section + stack/seams/build
+  notes now say **macOS, Windows, and Linux** and document the Linux arms), `README.md` (prerequisites,
+  Linux AppImage artifact, 3-OS pipeline), and a new **`TRAJECTORY_TO_LINUX.md`** (the running log of
+  Linux parity work + a "needs real-box verification" checklist).
+
+**Key decisions** (confirmed with the maintainer):
+
+- **AppImage only** — one universal binary runs on Arch/Ubuntu/Mint & others; no `.deb`/`.rpm`, no AUR
+  PKGBUILD. CI builds AppImage-only via `--bundles appimage` (leaving `tauri.conf.json`
+  `bundle.targets: "all"` so macOS/Windows are undisturbed and a local `tauri build` still emits all
+  Linux formats for dev).
+- **ubuntu-22.04** CI base — broadest glibc/webkit2gtk-4.1 floor (runs on Ubuntu 22.04+, Mint 21 **and**
+  22, current Arch).
+- **AppImage self-updates** through the existing minisign updater (`linux-x86_64` in `latest.json`);
+  no version bump / no patch-notes file in this PR (releases are batched by the maintainer).
+
+**Dependencies:** none (additive Linux arms + a CI leg + docs; no change to macOS or Windows behavior).
+
+**Notes**
+
+- **Cross-platform:** every genuine divergence stays `#[cfg]`-gated (Rust) or branched on the `platform`
+  signal (frontend), with all arms provided; the macOS arm is byte-for-byte unchanged and the Windows
+  arm untouched, the Linux arm is additive. Because the macOS build host can't compile a Linux-only arm,
+  Linux-only helpers (`reveal_file_linux`, `non_macos_unix_shell`) widen their `cfg` with `, test)` so
+  `cargo clippy --all-targets -- -D warnings` and `cargo test` type-check + exercise them on the host.
+  Checks green on macOS: `npm run build` / `npm run lint` / `npm test` (platform Linux cases) /
+  `cargo test` (180 pass, incl. the new shell test) / `cargo clippy --all-targets -- -D warnings` /
+  `cargo fmt --check` (touched files clean). GUI/AppImage/D-Bus paths that can't be unit-tested are
+  logged for real-box verification in **`TRAJECTORY_TO_LINUX.md`**.

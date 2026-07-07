@@ -1,10 +1,14 @@
-//! Restore the user's real `PATH` for GUI launches (macOS).
+//! Restore the user's real `PATH` for GUI launches (macOS + Linux, #345).
 //!
 //! A bundled `.app` launched from Finder/Dock inherits **launchd's** minimal PATH
 //! (`/usr/bin:/bin:/usr/sbin:/sbin`), *not* the PATH the user has in a terminal — so
 //! `claude` (installed under Homebrew, an npm-global prefix, nvm, the native
 //! `~/.local/bin` installer, …) isn't on PATH and **every** agent fails to start
-//! with "claude not found". `tauri dev`, by contrast, is launched from a terminal
+//! with "claude not found". The same class of problem hits a **Linux**
+//! `.desktop`/AppImage launch, which inherits the session/systemd environment rather
+//! than the login-shell PATH — so this whole module is `#[cfg(unix)]` and its
+//! login-shell probe restores the user's real PATH on Linux as well.
+//! `tauri dev`, by contrast, is launched from a terminal
 //! and inherits the full shell PATH, which is exactly why the bug only shows up in
 //! `tauri build` (this is the classic macOS GUI-PATH problem; VS Code/Electron's
 //! `fix-path` solve it the same way).
@@ -34,11 +38,12 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Resolve the user's login-shell PATH and merge it into this process's PATH.
 ///
-/// **macOS only.** A Finder/Dock-launched `.app` inherits launchd's minimal PATH;
-/// this probes the login shell to restore it (best-effort — any failure leaves PATH
-/// intact, augmented with well-known bin dirs; skipped in debug builds). On
-/// **Windows** this is a **no-op**: GUI apps inherit the user/system PATH from the
-/// registry, so the problem doesn't exist (#140).
+/// **Unix (macOS + Linux, #345).** A Finder/Dock-launched `.app` (or a Linux
+/// `.desktop`/AppImage launch) inherits a minimal environment PATH; this probes the
+/// login shell to restore it (best-effort — any failure leaves PATH intact, augmented
+/// with well-known bin dirs; skipped in debug builds). On **Windows** this is a
+/// **no-op**: GUI apps inherit the user/system PATH from the registry, so the problem
+/// doesn't exist (#140).
 ///
 /// Must run **before** any threads are spawned (env mutation isn't thread-safe);
 /// call it at the very top of `run()`.
