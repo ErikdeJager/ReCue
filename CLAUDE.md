@@ -1,52 +1,72 @@
 # CLAUDE.md
 
-Guidance for working in this repository. ReCue is a **macOS and Windows** desktop
-app (#139/#140/#143) for running and managing many live `claude` CLI sessions at once.
+Guidance for working in this repository. ReCue is a **macOS, Windows, and Linux** desktop
+app (#139/#140/#143/#345) for running and managing many live `claude` CLI sessions at once.
 Per-OS divergence is `#[cfg(...)]`-gated in Rust and a single store-cached `platform`
-signal in the frontend; the macOS arm is always the original behavior.
+signal in the frontend; the macOS arm is always the original behavior, the Windows and
+Linux arms are additive. Linux targets **Arch, Ubuntu, and Mint fully, best-effort for
+other distros** (#345).
 
 ## ⚠️ Cross-platform is a hard requirement (read this first)
 
-**ReCue ships on BOTH macOS and Windows. Every feature, fix, and refactor MUST
-be functional on both platforms — no exceptions.** This is not aspirational; it is a
-release constraint. macOS-only and Windows-only are both bugs.
+**ReCue ships on macOS, Windows, AND Linux. Every feature, fix, and refactor MUST
+be functional on all three — no exceptions.** This is not aspirational; it is a
+release constraint. macOS-only, Windows-only, and Linux-only are all bugs. Linux
+support (#345) covers **Arch, Ubuntu, and Mint fully, best-effort for other distros**;
+Linux inherits the `#[cfg(unix)]` code paths, so most divergence is shared with macOS,
+with a distinct arm only where the unix behavior actually differs (`xdg-open` vs the
+macOS `open`, Ctrl vs ⌘, the file-manager reveal).
 
-When you implement *anything*, treat "does this work on the other OS?" as part of the
+When you implement *anything*, treat "does this work on the other OSes?" as part of the
 definition of done — before you consider the task complete, walk the change against
-Windows **and** macOS in your head (and verify on a real box when the path can't be
-unit-tested). Concretely:
+Windows, macOS, **and Linux** in your head (and verify on a real box when the path can't
+be unit-tested). Concretely:
 
 - **Never assume one OS.** No hardcoded `/`-paths, POSIX-only shell-outs, `$HOME`,
   `open`/`explorer.exe`, `Cmd`-only key handling, or macOS-only system calls in a
-  code path that runs on both. If a primitive differs by OS, it gets an abstraction.
+  code path that runs on all. If a primitive differs by OS, it gets an abstraction.
+  Watch for a **`not(windows)`/`cfg(unix)` arm that secretly assumes _macOS_** (the
+  macOS `open` binary, `open -R`, ⌘ glyphs) — on Linux that is a bug; split it into a
+  macOS arm and a Linux arm (#345 did exactly this for `os_open` / `reveal_file_in_finder`
+  / `kbdHint` / `revealLabel`).
 - **Gate genuine divergence explicitly** — `#[cfg(windows)]` / `#[cfg(unix)]` /
-  `#[cfg(target_os = "macos")]` in Rust (with the *other* arm always provided, never
-  left to fail to compile), and the store-cached **`platform`** signal +
-  `src/platform.ts` helpers in the frontend. The macOS arm always preserves the
-  original behavior byte-for-byte; the Windows arm is additive.
+  `#[cfg(target_os = "macos")]` / `#[cfg(all(unix, not(target_os = "macos")))]` (Linux/BSD)
+  in Rust (with **every** arm always provided, never left to fail to compile — and because
+  the macOS host doesn't compile the Linux-only arm, widen a Linux-only helper's `cfg` with
+  `, test)` so the host still type-checks it, mirroring `explorer_select_arg`'s
+  `any(windows, test)`), and the store-cached **`platform`** signal + `src/platform.ts`
+  helpers (`isWindows` / `isLinux`) in the frontend. The macOS arm always preserves the
+  original behavior byte-for-byte; the Windows and Linux arms are additive.
 - **Reuse the established cross-platform seams instead of re-deriving them** — Rust:
-  `path_env::home_dir()` (`%USERPROFILE%` on Windows, never raw `$HOME`),
+  `path_env::home_dir()` (`%USERPROFILE%` on Windows, `$HOME` on unix, never raw `$HOME`),
   `git::hidden_command()` (the `CREATE_NO_WINDOW` console-flash guard — **every**
-  shelled-out `git`/CLI probe goes through it), `pty::resolve_command()` /
-  `find_on_path` / `launch_target` (PATHEXT + `cmd.exe /C` for `.cmd` agents),
+  shelled-out `git`/CLI probe goes through it; a no-op on unix/Linux), `pty::resolve_command()` /
+  `find_on_path` / `launch_target` (PATHEXT + `cmd.exe /C` for `.cmd` agents on Windows; the
+  bare name on unix/Linux) / `default_shell` (`$SHELL` on Linux, `/bin/bash`→`/bin/sh`
+  fallback), `os_open` (macOS `open` / Windows `explorer.exe` / **Linux `xdg-open`**),
   `commands.rs` path-segment guards (`windows_safe_seg` for reserved device names);
-  Frontend: `joinPath` / `splitPath` (split on `/` **or** `\`), `kbdHint` /
-  `revealLabel` (⌘↔Ctrl, "Reveal in Finder"↔"Reveal in Explorer"), `openUrl`→the
-  http/https-only `open_url`, and `metaKey || ctrlKey` for **every** shortcut handler.
-- **CSS / WebView too:** WKWebView (macOS) and WebView2/Chromium (Windows) diverge —
-  prefer `::-webkit-scrollbar` styling, ship plain-color fallbacks alongside
+  Frontend: `joinPath` / `splitPath` (split on `/` **or** `\`; Linux gets `/`-paths),
+  `kbdHint` / `revealLabel` (⌘↔Ctrl — **Ctrl on Windows AND Linux**; "Reveal in
+  Finder"↔"…Explorer"↔"…File Manager"), `openUrl`→the http/https-only `open_url`
+  (`xdg-open` on Linux), and `metaKey || ctrlKey` for **every** shortcut handler.
+- **CSS / WebView too:** WKWebView (macOS) and WebView2/Chromium (Windows) diverge — and
+  **Linux is Chromium too (WebKitGTK/WebView)**, so the Chromium-friendly choices carry
+  over: prefer `::-webkit-scrollbar` styling, ship plain-color fallbacks alongside
   `color-mix`, and avoid macOS-only `-webkit-`/vibrancy effects without a fallback.
 - **Mirror docs across the OS divide.** User-facing copy that names a platform reads
-  "macOS and Windows" (or routes through `kbdHint`/`revealLabel`), never "macOS only."
+  "macOS, Windows, and Linux" (or routes through `kbdHint`/`revealLabel`), never
+  "macOS only."
 - **When a path genuinely can't be unit-tested on CI** (GUI spawn, installer, ConPTY
-  reflow), implement it for both OSes anyway and record what still needs a real-box
-  check in **`TRAJECTORY_TO_WINDOWS.md`** (the running log of Windows parity work) —
-  do not silently ship a macOS-only path.
+  reflow, AppImage launch, D-Bus file-manager reveal), implement it for **all** OSes
+  anyway and record what still needs a real-box check in **`TRAJECTORY_TO_WINDOWS.md`** /
+  **`TRAJECTORY_TO_LINUX.md`** (the running logs of Windows / Linux parity work) — do not
+  silently ship a single-OS path.
 
 If a task as written would only work on one OS, that is a defect in the task: build
 the cross-platform version (gating divergence as above), not the single-OS shortcut.
-The detailed per-subsystem notes throughout this doc and `TRAJECTORY_TO_WINDOWS.md`
-show how each existing feature already honors this.
+The detailed per-subsystem notes throughout this doc and
+`TRAJECTORY_TO_WINDOWS.md` / `TRAJECTORY_TO_LINUX.md` show how each existing feature
+already honors this.
 
 ## What this app is
 
@@ -66,7 +86,7 @@ even though it works in `tauri dev`.
 
 ## Stack
 
-- **Tauri 2** desktop shell (macOS + Windows — see the cross-platform requirement above)
+- **Tauri 2** desktop shell (macOS + Windows + Linux — see the cross-platform requirement above)
 - **Frontend:** React + TypeScript + Vite, **Zustand** for state, plain CSS with
   CSS-variable design tokens (CSS Modules), **xterm.js** terminals (⌘-clickable
   `http`/`https` links via `@xterm/addon-web-links`, #109), **Lucide**
@@ -267,7 +287,8 @@ even though it works in `tauri dev`.
   a **Checkout branch…** picker (#266 — local/remote branches + create-new inline,
   `checkoutFolderBranch` / `createFolderBranch` without spawning an agent),
   non-destructive **Reveal in Finder** / **Copy path**
-  utilities (#130 — `reveal_path` shells out to macOS `open`, no shell) + **Pull**
+  utilities (#130 — `reveal_path` → `os_open`: macOS `open` / Windows `explorer.exe` /
+  Linux `xdg-open`, #345, no shell) + **Pull**
   (#181 — `git pull --ff-only` on the folder's current branch, toasted; shown only when a
   current branch is known; mirrored in the worktree header menu) + **Fetch** (#243 —
   `fetch_remotes`, also on the repo branch-line menu), repo
@@ -595,7 +616,7 @@ even though it works in `tauri dev`.
 │   ├── src/main.rs         # Binary entry point
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
-│   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder-launch fix)
+│   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen)
@@ -616,7 +637,9 @@ even though it works in `tauri dev`.
 ```bash
 npm install            # install frontend deps (also resolves the Rust crate on first build)
 npm run tauri dev      # run the desktop app (Vite + Rust) with hot reload
-npm run tauri build    # build an (unsigned) macOS .app / .dmg
+npm run tauri build    # build an (unsigned) bundle for the host OS (macOS .app/.dmg,
+                       #   Windows NSIS/MSI, Linux AppImage — add `-- --bundles appimage`
+                       #   to match CI's AppImage-only Linux output, #345)
 
 npm run build          # type-check + build the frontend only
 npm run lint           # ESLint (frontend)
@@ -633,8 +656,9 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml          # text summary
 cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 ```
 
-> **Cross-platform builds (#139/#140/#143).** The project builds, tests, **and runs** on
-> **Windows and macOS**. **#139** got it compiling + green on both (`#[cfg(...)]`-gated Rust,
+> **Cross-platform builds (#139/#140/#143/#345).** The project builds, tests, **and runs** on
+> **Windows, macOS, and Linux**. **#139** got it compiling + green on both macOS/Windows
+> (`#[cfg(...)]`-gated Rust,
 > `cfg(unix)` POSIX-shell tests, `.gitattributes` LF normalization so `cargo fmt`/`prettier`
 > pass on a Windows checkout, + a coverage push). **#140** made it *function* on Windows:
 > PowerShell terminals, `explorer.exe` for open/reveal (and, until #217, URLs), a no-op login-shell PATH probe, a
@@ -645,6 +669,25 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > and `[\\/]` path splitting (`repoName`/`lastSegment`). The macOS arm is always the prior
 > code. Runtime items needing a GUI/installer (the `claude.cmd` spawn, the Windows installer,
 > e2e smoke) are flagged for interactive verification (the #84/#105 precedent).
+>
+> **Linux (#345 — Arch/Ubuntu/Mint fully, best-effort others).** Linux inherits the
+> `#[cfg(unix)]` code paths, so the port was small and targeted. The fixes: `os_open`
+> (`open_data_folder`/`reveal_path`) and `reveal_file_in_finder` no longer assume the macOS
+> `open` binary — they split into a macOS arm and a **Linux `xdg-open`** arm (`open_url`
+> already had one), and the file-reveal best-effort-selects via the FreeDesktop
+> `org.freedesktop.FileManager1.ShowItems` D-Bus call with an `xdg-open`-parent-dir fallback
+> (`reveal_file_linux`); `default_shell` uses `$SHELL` with a `/bin/bash`→`/bin/sh` fallback
+> (not macOS's `/bin/zsh`); the login-shell PATH probe already runs (unix) so a
+> `.desktop`/AppImage launch gets the user's real PATH. Frontend: `platform.ts` gained
+> `isLinux`, so `kbdHint` shows **Ctrl** (not ⌘) and `revealLabel` shows **"Reveal in File
+> Manager"** on Linux; all CSS already works (Linux WebView is Chromium). Because the macOS
+> host can't compile a Linux-only arm, Linux-only helpers widen their `cfg` with `, test)`
+> (mirroring `explorer_select_arg`) so the host still type-checks + unit-tests them. Build:
+> the release pipeline's matrix gained an **ubuntu-22.04 AppImage** leg (`--bundles appimage`,
+> broad glibc/webkit2gtk-4.1 floor), minisign-signed like the other legs, merging a
+> `linux-x86_64` updater entry into `latest.json` so the **AppImage self-updates**. Items
+> needing a real Linux box (AppImage launch on each distro, the D-Bus reveal per DE, native
+> notifications, clipboard-image paste, the self-update) are logged in **`TRAJECTORY_TO_LINUX.md`**.
 >
 > **Keeping the port current with `main`.** When `main`'s later features (#144+) merge into the
 > Windows branch, each new feature is re-audited against the same abstractions so Windows
@@ -661,9 +704,10 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > platform-cfg — macOS `open`, **Windows `cmd /C start "" <url>`**, else `xdg-open` — *not*
 > `os_open`/`explorer.exe`: `explorer.exe <url>` opened a File Explorer window instead of the
 > browser, so the #210 sidebar **feedback button** (and the #109 ⌘/Ctrl-click link path) now
-> reach the browser on Windows. `os_open` (`explorer.exe`) still backs the **folder** opens
-> (`reveal_path`/`open_data_folder`). User-facing copy that names the platform (the #208
-> first-release patch note) reads "macOS and Windows".
+> reach the browser on Windows. `os_open` still backs the **folder** opens
+> (`reveal_path`/`open_data_folder`) — macOS `open` / **Windows `explorer.exe`** / **Linux
+> `xdg-open`** (#345). User-facing copy that names the platform (the #208
+> first-release patch note) reads "macOS, Windows, and Linux".
 >
 > **Rebased `main` features #211–#217 + the usage bar (#154).** #211 (drag-reorder sidebar
 > folders), #212 (resync a worktree/branch label after an in-terminal `git checkout`, on the
@@ -878,8 +922,9 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   (`open_canvas_window`) with the label `canvas-<id>` and a `?canvas=<id>` route, so
   no JS window-create permission is needed — only the `canvas-*` capability so the
   new window can invoke commands + listen to events.
-- **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`
-  and Windows NSIS/MSI installers; the **updater artifacts are minisign-signed**. macOS
+- **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`,
+  Windows NSIS/MSI installers, or a Linux **AppImage** (#345, host-OS dependent); the
+  **updater artifacts are minisign-signed** on all three. macOS
   builds carry **Hardened Runtime + `Entitlements.plist`** (#292, `bundle.macOS.
   entitlements`) so mic/voice + protected-folder permissions work and persist — but **only
   once actually signed with an identity** (#314): a plain `tauri build` is ad-hoc (sign it
@@ -924,11 +969,13 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
     Claude to **construct the release body** from every change since the last tag
     (`scripts/generate-release-body.mjs` — reads the current version, prints the body
     markdown to stdout; **writes/commits nothing**), a `create-release` job opens **one**
-    draft GitHub release with that body, and a **2-OS matrix** (`max-parallel: 1`) —
-    **macOS** (`universal-apple-darwin`) + **Windows** (`x86_64-pc-windows-msvc`) — builds
-    **signed** bundles via `tauri-action` and uploads them **by `releaseId`** to that
-    draft, merging one `latest.json` (`darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`).
-    Serialized so the `latest.json` read-modify-write merge is deterministic.
+    draft GitHub release with that body, and a **3-OS matrix** (`max-parallel: 1`, #345) —
+    **macOS** (`universal-apple-darwin`) + **Windows** (`x86_64-pc-windows-msvc`) + **Linux**
+    (`ubuntu-22.04`, `--bundles appimage`, after an apt-installed webkit2gtk-4.1 toolchain) —
+    builds **signed** bundles via `tauri-action` and uploads them **by `releaseId`** to that
+    draft, merging one `latest.json` (`darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`,
+    `linux-x86_64`). Serialized so the `latest.json` read-modify-write merge is deterministic
+    (Linux appends last).
   - **Releasing:** the pipeline leaves a **draft** — a maintainer **publishes** it (the
     `/releases/latest/download/latest.json` endpoint only resolves to a published,
     non-draft "latest" release). Each new release = bump `version` in `tauri.conf.json` +

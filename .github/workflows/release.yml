@@ -11,9 +11,10 @@ name: Release
 #                    construct the release body (markdown) from every change since the
 #                    last release tag. No file is written and nothing is committed back.
 #   create-release — open ONE draft GitHub release.
-#   release        — 2-OS matrix (macOS universal + Windows x86_64) builds SIGNED
-#                    updater artifacts from the triggering commit and uploads them to the
-#                    draft, merging one latest.json. On macOS it then polishes the .dmg
+#   release        — 3-OS matrix (macOS universal + Windows x86_64 + Linux x86_64
+#                    AppImage, #345) builds SIGNED updater artifacts from the triggering
+#                    commit and uploads them to the draft, merging one latest.json. On
+#                    macOS it then polishes the .dmg
 #                    (parks the DMG's hidden helper files off-canvas via
 #                    scripts/polish-dmg.sh) and swaps it for the uploaded asset —
 #                    best-effort, so it can never fail the release.
@@ -155,7 +156,7 @@ jobs:
       fail-fast: false
       # Serialize the legs so the latest.json read-modify-write merge on the shared
       # release is deterministic (macOS writes the darwin entries; Windows reads that,
-      # appends windows-x86_64, writes back).
+      # appends windows-x86_64; Linux reads that, appends linux-x86_64; each writes back).
       max-parallel: 1
       matrix:
         include:
@@ -165,6 +166,16 @@ jobs:
           - platform: windows-latest
             args: ""
             rust_targets: x86_64-pc-windows-msvc
+          # Linux (#345): AppImage-only (one universal binary runs on Arch/Ubuntu/Mint &
+          # others). Built on ubuntu-22.04 for the broadest glibc/webkit2gtk-4.1 floor
+          # (runs on Ubuntu 22.04+, Mint 21 AND 22, current Arch). No explicit --target
+          # (native x86_64-linux); `--bundles appimage` keeps it AppImage-only, and
+          # createUpdaterArtifacts adds the minisign-signed linux-x86_64 updater entry to
+          # latest.json (the AppImage self-updates; the leg runs last so the serialized
+          # latest.json merge appends after darwin + windows).
+          - platform: ubuntu-22.04
+            args: --bundles appimage
+            rust_targets: ""
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -191,6 +202,24 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Linux (#345): the Tauri 2 / AppImage build toolchain. webkit2gtk-4.1 is the
+      # Tauri-2 webview; libayatana-appindicator3 the tray; librsvg2 icon rendering;
+      # patchelf + the wget/file/curl utilities are needed by linuxdeploy when packing the
+      # AppImage. ubuntu-22.04 ships all of these. macOS/Windows legs skip this step.
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            build-essential \
+            curl wget file \
+            libssl-dev \
+            patchelf
 
       # macOS code signing so mic/voice and protected-folder permissions ACTUALLY WORK and
       # PERSIST across relaunches (#292/#314). macOS TCC pins a permission grant to the app's

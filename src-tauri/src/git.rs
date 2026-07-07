@@ -1672,21 +1672,33 @@ index 0..1
         // The canonical `git rev-list --left-right --count` output: `<ahead>\t<behind>`.
         assert_eq!(
             parse_ahead_behind("2\t1"),
-            Some(AheadBehind { ahead: 2, behind: 1 })
+            Some(AheadBehind {
+                ahead: 2,
+                behind: 1
+            })
         );
         assert_eq!(
             parse_ahead_behind("2\t1\n"),
-            Some(AheadBehind { ahead: 2, behind: 1 })
+            Some(AheadBehind {
+                ahead: 2,
+                behind: 1
+            })
         );
         // In-sync branch → both zero (still Some; the frontend filters 0/0 to no badge).
         assert_eq!(
             parse_ahead_behind("0\t0"),
-            Some(AheadBehind { ahead: 0, behind: 0 })
+            Some(AheadBehind {
+                ahead: 0,
+                behind: 0
+            })
         );
         // `split_whitespace` tolerates spaces too (robustness).
         assert_eq!(
             parse_ahead_behind("3 5"),
-            Some(AheadBehind { ahead: 3, behind: 5 })
+            Some(AheadBehind {
+                ahead: 3,
+                behind: 5
+            })
         );
         // Malformed / empty → None (fail-open, no indicator).
         assert_eq!(parse_ahead_behind(""), None);

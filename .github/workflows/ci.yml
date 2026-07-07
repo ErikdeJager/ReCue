@@ -1,0 +1,114 @@
+name: CI
+
+# Pull-request gate for `main` (#345 follow-up). Runs on every PR targeting main and
+# must pass before code lands, so only linted, formatted, tested, and coverage-gated code
+# reaches main:
+#
+#   frontend  — ESLint + Prettier + type-check/build + Vitest with a ≥75% line-coverage
+#               gate over the pure-logic surface (UI/components/hooks/store-IPC-wiring are
+#               excluded — see vitest.config.ts; "front end needs only logic tests")
+#   backend   — rustfmt + Clippy (-D warnings) + tests via cargo-llvm-cov with a ≥75% line
+#               gate over the logic surface (the Tauri command/wiring boundary —
+#               commands.rs/lib.rs/main.rs — is excluded, mirroring the frontend's
+#               store.ts/ipc.ts exclusion)
+#
+# There are no automated end-to-end tests yet (the app's e2e/GUI smoke is manual — see
+# TRAJECTORY_TO_WINDOWS.md / TRAJECTORY_TO_LINUX.md); when an e2e suite is added, wire it in
+# as a job here. Cross-platform BUILDS (macOS/Windows/Linux) are covered by release.yml on
+# push to main — a `tauri build` per-OS on every PR is too expensive to run as a gate.
+#
+# NOTE: making these checks *required* to merge is a branch-protection setting on `main`
+# (repo Settings ▸ Branches, or `gh api`), not something a workflow file can enforce itself.
+
+on:
+  pull_request:
+    branches: [main]
+
+# One in-flight run per PR; a new push cancels the previous run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend — lint, format, type-check, test (≥75% coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier (format check)
+        run: npm run format:check
+
+      - name: Type-check + build
+        run: npm run build
+
+      # Runs the full Vitest suite AND enforces the coverage gate in one step: vitest exits
+      # non-zero if any test fails OR logic-surface line coverage is below 75%. The scope
+      # (logic only, UI excluded) and the 75% threshold both live in vitest.config.ts, so
+      # this is identical to what a developer runs locally.
+      - name: Unit tests + coverage gate (logic lines ≥ 75%)
+        run: npm run test:coverage
+
+  backend:
+    name: Backend — rustfmt, clippy, test (≥75% coverage)
+    # ubuntu-22.04 matches release.yml's Linux floor and has the Tauri 2 system libs the
+    # `recue` crate needs to compile (webkit2gtk-4.1, gtk-3, …).
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (clippy, rustfmt, llvm-tools)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools-preview
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            build-essential \
+            curl wget file \
+            libssl-dev \
+            patchelf
+
+      - name: Rustfmt (format check)
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # Runs the full Rust test suite AND enforces the coverage gate over the pure-logic
+      # surface: cargo-llvm-cov exits non-zero if any test fails OR logic line coverage is
+      # below 75%. The Tauri IPC/wiring boundary is excluded (mirroring the frontend's
+      # store.ts/ipc.ts exclusion): commands.rs (the #[tauri::command] surface), lib.rs (app
+      # builder + event forwarding + poll loops), main.rs (entry point) — integration code
+      # exercised by the running app, not unit tests. Logic line coverage is ~87%.
+      - name: Tests + coverage gate (logic lines ≥ 75%)
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --ignore-filename-regex '(commands|lib|main)\.rs$' --fail-under-lines 75

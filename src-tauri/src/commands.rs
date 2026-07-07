@@ -2093,16 +2093,18 @@ pub fn clear_recents(store: State<'_, Store>) -> Result<(), SessionError> {
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
-/// Open a folder or `http(s)` URL with the OS's default handler, **without a shell**
-/// (so there is no injection vector) — macOS `open`, Windows `explorer.exe`. Both
-/// respect the user's default browser for a URL and default file manager for a
-/// folder. The single OS-open helper behind `open_data_folder` / `open_url` /
-/// `reveal_path` (#100/#109/#129/#140).
+/// Open a folder with the OS's default file manager, **without a shell** (so there is no
+/// injection vector) — macOS `open`, Windows `explorer.exe`, Linux `xdg-open` (#345).
+/// Each respects the user's default file manager. The single OS-open helper behind
+/// `open_data_folder` / `reveal_path` (#100/#109/#129/#140/#345). (`open_url` opens a
+/// *browser* and has its own opener — see below.)
 fn os_open(target: impl AsRef<std::ffi::OsStr>) -> Result<(), SessionError> {
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     let mut cmd = std::process::Command::new("open");
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     let mut cmd = std::process::Command::new("explorer.exe");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut cmd = std::process::Command::new("xdg-open");
     cmd.arg(target.as_ref())
         .spawn()
         .map_err(|e| SessionError::Io(e.to_string()))?;
@@ -2238,20 +2240,25 @@ pub fn reveal_path(path: String) -> Result<(), SessionError> {
 }
 
 /// Reveal a **file** in the OS file manager (#171 sidebar file/Kanban row → "Reveal
-/// in Finder"/"…Explorer"), **selecting** the file in its containing folder rather
-/// than launching it in its default app. The file counterpart of `reveal_path`:
-/// macOS `open -R <path>`, Windows `explorer.exe /select,<path>`. Same no-shell
-/// safety as `reveal_path` / `open_url` — spawned without a shell, and the path is
-/// the app's own tracked panel data.
+/// in Finder"/"…Explorer"/"…File Manager"), **selecting** the file in its containing
+/// folder rather than launching it in its default app. The file counterpart of
+/// `reveal_path`: macOS `open -R <path>`, Windows `explorer.exe /select,<path>`, Linux
+/// a best-effort FileManager1 select with a folder-open fallback (#345,
+/// `reveal_file_linux`). Same no-shell safety as `reveal_path` / `open_url` — spawned
+/// without a shell, and the path is the app's own tracked panel data.
 #[tauri::command]
 pub fn reveal_file_in_finder(path: String) -> Result<(), SessionError> {
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
             .arg("-R")
             .arg(&path)
             .spawn()
             .map_err(|e| SessionError::Io(e.to_string()))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        reveal_file_linux(&path)?;
     }
     #[cfg(windows)]
     {
@@ -2270,6 +2277,52 @@ pub fn reveal_file_in_finder(path: String) -> Result<(), SessionError> {
             .spawn()
             .map_err(|e| SessionError::Io(e.to_string()))?;
     }
+    Ok(())
+}
+
+/// Linux best-effort "reveal a file in the file manager" (#345). There is no universal
+/// "select this file" command, so first try the FreeDesktop
+/// `org.freedesktop.FileManager1.ShowItems` D-Bus method (Nautilus / Nemo / Dolphin /
+/// Thunar / Caja implement it and highlight the file, and the session bus auto-activates
+/// the DE's file manager). If `dbus-send` is missing or the call fails (no FileManager1
+/// provider), fall back to `xdg-open` on the file's **parent directory** (opens the
+/// folder, no highlight). Spawned without a shell, like `reveal_path` / `open_url`.
+/// Needs real-box verification per DE — see `TRAJECTORY_TO_LINUX.md`. Gated
+/// `any(<linux/bsd>, test)` (with `dead_code` allowed under `test`) so the macOS host
+/// type-checks it even though the real build arm isn't compiled there.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg_attr(test, allow(dead_code))]
+fn reveal_file_linux(path: &str) -> Result<(), SessionError> {
+    // The `as` array of `ShowItems(uris, startup_id)` — bound before the arg array so
+    // every element is a `&str` (a `&format!(…)` would be a `&String`, breaking the
+    // homogeneous array type).
+    let uris_arg = format!("array:string:file://{path}");
+    // Wait on dbus-send (it's fast: a fire-and-forget method call) so a missing provider
+    // falls through to the folder-open fallback rather than silently doing nothing.
+    let shown = std::process::Command::new("dbus-send")
+        .args([
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--type=method_call",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+            uris_arg.as_str(),
+            "string:",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if shown {
+        return Ok(());
+    }
+    let parent = std::path::Path::new(path)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    std::process::Command::new("xdg-open")
+        .arg(parent)
+        .spawn()
+        .map_err(|e| SessionError::Io(e.to_string()))?;
     Ok(())
 }
 

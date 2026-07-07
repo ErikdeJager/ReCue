@@ -1,10 +1,11 @@
 # ReCue
 
-A **macOS and Windows** desktop app for running and managing many live `claude` CLI
-sessions at once — an **Overview** "agent wall" of real terminals, a **Canvas**
+A **macOS, Windows, and Linux** desktop app for running and managing many live `claude`
+CLI sessions at once — an **Overview** "agent wall" of real terminals, a **Canvas**
 split-panel workspace (with file, git-diff, and terminal viewers), and a repo-grouped
-**sidebar**. Every feature works on both platforms (OS-specific behavior is gated
-behind a single platform abstraction; see [`CLAUDE.md`](CLAUDE.md)).
+**sidebar**. Every feature works on all three platforms (OS-specific behavior is gated
+behind a single platform abstraction; see [`CLAUDE.md`](CLAUDE.md)). Linux targets Arch,
+Ubuntu, and Mint fully, best-effort for other distros.
 
 Each session is a real PTY running the Claude Code CLI. ReCue provides the window
 chrome, navigation, persistence, and read-only git reading; the terminals come from
@@ -74,7 +75,7 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
 
 ## Prerequisites
 
-- macOS or Windows
+- macOS, Windows, or Linux (Arch, Ubuntu, and Mint fully supported; best-effort for other distros)
 - [`claude`](https://docs.claude.com/en/docs/claude-code) (Claude Code CLI)
   **installed and authenticated** on your `PATH` — ReCue runs `claude` for every
   session and shows a clear error if it is missing.
@@ -99,9 +100,17 @@ Artifacts land in `src-tauri/target/release/bundle/`:
 - **macOS** — `macos/ReCue.app` and `dmg/ReCue_<version>_<arch>.dmg`
 - **Windows** — an **NSIS** installer (`nsis/ReCue_<version>_<arch>-setup.exe`) and
   an **MSI** (`msi/ReCue_<version>_<arch>_<lang>.msi`)
+- **Linux** — an **AppImage** (`appimage/ReCue_<version>_<arch>.AppImage`), the single
+  universal binary that runs on Arch, Ubuntu, Mint, and other distros. Run
+  `npm run tauri build -- --bundles appimage` to match CI's AppImage-only output (a plain
+  `tauri build` also emits `.deb`/`.rpm`, which ReCue does not officially ship).
 
 Each `tauri build` produces the bundle for the OS it runs on; build on a macOS host for
-the macOS artifacts and on a Windows host for the Windows installers.
+the macOS artifacts, a Windows host for the Windows installers, and a Linux host (or the
+CI runner) for the AppImage. Building the AppImage needs the Tauri Linux toolchain
+(`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`,
+`patchelf` — see the `release.yml` deps step); on Linux the **AppImage** self-updates
+through the in-app updater.
 
 > A from-scratch local build is **unsigned** — first open warns (macOS Gatekeeper:
 > right-click → **Open**, or allow it under **System Settings → Privacy & Security**;
@@ -120,7 +129,8 @@ the macOS artifacts and on a Windows host for the Windows installers.
 > `pubkey` is baked into `tauri.conf.json`. `.github/workflows/release.yml` runs on every
 > push to `main` and, **when the app version is bumped past the latest tag and a matching
 > `src/patchnotes/<version>.json` exists**, builds **signed** bundles for **macOS
-> (universal) and Windows (x86_64)**, uploads them to one **draft** GitHub release with a
+> (universal), Windows (x86_64), and Linux (x86_64 AppImage)**, uploads them to one
+> **draft** GitHub release with a
 > merged `latest.json`, and waits for a maintainer to **publish** the draft (the updater's
 > `/releases/latest/download/latest.json` endpoint only resolves to a published release).
 > The signing private key lives in the `TAURI_SIGNING_PRIVATE_KEY` /

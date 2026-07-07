@@ -1322,12 +1322,18 @@ fn read_and_emit_title(
 }
 
 /// The default plain-terminal shell (#72) for the current OS: the user's `$SHELL`
-/// (fallback `/bin/zsh`) on unix; PowerShell — `pwsh.exe`, else `powershell.exe`,
-/// else `%COMSPEC%`/`cmd.exe` — on Windows.
+/// (fallback `/bin/zsh` on macOS, `/bin/bash`→`/bin/sh` on Linux) on unix; PowerShell —
+/// `pwsh.exe`, else `powershell.exe`, else `%COMSPEC%`/`cmd.exe` — on Windows.
 fn default_shell() -> String {
-    #[cfg(unix)]
+    // macOS: `$SHELL` else `/bin/zsh` — byte-for-byte the original behavior.
+    #[cfg(target_os = "macos")]
     {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+    }
+    // Other unix (Linux/BSD, #345): delegate to the testable helper below.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        non_macos_unix_shell()
     }
     #[cfg(windows)]
     {
@@ -1338,6 +1344,26 @@ fn default_shell() -> String {
         }
         std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
     }
+}
+
+/// Linux/BSD default plain-terminal shell (#345): the user's `$SHELL` (essentially
+/// always set in a desktop session), else the first existing of `/bin/bash`, `/bin/sh`
+/// — `/bin/zsh` (the macOS fallback) is not a safe Linux default (often not installed).
+/// Gated `any(<linux/bsd>, test)` so the macOS host still type-checks + unit-tests it
+/// even though the real build arm isn't compiled there.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn non_macos_unix_shell() -> String {
+    if let Ok(shell) = std::env::var("SHELL") {
+        if !shell.is_empty() {
+            return shell;
+        }
+    }
+    for candidate in ["/bin/bash", "/bin/sh"] {
+        if std::path::Path::new(candidate).exists() {
+            return candidate.to_string();
+        }
+    }
+    "/bin/sh".to_string()
 }
 
 /// Resolve `program` to an executable path via `PATH` (or a direct path). Unix:
@@ -1481,6 +1507,15 @@ mod tests {
 
     fn tmp() -> PathBuf {
         std::env::temp_dir()
+    }
+
+    // --- Linux/BSD default-shell fallback (#345) ---
+    // Runs on every OS (the helper is `test`-widened) so the macOS host type-checks the
+    // Linux arm. It must always yield a non-empty shell: `$SHELL` when set, else an
+    // existing `/bin/bash`/`/bin/sh` (or the `/bin/sh` last resort).
+    #[test]
+    fn non_macos_unix_shell_is_never_empty() {
+        assert!(!non_macos_unix_shell().is_empty());
     }
 
     // --- Global search: ANSI strip + output line matching (#337) ---
