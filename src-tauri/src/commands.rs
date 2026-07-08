@@ -505,10 +505,15 @@ pub fn set_session_watch(
 
 /// A session's retained scrollback plus its absolute end-offset, so the frontend's
 /// terminal replay can dedupe against the live output stream (the fresh-spawn
-/// double-paint / stray-glyph fix).
+/// double-paint / stray-glyph fix). Like live output (#261), the bytes travel as a
+/// **base64 string** (#346): serde serializes a `Vec<u8>` as a JSON integer array,
+/// which turned the 256 KB scrollback into ~1 MB+ of JSON the webview main thread
+/// had to parse on EVERY terminal mount — an agent wall of N terminals paid N of
+/// those at boot (costliest on Linux/WebKitGTK). base64 is ~⅓ the size and decodes
+/// with the same tight `atob` loop as live output (`decodeOutputB64`).
 #[derive(Clone, Serialize)]
 pub struct ScrollbackReply {
-    pub bytes: Vec<u8>,
+    pub b64: String,
     pub end: u64,
 }
 
@@ -518,7 +523,10 @@ pub fn session_scrollback(
     id: String,
 ) -> Result<ScrollbackReply, SessionError> {
     let (bytes, end) = manager.scrollback(&id)?;
-    Ok(ScrollbackReply { bytes, end })
+    Ok(ScrollbackReply {
+        b64: encode_output(&bytes),
+        end,
+    })
 }
 
 /// One live-terminal-output search hit (#337): a session id, the 1-based line number of
@@ -2554,6 +2562,30 @@ mod tests {
                 .expect("valid base64");
             assert_eq!(&decoded, case, "round-trip must be byte-exact");
         }
+    }
+
+    #[test]
+    fn scrollback_reply_serializes_b64_string() {
+        // #346: the scrollback replay must ship as a base64 STRING like live output —
+        // a `Vec<u8>` field would serde-serialize to a JSON integer array (~4 chars
+        // per byte), turning the 256 KB scrollback into a megabyte-plus parse on
+        // every terminal mount.
+        use base64::Engine as _;
+        let raw: &[u8] = &[0x1b, b'[', b'2', b'J', 0, 255, b'h', b'i'];
+        let reply = ScrollbackReply {
+            b64: encode_output(raw),
+            end: raw.len() as u64,
+        };
+        let value = serde_json::to_value(&reply).expect("serialize");
+        let b64 = value
+            .get("b64")
+            .and_then(|v| v.as_str())
+            .expect("`b64` must be a JSON string");
+        assert_eq!(value.get("end").and_then(|v| v.as_u64()), Some(8));
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("valid base64");
+        assert_eq!(decoded, raw, "replay must round-trip byte-exact");
     }
 
     #[test]

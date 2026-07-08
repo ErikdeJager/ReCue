@@ -120,6 +120,7 @@ pub struct SessionInfo {
 
 /// Output / lifecycle events produced by sessions, drained by the command layer.
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub enum SessionEvent {
     Output {
         id: String,
@@ -152,6 +153,56 @@ pub enum SessionEvent {
         id: String,
         forkable: bool,
     },
+}
+
+/// Cap on a single coalesced `Output` payload (#346): a run at/over this size is
+/// flushed so one emit's base64 payload stays bounded. Matches `SCROLLBACK_CAP`,
+/// so a merged emit is never larger than a scrollback replay already is.
+const COALESCE_MAX_BYTES: usize = SCROLLBACK_CAP;
+
+/// Merge consecutive runs of contiguous same-session `Output` events into one event
+/// (#346), leaving every other event — and overall order — untouched.
+///
+/// The event forwarder (`lib.rs`) drains whatever is queued after each blocking
+/// `recv` and passes the batch through here, so a TUI repaint storm becomes a few
+/// large `session://output` emits instead of hundreds of per-8KB ones — each emit is
+/// an evaluate-JS on the webview main thread, costliest on Linux/WebKitGTK. The
+/// frontend already rAF-coalesces its xterm writes, so a merged chunk decodes to the
+/// identical byte stream.
+///
+/// A chunk joins the open run only when it **continues it exactly**: same session,
+/// contiguous bytes (its end-offset == the run's end-offset + its length), and the
+/// run still under [`COALESCE_MAX_BYTES`]. The contiguity guard is load-bearing: it
+/// keeps the frontend's `start = offset - bytes.length` dedupe math exact, and it
+/// splits across a Restart — a respawn under the same id creates a fresh
+/// `Scrollback` whose running total resets to 0, so a stale reader's final chunk
+/// must never merge with the new reader's first. Any non-Output event (or another
+/// session's Output) simply starts a new run, so e.g. a session's `Exited` still
+/// emits strictly after its final `Output`.
+pub fn coalesce_output_events(events: Vec<SessionEvent>) -> Vec<SessionEvent> {
+    let mut out: Vec<SessionEvent> = Vec::with_capacity(events.len());
+    for event in events {
+        match event {
+            SessionEvent::Output { id, bytes, offset } => {
+                if let Some(SessionEvent::Output {
+                    id: run_id,
+                    bytes: run_bytes,
+                    offset: run_offset,
+                }) = out.last_mut()
+                {
+                    let contiguous = offset == run_offset.saturating_add(bytes.len() as u64);
+                    if *run_id == id && contiguous && run_bytes.len() < COALESCE_MAX_BYTES {
+                        run_bytes.extend_from_slice(&bytes);
+                        *run_offset = offset;
+                        continue;
+                    }
+                }
+                out.push(SessionEvent::Output { id, bytes, offset });
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Per-session activity timestamps (millis-since-`base`, 0 = none) for the busy
@@ -2249,5 +2300,119 @@ mod tests {
             saw_idle,
             "a real keystroke must still suppress the echo as busy (#55 preserved)"
         );
+    }
+
+    // --- coalesce_output_events (#346) ---
+
+    /// An `Output` event whose `offset` is the absolute END offset of the chunk
+    /// (matching the reader thread: offset = running total after the push).
+    fn out_ev(id: &str, bytes: &[u8], offset: u64) -> SessionEvent {
+        SessionEvent::Output {
+            id: id.into(),
+            bytes: bytes.to_vec(),
+            offset,
+        }
+    }
+
+    #[test]
+    fn coalesce_merges_consecutive_contiguous_same_session_outputs() {
+        let merged = coalesce_output_events(vec![
+            out_ev("a", b"he", 2),
+            out_ev("a", b"llo", 5),
+            out_ev("a", b" world", 11),
+        ]);
+        assert_eq!(merged, vec![out_ev("a", b"hello world", 11)]);
+    }
+
+    #[test]
+    fn coalesce_keeps_last_offset_so_start_math_is_preserved() {
+        // The frontend dedupe computes `start = offset - bytes.length`
+        // (replayDedupe.ts); a merged run must yield the FIRST chunk's start.
+        let merged = coalesce_output_events(vec![
+            out_ev("a", b"xyz", 103), // start = 100
+            out_ev("a", b"pq", 105),
+        ]);
+        match &merged[..] {
+            [SessionEvent::Output { bytes, offset, .. }] => {
+                assert_eq!(offset - bytes.len() as u64, 100);
+                assert_eq!(bytes, b"xyzpq");
+            }
+            other => panic!("expected one merged Output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn coalesce_splits_on_session_change_preserving_order() {
+        let events = vec![
+            out_ev("a", b"1", 1),
+            out_ev("b", b"2", 1),
+            out_ev("a", b"3", 2),
+        ];
+        // Interleaved sessions never merge (chunk 3 doesn't continue chunk 1's run —
+        // there's a "b" between them) and order is untouched.
+        assert_eq!(coalesce_output_events(events.clone()), events);
+    }
+
+    #[test]
+    fn coalesce_flushes_before_non_output_events_in_order() {
+        let exited = SessionEvent::Exited {
+            id: "a".into(),
+            code: Some(0),
+        };
+        let merged = coalesce_output_events(vec![
+            out_ev("a", b"bye", 3),
+            exited.clone(),
+            out_ev("a", b"??", 5),
+        ]);
+        // The Exited stays strictly between the two outputs — a lifecycle event is
+        // never reordered around (or swallowed into) an output run.
+        assert_eq!(
+            merged,
+            vec![out_ev("a", b"bye", 3), exited, out_ev("a", b"??", 5)]
+        );
+    }
+
+    #[test]
+    fn coalesce_splits_non_contiguous_offsets() {
+        // A Restart under the same id resets the session's Scrollback total to 0, so
+        // the stale reader's final chunk and the new reader's first are NOT contiguous
+        // and must not merge (merging would corrupt the frontend's replay dedupe).
+        let events = vec![out_ev("a", b"old", 4096), out_ev("a", b"new", 3)];
+        assert_eq!(coalesce_output_events(events.clone()), events);
+    }
+
+    #[test]
+    fn coalesce_respects_max_bytes_cap() {
+        let big = vec![b'x'; COALESCE_MAX_BYTES];
+        let events = vec![
+            out_ev("a", &big, COALESCE_MAX_BYTES as u64),
+            out_ev("a", b"more", COALESCE_MAX_BYTES as u64 + 4),
+        ];
+        // The first run is already at the cap, so the follow-up flushes separately.
+        assert_eq!(coalesce_output_events(events.clone()), events);
+    }
+
+    #[test]
+    fn coalesce_passes_through_non_output_only_input() {
+        let events = vec![
+            SessionEvent::State {
+                id: "a".into(),
+                busy: true,
+            },
+            SessionEvent::Name {
+                id: "a".into(),
+                name: "t".into(),
+            },
+            SessionEvent::Forkable {
+                id: "a".into(),
+                forkable: true,
+            },
+        ];
+        assert_eq!(coalesce_output_events(events.clone()), events);
+    }
+
+    #[test]
+    fn coalesce_empty_is_empty() {
+        assert_eq!(coalesce_output_events(vec![]), vec![]);
     }
 }

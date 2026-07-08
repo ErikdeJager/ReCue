@@ -689,6 +689,19 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > needing a real Linux box (AppImage launch on each distro, the D-Bus reveal per DE, native
 > notifications, clipboard-image paste, the self-update) are logged in **`TRAJECTORY_TO_LINUX.md`**.
 >
+> **Linux performance (#346).** Four fixes for the "everything is slow on Arch" report:
+> (1) `linux_webkit.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at boot **only** when the
+> NVIDIA proprietary driver or a VM is detected (user env always respected;
+> `RECUE_DISABLE_DMABUF=1|0` force-overrides; healthy AMD/Intel Mesa stacks keep DMA-BUF);
+> (2) the terminal pool probes the WebGL renderer string once (Linux only) and skips the
+> xterm WebGL addon when it's software-rasterized (llvmpipe/SwiftShader → DOM renderer,
+> `webglRenderer.ts`); (3) `session_scrollback` ships **base64** (`ScrollbackReply.b64`,
+> decoded by `decodeOutputB64`) instead of a ~1 MB JSON integer array per terminal mount;
+> (4) the `lib.rs` event forwarder drains its queue after each blocking `recv` and merges
+> consecutive contiguous same-session output chunks (`pty::coalesce_output_events`) into
+> one emit — each emit is an evaluate-JS on the webview main thread, costliest on
+> WebKitGTK. (3)+(4) are platform-neutral wins; (1)+(2) are unreachable on macOS/Windows.
+>
 > **Keeping the port current with `main`.** When `main`'s later features (#144+) merge into the
 > Windows branch, each new feature is re-audited against the same abstractions so Windows
 > users get it too: **OS-native path joins** (`joinPath(platform, root, rel)` in `platform.ts`

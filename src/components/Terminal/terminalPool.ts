@@ -24,6 +24,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
+import { decodeOutputB64 } from "../../decodeOutput";
 import {
   clipboardReadText,
   openUrl,
@@ -33,12 +34,13 @@ import {
   writeStdin,
 } from "../../ipc";
 import { onSessionOutput } from "../../outputBus";
-import { isWindows } from "../../platform";
+import { isLinux, isWindows } from "../../platform";
 import { useStore } from "../../store";
 import { IS_MAIN_WINDOW } from "../../windowContext";
 import { terminalsToDispose } from "./poolReconcile";
 import { dedupeAgainstScrollback } from "./replayDedupe";
 import styles from "./Terminal.module.css";
+import { isSoftwareWebGLRenderer } from "./webglRenderer";
 import { windowsPtyOption } from "./windowsPty";
 
 // Coalesce the frames of a view re-tile / inspector slide / window drag into a
@@ -76,6 +78,56 @@ let currentTerminalSettings = {
   lineHeight: 1.2,
   cursorBlink: true,
 };
+
+// Linux software-WebGL fallback (#346): WebKitGTK can hand out a WebGL context that
+// is silently software-rasterized (llvmpipe/SwiftShader — e.g. NVIDIA driver or
+// DMA-BUF trouble), so the addon "works" but every terminal frame renders on the
+// CPU. Probe the renderer string ONCE per app and skip the WebGL addon when it names
+// a software rasterizer — xterm then uses its DOM renderer (the detached-window
+// fallback, #105), which is faster than software GL. macOS/Windows short-circuit to
+// `true` and never construct the probe canvas, so their rendering is byte-for-byte
+// unchanged.
+let webglAllowedMemo: boolean | undefined;
+
+/** Read the WebGL renderer string from a throwaway context, or null if WebGL is
+ * unavailable at all. */
+function probeWebglRendererString(): string | null {
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    if (!gl) return null;
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer: unknown = info
+      ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL)
+      : gl.getParameter(gl.RENDERER);
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    return typeof renderer === "string" ? renderer : null;
+  } catch {
+    return null;
+  }
+}
+
+function webglAllowed(): boolean {
+  if (webglAllowedMemo !== undefined) return webglAllowedMemo;
+  const { platform } = useStore.getState();
+  // Platform signal not loaded yet (outside Tauri, or a pre-init host): keep WebGL
+  // and do NOT memoize, so a later Linux terminal still gets the real probe. Boot
+  // loads the platform before the first refresh (store `init`), so in practice
+  // every host creation sees a real value.
+  if (platform === "") return true;
+  if (!isLinux(platform)) {
+    webglAllowedMemo = true;
+    return webglAllowedMemo;
+  }
+  const renderer = probeWebglRendererString();
+  webglAllowedMemo = renderer !== null && !isSoftwareWebGLRenderer(renderer);
+  if (!webglAllowedMemo) {
+    console.warn(
+      `[recue] terminals: skipping WebGL renderer (software rasterizer${renderer ? `: ${renderer}` : " — no WebGL context"}); using the DOM renderer`,
+    );
+  }
+  return webglAllowedMemo;
+}
 
 /**
  * Apply the Settings terminal options (#100) to every live pooled terminal and to
@@ -193,10 +245,12 @@ function createHost(sessionId: string): TerminalHost {
   // detached canvas window (#84/#105): a freshly-opened native window renders agent
   // TUIs with doubled/ghosted glyphs and misaligned box-drawing — a known WebGL
   // glyph-atlas / devicePixelRatio artifact in a secondary window — so detached
-  // windows use the DOM renderer (visually equivalent, no artifact). The main window
-  // keeps WebGL, so its rendering is provably unchanged.
+  // windows use the DOM renderer (visually equivalent, no artifact). Also skipped on
+  // Linux when the one-time probe says WebGL is software-rasterized (#346, see
+  // `webglAllowed` above). The main window on macOS/Windows keeps WebGL, so its
+  // rendering is provably unchanged.
   let webgl: WebglAddon | undefined;
-  if (IS_MAIN_WINDOW) {
+  if (IS_MAIN_WINDOW && webglAllowed()) {
     try {
       const addon = new WebglAddon();
       addon.onContextLoss(() => addon.dispose());
@@ -370,8 +424,12 @@ function createHost(sessionId: string): TerminalHost {
   void sessionScrollback(sessionId)
     .then((reply) => {
       scrollbackEnd = reply.end;
-      if (!disposed && reply.bytes.length) {
-        term.write(Uint8Array.from(reply.bytes));
+      // base64 → bytes (#346): the reply carries the retained scrollback as a compact
+      // string (the #261 live-output encoding) instead of a JSON integer array that
+      // cost a megabyte-plus parse per terminal mount.
+      const replayBytes = decodeOutputB64(reply.b64);
+      if (!disposed && replayBytes.length) {
+        term.write(replayBytes);
       }
     })
     .catch(() => {

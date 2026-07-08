@@ -278,9 +278,11 @@ export interface OutputPayload {
   offset: number;
 }
 
-/** A session's retained scrollback plus its absolute end-offset (dedupe boundary). */
+/** A session's retained scrollback plus its absolute end-offset (dedupe boundary).
+ * The bytes travel base64-encoded like live output (#261/#346) — never a JSON
+ * integer array, which cost a megabyte-plus parse per terminal mount. */
 export interface ScrollbackReply {
-  bytes: number[];
+  b64: string;
   end: number;
 }
 
