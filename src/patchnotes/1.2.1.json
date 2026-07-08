@@ -1,0 +1,19 @@
+{
+  "version": "1.2.1",
+  "date": "2026-07-08",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "ReCue now runs on Linux — Arch, Ubuntu, and Mint are fully supported (best-effort on other distributions), shipped as a self-updating AppImage. Shortcuts use Ctrl, and \"Reveal in File Manager\" opens your desktop's file browser."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "Terminals on Linux are much faster: ReCue works around a graphics issue on NVIDIA drivers and virtual machines, skips GPU rendering when only a software rasterizer is available, and batches terminal output — fixing laggy typing, slow screen updates, and slow startup.",
+        "Reconnecting sessions at startup is quicker on every platform thanks to a leaner scrollback transfer."
+      ]
+    }
+  ]
+}
