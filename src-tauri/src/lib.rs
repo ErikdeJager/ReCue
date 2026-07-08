@@ -8,6 +8,7 @@ mod agents;
 mod commands;
 mod files;
 mod git;
+mod linux_webkit;
 mod path_env;
 mod pty;
 mod skills;
@@ -27,6 +28,11 @@ use store::Store;
 /// How often the #93 scheduler polls for due schedules. A few seconds is plenty
 /// for a one-shot launcher and keeps boot catch-up prompt without busy-spinning.
 const SCHEDULE_POLL_SECS: u64 = 5;
+
+/// Upper bound on how many queued session events one forwarder pass drains before
+/// emitting (#346) — keeps a single coalesce/emit pass bounded under a sustained
+/// output storm so lifecycle events never wait behind an unbounded drain.
+const MAX_EVENT_DRAIN: usize = 512;
 
 /// Best-effort: reset ReCue's microphone / speech-recognition TCC grants so macOS re-asks
 /// once after an update (#321). macOS pins a permission grant to the app's code signature;
@@ -52,6 +58,14 @@ pub fn run() {
     // Restore the login-shell PATH *before* any threads spawn (env mutation isn't
     // thread-safe). See `path_env`.
     path_env::restore_user_path();
+
+    // Linux/WebKitGTK renderer workaround (#346): on NVIDIA's proprietary driver (and
+    // in VMs) WebKitGTK's DMA-BUF renderer makes the whole webview crawl — laggy input
+    // echo, slow paint. Export the documented kill-switch before GTK/WebKit initialize
+    // (and, like the PATH restore above, before any threads — env mutation isn't
+    // thread-safe). No-op on macOS/Windows and on healthy AMD/Intel Mesa stacks; the
+    // user's own env and `RECUE_DISABLE_DMABUF` override it. See `linux_webkit`.
+    linux_webkit::apply_webkit_env_workarounds();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -100,55 +114,72 @@ pub fn run() {
 
             let handle = app.handle().clone();
             thread::spawn(move || {
-                for event in rx {
-                    let _ = match event {
-                        SessionEvent::Output { id, bytes, offset } => {
-                            // base64-encode here (off the per-session reader thread) so the
-                            // `session://output` payload is a compact string, not a multi-KB
-                            // JSON integer array the WebView main thread must JSON.parse (#261).
-                            handle.emit(
-                                "session://output",
-                                commands::OutputPayload {
-                                    id,
-                                    b64: commands::encode_output(&bytes),
-                                    offset,
-                                },
-                            )
+                // Drain-then-coalesce (#346): block for the next event, then scoop up
+                // whatever is already queued (`try_recv` never blocks, so a lone event
+                // forwards with unchanged latency) and merge consecutive contiguous
+                // same-session Output runs (`pty::coalesce_output_events`, order-
+                // preserving). Each `emit` is an evaluate-JS on the webview main
+                // thread — costliest on Linux/WebKitGTK — so under a TUI repaint storm
+                // this collapses hundreds of per-8KB emits/sec into a few, keeping
+                // keystroke echo responsive instead of queueing behind output events.
+                while let Ok(first) = rx.recv() {
+                    let mut batch = vec![first];
+                    while batch.len() < MAX_EVENT_DRAIN {
+                        match rx.try_recv() {
+                            Ok(event) => batch.push(event),
+                            Err(_) => break,
                         }
-                        SessionEvent::Exited { id, code } => {
-                            handle.emit("session://exited", commands::ExitPayload { id, code })
-                        }
-                        SessionEvent::State { id, busy } => {
-                            // Record the first activity (#112): on the first busy=true
-                            // we persist `has_been_active` so a previously-active agent
-                            // shows the "finished / needs input" (yellow) indicator
-                            // immediately on next boot. Persists only on the false→true
-                            // transition (a no-op afterward), off the emit hot path.
-                            if busy {
-                                let _ = handle.state::<Store>().mark_session_active(&id);
+                    }
+                    for event in pty::coalesce_output_events(batch) {
+                        let _ = match event {
+                            SessionEvent::Output { id, bytes, offset } => {
+                                // base64-encode here (off the per-session reader thread) so the
+                                // `session://output` payload is a compact string, not a multi-KB
+                                // JSON integer array the WebView main thread must JSON.parse (#261).
+                                handle.emit(
+                                    "session://output",
+                                    commands::OutputPayload {
+                                        id,
+                                        b64: commands::encode_output(&bytes),
+                                        offset,
+                                    },
+                                )
                             }
-                            handle.emit("session://state", commands::StatePayload { id, busy })
-                        }
-                        SessionEvent::Name { id, name } => {
-                            // Persist claude's auto-title (#97) so it shows on next
-                            // boot before the first refresh, then notify the UI. The
-                            // user's custom name (#57) is a separate field and wins.
-                            let _ = handle
-                                .state::<Store>()
-                                .set_auto_name(&id, Some(name.clone()));
-                            handle.emit("session://name", commands::NamePayload { id, name })
-                        }
-                        SessionEvent::Forkable { id, forkable } => {
-                            // Persist forkability (#138) — persist-on-change inside
-                            // set_forkable — then notify the UI so the Fork affordance
-                            // enables/disables up front, on the #97 title cadence.
-                            let _ = handle.state::<Store>().set_forkable(&id, forkable);
-                            handle.emit(
-                                "session://forkable",
-                                commands::ForkablePayload { id, forkable },
-                            )
-                        }
-                    };
+                            SessionEvent::Exited { id, code } => {
+                                handle.emit("session://exited", commands::ExitPayload { id, code })
+                            }
+                            SessionEvent::State { id, busy } => {
+                                // Record the first activity (#112): on the first busy=true
+                                // we persist `has_been_active` so a previously-active agent
+                                // shows the "finished / needs input" (yellow) indicator
+                                // immediately on next boot. Persists only on the false→true
+                                // transition (a no-op afterward), off the emit hot path.
+                                if busy {
+                                    let _ = handle.state::<Store>().mark_session_active(&id);
+                                }
+                                handle.emit("session://state", commands::StatePayload { id, busy })
+                            }
+                            SessionEvent::Name { id, name } => {
+                                // Persist claude's auto-title (#97) so it shows on next
+                                // boot before the first refresh, then notify the UI. The
+                                // user's custom name (#57) is a separate field and wins.
+                                let _ = handle
+                                    .state::<Store>()
+                                    .set_auto_name(&id, Some(name.clone()));
+                                handle.emit("session://name", commands::NamePayload { id, name })
+                            }
+                            SessionEvent::Forkable { id, forkable } => {
+                                // Persist forkability (#138) — persist-on-change inside
+                                // set_forkable — then notify the UI so the Fork affordance
+                                // enables/disables up front, on the #97 title cadence.
+                                let _ = handle.state::<Store>().set_forkable(&id, forkable);
+                                handle.emit(
+                                    "session://forkable",
+                                    commands::ForkablePayload { id, forkable },
+                                )
+                            }
+                        };
+                    }
                 }
             });
 

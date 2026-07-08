@@ -3141,6 +3141,18 @@ export const useStore = create<AppState>()((set, get) => ({
         eventsSubscribed = false;
       }
     }
+    // Host OS family (#143), once, for OS-appropriate display labels — read BEFORE the
+    // first refresh (#346) so the platform signal is loaded before any terminal host
+    // is created: the Linux software-WebGL probe and the Windows ConPTY option
+    // (`windowsPtyOption`) both read it at host-creation time, and `refresh` is what
+    // first populates `sessions` (whose terminals mount immediately). On Windows also
+    // read the build number so xterm.js can configure its ConPTY handling.
+    try {
+      set({ platform: await ipc.platform() });
+      set({ windowsBuild: await ipc.windowsBuild() });
+    } catch {
+      // Outside Tauri; leave "" / 0 → the macOS-default labels + no windowsPty.
+    }
     await get().refresh();
     // Default view on launch (#103): apply the saved preference once at boot (main
     // window only). `init` runs only on mount, so a mid-session view change is never
@@ -3161,14 +3173,6 @@ export const useStore = create<AppState>()((set, get) => ({
       get().setDetachedCanvasIds(await ipc.listCanvasWindows());
     } catch {
       // Outside Tauri / no windows; leave the (empty) default.
-    }
-    // Host OS family (#143), once, for OS-appropriate display labels. On Windows also
-    // read the build number so xterm.js can configure its ConPTY handling.
-    try {
-      set({ platform: await ipc.platform() });
-      set({ windowsBuild: await ipc.windowsBuild() });
-    } catch {
-      // Outside Tauri; leave "" / 0 → the macOS-default labels + no windowsPty.
     }
     // FileTree disk-change poll (#264): runs in *any* window that can show a tree (the
     // main shell or a detached canvas), each refreshing only its own mounted trees, so

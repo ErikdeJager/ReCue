@@ -106,3 +106,75 @@ real box across Arch, Ubuntu, and Mint:
 - [ ] **Clipboard image paste** (`save_clipboard_image`) works under X11 and Wayland.
 - [ ] The **in-app updater** recognizes the AppImage (`linux-x86_64` in `latest.json`) and
       relaunches after applying.
+
+## 2026-07-08
+
+### Performance (Task #346)
+
+Symptom (reported from a real Arch box, release AppImage, Wayland, across NVIDIA/AMD/Intel
+machines): agents inside ReCue are very slow — laggy terminal input echo, slow display
+updates, slow agent boot/spawn — while macOS and Windows are fine. Investigation traced it
+to four compounding causes; all four are fixed, the Linux-specific ones cfg-/platform-gated
+and the platform-neutral ones provably order/content-preserving:
+
+- **No WebKitGTK DMA-BUF workaround.** On NVIDIA's proprietary driver (and in VMs),
+  WebKitGTK's DMA-BUF renderer is the classic "Tauri app is unusably slow / blank on
+  Linux" failure — it drags the whole webview down (input, paint, boot). wry 0.55 does not
+  set the documented kill-switch, so ReCue now does: `linux_webkit::
+  apply_webkit_env_workarounds()` runs at the top of `run()` (before GTK/WebKit init,
+  before any threads) and sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` **only** when the NVIDIA
+  proprietary driver (`/proc/driver/nvidia/version` or `/sys/module/nvidia`) or a VM
+  (`/sys/hypervisor/type`, DMI product/vendor strings) is detected. Policy: a user-set
+  `WEBKIT_DISABLE_DMABUF_RENDERER` is always respected; `RECUE_DISABLE_DMABUF=1|0` force-
+  overrides both ways; healthy AMD/Intel Mesa stacks are left on the (faster) DMA-BUF
+  path. `WEBKIT_DISABLE_COMPOSITING_MODE` is never set automatically —
+  `RECUE_DISABLE_COMPOSITING=1` is an opt-in escape hatch for real-box debugging.
+  **Files**: `src-tauri/src/linux_webkit.rs` (new), `src-tauri/src/lib.rs`.
+- **xterm's WebGL renderer silently software-rasterized.** WebKitGTK can hand the
+  `@xterm/addon-webgl` a context that "works" but is llvmpipe/SwiftShader — every terminal
+  frame CPU-rendered. The pool now probes the WebGL renderer string **once per app** (Linux
+  only — macOS/Windows short-circuit and never construct the probe canvas) and skips the
+  WebGL addon when it names a software rasterizer, falling back to xterm's DOM renderer
+  (the #105 detached-window fallback, faster than software GL). The store's `init` now
+  loads the `platform` signal **before** the first `refresh()` so the probe (and Windows'
+  `windowsPtyOption`) always see a real value at host-creation time.
+  **Files**: `src/components/Terminal/webglRenderer.ts` (new, pure + tested),
+  `src/components/Terminal/terminalPool.ts`, `src/store.ts`.
+- **Scrollback replay shipped as a JSON integer array.** Live output went base64 in #261,
+  but `session_scrollback` still returned `Vec<u8>` — serde serializes that as
+  `[27,91,...]`, turning the 256 KB scrollback into ~1 MB+ of JSON parsed on **every**
+  terminal mount (an agent wall of N terminals pays N of those at boot; costliest on
+  WebKitGTK). `ScrollbackReply` now carries `b64` (the #261 `encode_output` encoding) and
+  the pool decodes with the existing `decodeOutputB64`. Platform-neutral — helps all OSes.
+  **Files**: `src-tauri/src/commands.rs`, `src/types/index.ts`,
+  `src/components/Terminal/terminalPool.ts`.
+- **One Tauri emit per 8 KB PTY read.** Each `emit` is an evaluate-JS on the webview main
+  thread — costliest on Linux/WebKitGTK — so claude's TUI repaint storms became hundreds of
+  events/sec that keystroke echo queued behind. The forwarder thread now drains whatever is
+  already queued after each blocking `recv` (`try_recv`, zero added latency for a lone
+  event) and merges **consecutive contiguous same-session** Output runs via the pure
+  `pty::coalesce_output_events` (capped at 256 KB per merged emit). The contiguity guard
+  (next chunk's start == run's end) keeps the frontend's `start = offset - bytes.length`
+  dedupe math exact and splits across a Restart (whose fresh Scrollback resets the running
+  total); non-Output events are never reordered. Platform-neutral — the frontend already
+  rAF-coalesces its xterm writes, so the merged payload decodes to the identical byte
+  stream. **Files**: `src-tauri/src/pty.rs`, `src-tauri/src/lib.rs`.
+
+Deliberately untouched (documented future work): the login-shell PATH probe's boot cost
+(≤3 s worst case, `path_env.rs`), per-keystroke `write_stdin` invokes (batching would add
+latency by definition), Overview terminal virtualization, `[profile.release]` tuning.
+
+### Needs real-box verification (performance, #346)
+
+- [ ] **NVIDIA + Wayland**: boot logs `[recue] WebKitGTK: set WEBKIT_DISABLE_DMABUF_RENDERER=1`,
+      and terminals are responsive (echo, paint, spawn).
+- [ ] **AMD + Wayland** and **Intel + Wayland**: DMA-BUF is left **on** (no log line), no
+      regression vs before.
+- [ ] `RECUE_DISABLE_DMABUF=1` / `=0` force the workaround on/off; a user-exported
+      `WEBKIT_DISABLE_DMABUF_RENDERER` is respected untouched.
+- [ ] On a box where WebGL is software (llvmpipe — e.g. NVIDIA without working GL in the
+      webview): the console logs the "skipping WebGL renderer" warning, terminals use the
+      DOM renderer, and input echo is responsive.
+- [ ] Release AppImage under a busy `claude` TUI (many parallel agents): display updates
+      stay smooth and typing stays responsive (coalescing + b64 scrollback in effect);
+      scrollback replays correctly after a view switch and after a session Restart.
