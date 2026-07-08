@@ -2883,3 +2883,83 @@ binary, `open -R`, ⌘ glyphs), plus the CI/bundle and docs. **macOS and Windows
   `cargo test` (180 pass, incl. the new shell test) / `cargo clippy --all-targets -- -D warnings` /
   `cargo fmt --check` (touched files clean). GUI/AppImage/D-Bus paths that can't be unit-tested are
   logged for real-box verification in **`TRAJECTORY_TO_LINUX.md`**.
+
+### 346. [x] Linux performance — WebKitGTK DMABUF env workaround, software-WebGL → DOM-renderer fallback, coalesced output emits, base64 scrollback replay
+
+ReCue on Arch Linux (release AppImage, Wayland, across NVIDIA/AMD/Intel machines) was extremely slow —
+laggy terminal input echo, slow display updates, slow agent boot/spawn — while macOS and Windows were
+fine (#346). Investigation across the backend PTY pipeline, the frontend rendering path, and the
+Linux/WebKitGTK configuration found four compounding causes; all four are fixed — the Linux-specific
+ones cfg-/platform-gated, the platform-neutral ones provably order/content-preserving. **macOS and
+Windows behavior is unchanged.**
+
+**What shipped** (branch `fiz/linux-oprimization`, PR [#99](https://github.com/ErikdeJager/ReCue/pull/99),
+2026-07-08):
+
+- **`src-tauri/src/linux_webkit.rs`** (new) + **`src-tauri/src/lib.rs`** — the WebKitGTK DMA-BUF
+  workaround: `apply_webkit_env_workarounds()` runs at the top of `run()` (before `tauri::Builder`/GTK
+  init and before any threads, next to `path_env::restore_user_path()`) and sets
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1` **only** when the NVIDIA proprietary driver
+  (`/proc/driver/nvidia/version` / `/sys/module/nvidia`) or a VM (`/sys/hypervisor/type`, DMI
+  product/vendor strings) is detected — on NVIDIA/VMs WebKitGTK's DMA-BUF renderer is the classic
+  "Tauri app is unusably slow on Linux" failure, dragging the whole webview down. A user-set
+  `WEBKIT_DISABLE_DMABUF_RENDERER` is always respected; `RECUE_DISABLE_DMABUF=1|0` force-overrides both
+  ways; healthy AMD/Intel Mesa stacks keep the (faster) DMA-BUF path. `WEBKIT_DISABLE_COMPOSITING_MODE`
+  is never auto-set (`RECUE_DISABLE_COMPOSITING=1` is a debug opt-in). The pure decision core
+  (`should_disable_dmabuf` / `parse_force_flag` / `is_vm_product_name`) is cfg-widened with `, test)`
+  (the `reveal_file_linux` precedent) and fully unit-tested on every host; only the thin fs-probe +
+  `set_var` shell is Linux-only (edition-2021 `set_var` is safe; the 2024 caveat is flagged in-code).
+- **`src/components/Terminal/webglRenderer.ts`** (new, pure + vitest suite) +
+  **`src/components/Terminal/terminalPool.ts`** — the software-WebGL fallback: WebKitGTK can hand
+  xterm's WebGL addon a context that "works" but is software-rasterized (llvmpipe/SwiftShader), so
+  every terminal frame rendered on the CPU. The pool now probes the WebGL renderer string **once per
+  app** (memoized; Linux only — macOS/Windows short-circuit to `true` and never construct the probe
+  canvas) and skips the `WebglAddon` when `isSoftwareWebGLRenderer` matches, so xterm uses its DOM
+  renderer (the #105 detached-window fallback — faster than software GL). Unknown/empty renderer
+  strings keep WebGL (only skip when we *know* it's software).
+- **`src/store.ts`** — `init()` now loads the `platform` (+ `windowsBuild`) signal **before** the first
+  `refresh()`, so the platform is always known before any terminal host is created — closing the latent
+  race for the new Linux probe **and** for Windows' `windowsPtyOption` (both read it at host-creation
+  time). Platform-neutral: same reads, earlier.
+- **`src-tauri/src/commands.rs`** + **`src/types/index.ts`** + **`terminalPool.ts`** — base64 scrollback
+  replay: `ScrollbackReply` now carries `b64: String` (via the #261 `encode_output`) instead of
+  `bytes: Vec<u8>`, which serde serialized as a JSON integer array — ~1 MB+ of JSON parsed on **every**
+  terminal mount (an agent wall of N terminals paid N of those at boot). The pool decodes with the
+  existing `decodeOutputB64`. New serde round-trip test. Platform-neutral win for all three OSes.
+- **`src-tauri/src/pty.rs`** + **`src-tauri/src/lib.rs`** — coalesced output emits: the event-forwarder
+  thread now drains whatever is queued after each blocking `recv` (`try_recv`, zero added latency for a
+  lone event; `MAX_EVENT_DRAIN` 512 bounds a pass) and merges **consecutive contiguous same-session**
+  `Output` runs via the new pure `pty::coalesce_output_events` (cap `COALESCE_MAX_BYTES` = 256 KB =
+  `SCROLLBACK_CAP`), collapsing claude's TUI repaint storms from hundreds of per-8 KB emits/sec — each
+  an evaluate-JS on the webview main thread, costliest on Linux/WebKitGTK — into a few. The
+  **contiguity guard** (next chunk's start == run's end) keeps the frontend's
+  `start = offset - bytes.length` dedupe math exact and splits across a Restart (a respawn under the
+  same id resets the fresh `Scrollback` total to 0 — a naive merge would corrupt the replay dedupe);
+  non-Output events are never reordered (a session's `Exited` still emits strictly after its final
+  `Output`). 8 new unit tests incl. the Restart hazard, ordering across `Exited`, and the size cap.
+- **Docs** — `TRAJECTORY_TO_LINUX.md` gained a "Performance (Task #346)" section (symptoms, fixes,
+  env-var policy) + a "Needs real-box verification (performance)" checklist (per-GPU DMABUF behavior,
+  llvmpipe fallback, AppImage under load); `CLAUDE.md` documents the four fixes in the Linux build note.
+
+**Key decisions**
+
+- **Detection-based, not unconditional**: the user's fleet spans NVIDIA/AMD/Intel, so
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1` is set only on the known-bad stacks (NVIDIA proprietary / VM) —
+  blanket-disabling would cost performance on healthy Mesa. User env always wins; `RECUE_*` overrides
+  exist for support.
+- **Deliberately untouched** (future work, logged in the trajectory): the login-shell PATH probe's boot
+  cost (≤3 s worst case), per-keystroke `write_stdin` invokes (batching adds latency by definition),
+  Overview terminal virtualization, `[profile.release]` tuning.
+- No version bump / patch-notes file (releases are batched by the maintainer).
+
+**Dependencies:** 345 (the Linux port this optimizes).
+
+**Notes**
+
+- Checks green on macOS: `cargo test` (196 pass, incl. the new coalescer / env-policy / scrollback
+  tests), `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo llvm-cov` logic
+  surface 87.6% lines (`linux_webkit.rs` 97.9%), `npm test` (664 pass / 46 files), frontend coverage
+  90.5% lines, `npm run build` / `lint` / `format:check`.
+- The per-GPU runtime behavior (DMABUF auto-set on NVIDIA, left alone on AMD/Intel, llvmpipe → DOM
+  renderer, AppImage under a busy TUI) can't be exercised on CI — walked via the
+  `TRAJECTORY_TO_LINUX.md` checklist on real boxes.
