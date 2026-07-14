@@ -956,3 +956,26 @@ returns `true` before touching the event).
   the temp-PNG path exactly once.
 - Re-confirm macOS ⌘V pastes once and Ctrl+V still emits `^V` (gated off), and Linux
   Ctrl+Shift+V native paste is unaffected.
+
+### `[profile.release]` tuned — the Windows leg too (Task #358)
+
+`src-tauri/Cargo.toml` gained a real `[profile.release]` (`lto = true`, `codegen-units = 1`,
+`opt-level = "s"`, `strip = true`) to shrink the shipped binary; the substance and the
+benchmark live in `TRAJECTORY_TO_LINUX.md` (the AppImage pays for binary size at every cold
+start), but the profile is a **single Cargo setting applied to all three targets** — no
+`#[cfg]`, no platform code. For Windows specifically:
+
+- `strip = true` is near-free and safe on MSVC — debug info lives in a PDB that the release
+  profile never emits, so there is nothing extra to strip and nothing to lose.
+- `lto` / `codegen-units` / `opt-level` are platform-neutral codegen settings; LTO on
+  `crate-type = ["staticlib", "cdylib", "rlib"]` is the stock Tauri template configuration.
+- `panic` deliberately stays `"unwind"` (**do not** set `panic = "abort"`): a panic in a
+  reader / monitor / title / forwarder / poll thread must kill only that thread, not every
+  live PTY session. The manifest comment says so.
+- Build cost lands only on `release.yml` (a version-bump push). The PR gate builds with the
+  dev/test profiles and is unaffected.
+
+**Needs real-box verification (Windows, #358)**: the MSVC leg only builds in `release.yml`, so
+its first exercise of the new profile is the next release run — confirm it links under LTO and
+that the resulting **NSIS/MSI installer installs and runs**, then note the binary/installer
+size delta.

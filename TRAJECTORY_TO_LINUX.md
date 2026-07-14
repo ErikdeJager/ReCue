@@ -162,7 +162,8 @@ and the platform-neutral ones provably order/content-preserving:
 
 Deliberately untouched (documented future work): the login-shell PATH probe's boot cost
 (≤3 s worst case, `path_env.rs`), per-keystroke `write_stdin` invokes (batching would add
-latency by definition), Overview terminal virtualization, `[profile.release]` tuning.
+latency by definition), Overview terminal virtualization. _(`[profile.release]` tuning was
+the fourth item here; it was picked up by #358 — see the entry below.)_
 
 ### Needs real-box verification (performance, #346)
 
@@ -265,3 +266,105 @@ latency by definition), Overview terminal virtualization, `[profile.release]` tu
       untouched (no `[recue] GTK:` line) and dialogs follow the desktop theme;
       `RECUE_GTK_THEME=Adwaita:dark npm run tauri dev` makes them dark (the AppImage-free
       smoke test).
+
+### `[profile.release]` tuned — smaller binary, faster AppImage cold start (Task #358)
+
+The crate had **no `[profile.release]` section at all** (no workspace root manifest, no
+`.cargo/config.toml`, no `RUSTFLAGS` in either workflow), so release builds ran on Cargo's
+stock defaults: `opt-level = 3`, **no LTO** (16 codegen units), **unstripped** symbols. Every
+bundle carried that bloat, and the **AppImage pays for it at every launch** — its squashfs
+image is decompressed / paged in on cold start (a known Tauri+AppImage cost,
+tauri-apps/tauri discussions #11157). `src-tauri/Cargo.toml` now carries a heavily-commented
+profile:
+
+```toml
+[profile.release]
+lto = true            # cross-crate LTO across tauri/wry/portable-pty/ureq/serde
+codegen-units = 1     # no cross-unit duplication, best inlining
+opt-level = "s"       # optimize for size (see the benchmark note below)
+strip = true          # drop the symbol table (no symbolication pipeline depends on it)
+# panic stays "unwind" — deliberately. See below.
+```
+
+- **`panic = "abort"` is deliberately rejected** (the one item of Tauri's stock size
+  recommendation this skips), and the manifest says so in a block comment so nobody
+  "completes the recommendation" later. ReCue supervises many long-lived PTY sessions from
+  always-running threads — the per-session reader (`pty.rs reader_loop`), the busy/idle
+  monitor, the title worker, the event forwarder, and the schedule/recurring poll loop
+  (`lib.rs`). Under `panic = "unwind"` a panic in any of them (including one thrown from
+  inside a dependency) kills **only that thread**; the process, every other live agent, and
+  every detached canvas window survive — and the backend is written for exactly that (there
+  is **not one** `lock().unwrap()` in the tree; every mutex take handles a poisoned lock).
+  Under `panic = "abort"` the same panic takes the whole app down and every live session with
+  it — traded for the *smallest* of the four size levers (unwind tables, typically ~5–10%).
+- **Build-time cost is confined to `release.yml`.** The PR gate (`ci.yml`) runs clippy /
+  `cargo test` / `llvm-cov` on the **dev/test** profiles and `npm run tauri dev` uses the dev
+  profile, so neither is affected. `release.yml` (only on a version bump) pays fat-LTO link
+  time for **four Rust binaries serially** (`max-parallel: 1` × macOS-universal = 2 targets,
+  Windows, Linux), and the first post-merge release run rebuilds deps cold (the profile change
+  busts `Swatinem/rust-cache`). Documented fallback if a leg OOMs or the pipeline gets
+  painful: **`lto = "thin"`** — one word, keeps most of the win for ~a third of the link cost.
+- **Rollback** is deleting the block; nothing else changed. The only source change is the
+  test-only `pty::tests::bench_output_hot_path` (below).
+
+**`opt-level = "s"` vs `3` — the benchmark.** `pty.rs`'s `#[cfg(test)] mod tests` gained an
+`#[ignore]`d `bench_output_hot_path`, which measures the three CPU-bound stages of the PTY
+output path (the only work between a PTY `read()` and the `session://output` emit):
+`Scrollback::push` → `coalesce_output_events` (#346) → `commands::encode_output` (#261), over
+64 MB of synthetic output in 8 KB chunks:
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --release \
+  -- --ignored --nocapture bench_output_hot_path      # run ~5x, take the median per stage
+```
+
+**Decision rule** (applied, not re-derived): ship `opt-level = "s"` unless it is **>15% slower
+on the aggregate** *and* some stage drops below **~200 MB/s**. A busy `claude` TUI repaint
+storm produces single-digit MB/s (and #261/#346 already moved the expensive part — the WebView
+`JSON.parse` and the per-8 KB emit — off the critical path), so any stage at ≥200 MB/s is
+nowhere near a bottleneck, and size is what this profile buys. **The implementer's box could
+not run the benchmark** (see below), so the rule's documented fallback applies: **`"s"` ships.**
+
+#### Measurement pending real-box verification (#358)
+
+The implementing box has **no `webkit2gtk-4.1` / `javascriptcoregtk-4.1` system libraries**
+(`cargo check` fails identically on untouched `main` — a pre-existing environment gap), so it
+**cannot link** a Rust binary: no `cargo build --release`, no AppImage bundle, no `cargo test`,
+and therefore **no size numbers and no benchmark numbers**. Nothing is estimated here on
+purpose — the figures below are to be **filled in from a real run**, not guessed. (What *was*
+verified: `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` are green, so the
+manifest parses and the benchmark test compiles warning-free.)
+
+- [ ] **Baseline (stash the `[profile.release]` block, or check out `main`), then tuned:**
+
+      ```bash
+      npm ci && npm run build                       # tauri-build embeds ../dist
+      cargo clean --manifest-path src-tauri/Cargo.toml
+      /usr/bin/time -v cargo build --release --manifest-path src-tauri/Cargo.toml 2>&1 \
+        | grep -E 'Maximum resident|Elapsed'
+      ls -l src-tauri/target/release/recue                       # binary bytes
+      npm run tauri build -- --bundles appimage
+      ls -l src-tauri/target/release/bundle/appimage/*.AppImage  # AppImage bytes
+      ```
+
+      Record: binary before/after + % delta (the acceptance target is **≥ 25% smaller**),
+      AppImage before/after, clean-build wall time and peak RSS before/after.
+- [ ] **`opt-level` benchmark table**: median MB/s per stage (`push` / `coalesce` / `encode`)
+      for **both** `"s"` and `3`, 5 runs each. If `"s"` trips the decision rule above, flip the
+      manifest to `opt-level = 3` and note it here — the `lto` + `codegen-units = 1` + `strip`
+      size win still lands either way.
+- [ ] **Functional smoke on the built AppImage** (LTO is precisely the setting that surfaces
+      latent UB, so exercise the real PTY path, not just the file size): launch it, spawn a
+      `claude` session, type (echo is immediate), watch the busy dot go blue → yellow, open a
+      git-diff panel and a file, quit cleanly, relaunch → the session resumes. Note
+      (subjectively) whether cold start is faster than the baseline AppImage — on Arch, Ubuntu
+      and Mint.
+- [ ] **macOS release leg** (`release.yml` only): the **universal** build does two sequential
+      fat-LTO links on the arm64 runner (~7 GB RAM) — confirm it neither OOMs nor times out,
+      and that the signed `.app` still passes the workflow's `codesign` assertions (strip runs
+      at link, long before signing, so it *should* be a non-event — #292/#314/#321).
+- [ ] **Windows release leg**: the MSVC build links under LTO and the NSIS/MSI installer still
+      installs + runs (`strip` is near-free there — release emits no PDB).
+
+**Files**: `src-tauri/Cargo.toml` (the profile), `src-tauri/src/pty.rs` (the `#[ignore]`d
+benchmark test only — no production-code change), `TRAJECTORY_TO_WINDOWS.md`, `CLAUDE.md`.

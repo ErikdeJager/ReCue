@@ -937,7 +937,15 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   new window can invoke commands + listen to events.
 - **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`,
   Windows NSIS/MSI installers, or a Linux **AppImage** (#345, host-OS dependent); the
-  **updater artifacts are minisign-signed** on all three. macOS
+  **updater artifacts are minisign-signed** on all three. Release builds use a tuned
+  **`[profile.release]`** (#358 — fat `lto`, `codegen-units = 1`, `strip = true`, size
+  `opt-level = "s"`) so the binary — and with it every bundle, above all the AppImage, whose
+  squashfs is paged in on **every** cold start — is materially smaller; it deliberately keeps
+  **`panic = "unwind"`** (**never** set `panic = "abort"`, and the manifest says why) so a
+  panic in a reader / monitor / title / forwarder / poll thread kills only that thread instead
+  of the whole app and every live PTY session. The extra link time is paid only by
+  `release.yml` (a version-bump push); the PR gate and `tauri dev` build with the dev/test
+  profiles. macOS
   builds carry **Hardened Runtime + `Entitlements.plist`** (#292, `bundle.macOS.
   entitlements`) so mic/voice + protected-folder permissions work and persist — but **only
   once actually signed with an identity** (#314): a plain `tauri build` is ad-hoc (sign it
