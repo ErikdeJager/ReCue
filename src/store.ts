@@ -11,6 +11,7 @@ import {
   IDLE_AUTO_CONTINUE,
   type AutoContinueState,
 } from "./autoContinue";
+import { resolveCanvases } from "./boot";
 import { overviewPanelToContent } from "./components/Canvas/canvasDrop";
 import { canvasToTemplate } from "./components/Canvas/canvasToTemplate";
 import { rewriteScheduledLeaves } from "./components/Canvas/canvasSchedule";
@@ -62,6 +63,7 @@ import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
 import type {
   AgentInfo,
   AheadBehind,
+  BootState,
   BranchList,
   CanvasContent,
   CanvasEdge,
@@ -1369,6 +1371,11 @@ export interface AppState {
    * until loaded. Only consumed under an `isWindows` guard, to set xterm.js's
    * `windowsPty.buildNumber` for correct ConPTY handling. */
   windowsBuild: number;
+  /** True once the boot payload (#352 `boot_state`) has been applied — **or** has
+   * failed (e.g. running outside Tauri), so the UI never hangs on a blank. Gates the
+   * empty states so "No active sessions" / "No repositories yet." / the empty-canvas
+   * hint can't flash before the real content pops in. */
+  booted: boolean;
   toasts: Toast[];
   /** New session modal (rendered by #10); `newSessionRepo` optionally prefills it. */
   newSessionOpen: boolean;
@@ -1625,6 +1632,12 @@ export interface AppState {
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
   refresh: () => Promise<void>;
+  /** Turn one batched boot payload (#352 `boot_state`) into state — the **single**
+   * place the payload becomes state, in **one** `set()` (so `platform`/`windowsBuild`
+   * are already loaded the moment `sessions` mount their terminals, #346). `null` (the
+   * command failed / outside Tauri) keeps the defaults but still flips `booted`, so the
+   * loading gate never strands the UI on a blank. */
+  applyBootState: (boot: BootState | null) => void;
   refreshBranches: () => Promise<void>;
   /** Re-resolve each sidebar repo's GitHub web URL (#327), filling `githubUrls`. Runs on
    * the same cadence as `refreshBranches`; fail-open (a backend miss leaves the map). */
@@ -2356,6 +2369,7 @@ export const useStore = create<AppState>()((set, get) => ({
   claudeMissing: false,
   platform: "",
   windowsBuild: 0,
+  booted: false,
   toasts: [],
   newSessionOpen: false,
   newSessionRepo: null,
@@ -2895,276 +2909,278 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   init: async () => {
-    // Subscribe exactly once. The flag is set *before* the await so StrictMode's
+    // Boot is TWO concurrent waves (#352). Wave 1: the single batched `boot_state`
+    // round-trip, started immediately so it flies in parallel with the listener wave
+    // below (it used to be ~22 sequential waves / 34 invokes, 16 of them gating the
+    // first meaningful paint — and every round-trip is an evaluate-JS hop on the
+    // webview main thread, costliest on Linux/WebKitGTK, #346). `.catch(() => null)`
+    // attaches the handler NOW, so a rejection (outside Tauri) is never an unhandled
+    // promise rejection while we await the subscriptions.
+    const bootPromise = ipc.bootState().catch(() => null);
+
+    // Wave 2: the 13 `listen` registrations (each its own invoke) as ONE parallel
+    // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
       eventsSubscribed = true;
       try {
-        await ipc.subscribeSessionEvents({
-          onOutput: ({ id, b64, offset }) => {
-            // Decode the compact base64 payload with a tight byte loop instead of a
-            // multi-KB JSON.parse, then feed the bytes straight to the outputBus (off
-            // the React re-render path) (#261). `offset` (absolute end-offset) rides
-            // along so the terminal can dedupe the scrollback ↔ live overlap.
-            emitSessionOutput(id, decodeOutputB64(b64), offset);
-            // First live output proves a reconnecting session is alive — clear the
-            // flag exactly once. An O(1) Set check keeps this per-chunk hot path off
-            // a linear scan over every session (#261); `markConnected` does the one
-            // store write (it also drains the Set) (#30).
-            if (reconnectingIds.has(id)) {
-              reconnectingIds.delete(id);
-              get().markConnected(id);
-            }
-          },
-          onState: ({ id, busy }) => {
-            // Busy/idle from the backend heuristic (#42); emitted only on change.
-            // `setBusy` also schedules a debounced branch-label refresh on the
-            // busy→idle edge (#212) so an in-terminal `git checkout` is reflected.
-            get().setBusy(id, busy);
-          },
-          onName: ({ id, name }) => {
-            // claude's own auto-title (#97); fills the label for an unnamed agent
-            // (a custom name #57 still wins in sessionLabel).
-            get().setAutoName(id, name);
-          },
-          onForkable: ({ id, forkable }) => {
-            // Forkability changed (#138) — gates the Fork affordance up front.
-            get().setForkable(id, forkable);
-          },
-          onExited: ({ id, code }) => {
-            // Recurring child rotation/crash (#294): a session owned as a recurring's
-            // *current* child that exits — killed on rotation, or crashed on its own —
-            // must NOT surface a "Process exited" overlay or toast (it's an internal,
-            // rotating agent, not a user agent). The rotation-order race (its exit vs
-            // the `recurring://fired` swapping `current_session_id`) is also covered by
-            // `intentionalKills` in `onFired` below (which handles the case where the
-            // record already points at the *new* child by the time this exit lands).
-            const owningRec = get().recurrings.find(
-              (r) => r.current_session_id === id,
-            );
-            if (owningRec) {
-              intentionalKills.delete(id);
-              if (IS_MAIN_WINDOW) {
-                // Clear the pointer so the panel shows "next run in…" until the next
-                // fire (a genuine crash); a rotation's `onFired` sets the fresh child.
-                // Drop the dead child so its pooled xterm reconciles away.
-                set((s) => ({
-                  recurrings: s.recurrings.map((r) =>
-                    r.id === owningRec.id
-                      ? { ...r, current_session_id: null }
-                      : r,
-                  ),
-                }));
-                get().dropSession(id);
+        await Promise.all([
+          ipc.subscribeSessionEvents({
+            onOutput: ({ id, b64, offset }) => {
+              // Decode the compact base64 payload with a tight byte loop instead of a
+              // multi-KB JSON.parse, then feed the bytes straight to the outputBus (off
+              // the React re-render path) (#261). `offset` (absolute end-offset) rides
+              // along so the terminal can dedupe the scrollback ↔ live overlap.
+              emitSessionOutput(id, decodeOutputB64(b64), offset);
+              // First live output proves a reconnecting session is alive — clear the
+              // flag exactly once. An O(1) Set check keeps this per-chunk hot path off
+              // a linear scan over every session (#261); `markConnected` does the one
+              // store write (it also drains the Set) (#30).
+              if (reconnectingIds.has(id)) {
+                reconnectingIds.delete(id);
+                get().markConnected(id);
               }
-              return;
-            }
-            // Session lifecycle (forget / toast / kill) is owned by the **main**
-            // window (#84) — it's the source of truth for the session list. A
-            // detached canvas window is a renderer: it only reflects the exit
-            // locally so a terminal it shows gets the "Process exited" overlay,
-            // never forgetting/killing/toasting (which the main window does).
-            if (!IS_MAIN_WINDOW) {
-              if (get().sessions.some((s) => s.id === id)) {
-                get().markExited(id, code);
-              } else {
-                get().markTerminalExited(id, code);
+            },
+            onState: ({ id, busy }) => {
+              // Busy/idle from the backend heuristic (#42); emitted only on change.
+              // `setBusy` also schedules a debounced branch-label refresh on the
+              // busy→idle edge (#212) so an in-terminal `git checkout` is reflected.
+              get().setBusy(id, busy);
+            },
+            onName: ({ id, name }) => {
+              // claude's own auto-title (#97); fills the label for an unnamed agent
+              // (a custom name #57 still wins in sessionLabel).
+              get().setAutoName(id, name);
+            },
+            onForkable: ({ id, forkable }) => {
+              // Forkability changed (#138) — gates the Fork affordance up front.
+              get().setForkable(id, forkable);
+            },
+            onExited: ({ id, code }) => {
+              // Recurring child rotation/crash (#294): a session owned as a recurring's
+              // *current* child that exits — killed on rotation, or crashed on its own —
+              // must NOT surface a "Process exited" overlay or toast (it's an internal,
+              // rotating agent, not a user agent). The rotation-order race (its exit vs
+              // the `recurring://fired` swapping `current_session_id`) is also covered by
+              // `intentionalKills` in `onFired` below (which handles the case where the
+              // record already points at the *new* child by the time this exit lands).
+              const owningRec = get().recurrings.find(
+                (r) => r.current_session_id === id,
+              );
+              if (owningRec) {
+                intentionalKills.delete(id);
+                if (IS_MAIN_WINDOW) {
+                  // Clear the pointer so the panel shows "next run in…" until the next
+                  // fire (a genuine crash); a rotation's `onFired` sets the fresh child.
+                  // Drop the dead child so its pooled xterm reconciles away.
+                  set((s) => ({
+                    recurrings: s.recurrings.map((r) =>
+                      r.id === owningRec.id
+                        ? { ...r, current_session_id: null }
+                        : r,
+                    ),
+                  }));
+                  get().dropSession(id);
+                }
+                return;
               }
-              return;
-            }
-            // One event per close. An intentional kill (Remove/Forget) already
-            // toasts and is never auto-forgotten or double-toasted here (#32).
-            const intentional = intentionalKills.delete(id);
-            // Terminal item (#72): a shell PTY, not a claude session (not in
-            // `sessions`). On an unintentional exit, record it so the pooled
-            // <Terminal> shows a Restart overlay; an intentional × already removed
-            // the panel, so just swallow it.
-            if (!get().sessions.some((s) => s.id === id)) {
-              if (!intentional) get().markTerminalExited(id, code);
-              return;
-            }
-            // Clean exit (code 0 while running): the user ended the agent — forget
-            // it like Remove so it vanishes everywhere and won't return on next
-            // boot, with a brief "Agent exited" toast and no overlay/Restart (#63).
-            if (isCleanExit(code, booting, intentional)) {
-              void get().forgetExitedSession(id);
-              return;
-            }
-            // Non-zero / crash exit (or a failed boot resume): keep the session
-            // and its exit code so the Terminal shows the "Process exited" overlay
-            // + Restart (#63/#30). The generic exit toast is suppressed for
-            // intentional kills and during the boot window; others toast once.
-            get().markExited(id, code);
-            if (!booting && !intentional) {
-              get().pushToast(
-                code != null
-                  ? `Session exited (code ${code})`
-                  : "Session exited",
-              );
-            }
-          },
-        });
-        // Cross-window canvas sync (#84): a tab/layout edit in any window, and
-        // the detached-window set changing, both flow through the backend.
-        await ipc.subscribeCanvasEvents({
-          onCanvasesChanged: ({ canvases }) => get().applyCanvasSync(canvases),
-          onWindowsChanged: (ids) => get().setDetachedCanvasIds(ids),
-        });
-        // Scheduled sessions (#93/#280): the backend engine fires schedules into live
-        // agents. The **main** window owns the scheduled→live transition; a **detached**
-        // canvas window (#84) also listens because it can hold a scheduled panel, so it
-        // must follow the same fire (and keep its own `schedules` slice in sync). Both
-        // subscribe; the per-window behavior is branched inside each handler. (Tauri
-        // events are global on macOS and Windows alike, so this path is identical.)
-        await ipc.subscribeScheduleEvents({
-          onFired: ({ id, session }) => {
-            get().upsertSession(toSessionView(session));
-            if (!IS_MAIN_WINDOW) {
-              // Detached canvas (#280): reflect the fire locally so the rewritten
-              // agent leaf (arriving via `canvas://changed`) finds its session and
-              // renders the terminal instead of "Session closed." The main window
-              // owns the leaf rewrite, persistence, recents, and toast.
-              set((s) => ({
-                schedules: s.schedules.filter((x) => x.id !== id),
-              }));
-              return;
-            }
-            // The recent to surface is the *parent repo* for a worktree session
-            // (its `repo_path` is the app-managed worktree folder), else the
-            // session's own folder. This mirrors the backend, which touches
-            // `sched.cwd` (the parent repo) — never the worktree dir — so the
-            // worktree shows only as a sub-group under its parent, not as a
-            // duplicate empty top-level folder (#279). The interactive worktree
-            // spawn path likewise never adds the worktree dir to recents.
-            const recentPath = session.worktree_parent ?? session.repo_path;
-            set((s) => ({
-              schedules: s.schedules.filter((x) => x.id !== id),
-              recents: [
-                recentPath,
-                ...s.recents.filter((r) => r !== recentPath),
-              ],
-            }));
-            // Rewrite any Canvas leaf showing this pending schedule into the live
-            // agent (#280), in place (same leaf id → the #18 pooled terminal
-            // reparents), then persist so the main window — and any detached canvas
-            // holding it (via `canvas://changed`) — render the agent rather than the
-            // now-removed schedule's "no longer pending" panel.
-            const liveContent: CanvasContent = {
-              kind: "agent",
-              sessionId: session.id,
-              repoPath: session.repo_path,
-            };
-            const { canvases, activeCanvasId } = get();
-            const nextCanvases = rewriteScheduledLeaves(
-              canvases,
-              id,
-              liveContent,
-            );
-            if (nextCanvases !== canvases) {
-              set({ canvases: nextCanvases });
-              void ipc
-                .setCanvases({
-                  canvases: nextCanvases,
-                  activeId: activeCanvasId,
-                })
-                .catch(() => {});
-            }
-            get().pushToast(
-              `Scheduled agent started${session.name ? `: ${session.name}` : ""}`,
-            );
-          },
-          onError: ({ id, message }) => {
-            set((s) => ({
-              schedules: s.schedules.filter((x) => x.id !== id),
-            }));
-            // Only the main window toasts the failure (it owns the schedule surface).
-            if (IS_MAIN_WINDOW) {
-              get().pushToast(
-                message || "Scheduled agent failed to start",
-                "error",
-              );
-            }
-          },
-          onChanged: (schedules) => get().applyScheduleSync(schedules),
-        });
-        // Recurring sessions (#294): the backend poll rotates each recurring's child
-        // agent. Both windows subscribe (a detached canvas #84 can hold a recurring
-        // panel, so it must follow the rotation + keep its `recurrings` slice fresh).
-        await ipc.subscribeRecurringEvents({
-          onFired: ({ id, session, next_fire_at }) => {
-            // Swap the retiring child for the fresh one. Order matters (#300): claim the
-            // child in the `recurrings` record FIRST, then `upsertSession` — so the child
-            // is already owned (excluded from Overview/Sidebar) the instant it enters
-            // `sessions`, never flashing as its own standalone column.
-            const { recurrings, present, prev } = applyRecurringFire(
-              get().recurrings,
-              id,
-              session.id,
-              next_fire_at,
-            );
-            if (present) {
-              set({ recurrings });
+              // Session lifecycle (forget / toast / kill) is owned by the **main**
+              // window (#84) — it's the source of truth for the session list. A
+              // detached canvas window is a renderer: it only reflects the exit
+              // locally so a terminal it shows gets the "Process exited" overlay,
+              // never forgetting/killing/toasting (which the main window does).
+              if (!IS_MAIN_WINDOW) {
+                if (get().sessions.some((s) => s.id === id)) {
+                  get().markExited(id, code);
+                } else {
+                  get().markTerminalExited(id, code);
+                }
+                return;
+              }
+              // One event per close. An intentional kill (Remove/Forget) already
+              // toasts and is never auto-forgotten or double-toasted here (#32).
+              const intentional = intentionalKills.delete(id);
+              // Terminal item (#72): a shell PTY, not a claude session (not in
+              // `sessions`). On an unintentional exit, record it so the pooled
+              // <Terminal> shows a Restart overlay; an intentional × already removed
+              // the panel, so just swallow it.
+              if (!get().sessions.some((s) => s.id === id)) {
+                if (!intentional) get().markTerminalExited(id, code);
+                return;
+              }
+              // Clean exit (code 0 while running): the user ended the agent — forget
+              // it like Remove so it vanishes everywhere and won't return on next
+              // boot, with a brief "Agent exited" toast and no overlay/Restart (#63).
+              if (isCleanExit(code, booting, intentional)) {
+                void get().forgetExitedSession(id);
+                return;
+              }
+              // Non-zero / crash exit (or a failed boot resume): keep the session
+              // and its exit code so the Terminal shows the "Process exited" overlay
+              // + Restart (#63/#30). The generic exit toast is suppressed for
+              // intentional kills and during the boot window; others toast once.
+              get().markExited(id, code);
+              if (!booting && !intentional) {
+                get().pushToast(
+                  code != null
+                    ? `Session exited (code ${code})`
+                    : "Session exited",
+                );
+              }
+            },
+          }),
+          // Cross-window canvas sync (#84): a tab/layout edit in any window, and
+          // the detached-window set changing, both flow through the backend.
+          ipc.subscribeCanvasEvents({
+            onCanvasesChanged: ({ canvases }) =>
+              get().applyCanvasSync(canvases),
+            onWindowsChanged: (ids) => get().setDetachedCanvasIds(ids),
+          }),
+          // Scheduled sessions (#93/#280): the backend engine fires schedules into live
+          // agents. The **main** window owns the scheduled→live transition; a **detached**
+          // canvas window (#84) also listens because it can hold a scheduled panel, so it
+          // must follow the same fire (and keep its own `schedules` slice in sync). Both
+          // subscribe; the per-window behavior is branched inside each handler. (Tauri
+          // events are global on macOS and Windows alike, so this path is identical.)
+          ipc.subscribeScheduleEvents({
+            onFired: ({ id, session }) => {
               get().upsertSession(toSessionView(session));
-            } else {
-              // The fired event beat the record's arrival (#300 — the immediate
-              // create-time fire's event racing the command return / `recurring://changed`
-              // broadcast). Upserting now would render an unowned standalone column, so
-              // stash the child; `createRecurring` / `applyRecurringSync` adopt it once the
-              // record — which the backend already marks with `current_session_id` — lands.
-              pendingRecurringChildren.set(id, session);
-            }
-            if (prev && prev !== session.id) {
-              // Swallow the old child's pending exit event (the kill lands async) so
-              // it never shows a "Process exited" overlay/toast, then drop it.
-              intentionalKills.add(prev);
-              get().dropSession(prev);
-            }
-            // Surface the (possibly new) folder in recents — main window only, and
-            // the *parent repo* for a worktree child (mirrors the backend).
-            if (IS_MAIN_WINDOW) {
+              if (!IS_MAIN_WINDOW) {
+                // Detached canvas (#280): reflect the fire locally so the rewritten
+                // agent leaf (arriving via `canvas://changed`) finds its session and
+                // renders the terminal instead of "Session closed." The main window
+                // owns the leaf rewrite, persistence, recents, and toast.
+                set((s) => ({
+                  schedules: s.schedules.filter((x) => x.id !== id),
+                }));
+                return;
+              }
+              // The recent to surface is the *parent repo* for a worktree session
+              // (its `repo_path` is the app-managed worktree folder), else the
+              // session's own folder. This mirrors the backend, which touches
+              // `sched.cwd` (the parent repo) — never the worktree dir — so the
+              // worktree shows only as a sub-group under its parent, not as a
+              // duplicate empty top-level folder (#279). The interactive worktree
+              // spawn path likewise never adds the worktree dir to recents.
               const recentPath = session.worktree_parent ?? session.repo_path;
               set((s) => ({
+                schedules: s.schedules.filter((x) => x.id !== id),
                 recents: [
                   recentPath,
                   ...s.recents.filter((r) => r !== recentPath),
                 ],
               }));
-            }
-          },
-          onError: ({ message }) => {
-            // The record is kept + re-armed backend-side; just toast (main window).
-            if (IS_MAIN_WINDOW) {
-              get().pushToast(
-                message || "Recurring agent failed to start",
-                "error",
+              // Rewrite any Canvas leaf showing this pending schedule into the live
+              // agent (#280), in place (same leaf id → the #18 pooled terminal
+              // reparents), then persist so the main window — and any detached canvas
+              // holding it (via `canvas://changed`) — render the agent rather than the
+              // now-removed schedule's "no longer pending" panel.
+              const liveContent: CanvasContent = {
+                kind: "agent",
+                sessionId: session.id,
+                repoPath: session.repo_path,
+              };
+              const { canvases, activeCanvasId } = get();
+              const nextCanvases = rewriteScheduledLeaves(
+                canvases,
+                id,
+                liveContent,
               );
-            }
-          },
-          onChanged: (recurrings) => get().applyRecurringSync(recurrings),
-        });
+              if (nextCanvases !== canvases) {
+                set({ canvases: nextCanvases });
+                void ipc
+                  .setCanvases({
+                    canvases: nextCanvases,
+                    activeId: activeCanvasId,
+                  })
+                  .catch(() => {});
+              }
+              get().pushToast(
+                `Scheduled agent started${session.name ? `: ${session.name}` : ""}`,
+              );
+            },
+            onError: ({ id, message }) => {
+              set((s) => ({
+                schedules: s.schedules.filter((x) => x.id !== id),
+              }));
+              // Only the main window toasts the failure (it owns the schedule surface).
+              if (IS_MAIN_WINDOW) {
+                get().pushToast(
+                  message || "Scheduled agent failed to start",
+                  "error",
+                );
+              }
+            },
+            onChanged: (schedules) => get().applyScheduleSync(schedules),
+          }),
+          // Recurring sessions (#294): the backend poll rotates each recurring's child
+          // agent. Both windows subscribe (a detached canvas #84 can hold a recurring
+          // panel, so it must follow the rotation + keep its `recurrings` slice fresh).
+          ipc.subscribeRecurringEvents({
+            onFired: ({ id, session, next_fire_at }) => {
+              // Swap the retiring child for the fresh one. Order matters (#300): claim the
+              // child in the `recurrings` record FIRST, then `upsertSession` — so the child
+              // is already owned (excluded from Overview/Sidebar) the instant it enters
+              // `sessions`, never flashing as its own standalone column.
+              const { recurrings, present, prev } = applyRecurringFire(
+                get().recurrings,
+                id,
+                session.id,
+                next_fire_at,
+              );
+              if (present) {
+                set({ recurrings });
+                get().upsertSession(toSessionView(session));
+              } else {
+                // The fired event beat the record's arrival (#300 — the immediate
+                // create-time fire's event racing the command return / `recurring://changed`
+                // broadcast). Upserting now would render an unowned standalone column, so
+                // stash the child; `createRecurring` / `applyRecurringSync` adopt it once the
+                // record — which the backend already marks with `current_session_id` — lands.
+                pendingRecurringChildren.set(id, session);
+              }
+              if (prev && prev !== session.id) {
+                // Swallow the old child's pending exit event (the kill lands async) so
+                // it never shows a "Process exited" overlay/toast, then drop it.
+                intentionalKills.add(prev);
+                get().dropSession(prev);
+              }
+              // Surface the (possibly new) folder in recents — main window only, and
+              // the *parent repo* for a worktree child (mirrors the backend).
+              if (IS_MAIN_WINDOW) {
+                const recentPath = session.worktree_parent ?? session.repo_path;
+                set((s) => ({
+                  recents: [
+                    recentPath,
+                    ...s.recents.filter((r) => r !== recentPath),
+                  ],
+                }));
+              }
+            },
+            onError: ({ message }) => {
+              // The record is kept + re-armed backend-side; just toast (main window).
+              if (IS_MAIN_WINDOW) {
+                get().pushToast(
+                  message || "Recurring agent failed to start",
+                  "error",
+                );
+              }
+            },
+            onChanged: (recurrings) => get().applyRecurringSync(recurrings),
+          }),
+        ]);
       } catch {
         // Event subscription only works inside the Tauri webview.
         eventsSubscribed = false;
       }
     }
-    // Host OS family (#143), once, for OS-appropriate display labels — read BEFORE the
-    // first refresh (#346) so the platform signal is loaded before any terminal host
-    // is created: the Linux software-WebGL probe and the Windows ConPTY option
-    // (`windowsPtyOption`) both read it at host-creation time, and `refresh` is what
-    // first populates `sessions` (whose terminals mount immediately). On Windows also
-    // read the build number so xterm.js can configure its ConPTY handling.
-    try {
-      set({ platform: await ipc.platform() });
-      // Keep the <html> data-platform attribute (written synchronously from the UA in
-      // main.tsx, #363) in agreement with the backend's authoritative answer — a no-op in
-      // practice, but it means the Linux --ui font override can never disagree with the
-      // store's platform signal.
-      applyPlatformAttribute(get().platform);
-      set({ windowsBuild: await ipc.windowsBuild() });
-    } catch {
-      // Outside Tauri; leave "" / 0 → the macOS-default labels + no windowsPty.
-    }
-    await get().refresh();
+    // Apply the payload only AFTER the listeners exist: the *fetch* may race the
+    // registration, the **apply** must not — a live `session://output` / `session://
+    // exited` must never land while its handler doesn't exist (#352). The detached
+    // window id set (#84), the platform signal + Windows build (#143/#346), and every
+    // persisted slice all arrive in this one payload, applied in a single `set()`
+    // (which also re-applies the `data-platform` attribute, #363 — see `applyBootState`).
+    get().applyBootState(await bootPromise);
     // Default view on launch (#103): apply the saved preference once at boot (main
     // window only). `init` runs only on mount, so a mid-session view change is never
     // overridden (unlike `refresh`, which can re-run).
@@ -3178,13 +3194,6 @@ export const useStore = create<AppState>()((set, get) => ({
       // forget so a slow disk check never delays the rest of boot.
       void get().pruneMissingFolders();
     }
-    // Learn the current detached-window set — a just-opened window may have missed
-    // the `canvas://windows` broadcast that fired before it began listening (#84).
-    try {
-      get().setDetachedCanvasIds(await ipc.listCanvasWindows());
-    } catch {
-      // Outside Tauri / no windows; leave the (empty) default.
-    }
     // FileTree disk-change poll (#264): runs in *any* window that can show a tree (the
     // main shell or a detached canvas), each refreshing only its own mounted trees, so
     // files created/removed on disk surface within a few seconds. Idempotent.
@@ -3192,127 +3201,136 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   refresh: async () => {
-    try {
-      const [records, recents] = await Promise.all([
-        ipc.listSessions(),
-        ipc.listRecents(),
-      ]);
-      // Persisted sessions are resumed on boot (claude --resume) — show them as
-      // "reconnecting" (neutral) until their first output / a real exit, never as
-      // a wall of errors (#30). Branch labels refresh from the sidebar.
-      booting = records.length > 0;
-      const views = records.map((r) => ({
-        ...toSessionView(r),
-        reconnecting: true,
-      }));
-      // Mirror the reconnecting flag into the Set the output hot path checks (#261).
-      reconnectingIds.clear();
-      for (const v of views) reconnectingIds.add(v.id);
-      set({
-        sessions: views,
-        recents,
-        // Seed the live "has been active" flag (#112) from the persisted records so
-        // a previously-active agent shows the yellow "finished / needs input" dot
-        // right after boot (reconnecting → idle), never reverting to gray.
-        sessionActive: Object.fromEntries(
-          views.filter((v) => v.hasBeenActive).map((v) => [v.id, true]),
-        ),
-      });
-      // End the boot window: stop suppressing exit toasts, and clear any flag
-      // still set (e.g. a resumed session whose first output raced the listener —
-      // its scrollback still replays the conversation).
-      setTimeout(() => {
-        booting = false;
-        reconnectingIds.clear(); // backstop fired — none are reconnecting now (#261)
-        if (get().sessions.some((x) => x.reconnecting)) {
-          set((s) => ({
-            sessions: s.sessions.map((x) =>
-              x.reconnecting ? { ...x, reconnecting: false } : x,
-            ),
-          }));
-        }
-      }, RECONNECT_BACKSTOP_MS);
-    } catch {
-      // Backend unreachable (e.g. running outside Tauri).
+    // The boot read, in one round-trip (#352). Kept as an action (the test entry
+    // point, and the one place a re-load is triggered from) — it is now just the
+    // fetch + the apply; a rejection (outside Tauri) applies `null`, which keeps the
+    // defaults and still flips `booted`. Never touches the view (that stays `init`-only).
+    get().applyBootState(await ipc.bootState().catch(() => null));
+  },
+
+  applyBootState: (boot) => {
+    // Command failed / outside Tauri: keep every default, but still flip `booted` so
+    // the empty-state gate resolves rather than stranding the UI on a blank (#352).
+    if (!boot) {
+      set({ booted: true });
+      return;
     }
-    // Repo colors + Overview panel layouts load independently so a failure here
-    // doesn't block sessions.
-    try {
-      const [
-        colors,
-        panels,
-        order,
-        files,
-        canvas,
-        canvasesState,
-        rawSettings,
-        rawSidebarWidth,
-        rawTemplates,
-        rawSidebarCollapsed,
-        rawRepoOrder,
-        rawDiffSeen,
-      ] = await Promise.all([
-        ipc.listRepoColors(),
-        ipc.listOverviewPanels(),
-        ipc.listOverviewOrder(),
-        ipc.listOpenFiles(),
-        ipc.getCanvasLayout(),
-        ipc.getCanvases(),
-        ipc.getSettings(),
-        ipc.getSidebarWidth(),
-        ipc.getCanvasTemplates(),
-        ipc.getSidebarCollapsed(),
-        ipc.getRepoOrder(),
-        ipc.getDiffSeen(),
-      ]);
-      // Settings (#100): merge the persisted blob over the defaults and apply its
-      // side-effects (live terminal options) before the first paint.
-      const settings = mergeSettings(rawSettings);
-      applySettingsEffects(settings);
+
+    // Settings (#100): merge the persisted blob over the defaults and apply its
+    // side-effects (theme / accent / reduce-motion / live terminal options) before the
+    // first paint.
+    const settings = mergeSettings(boot.settings);
+    applySettingsEffects(settings);
+
+    // Persisted sessions are resumed on boot (claude --resume) — show them as
+    // "reconnecting" (neutral) until their first output / a real exit, never as
+    // a wall of errors (#30). Branch labels refresh from the sidebar.
+    booting = boot.sessions.length > 0;
+    const views = boot.sessions.map((r) => ({
+      ...toSessionView(r),
+      reconnecting: true,
+    }));
+    // Mirror the reconnecting flag into the Set the output hot path checks (#261).
+    reconnectingIds.clear();
+    for (const v of views) reconnectingIds.add(v.id);
+
+    // Multi-canvas (#58): the persisted tabs, else the one-shot migration of the old
+    // single `canvas_layout`, else one empty canvas — and a detached window (#84)
+    // always shows its own canvas. Pure (`boot.ts`), so it is unit-tested on its own.
+    const { canvases, activeCanvasId, migrated } = resolveCanvases(
+      boot.canvases,
+      boot.canvas_layout,
+      IS_MAIN_WINDOW,
+      DETACHED_CANVAS_ID,
+    );
+
+    // ONE store update carries the whole payload. `platform` / `windowsBuild` are
+    // listed first, but what matters is that they land in the **same** `set()` as
+    // `sessions` (#346): the terminal pool reads them at host-creation time
+    // (`webglAllowed()` / `windowsPtyOption()`), and rendering `sessions` is what
+    // leads to those hosts — a `set` is applied synchronously, so
+    // `useStore.getState().platform` is already correct by the time React renders them.
+    // (Since #351 a host is built on first *visibility* rather than on mount, which only
+    // widens that margin — the signal can never be read before it has landed.)
+    set({
+      platform: boot.platform,
+      windowsBuild: boot.windows_build,
+      sessions: views,
+      // Seed the live "has been active" flag (#112) from the persisted records so
+      // a previously-active agent shows the yellow "finished / needs input" dot
+      // right after boot (reconnecting → idle), never reverting to gray.
+      sessionActive: Object.fromEntries(
+        views.filter((v) => v.hasBeenActive).map((v) => [v.id, true]),
+      ),
+      recents: boot.recents,
+      repoColors: boot.repo_colors,
+      overviewPanels: boot.overview_panels,
+      overviewOrder: boot.overview_order,
+      canvases,
+      activeCanvasId,
+      // Saved Canvas templates (#117); absent (null) → none saved yet.
+      canvasTemplates: boot.canvas_templates ?? [],
+      settings,
       // Sidebar width (#108): restore the persisted value re-clamped to the range
       // (or the default when absent).
-      const sidebarWidth = clampSidebarWidth(
-        rawSidebarWidth ?? SIDEBAR_WIDTH_DEFAULT,
-      );
+      sidebarWidth: clampSidebarWidth(
+        boot.sidebar_width ?? SIDEBAR_WIDTH_DEFAULT,
+      ),
       // Sidebar collapsed-to-rail flag (#168): default expanded when absent.
-      const sidebarCollapsed = rawSidebarCollapsed ?? false;
+      sidebarCollapsed: boot.sidebar_collapsed ?? false,
       // Top-level folder order (#211): the saved repo paths (empty until first
       // drag), merged with the live repo set at render via `mergeRepoOrder`.
-      const folderOrder = rawRepoOrder ?? [];
+      folderOrder: boot.repo_order ?? [],
       // Diff "seen" markers (#278): the persisted `{ repoPath: { filePath: digest } }`
       // map, or empty until first marked. Loaded in every window (a diff panel lives in
       // the main window and a detached canvas alike).
-      const diffSeen = (rawDiffSeen as DiffSeenMap | null) ?? {};
-      // Multi-canvas (#58): use the persisted tabs; else migrate the old single
-      // canvas_layout into "Canvas 1"; else start with one empty canvas. Persist
-      // the migrated shape once so the new field becomes the source of truth.
-      let canvases: CanvasTab[];
-      let activeCanvasId: string;
-      if (canvasesState && canvasesState.canvases.length > 0) {
-        canvases = canvasesState.canvases;
-        activeCanvasId = canvases.some((c) => c.id === canvasesState.activeId)
-          ? canvasesState.activeId
-          : (canvases[0]?.id ?? "");
-      } else {
-        const first: CanvasTab = {
-          id: crypto.randomUUID(),
-          name: "Canvas 1",
-          layout: canvas ?? null,
-        };
-        canvases = [first];
-        activeCanvasId = first.id;
-        // Only the main window migrates/persists the canvas shape (#84); a
-        // detached renderer never writes it.
-        if (IS_MAIN_WINDOW) {
-          void ipc
-            .setCanvases({ canvases, activeId: activeCanvasId })
-            .catch(() => {});
-        }
+      diffSeen: boot.diff_seen ?? {},
+      // Scheduled (#93) + recurring (#294) sessions — the backend owns the timers, the
+      // frontend just lists the pending ones. Loaded in **every** window (#280): a
+      // detached canvas (#84) can hold a scheduled/recurring panel, which needs the
+      // record to render. Live mutations sync via `schedule://*` / `recurring://*`.
+      schedules: boot.schedules,
+      recurrings: boot.recurrings,
+      // The detached-window set (#84) — a just-opened window may have missed the
+      // `canvas://windows` broadcast that fired before it began listening. It rides in
+      // the same update as `sessions` + `canvases`, so PTY ownership
+      // (`computeSessionOwners`) is already right when the terminals first mount.
+      detachedCanvasIds: boot.detached_canvas_ids,
+      booted: true,
+    });
+    // Keep the <html> data-platform attribute (written synchronously from the UA in
+    // main.tsx, #363) in agreement with the backend's authoritative answer — a no-op in
+    // practice, but it means the Linux --ui font override can never disagree with the
+    // store's platform signal. It rides the same apply as the `platform` field itself.
+    applyPlatformAttribute(boot.platform);
+    // Re-apply through the action so its guard still runs (#84): the main window never
+    // renders a detached canvas as its active tab — if the persisted active tab is
+    // already detached, switch to a still-docked one. A no-op on the (identical) ids.
+    get().setDetachedCanvasIds(boot.detached_canvas_ids);
+
+    // End the boot window: stop suppressing exit toasts, and clear any flag
+    // still set (e.g. a resumed session whose first output raced the listener —
+    // its scrollback still replays the conversation).
+    setTimeout(() => {
+      booting = false;
+      reconnectingIds.clear(); // backstop fired — none are reconnecting now (#261)
+      if (get().sessions.some((x) => x.reconnecting)) {
+        set((s) => ({
+          sessions: s.sessions.map((x) =>
+            x.reconnecting ? { ...x, reconnecting: false } : x,
+          ),
+        }));
       }
-      // A detached window (#84) always shows its own canvas, regardless of the
-      // persisted active tab (which tracks the main window).
-      if (!IS_MAIN_WINDOW && DETACHED_CANVAS_ID) {
-        activeCanvasId = DETACHED_CANVAS_ID;
+    }, RECONNECT_BACKSTOP_MS);
+
+    // --- Fire-and-forget side effects (main window only, exactly as before) ---
+    if (IS_MAIN_WINDOW) {
+      // Persist the migrated canvas shape once so the new field becomes the source of
+      // truth (#58); a detached renderer (#84) never writes it.
+      if (migrated) {
+        void ipc
+          .setCanvases({ canvases, activeId: activeCanvasId })
+          .catch(() => {});
       }
       // #110: the legacy per-repo `open_files` map (#45) is **no longer** folded
       // into `overviewPanels`. The #59 fold ran on every boot, and because nothing
@@ -3321,77 +3339,34 @@ export const useStore = create<AppState>()((set, get) => ({
       // persisted panels, and was re-created as a fresh markdown panel). Every real
       // install long since migrated and persisted its panels, so we drop the fold
       // entirely — `overviewPanels` loads from the persisted layout only — and
-      // permanently **empty** the stale `open_files` map (main window only; the Rust
-      // setter drops each now-empty key) so it can never resurrect an item again.
-      if (IS_MAIN_WINDOW) {
-        for (const repo of Object.keys(files)) {
-          void ipc.setOpenFiles(repo, []).catch(() => {});
-        }
+      // permanently **empty** the stale `open_files` map (the Rust setter drops each
+      // now-empty key) so it can never resurrect an item again.
+      for (const repo of Object.keys(boot.open_files)) {
+        void ipc.setOpenFiles(repo, []).catch(() => {});
       }
-      set({
-        repoColors: colors,
-        overviewPanels: panels,
-        overviewOrder: order,
-        canvases,
-        activeCanvasId,
-        settings,
-        sidebarWidth,
-        sidebarCollapsed,
-        folderOrder,
-        diffSeen,
-        // Saved Canvas templates (#117); absent (null) → none saved yet.
-        canvasTemplates: rawTemplates ?? [],
-      });
       // Terminal items can't resume (#72): respawn a fresh shell for each
       // persisted terminal panel under its repo so the item is usable after a
-      // restart (previous output/history is gone, by design). Main window only —
-      // a detached window (#84) must not re-spawn shells the main window owns.
-      if (IS_MAIN_WINDOW) {
-        for (const [repo, list] of Object.entries(panels)) {
-          for (const p of list) {
-            if (p.kind === "terminal") {
-              void ipc.spawnTerminal(repo, p.id).catch(() => {});
-            }
+      // restart (previous output/history is gone, by design). A detached window (#84)
+      // must not re-spawn shells the main window owns.
+      for (const [repo, list] of Object.entries(boot.overview_panels)) {
+        for (const p of list) {
+          if (p.kind === "terminal") {
+            void ipc.spawnTerminal(repo, p.id).catch(() => {});
           }
         }
       }
-    } catch {
-      // Backend unreachable; leave colors/panels/order/canvas/width as-is.
-    }
-    // Scheduled sessions (#93) — re-armed timers live in the backend, so the frontend
-    // just lists the pending ones. Loaded in **every** window (#280), not only the
-    // main one: a detached canvas (#84) can hold a scheduled panel, which needs the
-    // schedule's data to render (else it falsely shows "no longer pending"). Live
-    // mutations + the fire then sync via `schedule://changed` / `schedule://fired`.
-    try {
-      set({ schedules: await ipc.listSchedules() });
-    } catch {
-      // Backend unreachable; leave schedules as-is.
-    }
-    // Recurring sessions (#294) — the backend re-arms them; the frontend just lists
-    // them. Loaded in every window like schedules (a detached canvas #84 can hold a
-    // recurring panel). Live mutations + rotations sync via `recurring://*`.
-    try {
-      set({ recurrings: await ipc.listRecurrings() });
-    } catch {
-      // Backend unreachable; leave recurrings as-is.
-    }
-    // In-app updater (#190) — main window only. (1) Post-update toast: if the
-    // running version is higher than the one recorded last boot, the app just
-    // self-updated → toast it, then record the running version. (2) Best-effort
-    // update check (inert today — placeholder pubkey + no signed release).
-    if (IS_MAIN_WINDOW) {
-      try {
-        const running = await ipc.appVersion();
-        const last = await ipc.getLastVersion();
-        if (last && versionIncreased(last, running)) {
-          get().pushToast(`Updated to v${running}`, "success");
-        }
-        if (last !== running) {
-          void ipc.setLastVersion(running).catch(() => {});
-        }
-      } catch {
-        // Outside Tauri / command missing — skip the version compare.
+      // In-app updater (#190). (1) Post-update toast: if the running version is higher
+      // than the one recorded last boot, the app just self-updated → toast it, then
+      // record the running version. Both versions ride in the boot payload, so this
+      // step now costs **zero** extra round-trips (#352). (2) Best-effort update check.
+      if (
+        boot.last_version &&
+        versionIncreased(boot.last_version, boot.app_version)
+      ) {
+        get().pushToast(`Updated to v${boot.app_version}`, "success");
+      }
+      if (boot.last_version !== boot.app_version) {
+        void ipc.setLastVersion(boot.app_version).catch(() => {});
       }
       void get().checkForUpdate();
       // 5-hour usage bar (#154): kick off the 180s poll, kept alive at module scope

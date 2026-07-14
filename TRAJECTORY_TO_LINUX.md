@@ -744,3 +744,83 @@ follow-up — deliberately out of scope here; today Linux gets ReCue's determini
       `"windows"`, `body` computes to the unchanged `-apple-system …` stack (San Francisco /
       Segoe UI), and **no** `inter-*.woff2` request appears in the Network tab — including on a
       Windows box that has **Inter installed system-wide**.
+
+### Boot IPC batching (Task #352)
+
+Boot used to be **~22 sequential IPC waves (34 invokes)** — 13 event-listener `listen`
+registrations awaited one at a time, then `platform`, then `windows_build`, then two
+`Promise.all` batches, then five more serial singles — and **16 of those waves gated the
+first meaningful paint**, so the window sat on "No active sessions" / "No repositories yet."
+while they drained. Each round-trip is an **evaluate-JS hop on the webview main thread**
+(the same cost model as #346's coalesced emits), which is **costliest on WebKitGTK**, so a
+Linux boot paid the waterfall hardest.
+
+- **One aggregated `boot_state` command** (`commands.rs`: `BootState` + the pure
+  `boot_state_from`, registered in `lib.rs`) returns every slice the boot needs — sessions,
+  recents, repo colors, Overview panels/order, legacy open files, canvas layout/tabs/
+  templates, settings, sidebar width/collapsed, folder order, diff-seen, schedules,
+  recurrings, last + running version, platform, Windows build, detached canvas ids. Every
+  `Store` getter is an in-memory clone under one mutex (no disk I/O); the only real work is
+  the Windows `cmd /C ver` probe, which runs on the blocking pool and is awaited **before**
+  any store lock (so no `MutexGuard` is ever held across an `await`). Purely additive: all
+  21 individual commands stay registered for their other call sites, and a Rust unit test
+  asserts each `boot_state_from` field equals what its individual getter returns.
+- **The 13 `listen` registrations now go out as one parallel wave** (`Promise.all` inside
+  each `subscribe*Events` helper + across the four helpers in `store.init()`), racing the
+  single `boot_state` fetch. The **apply** is still strictly sequenced after the
+  subscription await — a live `session://output` / `session://exited` must never land before
+  its handler exists — so the window in which an event can arrive un-handled *shrinks* from
+  ~16 round-trips to ~1.
+- **One `set()`** (`store.applyBootState`) turns the payload into state, so `platform` /
+  `windowsBuild` land in the **same** store update as `sessions` — the terminal pool reads
+  them at host-creation time (`webglAllowed()` (#346) / `windowsPtyOption()`), and rendering
+  `sessions` is what leads to those hosts (since #351, on first *visibility* — which only
+  widens the margin). It also re-applies the `data-platform` attribute (#363) from the
+  authoritative backend value, the step `init` used to do after its own `platform()` call.
+- **No empty-state flash:** a `booted` flag gates the Overview `EmptyState`, the Sidebar's
+  "No repositories yet." hint, and the empty-canvas center hint (the droppable stays
+  mounted). Deliberately **no spinner/skeleton** — the gap is now ~1 round-trip, so
+  rendering nothing composes with the pre-paint window gate rather than trading one flash
+  for another. `boot_state` failing (outside Tauri) still flips `booted`, so the UI can
+  never strand on a blank.
+
+**How the gate composes with the hidden-until-painted window (#348) and the lazy route
+chunks (#356).** They are three independent layers, and deliberately stay that way:
+
+1. The window is created **hidden** with a themed native background (#348); the frontend
+   reveals it from `RevealOnPaint` — a sibling of the lazy route *inside* `App`'s `Suspense`
+   boundary (#356) — so the reveal fires on the first frame that `MainApp`/`CanvasWindow`
+   actually commits, never on the empty fallback.
+2. `booted` is **not** a fourth gate on that reveal. It gates only three *text* nodes, never
+   a `Suspense` fallback, never a `null` route, and never `RevealOnPaint`. So it cannot delay
+   or suppress the reveal, and it cannot fight the Suspense fallback: the window still shows
+   the instant the route chunk paints the real shell (sidebar chrome, wall, tab strip).
+3. What it removes is precisely the content flash *inside* that first real frame: the shell
+   used to paint "No active sessions" / "No repositories yet." for the ~16 round-trips the
+   old waterfall took, then swap to the persisted content. Now the shell paints without those
+   hints and the content lands ~1 round-trip later.
+
+A route chunk that never loads still cannot leave the app invisible — Rust's 2 s
+`schedule_reveal_fallback` (#348) is untouched — and a `boot_state` that never resolves still
+flips `booted` on rejection, so neither layer can strand the other.
+
+Platform-neutral (pure TS/React + existing `#[cfg]`-correct Rust helpers — nothing
+OS-specific was added), so macOS and Windows get the same win; WebKitGTK gets the biggest one.
+
+### Needs real-box verification (boot batching, #352)
+
+- [ ] Boot the AppImage on Linux with several persisted agents, a couple of repos, canvas
+      tabs, a schedule and a recurring: everything appears **in one go**, not in stages,
+      and noticeably faster than before.
+- [ ] **No flash**: "No active sessions" / "No repositories yet." never appear before the
+      content.
+- [ ] Terminals still resume + repaint correctly, and the Linux software-WebGL probe (#346)
+      still decides correctly — i.e. `platform` is loaded before the first terminal host is
+      created.
+- [ ] A popped-out canvas window (#84) boots through its own `boot_state`, renders its
+      canvas, claims its PTYs, and re-docks on close.
+- [ ] **Composes with #348/#356**: the window still appears (never stays hidden), appears
+      only once the real shell has painted (no empty-fallback frame), and is not visibly
+      *later* than before this change — the `booted` gate must not have become a fourth
+      reveal gate. Kill the dev server mid-boot: the 2 s Rust reveal fallback still shows
+      the window.

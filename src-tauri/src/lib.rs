@@ -250,6 +250,9 @@ pub fn run() {
             commands::set_session_watch,
             commands::session_scrollback,
             commands::search_session_output,
+            // The one batched boot read (#352) — additive; every command it batches
+            // stays registered below for its other call sites.
+            commands::boot_state,
             commands::list_sessions,
             commands::list_recents,
             commands::remove_recent,
