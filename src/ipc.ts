@@ -41,6 +41,7 @@ import type {
   StatePayload,
   WorkingDiff,
 } from "./types";
+import type { Theme } from "./theme";
 
 /** Native folder picker. Returns the chosen directory, or null if cancelled. */
 export async function pickDirectory(): Promise<string | null> {
@@ -254,6 +255,16 @@ export const closeCanvasWindow = (id: string) =>
 /** Canvas ids that currently have a detached window (#84); fetched on startup
  * since a just-opened window may have missed the `canvas://windows` broadcast. */
 export const listCanvasWindows = () => invoke<string[]>("list_canvas_windows");
+
+/** Show + focus THIS window once the frontend has painted its first themed frame
+ * (#348). Windows are created hidden so the OS never paints a white / wrong-theme
+ * rectangle; Rust also shows any still-hidden window after 2 s as a safety net. */
+export const revealWindow = () => invoke<void>("reveal_window");
+
+/** Re-apply the themed native window background to every open window after a runtime
+ * theme switch (#348), so a resize/repaint gap never exposes the old theme's color. */
+export const setThemeBackground = (theme: Theme) =>
+  invoke<void>("set_theme_background", { theme });
 
 /** One immediate child of a directory in the lazy file tree (#167). */
 export interface DirEntry {

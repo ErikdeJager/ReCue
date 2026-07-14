@@ -44,7 +44,7 @@ import { decodeOutputB64 } from "./decodeOutput";
 import * as ipc from "./ipc";
 import { notifyAgentReady } from "./notify";
 import { emitSessionOutput } from "./outputBus";
-import { isWindows } from "./platform";
+import { applyPlatformAttribute, isWindows } from "./platform";
 import {
   cloneRepoName,
   effectiveRepo,
@@ -56,6 +56,7 @@ import {
   sessionLabel,
   splitPath,
 } from "./paths";
+import { storeTheme } from "./theme";
 import { formatInterval, parseResetsAt } from "./time";
 import * as updater from "./updater";
 import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
@@ -1081,6 +1082,11 @@ function applySettingsEffects(s: Settings): void {
   // default accent.
   if (s.theme === "light") root.setAttribute("data-theme", "light");
   else root.removeAttribute("data-theme");
+  // Pre-paint theme mirror (#348): index.html's inline boot script reads this
+  // synchronously on the next launch (and in a detached canvas window) so the very
+  // first frame is already the right theme instead of dark-then-light. Best-effort —
+  // storeTheme never throws.
+  storeTheme(s.theme);
   if (s.accentColor) {
     const { hover, dim, fg } = accentCompanions(s.accentColor);
     root.style.setProperty("--accent", s.accentColor);
@@ -3172,7 +3178,8 @@ export const useStore = create<AppState>()((set, get) => ({
     // registration, the **apply** must not — a live `session://output` / `session://
     // exited` must never land while its handler doesn't exist (#352). The detached
     // window id set (#84), the platform signal + Windows build (#143/#346), and every
-    // persisted slice all arrive in this one payload, applied in a single `set()`.
+    // persisted slice all arrive in this one payload, applied in a single `set()`
+    // (which also re-applies the `data-platform` attribute, #363 — see `applyBootState`).
     get().applyBootState(await bootPromise);
     // Default view on launch (#103): apply the saved preference once at boot (main
     // window only). `init` runs only on mount, so a mid-session view change is never
@@ -3240,9 +3247,11 @@ export const useStore = create<AppState>()((set, get) => ({
     // ONE store update carries the whole payload. `platform` / `windowsBuild` are
     // listed first, but what matters is that they land in the **same** `set()` as
     // `sessions` (#346): the terminal pool reads them at host-creation time
-    // (`webglAllowed()` / `windowsPtyOption()`), and mounting `sessions` is what
-    // creates those hosts — a `set` is applied synchronously, so
+    // (`webglAllowed()` / `windowsPtyOption()`), and rendering `sessions` is what
+    // leads to those hosts — a `set` is applied synchronously, so
     // `useStore.getState().platform` is already correct by the time React renders them.
+    // (Since #351 a host is built on first *visibility* rather than on mount, which only
+    // widens that margin — the signal can never be read before it has landed.)
     set({
       platform: boot.platform,
       windowsBuild: boot.windows_build,
@@ -3289,6 +3298,11 @@ export const useStore = create<AppState>()((set, get) => ({
       detachedCanvasIds: boot.detached_canvas_ids,
       booted: true,
     });
+    // Keep the <html> data-platform attribute (written synchronously from the UA in
+    // main.tsx, #363) in agreement with the backend's authoritative answer — a no-op in
+    // practice, but it means the Linux --ui font override can never disagree with the
+    // store's platform signal. It rides the same apply as the `platform` field itself.
+    applyPlatformAttribute(boot.platform);
     // Re-apply through the action so its guard still runs (#84): the main window never
     // renders a detached canvas as its active tab — if the persisted active tab is
     // already detached, switch to a still-docked one. A no-op on the (identical) ids.
@@ -3678,6 +3692,12 @@ export const useStore = create<AppState>()((set, get) => ({
     const prev = get().settings;
     set({ settings });
     applySettingsEffects(settings);
+    // Theme switched at runtime (#348/#333): push the new native window background to
+    // every open window (main + detached canvases), so a resize/repaint gap can never
+    // expose the previous theme's color behind the webview. Best-effort.
+    if (settings.theme !== prev.theme) {
+      void ipc.setThemeBackground(settings.theme).catch(() => {});
+    }
     // React to the session-usage toggle at runtime (#326): starting/stopping the poll
     // is the load-bearing token-access gate, so it must fire immediately on Save.
     if (settings.showSessionUsage !== prev.showSessionUsage) {

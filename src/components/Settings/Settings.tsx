@@ -35,7 +35,7 @@ import {
   compareVersions,
   patchnotesFor,
 } from "../../patchnotes";
-import { kbdHint } from "../../platform";
+import { isLinux, kbdHint } from "../../platform";
 import { DEFAULT_SETTINGS, REPO_PALETTE, useStore } from "../../store";
 import type { Settings as SettingsType } from "../../types";
 import Checkbox from "../Checkbox/Checkbox";
@@ -300,6 +300,10 @@ function SettingsModal() {
                   </div>
                   <p className={styles.helpText}>
                     Dark mode is the recommended experience.
+                    {/* #349: GTK reads GTK_THEME at init, so the native dialogs
+                        adopt a changed theme only on the next launch. */}
+                    {isLinux(platform) &&
+                      " Native file dialogs adopt this theme the next time ReCue starts."}
                   </p>
                 </div>
                 <div className={styles.field}>
