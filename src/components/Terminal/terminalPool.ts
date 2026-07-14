@@ -41,6 +41,7 @@ import { makePasteKeyHandler } from "./pasteHandler";
 import { terminalsToDispose } from "./poolReconcile";
 import { dedupeAgainstScrollback } from "./replayDedupe";
 import styles from "./Terminal.module.css";
+import { webglFallback } from "./webglFallback";
 import { isSoftwareWebGLRenderer } from "./webglRenderer";
 import { windowsPtyOption } from "./windowsPty";
 
@@ -250,16 +251,51 @@ function createHost(sessionId: string): TerminalHost {
   // Linux when the one-time probe says WebGL is software-rasterized (#346, see
   // `webglAllowed` above). The main window on macOS/Windows keeps WebGL, so its
   // rendering is provably unchanged.
+  // And skipped once ANY terminal in this window has suffered an UNRECOVERED WebGL
+  // context loss (#364): a GPU that dropped one context (OOM / driver reset / suspend,
+  // likeliest on WebKitGTK) will drop the next one too, so re-attaching would be a
+  // context storm on an already-sick driver. The latch is checked BEFORE `webglAllowed()`
+  // so a fallen-back window doesn't even construct the #346 probe canvas.
   let webgl: WebglAddon | undefined;
-  if (IS_MAIN_WINDOW && webglAllowed()) {
+  if (IS_MAIN_WINDOW && webglFallback.allowsWebgl() && webglAllowed()) {
     try {
       const addon = new WebglAddon();
-      addon.onContextLoss(() => addon.dispose());
+      addon.onContextLoss(() => {
+        // Fired ONLY when the context was not restored within the addon's ~3s window,
+        // i.e. the renderer is dead (the addon handles a *recovered* loss internally, so
+        // there is nothing to re-attach or retry). Disposing the addon is the documented
+        // recovery: xterm swaps its render service back to the DOM renderer and re-lays
+        // out the SAME buffer — no host dispose, no scrollback replay, so the #18 pool
+        // invariant holds and `claude`'s width-specific TUI is not garbled.
+        //
+        // Clear our reference FIRST: the #221 font-atlas block below runs async, and on a
+        // disposed addon it would both call into a dead renderer AND burn the one-shot
+        // module-global `fontAtlasRebuilt` flag that the other live terminals still need.
+        webgl = undefined;
+        if (webglFallback.noteContextLoss(sessionId)) {
+          console.warn(
+            "[recue] terminals: WebGL context lost and not restored; falling back to xterm's DOM renderer for the rest of this run",
+          );
+        }
+        addon.dispose();
+        // Belt-and-braces repaint: the addon's own dispose already sets the DOM renderer
+        // and re-handles the resize, but a forced refresh guarantees the rows repaint
+        // from the existing buffer even if that internal path changes in a future xterm.
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          // terminal already torn down — nothing to repaint
+        }
+      });
       term.loadAddon(addon);
       webgl = addon;
+      webglFallback.noteRenderer(sessionId, "webgl");
     } catch {
       webgl = undefined;
+      webglFallback.noteRenderer(sessionId, "dom");
     }
+  } else {
+    webglFallback.noteRenderer(sessionId, "dom");
   }
 
   // Clickable http/https links (#109). Hover underlines a URL; the custom activate
@@ -499,6 +535,9 @@ function createHost(sessionId: string): TerminalHost {
     dataSub.dispose();
     webLinks.dispose();
     webgl?.dispose();
+    // Keep the renderer record bounded (reconcile / resetTerminal / detached-window churn
+    // all route through here). The context-loss LATCH is deliberately not cleared (#364).
+    webglFallback.forget(sessionId);
     term.dispose();
     container.remove();
   };
