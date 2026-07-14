@@ -5,6 +5,8 @@
 //! `store`; read-only git support is added by a later task.
 
 mod agents;
+mod boot;
+mod child_env;
 mod commands;
 mod files;
 mod git;
@@ -60,11 +62,14 @@ pub fn run() {
     // thread-safe). See `path_env`.
     path_env::restore_user_path();
 
-    // Linux/WebKitGTK renderer workaround (#346): on NVIDIA's proprietary driver (and
-    // in VMs) WebKitGTK's DMA-BUF renderer makes the whole webview crawl — laggy input
-    // echo, slow paint. Export the documented kill-switch before GTK/WebKit initialize
-    // (and, like the PATH restore above, before any threads — env mutation isn't
-    // thread-safe). No-op on macOS/Windows and on healthy AMD/Intel Mesa stacks; the
+    // Linux/WebKitGTK renderer workaround (#346, GPU-aware since #347): where the NVIDIA
+    // blob actually renders the webview, WebKitGTK's DMA-BUF renderer makes the whole
+    // thing crawl — laggy input echo, slow paint. Export the documented kill-switch before
+    // GTK/WebKit initialize (and, like the PATH restore above, before any threads — env
+    // mutation isn't thread-safe), but *only* where DMA-BUF is genuinely bad: the blob is
+    // the sole renderer, GL is PRIME-routed to it, or we're in a VM with no native GPU. A
+    // hybrid iGPU+dGPU laptop, nouveau, and any Mesa stack keep DMA-BUF (disabling it there
+    // forces CPU rendering — it *was* the reported slowness). No-op on macOS/Windows; the
     // user's own env and `RECUE_DISABLE_DMABUF` override it. See `linux_webkit`.
     linux_webkit::apply_webkit_env_workarounds();
 
@@ -106,6 +111,18 @@ pub fn run() {
                 .map(|dir| dir.join("sessions.json"))
                 .unwrap_or_else(|_| PathBuf::from("recue-sessions.json"));
             app.manage(Store::load(&store_path));
+
+            // Startup flash (#348): the main window is created hidden (`visible: false`)
+            // with a dark native background (tauri.conf.json). Re-color it to the persisted
+            // theme *before* it is ever shown — so a light-theme user's window never flashes
+            // dark — then let the frontend reveal it once React has painted (`reveal_window`),
+            // with a Rust fallback in case the bundle never boots. Needs the Store, so it runs
+            // right after it is managed. Platform-neutral (macOS/Windows/Linux).
+            if let Some(window) = app.get_webview_window("main") {
+                let color = commands::window_background(&app.state::<Store>());
+                let _ = window.set_background_color(Some(color));
+            }
+            commands::schedule_reveal_fallback(app.handle(), "main");
 
             // One-time post-update permission re-prompt (macOS, #321). When a user updates
             // from an old ad-hoc build into a properly-signed one, the code signature
@@ -196,43 +213,11 @@ pub fn run() {
 
             // Resume persisted sessions OFF the startup critical path so the
             // window appears immediately; each one reconnects as its PTY comes
-            // up. Best-effort: failures (e.g. claude missing) leave the record
-            // in place for the UI to show.
+            // up. Bounded-parallel (4 at a time) over one shared snapshot of the
+            // claude projects dir (#355 — see `boot`). Best-effort: failures (e.g.
+            // claude missing) leave the record in place for the UI to show (#30/#63).
             let resume = app.handle().clone();
-            thread::spawn(move || {
-                let manager = resume.state::<SessionManager>();
-                let store = resume.state::<Store>();
-                for record in store.sessions() {
-                    let spec = crate::agents::agent_spec(&record.agent);
-                    // Only resume agents that support id-based resume (#141). A Codex
-                    // record has no app-ownable session id, so resuming by id would
-                    // fail/garble — leave it dormant (the record persists; the user can
-                    // relaunch it as a fresh session). Claude resumes exactly as before.
-                    if spec.supports_resume {
-                        let _ = manager.resume_session(
-                            &record.claude_session_id,
-                            &record.repo_path,
-                            record.name.clone(),
-                            &record.agent,
-                        );
-                    }
-                    // Seed forkability once at boot (#138): read the on-disk log so a
-                    // resumed session **with** history shows Fork available immediately,
-                    // rather than waiting for its first busy→idle edge. A non-claude-log
-                    // agent (Codex, #141) is never forkable — no glob. Persist-on-change,
-                    // then notify the UI (the persisted value also covers a missed emit).
-                    let forkable = spec.supports_auto_name
-                        && crate::title::has_conversation(&record.claude_session_id);
-                    let _ = store.set_forkable(&record.id, forkable);
-                    let _ = resume.emit(
-                        "session://forkable",
-                        commands::ForkablePayload {
-                            id: record.id.clone(),
-                            forkable,
-                        },
-                    );
-                }
-            });
+            thread::spawn(move || boot::resume_persisted_sessions(resume));
 
             // Scheduled sessions (#93): a poll loop fires due schedules into live
             // agents. Polling (vs per-schedule timers) handles create/update/cancel
@@ -287,6 +272,8 @@ pub fn run() {
             commands::focus_canvas_window,
             commands::close_canvas_window,
             commands::list_canvas_windows,
+            commands::reveal_window,
+            commands::set_theme_background,
             commands::create_schedule,
             commands::list_schedules,
             commands::cancel_schedule,

@@ -26,9 +26,10 @@ import styles from "./CloneRepoModal.module.css";
  *
  * Store-driven (`cloneRepoOpen` + `closeCloneRepo`/`cloneRepo`), centered, focus-trapped
  * (Tab stays inside), Escape / outside-click close, URL auto-focused, Enter submits.
- * Mounted once in App.tsx (returns null when closed); local draft state resets on each
- * open. Main-window only. Cross-platform: the backend builds the dest path and shells
- * out to git, so this UI has no OS-specific path handling.
+ * Mounted (lazily, #356) by `ModalHost` only while open; the internal `if (!open) return
+ * null` gate is kept as a harmless belt-and-braces, and the local draft resets on each
+ * open either way. Main-window only. Cross-platform: the backend builds the dest path and
+ * shells out to git, so this UI has no OS-specific path handling.
  */
 function CloneRepoModal() {
   const open = useStore((s) => s.cloneRepoOpen);
