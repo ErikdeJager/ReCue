@@ -3413,3 +3413,20 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - SCHEDULE_TIME_HINT copy unchanged (it already matches the demo hint text); the hint line renders faint (--surface-1) and the resolve line 9.5px accent per the demo.
 - Demo border alphas .06/.12/.2 mapped to the nearest tokens (--border-hairline .08 / --border-strong .15); board gaps use literal 10px (no --space-10 token exists — the #240 trap).
 - Overview's ScheduleCard/RecurringCard chrome (Overview.tsx) untouched — Task 379 owns it; only the shared panel components are edited.
+
+## Task 381
+
+- Segmented controls use the landed Task-372 SegmentedControl atom (its default square look is demo-exact: crust well, 2px pad, 22px Surface0-thumb segments); one atom tweak — `gap: 5px` on the segment rule — for icon+label segments (no visual change for text-only consumers like ViewSwitch; Settings uses its own buttons).
+- The demo puts the DiffInspector's meta + Focused|Accordion in the 30px panel header, but that header is Task 380's generic chrome — they live instead in an in-component toolbar row (mirroring the FileViewer's demo toolbar-row pattern); the meta shows only "N files +a −d" since "repo · branch" is already the 379/380 card/panel header meta (dedupe; today it was duplicated).
+- The editable Raw view keeps the plain <textarea> and SKIPS the demo's "light syntax tinting" — a transparent-text overlay-highlight risks caret/IME/scroll-sync/wrap divergence across WKWebView/WebView2/WebKitGTK, and editable-raw parity (§12) is the harder constraint.
+- Rendered markdown sits on base (--bg-panel) per the demo; Raw/code surfaces stay crust; the base→crust hairline moves from the toolbar's border-bottom onto the editor's border-top (demo-exact, no double borders; only the editor ever renders under a toolbar).
+- New tokens --diff-hunk-fg/--diff-hunk-bg (Mocha #89b4fa / rgba(137,180,250,.07), Latte #1e66f5 / .07); dark --diff-add-bg/--diff-del-bg alphas 0.12 → 0.10 per demo; Latte add/del alphas left as-is (no light demo — don't regress tuned contrast).
+- Sticky @@ hunk headers are kept: the tint composes over an opaque --bg-panel under-layer so stuck headers never let code bleed through (slight deviation from the wall demo's translucent strip on crust cards — accepted).
+- Focused mode drops the sub-header row per the demo pager; the SeenToggle (#278, + S keycap) moves into the pager row after the › arrow, and the active file's +/− counts move into the file pill (demo mock omits them; zero-functionality-lost keeps them visible; full path stays as the pill tooltip).
+- Unified rows keep both old/new line-number gutters + the marker column (the demo mock shows a single number; dropping one would lose information).
+- Unified|Split and Recent|A–Z (not in the demo) restyle to the same 22px segmented look on a second toolbar row with the source segmented + pickers; all #237 persistence wiring unchanged.
+- The #255 panel-scoped arrow-nav guard gains `[role=tablist]` so the atom's roving arrow keys (which don't stop propagation) never also step the diff file.
+- Raw segment icon = lucide Terminal (demo data-ic="terminal"; was Code2); markdown h1/h2 use weight 700 per the demo (demo wins over §2.3's "700 wordmark only" prose).
+- The M status chip fg becomes --status-awaiting (demo yellow, matching FileTree's M; was text-secondary); chip bg = color-mix(currentColor 15%, transparent) with a plain fallback first (menu.css documents color-mix as shippable).
+- The focused-mode file-picker listbox is restyled locally to the §10 floating-chrome values (base bg, strong hairline, radius-window, shadow-menu) rather than composing the global .menu-pop class (its 200px min-width + entry animation don't fit an anchored pill-width listbox).
+- .raw/.code/.codeGutterWrap/.diffGutter metrics (12px pad, 1.5 lh) are deliberately untouched — the #324 gutter alignment is locked to them; only the gutter-free .editor adopts the demo's 10px/1.6.
