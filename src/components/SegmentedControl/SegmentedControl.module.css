@@ -1,0 +1,54 @@
+/* Shared segmented control (UI v2 task 372, §2): a crust well with flat segments;
+   the active segment is a Surface0 thumb. Square by default (panel toolbars, 22px
+   segments); `.chrome` is the rounded sidebar-chrome look (well 7 / thumb 5, 20px). */
+.group {
+  display: flex;
+  padding: 2px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 0;
+  background: var(--content-bg);
+}
+
+.chrome {
+  border-radius: var(--radius-chrome);
+}
+
+.option,
+.active {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--ui);
+  font-size: var(--fs-meta-sm);
+  font-weight: 400;
+  text-align: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.chrome .option,
+.chrome .active {
+  height: 20px;
+  border-radius: var(--radius-chrome-sm);
+}
+
+.stretch .option,
+.stretch .active {
+  flex: 1;
+}
+
+.option:hover {
+  color: var(--text-primary);
+}
+
+.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-weight: 600;
+}

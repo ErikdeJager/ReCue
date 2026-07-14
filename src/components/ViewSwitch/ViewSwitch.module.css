@@ -1,36 +1,5 @@
-/* Full-width segmented control: fills its sidebar container, segments split
-   evenly. */
-.group {
-  display: flex;
-  padding: var(--space-2);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
-}
-
-.option,
-.active {
-  flex: 1;
-  padding: var(--space-4) var(--space-12);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  text-align: center;
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-out);
-}
-
-.option:hover {
-  color: var(--text-primary);
-}
-
-.active {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
+/* Expanded mode renders through the shared SegmentedControl atom (UI v2 task 372);
+   only the compact rail mode keeps local styles (card 4 owns the rail restyle). */
 
 /* Compact (icon-only) mode for the collapsed sidebar rail (#168): two stacked
    icon buttons sized to the narrow rail (~44px, #214). */

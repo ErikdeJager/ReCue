@@ -43,7 +43,8 @@ function Checkbox({
         onChange={(event) => onChange(event.currentTarget.checked)}
       />
       <span className={styles.box} aria-hidden="true">
-        <Check className={styles.check} size={12} strokeWidth={3} />
+        {/* 11px clears the 15px v2 box's 13px interior (task 372). */}
+        <Check className={styles.check} size={11} strokeWidth={3} />
       </span>
       {label !== undefined && <span className={styles.label}>{label}</span>}
     </label>

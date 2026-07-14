@@ -5,18 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ReCue</title>
 
-    <!-- Pre-paint background (#348). Every stylesheet is JS-imported (src/main.tsx), so
-         until the bundle parses the document has no styles at all and the WebView paints
-         its default WHITE — the startup flash. This inline style is the only styling that
-         exists at first paint. Keep the hexes in sync with --bg-base in
-         src/styles/tokens.css / THEME_BG in src/theme.ts / background_for_theme() in
-         src-tauri/src/commands.rs (guarded by src/theme.test.ts). -->
+    <!-- Pre-paint background (#348; crust since UI v2 task 372). Every stylesheet is
+         JS-imported (src/main.tsx), so until the bundle parses the document has no styles
+         at all and the WebView paints its default WHITE — the startup flash. This inline
+         style is the only styling that exists at first paint. Keep the hexes in sync with
+         --bg-base in src/styles/tokens.css / THEME_BG in src/theme.ts /
+         background_for_theme() in src-tauri/src/commands.rs (guarded by src/theme.test.ts)
+         / "backgroundColor" in src-tauri/tauri.conf.json. -->
     <style>
       html {
-        background: #1e1e2e;
+        background: #11111b;
       }
       html[data-theme="light"] {
-        background: #eff1f5;
+        background: #dce0e8;
       }
     </style>
     <script>

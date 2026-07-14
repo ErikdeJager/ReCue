@@ -25,16 +25,18 @@
   border: 0;
 }
 
+/* UI v2 (task 372): a 15px crust off-well with a 4px radius; checked = accent
+   fill + accent-fg check (crust check on light accents — demo-exact). */
 .box {
   display: inline-flex;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-chip);
-  background: var(--bg-base);
+  border-radius: var(--radius-micro);
+  background: var(--content-bg);
   transition:
     background var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out);
