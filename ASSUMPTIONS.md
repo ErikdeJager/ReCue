@@ -3062,3 +3062,18 @@ Tune `[profile.release]` (LTO, one CGU, strip, size opt-level) to shrink the bin
 - Treat the card's "23.6 MB / 86 MB" as unverified: the plan re-measures the baseline first (no `[profile.*]`, no workspace root Cargo.toml, no `.cargo/config.toml`, no RUSTFLAGS/strip in CI or tauri.conf.json — all confirmed) and gates acceptance on a relative delta (binary >=25% smaller) rather than absolute numbers.
 - Do NOT add a release-profile build to the PR gate (`ci.yml`'s header explicitly refuses per-PR `tauri build` cost) — accept that a broken release link surfaces only on the next version-bump push, with a one-line revert as rollback; log the macOS/Windows legs as real-box verification items.
 - Docs: this card also closes the `TRAJECTORY_TO_LINUX.md:163-165` "deliberately untouched" entry, adds a dated Linux entry (sizes, benchmark table, panic rationale, CI cost), a short mirrored Windows note, and one sentence in CLAUDE.md's "Builds & distribution" bullet.
+
+## Task 356
+
+Code-split the frontend bundle — lazy routes, panels, modals, markdown/Prism, and the xterm WebGL addon
+
+- Rejected vite `manualChunks` (the card offered "and/or"): chunking cannot move a statically-reachable module off the first-paint parse path — only dynamic `import()`/`React.lazy` can. `vite.config.ts` is still touched, but only for `build: { manifest: true }` to feed the size-report script.
+- Kept xterm core + addon-fit + addon-web-links eager (the card calls terminals first-paint critical, and `store.ts` statically imports `terminalPool`); deferred only `@xterm/addon-webgl` (107 kB, already runtime-conditional via #105/#346), which means the terminal's first frames now use the DOM renderer and swap to WebGL a few ms later — flagged as the plan's top risk + rollback.
+- Verified dnd-kit really is first-paint (the app-level DndContext in MainApp) and kept it eager, as the card asked.
+- Got markdown+Prism (221 kB) out of the first-paint graph by lazying their four *consumers* (FileViewer, KanbanPanel, DiffInspector, Settings — each has exactly one importer) rather than refactoring FileViewer's internals into an async markdown/prism loader: same byte win, no change to `prism.ts` / `markdownCheckboxes.tsx` / any unit-tested pure module.
+- Added a route-level split (lazy `MainApp` vs `CanvasWindow`) to satisfy "a detached window should load less" — costs the main window one extra local chunk fetch, judged negligible vs the parse win.
+- Suspense fallbacks chosen explicitly: `null` for modals (an empty modal shell would be the regression the card names), the existing muted "Loading…" `.placeholder` for panels, and a bare background-painting `div.app` for the route boundary (kept complementary with Task 348's window show-gate).
+- Added `src/prefetch.ts` (idle warm-up, `requestIdleCallback` with a `setTimeout` fallback for older WKWebView) so deferred chunks are hot before the user reaches them — no perceived interaction regression.
+- Kept UpdateModal, BigModeModal, Toaster, ClaudeMissing, Sidebar, Overview, Canvas static (safety-critical or first-paint, and small).
+- Measured the baseline directly (1,351.5 kB raw / 391.1 kB gzip, single chunk) and attributed it per-library via a source-map build; set the acceptance target at <= 1,000 kB raw / <= 300 kB gzip main-route first-paint JS (expected ~900-950 kB), enforced by a new dependency-free `scripts/bundle-report.mjs --check` budget.
+- Included a short CLAUDE.md bullet (lazy boundaries + the "no manualChunks" rule) so a future feature doesn't static-import the deferred stacks back into the entry.
