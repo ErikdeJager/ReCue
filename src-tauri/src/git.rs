@@ -26,16 +26,24 @@ use serde::Serialize;
 /// `working_diff` / branch listing run on every refresh, so it flashes constantly.
 /// Sets `CREATE_NO_WINDOW` (0x0800_0000) on Windows; a **no-op on unix**, so macOS
 /// keeps spawning `git` exactly as before. Shared by `git.rs` and `commands.rs`.
+///
+/// Also runs the helper against the **restored login-shell PATH** once it is known
+/// (#360). Deliberately **non-blocking**: these run inside *synchronous* Tauri commands,
+/// i.e. on the main thread, so they must never stall the webview waiting for the probe —
+/// and `git` itself lives in a system dir that is on the minimal GUI PATH anyway. While
+/// the probe is in flight (or never armed — debug builds, Windows) `apply_path` adds no
+/// `env` call at all, so the `Command` stays byte-for-byte what it is today. The
+/// `claude --version` presence probe *does* see the restored PATH regardless, because
+/// `binary_version` resolves the binary through `pty::resolve_command` (which waits).
 pub(crate) fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let cmd = Command::new(program);
-    #[cfg(windows)]
-    let mut cmd = cmd;
+    let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    crate::path_env::apply_path(&mut cmd);
     cmd
 }
 
