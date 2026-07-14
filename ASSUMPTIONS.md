@@ -3310,3 +3310,19 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - New checkbox labels/copy chosen by me: "Dense panels" (+ kbdHint ⌘D help), "Background animation", "Cap agent card width" — consumers of the latter two land in cards 3/5, so they persist but are visually inert here, per the card.
 - The Slider restyle (4px crust track, 12px accent thumb, per demo) is included here — PLAN-372 explicitly deferred it to card 2.
 - Dense's visible tiling waits on cards 5/6 consuming the 372 stage vars; this card's verifiable effect is the persisted flag, the toast, and the `dense` class on <html> zeroing the vars.
+
+## Task 375
+
+- Primitive form: a global-class stylesheet `src/styles/menu.css` (the 372 atoms.css pattern), not a wrapper component — each menu keeps its own positioning/dismissal logic and only swaps look classes; positioning + z-index stay site-local.
+- Demo-extracted contract inlined in the plan (container min-width 200px, 4px padding, base bg, --border-strong, radius 10, --shadow-menu, 130ms .97→1; 28px/11.5px items, radius 6, Surface0 hover; 9.5px uppercase .06em section labels at weight 400; danger hover 12% red tint); menu border uses --border-strong (.15) for the demo's .14.
+- Viewport clamp margins in useRowMenu/clampAgentMenuPos bumped to match the wider 200px min-width.
+- Kept every existing menu item and its order beyond the demo's illustrative sets (Open in canvas, Watch, Pull, View on GitHub, Copy relative path, etc.); no icons added/removed — existing in-menu icons resized 14→13 + muted per §10 (demo's extra Copy/Trash glyphs not added).
+- ViewsPopover follows the demo's layout: "Open a view" section label + view items first, "New session here" last after a separator; deliberately NO ⌘N hint on it (⌘N opens the modal — the item instant-spawns, a hint would mislabel).
+- FileTree's right-click context menu included ("all context menus") even though the card's Apply-to list omits it — it is the third duplicated copy of the menu look; its form/input sub-styles stay local.
+- --shadow-popover alias kept for the ~20 consumers this card doesn't own (FileSwitcher/GlobalSearch/Settings/modals — cards 10-12); only owned surfaces migrate to --shadow-menu/--shadow-modal.
+- New-session popover: uniform 12px radius (drops the #65 mixed-corner trick — demo shows uniform) and token `--shadow-modal` instead of the demo's one-off `0 16px 56px` shadow (token-driven + light-theme-safe approximation); title 12.5px demo literal; anchor stays fixed 12px/12px.
+- Progress dots: 2 for the normal flow, 3 for schedule/recurring (demo shows only the 2-step flow); only the CURRENT step is accent (demo-exact); dots are aria-hidden decoration; a #127/#263 skip-folder open shows dot 2 active.
+- Highlighted/pre-selected rows in the New-session popover (recents, branches, Choose-another) move from --accent-dim to Surface0 fills, and "+ add branch" goes muted-with-hover (demo wins; accent never encodes selection); branch-filter >4 threshold and the branch-step Cancel button are kept (parity over the demo's omissions).
+- SkillAutocomplete dropdown, FilePicker/FileSwitcher/GlobalSearch internals, and Settings selects untouched; where a picker renders inside an owned menu it inherits only the new container.
+- Menu animation duration is a 130ms literal (spec band 130–160; --dur-fast is 120ms); reduced-motion relies on the existing global killswitch, no new mechanism.
+- Checkable-row check glyph right-aligns (margin-left auto) per the demo's right-aligned trailing hints (was label-adjacent).
