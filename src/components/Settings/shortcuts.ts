@@ -48,6 +48,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         win: "Ctrl+E",
         description: "Toggle big mode for the selected item",
       },
+      { mac: "⌘D", win: "Ctrl+D", description: "Toggle dense panels" },
     ],
   },
   {
@@ -64,6 +65,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         win: "Ctrl+B",
         description: "Collapse / expand the sidebar",
       },
+      { mac: "⌘F", win: "Ctrl+F", description: "Global search" },
       {
         mac: "⇧←/→",
         win: "Shift+←/→",

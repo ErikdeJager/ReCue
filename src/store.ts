@@ -1139,6 +1139,16 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   accentColor: "",
   reduceMotion: false,
+  // True by default (UI v2 task 373): animate the app background. The visual consumer
+  // (the wave background) lands with card 3 — until then the flag persists inertly.
+  backgroundAnimation: true,
+  // False by default (UI v2 §9, task 373): dense panels are opt-in — toggled by ⌘D or
+  // Settings → Appearance; applied as the `dense` class on <html> (the task-372
+  // `:root.dense` hook zeroing the --stage-* vars).
+  densePanels: false,
+  // True by default (UI v2 task 373, opt-out): cap Overview agent cards at a
+  // comfortable max width. The visual consumer lands with card 5's Overview reskin.
+  capAgentWidth: true,
   overviewPanelMinWidth: 400,
   // 100% = normal (#366); cleared to a no-op `zoom` so a default install is unchanged.
   displaySize: 100,
@@ -1279,9 +1289,28 @@ export function accentCompanions(hex: string): {
   return { hover, dim, fg };
 }
 
+/** A random member of the accent palette (UI v2 task 373): the `accentColor:
+ * "random"` sentinel resolves through this. Pure — `rand` injectable for tests. */
+export function randomPaletteAccent(rand: () => number = Math.random): string {
+  const idx = Math.min(
+    REPO_PALETTE.length - 1,
+    Math.floor(rand() * REPO_PALETTE.length),
+  );
+  return REPO_PALETTE[idx] ?? "#fab387";
+}
+
+let runRandomAccent: string | null = null;
+/** The per-launch resolution of `accentColor: "random"` (UI v2 task 373) — rolled
+ * once per window document (memoized), so re-saving settings never re-rolls the
+ * accent mid-run; the next launch rolls fresh. */
+export function resolvedRandomAccent(): string {
+  runRandomAccent ??= randomPaletteAccent();
+  return runRandomAccent;
+}
+
 /** Apply the imperative side-effects of settings: the terminal options to the live
- * pool (#100), the theme attribute (#333), the accent tokens (#102/#107), and the
- * reduce-motion class (#102). */
+ * pool (#100), the theme attribute (#333), the accent tokens (#102/#107), the
+ * reduce-motion class (#102), and the dense-panels class (UI v2 §9, task 373). */
 function applySettingsEffects(s: Settings): void {
   applyTerminalSettings({
     fontSize: s.terminalFontSize,
@@ -1311,9 +1340,13 @@ function applySettingsEffects(s: Settings): void {
   // first frame is already the right theme instead of dark-then-light. Best-effort —
   // storeTheme never throws.
   storeTheme(s.theme);
-  if (s.accentColor) {
-    const { hover, dim, fg } = accentCompanions(s.accentColor);
-    root.style.setProperty("--accent", s.accentColor);
+  // The "random" sentinel (UI v2 task 373) resolves to a palette member chosen once
+  // per launch; "" and an explicit hex behave exactly as before.
+  const accent =
+    s.accentColor === "random" ? resolvedRandomAccent() : s.accentColor;
+  if (accent) {
+    const { hover, dim, fg } = accentCompanions(accent);
+    root.style.setProperty("--accent", accent);
     root.style.setProperty("--accent-hover", hover);
     root.style.setProperty("--accent-dim", dim);
     root.style.setProperty("--accent-fg", fg);
@@ -1326,6 +1359,9 @@ function applySettingsEffects(s: Settings): void {
   // Reduce motion (#102): force-on beyond the OS setting via a body class that
   // global.css zeroes the motion for (mirrors the prefers-reduced-motion killswitch).
   document.body.classList.toggle("reduce-motion", s.reduceMotion);
+  // Dense panels (UI v2 §9, task 372/373): the `:root.dense` hook in tokens.css
+  // zeroes --stage-gap / --stage-pad-overview / --stage-pad-canvas.
+  root.classList.toggle("dense", s.densePanels);
   // Overview column min width (#176): the floor before columns scroll horizontally.
   // Always set it — the `.card` CSS fallback only covers the pre-JS first paint.
   root.style.setProperty("--overview-card-min", `${s.overviewPanelMinWidth}px`);
@@ -1983,6 +2019,10 @@ export interface AppState {
   setRepoColor: (path: string, color: string) => Promise<void>;
   /** Apply + persist application settings (#100) and run their side-effects. */
   saveSettings: (settings: Settings) => Promise<void>;
+  /** Flip the dense-panels setting (UI v2 §9, task 373) — backs the ⌘D shortcut.
+   * Persists via `saveSettings` (which applies the `dense` root class) and toasts
+   * "Dense panels on"/"Dense panels off". */
+  toggleDensePanels: () => void;
   /** First-launch agent detection: if not yet `onboarded`, presence-check the
    * selectable CLIs. 0 installed → no-op (re-checks next launch); exactly 1 → silently
    * make it the default (+ a toast if it's an untested agent); 2+ → open the picker. */
@@ -4187,6 +4227,15 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       // Persist failed (e.g. outside Tauri); the change stays for the session.
     }
+  },
+
+  toggleDensePanels: () => {
+    const settings = get().settings;
+    const next = !settings.densePanels;
+    // saveSettings applies the `dense` root class (applySettingsEffects) + persists;
+    // both fail-soft outside Tauri. The toast strings are the demo's exact copy.
+    void get().saveSettings({ ...settings, densePanels: next });
+    get().pushToast(next ? "Dense panels on" : "Dense panels off");
   },
 
   maybeOnboardAgent: async () => {
