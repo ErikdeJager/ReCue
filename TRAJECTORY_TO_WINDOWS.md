@@ -1038,3 +1038,44 @@ start), but the profile is a **single Cargo setting applied to all three targets
 its first exercise of the new profile is the next release run — confirm it links under LTO and
 that the resulting **NSIS/MSI installer installs and runs**, then note the binary/installer
 size delta.
+
+### Fast, reliable session exit — the `Exited` event now comes from the child (#354)
+
+Two backend bugs made agents exit slowly and leave orphans on **unix** (macOS + Linux): the
+`Exited` event was derived from the PTY reader hitting **EOF** (which on unix only happens once
+*every* holder of the slave fd is gone — and claude's MCP servers / tool children inherit it), and
+the kill signalled only the **direct pid**, blocking ~200 ms inside the Tauri command. The fix is a
+per-session **exit-waiter thread** that owns the `Child`, blocks in `wait()`, and is the **sole**
+emitter of `Exited`, plus a unix **process-group** kill (`killpg` SIGHUP → bounded grace →
+SIGKILL, off-thread).
+
+**Windows is deliberately untouched.** No job object / `TerminateJobObject`, and **no `libc` is
+compiled on Windows** (the new dep is `[target.'cfg(unix)'.dependencies]`-only). The Windows kill
+path is still `ChildKiller::kill()` → `TerminateProcess` — verified byte-for-byte equivalent:
+portable-pty's `WinChild::kill()` and the `clone_killer()`-derived `WinChildKiller::kill()` both
+call `TerminateProcess(handle, 1)`, so swapping the owned `Child` for a cloned killer changes
+nothing (including the exit code 1, which can never be misread as a clean code-0 exit). The
+`hangup_group` / `kill_group` helpers have explicit **no-op Windows arms**, so every call site
+stays `#[cfg]`-free.
+
+What Windows **does** inherit is the platform-neutral half: `Exited` now fires when the child is
+reaped rather than when the ConPTY reader EOFs, `kill_session` no longer blocks its command, and
+`kill_all` flags each generation `silent` before signalling — so a shutdown emits **no** `Exited`
+and the persisted records still survive to auto-resume on the next launch (#30/#63).
+
+Not compilable on this Linux box (no `rustup` / MSVC target), so the Windows arms are guarded by
+inspection + attributes rather than a cross-compile: `pid` / `KILL_GRACE_MS` / `SHUTDOWN_GRACE_MS`
+carry `#[cfg_attr(windows, allow(dead_code))]` so a Windows `clippy --all-targets -- -D warnings`
+stays clean, and all three new tests are `#[cfg(unix)]`.
+
+#### Still needs manual Windows verification (#354)
+
+- Remove an agent that has MCP servers / a tool child running → the card vanishes at once, and
+  Task Manager shows no orphaned `claude.cmd` / `node` children of it.
+- Let an agent exit on its own (`/exit`) → the "Agent exited" toast + auto-forget (#63) fires
+  promptly, not after seconds.
+- Quit the app with 3+ live agents, then relaunch → no orphan processes, and **every** session
+  comes back (the shutdown-silence rule — this is the key record-loss regression check).
+- `kill -9`-equivalent (End task) an agent's process → the "Process exited (code N)" overlay +
+  Restart appears promptly, and Restart works (the same-id respawn silences the stale generation).
+- `cargo clippy --all-targets -- -D warnings` and `cargo test` are clean on a Windows checkout.

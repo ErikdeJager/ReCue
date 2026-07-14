@@ -52,6 +52,14 @@ png = "0.18.1"
 # (transitive); pulling it direct adds no new compile. Pure-Rust, platform-neutral.
 base64 = "0.22"
 
+# Kill an agent's whole PTY **process group** on unix (#354). portable-pty's unix spawn
+# already makes the child a session/process-group leader (`setsid()`), so `killpg(child_pid,
+# …)` reaches claude's MCP servers / tool children and nothing else. libc is already in the
+# dependency tree (via portable-pty), so this adds no new compile; Windows never sees it —
+# its kill path stays `ChildKiller::kill()` → `TerminateProcess`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [lints.clippy]
 all = "warn"
 

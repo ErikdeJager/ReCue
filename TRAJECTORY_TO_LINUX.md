@@ -824,3 +824,65 @@ OS-specific was added), so macOS and Windows get the same win; WebKitGTK gets th
       *later* than before this change — the `booted` gate must not have become a fourth
       reveal gate. Kill the dev server mid-boot: the 2 s Rust reveal fallback still shows
       the window.
+
+### Fast, reliable session exit — kill the process group, derive `Exited` from the child (#354)
+
+Reported as "instances exit slow", plus orphaned agent children. Two backend bugs, both on the
+shared `#[cfg(unix)]` path (so macOS and Linux had them equally):
+
+- **`Exited` was EOF-driven.** `reader_loop` emitted it only after the PTY **master** hit EOF —
+  but on unix the master only EOFs once **every** holder of the **slave** fd is gone, and claude's
+  subprocesses (MCP servers, tool children) inherit it. An agent that had already exited therefore
+  kept its card alive for seconds. Verified on Linux with a PTY probe: a backgrounded descendant
+  that **ignores SIGHUP** keeps the master from EOFing **indefinitely** (the reader was still
+  blocked after 8 s), so the exit event never came at all.
+- **The kill hit only the direct pid, and it blocked.** portable-pty's unix `Child::kill()` sends
+  SIGHUP to the direct pid, then sleeps ~200 ms before escalating — inside the Tauri command, and
+  serially per session in `kill_all` (10 agents ⇒ a ~2 s shutdown stall). Descendants survived as
+  orphans (#31) and kept the slave open, so the exit stayed EOF-blocked anyway.
+
+**Fix.** A per-session **exit-waiter thread** owns the `Child`, blocks in `wait()` (which returns
+the moment the direct child dies, regardless of descendants), and is the **sole** emitter of
+`Exited`; the reader's send is deleted, not merely guarded, so there is still exactly **one**
+`Exited` per PTY generation (the frontend consumes its `intentionalKills` flag once). The waiter
+first waits — bounded, `EXIT_DRAIN_MS` — on the reader's `reader_done` flag, so trailing output
+still precedes the exit; if the reader hasn't EOF'd, descendants are still holding the slave, so it
+hangs up the whole **process group** and escalates to SIGKILL. `kill_session` / `kill_all` signal
+the group too (`killpg`), non-blocking, with `kill_all` paying **one** shared grace for all
+sessions.
+
+No `pre_exec` / `setsid` of our own is needed: portable-pty's unix spawn already `setsid()`s the
+child (crate `src/unix.rs`), so `pgid == pid` and the group is a fresh session containing nothing
+but the agent's own descendants — `killpg` can never reach anything else of ours. The one new dep
+is `libc`, `[target.'cfg(unix)'.dependencies]`-gated (already in the tree via portable-pty).
+
+**Linux-specific nuance worth knowing.** When a session leader holding a controlling terminal dies,
+the **kernel** SIGHUPs its foreground process group — so on Linux a *well-behaved* background child
+is killed for us and the master EOFs anyway. The bug only bites with a descendant that ignores or
+escapes the hangup (exactly what a long-lived MCP server does) — which is why the new unit tests
+deliberately use a `(trap "" HUP; sleep 30) &` descendant. With a plain `sleep` they passed even
+against the pre-fix code; with the stubborn one all three fail pre-fix and pass after (verified).
+
+**Records still survive a quit (#30/#63).** Making the exit *prompt* means a shutdown kill could
+now deliver `Exited` to a still-live webview — and an agent that exits 0 on SIGHUP would read as a
+**clean** exit, so `isCleanExit` would **delete the persisted record** and the session would not
+come back on the next launch. `kill_all` therefore flags every generation `silent` **before any
+signal** and emits nothing; a dedicated test asserts no `Exited` arrives. (A signal death also maps
+to exit code 1, never 0, so a killed agent can't be mistaken for a clean exit either.)
+
+**Files**: `src-tauri/src/pty.rs`, `src-tauri/Cargo.toml`. No frontend change.
+
+### Needs real-box verification (#354)
+
+- [ ] Run a real `claude` agent **with MCP servers** configured, then **Remove** it → the card
+      vanishes at once (no multi-second hang), and `pgrep -fa claude` / `pgrep -fa mcp` show none
+      of its children left.
+- [ ] Let an agent exit on its own (`/exit`, or Ctrl-C twice) while an MCP server is running → the
+      "Agent exited" toast / auto-forget (#63) fires within ~1 s, not after seconds.
+- [ ] Quit the app with 3+ live agents → `pgrep -fa claude` is empty right after (no orphans, #31),
+      and on relaunch **every** session is back (records survived — the key regression check for
+      the shutdown-silence rule).
+- [ ] `kill -9` an agent's `claude` process from a shell → the "Process exited (code N)" overlay +
+      Restart appears promptly, and Restart works.
+- [ ] Sanity-check on a desktop where an MCP server double-forks / `setsid`s itself: the agent's
+      exit is still immediate (only the reader thread lingers — documented, best-effort).
