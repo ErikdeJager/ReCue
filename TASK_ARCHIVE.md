@@ -3817,3 +3817,71 @@ thread, which is costliest on WebKitGTK. Boot is now **14 invokes in 2 concurren
   a `makeBootState()` fixture with every prior assertion kept, plus new coverage: boot issues only `bootState` +
   the four subscribes; `platform` and `sessions` land together; `booted` flips even on failure.
 - Platform-neutral win, largest on WebKitGTK; real-box checks recorded in `TRAJECTORY_TO_LINUX.md`.
+
+### 354. [x] Fast, reliable session exit — kill the PTY process group and derive `Exited` from the child, not the reader's EOF
+
+`kill_session` / `kill_all` only killed the **direct** child pid, and the `Exited` event was **EOF-driven** — but
+on unix a PTY master only EOFs once **every** holder of the slave fd is gone, and claude's subprocesses (MCP
+servers, tool children) inherit it. So an already-exited agent's card stayed alive for seconds (the reported
+"instances exit slow"), and with a descendant that ignores SIGHUP the master **never EOFs at all** — verified
+with a PTY probe where the reader was still blocked after 8 s.
+
+**What shipped** (branch `fast-session-exit`, PR [#113](https://github.com/ErikdeJager/ReCue/pull/113),
+2026-07-14):
+
+- **`Exited` is now driven by the child, not the reader.** A per-session **exit-waiter thread**
+  (`pty.rs exit_waiter`) owns the `Child`, blocks in `wait()`, and is the **sole** emitter of
+  `SessionEvent::Exited`. The reader's send is **deleted**, not merely guarded, so there is still exactly **one**
+  `Exited` per PTY generation — the frontend's consume-once `intentionalKills` contract is untouched.
+- **Trailing output still precedes `Exited`** — the waiter waits, bounded (`EXIT_DRAIN_MS`, 150 ms), on a
+  `reader_done` flag the reader sets after its last `Output`, then hangs up lingering descendants and escalates
+  to SIGKILL after a further 250 ms. Worst-case added exit latency ~400 ms; normally a few ms.
+- **Unix process-group kill (no orphans)** — `hangup_group` / `kill_group` (`killpg` SIGHUP → bounded grace →
+  SIGKILL) back `kill_session`, `kill_all`, and the waiter's cleanup of descendants still holding the slave.
+- **`kill_session` is non-blocking**: the SIGHUP goes out immediately and the SIGKILL escalation runs off-thread,
+  replacing portable-pty's ~200 ms sleep *inside* the Tauri command. **`kill_all` is bounded**: one shared 200 ms
+  grace for all sessions rather than ~200 ms × N serially, run inline rather than on detached threads (which may
+  not survive process exit → orphans).
+- **Same-id respawn (Restart) hardening** — a superseded generation is silenced and killed, so a stale waiter's
+  late exit can never be attributed to the fresh session.
+
+**Key decisions**
+
+- **No `pre_exec`/`setsid` of our own, and no `nix` dependency.** The root cause was confirmed *in the vendored
+  crate*: portable-pty 0.9.0's unix spawn **already** calls `setsid()` in `pre_exec` (`src/unix.rs:257`), so the
+  child is a session/process-group leader (`pgid == pid`) and `killpg(child_pid)` is already correct — it can
+  only ever reach the agent's **own** descendants. The only new dep is `libc`, gated
+  `[target.'cfg(unix)'.dependencies]` and already in the lock file via portable-pty.
+- **The subtlest bug this task had to avoid: `kill_all` must be *silent*.** An `ExitState::silent` flag is set
+  **before any signal** on shutdown, so a shutdown kill emits **no** `Exited` at all. Without it, a claude that
+  traps SIGHUP and exits **0** would reach the still-live webview, `isCleanExit` would read it as a *clean* exit,
+  and `forgetExitedSession` would **delete the persisted record** — silently breaking #30's "quitting keeps your
+  sessions" guarantee. `kill_session`, by contrast, still emits exactly one `Exited`, so `intentionalKills`
+  bookkeeping is unchanged.
+- **Exit-code semantics are preserved by construction, not by a new flag.** portable-pty maps a signal death to
+  exit code **1** (never 0), so a killed agent can never be misread as a clean code-0 exit and get its record
+  forgotten (#63). Documented and **asserted in a test** rather than adding a "killed" field to the event payload.
+- **SIGHUP first, not SIGTERM** (matching portable-pty's and a terminal's own semantics), escalating to SIGKILL.
+- **Deliberately did *not* killpg the tty's foreground process group** (`MasterPty::process_group_leader`): the
+  setsid'd child's own group already covers claude's non-detached descendants. A descendant that `setsid`s
+  *itself* is recorded as a known, best-effort limitation.
+- **Windows is byte-for-byte untouched** — no job object (an explicit non-goal), no `libc` compiled there, and
+  the kill path stays `ChildKiller::kill()` → `TerminateProcess` (verified in the crate: both `WinChild::kill`
+  and the cloned `WinChildKiller::kill` call `TerminateProcess(handle, 1)`). Windows still *inherits* the
+  platform-neutral child-wait-driven `Exited`, which is a cfg-free improvement. `pid` and the two grace
+  constants carry `#[cfg_attr(windows, allow(dead_code))]` so a Windows `clippy --all-targets -- -D warnings`
+  stays clean.
+- **No frontend change at all** — `isCleanExit`, `forgetExitedSession`, `intentionalKills`, the Restart overlay
+  and "shutdown keeps records" are exactly as they were.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Three new `#[cfg(unix)]` tests (plus a `session_pid` accessor and a `group_gone` helper): a prompt exit despite
+  a lingering descendant; a prompt whole-group kill (asserting **exactly one** `Exited`, **never code 0**); and a
+  **silent** `kill_all` leaving no process group behind. **Each was verified to fail against a pre-#354
+  simulation** and pass after — the tests genuinely pin the bug, rather than merely describing the new code.
+- Docs: the `CLAUDE.md` "Exit handling (#63)" convention + Spawn bullet, and dated entries with real-box
+  checklists in `TRAJECTORY_TO_LINUX.md` / `TRAJECTORY_TO_WINDOWS.md` (the Windows `TerminateProcess` path and a
+  real MCP-server-holding-the-slave scenario are the items CI cannot exercise).
