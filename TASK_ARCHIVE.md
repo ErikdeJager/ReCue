@@ -5047,3 +5047,47 @@ green).
 - Pure CSS/markup; identical on macOS/Windows/Linux. Rollback = revert the PR.
 
 **Dependencies:** Tasks 372, 377.
+
+### 381. [x] UI v2 (7/12): Content viewers reskin — FileViewer toolbar + markdown ramp, DiffInspector meta/pager + tinted diff rows
+
+Card 7 of the UI v2 reskin epic (spec §8 Workspace tab + demo; **no version bump / patch notes**). The two content
+viewers move onto the v2 language: the FileViewer gets the v2 toolbar row ("Saved" status + a segmented
+**Rendered | Raw** in a 22px crust well) and the demo's rendered-markdown type ramp with a flush crust Raw editor;
+the DiffInspector gets the "N files +a −d" meta + segmented **Focused | Accordion** toolbar, the demo's pager row
+(‹ › arrows + centered file pill), and token-tinted +/−/hunk-header diff rows — zero functionality lost
+(sources/sort/#278 seen-markers/#255 keyboard nav all intact).
+
+**What shipped** (branch `task-381-content-viewers-reskin`, PR
+[#136](https://github.com/ErikdeJager/ReCue/pull/136), merged 2026-07-15 into `ui-rework`):
+
+- **Both viewers adopt the 372 `SegmentedControl` atom** (its default square look is demo-exact); one atom tweak —
+  `gap: 5px` on segments — enables icon+label segments with no visual change for text-only consumers. Raw segment
+  icon = lucide `Terminal` (demo-exact, was Code2).
+- **FileViewer** — toolbar row with the auto-save "Saving…/Saved" status; rendered markdown sits on Base with the
+  demo ramp (17px h1 / 13px h2 / 11px body / 1.7, h1/h2 at weight 700 — demo wins over §2.3's "700 wordmark only"
+  prose; inline code chips, accent-left-bordered blockquote); Raw/code surfaces stay crust, the base→crust
+  hairline moving from the toolbar's border-bottom onto the editor's border-top (no double borders). The editable
+  Raw view keeps the plain `<textarea>` and **skips the demo's syntax tinting** (an overlay-highlight risks
+  caret/IME/scroll-sync divergence across the three WebViews; §12 editable-raw parity is the harder constraint);
+  only the gutter-free `.editor` adopts 10px/1.6 — `.raw`/`.code`/gutter metrics are untouched (the #324 gutter
+  alignment is locked to them). Mermaid, auto-save, and large-file behavior unchanged.
+- **DiffInspector** — the meta + Focused|Accordion live in an in-component toolbar row (the demo drew them in the
+  30px panel header, but that's 380's generic chrome), the meta deduped to just "N files +a −d" ("repo · branch"
+  already lives in the 379/380 card/panel headers); Focused mode drops the old sub-header for the demo pager row —
+  ‹ › arrows + a centered file pill (state chip, filename, 1/2, chevron opening the file picker) — with the
+  SeenToggle (#278) moved after the › arrow and the active file's +/− counts kept in the pill
+  (zero-functionality-lost over the demo's omission); Unified|Split and Recent|A–Z restyle to the same segmented
+  look on a second toolbar row (#237 persistence unchanged). Diff rows at `--fs-diff`/`--lh-diff` with tinted
+  backgrounds; **new tokens `--diff-hunk-fg`/`--diff-hunk-bg`** (Mocha + Latte variants), dark add/del alphas
+  .12→.10 per demo (Latte left as-is — no light demo, don't regress tuned contrast); sticky @@ hunk headers kept,
+  their tint composing over an opaque under-layer so stuck headers never bleed. The M status chip goes
+  `--status-awaiting` yellow (matching FileTree) with a color-mix bg + plain fallback. The #255 arrow-nav guard
+  gains `[role=tablist]` so the atom's roving arrows never also step the diff file; the focused-mode file-picker
+  listbox restyles locally to the §10 values (the global `.menu-pop`'s min-width/animation don't fit an anchored
+  pill-width listbox).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 381) — the toolbar-row relocation of header meta, the skipped
+editable-raw tinting, unified rows keeping both line-number gutters (the demo's single number would lose
+information), and the locked gutter metrics, all as summarized above.
+
+**Dependencies:** Tasks 372, 380.
