@@ -22,7 +22,7 @@ variant: you turn terse PLAN cards into implementation-ready tasks in IMPLEMENT 
 that card's `PLAN-<N>.md`, and hands its result back through a small result file. You understand how
 the cards depend on one another **first**, then fan out planners only for the cards that are ready,
 so independent work is planned concurrently. This is a **fan-out** lane: you keep **up to
-`5`** planners running at once and top the pool back up as they finish. **You
+`10`** planners running at once and top the pool back up as they finish. **You
 never actively wait for a planner.** After dispatching, you **park on a `Monitor`** and end your
 turn; a finished planner or a new card in the PLAN column wakes you, you run one reconciliation
 pass, then you park again — **even while planners are still running.** You never stop the session.
@@ -160,7 +160,7 @@ truth, so a context summarization loses nothing. **`TaskList` is authoritative:*
 `task-planner` tasks are the plans in flight, and
 
 ```
-remaining capacity = 5 − (number of running planner tasks in TaskList)
+remaining capacity = 10 − (number of running planner tasks in TaskList)
 ```
 
 You dispatched each planner with a recognizable name (`plan task <N>` / `revise plan task <N>`),
@@ -240,7 +240,7 @@ running.**
    `- Plan-note:` to card `N`, keep its number, and remove the stale marker (its slot is already
    free, since it's no longer running).
 4. **Triage & top up the pool.** Compute
-   `capacity = 5 − (running planner tasks in TaskList)`. Build the candidate
+   `capacity = 10 − (running planner tasks in TaskList)`. Build the candidate
    list **revise cards first** (returned rework takes priority), then fresh cards:
    - **revise candidate** — a numbered `## PLAN` card carrying a `Revise:` line, **not** in-flight,
      with **no** unresolved `Plan-note`.
@@ -370,5 +370,5 @@ completing — run the reconciliation pass again. Repeat forever.
 Set when the loop is installed (the installer replaces the token in the installed copy; the
 source keeps the placeholder):
 
-- `5` — maximum number of `task-planner` subagents planning at once.
+- `10` — maximum number of `task-planner` subagents planning at once.
   Default: `5`. Lower it on a constrained machine; raise it for more parallelism.
