@@ -1,5 +1,6 @@
 import { Download } from "lucide-react";
 
+import { selfUpdates } from "../../platform";
 import { useStore } from "../../store";
 import styles from "./Update.module.css";
 
@@ -19,14 +20,20 @@ import styles from "./Update.module.css";
  *
  * Inert today (no signed release → `checkForUpdate` returns null), but every state
  * is reachable via the dev mock (#193).
+ *
+ * Never rendered for a **package-managed** install (#361, `installKind === "system"`):
+ * the store gate already keeps the status at "idle" there, but the dev mock writes the
+ * status directly, so this is the defense-in-depth half of the same rule.
  */
 function UpdateIndicator() {
   const status = useStore((s) => s.update.status);
   const version = useStore((s) => s.update.version);
   const error = useStore((s) => s.update.error);
   const collapsed = useStore((s) => s.sidebarCollapsed);
+  const installKind = useStore((s) => s.installKind);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
 
+  if (!selfUpdates(installKind)) return null;
   if (status !== "available" && status !== "error") return null;
   const isError = status === "error";
 

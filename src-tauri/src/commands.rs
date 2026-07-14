@@ -2822,6 +2822,70 @@ pub fn platform() -> String {
     std::env::consts::OS.to_string()
 }
 
+/// How this ReCue process was **installed** (#361) — the runtime signal that decides
+/// whether the **in-app updater** owns this install:
+///
+/// * `"bundle"` — a macOS `.app` / a Windows installer / any dev (debug) build. Today's
+///   behavior: the updater owns it.
+/// * `"appimage"` — a Linux **AppImage** launch. The AppImage runtime exports `$APPIMAGE`
+///   (the path of the `.AppImage` file) into the process environment, and Tauri's Linux
+///   updater replaces exactly that file — so the updater owns it.
+/// * `"system"` — a Linux **release** binary with **no** `$APPIMAGE`: installed by a
+///   package manager (pacman / the AUR `recue-bin`, the `.deb`, a manual copy) or
+///   extracted out of an AppImage. The updater must **not** touch it — pacman/apt owns
+///   the binary, and Tauri's Linux updater couldn't replace it anyway.
+///
+/// A compile-time flag can't tell "AppImage build" from "distro build" — the AUR package
+/// repacks the **same binary** the `.deb` carries — so the detection has to be runtime,
+/// and `$APPIMAGE` is the one discriminator.
+///
+/// Pure so every row is unit-tested on every host. `RECUE_INSTALL_KIND` force-overrides
+/// (mirroring #346's `RECUE_DISABLE_DMABUF`) so either state is exercisable on any box;
+/// anything but the three known values is ignored.
+fn classify_install(
+    os: &str,
+    appimage: Option<&str>,
+    override_kind: Option<&str>,
+    debug: bool,
+) -> &'static str {
+    match override_kind {
+        Some("appimage") => return "appimage",
+        Some("system") => return "system",
+        Some("bundle") => return "bundle",
+        // Garbage / unset → fall through to the real probe.
+        _ => {}
+    }
+    if os != "linux" {
+        return "bundle";
+    }
+    // A `tauri dev` binary is neither an AppImage nor a package — keep today's dev UX
+    // (and the #193 update mock) working on Linux.
+    if debug {
+        return "bundle";
+    }
+    // An *empty* APPIMAGE reads as unset (`Some("")` is not an AppImage launch).
+    match appimage {
+        Some(path) if !path.is_empty() => "appimage",
+        _ => "system",
+    }
+}
+
+/// The install kind of this process (#361) — `"bundle"` / `"appimage"` / `"system"`.
+/// Read once at boot and cached in the store; the frontend's `selfUpdates()` turns it
+/// into "does the in-app updater own this install". See `classify_install`.
+#[tauri::command]
+pub fn install_kind() -> String {
+    let appimage = std::env::var("APPIMAGE").ok();
+    let override_kind = std::env::var("RECUE_INSTALL_KIND").ok();
+    classify_install(
+        std::env::consts::OS,
+        appimage.as_deref(),
+        override_kind.as_deref(),
+        cfg!(debug_assertions),
+    )
+    .to_string()
+}
+
 /// The Windows build number (e.g. `19045`, `22631`, `26100`), read once at boot and
 /// cached in the store to configure xterm.js's ConPTY handling
 /// (`windowsPty.buildNumber`, which gates reflow at ≥ 21376). On **non-Windows** this
@@ -3447,5 +3511,106 @@ mod tests {
         let _ = git::worktree_remove(&repo, Path::new(&p1), true);
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    // ---- classify_install (#361) --------------------------------------------------
+    // The runtime "how was this installed" probe behind the updater gate. Pure, so every
+    // row is exercised on every host (macOS/Windows CI never sees a real AppImage).
+
+    #[test]
+    fn classify_install_is_bundle_on_macos_and_windows() {
+        // Non-Linux never has an AppImage / package-manager binary — today's behavior
+        // (the updater owns the .app / the installer) must be preserved byte-for-byte.
+        for os in ["macos", "windows"] {
+            assert_eq!(classify_install(os, None, None, false), "bundle");
+            assert_eq!(classify_install(os, None, None, true), "bundle");
+            // Even a stray APPIMAGE var can't flip a non-Linux host.
+            assert_eq!(
+                classify_install(os, Some("/tmp/ReCue.AppImage"), None, false),
+                "bundle"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_install_detects_a_linux_appimage_by_the_appimage_var() {
+        // The AppImage runtime exports $APPIMAGE — the file Tauri's Linux updater replaces.
+        assert_eq!(
+            classify_install(
+                "linux",
+                Some("/home/u/Apps/ReCue_1.2.1_amd64.AppImage"),
+                None,
+                false
+            ),
+            "appimage"
+        );
+    }
+
+    #[test]
+    fn classify_install_treats_a_linux_release_without_appimage_as_system() {
+        // pacman/AUR/.deb/manual copy — the package manager owns the binary.
+        assert_eq!(classify_install("linux", None, None, false), "system");
+    }
+
+    #[test]
+    fn classify_install_treats_an_empty_appimage_var_as_unset() {
+        // `std::env::var` yields Some("") for a present-but-empty var — that is NOT an
+        // AppImage launch, so it must classify as a system install.
+        assert_eq!(classify_install("linux", Some(""), None, false), "system");
+    }
+
+    #[test]
+    fn classify_install_is_bundle_for_a_linux_debug_build() {
+        // `npm run tauri dev` on Linux: neither an AppImage nor a package. Keep the dev
+        // UX (and the #193 update mock) exactly as it is.
+        assert_eq!(classify_install("linux", None, None, true), "bundle");
+        assert_eq!(
+            classify_install("linux", Some("/tmp/x.AppImage"), None, true),
+            "bundle"
+        );
+    }
+
+    #[test]
+    fn classify_install_override_wins_over_everything() {
+        // RECUE_INSTALL_KIND forces either state on any box (testing seam, #346 precedent).
+        assert_eq!(
+            classify_install("linux", None, Some("appimage"), false),
+            "appimage"
+        );
+        assert_eq!(
+            classify_install("macos", None, Some("system"), false),
+            "system"
+        );
+        assert_eq!(
+            classify_install("linux", Some("/tmp/x.AppImage"), Some("system"), false),
+            "system"
+        );
+        assert_eq!(
+            classify_install("linux", None, Some("bundle"), false),
+            "bundle"
+        );
+        // A debug build can still be forced into either release state.
+        assert_eq!(
+            classify_install("linux", None, Some("system"), true),
+            "system"
+        );
+    }
+
+    #[test]
+    fn classify_install_ignores_a_garbage_override() {
+        // Anything but the three known values falls through to the real probe.
+        assert_eq!(
+            classify_install("linux", None, Some("nonsense"), false),
+            "system"
+        );
+        assert_eq!(classify_install("linux", None, Some(""), false), "system");
+        assert_eq!(
+            classify_install("linux", Some("/tmp/x.AppImage"), Some("SYSTEM"), false),
+            "appimage"
+        );
+        assert_eq!(
+            classify_install("macos", None, Some("nonsense"), false),
+            "bundle"
+        );
     }
 }

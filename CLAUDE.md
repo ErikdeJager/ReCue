@@ -721,6 +721,13 @@ steady-state boot pays **zero** probe cost.
 │   ├── tauri.conf.json     # Window, bundle, build config
 │   ├── capabilities/       # Tauri permission capabilities
 │   └── Cargo.toml          # Crate `recue` / lib `recue_lib`
+├── packaging/              # Distro packaging (#361)
+│   └── aur/recue-bin/      #   AUR PKGBUILD + .SRCINFO — repacks the release .deb into a
+│                           #   native Arch package (system webkit2gtk, no FUSE). Re-pinned
+│                           #   by scripts/aur-bump.sh; published to the AUR manually.
+├── docs/                   # macos-permissions.md (#292) + linux-packaging.md (#361 —
+│                           #   the Linux install matrix, the updater/pacman rule, the
+│                           #   AUR maintainer runbook)
 ├── eslint.config.js        # ESLint flat config (TS + React)
 └── .prettierrc.json        # Prettier config
 ```
@@ -1149,6 +1156,25 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   of the whole app and every live PTY session. The extra link time is paid only by
   `release.yml` (a version-bump push); the PR gate and `tauri dev` build with the dev/test
   profiles. macOS
+  Windows NSIS/MSI installers, or — on Linux — an **AppImage** *and* a **`.deb`** (#345/#361,
+  host-OS dependent); the **updater artifacts are minisign-signed** on all three. On Linux
+  only the **AppImage** is an updater artifact (Tauri's Linux updater can only replace the
+  file at `$APPIMAGE`), so `latest.json`'s `linux-x86_64` entry points at it and it
+  **self-updates**; the `.deb` gets no `.sig` and exists to be **repacked by the in-repo AUR
+  package** (`packaging/aur/recue-bin/` — `PKGBUILD` + `.SRCINFO`, re-pinned by
+  `scripts/aur-bump.sh <version>` and published to the AUR **manually**, never from CI), which
+  gives Arch users a native build against the **system** webkit2gtk/GTK (no bundled Ubuntu
+  userland, no FUSE, no AppRun `GTK_THEME`/`GDK_BACKEND` forcing). Because the AUR package
+  repacks the **same binary** the `.deb` carries, "is this a distro install?" **cannot** be a
+  compile-time flag — it is a **runtime** probe: `commands::install_kind()` (pure
+  `classify_install`) reports `"bundle"` (macOS/Windows/any debug build) / `"appimage"`
+  (`$APPIMAGE` set) / `"system"` (a Linux release binary **without** it ⇒ pacman/apt owns it;
+  `RECUE_INSTALL_KIND` force-overrides). The frontend's pure `selfUpdates()` (`platform.ts`)
+  gates the whole update surface on it: a `"system"` install makes `checkForUpdate` a
+  no-network no-op, hides the `UpdateIndicator`, refuses `installUpdate`, and swaps Settings →
+  Updates' Check/Update-now buttons for a `pacman -Syu` note (current version + #192 patch
+  notes still render). The pre-load default (`""`) reads as self-updating, so macOS, Windows,
+  and the AppImage are unchanged. See `docs/linux-packaging.md`. macOS
   builds carry **Hardened Runtime + `Entitlements.plist`** (#292, `bundle.macOS.
   entitlements`) so mic/voice + protected-folder permissions work and persist — but **only
   once actually signed with an identity** (#314): a plain `tauri build` is ad-hoc (sign it

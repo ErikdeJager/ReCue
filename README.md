@@ -73,6 +73,44 @@ chrome, navigation, persistence, and read-only git reading; the terminals come f
 - **Remove = kill + forget**, **Catppuccin Mocha** theme, bundled **JetBrains Mono**
   (offline), dark theme only.
 
+## Install (Linux)
+
+Two official Linux builds, from the same release. **Only the AppImage self-updates in-app**
+— a distro-packaged install is owned by your package manager, and ReCue detects that at
+runtime and hides its update UI.
+
+| Install                         | Self-updates?                            |
+| ------------------------------- | ---------------------------------------- |
+| **AppImage** (default download) | **Yes** — the in-app updater             |
+| **AUR `recue-bin`** / **`.deb`** | **No** — use your package manager        |
+
+**AppImage** (recommended default — runs on any distro):
+
+```bash
+chmod +x ReCue_<version>_amd64.AppImage
+./ReCue_<version>_amd64.AppImage
+```
+
+It needs **FUSE 2** — Arch: `sudo pacman -S fuse2`; Ubuntu 24.04+: `sudo apt install
+libfuse2t64`. FUSE-less fallback (note: an extracted run is **not** self-updating — there
+is no `$APPIMAGE` for the updater to replace):
+
+```bash
+./ReCue_<version>_amd64.AppImage --appimage-extract && ./squashfs-root/AppRun
+```
+
+**Arch / AUR** — [`recue-bin`](https://aur.archlinux.org/packages/recue-bin) repacks the
+official `.deb` into a native package: it links the **system** webkit2gtk/GTK (no bundled
+Ubuntu userland, no FUSE, no `GTK_THEME`/`GDK_BACKEND` forcing, faster cold start).
+**Updated with pacman, not in-app.**
+
+```bash
+yay -S recue-bin      # or: paru -S recue-bin
+```
+
+Full details — the install matrix, the updater rule, and the maintainer AUR-publish runbook
+— are in [`docs/linux-packaging.md`](docs/linux-packaging.md).
+
 ## Prerequisites
 
 - macOS, Windows, or Linux (Arch, Ubuntu, and Mint fully supported; best-effort for other distros)
@@ -101,9 +139,11 @@ Artifacts land in `src-tauri/target/release/bundle/`:
 - **Windows** — an **NSIS** installer (`nsis/ReCue_<version>_<arch>-setup.exe`) and
   an **MSI** (`msi/ReCue_<version>_<arch>_<lang>.msi`)
 - **Linux** — an **AppImage** (`appimage/ReCue_<version>_<arch>.AppImage`), the single
-  universal binary that runs on Arch, Ubuntu, Mint, and other distros. Run
-  `npm run tauri build -- --bundles appimage` to match CI's AppImage-only output (a plain
-  `tauri build` also emits `.deb`/`.rpm`, which ReCue does not officially ship). The
+  universal binary that runs on Arch, Ubuntu, Mint, and other distros, **and** a **`.deb`**
+  (`deb/ReCue_<version>_<arch>.deb`) — the artifact the AUR
+  [`recue-bin`](packaging/aur/recue-bin) package repacks. Run
+  `npm run tauri build -- --bundles appimage,deb` to match CI's Linux output (a plain
+  `tauri build` also emits an `.rpm`, which ReCue does not officially ship). The
   AppImage themes its **native file dialogs** from ReCue's own Dark/Light setting (applied
   at launch, so a theme change reaches the dialogs on the next start); override it with
   `APPIMAGE_GTK_THEME=Adwaita:dark` (or `RECUE_GTK_THEME=<gtk theme>`).
@@ -117,10 +157,12 @@ Artifacts land in `src-tauri/target/release/bundle/`:
 
 Each `tauri build` produces the bundle for the OS it runs on; build on a macOS host for
 the macOS artifacts, a Windows host for the Windows installers, and a Linux host (or the
-CI runner) for the AppImage. Building the AppImage needs the Tauri Linux toolchain
+CI runner) for the AppImage + `.deb`. Building them needs the Tauri Linux toolchain
 (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`,
-`patchelf` — see the `release.yml` deps step); on Linux the **AppImage** self-updates
-through the in-app updater.
+`patchelf` — see the `release.yml` deps step). On Linux only the **AppImage** self-updates
+through the in-app updater; a distro-packaged install (the `.deb`, the AUR package) is
+owned by the package manager, and ReCue detects that at runtime and hides its update UI —
+see [`docs/linux-packaging.md`](docs/linux-packaging.md).
 
 > A from-scratch local build is **unsigned** — first open warns (macOS Gatekeeper:
 > right-click → **Open**, or allow it under **System Settings → Privacy & Security**;
