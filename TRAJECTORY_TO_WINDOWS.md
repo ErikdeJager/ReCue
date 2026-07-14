@@ -1111,3 +1111,25 @@ The change is deliberately **byte-for-byte inert on Windows**:
       git panels populate, and `claude --version` (the `ClaudeMissing` / Settings → Data & About
       probe) still reports a version — with **no** console-window flash.
 - [ ] **`sessions.json` gains no `path_cache` key** after a Windows run (the probe never arms).
+
+## 2026-07-14
+
+### Settings → Appearance: display-size slider / UI scaling (#366)
+
+Pure TS/WebView: a **Display size** `Slider` (80–150%, default 100) persists `displaySize` in the
+opaque settings blob (no Rust change), and `applySettingsEffects` applies it as CSS `zoom` on
+`<html>` (`displayZoom()` — cleared at exactly 100 so a default install is byte-for-byte
+unchanged). No `#[cfg]` arms; `zoom` is supported by WebView2/Chromium on Windows.
+
+### Needs real-box verification (display size, #366)
+
+- [ ] **The whole UI scales at a non-100% size.** Settings → Appearance → Display size → 125% →
+      Save: the entire interface (sidebar, Overview cards, panels, text) renders ~25% larger with
+      no clipping / scrollbar glitches under **WebView2**; back to 100% removes the property and it
+      renders exactly as today.
+- [ ] **Terminal crispness at a fractional zoom.** At 125% the pooled xterm text stays legible and
+      the terminal still fits its container (cols/rows unchanged — the FitAddon ratio cancels).
+- [ ] **OS-file-drop hit-testing at a non-100% size** (`src/osFileDrop.ts` `targetAt`): dragging a
+      file from Explorer onto a FileTree folder still hits the correct row while zoomed (the
+      physical→CSS px math combines `devicePixelRatio` with the new `zoom`). Left unchanged pending
+      this check.
