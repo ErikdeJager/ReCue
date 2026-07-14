@@ -2911,3 +2911,17 @@ Consolidate agent header actions (Fork / Copy resume / Watch) into a "…" menu.
   one `.trailing` span) and `src/components/Sidebar/Sidebar.module.css` (new `.trailing`,
   absolutely-positioned `.remove` with `pointer-events` guard, `.diffCounts` hover →
   `visibility:hidden`).
+
+## Task 347
+
+Fix the Linux DMA-BUF workaround misfiring on hybrid Intel+NVIDIA GPUs (GPU-aware detection)
+
+- Core rule chosen: auto-disable DMA-BUF only when the NVIDIA blob is the *only* renderer (no Mesa-driven DRM card), when GL is explicitly PRIME-routed to NVIDIA (`__GLX_VENDOR_LIBRARY_NAME=nvidia` / `__NV_PRIME_RENDER_OFFLOAD=1`), or in a VM with no native Mesa GPU. Any Mesa card present (hybrid iGPU+dGPU, nouveau, AMD/Intel, VM w/ passthrough) keeps DMA-BUF.
+- nvidia-open is *detected and logged* separately but gates identically to the proprietary blob (it ships the same proprietary userspace EGL the workaround targets) — the card grouped it with nouveau; deliberately not done, because the hybrid/Mesa-present rule is what actually fixes the reported box, and an nvidia-open-only desktop still needs the workaround.
+- No NVIDIA driver-version gate: the version is parsed for the diagnostic log only (a wrong threshold would risk a blank/garbled webview, worse than slow).
+- VM detection tightened to require two independent signals (CPUID `hypervisor` flag + DMI/hypervisor-node/virtual-GPU corroboration, or exact DMI hit + only-virtual GPUs), with an explicit bare-metal Xen dom0 exclusion (`/proc/xen/capabilities` contains `control_d`) and exact (not substring) DMI matching, killing the "standard pc"/"kvm" false positives.
+- GPU inventory read from `/sys/class/drm/card<N>` (driver symlink basename, PCI vendor-id fallback) rather than counting render nodes — same signal, more precise, and trivially pure-testable.
+- Settings seam: a tri-state `RendererOverride` (Auto/ForceDisable/ForceKeep) resolved today from `RECUE_DISABLE_DMABUF` only, with an in-code note that a persisted setting must be read before `tauri::Builder` (GTK reads env at init). No Tauri command / IPC / settings field added here (future card).
+- `src/components/Terminal/webglRenderer.ts` keeps its logic unchanged (it is a correct consequence-level fail-safe); only its comment plus a one-time Linux `console.info` of the WebGL renderer string in `terminalPool.ts` are added for support diagnostics.
+- One boot diagnostic line is printed on Linux for BOTH outcomes (kept / disabled) with the evidence — #346 only logged the disable case, which is why the misfire was invisible.
+- No app version bump / patch-notes file (mirrors #346; releases are batched by the maintainer).
