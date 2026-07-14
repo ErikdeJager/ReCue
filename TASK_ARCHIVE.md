@@ -4686,3 +4686,57 @@ reduced-motion behavior preserved exactly.
   WKWebView/WebView2/WebKitGTK. Rollback = revert the PR (component-local; no store/IPC/persistence surface).
 
 **Dependencies:** Task 372.
+
+### 373. [x] UI v2 (2/12): Settings rework — §10 modal reskin, complete Shortcuts section (⌘F/⌘D), dense panels end-to-end (⌘D), and the new v2 settings
+
+Card 2 of the UI v2 reskin epic (spec §10 + demo; **no version bump / patch notes**). Reskins the Settings modal
+onto the v2 design, completes the Shortcuts reference, and ships the new v2 settings — dense panels fully
+functional, plus two persisted-but-visually-inert flags whose consumers land in cards 3/5, and a random-accent
+sentinel.
+
+**What shipped** (branch `task-373-settings-rework`, PR
+[#129](https://github.com/ErikdeJager/ReCue/pull/129), merged 2026-07-14 into `ui-rework`):
+
+- **Schema (`types/index.ts` + `DEFAULT_SETTINGS`)** — three new `Settings` fields:
+  `backgroundAnimation: true` (consumer = card 3's wave), `densePanels: false`, `capAgentWidth: true`
+  (consumer = card 5's Overview). Zero Rust changes (the blob is opaque); `mergeSettings` back-fills legacy blobs
+  (unit-tested). `accentColor` gains the `"random"` sentinel in its contract.
+- **Dense panels end-to-end (§9)** — `applySettingsEffects` toggles a **`dense` class on `<html>`** (the Task-372
+  `:root.dense` hook zeroes `--stage-gap`/`--stage-pad-overview`/`--stage-pad-canvas`); a `toggleDensePanels`
+  store action persists via `saveSettings` and toasts the demo's exact "Dense panels on/off"; **⌘D / Ctrl+D** in
+  `useKeyboardNav.ts` (capture phase, `e.code === "KeyD"`, works over a focused terminal) — main-window-only
+  (swallowed-but-inert in detached windows, like ⌘N/⌘B/⌘K/⌘T) and inert while the Settings modal is open so a
+  stale draft can't clobber the toggle on Save; an Appearance "Dense panels" checkbox (with a kbdHint help line)
+  rides the normal draft/Save path silently. Visible tiling waits on cards 5/6 consuming the stage vars.
+- **Random accent** — a **"?" swatch** after the 14 palette swatches persists `accentColor: "random"`; pure
+  `randomPaletteAccent(rand?)` + per-launch-memoized `resolvedRandomAccent()` resolve it to a `REPO_PALETTE`
+  member once per window document per run (re-saves never re-roll; each launch rolls fresh), applied exactly like
+  any accent (inline `--accent` + `accentCompanions()`; the 372 tint tokens track it). No palette values added or
+  changed; `""`/hex behavior byte-for-byte as before.
+- **Shortcuts complete** — `shortcuts.ts` gains **⌘F "Global search"** and **⌘D "Toggle dense panels"**; every
+  existing entry kept (the #318 grouped superset, not the demo's 5 rows); rows restyled label-left /
+  `.kbd-chip`-right (the 372 atom); a completeness test pins the full card map ⌘N ⌘⇧N ⌘B ⌘K ⌘F ⌘T ⌘E ⌘\ ⌘1–9 ⌘D.
+- **Modal reskin (`Settings.module.css`)** — dialog `min(740px, 92vw) × min(540px, 88vh)` (supersedes #119's
+  720×600; CLAUDE.md line updated), 190px mantle nav with 30px items (active Surface0 + 600), content 18/20px,
+  footer Reset · Cancel / accent Save (28px, `--radius-chrome`); segmented rows restyled to 26px crust-well /
+  Surface0-active (the accent no longer encodes selection state); 24px round swatches with the own-color ring
+  (`currentColor`); inputs/buttons swept off the now-zero `--radius-control` onto the chrome radii. All
+  token-driven; light theme stays functional. **Slider restyle** (deferred here by PLAN-372): 4px crust track,
+  12px round accent thumb.
+- **Tests** — defaults/legacy-merge, `randomPaletteAccent` determinism + palette membership,
+  `resolvedRandomAccent` memoization, `toggleDensePanels` flip + toast strings, shortcut-map completeness.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 373)
+
+- The card's "new Shortcuts section" = **completing** the existing #318 section (⌘F/⌘D added), not recreating it.
+- **Segmented rows stay plain-button markup** restyled to the demo's values rather than adopting the 372
+  `SegmentedControl` atom (whose looks are 20/22px) — smaller diff, demo-exact, zero behavior risk.
+- The toast fires on the **⌘D path only**; the checkbox path saves silently like every other setting.
+- All 14 palette swatches and the fully functional Light theme kept (demo showed 10 / mocked light) — the parity
+  constraints win over the demo. Dialog radius = the shared `--radius-window` token, not the demo's literal.
+- Settings stay main-authoritative with no cross-window broadcast — a detached window adopts dense/random-accent
+  at its next boot (same staleness as theme/accent today); a detached window rolls its random accent
+  independently.
+- Rollback = revert the PR; a downgrade reading `"random"` as a hex fails gracefully (cosmetic only).
+
+**Dependencies:** Task 372.
