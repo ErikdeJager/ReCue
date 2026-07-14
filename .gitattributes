@@ -11,3 +11,10 @@
 *.png binary
 *.ico binary
 *.icns binary
+
+# kanban-dev-pima pipeline: both files are append-only and are committed straight onto
+# main by their lanes (plan -> ASSUMPTIONS.md, archive -> TASK_ARCHIVE.md) while the merge
+# lane is landing PRs onto that same branch. `merge=union` keeps BOTH sides of a conflict,
+# so no archive entry and no assumption is ever dropped to make a push go through.
+TASK_ARCHIVE.md merge=union
+ASSUMPTIONS.md  merge=union

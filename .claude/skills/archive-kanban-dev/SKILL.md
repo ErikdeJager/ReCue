@@ -3,7 +3,7 @@ name: archive-kanban-dev
 description: >-
   The archive lane of the kanban-dev-pima board: drain the ARCHIVE column of KANBAN.md — for each
   finished card write a permanent TASK_ARCHIVE.md entry (what shipped, key assumptions, PR, deps),
-  delete its PLAN-<N>.md, remove the card, and commit & push the archive — then park on a Monitor
+  delete its PLAN-<N>.md, remove the card, committing & pushing the archive when it's tracked — then park on a Monitor
   watching ARCHIVE and resume automatically when a merged card arrives. Invoke once as
   /archive-kanban-dev in its own terminal; it loops itself via a Monitor (never /loop).
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Monitor, TaskStop, TaskList
@@ -17,8 +17,10 @@ card currently in ARCHIVE, then **arm a `Monitor`** on the ARCHIVE column and wa
 merged card arrives, the Monitor wakes you. You never stop the session.
 
 **Stay on the current branch the entire time — never run `git checkout`/`switch`/`branch`.**
-This lane commits only `TASK_ARCHIVE.md` (the file it changes). `ASSUMPTIONS.md` is also
-tracked, but the plan lane commits & pushes that; the board and plans stay git-ignored. **You may
+The board files may be **local-only (git-ignored — the default)** or **tracked** (install-time
+opt-in); you auto-detect per file with `git check-ignore -q` (step 5). When tracked, this lane
+commits only `TASK_ARCHIVE.md` (the file it changes) — `ASSUMPTIONS.md` is the plan lane's to
+commit. The board and plans always stay git-ignored. **You may
 directly commit and push `TASK_ARCHIVE.md` on the current branch whenever the task needs it — do
 so directly, without asking for confirmation.** (That stays on the branch you're already on; it
 does not contradict the never-`checkout`/`switch`/`branch` rule above.)
@@ -36,9 +38,11 @@ contain other columns you (the user) inserted** as manual gates, invisible to ev
 automation (see *Your lane boundaries* below). The supporting files:
 
 - **`PLAN-<N>.md`** — the task's plan (git-ignored); you delete it once archived.
-- **`ASSUMPTIONS.md`** — `## Task <N>` sections written during planning (**tracked**;
-  committed & pushed by the plan lane). You read it for context but don't modify it here.
-- **`TASK_ARCHIVE.md`** — the **permanent, tracked** record you append to. Distinct from the
+- **`ASSUMPTIONS.md`** — `## Task <N>` sections written during planning (local-only by
+  default; when tracked, the **plan lane** commits & pushes it). You read it for context but
+  don't modify it here.
+- **`TASK_ARCHIVE.md`** — the **permanent** record you append to (local-only by default;
+  tracked on opt-in). Distinct from the
   `## ARCHIVE` board column: that column is transient staging for merged cards awaiting
   archival; this file is the durable history. Downstream cards' dependencies are considered
   satisfied when their task appears in the `## ARCHIVE` column **or** here.
@@ -87,11 +91,41 @@ For each card:
    default branch for task `N`, and its `## Task <N>` section in `ASSUMPTIONS.md`.
 3. **Write the archive entry.** Append a `## Task <N> — <title>` section to `TASK_ARCHIVE.md`:
    what was implemented, the key assumptions carried over, the PR url, and the task numbers it
-   depended on. (Create `TASK_ARCHIVE.md` if missing.)
+   depended on.
+
+   **If `TASK_ARCHIVE.md` is missing, do not blindly create it — decide by mode:** run
+   `git check-ignore -q TASK_ARCHIVE.md`.
+
+   - **Tracked** (the check fails): `git log --oneline -1 -- TASK_ARCHIVE.md`. **No history** →
+     this is a virgin board; create the file and carry on. **It has history** → it was
+     **deleted**, and creating a fresh one would give you an empty file containing only this
+     one task. **Stop and report.** Restore it
+     (`git checkout <last-good-sha> -- TASK_ARCHIVE.md`) or ask the user, then resume.
+   - **Local-only** (the check succeeds): git holds no history for an ignored file, so read
+     the **board** for evidence the archive ever existed — a card whose `Dependencies:` line
+     names a task that appears **nowhere** on the board, or task numbers in play starting far
+     above 1 with no matching cards, can only have lived in the missing file: it was
+     **deleted**. **Stop and report** — there is no git copy to restore, so the user must
+     recover it (backup, editor history) or explicitly accept the loss and clear the stale
+     dependencies. **No evidence** → virgin board; create the file and carry on.
+
+   Either way the caution is the same: that file is this board's permanent record and the
+   ground truth for dependency satisfaction (a card's dep counts as landed when its task is in
+   `## ARCHIVE` **or** in `TASK_ARCHIVE.md`) — silently recreating it empty would re-block
+   every card that depends on anything already shipped, and lose the history for good.
 4. **Clean up.** Delete the transient `PLAN-<N>.md` and remove the card from `## ARCHIVE`.
-5. **Commit and push.** Commit the `TASK_ARCHIVE.md` change and push it to the remote
-   (`TASK_ARCHIVE.md` is the file this lane changes, so this carries the new entry upstream).
-   Follow the repo's existing commit-message conventions.
+5. **Commit and push — only if `TASK_ARCHIVE.md` is tracked (auto-detect, don't ask).** Run
+   `git check-ignore -q TASK_ARCHIVE.md`: **if it succeeds, the file is git-ignored
+   (local-only — the board default); skip this step entirely** — no add, no commit, no push.
+   If it fails, the installer opted in to tracking: commit the `TASK_ARCHIVE.md` change and
+   push it to the remote (`TASK_ARCHIVE.md` is the file this lane changes, so this carries
+   the new entry upstream). Follow the repo's existing commit-message conventions.
+
+   **The push can be rejected**, and that is expected — the merge lane is landing PRs onto this same
+   branch while you work, so it moves under you. On a non-fast-forward rejection:
+   `git fetch origin` → `git rebase origin/<default-branch>` → push again (bound the retries; a few
+   is plenty). If `TASK_ARCHIVE.md` conflicts, resolve it by **keeping both sides** — the file is
+   append-only, so every section belongs. Never drop an entry to make a push go through.
 
 Then loop back to step 1 for the next card.
 
@@ -99,7 +133,7 @@ Then loop back to step 1 for the next card.
 
 When no card remains in `## ARCHIVE`:
 
-1. **Report** the tasks archived and pushed this burst.
+1. **Report** the tasks archived (and pushed, when tracked) this burst.
 2. **Arm a new `Monitor`** (`persistent: true`) that watches the ARCHIVE column and emits one line
    only when it changes:
 

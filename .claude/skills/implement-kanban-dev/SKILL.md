@@ -45,8 +45,8 @@ call `ScheduleWakeup`, never create a cron/routine.**
 
 The board lives at the repo root in `KANBAN.md`. Its four **PIMA** lane columns are `## PLAN`,
 `## IMPLEMENT`, `## MERGE`, `## ARCHIVE` — one per lane, in flow order. The board **may also
-contain other columns you (the user) inserted** (a `## BACKLOG` inbox, or a `Ready` / `Review` /
-`Approval` gate placed anywhere to pause the flow for a manual check); those are invisible to
+contain other columns you (the user) inserted** (a `## BACKLOG` inbox, or a `Ready` / `Approval` /
+`Sign-off` gate placed anywhere to pause the flow for a manual check); those are invisible to
 every lane's automation — see *Your lane boundaries* below. Cards use this shape:
 
 ```
@@ -149,6 +149,14 @@ file**. In **every** task prompt (build and revise) append this closing instruct
 The result file lives in `.worktree/.results/`, a **sibling** of the subagent's own
 `.worktree/<slug>/`, so it survives the subagent's mandatory worktree cleanup.
 
+**`.worktree/.results/` and `.worktree/.inflight/` are yours, and only yours.** You harvest every
+`task-<N>` you find in them and **delete it**, including one whose card has already moved past
+`## IMPLEMENT`. So any *other* lane that wrote its handbacks there would have them silently eaten by
+you. Every lane on this board keeps its handbacks in its own private dir (the review lane uses
+`.worktree/.review/`, the watch merge lane `.worktree/.merge-watch/`). **Never read, write, or delete
+anything under another lane's dir**, and never assume a file under `.worktree/` is yours unless it is
+in one of these two.
+
 ## Reconciliation pass — run on EVERY wake, then park
 
 This replaces any notion of "fill the pool, then wait." Because four lanes share `KANBAN.md`,
@@ -159,7 +167,10 @@ running.**
 1. **Prepare.** `mkdir -p .worktree/.results .worktree/.inflight`. Bring the default branch up to
    date without leaving the current branch: `git fetch origin`, detect the default branch
    (`git symbolic-ref --short refs/remotes/origin/HEAD` — don't assume it's `main`), and
-   fast-forward the local default ref so each new worktree branches from the latest code.
+   fast-forward the local default ref so each new worktree branches from the latest code. Then
+   `git worktree prune` and remove any leaked `.worktree/<slug>` left behind by a build that died
+   before its own cleanup — otherwise the next `git worktree add` for that slug fails on a directory
+   that is already there.
 2. **Take stock (re-derive, don't remember).** Read `KANBAN.md`; run `TaskList` for the running
    implementer tasks (the in-flight set + count); `ls .worktree/.results` (results to harvest);
    `ls .worktree/.inflight` (breadcrumbs).
@@ -186,7 +197,8 @@ running.**
    - **Fresh build:** read its `PLAN-<N>.md` and pass its goal, acceptance criteria, and approach as
      the task description (plus the task number and title). The subagent creates its own worktree +
      branch, implements, runs the project's own checks, commits, pushes, opens a **new** PR, and
-     removes its worktree.
+     removes its worktree. **If `no` is `yes`, tell it to open the PR as a `--draft`** —
+     and tell it **not** to mark the PR ready; a later lane does that once the PR has been reviewed.
    - **Revision** (card has **both** a `- Revise:` line **and** a `PR:` url): hand it the card's
      `PR:` url plus the `Revise:` note and tell it to **revise that existing PR** — check the PR's
      existing branch out in a worktree (**no new branch**), apply the changes, and push to that
@@ -239,8 +251,13 @@ that was waiting). Repeat forever.
 
 ## Configuration
 
-Set when the loop is installed (the installer replaces the token in the installed copy; the
+Set when the loop is installed (the installer replaces each token in the installed copy; the
 source keeps the placeholder):
 
 - `10` — maximum number of `worktree-implementer` subagents building at
   once. Default: `5`. Lower it on a constrained machine; raise it for more parallelism.
+- `no` — open each PR as a **draft** (`yes` / `no`). Default: `no`.
+  Set to `yes` on a board that has a **review lane** between `## IMPLEMENT` and the merge lane
+  (`kanban-dev-pirma`): the PR opens as a draft, nothing downstream can merge it, no code owners
+  are notified, and the review lane is what marks it ready once it has been reviewed. Under `no`
+  (`kanban-dev-pima`) PRs open ready for review, as they always have.

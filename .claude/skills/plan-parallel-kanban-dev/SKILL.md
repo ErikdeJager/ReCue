@@ -33,8 +33,8 @@ to record. (Its serial siblings `plan-assume-kanban-dev` and `plan-ask-kanban-de
 identical board output — run one plan variant at a time.)
 
 **You own the board.** The subagents only explore code, write their own `PLAN-<N>.md`, and write
-their own result file. **You** assign task numbers, set each card's `Dependencies:`, write and
-commit `ASSUMPTIONS.md`, and move every card between columns. A subagent never touches `KANBAN.md`,
+their own result file. **You** assign task numbers, set each card's `Dependencies:`, write (and,
+when tracked, commit) `ASSUMPTIONS.md`, and move every card between columns. A subagent never touches `KANBAN.md`,
 another card's plan file, `ASSUMPTIONS.md`, or git.
 
 **Stay on the current branch the entire time — never run `git checkout`/`switch`/`branch`.**
@@ -61,7 +61,7 @@ invoke `/loop`, never call `ScheduleWakeup`, never create a cron/routine.**
 The board lives at the repo root in `KANBAN.md`. Its four **PIMA** lane columns —
 `## PLAN`, `## IMPLEMENT`, `## MERGE`, `## ARCHIVE` — are one per lane, in flow order. The
 board **may also contain other columns you (the user) inserted** — a `## BACKLOG` inbox to the
-left of `## PLAN`, or a `Ready` / `Review` / `Approval` gate placed anywhere to pause the flow
+left of `## PLAN`, or a `Ready` / `Approval` / `Sign-off` gate placed anywhere to pause the flow
 for a manual check. Those extra columns are **yours to manage by hand and invisible to every
 lane's automation** (see *Your lane boundaries* below). Cards use this shape:
 
@@ -78,9 +78,11 @@ by **4 spaces**, not 2 — an Obsidian-Kanban board viewer renders a card's tab-
 would drop this metadata when the board is opened as a real Kanban board.
 
 - **`PLAN-<N>.md`** — a per-task plan at the repo root (git-ignored). Written by the subagent.
-- **`ASSUMPTIONS.md`** — interpretation notes, one `## Task <N>` section per task
-  (**tracked**: this lane commits & pushes it). Written by **you**, from what each subagent returns.
-- **`TASK_ARCHIVE.md`** — permanent record of finished tasks (tracked). Distinct from the
+- **`ASSUMPTIONS.md`** — interpretation notes, one `## Task <N>` section per task.
+  **Local-only (git-ignored) by default; tracked if the installer opted in** — when tracked,
+  this lane commits & pushes it. Written by **you**, from what each subagent returns.
+- **`TASK_ARCHIVE.md`** — permanent record of finished tasks (same default; the archive lane
+  owns it). Distinct from the
   `## ARCHIVE` board column, which is transient staging for merged cards awaiting archival.
 - **Numbering** — `N` is a strictly increasing integer; the next free number is one greater
   than the highest used **anywhere** (board cards, `PLAN-*.md`, `TASK_ARCHIVE.md`). **You** assign
@@ -138,8 +140,8 @@ You are the owner of exactly one column: **`## PLAN`**. These rules are absolute
   gate column immediately right of `## PLAN`, the refined card lands **in that gate and waits
   there for you** — draining it onward is your job, not the lane's.
 - **Every other column is invisible to your pick-up.** No column other than `## PLAN` is ever a
-  source of cards to plan — the `## BACKLOG` inbox to the left, or any `Ready` / `Review` /
-  `Approval` gate inserted anywhere. You may *read* later columns for the refined-check above, but
+  source of cards to plan — the `## BACKLOG` inbox to the left, or any `Ready` / `Approval` /
+  `Sign-off` gate inserted anywhere. You may *read* later columns for the refined-check above, but
   never drain them and never move a card into them (except the single one-step advance, which may
   land in a gate).
 
@@ -227,7 +229,9 @@ running.**
        `Revise:` line** — the implement lane needs that url to update the existing PR.
      - Move the card **one column to the right** — to the next `##` column after `## PLAN` (don't
        hard-code `## IMPLEMENT`, so an inserted column like a review lane is respected).
-     - **Commit and push `ASSUMPTIONS.md` only:**
+     - **Commit and push `ASSUMPTIONS.md` — only if it is tracked (auto-detect, don't ask):**
+       run `git check-ignore -q ASSUMPTIONS.md`; if it **succeeds** the file is git-ignored
+       (local-only — the board default), so skip the commit entirely. If it fails, stage only:
        `git add ASSUMPTIONS.md && git commit -m "plan: assumptions for task <N>" && git push`
        (stay on the current branch; the board and `PLAN-<N>.md` are git-ignored).
    - On `STATUS=failed` (or a malformed result, or a missing `PLAN-<N>.md`): leave the card in

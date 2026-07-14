@@ -47,6 +47,14 @@ checks pass" → CI-fix.
 - **Never** run `git checkout`, `git switch`, `git branch`, `git reset`, or
   `git merge` in the **main** working tree. It must stay on whatever branch it
   was on. You operate **only** through your worktree.
+- **Never use `git worktree add --force` to get past "branch is already checked
+  out in another worktree".** That message is not an obstacle, it is an
+  **interlock**: another agent is holding that branch *right now* (a reviewer, a
+  PR watcher, a sibling implementer), and forcing your way in puts two agents on
+  one branch, committing over each other. Stop and report that the branch is
+  busy; the caller will retry you. `--force` is only ever for clearing a stale
+  local *branch ref* — and only after `git worktree list` proves no worktree
+  holds it.
 - Keep your shell's working directory at the **repo root** the whole time. Drive
   the worktree with `git -C <worktree>` and subshells `( cd <worktree> && … )`,
   so you never `cd` permanently and so worktree removal always succeeds.
@@ -74,9 +82,10 @@ checks pass" → CI-fix.
 >   BRANCH="$(gh pr view "<pr-url>" --json headRefName -q .headRefName)"   # or use the branch you were given
 >   git worktree add ".worktree/$BRANCH" "$BRANCH"   # check out the existing branch — note: no -b
 >   ```
->   (If a stale local branch of that name lingers, run `git fetch origin "$BRANCH"` first and add
->   `--force` to the `worktree add`.) Then do steps 2–6 on that branch; the step-6 push updates
->   the open PR.
+>   (If a stale local *branch ref* lingers, `git fetch origin "$BRANCH"` first. If `worktree add`
+>   says the branch is **already checked out in another worktree**, do **not** add `--force` — see
+>   *Hard rules*; another agent holds it. Report it as busy and stop.) Then do steps 2–6 on that
+>   branch; the step-6 push updates the open PR.
 > - **Step 7 — no new PR.** Skip PR creation entirely; your push already updated the existing
 >   PR. Report back that **same** PR url.
 >
@@ -94,7 +103,9 @@ checks pass" → CI-fix.
 >   BRANCH="$(gh pr view "<pr-url>" --json headRefName -q .headRefName)"   # or the branch you were given
 >   git worktree add ".worktree/$BRANCH" "$BRANCH"   # existing branch — no -b
 >   ```
->   (If a stale local branch lingers, `git fetch origin "$BRANCH"` first and add `--force`.)
+>   (If a stale local *branch ref* lingers, `git fetch origin "$BRANCH"` first. If `worktree add` says
+>   the branch is **already checked out in another worktree**, do **not** add `--force` — another agent
+>   holds it; report it as busy and stop. See *Hard rules*.)
 > - **Step 1b — bring in the default branch and resolve.** Detect the default branch (the snippet
 >   from step 1 below), then merge it into the PR branch **inside the worktree** and resolve every
 >   conflict:
@@ -132,7 +143,9 @@ checks pass" → CI-fix.
 >   BRANCH="$(gh pr view "<pr-url>" --json headRefName -q .headRefName)"   # or the branch you were given
 >   git worktree add ".worktree/$BRANCH" "$BRANCH"   # existing branch — no -b
 >   ```
->   (If a stale local branch lingers, `git fetch origin "$BRANCH"` first and add `--force`.)
+>   (If a stale local *branch ref* lingers, `git fetch origin "$BRANCH"` first. If `worktree add` says
+>   the branch is **already checked out in another worktree**, do **not** add `--force` — another agent
+>   holds it; report it as busy and stop. See *Hard rules*.)
 > - **Step 4 — diagnose and fix the failing checks instead of implementing a task.** First learn
 >   *what* failed. Where the forge exposes CI logs, pull them for context (GitHub example:
 >   `gh pr checks "<pr-url>"` to enumerate the checks, then `gh run view <run-id> --log-failed` for a
@@ -229,6 +242,12 @@ gh pr create --base "$DEFAULT_BRANCH" --head "<slug>" \
 EOF
 )"
 ```
+
+**If the caller asked for a draft PR, add `--draft`.** A caller that reviews the PR
+before it lands wants it opened as a draft: nothing can merge a draft, and no code
+owners are notified until the review is done. The caller marks it ready itself when
+it's satisfied — **you never run `gh pr ready`.**
+
 Capture the PR URL from the output — you report it back.
 
 ### 8. Remove the worktree (mandatory cleanup)

@@ -40,7 +40,7 @@ never arm the `Monitor` just because you're waiting on an answer. Arm the `Monit
 The board lives at the repo root in `KANBAN.md`. Its four **PIMA** lane columns —
 `## PLAN`, `## IMPLEMENT`, `## MERGE`, `## ARCHIVE` — are one per lane, in flow order. The
 board **may also contain other columns you (the user) inserted** — a `## BACKLOG` inbox to the
-left of `## PLAN`, or a `Ready` / `Review` / `Approval` gate placed anywhere to pause the flow
+left of `## PLAN`, or a `Ready` / `Approval` / `Sign-off` gate placed anywhere to pause the flow
 for a manual check. Those extra columns are **yours to manage by hand and invisible to every
 lane's automation** (see *Your lane boundaries* below). Cards use this shape:
 
@@ -57,9 +57,11 @@ by **4 spaces**, not 2 — an Obsidian-Kanban board viewer renders a card's tab-
 would drop this metadata when the board is opened as a real Kanban board.
 
 - **`PLAN-<N>.md`** — a per-task plan at the repo root (git-ignored).
-- **`ASSUMPTIONS.md`** — interpretation notes, one `## Task <N>` section per task
-  (**tracked**: this lane commits & pushes it).
-- **`TASK_ARCHIVE.md`** — permanent record of finished tasks (tracked). Distinct from the
+- **`ASSUMPTIONS.md`** — interpretation notes, one `## Task <N>` section per task.
+  **Local-only (git-ignored) by default; tracked if the installer opted in** — when tracked,
+  this lane commits & pushes it (step 8).
+- **`TASK_ARCHIVE.md`** — permanent record of finished tasks (same default; the archive lane
+  owns it). Distinct from the
   `## ARCHIVE` board column, which is transient staging for merged cards awaiting archival.
 - **Numbering** — `N` is a strictly increasing integer; the next free number is one greater
   than the highest used **anywhere** (board cards, `PLAN-*.md`, `TASK_ARCHIVE.md`).
@@ -89,8 +91,8 @@ You are the owner of exactly one column: **`## PLAN`**. These rules are absolute
   immediately right of `## PLAN`, the refined card lands **in that gate and waits there for you** —
   draining it onward is your job, not the lane's.
 - **Every other column is invisible to you.** Any column that is not `## PLAN` does not exist as
-  far as your work is concerned — the `## BACKLOG` inbox to the left, or any `Ready` / `Review` /
-  `Approval` gate inserted anywhere. Never read it for work, never drain it, never move a card
+  far as your work is concerned — the `## BACKLOG` inbox to the left, or any `Ready` / `Approval` /
+  `Sign-off` gate inserted anywhere. Never read it for work, never drain it, never move a card
   into it (except the single one-step advance above, which may land in a gate).
 
 ### Concurrent writes — the board is shared, so retry on conflict
@@ -189,8 +191,11 @@ For each card:
    it **one column to the right** — to the next `##` column after the card's current one in `KANBAN.md`.
    Don't hard-code the target: move to whatever column is immediately to the right, so an
    inserted column (e.g. a review lane) is respected.
-8. **Commit and push `ASSUMPTIONS.md`.** Stage **only** `ASSUMPTIONS.md` (the board and
-   `PLAN-<N>.md` stay git-ignored), commit it on the current branch, and push so the
+8. **Commit and push `ASSUMPTIONS.md` — only if it is tracked (auto-detect, don't ask).**
+   Run `git check-ignore -q ASSUMPTIONS.md`: **if it succeeds, the file is git-ignored
+   (local-only — the board default); skip this step entirely** — no add, no commit, no push.
+   If it fails, the installer opted in to tracking: stage **only** `ASSUMPTIONS.md` (the board
+   and `PLAN-<N>.md` stay git-ignored), commit it on the current branch, and push so the
    assumptions are durable and visible upstream:
    `git add ASSUMPTIONS.md && git commit -m "plan: assumptions for task <N>" && git push`.
    Stay on the current branch — never `checkout`/`switch`/`branch`.
@@ -204,8 +209,8 @@ planned task bounced back to `## PLAN`. **Reuse its existing number `N`** — do
 one. If the `Revise:` note itself is ambiguous, ask the user about it (via `AskUserQuestion`)
 before changing anything. Re-open `PLAN-<N>.md` and its `## Task <N>` section in `ASSUMPTIONS.md`,
 revise them to satisfy the note (and adjust the `Dependencies:` line if the change affects them),
-**remove the `Revise:` line**, then move the card forward (step 7) and commit & push
-`ASSUMPTIONS.md` (step 8) as usual.
+**remove the `Revise:` line**, then move the card forward (step 7) and run step 8 as usual
+(it commits & pushes only when the file is tracked).
 
 ## Idle & wait (Monitor) — start a fresh Monitor each time the column drains
 
