@@ -3376,3 +3376,76 @@ happen are **serialized** rather than racing each other on the single main threa
 - Pure WebView/TS — `IntersectionObserver` is supported by WKWebView, WebView2/Chromium **and** WebKitGTK, so
   there is no `#[cfg]` divergence and no OS primitive involved; identical on all three, with the biggest win on
   Linux.
+
+### 347. [x] Fix the Linux DMA-BUF workaround misfiring on hybrid Intel+NVIDIA GPUs (GPU-aware detection)
+
+**#346's own workaround had become the "slow on Arch" bug.** Its `nvidia_driver_present()` returned true on the
+mere *presence* of the kernel module (`/proc/driver/nvidia/version` or `/sys/module/nvidia`) — but on a **hybrid
+laptop** the NVIDIA card exists while the webview actually renders on the Intel/AMD **iGPU via Mesa**, where
+DMA-BUF is healthy and fast. So ReCue forced `WEBKIT_DISABLE_DMABUF_RENDERER=1` on a machine that didn't need
+it, pushing the bundled Skia WebKit into CPU rendering, which then cascaded into software WebGL → xterm's DOM
+renderer. Verified on the reporter's Arch/Hyprland box (`card0` = nvidia blob RTX 4080 Max-Q on nvidia-open
+610.43.03, `card1` = `i915` Intel Iris Xe rendering the webview; boot log
+`set WEBKIT_DISABLE_DMABUF_RENDERER=1 (nvidia: true, vm: false)`). `vm_detected()` was equally coarse: it
+tripped on the mere existence of `/sys/hypervisor/type` (which also exists on a **bare-metal Xen dom0**) and on
+loose DMI *substring* matches including `"standard pc"` and `"kvm"`, which appear in real hardware product
+strings.
+
+**What shipped** (branch `linux-dmabuf-hybrid-gpu`, PR [#104](https://github.com/ErikdeJager/ReCue/pull/104),
+2026-07-14):
+
+- **`src-tauri/src/linux_webkit.rs` rewritten** around pure, unit-tested types and functions
+  (`RendererOverride` / `NvidiaKernel` / `GpuClass` / `DmabufProbe` / `DmabufDecision` / `VmSignals`;
+  `decide_dmabuf`, `nvidia_kernel_flavor`, `nvidia_driver_version`, `classify_gpu`, `is_hypervisor_dmi`,
+  `vm_detected`, `cpuinfo_has_hypervisor_flag`, `only_virtual_gpus`, `describe_probe`, plus the kept
+  `parse_force_flag`), over thin Linux-only `/sys` + `/proc` probes.
+- **The new policy** (ordered, in `decide_dmabuf`): a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` always
+  wins and is never touched → `RECUE_DISABLE_DMABUF` force-overrides both ways → **disable** only when GL is
+  explicitly PRIME-routed to the blob (`__GLX_VENDOR_LIBRARY_NAME=nvidia` / `__NV_PRIME_RENDER_OFFLOAD=1` — the
+  hybrid exemption cannot apply, since the webview's GL *is* NVIDIA's), or when the **NVIDIA blob is the sole
+  renderer** (no Mesa-driven DRM card), or in a **VM with no native Mesa GPU** → otherwise **keep** it. So a
+  hybrid iGPU+dGPU laptop, nouveau, an AMD/Intel-only box, and a passthrough VM all keep the faster DMA-BUF
+  path. An unreadable `/sys/class/drm` leaves the GPU list empty and lands on "disable" — conservative, exactly
+  as #346 was.
+- **GPU inventory** from `/sys/class/drm/card*` (DRM driver-name → Mesa / NvidiaBlob / Virtual / Unknown, with a
+  PCI vendor-id fallback) rather than counting render nodes — the same signal, more precise, and trivially
+  pure-testable.
+- **VM detection tightened** to require **two independent signals** (the CPUID `hypervisor` flag plus
+  DMI/hypervisor-node/virtual-GPU corroboration, or an exact DMI hit with only-virtual GPUs), with **exact —
+  not substring — DMI matching** and an explicit **bare-metal Xen dom0 exclusion** (`/proc/xen/capabilities`
+  containing `control_d`). `"PowerEdge KVM 1000"` and a real "Standard PC Server Board" no longer read as VMs.
+- **One boot diagnostic line for *both* outcomes**, naming the evidence — e.g. `[recue] WebKitGTK: DMA-BUF left
+  on — Mesa GPU present (healthy DMA-BUF) (gpus: nvidia[blob],i915[mesa]; nvidia: open 610.43.03; vm: no;
+  session: wayland) — override with RECUE_DISABLE_DMABUF=1|0`. **#346 logged only the disable case, which is
+  exactly why the misfire was invisible.**
+- **Frontend (comment/log only, zero logic change)** — `webglRenderer.ts`'s header is reframed as what it is (a
+  consequence-level fail-safe, not a detector), and `terminalPool.ts::webglAllowed()` now logs the WebGL
+  renderer string once on Linux for support diagnostics. Once DMA-BUF is correctly left on, that probe reads a
+  hardware renderer (`Mesa Intel(R) Graphics …`) and xterm's WebGL addon is used again — no change needed there.
+
+**Key decisions**
+
+- **nvidia-open gates *identically* to the proprietary blob**, and is only *logged* separately. The card grouped
+  it with nouveau; that was deliberately not done, because it ships the same proprietary userspace EGL the
+  workaround targets — and an nvidia-open-**only** desktop still needs the workaround. What actually fixes the
+  reported box is the Mesa-present/hybrid rule, not a driver-flavor exemption.
+- **No NVIDIA driver-version gate.** The version is parsed for the diagnostic log only; a wrong threshold would
+  risk a blank or garbled webview, which is worse than slow.
+- **The `RendererOverride` tri-state (Auto / ForceDisable / ForceKeep) is the seam** a future Settings
+  renderer-override card plugs into — resolved today from `RECUE_DISABLE_DMABUF` alone, with an in-code note
+  that a *persisted* setting must be read **before `tauri::Builder`** (GTK reads the env at init). No Tauri
+  command, IPC, or settings field was added here.
+- Escape hatches unchanged: a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` is never touched, and the
+  `RECUE_DISABLE_COMPOSITING` debug opt-in is untouched.
+
+**Dependencies:** none. (Corrects #346, which introduced the detection.)
+
+**Notes**
+
+- 23 unit tests, including the named **`hybrid_intel_nvidia_open_keeps_dmabuf`** regression guard built from the
+  reporter's verbatim `/sys` strings, plus a Linux-only no-panic/consistency smoke test over the impure probes.
+  Every pure fn is `, test)`-widened so the macOS and Windows hosts still type-check and run them;
+  **macOS/Windows behavior is byte-for-byte unchanged** (the arm is unreachable there).
+- Per-GPU runtime behavior can't be exercised on CI — a dated `### DMA-BUF detection regression (Task #347)`
+  section + real-box checklist went into `TRAJECTORY_TO_LINUX.md`, and `CLAUDE.md`'s Linux-performance item (1)
+  was restated under the new policy (`#346/#347`).
