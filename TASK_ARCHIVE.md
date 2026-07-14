@@ -4740,3 +4740,57 @@ sentinel.
 - Rollback = revert the PR; a downgrade reading `"random"` as a hex fails gracefully (cosmetic only).
 
 **Dependencies:** Task 372.
+
+### 374. [x] UI v2 (4/12): Sidebar reskin — top action cluster, §5 tree metrics, footer (update pill + usage meter), first-launch empty block, §6 collapsed rail
+
+Card 4 of the UI v2 reskin epic (spec §5–6 + demo; **no version bump / patch notes**). Reskins the whole sidebar —
+expanded tree, collapsed rail, and footer — onto the v2 language with **zero functionality lost** (a reskin, not a
+rearchitecture: every dnd-kit listener, context-menu handler, and onClick chain left byte-identical).
+
+**What shipped** (branch `task-374-sidebar-reskin`, PR
+[#131](https://github.com/ErikdeJager/ReCue/pull/131), merged 2026-07-14 into `ui-rework`):
+
+- **Top cluster** — New session is a 26px full-width accent block via the 372 atoms
+  (`.btn .btn-accent .btn-chrome`, 12px Plus, right-aligned ⌘N `.kbd-hint-onfill` via `kbdHint`); Schedule session
+  is the same 26px format in neutral (clock icon, ⌘⇧N) beside a 26×26 neutral `⋯` block (existing dots menu
+  untouched); label truncation (#301/#317) preserved.
+- **Tree metrics (§5)** — repo header 24px (12px repo-colored folder icon, name 600 `--fs-row`, count →
+  `.chip-count` Surface0 pill, **hover-revealed in-flow `+`** — space reserved, `:focus-visible` also reveals;
+  empty repo keeps the always-visible accent `+` + dimmed name); branch label 17px; agent rows 26px indented 12px
+  under the branch label with **Surface0 selection fill** (replacing the accent-dim + border-left), secondary→
+  primary title, `--fs-micro` diff counts, red `--status-error` hover ✕ (the #344 zero-shift trailing slot kept);
+  item rows 22px; worktree header 20px with children indented 24px; 8px between repo groups; 1px row gap from the
+  container; row hover wash = `color-mix(text-primary 4%)` with a plain token fallback first.
+- **Footer** — update pill = 28px transparent hairline block (`--radius-chrome`, accent 12px download icon, 11px
+  title / 10px muted version; #287 glow + error + collapsed variants kept; still deep-links Settings→Updates);
+  usage meter = 10px meta row over a **4px inset crust track** with rounded accent fill (`.meter` class added
+  beside `.track`; the empty state keeps today's full-bleed hairline separator; ≥90% critical red + the **#370
+  expandable all-usage box kept**, box radius → `--radius-chrome-sm`); icon row = 26×26 ghost buttons, feedback
+  button (+ #241 nudge) expanded-only.
+- **First-launch empty block** — when `booted && repos.length === 0 && cloningRepos.length === 0`, the tree area
+  shows a centered block (FolderOpen icon, "No folders yet", two-line explainer, neutral **Open a folder…** →
+  `addFolder()` and **Clone a repo…** → `openCloneRepo()`); the same flag hides the update pill, auto-continue
+  prompt, and usage meter; the background context menu still opens on the empty area.
+- **Collapsed rail (§6)** — 44px: 28×28 accent-tinted `+` (tooltip w/ ⌘N hint), hairline dividers, Overview/Canvas
+  as 28×28 ghost icon buttons with Surface0 active (ViewSwitch `compact` de-welled, icons 16→14, tablist/arrow-key
+  nav intact), per-repo 28×26 folder icons (tooltip "repo — N sessions") over 7px activity-dot buttons whose
+  tooltips gain the state suffix via the new pure `railDotState(busy, hasBeenActive)` helper (+ unit test),
+  worktree glyph + phantom clone rows kept. The rail's Schedule and bug-report buttons are **removed** (both stay
+  one interaction away: ⌘⇧N / background menu / expanded footer).
+- **Default width** — `SIDEBAR_WIDTH_DEFAULT` 260 → 248 (exported; double-click reset uses it); the [180, 560]
+  clamp and persisted widths untouched.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 374)
+
+- All demo hexes mapped to existing tokens, never literals — light theme keeps working.
+- Filter-active fills (repo "all" / branch "own" / worktree / rail folder) keep today's accent-dim treatment —
+  spec silent, and it keeps "filtered" visually distinct from the new Surface0 "selected".
+- The rail keeps the worktree glyph + its own dot stack (the demo flattens them into the repo stack, but that
+  would silently lose the worktree right-click menu — the §12 parity constraint outranks the demo).
+- Collapsed update icon + usage track still render in the rail (§6 silent; hiding them would lose the update
+  affordance while collapsed). Pill radius = `--radius-chrome` (7px) over the demo's 8px literal.
+- Context menus / checkout picker / color picker styles kept byte-identical — Task 375 owns floating chrome.
+- Pure CSS/TSX; kbd hints via `kbdHint` (Ctrl on Windows/Linux); identical on macOS/Windows/Linux. Rollback =
+  revert the PR (no persisted-data/IPC/schema changes; the 248px default only affects fresh installs/reset).
+
+**Dependencies:** Task 372.
