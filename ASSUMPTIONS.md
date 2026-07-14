@@ -3278,3 +3278,21 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Reduced-motion needs no per-component code: the rise stays a CSS animation, so global.css's existing killswitch (media query + body.reduce-motion) drops it while toasts still appear — today's behavior.
 - Both Toaster mounts (MainApp + detached CanvasWindow) are preserved untouched; the restyle is entirely inside the shared component.
 - Added a small file-content guard test (platform.test.ts idiom) pinning bottom-center position, the v2 tokens, the --dur-slow rise, and the tone-icon mapping.
+
+## Task 374
+
+- Unpacked the bundled demo HTML to extract the sidebar's exact metrics; all demo hexes are mapped to existing tokens (surfaces/text/borders/accent tints), never literals, so the light theme keeps working.
+- Count chip = Surface0 pill via 372's `.chip-count` atom (demo wins over the card's "crust pill" wording — same call PLAN-372 already recorded).
+- Agent-row selection = Surface0 fill at radius 6 applied on the row itself (spec prose radius 6; the demo's inner inset span at radius 7 treated as a mock artifact); unselected agent titles go secondary, selected primary (demo).
+- Filter-active fills (repo header "all" / branch line "own" / worktree / rail folder) keep today's accent-dim + accent-text treatment — spec is silent, and it keeps "filtered" visually distinct from the new Surface0 "selected".
+- Collapsed rail follows §6/demo exactly: the rail's Schedule button and the rail footer's bug-report button are removed (scheduling stays reachable collapsed via ⌘⇧N + the background context menu; feedback via the expanded footer) — the card's only affordance relocations.
+- Rail keeps the worktree branch glyph + its own dot stack (the demo flattens worktree agents into the repo's stack, but that would silently lose the worktree right-click menu — the §12 parity constraint outranks the demo here).
+- Collapsed UpdateIndicator icon + usage track keep rendering in the rail as today (§6 silent; hiding them would lose the update affordance while collapsed).
+- Update pill keeps the #287 breathing glow and the error variant on the new 28px geometry (spec silent on both); pill radius uses --radius-chrome (7px) instead of the demo's 8px literal (spec §2.4 caps chrome radii at 7; no 8px token exists).
+- Usage meter: the no-data state keeps today's full-bleed hairline (it doubles as the footer separator); the >=90% critical red fill is kept (accent never encodes status); the #370 all-usage box keeps a small --radius-chrome-sm now that --radius-chip is 0.
+- First-launch gate = booted && repos.length === 0 && cloningRepos.length === 0; it also hides the update pill, auto-continue prompt, and usage meter per §5 "hide both on fresh install"; the footer icon row always renders.
+- Default + double-click-reset sidebar width moves 260 → 248 (spec §2.4); the [180,560] clamp and persisted user widths untouched.
+- Repo-header + becomes hover-revealed via opacity with space reserved (also revealed on :focus-visible); the empty-repo accent + and the worktree + stay always visible (demo shows both non-hover-gated).
+- Row hover wash = color-mix(text-primary 4%, transparent) with a plain token fallback declaration before it (the demo's rgba(205,214,244,.04) has no token equivalent).
+- Context menus / checkout picker / color picker styles are kept byte-identical (Task 375 owns floating-chrome look); this card only keeps them working.
+- Rail dot tooltips gain the §6 state suffix ("— running/awaiting input/idle") via a new tiny pure helper railDotState + unit test — a strict superset of today's name-only tooltip.
