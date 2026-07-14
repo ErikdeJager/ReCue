@@ -106,6 +106,12 @@ fn login_shell_path() -> Option<String> {
 /// (`.zshrc`/`.bashrc`) — users set PATH in either, so both are needed. stdin is
 /// `/dev/null` so an interactive shell sees EOF and exits instead of blocking on
 /// input; stderr is discarded so rc warnings don't matter.
+///
+/// The probe shell is built through `child_env::command` (#350): under a Linux AppImage
+/// it would otherwise run with the AppImage's `LD_LIBRARY_PATH` / `XDG_DATA_DIRS`, which
+/// can make the shell (or the tools its rc files invoke) misbehave. Ordering is safe —
+/// `restore_user_path` runs first in `run()`, before any threads, and the scrub only
+/// *reads* the process env. A no-op on macOS and outside an AppImage.
 #[cfg(unix)]
 fn login_shell_path_blocking() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
@@ -113,7 +119,7 @@ fn login_shell_path_blocking() -> Option<String> {
     // name (`$PATH__RECUE_PATH__` would expand a *different* variable).
     let script = format!("printf '%s' \"{MARKER}${{PATH}}{MARKER}\"");
 
-    let output = std::process::Command::new(shell)
+    let output = crate::child_env::command(shell)
         .args(["-ilc", &script])
         // Quiet oh-my-zsh's auto-update prompt, which would otherwise stall on input.
         .env("DISABLE_AUTO_UPDATE", "true")

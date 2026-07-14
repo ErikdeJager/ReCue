@@ -1,6 +1,7 @@
 import {
   type CSSProperties,
   type ReactNode,
+  type RefObject,
   useEffect,
   useRef,
   useState,
@@ -63,7 +64,37 @@ import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import ItemContent from "../ItemContent/ItemContent";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
+import { TerminalScrollRootContext } from "../Terminal/useVisibleOnce";
 import styles from "./Overview.module.css";
+
+/**
+ * The horizontally scrolling agent wall — and the observer root for the #351 terminal
+ * visibility gate.
+ *
+ * A pooled xterm is now created on a card's first visibility, and `IntersectionObserver`
+ * clips a target against every intermediate scroll container *before* applying
+ * `rootMargin` — so a viewport-rooted observer could never pre-load a card scrolled out of
+ * this `overflow-x: auto` wall (its horizontal margin would be dead). Providing the wall
+ * element as the observer root makes the pre-load margin real. Everywhere else the context
+ * stays `null` ⇒ the viewport root, which is correct for Canvas panels, big mode (#157) and
+ * detached windows (#84). The provider value is the stable ref object, so this adds no
+ * re-renders.
+ */
+function Wall({
+  wallRef,
+  children,
+}: {
+  wallRef: RefObject<HTMLDivElement | null>;
+  children: ReactNode;
+}) {
+  return (
+    <TerminalScrollRootContext.Provider value={wallRef}>
+      <div ref={wallRef} className={styles.wall}>
+        {children}
+      </div>
+    </TerminalScrollRootContext.Provider>
+  );
+}
 
 /**
  * Shared column chrome (#38): every Overview column — an agent terminal, a diff
@@ -715,6 +746,8 @@ function Overview() {
   const startScheduleNow = useStore((s) => s.startScheduleNow);
   const recurrings = useStore((s) => s.recurrings);
   const cancelRecurring = useStore((s) => s.cancelRecurring);
+  // The boot payload has landed (#352) — gates the empty state (see below).
+  const booted = useStore((s) => s.booted);
   // PTY ownership across windows (#84) is resolved inside the shared ItemContent
   // (#157) now — an agent owned by a detached canvas window shows a note there.
 
@@ -733,7 +766,9 @@ function Overview() {
   );
 
   // Scroll the selected item's column into view when the selection changes (#79)
-  // — so clicking a sidebar item in Overview reveals its column.
+  // — so clicking a sidebar item in Overview reveals its column. The same ref is the
+  // IntersectionObserver root for the #351 terminal visibility gate (see `Wall`), so
+  // scrolling a column into view also mounts its terminal.
   const wallRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!selectedId) return;
@@ -743,7 +778,10 @@ function Overview() {
   }, [selectedId]);
 
   // The welcome empty state only when there's truly nothing — no agents and no
-  // extra panels (a repo can have a diff/markdown panel without an agent, #39/#41).
+  // extra panels (a repo can have a diff/markdown panel without an agent, #39/#41)
+  // — and only once the boot payload has landed (#352): before that everything is
+  // empty simply because nothing has loaded yet, and showing "No active sessions"
+  // for that round-trip would flash the wrong state right before the content pops in.
   const anyPanels = Object.values(overviewPanels).some(
     (list) => list.length > 0,
   );
@@ -753,7 +791,7 @@ function Overview() {
     schedules.length === 0 &&
     recurrings.length === 0
   ) {
-    return <EmptyState onNewSession={() => openNewSession()} />;
+    return booted ? <EmptyState onNewSession={() => openNewSession()} /> : null;
   }
 
   // The sidebar filter (#34/#197) narrows the wall to one repo's agents — or, when
@@ -887,7 +925,7 @@ function Overview() {
           collisionDetection={closestCenter}
           onDragEnd={onDragEnd}
         >
-          <div ref={wallRef} className={styles.wall}>
+          <Wall wallRef={wallRef}>
             {clusters.map((cluster, clusterIdx) => (
               <SortableContext
                 key={cluster.repo}
@@ -965,7 +1003,7 @@ function Overview() {
                 })}
               </SortableContext>
             ))}
-          </div>
+          </Wall>
         </DndContext>
       )}
     </div>
