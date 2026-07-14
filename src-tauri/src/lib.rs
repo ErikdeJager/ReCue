@@ -5,6 +5,7 @@
 //! `store`; read-only git support is added by a later task.
 
 mod agents;
+mod child_env;
 mod commands;
 mod files;
 mod git;

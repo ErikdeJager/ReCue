@@ -40,7 +40,10 @@ be unit-tested). Concretely:
 - **Reuse the established cross-platform seams instead of re-deriving them** — Rust:
   `path_env::home_dir()` (`%USERPROFILE%` on Windows, `$HOME` on unix, never raw `$HOME`),
   `git::hidden_command()` (the `CREATE_NO_WINDOW` console-flash guard — **every**
-  shelled-out `git`/CLI probe goes through it; a no-op on unix/Linux), `pty::resolve_command()` /
+  shelled-out `git`/CLI probe goes through it; a no-op on unix/Linux),
+  `child_env::child_env_vars()` / `child_env::scrub_command()` / `child_env::command()` (the
+  #350 AppImage env scrub — **every** spawned child, PTY or shell-out, gets its env through
+  one of these; a no-op on macOS/Windows and outside an AppImage), `pty::resolve_command()` /
   `find_on_path` / `launch_target` (PATHEXT + `cmd.exe /C` for `.cmd` agents on Windows; the
   bare name on unix/Linux) / `default_shell` (`$SHELL` on Linux, `/bin/bash`→`/bin/sh`
   fallback), `os_open` (macOS `open` / Windows `explorer.exe` / **Linux `xdg-open`**),
@@ -105,6 +108,28 @@ even though it works in `tauri dev`.
   Tauri **dialog** (folder picker) plugin
 - Dark (default) and Light themes (#333) — a Catppuccin **Latte** token override
   selected in Settings → Appearance (the terminal stays dark in both)
+- **Code-split bundle (#356).** The frontend is **not** one chunk: everything not needed to
+  paint the sidebar + terminals is behind a dynamic `import()`. Lazy boundaries — the two
+  **window routes** (`App.tsx` is a `Suspense` router over `src/MainApp.tsx` and
+  `CanvasWindow`, so a detached window #84 never downloads the sidebar/Overview/modals); the
+  four **content panels** in `ItemContent.tsx` (`FileViewer` / `KanbanPanel` /
+  `DiffInspector` / `FileTree` — which is what carries the whole **react-markdown + Prism**
+  stack out of the first-paint graph), each in its **own** per-branch `Suspense` (never one
+  boundary around `ItemContent` — a suspending boundary `display:none`s its children, which
+  would un-measure a pooled xterm, the #18 class of bug); the ten modals in
+  `components/ModalHost.tsx` (Suspense fallback **`null`** — an empty modal shell would be a
+  visible regression); the **`@xterm/addon-webgl`** addon in `terminalPool.createHost()`
+  (xterm core / fit / web-links stay **static** — terminals *are* the first paint; the addon
+  attaches a few ms later, and on a software rasterizer #346 its chunk is never fetched); and
+  **mermaid** (#254). `src/prefetch.ts` warms the deferred chunks on idle
+  (`requestIdleCallback`, feature-detected with a `setTimeout` fallback for older WKWebView).
+  **Rule: only a dynamic `import()` removes work from the first-paint path** — a statically
+  reachable module is parsed before first render whatever chunk it lands in, so
+  `manualChunks` is deliberately **not** used; never static-import `react-markdown` /
+  `prismjs` / `@xterm/addon-webgl` into the entry graph. Guarded by
+  `node scripts/bundle-report.mjs --check` (per-route first-paint closure from Vite's
+  `build.manifest`, with a budget): main window **854 kB raw / 246 kB gzip**, down from a
+  single 1,351 kB / 391 kB chunk; the detached canvas window is lighter still (770 kB).
 
 ## Architecture (data flow)
 
@@ -608,8 +633,10 @@ even though it works in `tauri dev`.
 ├── index.html              # Vite entry
 ├── src/                    # Frontend (React + TS)
 │   ├── main.tsx            # React bootstrap (loads fonts + tokens + global CSS)
-│   ├── App.tsx             # Root: main shell (sidebar + Overview/Canvas) OR a
-│   │                       #   detached CanvasWindow, by window identity (#84)
+│   ├── App.tsx             # Root: a Suspense router over the two LAZY window routes —
+│   │                       #   MainApp or the detached CanvasWindow (#84/#356)
+│   ├── MainApp.tsx         # Main-window route chunk: sidebar + Overview/Canvas + ModalHost (#356)
+│   ├── prefetch.ts         # Idle warm-up of the deferred chunks (rIC → setTimeout) (#356)
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
@@ -634,6 +661,7 @@ even though it works in `tauri dev`.
 │   │                       #   Checkbox, Slider (#122), SkillAutocomplete (#114), PatchNotes (#192),
 │   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
 │   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState
+│   │                       #   ModalHost.tsx — the ten lazily-mounted top-level modals (#356)
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
@@ -642,6 +670,7 @@ even though it works in `tauri dev`.
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
+│   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen)
@@ -667,6 +696,8 @@ npm run tauri build    # build an (unsigned) bundle for the host OS (macOS .app/
                        #   to match CI's AppImage-only Linux output, #345)
 
 npm run build          # type-check + build the frontend only
+npm run bundle:report  # per-route first-paint JS, raw + gzip (after a build) (#356)
+                       #   add `-- --check` to fail over the first-paint budget
 npm run lint           # ESLint (frontend)
 npm run format         # Prettier write (frontend)
 npm run format:check   # Prettier check (frontend)
@@ -726,6 +757,22 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > consecutive contiguous same-session output chunks (`pty::coalesce_output_events`) into
 > one emit — each emit is an evaluate-JS on the webview main thread, costliest on
 > WebKitGTK. (3)+(4) are platform-neutral wins; (1)+(2) are unreachable on macOS/Windows.
+>
+> **AppImage child environment (#350).** Under the AppImage, every child ReCue spawned
+> inherited the AppRun's environment — `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`, a forced
+> `GTK_THEME=Adwaita:light` + `GDK_BACKEND=x11`, and `PATH`/`LD_LIBRARY_PATH`/`XDG_DATA_DIRS`/…
+> segments under the transient `/tmp/.mount_…` FUSE mount — which is documented to break
+> `xdg-open` and to degrade a system binary that then loads the AppImage's bundled libraries.
+> **`src-tauri/src/child_env.rs`** (modeled on `linux_webkit.rs`) is the one scrub seam: a pure,
+> unit-tested core (`is_appimage_segment` / `filter_segments` / `scrub_env` / `env_diff` — a
+> **value-based** rule that strips any `$APPDIR`-owned `:`-segment from **any** var, drops the
+> marker/forced vars, restores an `APPIMAGE_ORIGINAL_<VAR>` backup verbatim, and never empties
+> `PATH`) plus three entry points every spawn goes through — `child_env_vars()` (the `pty.rs`
+> PTY env copy), `scrub_command()` (inside `git::hidden_command`, so every `git`/CLI probe) and
+> `command()` (the `os_open`/`open_url`/`reveal_file_in_finder`/`reveal_file_linux` openers +
+> the `path_env` login-shell probe). It **arms only when `APPDIR`/`APPIMAGE` is set**, so macOS,
+> Windows and a non-AppImage Linux build are byte-for-byte unchanged (no `env`/`env_remove` call
+> is added at all); `WEBKIT_DISABLE_DMABUF_RENDERER` (#346, ReCue's own webview) is not stripped.
 >
 > **Keeping the port current with `main`.** When `main`'s later features (#144+) merge into the
 > Windows branch, each new feature is re-audited against the same abstractions so Windows
