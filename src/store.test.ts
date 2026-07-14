@@ -2368,6 +2368,20 @@ describe("mergeSettings (#100/#176)", () => {
     expect(mergeSettings({ theme: "light" }).theme).toBe("light");
   });
 
+  it("defaults autoFocusOnHover to false and back-fills it (#368)", () => {
+    expect(DEFAULT_SETTINGS.autoFocusOnHover).toBe(false);
+    // A pre-#368 blob (no key) merges to the opt-in default (off).
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.autoFocusOnHover;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>).autoFocusOnHover,
+    ).toBe(false);
+    // A persisted true (opted in) is preserved over the default.
+    expect(mergeSettings({ autoFocusOnHover: true }).autoFocusOnHover).toBe(
+      true,
+    );
+  });
+
   it("defaults promptEnableAutoContinueAtLimit to true and back-fills it (#309)", () => {
     expect(DEFAULT_SETTINGS.promptEnableAutoContinueAtLimit).toBe(true);
     // A pre-#309 blob (no key) merges to the shown-by-default true.

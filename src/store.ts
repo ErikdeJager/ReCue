@@ -1102,6 +1102,9 @@ export const DEFAULT_SETTINGS: Settings = {
   linuxTerminalRenderer: "auto",
   defaultView: "overview",
   confirmDestructive: true,
+  // False by default (#368): focus-follows-mouse is opt-in — today's click-to-focus stays
+  // the norm. An older sessions.json lacking the key back-fills to false via mergeSettings.
+  autoFocusOnHover: false,
   canvasCloseBehavior: "ask",
   diffDisplayMode: "focused",
   diffLineMode: "unified",
