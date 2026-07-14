@@ -3220,3 +3220,13 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - No pre-paint mirror (no index.html boot-script change): display size settles post-boot like accent/Overview-min-width, accepting a one-frame settle (only theme is pre-painted, #348).
 - Live change reaches an already-open detached canvas window only on that window's next boot (same as live theme changes today); acceptable.
 - OS file-drop hit-testing (osFileDrop.ts) flagged for real-box verification at non-100% zoom; adjust `targetAt` by the scale only if it lands wrong (conditional touch).
+
+## Task 370
+
+- Expanded/collapsed state is transient (local component state, default collapsed each launch), not persisted to settings/disk — card only says "default collapsed".
+- "Adaptive" is achieved by surfacing ALL usage buckets generically from usage.rs (any top-level object with a numeric utilization/used_percentage), rendered by iterating on the frontend; unknown keys get a generic humanized label (underscores→spaces, capitalized) so new Anthropic metrics auto-appear.
+- The five_hour bucket stays the "primary": the existing bar fill, countdown, and auto-continue are byte-for-byte unchanged, and a missing five_hour still hides the whole bar (as today). The expanded box lists ALL buckets including the 5-hour one for a complete picture.
+- Disclosure control is an up-chevron button to the LEFT of the reset countdown in the meta row (down-chevron when open); the box grows upward as the first child of the bar, since the bar sits at the sidebar bottom.
+- Disclosure/box are hidden in the collapsed sidebar rail (no room) and in the empty-hairline state, preserving current behavior; whole feature stays fail-open + Claude-only via the existing showUsage gate.
+- Each bucket row shows a humanized label, mini progress bar, percent, and its own reset countdown; per-bucket critical-red at >=90% reusing existing fill classes/tokens.
+- Store usage slice gains a required buckets field, so every `usage:` object literal (store defaults/reset branches + test files) must add `buckets: []`; tsc enumerates them.
