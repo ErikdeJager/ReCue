@@ -4571,3 +4571,72 @@ setting off, behavior is byte-for-byte unchanged.
   macOS, Windows, and Linux; no Rust, no platform seams; rollback = revert (additive, fully behind the opt-in).
 
 **Dependencies:** none.
+
+### 372. [x] UI v2 (1/12): Design foundation — v2 tokens (crust stage, square corners, mono scale), JetBrains Mono as --ui everywhere, pre-paint invariant, shared UI atoms
+
+The foundation card of the **"UI v2" reskin epic** (12 cards, spec `docs/ui-v2-handoff/DESIGN-SPEC.md` + the
+`ReCue-v2-demo.html` reference demo — **where prose and demo disagree, the demo wins**; hard constraints: no
+glass/blur, OS titlebar untouched, zero functionality lost, no accent colors added or changed, the epic ships as
+v2.0.0 only after card 12/12 — no version bump / patch notes here). Every later "UI v2" card consumes what this
+one lands.
+
+**What shipped** (branch `task-372-ui-v2-foundation`, PR
+[#127](https://github.com/ErikdeJager/ReCue/pull/127), merged 2026-07-14 into `ui-rework`):
+
+- **`tokens.css` rework (§2)** — canonical surface roles `--surface-crust #11111b` (content stage/wells) /
+  `--surface-mantle #181825` (chrome) / `--surface-base #1e1e2e` (panels) / `--surface-0 #313244` /
+  `--surface-1 #45475a`, with the legacy tokens repointed as aliases (`--bg-sidebar`→mantle, `--bg-panel`→base,
+  `--bg-elevated`→surface0, `--bg-hover`→surface1, `--content-bg`→crust) and `--bg-base` now the **literal crust**
+  `#11111b` (the window/stage). Square-by-default geometry: `--radius-control`/`--radius-chip` → **0**, new
+  `--radius-chrome 7` / `--radius-chrome-sm 5` / `--radius-btn 6` / `--radius-micro 4` for sidebar-chrome exemptions
+  (`--radius-window 10` / `--radius-dot 999` kept). Mono type scale (`--fs-ui 12` · new `--fs-row 11.5` ·
+  `--fs-meta 11` · `--fs-meta-sm 10.5` · `--fs-meta-xs 10` · new `--fs-micro 9.5` · terminal/diff 10.5 w/ lh
+  1.55/1.65 — cosmetic, xterm size stays a user setting). Floating-chrome shadow tokens `--shadow-menu` /
+  `--shadow-modal` / `--shadow-toast` (§2.5) with `--shadow-popover` kept as a legacy alias for the 27 existing
+  consumers. Stage vars `--stage-gap 8px` / `--stage-pad-overview 12px` / `--stage-pad-canvas 10px` + the
+  `:root.dense` zero-override hook (card 2 wires ⌘D/setting; cards 5/6 consume). Accent tint derivation §2.2:
+  `--accent-tint-fill/-border/-hover` = `color-mix(in srgb, var(--accent) 10%/35%/18%, transparent)` on `:root` so
+  every existing swatch AND an inline custom accent track live (`accentCompanions` untouched). `--status-idle` →
+  `#45475a` (Surface1, §2.1); `--busy-sheen` deleted with the sheen.
+- **JetBrains Mono everywhere (§2.3)** — `--ui` is now the same literal mono stack as `--mono` on ALL OSes; the
+  Linux-only Inter seam (#363) is retired: the `:root[data-platform="linux"]` block and `src/styles/fonts.css` are
+  deleted, `@fontsource-variable/inter` is uninstalled, and `@fontsource/jetbrains-mono/600.css` is added (v2 leans
+  on weight 600). The `data-platform` attribute machinery **stays** as the platform-CSS seam — only its one CSS
+  consumer retired. `platform.test.ts`'s #363 font block replaced by a v2 guard (single `--ui` declaration leading
+  with "JetBrains Mono", ending in `monospace`, no `data-platform` selector in tokens.css).
+- **Pre-paint invariant moved Base→Crust (#348)** — dark `#11111b` / light `#dce0e8` across ALL five synced sites:
+  tokens.css `--bg-base` (both theme blocks), `index.html`'s inline style, `THEME_BG` in `src/theme.ts`,
+  `background_for_theme()` in `commands.rs` (+ its two unit tests), and `tauri.conf.json` `backgroundColor` (the
+  fifth site, newly called out). `global.css` `.main` now paints `var(--bg-base)` so the first frame matches the
+  native pre-paint color. `theme.test.ts` gains a "v2 foundation tokens" guard (stage vars + dense hook +
+  accent tints).
+- **Light theme remapped, not regressed (#333)** — the Latte block redefines the five surfaces (crust `#dce0e8`,
+  mantle `#e6e9ef`, base `#eff1f5`, surface0 `#ccd0da`, surface1 `#bcc0cc`); `--terminal-bg/-fg/-selection` stay
+  **independent literals** so the terminal remains dark in light mode; soft light shadow variants added. Polish
+  deferred per §13 — functional only.
+- **Shared atoms** — new `src/styles/atoms.css` (imported in `main.tsx`): `.btn` block buttons (26px;
+  `.btn-accent` 10% tint fill / 35% border / 18% hover with plain `--accent-dim` fallbacks before each color-mix,
+  `.btn-neutral`, `.btn-primary`, `.btn-ghost`, `.btn-icon[-sm/-lg]`), `.chip-count` (Surface0 pill — demo wins
+  over the spec's "crust pill" prose), `.kbd-hint` / `.kbd-hint-onfill` / `.kbd-chip`. New
+  **`SegmentedControl`** primitive (generic options/value/onChange, ARIA tablist + roving tabindex ported from
+  ViewSwitch; square panel look default, rounded `chrome` variant well-7/thumb-5/20px) — ViewSwitch's **expanded**
+  mode now renders through it (compact rail mode untouched, card 4 owns the rail). **Checkbox** → 15×15px,
+  `--radius-micro`, crust off-well, accent fill + `--accent-fg` check. **BusyIndicator** → 7px dot + 2.5px
+  color-mix-tinted ring in the same fixed 14px slot (#95), running = blue + 1.6s opacity pulse 1→.4 (sheen/
+  `busy-shimmer` removed; reduced motion freezes the pulse solid), settled = steady yellow + ring, fresh = gray
+  Surface1 dot, no ring — visual only, the 3-state + sticky semantics (#315) untouched.
+- **CLAUDE.md minimal touch** — pre-paint hex parentheticals + the #363 font-seam notes corrected (the full doc
+  sweep is card 12).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 372)
+
+- **Transitional visuals are accepted** — flipping the radius tokens to 0 squares sidebar/modal inner controls
+  until cards 4/9/10 re-round them via the new chrome radii; functional parity is unaffected.
+- **tauri.conf.json `backgroundColor` is a fifth synced pre-paint site** (covered by review only — the tests guard
+  the other four); light pre-paint = Latte crust `#dce0e8`.
+- **Terminal-stays-dark invariant kept** by keeping the terminal tokens literals, never `var(--surface-crust)`.
+- **No italic mono faces bundled** — `em` text renders synthetic-oblique (the demo ships none either).
+- Bundled-font + token CSS only — identical on macOS, Windows, and Linux; retiring the Inter seam *removes*
+  Linux-only divergence. Rollback = revert the PR (no persisted-data/IPC/settings-shape changes).
+
+**Dependencies:** none. (Foundation for UI v2 cards 2–12.)
