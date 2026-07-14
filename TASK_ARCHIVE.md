@@ -3696,3 +3696,63 @@ state. WebGL contexts drop on OOM/suspend, likelier on WebKitGTK.
   `TRAJECTORY_TO_LINUX.md`, with one clause added to `CLAUDE.md`.
 - Unchanged elsewhere: detached windows (#105) and Linux software-WebGL boxes (#346) still never construct the
   addon at all; macOS/Windows main-window terminals still do.
+
+### 363. [x] Give the UI font a Linux leg — bundle Inter Variable (latin), applied Linux-only
+
+`tokens.css`'s `--ui` stack (`-apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif`) resolves to
+San Francisco on macOS and Segoe UI on Windows, but on Linux it falls through to whatever the distro's default
+sans happens to be — which reads noticeably worse than the other two targets. The card suggested simply adding
+Linux-common faces (Inter, Cantarell, Ubuntu, Noto Sans) ahead of the generic. **That was measured on the
+reporting Arch box and rejected**: `fc-list` showed that **none** of those faces are installed (only Adwaita
+Sans/Mono + FreeSans, with `fc-match sans-serif` → FreeSans), so a fallback-only list would have been a **no-op
+on the very machine that reported the bug**, and non-deterministic everywhere else. So the face is **bundled**
+instead.
+
+**What shipped** (branch `linux-ui-font`, PR [#110](https://github.com/ErikdeJager/ReCue/pull/110),
+2026-07-14) — frontend only, no Rust change:
+
+- **Inter Variable bundled offline** (`@fontsource-variable/inter`, OFL-1.1 — never a CDN, like the existing
+  JetBrains Mono) via a **hand-written `@font-face`** in the new `src/styles/fonts.css` naming only the **latin**
+  subset: one **48,256 B** woff2 ships, instead of the **218,512 B** that `import "@fontsource-variable/inter"`
+  would have emitted across all seven subsets. Variable rather than static because the UI uses weights
+  400/500/600 — one file, real weights.
+- **Applied Linux-only** through a new `:root[data-platform="linux"]` `--ui` override. The shared `:root --ui`
+  line is **not touched**, so macOS and Windows render byte-for-byte as before — and never fetch the woff2 at
+  all, since a `@font-face` file loads only when an element actually matches the family. A short system-face
+  tail is kept in the Linux stack for non-latin glyph coverage.
+- **A new seam for platform-conditional CSS** — `data-platform` on `<html>`, written **synchronously** from the
+  WebView user-agent (`detectPlatform` / `applyPlatformAttribute` in `src/platform.ts`) from `main.tsx`
+  **before the first render**. The store's `platform` signal is an async IPC and would have flipped the font
+  mid-boot. `store.ts` re-applies the attribute from the authoritative backend `platform()` when it lands (a
+  no-op in practice, and a self-heal if the UA sniff were ever wrong).
+
+**Key decisions**
+
+- **The ordering hazard was verified, not assumed.** Prepending `"Inter"` into the *shared* stack is **not**
+  platform-neutral: macOS is safe (`-apple-system` wins first), but **Windows is not** — neither
+  `-apple-system` nor `"SF Pro Text"` resolve there, so a user who happened to have Inter installed would get
+  it *instead of* Segoe UI. Appending after `system-ui` is safe on macOS/Windows but a no-op on Linux (the
+  generic always resolves; fontconfig even defines a `system-ui` generic). Hence a **platform-scoped override**,
+  never a re-ordering of the shared list.
+- **`format("woff2")`, not fontsource's `format("woff2-variations")`** — an engine that doesn't know the newer
+  keyword degrades to the default instance rather than skipping the `src` entirely (which would mean no font at
+  all). The verbatim latin `unicode-range` lets non-latin codepoints fall through to system faces, so no tofu.
+- **Consistent with Task #356's bundle budget:** a woff2 is not JS, is never parsed by the engine, and is
+  fetched only on Linux — +47 KB on disk (~0.9% of `dist/`), with **zero** JS-parse cost.
+- **`index.html` was deliberately not touched** (Task #348 owns it), so the two land independently.
+- Out of scope and recorded rather than built: the `--mono`/terminal font, mermaid's `fontFamily`, and a
+  user-facing "UI font" setting or opt-out for Linux users who prefer their desktop font.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Measured, not assumed** (`npm run build`): exactly **one** `dist/assets/inter-latin-wght-normal-*.woff2` at
+  48,256 B; total woff2 payload 164,332 B (up from 116,076 B) — both matching the plan exactly. The
+  bare-package `url()` resolution in plain CSS was empirically verified against this repo's own Vite 7.3.6.
+- Tests: `detectPlatform` over the real WKWebView / WebView2 / WebKitGTK user-agent strings plus the unknown
+  case, and a **mechanical regression guard** that reads `tokens.css` + `fonts.css` off disk and asserts the
+  `:root --ui` stack still equals the original **exactly**, that the Linux block leads with `"Inter Variable"`
+  and ends in a generic, and that the named family is genuinely bundled locally.
+- Checks green: `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (681 passed). The GUI check
+  (does it actually *look* right on each distro) is recorded in `TRAJECTORY_TO_LINUX.md`.
