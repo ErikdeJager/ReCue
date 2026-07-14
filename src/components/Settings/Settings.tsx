@@ -407,6 +407,8 @@ function SettingsModal() {
                     {REPO_PALETTE.map((color) => {
                       // Peach is the default → store "" so the --accent token
                       // stands; any other swatch overrides --accent with its hex.
+                      // A "random" draft never equals a palette hex, so no palette
+                      // swatch reads active alongside the "?" swatch below.
                       const isDefault = color === DEFAULT_ACCENT;
                       const active =
                         (draft.accentColor || DEFAULT_ACCENT) === color;
@@ -415,7 +417,9 @@ function SettingsModal() {
                           key={color}
                           type="button"
                           className={`${styles.swatch} ${active ? styles.swatchActive : ""}`}
-                          style={{ background: color }}
+                          // `color` too: the active ring is the swatch's own color
+                          // via currentColor (UI v2 §10).
+                          style={{ background: color, color }}
                           onClick={() =>
                             update("accentColor", isDefault ? "" : color)
                           }
@@ -425,6 +429,22 @@ function SettingsModal() {
                         />
                       );
                     })}
+                    {/* "?" random accent (UI v2 task 373): persists the literal
+                        "random", resolved to a random palette member each launch. */}
+                    <button
+                      type="button"
+                      className={`${styles.swatch} ${styles.swatchRandom} ${
+                        draft.accentColor === "random"
+                          ? styles.swatchActive
+                          : ""
+                      }`}
+                      onClick={() => update("accentColor", "random")}
+                      title="Random accent — a new palette color each launch"
+                      aria-label="Random accent"
+                      aria-pressed={draft.accentColor === "random"}
+                    >
+                      ?
+                    </button>
                   </div>
                 </div>
                 <Checkbox
@@ -433,6 +453,40 @@ function SettingsModal() {
                   label="Reduce motion"
                   className={styles.checkRow}
                 />
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.densePanels}
+                    onChange={(v) => update("densePanels", v)}
+                    label="Dense panels"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Tile panels edge-to-edge with no gaps (
+                    {kbdHint(platform, "⌘D", "Ctrl+D")}).
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.backgroundAnimation}
+                    onChange={(v) => update("backgroundAnimation", v)}
+                    label="Background animation"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Animate the app background. Off keeps it static.
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.capAgentWidth}
+                    onChange={(v) => update("capAgentWidth", v)}
+                    label="Cap agent card width"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Limit Overview agent cards to a comfortable maximum width.
+                  </p>
+                </div>
                 <Checkbox
                   checked={draft.showDiffLineCounts}
                   onChange={(v) => update("showDiffLineCounts", v)}
@@ -935,7 +989,9 @@ function SettingsModal() {
                               key={color}
                               type="button"
                               className={`${styles.swatch} ${row.color === color ? styles.swatchActive : ""}`}
-                              style={{ background: color }}
+                              // `color` too: the active ring is the swatch's own
+                              // color via currentColor (UI v2 §10).
+                              style={{ background: color, color }}
                               onClick={() => setRow({ color })}
                               title={color}
                               aria-label={`Color ${color}`}
@@ -950,7 +1006,7 @@ function SettingsModal() {
                             className={`${styles.swatch} ${styles.swatchCustom} ${customActive ? styles.swatchActive : ""}`}
                             style={
                               customActive
-                                ? { background: row.color }
+                                ? { background: row.color, color: row.color }
                                 : undefined
                             }
                             title="Custom color"
@@ -1235,12 +1291,14 @@ function SettingsModal() {
                           key={shortcut.description}
                           className={styles.shortcutRow}
                         >
-                          <kbd className={styles.shortcutKey}>
-                            {kbdHint(platform, shortcut.mac, shortcut.win)}
-                          </kbd>
+                          {/* Label-left / key-chip-right (UI v2 §10); the chip is
+                              the task-372 `.kbd-chip` atom (atoms.css, global). */}
                           <span className={styles.shortcutDesc}>
                             {shortcut.description}
                           </span>
+                          <kbd className={`kbd-chip ${styles.shortcutKey}`}>
+                            {kbdHint(platform, shortcut.mac, shortcut.win)}
+                          </kbd>
                         </li>
                       ))}
                     </ul>

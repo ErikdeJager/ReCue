@@ -12,6 +12,7 @@
 //                      for type N (session/file/diff/terminal/kanban/tree)
 //   ⌘T / Ctrl+T        new Canvas tab (switches to Canvas view)           (#206)
 //   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
+//   ⌘D / Ctrl+D        toggle dense panels (UI v2 §9)                     (#373)
 //
 // xterm forwards keystrokes to the PTY when a terminal is focused, so the
 // listener runs in the **capture phase on window** — it fires before xterm's
@@ -190,6 +191,25 @@ export function useKeyboardNav(): void {
         e.preventDefault();
         e.stopPropagation();
         useStore.getState().toggleMaximizeSelected();
+        return;
+      }
+
+      // ⌘D / Ctrl+D — toggle dense panels (UI v2 §9, task 373). Persisted like any
+      // setting and toasted. Main window only (settings are main-authoritative and not
+      // broadcast cross-window — swallowed but inert in a detached canvas window, like
+      // ⌘N/⌘B/⌘K/⌘T); inert while the Settings modal is open so its draft can't clobber
+      // the toggle on Save. Matched on e.code (physical key) like ⌘E.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.code === "KeyD"
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (IS_MAIN_WINDOW && !useStore.getState().settingsOpen) {
+          useStore.getState().toggleDensePanels();
+        }
         return;
       }
 

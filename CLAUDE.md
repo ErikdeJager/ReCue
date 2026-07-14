@@ -537,8 +537,9 @@ steady-state boot pays **zero** probe cost.
   and the busy indicator is never stalled. The Settings auto-name toggle (#100) gates
   it.
 - **Settings (#100/#102/#103/#107/#119):** a sidebar **footer gear** opens a centered,
-  focus-trapped **Settings modal** (`components/Settings`) — a **fixed 720×600** size
-  (clamped to 90vh, #119) so every section renders identically and a tall section
+  focus-trapped **Settings modal** (`components/Settings`) — a **fixed 740×540** size
+  (clamped to 92vw/88vh — #119's fixed-size precedent, resized by UI v2 task 373)
+  so every section renders identically and a tall section
   scrolls inside the content pane (the nav + action row stay put) — with **eight** sections
   (**nine** on Linux, which additionally gets **Rendering**, #357) —
   **Terminal** (font size / line height via the custom **`Slider`** #122 + cursor

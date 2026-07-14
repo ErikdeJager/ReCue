@@ -357,10 +357,23 @@ export interface Settings {
    * Latte). Applied as a `data-theme` attribute on <html> by applySettingsEffects;
    * the terminal stays dark in both. */
   theme: "dark" | "light";
-  /** Accent color hex from `REPO_PALETTE`, or "" to use the default token. */
+  /** Accent color: a hex from `REPO_PALETTE`, "" to use the default token, or the
+   * literal `"random"` sentinel (UI v2 task 373) — re-resolved to a random
+   * `REPO_PALETTE` member once per launch by applySettingsEffects. */
   accentColor: string;
   /** Force reduced motion beyond the OS setting. */
   reduceMotion: boolean;
+  /** Animate the app background (UI v2 wave, card 3). Default true; the visual
+   * consumer lands with the wave background — until then the flag persists inertly. */
+  backgroundAnimation: boolean;
+  /** Dense panels (UI v2 §9): collapse every stage gap and pane padding to 0 so
+   * panels tile edge-to-edge (hairlines keep them separated). Applied as a `dense`
+   * class on <html> by applySettingsEffects (the task-372 `:root.dense` token hook);
+   * toggled by ⌘D or Settings → Appearance. Default false. */
+  densePanels: boolean;
+  /** Cap Overview agent cards at a comfortable max width (UI v2, card 5). Default
+   * true (opt-out); the visual consumer lands with the Overview reskin. */
+  capAgentWidth: boolean;
   /** Overview column minimum width in px (320–600); the floor before columns
    * scroll horizontally (#176). Applied as the `--overview-card-min` CSS var. */
   overviewPanelMinWidth: number;
