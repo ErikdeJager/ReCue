@@ -403,7 +403,7 @@
   margin: 0 var(--space-8) var(--space-6);
   overflow: hidden;
   border-radius: var(--radius-dot);
-  background: var(--bg-hover);
+  background: var(--content-bg);
 }
 
 /* The swept stripe: a solid accent rectangle that slides across the track. */

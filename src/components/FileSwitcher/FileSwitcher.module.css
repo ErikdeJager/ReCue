@@ -33,7 +33,10 @@
 }
 
 /* The picker popover, anchored under the filename. FilePicker sets its own width
-   (280px); this just supplies the floating surface. */
+   (280px); this just supplies the floating surface — the §10 anchored-menu look
+   (task 378): Base bg, strong hairline, 10px window radius, menu shadow, 130ms
+   .97→1 pop (module-local keyframes; the global reduced-motion killswitch drops
+   the animation). */
 .popover {
   position: absolute;
   left: 0;
@@ -41,9 +44,10 @@
   z-index: 50;
   overflow: hidden;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
+  border-radius: var(--radius-window);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-menu);
+  animation: switcher-in 130ms var(--ease-out);
 }
 
 /* "Browse…" footer (#163): opens the native open-file dialog to pick any file on
@@ -67,6 +71,17 @@
 }
 
 .browse:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+@keyframes switcher-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }

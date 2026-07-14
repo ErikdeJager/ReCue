@@ -445,10 +445,10 @@ function GlobalSearch() {
   const hint = kbdHint(platform, "⌘F", "Ctrl+F");
 
   return (
-    <div className={styles.overlay} onClick={close}>
+    <div className={`modal-scrim ${styles.overlay}`} onClick={close}>
       <div
         ref={dialogRef}
-        className={styles.dialog}
+        className={`modal-pop ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-label="Search everything"
@@ -467,7 +467,7 @@ function GlobalSearch() {
             onKeyDown={onInputKeyDown}
             aria-label="Search everything"
           />
-          <kbd className={styles.kbd}>{hint}</kbd>
+          <kbd className="kbd-chip">{hint}</kbd>
         </div>
 
         <div className={styles.results}>

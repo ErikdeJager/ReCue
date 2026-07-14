@@ -112,10 +112,10 @@ function CloneRepoModal() {
   };
 
   return (
-    <div className={styles.overlay} onClick={() => close()}>
+    <div className={`modal-scrim ${styles.overlay}`} onClick={() => close()}>
       <div
         ref={dialogRef}
-        className={styles.dialog}
+        className={`modal-pop ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-label="Clone repository"
@@ -153,7 +153,7 @@ function CloneRepoModal() {
             </span>
             <button
               type="button"
-              className={styles.pickButton}
+              className="modal-btn modal-btn-neutral"
               onClick={() => void chooseParent()}
             >
               <FolderOpen size={15} strokeWidth={1.5} />
@@ -172,10 +172,18 @@ function CloneRepoModal() {
           )}
 
           <div className={styles.actions}>
-            <button type="button" className={styles.cancel} onClick={close}>
+            <button
+              type="button"
+              className="modal-btn modal-btn-neutral"
+              onClick={close}
+            >
               Cancel
             </button>
-            <button type="submit" className={styles.clone} disabled={!canClone}>
+            <button
+              type="submit"
+              className="modal-btn modal-btn-primary"
+              disabled={!canClone}
+            >
               Clone
             </button>
           </div>

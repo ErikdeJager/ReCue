@@ -8,6 +8,7 @@ import "./styles/tokens.css";
 import "./styles/global.css";
 import "./styles/atoms.css";
 import "./styles/menu.css";
+import "./styles/modal.css";
 import { applyPlatformAttribute, detectPlatform } from "./platform";
 import App from "./App";
 

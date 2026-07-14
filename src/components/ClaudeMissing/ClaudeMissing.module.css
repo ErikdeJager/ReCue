@@ -16,24 +16,29 @@
 
 .code {
   padding: 0 var(--space-4);
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-micro);
   background: var(--bg-base);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
 }
 
+/* Dismiss — the v2 28px neutral button idiom (task 378). */
 .dismiss {
+  display: inline-flex;
   flex-shrink: 0;
-  padding: var(--space-4) var(--space-12);
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-chrome);
   background: transparent;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font: inherit;
   font-size: var(--fs-meta);
   cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .dismiss:hover {
-  background: var(--bg-hover);
+  color: var(--text-primary);
 }

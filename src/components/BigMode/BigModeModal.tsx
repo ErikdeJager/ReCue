@@ -84,9 +84,12 @@ function BigModeModal() {
   return (
     // mousedown (not click) on the scrim closes — a click that starts inside the
     // body and releases on the scrim won't accidentally close.
-    <div className={styles.overlay} onMouseDown={() => closeMaximized()}>
+    <div
+      className={`modal-scrim ${styles.overlay}`}
+      onMouseDown={() => closeMaximized()}
+    >
       <div
-        className={styles.dialog}
+        className={`modal-pop ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-label="Big mode"

@@ -1,26 +1,15 @@
-/* "Manage templates" modal (#117): scrim + centered dialog listing saved
-   templates with edit/rename/duplicate/delete. On-system tokens; the shared
-   popover shadow. */
+/* "Manage templates" modal (#117): the shared modal-scrim/modal-pop chrome
+   (modal.css, task 378) listing saved templates with edit/rename/duplicate/delete.
+   This module keeps only z-index, width, and the list/row layout. */
 .overlay {
-  position: fixed;
-  inset: 0;
   z-index: 210;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--scrim);
 }
 
 .dialog {
   display: flex;
   width: 420px;
-  max-width: calc(100vw - var(--space-32));
   max-height: calc(100vh - var(--space-32));
   flex-direction: column;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-window);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
 }
 
 .header {
@@ -60,11 +49,11 @@
   align-items: center;
   gap: var(--space-8);
   padding: var(--space-6) var(--space-8);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-btn);
 }
 
 .row:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 
 .name {
@@ -77,13 +66,14 @@
   white-space: nowrap;
 }
 
+/* Inline rename — the v2 crust input idiom (accent focus border kept). */
 .renameInput {
   flex: 1;
   min-width: 0;
   padding: var(--space-2) var(--space-6);
   border: 1px solid var(--accent);
-  border-radius: var(--radius-chip);
-  background: var(--bg-base);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -104,7 +94,7 @@
   justify-content: center;
   padding: 0 var(--space-4);
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-micro);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
@@ -116,7 +106,7 @@
 }
 
 .iconBtn:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
@@ -128,6 +118,7 @@
   color: var(--status-error);
 }
 
+/* Armed two-step delete confirm (#103) — kept red and unmistakable. */
 .dangerArmed,
 .dangerArmed:hover {
   background: var(--status-error);
@@ -144,45 +135,4 @@
   gap: var(--space-8);
   padding: var(--space-12) var(--space-16);
   border-top: 1px solid var(--border-hairline);
-}
-
-.importBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-
-.importBtn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.newBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-12);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-control);
-  background: var(--accent);
-  color: var(--accent-fg);
-  font: inherit;
-  font-size: var(--fs-meta);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.newBtn:hover {
-  background: var(--accent-hover);
 }
