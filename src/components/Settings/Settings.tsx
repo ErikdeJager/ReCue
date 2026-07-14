@@ -621,6 +621,19 @@ function SettingsModal() {
                 />
                 <div className={styles.field}>
                   <Checkbox
+                    checked={draft.autoFocusOnHover}
+                    onChange={(v) => update("autoFocusOnHover", v)}
+                    label="Focus panels on hover"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    When on, moving the mouse over an agent or terminal panel
+                    focuses it so you can type immediately without clicking.
+                    Text fields you are editing are never interrupted.
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
                     checked={draft.autoSave}
                     onChange={(v) => update("autoSave", v)}
                     label="Auto-save files"
@@ -1280,10 +1293,15 @@ function SettingsModal() {
             <button
               type="button"
               className={styles.resetButton}
-              // Preserve the one-time onboarding flag across a reset so it doesn't
-              // re-trigger the first-launch agent picker next launch.
+              // Preserve the one-time flags across a reset so it doesn't re-trigger the
+              // first-launch agent picker (`onboarded`) or re-arm the #367 line-height
+              // migration (`terminalLineHeightMigrated`) next launch.
               onClick={() =>
-                setDraft({ ...DEFAULT_SETTINGS, onboarded: saved.onboarded })
+                setDraft({
+                  ...DEFAULT_SETTINGS,
+                  onboarded: saved.onboarded,
+                  terminalLineHeightMigrated: saved.terminalLineHeightMigrated,
+                })
               }
             >
               Reset to defaults

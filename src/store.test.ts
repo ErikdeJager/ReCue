@@ -18,13 +18,16 @@ import {
   mergeRepoOrder,
   mergeSettings,
   MIN_DISPLAY_SIZE,
+  migrateTerminalLineHeight,
   moveResultMessage,
   overviewClusterKeys,
   ownedChildSessionIds,
+  pickRepoColor,
   placeAfterAnchor,
   REPO_PALETTE,
   repoColor,
   repoOrder,
+  sidebarRepos,
   useStore,
   versionIncreased,
   worktreeHasItems,
@@ -1187,6 +1190,78 @@ describe("repoColor", () => {
     const c = repoColor("/repo/a", {});
     expect(REPO_PALETTE).toContain(c);
     expect(repoColor("/repo/a", {})).toBe(c); // stable across calls
+  });
+});
+
+describe("pickRepoColor (#369)", () => {
+  it("returns the first palette color for the very first folder", () => {
+    expect(pickRepoColor("/repo/a", {}, [])).toBe(REPO_PALETTE[0]);
+  });
+
+  it("returns the first unused palette color in palette order", () => {
+    // Two existing folders explicitly occupy palette[0] and palette[2]; the next
+    // unused slot in palette order is palette[1].
+    const colors = {
+      "/repo/a": REPO_PALETTE[0],
+      "/repo/c": REPO_PALETTE[2],
+    };
+    expect(
+      pickRepoColor("/repo/new", colors, ["/repo/a", "/repo/c", "/repo/new"]),
+    ).toBe(REPO_PALETTE[1]);
+  });
+
+  it("falls back to the stable hashed default once all 14 palette colors are used", () => {
+    // 14 existing folders each pinned to a distinct palette color.
+    const existing = REPO_PALETTE.map((_, i) => `/repo/f${i}`);
+    const colors: Record<string, string> = {};
+    existing.forEach((r, i) => (colors[r] = REPO_PALETTE[i]));
+    const picked = pickRepoColor("/repo/new", colors, [
+      ...existing,
+      "/repo/new",
+    ]);
+    // No crash; deterministic; a real palette member equal to the hashed default.
+    expect(REPO_PALETTE).toContain(picked);
+    expect(picked).toBe(repoColor("/repo/new", {}));
+  });
+
+  it("does not consume a palette slot for an override that is off-palette", () => {
+    // A user override outside the palette occupies no palette color, so the first
+    // palette color is still available to a new folder.
+    const colors = { "/repo/a": "#001122" };
+    expect(pickRepoColor("/repo/new", colors, ["/repo/a", "/repo/new"])).toBe(
+      REPO_PALETTE[0],
+    );
+  });
+
+  it("ignores the target folder's own current color", () => {
+    // /repo/a already sits on palette[0]; picking for itself must not avoid it, so
+    // the first palette color is returned rather than palette[1].
+    const colors = { "/repo/a": REPO_PALETTE[0] };
+    expect(pickRepoColor("/repo/a", colors, ["/repo/a"])).toBe(REPO_PALETTE[0]);
+  });
+});
+
+describe("sidebarRepos (#369)", () => {
+  it("unions recents, worktree parents, and recurring cwds; hides worktree children", () => {
+    const sessions = [
+      ovSession("s1", "/repo/a", 0),
+      // A worktree child: its repoPath is the isolated worktree dir, nested under
+      // /repo/a — it must NOT appear top-level, but its parent should.
+      ovSession("s2", "/wt/a-feature", 1, "/repo/a"),
+    ];
+    const recurrings: RecurringSession[] = [
+      {
+        id: "r1",
+        cwd: "/repo/c",
+        interval_secs: 3600,
+        next_fire_at: 0,
+        created_at: 0,
+      },
+    ];
+    const repos = sidebarRepos(["/repo/b"], sessions, recurrings);
+    // Alphabetical by name (repoOrder); worktree child dir absent.
+    expect(repos).toEqual(["/repo/a", "/repo/b", "/repo/c"]);
+    expect(repos).not.toContain("/wt/a-feature");
   });
 });
 
@@ -2370,6 +2445,20 @@ describe("mergeSettings (#100/#176)", () => {
     expect(mergeSettings({ theme: "light" }).theme).toBe("light");
   });
 
+  it("defaults autoFocusOnHover to false and back-fills it (#368)", () => {
+    expect(DEFAULT_SETTINGS.autoFocusOnHover).toBe(false);
+    // A pre-#368 blob (no key) merges to the opt-in default (off).
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.autoFocusOnHover;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>).autoFocusOnHover,
+    ).toBe(false);
+    // A persisted true (opted in) is preserved over the default.
+    expect(mergeSettings({ autoFocusOnHover: true }).autoFocusOnHover).toBe(
+      true,
+    );
+  });
+
   it("defaults promptEnableAutoContinueAtLimit to true and back-fills it (#309)", () => {
     expect(DEFAULT_SETTINGS.promptEnableAutoContinueAtLimit).toBe(true);
     // A pre-#309 blob (no key) merges to the shown-by-default true.
@@ -2397,6 +2486,29 @@ describe("mergeSettings (#100/#176)", () => {
     // A persisted value is preserved over the default.
     expect(mergeSettings({ displaySize: 125 }).displaySize).toBe(125);
   });
+
+  it("defaults the terminal line height to 1.0 and the migration flag to false (#367)", () => {
+    expect(DEFAULT_SETTINGS.terminalLineHeight).toBe(1.0);
+    expect(DEFAULT_SETTINGS.terminalLineHeightMigrated).toBe(false);
+  });
+
+  it("back-fills terminalLineHeightMigrated to false for an older blob and preserves a stored value/flag (#367)", () => {
+    // A pre-#367 blob (no migration key) upgrades cleanly to false so it's still
+    // eligible for the one-time bump.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.terminalLineHeightMigrated;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .terminalLineHeightMigrated,
+    ).toBe(false);
+    // A persisted line-height value + set flag win over the defaults.
+    const merged = mergeSettings({
+      terminalLineHeight: 1.5,
+      terminalLineHeightMigrated: true,
+    });
+    expect(merged.terminalLineHeight).toBe(1.5);
+    expect(merged.terminalLineHeightMigrated).toBe(true);
+  });
 });
 
 describe("displayZoom (#366)", () => {
@@ -2418,6 +2530,57 @@ describe("displayZoom (#366)", () => {
   it("returns null for a non-finite input (no `zoom: NaN`)", () => {
     expect(displayZoom(NaN)).toBeNull();
     expect(displayZoom(Infinity)).toBeNull();
+  });
+});
+
+describe("migrateTerminalLineHeight (#367)", () => {
+  it("bumps an explicit legacy 1.2 down to 1.0 and stamps the flag (changed)", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalLineHeight: 1.2,
+      terminalLineHeightMigrated: false,
+    };
+    const { settings, changed } = migrateTerminalLineHeight(before);
+    expect(settings.terminalLineHeight).toBe(1.0);
+    expect(settings.terminalLineHeightMigrated).toBe(true);
+    expect(changed).toBe(true);
+  });
+
+  it("leaves any other chosen value unchanged but still stamps the flag (not changed)", () => {
+    for (const value of [1.0, 1.1, 1.3, 1.5, 1.8]) {
+      const before = {
+        ...DEFAULT_SETTINGS,
+        terminalLineHeight: value,
+        terminalLineHeightMigrated: false,
+      };
+      const { settings, changed } = migrateTerminalLineHeight(before);
+      expect(settings.terminalLineHeight).toBe(value);
+      expect(settings.terminalLineHeightMigrated).toBe(true);
+      expect(changed).toBe(false);
+    }
+  });
+
+  it("never re-runs once the flag is set — a re-picked 1.2 is preserved", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalLineHeight: 1.2,
+      terminalLineHeightMigrated: true,
+    };
+    const { settings, changed } = migrateTerminalLineHeight(before);
+    expect(settings).toBe(before); // untouched (same reference)
+    expect(settings.terminalLineHeight).toBe(1.2);
+    expect(changed).toBe(false);
+  });
+
+  it("only matches ~1.2 within a tight epsilon (a nearby step is not bumped)", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalLineHeight: 1.2 + 1e-3,
+      terminalLineHeightMigrated: false,
+    };
+    const { settings, changed } = migrateTerminalLineHeight(before);
+    expect(settings.terminalLineHeight).toBe(1.2 + 1e-3);
+    expect(changed).toBe(false);
   });
 });
 

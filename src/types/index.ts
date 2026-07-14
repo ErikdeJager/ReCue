@@ -395,6 +395,10 @@ export interface Settings {
   defaultView: View;
   /** Confirm destructive Sidebar actions (Remove / Kill all / Close all). */
   confirmDestructive: boolean;
+  /** Focus-follows-mouse (#368): when true, hovering an agent or shell terminal panel
+   * focuses it immediately so keystrokes are captured without a click. Off by default
+   * (opt-in). Read live by Terminal.tsx; not a side-effecting setting. */
+  autoFocusOnHover: boolean;
   /** What closing a Canvas tab *with contents* does (#137): `ask` shows a modal,
    * `kill` tears down its agents/items, `keep` just drops the tab (today's behavior).
    * Self-contained — independent of `confirmDestructive`. */
@@ -458,6 +462,11 @@ export interface Settings {
    * if exactly one CLI is installed, the picker modal if 2+). Set once, then never
    * re-prompts. Kept in the settings blob (no separate Rust scalar). */
   onboarded: boolean;
+  /** One-time #367 migration marker: whether the terminal line-height default drop
+   *  (1.2 → 1.0) has been applied for this install. Defaults false so an older blob
+   *  (lacking the key) is eligible for the one-time bump; set true once so a user who
+   *  later re-picks 1.2 is never re-migrated. Mirrors `onboarded`. */
+  terminalLineHeightMigrated: boolean;
 }
 
 // --- Canvas (#46): a recursive binary split-panel (BSP) layout tree ---

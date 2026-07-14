@@ -155,7 +155,9 @@ let fontAtlasRebuilt = false;
  * hard-coded values, so behavior is unchanged until a setting is saved. */
 let currentTerminalSettings = {
   fontSize: 12.5,
-  lineHeight: 1.2,
+  // 1.0 (#367): tracks DEFAULT_SETTINGS.terminalLineHeight, used for any xterm created
+  // before applyTerminalSettings runs.
+  lineHeight: 1.0,
   cursorBlink: true,
 };
 

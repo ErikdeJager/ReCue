@@ -122,6 +122,10 @@ const reconnectingIds = new Set<string>();
 // effect in dev, which would otherwise register duplicate listeners and
 // double-fire every exit toast (#32).
 let eventsSubscribed = false;
+// Give each NEW top-level folder a distinct default color exactly once (#369): the
+// main-window subscription that watches for added folders is started a single time,
+// guarded so StrictMode's double-invoke can't register it twice.
+let folderColorSubStarted = false;
 // Sessions killed intentionally (Remove / Forget) — their backend `Exited` event
 // must not add a second "Session exited" toast on top of the action's toast (#32).
 const intentionalKills = new Set<string>();
@@ -703,6 +707,28 @@ export function repoOrder(
 }
 
 /**
+ * The set of top-level sidebar "folders" (repos) currently shown, in display order —
+ * the canonical computation the sidebar uses (mirrors `pruneMissingFolders`): recents
+ * ∪ worktree parents ∪ recurring cwds ∪ non-worktree session repos, deduped/sorted by
+ * `repoOrder`. Worktree *child* dirs are nested under their parent (they carry a
+ * `worktreeParent`), so they never appear top-level and never get their own color
+ * (#369). Pure.
+ */
+export function sidebarRepos(
+  recents: string[],
+  sessions: SessionView[],
+  recurrings: RecurringSession[],
+): string[] {
+  const worktreeParents = sessions
+    .map((x) => x.worktreeParent)
+    .filter((p): p is string => !!p);
+  return repoOrder(
+    [...recents, ...worktreeParents, ...recurrings.map((r) => r.cwd)],
+    sessions.filter((x) => !x.worktreeParent),
+  );
+}
+
+/**
  * Disambiguate repeated sidebar row labels. Branch is tracked per repo path, so
  * every session in a repo group shares the same branch label; this appends a
  * 1-based index to the 2nd+ occurrence (`main`, `main (2)`, `main (3)`) so rows
@@ -1056,6 +1082,28 @@ export function repoColor(
 }
 
 /**
+ * Choose a **default** color for a newly-added folder (#369): prefer a palette color
+ * not already shown by any *other* current folder, so distinct folders start visually
+ * distinct instead of colliding on the path hash. "Used" is each other folder's
+ * **effective** color `repoColor(r, colors)` (a user override *or* its hashed default);
+ * the first `REPO_PALETTE` entry not in that set wins, in palette order. Once all 14
+ * palette colors are in use, fall back to the stable hashed default (`repoColor(path,
+ * {})`, always a palette member) — no crash, deterministic. `path`'s own current color
+ * is ignored (a folder never avoids itself). Pure.
+ */
+export function pickRepoColor(
+  path: string,
+  colors: Record<string, string>,
+  existingRepos: readonly string[],
+): string {
+  const used = new Set(
+    existingRepos.filter((r) => r !== path).map((r) => repoColor(r, colors)),
+  );
+  const unused = REPO_PALETTE.find((c) => !used.has(c));
+  return unused ?? repoColor(path, {});
+}
+
+/**
  * A Kanban column's color (#239): the configured color when the column name matches
  * a Settings entry (case-insensitive + trimmed), else a stable default derived by
  * hashing the name into the Catppuccin palette — exactly like `repoColor` hashes a
@@ -1083,7 +1131,10 @@ export function kanbanColumnColor(
  */
 export const DEFAULT_SETTINGS: Settings = {
   terminalFontSize: 12.5,
-  terminalLineHeight: 1.2,
+  // Default terminal line height (#367): 1.0, dropped from the old 1.2. New / never-saved
+  // installs get 1.0 straight from this default; an install that once saved 1.2 explicitly
+  // is one-time migrated down by `migrateTerminalLineHeight` (guarded by the flag below).
+  terminalLineHeight: 1.0,
   terminalCursorBlink: true,
   theme: "dark",
   accentColor: "",
@@ -1101,6 +1152,9 @@ export const DEFAULT_SETTINGS: Settings = {
   linuxTerminalRenderer: "auto",
   defaultView: "overview",
   confirmDestructive: true,
+  // False by default (#368): focus-follows-mouse is opt-in — today's click-to-focus stays
+  // the norm. An older sessions.json lacking the key back-fills to false via mergeSettings.
+  autoFocusOnHover: false,
   canvasCloseBehavior: "ask",
   diffDisplayMode: "focused",
   diffLineMode: "unified",
@@ -1131,6 +1185,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // False so the first-launch agent picker runs once for new AND existing installs
   // (an older sessions.json lacks the key → merges to false → detected next launch).
   onboarded: false,
+  // False by default (#367): opt-in one-time flag. An older blob lacks the key →
+  // mergeSettings back-fills false → the terminal line-height migration is eligible to run
+  // once (bump an explicit legacy 1.2 → 1.0), then set true so it never re-triggers. Same
+  // rationale as `onboarded: false`.
+  terminalLineHeightMigrated: false,
 };
 
 /** Merge a persisted (possibly partial / null) settings blob over the defaults so
@@ -1156,6 +1215,40 @@ export function displayZoom(percent: number): string | null {
   );
   if (clamped === 100) return null;
   return String(clamped / 100);
+}
+
+/** The legacy default terminal line height (#367), migrated down to 1.0. */
+const LEGACY_LINE_HEIGHT = 1.2;
+
+/**
+ * One-time migration (#367) of the terminal line height. New / never-saved installs get
+ * 1.0 from `DEFAULT_SETTINGS`, but an install that once saved settings has an explicit
+ * `terminalLineHeight: 1.2` persisted (a stored value wins over the default in
+ * `mergeSettings`), so it needs an active bump to 1.0.
+ *
+ * Gated by the `terminalLineHeightMigrated` flag (mirrors `onboarded`): once set, the
+ * migration never runs again — so a user who *re-picks* 1.2 after the migration keeps it.
+ * Only a value that is **exactly** the old default 1.2 is bumped; any other deliberately
+ * chosen value (1.0/1.1/1.3/1.5/1.8/…) is left untouched. The `1e-6` epsilon guards the
+ * float compare defensively (the slider yields an exact 1.2, but nearby steps must not
+ * match). `changed` is true only when the value was actually bumped — it drives whether
+ * the migrated blob is persisted once — while the flag is stamped true regardless, so an
+ * install whose value wasn't legacy still records that the one-time check has run.
+ */
+export function migrateTerminalLineHeight(s: Settings): {
+  settings: Settings;
+  changed: boolean;
+} {
+  if (s.terminalLineHeightMigrated) return { settings: s, changed: false };
+  const wasLegacy = Math.abs(s.terminalLineHeight - LEGACY_LINE_HEIGHT) < 1e-6;
+  return {
+    settings: {
+      ...s,
+      terminalLineHeight: wasLegacy ? 1.0 : s.terminalLineHeight,
+      terminalLineHeightMigrated: true,
+    },
+    changed: wasLegacy,
+  };
 }
 
 /** Companion accent tokens derived from a chosen accent hex (#107): a lightened
@@ -3417,6 +3510,44 @@ export const useStore = create<AppState>()((set, get) => ({
       // avoids a detached canvas racing the same destructive teardown). Fire-and-
       // forget so a slow disk check never delays the rest of boot.
       void get().pruneMissingFolders();
+      // #369: give each NEW folder a distinct default color — prefer an unused palette
+      // color before repeating one. Folders present at boot are grandfathered (they
+      // keep whatever color they already show). Main window only; a detached canvas
+      // picks up the assignment on its next boot. Started once.
+      if (!folderColorSubStarted) {
+        folderColorSubStarted = true;
+        let knownRepos = new Set(
+          sidebarRepos(get().recents, get().sessions, get().recurrings),
+        );
+        useStore.subscribe((state, prev) => {
+          // Cheap reference-equality gate: only the three slices that feed the folder
+          // set can add a folder, so a color write (or any unrelated `set`) short-
+          // circuits here — including the synchronous re-entry from `setRepoColor`.
+          if (
+            state.recents === prev.recents &&
+            state.sessions === prev.sessions &&
+            state.recurrings === prev.recurrings
+          )
+            return;
+          const current = sidebarRepos(
+            state.recents,
+            state.sessions,
+            state.recurrings,
+          );
+          const additions = current.filter((r) => !knownRepos.has(r));
+          knownRepos = new Set(current);
+          if (additions.length === 0) return;
+          // Accumulate the picked colors so 2+ folders added in one batch each avoid
+          // the others' just-chosen colors, not just the pre-batch ones.
+          let colors = state.repoColors;
+          for (const repo of additions) {
+            if (colors[repo]) continue; // a user override / prior assignment always wins
+            const color = pickRepoColor(repo, colors, current);
+            colors = { ...colors, [repo]: color };
+            void get().setRepoColor(repo, color);
+          }
+        });
+      }
     }
     // FileTree disk-change poll (#264): runs in *any* window that can show a tree (the
     // main shell or a detached canvas), each refreshing only its own mounted trees, so
@@ -3446,7 +3577,12 @@ export const useStore = create<AppState>()((set, get) => ({
     // Settings (#100): merge the persisted blob over the defaults and apply its
     // side-effects (theme / accent / reduce-motion / live terminal options) before the
     // first paint.
-    const settings = mergeSettings(boot.settings);
+    const merged = mergeSettings(boot.settings);
+    // One-time #367 line-height migration: bump an explicit legacy 1.2 down to 1.0 (and
+    // stamp the flag) before the settings are applied / land in the store, so terminals
+    // render 1.0 from the first paint. `lineHeightMigrated` gates the one-off persist below.
+    const { settings, changed: lineHeightMigrated } =
+      migrateTerminalLineHeight(merged);
     applySettingsEffects(settings);
 
     // Persisted sessions are resumed on boot (claude --resume) — show them as
@@ -3565,6 +3701,12 @@ export const useStore = create<AppState>()((set, get) => ({
         void ipc
           .setCanvases({ canvases, activeId: activeCanvasId })
           .catch(() => {});
+      }
+      // #367: persist the one-time line-height migration once (an explicit legacy 1.2 was
+      // bumped to 1.0) so the migrated value + the set flag become the source of truth and
+      // the bump never re-runs. Only fires when a value actually changed.
+      if (lineHeightMigrated) {
+        void ipc.setSettings(settings).catch(() => {});
       }
       // #110: the legacy per-repo `open_files` map (#45) is **no longer** folded
       // into `overviewPanels`. The #59 fold ran on every boot, and because nothing
@@ -5535,16 +5677,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // session repos, deduped by `repoOrder`. Worktree *child* dirs live under
     // app-data and aren't shown top-level, so they're not checked here.
     const s = get();
-    const worktreeParents = [
-      ...new Set(
-        s.sessions.map((x) => x.worktreeParent).filter((p): p is string => !!p),
-      ),
-    ];
-    const recurringRepos = s.recurrings.map((r) => r.cwd);
-    const repos = repoOrder(
-      [...s.recents, ...worktreeParents, ...recurringRepos],
-      s.sessions.filter((x) => !x.worktreeParent),
-    );
+    const repos = sidebarRepos(s.recents, s.sessions, s.recurrings);
     if (repos.length === 0) return;
     // Check existence in parallel; fail *open* — an IPC error must never forget.
     const checks = await Promise.all(
