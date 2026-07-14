@@ -10,6 +10,7 @@ import {
 } from "@dnd-kit/core";
 
 import { useOsFileDrop } from "../../osFileDrop";
+import { prefetchDeferredChunks } from "../../prefetch";
 import { useStore } from "../../store";
 import { useKeyboardNav } from "../../useKeyboardNav";
 import { DETACHED_CANVAS_ID, ownedHere } from "../../windowContext";
@@ -65,6 +66,9 @@ function CanvasWindow() {
   useEffect(() => {
     void init();
   }, [init]);
+
+  // Warm the deferred panel chunks once idle (#356) — no modals in a detached window.
+  useEffect(() => prefetchDeferredChunks(false), []);
 
   // Spatial panel nav (#76) works here; new-session / view-toggle / canvas-jump
   // are inert in a canvas-only window (guarded in the hook by window identity).

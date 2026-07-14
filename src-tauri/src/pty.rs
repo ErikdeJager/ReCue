@@ -891,9 +891,12 @@ impl SessionManager {
             cmd.arg(arg);
         }
         cmd.cwd(cwd);
-        // Inherit the parent environment so the child can resolve PATH etc.,
-        // then make sure it has a sensible TERM for the TUI.
-        for (key, value) in std::env::vars_os() {
+        // Inherit the parent environment so the child can resolve PATH etc. — with the
+        // AppImage-injected vars scrubbed out on Linux (#350; a byte-for-byte no-op on
+        // macOS/Windows and outside an AppImage) — then make sure it has a sensible TERM
+        // for the TUI. `CommandBuilder` starts from an empty env set, so a var the scrub
+        // omits is genuinely absent from the child.
+        for (key, value) in crate::child_env::child_env_vars() {
             cmd.env(key, value);
         }
         cmd.env("TERM", "xterm-256color");
@@ -2042,6 +2045,73 @@ mod tests {
         ));
     }
 
+    /// The standing regression guard for the bounded-parallel boot resume (#355): four
+    /// threads spawn through **one** `SessionManager` at once. Every session must register
+    /// under its own id and stream its own `Output` + a final `Exited` — no lost, doubled,
+    /// or cross-wired events, no wedged reader thread. (Concurrent spawns are safe because
+    /// `spawn_with_id` holds the map lock only for the O(1) insert (#260) and `portable-pty`
+    /// cloexecs both pty fds and closes every fd ≥ 3 in the child's `pre_exec`, so one
+    /// thread's fresh pty can never leak into another thread's `fork`.)
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_spawns_register_every_session() {
+        const N: usize = 4;
+        let (tx, rx) = mpsc::channel();
+        let mgr = Arc::new(SessionManager::new(tx));
+
+        let spawns: Vec<_> = (0..N)
+            .map(|_| {
+                let mgr = Arc::clone(&mgr);
+                std::thread::spawn(move || {
+                    mgr.spawn_program("sh", &["-c", "printf 'hi-from-pty'"], &tmp(), None)
+                        .expect("concurrent spawn sh")
+                        .id
+                })
+            })
+            .collect();
+        let ids: Vec<String> = spawns
+            .into_iter()
+            .map(|handle| handle.join().expect("spawn thread"))
+            .collect();
+
+        let unique: HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), N, "each spawn must get its own id");
+        assert_eq!(mgr.session_count(), N, "every session must be registered");
+
+        // Drain until every session has exited (or we time out), collecting per-id output.
+        let mut output: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut exited: HashSet<String> = HashSet::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while exited.len() < N && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(SessionEvent::Output { id, bytes, .. }) => {
+                    output.entry(id).or_default().extend(bytes);
+                }
+                Ok(SessionEvent::Exited { id, code }) => {
+                    assert_eq!(code, Some(0), "clean exit for {id}");
+                    assert!(exited.insert(id), "a session exited twice");
+                }
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        assert_eq!(
+            exited.len(),
+            N,
+            "timed out waiting for every session to exit"
+        );
+        for id in &ids {
+            assert!(exited.contains(id), "no Exited event for {id}");
+            let bytes = output.get(id).cloned().unwrap_or_default();
+            assert!(
+                String::from_utf8_lossy(&bytes).contains("hi-from-pty"),
+                "no output for {id}"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn busy_state_tracks_output_then_goes_idle() {
@@ -2414,5 +2484,90 @@ mod tests {
     #[test]
     fn coalesce_empty_is_empty() {
         assert_eq!(coalesce_output_events(vec![]), vec![]);
+    }
+
+    // --- Output hot-path throughput benchmark (#358) ---
+
+    /// Throughput of the PTY output hot path — the only CPU-bound work between a `read()`
+    /// on the PTY and the `session://output` emit: [`Scrollback::push`] (VecDeque churn
+    /// under the 256 KB cap), [`coalesce_output_events`] (#346's contiguous-run merge), and
+    /// `commands::encode_output` (#261's base64). Not a correctness test and not a
+    /// regression gate — it exists so the `[profile.release]` `opt-level` choice (`"s"` vs
+    /// `3`, #358) stays reproducible instead of being an opinion. `#[ignore]`d because it is
+    /// a measurement, not an assertion (and it churns 64 MB three times).
+    ///
+    /// Run it against the profile under test:
+    ///
+    /// ```text
+    /// cargo test --manifest-path src-tauri/Cargo.toml --release \
+    ///   -- --ignored --nocapture bench_output_hot_path
+    /// ```
+    ///
+    /// (`cargo test --release` builds the test with the `bench` profile, which inherits
+    /// `[profile.release]`; run it ~5× and take the median per stage.) The decision rule
+    /// #358 applied: keep the size-oriented `opt-level = "s"` unless it is >15% slower on
+    /// the aggregate and some stage drops below ~200 MB/s — a busy `claude` TUI repaint
+    /// storm produces single-digit MB/s, so anything at ≥200 MB/s is nowhere near a
+    /// bottleneck.
+    #[test]
+    #[ignore]
+    fn bench_output_hot_path() {
+        /// Synthetic PTY output pushed through each stage.
+        const TOTAL: usize = 64 * 1024 * 1024;
+        /// 8 KB reads, exactly like `reader_loop`.
+        const CHUNKS: usize = TOTAL / READ_CHUNK;
+        /// Events per coalesce batch — a plausible forwarder drain (32 × 8 KB = 256 KB, so
+        /// the merged run also hits `COALESCE_MAX_BYTES` and the flush path is exercised).
+        const BATCH: usize = 32;
+
+        // A claude TUI repaint is mostly ESC sequences + ASCII; vary the bytes so nothing
+        // folds into a constant.
+        let chunk: Vec<u8> = (0..READ_CHUNK).map(|i| (i % 251) as u8).collect();
+
+        // 1) Scrollback::push — the reader thread's per-chunk write under the 256 KB cap.
+        let mut sb = Scrollback::new(SCROLLBACK_CAP);
+        let t = std::time::Instant::now();
+        for _ in 0..CHUNKS {
+            sb.push(&chunk);
+        }
+        let push = t.elapsed();
+
+        // 2) coalesce_output_events — contiguous same-session runs, so the merge is taken.
+        let batches = CHUNKS / BATCH;
+        let t = std::time::Instant::now();
+        let mut merged = 0usize;
+        for b in 0..batches {
+            let events: Vec<SessionEvent> = (0..BATCH)
+                .map(|i| {
+                    let n = (b * BATCH + i + 1) as u64;
+                    SessionEvent::Output {
+                        id: "bench".to_string(),
+                        bytes: chunk.clone(),
+                        offset: n * READ_CHUNK as u64,
+                    }
+                })
+                .collect();
+            merged += coalesce_output_events(events).len();
+        }
+        let coalesce = t.elapsed();
+
+        // 3) encode_output — the base64 the forwarder puts on the wire.
+        let t = std::time::Instant::now();
+        let mut encoded = 0usize;
+        for _ in 0..CHUNKS {
+            encoded += crate::commands::encode_output(&chunk).len();
+        }
+        let encode = t.elapsed();
+
+        let mb = TOTAL as f64 / (1024.0 * 1024.0);
+        let rate = |d: std::time::Duration| mb / d.as_secs_f64();
+        println!(
+            "bench_output_hot_path: {mb:.0} MB | push {push:?} ({:.0} MB/s) | \
+             coalesce {coalesce:?} ({:.0} MB/s, {merged} events out) | \
+             encode {encode:?} ({:.0} MB/s, {encoded} b64 bytes)",
+            rate(push),
+            rate(coalesce),
+            rate(encode),
+        );
     }
 }

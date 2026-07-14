@@ -55,6 +55,7 @@ import {
   sessionLabel,
   splitPath,
 } from "./paths";
+import { storeTheme } from "./theme";
 import { formatInterval, parseResetsAt } from "./time";
 import * as updater from "./updater";
 import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
@@ -1079,6 +1080,11 @@ function applySettingsEffects(s: Settings): void {
   // default accent.
   if (s.theme === "light") root.setAttribute("data-theme", "light");
   else root.removeAttribute("data-theme");
+  // Pre-paint theme mirror (#348): index.html's inline boot script reads this
+  // synchronously on the next launch (and in a detached canvas window) so the very
+  // first frame is already the right theme instead of dark-then-light. Best-effort —
+  // storeTheme never throws.
+  storeTheme(s.theme);
   if (s.accentColor) {
     const { hover, dim, fg } = accentCompanions(s.accentColor);
     root.style.setProperty("--accent", s.accentColor);
@@ -3711,6 +3717,12 @@ export const useStore = create<AppState>()((set, get) => ({
     const prev = get().settings;
     set({ settings });
     applySettingsEffects(settings);
+    // Theme switched at runtime (#348/#333): push the new native window background to
+    // every open window (main + detached canvases), so a resize/repaint gap can never
+    // expose the previous theme's color behind the webview. Best-effort.
+    if (settings.theme !== prev.theme) {
+      void ipc.setThemeBackground(settings.theme).catch(() => {});
+    }
     // React to the session-usage toggle at runtime (#326): starting/stopping the poll
     // is the load-bearing token-access gate, so it must fire immediately on Save.
     if (settings.showSessionUsage !== prev.showSessionUsage) {
