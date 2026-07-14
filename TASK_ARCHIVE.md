@@ -4999,3 +4999,51 @@ and a new random-tip system. Zero functionality lost.
 - Pure CSS/TSX + one JSON asset; identical on macOS/Windows/Linux. Rollback = revert the PR.
 
 **Dependencies:** Tasks 372, 373, 377.
+
+### 380. [x] UI v2 (6/12): Canvas reskin — transparent tab strip over the shared wave, 30px panel chrome, hairline split dividers, wave empty state, detached-window chrome
+
+Card 6 of the UI v2 reskin epic (spec §8/§9 + demo; **no version bump / patch notes**). The Canvas view moves
+onto the ONE shared wave (377): the tab strip becomes transparent chrome on top of it, panels get the v2 chrome
+(Base bg, hairline border, square, FIXED 30px headers), splits open into transparent `--stage-gap` gaps with
+hairline dividers (0 in dense), the empty canvas becomes the centered on-the-wave state, and detached canvas
+windows get the same chrome. Zero functionality lost; markup/CSS only (no new unit tests — the suite stays
+green).
+
+**What shipped** (branch `task-380-canvas-reskin`, PR
+[#135](https://github.com/ErikdeJager/ReCue/pull/135), merged 2026-07-15 into `ui-rework`):
+
+- **Tab strip** — transparent (no bg/border/fixed height), 6px/10px padding directly on the wave; 24px square tab
+  blocks (active = Base fill + hairline + 600/11px primary; inactive = ghost muted), each with label · pop-out ·
+  ✕ (hit areas kept at today's ~18–20px, hover color-only with the ✕ turning red); aux 22px ghost buttons — `+`
+  new tab (⌘T hint), the Templates ▾ trigger (dropdown surface left byte-identical — 375 owns the menu
+  primitive), and **Distribute panels evenly** (#186) restyled + moved inline after Templates (removing #205's
+  far-right push), disabled-when-<2-panels kept.
+- **Panels** — `.panel` background crust→Base with hairline border, square; FIXED 30px headers (demo-exact:
+  padding 0 10px, gap 8, 12px/600 ellipsizing title, 10px meta, 13px icons, 22px actions with Surface0 hover).
+  **Agent panel headers regain a status dot** (the 372 BusyIndicator — deliberately reversing #95's "agent panels
+  drop the dot" for Canvas headers only); non-agent panels keep the repo dot, now an 8px rounded square. The #144
+  whole-header grip, #90 FileSwitcher, #188 rename, #297 AutoContinueToggle, #76 active ring, and edge drop zones
+  all untouched.
+- **Split dividers** — the react-resizable-panels `Separator` becomes the transparent `--stage-gap` gap (wave
+  peeks through) with a centered 1px hairline drawn via `::before` (accent on hover/active), oriented off the
+  library's `aria-orientation`; an invisible ±4px `::after` hit-area extension keeps resizing workable in dense
+  (gap 0). Double-click equalize (#186) kept.
+- **Empty canvas** — the always-visible dashed box is replaced by a wave-centered stack (panels icon, "No panels
+  yet", "Open a view from a session, or start with an empty tab", ghost **New tab ⌘T** → `addCanvas()`); the
+  accent dashed border + tint now appear only while a drag hovers the center droppable (droppability unchanged,
+  `canvas-center` id kept; text-shadow reuses 377's constant).
+- **Detached windows + notes** — the detached header becomes the same transparent 6px/10px strip with the tab
+  name styled as an active tab block; DetachedNote / MaximizedNote / DetachedCanvasNote swap their bespoke
+  buttons for the 372 `btn btn-neutral` atoms (no text-shadow — they sit on opaque panels).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 380)
+
+- Demo border alphas (.10/.12) mapped to `--border-hairline` — token discipline, no new literals.
+- The empty state's "New tab ⌘T" opens a fresh tab verbatim per the spec copy even though the state means "active
+  tab is empty". Empty-state subtitle uses `--text-muted` (not the demo's Surface1) for light-theme legibility.
+- Panel INNER content backgrounds are cards 7/8's turf — the transitional look is accepted (xterm paints its own
+  bg, terminals unaffected).
+- Templates dropdown JSX/rules untouched to avoid colliding with 375. No CLAUDE.md edit (card 12 owns the sweep).
+- Pure CSS/markup; identical on macOS/Windows/Linux. Rollback = revert the PR.
+
+**Dependencies:** Tasks 372, 377.
