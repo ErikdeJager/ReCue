@@ -2106,13 +2106,18 @@ pub fn clear_recents(store: State<'_, Store>) -> Result<(), SessionError> {
 /// Each respects the user's default file manager. The single OS-open helper behind
 /// `open_data_folder` / `reveal_path` (#100/#109/#129/#140/#345). (`open_url` opens a
 /// *browser* and has its own opener — see below.)
+///
+/// Built through `child_env::command` (#350): under a Linux AppImage the inherited
+/// `LD_LIBRARY_PATH`/`XDG_DATA_DIRS` are documented to break `xdg-open`, so the child
+/// gets the user's real environment. A no-op on macOS/Windows (deliberately *not*
+/// `git::hidden_command`, so those `Command`s stay exactly as they are today).
 fn os_open(target: impl AsRef<std::ffi::OsStr>) -> Result<(), SessionError> {
     #[cfg(target_os = "macos")]
-    let mut cmd = std::process::Command::new("open");
+    let mut cmd = crate::child_env::command("open");
     #[cfg(target_os = "windows")]
-    let mut cmd = std::process::Command::new("explorer.exe");
+    let mut cmd = crate::child_env::command("explorer.exe");
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let mut cmd = std::process::Command::new("xdg-open");
+    let mut cmd = crate::child_env::command("xdg-open");
     cmd.arg(target.as_ref())
         .spawn()
         .map_err(|e| SessionError::Io(e.to_string()))?;
@@ -2141,6 +2146,9 @@ pub fn open_data_folder(store: State<'_, Store>) -> Result<(), SessionError> {
 /// Explorer window instead of the browser (#217). The http/https-only guard keeps it
 /// shell-injection-safe: the URL is always a separate, validated argument, never
 /// interpolated into a shell string.
+///
+/// Built through `child_env::command` (#350) so the Linux `xdg-open` runs with the
+/// user's real environment rather than the AppImage's (which is documented to break it).
 #[tauri::command]
 pub fn open_url(url: String) -> Result<(), SessionError> {
     if !is_http_url(&url) {
@@ -2150,7 +2158,7 @@ pub fn open_url(url: String) -> Result<(), SessionError> {
     }
     #[cfg(target_os = "macos")]
     let mut command = {
-        let mut c = std::process::Command::new("open");
+        let mut c = crate::child_env::command("open");
         c.arg(&url);
         c
     };
@@ -2158,13 +2166,13 @@ pub fn open_url(url: String) -> Result<(), SessionError> {
     let mut command = {
         // `cmd /C start "" <url>` — `start`'s first quoted argument is the window
         // title, so the empty "" stops a quoted URL from being taken as the title.
-        let mut c = std::process::Command::new("cmd");
+        let mut c = crate::child_env::command("cmd");
         c.args(["/C", "start", "", url.as_str()]);
         c
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut command = {
-        let mut c = std::process::Command::new("xdg-open");
+        let mut c = crate::child_env::command("xdg-open");
         c.arg(&url);
         c
     };
@@ -2253,12 +2261,14 @@ pub fn reveal_path(path: String) -> Result<(), SessionError> {
 /// `reveal_path`: macOS `open -R <path>`, Windows `explorer.exe /select,<path>`, Linux
 /// a best-effort FileManager1 select with a folder-open fallback (#345,
 /// `reveal_file_linux`). Same no-shell safety as `reveal_path` / `open_url` — spawned
-/// without a shell, and the path is the app's own tracked panel data.
+/// without a shell, and the path is the app's own tracked panel data. Every arm builds
+/// its `Command` through `child_env::command` (#350), so the Linux reveal runs with the
+/// user's real environment (a no-op on macOS/Windows).
 #[tauri::command]
 pub fn reveal_file_in_finder(path: String) -> Result<(), SessionError> {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
+        crate::child_env::command("open")
             .arg("-R")
             .arg(&path)
             .spawn()
@@ -2280,7 +2290,7 @@ pub fn reveal_file_in_finder(path: String) -> Result<(), SessionError> {
         // so a file under e.g. `C:\Users\First Last\…` wouldn't highlight (#194). The
         // helper instead quotes the path *inside* the token (`/select,"<path>"`).
         use std::os::windows::process::CommandExt;
-        std::process::Command::new("explorer.exe")
+        crate::child_env::command("explorer.exe")
             .raw_arg(explorer_select_arg(&path))
             .spawn()
             .map_err(|e| SessionError::Io(e.to_string()))?;
@@ -2294,7 +2304,9 @@ pub fn reveal_file_in_finder(path: String) -> Result<(), SessionError> {
 /// Thunar / Caja implement it and highlight the file, and the session bus auto-activates
 /// the DE's file manager). If `dbus-send` is missing or the call fails (no FileManager1
 /// provider), fall back to `xdg-open` on the file's **parent directory** (opens the
-/// folder, no highlight). Spawned without a shell, like `reveal_path` / `open_url`.
+/// folder, no highlight). Spawned without a shell, like `reveal_path` / `open_url`, and
+/// through `child_env::command` so neither `dbus-send` nor `xdg-open` inherits the
+/// AppImage's environment (#350 — the documented `xdg-open` breakage).
 /// Needs real-box verification per DE — see `TRAJECTORY_TO_LINUX.md`. Gated
 /// `any(<linux/bsd>, test)` (with `dead_code` allowed under `test`) so the macOS host
 /// type-checks it even though the real build arm isn't compiled there.
@@ -2307,7 +2319,7 @@ fn reveal_file_linux(path: &str) -> Result<(), SessionError> {
     let uris_arg = format!("array:string:file://{path}");
     // Wait on dbus-send (it's fast: a fire-and-forget method call) so a missing provider
     // falls through to the folder-open fallback rather than silently doing nothing.
-    let shown = std::process::Command::new("dbus-send")
+    let shown = crate::child_env::command("dbus-send")
         .args([
             "--session",
             "--dest=org.freedesktop.FileManager1",
@@ -2327,7 +2339,7 @@ fn reveal_file_linux(path: &str) -> Result<(), SessionError> {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    std::process::Command::new("xdg-open")
+    crate::child_env::command("xdg-open")
         .arg(parent)
         .spawn()
         .map_err(|e| SessionError::Io(e.to_string()))?;
