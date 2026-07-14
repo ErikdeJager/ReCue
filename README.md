@@ -103,7 +103,10 @@ Artifacts land in `src-tauri/target/release/bundle/`:
 - **Linux** — an **AppImage** (`appimage/ReCue_<version>_<arch>.AppImage`), the single
   universal binary that runs on Arch, Ubuntu, Mint, and other distros. Run
   `npm run tauri build -- --bundles appimage` to match CI's AppImage-only output (a plain
-  `tauri build` also emits `.deb`/`.rpm`, which ReCue does not officially ship).
+  `tauri build` also emits `.deb`/`.rpm`, which ReCue does not officially ship). The
+  AppImage themes its **native file dialogs** from ReCue's own Dark/Light setting (applied
+  at launch, so a theme change reaches the dialogs on the next start); override it with
+  `APPIMAGE_GTK_THEME=Adwaita:dark` (or `RECUE_GTK_THEME=<gtk theme>`).
 
 Each `tauri build` produces the bundle for the OS it runs on; build on a macOS host for
 the macOS artifacts, a Windows host for the Windows installers, and a Linux host (or the
