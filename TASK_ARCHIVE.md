@@ -3641,3 +3641,58 @@ harmful. It also closes the "deliberately untouched" `[profile.release]` item th
   tests). `cargo test` compiles the test target but fails at **link** on those missing system libs — a
   pre-existing environment gap, not a defect of this change.
 - Untouched: no `[profile.dev|test|bench]`, no `.cargo/config.toml`, no `RUSTFLAGS`, no new dependency.
+
+### 364. [x] Recover from an unrecovered xterm WebGL context loss (dispose the addon → DOM renderer, latched)
+
+**The card's premise was partly wrong, and the task was rescoped honestly rather than built to the letter.** It
+said the WebGL addon was attached "without a context-loss handler" — but `terminalPool.ts` has had a minimal
+`addon.onContextLoss(() => addon.dispose())` since #18. What was *actually* missing is what happens around that
+dispose: the pool kept a **dangling reference** to the disposed addon, so the async #221 font-atlas rebuild
+could still call `clearTextureAtlas()` on it — and, worse, **burn the one-shot module-global `fontAtlasRebuilt`
+flag that every other live terminal still needs**. There was also no anti-retry latch (a sick GPU could be
+hammered with a context-loss storm as each new terminal attached a fresh addon), no warning, and no observable
+state. WebGL contexts drop on OOM/suspend, likelier on WebKitGTK.
+
+**What shipped** (branch `xterm-webgl-context-loss`, PR
+[#109](https://github.com/ErikdeJager/ReCue/pull/109), 2026-07-14) — frontend only:
+
+- **`src/components/Terminal/webglFallback.ts`** (new, pure and dependency-free) — the per-document WebGL
+  fallback latch plus a per-session renderer record: `allowsWebgl` / `noteRenderer` / `noteContextLoss` /
+  `rendererOf` / `hasLostContext` / `forget` / `reset`, exposed through a `webglFallback` singleton so the main
+  window and each detached canvas window (#84) latch **independently**.
+- **`terminalPool.ts`** — on an **unrecovered** context loss, `createHost` now clears its addon reference,
+  latches + warns once, disposes the addon (xterm swaps back to its DOM renderer and re-lays-out the **same**
+  buffer), and forces a belt-and-braces `term.refresh(0, term.rows - 1)`. The window is then latched to the DOM
+  renderer for the rest of the run, so a newly created terminal (spawn / Restart / template) attaches no
+  `WebglAddon` at all. `webglFallback.allowsWebgl()` is checked **before** `webglAllowed()`, so a fallen-back
+  window never even constructs the #346 probe canvas.
+- `host.dispose` forgets the session's renderer record (keeping the map bounded) but **deliberately does not
+  clear the latch** — disposing the terminal that lost its context must not re-arm WebGL. The latch likewise
+  survives `resetTerminal` (session Restart) and `forget()`.
+
+**Key decisions**
+
+- **The latch is window-wide (a module singleton per document), not per-session.** A real GL loss is
+  driver/process-level, so a terminal spawned after the loss would immediately lose its context too. Rollback to
+  a per-session key is noted in the plan.
+- **No re-attach, and no `webglcontextrestored` handling.** Verified against `@xterm/addon-webgl@0.19.0`: the
+  addon itself waits ~3 s for a restore and only fires `onContextLoss` when the context is **unrecoverable** —
+  so a retry path would be redundant at best and a context storm at worst.
+- **A new module rather than extending `webglRenderer.ts`** — that keeps `webglRenderer.ts` a pure classifier
+  and kept this diff conflict-free with the concurrent Task #357, which extends that same file.
+- **No user-facing surface** (no toast, badge, or setting) — a single `console.warn` in #346's style. The
+  user-visible outcome is simply that the terminal keeps working. `webglFallback.allowsWebgl()` / `reset()` are
+  documented as the seam for Task #357's Settings renderer override (an explicit "force WebGL" must clear the
+  latch).
+- **The #18 pool invariant holds**: no host / xterm / container / PTY dispose, no scrollback replay, no remount —
+  the renderer swaps underneath the same live buffer.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Unit tests cover the pure module at 100% lines/branches/functions. The one path CI cannot exercise — the
+  actual `WEBGL_lose_context` smoke test — is recorded as a real-box verification step in
+  `TRAJECTORY_TO_LINUX.md`, with one clause added to `CLAUDE.md`.
+- Unchanged elsewhere: detached windows (#105) and Linux software-WebGL boxes (#346) still never construct the
+  addon at all; macOS/Windows main-window terminals still do.
