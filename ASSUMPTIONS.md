@@ -3340,3 +3340,21 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Minimal transparency CSS only (no reskin): .wall/.filterEmpty/.canvas/.area go transparent, Overview .card gains an explicit opaque bg (panels must be opaque), empty-state copy gets a locally chosen text-shadow (0 1px 6px rgba(17,17,27,.65) — the packed demo's exact value isn't extractable); the tab strip + detached header stay opaque (card 6 owns the transparent strip).
 - Tooling ignores added for the vendored file (eslint ignores + .prettierignore, incl. the untracked docs/ui-v2-handoff assets) since ESLint 9 would flag its bare `catch (e) {}` and Prettier would reformat it.
 - Task 372 is already landed on this branch (archived); it is still listed as a dependency per the card.
+
+## Task 378
+
+- Demo wins on radius: centered modals get the demo's 12px (not --radius-window 10px), kept as a documented literal in the new modal.css (per PLAN-375's "card 10 may tokenize 12px" note) — tokens.css (Task 372's) is not edited.
+- The demo's modal border rgba(205,214,244,.12) maps to var(--border-strong) (.15, the card's "strong hairline"); no new token.
+- ⌘K CreatePanelModal and ⌘F GlobalSearch keep their top-anchored launcher positions (12vh/10vh) — "centered on scrim" in the card names the fleet's §10 conventions, the demo shows no launcher to override, and Spotlight-style palettes are top-anchored by convention; only the chrome (scrim fade, Base bg, 12px, --shadow-modal, 160ms pop) changes.
+- Selection fills move accent-dim → Surface0 (--bg-elevated) in ⌘K/⌘F/TemplateUse/FilePicker active rows (demo rule: accent never encodes selection — mirrors PLAN-375's same call for the New-session popover).
+- Onboarding adopts the demo's chips (Recommended = accent tint chip, Untested = neutral hairline chip — replacing today's green/yellow bordered chips) and the demo's intro copy; the Claude-first order comes from the store's existing choice order (no logic change).
+- CanvasCloseModal goes demo-exact (440px, 18px padding, 13.5px/700 title, borderless --fs-micro key hints replacing bordered kbd chips); Esc/K/⏎ handlers, Keep autofocus, and the Tab trap unchanged.
+- ClaudeMissing stays a top banner (converting it to a centered dialog would be a rearchitecture; the demo doesn't show it) — only its Dismiss button/typography align to the v2 idiom.
+- AutoContinuePrompt adopts the same 28px --radius-chrome pill geometry PLAN-374 gives the UpdateIndicator, so the sidebar footer reads coherently whichever card lands first; glow/collapsed/reduced-motion behavior kept.
+- Phantom cloning row: only the progress track moves to the crust inset idiom (var(--content-bg)); its row metrics belong to Task 374's sidebar pass — deliberately a one-declaration touch to minimize merge overlap (Update.module.css is similarly shared with 374: I touch only the modal rules, never .indicator*).
+- TemplateEditor stays a full-screen surface (not a scrim-centered dialog); only its toolbar buttons, name/config inputs, and hovers adopt the v2 idiom.
+- FileSwitcher's anchored popover gets the §10 anchored-surface look (radius-window 10px + --shadow-menu + 130ms pop) via its own module rules rather than composing 375's .menu-pop (whose min-width/4px padding would disturb the embedded FilePicker).
+- The UpdateModal install overlay keeps its no-dismiss alertdialog semantics; its progress track restyles to a crust rounded track.
+- CreatePanelModal type icons and GlobalSearch row icons stay accent (they encode panel type like the sidebar rows; §10's muted-icon rule is applied to menu lists, not launcher type icons).
+- Existing per-modal z-index layering (100/200/210/220) is positioning, kept site-local and unchanged (the demo's uniform z-70 is a single-page artifact).
+- PatchNotes gets only the v2 micro-eyebrow category restyle; the surrounding Settings → Updates pane is Task 373's.
