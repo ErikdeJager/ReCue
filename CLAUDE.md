@@ -105,6 +105,28 @@ even though it works in `tauri dev`.
   Tauri **dialog** (folder picker) plugin
 - Dark (default) and Light themes (#333) — a Catppuccin **Latte** token override
   selected in Settings → Appearance (the terminal stays dark in both)
+- **Code-split bundle (#356).** The frontend is **not** one chunk: everything not needed to
+  paint the sidebar + terminals is behind a dynamic `import()`. Lazy boundaries — the two
+  **window routes** (`App.tsx` is a `Suspense` router over `src/MainApp.tsx` and
+  `CanvasWindow`, so a detached window #84 never downloads the sidebar/Overview/modals); the
+  four **content panels** in `ItemContent.tsx` (`FileViewer` / `KanbanPanel` /
+  `DiffInspector` / `FileTree` — which is what carries the whole **react-markdown + Prism**
+  stack out of the first-paint graph), each in its **own** per-branch `Suspense` (never one
+  boundary around `ItemContent` — a suspending boundary `display:none`s its children, which
+  would un-measure a pooled xterm, the #18 class of bug); the ten modals in
+  `components/ModalHost.tsx` (Suspense fallback **`null`** — an empty modal shell would be a
+  visible regression); the **`@xterm/addon-webgl`** addon in `terminalPool.createHost()`
+  (xterm core / fit / web-links stay **static** — terminals *are* the first paint; the addon
+  attaches a few ms later, and on a software rasterizer #346 its chunk is never fetched); and
+  **mermaid** (#254). `src/prefetch.ts` warms the deferred chunks on idle
+  (`requestIdleCallback`, feature-detected with a `setTimeout` fallback for older WKWebView).
+  **Rule: only a dynamic `import()` removes work from the first-paint path** — a statically
+  reachable module is parsed before first render whatever chunk it lands in, so
+  `manualChunks` is deliberately **not** used; never static-import `react-markdown` /
+  `prismjs` / `@xterm/addon-webgl` into the entry graph. Guarded by
+  `node scripts/bundle-report.mjs --check` (per-route first-paint closure from Vite's
+  `build.manifest`, with a budget): main window **854 kB raw / 246 kB gzip**, down from a
+  single 1,351 kB / 391 kB chunk; the detached canvas window is lighter still (770 kB).
 
 ## Architecture (data flow)
 
@@ -583,8 +605,10 @@ even though it works in `tauri dev`.
 ├── index.html              # Vite entry
 ├── src/                    # Frontend (React + TS)
 │   ├── main.tsx            # React bootstrap (loads fonts + tokens + global CSS)
-│   ├── App.tsx             # Root: main shell (sidebar + Overview/Canvas) OR a
-│   │                       #   detached CanvasWindow, by window identity (#84)
+│   ├── App.tsx             # Root: a Suspense router over the two LAZY window routes —
+│   │                       #   MainApp or the detached CanvasWindow (#84/#356)
+│   ├── MainApp.tsx         # Main-window route chunk: sidebar + Overview/Canvas + ModalHost (#356)
+│   ├── prefetch.ts         # Idle warm-up of the deferred chunks (rIC → setTimeout) (#356)
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
@@ -609,6 +633,7 @@ even though it works in `tauri dev`.
 │   │                       #   Checkbox, Slider (#122), SkillAutocomplete (#114), PatchNotes (#192),
 │   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
 │   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState
+│   │                       #   ModalHost.tsx — the ten lazily-mounted top-level modals (#356)
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
@@ -642,6 +667,8 @@ npm run tauri build    # build an (unsigned) bundle for the host OS (macOS .app/
                        #   to match CI's AppImage-only Linux output, #345)
 
 npm run build          # type-check + build the frontend only
+npm run bundle:report  # per-route first-paint JS, raw + gzip (after a build) (#356)
+                       #   add `-- --check` to fail over the first-paint budget
 npm run lint           # ESLint (frontend)
 npm run format         # Prettier write (frontend)
 npm run format:check   # Prettier check (frontend)

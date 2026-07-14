@@ -20,7 +20,12 @@
 
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { WebglAddon } from "@xterm/addon-webgl";
+// The WebGL addon (~107 kB) is the one xterm piece that is already conditional at
+// runtime (main window + a non-software rasterizer), so it is `import()`ed on demand in
+// `createHost` and kept out of the first-paint bundle (#356). xterm core + fit +
+// web-links + the xterm CSS stay static — terminals ARE the app's first paint and must
+// never wait on a chunk. The type import is erased at compile time (no runtime edge).
+import type { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
@@ -242,6 +247,11 @@ function createHost(sessionId: string): TerminalHost {
   parkingLayer().appendChild(container);
   term.open(container);
 
+  // Set by `host.dispose()`. Hoisted above the WebGL block so the async addon load (and
+  // the scrollback replay / font-atlas rebuild further down) can bail out when the host
+  // was torn down while their promise was in flight.
+  let disposed = false;
+
   // Best-effort GPU renderer; fall back to the default DOM renderer. Skipped in a
   // detached canvas window (#84/#105): a freshly-opened native window renders agent
   // TUIs with doubled/ghosted glyphs and misaligned box-drawing — a known WebGL
@@ -250,17 +260,29 @@ function createHost(sessionId: string): TerminalHost {
   // Linux when the one-time probe says WebGL is software-rasterized (#346, see
   // `webglAllowed` above). The main window on macOS/Windows keeps WebGL, so its
   // rendering is provably unchanged.
+  //
+  // The addon is now fetched as its own chunk (#356), so the terminal paints its first
+  // frame(s) on xterm's DOM renderer and swaps to WebGL a few ms later, when the chunk
+  // resolves — xterm supports `loadAddon` after `open()`, which is exactly the order the
+  // code already used, only synchronously. When `webglAllowed()` is false (a detached
+  // window, or Linux on a software rasterizer #346) the chunk is never even requested.
+  // Any failure (chunk error, WebGL ctor throw) leaves `webgl` undefined ⇒ the DOM
+  // renderer, as today.
   let webgl: WebglAddon | undefined;
-  if (IS_MAIN_WINDOW && webglAllowed()) {
-    try {
-      const addon = new WebglAddon();
-      addon.onContextLoss(() => addon.dispose());
-      term.loadAddon(addon);
-      webgl = addon;
-    } catch {
-      webgl = undefined;
-    }
-  }
+  const webglReady: Promise<void> =
+    IS_MAIN_WINDOW && webglAllowed()
+      ? import("@xterm/addon-webgl")
+          .then(({ WebglAddon }) => {
+            if (disposed) return;
+            const addon = new WebglAddon();
+            addon.onContextLoss(() => addon.dispose());
+            term.loadAddon(addon);
+            webgl = addon;
+          })
+          .catch(() => {
+            webgl = undefined;
+          })
+      : Promise.resolve();
 
   // Clickable http/https links (#109). Hover underlines a URL; the custom activate
   // handler opens it only on a ⌘/Ctrl-click (`metaKey || ctrlKey`, #143 — Ctrl on
@@ -405,7 +427,6 @@ function createHost(sessionId: string): TerminalHost {
     scheduleFlush();
   });
 
-  let disposed = false;
   void sessionScrollback(sessionId)
     .then((reply) => {
       scrollbackEnd = reply.end;
@@ -460,6 +481,12 @@ function createHost(sessionId: string): TerminalHost {
     } catch {
       // ignore — proceed to the best-effort rebuild regardless
     }
+    // Wait for the (now lazily imported, #356) WebGL addon to have attached — or to have
+    // been skipped/failed — so the one-shot atlas rebuild below still sees the real value
+    // of `webgl` and runs exactly once, exactly when the GL renderer is in play. Never
+    // rejects (the import is already `.catch`ed), and resolves immediately when WebGL is
+    // not allowed at all.
+    await webglReady;
     if (disposed) return;
     // Rebuild the GL atlas and force xterm to re-measure the cell with the loaded font.
     // Re-applying fontFamily (via a transient that never paints — both writes are
