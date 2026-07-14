@@ -3577,3 +3577,67 @@ seconds of staggered reconnect on a busy install. The resume loop is now a **4-w
   gating, and a unix-gated `concurrent_spawns_register_every_session` regression guard in `pty.rs`.
 - Real-box-check entries went into `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md` — **four concurrent
   ConPTY creations are worth eyeballing on Windows**, since that is the one path CI cannot exercise.
+
+### 358. [x] Tune `[profile.release]` (LTO, one CGU, strip, size opt-level) — deliberately keeping `panic = "unwind"`
+
+`src-tauri/Cargo.toml` had **no `[profile.release]` at all**, so release builds ran on Cargo's stock defaults:
+no LTO, 16 codegen units, unstripped symbols. The resulting binary is decompressed and paged in from the
+AppImage's squashfs at **every** launch, so its size is a direct cold-start cost (an acknowledged upstream
+AppImage issue). This adds Tauri's standard size profile — **minus** the one lever that would have been actively
+harmful. It also closes the "deliberately untouched" `[profile.release]` item that #346 logged in
+`TRAJECTORY_TO_LINUX.md`.
+
+**What shipped** (branch `release-profile-tuning`, PR [#108](https://github.com/ErikdeJager/ReCue/pull/108),
+2026-07-14):
+
+- **`src-tauri/Cargo.toml`** — a heavily-commented `[profile.release]`: `lto = true` (fat), `codegen-units = 1`,
+  `strip = true`, `opt-level = "s"`.
+- **`src-tauri/src/pty.rs`** — an `#[ignore]`d `bench_output_hot_path` test (test-only; **no production-code
+  change**) timing the three CPU-bound stages of the PTY output path — `Scrollback::push` at 8 KB chunks against
+  the 256 KB cap, `coalesce_output_events`, and `commands::encode_output` — with `std::time::Instant` and **no
+  new dependency** (no criterion). Shipped rather than thrown away so the `opt-level` choice stays reproducible,
+  including for Task #361's AUR package.
+- **Docs** — a dated `TRAJECTORY_TO_LINUX.md` entry (profile, the panic rationale, CI build-time cost, the
+  `lto = "thin"` fallback), a short mirrored `TRAJECTORY_TO_WINDOWS.md` note (on MSVC `strip` is near-free and
+  release carries no PDB), and one sentence in `CLAUDE.md`'s **Builds & distribution** bullet.
+
+**Key decisions**
+
+- **`panic = "abort"` was rejected, and the reasoning is recorded *in the manifest* so nobody "completes" the
+  profile later.** Technically nothing needs unwinding — the backend has no `catch_unwind`, no `#[should_panic]`,
+  and no production `unwrap`/`expect` outside one startup `.expect`. But ReCue **supervises long-lived PTY
+  sessions from always-running threads** (the per-session reader loop, the busy/idle monitor, the title worker,
+  the `lib.rs` event forwarder, the schedule/recurring poll, the `path_env` probe), and every mutex take already
+  handles a poisoned lock — there is not one `lock().unwrap()` in the tree. Under unwinding, a panic in any of
+  those threads kills **only that thread** while every other live agent and detached window survives.
+  `panic = "abort"` would trade that live property away — the whole app dies, every agent lost — for the
+  **smallest** of the four size levers (~5–10% of unwind tables).
+- **Fat `lto = true`, not `"thin"`.** The extra link time is paid only by `release.yml` (version-bump pushes,
+  four serialized Rust binaries — the macOS universal target counts twice) and produces a draft release a human
+  publishes later; it is **never** paid by the PR gate, since `ci.yml` uses the dev/test profiles. `lto = "thin"`
+  is documented as the one-word fallback if a leg OOMs (the arm64 macOS runner has ~7 GB, and universal means
+  two LTO links).
+- **`opt-level = "s"` by the plan's own decision rule.** `3` was to be shipped only if `"s"` proved >15% slower
+  on the aggregate hot path *and* a stage dropped below ~200 MB/s — and a claude repaint storm is single-digit
+  MB/s, with #261/#346 having already moved the costly work off the critical path.
+- **The card's "23.6 MB / 86 MB" figures were treated as unverified** — acceptance was gated on a *relative*
+  delta (binary ≥25% smaller) rather than absolute numbers.
+- **No release build was added to the PR gate** (`ci.yml` explicitly refuses per-PR `tauri build` cost). Accepted
+  consequence: a broken release link would surface only on the next version-bump push; rollback is a one-line
+  revert of the profile block.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **No size or benchmark numbers are claimed, and this is the honest gap in the task.** The implementing box has
+  no `webkit2gtk-4.1` / `javascriptcoregtk-4.1` system libraries — `cargo check` fails identically on untouched
+  `main` — so it could not **link** a binary: no `cargo build --release`, no AppImage, no `cargo test` run, and
+  no benchmark. Per the plan's own decision rule, an unrunnable benchmark defaults to `opt-level = "s"`. The
+  measurements are logged as **pending real-box verification** in `TRAJECTORY_TO_LINUX.md`, with the exact
+  commands to obtain them.
+- Green in CI: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` (so the manifest parses and the
+  new test compiles warning-free), `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (671
+  tests). `cargo test` compiles the test target but fails at **link** on those missing system libs — a
+  pre-existing environment gap, not a defect of this change.
+- Untouched: no `[profile.dev|test|bench]`, no `.cargo/config.toml`, no `RUSTFLAGS`, no new dependency.
