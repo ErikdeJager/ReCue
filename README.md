@@ -1,88 +1,136 @@
 # ReCue
 
-A **macOS, Windows, and Linux** desktop app for running and managing many live `claude`
-CLI sessions at once — an **Overview** "agent wall" of real terminals, a **Canvas**
-split-panel workspace (with file, git-diff, and terminal viewers), and a repo-grouped
-**sidebar**. Every feature works on all three platforms (OS-specific behavior is gated
-behind a single platform abstraction; see [`CLAUDE.md`](CLAUDE.md)). Linux targets Arch,
-Ubuntu, and Mint fully, best-effort for other distros.
+**Mission control for AI coding agents.** ReCue is a **macOS, Windows, and Linux**
+desktop app for running and managing many live coding-agent CLI sessions at once —
+[Claude Code](https://docs.claude.com/en/docs/claude-code) by default, with
+[Codex](https://github.com/openai/codex) and [OpenCode](https://opencode.ai) selectable
+as alternatives.
 
-Each session is a real PTY running the Claude Code CLI. ReCue provides the window
-chrome, navigation, persistence, and read-only git reading; the terminals come from
-`claude` itself.
+Each session is a **real PTY** running the agent's own CLI — ReCue doesn't wrap,
+re-implement, or proxy the agent. It provides everything around it: an **Overview**
+"agent wall" of live terminals, a **Canvas** split-panel workspace (with file, git-diff,
+and terminal viewers), a repo-grouped **sidebar**, scheduling, persistence, and
+read-mostly git integration. The terminals are the genuine agent TUIs, so every prompt,
+permission dialog, and keybinding works exactly as it does in a plain terminal.
+
+Every feature works on all three platforms (OS-specific behavior is gated behind a
+single platform abstraction; see [`CLAUDE.md`](CLAUDE.md)). Linux targets Arch, Ubuntu,
+and Mint fully, best-effort for other distros.
+
+## Why ReCue
+
+Running one coding agent in a terminal is easy. Running **eight of them across four
+repos** — knowing which ones are working, which are waiting on you, what they changed,
+and picking up where each left off after a reboot — is what ReCue is for:
+
+- **See everything at once** — a wall of live terminals grouped by repository, each with
+  a status dot that shows *working* (shimmer), *waiting for you* (yellow), or *fresh*
+  (gray).
+- **Arrange your own workspace** — split-panel Canvas tabs mixing agent terminals, file
+  viewers, git diffs, shell terminals, and Kanban boards; pop a tab out into its own
+  native window for multi-monitor use.
+- **Come back to where you were** — sessions, layouts, and settings survive restarts;
+  agents that support it resume their conversation automatically on launch.
+- **Run agents on your schedule** — queue a session to start later ("tomorrow", "6pm",
+  "1h") with a pre-seeded prompt, or relaunch one on a recurring interval.
+- **Keep agents out of each other's way** — start any agent on a branch of your choice or
+  in an isolated **git worktree**, so parallel agents never fight over a working tree.
+
+## Supported agents
+
+ReCue speaks to agents through a pluggable spec catalog; pick your default in
+**Settings → Sessions** (a first-launch picker offers the choice if more than one CLI is
+installed). Any agent's CLI must be **installed and authenticated on your `PATH`** —
+ReCue shows a clear install hint if it's missing.
+
+| Capability                        | Claude Code | Codex | OpenCode |
+| --------------------------------- | :---------: | :---: | :------: |
+| Interactive sessions (real PTY)   | ✅          | ✅    | ✅       |
+| Prompt-seeded / scheduled launch  | ✅          | ✅    | ✅       |
+| Resume conversations across restarts | ✅       | —     | —        |
+| Fork a conversation               | ✅          | —     | —        |
+| Auto-named sessions (agent's own title) | ✅    | —     | —        |
+| Five-hour usage bar + auto-continue | ✅        | —     | —        |
+
+Claude Code is the primary, fully supported agent. Codex and OpenCode own their session
+identity, so features built on resumable session ids (resume, fork, auto-naming) are
+gracefully hidden for them rather than half-working; both are newer additions and less
+battle-tested. New agent specs are additive — see `src-tauri/src/agents.rs`.
 
 ## Features
 
-- **Overview wall** — active sessions as equal-width live terminal columns, **grouped
-  by repo** with colored badges and a per-repo filter; columns are
-  **drag-reorderable**, and a repo can add **diff**, **file-viewer**, **terminal**, and
-  **Kanban-board** columns. **Fork** any agent's conversation from its header to branch
-  it into a new parallel session.
+- **Overview wall** — active sessions as live terminal columns, **grouped by repo** with
+  colored badges and a per-repo filter; columns are **drag-reorderable**, and a repo can
+  add **diff**, **file-viewer**, **terminal**, and **Kanban-board** columns. **Fork** any
+  agent's conversation from its header to branch it into a new parallel session (where
+  the agent supports it).
 - **Canvas** — a split-panel workspace with **multiple named tabs**; drag any sidebar
   item (agent, file, diff, terminal, or Kanban board) in to tile it, split panels on
   their edges, drag a panel's header to reorder it, resize borders. A tab can **pop out
-  into its own native window** for multi-monitor use, and closing a tab can optionally
-  kill everything in it. Save reusable **Canvas templates** — a layout of action blocks
-  (start session, open terminal, file, or diff) — and open a whole workspace from one in
-  a single step (each panel resolves on its own, with an inline retry if something can't
-  start).
+  into its own native window**, and closing a tab can optionally kill everything in it.
+  Save reusable **Canvas templates** — a layout of action blocks (start session, open
+  terminal, file, or diff) — and open a whole workspace from one in a single step.
 - **Files & Kanban boards** — open any repo text file in a viewer with markdown
-  rendering and syntax highlighting (incl. Java + config formats); **edit** raw markdown
-  / plain-text inline with **auto-save** (no save button). Open or create a markdown
-  **Kanban board** (Obsidian format) and manage its cards and columns by drag-and-drop —
-  every change is written back to the `.md`.
-- **Sidebar** — sessions and their file / diff / terminal / Kanban viewers grouped by repository
-  (labelled by your custom name, else `claude`'s own session title, else the branch),
-  from persisted recents so repos stay listed with no active session; isolated
-  **worktree agents** nest under their parent repo, and each repo is marked by a small
-  repo-colored folder. Right-click a repo (new session, a **Views** section to add
-  viewers, **reveal in Finder** / **copy path**, change color, **kill all agents** /
-  **close all items**, forget), an agent (**rename**, **fork**, **copy session ID**,
-  remove), or any file / diff / terminal / schedule row (**remove**). **Drag a repo
-  header up or down to reorder the folders** (no separate handle — the whole header is
-  the grip; the order persists). Drag the sidebar's right edge to resize it.
-- **Schedule & recur sessions** — **⌘⇧N** (or the sidebar's **Schedule session** button)
-  queues an agent to launch later at a **natural-language** time (`1h`, `6pm`, `tomorrow`),
-  optionally pre-seeded with a prompt (with **slash-command autocomplete**) and a branch —
-  including a **new branch** or an isolated **worktree** created when it fires; it catches
-  up anything missed while the app was closed, and has a **Start now** button. The **⋯** menu
-  also creates **recurring** sessions that relaunch a fresh agent on an interval.
-- **Clone a repo** — the sidebar background menu's **Clone Repo…** clones a git URL into a
-  chosen folder (fast **blobless** clone) in the background — a placeholder folder shows a
-  progress bar while it runs — then registers it and starts a session on its default branch.
-- **Usage & auto-continue** — a sidebar-footer bar shows Claude's rolling five-hour usage
-  (red near the limit); an opt-in **auto-continue after limit reset** nudges your running
-  agents to resume once the limit clears, with a per-agent opt-out.
-- **Settings** — a gear in the sidebar footer opens **Settings**: terminal font /
-  spacing / cursor, auto-naming + **coding-agent** selector (Claude / Codex / OpenCode),
-  accent color / reduce-motion / panel min-width, default launch view / confirm-destructive
-  / diff + Canvas-close defaults, **Kanban** column colors, **Updates** (check / install),
-  plus data tools (open data folder, clear recents, versions).
-- **Keyboard-first** — ⌘N opens a fast two-step new-session launcher (type-ahead recents
-  → branch pick, or **+ add branch** to create one; **Enter** to start, **⌘⏎** for an
-  isolated worktree agent), **⌘⇧N** schedules one for later. In the app, Shift+arrows
-  move between agents (Overview) or panels (Canvas), ⌘1–9 jump between canvases, and
-  ⌘\\ toggles Overview ↔ Canvas.
-- **Busy indicator** — a per-session dot marks when `claude` is genuinely working (a
-  **shimmer**), turns **yellow** when a turn finishes and it's waiting on you, and
-  stays a calm gray when fresh (typing alone doesn't read as busy). **⌘-click** any
-  `http`/`https` link printed in a terminal to open it in your browser.
+  rendering (including **Mermaid** diagrams) and syntax highlighting; **edit** raw
+  markdown / plain text inline with **auto-save**. Open or create a markdown **Kanban
+  board** (Obsidian-Kanban format) and manage its cards and columns by drag-and-drop —
+  every change is written back to the `.md`, so the board stays a plain file your agents
+  can read and edit too.
+- **Git, read-mostly** — working-tree and branch-compare diffs, a commit browser,
+  per-file seen/changed markers, a file tree tinted by git status, branch checkout and
+  creation from the UI, `--ff-only` pull, fetch, and **blobless clone** — but ReCue never
+  commits or pushes; that stays between you and your agents.
+- **Sidebar** — sessions and their file / diff / terminal / Kanban viewers grouped by
+  repository, with isolated **worktree agents** nested under their parent repo.
+  Right-click anything for its actions (rename, fork, copy session id, reveal in your
+  file manager, kill/close/forget…). Drag a repo header to reorder folders; drag the
+  sidebar's edge to resize it.
+- **Schedule & recur** — **⌘⇧N** / **Ctrl+Shift+N** queues an agent to launch later at a
+  **natural-language** time (`1h`, `6pm`, `tomorrow`), optionally pre-seeded with a
+  prompt (with **slash-command autocomplete**) and a branch — including a new branch or
+  an isolated worktree created when it fires. Missed schedules catch up on next launch;
+  the **⋯** menu adds **recurring** sessions that relaunch a fresh agent on an interval.
+- **Keyboard-first** — ⌘N / Ctrl+N opens a fast two-step launcher (type-ahead recents →
+  branch pick; **Enter** to start, **⌘⏎ / Ctrl+Enter** for an isolated worktree agent).
+  Shift+arrows move between agents or panels, ⌘1–9 / Ctrl+1–9 jump between canvases,
+  ⌘\ / Ctrl+\ toggles Overview ↔ Canvas, ⌘E / Ctrl+E maximizes the selected item.
+  ⌘-click / Ctrl-click any `http(s)` link printed in a terminal to open it in your
+  browser.
 - **Persistence + resume** — sessions, layouts, settings, and recent folders survive
-  restarts; sessions resume their `claude` conversation by id on launch. An agent you
-  end cleanly just disappears; one that crashes keeps a **Restart** button.
-- **Remove = kill + forget**, **Catppuccin Mocha** theme, bundled **JetBrains Mono**
-  (offline), dark theme only.
+  restarts; resumable agents pick their conversation back up by id on launch. An agent
+  you end cleanly just disappears; one that crashes keeps a **Restart** button.
+- **Themes & settings** — **Dark and Light** themes (Catppuccin Mocha / Latte) with a
+  custom accent color, terminal font/spacing/cursor controls, reduce-motion, per-column
+  Kanban colors, confirm-gating for destructive actions, and (Linux) rendering
+  overrides. Bundled fonts, fully offline — no CDNs.
+- **Auto-update** — in-app update checks and one-click installs (minisign-signed), with
+  per-version patch notes. Distro-managed installs (e.g. the AUR package) detect that
+  and defer to your package manager instead.
 
-## Install (Linux)
+## Getting started
 
-Two official Linux builds, from the same release. **Only the AppImage self-updates in-app**
-— a distro-packaged install is owned by your package manager, and ReCue detects that at
-runtime and hides its update UI.
+1. **Install a coding agent CLI** and make sure it's authenticated and on your `PATH`:
+   - [Claude Code](https://docs.claude.com/en/docs/claude-code) (recommended) — `claude`
+   - [Codex](https://github.com/openai/codex) — `codex`
+   - [OpenCode](https://opencode.ai) — `opencode`
+2. **Install ReCue** from the
+   [latest release](https://github.com/ErikdeJager/ReCue/releases/latest):
+   - **macOS** — download the `.dmg`, drag ReCue to Applications.
+   - **Windows** — run the NSIS setup `.exe` (or the `.msi`).
+   - **Linux** — see [Install on Linux](#install-on-linux) below.
+3. **Launch ReCue**, add a repository folder (⌘N / Ctrl+N or the **+** button), pick a
+   branch, and start your first session.
 
-| Install                         | Self-updates?                            |
-| ------------------------------- | ---------------------------------------- |
-| **AppImage** (default download) | **Yes** — the in-app updater             |
-| **AUR `recue-bin`** / **`.deb`** | **No** — use your package manager        |
+## Install on Linux
+
+Two official Linux builds, from the same release. **Only the AppImage self-updates
+in-app** — a distro-packaged install is owned by your package manager, and ReCue detects
+that at runtime and hides its update UI.
+
+| Install                          | Self-updates?                     |
+| -------------------------------- | --------------------------------- |
+| **AppImage** (default download)  | **Yes** — the in-app updater      |
+| **AUR `recue-bin`** / **`.deb`** | **No** — use your package manager |
 
 **AppImage** (recommended default — runs on any distro):
 
@@ -101,118 +149,77 @@ is no `$APPIMAGE` for the updater to replace):
 
 **Arch / AUR** — [`recue-bin`](https://aur.archlinux.org/packages/recue-bin) repacks the
 official `.deb` into a native package: it links the **system** webkit2gtk/GTK (no bundled
-Ubuntu userland, no FUSE, no `GTK_THEME`/`GDK_BACKEND` forcing, faster cold start).
-**Updated with pacman, not in-app.**
+Ubuntu userland, no FUSE, faster cold start). **Updated with pacman, not in-app.**
 
 ```bash
 yay -S recue-bin      # or: paru -S recue-bin
 ```
 
-Full details — the install matrix, the updater rule, and the maintainer AUR-publish runbook
-— are in [`docs/linux-packaging.md`](docs/linux-packaging.md).
-
-## Prerequisites
-
-- macOS, Windows, or Linux (Arch, Ubuntu, and Mint fully supported; best-effort for other distros)
-- [`claude`](https://docs.claude.com/en/docs/claude-code) (Claude Code CLI)
-  **installed and authenticated** on your `PATH` — ReCue runs `claude` for every
-  session and shows a clear error if it is missing.
-- For building from source: [Node.js](https://nodejs.org/) + npm and
-  [Rust](https://www.rust-lang.org/tools/install) (stable) + Cargo.
-
-## Develop
-
-```bash
-npm install
-npm run tauri dev      # launch the app (Vite + Rust) with hot reload
-```
-
-## Build
-
-```bash
-npm run tauri build    # builds for the host OS (run it on each platform you target)
-```
-
-Artifacts land in `src-tauri/target/release/bundle/`:
-
-- **macOS** — `macos/ReCue.app` and `dmg/ReCue_<version>_<arch>.dmg`
-- **Windows** — an **NSIS** installer (`nsis/ReCue_<version>_<arch>-setup.exe`) and
-  an **MSI** (`msi/ReCue_<version>_<arch>_<lang>.msi`)
-- **Linux** — an **AppImage** (`appimage/ReCue_<version>_<arch>.AppImage`), the single
-  universal binary that runs on Arch, Ubuntu, Mint, and other distros, **and** a **`.deb`**
-  (`deb/ReCue_<version>_<arch>.deb`) — the artifact the AUR
-  [`recue-bin`](packaging/aur/recue-bin) package repacks. Run
-  `npm run tauri build -- --bundles appimage,deb` to match CI's Linux output (a plain
-  `tauri build` also emits an `.rpm`, which ReCue does not officially ship). The
-  AppImage themes its **native file dialogs** from ReCue's own Dark/Light setting (applied
-  at launch, so a theme change reaches the dialogs on the next start); override it with
-  `APPIMAGE_GTK_THEME=Adwaita:dark` (or `RECUE_GTK_THEME=<gtk theme>`).
+Full details — the install matrix, the updater rule, and the maintainer AUR-publish
+runbook — are in [`docs/linux-packaging.md`](docs/linux-packaging.md).
 
 ### Linux desktop integration
 
-An AppImage is a single self-contained file with no installer, so its **desktop entry and
-icon only reach your application menu if you install them** — and until they do, the running
-window has no icon and does not group under its launcher. ReCue itself **never** writes to
-`~/.local/share/applications`; installing the entry is an explicit, user-invoked step:
+An AppImage is a single self-contained file with no installer, so its **desktop entry
+and icon only reach your application menu if you install them**. ReCue itself **never**
+writes to `~/.local/share/applications`; installing the entry is an explicit,
+user-invoked step:
 
 ```bash
 scripts/install-linux-desktop.sh ~/Applications/ReCue.AppImage   # asks before writing
 scripts/install-linux-desktop.sh --uninstall                     # removes exactly what it wrote
 ```
 
-The script copies the entry (including its `StartupWMClass=recue` — the identifier ReCue pins
-at startup so the window matches its launcher) straight out of the AppImage, rewrites only
-`Exec`/`TryExec` to the AppImage's real path, and installs its hicolor icons. It writes only
-under `$XDG_DATA_HOME`, never uses `sudo`, and is safe to re-run. A desktop integrator (Gear
-Lever, appimaged, AppImageLauncher) or a hand-written entry works too — see
-[`docs/linux-desktop-integration.md`](docs/linux-desktop-integration.md), which also covers
-WM_CLASS/`app_id` matching and icon troubleshooting.
-  If the app window or its terminals render slowly, the two rendering switches live in
-  **Settings → Rendering** (Linux only): the **DMA-BUF renderer** (auto / on / off — the
-  WebKitGTK GPU path; applies at the **next launch**) and the **terminal renderer** (auto /
-  WebGL / DOM — applies immediately), plus a copy-pasteable readout of what ReCue detected
-  at startup. `RECUE_DISABLE_DMABUF=1|0` still overrides the DMA-BUF choice for one run, and
-  a `WEBKIT_DISABLE_DMABUF_RENDERER` you export yourself is always respected untouched.
+The script copies the entry (including its `StartupWMClass=recue`) straight out of the
+AppImage, rewrites only `Exec`/`TryExec` to the AppImage's real path, and installs its
+icons. It writes only under `$XDG_DATA_HOME`, never uses `sudo`, and is safe to re-run.
+A desktop integrator (Gear Lever, appimaged, AppImageLauncher) works too — see
+[`docs/linux-desktop-integration.md`](docs/linux-desktop-integration.md).
 
-Each `tauri build` produces the bundle for the OS it runs on; build on a macOS host for
-the macOS artifacts, a Windows host for the Windows installers, and a Linux host (or the
-CI runner) for the AppImage + `.deb`. Building them needs the Tauri Linux toolchain
-(`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`,
-`patchelf` — see the `release.yml` deps step). On Linux only the **AppImage** self-updates
-through the in-app updater; a distro-packaged install (the `.deb`, the AUR package) is
-owned by the package manager, and ReCue detects that at runtime and hides its update UI —
-see [`docs/linux-packaging.md`](docs/linux-packaging.md).
+If the window or its terminals render slowly, the rendering switches live in
+**Settings → Rendering** (Linux only): the **DMA-BUF renderer** (auto / on / off —
+applies at the next launch) and the **terminal renderer** (auto / WebGL / DOM — applies
+immediately), plus a copy-pasteable readout of what ReCue detected at startup.
+`RECUE_DISABLE_DMABUF=1|0` overrides the DMA-BUF choice for one run, and a
+`WEBKIT_DISABLE_DMABUF_RENDERER` you export yourself is always respected untouched.
+
+## Building from source
+
+**Prerequisites:** [Node.js](https://nodejs.org/) + npm,
+[Rust](https://www.rust-lang.org/tools/install) (stable) + Cargo, and — on Linux — the
+Tauri toolchain (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
+`librsvg2-dev`, `patchelf`).
+
+```bash
+npm install
+npm run tauri dev      # launch the app (Vite + Rust) with hot reload
+npm run tauri build    # build a bundle for the host OS
+```
+
+Artifacts land in `src-tauri/target/release/bundle/`:
+
+- **macOS** — `macos/ReCue.app` and `dmg/ReCue_<version>_<arch>.dmg`
+- **Windows** — an **NSIS** installer (`nsis/…-setup.exe`) and an **MSI** (`msi/….msi`)
+- **Linux** — an **AppImage** and a **`.deb`** (the artifact the AUR
+  [`recue-bin`](packaging/aur/recue-bin) package repacks). Run
+  `npm run tauri build -- --bundles appimage,deb` to match CI's Linux output.
+
+Each `tauri build` produces the bundle for the OS it runs on — build on each platform
+you target (CI's release workflow covers all three).
 
 > A from-scratch local build is **unsigned** — first open warns (macOS Gatekeeper:
-> right-click → **Open**, or allow it under **System Settings → Privacy & Security**;
-> Windows SmartScreen: **More info → Run anyway**). On macOS, mic/voice and
-> protected-folder permissions only actually work **and persist** once the app is signed
-> with the Hardened Runtime + `Entitlements.plist`'s `audio-input` entitlement + a stable
-> signature (#292/#314/#321) — a plain `tauri build` is ad-hoc and does neither. Sign a
-> **local** build with `npm run build:mac` (stable self-signed, no Apple account), and sign
-> **CI releases** by running `scripts/gen-macos-ci-cert.sh` once to set the 4 self-signed
-> signing secrets (or add all 7 `APPLE_*` secrets for a Developer-ID-signed + **notarized**
-> build). See [`docs/macos-permissions.md`](docs/macos-permissions.md).
->
-> **In-app auto-update is live** (#190): the Tauri updater/process plugins, a sidebar
-> update indicator → confirm/install-with-progress modal → relaunch, and a post-update
-> toast. Updates are **minisign-signed** — `createUpdaterArtifacts` is on and the real
-> `pubkey` is baked into `tauri.conf.json`. `.github/workflows/release.yml` runs on every
-> push to `main` and, **when the app version is bumped past the latest tag and a matching
-> `src/patchnotes/<version>.json` exists**, builds **signed** bundles for **macOS
-> (universal), Windows (x86_64), and Linux (x86_64 AppImage)**, uploads them to one
-> **draft** GitHub release with a
-> merged `latest.json`, and waits for a maintainer to **publish** the draft (the updater's
-> `/releases/latest/download/latest.json` endpoint only resolves to a published release).
-> The signing private key lives in the `TAURI_SIGNING_PRIVATE_KEY` /
-> `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets. macOS **code signing** exists for
-> permissions (Hardened Runtime + entitlements, #292); Apple **notarization** is
-> provisioned but dormant until the `APPLE_*` secrets are added.
+> right-click → **Open**; Windows SmartScreen: **More info → Run anyway**). On macOS,
+> mic/voice and protected-folder permissions only work **and persist** once the app is
+> signed with the Hardened Runtime + entitlements — sign a **local** build with
+> `npm run build:mac` (stable self-signed, no Apple account needed). CI releases sign
+> self-signed or Developer-ID + notarized depending on which secrets are configured. See
+> [`docs/macos-permissions.md`](docs/macos-permissions.md).
 
-## Develop scripts
+### Development scripts
 
 ```bash
 npm run build          # type-check + build the frontend only
+npm run bundle:report  # per-route first-paint JS budget report (after a build)
 npm run lint           # ESLint (frontend)
 npm run format         # Prettier write (frontend)
 npm run format:check   # Prettier check (frontend)
@@ -222,5 +229,5 @@ npm run format:rust    # cargo fmt (backend)
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit tests
 ```
 
-See [`CLAUDE.md`](CLAUDE.md) for architecture and [`TASK_ARCHIVE.md`](TASK_ARCHIVE.md)
-for the record of what's been built.
+See [`CLAUDE.md`](CLAUDE.md) for the architecture deep-dive and
+[`TASK_ARCHIVE.md`](TASK_ARCHIVE.md) for the record of what's been built.
