@@ -1,7 +1,9 @@
 /* Scheduled-prompt slash-command autocomplete (#114): a wrapper around the prompt
-   textarea hosting a `/`-triggered dropdown. On-system tokens only; the popover
-   uses the shared soft shadow. No animation, so reduced-motion is respected by
-   construction. Follows the FilePicker (#56) list look + keyboard feel. */
+   textarea hosting a `/`-triggered dropdown. On-system tokens only. The dropdown
+   SURFACE comes from the shared menu.css primitive (task 375, `menu-pop` — bg /
+   border / radius / shadow / pop-in; its animation is covered by the global
+   reduced-motion killswitch); `.menu` keeps only positioning + scroll (v2 task
+   382). Follows the FilePicker (#56) list look + keyboard feel. */
 .wrap {
   position: relative;
   display: block;
@@ -28,7 +30,8 @@
   /* Anchor to the textarea's top edge and grow upward (#235): both call sites
      (NewSessionModal schedule step, ScheduledPanel) have UI directly below the
      prompt, so opening below overlapped it. `max-height` caps the upward growth
-     and `overflow-y: auto` keeps long lists scrollable. */
+     and `overflow-y: auto` keeps long lists scrollable. `left/right: 0` pin the
+     width, so `menu-pop`'s min-width is moot. */
   bottom: calc(100% + var(--space-2));
   right: 0;
   left: 0;
@@ -36,11 +39,6 @@
   max-height: 220px;
   flex-direction: column;
   overflow-y: auto;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
 }
 
 .option {
@@ -50,7 +48,7 @@
   gap: var(--space-1);
   padding: var(--space-6) var(--space-8);
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-primary);
   font: inherit;
@@ -58,13 +56,14 @@
   cursor: pointer;
 }
 
+.option:hover,
 .optionActive {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 
 .name {
   overflow: hidden;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-row);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -72,7 +71,7 @@
 .desc {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-micro);
   white-space: nowrap;
   text-overflow: ellipsis;
 }

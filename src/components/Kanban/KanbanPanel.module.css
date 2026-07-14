@@ -8,47 +8,48 @@
   font-size: var(--fs-meta);
 }
 
-/* Panel wrapper: a thin toolbar (#147 Board/Raw toggle) above the board/raw area. */
+/* Panel wrapper: a thin toolbar (#147 Board/Raw toggle) above the board/raw area.
+   Paints its own base bg (UI v2 task 382) so it reads correctly in any host. */
 .panel {
   display: flex;
   height: 100%;
   flex-direction: column;
+  background: var(--bg-panel);
 }
 
-/* Board ⟷ Raw toggle bar (#147, mirroring the #73 FileViewer toolbar). Responsive
-   at narrow widths (#161, folding in #158's fix): the status truncates and the
-   toggle never clips. */
+/* Board ⟷ Raw toggle bar (#147, v2 task 382: a fixed 30px row; the auto-save
+   status and the shared SegmentedControl atom sit together, right-aligned).
+   Responsive at narrow widths (#161, folding in #158's fix): the status
+   truncates and the toggle never clips. */
 .toolbar {
   display: flex;
   flex-shrink: 0;
   min-width: 0;
+  height: 30px;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-8);
-  padding: var(--space-4) var(--space-6);
+  padding: 0 10px;
   border-bottom: 1px solid var(--border-hairline);
   background: var(--bg-panel);
 }
 
-/* Subtle auto-save hint (#148/#149) — "Saving… / Saved". `margin-right: auto`
-   keeps the Board/Raw toggle on the right when both are shown; it truncates rather
-   than pushing the toggle off at narrow widths (#161). */
+/* Subtle auto-save hint (#148/#149) — "Saving… / Saved", just left of the
+   segments (both right-aligned, v2 task 382); it truncates rather than pushing
+   the toggle off at narrow widths (#161). */
 .status {
   min-width: 0;
-  margin-right: auto;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* Manual-save button (#162) — replaces the status hint in manual mode. Primary
-   (accent) when dirty, a muted disabled "Saved" when clean. margin-right:auto keeps
-   the Board/Raw toggle on the right, like .status. */
+   (accent) when dirty, a muted disabled "Saved" when clean. */
 .saveBtn {
   flex-shrink: 0;
-  margin-right: auto;
   padding: var(--space-2) var(--space-12);
   border: 1px solid var(--accent);
   border-radius: var(--radius-control);
@@ -75,51 +76,23 @@
   cursor: default;
 }
 
-.segmented {
-  display: flex;
-  flex-shrink: 0;
-  gap: var(--space-1);
-  padding: var(--space-1);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
-}
-
-.segment {
-  display: flex;
+/* Icon + text inside a SegmentedControl segment (v2 task 382). */
+.segLabel {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-6);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: var(--fs-meta-sm);
-  cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
-}
-
-.segment:hover {
-  color: var(--text-secondary);
-}
-
-.segmentActive {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
+  gap: 5px;
 }
 
 /* Read-only raw markdown (#147) — the FileViewer raw style, wrapped (#80). */
-/* Editable raw board markdown (#149): the FileViewer .editor look — a full-height
-   monospace textarea that soft-wraps; auto-saves via the shared #148 hook. */
+/* Editable raw board markdown (#149, v2 task 382: a 10px-inset crust well): a
+   full-height monospace textarea that soft-wraps; auto-saves via the shared
+   #148 hook. */
 .rawEditor {
   flex: 1;
   min-height: 0;
-  margin: 0;
-  padding: var(--space-12);
-  border: 0;
+  margin: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-hairline);
   outline: none;
   resize: none;
   overflow: auto;
@@ -128,7 +101,7 @@
   color: var(--text-primary);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
-  line-height: 1.5;
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   tab-size: 2;
@@ -139,33 +112,31 @@
   min-height: 0;
   display: flex;
   align-items: stretch;
-  gap: var(--space-12);
-  padding: var(--space-12);
+  /* Demo-exact 10px gaps/padding (there is no --space-10 token — the #240 trap). */
+  gap: 10px;
+  padding: 10px;
   overflow-x: auto;
   overflow-y: hidden;
 }
 
+/* Crust column (v2 task 382): hairline border, square — no top accent stripe,
+   no header underline; the header dot carries the per-column color. */
 .column {
   flex: 0 0 auto;
-  width: 248px;
+  width: 250px;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg-sidebar);
+  background: var(--content-bg);
   border: 1px solid var(--border-hairline);
-  /* Per-column accent (#233): a subtle top stripe in the column's derived color
-     (--col-accent, set inline). The dot in the header matches. */
-  border-top: 2px solid var(--col-accent, var(--border-strong));
-  border-radius: var(--radius-control);
   overflow: hidden;
 }
 
 .columnHeader {
   display: flex;
   align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-6) var(--space-8) var(--space-6) var(--space-12);
-  border-bottom: 1px solid var(--border-hairline);
+  gap: 7px;
+  padding: 9px 10px;
 }
 
 /* Status-colored dot at the left of the column header (#233) — the column's accent. */
@@ -177,6 +148,7 @@
   background: var(--col-accent, var(--text-muted));
 }
 
+/* Column name (v2 task 382): as-typed 11px/600 — no uppercase/letter-spacing. */
 .columnName {
   flex: 1;
   min-width: 0;
@@ -188,10 +160,8 @@
   border-radius: var(--radius-chip);
   text-align: left;
   cursor: text;
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -201,33 +171,32 @@
     background var(--dur-fast) var(--ease-out);
 }
 
-/* Hover cue that the column name is click-to-rename (#161). */
+/* Hover cue that the column name is click-to-rename (#161) — the 374 row wash
+   (plain fallback first for engines without color-mix). */
 .columnName:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
+/* A base input on a crust column (v2 task 382). */
 .columnNameInput {
   flex: 1;
   min-width: 0;
-  background: var(--bg-base);
-  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-hairline);
   border-radius: var(--radius-chip);
   padding: var(--space-2) var(--space-6);
   color: var(--text-primary);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
+/* Plain muted count (v2 task 382 — the pill is gone). */
 .count {
   flex: 0 0 auto;
-  min-width: 18px;
-  padding: 0 var(--space-6);
-  text-align: center;
   font-size: var(--fs-meta-xs);
   color: var(--text-muted);
-  background: var(--bg-elevated);
-  border-radius: var(--radius-chip);
 }
 
 /* The lone Delete action reveals on column hover / keyboard focus-within (#161),
@@ -267,7 +236,7 @@
 
 .colBtn:hover:not(:disabled) {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 
 .colBtn:disabled {
@@ -285,8 +254,8 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-8);
-  padding: var(--space-8);
+  gap: var(--space-6);
+  padding: 0 var(--space-8) var(--space-8);
   overflow-y: auto;
 }
 
@@ -323,41 +292,31 @@
   color: var(--accent-fg);
 }
 
+/* Base card on a crust column (v2 task 382): flat — no lift/shadow (§2.5,
+   shadows only on floating chrome; the DragOverlay preview keeps its shadow). */
 .card {
   /* Positioning context for the hover/focus-revealed top-right actions (#195). */
   position: relative;
-  background: var(--bg-elevated);
+  background: var(--bg-panel);
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-chip);
-  padding: var(--space-6) var(--space-8);
+  padding: var(--space-8) 9px;
   transition:
     border-color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+    background var(--dur-fast) var(--ease-out);
 }
 
-/* Subtle hover-lift (#234, layered on #161): a ~2px rise + soft shadow + grab cursor
-   signal the card is draggable — eased in and out via `.card`'s transition. Excluded
-   while dragging (`.cardPlaceholder`) and on the floating `.cardOverlay` so it never
-   fights dnd-kit's inline drag transform; `:active` shows grabbing. */
+/* Flat hover (v2 task 382, superseding the #234 lift): the border strengthens +
+   grab cursor signal the card is draggable. Excluded while dragging
+   (`.cardPlaceholder`) and on the floating `.cardOverlay`; `:active` shows
+   grabbing. */
 .card:not(.cardPlaceholder):not(.cardOverlay):hover {
   border-color: var(--border-strong);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
   cursor: grab;
 }
 
 .card:not(.cardPlaceholder):not(.cardOverlay):active {
   cursor: grabbing;
-}
-
-/* Reduced motion (#234): the global killswitch only zeroes the transition duration,
-   so neutralize the lift itself — no movement, just the calm border/cursor cue. */
-:global(body.reduce-motion)
-  .card:not(.cardPlaceholder):not(.cardOverlay):hover {
-  transform: none;
-  box-shadow: none;
 }
 
 .card:focus-within {
@@ -405,7 +364,7 @@
   /* Pin the checkbox to the top-left so the title flows full-width to its right and
      wraps full-width below (#233). */
   align-items: flex-start;
-  gap: var(--space-6);
+  gap: 7px;
 }
 
 /* Grip reveals on card hover / focus-within (#161) so cards read uncluttered. */
@@ -439,6 +398,34 @@
   margin-top: 1px;
 }
 
+/* 12px card checkbox (v2 task 382) — restyles the shared Checkbox from outside
+   via its documented structure (visually-hidden input + aria-hidden box span);
+   the component API is untouched. The `[aria-hidden]` attribute lifts these
+   past the component's own `.input:checked + .box` specificity. Unchecked:
+   1.5px Surface1 border, transparent. Checked: green (--status-done) fill with
+   a crust check. The CardPreview reuses `.cardCheck`, so the drag ghost matches. */
+.cardCheck input + span {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--surface-1);
+  background: transparent;
+}
+
+.cardCheck input + span svg {
+  width: 9px;
+  height: 9px;
+  stroke-width: 3.5;
+}
+
+.cardCheck input:checked + span[aria-hidden] {
+  background: var(--status-done);
+  border-color: var(--status-done);
+}
+
+.cardCheck input:checked + span[aria-hidden] svg {
+  color: var(--content-bg);
+}
+
 /* Plain display text + part of the drag surface (#238 — no longer a click-to-edit
    button), so no `cursor: text`; the card's grab cursor governs. */
 .cardTitle {
@@ -450,7 +437,7 @@
   text-align: left;
   font-size: var(--fs-meta);
   color: var(--text-primary);
-  line-height: 1.4;
+  line-height: 1.45;
   word-break: break-word;
   /* The title is a drag surface (#238/#246) — disable text selection so a press-drag
      never starts a native selection. Ship both the `-webkit-` (WKWebView/macOS) and the
@@ -464,10 +451,22 @@
   font-style: italic;
 }
 
+/* Done card (v2 task 382, reinstating the strikethrough #248 removed — the demo
+   wins): the whole card fades to 60% and the title strikes through with a soft
+   decoration (plain fallback first for engines without color-mix). */
+.cardDone {
+  opacity: 0.6;
+}
+
 .cardDone .cardTitle {
-  /* No strikethrough (#248): the checkmark already signals "done". Keep just a subtle
-     muted-gray dim so a completed card stays gently de-emphasized. */
-  color: var(--text-muted);
+  color: var(--text-primary);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-muted);
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--text-primary) 40%,
+    transparent
+  );
 }
 
 /* Edit (pencil) / Delete (trash) in a hover/focus-revealed cluster, absolutely
@@ -487,7 +486,7 @@
   background: linear-gradient(
     to right,
     transparent 0,
-    var(--bg-elevated) var(--space-16)
+    var(--bg-panel) var(--space-16)
   );
   opacity: 0;
   pointer-events: none;
@@ -515,7 +514,7 @@
 
 .cardBtn:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 
 /* Inline single-field card editor (#238): a composer-style textarea + a flow action
@@ -538,8 +537,8 @@
   min-height: 88px;
   max-height: 320px;
   resize: vertical;
-  background: var(--bg-base);
-  border: 1px solid var(--border-strong);
+  background: var(--content-bg);
+  border: 1px solid var(--border-hairline);
   border-radius: var(--radius-chip);
   padding: var(--space-6);
   color: var(--text-primary);
@@ -561,12 +560,10 @@
    under the title (past the top-left checkbox). Keeps ReactMarkdown so links +
    interactive task checkboxes (#173/#194) still work — only the style is "secondary". */
 .cardBody {
-  margin-top: var(--space-4);
-  padding-left: calc(
-    16px + var(--space-6)
-  ); /* align under the title (past checkbox) */
+  margin-top: 5px;
+  padding-left: 19px; /* align under the title (12px checkbox + 7px gap) */
   font-family: var(--mono);
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-micro);
   color: var(--text-muted);
   line-height: 1.5;
   word-break: break-word;
@@ -636,9 +633,10 @@
   cursor: pointer;
 }
 
+/* Green done-state (v2 task 382) so a done sub-task matches the card checkbox. */
 .cardBody input[type="checkbox"]:checked {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--status-done);
+  background: var(--status-done);
 }
 
 .cardBody input[type="checkbox"]:checked::after {
@@ -648,7 +646,7 @@
   left: 4px;
   width: 3px;
   height: 7px;
-  border: solid var(--accent-fg);
+  border: solid var(--content-bg);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
@@ -663,24 +661,24 @@
   font-style: italic;
 }
 
+/* Ghost "+ Add card" (v2 task 382): borderless, muted — hover only brightens. */
 .addCard {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-6);
   width: 100%;
   appearance: none;
   background: none;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-chip);
-  padding: var(--space-6) var(--space-8);
+  border: 0;
+  padding: var(--space-4) var(--space-2);
   color: var(--text-muted);
   font-size: var(--fs-meta-sm);
   cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .addCard:hover {
   color: var(--text-primary);
-  border-color: var(--text-muted);
 }
 
 /* Inline add-card composer (#233): a multi-line textarea + Add/Cancel buttons,
@@ -699,8 +697,8 @@
   min-height: 88px;
   max-height: 320px;
   resize: vertical;
-  background: var(--bg-base);
-  border: 1px solid var(--col-accent, var(--border-strong));
+  background: var(--content-bg);
+  border: 1px solid var(--col-accent, var(--border-hairline));
   border-radius: var(--radius-chip);
   padding: var(--space-6);
   color: var(--text-primary);
@@ -768,17 +766,20 @@
   background: var(--bg-hover);
 }
 
+/* Dashed "+ Add column" block (v2 task 382): 160×34, centered content. */
 .addColumn {
   flex: 0 0 auto;
   align-self: flex-start;
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  justify-content: center;
+  gap: var(--space-6);
+  width: 160px;
+  height: 34px;
   appearance: none;
   background: none;
-  border: 1px dashed var(--border-strong);
+  border: 1.5px dashed var(--border-strong);
   border-radius: var(--radius-control);
-  padding: var(--space-8) var(--space-12);
   color: var(--text-muted);
   font-size: var(--fs-meta-sm);
   cursor: pointer;
