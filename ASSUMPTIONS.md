@@ -2953,3 +2953,216 @@ Scrub the AppImage-injected environment from every child process ReCue spawns
 - Complementary with Task 349 (dark GTK dialogs): that card SETS `GTK_THEME` for ReCue's own process, this one STRIPS it from children under the AppImage only; outside an AppImage the scrub stays a no-op (deliberate boundary, noted in non-goals as the single place a follow-up would extend).
 - Non-UTF-8 env vars are passed through verbatim (they cannot be AppImage vars) and env ordering between the scrubbed and passthrough groups is treated as insignificant to a child.
 - macOS-only spawns (`usage.rs`'s `security`, `lib.rs`'s `tccutil`) are left untouched; no frontend/TS change. Docs: CLAUDE.md (layout + seams list) and TRAJECTORY_TO_LINUX.md (dated entry + real-box checklist).
+
+## Task 348
+
+Eliminate the white startup flash: hidden-until-painted windows + themed pre-paint background
+
+- Pre-paint color = the theme's `--bg-base` (#1e1e2e Mocha / #eff1f5 Latte), not `--bg-sidebar`/`--terminal-bg`; duplicated in `index.html`, `src/theme.ts` and `commands.rs` with a vitest sync-guard against `tokens.css`.
+- The window learns the theme pre-paint from a best-effort `recue.theme` localStorage mirror written by `applySettingsEffects` (all windows share one origin); the Rust settings blob stays the source of truth. A missing/stale mirror degrades to today's behavior (one dark→light flip) and self-heals that same launch — no white flash either way. Chose this over creating the main window from a Rust builder with an `initialization_script` (bigger, riskier change).
+- Reveal is a new app-owned Rust command `reveal_window` invoked from a React mount effect, NOT `getCurrentWindow().show()` — avoids widening `capabilities/default.json` with `core:window:allow-show` and matches the existing Rust-owned window commands (open/focus/close_canvas_window).
+- Reveal fires on React's first commit (0 ms timer + rAF, whichever first, idempotent) rather than waiting for the settings/session IPC, so backend latency can never delay the window.
+- Added a Rust-side reveal fallback (show any still-hidden window after 2 s) so a crashed bundle / dead dev server can never leave the app running-but-invisible — the main hazard is a hidden WebView possibly throttling rAF.
+- Added beyond the card's literal text: a `set_theme_background` command called from `saveSettings` on a theme change, so already-open windows' native background is updated (no stale-color gutter on resize); plus `show()` on the focus/existing-window branches of the canvas-window commands.
+- Detached canvas windows get the same treatment (`.visible(false)` + `.background_color(theme)`), and the reveal hook lives in `App()` — the shared root of both the main and canvas-window routes.
+- No `color-scheme` declaration is added (explicit background suffices; avoids UA form-control/scrollbar restyling), and no bundle/code-splitting work is assumed (Task 356).
+
+## Task 351
+
+Lazy-mount Overview terminals — visibility-gated xterm creation + a bounded scrollback-replay queue
+
+- Committed to two of the card's three fix directions: an IntersectionObserver deferred-mount gate + a bounded FIFO scrollback-replay queue (MAX_CONCURRENT_REPLAYS = 1). Rejected the third ("smaller initial tail, rest on idle") — it needs a new backend `session_scrollback` parameter and trades away user-visible history for a win the gate already delivers.
+- "Virtualize" is read as **deferred creation only**, never recycling: once a terminal is created it is never disposed/parked on scroll-out. Disposing on scroll-out would re-enter the #18 garbled-redraw trap for zero boot benefit.
+- The gate lives in `Terminal.tsx` (not Overview), so it applies to every terminal surface — Overview, Canvas panels, big mode (#157), detached windows (#84) — via the one component, rather than adding an Overview-only code path.
+- Bytes arriving while a session has no terminal are dropped by `outputBus` and recovered from the backend's 256 KB `Scrollback` at creation (deduped by absolute offset). This is already today's behavior for any session not rendered in the current view (e.g. booting into Canvas view), so no new mechanism is introduced; history older than the 256 KB window is not recoverable — accepted.
+- The IntersectionObserver root is provided by Overview (its scrolling wall) through a small React context, because IO clips against intermediate scroll containers *before* applying `rootMargin` — a viewport-rooted observer could not pre-load off-screen wall cards. Pre-load margin chosen as "200px 600px" (≥1.5 cards at the 400px default column min-width).
+- `focusTerminal` gains a short-lived (3 s) pending-focus so a Canvas panel focused before its deferred mount still receives keystrokes; without it the CanvasSurface active-leaf effect would silently no-op.
+- The pre-replay pending buffer is capped (2 MB, oldest dropped) only until the scrollback fetch is dispatched — provably gap-free, since the backend pushes to its Scrollback before emitting, so pre-dispatch chunks are ≤ the snapshot's end offset.
+- Non-terminal Overview panels (FileViewer / DiffInspector / Kanban / FileTree / Scheduled / Recurring) are NOT gated in this task (smaller mount cost); noted as a follow-up that can reuse the same hook.
+- No backend change and no new user setting: `session_scrollback` stays sync (Tasks 353/355 own that), and the rollback path is two constants.
+- Docs updated as part of the task (repo convention): a `(#351)` note in CLAUDE.md and closing the "Overview terminal virtualization" future-work item in TRAJECTORY_TO_LINUX.md with real-box verification checks.
+
+## Task 355
+
+Bounded-parallel boot resume + a one-shot claude project-log index
+
+- Dropped "resume visible/selected sessions first" from scope: `selectedId` is not persisted at all, and `canvases`/`settings` are deliberately opaque frontend-owned JSON blobs the Rust store must not parse; with a 4-wide pool the reordering win is a few hundred ms. Records are dispatched in persisted order. (Visibility is Task 351's concern.)
+- Fixed pool width `RESUME_CONCURRENCY = 4`, clamped to the record count; not derived from `available_parallelism` (the work is process-creation/IO-bound, and a wider pool just piles concurrent spawns onto the OS during first paint).
+- The projects-dir cache is a **boot-scoped snapshot** (`title::ProjectLogIndex`, built once, dropped when the loop ends) rather than a global/TTL cache — the live title worker keeps its per-call `locate_log`, so a project dir created after boot is always seen and there is nothing to invalidate.
+- The index lists each project dir's `*.jsonl` filenames (name -> dir) instead of only caching the dir list, making lookups O(1) and the cost O(M) rather than O(N x M) stats; a project dir whose listing fails falls back to the old per-dir `is_file` probe so Found/Absent/Unknown (and the fail-open Fork guard) semantics are preserved exactly.
+- New `src-tauri/src/boot.rs` module (rather than growing `lib.rs`) so the pool + worker-count helpers are unit-testable without a Tauri app; `lib.rs`'s setup block collapses to one call.
+- No batching of `Store::set_forkable` and no new events/error toasts: it already persists only on change (~zero writes on a normal boot), and a failed resume stays best-effort (`let _ =`) so the child's own exit remains the single existing signal.
+- Frontend is explicitly untouched: `booting` / `RECONNECT_BACKSTOP_MS` / the #30 reconnecting flow stay as-is (faster resume only makes more resumes land inside that window).
+- `SessionManager`/`pty.rs` production code is unchanged (already concurrency-safe per #260; portable-pty 0.9.0 cloexecs pty fds + closes fds>=3 in the child on unix and passes bInheritHandles=FALSE on Windows) — only a unix-gated concurrent-spawn regression test is added there.
+
+## Task 352
+
+Batch the boot IPC waterfall — one aggregated `boot_state` command + parallel event listeners + a no-flash loading gate
+
+- Aggregate: added ONE new Rust command `boot_state` (async, `Result<BootState, SessionError>`, `spawn_blocking` for the Windows `cmd /C ver` probe) returning all 21 boot reads (sessions, recents, repo colors, overview panels/order, legacy open_files, canvas_layout/canvases/templates, settings, sidebar width/collapsed, repo_order, diff_seen, schedules, recurrings, last_version, app_version, platform, windows_build, detached_canvas_ids). Chose async over sync to keep the Windows probe off the webview main thread and to match #308/#330; noted a sync fallback in the plan's risks.
+- Every existing command and `ipc.ts` wrapper is KEPT and still registered (per the card) — some become boot-unused; they remain the API surface for Settings/About and other call sites. No command deleted.
+- Boot ordering: the 13 `listen` registrations are batched (`Promise.all` inside each `subscribe*Events` + across the four) and the `boot_state` fetch is started in parallel with them, but the payload is APPLIED only after the subscription await resolves — preserving today's "listeners exist before any event can land" invariant. Result: 14 invokes in 2 concurrent waves (was 34 invokes in 22 sequential waves).
+- `platform` + `windowsBuild` must land in the SAME store `set()` as `sessions` (the #346 invariant: terminalPool reads them at host-creation time) — made an explicit acceptance criterion + test.
+- Kept the `refresh()` action name (now a thin `bootState()` fetch + `applyBootState()` apply) so `src/store.refresh.test.ts` keeps its entry point; the view/onboarding/prune/file-tree-poll steps stay init-only, and all IS_MAIN_WINDOW-only side effects (legacy open_files clear, terminal respawn, canvas migration persist, update toast + setLastVersion, usage poll) are preserved verbatim — so the detached canvas window (#84) boots identically.
+- Loading state: interpreted "minimal" as a `booted: boolean` store flag gating three empty-state affordances (Overview `EmptyState`, Sidebar "No repositories yet.", CanvasSurface's empty-canvas hint) to render NOTHING until the payload lands — no spinner/skeleton, deliberately complementary to Task 348's pre-paint window-show gate. `booted` also flips true when `boot_state` fails (outside Tauri), so the UI never hangs blank.
+- Single point of failure accepted: one command replaces three independent try/catch groups; `boot_state` is infallible server-side (in-memory store reads) and the only realistic failure ("not inside Tauri") already sank all three groups before.
+- Extracted only ONE new pure module (`src/boot.ts` → `resolveCanvases`, the canvas-tab/legacy-migration/detached-override branch) + its test, keeping the rest of the derivation inside the store action to avoid an import cycle with `store.ts`.
+- Out of scope: the sidebar's post-boot git refreshes (Task 359), `maybeOnboardAgent`'s 3 `agent_info` probes, `pruneMissingFolders`' `dir_exists` calls (all already void-ed/off the critical path), and the boot resume loop (Task 355).
+
+## Task 353
+
+Move the straggler sync Tauri commands (PTY spawn/kill/scrollback, agent probes, git writes) off the webview main thread
+
+- Conversion recipe: converted commands take an owned `app: AppHandle` (no `State<'_, _>` args) and resolve `app.state::<SessionManager>()` / `app.state::<Store>()` INSIDE the `spawn_blocking` closure — `State` is a non-`'static` borrow and can never be captured. This also keeps the two non-`Result` commands (`agent_info`, `search_session_output`) non-`Result` (Tauri forces `Result` only when a borrowed `State` arg is present in an async command), so `src/ipc.ts` needs no change.
+- No `SessionManager`/`Store` restructuring: their `std::sync::Mutex`es stay (no `tokio::sync`, no `Arc<SessionManager>` managed-state swap). No guard can cross an `.await` because every lock is taken inside a sync method called from inside the blocking closure — and the `Send` bound on Tauri's spawned command future makes the alternative a compile error. `pty.rs` / `store.rs` are untouched (also minimizes conflict with Tasks 350/354).
+- KEEP SYNC (justified per-command, as the card asked): `write_stdin` (per-keystroke; the work is microseconds, and async would break FIFO ordering — `terminalPool.ts` fires it un-awaited from xterm `onData`, so two racing tasks could reach the PTY out of order); `resize_pty` (cheap ioctl, same un-awaited fire-and-forget ordering hazard, stale-size regression for no win); `list_sessions` (in-memory `Vec` clone).
+- The blocking-`write_all` problem for `write_stdin` is called out as a NON-GOAL + follow-up card (it needs a per-session writer thread + FIFO channel in `pty.rs`, not `spawn_blocking`).
+- Scope rule chosen: convert every sync command that spawns a process or shells out to git. That adds 6 commands beyond the card's list — `spawn_worktree_agent`, `spawn_worktree_agent_new_branch`, `search_session_output` (N x 256KB scan per search keystroke), and `pull_branch` / `checkout_branch` / `create_branch` (the trio #330 explicitly deferred; `pull_branch` is a network call on the main thread) — plus `create_schedule` / `create_recurring` / `fire_schedule_now` (eager `git worktree add` and inline PTY spawn). 17 commands total.
+- Explicitly NOT converted (documented, not silent): the `files.rs` family, `list_skills`, `save_clipboard_image`, `open_url`/`reveal_path`/`open_data_folder`, and the in-memory store getters/setters — a different family; `search_file_contents` flagged as the one plausible remaining straggler for a follow-up card.
+- No automated command-level test is added (the repo has no `tauri::test` mock-app harness and the change is structural); acceptance rests on compile-time guarantees (`Send` bound), clippy `-D warnings`, the unchanged existing test suites, and enumerated manual smoke checks (GUI responsiveness is not CI-assertable — logged per the #345 TRAJECTORY convention).
+- `#[tauri::command(async)]` is explicitly rejected in favor of `async fn` + `spawn_blocking` (it would run blocking bodies on tokio worker threads).
+
+## Task 354
+
+Fast, reliable session exit — kill the PTY process group and derive `Exited` from the child, not the reader's EOF
+
+- Root cause confirmed in the vendored crate: portable-pty 0.9.0's unix spawn ALREADY calls `setsid()` in `pre_exec` (src/unix.rs:257), so the child is a session/process-group leader (pgid == pid). No `pre_exec`/`setsid` of our own is needed — `killpg(child_pid)` is already correct and can only reach the agent's own descendants. Assumed we therefore add only `libc` (unix-only, already in the lock file via portable-pty) and not `nix`.
+- Interpreted "treat child-wait completion as exit" as the primary fix AND kept the group kill: a per-session exit-waiter thread owns the `Child`, blocks in `wait()`, and becomes the SOLE emitter of `Exited`; the reader thread stops emitting it (exactly-once preserved, so the frontend's consume-once `intentionalKills` contract is untouched).
+- To avoid losing trailing output (the waiter could beat the reader's last Output), the waiter waits on a bounded `reader_done` flag (150ms) before emitting, then hangs up lingering descendants (SIGHUP group) and escalates (SIGKILL) after a further 250ms. Chose these bounds over emitting instantly; worst-case added exit latency ~400ms, normally a few ms.
+- Preserved exit-code semantics by construction: portable-pty maps a signal death to exit code 1 (never 0), so a killed agent can never be misread as a clean code-0 exit and get its record forgotten (#63). Documented + asserted in a test rather than adding a new "killed" flag to the event payload.
+- Shutdown safety: added an `ExitState::silent` flag that `kill_all` sets before signalling, so a shutdown kill emits NO `Exited` at all (a claude that traps SIGHUP and exits 0 could otherwise reach a still-live webview and delete records, breaking #30's "quit keeps sessions"). `kill_session`, by contrast, still emits exactly one `Exited` (today's behavior) so `intentionalKills` bookkeeping is unchanged.
+- `kill_session` made non-blocking (SIGHUP to the group immediately; SIGKILL escalation on a short detached thread after 500ms), replacing portable-pty's ~200ms in-call sleep. `kill_all` pays ONE shared 200ms grace then a SIGKILL sweep (instead of ~200ms x N serially), inline rather than via detached threads (which may not survive process exit → orphans).
+- Signal choice: SIGHUP first (matching portable-pty's and a terminal's semantics), not SIGTERM; escalate to SIGKILL.
+- Windows/ConPTY kill left byte-for-byte as-is (TerminateProcess via portable-pty's ChildKiller); no job-object process-tree kill (explicit non-goal). Windows still inherits the platform-neutral child-wait-driven `Exited` (an improvement, cfg-free).
+- Added Restart hardening: a same-id respawn silences + kills any stale prior generation, so a stale waiter's late exit can't be attributed to the fresh session.
+- Chose NOT to also killpg the tty's foreground process group (`MasterPty::process_group_leader`) — the setsid'd child's own group already covers claude's non-detached descendants; a descendant that setsid's itself is documented as a known, best-effort limitation.
+- No frontend changes: `isCleanExit` / `forgetExitedSession` / `intentionalKills` / the Restart overlay are all deliberately untouched.
+
+## Task 357
+
+Settings → Rendering (Linux-only): DMA-BUF + terminal-renderer overrides with a boot-decision readout
+
+- Surfaced as a dedicated Linux-only **Rendering** section in the Settings nav (icon MonitorCog, after Appearance), not rows inside Appearance: these are engine/diagnostic switches plus a log readout, and a filtered SECTIONS array makes the whole thing vanish on macOS/Windows (Appearance stays byte-identical there). Includes a guard clamping a deep-linked "rendering" section id to the default on non-Linux.
+- Setting names/polarity chosen: `linuxDmabufRenderer: "auto" | "on" | "off"` (names the *renderer*: "off" ⇒ ForceDisable ⇒ sets WEBKIT_DISABLE_DMABUF_RENDERER=1) and `linuxTerminalRenderer: "auto" | "webgl" | "dom"`, both defaulting to "auto" so existing installs and other OSes are unchanged. The env var keeps its inverted sense (RECUE_DISABLE_DMABUF=1 = disable), so the plan asserts both directions in tests.
+- Precedence: user-exported WEBKIT_DISABLE_DMABUF_RENDERER > RECUE_DISABLE_DMABUF > persisted Settings > auto-detection (i.e. Task 347's rules 1–2 stay unchanged; the setting is only consulted when no env override exists). A setting rendered ineffective by an env var is *shown as such* in the readout rather than silently ignored.
+- The persisted DMA-BUF mode is read from `sessions.json` on disk at boot (before tauri::Builder / GTK init) via a NEW shared Rust module `early_settings.rs` — which also becomes the home for Task 349's identical need. Instruction is conditional: rewire `linux_gtk.rs` onto it only if that file already exists at implementation time; do not depend on 349.
+- The terminal-renderer override is applied **live** by loading/disposing the WebglAddon on the existing pooled xterms (never disposing a host — the #18 no-replay invariant; no clearTextureAtlas, per #221), with a documented fallback to "applies to newly opened terminals" if a real box shows artifacts. DMA-BUF is restart-scoped and the UI says so.
+- The frontend learns the boot decision via a new read-only `renderer_diagnostics` Tauri command returning an `Option<RendererReport>` captured in a `OnceLock` at boot (exact log line + reason + evidence + what decided it + the normalized setting in effect at boot); it returns null on macOS/Windows. Comparing the draft against `report.setting` (normalized) is what drives the "Restart to apply" note without a spurious note on a fresh install.
+- No in-app "Restart now" button (a relaunch would kill every running agent's PTY) — deliberately out of scope; a Copy-diagnostics button (existing clipboard write, #282) is included instead for bug reports.
+- Rust command payload fields stay snake_case (the AgentInfo precedent — no serde rename_all in commands.rs); the TS interface mirrors them verbatim.
+
+## Task 358
+
+Tune `[profile.release]` (LTO, one CGU, strip, size opt-level) to shrink the binary and speed AppImage cold start — deliberately keeping `panic = "unwind"`
+
+- Reject `panic = "abort"`: the backend has zero `catch_unwind` / `#[should_panic]` / `std::panic` and zero prod `unwrap`/`expect` (only `lib.rs:346`'s startup `.expect`), so nothing technically needs unwinding — but ReCue supervises long-lived PTY sessions from always-running threads (per-session `reader_loop`, busy/idle monitor, title worker, `lib.rs` event forwarder + schedule/recurring poll, `path_env` probe) and every mutex take handles a poisoned lock (no `lock().unwrap()` in the tree), i.e. thread-level panic isolation is a live property. `abort` would trade that (whole app dies, every live agent lost) for the smallest size lever (~5-10% unwind tables). Ship it as a comment in Cargo.toml so it isn't re-litigated.
+- Ship `lto = true` (fat) rather than `"thin"`: the added link time is paid only by `release.yml` (version-bump pushes; 4 serialized Rust binaries — macOS universal counts twice), never by the PR gate (`ci.yml` uses dev/test profiles), and it yields a draft release a human publishes later. `lto = "thin"` is documented as the one-word fallback if a leg OOMs (arm64 macOS runner ~7 GB, universal = two LTO links) or the pipeline gets painful.
+- Default `opt-level = "s"` if the benchmark is inconclusive; ship `3` only if `"s"` is >15% slower on the aggregate hot path AND any stage drops below ~200 MB/s (a claude repaint storm is single-digit MB/s, and #261/#346 already moved the costly work off the critical path).
+- Concretize "benchmark PTY throughput" as a new `#[ignore]`d `bench_output_hot_path` test in `pty.rs`'s existing test module, timing the three CPU-bound stages of the output path (`Scrollback::push` @ 8 KB chunks / 256 KB cap, `coalesce_output_events`, `commands::encode_output`) with `std::time::Instant` — no new dep (no criterion) — run via `cargo test --release -- --ignored --nocapture` (the `bench` profile inherits `[profile.release]`). Shipped rather than thrown away so the choice is reproducible for Task 361 (the AUR package).
+- Treat the card's "23.6 MB / 86 MB" as unverified: the plan re-measures the baseline first (no `[profile.*]`, no workspace root Cargo.toml, no `.cargo/config.toml`, no RUSTFLAGS/strip in CI or tauri.conf.json — all confirmed) and gates acceptance on a relative delta (binary >=25% smaller) rather than absolute numbers.
+- Do NOT add a release-profile build to the PR gate (`ci.yml`'s header explicitly refuses per-PR `tauri build` cost) — accept that a broken release link surfaces only on the next version-bump push, with a one-line revert as rollback; log the macOS/Windows legs as real-box verification items.
+- Docs: this card also closes the `TRAJECTORY_TO_LINUX.md:163-165` "deliberately untouched" entry, adds a dated Linux entry (sizes, benchmark table, panic rationale, CI cost), a short mirrored Windows note, and one sentence in CLAUDE.md's "Builds & distribution" bullet.
+
+## Task 356
+
+Code-split the frontend bundle — lazy routes, panels, modals, markdown/Prism, and the xterm WebGL addon
+
+- Rejected vite `manualChunks` (the card offered "and/or"): chunking cannot move a statically-reachable module off the first-paint parse path — only dynamic `import()`/`React.lazy` can. `vite.config.ts` is still touched, but only for `build: { manifest: true }` to feed the size-report script.
+- Kept xterm core + addon-fit + addon-web-links eager (the card calls terminals first-paint critical, and `store.ts` statically imports `terminalPool`); deferred only `@xterm/addon-webgl` (107 kB, already runtime-conditional via #105/#346), which means the terminal's first frames now use the DOM renderer and swap to WebGL a few ms later — flagged as the plan's top risk + rollback.
+- Verified dnd-kit really is first-paint (the app-level DndContext in MainApp) and kept it eager, as the card asked.
+- Got markdown+Prism (221 kB) out of the first-paint graph by lazying their four *consumers* (FileViewer, KanbanPanel, DiffInspector, Settings — each has exactly one importer) rather than refactoring FileViewer's internals into an async markdown/prism loader: same byte win, no change to `prism.ts` / `markdownCheckboxes.tsx` / any unit-tested pure module.
+- Added a route-level split (lazy `MainApp` vs `CanvasWindow`) to satisfy "a detached window should load less" — costs the main window one extra local chunk fetch, judged negligible vs the parse win.
+- Suspense fallbacks chosen explicitly: `null` for modals (an empty modal shell would be the regression the card names), the existing muted "Loading…" `.placeholder` for panels, and a bare background-painting `div.app` for the route boundary (kept complementary with Task 348's window show-gate).
+- Added `src/prefetch.ts` (idle warm-up, `requestIdleCallback` with a `setTimeout` fallback for older WKWebView) so deferred chunks are hot before the user reaches them — no perceived interaction regression.
+- Kept UpdateModal, BigModeModal, Toaster, ClaudeMissing, Sidebar, Overview, Canvas static (safety-critical or first-paint, and small).
+- Measured the baseline directly (1,351.5 kB raw / 391.1 kB gzip, single chunk) and attributed it per-library via a source-map build; set the acceptance target at <= 1,000 kB raw / <= 300 kB gzip main-route first-paint JS (expected ~900-950 kB), enforced by a new dependency-free `scripts/bundle-report.mjs --check` budget.
+- Included a short CLAUDE.md bullet (lazy boundaries + the "no manualChunks" rule) so a future feature doesn't static-import the deferred stacks back into the entry.
+
+## Task 359
+
+Tame the boot git storm — tier, scope, and coalesce the sidebar git refresh volley
+
+- Keep `showDiffLineCounts` default ON on all three OSes: explicitly REJECTED the card's "or default it off on Linux" option (a silent per-OS feature removal); the fix keeps the badge working and instead makes it cheaper + deferred + per-repo scoped.
+- "Resume settled" is defined as the store's existing `RECONNECT_BACKSTOP_MS` (4 s) boot window: a new `resumeSettled` flag is true immediately when zero session records were persisted, else flipped by that existing unconditional timeout — a hard cap, so a slow/failed `claude --resume` can never defer the volley forever. Deliberately not keyed on "every session emitted output" (a never-resuming session would hang the gate).
+- "After first paint" = a double `requestAnimationFrame` (with a `setTimeout` fallback), not `requestIdleCallback` (support on WKWebView/WebKitGTK not worth relying on). Complementary to Task 348's pre-paint `show()` gate.
+- `refreshBranches` is NOT deferred (tier 1, 1 spawn/folder): `branches[path]` is the sidebar's primary label source via `sessionLabel`. Only the decorations (GitHub URLs, ahead/behind, diff line counts, FileTree tint) are deferred.
+- Per-repo scope key = the settling session's `repoPath` (the exact key of every affected map, worktree folders included); an unknown session id falls back to an unscoped volley (fail-safe).
+- `file_statuses` is scoped to repos with a **mounted FileTree** (its only consumer, which already self-fetches on mount) — so a boot with no tree open does zero `git status` reads. This goes beyond the card's four directions but is strictly implied by "dedupe/skip unnecessary refreshes".
+- Viewport-based skipping REJECTED (recommended against, as the card allows): the sidebar is short and non-virtualized; scroll-dependent data would pop in and interact badly with worktree nesting, the collapsed rail, and detached windows.
+- To preserve today's "any settle refreshes every repo" safety net for externally edited folders, the window focus/visibility handler runs a full unscoped volley throttled to at most once per 30 s (the 15 s interval poll keeps the cheap branches+ahead/behind pair).
+- Two Rust spawn reductions adopted as part of the card's intent (it counts spawns): drop the redundant `has_head` probe in `diff_line_counts` (3→2 spawns; provably identical output) and collapse `github_web_url_for` to one `git config --local --get-regexp` read (2→1 spawn).
+- Untracked line counting keeps its 2000-file / 2 MB-per-file caps and gains a total-byte budget (16 MB/repo) plus streaming line counting — a bounded-fidelity tradeoff in the same family as the existing caps (pathological untracked trees may undercount, as they already do today).
+- The ~8 copy-pasted refresh blocks in the git-write/spawn paths are consolidated onto the new `refreshRepoGit()` action, unscoped (rare, user-initiated), which also adds a GitHub-URL read they lacked — a harmless superset of today's behavior.
+
+## Task 364
+
+Recover from an xterm WebGL context loss (dispose the addon → DOM renderer, latched)
+
+- The card says the addon is attached "without a context-loss handler"; in fact `terminalPool.ts:257` already has a minimal `addon.onContextLoss(() => addon.dispose())` (since #18). Kept the card's intent and scoped the task to what is actually missing: clearing the dangling addon reference (it currently lets the #221 font-atlas rebuild call `clearTextureAtlas()` on a disposed addon and burn the one-shot `fontAtlasRebuilt` flag), the anti-retry latch, a one-time warning, and observable state.
+- Latch scope: made it **window-wide** (a module singleton per document, so the main window and each detached window latch independently), not per-session — a real GL loss is driver/process-level, so a terminal spawned after the loss would immediately lose its context too. Rollback to a per-session key is noted in the plan.
+- The latch survives `resetTerminal` (session Restart) and `forget()` — disposing the terminal that lost its context does not re-arm WebGL.
+- Put the latch in a NEW pure module `src/components/Terminal/webglFallback.ts` rather than extending `webglRenderer.ts` (keeps that file a pure classifier and keeps the diff conflict-free with Task 357, which extends `webglRenderer.ts`).
+- No re-attach and no `webglcontextrestored` handling: verified in `@xterm/addon-webgl@0.19.0` that the addon itself waits ~3s for a restore and only fires `onContextLoss` when the context is unrecoverable.
+- No user-facing surface (no toast/badge/Setting) — a single `console.warn` mirroring #346's style; the user-visible outcome is simply that the terminal keeps working. The Settings renderer override stays Task 357's; the plan documents `webglFallback.allowsWebgl()` / `reset()` as its seam (an explicit "force WebGL" must clear the latch).
+- Added a belt-and-braces `term.refresh(0, term.rows - 1)` after dispose even though xterm's own dispose path already calls `setRenderer(DOM)` + `handleResize` (guards against future addon-internal drift).
+- Included small doc touches (`TRAJECTORY_TO_LINUX.md` real-box verification bullet + one clause in `CLAUDE.md`), per CLAUDE.md's rule that a path which can't be unit-tested on CI must be recorded.
+
+## Task 361
+
+Ship a native Arch/AUR package (`recue-bin`) + Linux install docs, and gate the in-app updater off for distro-managed installs
+
+- Chose ONE AUR package: `recue-bin`, repacking a new official CI `.deb`. No source-built `recue` package (npm/cargo network fetch at build time conflicts with makepkg's declared-sources model, heavy makedepends, and it yields the same binary) — the name is reserved via `provides=('recue')` / `conflicts=('recue')`.
+- Therefore CI must publish a `.deb`: the Linux leg's args become `--bundles appimage,deb`. The AppImage stays the sole minisign-signed updater artifact and the self-updating default (`latest.json` linux-x86_64 keeps pointing at the .AppImage).
+- PKGBUILD + .SRCINFO live in-repo at `packaging/aur/recue-bin/` as the source of truth; publishing to the AUR is a documented MANUAL maintainer step (`scripts/aur-bump.sh <version>` re-pins pkgver/sha256sums/.SRCINFO, then push to ssh://aur@aur.archlinux.org/recue-bin.git). No CI automation of the AUR push — no AUR account/SSH-key secret exists and auto-publishing on every release is not something to enable silently.
+- Distro-install detection is RUNTIME, not compile-time: the AUR package repacks the same CI binary, so a cargo feature / build-time env cannot distinguish it. New Rust `install_kind()` returns "appimage" (Linux with `$APPIMAGE` set), "system" (Linux release build without it — pacman/deb/extracted), or "bundle" (macOS/Windows, and any debug build). `RECUE_INSTALL_KIND=appimage|system|bundle` force-overrides (mirrors #346's RECUE_DISABLE_DMABUF).
+- Debug builds report "bundle" so `npm run tauri dev` on Linux keeps today's update UI and the #193 dev mock exercisable.
+- A Linux release binary run outside an AppImage (target/release, .deb, manual copy, `--appimage-extract` run) reports "system" and hides the update UI — deliberate: Tauri's Linux updater can only replace an `$APPIMAGE`, so an offer there would always fail.
+- The updater gate is frontend-side (`selfUpdates()` in src/platform.ts → store `checkForUpdate`/`installUpdate` short-circuit, UpdateIndicator hidden, Settings → Updates shows a "use your package manager / `sudo pacman -Syu recue-bin`" note). The unloaded default (installKind === "") reads as self-updating, so macOS/Windows/AppImage behavior is byte-for-byte unchanged.
+- The boot post-update "Updated to v…" toast stays enabled for package installs (a pure version compare — it correctly fires after a `pacman -Syu`).
+- The committed PKGBUILD ships `pkgver` = current version and `sha256sums=('SKIP')` as a documented placeholder, because no released `.deb` exists yet; `aur-bump.sh` fills it and hard-errors (refusing to print publish steps) while SKIP remains.
+- `license=('custom')` — the repo has no LICENSE file. Not adding one (a legal decision); flagged in docs/linux-packaging.md as a prerequisite for a real AUR submission that redistributes the binary.
+- PKGBUILD `depends` start at `webkit2gtk-4.1 gtk3 glibc gcc-libs` and are finalized from the real `ldd` output on the Arch box; no appindicator dep (ReCue ships no tray) unless ldd shows it.
+- The PKGBUILD does NOT hand-edit the `.desktop` entry — it inherits whatever Tauri generates, so Task 362's StartupWMClass fix flows into the AUR package for free.
+- Docs split: a concise README "Install (Linux)" section (AppImage + `fuse2` / `--appimage-extract` vs AUR, and which one self-updates) plus a full `docs/linux-packaging.md` (install matrix, updater rule, maintainer AUR runbook), rather than a packaging/aur/README.md.
+
+## Task 360
+
+Take the login-shell PATH probe off the startup critical path (async probe + fingerprinted cache)
+
+- Chose the safest design over the fastest: the process env is NEVER mutated for PATH (no `set_var` at all). The probe result lands in a `Mutex`+`Condvar` cell in `path_env`; `find_on_path` / `spawn_with_id` / `hidden_command` read that. Rules out the getenv/setenv data race the card flags.
+- The probe thread works from an env SNAPSHOT (SHELL/PATH/HOME/ZDOTDIR) captured on the main thread, so it never calls getenv concurrently with anything.
+- Reordered `run()`: `linux_webkit::apply_webkit_env_workarounds()` (which still `set_var`s) must run BEFORE `path_env::start_probe()` spawns any thread.
+- Two readers, deliberately: `effective_path()` BLOCKS (spawn/lookup path — the correctness gate) while `apply_path()` is NON-blocking (git shell-outs + xdg-open-class helpers), because Tauri v2 runs sync commands on the main thread and a blocking git call would stall the webview — the exact failure this task removes.
+- Cache persists as a backend-internal `path_cache: Option<PathCache>` scalar in `store.rs` (like `sidebar_width`/`repo_order`) — no Tauri command, no frontend change.
+- The cache stores the DISCOVERED login-shell PATH, not the merged one, so no per-launch segment (AppImage `/tmp/.mount_…`) is ever persisted; the merge against the current process PATH is redone every boot.
+- Cache key = `$SHELL` + mtime/presence of the rc files that can set PATH (/etc/profile, /etc/paths(.d), ~/.profile, the zsh/bash/fish rc sets, ZDOTDIR-aware). A stale-fingerprint cache is NOT seeded (readers wait for the probe) rather than optimistically used.
+- A background re-probe republishes in-memory when it differs from the seeded value (later spawns in the same session get the fresh PATH) and rewrites the cache; a failed/timed-out probe never downgrades a good seed.
+- Scope call: `commands.rs`'s `os_open` / `open_url` / `reveal_file_in_finder` / `reveal_file_linux` (and `usage.rs`'s `security`, `lib.rs`'s `tccutil`) are left alone — they launch system binaries always present in the minimal GUI PATH, and skipping them keeps the diff off Task 350's seams.
+- Release-only + Windows no-op preserved exactly (state stays `Inherit` ⇒ `effective_path()` == the process PATH ⇒ byte-for-byte today's behavior in dev and on Windows).
+
+## Task 363
+
+Give the UI font a Linux leg — bundle Inter Variable (latin), applied Linux-only
+
+- Chose BUNDLE over system-fallback-list: measured on the reporting Arch box (`fc-list`) that NONE of the card's suggested faces (Inter, Cantarell, Ubuntu, Noto Sans, DejaVu) are installed — only Adwaita Sans/Mono + FreeSans, and `fc-match sans-serif` → FreeSans. A fallback-only list would be a no-op on the very machine that reported the bug, and non-deterministic elsewhere. A short system-face tail is still kept in the Linux `--ui` for non-latin glyph coverage.
+- Applied the bundled face on **Linux only** via a new `:root[data-platform="linux"]` `--ui` override; `:root --ui` (tokens.css:77) is left byte-for-byte untouched, so macOS (San Francisco) and Windows (Segoe UI) render exactly as today and never fetch the woff2 (@font-face files load lazily, only when the family is matched).
+- Verified the ordering hazard rather than assuming it: prepending "Inter" into the shared list is NOT platform-neutral — macOS is safe (`-apple-system` wins) but **Windows is not** (neither `-apple-system` nor "SF Pro Text" resolve there, so an installed Inter would beat `system-ui`/Segoe UI). Appending after `system-ui` is safe on mac/Win but a no-op on Linux (the generic always resolves — /etc/fonts/conf.d/60-latin.conf even defines a fontconfig `system-ui` generic). Hence a platform-scoped override, not any re-ordering.
+- Chose `@fontsource-variable/inter@5.2.8` (OFL-1.1) with a hand-written **latin-only** `@font-face` rather than importing the package's index.css: measured 48,256 B (one file) vs 218,512 B (all 7 subsets). Empirically verified with this repo's own Vite 7.3.6 that a bare-package `url()` in plain CSS resolves and emits exactly that one asset. Variable (not static) because the UI uses weights 400/500/600 — one file, real weights.
+- Kept the bundle-weight claim consistent with Task 356: a woff2 is not JS, is never parsed by the engine, and is fetched only on Linux — +47 KB on disk (~0.9% of dist/), no JS-parse cost.
+- Synchronous platform detection via `navigator.userAgent`/`navigator.platform` → `data-platform` on `<html>` set in `main.tsx` before render (CSS tokens are static; the store's `platform` IPC is async and would flip the font mid-boot). Deliberately did NOT touch `index.html` — Task 348 owns it — so the two land independently; the store re-applies the authoritative backend value as a self-heal.
+- Used `format("woff2")` instead of fontsource's `format("woff2-variations")` so an engine that doesn't know the newer keyword degrades to the default instance rather than skipping the src entirely.
+- Out of scope (recorded, not built): `--mono`/terminal font, mermaid's fontFamily, and a user-facing "UI font" setting / opt-out for Linux users who prefer their desktop font.
+
+## Task 365
+
+Walk the Linux real-box verification checklist on Arch/Hyprland — evidence, honest ticks, and recorded findings
+
+- Item count: the card says "15 unchecked items"; the file actually has 13 `- [ ]` lines (8 in the #345 list, 5 in the #346 list) that expand to ~20 sub-conditions (A1 = 3 distros, A4 = 4 DEs, A7 = X11+Wayland, B2 = AMD+Intel). Planned as 13 boxes + a re-count at branch time; the plan says to walk whatever `- [ ]` lines exist then, including the ones Tasks 347/350 rewrite/append.
+- Dependency stance (the key judgment call): depend on Task 347 and Task 350 and walk the fixed build. 347 rewrites the DMA-BUF decision AND the #346 checklist itself (today's boot line is, per 347, the bug on this exact hybrid box), and 350 scrubs the AppImage env from the very `xdg-open`/`dbus-send`/`git`/`claude` child spawns that A2/A3/A4 test and appends its own boxes. Verifying now would enshrine ticks that are stale on arrival. 348/349/351–355 change no box's pass criterion, so they are not dependencies.
+- Nothing from the earlier research session is ticked on trust — the AppImage-launch/DMA-BUF-log observations it made are pre-347/pre-350 and must be re-verified against the branch build.
+- Agent-vs-human split: the implementer performs every headless check (login-shell PATH probe, xdg-open handlers + live open, verbatim `dbus-send` FileManager1.ShowItems, notification-daemon activatability, `latest.json` linux-x86_64 entry, GPU/`/sys` ground truth, boot log line + `/proc/<pid>/environ` for the whole DMA-BUF override matrix, AppImage launch confirmed via `hyprctl clients`) and hands every GUI-only step (agent spawn from the desktop launcher, Ctrl-click link, Reveal, Watch notification, clipboard image paste, busy-TUI smoothness) to the maintainer as a written checklist with blank verdict slots. A box is NEVER ticked unless it was actually exercised.
+- Environment scoping: this box is Arch/Hyprland (Wayland), hybrid Intel i915 + NVIDIA-open, Thunar-only, Brave, no AMD/NVIDIA-only GPU, no GNOME/KDE/Cinnamon, no X11 session, and no libfuse2. Boxes covering absent environments stay `- [ ]` with an explicit `N/A — not this box` scope note; every tick names the environment it was proved on.
+- Deliverable shape: a new dated section in TRAJECTORY_TO_LINUX.md (box-under-test fingerprint incl. commit SHA + artifact, results table, numbered findings, maintainer checklist) plus a new read-only `scripts/linux-verify.sh` evidence collector (+ one `verify:linux` package.json script) so Ubuntu/Mint can be walked later unchanged. No source behavior change.
+- Failures are recorded, not fixed: findings F1..Fn go in the trajectory doc and the PR body as proposed card titles; KANBAN.md is not touched (the maintainer files them).
+- Artifact choice: walk a locally built AppImage (`APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri build -- --bundles appimage`), explicitly recorded as NOT proving CI's ubuntu-22.04 glibc/webkit floor. The updater end-to-end (download→replace→relaunch) is blocked until a newer release is published; only the signed `linux-x86_64` manifest entry + the app's own `APPIMAGE` env (a 350 regression check) are verifiable now, with an optional uncommitted staged-endpoint test offered.
+- Safety: every app launch uses an isolated `XDG_DATA_HOME=$(mktemp -d)` (Tauri app_data_dir) so the maintainer's real sessions.json is never resumed/rewritten, plus `timeout` on every launch.

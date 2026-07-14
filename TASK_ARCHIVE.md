@@ -2963,3 +2963,97 @@ Windows behavior is unchanged.**
 - The per-GPU runtime behavior (DMABUF auto-set on NVIDIA, left alone on AMD/Intel, llvmpipe → DOM
   renderer, AppImage under a busy TUI) can't be exercised on CI — walked via the
   `TRAJECTORY_TO_LINUX.md` checklist on real boxes.
+
+### 349. [x] Linux: native file dialogs follow ReCue's own theme (fix the always-white Adwaita dialogs in the AppImage)
+
+In the shipped **AppImage** every native dialog — the folder picker ("Choose a working directory"), the
+open-file dialog (FileSwitcher → Browse…) and the save dialog (template export) — rendered white/light
+Adwaita no matter the desktop's theme or ReCue's own Dark/Light setting (#333), so a dark-desktop user in
+a dark app got a blinding white dialog. Three facts stack up: (1) Tauri's AppImage bundler injects the
+vendored `linuxdeploy-plugin-gtk.sh` AppRun hook, which bundles GTK and then **forces `GTK_THEME`** for
+the whole process, picking the variant by grepping the *system theme name* for the substring `dark` — so
+`catppuccin-mocha-yellow-standard+default` (and any `color-scheme: prefer-dark` setup whose theme name
+lacks "dark") falls through to `GTK_THEME=Adwaita:light`; (2) `tauri-plugin-dialog` (2.7.1) resolves to
+rfd's **in-process GTK3** backend on Linux (`Cargo.lock`: `rfd 0.16` + `gtk-sys 0.18`, **no `ashpd`**), so
+every dialog is a GTK3 widget created inside our process and themed by that polluted env; (3) GTK3's
+`get_theme_name()` gives **`GTK_THEME` absolute precedence** — `gtk-theme-name` /
+`gtk-application-prefer-dark-theme` are not even read when it is set, which is why tao's
+`Window::set_theme` cannot fix it. The env itself must be corrected, **before GTK initializes**.
+**macOS and Windows are byte-for-byte unchanged** (no env write, no file read).
+
+**What shipped** (branch `linux-gtk-dialog-theme`, PR [#101](https://github.com/ErikdeJager/ReCue/pull/101),
+2026-07-14):
+
+- **`src-tauri/src/linux_gtk.rs`** (new, mirroring `linux_webkit.rs`'s shape) — `apply_gtk_theme_env()`
+  builds a `GtkThemeProbe` from the environment + the persisted store and exports `GTK_THEME`. The pure,
+  unit-tested `gtk_theme_env` policy, in order: **(1)** `RECUE_GTK_THEME=<literal GTK_THEME value>` forces
+  the value **everywhere** (the support escape hatch — and the way to smoke-test this in `tauri dev`
+  without building an AppImage; a blank/whitespace value is treated as unset); **(2)** not in an AppImage
+  (`$APPIMAGE`/`$APPDIR` unset — a dev run, `.deb`, or distro package) → leave `GTK_THEME` untouched, since
+  the desktop's real GTK theme already applies and forcing Adwaita would be a downgrade; **(3)**
+  `APPIMAGE_GTK_THEME` set → leave it alone (the hook already copied the user's explicit choice verbatim —
+  ReCue never clobbers it); **(4)** otherwise pick the **Adwaita** variant — the family the AppImage
+  actually bundles and the only one guaranteed to render against the bundled GTK — from ReCue's own
+  `settings.theme`: `light` (case-insensitive, trimmed) → `Adwaita:light`, everything else including a
+  fresh install with no persisted settings → `Adwaita:dark` (matching `DEFAULT_SETTINGS.theme = "dark"`).
+  One `[recue] GTK: set GTK_THEME=… (was …; recue theme: …)` log line on the write.
+- **Reading the theme before Tauri exists** — the `Store` is only constructed in `.setup()`, i.e. *after*
+  GTK init, so the module reads `settings.theme` straight out of `sessions.json` itself: read-only and
+  **fail-open** (`theme_from_store_json` returns `None` for malformed JSON, a missing/`null` `settings`, a
+  missing or non-string `theme` → dark, which is the default theme anyway). `store_path()` re-derives
+  Tauri's Linux `app_data_dir()` rule (`$XDG_DATA_HOME` when absolute, else `path_env::home_dir()` +
+  `.local/share`, joined with the identifier), reusing the shared `home_dir()` seam rather than reading
+  `$HOME`. A **drift-guard test** parses `tauri.conf.json` via `include_str!` and asserts its `identifier`
+  still equals the hardcoded `com.recue.app`, so the hand-derived path can't silently rot.
+- **`src-tauri/src/lib.rs`** — `mod linux_gtk;` + one call in `run()`, immediately after
+  `linux_webkit::apply_webkit_env_workarounds()` and before `tauri::Builder` — i.e. before GTK init **and**
+  before any thread spawns (env mutation isn't thread-safe; `set_var` is `unsafe` in Rust 2024 for exactly
+  that reason), joining the existing pre-GTK env writes.
+- **`src/components/Settings/Settings.tsx`** — a Linux-only (`isLinux(platform)`) sentence appended to the
+  existing Theme help text: native file dialogs adopt the theme the next time ReCue starts. Absent on
+  macOS/Windows; no new CSS, store state, or component.
+- **Docs** — `TRAJECTORY_TO_LINUX.md` gained a dated `### Native GTK dialogs were always light (Task #349)`
+  entry (bug / fix / rejected options / real-box checklist); `README.md`'s Linux build section gained a
+  one-line override note (`APPIMAGE_GTK_THEME=Adwaita:dark`, or `RECUE_GTK_THEME=<gtk theme>`).
+
+**Key decisions**
+
+- **Fix the env, don't swap the backend.** The **`xdg-portal`** feature of `tauri-plugin-dialog` was
+  rejected and kept only as the *documented fallback*: it hard-requires a running `xdg-desktop-portal` +
+  backend, and rfd has no GTK fallback when built with it — on a minimal/wlroots box the dialogs would stop
+  working **entirely**, turning a cosmetic bug into "cannot open a folder" (unacceptable for the
+  best-effort-other-distros promise). It also follows the *system* theme, so a light-desktop + dark-ReCue
+  user would still mismatch. Also rejected: **unsetting `GTK_THEME`** (the user's real theme may not exist
+  under the AppImage's `XDG_DATA_DIRS` or render against the *bundled* GTK — precisely why the hook forces
+  Adwaita; it would trade a white dialog for a possibly-broken one) and **runtime tao `set_theme`** (needs a
+  direct `gtk` dep and is a no-op while `GTK_THEME` is set — fact 3).
+- **The variant follows ReCue's own theme, not the system color-scheme** — the dialog belongs to the app,
+  and this is deterministic + unit-testable on any host. Only the Adwaita **variant** is chosen, never a
+  different theme *name*.
+- **Scoped to the AppImage-polluted env only.** A dev / distro-package run is left alone; making
+  non-AppImage dialogs follow ReCue's theme rather than the desktop's is an explicit non-goal.
+- **Accepted limitation:** `GTK_THEME` is read at GTK init, so toggling the theme in Settings re-themes the
+  app instantly but the **native dialogs pick up the new variant on the next launch** — surfaced as the
+  muted Linux-only Settings hint above.
+- **A separate module, not an extension of `linux_webkit.rs`** — Task 347 is editing that file; the only
+  shared touchpoint is the append-only call list in `run()`. Complementary to Task 350 (which scrubs
+  AppImage-polluted env from *child* processes — a different process's env; `GTK_THEME` landing on its
+  strip-list for children is fine and expected).
+- No dependency / `Cargo.toml` / `Cargo.lock` / `tauri.conf.json` / capability / dialog-call-site
+  (`src/ipc.ts`) change. No version bump or patch-notes file (releases are batched by the maintainer).
+
+**Dependencies:** none. (Builds on landed work only: #333 the `settings.theme` field, #345 the Linux port +
+AppImage leg, #346 `linux_webkit.rs`'s pre-GTK env pattern.)
+
+**Notes**
+
+- The pure decision core (`gtk_theme_env` / `adwaita_variant` / `theme_from_store_json`) is `, test)`-widened
+  (the `reveal_file_linux` / `explorer_select_arg` precedent) so the macOS and Windows hosts still type-check
+  **and** unit-test it; only the thin env-probe + `set_var` + file-read shell is Linux-only.
+- The GUI/AppImage surface (a dark folder picker in the real AppImage, the light variant after a toggle +
+  relaunch, both escape hatches honored, a non-AppImage run leaving `GTK_THEME` untouched) can't be
+  exercised on CI — logged in `TRAJECTORY_TO_LINUX.md`'s real-box checklist (Arch/Ubuntu/Mint ×
+  GNOME/KDE/Cinnamon/Xfce, Wayland + X11).
+- Benign side effect: a dark `GTK_THEME` also darkens the GTK window background and WebKitGTK's
+  `prefers-color-scheme`. ReCue's CSS keys off `data-theme`, not `prefers-color-scheme`, so nothing in the UI
+  changes — and a dark native background *helps* (does not fight) Task 348's white-startup-flash work.
