@@ -956,3 +956,40 @@ returns `true` before touching the event).
   the temp-PNG path exactly once.
 - Re-confirm macOS ⌘V pastes once and Ctrl+V still emits `^V` (gated off), and Linux
   Ctrl+Shift+V native paste is unaffected.
+
+## 2026-07-14
+
+### White startup flash (#348)
+
+Platform-neutral fix (no `#[cfg]` arms) — windows are created **hidden**
+(`visible: false`) with a **themed native background** (`tauri.conf.json` /
+`WebviewWindowBuilder::background_color`, from `commands::background_for_theme`; `lib.rs`
+`setup` re-colors the main window from the persisted theme before it is ever shown),
+`index.html` gained an **inline pre-paint `<style>`** + a synchronous **`recue.theme`
+localStorage mirror** read (every stylesheet is JS-imported, so the document had *zero*
+styles — a white canvas — until the ~1.35 MB bundle parsed), and the frontend reveals the
+window from `useRevealWindow` → the Rust `reveal_window` command once React has committed
+its first frame, with `schedule_reveal_fallback` (2 s) as a safety net. The paint race is
+a GUI behavior and cannot be unit-tested, so it needs a real-box check per OS.
+
+Windows-specific notes: WebView2 honors the window-layer `backgroundColor` (unlike macOS,
+where `set_background_color` is a webview-layer no-op — harmless there, since the
+document's inline `html` background paints over it before the window is revealed), and the
+config's alpha channel is ignored for the window layer, which is fine (we ship opaque
+`#1e1e2e` / `#eff1f5`). Watch for WebView2 suspending `requestAnimationFrame` while the
+window is unmapped — the reveal therefore fires from **both** an rAF and a 0 ms timer.
+
+### Needs real-box verification (startup flash, #348)
+
+- [ ] **Dark (default) launch** (`npm run tauri dev` **and** an installed NSIS/MSI build):
+      no white rectangle at any point — the window first appears already dark.
+- [ ] **Light theme** (Settings → Appearance → Light → Save, quit, relaunch): the window
+      appears **light** — no white flash and no dark→light flip.
+- [ ] **Detached canvas window**: pop a Canvas tab out (button **and** drag tear-off) in
+      both themes — no white flash; closing it re-docks as before.
+- [ ] **Reveal timing**: the window appears promptly (frontend reveal), not after a ~2 s
+      pause (which would mean only the Rust fallback fired).
+- [ ] **Reveal fallback**: with the Vite dev server stopped (or a broken bundle), the
+      window still appears within ~2 s instead of never showing.
+- [ ] **Runtime theme switch**: switch Dark↔Light, Save, then resize the window quickly —
+      any exposed native gutter is the **new** theme color.

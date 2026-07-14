@@ -42,6 +42,7 @@ import UpdateModal from "./components/Update/UpdateModal";
 import { useOsFileDrop } from "./osFileDrop";
 import { useStore } from "./store";
 import { useKeyboardNav } from "./useKeyboardNav";
+import { useRevealWindow } from "./useRevealWindow";
 import { IS_MAIN_WINDOW, ownedHere } from "./windowContext";
 
 /**
@@ -208,6 +209,11 @@ function MainApp() {
  * (derived from its URL), so this branch is stable — hooks never run conditionally.
  */
 function App() {
+  // Windows are created hidden with a themed native background (#348) — show this one
+  // once React has committed its first frame, so no white rectangle is ever painted.
+  // Called before the branch: a hook must never run conditionally, and this root is
+  // shared by the main window AND every detached canvas window.
+  useRevealWindow();
   return IS_MAIN_WINDOW ? <MainApp /> : <CanvasWindow />;
 }
 

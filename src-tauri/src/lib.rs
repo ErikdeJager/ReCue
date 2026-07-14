@@ -96,6 +96,18 @@ pub fn run() {
                 .unwrap_or_else(|_| PathBuf::from("recue-sessions.json"));
             app.manage(Store::load(&store_path));
 
+            // Startup flash (#348): the main window is created hidden (`visible: false`)
+            // with a dark native background (tauri.conf.json). Re-color it to the persisted
+            // theme *before* it is ever shown — so a light-theme user's window never flashes
+            // dark — then let the frontend reveal it once React has painted (`reveal_window`),
+            // with a Rust fallback in case the bundle never boots. Needs the Store, so it runs
+            // right after it is managed. Platform-neutral (macOS/Windows/Linux).
+            if let Some(window) = app.get_webview_window("main") {
+                let color = commands::window_background(&app.state::<Store>());
+                let _ = window.set_background_color(Some(color));
+            }
+            commands::schedule_reveal_fallback(app.handle(), "main");
+
             // One-time post-update permission re-prompt (macOS, #321). When a user updates
             // from an old ad-hoc build into a properly-signed one, the code signature
             // (Designated Requirement) changes so macOS should re-ask — but a stale/denied
@@ -276,6 +288,8 @@ pub fn run() {
             commands::focus_canvas_window,
             commands::close_canvas_window,
             commands::list_canvas_windows,
+            commands::reveal_window,
+            commands::set_theme_background,
             commands::create_schedule,
             commands::list_schedules,
             commands::cancel_schedule,

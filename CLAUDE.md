@@ -935,6 +935,28 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   (`open_canvas_window`) with the label `canvas-<id>` and a `?canvas=<id>` route, so
   no JS window-create permission is needed — only the `canvas-*` capability so the
   new window can invoke commands + listen to events.
+  **Hidden until painted (#348)** — every window (main + detached canvas) is created
+  **`visible: false`** with a **themed native `backgroundColor`** (`tauri.conf.json`
+  `app.windows[0]` / `WebviewWindowBuilder::background_color`, from the pure
+  `commands::background_for_theme`; `lib.rs` `setup` re-colors the main window from the
+  **persisted** theme right after the `Store` is managed, so a light-theme user's window
+  never flashes dark). `index.html` carries an **inline `<style>`** (the *only* styling
+  that exists at first paint — every stylesheet is JS-imported via `main.tsx`) plus an
+  inline boot script that reads the **`recue.theme` localStorage mirror** (written by
+  `applySettingsEffects`, `src/theme.ts`) so the first frame is already the right theme.
+  The frontend then shows the window from **`useRevealWindow`** (`App()`, the shared root
+  of both window kinds) → the Rust **`reveal_window`** command (JS can't call
+  `window.show()` — `core:window:default` grants no `allow-show`, and widening it isn't
+  needed since window ops are already Rust-owned), with `schedule_reveal_fallback` showing
+  any still-hidden window after **2 s** so a dead bundle can't leave the app invisible; a
+  runtime theme switch pushes the new native color via `set_theme_background`.
+  **Invariant:** the two pre-paint hexes (`#1e1e2e` dark / `#eff1f5` light) are duplicated
+  in **four** places — `--bg-base` in `src/styles/tokens.css`, the inline style in
+  `index.html`, `THEME_BG` in `src/theme.ts`, and `background_for_theme` in `commands.rs`
+  — keep them in sync (the TS/HTML/CSS trio is guarded by `src/theme.test.ts`, the Rust
+  mapping by its own unit test). Platform-neutral: no `#[cfg]` arms (on macOS
+  `set_background_color` is a no-op for the *webview* layer, but the document's inline
+  `html` background paints over it before the window is ever revealed).
 - **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`,
   Windows NSIS/MSI installers, or a Linux **AppImage** (#345, host-OS dependent); the
   **updater artifacts are minisign-signed** on all three. macOS
