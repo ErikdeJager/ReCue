@@ -382,7 +382,32 @@ jobs:
           releaseBody: ${{ needs.prepare.outputs.body }}
           args: ${{ matrix.args }}
 
-<<<<<<< HEAD
+      # Linux (#361): surface the .deb the AUR `recue-bin` package repacks — its exact
+      # asset name + sha256 — in the job summary, so a maintainer can bump the AUR package
+      # after publishing the draft (scripts/aur-bump.sh does this from the published
+      # release). Best-effort: a missing artifact warns, never fails the release.
+      - name: Linux artifact summary (AUR bump info)
+        if: matrix.platform == 'ubuntu-22.04'
+        continue-on-error: true
+        run: |
+          deb="$(ls src-tauri/target/release/bundle/deb/*.deb 2>/dev/null | head -1)"
+          img="$(ls src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1)"
+          [ -n "$img" ] || echo "::warning::No AppImage produced — the updater artifact is missing."
+          if [ -z "$deb" ]; then
+            echo "::warning::No .deb produced — the AUR recue-bin package cannot be bumped."
+            exit 0
+          fi
+          sum="$(sha256sum "$deb" | cut -d' ' -f1)"
+          {
+            echo "### Linux artifacts"
+            echo ""
+            echo "- AppImage (self-updating): \`$(basename "${img:-none}")\`"
+            echo "- deb (AUR \`recue-bin\` source): \`$(basename "$deb")\`"
+            echo "- deb sha256: \`$sum\`"
+            echo ""
+            echo "After publishing the draft: \`scripts/aur-bump.sh <version>\` → push to the AUR."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Linux (#362): the AppImage's internal .desktop is what every desktop integrator
       # (and ReCue's own scripts/install-linux-desktop.sh) copies into the user's menu, and
       # its StartupWMClass is what makes the running window group under that launcher icon
@@ -416,33 +441,6 @@ jobs:
           grep -qx 'Icon=recue' "$f" || { echo "::error::Icon is not 'recue'"; exit 1; }
           grep -qx 'Exec=recue' "$f" || { echo "::error::Exec is not 'recue' (AppRun parses that line to find the binary)"; exit 1; }
           echo "AppImage desktop entry OK: StartupWMClass/Icon/Exec = recue."
-=======
-      # Linux (#361): surface the .deb the AUR `recue-bin` package repacks — its exact
-      # asset name + sha256 — in the job summary, so a maintainer can bump the AUR package
-      # after publishing the draft (scripts/aur-bump.sh does this from the published
-      # release). Best-effort: a missing artifact warns, never fails the release.
-      - name: Linux artifact summary (AUR bump info)
-        if: matrix.platform == 'ubuntu-22.04'
-        continue-on-error: true
-        run: |
-          deb="$(ls src-tauri/target/release/bundle/deb/*.deb 2>/dev/null | head -1)"
-          img="$(ls src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1)"
-          [ -n "$img" ] || echo "::warning::No AppImage produced — the updater artifact is missing."
-          if [ -z "$deb" ]; then
-            echo "::warning::No .deb produced — the AUR recue-bin package cannot be bumped."
-            exit 0
-          fi
-          sum="$(sha256sum "$deb" | cut -d' ' -f1)"
-          {
-            echo "### Linux artifacts"
-            echo ""
-            echo "- AppImage (self-updating): \`$(basename "${img:-none}")\`"
-            echo "- deb (AUR \`recue-bin\` source): \`$(basename "$deb")\`"
-            echo "- deb sha256: \`$sum\`"
-            echo ""
-            echo "After publishing the draft: \`scripts/aur-bump.sh <version>\` → push to the AUR."
-          } >> "$GITHUB_STEP_SUMMARY"
->>>>>>> origin/main
 
       # macOS only: when signing was enabled, assert the built .app carries the signature
       # that makes TCC grants work + persist — the necessary+sufficient precondition the
