@@ -1,0 +1,21 @@
+{
+  "version": "1.3.1",
+  "date": "2026-07-14",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "**See all of your Claude usage, not just the 5-hour window.** The sidebar usage bar now has a small disclosure that expands to list every usage window Anthropic reports — 5-hour, weekly, and any others — each with its own percentage, bar, and reset countdown. It adapts automatically, so new limits Anthropic adds just show up.",
+        "**Display size slider** in Settings → Appearance — scale the entire interface (text, controls, spacing, panels) up or down like browser zoom, from 80% to 150%. Enlarge it for readability or shrink it to fit more on screen.",
+        "**Focus follows mouse** — an opt-in mode (Settings → Behavior) that focuses a terminal panel the moment your pointer moves over it, so keystrokes land without a click. Off by default."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "New folders now prefer a palette color that isn't already in use, so distinct folders are easier to tell apart at a glance. Existing folders keep their color.",
+        "The default terminal line height is now the tighter **1.0**. If you'd previously left it at the old 1.2 default, ReCue migrates you to 1.0 once; a line height you chose yourself is left alone."
+      ]
+    }
+  ]
+}
