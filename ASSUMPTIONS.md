@@ -3395,3 +3395,21 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - `.panel` background crust→base per the card; panel INNER content backgrounds are cards 7/8's — the transitional look is accepted (terminals unaffected, xterm paints its own bg).
 - Header metrics taken demo-exact: 30px fixed, padding 0 10px, gap 8, title 12px/600 (`--fs-ui`), meta 10px (`--fs-meta-xs`), 13px icons, 22px actions with Surface0 hover (was the stronger post-372 `--bg-hover`/Surface1).
 - No CLAUDE.md edit (card 12 owns the docs sweep) and no new unit tests (CSS/markup-only card; the existing suite must stay green).
+
+## Task 382
+
+- Kanban toolbar stays a dedicated 30px row below the panel header (the demo folds "Saved" + the segmented into the 30px header, but that header is Task 380's Canvas chrome hosting panel actions; moving inner controls there would collide) — "Saved" + segmented right-aligned per the demo order.
+- Board|Raw judge call: use the landed SegmentedControl atom (its 22px segments / crust well / Surface0 active thumb / 10.5px type match the demo's computed seg() styles exactly); the atom's hairline well border is kept over the demo's borderless well; segment icons become demo's kanban/terminal glyphs (lucide Kanban/Terminal 12px, replacing Eye/Code2 13px).
+- Demo wins over #248: done cards regain strikethrough (40%-text decoration) + 60% opacity, and the done checkbox is a 12px status-done (green) box with a crust check — implemented by restyling the shared Checkbox via structural selectors under .cardCheck (no Checkbox API change); body task-list checkboxes go green to match.
+- Removed the #233 2px column top accent stripe, the uppercase column names, the count pill, and the column-header underline (demo has none); column color identity is the 8px dot only, still driven by the #239 per-column color settings.
+- Card hover-lift (#234 translateY + shadow) replaced by the demo's flat border-strengthen hover (spec §2.5: shadows only on floating chrome); the DragOverlay drag preview keeps its shadow.
+- "Raw = flush textarea" (card prose) vs demo: demo wins — the Raw view is a 10px-inset crust well with a hairline border, not literally flush.
+- FileTree gains a trailing right-aligned 9px M/A/D status letter on tinted file rows + ghost rows (present in the demo though absent from the card prose; presentation-only spans); folders keep the roll-up tint without a letter.
+- FileTree ignored rows go faint --surface-1 (demo #45475a) instead of muted+opacity; folder icons become muted (demo) instead of accent; default row text --text-secondary; git tints color the whole row (icons included).
+- FileTree indentation formula and the 17px file-icon alignment nudge kept as-is (alignment mechanics; the demo mock doesn't demonstrate mixed folder/file depths).
+- The refresh button keeps the demo's 7px radius (--radius-chrome) despite the in-panel square rule — demo wins.
+- RecurringPanel has no Start-now today ("Start now #269/fire_one_recurring" in the constraints is a keep-list; fire_one_recurring is an internal Rust fn, not a command) — restyle-only, no new recurring fire-now feature; the accent ▶ Start now applies to ScheduledPanel, whose button is restyled to the demo's 30px accent block.
+- SkillAutocomplete dropdown adopts the landed menu.css surface by adding the global menu-pop class to the existing menu div (positioning stays module-local); the two-line name+desc options keep their stacked layout (menu items are 28px single-line) restyled to Surface0 hover/active + --fs-row/--fs-micro; keyboard flow byte-identical.
+- SCHEDULE_TIME_HINT copy unchanged (it already matches the demo hint text); the hint line renders faint (--surface-1) and the resolve line 9.5px accent per the demo.
+- Demo border alphas .06/.12/.2 mapped to the nearest tokens (--border-hairline .08 / --border-strong .15); board gaps use literal 10px (no --space-10 token exists — the #240 trap).
+- Overview's ScheduleCard/RecurringCard chrome (Overview.tsx) untouched — Task 379 owns it; only the shared panel components are edited.
