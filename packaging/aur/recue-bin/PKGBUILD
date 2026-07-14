@@ -1,0 +1,71 @@
+# Maintainer: Erik de Jager <erik.dejager@outlook.com>
+#
+# ReCue — prebuilt, repacked from the official .deb published with each GitHub release
+# (https://github.com/ErikdeJager/ReCue/releases). Unlike the AppImage this links against
+# the SYSTEM webkit2gtk-4.1 / GTK stack: no bundled Ubuntu 22.04 userland, no AppRun
+# GTK_THEME / GDK_BACKEND overrides, no FUSE requirement, faster cold start.
+#
+# The in-app auto-updater is DISABLED for this install (#361) — pacman owns the binary.
+# ReCue detects this at runtime (a release build with no $APPIMAGE ⇒ a "system" install)
+# and hides its update UI, pointing at `pacman -Syu` instead. Update with your package
+# manager.
+#
+# Re-pin to a new release with `scripts/aur-bump.sh <version>` from the ReCue repo; it
+# rewrites pkgver + sha256sums and regenerates .SRCINFO. sha256sums MUST NOT be 'SKIP'
+# when this is published to the AUR (aur-bump.sh hard-errors while it still is).
+
+pkgname=recue-bin
+pkgver=1.2.1
+pkgrel=1
+pkgdesc="Run and manage many live claude CLI sessions — an agent wall, a split-panel canvas, and a repo-grouped sidebar"
+arch=('x86_64')
+url="https://github.com/ErikdeJager/ReCue"
+license=('custom')
+# Derived from the release binary's DIRECT shared-library links (`objdump -p …| grep
+# NEEDED` / `ldd` on src-tauri/target/release/recue), each .so mapped to its owning Arch
+# package. ReCue ships NO tray icon and does NOT link libayatana-appindicator — do not add
+# it. See docs/linux-packaging.md.
+depends=(
+  'webkit2gtk-4.1' # libwebkit2gtk-4.1.so.0, libjavascriptcoregtk-4.1.so.0
+  'gtk3'           # libgtk-3.so.0, libgdk-3.so.0
+  'glib2'          # libglib-2.0.so.0, libgio-2.0.so.0, libgobject-2.0.so.0
+  'cairo'          # libcairo.so.2
+  'gdk-pixbuf2'    # libgdk_pixbuf-2.0.so.0
+  'libsoup3'       # libsoup-3.0.so.0
+  'dbus'           # libdbus-1.so.3
+  'glibc'          # libc.so.6, libm.so.6
+  'gcc-libs'       # libgcc_s.so.1
+)
+optdepends=(
+  'claude-code: the Claude Code CLI ReCue runs in every session'
+  'git: branch, diff and file-status reading for repo folders'
+  'xdg-utils: open links, folders and files in the browser / file manager'
+  'xdg-desktop-portal-gtk: native file and folder picker dialogs'
+)
+provides=('recue')
+conflicts=('recue')
+options=('!strip' '!debug')
+_deb="ReCue_${pkgver}_amd64.deb"
+source=("${url}/releases/download/v${pkgver}/${_deb}")
+noextract=("${_deb}")
+# Replaced by scripts/aur-bump.sh with the released .deb's real hash.
+sha256sums=('SKIP')
+
+package() {
+  # A .deb is an `ar` archive: pull out its data member, then unpack that into $pkgdir.
+  # The payload is /usr/bin/recue + /usr/share/applications/ReCue.desktop + the hicolor
+  # icons. The .desktop entry and the icons are taken from the deb UNTOUCHED — keep it
+  # that way, so any upstream fix to the desktop entry flows into this package for free.
+  bsdtar -xf "${srcdir}/${_deb}" -C "${srcdir}" 'data.tar.*'
+  bsdtar -xpf "${srcdir}"/data.tar.* -C "${pkgdir}"
+
+  # Tauri's .deb installs the binary under its CARGO name, which is already the lowercase
+  # `recue` — so `recue` on the command line just works and this is a no-op today. Kept as
+  # a guard: were a future bundler to install /usr/bin/ReCue (the productName) instead,
+  # this adds the lowercase alias so the command name never breaks.
+  local _bin
+  _bin="$(find "${pkgdir}/usr/bin" -maxdepth 1 -type f -printf '%f\n' | head -n1)"
+  if [ -n "${_bin}" ] && [ "${_bin}" != "recue" ]; then
+    ln -s "${_bin}" "${pkgdir}/usr/bin/recue"
+  fi
+}

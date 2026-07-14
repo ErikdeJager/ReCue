@@ -14,6 +14,20 @@ export function isLinux(platform: string): boolean {
   return platform === "linux";
 }
 
+/** How this ReCue process was installed (#361), read once at boot from the backend
+ * `install_kind()` command — `""` until loaded. See `selfUpdates`. */
+export type InstallKind = "" | "bundle" | "appimage" | "system";
+
+/** Whether the **in-app updater** owns this install (#361). False only for a
+ * distro-packaged (`"system"`) install — pacman/apt owns the binary there, and Tauri's
+ * Linux updater can only replace an `$APPIMAGE` anyway, so checking/offering/installing
+ * an update would fight the package manager. The unloaded default (`""`) reads as
+ * self-updating, preserving today's behavior on every OS (macOS `.app` / the Windows
+ * installer / the Linux AppImage all report a self-managed kind). */
+export function selfUpdates(installKind: string): boolean {
+  return installKind !== "system";
+}
+
 /** The OS file manager's "reveal" label — "Reveal in Explorer" on Windows, "Reveal in
  * File Manager" on Linux (generic across Nautilus/Dolphin/Nemo/Thunar), the original
  * "Reveal in Finder" on macOS (#129/#133/#143/#345). */

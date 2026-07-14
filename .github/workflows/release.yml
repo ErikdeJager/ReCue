@@ -12,9 +12,12 @@ name: Release
 #                    last release tag. No file is written and nothing is committed back.
 #   create-release — open ONE draft GitHub release.
 #   release        — 3-OS matrix (macOS universal + Windows x86_64 + Linux x86_64
-#                    AppImage, #345) builds SIGNED updater artifacts from the triggering
-#                    commit and uploads them to the draft, merging one latest.json. On
-#                    macOS it then polishes the .dmg
+#                    AppImage + .deb, #345/#361) builds SIGNED updater artifacts from the
+#                    triggering commit and uploads them to the draft, merging one
+#                    latest.json. The Linux leg also emits a .deb — NOT an updater
+#                    artifact (it gets no .sig and latest.json keeps pointing at the
+#                    AppImage); it is the source the AUR `recue-bin` package repacks
+#                    (packaging/aur/recue-bin, #361). On macOS it then polishes the .dmg
 #                    (parks the DMG's hidden helper files off-canvas via
 #                    scripts/polish-dmg.sh) and swaps it for the uploaded asset —
 #                    best-effort, so it can never fail the release.
@@ -166,15 +169,23 @@ jobs:
           - platform: windows-latest
             args: ""
             rust_targets: x86_64-pc-windows-msvc
-          # Linux (#345): AppImage-only (one universal binary runs on Arch/Ubuntu/Mint &
-          # others). Built on ubuntu-22.04 for the broadest glibc/webkit2gtk-4.1 floor
-          # (runs on Ubuntu 22.04+, Mint 21 AND 22, current Arch). No explicit --target
-          # (native x86_64-linux); `--bundles appimage` keeps it AppImage-only, and
-          # createUpdaterArtifacts adds the minisign-signed linux-x86_64 updater entry to
-          # latest.json (the AppImage self-updates; the leg runs last so the serialized
-          # latest.json merge appends after darwin + windows).
+          # Linux (#345/#361): TWO artifacts, one build. Built on ubuntu-22.04 for the
+          # broadest glibc/webkit2gtk-4.1 floor (runs on Ubuntu 22.04+, Mint 21 AND 22,
+          # current Arch). No explicit --target (native x86_64-linux).
+          #   * AppImage — the UPDATER artifact: one universal binary (bundled Ubuntu
+          #     GTK/WebKit userland), minisign-signed by createUpdaterArtifacts, merged
+          #     into latest.json as `linux-x86_64`. This is what SELF-UPDATES in-app. The
+          #     leg runs last so the serialized latest.json merge appends after darwin +
+          #     windows.
+          #   * .deb — NOT an updater artifact (no .sig; latest.json keeps its AppImage
+          #     URL — Tauri's Linux updater can only replace an $APPIMAGE). It is the
+          #     source the AUR `recue-bin` package repacks (packaging/aur/recue-bin,
+          #     #361), giving Arch users a native build against the SYSTEM webkit2gtk/GTK
+          #     with no FUSE requirement. A distro-packaged install is owned by the
+          #     package manager, so the app's `install_kind()` probe hides its update UI
+          #     there. Re-pin the AUR package with scripts/aur-bump.sh after publishing.
           - platform: ubuntu-22.04
-            args: --bundles appimage
+            args: --bundles appimage,deb
             rust_targets: ""
     runs-on: ${{ matrix.platform }}
     steps:
@@ -370,6 +381,32 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           releaseBody: ${{ needs.prepare.outputs.body }}
           args: ${{ matrix.args }}
+
+      # Linux (#361): surface the .deb the AUR `recue-bin` package repacks — its exact
+      # asset name + sha256 — in the job summary, so a maintainer can bump the AUR package
+      # after publishing the draft (scripts/aur-bump.sh does this from the published
+      # release). Best-effort: a missing artifact warns, never fails the release.
+      - name: Linux artifact summary (AUR bump info)
+        if: matrix.platform == 'ubuntu-22.04'
+        continue-on-error: true
+        run: |
+          deb="$(ls src-tauri/target/release/bundle/deb/*.deb 2>/dev/null | head -1)"
+          img="$(ls src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1)"
+          [ -n "$img" ] || echo "::warning::No AppImage produced — the updater artifact is missing."
+          if [ -z "$deb" ]; then
+            echo "::warning::No .deb produced — the AUR recue-bin package cannot be bumped."
+            exit 0
+          fi
+          sum="$(sha256sum "$deb" | cut -d' ' -f1)"
+          {
+            echo "### Linux artifacts"
+            echo ""
+            echo "- AppImage (self-updating): \`$(basename "${img:-none}")\`"
+            echo "- deb (AUR \`recue-bin\` source): \`$(basename "$deb")\`"
+            echo "- deb sha256: \`$sum\`"
+            echo ""
+            echo "After publishing the draft: \`scripts/aur-bump.sh <version>\` → push to the AUR."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # macOS only: when signing was enabled, assert the built .app carries the signature
       # that makes TCC grants work + persist — the necessary+sufficient precondition the
