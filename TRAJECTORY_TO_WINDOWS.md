@@ -921,3 +921,38 @@ tokens + on-system icons only; `metaKey || ctrlKey` unaffected — no new shortc
   fires **exactly one** notification (not one per window). Re-confirm the whole flow on macOS
   (Notification Center), where an unsigned/ad-hoc build may need the notification permission
   allowed for "ReCue" in System Settings.
+
+## 2026-07-14
+
+### Ctrl+V pasted twice on Windows (#220 follow-up fix)
+
+User-reported: pressing **Ctrl+V** in a ReCue terminal on Windows pasted the clipboard
+contents **twice**. Root cause: the #220 handler's `return false` from
+`attachCustomKeyEventHandler` only stops xterm's *keydown→data* path (the stray `^V`) —
+in xterm 6, `_keyDown` **early-returns on a custom-handler `false` without ever calling
+`preventDefault()`**, so the browser still performed its default Ctrl+V action, firing a
+native `paste` event on xterm's hidden textarea, which xterm's own paste listener fed to
+the PTY a second time. Paste #1 was the manual `term.paste(clipboard)`; paste #2 was the
+native path #220 believed was suppressed. macOS never doubled (the handler is
+`isWindows`-gated, and ⌘V only ever takes the single native path); Linux likewise
+untouched.
+
+Fix: `event.preventDefault()` on the intercepted Ctrl+V / Ctrl+Shift+V keydown before
+returning `false`, cancelling the browser's default paste so exactly one paste (the
+manual one, which also covers the #220 image fallback) survives. The handler is
+extracted to the pure `Terminal/pasteHandler.ts` (`makePasteKeyHandler`, injected
+platform/clipboard/paste deps) with unit tests covering the single-paste + preventDefault
+regression, the Ctrl+Shift+V chord, the image fallback, clipboard failure, the
+non-Windows no-op, and non-paste chords (Ctrl+C stays SIGINT). Logic is otherwise
+byte-for-byte #220's; macOS/Linux behavior is provably unchanged (the non-Windows branch
+returns `true` before touching the event).
+
+#### Still needs manual Windows verification (#220 follow-up)
+
+- On a Windows build: copy multi-line text, focus an agent terminal, press **Ctrl+V** →
+  the text must arrive **exactly once** (this box previously reproduced the double),
+  multi-line intact, no stray `^V`; repeat with **Ctrl+Shift+V** and in a shell terminal.
+- Image fallback intact: with an image (no text) on the clipboard, Ctrl+V still pastes
+  the temp-PNG path exactly once.
+- Re-confirm macOS ⌘V pastes once and Ctrl+V still emits `^V` (gated off), and Linux
+  Ctrl+Shift+V native paste is unaffected.
