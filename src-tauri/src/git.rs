@@ -215,7 +215,6 @@ pub fn working_diff(cwd: impl AsRef<Path>) -> WorkingDiff {
     // `parse_unified_diff` (the `new file mode` line → FileStatus::Added, the `b/<path>`
     // header → the relative path, a binary file → flagged binary). Bounded by
     // MAX_UNTRACKED_FILES so a pathological untracked set can't storm git spawns.
-    const MAX_UNTRACKED_FILES: usize = 2000;
     for path in untracked_files(cwd).into_iter().take(MAX_UNTRACKED_FILES) {
         let Some(diff) = run_git_raw_allow_diff(
             cwd,
@@ -304,71 +303,128 @@ fn sum_numstat(out: &str) -> (u32, u32) {
     (added, removed)
 }
 
+/// Skip untracked files larger than this so a huge generated file can't dominate the
+/// count (#335) — a per-file gate, checked from `fs::metadata` before any read.
+const MAX_UNTRACKED_BYTES: u64 = 2_000_000;
+/// At most this many untracked files are counted (#335), matching `working_diff`.
+const MAX_UNTRACKED_FILES: usize = 2000;
+/// Total content budget for one `diff_line_counts` untracked pass (#359). On top of the
+/// per-file and file-count caps: a working tree of 2000 near-2MB untracked files would
+/// otherwise read up to ~4GB from disk on **every** refresh tick. Once the budget is
+/// exhausted the pass stops (the remaining files contribute 0) — the badge is an
+/// at-a-glance hint, not an audit, and this keeps a pathological tree from stalling the
+/// sidebar refresh.
+const MAX_UNTRACKED_TOTAL_BYTES: u64 = 16_000_000;
+
 /// Count the lines a brand-new (untracked) file contributes to the additions total
-/// (#335). Bounded + fail-open: a read error, an over-cap file, or a binary file all
-/// contribute 0. `cwd.join(rel)` keeps path assembly OS-native (never string concat).
+/// (#335), **streaming** it in fixed-size chunks (#359) rather than reading the whole
+/// file into memory. Bounded + fail-open: a read error or a binary file contributes 0.
+/// `cwd.join(rel)` keeps path assembly OS-native (never string concat).
 fn count_new_file_lines(cwd: &Path, rel: &str) -> u32 {
-    /// Skip files larger than this so a huge generated file can't dominate the count.
-    const MAX_UNTRACKED_BYTES: u64 = 2_000_000;
+    use std::io::Read;
+
     let path = cwd.join(rel);
-    // Cheap size gate before reading the whole file into memory.
-    if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() > MAX_UNTRACKED_BYTES {
-            return 0;
-        }
-    }
-    let Ok(bytes) = std::fs::read(&path) else {
+    let Ok(mut file) = std::fs::File::open(&path) else {
         return 0;
     };
-    if bytes.is_empty() {
-        return 0;
+    let mut buf = [0u8; 64 * 1024];
+    let mut newlines: u32 = 0;
+    let mut first = true;
+    let mut last_byte: Option<u8> = None;
+    loop {
+        let read = match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => return 0, // unreadable mid-stream → contribute 0 (fail-open)
+        };
+        let chunk = &buf[..read];
+        // Binary skip: a NUL byte in the first ~8KB (git's own heuristic window).
+        if first {
+            first = false;
+            if chunk[..chunk.len().min(8192)].contains(&0) {
+                return 0;
+            }
+        }
+        newlines = newlines.saturating_add(bytecount_newlines(chunk));
+        last_byte = chunk.last().copied();
     }
-    // Binary skip: a NUL byte in the first ~8KB (git's own heuristic window).
-    let probe = &bytes[..bytes.len().min(8192)];
-    if probe.contains(&0) {
-        return 0;
+    match last_byte {
+        // Empty file → no lines.
+        None => 0,
+        // git counts a final unterminated line, so add 1 when the file doesn't end in \n.
+        Some(b'\n') => newlines,
+        Some(_) => newlines.saturating_add(1),
     }
-    let newlines = bytes.iter().filter(|&&b| b == b'\n').count() as u32;
-    // git counts a final unterminated line, so add 1 when the file doesn't end in \n.
-    if bytes.last() == Some(&b'\n') {
-        newlines
-    } else {
-        newlines.saturating_add(1)
+}
+
+/// `\n` count of one chunk, as a saturating `u32`. Split out so `count_new_file_lines`
+/// reads as a stream loop.
+fn bytecount_newlines(chunk: &[u8]) -> u32 {
+    u32::try_from(chunk.iter().filter(|&&b| b == b'\n').count()).unwrap_or(u32::MAX)
+}
+
+/// Added lines contributed by a working tree's untracked (new, non-ignored) files (#335),
+/// bounded on **three** axes (#359) so a pathological tree can't storm file reads on every
+/// sidebar refresh: at most `max_files` files, at most `MAX_UNTRACKED_BYTES` per file
+/// (skipped outright — the pre-existing gate), and at most `max_bytes` of content in
+/// total (the pass stops once the budget is spent). The caps are parameters so the unit
+/// tests can drive tiny ones; `diff_line_counts` passes the real consts. Pure but for the
+/// file reads; no git spawn.
+fn untracked_added_lines(cwd: &Path, files: &[String], max_files: usize, max_bytes: u64) -> u32 {
+    let mut added: u32 = 0;
+    let mut budget = max_bytes;
+    for rel in files.iter().take(max_files) {
+        if budget == 0 {
+            break;
+        }
+        // Cheap size gate before opening the file: skip an over-cap file entirely, and
+        // spend the rest against the total budget.
+        let size = match std::fs::metadata(cwd.join(rel)) {
+            Ok(meta) => meta.len(),
+            Err(_) => continue, // unreadable → contributes 0 (fail-open)
+        };
+        if size > MAX_UNTRACKED_BYTES {
+            continue;
+        }
+        added = added.saturating_add(count_new_file_lines(cwd, rel));
+        budget = budget.saturating_sub(size);
     }
+    added
 }
 
 /// Summed added/removed line counts of a working tree vs `HEAD` (#335) — the sidebar
 /// per-agent badge source. Materially lighter than `working_diff`: **one** `git diff
 /// --numstat HEAD` spawn for all tracked changes (no hunk parse) plus one `ls-files`
-/// spawn, then plain bounded file reads for untracked additions (cheaper than
-/// `working_diff`'s per-file `git diff --no-index` spawns). Every git call routes
-/// through `hidden_command` (via `run_git_raw`), so no console flash on Windows.
-/// Entirely fail-open: a non-git / no-`HEAD` folder or any git error yields `{ 0, 0 }`.
+/// spawn — **two** git spawns per folder (#359: the third, a `rev-parse --verify HEAD`
+/// pre-check, was redundant — `git diff --numstat HEAD` itself exits non-zero in exactly
+/// the same cases, a non-git or unborn repo, so `run_git_raw` yields `None` → contributes
+/// 0) — then bounded, streamed file reads for untracked additions (cheaper than
+/// `working_diff`'s per-file `git diff --no-index` spawns). Every git call routes through
+/// `hidden_command` (via `run_git_raw`), so no console flash on Windows. Entirely
+/// fail-open: a non-git / no-`HEAD` folder or any git error yields `{ 0, 0 }`.
 pub fn diff_line_counts(cwd: impl AsRef<Path>) -> DiffLineCounts {
     let cwd = cwd.as_ref();
     let mut counts = DiffLineCounts::default();
 
-    // Tracked changes vs HEAD (only meaningful once the repo has a commit).
-    if has_head(cwd) {
-        if let Some(out) = run_git_raw(
-            cwd,
-            &["-c", "core.quotepath=false", "diff", "--numstat", "HEAD"],
-        ) {
-            let (added, removed) = sum_numstat(&out);
-            counts.added = counts.added.saturating_add(added);
-            counts.removed = counts.removed.saturating_add(removed);
-        }
+    // Tracked changes vs HEAD. In a non-git / unborn (no-commit) repo this simply exits
+    // non-zero → `None` → contributes 0, so no `has_head` pre-check is needed.
+    if let Some(out) = run_git_raw(
+        cwd,
+        &["-c", "core.quotepath=false", "diff", "--numstat", "HEAD"],
+    ) {
+        let (added, removed) = sum_numstat(&out);
+        counts.added = counts.added.saturating_add(added);
+        counts.removed = counts.removed.saturating_add(removed);
     }
 
-    // Untracked (new, non-ignored) files: their whole content counts as additions.
-    // Bounded by MAX_UNTRACKED_FILES (matching `working_diff`) so a pathological
-    // untracked set can't storm file reads. An unborn repo (no HEAD) still gets here.
-    const MAX_UNTRACKED_FILES: usize = 2000;
-    for path in untracked_files(cwd).into_iter().take(MAX_UNTRACKED_FILES) {
-        counts.added = counts
-            .added
-            .saturating_add(count_new_file_lines(cwd, &path));
-    }
+    // Untracked (new, non-ignored) files: their whole content counts as additions. An
+    // unborn repo (no HEAD) still gets here, so its new files are counted.
+    counts.added = counts.added.saturating_add(untracked_added_lines(
+        cwd,
+        &untracked_files(cwd),
+        MAX_UNTRACKED_FILES,
+        MAX_UNTRACKED_TOTAL_BYTES,
+    ));
 
     counts
 }
@@ -759,20 +815,52 @@ pub fn github_web_url(remote: &str) -> Option<String> {
     Some(format!("https://github.com/{owner}/{repo}"))
 }
 
+/// Pick a remote's fetch URL out of `git config --get-regexp ^remote\..*\.url$` output
+/// (#359) — one `remote.<name>.url <url>` per line. Prefers `origin`, else the first
+/// line with a non-empty URL. Pure `&str -> Option<String>`, so it is unit-tested with no
+/// repo on disk (mirroring `sum_numstat` / `parse_ahead_behind`). A malformed / empty line
+/// is skipped; a key with no value yields `None` for that line.
+fn pick_remote_url(out: &str) -> Option<String> {
+    let mut first: Option<&str> = None;
+    for line in out.lines() {
+        let line = line.trim();
+        let Some((key, url)) = line.split_once(char::is_whitespace) else {
+            continue; // a key with no value (or a blank line)
+        };
+        let url = url.trim();
+        if url.is_empty() {
+            continue;
+        }
+        // `remote.<name>.url` — the name is everything between the fixed prefix/suffix
+        // (a remote name may itself contain dots).
+        let name = key
+            .strip_prefix("remote.")
+            .and_then(|rest| rest.strip_suffix(".url"))
+            .unwrap_or("");
+        if name == "origin" {
+            return Some(url.to_string());
+        }
+        if first.is_none() && !name.is_empty() {
+            first = Some(url);
+        }
+    }
+    first.map(str::to_string)
+}
+
 /// The GitHub web URL for `cwd`'s remote, or `None` (non-git / no remote / non-GitHub)
 /// (#327). Prefers `origin`, else the first remote. Best-effort; never panics. The only
-/// git work is two cheap local reads (`git remote` + `git remote get-url <name>`) —
-/// `run_git` routes both through `hidden_command`, so it's identical on macOS/Windows.
+/// git work is **one** cheap local read (#359 — `git config --local --get-regexp
+/// "^remote\..*\.url$"`, replacing the earlier `git remote` + `git remote get-url <name>`
+/// pair): `--local` reads just the repo's own config, so a non-git dir (and a stray
+/// *global* remote) exits non-zero → `run_git` → `None`, and a **linked worktree** shares
+/// its main repo's config so worktree folders still resolve. `run_git` routes it through
+/// `hidden_command`, so it's identical on macOS / Windows / Linux.
 pub fn github_web_url_for(cwd: impl AsRef<Path>) -> Option<String> {
-    let cwd = cwd.as_ref();
-    let remotes = run_git(cwd, &["remote"])?; // one remote name per line
-    let names: Vec<&str> = remotes.lines().filter(|l| !l.is_empty()).collect();
-    let name = if names.contains(&"origin") {
-        "origin"
-    } else {
-        *names.first()?
-    };
-    let url = run_git(cwd, &["remote", "get-url", name])?;
+    let out = run_git(
+        cwd.as_ref(),
+        &["config", "--local", "--get-regexp", r"^remote\..*\.url$"],
+    )?;
+    let url = pick_remote_url(&out)?;
     github_web_url(&url)
 }
 
@@ -2004,6 +2092,116 @@ index 0..1
         fs::write(plain.join("loose.txt"), "hi\n").unwrap();
         assert_eq!(diff_line_counts(&plain), DiffLineCounts::default());
         let _ = fs::remove_dir_all(&plain);
+    }
+
+    /// #359: dropping the redundant `has_head` pre-check is safe precisely because an
+    /// **unborn** repo (initialized, no commit yet) behaves the same either way — the
+    /// covering `git diff --numstat HEAD` exits non-zero exactly where `has_head` was
+    /// false, contributing 0, while the untracked pass still counts the new files.
+    #[test]
+    fn diff_line_counts_unborn_repo_counts_untracked_only() {
+        let Some(dir) = init_repo("diff-line-counts-unborn") else {
+            return;
+        };
+        // No commit at all — HEAD is unborn.
+        fs::write(dir.join("new.txt"), "x\ny\nz\n").unwrap();
+
+        let counts = diff_line_counts(&dir);
+        assert_eq!(
+            counts,
+            DiffLineCounts {
+                added: 3,
+                removed: 0
+            }
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #359: the untracked pass is bounded by a file cap **and** a total-byte budget, so a
+    /// pathological working tree can't storm file reads on every sidebar refresh.
+    #[test]
+    fn untracked_added_lines_respects_file_and_byte_caps() {
+        let dir = unique_dir("untracked-caps");
+        fs::create_dir_all(&dir).unwrap();
+        // Three files of 3 / 2 / 4 lines; sizes are 6 / 4 / 8 bytes.
+        fs::write(dir.join("a.txt"), "a\nb\nc\n").unwrap();
+        fs::write(dir.join("b.txt"), "d\ne\n").unwrap();
+        fs::write(dir.join("c.txt"), "f\ng\nh\ni\n").unwrap();
+        let files = vec![
+            "a.txt".to_string(),
+            "b.txt".to_string(),
+            "c.txt".to_string(),
+        ];
+
+        // No caps hit → every line counts.
+        assert_eq!(untracked_added_lines(&dir, &files, 10, 1_000), 9);
+        // File cap: only the first file is read.
+        assert_eq!(untracked_added_lines(&dir, &files, 1, 1_000), 3);
+        // Byte budget: a.txt (6 bytes) spends the 6-byte budget, so the pass stops before
+        // b.txt — even though the file cap allows it.
+        assert_eq!(untracked_added_lines(&dir, &files, 10, 6), 3);
+        // A budget that survives a.txt still admits b.txt, then stops.
+        assert_eq!(untracked_added_lines(&dir, &files, 10, 7), 5);
+        // A zero budget reads nothing at all.
+        assert_eq!(untracked_added_lines(&dir, &files, 10, 0), 0);
+        // A missing file is skipped (fail-open), not counted.
+        assert_eq!(
+            untracked_added_lines(&dir, &["gone.txt".to_string()], 10, 1_000),
+            0
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #359: a file with no trailing newline still counts its last line, and a binary file
+    /// (NUL in the first chunk) contributes 0 — preserved through the streaming rewrite.
+    #[test]
+    fn count_new_file_lines_handles_no_trailing_newline_and_binary() {
+        let dir = unique_dir("count-new-lines");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("nonl.txt"), "a\nb").unwrap();
+        fs::write(dir.join("bin.dat"), [0x41u8, 0x00, 0x42, b'\n']).unwrap();
+        fs::write(dir.join("empty.txt"), "").unwrap();
+
+        assert_eq!(count_new_file_lines(&dir, "nonl.txt"), 2);
+        assert_eq!(count_new_file_lines(&dir, "bin.dat"), 0);
+        assert_eq!(count_new_file_lines(&dir, "empty.txt"), 0);
+        assert_eq!(count_new_file_lines(&dir, "missing.txt"), 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #359: the single-read GitHub URL resolution — prefer `origin`, else the first
+    /// remote with a URL; junk / empty input yields `None`.
+    #[test]
+    fn pick_remote_url_prefers_origin_then_first_and_rejects_empty() {
+        // `origin` wins regardless of line order.
+        assert_eq!(
+            pick_remote_url(
+                "remote.upstream.url https://github.com/up/stream.git\n\
+                 remote.origin.url git@github.com:owner/repo.git\n"
+            )
+            .as_deref(),
+            Some("git@github.com:owner/repo.git")
+        );
+        // No origin → the first remote's URL.
+        assert_eq!(
+            pick_remote_url(
+                "remote.fork.url https://github.com/a/b.git\nremote.z.url https://x/y\n"
+            )
+            .as_deref(),
+            Some("https://github.com/a/b.git")
+        );
+        // A remote name containing dots still parses.
+        assert_eq!(
+            pick_remote_url("remote.my.fork.url https://github.com/a/b.git\n").as_deref(),
+            Some("https://github.com/a/b.git")
+        );
+        // Empty / malformed / valueless input → None (fail-open: no menu item).
+        assert_eq!(pick_remote_url(""), None);
+        assert_eq!(pick_remote_url("garbage\n"), None);
+        assert_eq!(pick_remote_url("remote.origin.url\n"), None);
     }
 
     #[test]

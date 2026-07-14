@@ -42,6 +42,9 @@ vi.mock("./ipc", () => ({
   spawnSession: vi.fn(),
   currentBranches: vi.fn(),
   fileStatuses: vi.fn(),
+  githubWebUrls: vi.fn(),
+  diffLineCounts: vi.fn(),
+  branchAheadBehind: vi.fn(),
   // Post-boot, off-the-critical-path probes `init()` fires and forgets.
   agentInfo: vi.fn(),
   dirExists: vi.fn(),
@@ -112,6 +115,9 @@ function primeIpc(): void {
   });
   m(ipc.currentBranches).mockResolvedValue({});
   m(ipc.fileStatuses).mockResolvedValue([]);
+  m(ipc.githubWebUrls).mockResolvedValue({});
+  m(ipc.diffLineCounts).mockResolvedValue({});
+  m(ipc.branchAheadBehind).mockResolvedValue({});
   // `init()`'s fire-and-forget probes (#352 leaves them exactly where they were):
   // no agent installed → onboarding no-ops; folders exist; usage unavailable.
   m(ipc.agentInfo).mockResolvedValue({
@@ -473,20 +479,30 @@ describe("startRepoSession (#127/#263)", () => {
   });
 });
 
-describe("branch labels refresh on busy→idle (#212)", () => {
-  it("re-reads branches after the debounce, updating a (worktree) label", async () => {
-    // A worktree folder + its parent live in recents, so refreshBranches passes both
-    // to current_branches (it already includes worktree paths). Label starts stale.
+describe("branch labels refresh on busy→idle (#212/#359)", () => {
+  it("re-reads the SETTLING session's folder after the debounce, updating a (worktree) label", async () => {
+    // A worktree folder + its parent live in recents. The settling agent runs in the
+    // worktree, so the #359 volley is scoped to **its** folder only — the #212 contract
+    // ("an in-terminal `git checkout` updates that folder's label") is about exactly that
+    // folder. Label starts stale.
     useStore.setState({
+      sessions: [
+        {
+          id: "wt1",
+          claudeSessionId: "wt1",
+          repoPath: "/repo/a-wt",
+          name: null,
+          createdAt: 0,
+          worktreeParent: "/repo/a",
+        },
+      ],
       recents: ["/repo/a-wt", "/repo/a"],
       branches: { "/repo/a-wt": "old-branch", "/repo/a": "main" },
       sessionBusy: { wt1: true },
+      fileTreeMounts: {},
     });
     // After the in-terminal checkout, current_branches reports the new branch.
-    m(ipc.currentBranches).mockResolvedValue({
-      "/repo/a-wt": "new-branch",
-      "/repo/a": "main",
-    });
+    m(ipc.currentBranches).mockResolvedValue({ "/repo/a-wt": "new-branch" });
 
     // Busy→idle settle schedules the debounced refresh (not fired immediately).
     useStore.getState().setBusy("wt1", false);
@@ -494,7 +510,28 @@ describe("branch labels refresh on busy→idle (#212)", () => {
 
     await vi.advanceTimersByTimeAsync(600);
 
-    expect(ipc.currentBranches).toHaveBeenCalled();
+    // Scoped to the settling session's folder — not every sidebar repo.
+    expect(ipc.currentBranches).toHaveBeenCalledWith(["/repo/a-wt"]);
     expect(useStore.getState().branches["/repo/a-wt"]).toBe("new-branch");
+    // The other folder's label is untouched by the scoped read.
+    expect(useStore.getState().branches["/repo/a"]).toBe("main");
+    // `file_statuses` is read only for a repo with an open FileTree (#359) — none here.
+    expect(ipc.fileStatuses).not.toHaveBeenCalled();
+  });
+
+  it("falls back to an unscoped volley for an unknown session id (#359, fail-safe)", async () => {
+    useStore.setState({
+      sessions: [],
+      recents: ["/repo/a", "/repo/b"],
+      branches: {},
+      sessionBusy: { ghost: true },
+    });
+    m(ipc.currentBranches).mockResolvedValue({});
+
+    useStore.getState().setBusy("ghost", false);
+    await vi.advanceTimersByTimeAsync(600);
+
+    // No session record for the id → read every sidebar folder rather than miss one.
+    expect(ipc.currentBranches).toHaveBeenCalledWith(["/repo/a", "/repo/b"]);
   });
 });
