@@ -4008,3 +4008,71 @@ a steady-state boot pays **zero** probe cost.
   precedent) so a Windows host still type-checks and runs them.
 - The actual win (a GUI launch not stalling on a heavy rc) can't be unit-tested — real-box checklists went into
   `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md`; `CLAUDE.md` records the new PATH seam.
+
+### 361. [x] Ship a native Arch/AUR package (`recue-bin`) + Linux install docs, and gate the in-app updater off for distro-managed installs
+
+The AppImage bundles the Ubuntu 22.04 GTK/WebKit userland (90 MB `libwebkit2gtk-4.1`, 165 libs), its AppRun hook
+forces `GTK_THEME` + `GDK_BACKEND=x11`, cold start pays squashfs/FUSE decompression, and Arch needs `fuse2`
+installed to run it at all — so it is the root of a whole class of Linux issues (the ones #349 and #350 had to
+patch around). A native package sidesteps every one of them: system webkit2gtk, no env pollution, no FUSE, faster
+start. **But a pacman-managed install must not offer to update itself**, since Tauri's Linux updater can only
+replace an `$APPIMAGE`.
+
+**What shipped** (branch `linux-aur-package`, PR [#116](https://github.com/ErikdeJager/ReCue/pull/116),
+2026-07-14):
+
+- **Rust `install_kind()`** — a pure `classify_install(os, appimage, override_kind, debug)` plus a thin command:
+  **`"bundle"`** (macOS `.app` / Windows installer / any debug build), **`"appimage"`** (`$APPIMAGE` set), or
+  **`"system"`** (a Linux **release** binary *without* it ⇒ pacman/apt owns it). An **empty** `APPIMAGE` counts as
+  unset, and `RECUE_INSTALL_KIND` force-overrides (mirroring #346's `RECUE_DISABLE_DMABUF`).
+- **The updater gate (frontend)** — `ipc.installKind()`, a pure `selfUpdates()` in `platform.ts` (false **only**
+  for `"system"`), an `installKind` store field loaded at boot, and guards in `store.checkForUpdate` (short-circuits
+  to `idle` with **no network call**) and `store.installUpdate` (no-op + toast). `UpdateIndicator` is hidden on a
+  package-managed install, and Settings → Updates hides Check / Update-now, showing a `sudo pacman -Syu recue-bin`
+  note instead — while "Current version" and the #192 patch notes still render.
+- **CI** — the Linux leg now builds `--bundles appimage,deb`, plus a Linux-only `continue-on-error` job-summary
+  step printing the `.deb` name + sha256. **The updater artifact stays the AppImage**: `latest.json`'s
+  `linux-x86_64` entry is unchanged and the `.deb` gets no `.sig`.
+- **Packaging** — `packaging/aur/recue-bin/{PKGBUILD,.SRCINFO}` repacking the released `.deb`, and an executable
+  `scripts/aur-bump.sh <version>` that re-pins `pkgver`/`sha256sums`/`.SRCINFO` and **hard-errors while
+  `sha256sums` is still the `SKIP` placeholder** (so a half-configured PKGBUILD can't be published).
+- **Docs** — a README **Install (Linux)** section (which build self-updates), a new `docs/linux-packaging.md`
+  (install matrix, updater rule, maintainer runbook, LICENSE caveat), a `TRAJECTORY_TO_LINUX.md` entry, and the
+  `CLAUDE.md` distribution note + layout tree.
+
+**Key decisions**
+
+- **Detection must be *runtime*, not compile-time** — the AUR package repacks the **same binary** the `.deb`
+  carries, so a cargo feature or build-time env could not possibly distinguish them.
+- **A debug build reports `"bundle"`**, so `npm run tauri dev` on Linux keeps today's update UI and the #193 dev
+  mock stays exercisable.
+- **A Linux release binary run outside an AppImage reports `"system"` and hides the update UI** — deliberately,
+  including a `target/release` run or an `--appimage-extract` run. Tauri's Linux updater can only replace an
+  `$APPIMAGE`, so an offer there would *always* fail; better to hide it than to offer a broken button.
+- **One AUR package (`recue-bin`), not two.** A source-built `recue` was rejected: npm/cargo network fetches at
+  build time conflict with makepkg's declared-sources model, it needs heavy makedepends, and it yields the same
+  binary anyway. The name is reserved via `provides=('recue')` / `conflicts=('recue')`.
+- **Publishing to the AUR stays a documented *manual* maintainer step.** No AUR account or SSH-key secret exists,
+  and auto-publishing on every release is not something to enable silently.
+- **The PKGBUILD does not hand-edit the `.desktop` entry** — it inherits whatever Tauri generates, so Task #362's
+  `StartupWMClass` fix flows into the AUR package for free.
+- **The boot post-update "Updated to v…" toast is left enabled** for package installs — it is a pure version
+  compare, so it correctly fires after a `pacman -Syu` too.
+- `license=('custom')` — the repo has **no LICENSE file**, and adding one is a legal decision, not an engineering
+  one. Flagged in `docs/linux-packaging.md` as a **prerequisite for a real AUR submission** that redistributes the
+  binary.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Verified on a real Arch box** (webkit2gtk-4.1 2.52.5): `npm run tauri build -- --bundles deb` produced
+  `ReCue_1.2.1_amd64.deb`; the PKGBUILD's `package()` body was run **verbatim** against it (yielding
+  `/usr/bin/recue` + the untouched `.desktop` + icons); `makepkg --printsrcinfo` generated the committed
+  `.SRCINFO`; and `depends` was derived from the binary's **actual** `NEEDED` links — confirming **no
+  `libayatana-appindicator`** is needed (ReCue ships no tray).
+- macOS, Windows and the Linux AppImage are **byte-for-byte unchanged** — `src/store.update.test.ts` (with a
+  mocked `./updater`) proves `"system"` never calls the updater while `"appimage"` / `"bundle"` / the unloaded
+  `""` default still do.
+- Checks green: `npm run build`, `lint`, `test` (680 passed), `format:check`, `cargo test` (213 passed), clippy
+  `-D warnings`, `cargo fmt --check`, `bash -n scripts/aur-bump.sh`, `makepkg --printsrcinfo`.
