@@ -38,7 +38,13 @@ import {
   patchnotesFor,
 } from "../../patchnotes";
 import { isLinux, kbdHint, selfUpdates } from "../../platform";
-import { DEFAULT_SETTINGS, REPO_PALETTE, useStore } from "../../store";
+import {
+  DEFAULT_SETTINGS,
+  MAX_DISPLAY_SIZE,
+  MIN_DISPLAY_SIZE,
+  REPO_PALETTE,
+  useStore,
+} from "../../store";
 import type { RendererReport, Settings as SettingsType } from "../../types";
 import Checkbox from "../Checkbox/Checkbox";
 import { markdownLinkComponents } from "../markdownCheckboxes";
@@ -442,6 +448,19 @@ function SettingsModal() {
                   value={draft.overviewPanelMinWidth}
                   onChange={(v) => update("overviewPanelMinWidth", v)}
                 />
+                <Slider
+                  label="Display size"
+                  valueLabel={`${draft.displaySize}%`}
+                  min={MIN_DISPLAY_SIZE}
+                  max={MAX_DISPLAY_SIZE}
+                  step={5}
+                  value={draft.displaySize}
+                  onChange={(v) => update("displaySize", v)}
+                />
+                <p className={styles.helpText}>
+                  Scales the entire interface. The terminal font size is set
+                  separately under Terminal.
+                </p>
               </>
             )}
 

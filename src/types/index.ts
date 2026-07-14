@@ -364,6 +364,12 @@ export interface Settings {
   /** Overview column minimum width in px (320–600); the floor before columns
    * scroll horizontally (#176). Applied as the `--overview-card-min` CSS var. */
   overviewPanelMinWidth: number;
+  /** Whole-app UI scale as an integer percent (#366): 100 = normal (default). Applied
+   * as CSS `zoom` on <html> by applySettingsEffects; scales the entire UI (chrome,
+   * text, spacing) AND the terminals uniformly, while the terminal font-size/line-height
+   * (Terminal section) stay independent as the base. Clamped to 80–150; exactly 100
+   * clears the `zoom` property so a default install is byte-for-byte unchanged. */
+  displaySize: number;
   /** Show a compact green `+A` / red `−D` added/removed line-count badge on each
    * agent's sidebar row (#335). Default on. When off, no badge renders and the store
    * performs **no** `diff_line_counts` git reads (zero cost). */

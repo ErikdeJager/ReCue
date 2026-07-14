@@ -10,11 +10,14 @@ import {
   contentForSelected,
   DEFAULT_SETTINGS,
   dedupeBranchLabels,
+  displayZoom,
   isClaudeActive,
   isCleanExit,
   kanbanColumnColor,
+  MAX_DISPLAY_SIZE,
   mergeRepoOrder,
   mergeSettings,
+  MIN_DISPLAY_SIZE,
   moveResultMessage,
   overviewClusterKeys,
   ownedChildSessionIds,
@@ -2381,6 +2384,40 @@ describe("mergeSettings (#100/#176)", () => {
       mergeSettings({ promptEnableAutoContinueAtLimit: false })
         .promptEnableAutoContinueAtLimit,
     ).toBe(false);
+  });
+
+  it("defaults the display size to 100 and back-fills it (#366)", () => {
+    expect(DEFAULT_SETTINGS.displaySize).toBe(100);
+    // A pre-#366 blob (no displaySize key) upgrades cleanly to 100.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.displaySize;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>).displaySize,
+    ).toBe(100);
+    // A persisted value is preserved over the default.
+    expect(mergeSettings({ displaySize: 125 }).displaySize).toBe(125);
+  });
+});
+
+describe("displayZoom (#366)", () => {
+  it("returns null at exactly 100 (a no-op — the property is cleared)", () => {
+    expect(displayZoom(100)).toBeNull();
+  });
+
+  it("maps a percent to its `zoom` multiplier string", () => {
+    expect(displayZoom(125)).toBe("1.25");
+    expect(displayZoom(MIN_DISPLAY_SIZE)).toBe("0.8");
+    expect(displayZoom(MAX_DISPLAY_SIZE)).toBe("1.5");
+  });
+
+  it("clamps out-of-range percents to the bounds", () => {
+    expect(displayZoom(10)).toBe("0.8"); // clamped up to MIN_DISPLAY_SIZE
+    expect(displayZoom(999)).toBe("1.5"); // clamped down to MAX_DISPLAY_SIZE
+  });
+
+  it("returns null for a non-finite input (no `zoom: NaN`)", () => {
+    expect(displayZoom(NaN)).toBeNull();
+    expect(displayZoom(Infinity)).toBeNull();
   });
 });
 

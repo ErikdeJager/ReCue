@@ -1089,6 +1089,8 @@ export const DEFAULT_SETTINGS: Settings = {
   accentColor: "",
   reduceMotion: false,
   overviewPanelMinWidth: 400,
+  // 100% = normal (#366); cleared to a no-op `zoom` so a default install is unchanged.
+  displaySize: 100,
   // True by default (#335): show the per-agent added/removed line-count badge. Off
   // hides it AND stops ReCue running any `diff_line_counts` git read.
   showDiffLineCounts: true,
@@ -1137,6 +1139,23 @@ export function mergeSettings(
   raw: Partial<Settings> | null | undefined,
 ): Settings {
   return { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
+}
+
+/** UI display-size bounds as integer percents (#366). */
+export const MIN_DISPLAY_SIZE = 80;
+export const MAX_DISPLAY_SIZE = 150;
+
+/** The CSS `zoom` value for a display-size percent (#366), clamped to
+ * [MIN_DISPLAY_SIZE, MAX_DISPLAY_SIZE]. Returns `null` at exactly 100 so the caller
+ * *clears* the property; otherwise the multiplier as a string, e.g. 125 → "1.25". Pure. */
+export function displayZoom(percent: number): string | null {
+  if (!Number.isFinite(percent)) return null;
+  const clamped = Math.min(
+    MAX_DISPLAY_SIZE,
+    Math.max(MIN_DISPLAY_SIZE, Math.round(percent)),
+  );
+  if (clamped === 100) return null;
+  return String(clamped / 100);
 }
 
 /** Companion accent tokens derived from a chosen accent hex (#107): a lightened
@@ -1217,6 +1236,12 @@ function applySettingsEffects(s: Settings): void {
   // Overview column min width (#176): the floor before columns scroll horizontally.
   // Always set it — the `.card` CSS fallback only covers the pre-JS first paint.
   root.style.setProperty("--overview-card-min", `${s.overviewPanelMinWidth}px`);
+  // Display size (#366): scale the whole app via CSS `zoom` on <html>. Cleared at 100%.
+  // Applied in every window on its own boot (applyBootState) and on Save. Use
+  // setProperty/removeProperty because `zoom` is not a typed CSSStyleDeclaration property.
+  const zoom = displayZoom(s.displaySize);
+  if (zoom === null) root.style.removeProperty("zoom");
+  else root.style.setProperty("zoom", zoom);
 }
 
 /** A clicked sidebar item — an agent/terminal (by PTY id) or a file/diff panel

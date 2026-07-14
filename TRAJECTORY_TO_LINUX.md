@@ -1609,3 +1609,26 @@ XDG_DATA_HOME=$(mktemp -d) "$APP"
       version *N* and *N+1* published: Settings → Updates → Check → Update now. **Pass when** it
       downloads, replaces the file at `$APPIMAGE` in place, and relaunches into *N+1*.
       Result: \_\_\_\_
+
+## 2026-07-14
+
+### Settings → Appearance: display-size slider / UI scaling (#366)
+
+Pure TS/WebView: a **Display size** `Slider` (80–150%, default 100) persists `displaySize` in the
+opaque settings blob (no Rust change), and `applySettingsEffects` applies it as CSS `zoom` on
+`<html>` (`displayZoom()` — cleared at exactly 100 so a default install is byte-for-byte
+unchanged). No `#[cfg]` arms; `zoom` is supported by WebKitGTK/Chromium on Linux. A detached canvas
+window (#84) applies it on its own boot.
+
+### Needs real-box verification (display size, #366)
+
+- [ ] **The whole UI scales at a non-100% size.** Settings → Appearance → Display size → 125% →
+      Save: the entire interface renders ~25% larger under **WebKitGTK** with no clipping /
+      scrollbar glitches; back to 100% renders exactly as today. Confirm a detached canvas window
+      opens at the same size.
+- [ ] **Terminal crispness at a fractional zoom.** At 125% the pooled xterm text stays legible and
+      the terminal still fits its container (cols/rows unchanged — the FitAddon ratio cancels).
+- [ ] **OS-file-drop hit-testing at a non-100% size** (`src/osFileDrop.ts` `targetAt`): dragging a
+      file from the file manager onto a FileTree folder still hits the correct row while zoomed
+      (the physical→CSS px math combines `devicePixelRatio` with the new `zoom`). Left unchanged
+      pending this check.
