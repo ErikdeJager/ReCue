@@ -1,26 +1,24 @@
 /* Expanded mode renders through the shared SegmentedControl atom (UI v2 task 372);
-   only the compact rail mode keeps local styles (card 4 owns the rail restyle). */
+   only the compact rail mode keeps local styles (restyled by card 4 / task 374). */
 
-/* Compact (icon-only) mode for the collapsed sidebar rail (#168): two stacked
-   icon buttons sized to the narrow rail (~44px, #214). */
+/* Compact (icon-only) mode for the collapsed sidebar rail (#168, UI v2 §6): two
+   stacked 28×28 ghost icon buttons — no crust well/border, Surface0 active fill. */
 .groupCompact {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  gap: 5px;
 }
 
 .iconOption,
 .iconActive {
   display: flex;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
-  padding: var(--space-4);
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;

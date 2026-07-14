@@ -260,7 +260,9 @@ function worktreeParentOf(
 
 // Sidebar width (#108): drag-resizable, clamped to [min, max] and persisted
 // separately from the Settings blob (so the modal's draft can't clobber a drag).
-const SIDEBAR_WIDTH_DEFAULT = 260;
+// Default 248px (UI v2 spec §2.4, task 374). Exported so the Sidebar's
+// double-click reset shares the single source of truth.
+export const SIDEBAR_WIDTH_DEFAULT = 248;
 const SIDEBAR_WIDTH_MIN = 180;
 const SIDEBAR_WIDTH_MAX = 560;
 const clampSidebarWidth = (w: number): number =>
