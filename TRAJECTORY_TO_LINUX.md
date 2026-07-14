@@ -162,7 +162,8 @@ and the platform-neutral ones provably order/content-preserving:
 
 Deliberately untouched (documented future work): the login-shell PATH probe's boot cost
 (≤3 s worst case, `path_env.rs`), per-keystroke `write_stdin` invokes (batching would add
-latency by definition), Overview terminal virtualization, `[profile.release]` tuning.
+latency by definition), `[profile.release]` tuning. _(Overview terminal virtualization was
+listed here too — it is now done, see Task #351 below.)_
 
 ### Needs real-box verification (performance, #346)
 
@@ -178,3 +179,60 @@ latency by definition), Overview terminal virtualization, `[profile.release]` tu
 - [ ] Release AppImage under a busy `claude` TUI (many parallel agents): display updates
       stay smooth and typing stays responsive (coalescing + b64 scrollback in effect);
       scrollback replays correctly after a view switch and after a session Restart.
+
+## 2026-07-14
+
+### Performance: lazy-mounted Overview terminals (Task #351)
+
+Closes the "Overview terminal virtualization" future-work item left open by #346 — the
+single biggest remaining WebKitGTK boot cost. Overview's wall used to mount **every**
+session's terminal at boot even though only ~3 cards fit on screen: each `createHost`
+constructs an XTerm, opens its own WebGL context, fetches up to 256 KB of scrollback over
+a **sync** main-thread command, ANSI-parses it, awaits three font loads and does a resize
+IPC. Ten resumed agents = ten eager hosts racing on the one WebView main thread, so nothing
+painted until all ten finished. Two changes, both pure WebView/TS (no Rust, no OS
+primitives, no `#[cfg]` arm — identical on macOS/Windows/Linux, biggest win on WebKitGTK):
+
+- **Visibility-gated creation.** `Terminal.tsx` calls `mountTerminal` only once its wrapper
+  first intersects — a **latching** IntersectionObserver (`useVisibleOnce.ts`; starts `true`
+  when `IntersectionObserver` is undefined, so the fallback is never worse than before). The
+  observer root comes from a `TerminalScrollRootContext` that **Overview** fills with its
+  horizontally scrolling wall: IntersectionObserver clips a target against every intermediate
+  scroll container *before* applying `rootMargin`, so a viewport-rooted observer could never
+  pre-load a card scrolled out of `overflow-x: auto` — the 600px horizontal margin would be
+  dead. Elsewhere the context is `null` ⇒ the viewport root (right for Canvas panels, big
+  mode #157, detached windows #84). Only **creation** is deferred: a host is still never
+  disposed or recycled on scroll-out / view switch (the #18 invariant — a re-replay at a
+  different width garbles claude's cursor-positioned TUI). Nothing is lost, because
+  `outputBus` already drops chunks for a session with no listener (the normal state today for
+  any session not in the current view), the backend `Scrollback` retains them, and
+  `replayDedupe.ts` drops the scrollback↔live overlap by absolute offset at creation.
+- **Serialized scrollback replays.** The hydration (fetch + initial `term.write`, awaited via
+  its write callback) runs through a bounded FIFO queue (`replayQueue.ts`,
+  `MAX_CONCURRENT_REPLAYS = 1`) that yields a macrotask between jobs, so several cards
+  becoming visible in one frame no longer stack N × (IPC + 256 KB ANSI parse) on the main
+  thread — the first terminal paints as fast as a single replay and input echo stays
+  responsive while the rest fill in. The pre-replay live buffer is byte-capped
+  (`pendingOutput.ts`) only until the fetch is dispatched (those bytes are all ≤ the
+  snapshot's `end`, so dropping them can never leave a hole); after dispatch every byte is
+  kept for the dedupe. A short-lived pending-focus keeps ⌘/Ctrl+1–9 → type-immediately
+  working when the gate creates the host a frame later.
+  **Files**: `src/components/Terminal/{useVisibleOnce.ts,replayQueue.ts,pendingOutput.ts}`
+  (new, the last two pure + unit-tested), `src/components/Terminal/terminalPool.ts`,
+  `src/components/Terminal/Terminal.tsx`, `src/components/Overview/Overview.tsx`.
+
+Rollback is two single-constant reverts: `useVisibleOnce` returning `true` immediately
+restores eager mounting, `MAX_CONCURRENT_REPLAYS = Infinity` restores parallel replays.
+
+### Needs real-box verification (performance, #351)
+
+- [ ] Release AppImage on Linux/WebKitGTK with ~10 resumed agents, booting into **Overview**:
+      `document.querySelectorAll(".xterm").length` ≈ the visible-card count (not 10), and the
+      first visible terminals paint noticeably sooner than before.
+- [ ] Scrolling the wall right fills each revealed card in **once** — history intact, no
+      duplicated startup paint / stray glyph; scrolling back and forth never re-replays.
+- [ ] Overview → Canvas → Overview reparents (no re-created terminal, no scrollback repaint).
+- [ ] Typing into a busy agent stays responsive while another card hydrates (the queue's
+      macrotask yield between replays).
+- [ ] ⌘/Ctrl+E big mode on a never-mounted card paints its terminal; a Canvas tab switched to
+      with Ctrl+1–9 takes keystrokes immediately (pending-focus).

@@ -246,6 +246,27 @@ even though it works in `tauri dev`.
   terminals (#109). `open_url` is **cross-platform** (#217): macOS `open`, Windows
   `cmd /C start "" <url>`, else `xdg-open` — so the same path (and the #210 feedback
   button) opens the browser on Windows too, not a File Explorer folder.
+- **Lazy terminal mount (#351):** a pooled xterm is created on **first visibility**, not
+  on React mount — `Terminal.tsx` gates `mountTerminal` on a **latching**
+  `IntersectionObserver` (`Terminal/useVisibleOnce.ts`), so booting into an Overview wall
+  of N resumed agents no longer builds N xterms + N WebGL contexts + N 256 KB
+  scrollback replays on the single WebView main thread (the dominant boot cost, worst on
+  Linux/WebKitGTK). The observer's root comes from a `TerminalScrollRootContext` that
+  **Overview** fills with its horizontally scrolling wall — IntersectionObserver clips a
+  target against every intermediate scroll container *before* applying `rootMargin`, so a
+  viewport-rooted observer could never pre-load a card scrolled out of the wall; everywhere
+  else (Canvas panels, big mode #157, detached windows #84) the context is `null` ⇒ the
+  viewport root. The replays that do happen are **serialized** through a bounded FIFO queue
+  (`Terminal/replayQueue.ts`, `MAX_CONCURRENT_REPLAYS = 1`, a macrotask yield between jobs),
+  and the pre-replay live buffer is byte-capped (`Terminal/pendingOutput.ts`) only until the
+  fetch is dispatched. **Nothing is lost:** bytes emitted while a session has no terminal are
+  simply not subscribed (`outputBus` already drops them — the normal state today for any
+  session not rendered in the current view), the backend `Scrollback` retains them, and
+  `replayDedupe.ts` drops the scrollback↔live overlap by absolute offset at creation. The
+  gate defers **creation only** — a host is still never disposed or recycled on a scroll-out
+  or view switch (the #18 invariant); it latches, and falls back to eager mounting where
+  `IntersectionObserver` is absent. Pure WebView/TS, so identical on macOS, Windows, and
+  Linux.
 - **Overview customization:** columns are grouped by repo (#36) — by a session's
   pure **`effectiveRepo`** (`paths.ts`), so a worktree agent (#74) sits in its
   **parent repo's** cluster sharing its color, text-badged "worktree" rather than
@@ -259,7 +280,11 @@ even though it works in `tauri dev`.
   dnd-kit) — each column is a sortable keyed by session/panel id, so a reorder
   reparents DOM nodes and never remounts a terminal (pool intact). Persisted per
   repo: `overview_panels` (panel defs) + `overview_order` (the unified item
-  order, merged with live items so spawn/exit don't scramble it).
+  order, merged with live items so spawn/exit don't scramble it). The wall scrolls
+  horizontally, so only ~3 cards are on screen at a time — it is the
+  `TerminalScrollRootContext` root for the #351 visibility gate, and an off-screen agent
+  card costs **no** xterm at boot until it is scrolled to (or its column is scrolled into
+  view by a sidebar click, #79).
 - **Sidebar tree (#45/#59):** each repo lists its sessions **and** its non-agent
   items — the **same `overview_panels` Overview shows, 1:1**: file viewers, diff
   viewers, shell terminals (#72), and scheduled sessions (#94). #59 folded the old per-repo `open_files` into
