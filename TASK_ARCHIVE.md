@@ -4640,3 +4640,49 @@ one lands.
   Linux-only divergence. Rollback = revert the PR (no persisted-data/IPC/settings-shape changes).
 
 **Dependencies:** none. (Foundation for UI v2 cards 2–12.)
+
+### 376. [x] UI v2 (11/12): Toast rework — bottom-center blocks with Lucide tone icons
+
+Card 11 of the UI v2 reskin epic (spec §10 + the reference demo; **no version bump / patch notes** — the epic ships
+as v2.0.0 after card 12). Toasts move from the small bottom-right stack (#32) to larger **bottom-center** blocks,
+each led by a Lucide icon that encodes its tone — with the store API, click-to-dismiss, auto-dismiss, stacking, and
+reduced-motion behavior preserved exactly.
+
+**What shipped** (branch `task-376-toast-rework`, PR
+[#128](https://github.com/ErikdeJager/ReCue/pull/128), merged 2026-07-14 into `ui-rework`; entirely inside
+`src/components/Toaster/`):
+
+- **`Toaster.module.css`** — the container is now fixed bottom-center (`left: 50%` + `translateX(-50%)`,
+  `bottom: 22px` demo-exact, column stack with 8px gaps, `z-index: 70` kept). Each toast: `min-height: 34px`,
+  `max-width: min(520px, calc(100vw - 32px))`, `padding 14px` horizontal, Base `var(--bg-panel)` background,
+  uniform `var(--border-strong)` hairline, `var(--radius-window)` (floating chrome ~10), `var(--shadow-toast)`,
+  `var(--fs-row)` 11.5px primary text (the shadow/type/surface tokens from Task 372), `overflow-wrap: anywhere`
+  on the message. The 180ms `toast-in` rise stays a plain CSS animation on `var(--dur-slow) var(--ease-out)`
+  animating `translateY` on the child only (the container owns the centering transform — no transform clash), so
+  the global reduced-motion killswitch drops it for free.
+- **`Toaster.tsx`** — a `toneIcon(tone)` helper renders a leading 13px `aria-hidden` icon span: success →
+  `Check` (strokeWidth 2.5, demo-exact) in `--status-done`, error → `CircleAlert` in `--status-error`, info →
+  `Info` in `--accent`. The old tone **border** overrides are gone — tone is encoded solely by the icon color.
+  Component shape untouched: one `<button>` per toast, `role="status" aria-live="polite"`, `title="Dismiss"` +
+  aria-label, click → dismiss. Both mounts (MainApp + detached CanvasWindow, each its own store/document) work
+  unchanged.
+- **`toaster.test.ts`** (new) — a node-env file-content guard (platform.test.ts idiom) pinning bottom-center
+  positioning (no `right:` anchor), the v2 tokens (`--shadow-toast`/`--radius-window`/`--bg-panel`/
+  `--border-strong`), the `--dur-slow`/`--ease-out` rise, and the tone-icon mapping (TSX names + status colors).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 376)
+
+- **Toasts are floating chrome (rounded), not square** — `--radius-window` (10px) over the demo's literal 9px,
+  keeping the shared token per spec §10's "radius ~10".
+- **TTL stays 3500ms and the store is untouched** (`pushToast`/`dismissToast`/`ToastTone`/`TOAST_TTL_MS`
+  zero-diff) — spec prose suggested ~2.2s, but real app messages are longer than the demo's mocks, and 3500 keeps
+  `store.test.ts`'s fake-timer test byte-for-byte green.
+- **`z-index: 70` kept** (the app's own stacking scale, under the update overlay 200 / BigMode 220) — the demo's
+  90 belongs to the demo's scale.
+- **The demo's `white-space: nowrap` deliberately dropped** — real messages (multi-item tab-close summaries,
+  pathy errors) wrap inside the max-width; short toasts still render the demo's 34px single line.
+- **Stacking kept from v1** (the demo shows only one toast): centered column, newest nearest the bottom edge.
+- Pure CSS transforms/flex + two newly tree-shaken Lucide icons — no color-mix, no platform code; identical on
+  WKWebView/WebView2/WebKitGTK. Rollback = revert the PR (component-local; no store/IPC/persistence surface).
+
+**Dependencies:** Task 372.
