@@ -169,3 +169,39 @@ describe("v2 foundation tokens (task 372)", () => {
     }
   });
 });
+
+/**
+ * Token hygiene guard (task 383): parallel reskin cards merging into tokens.css can
+ * each bring their own copy of a token (the epic's known near-miss: `--text-faint`
+ * from tasks 379/380). A duplicate declaration is silent — last-one-wins — so a merge
+ * can flip a color without any diff on the consumer. Pin it: every custom property is
+ * declared exactly once per top-level block.
+ */
+describe("token hygiene (task 383)", () => {
+  const tokens = read("./styles/tokens.css");
+
+  // Top-level blocks only: a selector line followed by a body up to the first
+  // column-0 closing brace (tokens.css has no nested rules).
+  const blocks = [...tokens.matchAll(/^([^{\n][^\n{]*)\{([\s\S]*?)^\}/gm)];
+
+  it("finds the three theme blocks", () => {
+    const selectors = blocks.map(([, sel]) => sel.trim());
+    expect(selectors).toContain(":root");
+    expect(selectors).toContain(":root.dense");
+    expect(selectors).toContain(':root[data-theme="light"]');
+  });
+
+  it.each(blocks.map(([, sel, body]) => [sel.trim(), body]))(
+    "declares each custom property exactly once in %s",
+    (_sel, body) => {
+      const names = [...body.matchAll(/^\s*(--[\w-]+)\s*:/gm)].map((m) => m[1]);
+      const seen = new Set<string>();
+      const dupes = new Set<string>();
+      for (const name of names) {
+        if (seen.has(name)) dupes.add(name);
+        seen.add(name);
+      }
+      expect([...dupes]).toEqual([]);
+    },
+  );
+});

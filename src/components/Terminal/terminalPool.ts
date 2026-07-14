@@ -53,6 +53,7 @@ import { isLinux, isWindows } from "../../platform";
 import { useStore } from "../../store";
 import { IS_MAIN_WINDOW } from "../../windowContext";
 import { focusedTerminalElement } from "./hoverFocus";
+import { effectiveCursorBlink, reducedMotionActive } from "./motionPolicy";
 import { makePasteKeyHandler } from "./pasteHandler";
 import {
   PENDING_CAP_BYTES,
@@ -161,6 +162,22 @@ let currentTerminalSettings = {
   lineHeight: 1.0,
   cursorBlink: true,
 };
+
+/** Whether reduced motion is in force right now (UI v2 §2.5, task 383): the app's
+ * Settings toggle (read from the store — `set({ settings })` runs before
+ * `applySettingsEffects`, so this is already current on Save) OR the OS
+ * `prefers-reduced-motion` query. `currentTerminalSettings.cursorBlink` keeps the
+ * user's RAW setting, so un-toggling reduced motion restores blink on the next
+ * apply. */
+function reducedMotionNow(): boolean {
+  let appSetting = false;
+  try {
+    appSetting = useStore.getState().settings.reduceMotion;
+  } catch {
+    appSetting = false; // store not ready (unit tests) — the media query decides
+  }
+  return reducedMotionActive(appSetting);
+}
 
 // Linux software-WebGL fallback (#346): WebKitGTK can hand out a WebGL context that
 // is silently software-rasterized (llvmpipe/SwiftShader — e.g. NVIDIA driver or
@@ -337,10 +354,14 @@ export function applyTerminalSettings(s: {
   cursorBlink: boolean;
 }): void {
   currentTerminalSettings = { ...s };
+  // Effective blink (UI v2 §2.5, task 383): xterm's canvas cursor is out of reach
+  // of the CSS reduced-motion killswitch, so gate it here — an options mutation on
+  // the live xterm, never a host dispose (#18).
+  const blink = effectiveCursorBlink(s.cursorBlink, reducedMotionNow());
   for (const host of hosts.values()) {
     host.term.options.fontSize = s.fontSize;
     host.term.options.lineHeight = s.lineHeight;
-    host.term.options.cursorBlink = s.cursorBlink;
+    host.term.options.cursorBlink = blink;
     host.scheduleResize();
   }
 }
@@ -417,7 +438,11 @@ function createHost(sessionId: string): TerminalHost {
     ),
     fontSize: currentTerminalSettings.fontSize,
     lineHeight: currentTerminalSettings.lineHeight,
-    cursorBlink: currentTerminalSettings.cursorBlink,
+    // Gated by reduced motion (UI v2 §2.5, task 383) — see applyTerminalSettings.
+    cursorBlink: effectiveCursorBlink(
+      currentTerminalSettings.cursorBlink,
+      reducedMotionNow(),
+    ),
     allowProposedApi: true,
     ...(windowsPty ? { windowsPty } : {}),
     theme: {

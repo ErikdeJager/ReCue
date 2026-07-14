@@ -25,9 +25,11 @@
   background: var(--status-idle);
 }
 
-/* Busy: blue dot + tinted ring, pulsing 1 → .4 (demo-exact). */
+/* Busy: blue dot + tinted ring, pulsing 1 → .4 (demo-exact). Plain dim-token
+   fallback first, then the demo-exact color-mix (the cross-platform rule, 383). */
 .busy::before {
   background: var(--status-running);
+  box-shadow: 0 0 0 2.5px var(--status-running-dim);
   box-shadow: 0 0 0 2.5px
     color-mix(in srgb, var(--status-running) 18%, transparent);
   animation: busy-pulse 1.6s ease-in-out infinite;
@@ -37,6 +39,7 @@
    dot + tinted ring, no animation ("finished — needs input"). */
 .settled::before {
   background: var(--status-awaiting);
+  box-shadow: 0 0 0 2.5px var(--status-awaiting-dim);
   box-shadow: 0 0 0 2.5px
     color-mix(in srgb, var(--status-awaiting) 15%, transparent);
 }

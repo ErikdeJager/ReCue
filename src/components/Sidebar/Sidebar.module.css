@@ -186,7 +186,7 @@
   box-shadow:
     0 0 0 1px var(--accent-dim),
     0 0 6px 0 var(--accent-dim),
-    var(--shadow-popover);
+    var(--shadow-menu);
   animation:
     feedback-nudge-in 0.18s var(--ease-out),
     feedback-nudge-pulse 1.2s var(--ease-out) 2;
@@ -207,13 +207,13 @@
     box-shadow:
       0 0 0 1px var(--accent-dim),
       0 0 6px 0 var(--accent-dim),
-      var(--shadow-popover);
+      var(--shadow-menu);
   }
   50% {
     box-shadow:
       0 0 0 1px var(--accent),
       0 0 10px 1px var(--accent-dim),
-      var(--shadow-popover);
+      var(--shadow-menu);
   }
 }
 
@@ -998,6 +998,7 @@
   gap: var(--space-4);
   padding: var(--space-4) var(--space-6);
   border-radius: var(--radius-chip);
+  background: var(--status-awaiting-dim); /* plain fallback (383) */
   background: color-mix(in srgb, var(--status-awaiting) 14%, transparent);
   color: var(--status-awaiting);
   font-size: var(--fs-meta-sm);
@@ -1344,9 +1345,11 @@
   background: var(--bg-hover);
 }
 
+/* Selected agent = Surface0 (task 383) — selection never reads as accent (the
+   375/378 rule); the rail's accent-dim FILTER fills are the recorded 374 keeper. */
 .railDotSelected,
 .railDotSelected:hover {
-  background: var(--accent-dim);
+  background: var(--bg-elevated);
 }
 
 .railWorktreeGroup {
