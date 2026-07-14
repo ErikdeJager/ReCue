@@ -8,6 +8,7 @@ mod agents;
 mod commands;
 mod files;
 mod git;
+mod linux_desktop;
 mod linux_gtk;
 mod linux_webkit;
 mod path_env;
@@ -77,6 +78,14 @@ pub fn run() {
     // spawns). No-op on macOS/Windows and outside an AppImage; the user's own
     // `APPIMAGE_GTK_THEME` / `RECUE_GTK_THEME` override it. See `linux_gtk`.
     linux_gtk::apply_gtk_theme_env();
+
+    // Linux desktop identity (#362): GTK derives the X11 WM_CLASS pair and the Wayland
+    // app_id from GLib's program name (`argv[0]`'s basename) — which an AppImage's AppRun
+    // is free to rewrite. Pin it to the constant the shipped `.desktop`'s StartupWMClass
+    // states, so the window reliably groups under its launcher icon instead of showing up
+    // as a second, iconless tile. Must run before `tauri::Builder` (GTK reads prgname at
+    // init) and, like the three calls above, before any thread spawns. See `linux_desktop`.
+    linux_desktop::pin_wm_class();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

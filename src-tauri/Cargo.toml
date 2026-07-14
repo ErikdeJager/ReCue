@@ -52,5 +52,13 @@ png = "0.18.1"
 # (transitive); pulling it direct adds no new compile. Pure-Rust, platform-neutral.
 base64 = "0.22"
 
+# Linux desktop identity (#362): pin GLib's program name so the window's WM_CLASS /
+# Wayland app_id is a stable `recue` (never an argv[0]/AppRun accident) and the
+# generated .desktop's StartupWMClass can be a fact. glib 0.18 is already in the
+# dependency tree (via tao/gtk), so this adds no new compilation. Linux-only —
+# macOS/Windows never build it. See `src/linux_desktop.rs`.
+[target.'cfg(target_os = "linux")'.dependencies]
+glib = "0.18"
+
 [lints.clippy]
 all = "warn"

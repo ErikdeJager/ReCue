@@ -371,6 +371,40 @@ jobs:
           releaseBody: ${{ needs.prepare.outputs.body }}
           args: ${{ matrix.args }}
 
+      # Linux (#362): the AppImage's internal .desktop is what every desktop integrator
+      # (and ReCue's own scripts/install-linux-desktop.sh) copies into the user's menu, and
+      # its StartupWMClass is what makes the running window group under that launcher icon
+      # instead of showing up as a second, iconless tile. It comes from
+      # bundle.linux.deb.desktopTemplate (the AppImage is packed from the deb data tree) —
+      # assert the template actually took effect, so a Tauri bump that moves that seam can't
+      # silently ship a mismatched entry again. Extraction *tooling* trouble only warns (a
+      # runner quirk must never block a release); wrong *content* is a hard error.
+      - name: Verify the AppImage desktop entry (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          set -euo pipefail
+          app="$(ls "$GITHUB_WORKSPACE"/src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1)"
+          if [ -z "$app" ]; then
+            echo "::warning::No AppImage found to verify — skipping the desktop-entry check."
+            exit 0
+          fi
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          if ! "$app" --appimage-extract 'usr/share/applications/*.desktop' >/dev/null 2>&1; then
+            echo "::warning::Could not extract the AppImage's desktop entry — skipping the check."
+            exit 0
+          fi
+          f="$(find squashfs-root -name '*.desktop' | head -1)"
+          if [ -z "$f" ]; then
+            echo "::warning::No .desktop found inside the AppImage — skipping the check."
+            exit 0
+          fi
+          cat "$f"
+          grep -qx 'StartupWMClass=recue' "$f" || { echo "::error::StartupWMClass is not 'recue' (the window won't match its launcher)"; exit 1; }
+          grep -qx 'Icon=recue' "$f" || { echo "::error::Icon is not 'recue'"; exit 1; }
+          grep -qx 'Exec=recue' "$f" || { echo "::error::Exec is not 'recue' (AppRun parses that line to find the binary)"; exit 1; }
+          echo "AppImage desktop entry OK: StartupWMClass/Icon/Exec = recue."
+
       # macOS only: when signing was enabled, assert the built .app carries the signature
       # that makes TCC grants work + persist — the necessary+sufficient precondition the
       # GUI mic prompt can't be exercised for in CI. Skipped on the ad-hoc fallback (signing
