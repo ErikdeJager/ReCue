@@ -956,3 +956,62 @@ returns `true` before touching the event).
   the temp-PNG path exactly once.
 - Re-confirm macOS ⌘V pastes once and Ctrl+V still emits `^V` (gated off), and Linux
   Ctrl+Shift+V native paste is unaffected.
+
+## 2026-07-14
+
+### White startup flash (#348)
+
+Platform-neutral fix (no `#[cfg]` arms) — windows are created **hidden**
+(`visible: false`) with a **themed native background** (`tauri.conf.json` /
+`WebviewWindowBuilder::background_color`, from `commands::background_for_theme`; `lib.rs`
+`setup` re-colors the main window from the persisted theme before it is ever shown),
+`index.html` gained an **inline pre-paint `<style>`** + a synchronous **`recue.theme`
+localStorage mirror** read (every stylesheet is JS-imported, so the document had *zero*
+styles — a white canvas — until the ~1.35 MB bundle parsed), and the frontend reveals the
+window from `useRevealWindow` → the Rust `reveal_window` command once React has committed
+its first frame, with `schedule_reveal_fallback` (2 s) as a safety net. The paint race is
+a GUI behavior and cannot be unit-tested, so it needs a real-box check per OS.
+
+Windows-specific notes: WebView2 honors the window-layer `backgroundColor` (unlike macOS,
+where `set_background_color` is a webview-layer no-op — harmless there, since the
+document's inline `html` background paints over it before the window is revealed), and the
+config's alpha channel is ignored for the window layer, which is fine (we ship opaque
+`#1e1e2e` / `#eff1f5`). Watch for WebView2 suspending `requestAnimationFrame` while the
+window is unmapped — the reveal therefore fires from **both** an rAF and a 0 ms timer.
+
+### Needs real-box verification (startup flash, #348)
+
+- [ ] **Dark (default) launch** (`npm run tauri dev` **and** an installed NSIS/MSI build):
+      no white rectangle at any point — the window first appears already dark.
+- [ ] **Light theme** (Settings → Appearance → Light → Save, quit, relaunch): the window
+      appears **light** — no white flash and no dark→light flip.
+- [ ] **Detached canvas window**: pop a Canvas tab out (button **and** drag tear-off) in
+      both themes — no white flash; closing it re-docks as before.
+- [ ] **Reveal timing**: the window appears promptly (frontend reveal), not after a ~2 s
+      pause (which would mean only the Rust fallback fired).
+- [ ] **Reveal fallback**: with the Vite dev server stopped (or a broken bundle), the
+      window still appears within ~2 s instead of never showing.
+- [ ] **Runtime theme switch**: switch Dark↔Light, Save, then resize the window quickly —
+      any exposed native gutter is the **new** theme color.
+
+### Bounded-parallel boot resume (#355)
+
+Boot resume now reconnects persisted sessions **4 at a time** (`src-tauri/src/boot.rs`,
+`RESUME_CONCURRENCY`) over **one** shared snapshot of `~/.claude/projects`
+(`title::ProjectLogIndex`, read through the cross-platform `home_dir()` — `%USERPROFILE%` on
+Windows). Pure `std::thread` + `std::fs`, no OS-specific code; concurrent spawns are safe on
+Windows because `portable-pty` passes `bInheritHandles = FALSE` to `CreateProcessW` (the
+ConPTY is handed over via `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`), and `SessionManager` holds
+its map lock only for the O(1) insert (#260). A unix-gated concurrent-spawn test
+(`pty::tests::concurrent_spawns_register_every_session`) is the standing regression guard.
+The loop runs on its own `std::thread` (not the async runtime), so it is independent of the
+#353 `spawn_blocking` command path, and each resumed PTY still goes through
+`pty::spawn_with_id` — so the `PATHEXT` / `cmd.exe /C` agent resolution (#140) is unchanged.
+
+#### Still needs manual Windows verification (#355)
+
+- [ ] With ≥8 persisted agents, relaunch: 4 **concurrent ConPTY creations** are the
+      Windows-specific thing to eyeball — every terminal must reconnect with its own scrollback
+      exactly once (no cross-wired/garbled output, no stray glyph, no wall of exit toasts).
+- [ ] The bounded-parallel resume does not delay the #348 window reveal (the window still
+      appears promptly, not after the 2 s Rust fallback).
