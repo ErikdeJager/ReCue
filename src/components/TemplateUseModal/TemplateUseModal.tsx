@@ -84,9 +84,9 @@ function TemplateUseModal() {
   };
 
   return (
-    <div className={styles.overlay} onClick={close}>
+    <div className={`modal-scrim ${styles.overlay}`} onClick={close}>
       <form
-        className={styles.dialog}
+        className={`modal-pop ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-label="New tab from template"
@@ -137,13 +137,17 @@ function TemplateUseModal() {
               </div>
             )}
             <div className={styles.actions}>
-              <button type="button" className={styles.cancel} onClick={close}>
+              <button
+                type="button"
+                className="modal-btn modal-btn-neutral"
+                onClick={close}
+              >
                 Cancel
               </button>
               {templates.length === 0 ? (
                 <button
                   type="button"
-                  className={styles.primary}
+                  className="modal-btn modal-btn-primary"
                   onClick={() => openEditor(null)}
                 >
                   New template…
@@ -151,7 +155,7 @@ function TemplateUseModal() {
               ) : (
                 <button
                   type="submit"
-                  className={styles.primary}
+                  className="modal-btn modal-btn-primary"
                   disabled={!templateId}
                 >
                   Continue
@@ -195,7 +199,7 @@ function TemplateUseModal() {
             )}
             <button
               type="button"
-              className={styles.pickButton}
+              className="modal-btn modal-btn-neutral"
               onClick={() => void pick()}
             >
               <FolderOpen size={15} strokeWidth={1.5} />
@@ -216,12 +220,16 @@ function TemplateUseModal() {
               {...noAutoCapitalize}
             />
             <div className={styles.actions}>
-              <button type="button" className={styles.cancel} onClick={close}>
+              <button
+                type="button"
+                className="modal-btn modal-btn-neutral"
+                onClick={close}
+              >
                 Cancel
               </button>
               <button
                 type="submit"
-                className={styles.primary}
+                className="modal-btn modal-btn-primary"
                 disabled={!cwd || !templateId}
               >
                 Open template

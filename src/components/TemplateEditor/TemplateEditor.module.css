@@ -36,13 +36,15 @@
   text-transform: uppercase;
 }
 
+/* Template-name field — the v2 crust input idiom (accent focus border kept). */
 .nameInput {
   width: 260px;
   max-width: 40%;
-  padding: var(--space-4) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -60,68 +62,12 @@
   flex: 1;
 }
 
-.cancelBtn,
-.saveBtn {
-  padding: var(--space-4) var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  font: inherit;
-  font-size: var(--fs-meta);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-
-.cancelBtn {
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-.cancelBtn:hover {
-  border-color: var(--border-strong);
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-
-.saveBtn {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-fg);
-}
-
-.saveBtn:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-}
-
-/* Icon-only "Distribute panels evenly" button (#223), styled like the bordered
-   cancel button but square for the Grid2x2 glyph. */
+/* Icon-only "Distribute panels evenly" button (#223): composes the shared
+   modal-btn neutral (task 378) — this only squares it for the Grid2x2 glyph. */
 .distributeBtn {
-  display: flex;
-  align-items: center;
+  width: 28px;
   justify-content: center;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-
-.distributeBtn:hover:not(:disabled) {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-
-.distributeBtn:disabled {
-  opacity: 0.4;
-  cursor: default;
+  padding: 0;
 }
 
 .workspace {
@@ -172,7 +118,7 @@
 
 .chip:hover {
   border-color: var(--accent);
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 
 .chipDragging {
@@ -227,14 +173,15 @@
   font-size: var(--fs-meta-sm);
 }
 
+/* Per-block config fields — the v2 crust input idiom (accent focus kept). */
 .configInput {
   flex: 1;
   min-height: 140px;
   width: 100%;
   padding: var(--space-6) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -244,9 +191,9 @@
 .configLine {
   width: 100%;
   padding: var(--space-4) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -308,7 +255,7 @@
 
 .pathModeBtn:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 
 .pathModeActive,
@@ -345,5 +292,5 @@
 
 .browseBtn:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }

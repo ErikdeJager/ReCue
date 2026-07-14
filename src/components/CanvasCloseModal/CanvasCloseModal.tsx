@@ -86,10 +86,13 @@ function CanvasCloseModal() {
   const summary = parts.length ? parts.join(", ") : "this tab's contents";
 
   return (
-    <div className={styles.overlay} onClick={cancelCloseCanvas}>
+    <div
+      className={`modal-scrim ${styles.overlay}`}
+      onClick={cancelCloseCanvas}
+    >
       <div
         ref={dialogRef}
-        className={styles.dialog}
+        className={`modal-pop ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-label="Close canvas"
@@ -113,25 +116,25 @@ function CanvasCloseModal() {
         <div className={styles.actions}>
           <button
             type="button"
-            className={styles.cancel}
+            className="modal-btn modal-btn-neutral"
             onClick={cancelCloseCanvas}
           >
-            Cancel <kbd className={styles.kbd}>Esc</kbd>
+            Cancel <kbd className="modal-kbd">Esc</kbd>
           </button>
           <button
             type="button"
-            className={styles.danger}
+            className="modal-btn modal-btn-danger"
             onClick={() => void confirmCloseCanvas(promptId, true)}
           >
-            Kill &amp; close <kbd className={styles.kbd}>K</kbd>
+            Kill &amp; close <kbd className="modal-kbd">K</kbd>
           </button>
           <button
             type="button"
             ref={keepRef}
-            className={styles.primary}
+            className="modal-btn modal-btn-primary"
             onClick={() => void confirmCloseCanvas(promptId, false)}
           >
-            Keep &amp; close <kbd className={styles.kbd}>↵</kbd>
+            Keep &amp; close <kbd className="modal-kbd">↵</kbd>
           </button>
         </div>
       </div>

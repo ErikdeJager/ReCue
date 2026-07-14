@@ -205,10 +205,10 @@ function CreatePanelModal() {
     : "";
 
   return (
-    <div className={styles.overlay} onClick={close}>
+    <div className={`modal-scrim ${styles.overlay}`} onClick={close}>
       <div
         ref={dialogRef}
-        className={styles.dialog}
+        className={`modal-pop ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-label="Create panel"
@@ -246,14 +246,18 @@ function CreatePanelModal() {
                       className={styles.typeIcon}
                     />
                     <span className={styles.typeLabel}>{t.label}</span>
-                    <kbd className={styles.typeKbd}>{i + 1}</kbd>
+                    <kbd className="modal-kbd">{i + 1}</kbd>
                   </button>
                 );
               })}
             </div>
             <div className={styles.actions}>
-              <button type="button" className={styles.cancel} onClick={close}>
-                Cancel <kbd className={styles.btnKbd}>esc</kbd>
+              <button
+                type="button"
+                className="modal-btn modal-btn-neutral"
+                onClick={close}
+              >
+                Cancel <kbd className="modal-kbd">esc</kbd>
               </button>
             </div>
           </>
@@ -304,12 +308,16 @@ function CreatePanelModal() {
               )}
             </div>
             <div className={styles.actions}>
-              <button type="button" className={styles.cancel} onClick={close}>
-                Cancel <kbd className={styles.btnKbd}>esc</kbd>
+              <button
+                type="button"
+                className="modal-btn modal-btn-neutral"
+                onClick={close}
+              >
+                Cancel <kbd className="modal-kbd">esc</kbd>
               </button>
               <button
                 type="button"
-                className={styles.pickButton}
+                className="modal-btn modal-btn-neutral"
                 onClick={() => void browse()}
               >
                 <FolderOpen size={15} strokeWidth={1.5} />
