@@ -365,68 +365,17 @@
   }
 }
 
-/* Cursor-positioned right-click menu (mirrors the Sidebar RowContextMenu, #167). */
+/* Cursor-positioned right-click menu (mirrors the Sidebar RowContextMenu, #167).
+   The LOOK comes from the shared menu.css primitive (task 375, `menu-pop`/
+   `menu-item`/`menu-item-danger`/`menu-item-confirm`); these two classes keep
+   only the site-local positioning + z-index. */
 .menuOverlay {
-  position: fixed;
-  inset: 0;
   z-index: 200;
 }
 
-.menu {
+.menuPos {
   position: fixed;
   z-index: 201;
-  min-width: 170px;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
-  animation: menu-in var(--dur-fast) var(--ease-out);
-}
-
-.menuItem {
-  display: block;
-  width: 100%;
-  padding: var(--space-6) var(--space-8);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.menuItem:hover {
-  background: var(--bg-hover);
-}
-
-/* Destructive menu item (#267) — Delete / Delete folder + the inline confirm. Mirrors
-   the Sidebar RowContextMenu `.menuDanger`: a faint red wash + red text, deepening on
-   hover. On-system status token + color-mix (with the token as a plain-color fallback
-   baked into `--status-error`), so it's identical on macOS and Windows. */
-.menuItemDanger {
-  display: block;
-  width: 100%;
-  padding: var(--space-6) var(--space-8);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: color-mix(in srgb, var(--status-error) 14%, transparent);
-  color: var(--status-error);
-  font: inherit;
-  font-size: var(--fs-meta);
-  font-weight: 500;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.menuItemDanger:hover {
-  background: color-mix(in srgb, var(--status-error) 22%, transparent);
 }
 
 /* New-folder inline form (#267): a name input + a Create button inside the menu. */
@@ -437,13 +386,14 @@
   padding: var(--space-4);
 }
 
+/* Crust input skin (task 375) — matches the reskinned New-session popover inputs. */
 .menuInput {
   flex: 1;
   min-width: 0;
   padding: var(--space-4) var(--space-6);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -478,15 +428,4 @@
 .menuFormBtn:disabled {
   cursor: default;
   opacity: 0.5;
-}
-
-@keyframes menu-in {
-  from {
-    opacity: 0;
-    transform: scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
 }

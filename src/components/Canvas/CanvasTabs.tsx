@@ -295,7 +295,7 @@ function CanvasTabs() {
         </button>
         {templatesMenu.open && templatesMenu.menuPos && (
           <div
-            className={styles.menu}
+            className={`menu-pop ${styles.menuPos}`}
             role="menu"
             style={{
               top: templatesMenu.menuPos.top,
@@ -304,7 +304,7 @@ function CanvasTabs() {
           >
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               disabled={!hasTemplates}
               onClick={() => {
@@ -316,7 +316,7 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               onClick={() => {
                 templatesMenu.close();
@@ -327,7 +327,7 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               disabled={!canSaveAsTemplate}
               onClick={() => {
@@ -339,7 +339,7 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               onClick={() => {
                 templatesMenu.close();

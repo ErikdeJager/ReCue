@@ -1,5 +1,6 @@
-/* Shared add-view popover chrome (#164/#165). The root anchors the popover; the
-   popover mirrors the FileSwitcher popover surface. On-system tokens only. */
+/* Shared add-view popover positioning (#164/#165). The LOOK comes from the shared
+   menu.css primitive (task 375, `menu-pop`); these classes keep only the anchor
+   positioning + z-index. The root anchors the popover under its trigger. */
 .root {
   position: relative;
   display: inline-flex;
@@ -10,12 +11,6 @@
   position: absolute;
   top: calc(100% + var(--space-4));
   z-index: 50;
-  min-width: 160px;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
 }
 
 /* Anchor under the trigger's left edge (left-placed trigger, e.g. the badge) or
