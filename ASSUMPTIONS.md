@@ -3190,3 +3190,22 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - A focus-steal guard (pure `shouldHoverFocus`) skips when a non-xterm editable element (input/textarea/select/contenteditable) holds focus, so typing in a FileViewer/Kanban textarea, rename input, or modal field is never interrupted; moving between terminals IS allowed (xterm's helper textarea sits inside `.xterm`).
 - Hover changes keyboard focus only; it does NOT move the Canvas "active leaf" highlight (that stays pointerDown-driven) to avoid the selection jumping with the mouse.
 - Detached canvas windows pick up the setting on their own init() load; a live toggle in the main window reaches a detached window on its next load (consistent with existing settings-blob propagation) — accepted as a minor limitation, not separately broadcast.
+
+## Task 367
+
+- "1.2" = the current `DEFAULT_SETTINGS.terminalLineHeight` (verified store.ts:1086); new default is 1.0, fallback default in terminalPool.ts also updated to 1.0.
+- Migration is one-time per install, gated by a NEW persisted boolean `terminalLineHeightMigrated` in the settings blob (default false, back-filled false for old blobs) — mirroring the `onboarded` one-time-flag precedent — so a user who deliberately re-picks 1.2 after the migration keeps it.
+- "Exactly 1.2" matched with an epsilon `Math.abs(v - 1.2) < 1e-6` (robust vs FP drift; far tighter than the 0.1 slider step, so 1.1/1.3 never match). The slider emits `Number("1.2") === 1.2` exactly, so strict equality would also work; epsilon is defensive.
+- New/never-saved installs get 1.0 purely from the default change; the migration only rewrites an actually-stored ~1.2. Migration runs in `applyBootState` (the sole load path) and persists once (main-window only) only when it actually bumps a value — mirroring the #58 canvas `migrated` persist.
+- The Settings "Reset to defaults" handler must also preserve `terminalLineHeightMigrated` (like it preserves `onboarded`) so a reset-then-re-pick-1.2 isn't clobbered.
+- Frontend-only: the settings blob is opaque on the Rust side, so there is no backend change and no per-OS gating (identical on macOS/Windows/Linux).
+
+## Task 369
+
+- Selection rule among unused colors: FIRST unused in REPO_PALETTE order (deterministic/stable/testable), not random-among-unused.
+- Fallback once all 14 palette colors are in use: the existing stable hash default (repoColor(path, {})) — matches today's pick; not round-robin/least-used.
+- Auto-assigned colors are PERSISTED via the existing set_repo_color / repo_colors storage (same map as user overrides), so a folder keeps its color permanently; a user override or prior assignment always wins and is never overwritten.
+- Grandfather existing folders: the feature only affects folders that appear AFTER boot; folders present at boot keep their current (hash-derived) colors — satisfying "don't change existing folders' colors".
+- Wired as a single main-window Zustand store subscription (not by instrumenting the ~9 folder-add sites), keyed to the sidebar's top-level folder set (recents ∪ worktree parents ∪ recurring cwds ∪ non-worktree session repos), so worktree child dirs are never assigned a stray color. Detached windows don't assign.
+- Known minor limitation (not fixed): a detached canvas window open when a new folder is added won't show the new color live (repo colors have no cross-window broadcast today); it appears on that window's next boot.
+- No backend/Rust changes; pure TS/WebView so identical on macOS/Windows/Linux.
