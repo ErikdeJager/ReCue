@@ -70,6 +70,7 @@ import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
 import { shouldHoverSelect } from "../Terminal/hoverFocus";
 import { blurTerminals, focusTerminal } from "../Terminal/terminalPool";
 import { TerminalScrollRootContext } from "../Terminal/useVisibleOnce";
+import { overviewIsEmpty } from "../WaveBackground/wavePresets";
 import styles from "./Overview.module.css";
 
 // A hover-driven select (#371) must not scroll the wall: scrollIntoView would move
@@ -834,15 +835,9 @@ function Overview() {
   // — and only once the boot payload has landed (#352): before that everything is
   // empty simply because nothing has loaded yet, and showing "No active sessions"
   // for that round-trip would flash the wrong state right before the content pops in.
-  const anyPanels = Object.values(overviewPanels).some(
-    (list) => list.length > 0,
-  );
-  if (
-    sessions.length === 0 &&
-    !anyPanels &&
-    schedules.length === 0 &&
-    recurrings.length === 0
-  ) {
+  // The gate is the shared `overviewIsEmpty` (task 377) so the wave background's
+  // hero preset can never drift from this render.
+  if (overviewIsEmpty({ sessions, overviewPanels, schedules, recurrings })) {
     return booted ? <EmptyState onNewSession={() => openNewSession()} /> : null;
   }
 

@@ -1,19 +1,21 @@
 /* Canvas view (#46/#47): the split-panel area fills the view; content is dragged
    in from the sidebar via the app-level DnD context. */
+/* Transparent (task 377): the stage container behind it (.main / .window) paints
+   the crust and hosts the wave layer — ONE canvas spans strip + panes. */
 .canvas {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-base);
 }
 
+/* Transparent (task 377): the wave shows through the split separators and the
+   empty drop target; the opaque leaf panels cover it wherever there is content. */
 .area {
   position: relative;
   flex: 1;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: var(--bg-panel);
 }
 
 /* --- Canvas tab strip (#58) --- */
@@ -239,6 +241,8 @@
   margin: 0;
   color: var(--text-muted);
   font-size: var(--fs-meta);
+  /* The empty-canvas hint sits on the wave background (task 377). */
+  text-shadow: 0 1px 6px rgba(17, 17, 27, 0.65);
 }
 
 /* --- A leaf panel --- */

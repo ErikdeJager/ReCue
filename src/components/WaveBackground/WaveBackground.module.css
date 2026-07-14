@@ -1,0 +1,12 @@
+/* The wave layer (UI v2 §3, task 377): fills the stage, paints ABOVE the stage's own
+   crust background but BELOW all in-flow content — negative z-index inside an
+   isolated ancestor (.main / .window set position:relative + isolation:isolate), so
+   opaque panels/chrome cover it with no z-index changes anywhere else. */
+.wave {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}

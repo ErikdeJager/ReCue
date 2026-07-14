@@ -142,7 +142,8 @@ steady-state boot pays **zero** probe cost.
   visible regression); the **`@xterm/addon-webgl`** addon in `terminalPool.createHost()`
   (xterm core / fit / web-links stay **static** — terminals *are* the first paint; the addon
   attaches a few ms later, and on a software rasterizer #346 its chunk is never fetched); and
-  **mermaid** (#254). `src/prefetch.ts` warms the deferred chunks on idle
+  **mermaid** (#254); and the vendored **WaveEngine** (`src/vendor/waveEngineLoader.ts`, UI v2
+  task 377 — loaded on `WaveBackground` mount). `src/prefetch.ts` warms the deferred chunks on idle
   (`requestIdleCallback`, feature-detected with a `setTimeout` fallback for older WKWebView).
   **Rule: only a dynamic `import()` removes work from the first-paint path** — a statically
   reachable module is parsed before first render whatever chunk it lands in, so
@@ -693,7 +694,8 @@ steady-state boot pays **zero** probe cost.
 │   │                       #   TemplateEditor + TemplateManager (#117) + TemplateUseModal (#118),
 │   │                       #   Checkbox, Slider (#122), SkillAutocomplete (#114), PatchNotes (#192),
 │   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
-│   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState
+│   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState,
+│   │                       #   WaveBackground (UI v2 wave layer, task 377 — lazy src/vendor/WaveEngine.js)
 │   │                       #   ModalHost.tsx — the ten lazily-mounted top-level modals (#356)
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)

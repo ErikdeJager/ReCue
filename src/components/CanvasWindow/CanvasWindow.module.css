@@ -1,6 +1,11 @@
 /* Detached canvas window (#84): a minimal canvas-only frame — a thin header with
    the tab name over the shared BSP surface, no sidebar / Overview / tab strip. */
 .window {
+  /* Hosts the task-377 wave layer at z -1 (see .main in global.css): position +
+     isolation keep the canvas below all content; the crust background stays as
+     the backgroundAnimation-off / pre-engine-load static stage. */
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   height: 100%;

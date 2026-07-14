@@ -43,21 +43,24 @@
   border-color: var(--accent);
 }
 
+/* Transparent over the wave background (task 377) — the filtered-empty copy sits
+   directly on the animated stage, so a soft shadow keeps it readable. */
 .filterEmpty {
   display: flex;
   flex: 1;
   align-items: center;
   justify-content: center;
-  background: var(--bg-panel);
   color: var(--text-muted);
   font-size: var(--fs-meta);
+  text-shadow: 0 1px 6px rgba(17, 17, 27, 0.65);
 }
 
+/* Transparent (task 377): the stage's wave/crust shows through — the opaque
+   cards below cover it wherever there is content. */
 .wall {
   display: flex;
   flex: 1;
   min-height: 0;
-  background: var(--bg-panel);
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -73,6 +76,9 @@
      same-repo cards share it, reading as a group. */
   border-top: 2px solid transparent;
   border-right: 1px solid var(--border-hairline);
+  /* Explicitly opaque over the wave background (task 377) — nothing readable
+     ever sits directly on the animated layer. */
+  background: var(--bg-panel);
   overflow: hidden;
 }
 
