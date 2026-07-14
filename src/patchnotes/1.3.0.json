@@ -1,0 +1,34 @@
+{
+  "version": "1.3.0",
+  "date": "2026-07-14",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "**Settings → Rendering** (Linux only) — take control of how ReCue draws itself. Override the window's DMA-BUF renderer, switch terminals between GPU and DOM rendering, and read a copy-pasteable summary of what ReCue detected about your graphics setup at startup — so a bad driver combination is something you can fix yourself.",
+        "ReCue now ships as a **native Arch package** (`recue-bin` on the AUR) and a **`.deb`**, alongside the AppImage. Packaged installs are owned by your system's package manager, so ReCue no longer tries to update itself there and points you at `pacman -Syu` instead."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "**Startup is dramatically faster.** ReCue no longer builds every terminal on the Overview wall before showing you anything — a terminal is created the moment you scroll to it. Reconnecting agents, reading git state, and resolving your shell's PATH now happen in parallel and off the critical path instead of one after another.",
+        "The window also opens lighter: ReCue loads only the code the first screen needs and streams the rest in quietly afterwards. The installed app itself is meaningfully smaller too.",
+        "**Closing an agent is now instant.** A finished agent's card could previously linger for several seconds; ReCue now shuts down the agent along with everything it started, and reacts the moment it actually exits.",
+        "Linux UI text now uses a bundled Inter typeface, so ReCue looks the same regardless of which fonts your distribution happens to ship. macOS and Windows are unchanged."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "No more white flash on launch — the window stays hidden until it has painted, and opens straight into your chosen theme.",
+        "Terminals no longer go blank when the graphics driver drops ReCue's GPU context; they fall back to software rendering and keep working.",
+        "Windows: pasting into a terminal with Ctrl+V no longer pastes twice.",
+        "Linux: ReCue no longer switches off GPU rendering on hybrid Intel/AMD + NVIDIA laptops — that workaround was itself the cause of the slowness reported on those machines.",
+        "Linux: ReCue now shows its proper icon and name in your taskbar, dock, and app launcher, and can install its desktop entry on request.",
+        "Linux: native file dialogs follow ReCue's Dark/Light theme instead of always opening light.",
+        "Linux (AppImage): agents, git, and \"Reveal in File Manager\" now launch in a clean environment, fixing tools that misbehaved or refused to open when started from the AppImage."
+      ]
+    }
+  ]
+}
