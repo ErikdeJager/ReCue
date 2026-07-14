@@ -4900,3 +4900,49 @@ random seed every launch, live accent recolor, per-surface presets switched with
   identical on macOS/Windows/Linux. Rollback = revert the PR.
 
 **Dependencies:** Tasks 372, 373.
+
+### 378. [x] UI v2 (10/12): Floating chrome II — modal fleet reskin onto the §10 scrim/pop contract (shared modal.css primitive, 15 surfaces)
+
+Card 10 of the UI v2 reskin epic (spec §10/§2.5 + demo; **no version bump / patch notes**). Every centered modal
+and named auxiliary surface gets the one v2 floating-chrome look — `var(--scrim)` with a 150ms fade, a Base-bg
+dialog with a strong hairline, **12px radius**, deep `--shadow-modal`, a 160ms .97→1 pop, and the demo's 28px
+action-button row (neutral / red-tinted danger / accent primary) — with zero functionality lost: every focus
+trap, keyboard path (Esc/⏎/K/digits), confirm gate (#103), and lazy-load boundary (#356) stays byte-for-byte
+(`ModalHost.tsx` untouched).
+
+**What shipped** (branch `task-378-modal-fleet`, PR
+[#133](https://github.com/ErikdeJager/ReCue/pull/133), merged 2026-07-14 into `ui-rework`):
+
+- **`src/styles/modal.css`** (new, imported once in `main.tsx`) — the centered-modal sibling of 375's `menu.css`:
+  scrim fade, dialog chrome (Base bg, `--border-strong`, 12px, `--shadow-modal`, 160ms pop), and the three
+  28px/radius-7 action-button classes with borderless kbd hints. A new `src/modal.test.ts` file-content guard
+  pins the contract.
+- **The fleet migrated** (Surface0 dialogs → Base, `--shadow-popover` → `--shadow-modal`, square buttons → the
+  28px row, bordered kbd chips → borderless `--fs-micro` hints): **CanvasCloseModal** demo-exact (440px, yellow
+  alert icon + 13.5px/700 title, Cancel Esc · Kill & close K danger · Keep & close ⏎ accent);
+  **Onboarding** demo-exact (470px, crust choice cards, Claude first with an accent-tint border + accent
+  `Recommended` chip, others hairline + neutral `Untested` chip — replacing the green/yellow chips — and a
+  "Decide later" ghost); **CreatePanelModal (⌘K)** and **GlobalSearch (⌘F)** keeping their top-anchored launcher
+  positions with active rows moved accent-dim → Surface0; **TemplateManager / TemplateUseModal / TemplateEditor**
+  (the editor stays a full-screen surface — only toolbar/inputs/hovers adopt the idiom); **CloneRepoModal** (the
+  phantom row's progress track alone moves to the crust inset — its metrics are 374's); **FilePicker /
+  FileSwitcher** (the switcher's anchored popover gets the §10 anchored look via its own rules rather than
+  composing `.menu-pop`, whose min-width/padding would disturb the embedded picker); **UpdateModal + the
+  no-dismiss install overlay** (crust rounded progress track); **BigModeModal** (local reduce-motion opt-out
+  removed — the global killswitch covers it); **ClaudeMissing** (stays a top banner; button/typography aligned);
+  **PatchNotes** (micro-eyebrow categories only); **AutoContinuePrompt** (adopts the same 28px `--radius-chrome`
+  pill geometry 374 gives the UpdateIndicator so the footer reads coherently whichever lands first).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 378)
+
+- **Demo wins on radius**: centered modals use the demo's 12px as a documented literal in modal.css (tokens.css
+  not edited); the demo's .12 border maps to `--border-strong` — no new tokens.
+- **⌘K/⌘F stay top-anchored** (Spotlight convention; the demo shows no launcher to override) — only the chrome
+  changes. Launcher type icons stay accent (they encode panel type; §10's muted-icon rule is for menu lists).
+- **Selection fills move accent-dim → Surface0** across ⌘K/⌘F/TemplateUse/FilePicker (accent never encodes
+  selection — mirroring 375's call).
+- Per-modal z-index layering (100/200/210/220) kept site-local (the demo's uniform z-70 is a single-page
+  artifact). Shared-file overlap with 374 minimized (Update.module.css: modal rules only, never `.indicator*`).
+- Pure CSS/TSX, token-driven; identical on macOS/Windows/Linux. Rollback = revert the PR.
+
+**Dependencies:** Tasks 372, 375.
