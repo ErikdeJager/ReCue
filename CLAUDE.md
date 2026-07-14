@@ -111,7 +111,9 @@ even though it works in `tauri dev`.
 - **Spawn:** `spawn_session(cwd, name)` → `SessionManager` (`pty.rs`) opens a PTY
   running `claude --session-id <uuid>`, registers it by id, and persists a record
   (`store.rs`). A per-session reader thread pushes output to a bounded scrollback
-  buffer and an `mpsc` channel. A **fork** (#126, `fork_session`) is a spawn variant
+  buffer and an `mpsc` channel, and a per-session **exit-waiter thread** (#354) owns the
+  `Child`, blocks in `wait()`, and is the **sole** emitter of `Exited` — see the Exit
+  handling convention. A **fork** (#126, `fork_session`) is a spawn variant
   that branches a source agent's conversation into a new parallel session
   (`--session-id <new> --resume <source> --fork-session`) — see Conventions.
 - **Output:** `lib.rs` forwards the channel to the `session://output` /
@@ -924,6 +926,28 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   (`booting`): a code-0 exit there keeps the overlay rather than auto-forgetting,
   and **app shutdown keeps records** (`kill_all` doesn't delete them) so they
   auto-resume on next boot (#30) — the only path that "offers to restart."
+  **The `Exited` event is driven by the child, not the PTY (#354).** A per-session
+  **exit-waiter thread** (`pty.rs exit_waiter`) owns the `Child`, blocks in `wait()`, and
+  is the **sole** emitter of `SessionEvent::Exited` (the reader thread no longer sends it —
+  exactly **one** `Exited` per PTY generation, which the consume-once `intentionalKills`
+  bookkeeping relies on). Before, the exit was derived from the reader hitting **EOF** — but
+  on unix a PTY master only EOFs once **every** holder of the slave fd is gone, and claude's
+  subprocesses (MCP servers, tool children) inherit it, so an agent that had already exited
+  kept its card alive for seconds ("instances exit slow"). The waiter still waits (bounded,
+  `EXIT_DRAIN_MS`) on the reader's `reader_done` flag first, so trailing output still
+  precedes `Exited`. On unix a kill signals the child's whole **process group**
+  (`hangup_group`/`kill_group`: `killpg` SIGHUP → bounded grace → SIGKILL — portable-pty
+  already `setsid()`s the child, so `pgid == pid` and the group holds nothing but its own
+  descendants), so no MCP/tool child is orphaned (#31); `kill_session` is **non-blocking**
+  (the escalation runs off-thread, instead of portable-pty's ~200ms in-command sleep); and
+  `kill_all` (shutdown) pays **one** shared grace for all sessions and **silences** the exit
+  events (an `ExitState.silent` flag set **before any signal**) — a prompt `Exited` could now
+  reach the still-live webview, and an agent that exits 0 on SIGHUP would read as a *clean*
+  exit, so `isCleanExit` would **delete the persisted record** and the session would not come
+  back (#30/#63). A signal death maps to exit code **1** (portable-pty), never 0, so a killed
+  agent can never be mistaken for a clean exit. **Windows is unchanged**: no job object — the
+  kill is still `ChildKiller::kill()` → `TerminateProcess` on the direct child; it inherits
+  only the platform-neutral child-wait-driven `Exited`.
 - **Window chrome:** the **standard native macOS title bar** (#19) — native
   traffic lights, native title (`title: "ReCue"`), native drag, no custom
   positioning. The window config carries no `titleBarStyle`/`hiddenTitle`/
