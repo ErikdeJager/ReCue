@@ -3430,3 +3430,17 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - The M status chip fg becomes --status-awaiting (demo yellow, matching FileTree's M; was text-secondary); chip bg = color-mix(currentColor 15%, transparent) with a plain fallback first (menu.css documents color-mix as shippable).
 - The focused-mode file-picker listbox is restyled locally to the §10 floating-chrome values (base bg, strong hairline, radius-window, shadow-menu) rather than composing the global .menu-pop class (its 200px min-width + entry animation don't fit an anchored pill-width listbox).
 - .raw/.code/.codeGutterWrap/.diffGutter metrics (12px pad, 1.5 lh) are deliberately untouched — the #324 gutter alignment is locked to them; only the gutter-free .editor adopts the demo's 10px/1.6.
+
+## Task 383
+
+- Dependencies are exactly 381+382: TASK_ARCHIVE.md shows 372-380 archived; PLAN-381/382 still at root (unlanded) — the card runs strictly after them.
+- Light-theme deferred-polish findings are recorded in the PR body under a "Light polish deferred (§13)" heading (no tracked file is designated for them; TRAJECTORY files stay OS-real-box logs only).
+- xterm's canvas cursor blink is unreachable by the CSS reduced-motion killswitch; if the audit confirms it still blinks, the fix threads effective cursorBlink (= setting && !reducedMotion) through terminalPool.applyTerminalSettings/createHost — the one deliberate JS touch, justified as spec §2.5 motion policy, never a host dispose (#18).
+- Token hygiene targets only UNDOCUMENTED literal drift; demo-exact literals recorded in ASSUMPTIONS (modal 12px radius, 379's 8px button radius + rgba(17,17,27,.65) text shadow, 382's 10px board gaps, terminal/ANSI + pre-paint literals) deliberately stay.
+- --shadow-popover legacy alias: migrate remaining floating-chrome consumers to --shadow-menu/--shadow-modal, then delete the alias only if zero consumers remain, else keep it.
+- --text-faint reconciliation keeps 379's values (dark #45475a / light #9ca0b0 — the current tokens.css state); a new theme.test.ts guard asserts no custom property is declared twice per theme block (my addition, pinning the merge-drift bug class).
+- accentCompanions/store.ts may be edited ONLY if the accent audit finds a genuinely broken derivation (e.g. near-black accent → invisible tint), with a unit test; otherwise store logic is untouched.
+- Detached windows adopting dense/accent/theme only at next boot is recorded 373/377 behavior, treated as expected (not a parity gap to fix).
+- CLAUDE.md sweep scope = the seven statements v2 falsified (Stack Inter line, data-platform consumer, Styling convention, five-place pre-paint invariant incl. tauri.conf.json backgroundColor, Settings 740×540 + new sections/settings, sidebar default 248, Layout tree additions) — surgical edits, not a rewrite.
+- No version bump / patch notes (maintainer's v2.0.0 release step); the fix rule everywhere is reskin scope only (CSS/markup/title attrs) — logic-needing findings are recorded in the PR body as out of scope.
+- The untracked handoff dir is absent in implementer worktrees, so the plan inlines the full §12 checklist + all load-bearing values and points at the main checkout's absolute path for the demo contract.
