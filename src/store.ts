@@ -40,6 +40,15 @@ import {
 } from "./components/TemplateManager/templateIo";
 import { applyTerminalSettings } from "./components/Terminal/terminalPool";
 import { decodeOutputB64 } from "./decodeOutput";
+import {
+  ALL_GIT_REFRESH_KINDS,
+  focusRefreshKinds,
+  type GitRefreshKind,
+  type GitRefreshRequest,
+  mergeRequests,
+  mergeScoped,
+  normalizeRequest,
+} from "./gitRefresh";
 import * as ipc from "./ipc";
 import { notifyAgentReady } from "./notify";
 import { emitSessionOutput } from "./outputBus";
@@ -261,37 +270,123 @@ function persistDiffSeen(): void {
   }, 300);
 }
 
-// Branch-label refresh debounce (#212): an in-terminal `git checkout` settles on a
-// session's busy→idle edge, so re-read branch labels then (mirrors the #97 title
-// reader's cadence). Coalesce a burst of sessions settling together into a single
-// `current_branches` call, like `sidebarWidthPersistTimer`. The same edge is exactly
-// when an agent's file edits land, so the FileTree git-status coloring (#252) is
-// refreshed on the same debounced tick.
+// --- The coalesced git-refresh volley (#359) -------------------------------------
+//
+// Every sidebar git read (branch labels #212/#225, GitHub URLs #327, per-agent line
+// counts #335, ahead/behind #338, FileTree tints #252) runs through **one** action —
+// `refreshRepoGit` — behind these three module-level guards, so the five reads can never
+// stack up on each other or storm `git` spawns on boot:
+//
+//   * `gitRefreshInFlight` — one volley at a time; a request arriving mid-flight is
+//     **merged** into `gitRefreshPending` and runs exactly once when the current one
+//     resolves (union of repos and of kinds).
+//   * `gitRefreshDeferred` — a `whenSettled` request (the boot tier-2 decorations) held
+//     until the boot-resume window has settled (`resumeSettled`, hard-capped by the
+//     existing `RECONNECT_BACKSTOP_MS` timeout), then flushed once.
+//   * `lastFullRefreshAt` — throttles a **full, unscoped** volley requested with
+//     `throttleFull` (the focus/visibility backstop) to at most one per
+//     `FOCUS_FULL_REFRESH_MIN_MS`.
+//
+// The pure request algebra (normalize / merge / scoped-map merge / focus policy) lives in
+// `./gitRefresh`; only the effects live here.
+let gitRefreshInFlight = false;
+let gitRefreshPending: GitRefreshRequest | null = null;
+let gitRefreshDeferred: GitRefreshRequest | null = null;
+let lastFullRefreshAt = 0;
+
+/** Run one volley: fan out to the requested sub-refreshes (each already fail-open, with
+ *  its own try/catch), then run any request merged in while it was in flight. The
+ *  in-flight flag is cleared in a `finally`, so it can never stick. */
+async function runGitRefresh(req: GitRefreshRequest): Promise<void> {
+  if (gitRefreshInFlight) {
+    gitRefreshPending = mergeRequests(gitRefreshPending, req);
+    return;
+  }
+  gitRefreshInFlight = true;
+  try {
+    const s = useStore.getState();
+    const repos = req.repos ?? undefined; // undefined = every sidebar folder
+    const jobs: Promise<unknown>[] = [];
+    if (req.kinds.includes("branches")) jobs.push(s.refreshBranches(repos));
+    if (req.kinds.includes("githubUrls")) jobs.push(s.refreshGithubUrls(repos));
+    if (req.kinds.includes("diffLineCounts")) {
+      jobs.push(s.refreshDiffLineCounts(repos));
+    }
+    if (req.kinds.includes("aheadBehind")) {
+      jobs.push(s.refreshBranchAheadBehind(repos));
+    }
+    if (req.kinds.includes("fileStatuses")) {
+      // The ONLY consumer of `fileStatuses` is an open FileTree (#252) — so read `git
+      // status` (the heaviest of the five: it walks the whole working tree) for repos
+      // with a **mounted tree** only, never for every sidebar folder.
+      const open = Object.keys(s.fileTreeMounts);
+      const target = repos ? open.filter((r) => repos.includes(r)) : open;
+      if (target.length > 0) jobs.push(s.refreshFileStatuses(target));
+    }
+    if (
+      req.repos === null &&
+      req.kinds.length === ALL_GIT_REFRESH_KINDS.length
+    ) {
+      lastFullRefreshAt = Date.now();
+    }
+    await Promise.all(jobs);
+  } finally {
+    gitRefreshInFlight = false;
+    const next = gitRefreshPending;
+    gitRefreshPending = null;
+    if (next) void runGitRefresh(next);
+  }
+}
+
+/** Flush the boot tier-2 request held until the resume window settled (#359). Called from
+ *  the `RECONNECT_BACKSTOP_MS` timeout in `refresh()` — a fixed, unconditional cap, so a
+ *  slow or failed `--resume` can never defer the volley forever. */
+function flushDeferredGitRefresh(): void {
+  const req = gitRefreshDeferred;
+  gitRefreshDeferred = null;
+  if (req) void runGitRefresh(req);
+}
+
+// Git-refresh debounce (#212/#359): an in-terminal `git checkout` settles on a session's
+// busy→idle edge, so re-read that folder's git state then (mirrors the #97 title reader's
+// cadence). Coalesce a burst of sessions settling together into a single volley, like
+// `sidebarWidthPersistTimer` — accumulating the **set of folders** that settled, so the
+// volley is scoped to exactly those (an unknown session id ⇒ unscoped, fail-safe). The
+// same edge is exactly when an agent's file edits land, so the FileTree git-status
+// coloring (#252) + re-list (#264) ride the same debounced tick.
 const BRANCH_REFRESH_DEBOUNCE_MS = 600;
 let branchRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-function scheduleBranchRefresh(): void {
+// The folders that settled inside the current debounce window; `unscoped` wins over any
+// accumulated set (it is the superset) — an unknown session id (a shell terminal, a
+// recurring child whose record hasn't landed) falls back to it, so we never *miss* a
+// folder.
+let pendingGitRefreshScope = new Set<string>();
+let pendingGitRefreshUnscoped = false;
+function scheduleGitRefresh(folder?: string): void {
+  if (folder) pendingGitRefreshScope.add(folder);
+  else pendingGitRefreshUnscoped = true;
   if (branchRefreshTimer) clearTimeout(branchRefreshTimer);
   branchRefreshTimer = setTimeout(() => {
     branchRefreshTimer = undefined;
-    void useStore.getState().refreshBranches();
-    void useStore.getState().refreshFileStatuses();
-    // Re-resolve each repo's GitHub web URL on the same edge (#327) — cheap local
-    // `git remote` reads, so the View-on-GitHub menu item tracks a remote change
-    // (added/removed/retargeted) without a restart.
-    void useStore.getState().refreshGithubUrls();
-    // Re-read each agent's added/removed line counts on the same edge (#335) — a
-    // finished turn is exactly when its file edits land. Self-guards on the setting,
-    // so it's a cheap no-op (zero git reads) when the badge is turned off.
-    void useStore.getState().refreshDiffLineCounts();
-    // Re-read each folder's ahead/behind vs upstream on the same edge (#338) — an
-    // in-terminal commit/checkout shifts the count. A cheap local `git rev-list`
-    // against the already-fetched remote-tracking ref (no network fetch).
-    void useStore.getState().refreshBranchAheadBehind();
-    // A finished turn is exactly when an agent's just-written files land. The
-    // git-status re-tint above can't add a *new* row (rows come only from `list_dir`),
-    // so also re-list every open tree's loaded levels so created/removed files appear
-    // right after the agent settles, without collapsing expanded folders (#264).
-    useStore.getState().bumpFileTreeRefresh();
+    const unscoped = pendingGitRefreshUnscoped;
+    const scope = [...pendingGitRefreshScope];
+    pendingGitRefreshUnscoped = false;
+    pendingGitRefreshScope = new Set();
+    void useStore
+      .getState()
+      .refreshRepoGit({ repos: unscoped ? undefined : scope });
+    // A finished turn is exactly when an agent's just-written files land. The git-status
+    // re-tint above can't add a *new* row (rows come only from `list_dir`), so also
+    // re-list every open tree's loaded levels so created/removed files appear right after
+    // the agent settles, without collapsing expanded folders (#264).
+    if (unscoped) {
+      useStore.getState().bumpFileTreeRefresh();
+    } else {
+      const mounts = useStore.getState().fileTreeMounts;
+      for (const repo of scope) {
+        if (mounts[repo]) useStore.getState().bumpFileTreeRefresh(repo);
+      }
+    }
   }, BRANCH_REFRESH_DEBOUNCE_MS);
 }
 
@@ -325,9 +420,12 @@ function maybeNotifyWatched(id: string): void {
   void notifyAgentReady(label.primary, "Finished or awaiting your input");
 }
 
-/** Shallow-equality of two `path → url` maps (#327) — lets `refreshGithubUrls` skip a
- *  re-render (referential stability for the sidebar selector) when nothing changed. */
-function urlMapsEqual(
+/** Shallow-equality of two `path → string` maps — lets `refreshGithubUrls` (#327, the
+ *  `path → url` map) and `refreshBranches` (#359, the `path → branch` map) skip a
+ *  re-render (referential stability for the sidebar selectors) when nothing changed.
+ *  Without the `branches` guard the 15s poll (#225) re-rendered every sidebar row on
+ *  every tick. */
+function stringMapsEqual(
   a: Record<string, string>,
   b: Record<string, string>,
 ): boolean {
@@ -1354,6 +1452,13 @@ export interface AppState {
   /** Terminal items (#72) whose shell has exited → exit code (or null); drives the
    * Terminal exit overlay for non-agent PTYs (they aren't in `sessions`). */
   terminalExits: Record<string, number | null>;
+  /** Whether the boot-resume window has settled (#359) — the gate for the tier-2 git
+   * volley (`refreshRepoGit({ whenSettled: true })`). `true` when `refresh()` loaded
+   * **zero** persisted session records (nothing to resume); otherwise flipped `true` by
+   * the existing `RECONNECT_BACKSTOP_MS` (4s) backstop, a fixed unconditional cap — so a
+   * slow or failed `claude --resume` can never defer the decorations forever. Not keyed
+   * on "every session emitted output" (a session that never resumes would hang the gate). */
+  resumeSettled: boolean;
   claudeMissing: boolean;
   /** Host OS family (#143), read once at boot from the backend `platform()` command
    * — "windows" / "macos" / "linux", or "" until loaded. Drives OS-appropriate
@@ -1619,25 +1724,55 @@ export interface AppState {
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
   refresh: () => Promise<void>;
-  refreshBranches: () => Promise<void>;
+  /**
+   * The single entry point for the sidebar's git reads (#359) — branch labels (#212),
+   * GitHub URLs (#327), FileTree tints (#252), per-agent line counts (#335) and
+   * ahead/behind (#338). Coalesced behind one in-flight guard (a request arriving
+   * mid-volley is merged and runs once afterwards), optionally **scoped** to a set of
+   * folders and/or a subset of `kinds`.
+   *
+   * - `repos` — the folder paths to read (the key of every map involved, worktrees
+   *   included). Omitted/empty ⇒ every sidebar folder.
+   * - `kinds` — omitted/empty ⇒ all five.
+   * - `whenSettled` — hold the request until the boot-resume window has settled, so the
+   *   boot decorations never race the persisted PTYs' resume (hard-capped by the 4s
+   *   reconnect backstop).
+   * - `throttleFull` — downgrade a *full, unscoped* request to the cheap
+   *   branches+ahead/behind pair when a full volley ran within the last 30s (the
+   *   focus/visibility backstop).
+   *
+   * `file_statuses` is issued **only** for repos with a mounted FileTree — its sole
+   * consumer — never for every sidebar folder.
+   */
+  refreshRepoGit: (opts?: {
+    repos?: readonly string[];
+    kinds?: readonly GitRefreshKind[];
+    whenSettled?: boolean;
+    throttleFull?: boolean;
+  }) => Promise<void>;
+  /** Re-read branch labels (#212) into `branches` — one `current_branches` batch IPC.
+   * Scoped to `repos` when given (#359, merged into the map), else every sidebar folder
+   * (full replace). Fail-open (a backend miss leaves the map). */
+  refreshBranches: (repos?: readonly string[]) => Promise<void>;
   /** Re-resolve each sidebar repo's GitHub web URL (#327), filling `githubUrls`. Runs on
-   * the same cadence as `refreshBranches`; fail-open (a backend miss leaves the map). */
-  refreshGithubUrls: () => Promise<void>;
-  /** Re-read git file statuses (#252) — one repo when `repo` is given (the FileTree
-   * mount / Refresh path), else every repo in the sidebar set (load / busy→idle /
-   * git-write paths). Fail-open per repo (a failed read leaves the prior map). */
-  refreshFileStatuses: (repo?: string) => Promise<void>;
+   * the same cadence as `refreshBranches` and takes the same optional `repos` scope
+   * (#359); fail-open (a backend miss leaves the map). */
+  refreshGithubUrls: (repos?: readonly string[]) => Promise<void>;
+  /** Re-read git file statuses (#252) — one repo (or a given set: the #359 volley passes
+   * the repos with a **mounted FileTree**, the map's only consumer), else every repo in
+   * the sidebar set. Fail-open per repo (a failed read leaves the prior map). */
+  refreshFileStatuses: (repo?: string | readonly string[]) => Promise<void>;
   /** Re-read each sidebar repo's added/removed line counts (#335), filling
    * `diffLineCounts`. Self-guards on `settings.showDiffLineCounts`: off ⇒ returns
-   * immediately with **no** `diff_line_counts` git reads. One batch IPC round-trip;
-   * fail-open (a backend miss leaves the map as-is). */
-  refreshDiffLineCounts: () => Promise<void>;
+   * immediately with **no** `diff_line_counts` git reads. One batch IPC round-trip, over
+   * the optional `repos` scope (#359); fail-open (a backend miss leaves the map as-is). */
+  refreshDiffLineCounts: (repos?: readonly string[]) => Promise<void>;
   /** Re-read each sidebar folder's ahead/behind vs upstream (#338), filling
    * `branchAheadBehind`. Runs on the same cadence as `refreshBranches`; one batch IPC
-   * round-trip that reads the already-fetched remote-tracking ref (no network fetch).
-   * Full replace so a folder that lost its upstream drops out; fail-open (a backend miss
-   * leaves the map as-is). */
-  refreshBranchAheadBehind: () => Promise<void>;
+   * round-trip that reads the already-fetched remote-tracking ref (no network fetch),
+   * over the optional `repos` scope (#359). A folder that lost its upstream drops out of
+   * the map (within the scope); fail-open (a backend miss leaves the map as-is). */
+  refreshBranchAheadBehind: (repos?: readonly string[]) => Promise<void>;
   /** Bump the FileTree re-list signal (#253/#264): one repo when `repo` is given, else
    * every repo with a mounted tree. Each mounted FileTree re-fetches its currently
    * loaded directory levels in place — surfacing files created/removed on disk —
@@ -2347,6 +2482,9 @@ export const useStore = create<AppState>()((set, get) => ({
   sessionBusy: {},
   sessionActive: {},
   terminalExits: {},
+  // Default true: with no persisted sessions there is nothing to wait for (#359), and a
+  // window that never calls `refresh()` (a detached canvas) must never hold a volley.
+  resumeSettled: true,
   claudeMissing: false,
   platform: "",
   windowsBuild: 0,
@@ -2523,11 +2661,17 @@ export const useStore = create<AppState>()((set, get) => ({
       };
     });
     // Busy→idle settle (#212): a turn just finished, so an in-terminal `git checkout`
-    // during it has completed — re-read branch labels (debounced) so the sidebar
-    // worktree/repo label tracks the new branch without an app restart. This is the
-    // single transition point (the `session://state` handler's only caller).
+    // during it has completed — re-read that folder's git state (debounced) so the
+    // sidebar worktree/repo label tracks the new branch without an app restart. This is
+    // the single transition point (the `session://state` handler's only caller).
+    //
+    // Scoped to the **settling session's own folder** (#359): the #212 contract is about
+    // that folder, so the volley no longer re-reads every repo (~7–8 `git` spawns per
+    // folder) whenever any one agent settles. An unknown id (a shell terminal, a session
+    // whose record hasn't landed) falls back to an unscoped volley — fail-safe.
     if (wasBusy && !busy) {
-      scheduleBranchRefresh();
+      const folder = get().sessions.find((x) => x.id === id)?.repoPath;
+      scheduleGitRefresh(folder);
       maybeNotifyWatched(id);
     }
   },
@@ -3206,6 +3350,9 @@ export const useStore = create<AppState>()((set, get) => ({
         sessionActive: Object.fromEntries(
           views.filter((v) => v.hasBeenActive).map((v) => [v.id, true]),
         ),
+        // Nothing to resume ⇒ the boot decorations (#359) may run as soon as the first
+        // paint is out; otherwise they wait for the backstop below.
+        resumeSettled: records.length === 0,
       });
       // End the boot window: stop suppressing exit toasts, and clear any flag
       // still set (e.g. a resumed session whose first output raced the listener —
@@ -3213,6 +3360,10 @@ export const useStore = create<AppState>()((set, get) => ({
       setTimeout(() => {
         booting = false;
         reconnectingIds.clear(); // backstop fired — none are reconnecting now (#261)
+        // The resume window is over (a hard cap — a slow/failed resume can't extend it),
+        // so release the deferred tier-2 git volley (#359).
+        set({ resumeSettled: true });
+        flushDeferredGitRefresh();
         if (get().sessions.some((x) => x.reconnecting)) {
           set((s) => ({
             sessions: s.sessions.map((x) =>
@@ -3390,72 +3541,130 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  refreshBranches: async () => {
-    const repos = repoOrder(get().recents, get().sessions);
+  refreshRepoGit: async (opts) => {
+    const req = normalizeRequest(opts);
+    // Boot tier-2 (#359): hold the decorations until the boot-resume window has settled,
+    // so they never race the persisted PTYs' resume. Merged if several arrive; flushed
+    // once by the `RECONNECT_BACKSTOP_MS` backstop (a hard cap — a slow/failed resume can
+    // never defer them forever).
+    if (opts?.whenSettled && !get().resumeSettled) {
+      gitRefreshDeferred = mergeRequests(gitRefreshDeferred, req);
+      return;
+    }
+    // The focus/visibility backstop asks for a full volley; downgrade it to the cheap
+    // branches+ahead/behind pair when a full one ran recently (#359).
+    if (opts?.throttleFull && req.repos === null) {
+      req.kinds = focusRefreshKinds(Date.now(), lastFullRefreshAt);
+    }
+    await runGitRefresh(req);
+  },
+
+  refreshBranches: async (scope) => {
+    const repos = scope?.length
+      ? [...scope]
+      : repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     try {
       // One IPC round-trip for all repos instead of one per repo.
-      set({ branches: await ipc.currentBranches(repos) });
+      const next = await ipc.currentBranches(repos);
+      set((s) => {
+        // Scoped (#359): merge into the full map — set each scoped folder from the read,
+        // deleting one it no longer resolves — so other folders' labels survive.
+        const merged = scope?.length
+          ? mergeScoped(s.branches, repos, next)
+          : next;
+        return stringMapsEqual(s.branches, merged) ? {} : { branches: merged };
+      });
     } catch {
       // Backend unreachable; leave branches as-is.
     }
   },
 
-  refreshGithubUrls: async () => {
-    const repos = repoOrder(get().recents, get().sessions);
+  refreshGithubUrls: async (scope) => {
+    const repos = scope?.length
+      ? [...scope]
+      : repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     try {
       // One IPC round-trip for all repos (only github.com remotes come back). A full
       // replace is correct: a repo whose remote stopped being GitHub drops out.
       const next = await ipc.githubWebUrls(repos);
-      set((s) =>
-        urlMapsEqual(s.githubUrls, next) ? {} : { githubUrls: next },
-      );
+      set((s) => {
+        const merged = scope?.length
+          ? mergeScoped(s.githubUrls, repos, next)
+          : next;
+        return stringMapsEqual(s.githubUrls, merged)
+          ? {}
+          : { githubUrls: merged };
+      });
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
     }
   },
 
-  refreshDiffLineCounts: async () => {
+  refreshDiffLineCounts: async (scope) => {
     // The privacy/perf opt-out (#335): off ⇒ never invoke the git read at all.
     if (!get().settings.showDiffLineCounts) return;
-    const repos = repoOrder(get().recents, get().sessions);
+    const repos = scope?.length
+      ? [...scope]
+      : repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     try {
       // One batch IPC round-trip for every working tree (agents keyed by repoPath).
       const next = await ipc.diffLineCounts(repos);
-      set((s) =>
-        diffCountsMapsEqual(s.diffLineCounts, next)
+      set((s) => {
+        const merged = scope?.length
+          ? mergeScoped(
+              s.diffLineCounts,
+              repos,
+              next,
+              (a, b) => a.added === b.added && a.removed === b.removed,
+            )
+          : next;
+        return diffCountsMapsEqual(s.diffLineCounts, merged)
           ? {}
-          : { diffLineCounts: next },
-      );
+          : { diffLineCounts: merged };
+      });
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
     }
   },
 
-  refreshBranchAheadBehind: async () => {
-    const repos = repoOrder(get().recents, get().sessions);
+  refreshBranchAheadBehind: async (scope) => {
+    const repos = scope?.length
+      ? [...scope]
+      : repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     try {
       // One batch IPC round-trip for every folder (repos + worktree paths). A full
-      // replace is correct: a folder that lost its upstream drops out of the map.
+      // replace is correct: a folder that lost its upstream drops out of the map — and
+      // `mergeScoped` reproduces exactly that within a scoped read (#359).
       const next = await ipc.branchAheadBehind(repos);
-      set((s) =>
-        aheadBehindMapsEqual(s.branchAheadBehind, next)
+      set((s) => {
+        const merged = scope?.length
+          ? mergeScoped(
+              s.branchAheadBehind,
+              repos,
+              next,
+              (a, b) => a.ahead === b.ahead && a.behind === b.behind,
+            )
+          : next;
+        return aheadBehindMapsEqual(s.branchAheadBehind, merged)
           ? {}
-          : { branchAheadBehind: next },
-      );
+          : { branchAheadBehind: merged };
+      });
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
     }
   },
 
   refreshFileStatuses: async (repo) => {
-    // Scope: one repo for the FileTree's own mount/Refresh (cheap, immediate), or the
-    // whole sidebar repo set (mirroring `refreshBranches`) for the load / busy→idle /
-    // git-write paths so any open tree reflects an agent's edits without a restart.
-    const repos = repo ? [repo] : repoOrder(get().recents, get().sessions);
+    // Scope: one repo (or a set) for the FileTree's own mount/Refresh and the #359 volley
+    // — which reads statuses for **mounted trees only**, since an open FileTree is the
+    // map's sole consumer — or, with no scope, the whole sidebar repo set.
+    const scope =
+      typeof repo === "string" ? [repo] : repo?.length ? [...repo] : undefined;
+    const repos = scope ?? repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     // One `git status --porcelain` per repo, in parallel; a failed repo is left as-is.
     const results = await Promise.allSettled(
@@ -4795,15 +5004,11 @@ export const useStore = create<AppState>()((set, get) => ({
       }));
       get().select(record.id);
       get().pushToast(`Started ${record.name ?? cwd}`);
-      // A checkout (or a brand-new repo) can change the branch label — refresh.
-      void get().refreshBranches();
-      // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
-      void get().refreshFileStatuses();
-      void get().refreshDiffLineCounts();
-      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
-      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
-      void get().refreshBranchAheadBehind();
+      // A checkout (or a brand-new repo) changes the branch label, which files differ
+      // from HEAD (the FileTree tint #252 + the per-agent line counts #335) and
+      // ahead/behind vs upstream (#338) — one unscoped volley covers all of them (#359;
+      // unscoped because a spawn can add a brand-new folder).
+      void get().refreshRepoGit();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4830,14 +5035,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().upsertSession(toSessionView(record));
       get().select(record.id);
       get().pushToast(`Started isolated worktree on ${branch}`);
-      void get().refreshBranches();
-      // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
-      void get().refreshFileStatuses();
-      void get().refreshDiffLineCounts();
-      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
-      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
-      void get().refreshBranchAheadBehind();
+      // The new worktree folder is a brand-new key in every git map — one unscoped
+      // volley fills its branch label / tint / counts / ahead-behind (#359).
+      void get().refreshRepoGit();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4877,14 +5077,9 @@ export const useStore = create<AppState>()((set, get) => ({
       }));
       get().select(record.id);
       get().pushToast(`Created ${name} & started`);
-      void get().refreshBranches();
-      // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
-      void get().refreshFileStatuses();
-      void get().refreshDiffLineCounts();
-      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
-      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
-      void get().refreshBranchAheadBehind();
+      // The branch-create switched HEAD: label, tint, counts and ahead/behind all move
+      // (#359 — one unscoped volley).
+      void get().refreshRepoGit();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4905,14 +5100,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().upsertSession(toSessionView(record));
       get().select(record.id);
       get().pushToast(`Created ${name} worktree & started`);
-      void get().refreshBranches();
-      // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
-      void get().refreshFileStatuses();
-      void get().refreshDiffLineCounts();
-      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
-      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
-      void get().refreshBranchAheadBehind();
+      // A brand-new worktree folder + branch — one unscoped volley fills every git map
+      // for it (#359).
+      void get().refreshRepoGit();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -5619,10 +5809,9 @@ export const useStore = create<AppState>()((set, get) => ({
           : `Pulled ${repoName(cwd)}`,
       );
       // A `--ff-only` pull fast-forwards the local branch to its upstream, so the
-      // ahead/behind vs upstream (and the branch label / counts) all shift — refresh
-      // the sidebar's `↑A ↓B` indicator (#338) alongside the branch label.
-      void get().refreshBranches();
-      void get().refreshBranchAheadBehind();
+      // ahead/behind vs upstream (#338) and the branch label / counts all shift — one
+      // volley, scoped to the pulled folder (#359).
+      void get().refreshRepoGit({ repos: [cwd] });
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Pull failed";
       get().pushToast(`Pull failed: ${message}`, "error");
@@ -5637,12 +5826,10 @@ export const useStore = create<AppState>()((set, get) => ({
     try {
       await ipc.fetchRemotes(cwd);
       get().pushToast(`Fetched ${repoName(cwd)}`);
-      await get().refreshBranches();
-      // A fetch can fast-forward-adjacent state; keep the per-agent counts fresh (#335).
-      void get().refreshDiffLineCounts();
-      // A fetch moves the remote-tracking ref, so ahead/behind vs upstream changes —
-      // re-read the sidebar's `↑A ↓B` indicator (#338).
-      void get().refreshBranchAheadBehind();
+      // A fetch moves the remote-tracking ref, so ahead/behind vs upstream (#338) — and
+      // the branch label / per-agent counts (#335) — shift for the fetched folder: one
+      // scoped volley (#359).
+      await get().refreshRepoGit({ repos: [cwd] });
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Fetch failed";
       get().pushToast(`Fetch failed: ${message}`, "error");
@@ -5657,13 +5844,11 @@ export const useStore = create<AppState>()((set, get) => ({
     try {
       await ipc.checkoutBranch(repo, branch);
       get().pushToast(`Checked out ${branch}`);
-      // Both the branch label (#212) and which files differ from HEAD (#252) change —
-      // refresh those + the per-agent line counts (#335) so the sidebar follows.
-      await get().refreshBranches();
-      void get().refreshFileStatuses(repo);
-      void get().refreshDiffLineCounts();
-      // A checkout switches HEAD to a branch with its own upstream divergence (#338).
-      void get().refreshBranchAheadBehind();
+      // The branch label (#212), which files differ from HEAD (the FileTree tint #252 +
+      // the per-agent line counts #335) and the upstream divergence (#338) all change —
+      // one volley scoped to the checked-out folder (#359). The tint is read only when a
+      // tree is actually open (a closed one needs no status read).
+      await get().refreshRepoGit({ repos: [repo] });
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Checkout failed";
       get().pushToast(`Checkout failed: ${message}`, "error");
@@ -5681,11 +5866,9 @@ export const useStore = create<AppState>()((set, get) => ({
       return isSessionError(err) ? err.message : "Could not create branch";
     }
     get().pushToast(`Created ${name}`);
-    await get().refreshBranches();
-    void get().refreshFileStatuses(repo);
-    void get().refreshDiffLineCounts();
-    // A new branch has no upstream yet (or inherits the base's) — refresh `↑A ↓B` (#338).
-    void get().refreshBranchAheadBehind();
+    // The new branch switches HEAD (label + tint + counts) and has no upstream yet (or
+    // inherits the base's) — one volley scoped to the folder (#359).
+    await get().refreshRepoGit({ repos: [repo] });
     return true;
   },
 }));

@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 
 import { agentSupportsResume } from "../../agents";
+import { afterPaint } from "../../gitRefresh";
 import { noAutoCapitalize } from "../../inputProps";
 import {
   listBranches,
@@ -2208,11 +2209,9 @@ function Sidebar() {
   // In-flight clones (#299): each shows a transient, non-draggable "phantom" folder +
   // progress bar in the repo list (and a dimmed indicator in the collapsed rail).
   const cloningRepos = useStore((s) => s.cloningRepos);
-  const refreshBranches = useStore((s) => s.refreshBranches);
-  const refreshFileStatuses = useStore((s) => s.refreshFileStatuses);
-  const refreshGithubUrls = useStore((s) => s.refreshGithubUrls);
-  const refreshDiffLineCounts = useStore((s) => s.refreshDiffLineCounts);
-  const refreshBranchAheadBehind = useStore((s) => s.refreshBranchAheadBehind);
+  // The single, coalesced git-refresh entry point (#359) — supersedes the five separate
+  // refresh actions this component used to fire in one volley.
+  const refreshRepoGit = useStore((s) => s.refreshRepoGit);
   // Depended on by the load effect so flipping the setting off→on refetches counts
   // immediately, without waiting for a busy→idle edge (#335).
   const showDiffLineCounts = useStore((s) => s.settings.showDiffLineCounts);
@@ -2415,51 +2414,55 @@ function Sidebar() {
   );
   const reposKey = repos.join("\n");
 
+  // Tier 1 (#359) — the branch label is the sidebar's primary text (`sessionLabel` falls
+  // back to it), so read it as soon as the folder set is known: **one** `git rev-parse`
+  // per folder, and the only git work on the boot critical path. Keyed on the repo set
+  // changing — not on every session mutation (exit, output) that allocates a new sessions
+  // array.
   useEffect(() => {
-    // Refresh branch labels only when the set of repos changes — not on every
-    // session mutation (exit, output) that allocates a new sessions array. The
-    // FileTree git-status coloring (#252) refreshes on the same cadence so an open
-    // tree shows current state right after boot / a repo being added.
-    void refreshBranches();
-    void refreshFileStatuses();
-    // Resolve each repo's GitHub web URL (#327) on the same edge so the repo/worktree
-    // menus' "View on GitHub" item is ready before the user right-clicks.
-    void refreshGithubUrls();
-    // Per-agent line counts (#335) on the same edge; the setting is a dep so an
-    // off→on toggle refetches immediately (the action self-guards when off).
-    void refreshDiffLineCounts();
-    // Ahead/behind vs upstream (#338) on the same edge so the `↑A ↓B` indicator is
-    // ready right after boot / a repo being added.
-    void refreshBranchAheadBehind();
-  }, [
-    refreshBranches,
-    refreshFileStatuses,
-    refreshGithubUrls,
-    refreshDiffLineCounts,
-    refreshBranchAheadBehind,
-    showDiffLineCounts,
-    reposKey,
-  ]);
+    void refreshRepoGit({ kinds: ["branches"] });
+  }, [refreshRepoGit, reposKey]);
+
+  // Tier 2 (#359) — the decorations: GitHub URLs (#327, only needed on right-click),
+  // ahead/behind (#338), per-agent line counts (#335, up to 2000 untracked-file reads per
+  // repo) and the FileTree tint (#252, read only for a repo with an open tree). Together
+  // ~6 `git` spawns per folder, so they run only **after the first paint** and **after the
+  // boot-resume window has settled** (hard-capped by the store's 4s reconnect backstop, so
+  // a slow/failed resume can't defer them forever) — never racing the persisted PTYs'
+  // resume while the app is trying to become interactive. `showDiffLineCounts` stays a dep
+  // so an off→on toggle refetches immediately (the action self-guards when off).
+  useEffect(() => {
+    return afterPaint(() => {
+      void refreshRepoGit({ whenSettled: true });
+    });
+  }, [refreshRepoGit, reposKey, showDiffLineCounts]);
 
   // Keep the repo branch badges (#225) in sync with **external** checkouts — a `git
   // checkout` in a terminal of an idle repo (no busy→idle edge, #212) or in another
   // tool. The #212 edge refresh stays; this adds (a) a refresh when the window regains
   // focus / becomes visible ("changed it elsewhere, came back"), and (b) a modest poll
-  // while the window is visible, paused when hidden. `refreshBranches` batches every
-  // repo into one `currentBranches` IPC call, so a tick is one call. Main-window only —
-  // the Sidebar mounts only there. The interval is tunable.
+  // while the window is visible, paused when hidden. Main-window only — the Sidebar
+  // mounts only there. The interval is tunable.
+  //
+  // The **poll tick** stays the cheap pair — branch label + ahead/behind, batched into one
+  // IPC each, ~2 `git` spawns per folder. The **focus / visibility** backstop asks for a
+  // *full* volley with `throttleFull` (#359), so returning to the window also re-reads the
+  // per-agent line counts / GitHub URLs / open-tree tints for **every** folder (the safety
+  // net for a file edited in an external editor, which the now folder-scoped busy→idle
+  // volley no longer covers) — at most once per `FOCUS_FULL_REFRESH_MIN_MS`, downgrading
+  // to the cheap pair in between.
   useEffect(() => {
     const BRANCH_POLL_MS = 15_000;
     let timer: ReturnType<typeof setInterval> | undefined;
-    // Refresh the branch label + its ahead/behind indicator (#338) together, so an
-    // external checkout/commit updates both without a restart.
-    const refreshBranchState = () => {
-      void refreshBranches();
-      void refreshBranchAheadBehind();
+    const pollBranchState = () => {
+      void refreshRepoGit({ kinds: ["branches", "aheadBehind"] });
+    };
+    const fullRefresh = () => {
+      void refreshRepoGit({ throttleFull: true });
     };
     const startPoll = () => {
       if (timer === undefined) {
-        timer = setInterval(refreshBranchState, BRANCH_POLL_MS);
+        timer = setInterval(pollBranchState, BRANCH_POLL_MS);
       }
     };
     const stopPoll = () => {
@@ -2472,11 +2475,11 @@ function Sidebar() {
       if (document.hidden) {
         stopPoll();
       } else {
-        refreshBranchState();
+        fullRefresh();
         startPoll();
       }
     };
-    const onFocus = () => refreshBranchState();
+    const onFocus = () => fullRefresh();
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisibility);
     if (!document.hidden) startPoll();
@@ -2485,7 +2488,7 @@ function Sidebar() {
       document.removeEventListener("visibilitychange", onVisibility);
       stopPoll();
     };
-  }, [refreshBranches, refreshBranchAheadBehind]);
+  }, [refreshRepoGit]);
 
   // Escape dismisses the context menu (keyboard-dismissable).
   useEffect(() => {
