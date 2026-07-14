@@ -122,6 +122,10 @@ const reconnectingIds = new Set<string>();
 // effect in dev, which would otherwise register duplicate listeners and
 // double-fire every exit toast (#32).
 let eventsSubscribed = false;
+// Give each NEW top-level folder a distinct default color exactly once (#369): the
+// main-window subscription that watches for added folders is started a single time,
+// guarded so StrictMode's double-invoke can't register it twice.
+let folderColorSubStarted = false;
 // Sessions killed intentionally (Remove / Forget) — their backend `Exited` event
 // must not add a second "Session exited" toast on top of the action's toast (#32).
 const intentionalKills = new Set<string>();
@@ -703,6 +707,28 @@ export function repoOrder(
 }
 
 /**
+ * The set of top-level sidebar "folders" (repos) currently shown, in display order —
+ * the canonical computation the sidebar uses (mirrors `pruneMissingFolders`): recents
+ * ∪ worktree parents ∪ recurring cwds ∪ non-worktree session repos, deduped/sorted by
+ * `repoOrder`. Worktree *child* dirs are nested under their parent (they carry a
+ * `worktreeParent`), so they never appear top-level and never get their own color
+ * (#369). Pure.
+ */
+export function sidebarRepos(
+  recents: string[],
+  sessions: SessionView[],
+  recurrings: RecurringSession[],
+): string[] {
+  const worktreeParents = sessions
+    .map((x) => x.worktreeParent)
+    .filter((p): p is string => !!p);
+  return repoOrder(
+    [...recents, ...worktreeParents, ...recurrings.map((r) => r.cwd)],
+    sessions.filter((x) => !x.worktreeParent),
+  );
+}
+
+/**
  * Disambiguate repeated sidebar row labels. Branch is tracked per repo path, so
  * every session in a repo group shares the same branch label; this appends a
  * 1-based index to the 2nd+ occurrence (`main`, `main (2)`, `main (3)`) so rows
@@ -1053,6 +1079,28 @@ export function repoColor(
   if (assigned) return assigned;
   const idx = hashString(path) % REPO_PALETTE.length;
   return REPO_PALETTE[idx] ?? REPO_PALETTE[0] ?? "#cba6f7";
+}
+
+/**
+ * Choose a **default** color for a newly-added folder (#369): prefer a palette color
+ * not already shown by any *other* current folder, so distinct folders start visually
+ * distinct instead of colliding on the path hash. "Used" is each other folder's
+ * **effective** color `repoColor(r, colors)` (a user override *or* its hashed default);
+ * the first `REPO_PALETTE` entry not in that set wins, in palette order. Once all 14
+ * palette colors are in use, fall back to the stable hashed default (`repoColor(path,
+ * {})`, always a palette member) — no crash, deterministic. `path`'s own current color
+ * is ignored (a folder never avoids itself). Pure.
+ */
+export function pickRepoColor(
+  path: string,
+  colors: Record<string, string>,
+  existingRepos: readonly string[],
+): string {
+  const used = new Set(
+    existingRepos.filter((r) => r !== path).map((r) => repoColor(r, colors)),
+  );
+  const unused = REPO_PALETTE.find((c) => !used.has(c));
+  return unused ?? repoColor(path, {});
 }
 
 /**
@@ -3392,6 +3440,44 @@ export const useStore = create<AppState>()((set, get) => ({
       // avoids a detached canvas racing the same destructive teardown). Fire-and-
       // forget so a slow disk check never delays the rest of boot.
       void get().pruneMissingFolders();
+      // #369: give each NEW folder a distinct default color — prefer an unused palette
+      // color before repeating one. Folders present at boot are grandfathered (they
+      // keep whatever color they already show). Main window only; a detached canvas
+      // picks up the assignment on its next boot. Started once.
+      if (!folderColorSubStarted) {
+        folderColorSubStarted = true;
+        let knownRepos = new Set(
+          sidebarRepos(get().recents, get().sessions, get().recurrings),
+        );
+        useStore.subscribe((state, prev) => {
+          // Cheap reference-equality gate: only the three slices that feed the folder
+          // set can add a folder, so a color write (or any unrelated `set`) short-
+          // circuits here — including the synchronous re-entry from `setRepoColor`.
+          if (
+            state.recents === prev.recents &&
+            state.sessions === prev.sessions &&
+            state.recurrings === prev.recurrings
+          )
+            return;
+          const current = sidebarRepos(
+            state.recents,
+            state.sessions,
+            state.recurrings,
+          );
+          const additions = current.filter((r) => !knownRepos.has(r));
+          knownRepos = new Set(current);
+          if (additions.length === 0) return;
+          // Accumulate the picked colors so 2+ folders added in one batch each avoid
+          // the others' just-chosen colors, not just the pre-batch ones.
+          let colors = state.repoColors;
+          for (const repo of additions) {
+            if (colors[repo]) continue; // a user override / prior assignment always wins
+            const color = pickRepoColor(repo, colors, current);
+            colors = { ...colors, [repo]: color };
+            void get().setRepoColor(repo, color);
+          }
+        });
+      }
     }
     // FileTree disk-change poll (#264): runs in *any* window that can show a tree (the
     // main shell or a detached canvas), each refreshing only its own mounted trees, so
@@ -5510,16 +5596,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // session repos, deduped by `repoOrder`. Worktree *child* dirs live under
     // app-data and aren't shown top-level, so they're not checked here.
     const s = get();
-    const worktreeParents = [
-      ...new Set(
-        s.sessions.map((x) => x.worktreeParent).filter((p): p is string => !!p),
-      ),
-    ];
-    const recurringRepos = s.recurrings.map((r) => r.cwd);
-    const repos = repoOrder(
-      [...s.recents, ...worktreeParents, ...recurringRepos],
-      s.sessions.filter((x) => !x.worktreeParent),
-    );
+    const repos = sidebarRepos(s.recents, s.sessions, s.recurrings);
     if (repos.length === 0) return;
     // Check existence in parallel; fail *open* — an IPC error must never forget.
     const checks = await Promise.all(

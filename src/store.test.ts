@@ -18,10 +18,12 @@ import {
   moveResultMessage,
   overviewClusterKeys,
   ownedChildSessionIds,
+  pickRepoColor,
   placeAfterAnchor,
   REPO_PALETTE,
   repoColor,
   repoOrder,
+  sidebarRepos,
   useStore,
   versionIncreased,
   worktreeHasItems,
@@ -1184,6 +1186,78 @@ describe("repoColor", () => {
     const c = repoColor("/repo/a", {});
     expect(REPO_PALETTE).toContain(c);
     expect(repoColor("/repo/a", {})).toBe(c); // stable across calls
+  });
+});
+
+describe("pickRepoColor (#369)", () => {
+  it("returns the first palette color for the very first folder", () => {
+    expect(pickRepoColor("/repo/a", {}, [])).toBe(REPO_PALETTE[0]);
+  });
+
+  it("returns the first unused palette color in palette order", () => {
+    // Two existing folders explicitly occupy palette[0] and palette[2]; the next
+    // unused slot in palette order is palette[1].
+    const colors = {
+      "/repo/a": REPO_PALETTE[0],
+      "/repo/c": REPO_PALETTE[2],
+    };
+    expect(
+      pickRepoColor("/repo/new", colors, ["/repo/a", "/repo/c", "/repo/new"]),
+    ).toBe(REPO_PALETTE[1]);
+  });
+
+  it("falls back to the stable hashed default once all 14 palette colors are used", () => {
+    // 14 existing folders each pinned to a distinct palette color.
+    const existing = REPO_PALETTE.map((_, i) => `/repo/f${i}`);
+    const colors: Record<string, string> = {};
+    existing.forEach((r, i) => (colors[r] = REPO_PALETTE[i]));
+    const picked = pickRepoColor("/repo/new", colors, [
+      ...existing,
+      "/repo/new",
+    ]);
+    // No crash; deterministic; a real palette member equal to the hashed default.
+    expect(REPO_PALETTE).toContain(picked);
+    expect(picked).toBe(repoColor("/repo/new", {}));
+  });
+
+  it("does not consume a palette slot for an override that is off-palette", () => {
+    // A user override outside the palette occupies no palette color, so the first
+    // palette color is still available to a new folder.
+    const colors = { "/repo/a": "#001122" };
+    expect(pickRepoColor("/repo/new", colors, ["/repo/a", "/repo/new"])).toBe(
+      REPO_PALETTE[0],
+    );
+  });
+
+  it("ignores the target folder's own current color", () => {
+    // /repo/a already sits on palette[0]; picking for itself must not avoid it, so
+    // the first palette color is returned rather than palette[1].
+    const colors = { "/repo/a": REPO_PALETTE[0] };
+    expect(pickRepoColor("/repo/a", colors, ["/repo/a"])).toBe(REPO_PALETTE[0]);
+  });
+});
+
+describe("sidebarRepos (#369)", () => {
+  it("unions recents, worktree parents, and recurring cwds; hides worktree children", () => {
+    const sessions = [
+      ovSession("s1", "/repo/a", 0),
+      // A worktree child: its repoPath is the isolated worktree dir, nested under
+      // /repo/a — it must NOT appear top-level, but its parent should.
+      ovSession("s2", "/wt/a-feature", 1, "/repo/a"),
+    ];
+    const recurrings: RecurringSession[] = [
+      {
+        id: "r1",
+        cwd: "/repo/c",
+        interval_secs: 3600,
+        next_fire_at: 0,
+        created_at: 0,
+      },
+    ];
+    const repos = sidebarRepos(["/repo/b"], sessions, recurrings);
+    // Alphabetical by name (repoOrder); worktree child dir absent.
+    expect(repos).toEqual(["/repo/a", "/repo/b", "/repo/c"]);
+    expect(repos).not.toContain("/wt/a-feature");
   });
 });
 
