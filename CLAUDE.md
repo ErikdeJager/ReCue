@@ -707,6 +707,7 @@ steady-state boot pays **zero** probe cost.
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
 │   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
 │   ├── src/path_env.rs     # Login-shell PATH: async probe + PathState cell + rc-mtime cache (#360; Finder/.desktop-launch fix, macOS+Linux)
+│   ├── src/linux_desktop.rs # WM_CLASS/app_id pin for Linux desktop-entry matching (#362)
 │   ├── src/early_settings.rs # Shared PRE-GTK settings reader: sessions.json off disk before tauri::Builder (#357)
 │   ├── src/linux_webkit.rs # Linux DMA-BUF decision + Settings override + the boot RendererReport (#346/#347/#357)
 │   ├── src/linux_gtk.rs    # Linux GTK dialog theme from ReCue's own theme, before GTK init (#349)
@@ -790,6 +791,14 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > `linux-x86_64` updater entry into `latest.json` so the **AppImage self-updates**. Items
 > needing a real Linux box (AppImage launch on each distro, the D-Bus reveal per DE, native
 > notifications, clipboard-image paste, the self-update) are logged in **`TRAJECTORY_TO_LINUX.md`**.
+>
+> **Linux desktop entry (#362).** The generated `.desktop` comes from
+> `src-tauri/linux/recue.desktop` via `bundle.linux.deb.desktopTemplate` — which the **AppImage**
+> bundler also uses (it packs its `.AppDir` from the deb data tree; there is no
+> `appimage.desktopTemplate`) — and its `StartupWMClass` matches the prgname ReCue **pins** in
+> `linux_desktop.rs` (`glib::set_prgname`, so the WM_CLASS/`app_id` is an owned `recue`, not an
+> `argv[0]` accident). The app **never** installs a desktop file; AppImage users run
+> `scripts/install-linux-desktop.sh` (consent-gated, XDG-only, reversible).
 >
 > **Linux performance (#346).** Four fixes for the "everything is slow on Arch" report:
 > (1) **(#346/#347)** `linux_webkit.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at boot only

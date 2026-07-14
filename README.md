@@ -148,6 +148,25 @@ Artifacts land in `src-tauri/target/release/bundle/`:
   at launch, so a theme change reaches the dialogs on the next start); override it with
   `APPIMAGE_GTK_THEME=Adwaita:dark` (or `RECUE_GTK_THEME=<gtk theme>`).
 
+### Linux desktop integration
+
+An AppImage is a single self-contained file with no installer, so its **desktop entry and
+icon only reach your application menu if you install them** — and until they do, the running
+window has no icon and does not group under its launcher. ReCue itself **never** writes to
+`~/.local/share/applications`; installing the entry is an explicit, user-invoked step:
+
+```bash
+scripts/install-linux-desktop.sh ~/Applications/ReCue.AppImage   # asks before writing
+scripts/install-linux-desktop.sh --uninstall                     # removes exactly what it wrote
+```
+
+The script copies the entry (including its `StartupWMClass=recue` — the identifier ReCue pins
+at startup so the window matches its launcher) straight out of the AppImage, rewrites only
+`Exec`/`TryExec` to the AppImage's real path, and installs its hicolor icons. It writes only
+under `$XDG_DATA_HOME`, never uses `sudo`, and is safe to re-run. A desktop integrator (Gear
+Lever, appimaged, AppImageLauncher) or a hand-written entry works too — see
+[`docs/linux-desktop-integration.md`](docs/linux-desktop-integration.md), which also covers
+WM_CLASS/`app_id` matching and icon troubleshooting.
   If the app window or its terminals render slowly, the two rendering switches live in
   **Settings → Rendering** (Linux only): the **DMA-BUF renderer** (auto / on / off — the
   WebKitGTK GPU path; applies at the **next launch**) and the **terminal renderer** (auto /

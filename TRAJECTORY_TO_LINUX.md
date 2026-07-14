@@ -1183,3 +1183,111 @@ WebKitGTK/tokio/PTY-reader threads. Consequences for Linux specifically:
       UI is hidden (no `$APPIMAGE` ⇒ classified `system`, which is correct — there is no
       AppImage file for the updater to replace).
 - [ ] macOS + Windows: the update flow is unchanged (indicator → modal → Settings pane).
+---
+
+## 2026-07-14
+
+### Desktop integration: the window never matched its launcher (Task #362)
+
+**Symptom (reported from an Arch/Hyprland box).** Two desktop entries disagreed about
+ReCue's `StartupWMClass` — the AppImage's internal `usr/share/applications/recue.desktop`
+said `recue`, the installed `~/.local/share/applications/recue.desktop` said `Recue` — so the
+running window did not reliably group under its launcher icon.
+
+**Root cause.** Neither value was "wrong": they are the two halves of X11's `WM_CLASS` *pair*,
+both derived by GTK from GLib's program name (`argv[0]`'s basename) — res_name/`app_id` =
+prgname (`recue`), res_class = prgname with the first letter upper-cased (`Recue`). A desktop
+entry may carry only **one** `StartupWMClass=` line, and **nobody owned the string**: it was an
+accident of how the process happened to be launched (an AppImage's `AppRun` may exec the binary
+with any `argv[0]`) plus GDK's capitalization rule.
+
+**Measured on the reporting box** (Arch, Hyprland 0.5x, Wayland session, ReCue 1.2.1 AppImage,
+2026-07-14 — these are real readings, not assumptions):
+
+```console
+$ xprop -name ReCue WM_CLASS
+WM_CLASS(STRING) = "recue", "Recue"          # res_name, res_class — exactly as derived above
+
+$ hyprctl clients -j | jq -r '.[] | select(.title|test("ReCue";"i")) | {class, initialClass, xwayland}'
+{ "class": "Recue", "initialClass": "Recue", "xwayland": true }
+
+$ tr '\0' '\n' < /proc/$(pgrep -x recue)/environ | grep -E 'GDK_BACKEND|WAYLAND_DISPLAY'
+WAYLAND_DISPLAY=wayland-1
+GDK_BACKEND=x11                               # ← not set by the user, and not by ReCue
+```
+
+**The finding that the plan did not anticipate:** the AppImage **always runs as an X11/XWayland
+client**, even in a Wayland session. Tauri's bundled `linuxdeploy-plugin-gtk.sh` AppRun hook
+hard-exports `GDK_BACKEND=x11` (`# Crash with Wayland backend on Wayland`, tauri-apps/tauri#8541).
+So there is no Wayland `app_id` to read for the AppImage, and a wlroots compositor reports the
+**res_class** half (`Recue`) as the window's class — which is why someone had hand-edited the
+installed entry to `Recue` (it was otherwise a byte-identical copy of the AppImage's: same key
+order, no `X-AppImage-*`/`X-Gearlever-*` keys, and no integrator installed on the box).
+
+**The value chosen: `recue`** (`linux_desktop::APP_WM_CLASS`). It is the one spelling that is
+correct everywhere: it is the X11 **res_name** (which GNOME Shell matches against
+`StartupWMClass` *first*, before res_class), it is the Wayland **`app_id`** for every
+**native**-Wayland launch (dev run, distro package, a future AUR package — none of which get the
+AppRun's `GDK_BACKEND=x11`), and KDE matches case-insensitively so it is fine there too. The
+capitalized `Recue` would be exactly wrong on GNOME-Wayland and on any native-Wayland package.
+
+**Fixes**
+
+- **`src-tauri/src/linux_desktop.rs`** (new, mirroring `linux_webkit.rs`/`linux_gtk.rs`):
+  `APP_WM_CLASS = "recue"` + `pin_wm_class()` → `glib::set_prgname()`, called from `run()` after
+  `linux_gtk::apply_gtk_theme_env()` and before `tauri::Builder` (GTK reads prgname at init).
+  ReCue now **owns** the identifier instead of inheriting `argv[0]`. `glib = "0.18"` is
+  target-gated to Linux and was already in the lockfile via tao/gtk — `cargo tree -d` shows no
+  duplicate and the build compiles no new crate.
+- **`src-tauri/linux/recue.desktop`** (new): a custom Handlebars desktop-entry template wired
+  via `bundle.linux.deb.desktopTemplate` (+ `rpm` for parity). The **deb** seam is the one that
+  matters — the AppImage bundler packs its `.AppDir` from the deb data tree, and there is no
+  `appimage.desktopTemplate`. `Exec` stays the bare `{{exec}}` placeholder (linuxdeploy's
+  `AppRun` parses that line to find the binary); `StartupWMClass` is the literal `recue`; adds
+  `StartupNotify=true` + `Keywords=`.
+- **Anti-drift tests** (`linux_desktop.rs`, run on every OS): the template's `StartupWMClass=`
+  must equal `APP_WM_CLASS`, `Exec`/`Icon`/`Name`/`Type`/`Terminal` must keep their placeholders,
+  `tauri.conf.json` must still point at the template, and the install script must **not**
+  hardcode the WM class.
+- **`.github/workflows/release.yml`**: the Linux leg now extracts the freshly built AppImage's
+  desktop entry and hard-fails the release if `StartupWMClass`/`Icon`/`Exec` are not `recue`
+  (extraction *tooling* trouble only warns).
+- **`scripts/install-linux-desktop.sh`** (new): consent-gated (`[y/N]` unless `--yes`), XDG-only
+  (never `sudo`, nothing outside `$XDG_DATA_HOME`), idempotent, `--uninstall`. It copies
+  `StartupWMClass` **verbatim from the AppImage's own entry** and never hardcodes it — a second
+  hand-maintained copy of that value is precisely the bug being fixed. **The app itself still
+  never writes a desktop file** (no auto-integration; running the script is the consent).
+- **Linux icon quality** (`bundle.icon` reordered/extended): `tauri-codegen` embeds the **first**
+  `.png` as the default window icon on non-Windows, which was `32x32.png` — now `128x128@2x.png`
+  (256×256), and the installed hicolor set gains 64×64 + 512×512. macOS/Windows still take
+  `icon.icns`/`icon.ico`.
+
+### Needs real-box verification (desktop integration, #362)
+
+- [x] **Measured** the identifier on Arch/Hyprland (above): X11 `WM_CLASS = "recue", "Recue"`;
+      the AppImage is an XWayland client (`GDK_BACKEND=x11` from Tauri's AppRun hook).
+- [x] **Built the AppImage** from this branch and extracted its internal entry — the custom
+      template took effect (`StartupWMClass=recue`, `Exec=recue`, `Icon=recue`, `StartupNotify`,
+      `Keywords`).
+- [x] **Ran the install script** against a real AppImage (into a sandboxed `XDG_DATA_HOME`):
+      correct entry + icons, `desktop-file-validate` clean, idempotent on re-run, `--uninstall`
+      leaves nothing behind, and a non-TTY without `--yes` aborts.
+- [ ] **Entry appears in the app menu** on GNOME / KDE / Cinnamon / Xfce / Hyprland after
+      running the script (some desktops only rescan on login).
+- [ ] **The running window groups under that launcher** — correct icon, no second "unknown app"
+      tile — on **X11** and on **Wayland**, on Arch, Ubuntu and Mint.
+- [ ] **A native-Wayland launch** (`npm run tauri dev`, or a distro package — no AppRun hook, so
+      no `GDK_BACKEND=x11`) reports Wayland `app_id` = `recue`, matching the entry exactly. Only
+      the AppImage's XWayland path was measurable here.
+- [ ] **Gear Lever / appimaged / AppImageLauncher** integration of the new AppImage produces the
+      same `StartupWMClass=recue` (they copy the AppImage's own entry, so it should).
+- [ ] **wlroots follow-up (open question, deliberately out of scope for #362).** Because the
+      AppImage is XWayland-only, Hyprland/sway see the res_class half (`Recue`), not `recue`.
+      Taskbars still resolve the entry via a case-folded name search, but the *exact* match
+      fails. Two candidate fixes, both bigger than this card: (a) also pin the X11 program class
+      (`gdk_set_program_class("recue")` — must run **after** GTK init, since `gdk_pre_parse()`
+      unconditionally re-derives it from prgname, so it needs a safe hook point in the Tauri
+      startup sequence); or (b) stop forcing `GDK_BACKEND=x11` in the AppImage once
+      tauri-apps/tauri#8541 is fixed upstream, making ReCue a native Wayland client whose
+      `app_id` is already `recue`. Until then, hand-written Hyprland window rules should match
+      `class:^(Recue)$` (documented in `docs/linux-desktop-integration.md`).
