@@ -3449,3 +3449,74 @@ strings.
 - Per-GPU runtime behavior can't be exercised on CI — a dated `### DMA-BUF detection regression (Task #347)`
   section + real-box checklist went into `TRAJECTORY_TO_LINUX.md`, and `CLAUDE.md`'s Linux-performance item (1)
   was restated under the new policy (`#346/#347`).
+
+### 348. [x] Eliminate the white startup flash — hidden-until-painted windows + a themed pre-paint background
+
+Every launch (and every Canvas pop-out, #84) flashed a white rectangle before the UI appeared. **Four
+independent gaps compounded:** (1) `tauri.conf.json`'s window declared no `backgroundColor` and no
+`visible: false`, so the OS mapped the window and painted its **default white surface** as soon as it was
+created — long before the webview had anything to show; (2) `index.html` was 13 completely **unstyled** lines —
+every stylesheet reaches the page through JS (`main.tsx` imports the fonts, `tokens.css` and `global.css`; each
+component imports its own CSS Module), so from document-parse until the ~1.35 MB bundle had been fetched,
+parsed and executed the document had **zero** styles and the WebView painted white (`body { background:
+var(--bg-base) }` lives in `global.css` — far too late to help); (3) `open_canvas_window` built its
+`canvas-<id>` window with no background color, visible immediately; and (4) the **theme** (#333) lives in the
+opaque Rust `settings` blob and only reaches the frontend *asynchronously*, so a Light-theme user got
+white → dark → light. Any pre-paint color therefore has to know the theme **before the JS bundle runs**, in
+both the native window (created by Rust before the webview exists) and the raw HTML document.
+
+**What shipped** (branch `white-startup-flash-348`, PR [#105](https://github.com/ErikdeJager/ReCue/pull/105),
+2026-07-14):
+
+- **`tauri.conf.json`** — the main window is created with `backgroundColor: "#1e1e2e"` **and**
+  `visible: false`, so there is no white OS surface at creation.
+- **`index.html`** — an inline pre-paint `<style>` (dark, plus an `html[data-theme="light"]` rule) and a
+  **synchronous** boot script that reads the `recue.theme` localStorage mirror before first paint.
+- **`src/theme.ts`** (new) — the never-throwing theme mirror: `THEME_STORAGE_KEY`, `THEME_BG`,
+  `themeFromStored`, `readStoredTheme`, `storeTheme`. `store.ts`'s `applySettingsEffects` writes the mirror on
+  every settings apply; the **Rust settings blob stays the source of truth**, and the mirror is only a
+  best-effort pre-paint hint.
+- **`src/useRevealWindow.ts`** (new) — an idempotent post-commit reveal fired from `App()` (the shared root of
+  *both* the main and the detached-canvas routes), on **rAF and a 0 ms timer, whichever lands first** — a hidden
+  WebView may not tick rAF at all.
+- **`commands.rs`** — the pure `background_for_theme` / `window_background` mapping (unit-tested), the new
+  `reveal_window` and `set_theme_background` commands, and **`schedule_reveal_fallback`**: any still-hidden
+  window is shown after 2 s regardless, so a crashed bundle or a dead dev server can never leave the app
+  running-but-invisible. `open_canvas_window` now builds hidden + themed, and `focus_canvas_window` (plus the
+  already-open branch) `show()`s before `set_focus()`.
+- **`lib.rs`** — re-colors the main window from the **persisted** theme in `setup` (after the `Store` is
+  managed, but before the window is ever shown) and schedules its reveal fallback.
+- **`store.ts`** — `saveSettings` pushes the new native background to every window on a theme change, so an
+  already-open window has no stale-color gutter on resize.
+
+**Key decisions**
+
+- **Pre-paint color is the theme's `--bg-base`** (`#1e1e2e` Mocha / `#eff1f5` Latte) — not `--bg-sidebar` or
+  `--terminal-bg`. That hex is necessarily duplicated in four places (`index.html`, `theme.ts`, `commands.rs`,
+  `tokens.css`), so **`src/theme.test.ts` carries an anti-drift guard** asserting all four agree for both
+  themes.
+- **A localStorage mirror, not a Rust-built window with an `initialization_script`.** All windows share one
+  origin, so the mirror is readable pre-paint by both routes. A missing or stale mirror degrades to *today's*
+  behavior (one dark→light flip) and self-heals that same launch — **no white flash either way**. The
+  alternative was a bigger, riskier change to how the main window is created.
+- **Reveal via an app-owned Rust `reveal_window` command, not `getCurrentWindow().show()`** — this avoids
+  widening `capabilities/default.json` with `core:window:allow-show`, and matches the existing Rust-owned
+  window commands (`open_canvas_window` / `focus_canvas_window` / `close_canvas_window`).
+- **Reveal fires on React's first commit, not on the settings/session IPC** — so backend latency can never
+  delay the window appearing.
+- **Added beyond the card's literal text:** `set_theme_background` (so an open window's *native* background
+  follows a theme change), the same hidden+themed treatment for detached canvas windows, and the 2 s Rust-side
+  reveal fallback.
+- **No `color-scheme` declaration was added** — an explicit background suffices, and `color-scheme` would drag
+  UA form-control and scrollbar restyling along with it.
+
+**Dependencies:** none. (Complementary with #356, whose route-level Suspense fallback is a bare
+background-painting `div.app` precisely so the first commit paints the app background, never white.)
+
+**Notes**
+
+- Platform-neutral: **no `#[cfg]` divergence at all** — macOS, Windows and Linux alike. `backgroundColor` +
+  `visible:false` works on WebKitGTK since Tauri 2.1.0 (ReCue is on 2.11.3).
+- The startup surface can't be asserted on CI, so "Needs real-box verification (startup flash, #348)" checklists
+  went into **both** `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md`; `CLAUDE.md`'s "Window chrome"
+  convention now records the hidden-until-painted rule and the four-place pre-paint hex invariant.
