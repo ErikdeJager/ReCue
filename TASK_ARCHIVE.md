@@ -3520,3 +3520,60 @@ background-painting `div.app` precisely so the first commit paints the app backg
 - The startup surface can't be asserted on CI, so "Needs real-box verification (startup flash, #348)" checklists
   went into **both** `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md`; `CLAUDE.md`'s "Window chrome"
   convention now records the hidden-until-painted rule and the four-place pre-paint hex invariant.
+
+### 355. [x] Bounded-parallel boot resume + a one-shot claude project-log index
+
+On boot, persisted sessions were reconnected **strictly one at a time** on a single thread, and every one of
+them re-scanned `~/.claude/projects` from scratch (a `read_dir` plus a stat per project dir) to decide
+forkability. So N sessions cost N serial spawns **and** N directory walks before the last terminal appeared —
+seconds of staggered reconnect on a busy install. The resume loop is now a **4-wide worker pool** over one
+**snapshot** of the claude projects tree, with byte-identical events, error handling, and UI behavior.
+
+**What shipped** (branch `bounded-parallel-boot-resume`, PR
+[#106](https://github.com/ErikdeJager/ReCue/pull/106), 2026-07-14):
+
+- **`src-tauri/src/boot.rs`** (new) — `resume_persisted_sessions(app)` runs a bounded worker pool
+  (`RESUME_CONCURRENCY = 4`, clamped to the record count) over the persisted records, with the pure,
+  unit-testable helpers `run_bounded` / `resume_worker_count` / `next_record` / `plan_for`. `lib.rs`'s setup
+  block collapses to a single `thread::spawn(move || boot::resume_persisted_sessions(resume))`.
+- **`title::ProjectLogIndex`** (new) — one directory scan per boot. It snapshots
+  `~/.claude/projects/*/<uuid>.jsonl` **listing each project dir's `.jsonl` filenames** (name → dir), so a
+  lookup is O(1) and the whole cost is O(M) rather than N × M stats. Its semantics match `title::has_conversation`
+  **exactly**: a shared `conversation_from(LogLocation)` helper, the fail-open `Unknown ⇒ true`, and a per-dir
+  stat fallback so a project dir whose listing fails never reports `Absent` where `locate_log` would have
+  reported `Found` (which would have wrongly disabled the Fork affordance).
+- **Per-record behavior is unchanged** — same order (resume → forkable → `set_forkable` →
+  `session://forkable`), same best-effort `let _ =` handling, no new events or payload fields, and the
+  #101/#141 capability gating preserved (a codex / opencode / custom record is not resumed and reports
+  `forkable: false` without touching the index at all).
+
+**Key decisions**
+
+- **A boot-scoped snapshot, not a global or TTL cache.** The index is built once and dropped when the loop
+  ends; the live title worker keeps its per-call `locate_log`. So a project dir created *after* boot is always
+  seen, and there is **nothing to invalidate** — the classic staleness bug is designed out rather than managed.
+- **Fixed pool width of 4, not `available_parallelism`.** The work is process-creation/IO-bound, and a wider
+  pool would just pile concurrent spawns onto the OS during first paint.
+- **Dropped "resume visible/selected sessions first" from the card's scope**, deliberately: `selectedId` is not
+  persisted at all, and `canvases`/`settings` are opaque frontend-owned JSON blobs the Rust store must not
+  parse. With a 4-wide pool the reordering win is a few hundred ms. Records are dispatched in persisted order;
+  visibility is Task #351's concern.
+- **`pty.rs` production code is untouched** — `SessionManager` was already concurrency-safe (#260), and
+  portable-pty 0.9.0 cloexecs the pty fds and closes fds ≥ 3 in the child on unix (and passes
+  `bInheritHandles=FALSE` on Windows). Only a unix-gated concurrent-spawn **regression test** was added there.
+- **No frontend change** (`git diff --stat -- src/` is empty): `booting` / `RECONNECT_BACKSTOP_MS` / the #30
+  reconnecting flow all stay as-is — a faster resume simply means more resumes land inside that window.
+- No batching of `Store::set_forkable` and no new events or error toasts: it already persists only on change
+  (≈zero writes on a normal boot), and a failed resume stays best-effort, so the child's own exit remains the
+  single existing signal.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Tests: a **peak-concurrency probe** (50 items / 4 workers, `AtomicUsize` + `fetch_max` — each item runs
+  exactly once and `peak <= 4`), the single-worker sequential case, a **snapshot proof** (a project dir created
+  after `build_in` is invisible to the index), the fail-open + unlistable-dir fallback (unix-gated), capability
+  gating, and a unix-gated `concurrent_spawns_register_every_session` regression guard in `pty.rs`.
+- Real-box-check entries went into `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md` — **four concurrent
+  ConPTY creations are worth eyeballing on Windows**, since that is the one path CI cannot exercise.
