@@ -3077,3 +3077,32 @@ Code-split the frontend bundle — lazy routes, panels, modals, markdown/Prism, 
 - Kept UpdateModal, BigModeModal, Toaster, ClaudeMissing, Sidebar, Overview, Canvas static (safety-critical or first-paint, and small).
 - Measured the baseline directly (1,351.5 kB raw / 391.1 kB gzip, single chunk) and attributed it per-library via a source-map build; set the acceptance target at <= 1,000 kB raw / <= 300 kB gzip main-route first-paint JS (expected ~900-950 kB), enforced by a new dependency-free `scripts/bundle-report.mjs --check` budget.
 - Included a short CLAUDE.md bullet (lazy boundaries + the "no manualChunks" rule) so a future feature doesn't static-import the deferred stacks back into the entry.
+
+## Task 359
+
+Tame the boot git storm — tier, scope, and coalesce the sidebar git refresh volley
+
+- Keep `showDiffLineCounts` default ON on all three OSes: explicitly REJECTED the card's "or default it off on Linux" option (a silent per-OS feature removal); the fix keeps the badge working and instead makes it cheaper + deferred + per-repo scoped.
+- "Resume settled" is defined as the store's existing `RECONNECT_BACKSTOP_MS` (4 s) boot window: a new `resumeSettled` flag is true immediately when zero session records were persisted, else flipped by that existing unconditional timeout — a hard cap, so a slow/failed `claude --resume` can never defer the volley forever. Deliberately not keyed on "every session emitted output" (a never-resuming session would hang the gate).
+- "After first paint" = a double `requestAnimationFrame` (with a `setTimeout` fallback), not `requestIdleCallback` (support on WKWebView/WebKitGTK not worth relying on). Complementary to Task 348's pre-paint `show()` gate.
+- `refreshBranches` is NOT deferred (tier 1, 1 spawn/folder): `branches[path]` is the sidebar's primary label source via `sessionLabel`. Only the decorations (GitHub URLs, ahead/behind, diff line counts, FileTree tint) are deferred.
+- Per-repo scope key = the settling session's `repoPath` (the exact key of every affected map, worktree folders included); an unknown session id falls back to an unscoped volley (fail-safe).
+- `file_statuses` is scoped to repos with a **mounted FileTree** (its only consumer, which already self-fetches on mount) — so a boot with no tree open does zero `git status` reads. This goes beyond the card's four directions but is strictly implied by "dedupe/skip unnecessary refreshes".
+- Viewport-based skipping REJECTED (recommended against, as the card allows): the sidebar is short and non-virtualized; scroll-dependent data would pop in and interact badly with worktree nesting, the collapsed rail, and detached windows.
+- To preserve today's "any settle refreshes every repo" safety net for externally edited folders, the window focus/visibility handler runs a full unscoped volley throttled to at most once per 30 s (the 15 s interval poll keeps the cheap branches+ahead/behind pair).
+- Two Rust spawn reductions adopted as part of the card's intent (it counts spawns): drop the redundant `has_head` probe in `diff_line_counts` (3→2 spawns; provably identical output) and collapse `github_web_url_for` to one `git config --local --get-regexp` read (2→1 spawn).
+- Untracked line counting keeps its 2000-file / 2 MB-per-file caps and gains a total-byte budget (16 MB/repo) plus streaming line counting — a bounded-fidelity tradeoff in the same family as the existing caps (pathological untracked trees may undercount, as they already do today).
+- The ~8 copy-pasted refresh blocks in the git-write/spawn paths are consolidated onto the new `refreshRepoGit()` action, unscoped (rare, user-initiated), which also adds a GitHub-URL read they lacked — a harmless superset of today's behavior.
+
+## Task 364
+
+Recover from an xterm WebGL context loss (dispose the addon → DOM renderer, latched)
+
+- The card says the addon is attached "without a context-loss handler"; in fact `terminalPool.ts:257` already has a minimal `addon.onContextLoss(() => addon.dispose())` (since #18). Kept the card's intent and scoped the task to what is actually missing: clearing the dangling addon reference (it currently lets the #221 font-atlas rebuild call `clearTextureAtlas()` on a disposed addon and burn the one-shot `fontAtlasRebuilt` flag), the anti-retry latch, a one-time warning, and observable state.
+- Latch scope: made it **window-wide** (a module singleton per document, so the main window and each detached window latch independently), not per-session — a real GL loss is driver/process-level, so a terminal spawned after the loss would immediately lose its context too. Rollback to a per-session key is noted in the plan.
+- The latch survives `resetTerminal` (session Restart) and `forget()` — disposing the terminal that lost its context does not re-arm WebGL.
+- Put the latch in a NEW pure module `src/components/Terminal/webglFallback.ts` rather than extending `webglRenderer.ts` (keeps that file a pure classifier and keeps the diff conflict-free with Task 357, which extends `webglRenderer.ts`).
+- No re-attach and no `webglcontextrestored` handling: verified in `@xterm/addon-webgl@0.19.0` that the addon itself waits ~3s for a restore and only fires `onContextLoss` when the context is unrecoverable.
+- No user-facing surface (no toast/badge/Setting) — a single `console.warn` mirroring #346's style; the user-visible outcome is simply that the terminal keeps working. The Settings renderer override stays Task 357's; the plan documents `webglFallback.allowsWebgl()` / `reset()` as its seam (an explicit "force WebGL" must clear the latch).
+- Added a belt-and-braces `term.refresh(0, term.rows - 1)` after dispose even though xterm's own dispose path already calls `setRenderer(DOM)` + `handleResize` (guards against future addon-internal drift).
+- Included small doc touches (`TRAJECTORY_TO_LINUX.md` real-box verification bullet + one clause in `CLAUDE.md`), per CLAUDE.md's rule that a path which can't be unit-tested on CI must be recorded.
