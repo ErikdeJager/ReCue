@@ -1015,3 +1015,26 @@ The loop runs on its own `std::thread` (not the async runtime), so it is indepen
       exactly once (no cross-wired/garbled output, no stray glyph, no wall of exit toasts).
 - [ ] The bounded-parallel resume does not delay the #348 window reveal (the window still
       appears promptly, not after the 2 s Rust fallback).
+
+### `[profile.release]` tuned — the Windows leg too (Task #358)
+
+`src-tauri/Cargo.toml` gained a real `[profile.release]` (`lto = true`, `codegen-units = 1`,
+`opt-level = "s"`, `strip = true`) to shrink the shipped binary; the substance and the
+benchmark live in `TRAJECTORY_TO_LINUX.md` (the AppImage pays for binary size at every cold
+start), but the profile is a **single Cargo setting applied to all three targets** — no
+`#[cfg]`, no platform code. For Windows specifically:
+
+- `strip = true` is near-free and safe on MSVC — debug info lives in a PDB that the release
+  profile never emits, so there is nothing extra to strip and nothing to lose.
+- `lto` / `codegen-units` / `opt-level` are platform-neutral codegen settings; LTO on
+  `crate-type = ["staticlib", "cdylib", "rlib"]` is the stock Tauri template configuration.
+- `panic` deliberately stays `"unwind"` (**do not** set `panic = "abort"`): a panic in a
+  reader / monitor / title / forwarder / poll thread must kill only that thread, not every
+  live PTY session. The manifest comment says so.
+- Build cost lands only on `release.yml` (a version-bump push). The PR gate builds with the
+  dev/test profiles and is unaffected.
+
+**Needs real-box verification (Windows, #358)**: the MSVC leg only builds in `release.yml`, so
+its first exercise of the new profile is the next release run — confirm it links under LTO and
+that the resulting **NSIS/MSI installer installs and runs**, then note the binary/installer
+size delta.
