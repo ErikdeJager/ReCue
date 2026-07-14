@@ -15,6 +15,7 @@ import {
   kanbanColumnColor,
   mergeRepoOrder,
   mergeSettings,
+  migrateTerminalLineHeight,
   moveResultMessage,
   overviewClusterKeys,
   ownedChildSessionIds,
@@ -2381,6 +2382,80 @@ describe("mergeSettings (#100/#176)", () => {
       mergeSettings({ promptEnableAutoContinueAtLimit: false })
         .promptEnableAutoContinueAtLimit,
     ).toBe(false);
+  });
+
+  it("defaults the terminal line height to 1.0 and the migration flag to false (#367)", () => {
+    expect(DEFAULT_SETTINGS.terminalLineHeight).toBe(1.0);
+    expect(DEFAULT_SETTINGS.terminalLineHeightMigrated).toBe(false);
+  });
+
+  it("back-fills terminalLineHeightMigrated to false for an older blob and preserves a stored value/flag (#367)", () => {
+    // A pre-#367 blob (no migration key) upgrades cleanly to false so it's still
+    // eligible for the one-time bump.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.terminalLineHeightMigrated;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .terminalLineHeightMigrated,
+    ).toBe(false);
+    // A persisted line-height value + set flag win over the defaults.
+    const merged = mergeSettings({
+      terminalLineHeight: 1.5,
+      terminalLineHeightMigrated: true,
+    });
+    expect(merged.terminalLineHeight).toBe(1.5);
+    expect(merged.terminalLineHeightMigrated).toBe(true);
+  });
+});
+
+describe("migrateTerminalLineHeight (#367)", () => {
+  it("bumps an explicit legacy 1.2 down to 1.0 and stamps the flag (changed)", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalLineHeight: 1.2,
+      terminalLineHeightMigrated: false,
+    };
+    const { settings, changed } = migrateTerminalLineHeight(before);
+    expect(settings.terminalLineHeight).toBe(1.0);
+    expect(settings.terminalLineHeightMigrated).toBe(true);
+    expect(changed).toBe(true);
+  });
+
+  it("leaves any other chosen value unchanged but still stamps the flag (not changed)", () => {
+    for (const value of [1.0, 1.1, 1.3, 1.5, 1.8]) {
+      const before = {
+        ...DEFAULT_SETTINGS,
+        terminalLineHeight: value,
+        terminalLineHeightMigrated: false,
+      };
+      const { settings, changed } = migrateTerminalLineHeight(before);
+      expect(settings.terminalLineHeight).toBe(value);
+      expect(settings.terminalLineHeightMigrated).toBe(true);
+      expect(changed).toBe(false);
+    }
+  });
+
+  it("never re-runs once the flag is set — a re-picked 1.2 is preserved", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalLineHeight: 1.2,
+      terminalLineHeightMigrated: true,
+    };
+    const { settings, changed } = migrateTerminalLineHeight(before);
+    expect(settings).toBe(before); // untouched (same reference)
+    expect(settings.terminalLineHeight).toBe(1.2);
+    expect(changed).toBe(false);
+  });
+
+  it("only matches ~1.2 within a tight epsilon (a nearby step is not bumped)", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalLineHeight: 1.2 + 1e-3,
+      terminalLineHeightMigrated: false,
+    };
+    const { settings, changed } = migrateTerminalLineHeight(before);
+    expect(settings.terminalLineHeight).toBe(1.2 + 1e-3);
+    expect(changed).toBe(false);
   });
 });
 

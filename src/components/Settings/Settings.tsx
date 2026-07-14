@@ -1261,10 +1261,15 @@ function SettingsModal() {
             <button
               type="button"
               className={styles.resetButton}
-              // Preserve the one-time onboarding flag across a reset so it doesn't
-              // re-trigger the first-launch agent picker next launch.
+              // Preserve the one-time flags across a reset so it doesn't re-trigger the
+              // first-launch agent picker (`onboarded`) or re-arm the #367 line-height
+              // migration (`terminalLineHeightMigrated`) next launch.
               onClick={() =>
-                setDraft({ ...DEFAULT_SETTINGS, onboarded: saved.onboarded })
+                setDraft({
+                  ...DEFAULT_SETTINGS,
+                  onboarded: saved.onboarded,
+                  terminalLineHeightMigrated: saved.terminalLineHeightMigrated,
+                })
               }
             >
               Reset to defaults

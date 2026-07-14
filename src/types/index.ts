@@ -452,6 +452,11 @@ export interface Settings {
    * if exactly one CLI is installed, the picker modal if 2+). Set once, then never
    * re-prompts. Kept in the settings blob (no separate Rust scalar). */
   onboarded: boolean;
+  /** One-time #367 migration marker: whether the terminal line-height default drop
+   *  (1.2 → 1.0) has been applied for this install. Defaults false so an older blob
+   *  (lacking the key) is eligible for the one-time bump; set true once so a user who
+   *  later re-picks 1.2 is never re-migrated. Mirrors `onboarded`. */
+  terminalLineHeightMigrated: boolean;
 }
 
 // --- Canvas (#46): a recursive binary split-panel (BSP) layout tree ---
