@@ -108,6 +108,13 @@ Artifacts land in `src-tauri/target/release/bundle/`:
   at launch, so a theme change reaches the dialogs on the next start); override it with
   `APPIMAGE_GTK_THEME=Adwaita:dark` (or `RECUE_GTK_THEME=<gtk theme>`).
 
+  If the app window or its terminals render slowly, the two rendering switches live in
+  **Settings → Rendering** (Linux only): the **DMA-BUF renderer** (auto / on / off — the
+  WebKitGTK GPU path; applies at the **next launch**) and the **terminal renderer** (auto /
+  WebGL / DOM — applies immediately), plus a copy-pasteable readout of what ReCue detected
+  at startup. `RECUE_DISABLE_DMABUF=1|0` still overrides the DMA-BUF choice for one run, and
+  a `WEBKIT_DISABLE_DMABUF_RENDERER` you export yourself is always respected untouched.
+
 Each `tauri build` produces the bundle for the OS it runs on; build on a macOS host for
 the macOS artifacts, a Windows host for the Windows installers, and a Linux host (or the
 CI runner) for the AppImage. Building the AppImage needs the Tauri Linux toolchain

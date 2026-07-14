@@ -40,6 +40,10 @@
   padding: var(--space-12) var(--space-8);
   border-right: 1px solid var(--border-hairline);
   background: var(--bg-sidebar);
+  /* The Linux-only Rendering tab (#357) makes a 9th entry; scroll rather than overflow
+     the 90vh-clamped dialog on a short screen. The 8 macOS/Windows tabs fit as before. */
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .title {
@@ -161,6 +165,22 @@
 
 .checkRow {
   font-size: var(--fs-meta);
+}
+
+/* The Rendering pane's copy-pasteable boot-decision readout (#357): a bordered mono block.
+   Tokens only, so it's identical in dark + light (#333) — and it never appears off Linux. */
+.diagnostics {
+  margin: 0;
+  overflow-x: auto;
+  padding: var(--space-8);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 /* Sub-label helper under a setting (#162). */

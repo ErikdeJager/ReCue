@@ -62,6 +62,27 @@ export interface AgentInfo {
   version: string | null;
 }
 
+/** What ReCue decided about the WebKitGTK DMA-BUF renderer at boot (#357), for
+ * Settings → Rendering. Mirrors Rust's `linux_webkit::RendererReport` — snake_case on the
+ * wire, like `AgentInfo`. `renderer_diagnostics` returns `null` on macOS/Windows (nothing
+ * is decided there), which is what hides the whole Rendering section. */
+export interface RendererReport {
+  /** Did ReCue export `WEBKIT_DISABLE_DMABUF_RENDERER=1`? */
+  dmabuf_disabled: boolean;
+  /** Why — the detection's reason, or the Settings override naming itself. */
+  reason: string;
+  /** The evidence the boot probes saw: GPUs, NVIDIA flavor/version, VM verdict, session. */
+  evidence: string;
+  /** The exact `[recue] WebKitGTK: …` line printed at boot. */
+  log_line: string;
+  /** What decided it: `"auto"` | `"setting"` | `"env"` (`RECUE_DISABLE_DMABUF`) |
+   * `"user_env"` (the user's own `WEBKIT_DISABLE_DMABUF_RENDERER`). */
+  source: string;
+  /** The normalized persisted mode **in effect at boot** (`"auto"` | `"on"` | `"off"`) —
+   * what a draft is compared against to decide whether a restart is needed. */
+  setting: string;
+}
+
 /** Typed command error (mirrors `pty::SessionError`, serialized `{ kind, message }`). */
 export interface SessionError {
   kind:
@@ -347,6 +368,22 @@ export interface Settings {
    * agent's sidebar row (#335). Default on. When off, no badge renders and the store
    * performs **no** `diff_line_counts` git reads (zero cost). */
   showDiffLineCounts: boolean;
+  // Rendering — Linux only (#357). Hidden entirely on macOS/Windows, where both fields
+  // are inert whatever their persisted value.
+  /** WebKitGTK's **DMA-BUF** (zero-copy GPU) renderer: `"auto"` (#346/#347's GPU-aware
+   * detection — the default), `"on"` (force-keep, overriding a detection that wrongly
+   * disables it), `"off"` (force-disable ⇒ CPU rendering of the webview, the fix for a
+   * broken NVIDIA-blob / VM stack). Read from `sessions.json` **before GTK init** (via the
+   * Rust `early_settings`), so a change applies on the **next launch** — GTK reads the env
+   * once at init and there is no way to re-apply it live. `RECUE_DISABLE_DMABUF=1|0`, and a
+   * user-exported `WEBKIT_DISABLE_DMABUF_RENDERER`, still win over this for one run. */
+  linuxDmabufRenderer: "auto" | "on" | "off";
+  /** xterm's renderer: `"auto"` (the #346 software-rasterizer probe — the default),
+   * `"webgl"` (force the WebGL addon even when the probe says llvmpipe/SwiftShader),
+   * `"dom"` (force xterm's DOM renderer). Applied **live** to the pooled terminals on Save
+   * — no terminal is ever disposed (the #18 invariant). Detached canvas windows always use
+   * the DOM renderer regardless (#105). */
+  linuxTerminalRenderer: "auto" | "webgl" | "dom";
   // Behavior (wired by a follow-up)
   /** View shown on launch. */
   defaultView: View;

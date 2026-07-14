@@ -62,7 +62,11 @@ import { terminalsToDispose } from "./poolReconcile";
 import { dedupeAgainstScrollback } from "./replayDedupe";
 import { createReplayQueue } from "./replayQueue";
 import styles from "./Terminal.module.css";
-import { isSoftwareWebGLRenderer } from "./webglRenderer";
+import {
+  decideTerminalRenderer,
+  type TerminalRendererDecision,
+  type TerminalRendererMode,
+} from "./webglRenderer";
 import { windowsPtyOption } from "./windowsPty";
 
 // Coalesce the frames of a view re-tile / inspector slide / window drag into a
@@ -120,6 +124,17 @@ interface TerminalHost {
   fit: FitAddon;
   /** The slot currently displaying this terminal, or null when parked. */
   slot: HTMLElement | null;
+  /** The attached WebGL addon, or undefined when this terminal renders via xterm's DOM
+   * renderer (a detached window #105, a software rasterizer #346, a Settings override
+   * #357, or a failed/lost GL context). Lives on the host — not a `createHost` closure
+   * local — so `applyTerminalRenderer` can add/remove it on the RUNNING xterm. */
+  webgl?: WebglAddon;
+  /** Attach the WebGL addon to the live xterm (lazy `import()`, #356). Idempotent and
+   * best-effort: any failure leaves the DOM renderer, exactly as today. */
+  loadWebgl: () => Promise<void>;
+  /** Detach it → xterm reverts to its DOM renderer (the very path `onContextLoss`
+   * already takes). Never disposes the host. */
+  unloadWebgl: () => void;
   /** Debounced fit + PTY resize; no-op while parked/unmeasurable. */
   scheduleResize: () => void;
   dispose: () => void;
@@ -148,10 +163,17 @@ let currentTerminalSettings = {
 // DMA-BUF trouble), so the addon "works" but every terminal frame renders on the
 // CPU. Probe the renderer string ONCE per app and skip the WebGL addon when it names
 // a software rasterizer — xterm then uses its DOM renderer (the detached-window
-// fallback, #105), which is faster than software GL. macOS/Windows short-circuit to
-// `true` and never construct the probe canvas, so their rendering is byte-for-byte
+// fallback, #105), which is faster than software GL. macOS/Windows never construct
+// the probe canvas and always keep WebGL, so their rendering is byte-for-byte
 // unchanged.
-let webglAllowedMemo: boolean | undefined;
+//
+// #357 splits the memo in two: the raw probe is cached here, while the *decision* is
+// recomputed from it plus the persisted Settings mode — so the user can override a probe
+// their machine defeats (WebKitGTK masks the renderer string on some stacks; Tauri's own
+// Linux-graphics guidance is to ship the switch), live, without re-probing.
+//
+// `undefined` = not probed yet; `null` = probed, no WebGL context at all.
+let probedRendererMemo: string | null | undefined;
 
 /** Read the WebGL renderer string from a throwaway context, or null if WebGL is
  * unavailable at all. */
@@ -171,30 +193,103 @@ function probeWebglRendererString(): string | null {
   }
 }
 
-function webglAllowed(): boolean {
-  if (webglAllowedMemo !== undefined) return webglAllowedMemo;
-  const { platform } = useStore.getState();
-  // Platform signal not loaded yet (outside Tauri, or a pre-init host): keep WebGL
-  // and do NOT memoize, so a later Linux terminal still gets the real probe. Boot
-  // loads the platform before the first refresh (store `init`), so in practice
-  // every host creation sees a real value.
-  if (platform === "") return true;
-  if (!isLinux(platform)) {
-    webglAllowedMemo = true;
-    return webglAllowedMemo;
+/** The probed renderer string, run at most once per window (Linux only — every caller
+ * is behind an `isLinux` guard, so macOS/Windows never build the probe canvas). */
+function probedRenderer(): string | null {
+  if (probedRendererMemo === undefined) {
+    probedRendererMemo = probeWebglRendererString();
   }
-  const renderer = probeWebglRendererString();
-  webglAllowedMemo = renderer !== null && !isSoftwareWebGLRenderer(renderer);
-  // Memoized, so each branch logs at most once per window — the frontend counterpart of
-  // the Rust DMA-BUF boot line (#347), so a real-box report shows both halves.
-  if (!webglAllowedMemo) {
-    console.warn(
-      `[recue] terminals: skipping WebGL renderer (software rasterizer${renderer ? `: ${renderer}` : " — no WebGL context"}); using the DOM renderer`,
-    );
-  } else {
-    console.info(`[recue] terminals: WebGL renderer: ${renderer}`);
+  return probedRendererMemo;
+}
+
+// The frontend counterpart of the Rust DMA-BUF boot line (#347): log the renderer
+// decision so a real-box report shows both halves. Keyed by reason, so it logs once per
+// distinct outcome — including once more if the user changes the setting (which is the
+// one time a *new* line is worth having).
+let loggedRendererReason: string | undefined;
+
+/** Which renderer this window's terminals should use, from the persisted Settings mode
+ * (#357) and the one-time probe (#346). Recomputed on demand — cheap (the probe is
+ * memoized). macOS/Windows short-circuit to WebGL **without probing**, whatever the
+ * persisted value happens to be, so they are byte-for-byte unchanged. */
+function rendererDecision(): TerminalRendererDecision {
+  const { platform, settings } = useStore.getState();
+  // Platform signal not loaded yet (outside Tauri, or a pre-init host): keep WebGL and do
+  // NOT probe, so a later Linux terminal still gets the real decision. Boot loads the
+  // platform before the first refresh (store `init`), so in practice every host creation
+  // sees a real value — and `applySettingsEffects` re-converges the pool afterwards anyway.
+  if (platform === "") return { webgl: true, reason: "platform not loaded" };
+  if (!isLinux(platform)) return { webgl: true, reason: "GPU renderer" };
+
+  const decision = decideTerminalRenderer(
+    settings.linuxTerminalRenderer,
+    probedRenderer(),
+  );
+  if (loggedRendererReason !== decision.reason) {
+    loggedRendererReason = decision.reason;
+    if (decision.webgl) {
+      console.info(`[recue] terminals: WebGL renderer (${decision.reason})`);
+    } else {
+      console.warn(
+        `[recue] terminals: skipping WebGL renderer (${decision.reason}); using the DOM renderer`,
+      );
+    }
   }
-  return webglAllowedMemo;
+  return decision;
+}
+
+/**
+ * Apply the Linux terminal-renderer override (#357) to the **live** pool — without
+ * disposing any host. That is the #18 invariant: a dispose would replay scrollback whose
+ * absolute cursor moves were encoded for another width, garbling `claude`'s TUI. xterm
+ * supports loading **and** disposing the WebGL addon on a *running* terminal (disposing it
+ * reverts to the DOM renderer — the exact path `onContextLoss` already takes), so the swap
+ * is an addon operation, never a terminal one.
+ *
+ * A converge-to-target loop: it only acts on a host whose addon state differs from the
+ * decision, so it is safe to call repeatedly (it runs on every Save, and on boot after the
+ * settings blob loads). No-op off Linux and in a detached canvas window (#105 — those
+ * always use the DOM renderer).
+ */
+export function applyTerminalRenderer(): void {
+  if (!IS_MAIN_WINDOW) return;
+  if (!isLinux(useStore.getState().platform)) return;
+  const decision = rendererDecision();
+  for (const host of hosts.values()) {
+    if (decision.webgl && !host.webgl) {
+      void host.loadWebgl();
+    } else if (!decision.webgl && host.webgl) {
+      host.unloadWebgl();
+    } else {
+      continue; // already on the target renderer
+    }
+    // Repaint every row at the new renderer and re-fit (the cell metrics can differ a
+    // hair between the GL and DOM renderers). NEVER `clearTextureAtlas()`: the atlas is
+    // SHARED across the pool, so clearing it from under the other terminals is the #221
+    // "font jumble" — and the font has long since loaded by now anyway.
+    host.term.refresh(0, host.term.rows - 1);
+    host.scheduleResize();
+  }
+}
+
+/** The terminal half of the Settings → Rendering diagnostics (#357): the persisted mode,
+ * the renderer actually in use, the probed renderer string, and why. Runs the probe on
+ * demand, so the readout works with **zero** terminals open. */
+export function terminalRendererReport(): {
+  mode: TerminalRendererMode;
+  active: "webgl" | "dom";
+  renderer: string | null;
+  reason: string;
+} {
+  const { platform, settings } = useStore.getState();
+  const decision = rendererDecision();
+  return {
+    mode: settings.linuxTerminalRenderer,
+    // A detached canvas window is always DOM (#105), whatever the decision says.
+    active: IS_MAIN_WINDOW && decision.webgl ? "webgl" : "dom",
+    renderer: isLinux(platform) ? probedRenderer() : null,
+    reason: decision.reason,
+  };
 }
 
 /**
@@ -314,36 +409,69 @@ function createHost(sessionId: string): TerminalHost {
   // was torn down while their promise was in flight.
   let disposed = false;
 
+  const safeFit = () => {
+    try {
+      fit.fit();
+    } catch {
+      // container not measurable yet (e.g. mid-transition); ignore
+    }
+  };
+
+  // The host record is built up front (#357) so the WebGL addon can live ON it rather than
+  // in a closure local — that is what lets `applyTerminalRenderer` add/remove the addon on
+  // this RUNNING xterm later, without ever disposing the host (#18). The function fields
+  // are filled in below, as they always were.
+  const host: TerminalHost = {
+    container,
+    term,
+    fit,
+    slot: null,
+    webgl: undefined,
+    loadWebgl: () => Promise.resolve(),
+    unloadWebgl: () => {},
+    scheduleResize: () => {},
+    dispose: () => {},
+  };
+
   // Best-effort GPU renderer; fall back to the default DOM renderer. Skipped in a
   // detached canvas window (#84/#105): a freshly-opened native window renders agent
   // TUIs with doubled/ghosted glyphs and misaligned box-drawing — a known WebGL
   // glyph-atlas / devicePixelRatio artifact in a secondary window — so detached
   // windows use the DOM renderer (visually equivalent, no artifact). Also skipped on
-  // Linux when the one-time probe says WebGL is software-rasterized (#346, see
-  // `webglAllowed` above). The main window on macOS/Windows keeps WebGL, so its
-  // rendering is provably unchanged.
+  // Linux when the one-time probe says WebGL is software-rasterized (#346) or the user
+  // forced the DOM renderer in Settings → Rendering (#357) — see `rendererDecision`.
+  // The main window on macOS/Windows keeps WebGL, so its rendering is provably unchanged.
   //
-  // The addon is now fetched as its own chunk (#356), so the terminal paints its first
+  // The addon is fetched as its own chunk (#356), so the terminal paints its first
   // frame(s) on xterm's DOM renderer and swaps to WebGL a few ms later, when the chunk
   // resolves — xterm supports `loadAddon` after `open()`, which is exactly the order the
-  // code already used, only synchronously. When `webglAllowed()` is false (a detached
-  // window, or Linux on a software rasterizer #346) the chunk is never even requested.
-  // Any failure (chunk error, WebGL ctor throw) leaves `webgl` undefined ⇒ the DOM
+  // code already used, only synchronously. When the decision is DOM (a detached window, a
+  // software rasterizer, or the Settings override) the chunk is never even requested.
+  // Any failure (chunk error, WebGL ctor throw) leaves `host.webgl` undefined ⇒ the DOM
   // renderer, as today.
-  let webgl: WebglAddon | undefined;
+  host.loadWebgl = async () => {
+    if (disposed || host.webgl) return;
+    try {
+      const { WebglAddon } = await import("@xterm/addon-webgl");
+      // Re-check: the host may have been disposed — or a concurrent call may have won the
+      // race — while the chunk was in flight.
+      if (disposed || host.webgl) return;
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => addon.dispose());
+      term.loadAddon(addon);
+      host.webgl = addon;
+    } catch {
+      host.webgl = undefined;
+    }
+  };
+  host.unloadWebgl = () => {
+    if (!host.webgl) return;
+    host.webgl.dispose(); // xterm reverts to its DOM renderer
+    host.webgl = undefined;
+  };
   const webglReady: Promise<void> =
-    IS_MAIN_WINDOW && webglAllowed()
-      ? import("@xterm/addon-webgl")
-          .then(({ WebglAddon }) => {
-            if (disposed) return;
-            const addon = new WebglAddon();
-            addon.onContextLoss(() => addon.dispose());
-            term.loadAddon(addon);
-            webgl = addon;
-          })
-          .catch(() => {
-            webgl = undefined;
-          })
+    IS_MAIN_WINDOW && rendererDecision().webgl
+      ? host.loadWebgl()
       : Promise.resolve();
 
   // Clickable http/https links (#109). Hover underlines a URL; the custom activate
@@ -374,23 +502,6 @@ function createHost(sessionId: string): TerminalHost {
       saveImage: saveClipboardImage,
     }),
   );
-
-  const safeFit = () => {
-    try {
-      fit.fit();
-    } catch {
-      // container not measurable yet (e.g. mid-transition); ignore
-    }
-  };
-
-  const host: TerminalHost = {
-    container,
-    term,
-    fit,
-    slot: null,
-    scheduleResize: () => {},
-    dispose: () => {},
-  };
 
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   const applyResize = () => {
@@ -564,11 +675,11 @@ function createHost(sessionId: string): TerminalHost {
     } catch {
       // ignore — proceed to the best-effort rebuild regardless
     }
-    // Wait for the (now lazily imported, #356) WebGL addon to have attached — or to have
-    // been skipped/failed — so the one-shot atlas rebuild below still sees the real value
-    // of `webgl` and runs exactly once, exactly when the GL renderer is in play. Never
-    // rejects (the import is already `.catch`ed), and resolves immediately when WebGL is
-    // not allowed at all.
+    // Wait for the (lazily imported, #356) WebGL addon to have attached — or to have been
+    // skipped/failed — so the one-shot atlas rebuild below still sees the real value of
+    // `host.webgl` and runs exactly once, exactly when the GL renderer is in play. Never
+    // rejects (`loadWebgl` is already `.catch`ed), and resolves immediately when the
+    // decision was the DOM renderer.
     await webglReady;
     if (disposed) return;
     // Rebuild the GL atlas and force xterm to re-measure the cell with the loaded font.
@@ -585,10 +696,15 @@ function createHost(sessionId: string): TerminalHost {
     // "font jumble"). Every later terminal shares the already-corrected atlas; the fontFamily
     // re-measure below still repaints IT (a full model clear via the options-change handler),
     // so its glyphs are crisp without disturbing anyone else's. No-op with the DOM renderer
-    // (`webgl` undefined, e.g. detached windows #105), which has no shared GL atlas.
-    if (webgl && !fontAtlasRebuilt) {
+    // (`host.webgl` undefined — a detached window #105, a software rasterizer #346, or the
+    // #357 Settings override), which has no shared GL atlas.
+    //
+    // This is also why `applyTerminalRenderer` (#357) must NOT clear the atlas when it
+    // attaches the addon to a running terminal: same shared-atlas hazard, and by then the
+    // font has long been loaded and the atlas already rebuilt.
+    if (host.webgl && !fontAtlasRebuilt) {
       fontAtlasRebuilt = true;
-      webgl.clearTextureAtlas();
+      host.webgl.clearTextureAtlas();
     }
     const family = term.options.fontFamily;
     term.options.fontFamily = "monospace";
@@ -612,7 +728,7 @@ function createHost(sessionId: string): TerminalHost {
     unsubscribe();
     dataSub.dispose();
     webLinks.dispose();
-    webgl?.dispose();
+    host.webgl?.dispose();
     term.dispose();
     container.remove();
   };

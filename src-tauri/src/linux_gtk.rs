@@ -32,8 +32,10 @@
 //!
 //! ReCue's theme lives inside the opaque `settings` blob of `sessions.json` in the
 //! app-data dir — and the `Store` is only constructed in `.setup()`, i.e. *after* GTK
-//! init — so this module reads that one file itself, read-only and fail-open (any miss →
-//! dark, which is the default theme anyway).
+//! init — so it is read straight off disk through the shared [`crate::early_settings`]
+//! (#357, which owns the app-data path derivation, its identifier drift guard, and the
+//! JSON helpers — the same reader `linux_webkit` uses for the DMA-BUF mode). Read-only and
+//! fail-open: any miss → dark, which is the default theme anyway.
 //!
 //! Because `GTK_THEME` is read at GTK init, toggling the theme in Settings re-themes the
 //! app instantly but the **dialogs pick up the new variant on the next launch** (env
@@ -45,16 +47,10 @@
 //! `reveal_file_linux` precedent) so the macOS/Windows hosts still type-check and
 //! unit-test them.
 
-/// ReCue's app identifier — mirrors `tauri.conf.json`'s `identifier`, which Tauri joins
-/// onto the XDG data dir to form `app_data_dir()`. Guarded by a drift test below.
-#[cfg(any(all(unix, not(target_os = "macos")), test))]
-#[cfg_attr(test, allow(dead_code))]
-const APP_IDENTIFIER: &str = "com.recue.app";
-
-/// The persisted store's filename — mirrors `lib.rs`'s `app_data_dir().join(...)`.
-#[cfg(any(all(unix, not(target_os = "macos")), test))]
-#[cfg_attr(test, allow(dead_code))]
-const STORE_FILE: &str = "sessions.json";
+/// The settings-blob key holding ReCue's UI theme (#333). **Must** equal the TS field name
+/// `Settings.theme` (`src/types/index.ts`) — the blob's keys are the TS names verbatim.
+#[cfg(all(unix, not(target_os = "macos")))]
+const THEME_SETTING_KEY: &str = "theme";
 
 // Only the Linux arm reads these env-var names (the pure helpers take parsed values), so
 // they stay Linux-gated — widening them with `, test)` would just be dead code on the
@@ -146,37 +142,13 @@ pub(crate) fn adwaita_variant(app_theme: Option<&str>) -> &'static str {
     }
 }
 
-/// Pull `settings.theme` out of the persisted store's bytes. Fail-open: malformed JSON, a
-/// missing/`null` `settings`, a missing or non-string `theme` all yield `None` (→ dark).
-#[cfg(any(all(unix, not(target_os = "macos")), test))]
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) fn theme_from_store_json(bytes: &[u8]) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
-    value
-        .get("settings")?
-        .get("theme")?
-        .as_str()
-        .map(str::to_string)
-}
-
-/// Where Tauri puts `sessions.json` on Linux: `dirs::data_dir()` (`$XDG_DATA_HOME` when
-/// absolute, else `$HOME/.local/share`) joined with the app identifier. Reuses the shared
-/// `path_env::home_dir()` seam rather than reading `$HOME` directly.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn store_path() -> Option<std::path::PathBuf> {
-    let data_dir = match std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from) {
-        Some(dir) if dir.is_absolute() => dir,
-        _ => crate::path_env::home_dir()?.join(".local/share"),
-    };
-    Some(data_dir.join(APP_IDENTIFIER).join(STORE_FILE))
-}
-
 /// Best-effort, read-only: ReCue's own theme from the persisted store (the `Store` itself
-/// only exists after GTK init, so we read the file directly). Any miss → `None`.
+/// only exists after GTK init, so the file is read directly — via the shared
+/// `early_settings` reader, #357). Any miss → `None` → the dark Adwaita variant.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn read_app_theme() -> Option<String> {
-    let bytes = std::fs::read(store_path()?).ok()?;
-    theme_from_store_json(&bytes)
+    let settings = crate::early_settings::read_settings()?;
+    crate::early_settings::settings_str(&settings, THEME_SETTING_KEY)
 }
 
 #[cfg(test)]
@@ -278,42 +250,7 @@ mod tests {
         assert_eq!(adwaita_variant(None), "Adwaita:dark");
     }
 
-    #[test]
-    fn theme_from_store_json_reads_the_settings_blob() {
-        let json = br#"{"sessions":[],"settings":{"theme":"light","accent":""}}"#;
-        assert_eq!(theme_from_store_json(json).as_deref(), Some("light"));
-
-        let json = br#"{"settings":{"theme":"dark"}}"#;
-        assert_eq!(theme_from_store_json(json).as_deref(), Some("dark"));
-    }
-
-    #[test]
-    fn theme_from_store_json_fails_open() {
-        for bad in [
-            &b"not json at all"[..],
-            b"",
-            b"{}",
-            br#"{"settings":null}"#,
-            br#"{"settings":{}}"#,
-            br#"{"settings":{"theme":42}}"#,
-            br#"{"settings":"dark"}"#,
-            br#"[]"#,
-        ] {
-            assert_eq!(
-                theme_from_store_json(bad),
-                None,
-                "{:?}",
-                String::from_utf8_lossy(bad)
-            );
-        }
-    }
-
-    #[test]
-    fn app_identifier_matches_tauri_conf() {
-        // Drift guard: `store_path()` re-derives Tauri's `app_data_dir()` by hand, so the
-        // identifier must stay in lockstep with the bundle config.
-        let cfg: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
-            .expect("tauri.conf.json parses");
-        assert_eq!(cfg["identifier"], APP_IDENTIFIER);
-    }
+    // The store read itself (path derivation, the JSON helpers, and the `tauri.conf.json`
+    // identifier drift guard) now lives in `early_settings` (#357) and is tested there —
+    // `read_app_theme` is the thin Linux-only shell over it.
 }

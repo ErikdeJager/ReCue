@@ -8,11 +8,13 @@ import {
 import {
   Bot,
   ChevronDown,
+  Copy,
   Database,
   Download,
   FlaskConical,
   FolderOpen,
   Keyboard,
+  MonitorCog,
   MousePointerClick,
   Palette,
   Plus,
@@ -37,23 +39,69 @@ import {
 } from "../../patchnotes";
 import { isLinux, kbdHint } from "../../platform";
 import { DEFAULT_SETTINGS, REPO_PALETTE, useStore } from "../../store";
-import type { Settings as SettingsType } from "../../types";
+import type { RendererReport, Settings as SettingsType } from "../../types";
 import Checkbox from "../Checkbox/Checkbox";
 import { markdownLinkComponents } from "../markdownCheckboxes";
 import PatchNotes from "../PatchNotes/PatchNotes";
 import Slider from "../Slider/Slider";
+import { terminalRendererReport } from "../Terminal/terminalPool";
 import styles from "./Settings.module.css";
 import { SHORTCUT_GROUPS } from "./shortcuts";
 
 type Section =
   | "terminal"
   | "appearance"
+  | "rendering"
   | "behavior"
   | "sessions"
   | "kanban"
   | "updates"
   | "shortcuts"
   | "data";
+
+/** The live terminal-renderer readout (#357) — the frontend half of the diagnostics. */
+type TerminalRendererInfo = ReturnType<typeof terminalRendererReport>;
+
+/** How each `RendererReport["source"]` reads in the diagnostics block (#357). */
+const DMABUF_SOURCE_LABELS: Record<string, string> = {
+  auto: "auto-detection",
+  setting: "Settings",
+  env: "the RECUE_DISABLE_DMABUF environment variable",
+  user_env: "your exported WEBKIT_DISABLE_DMABUF_RENDERER",
+};
+
+/**
+ * The copy-pasteable rendering diagnostics (#357): what ReCue decided about WebKitGTK's
+ * DMA-BUF renderer at boot (decision + reason + the evidence the probes saw + what decided
+ * it), and which xterm renderer the terminals are using plus the probed WebGL renderer
+ * string. Plain text, so it drops straight into a bug report.
+ *
+ * `report === null` means the boot report is unavailable (the command failed, or this is a
+ * non-Linux build) — the terminal half still renders.
+ */
+function diagnosticsText(
+  report: RendererReport | null,
+  term: TerminalRendererInfo,
+): string {
+  const lines: string[] = [];
+  if (report) {
+    const outcome = report.dmabuf_disabled ? "disabled" : "left on";
+    lines.push(`DMA-BUF renderer: ${outcome} — ${report.reason}`);
+    lines.push(
+      `  decided by: ${DMABUF_SOURCE_LABELS[report.source] ?? report.source}   setting: ${report.setting}`,
+    );
+    lines.push(`  evidence: ${report.evidence}`);
+  } else {
+    lines.push("DMA-BUF renderer: boot diagnostics unavailable.");
+  }
+  lines.push(
+    `Terminal renderer: ${term.active === "webgl" ? "WebGL" : "DOM"} — ${term.reason}`,
+  );
+  lines.push(
+    `  setting: ${term.mode}   probed: ${term.renderer ?? "no WebGL context"}`,
+  );
+  return lines.join("\n");
+}
 
 /** Peach — the default `--accent` token (#102). The Appearance picker maps this
  * swatch to `accentColor: ""` (no override, so the token stands). */
@@ -69,6 +117,13 @@ const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
     id: "appearance",
     label: "Appearance",
     icon: <Palette size={15} strokeWidth={1.5} />,
+  },
+  // Linux only (#357) — filtered out of the nav on macOS/Windows, where neither decision
+  // exists (see `visibleSections`).
+  {
+    id: "rendering",
+    label: "Rendering",
+    icon: <MonitorCog size={15} strokeWidth={1.5} />,
   },
   {
     id: "behavior",
@@ -132,9 +187,19 @@ function SettingsModal() {
   const mockUpdate = useStore((s) => s.mockUpdate);
 
   const [draft, setDraft] = useState<SettingsType>(saved);
-  const [section, setSection] = useState<Section>(
-    () => (initialSection as Section | null) ?? "terminal",
+  // Rendering is Linux-only (#357): drop it from the nav everywhere else, so macOS/Windows
+  // render byte-for-byte as before.
+  const visibleSections = SECTIONS.filter(
+    (s) => s.id !== "rendering" || isLinux(platform),
   );
+  const [section, setSection] = useState<Section>(() => {
+    // Clamp the deep-link / persisted target to what's actually visible, so a stale
+    // "rendering" id on macOS/Windows can never leave a blank pane.
+    const wanted = initialSection as Section | null;
+    return wanted && visibleSections.some((s) => s.id === wanted)
+      ? wanted
+      : "terminal";
+  });
   const [appVer, setAppVer] = useState("");
   const [claudeVer, setClaudeVer] = useState<string | null>(null);
   // The running version's baked-in patch notes (#192), shown in the Updates pane.
@@ -149,6 +214,12 @@ function SettingsModal() {
   // honoring the confirm-destructive setting like the app's other destructive
   // actions (TemplateManager delete, FileTree, Sidebar).
   const [confirmingClear, setConfirmingClear] = useState(false);
+
+  // Rendering diagnostics (#357), Linux only. The boot report comes from Rust (a OnceLock
+  // captured before GTK init); the terminal half is read straight from the pool, which runs
+  // the WebGL probe on demand — so the readout works with zero terminals open.
+  const [report, setReport] = useState<RendererReport | null>(null);
+  const [termInfo, setTermInfo] = useState<TerminalRendererInfo | null>(null);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -171,6 +242,18 @@ function SettingsModal() {
       .then(setClaudeVer)
       .catch(() => {});
   }, []);
+
+  // Rendering diagnostics (#357). Fetched once per open, Linux only — the command returns
+  // null off Linux anyway, but skipping the call entirely keeps macOS/Windows untouched.
+  // Best-effort: a failure leaves `report` null and the pane says so.
+  useEffect(() => {
+    if (!isLinux(platform)) return;
+    setTermInfo(terminalRendererReport());
+    void ipc
+      .rendererDiagnostics()
+      .then(setReport)
+      .catch(() => {});
+  }, [platform]);
 
   const close = () => setOpen(false);
   const save = () => {
@@ -234,7 +317,7 @@ function SettingsModal() {
       >
         <nav className={styles.sections} aria-label="Settings sections">
           <h2 className={styles.title}>Settings</h2>
-          {SECTIONS.map((s) => (
+          {visibleSections.map((s) => (
             <button
               key={s.id}
               type="button"
@@ -353,6 +436,135 @@ function SettingsModal() {
                   value={draft.overviewPanelMinWidth}
                   onChange={(v) => update("overviewPanelMinWidth", v)}
                 />
+              </>
+            )}
+
+            {/* Rendering (#357) — Linux only. Tauri's own Linux-graphics guidance is to
+                ship these switches: WebKitGTK masks the WebGL renderer string and the
+                auto-detection is unreliable, and a user who launches the AppImage from a
+                desktop menu can't set the RECUE_* environment variables at all. The
+                `isLinux` guard is belt-and-braces on top of the nav filter. */}
+            {section === "rendering" && isLinux(platform) && (
+              <>
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>DMA-BUF renderer</span>
+                  <div className={styles.segmented}>
+                    {(
+                      [
+                        ["auto", "Auto (recommended)"],
+                        ["on", "On"],
+                        ["off", "Off"],
+                      ] as const
+                    ).map(([v, label]) => (
+                      <button
+                        key={v}
+                        type="button"
+                        className={`${styles.segment} ${draft.linuxDmabufRenderer === v ? styles.segmentActive : ""}`}
+                        onClick={() => update("linuxDmabufRenderer", v)}
+                        aria-pressed={draft.linuxDmabufRenderer === v}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className={styles.helpText}>
+                    WebKitGTK&rsquo;s zero-copy GPU path for the app window.{" "}
+                    <strong>Off</strong> renders the window on the CPU — the fix
+                    when the GPU path is broken (the NVIDIA proprietary driver,
+                    or a VM with no real GPU), which reads as a sluggish or
+                    blank window. <strong>On</strong> keeps it when
+                    auto-detection wrongly turns it off. Auto detects your GPU
+                    and is right for almost everyone.
+                  </p>
+                  {/* Compared against the NORMALIZED mode that was in effect at boot, so a
+                      fresh install (nothing persisted ⇒ "auto") whose draft is still auto
+                      shows no spurious note. */}
+                  {report && report.setting !== draft.linuxDmabufRenderer && (
+                    <span className={styles.fieldWarn}>
+                      <TriangleAlert size={13} strokeWidth={2} aria-hidden />
+                      Restart ReCue to apply this. (The window&rsquo;s renderer
+                      is chosen before it opens.)
+                    </span>
+                  )}
+                  {report?.source === "env" && (
+                    <span className={styles.fieldHelp}>
+                      Overridden this run by <code>RECUE_DISABLE_DMABUF</code>.
+                      The setting still saves, and applies once that variable is
+                      gone.
+                    </span>
+                  )}
+                  {report?.source === "user_env" && (
+                    <span className={styles.fieldHelp}>
+                      Overridden this run by your exported{" "}
+                      <code>WEBKIT_DISABLE_DMABUF_RENDERER</code>. The setting
+                      still saves, and applies once that variable is gone.
+                    </span>
+                  )}
+                </div>
+
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Terminal renderer</span>
+                  <div className={styles.segmented}>
+                    {(
+                      [
+                        ["auto", "Auto (detect)"],
+                        ["webgl", "WebGL"],
+                        ["dom", "DOM"],
+                      ] as const
+                    ).map(([v, label]) => (
+                      <button
+                        key={v}
+                        type="button"
+                        className={`${styles.segment} ${draft.linuxTerminalRenderer === v ? styles.segmentActive : ""}`}
+                        onClick={() => update("linuxTerminalRenderer", v)}
+                        aria-pressed={draft.linuxTerminalRenderer === v}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className={styles.helpText}>
+                    How the terminals draw their text. <strong>WebGL</strong> is
+                    the fast GPU glyph renderer; when the GPU context is only
+                    software-rasterized (llvmpipe / SwiftShader) the{" "}
+                    <strong>DOM</strong> renderer is faster, which Auto detects.
+                    Applies immediately on Save — open terminals keep their
+                    contents. Detached canvas windows always use the DOM
+                    renderer.
+                  </p>
+                </div>
+
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>Diagnostics</span>
+                  <p className={styles.helpText}>
+                    What ReCue detected and decided at startup — paste this into
+                    a bug report.
+                  </p>
+                  {termInfo ? (
+                    <>
+                      <pre className={styles.diagnostics}>
+                        {diagnosticsText(report, termInfo)}
+                      </pre>
+                      <button
+                        type="button"
+                        className={styles.dataButton}
+                        onClick={() => {
+                          void ipc
+                            .clipboardWriteText(
+                              diagnosticsText(report, termInfo),
+                            )
+                            .then(() => pushToast("Diagnostics copied"))
+                            .catch(() => pushToast("Could not copy"));
+                        }}
+                      >
+                        <Copy size={15} strokeWidth={1.5} />
+                        Copy diagnostics
+                      </button>
+                    </>
+                  ) : (
+                    <p className={styles.helpText}>Diagnostics unavailable.</p>
+                  )}
+                </div>
               </>
             )}
 

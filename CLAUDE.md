@@ -516,7 +516,8 @@ even though it works in `tauri dev`.
 - **Settings (#100/#102/#103/#107/#119):** a sidebar **footer gear** opens a centered,
   focus-trapped **Settings modal** (`components/Settings`) — a **fixed 720×600** size
   (clamped to 90vh, #119) so every section renders identically and a tall section
-  scrolls inside the content pane (the nav + action row stay put) — with **seven** sections —
+  scrolls inside the content pane (the nav + action row stay put) — with **eight** sections
+  (**nine** on Linux, which additionally gets **Rendering**, #357) —
   **Terminal** (font size / line height via the custom **`Slider`** #122 + cursor
   blink → the live pooled xterms via `terminalPool.applyTerminalSettings`),
   **Sessions** (the #97 auto-name toggle + the #142 **Coding agent** selector →
@@ -524,7 +525,15 @@ even though it works in `tauri dev`.
   for the non-claude picks, + the #296 auto-continue-after-limit toggle),
   **Appearance** (a **Dark/Light theme** toggle #333 + an accent swatch over the Catppuccin
   palette + a reduce-motion toggle +
-  the Overview panel min-width #176), **Behavior** (default launch view + confirm-destructive
+  the Overview panel min-width #176), **Rendering** (**Linux only** #357 — filtered out of
+  the nav on macOS/Windows: a **DMA-BUF renderer** control (auto/on/off, applied at the
+  **next launch** — GTK reads the env once at init, so the persisted mode is read straight
+  off `sessions.json` **before** `tauri::Builder` via the shared Rust `early_settings`), a
+  **Terminal renderer** control (auto/webgl/dom, applied **live** — the WebGL addon is
+  loaded/disposed on the *running* xterm by `terminalPool.applyTerminalRenderer`, never a
+  host dispose #18, and never a `clearTextureAtlas()` #221), and a copy-pasteable
+  **Diagnostics** readout of the boot decision (`renderer_diagnostics` → the
+  `linux_webkit::RendererReport` captured in a `OnceLock`; `null` off Linux)), **Behavior** (default launch view + confirm-destructive
   gating #103 + the Canvas tab-close default `canvasCloseBehavior`: Ask / Always kill / Never
   kill #137 + the diff display/line/sort defaults #237/#258), **Kanban** (per-column colors by
   name #239), **Updates** (check for updates / current version / "What's new" / update now
@@ -671,6 +680,9 @@ even though it works in `tauri dev`.
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
 │   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
+│   ├── src/early_settings.rs # Shared PRE-GTK settings reader: sessions.json off disk before tauri::Builder (#357)
+│   ├── src/linux_webkit.rs # Linux DMA-BUF decision + Settings override + the boot RendererReport (#346/#347/#357)
+│   ├── src/linux_gtk.rs    # Linux GTK dialog theme from ReCue's own theme, before GTK init (#349)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen)
@@ -757,11 +769,24 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > webview rendering and **was itself** the reported slowness (#347 — it also fixes the coarse VM
 > heuristic: a bare-metal Xen dom0 / a `"PowerEdge KVM 1000"` no longer read as VMs). The user's
 > own env is never touched, `RECUE_DISABLE_DMABUF=1|0` force-overrides (a tri-state
-> `RendererOverride` — the seam a future Settings renderer-override card plugs into), and **one**
-> boot line names the evidence for **both** outcomes;
+> `RendererOverride`), and **one** boot line names the evidence for **both** outcomes. **#357**
+> fills that tri-state seam with a **persisted setting** (`linuxDmabufRenderer`: auto/on/off,
+> Settings → Rendering) — precedence `WEBKIT_DISABLE_DMABUF_RENDERER` > `RECUE_DISABLE_DMABUF` >
+> Settings > auto. Mind the **polarity**: the *setting* names the renderer (`on` = DMA-BUF on =
+> `ForceKeep`), the *env var* names the workaround (`=1` = disable = `ForceDisable`). Because GTK
+> reads the env **once at init** and the Tauri `Store` only exists inside `.setup()` (i.e. after
+> GTK init), the mode is read straight off `sessions.json` **before `tauri::Builder`** by the
+> shared **`early_settings.rs`** (`$XDG_DATA_HOME`-or-`$HOME/.local/share` + the bundle
+> identifier, `include_str!`-drift-guarded, fail-open → `auto`) — the **same** reader `linux_gtk`
+> (#349) uses for `theme`. So it applies at the **next launch**, never live (`set_var` after
+> threads exist is unsound), and there is deliberately no in-app "Restart now" (it would kill
+> every agent's PTY);
 > (2) the terminal pool probes the WebGL renderer string once (Linux only) and skips the
 > xterm WebGL addon when it's software-rasterized (llvmpipe/SwiftShader → DOM renderer,
-> `webglRenderer.ts`); (3) `session_scrollback` ships **base64** (`ScrollbackReply.b64`,
+> `webglRenderer.ts`) — **#357** makes this user-overridable too (`linuxTerminalRenderer`:
+> auto/webgl/dom), applied **live** by `terminalPool.applyTerminalRenderer()`, which
+> loads/disposes the `WebglAddon` on the **running** xterm (the `onContextLoss` path) so no host
+> is ever disposed (#18) and the **shared** glyph atlas is never cleared (#221); (3) `session_scrollback` ships **base64** (`ScrollbackReply.b64`,
 > decoded by `decodeOutputB64`) instead of a ~1 MB JSON integer array per terminal mount;
 > (4) the `lib.rs` event forwarder drains its queue after each blocking `recv` and merges
 > consecutive contiguous same-session output chunks (`pty::coalesce_output_events`) into

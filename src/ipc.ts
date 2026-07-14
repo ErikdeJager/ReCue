@@ -30,6 +30,7 @@ import type {
   RecurringErrorPayload,
   RecurringFiredPayload,
   RecurringSession,
+  RendererReport,
   ScheduledSession,
   ScheduleErrorPayload,
   ScheduleFiredPayload,
@@ -707,6 +708,12 @@ export const windowsBuild = () => invoke<number>("windows_build");
  * generalized missing-binary screen (`version: null` ⇒ the CLI isn't installed). */
 export const agentInfo = (agent: string) =>
   invoke<AgentInfo>("agent_info", { agent });
+
+/** The boot rendering decision (#357) for Settings → Rendering: the DMA-BUF outcome, its
+ * reason + evidence, and what decided it. `null` on macOS/Windows — nothing is decided
+ * there, so the Rendering section is hidden. Read-only; safe to call any time. */
+export const rendererDiagnostics = () =>
+  invoke<RendererReport | null>("renderer_diagnostics");
 
 /** 5-hour Claude session usage (#154). `usedPercent` is 0–100 (clamped in Rust);
  * `resetsAt` is the raw `resets_at` (an ISO-8601 string or a stringified unix
