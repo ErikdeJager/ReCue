@@ -133,7 +133,7 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
     <div className={styles.panel}>
       <div className={styles.meta}>
         <GitBranch
-          size={13}
+          size={12}
           strokeWidth={1.5}
           className={styles.metaIcon}
           aria-hidden
@@ -221,7 +221,7 @@ function ScheduledPanel({ scheduleId }: { scheduleId: string }) {
           }}
           title="Launch this agent now instead of waiting"
         >
-          <Play size={13} strokeWidth={1.5} aria-hidden />
+          <Play size={12} strokeWidth={1.5} aria-hidden />
           {starting ? "Starting…" : "Start now"}
         </button>
       </div>

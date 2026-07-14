@@ -502,13 +502,13 @@ function FileTree({ repoPath }: { repoPath: string }) {
               data-filetree-droptarget={node.path}
             >
               <Chevron
-                size={13}
+                size={12}
                 strokeWidth={1.5}
                 className={styles.chevron}
                 aria-hidden
               />
               <FolderIcon
-                size={13}
+                size={12}
                 strokeWidth={1.5}
                 className={styles.folderIcon}
                 aria-hidden
@@ -520,10 +520,11 @@ function FileTree({ repoPath }: { repoPath: string }) {
         );
       }
       const isRevealed = node.path === revealTarget;
-      // Tint the file name + icon by its working-tree status (#252): green = new,
-      // yellow = edited, dimmed gray = gitignored (#270); unchanged files keep the
-      // default styling.
-      const cls = statusClass(statusMap?.[node.path]);
+      // Tint the whole row by its working-tree status (#252, v2 task 382): green =
+      // new, yellow = edited, faint = gitignored (#270); unchanged files keep the
+      // default styling. Tinted A/M rows also get a trailing status letter.
+      const code = statusMap?.[node.path];
+      const cls = statusClass(code);
       return (
         <button
           key={node.path}
@@ -538,12 +539,17 @@ function FileTree({ repoPath }: { repoPath: string }) {
           data-filetree-droptarget={parentDir(node.path)}
         >
           <FileText
-            size={13}
+            size={12}
             strokeWidth={1.5}
             className={styles.fileIcon}
             aria-hidden
           />
           <span className={styles.name}>{node.name}</span>
+          {(code === "A" || code === "M") && (
+            <span className={styles.statusLetter} aria-hidden>
+              {code}
+            </span>
+          )}
         </button>
       );
     });
@@ -566,12 +572,15 @@ function FileTree({ repoPath }: { repoPath: string }) {
             data-filetree-droptarget={path}
           >
             <FileText
-              size={13}
+              size={12}
               strokeWidth={1.5}
               className={styles.fileIcon}
               aria-hidden
             />
             <span className={styles.name}>{name}</span>
+            <span className={styles.statusLetter} aria-hidden>
+              D
+            </span>
           </div>
         );
       },
@@ -606,7 +615,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                   title={`Open ${path}`}
                 >
                   <FileText
-                    size={13}
+                    size={12}
                     strokeWidth={1.5}
                     className={styles.fileIcon}
                     aria-hidden
@@ -645,7 +654,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 >
                   <div className={styles.contentHead}>
                     <FileText
-                      size={13}
+                      size={12}
                       strokeWidth={1.5}
                       className={styles.fileIcon}
                       aria-hidden
