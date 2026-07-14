@@ -4472,3 +4472,51 @@ panels) for readability or shrink it to fit more on screen — one uniform contr
   adjust by the scale only if a drop lands wrong (conditional, not touched pre-emptively).
 
 **Dependencies:** none. (Self-contained; independent of the sibling Tasks 367/368/369.)
+
+### 370. [x] Expandable "all usage" viewer in the sidebar (adaptive, collapsed by default)
+
+The sidebar-footer Claude usage bar (#154) only ever showed the **5-hour** window. This adds a collapsed-by-default
+disclosure — a small up-chevron left of the reset countdown — that expands a box listing **every** usage window
+Anthropic's API reports (5-hour, weekly, …), each with its own percentage, mini bar, and reset countdown. The list
+is **adaptive**: it renders whatever buckets the API returns, so a new metric Anthropic adds appears automatically
+with no code change.
+
+**What shipped** (branch `task-370-all-usage-viewer`, PR
+[#124](https://github.com/ErikdeJager/ReCue/pull/124), merged 2026-07-14):
+
+- **Backend (`usage.rs`)** — a new serializable `UsageBucket { key, usedPercent (clamped 0–100), resetsAt }` and a
+  pure `parse_buckets(v)` that iterates the response object and pushes one bucket per top-level object carrying a
+  **finite** `utilization`/`used_percentage` number (non-objects / metadata without a percentage are skipped — the
+  adaptivity guard), reusing `value_to_string` for `resets_at`. `UsageSnapshot` gains `buckets: Vec<UsageBucket>`;
+  `parse_snapshot` keeps the existing `five_hour` extraction **byte-for-byte** (a missing `five_hour` still returns
+  `None` and hides the bar) and sets `buckets: parse_buckets(v)`. New tests cover multi-bucket, an **unknown** key,
+  a skipped non-numeric bucket, and clamping.
+- **IPC + store** — `UsageBucket` mirrored in `ipc.ts` (`buckets` on `UsageSnapshot`); the store `usage` slice gains
+  `buckets: { key, usedPercent, resetsAtMs }[]`, mapped in `refreshUsage` (bucket `resetsAt` → `resetsAtMs` via
+  `parseResetsAt`), with `buckets: []` added to every unavailable/reset literal (the required field made `tsc`
+  enumerate each site).
+- **Pure helper (`usageBuckets.ts`)** — `humanizeUsageLabel(key)` (known-key map + a generic fallback:
+  underscores→spaces, capitalized, so a brand-new key renders sensibly), `orderUsageBuckets` (five_hour first,
+  seven_day next, unknown keys last, alphabetical tie-break), and `prepareUsageBuckets` attaching labels in order.
+  Unit-tested (`usageBuckets.test.ts`).
+- **UI (`UsageBar.tsx` + `Usage.module.css`)** — a transient `expanded` state (default collapsed), a chevron
+  disclosure button in the meta row, and an expandable `.box` (rendered as the first child so it grows upward from
+  the sidebar bottom) mapping `prepareUsageBuckets` to rows (label · mini bar · percent · own countdown), reusing the
+  `now` tick and the per-bucket `critical` (≥90%) fill classes/tokens. Hidden in the collapsed rail and the empty
+  hairline state.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 370)
+
+- **Expanded/collapsed state is transient** (local component state, collapsed each launch) — not persisted.
+- **`five_hour` stays the "primary"** — the bar fill, countdown, and auto-continue arming are byte-for-byte
+  unchanged, and a missing `five_hour` still hides the whole bar; the expanded box lists all buckets including the
+  5-hour one for a complete picture.
+- **Adaptivity by surfacing all buckets generically** — any top-level object with a numeric utilization becomes a
+  bucket; the frontend iterates and humanizes unknown keys, so new Anthropic metrics auto-appear.
+- **Fail-open + Claude-only preserved** — an unexpected shape yields an empty `buckets` list (box shows just the
+  primary) or `None` (bar hides), never a crash; the `showSessionUsage` / `isClaudeActive` gates are untouched. No
+  new Tauri command, no polling-cadence change, no token-read/Keychain change.
+- **Tokens only + reduced-motion** — the box uses design tokens (Dark/Light/custom-accent) and any transition is
+  dropped under the global reduced-motion killswitch; pure WebView, identical on macOS/Windows/Linux.
+
+**Dependencies:** none. (Extends the already-landed usage bar #154; self-contained.)
