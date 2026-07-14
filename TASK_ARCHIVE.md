@@ -4946,3 +4946,56 @@ trap, keyboard path (Esc/⏎/K/digits), confirm gate (#103), and lazy-load bound
 - Pure CSS/TSX, token-driven; identical on macOS/Windows/Linux. Rollback = revert the PR.
 
 **Dependencies:** Tasks 372, 375.
+
+### 379. [x] UI v2 (5/12): Overview wall reskin — crust stage, flush terminal cards, filter/empty/first-launch states, agent max-width, startup tips
+
+Card 5 of the UI v2 reskin epic (spec §7 + demo; **no version bump / patch notes**). The Overview "agent wall"
+moves onto the crust stage over the wave — 12px stage padding, 8px gaps (0 in dense via the 372 stage vars), each
+card a square Base block with a 2px repo band, a fixed 36px header, and a flush crust terminal — plus the
+chrome-free filter bar, wave-centered empty states, the `capAgentWidth` consumer, a token-fed xterm ANSI palette,
+and a new random-tip system. Zero functionality lost.
+
+**What shipped** (branch `task-379-overview-reskin`, PR
+[#134](https://github.com/ErikdeJager/ReCue/pull/134), merged 2026-07-15 into `ui-rework`):
+
+- **Stage + cards (`Overview.module.css`/`.tsx`)** — the wall consumes `--stage-pad-overview`/`--stage-gap`;
+  cards are square Base blocks with a hairline border and a full-width 2px solid repo-color top band; the
+  repo-group divider borders (`.cardGroupStart` + its #343 light override) are **removed** — grouping now reads
+  via band + gaps (the light opaque-border override stays on `.card`). **Selection = the demo's plain 1px inset
+  accent ring** (click-through overlay), replacing the #50 repo-colored frame + header tint; sidebar sync rides
+  the existing shared `selectedId`. Fixed 36px header (13px grip, BusyIndicator slot — non-agent cards get the
+  demo's 8px repo-colored leading square, scheduled/recurring keep their Clock/RefreshCw icons; 12px/600
+  ellipsizing title + 9px fork badge over a 10px "repo · branch" meta) with 24×24 ghost actions (14px icons,
+  Surface0 hover; remove ✕ hovers red). The #70 whole-header drag grip, #188 inline rename, #297 subheader, #84
+  DetachedNote guard, and #351 lazy-mount root are all untouched. Terminal body flush: crust bg, only a hairline
+  header/body divider (kept as the header's border-bottom — renders identically to the demo's body border-top).
+- **capAgentWidth consumer** — agent-conversation cards only (SessionCard + RecurringCard) cap at `max-width:
+  900px` (safely above the #176 min-width slider's 600px max); other kinds uncapped; active in dense too; the
+  uncapped leftover stage shows the wave (cards left-aligned).
+- **Filter bar** — renders only when filtered, now an unchromed row: "Showing **repo**" + a plain accent
+  text-link "Show all" (the #247 "· this branch" suffix kept).
+- **Empty states** — filtered-empty: wave-centered "No sessions in **repo** yet" + an accent New session button
+  that calls `startRepoSession(filter.path)` (#127 — skips the folder step), plus the spec's faint "the wave keeps
+  you company" line; it keeps the calm overview wave preset (377's `selectWavePreset` not re-mapped — the demo's
+  hero boost fires only on whole-app empty). First-launch hero (`EmptyState`): boosted wave + a text-shadowed
+  20px/700 "ReCue" wordmark + ONE compact accent "New session ⌘N" button + a **random tip** underneath.
+- **Tips system** — `src/tips.json` (an array of short useful tips) + pure `src/tips.ts` (`renderTip` converts
+  mac-style chords per-OS: ⌘→Ctrl+, ⇧→Shift+, ⌥→Alt+, ⏎→Enter — kbdHint semantics; a shuffle picks a
+  guaranteed-different tip) + `tips.test.ts`; shown only on the first-launch EmptyState with a small ghost
+  "tip" chip (Lightbulb) that shuffles.
+- **Token-fed ANSI palette (`terminalPool.ts` + `tokens.css`)** — 16 new literal `--terminal-ansi-*` tokens
+  (Catppuccin Mocha terminal scheme, NOT overridden in light — the terminal stays dark) read at terminal
+  creation; bg/fg/cursor/selection were already token-fed; font-size/line-height stay user settings; no live
+  re-theme on accent change (parity with today's creation-time cursor color).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 379)
+
+- The "no taglines" rule applies to the first-launch hero only; the empty-repo state carries the spec's faint
+  wave line. Tips appear only when the whole app is empty, not on the filtered empty state.
+- Added `--text-faint` (dark `#45475a` / light `#9ca0b0`) since spec §2.1 lists "faint" but 372 didn't land it —
+  flagged as possibly duplicated by sibling Task 380 (keep one definition at merge).
+- Diff-card inner content (summary row + diff lines) is DiffInspector's turf (cards 7/8) — this card delivers
+  only the card chrome around it.
+- Pure CSS/TSX + one JSON asset; identical on macOS/Windows/Linux. Rollback = revert the PR.
+
+**Dependencies:** Tasks 372, 373, 377.
