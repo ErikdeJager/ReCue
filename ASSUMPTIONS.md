@@ -2938,3 +2938,18 @@ Linux: native file dialogs follow ReCue's theme (fix always-white Adwaita dialog
 - Escape hatches: honor the hook's `APPIMAGE_GTK_THEME` (never clobber it) and add a new `RECUE_GTK_THEME=<literal value>` force override, mirroring `RECUE_DISABLE_DMABUF` (#346); documented in TRAJECTORY_TO_LINUX.md + a one-liner in README's Linux section.
 - Reading the theme before the Tauri app exists means resolving `sessions.json` directly: `$XDG_DATA_HOME` (if absolute) else `$HOME/.local/share`, + the hardcoded identifier `com.recue.app`. Guarded by a unit test that parses `tauri.conf.json` via `include_str!` so the identifier can't drift; any read failure fails open to dark.
 - New module `src-tauri/src/linux_gtk.rs` (mirrors `linux_webkit.rs`) rather than extending `linux_webkit.rs`, to avoid colliding with Task 347, which edits that file; the only shared touchpoint is an appended call in `run()`.
+
+## Task 350
+
+Scrub the AppImage-injected environment from every child process ReCue spawns
+
+- Scoped the fix to one shared seam rather than only `pty.rs::spawn_with_id`, per the card's hint: a new `src-tauri/src/child_env.rs` wired into the PTY spawn, `git::hidden_command` (all git + `<cli> --version` probes), the OS openers (`os_open`/`open_url`/`reveal_file_in_finder`/`reveal_file_linux` — `xdg-open`/`dbus-send`), and `path_env`'s login-shell PATH probe.
+- Gated the real work `#[cfg(all(unix, not(target_os = "macos")))]` (Linux/BSD) rather than the card's `#[cfg(unix)]`, so macOS stays byte-for-byte; the pure helpers are `, test)`-widened + `cfg_attr(test, allow(dead_code))` per the `explorer_select_arg`/`reveal_file_linux`/`should_disable_dmabuf` precedent (clippy runs `--all-targets -D warnings`).
+- The scrub arms only when `APPDIR` or `APPIMAGE` is present in the env map, making a dev/`.deb`/pacman/macOS/Windows run a provable identity transform (pinned by the first unit test); `scrub_command` makes zero `env*` calls when the diff is empty.
+- Chose a value-based rule (strip `$APPDIR`-owned / `/tmp/.mount_…` `:`-segments from ANY var) plus a small explicit drop-list (`APPDIR`/`APPIMAGE`/`APPIMAGE_UUID`/`ARGV0`/`OWD`, and the tauri linuxdeploy-gtk scalars `GTK_THEME`/`GDK_BACKEND`) instead of enumerating vars — automatically covers PATH, LD_LIBRARY_PATH, XDG_DATA_DIRS, GIO_MODULE_DIR, GDK_PIXBUF_*, GSETTINGS_SCHEMA_DIR, GI_TYPELIB_PATH, PYTHONPATH, PERLLIB, QT_PLUGIN_PATH, GST_*.
+- A var emptied by filtering is removed (never left as `""`, since an empty `LD_LIBRARY_PATH` segment means CWD to the loader); `PATH` is on a NEVER_UNSET list so it is never emptied/unset, and binary resolution (`find_on_path`) still uses ReCue's own process PATH.
+- Restore `APPIMAGE_ORIGINAL_<VAR>` backups verbatim when an AppRun variant stashed them, and drop the `APPIMAGE_ORIGINAL_*` keys themselves from the child env (defensive; harmless when absent).
+- Left `WEBKIT_DISABLE_DMABUF_RENDERER` (set by ReCue itself in #346) in the child env — not AppImage-injected and inert for CLI children; recorded as an explicit non-goal.
+- Complementary with Task 349 (dark GTK dialogs): that card SETS `GTK_THEME` for ReCue's own process, this one STRIPS it from children under the AppImage only; outside an AppImage the scrub stays a no-op (deliberate boundary, noted in non-goals as the single place a follow-up would extend).
+- Non-UTF-8 env vars are passed through verbatim (they cannot be AppImage vars) and env ordering between the scrubbed and passthrough groups is treated as insignificant to a child.
+- macOS-only spawns (`usage.rs`'s `security`, `lib.rs`'s `tccutil`) are left untouched; no frontend/TS change. Docs: CLAUDE.md (layout + seams list) and TRAJECTORY_TO_LINUX.md (dated entry + real-box checklist).
