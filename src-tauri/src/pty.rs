@@ -891,9 +891,12 @@ impl SessionManager {
             cmd.arg(arg);
         }
         cmd.cwd(cwd);
-        // Inherit the parent environment so the child can resolve PATH etc.,
-        // then make sure it has a sensible TERM for the TUI.
-        for (key, value) in std::env::vars_os() {
+        // Inherit the parent environment so the child can resolve PATH etc. — with the
+        // AppImage-injected vars scrubbed out on Linux (#350; a byte-for-byte no-op on
+        // macOS/Windows and outside an AppImage) — then make sure it has a sensible TERM
+        // for the TUI. `CommandBuilder` starts from an empty env set, so a var the scrub
+        // omits is genuinely absent from the child.
+        for (key, value) in crate::child_env::child_env_vars() {
             cmd.env(key, value);
         }
         cmd.env("TERM", "xterm-256color");
