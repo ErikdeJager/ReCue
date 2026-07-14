@@ -938,3 +938,48 @@ make map contents depend on scroll history) and defaulting `showDiffLineCounts` 
       closing it, subsequent busy→idle settles run **no** `git status` for that repo.
 - [ ] **Focus backstop**: alt-tab away and back → the `+A/−D` badge picks up a file edited in an
       external editor (full volley, at most once per 30 s).
+## 2026-07-14 — Login-shell PATH probe off the startup critical path (#360)
+
+The `.desktop`/AppImage launch inherits the session environment, not the login-shell PATH,
+so `path_env`'s `$SHELL -ilc` probe is what makes `claude` findable on Linux (#345). It used
+to run **synchronously at the top of `run()`**, before the window existed — so a heavy
+`.bashrc`/`.zshrc` (oh-my-zsh, nvm, conda) delayed the *window* by up to the 3 s
+`PROBE_TIMEOUT`.
+
+It now runs **concurrently with window creation**: `path_env::start_probe()` snapshots the env
+on the main thread and returns immediately; the probe thread publishes into a `Mutex`+`Condvar`
+cell (`PathState`). **The process env is never mutated** — `std::env::set_var` races a
+concurrent `getenv` (glibc reallocs `environ`), which would be a real data race against the
+WebKitGTK/tokio/PTY-reader threads. Consequences for Linux specifically:
+
+- `linux_webkit::apply_webkit_env_workarounds()` (#346) and `linux_gtk::apply_gtk_theme_env()`
+  (#349) **still run first**, before `start_probe()` — they are now the *only* `set_var`s in the
+  process, and they must complete while the process is still single-threaded. `start_probe()` is
+  the first thing that spawns a thread, so its position after them is **load-bearing**.
+- Only the spawn/lookup seam waits for the probe (`pty::find_on_path` / `spawn_with_id` via
+  `effective_path()`); the git/CLI helper seam (`git::hidden_command` via `apply_path()`) never
+  blocks, because sync Tauri commands run on the webview main thread.
+- The result is cached in `sessions.json` (`path_cache`: `$SHELL` + rc-file mtime fingerprint +
+  the raw **discovered** PATH), so a steady-state boot pays zero probe cost. Only the *discovered*
+  PATH is persisted — never the merged one — so an AppImage's per-launch `/tmp/.mount_…/usr/bin`
+  segment can never be baked into the cache; the merge against the current PATH is redone each boot.
+
+### Needs real-box verification (async PATH probe, #360)
+
+- [ ] **The actual win.** Put `sleep 3` as the **first line** of `~/.bashrc` (or your `$SHELL`'s rc),
+      remove `"path_cache"` from `~/.local/share/com.recue.app/sessions.json`, build
+      (`npm run tauri build -- --bundles appimage`) and launch from the **AppImage / `.desktop`
+      entry** (not a terminal — a terminal launch already has the full PATH and hides the whole
+      problem): the window must appear **promptly**, roughly as fast as with a fast rc (today it is
+      ~3 s late).
+- [ ] **The spawn gate still holds** on that same cold boot: persisted agents reconnect and a **new**
+      agent spawns fine (`claude` is found) — proving the spawn waited for the probe even though the
+      window did not.
+- [ ] **Cache hit.** Quit and relaunch: window appears promptly **and** the first spawn no longer
+      waits at all. `sessions.json` carries `"path_cache": { shell, fingerprint, path }`, and `path`
+      is the raw login-shell PATH with **no `/tmp/.mount_…` segment**.
+- [ ] **Cache invalidation.** `touch ~/.bashrc` → relaunch → the fingerprint mismatches, the probe
+      re-runs, the cache is rewritten. Then remove the `sleep 3`.
+- [ ] **GTK/WebKit env workarounds unaffected** (#346/#349): the DMA-BUF kill-switch and the
+      `GTK_THEME` correction still apply (they run before the probe arms), dialogs still theme
+      correctly, and the webview is not slower.
