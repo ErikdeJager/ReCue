@@ -162,7 +162,8 @@ and the platform-neutral ones provably order/content-preserving:
 
 Deliberately untouched (documented future work): the login-shell PATH probe's boot cost
 (≤3 s worst case, `path_env.rs`), per-keystroke `write_stdin` invokes (batching would add
-latency by definition), Overview terminal virtualization, `[profile.release]` tuning.
+latency by definition), `[profile.release]` tuning. _(Overview terminal virtualization was
+listed here too — it is now done, see Task #351 below.)_
 
 ### Needs real-box verification (performance, #346)
 
@@ -349,3 +350,114 @@ hardware renderer and WebGL is used again (`terminalPool` logs the renderer stri
 - [ ] Ground truth to read the boot line against: `ls /sys/class/drm`,
       `readlink -f /sys/class/drm/card*/device/driver`, `cat /proc/driver/nvidia/version`,
       `cat /sys/class/dmi/id/{sys_vendor,product_name}`.
+
+### AppImage child-process environment (Task #350)
+
+Symptom (Linux **AppImage** only): every process ReCue spawns inherited the AppImage
+runtime's environment. The runtime mounts the payload at a transient FUSE mountpoint
+(`/tmp/.mount_ReCueXXXXXX`) and its `AppRun` (linuxdeploy + the tauri
+`linuxdeploy-plugin-gtk` hook) exports `APPDIR` / `APPIMAGE` / `APPIMAGE_UUID` / `ARGV0` /
+`OWD`, forces `GTK_THEME=Adwaita:light` + `GDK_BACKEND=x11`, and prefixes `PATH`,
+`LD_LIBRARY_PATH`, `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GIO_MODULE_DIR`,
+`GDK_PIXBUF_MODULE_FILE`, `GI_TYPELIB_PATH`, … with the mountpoint. None of that is meant
+for a child: it is documented to break `xdg-open` (tauri-apps/tauri#10617,
+AppImage/AppImageKit#124) and to degrade or break a system binary that then loads the
+AppImage's bundled libraries through `LD_LIBRARY_PATH` — i.e. every `claude`/codex agent
+PTY, every shell terminal, every `git` shell-out, `xdg-open` and `dbus-send`.
+
+Fix — one shared, pure, unit-tested scrub seam, `src-tauri/src/child_env.rs` (modeled on
+`linux_webkit.rs`: compiles on every OS, the real work cfg-gated inside, the decision logic
+pure and host-independent so macOS/Windows CI unit-tests it too):
+
+- **Pure core.** `is_appimage_segment` / `filter_segments` / `scrub_env` / `env_diff`. The
+  rule is **value-based**, not an exhaustive var list — any `:`-segment under `$APPDIR` (or
+  under the `/tmp/.mount_` prefix, for `--appimage-extract-and-run` / an AppRun that only
+  exports `APPIMAGE`) is stripped from **any** variable, so a future AppRun's new path vars
+  are covered automatically. Marker vars and `APPIMAGE_ORIGINAL_*` bookkeeping are dropped;
+  a forced scalar (`GTK_THEME`, `GDK_BACKEND`) is restored from its `APPIMAGE_ORIGINAL_<VAR>`
+  backup when one exists, else dropped; a var whose segments were *all* AppImage-owned is
+  removed entirely rather than emptied (an empty `LD_LIBRARY_PATH` segment means CWD to the
+  loader) — except `PATH`, which is on a `NEVER_UNSET` list and keeps its original value.
+- **Wiring.** `pty.rs::spawn_with_id` copies `child_env::child_env_vars()` into the
+  `CommandBuilder` (still setting `TERM=xterm-256color` after) — agent PTYs *and* the #72
+  shell terminals; `git::hidden_command` applies `child_env::scrub_command` (every `git`
+  shell-out + every `<cli> --version` probe); `commands.rs`'s `os_open` / `open_url` /
+  `reveal_file_in_finder` / `reveal_file_linux` (`dbus-send` + `xdg-open`) build their
+  `Command` via `child_env::command`; and `path_env`'s login-shell PATH probe does the same.
+- **Byte-for-byte no-op elsewhere.** The scrub arms **only** when `APPDIR` or `APPIMAGE` is
+  set, so macOS, Windows and a non-AppImage Linux build (dev, `.deb`, pacman) are unchanged:
+  `child_env_vars()` is exactly `std::env::vars_os()` there, and `scrub_command` makes
+  **zero** `env`/`env_remove` calls when the diff is empty. `WEBKIT_DISABLE_DMABUF_RENDERER`
+  (#346, ReCue's own webview) is deliberately **not** stripped.
+
+**Files**: `src-tauri/src/child_env.rs` (new), `src-tauri/src/lib.rs` (module),
+`src-tauri/src/pty.rs`, `src-tauri/src/git.rs`, `src-tauri/src/commands.rs`,
+`src-tauri/src/path_env.rs`.
+
+### Needs real-box verification (AppImage env scrub, #350)
+
+- [ ] A ReCue shell terminal's `env` carries no `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`/
+      `GTK_THEME`/`GDK_BACKEND` and no `/tmp/.mount_` segment in `PATH` / `XDG_DATA_DIRS` /
+      `LD_LIBRARY_PATH`.
+- [ ] `xdg-open` from inside a ReCue terminal, the Ctrl-click link open, "Reveal in File
+      Manager", and Settings → Data → "Open data folder" all work under the AppImage.
+- [ ] A `claude` agent spawns, runs its tools, and `git` works inside it (no dynamic-loader
+      / symbol errors).
+- [ ] GTK apps launched from a ReCue terminal use the user's own theme (no forced
+      `Adwaita:light`).
+- [ ] ReCue's own window/dialogs are visually unchanged (the app process env is untouched).
+
+### Performance: lazy-mounted Overview terminals (Task #351)
+
+Closes the "Overview terminal virtualization" future-work item left open by #346 — the
+single biggest remaining WebKitGTK boot cost. Overview's wall used to mount **every**
+session's terminal at boot even though only ~3 cards fit on screen: each `createHost`
+constructs an XTerm, opens its own WebGL context, fetches up to 256 KB of scrollback over
+a **sync** main-thread command, ANSI-parses it, awaits three font loads and does a resize
+IPC. Ten resumed agents = ten eager hosts racing on the one WebView main thread, so nothing
+painted until all ten finished. Two changes, both pure WebView/TS (no Rust, no OS
+primitives, no `#[cfg]` arm — identical on macOS/Windows/Linux, biggest win on WebKitGTK):
+
+- **Visibility-gated creation.** `Terminal.tsx` calls `mountTerminal` only once its wrapper
+  first intersects — a **latching** IntersectionObserver (`useVisibleOnce.ts`; starts `true`
+  when `IntersectionObserver` is undefined, so the fallback is never worse than before). The
+  observer root comes from a `TerminalScrollRootContext` that **Overview** fills with its
+  horizontally scrolling wall: IntersectionObserver clips a target against every intermediate
+  scroll container *before* applying `rootMargin`, so a viewport-rooted observer could never
+  pre-load a card scrolled out of `overflow-x: auto` — the 600px horizontal margin would be
+  dead. Elsewhere the context is `null` ⇒ the viewport root (right for Canvas panels, big
+  mode #157, detached windows #84). Only **creation** is deferred: a host is still never
+  disposed or recycled on scroll-out / view switch (the #18 invariant — a re-replay at a
+  different width garbles claude's cursor-positioned TUI). Nothing is lost, because
+  `outputBus` already drops chunks for a session with no listener (the normal state today for
+  any session not in the current view), the backend `Scrollback` retains them, and
+  `replayDedupe.ts` drops the scrollback↔live overlap by absolute offset at creation.
+- **Serialized scrollback replays.** The hydration (fetch + initial `term.write`, awaited via
+  its write callback) runs through a bounded FIFO queue (`replayQueue.ts`,
+  `MAX_CONCURRENT_REPLAYS = 1`) that yields a macrotask between jobs, so several cards
+  becoming visible in one frame no longer stack N × (IPC + 256 KB ANSI parse) on the main
+  thread — the first terminal paints as fast as a single replay and input echo stays
+  responsive while the rest fill in. The pre-replay live buffer is byte-capped
+  (`pendingOutput.ts`) only until the fetch is dispatched (those bytes are all ≤ the
+  snapshot's `end`, so dropping them can never leave a hole); after dispatch every byte is
+  kept for the dedupe. A short-lived pending-focus keeps ⌘/Ctrl+1–9 → type-immediately
+  working when the gate creates the host a frame later.
+  **Files**: `src/components/Terminal/{useVisibleOnce.ts,replayQueue.ts,pendingOutput.ts}`
+  (new, the last two pure + unit-tested), `src/components/Terminal/terminalPool.ts`,
+  `src/components/Terminal/Terminal.tsx`, `src/components/Overview/Overview.tsx`.
+
+Rollback is two single-constant reverts: `useVisibleOnce` returning `true` immediately
+restores eager mounting, `MAX_CONCURRENT_REPLAYS = Infinity` restores parallel replays.
+
+### Needs real-box verification (performance, #351)
+
+- [ ] Release AppImage on Linux/WebKitGTK with ~10 resumed agents, booting into **Overview**:
+      `document.querySelectorAll(".xterm").length` ≈ the visible-card count (not 10), and the
+      first visible terminals paint noticeably sooner than before.
+- [ ] Scrolling the wall right fills each revealed card in **once** — history intact, no
+      duplicated startup paint / stray glyph; scrolling back and forth never re-replays.
+- [ ] Overview → Canvas → Overview reparents (no re-created terminal, no scrollback repaint).
+- [ ] Typing into a busy agent stays responsive while another card hydrates (the queue's
+      macrotask yield between replays).
+- [ ] ⌘/Ctrl+E big mode on a never-mounted card paints its terminal; a Canvas tab switched to
+      with Ctrl+1–9 takes keystrokes immediately (pending-focus).

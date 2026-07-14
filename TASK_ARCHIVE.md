@@ -2963,3 +2963,183 @@ Windows behavior is unchanged.**
 - The per-GPU runtime behavior (DMABUF auto-set on NVIDIA, left alone on AMD/Intel, llvmpipe → DOM
   renderer, AppImage under a busy TUI) can't be exercised on CI — walked via the
   `TRAJECTORY_TO_LINUX.md` checklist on real boxes.
+
+### 349. [x] Linux: native file dialogs follow ReCue's own theme (fix the always-white Adwaita dialogs in the AppImage)
+
+In the shipped **AppImage** every native dialog — the folder picker ("Choose a working directory"), the
+open-file dialog (FileSwitcher → Browse…) and the save dialog (template export) — rendered white/light
+Adwaita no matter the desktop's theme or ReCue's own Dark/Light setting (#333), so a dark-desktop user in
+a dark app got a blinding white dialog. Three facts stack up: (1) Tauri's AppImage bundler injects the
+vendored `linuxdeploy-plugin-gtk.sh` AppRun hook, which bundles GTK and then **forces `GTK_THEME`** for
+the whole process, picking the variant by grepping the *system theme name* for the substring `dark` — so
+`catppuccin-mocha-yellow-standard+default` (and any `color-scheme: prefer-dark` setup whose theme name
+lacks "dark") falls through to `GTK_THEME=Adwaita:light`; (2) `tauri-plugin-dialog` (2.7.1) resolves to
+rfd's **in-process GTK3** backend on Linux (`Cargo.lock`: `rfd 0.16` + `gtk-sys 0.18`, **no `ashpd`**), so
+every dialog is a GTK3 widget created inside our process and themed by that polluted env; (3) GTK3's
+`get_theme_name()` gives **`GTK_THEME` absolute precedence** — `gtk-theme-name` /
+`gtk-application-prefer-dark-theme` are not even read when it is set, which is why tao's
+`Window::set_theme` cannot fix it. The env itself must be corrected, **before GTK initializes**.
+**macOS and Windows are byte-for-byte unchanged** (no env write, no file read).
+
+**What shipped** (branch `linux-gtk-dialog-theme`, PR [#101](https://github.com/ErikdeJager/ReCue/pull/101),
+2026-07-14):
+
+- **`src-tauri/src/linux_gtk.rs`** (new, mirroring `linux_webkit.rs`'s shape) — `apply_gtk_theme_env()`
+  builds a `GtkThemeProbe` from the environment + the persisted store and exports `GTK_THEME`. The pure,
+  unit-tested `gtk_theme_env` policy, in order: **(1)** `RECUE_GTK_THEME=<literal GTK_THEME value>` forces
+  the value **everywhere** (the support escape hatch — and the way to smoke-test this in `tauri dev`
+  without building an AppImage; a blank/whitespace value is treated as unset); **(2)** not in an AppImage
+  (`$APPIMAGE`/`$APPDIR` unset — a dev run, `.deb`, or distro package) → leave `GTK_THEME` untouched, since
+  the desktop's real GTK theme already applies and forcing Adwaita would be a downgrade; **(3)**
+  `APPIMAGE_GTK_THEME` set → leave it alone (the hook already copied the user's explicit choice verbatim —
+  ReCue never clobbers it); **(4)** otherwise pick the **Adwaita** variant — the family the AppImage
+  actually bundles and the only one guaranteed to render against the bundled GTK — from ReCue's own
+  `settings.theme`: `light` (case-insensitive, trimmed) → `Adwaita:light`, everything else including a
+  fresh install with no persisted settings → `Adwaita:dark` (matching `DEFAULT_SETTINGS.theme = "dark"`).
+  One `[recue] GTK: set GTK_THEME=… (was …; recue theme: …)` log line on the write.
+- **Reading the theme before Tauri exists** — the `Store` is only constructed in `.setup()`, i.e. *after*
+  GTK init, so the module reads `settings.theme` straight out of `sessions.json` itself: read-only and
+  **fail-open** (`theme_from_store_json` returns `None` for malformed JSON, a missing/`null` `settings`, a
+  missing or non-string `theme` → dark, which is the default theme anyway). `store_path()` re-derives
+  Tauri's Linux `app_data_dir()` rule (`$XDG_DATA_HOME` when absolute, else `path_env::home_dir()` +
+  `.local/share`, joined with the identifier), reusing the shared `home_dir()` seam rather than reading
+  `$HOME`. A **drift-guard test** parses `tauri.conf.json` via `include_str!` and asserts its `identifier`
+  still equals the hardcoded `com.recue.app`, so the hand-derived path can't silently rot.
+- **`src-tauri/src/lib.rs`** — `mod linux_gtk;` + one call in `run()`, immediately after
+  `linux_webkit::apply_webkit_env_workarounds()` and before `tauri::Builder` — i.e. before GTK init **and**
+  before any thread spawns (env mutation isn't thread-safe; `set_var` is `unsafe` in Rust 2024 for exactly
+  that reason), joining the existing pre-GTK env writes.
+- **`src/components/Settings/Settings.tsx`** — a Linux-only (`isLinux(platform)`) sentence appended to the
+  existing Theme help text: native file dialogs adopt the theme the next time ReCue starts. Absent on
+  macOS/Windows; no new CSS, store state, or component.
+- **Docs** — `TRAJECTORY_TO_LINUX.md` gained a dated `### Native GTK dialogs were always light (Task #349)`
+  entry (bug / fix / rejected options / real-box checklist); `README.md`'s Linux build section gained a
+  one-line override note (`APPIMAGE_GTK_THEME=Adwaita:dark`, or `RECUE_GTK_THEME=<gtk theme>`).
+
+**Key decisions**
+
+- **Fix the env, don't swap the backend.** The **`xdg-portal`** feature of `tauri-plugin-dialog` was
+  rejected and kept only as the *documented fallback*: it hard-requires a running `xdg-desktop-portal` +
+  backend, and rfd has no GTK fallback when built with it — on a minimal/wlroots box the dialogs would stop
+  working **entirely**, turning a cosmetic bug into "cannot open a folder" (unacceptable for the
+  best-effort-other-distros promise). It also follows the *system* theme, so a light-desktop + dark-ReCue
+  user would still mismatch. Also rejected: **unsetting `GTK_THEME`** (the user's real theme may not exist
+  under the AppImage's `XDG_DATA_DIRS` or render against the *bundled* GTK — precisely why the hook forces
+  Adwaita; it would trade a white dialog for a possibly-broken one) and **runtime tao `set_theme`** (needs a
+  direct `gtk` dep and is a no-op while `GTK_THEME` is set — fact 3).
+- **The variant follows ReCue's own theme, not the system color-scheme** — the dialog belongs to the app,
+  and this is deterministic + unit-testable on any host. Only the Adwaita **variant** is chosen, never a
+  different theme *name*.
+- **Scoped to the AppImage-polluted env only.** A dev / distro-package run is left alone; making
+  non-AppImage dialogs follow ReCue's theme rather than the desktop's is an explicit non-goal.
+- **Accepted limitation:** `GTK_THEME` is read at GTK init, so toggling the theme in Settings re-themes the
+  app instantly but the **native dialogs pick up the new variant on the next launch** — surfaced as the
+  muted Linux-only Settings hint above.
+- **A separate module, not an extension of `linux_webkit.rs`** — Task 347 is editing that file; the only
+  shared touchpoint is the append-only call list in `run()`. Complementary to Task 350 (which scrubs
+  AppImage-polluted env from *child* processes — a different process's env; `GTK_THEME` landing on its
+  strip-list for children is fine and expected).
+- No dependency / `Cargo.toml` / `Cargo.lock` / `tauri.conf.json` / capability / dialog-call-site
+  (`src/ipc.ts`) change. No version bump or patch-notes file (releases are batched by the maintainer).
+
+**Dependencies:** none. (Builds on landed work only: #333 the `settings.theme` field, #345 the Linux port +
+AppImage leg, #346 `linux_webkit.rs`'s pre-GTK env pattern.)
+
+**Notes**
+
+- The pure decision core (`gtk_theme_env` / `adwaita_variant` / `theme_from_store_json`) is `, test)`-widened
+  (the `reveal_file_linux` / `explorer_select_arg` precedent) so the macOS and Windows hosts still type-check
+  **and** unit-test it; only the thin env-probe + `set_var` + file-read shell is Linux-only.
+- The GUI/AppImage surface (a dark folder picker in the real AppImage, the light variant after a toggle +
+  relaunch, both escape hatches honored, a non-AppImage run leaving `GTK_THEME` untouched) can't be
+  exercised on CI — logged in `TRAJECTORY_TO_LINUX.md`'s real-box checklist (Arch/Ubuntu/Mint ×
+  GNOME/KDE/Cinnamon/Xfce, Wayland + X11).
+- Benign side effect: a dark `GTK_THEME` also darkens the GTK window background and WebKitGTK's
+  `prefers-color-scheme`. ReCue's CSS keys off `data-theme`, not `prefers-color-scheme`, so nothing in the UI
+  changes — and a dark native background *helps* (does not fight) Task 348's white-startup-flash work.
+
+### 350. [x] Scrub the AppImage-injected environment from every child process ReCue spawns
+
+Under the Linux **AppImage**, every process ReCue spawned — each `claude`/codex agent PTY, every #72 shell
+terminal, every `git` shell-out and `<cli> --version` probe, `xdg-open`, `dbus-send`, the login-shell PATH
+probe — inherited the AppImage runtime's polluted environment: the bookkeeping vars (`APPDIR`, `APPIMAGE`,
+`APPIMAGE_UUID`, `ARGV0`, `OWD`), the scalars the vendored `linuxdeploy-plugin-gtk` AppRun hook forces for
+the *webview* (`GTK_THEME=Adwaita:light`, `GDK_BACKEND=x11`), and `$APPDIR`-prefixed values for `PATH`,
+`LD_LIBRARY_PATH`, `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GIO_MODULE_DIR`, `GDK_PIXBUF_MODULE_FILE`,
+`GI_TYPELIB_PATH`, `PYTHONPATH`, `PERLLIB`, `QT_PLUGIN_PATH`, `GST_*`, … — all pointing into the transient
+`/tmp/.mount_…` FUSE mount. That is documented to break `xdg-open` and to degrade or outright break a system
+binary that ends up loading the AppImage's bundled libraries (tauri-apps/tauri#10617,
+AppImage/AppImageKit#124). One shared, pure, unit-tested scrub seam now gives children the user's real
+environment. **A byte-for-byte no-op on macOS, on Windows, and on any non-AppImage Linux build** (dev,
+`.deb`, pacman).
+
+**What shipped** (branch `scrub-appimage-child-env`, PR [#102](https://github.com/ErikdeJager/ReCue/pull/102),
+2026-07-14):
+
+- **`src-tauri/src/child_env.rs`** (new, modeled on `linux_webkit.rs`) — the pure core plus three
+  process-level entry points. The rule is **value-based, not an exhaustive var list**: any `:`-separated
+  segment living under `$APPDIR` (or under the `/tmp/.mount_` prefix) is stripped from **any** variable, so a
+  future AppRun's newly injected path vars are covered automatically — only a new *scalar* forcing would need
+  a `FORCED_VARS` entry. Per key: `APPIMAGE_ORIGINAL_*` bookkeeping and the marker vars are dropped; a forced
+  scalar is restored from its `APPIMAGE_ORIGINAL_<VAR>` backup if one exists, else dropped; any var with a
+  backup is restored **verbatim**; otherwise the AppImage-owned segments are stripped. A var whose segments
+  were *all* AppImage-owned is **removed entirely, never set to `""`** — an empty `LD_LIBRARY_PATH` segment
+  means "current working directory" to the dynamic loader (a consumer then falls back to its FreeDesktop
+  default, which is exactly the pre-AppImage state, since AppRun only ever *prepends*). `PATH` is on a
+  `NEVER_UNSET` list, so an all-AppImage `PATH` is left untouched rather than emptied.
+- **Entry points** — `child_env_vars()` (the PTY env snapshot for `portable_pty::CommandBuilder`, which
+  starts from an *empty* env set, so a var omitted here is genuinely absent from the child; non-UTF-8 pairs
+  pass through verbatim — they cannot be AppImage vars), `scrub_command(&mut Command)` (snapshot → `scrub_env`
+  → `env_diff` → `env_remove`/`env` overrides), and `command(program)` (construct + scrub). Outside an
+  AppImage the diff is empty, so **zero** `env`/`env_remove` calls are made and the `Command` is byte-for-byte
+  what it was before.
+- **Five spawn seams wired** — `pty.rs::spawn_with_id` (the single spawn behind `spawn_session` /
+  `spawn_session_with_prompt` / `resume_session` / `fork_session` / `spawn_terminal`) copies the scrubbed env
+  instead of raw `std::env::vars_os()`, still setting `TERM=xterm-256color` after; `git::hidden_command`
+  applies the scrub, covering every `git` shell-out and `<cli> --version` probe (its doc comment now names it
+  the shared "shell out to a helper process" seam — console-flash guard **and** AppImage scrub); `commands.rs`'s
+  `os_open` / `open_url` / `reveal_file_in_finder` / `reveal_file_linux` (`dbus-send` + the `xdg-open`
+  parent-dir fallback) build through `child_env::command`; and `path_env::login_shell_path_blocking` runs the
+  `$SHELL -ilc` probe through it too.
+- **Docs** — `CLAUDE.md` gained `child_env.rs` in the `src-tauri/` layout tree, `child_env_vars()` /
+  `scrub_command()` in the "reuse the established cross-platform seams" Rust list (next to
+  `git::hidden_command()`), and a sentence in the Linux block; `TRAJECTORY_TO_LINUX.md` gained a dated
+  `### AppImage child-process environment (Task #350)` entry + its real-box checklist.
+
+**Key decisions**
+
+- **One shared seam, not a `pty.rs`-only patch.** The card only named the PTY spawn, but `git`, `xdg-open`,
+  `dbus-send` and the login-shell probe inherit the same pollution — so all five go through one module.
+- **Gated `#[cfg(all(unix, not(target_os = "macos")))]`**, not the card's `#[cfg(unix)]`, so macOS stays
+  byte-for-byte (it shares the unix arm but never sees an AppImage). The pure helpers are `, test)`-widened +
+  `cfg_attr(test, allow(dead_code))` — the `explorer_select_arg` / `reveal_file_linux` / `should_disable_dmabuf`
+  precedent — so the macOS/Windows hosts still type-check **and** unit-test them without tripping clippy's
+  `--all-targets -D warnings` dead-code check.
+- **The scrub arms only when `APPDIR` or `APPIMAGE` is present in the env map**, making every other run a
+  provable identity transform — pinned by the first unit test and by `scrub_command`'s empty-diff path.
+- **Binary resolution is untouched:** `find_on_path` / `resolve_command` still use ReCue's *own* process
+  `PATH` (already repaired by #345's login-shell probe). The scrub changes what the child *inherits*, never
+  which binary is found.
+- **`WEBKIT_DISABLE_DMABUF_RENDERER` is deliberately not stripped** — #346 sets it for ReCue's own webview,
+  it isn't AppImage-injected, and it's inert for CLI children. The macOS-only spawns (`usage.rs`'s `security`,
+  `lib.rs`'s `tccutil`) are likewise left alone; no AppImage exists there.
+- **Complementary with Task #349, not overlapping:** #349 *sets* `GTK_THEME` for ReCue's **own** process (so
+  the native dialogs are dark); this task *strips* it from **children** under the AppImage (so a GTK app
+  launched from a ReCue terminal uses the user's own theme). No frontend, store, IPC, or bundling-config
+  change.
+
+**Dependencies:** none.
+
+**Notes**
+
+- The pure core (`is_appimage_segment` / `filter_segments` / `scrub_env` / `env_diff`) is unit-tested on every
+  host: the no-AppImage identity case, the full AppImage map (markers, forced scalars, `PATH`,
+  `LD_LIBRARY_PATH`, `XDG_DATA_DIRS`, the GTK module vars, untouched user vars, no emitted empty segment), the
+  never-empty `PATH` guard, the `APPIMAGE_ORIGINAL_*` restore + backup-key removal, the `APPDIR`-absent /
+  `/tmp/.mount_`-only (`--appimage-extract-and-run`) case, idempotence, and `env_diff` both ways. A prefix
+  false-positive guard is included: `/home/u/squashfs-root2/bin` is **not** under `/home/u/squashfs-root`.
+- The AppImage surface can't be exercised on CI — logged in `TRAJECTORY_TO_LINUX.md`'s real-box checklist: a
+  ReCue shell terminal's `env` carries no `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`/`GTK_THEME`/`GDK_BACKEND` and no
+  `/tmp/.mount_` segment in `PATH`/`XDG_DATA_DIRS`/`LD_LIBRARY_PATH`; `xdg-open`, the Ctrl-click link open,
+  "Reveal in File Manager", "Open data folder", `git`, and a spawned `claude` agent all work under the
+  AppImage; and ReCue's own window/dialogs are visually unchanged (the app's *own* process env is untouched).
