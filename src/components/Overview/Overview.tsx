@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
   useEffect,
@@ -39,6 +40,7 @@ import {
   repoColor,
   useStore,
 } from "../../store";
+import { useSessionOwners } from "../../ownership";
 import {
   effectiveRepo,
   repoName,
@@ -46,6 +48,7 @@ import {
   sessionLabel,
 } from "../../paths";
 import { kbdHint } from "../../platform";
+import { ownedHere } from "../../windowContext";
 import { formatFireTime, formatInterval, formatNextRun } from "../../time";
 import type {
   OverviewPanel,
@@ -64,8 +67,16 @@ import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import ItemContent from "../ItemContent/ItemContent";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
+import { shouldHoverSelect } from "../Terminal/hoverFocus";
+import { blurTerminals, focusTerminal } from "../Terminal/terminalPool";
 import { TerminalScrollRootContext } from "../Terminal/useVisibleOnce";
 import styles from "./Overview.module.css";
+
+// A hover-driven select (#371) must not scroll the wall: scrollIntoView would move
+// the cards under the stationary cursor, hover-entering a different card — a
+// select/scroll feedback cascade. Set right before a hover select, consumed by the
+// selection scroll effect that select() triggers.
+let hoverSelecting = false;
 
 /**
  * The horizontally scrolling agent wall — and the observer root for the #351 terminal
@@ -118,6 +129,10 @@ interface PanelColumnProps {
    * nothing (`null`) no empty bar appears. Not part of the drag handle. */
   subheader?: ReactNode;
   onClickBody?: () => void;
+  /** Hover-select (#371): the PTY session this window renders for the card, focused
+   * when the pointer enters it; `undefined` ⇒ the card has no local terminal input,
+   * so entering it blurs the previously focused xterm instead. */
+  ptyFocusId?: string;
   children: ReactNode;
 }
 
@@ -131,6 +146,7 @@ function PanelColumn({
   actions,
   subheader,
   onClickBody,
+  ptyFocusId,
   children,
 }: PanelColumnProps) {
   const {
@@ -149,12 +165,30 @@ function PanelColumn({
     transition,
     "--card-color": color,
   } as CSSProperties;
+  // Hover-select (#371, extending #368): entering the card moves the selection ring
+  // here (same path as a body click) — focusing its terminal when this window renders
+  // one, otherwise blurring the previously focused xterm so keystrokes never silently
+  // keep flowing to it. The `hoverSelecting` flag keeps the wall from auto-scrolling
+  // under the stationary cursor; it is raised only when the selection actually
+  // changes, so it can never linger and swallow a later explicit scroll.
+  const autoFocusOnHover = useStore((s) => s.settings.autoFocusOnHover);
+  const handleHoverEnter = (e: ReactMouseEvent) => {
+    if (!shouldHoverSelect(autoFocusOnHover, e.buttons, document.activeElement))
+      return;
+    if (ptyFocusId) focusTerminal(ptyFocusId);
+    else blurTerminals();
+    if (!selected && onClickBody) {
+      hoverSelecting = true;
+      onClickBody(); // the card's select action — same as a body click
+    }
+  };
   return (
     <div
       ref={setNodeRef}
       data-item-id={id}
       className={`${styles.card} ${selected ? styles.cardSelected : ""} ${groupStart ? styles.cardGroupStart : ""} ${isDragging ? styles.cardDragging : ""}`}
       style={style}
+      onMouseEnter={handleHoverEnter}
     >
       {/* The whole title bar is the drag handle (#70): dnd-kit attributes make it
           focusable for keyboard + screen-reader drag; the grip is just a visual
@@ -208,6 +242,10 @@ function SessionCard({
   const maximizeItem = useStore((s) => s.maximizeItem);
   const platform = useStore((s) => s.platform);
   const renameSession = useStore((s) => s.renameSession);
+  // Hover-select (#371): focus this agent's PTY only when THIS window renders it —
+  // a session owned by a detached window (#84) shows a DetachedNote, so hovering it
+  // must blur instead of queueing a focus for the other window's terminal.
+  const owners = useSessionOwners();
   // Agent label (#95): a single line showing only the primary — the custom name if
   // set, else the branch (folder name when non-git). No subtitle, no repo dot; repo
   // color reads from the card's top band (#36). `sessionLabel` still computes the
@@ -363,6 +401,7 @@ function SessionCard({
       actions={actions}
       subheader={<AutoContinueToggle session={session} />}
       onClickBody={onSelect}
+      ptyFocusId={ownedHere(owners, session.id) ? session.id : undefined}
     >
       <ItemContent
         content={{
@@ -410,6 +449,10 @@ function ExtraPanel({
   const moveOverviewPanelToFile = useStore((s) => s.moveOverviewPanelToFile);
   const maximizeItem = useStore((s) => s.maximizeItem);
   const platform = useStore((s) => s.platform);
+  // Hover-select (#371): a shell terminal panel's PTY session id IS the panel id
+  // (overviewPanelToContent) — focus it on hover when this window renders it.
+  // File/diff/kanban/filetree panels have no terminal input ⇒ blur instead.
+  const owners = useSessionOwners();
   const content = overviewPanelToContent(panel, repoPath);
   const title = (
     <>
@@ -472,6 +515,11 @@ function ExtraPanel({
       title={title}
       actions={actions}
       onClickBody={onSelect}
+      ptyFocusId={
+        panel.kind === "terminal" && ownedHere(owners, panel.id)
+          ? panel.id
+          : undefined
+      }
     >
       {/* The shared renderer (#157) maps diff/terminal/kanban/file → the live child
           (the same components Canvas uses), with the big-mode placeholder guard. */}
@@ -772,6 +820,10 @@ function Overview() {
   const wallRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!selectedId) return;
+    if (hoverSelecting) {
+      hoverSelecting = false; // hover put the border here; don't move the wall (#371)
+      return;
+    }
     wallRef.current
       ?.querySelector(`[data-item-id="${selectedId}"]`)
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
