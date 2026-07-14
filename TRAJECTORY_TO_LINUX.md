@@ -461,3 +461,54 @@ restores eager mounting, `MAX_CONCURRENT_REPLAYS = Infinity` restores parallel r
       macrotask yield between replays).
 - [ ] ⌘/Ctrl+E big mode on a never-mounted card paints its terminal; a Canvas tab switched to
       with Ctrl+1–9 takes keystrokes immediately (pending-focus).
+
+### White startup flash (#348)
+
+Platform-neutral fix (no `#[cfg]` arms), but the paint race it removes is a **GUI**
+behavior, so it cannot be unit-tested — it needs a real box per OS. What changed:
+windows are created **hidden** (`visible: false`) with a **themed native background**
+(`tauri.conf.json` / `WebviewWindowBuilder::background_color`, from
+`commands::background_for_theme`; `lib.rs` `setup` re-colors the main window from the
+persisted theme before it is ever shown), `index.html` gained an **inline pre-paint
+`<style>`** + a synchronous **`recue.theme` localStorage mirror** read (every stylesheet
+is JS-imported, so the document had *zero* styles — and thus a white canvas — until the
+bundle parsed), and the frontend reveals the window from `useRevealWindow` →
+`reveal_window` once React has committed its first frame, with a Rust
+`schedule_reveal_fallback` (2 s) so a bundle that never boots can't leave the app
+running-but-invisible.
+
+**Interaction with the #356 code-split.** `App.tsx` is now a `Suspense` router over two
+**lazy** route chunks (`MainApp` / `CanvasWindow`), so "React has committed its first
+frame" is ambiguous: a still-pending boundary commits its *fallback*, not the route. The
+reveal trigger therefore sits **inside** the boundary as a sibling of the route
+(`RevealOnPaint` → `useRevealWindow`), so it fires only once the route chunk has actually
+mounted — never on the empty fallback frame. It cannot deadlock the window shut: a chunk
+that never loads simply never reveals, and the Rust 2 s fallback shows the window anyway
+(and what it would then show is #356's themed `div.app` fallback, not a white canvas).
+
+Linux-specific risk to watch: **WebKitGTK may throttle/suspend `requestAnimationFrame`
+for an unmapped window**, which is exactly why the reveal fires from *both* an rAF and a
+0 ms timer, with the Rust 2 s fallback underneath. If the window on Linux consistently
+appears only after ~2 s, the rAF+timer path is not running while hidden — shorten the
+fallback or reveal from Rust's `on_page_load` instead (`visible: false` is one line to
+revert).
+
+### Needs real-box verification (startup flash, #348)
+
+- [ ] **Dark (default) launch** (`npm run tauri dev` **and** a release AppImage): no white
+      rectangle at any point — the window first appears already showing the dark shell.
+- [ ] **Light theme** (Settings → Appearance → Light → Save, quit, relaunch): the window
+      appears **light** — no white flash and no dark→light flip.
+- [ ] **Detached canvas window**: pop a Canvas tab out (button **and** drag tear-off) in
+      both themes — the new window appears already themed, no white flash; closing it
+      re-docks as before.
+- [ ] **Reveal timing**: the window appears promptly (frontend reveal), not after a ~2 s
+      pause (which would mean only the Rust fallback fired — see the WebKitGTK rAF note).
+      With #356's lazy route chunk this also confirms the chunk fetch (a local `tauri://`
+      asset read) is not adding a visible delay before the reveal.
+- [ ] **Reveal fallback**: with the Vite dev server stopped (or a deliberately broken
+      bundle), the window still appears within ~2 s instead of never showing.
+- [ ] **Runtime theme switch**: switch Dark↔Light, Save, then resize the window quickly —
+      any exposed native gutter is the **new** theme color.
+- [ ] Confirmed on **Arch**, **Ubuntu**, and **Mint** (the fully-supported distros), on
+      both Wayland and X11.

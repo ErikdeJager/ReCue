@@ -1,0 +1,136 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+import {
+  THEME_BG,
+  THEME_STORAGE_KEY,
+  readStoredTheme,
+  storeTheme,
+  themeFromStored,
+  type Theme,
+} from "./theme";
+
+/** Minimal in-memory Storage stand-in (vitest runs in node — no localStorage). */
+function fakeStorage(initial: Record<string, string> = {}) {
+  const data = new Map(Object.entries(initial));
+  return {
+    data,
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      data.set(key, value);
+    },
+  };
+}
+
+/** A storage that throws on every access (a locked-down WebView / disabled storage). */
+const throwingStorage = {
+  getItem: (): string => {
+    throw new Error("storage blocked");
+  },
+  setItem: (): void => {
+    throw new Error("storage blocked");
+  },
+};
+
+const read = (path: string) =>
+  readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+
+describe("themeFromStored", () => {
+  it("accepts the two known themes", () => {
+    expect(themeFromStored("dark")).toBe("dark");
+    expect(themeFromStored("light")).toBe("light");
+  });
+
+  it("rejects anything else", () => {
+    expect(themeFromStored(null)).toBeNull();
+    expect(themeFromStored(undefined)).toBeNull();
+    expect(themeFromStored("")).toBeNull();
+    expect(themeFromStored("Light")).toBeNull();
+    expect(themeFromStored("system")).toBeNull();
+  });
+});
+
+describe("the theme mirror (#348)", () => {
+  it("round-trips through a storage", () => {
+    const storage = fakeStorage();
+    storeTheme("light", storage);
+    expect(storage.data.get(THEME_STORAGE_KEY)).toBe("light");
+    expect(readStoredTheme(storage)).toBe("light");
+
+    storeTheme("dark", storage);
+    expect(readStoredTheme(storage)).toBe("dark");
+  });
+
+  it("reads null from an empty or garbage store", () => {
+    expect(readStoredTheme(fakeStorage())).toBeNull();
+    expect(
+      readStoredTheme(fakeStorage({ [THEME_STORAGE_KEY]: "chartreuse" })),
+    ).toBeNull();
+  });
+
+  it("never throws when storage is absent (node) or blocked", () => {
+    // No storage argument and no globalThis.localStorage in the node test env.
+    expect(() => storeTheme("light")).not.toThrow();
+    expect(readStoredTheme()).toBeNull();
+
+    expect(() => storeTheme("dark", throwingStorage)).not.toThrow();
+    expect(readStoredTheme(throwingStorage)).toBeNull();
+  });
+});
+
+/**
+ * Anti-drift guard (#348): the pre-paint background is duplicated in three places that
+ * cannot import each other — the TS mirror, the inline `<style>` in `index.html` (the
+ * only styling that exists before the bundle parses), and the `--bg-base` token in
+ * `src/styles/tokens.css` (the real theme). If they drift, the first painted frame no
+ * longer matches the app and the flash comes back. (The Rust side —
+ * `background_for_theme` in `src-tauri/src/commands.rs` — carries the same hexes and is
+ * covered by its own unit test.)
+ */
+describe("pre-paint background hexes stay in sync", () => {
+  const html = read("../index.html");
+  const tokens = read("./styles/tokens.css");
+
+  const grab = (source: string, pattern: RegExp, what: string): string => {
+    const match = source.match(pattern);
+    if (!match) throw new Error(`could not find ${what}`);
+    return match[1].toLowerCase();
+  };
+
+  it("index.html matches THEME_BG", () => {
+    const dark = grab(
+      html,
+      /\bhtml\s*\{[^}]*background:\s*(#[0-9a-fA-F]{6})/,
+      "the html background in index.html",
+    );
+    const light = grab(
+      html,
+      /\bhtml\[data-theme="light"\]\s*\{[^}]*background:\s*(#[0-9a-fA-F]{6})/,
+      'the html[data-theme="light"] background in index.html',
+    );
+    expect(dark).toBe(THEME_BG.dark);
+    expect(light).toBe(THEME_BG.light);
+  });
+
+  it("tokens.css --bg-base matches THEME_BG", () => {
+    const dark = grab(
+      tokens,
+      /:root\s*\{[\s\S]*?--bg-base:\s*(#[0-9a-fA-F]{6})/,
+      "--bg-base in :root",
+    );
+    const light = grab(
+      tokens,
+      /:root\[data-theme="light"\]\s*\{[\s\S]*?--bg-base:\s*(#[0-9a-fA-F]{6})/,
+      '--bg-base in :root[data-theme="light"]',
+    );
+    expect(dark).toBe(THEME_BG.dark);
+    expect(light).toBe(THEME_BG.light);
+  });
+
+  it("the boot script in index.html reads the mirror key", () => {
+    expect(html).toContain(`localStorage.getItem("${THEME_STORAGE_KEY}")`);
+    const themes: Theme[] = ["dark", "light"];
+    expect(Object.keys(THEME_BG).sort()).toEqual(themes.sort());
+  });
+});

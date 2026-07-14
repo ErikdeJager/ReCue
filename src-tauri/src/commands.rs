@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use tauri::window::Color;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
 use uuid::Uuid;
 
@@ -1147,6 +1148,64 @@ fn broadcast_canvas_windows(app: &AppHandle, exclude: Option<&str>) {
     );
 }
 
+/// Pre-paint window background per theme (#348) — the OS paints this native color while
+/// the WebView boots. MUST equal `--bg-base` in `src/styles/tokens.css` (and `THEME_BG` in
+/// `src/theme.ts` / the inline `<style>` in `index.html`): Catppuccin Mocha Base for dark,
+/// Latte Base for light (#333). Pure — an unknown/absent theme means the dark default.
+/// Platform-neutral: the same color is applied on macOS, Windows and Linux.
+pub fn background_for_theme(theme: Option<&str>) -> Color {
+    match theme {
+        Some("light") => Color(0xef, 0xf1, 0xf5, 0xff),
+        _ => Color(0x1e, 0x1e, 0x2e, 0xff),
+    }
+}
+
+/// The persisted theme's background color (#348). The settings blob is opaque JSON owned
+/// by the frontend (#100); we read only `theme`, best-effort.
+pub fn window_background(store: &Store) -> Color {
+    let settings = store.settings();
+    background_for_theme(settings.get("theme").and_then(|v| v.as_str()))
+}
+
+/// How long Rust waits before showing a window the frontend never revealed (#348).
+const REVEAL_FALLBACK_MS: u64 = 2000;
+
+/// Show + focus the calling window (#348). Windows are created hidden (`visible: false`)
+/// with a themed native background so the OS never paints a white rectangle; the frontend
+/// calls this from `useRevealWindow` once React has committed its first frame. Idempotent.
+#[tauri::command]
+pub fn reveal_window(window: Window) {
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// Safety net for the hidden-until-painted startup (#348): if the frontend never calls
+/// `reveal_window` (a crashed bundle, a dead dev server), show the window anyway after a
+/// short delay so the app can never end up running-but-invisible. A window that is already
+/// visible is left alone.
+pub fn schedule_reveal_fallback(app: &AppHandle, label: &str) {
+    let app = app.clone();
+    let label = label.to_string();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(REVEAL_FALLBACK_MS));
+        if let Some(window) = app.get_webview_window(&label) {
+            if !matches!(window.is_visible(), Ok(true)) {
+                let _ = window.show();
+            }
+        }
+    });
+}
+
+/// Re-apply the themed native background to every open window after a runtime theme switch
+/// (#348), so a resize/repaint gap never exposes the previous theme's color. Best-effort.
+#[tauri::command]
+pub fn set_theme_background(app: AppHandle, theme: String) {
+    let color = background_for_theme(Some(theme.as_str()));
+    for window in app.webview_windows().into_values() {
+        let _ = window.set_background_color(Some(color));
+    }
+}
+
 /// Open (or focus, if already open) a detached window showing one canvas (#84).
 /// The window loads a canvas-only route (`index.html?canvas=<id>`) under the label
 /// `canvas-<id>`; closing it re-docks the canvas by re-broadcasting the (now
@@ -1156,6 +1215,7 @@ fn broadcast_canvas_windows(app: &AppHandle, exclude: Option<&str>) {
 pub fn open_canvas_window(app: AppHandle, id: String, title: String) -> Result<(), SessionError> {
     let label = format!("canvas-{id}");
     if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.show(); // it may still be hidden pre-reveal (#348)
         let _ = existing.set_focus();
         return Ok(());
     }
@@ -1164,8 +1224,14 @@ pub fn open_canvas_window(app: AppHandle, id: String, title: String) -> Result<(
         .title(title)
         .inner_size(1000.0, 760.0)
         .min_inner_size(640.0, 480.0)
+        // Hidden until the frontend paints its first themed frame (#348) — the native
+        // background is the current theme's --bg-base, so a pop-out never flashes white.
+        .visible(false)
+        .background_color(window_background(&app.state::<Store>()))
         .build()
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Never leave a detached window invisible if its frontend fails to boot (#348).
+    schedule_reveal_fallback(&app, &label);
     // Re-dock on close: when this window is destroyed, re-broadcast the detached
     // set (excluding this label) so the main window reclaims the canvas + terminals.
     let on_close = app.clone();
@@ -1184,7 +1250,10 @@ pub fn open_canvas_window(app: AppHandle, id: String, title: String) -> Result<(
 #[tauri::command]
 pub fn focus_canvas_window(app: AppHandle, id: String) -> bool {
     match app.get_webview_window(&format!("canvas-{id}")) {
-        Some(window) => window.set_focus().is_ok(),
+        Some(window) => {
+            let _ = window.show(); // it may still be hidden pre-reveal (#348)
+            window.set_focus().is_ok()
+        }
         None => false,
     }
 }
@@ -2791,6 +2860,27 @@ pub async fn agent_info(app: AppHandle, agent: String) -> AgentInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-paint background must match `--bg-base` (Catppuccin Mocha Base) for dark and
+    /// every non-light / unknown / absent value (#348) — a fresh install has no `theme` key.
+    #[test]
+    fn background_for_theme_defaults_to_the_dark_base() {
+        let dark = Color(0x1e, 0x1e, 0x2e, 0xff);
+        assert_eq!(background_for_theme(None), dark);
+        assert_eq!(background_for_theme(Some("dark")), dark);
+        assert_eq!(background_for_theme(Some("bogus")), dark);
+        assert_eq!(background_for_theme(Some("")), dark);
+    }
+
+    /// Light (#333) maps to the Catppuccin Latte Base — the same `--bg-base` the light token
+    /// block, `THEME_BG` in `src/theme.ts` and the `index.html` inline style carry.
+    #[test]
+    fn background_for_theme_maps_light_to_the_latte_base() {
+        assert_eq!(
+            background_for_theme(Some("light")),
+            Color(0xef, 0xf1, 0xf5, 0xff)
+        );
+    }
 
     /// Build a minimal `PersistedSession` for the `worktree_parent_for_cwd` tests (#331) —
     /// only `repo_path` + `worktree_parent` matter to the resolver.
