@@ -12,6 +12,8 @@
   flex-direction: column;
 }
 
+/* UI v2 toolbar row (§8): status left, segmented right, on the base panel surface
+   with no border toward the rendered content. */
 .toolbar {
   display: flex;
   flex-shrink: 0;
@@ -19,8 +21,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-8);
-  padding: var(--space-4) var(--space-6);
-  border-bottom: 1px solid var(--border-hairline);
+  padding: var(--space-6) 10px;
   background: var(--bg-panel);
 }
 
@@ -32,21 +33,20 @@
   margin-right: auto;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Two-segment Rendered / Raw toggle (#73): a bordered group with the active mode
-   filled — replaces the old single ambiguous icon so the way back to the rendered
-   view is obvious. */
 /* Manual-save button (#162) — replaces the status hint in manual mode. Primary
    (accent) when there are unsaved edits, a muted disabled "Saved" when clean.
-   margin-right:auto keeps the Rendered/Raw toggle on the right, like .status. */
+   margin-right:auto keeps the Rendered/Raw toggle on the right, like .status.
+   Compact 22px block matching the v2 segmented control. */
 .saveBtn {
   flex-shrink: 0;
   margin-right: auto;
-  padding: var(--space-2) var(--space-12);
+  height: 22px;
+  padding: 0 9px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-control);
   background: var(--accent);
@@ -70,43 +70,6 @@
   background: transparent;
   color: var(--text-muted);
   cursor: default;
-}
-
-.segmented {
-  display: flex;
-  /* Never shrink/clip the Rendered/Raw toggle — the status truncates instead (#158). */
-  flex-shrink: 0;
-  gap: var(--space-1);
-  padding: var(--space-1);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
-}
-
-.segment {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-6);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: var(--fs-meta-sm);
-  cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
-}
-
-.segment:hover {
-  color: var(--text-secondary);
-}
-
-.segmentActive {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
 }
 
 .notice {
@@ -153,13 +116,16 @@
 
 /* Editable raw-text surface (#148): the .raw look as a full-height textarea that
    soft-wraps (#80, unlike read-only .raw's pre) so long lines don't force a
-   horizontal scroll while typing. Auto-saves via useAutoSaveFile; no save button. */
+   horizontal scroll while typing. Auto-saves via useAutoSaveFile; no save button.
+   UI v2 (§8): a flush crust editor; the hairline top marks the toolbar's
+   base→crust seam (the editor only ever renders below the toolbar). */
 .editor {
   flex: 1;
   min-height: 0;
   margin: 0;
-  padding: var(--space-12);
+  padding: 10px;
   border: 0;
+  border-top: 1px solid var(--border-hairline);
   outline: none;
   resize: none;
   overflow: auto;
@@ -168,7 +134,7 @@
   color: var(--text-primary);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
-  line-height: 1.5;
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   tab-size: 2;
@@ -252,7 +218,7 @@
   color: var(--syn-accent);
 }
 
-/* --- Rendered markdown (ported from #40) --- */
+/* --- Rendered markdown (ported from #40; UI v2 type ramp, §8) --- */
 .markdown {
   flex: 1;
   min-width: 0;
@@ -261,11 +227,11 @@
   /* See .raw: a stable gutter (#64) keeps the scrollbar off the content's right
      edge and avoids a layout shift when it appears. */
   scrollbar-gutter: stable;
-  padding: var(--space-16);
-  background: var(--content-bg);
+  padding: var(--space-4) 14px 14px;
+  background: var(--bg-panel);
   color: var(--text-secondary);
   font-size: var(--fs-meta);
-  line-height: 1.6;
+  line-height: 1.7;
   /* Wrap long content to the column width (#158): `break-word` for normal text plus
      `anywhere` so unbreakable tokens (URLs, inline code) wrap instead of forcing a
      horizontal overflow that the column then clips. Code blocks still scroll. */
@@ -274,23 +240,26 @@
 }
 
 .markdown :where(h1, h2, h3, h4, h5, h6) {
-  margin: var(--space-16) 0 var(--space-8);
+  margin: 12px 0 6px;
   color: var(--text-primary);
   font-weight: 600;
   line-height: 1.3;
 }
 
 .markdown h1 {
-  font-size: 18px;
+  margin: 10px 0 8px;
+  font-size: 17px;
+  font-weight: 700;
 }
 .markdown h2 {
-  font-size: 16px;
+  font-size: 13px;
+  font-weight: 700;
 }
 .markdown h3 {
-  font-size: 14px;
+  font-size: 12px;
 }
 .markdown :where(h4, h5, h6) {
-  font-size: 13px;
+  font-size: 11px;
 }
 .markdown :where(h1, h2, h3):first-child {
   margin-top: 0;
@@ -300,9 +269,13 @@
   margin: var(--space-8) 0;
 }
 
+.markdown :where(strong, b) {
+  color: var(--text-primary);
+}
+
 .markdown :where(ul, ol) {
   margin: var(--space-8) 0;
-  padding-left: var(--space-20);
+  padding-left: 18px;
 }
 
 .markdown li {
@@ -318,8 +291,8 @@
 }
 
 .markdown code {
-  padding: var(--space-1) var(--space-4);
-  border-radius: var(--radius-chip);
+  padding: 1px 4px;
+  border-radius: var(--radius-micro);
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-family: var(--mono);
@@ -388,11 +361,17 @@
   outline-offset: 1px;
 }
 
+/* Accent-tinted blockquote (UI v2 §8). Plain fallback first, then the color-mix
+   6% accent tint (atoms.css pattern) — recolors live with a custom accent. */
 .markdown blockquote {
   margin: var(--space-8) 0;
-  padding-left: var(--space-12);
-  border-left: 2px solid var(--border-strong);
-  color: var(--text-muted);
+  padding: var(--space-6) 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-dim);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
 }
 
 .markdown table {

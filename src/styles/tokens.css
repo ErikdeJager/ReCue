@@ -85,10 +85,12 @@
 
   /* --- Diff --- */
   --diff-add-fg: #a6e3a1; /* Green */
-  --diff-add-bg: rgba(166, 227, 161, 0.12);
+  --diff-add-bg: rgba(166, 227, 161, 0.1);
   --diff-del-fg: #f38ba8; /* Red */
-  --diff-del-bg: rgba(243, 139, 168, 0.12);
+  --diff-del-bg: rgba(243, 139, 168, 0.1);
   --diff-gutter: #6c7086; /* Overlay0 */
+  --diff-hunk-fg: #89b4fa; /* Blue — @@ hunk-header text (UI v2 §2.1) */
+  --diff-hunk-bg: rgba(137, 180, 250, 0.07);
 
   /* --- Status colors (Catppuccin accents; consumed by #36/#42) --- */
   --status-running: #89b4fa; /* Blue */
@@ -235,6 +237,8 @@
   --diff-del-fg: #d20f39; /* Red */
   --diff-del-bg: rgba(210, 15, 57, 0.12);
   --diff-gutter: #9ca0b0; /* Overlay0 */
+  --diff-hunk-fg: #1e66f5; /* Latte Blue */
+  --diff-hunk-bg: rgba(30, 102, 245, 0.07);
 
   /* --- Status colors (Latte accents — chosen for contrast on light surfaces) --- */
   --status-running: #1e66f5; /* Blue */
