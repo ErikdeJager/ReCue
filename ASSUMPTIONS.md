@@ -3181,3 +3181,12 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Included two guards not named in the card: a Rust unit test asserting the template's StartupWMClass never drifts from `APP_WM_CLASS` / the tauri.conf wiring, and a release.yml Linux-leg assertion on the built AppImage's extracted entry (warns on extraction-tooling failure, hard-fails on wrong content).
 - Included one adjacent icon fix as "desktop integration polish": reorder/extend `bundle.icon` so Linux's embedded window icon is 256x256 instead of today's 32x32 (tauri-codegen picks the first PNG) and hicolor gains 64x64 + 512x512. Independently revertible; macOS/Windows unaffected (icns/ico).
 - No tray work (explicitly excluded by the card); no MIME/file associations; no deb/rpm/AUR packaging (left to Task 361, which the plan tells to reuse these canonical identifiers).
+
+## Task 368
+
+- Hover-focus targets only the two xterm-backed panel kinds (agent + shell terminal, both keyboard-capturing); non-xterm panels (FileViewer, DiffInspector, Kanban, FileTree, Scheduled, Recurring, pending) are NOT hover-focus targets. Achieved by placing the handler in the shared Terminal.tsx, which covers Overview, Canvas, big mode, and detached windows in one spot.
+- Setting named `autoFocusOnHover`, a boolean defaulting to false (opt-in), added to the opaque settings blob (no Rust change) and read live (no applySettingsEffects wiring). Placed in Settings → Behavior with a "Focus panels on hover" checkbox + help text.
+- Use `onMouseEnter` (hover intent, one focus per entry, ignores touch) on the terminal body wrapper — not the header — so header buttons/drag stay usable; reuse terminalPool.focusTerminal.
+- A focus-steal guard (pure `shouldHoverFocus`) skips when a non-xterm editable element (input/textarea/select/contenteditable) holds focus, so typing in a FileViewer/Kanban textarea, rename input, or modal field is never interrupted; moving between terminals IS allowed (xterm's helper textarea sits inside `.xterm`).
+- Hover changes keyboard focus only; it does NOT move the Canvas "active leaf" highlight (that stays pointerDown-driven) to avoid the selection jumping with the mouse.
+- Detached canvas windows pick up the setting on their own init() load; a live toggle in the main window reaches a detached window on its next load (consistent with existing settings-blob propagation) — accepted as a minor limitation, not separately broadcast.
