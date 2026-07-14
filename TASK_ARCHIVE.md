@@ -4428,3 +4428,47 @@ use. Existing folders are grandfathered (never recolored).
 - **Cross-platform:** pure TS/WebView, no OS-specific paths — identical on macOS, Windows, and Linux.
 
 **Dependencies:** none. (Self-contained; reuses the #35 `set_repo_color` / `repo_colors` storage.)
+
+### 366. [x] Settings → Appearance: display-size slider (UI scaling)
+
+A **Display size** slider was added to Settings → Appearance that scales the whole app UI up and down like
+browser-zoom, starting at **100%** (normal). A user can enlarge the entire interface (text, controls, spacing,
+panels) for readability or shrink it to fit more on screen — one uniform control.
+
+**What shipped** (branch `settings-appearance-display-size`, PR
+[#123](https://github.com/ErikdeJager/ReCue/pull/123), merged 2026-07-14):
+
+- **A new `displaySize` setting** (integer percent, default **100**) on the `Settings` interface (`types/index.ts`)
+  + `DEFAULT_SETTINGS` (`store.ts`) — in the opaque settings blob, so **no Rust change**; `mergeSettings` back-fills
+  `100` for an older blob.
+- **A pure, unit-tested `displayZoom(percent)` helper** (`store.ts`, beside `accentCompanions`, with exported
+  `MIN_DISPLAY_SIZE = 80` / `MAX_DISPLAY_SIZE = 150`) — clamps to [80, 150], returns `null` at exactly 100 (so the
+  caller *clears* the property and a default install is byte-for-byte unchanged) and `null` for a non-finite input,
+  else the multiplier string (e.g. `125 → "1.25"`).
+- **Applied as CSS `zoom` on `<html>`** in `applySettingsEffects` — `removeProperty("zoom")` at 100, else
+  `setProperty("zoom", zoom)`. Runs on **both** boot (`applyBootState`) and Save, in **every** window with a store
+  (including a detached canvas window on its own boot). The visible terminals refit automatically via their
+  `ResizeObserver` (the zoom is a layout change); no extra pool call.
+- **A "Display size" `Slider`** (80–150%, step 5%) + help line in the Appearance section (`Settings.tsx`), reusing
+  the shared `Slider` (#122); staged in the modal draft and applied on Save.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 366)
+
+- **CSS `zoom` on `<html>`, not root font-size** — the type/spacing tokens are **px-based** (and many CSS Modules use
+  raw px), so a root font-size change wouldn't propagate; `zoom` is the only uniform whole-app scale and is supported
+  on all three WebViews (WKWebView / WebView2 / WebKitGTK). Native `Webview::set_zoom` was kept only as a documented
+  fallback, not implemented.
+- **Terminals scale with the display zoom** (they reparent into `#root`) — accepted as the correct "display size"
+  behavior; the terminal font-size/line-height settings stay **independent** as the base size (effective size =
+  terminalFontSize × displayScale), and cols/rows are scale-invariant (FitAddon measures container and cell in the
+  same zoomed space). No per-terminal counter-zoom.
+- **Default 100% clears the property entirely** (a no-op), so a default install is unchanged; range 80–150%, step 5%
+  chosen for safe layout + accessibility.
+- **No pre-paint mirror** (no `index.html` boot-script / #348 `--bg-base` change) — display size settles post-boot
+  like accent / Overview-min-width, accepting a one-frame settle; only theme is pre-painted.
+- **Pure frontend** — opaque settings blob, so no Rust/capability change. A live change reaches an already-open
+  detached window only on that window's next boot (same as live theme changes today).
+- **OS file-drop hit-testing** (`osFileDrop.ts` `targetAt`) flagged for real-box verification at non-100% zoom;
+  adjust by the scale only if a drop lands wrong (conditional, not touched pre-emptively).
+
+**Dependencies:** none. (Self-contained; independent of the sibling Tasks 367/368/369.)
