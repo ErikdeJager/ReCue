@@ -445,6 +445,19 @@
   overflow-wrap: anywhere;
 }
 
+/* The package-manager update command shown on a distro-packaged install (#361) —
+   an inline mono chip inside the "managed by your package manager" note. */
+.updateCmd {
+  padding: 1px 5px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chip);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+  white-space: nowrap;
+}
+
 /* "What will be installed" — a labelled slot the patch-notes view (#192) fills. */
 .whatsNew {
   display: flex;

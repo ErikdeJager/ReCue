@@ -700,6 +700,10 @@ export const claudeVersion = () => invoke<string | null>("claude_version");
 /** The host OS family (#143) — "windows" / "macos" / "linux" — for OS-appropriate
  * display labels (Finder vs Explorer, ⌘ vs Ctrl). */
 export const platform = () => invoke<string>("platform");
+/** How this install is managed (#361) — "bundle" | "appimage" | "system". A "system"
+ * (distro-packaged) Linux install is owned by the package manager, so the in-app
+ * updater is disabled for it. Read once at boot; see `selfUpdates` in platform.ts. */
+export const installKind = () => invoke<string>("install_kind");
 /** The Windows build number (e.g. 22631), or 0 on non-Windows. Used to configure
  * xterm.js's ConPTY handling (`windowsPty.buildNumber`); read once at boot. */
 export const windowsBuild = () => invoke<number>("windows_build");

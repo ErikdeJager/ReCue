@@ -43,7 +43,7 @@ import { decodeOutputB64 } from "./decodeOutput";
 import * as ipc from "./ipc";
 import { notifyAgentReady } from "./notify";
 import { emitSessionOutput } from "./outputBus";
-import { isWindows } from "./platform";
+import { isWindows, selfUpdates } from "./platform";
 import {
   cloneRepoName,
   effectiveRepo,
@@ -1359,6 +1359,12 @@ export interface AppState {
    * — "windows" / "macos" / "linux", or "" until loaded. Drives OS-appropriate
    * display labels (Finder vs Explorer, ⌘ vs Ctrl); keyboard handling is unaffected. */
   platform: string;
+  /** How this ReCue process was installed (#361), read once at boot from the backend
+   * `install_kind()` — "bundle" (macOS .app / Windows installer / any dev build) /
+   * "appimage" (a Linux AppImage launch) / "system" (a distro-packaged Linux binary:
+   * pacman/AUR/.deb), or "" until loaded. A "system" install is owned by the package
+   * manager, so the in-app updater is gated off for it (`selfUpdates`). */
+  installKind: string;
   /** Windows build number (e.g. 22631), read once at boot; `0` on non-Windows or
    * until loaded. Only consumed under an `isWindows` guard, to set xterm.js's
    * `windowsPty.buildNumber` for correct ConPTY handling. */
@@ -2349,6 +2355,7 @@ export const useStore = create<AppState>()((set, get) => ({
   terminalExits: {},
   claudeMissing: false,
   platform: "",
+  installKind: "",
   windowsBuild: 0,
   toasts: [],
   newSessionOpen: false,
@@ -2659,6 +2666,15 @@ export const useStore = create<AppState>()((set, get) => ({
   // release / placeholder pubkey), so the indicator stays hidden. Structured so the
   // mock (#193) can `setUpdateState` any status.
   checkForUpdate: async () => {
+    // #361: a distro-packaged install (a Linux release binary with no $APPIMAGE —
+    // pacman/AUR/.deb) is owned by the package manager. Never check (no network call),
+    // never offer, never replace the binary. Every other install kind — macOS .app,
+    // Windows installer, Linux AppImage, any dev build, and the "" pre-load default —
+    // takes the unchanged path below.
+    if (!selfUpdates(get().installKind)) {
+      set((s) => ({ update: { ...s.update, status: "idle" } }));
+      return;
+    }
     set((s) => ({ update: { ...s.update, status: "checking" } }));
     try {
       const info = await updater.checkForUpdate();
@@ -2685,6 +2701,20 @@ export const useStore = create<AppState>()((set, get) => ({
   cancelUpdate: () =>
     set((s) => ({ update: { ...s.update, confirming: false } })),
   installUpdate: async () => {
+    // #361: defense in depth — with the `checkForUpdate` gate above, a package-managed
+    // install can never reach an "available" status, so no UI offers this. Guard anyway
+    // (the #193 dev mock writes the status directly) so the updater can never overwrite
+    // a pacman/apt-owned binary.
+    if (!selfUpdates(get().installKind)) {
+      set((s) => ({
+        update: { ...s.update, status: "idle", confirming: false },
+      }));
+      get().pushToast(
+        "ReCue is managed by your package manager — update it there",
+        "error",
+      );
+      return;
+    }
     set((s) => ({
       update: {
         ...s.update,
@@ -3150,8 +3180,13 @@ export const useStore = create<AppState>()((set, get) => ({
     try {
       set({ platform: await ipc.platform() });
       set({ windowsBuild: await ipc.windowsBuild() });
+      // How this install is managed (#361) — read here, before the boot
+      // `checkForUpdate()` further down in `init`, so a distro-packaged (pacman/AUR)
+      // install never fires a single update check.
+      set({ installKind: await ipc.installKind() });
     } catch {
-      // Outside Tauri; leave "" / 0 → the macOS-default labels + no windowsPty.
+      // Outside Tauri; leave "" / 0 → the macOS-default labels + no windowsPty, and an
+      // "" install kind, which reads as self-updating (today's behavior).
     }
     await get().refresh();
     // Default view on launch (#103): apply the saved preference once at boot (main
