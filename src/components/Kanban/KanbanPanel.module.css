@@ -355,7 +355,7 @@
 /* The floating drag preview (#161): elevated + grabbing, grip always shown. */
 .cardOverlay {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-popover);
+  box-shadow: var(--shadow-menu);
   cursor: grabbing;
 }
 

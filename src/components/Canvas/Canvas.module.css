@@ -502,15 +502,18 @@
   position: relative;
 }
 
+/* Floating chrome (UI v2 §10, task 383) — the anchored-menu look (Base surface,
+   window radius, menu shadow), like the FileSwitcher popover it mirrors. */
 .pickPopover {
   position: absolute;
   bottom: calc(100% + var(--space-4));
   left: 0;
   z-index: 20;
+  overflow: hidden;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
+  border-radius: var(--radius-window);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-menu);
 }
 
 /* A split group fills its slot (parent area, or an enclosing Panel when nested). */
@@ -696,7 +699,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover, 0 8px 24px rgb(0 0 0 / 40%));
+  box-shadow: var(--shadow-menu, 0 8px 24px rgb(0 0 0 / 40%));
   color: var(--text-muted);
   cursor: grabbing;
 }

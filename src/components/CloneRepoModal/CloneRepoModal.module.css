@@ -108,6 +108,7 @@
   padding: var(--space-8);
   border: 1px solid var(--status-error);
   border-radius: var(--radius-control);
+  background: var(--status-error-dim); /* plain fallback (383) */
   background: color-mix(in srgb, var(--status-error) 12%, transparent);
   color: var(--status-error);
   font-family: var(--mono);

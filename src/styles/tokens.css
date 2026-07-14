@@ -98,6 +98,10 @@
   --status-done: #a6e3a1; /* Green */
   --status-error: #f38ba8; /* Red */
   --status-error-dim: rgba(243, 139, 168, 0.14); /* Red 0.14 (#215) */
+  /* Dim companions (task 383) — plain fallbacks for status-tinted color-mix
+     fills/glows (the cross-platform rule), mirroring --status-error-dim. */
+  --status-running-dim: rgba(137, 180, 250, 0.14);
+  --status-awaiting-dim: rgba(249, 226, 175, 0.14);
   --status-idle: #45475a; /* Surface1 (UI v2 §2.1 — was Overlay0) */
 
   /* Usage bar critical state (#154): a fixed, vivid red for >=95% — deliberately
@@ -173,7 +177,6 @@
   --shadow-menu: 0 12px 44px rgba(0, 0, 0, 0.55);
   --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.6);
   --shadow-toast: 0 12px 40px rgba(0, 0, 0, 0.5);
-  --shadow-popover: var(--shadow-menu); /* legacy alias — existing consumers */
 
   /* --- Motion (120–180ms ease-out; respect prefers-reduced-motion) --- */
   --dur-fast: 120ms;
@@ -246,6 +249,8 @@
   --status-done: #40a02b; /* Green */
   --status-error: #d20f39; /* Red */
   --status-error-dim: rgba(210, 15, 57, 0.12);
+  --status-running-dim: rgba(30, 102, 245, 0.12); /* (task 383) */
+  --status-awaiting-dim: rgba(223, 142, 29, 0.12);
   --status-idle: #9ca0b0; /* Overlay0 */
   /* --usage-critical: NOT overridden (the fixed vivid red reads on both) */
 
@@ -263,5 +268,4 @@
   --shadow-menu: 0 12px 44px rgba(0, 0, 0, 0.18);
   --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.22);
   --shadow-toast: 0 12px 40px rgba(0, 0, 0, 0.18);
-  --shadow-popover: var(--shadow-menu); /* legacy alias */
 }

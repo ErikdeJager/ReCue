@@ -258,10 +258,12 @@
   background: var(--bg-elevated);
 }
 
+/* Surface0 active segment (task 383) — the v2 segmented idiom: an active state
+   never reads as accent (matches the SegmentedControl atom + Settings rows). */
 .pathModeActive,
 .pathModeActive:hover {
-  border-color: var(--accent);
-  background: var(--accent-dim);
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 

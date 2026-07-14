@@ -566,8 +566,9 @@
 .pickerItem:hover {
   background: var(--bg-elevated);
 }
+/* Surface0, like every picker's active row (task 383 — selection is never accent). */
 .pickerItemActive {
-  background: var(--accent-dim);
+  background: var(--bg-elevated);
 }
 .pickerItemPath {
   overflow: hidden;
