@@ -3244,3 +3244,23 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Scheduled/recurring cards are non-input at the card level; a recurring card's embedded rotating child terminal still gets #368's own body-level hover focus.
 - Big mode and sidebar rows are out of scope (no panel-border semantics); `Terminal.tsx`'s #368 body handler stays unchanged (it also covers big mode).
 - `blurTerminals()` also clears the pool's pending focus request so a queued focus (#351 gate) can never land after the pointer moved to a non-input panel.
+
+## Task 372
+
+- Light pre-paint hex = Latte crust #dce0e8 (mirrors "window/stage base becomes crust"; equals today's light --content-bg, so the light content well is unchanged).
+- tauri.conf.json "backgroundColor" is a fifth synced site of the "four-place" pre-paint invariant — updated to #11111b too (version field untouched).
+- --bg-base repointed to crust AND global.css .main flipped to var(--bg-base) in this card, so the painted stage matches the new native pre-paint color (no boot flash); per-surface stage layout stays with cards 5/6.
+- Radius tokens flipped globally (--radius-control/--radius-chip → 0): sidebar + modal inner controls go transitionally square until cards 4/9/10 re-round via new --radius-chrome(7)/--radius-chrome-sm(5)/--radius-btn(6)/--radius-micro(4); --radius-window stays 10px (floating chrome).
+- Terminal-stays-dark invariant kept: --terminal-bg/-fg/-selection remain literals, deliberately NOT remapped to the surface roles (light theme would flip them).
+- Count chip = Surface0 pill per the demo (spec prose says "crust pill" — demo wins).
+- Checkbox per demo: 15px, radius 4 (--radius-micro), crust off-well, accent fill + --accent-fg check; border uses the on-system --border-strong (0.15) instead of the demo's literal .2 alpha.
+- BusyIndicator keeps its fixed 14px slot (#95 footprint) with the 7px dot + 2.5px ring centered; --status-idle repointed to #45475a (spec §2.1); --busy-sheen token deleted with the sheen; light-theme status colors untouched.
+- Type-scale mapping: fs-ui 12, new fs-row 11.5, fs-meta 11, fs-meta-sm 10.5, fs-meta-xs 10, new fs-micro 9.5, fs-eyebrow 9.5; --fs-terminal/--fs-diff → 10.5 (cosmetic — xterm font size/line-height stay user settings; DEFAULT_SETTINGS untouched).
+- Dense hook = a :root.dense class override zeroing --stage-gap/--stage-pad-overview/--stage-pad-canvas (card 2's text says "root class"); card 2 owns the setting/⌘D/toggle.
+- Accent tints land as :root tokens --accent-tint-fill/-border/-hover via color-mix from the single --accent (tracks custom/inline accents since both live on <html>); accentCompanions machinery untouched.
+- SegmentedControl primitive lands with square panel look default + rounded "chrome" variant; ViewSwitch's EXPANDED mode adopts it now as the proof consumer, its compact rail mode is left for card 4.
+- data-platform attribute machinery (platform.ts/main.tsx) is kept as the platform-CSS seam; only its single CSS consumer (the Linux --ui Inter override) retires, along with fonts.css + the @fontsource-variable/inter dependency; @fontsource/jetbrains-mono/600.css import added for the v2 600 weight.
+- platform.test.ts's #363 font-contract block is replaced with a v2 guard (single --ui declaration leading with "JetBrains Mono", no data-platform selector); theme.test.ts gains a small foundation guard (stage vars + dense hook + accent tints).
+- Minimal CLAUDE.md touch only where this card falsifies stated invariants (pre-paint hexes, #363 Inter seam); the full doc sweep stays with card 12.
+- No italic mono faces bundled — em/italic text renders synthetic-oblique (the demo ships none either).
+- --shadow-popover kept as a legacy alias = var(--shadow-menu) so all 27 existing popover/modal consumers get the v2 depth before their reskin cards land.
