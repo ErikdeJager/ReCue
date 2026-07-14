@@ -3885,3 +3885,126 @@ with a PTY probe where the reader was still blocked after 8 s.
 - Docs: the `CLAUDE.md` "Exit handling (#63)" convention + Spawn bullet, and dated entries with real-box
   checklists in `TRAJECTORY_TO_LINUX.md` / `TRAJECTORY_TO_WINDOWS.md` (the Windows `TerminateProcess` path and a
   real MCP-server-holding-the-slave scenario are the items CI cannot exercise).
+
+### 359. [x] Tame the boot git storm — tier, scope, and coalesce the sidebar git refresh volley
+
+Right after boot's batch A, the Sidebar effect fired **five** git reads per repo — `refreshBranches` +
+`refreshFileStatuses` + `refreshGithubUrls` + `refreshDiffLineCounts` + `refreshBranchAheadBehind` — roughly six
+`git` process spawns per repo, and `diff_line_counts` additionally **read up to 2000 untracked files per repo**
+to count their lines. The same volley re-fired **unscoped** on every session's busy→idle edge (debounced 600 ms)
+— so during boot resume of many sessions it stormed repeatedly at exactly the moment the app was trying to become
+interactive, plus a 15 s poll on top.
+
+**What shipped** (branch `tame-boot-git-storm`, PR [#114](https://github.com/ErikdeJager/ReCue/pull/114),
+2026-07-14):
+
+- **Tiered the boot volley.** `refreshBranches` (one `git rev-parse` per folder) **stays** on the critical
+  path — it is the sidebar's primary label source via `sessionLabel`. The **decorations** (GitHub URLs #327,
+  ahead/behind #338, per-agent line counts #335, FileTree tints #252) now run **after first paint** *and* **after
+  the boot-resume window settles**.
+- **`resumeSettled`** — a new store flag, true immediately when zero session records were persisted, else flipped
+  by the **existing** 4 s `RECONNECT_BACKSTOP_MS`. That's a **hard cap**: a slow or failed `claude --resume` can
+  never defer the decorations forever. Deliberately *not* keyed on "every session emitted output", which a
+  never-resuming session would hang on.
+- **Scoped the busy→idle volley** to the settling session's **own folder** (exactly the #212 contract). The
+  600 ms debounce accumulates a `Set` of folders; an unknown session id falls back to an unscoped volley
+  (fail-safe).
+- **`file_statuses` is read only for repos with a mounted FileTree** — its sole consumer — removing the heaviest
+  `git` command (a full working-tree walk) from the boot path entirely. A boot with no tree open now does **zero**
+  `git status` reads.
+- **Coalesced all five reads** behind one `refreshRepoGit({ repos?, kinds?, whenSettled?, throttleFull? })`
+  action with an in-flight guard + a merged trailing rerun, replacing ~8 copy-pasted five-call blocks. The
+  focus/visibility backstop still runs a **full, unscoped** volley (throttled to ≤1 per 30 s), so a folder edited
+  in an external editor still updates its badges.
+- **Cheaper git (`git.rs`)** — `diff_line_counts` drops a redundant `has_head` spawn (3 → **2**; `git diff
+  --numstat HEAD` already fails exactly where `has_head` was false, pinned by a new unborn-repo test), gains a
+  **total-byte budget** (16 MB/repo) on top of the existing file/size caps, and **streams** line counts instead
+  of `fs::read`-ing whole files. `github_web_url_for` goes 2 spawns → **1** (a single
+  `git config --local --get-regexp` + the pure `pick_remote_url`).
+
+**Key decisions**
+
+- **The card's "or default `showDiffLineCounts` off on Linux" option was explicitly rejected** — that would be a
+  silent per-OS feature removal. The badge keeps working on all three OSes; it is simply made cheaper, deferred,
+  and per-repo scoped.
+- **"After first paint" = a double `requestAnimationFrame`** (with a `setTimeout` fallback), **not**
+  `requestIdleCallback` — its support on WKWebView/WebKitGTK isn't worth relying on. Complementary to Task
+  #348's pre-paint window-show gate.
+- **Viewport-based skipping was rejected** (as the card permitted): the sidebar is short and non-virtualized, and
+  scroll-dependent data would pop in and interact badly with worktree nesting, the collapsed rail, and detached
+  windows.
+- **The "any settle refreshes every repo" safety net is preserved** for externally edited folders — that's what
+  the throttled focus/visibility full volley is for; the 15 s interval poll keeps the cheap branches +
+  ahead/behind pair.
+- Untracked line counting keeps its bounded-fidelity tradeoff: pathological untracked trees may undercount, as
+  they already do today under the existing caps.
+
+**Dependencies:** none.
+
+**Notes**
+
+- New pure `src/gitRefresh.ts` (`normalizeRequest` / `mergeRequests` / `mergeScoped` — which deletes a scoped key
+  the read no longer returns, and is referentially stable — plus `afterPaint` / `focusRefreshKinds`) with unit
+  tests, and new store-level tests for tiering / deferral / scoping / coalescing / open-tree gating.
+- Checks green: `npm test` (703 passed), `npm run build`, `npm run lint`, `npm run format:check`,
+  `npm run lint:rust`, `npm run format:rust`, `cargo test` (210 passed).
+- Platform-neutral: no `#[cfg]` divergence, no new shell-out primitive, no OS-specific frontend API.
+
+### 360. [x] Take the login-shell PATH probe off the startup critical path (async probe + fingerprinted cache)
+
+`restore_user_path()` ran **synchronously at the top of `run()`, before the window existed**, waiting up to 3 s
+on `$SHELL -ilc` (release builds only) — so a heavy interactive rc (oh-my-zsh, nvm) delayed the window by
+exactly that much. The probe now resolves **concurrently with window creation**, and a fingerprinted cache means
+a steady-state boot pays **zero** probe cost.
+
+**What shipped** (branch `async-path-probe`, PR [#115](https://github.com/ErikdeJager/ReCue/pull/115),
+2026-07-14):
+
+- **`path_env::start_probe()`** — snapshots the env and returns immediately; the probe runs on its own thread
+  while the window is being created.
+- **The result lands in an in-process `Mutex` + `Condvar` cell** (`PathState`: `Inherit` / `Pending` / `Ready`).
+- **Two readers, deliberately different.** `effective_path()` **blocks** (bounded by a 5 s `WAIT_TIMEOUT`, with a
+  timeout-downgrade so a wedged probe can't make every later reader pay the cap) and backs `pty::find_on_path`
+  (both cfg arms) + `spawn_with_id`'s child env — this is the **correctness gate**, since a spawn must not
+  resolve `claude` against a minimal GUI PATH. `apply_path()` **never blocks** and backs `git::hidden_command`,
+  which runs inside *synchronous* Tauri commands on the main thread — a blocking git call there would stall the
+  webview, which is the exact failure this task exists to remove.
+- **A cross-launch cache** — a backend-internal `path_cache` scalar in `store.rs` (getter + setter, **no Tauri
+  command, no frontend change**), keyed by `$SHELL` plus the mtime/presence of every rc file that can set PATH
+  (`/etc/profile`, `/etc/paths` and `/etc/paths.d` as a directory, `~/.profile`, the zsh/bash/fish rc sets,
+  ZDOTDIR-aware). A hit **seeds** the PATH at boot with no subprocess at all; the probe still re-runs in the
+  background and refreshes the cache, republishing in-memory if it differs so later spawns get the fresh value.
+
+**Key decisions**
+
+- **The process env is never mutated for PATH — no `set_var` at all.** This is the safest design rather than the
+  fastest: `set_var` races a concurrent `getenv`, which is precisely the data race the card flagged. The probe
+  thread also works from a **main-thread env snapshot** (SHELL/PATH/HOME/ZDOTDIR), so it never calls `getenv`
+  concurrently with anything either.
+- **`linux_webkit` / `linux_gtk` must still run *first*.** They are the last `set_var`s in the process, and
+  `start_probe()` is the first thing to spawn a thread — so that ordering in `run()` is **load-bearing**, and is
+  documented as such.
+- **The cache stores the raw *discovered* login-shell PATH, never the merged one** — so no per-launch segment (an
+  AppImage `/tmp/.mount_…/usr/bin`, a dev-shell PATH) is ever persisted. The merge against the current process
+  PATH is redone every boot.
+- **A stale-fingerprint cache is not optimistically used** — readers wait for the probe instead. And a
+  failed/timed-out probe **never downgrades a good seed** (`publish_fallback` only fills a non-`Ready` slot);
+  with no seed it publishes today's fallback unchanged.
+- **Scope call:** `commands.rs`'s `os_open` / `open_url` / `reveal_file_in_finder` / `reveal_file_linux` (and
+  `usage.rs`'s `security`, `lib.rs`'s `tccutil`) are left alone — they launch system binaries always present in
+  the minimal GUI PATH, and skipping them kept the diff off Task #350's seams.
+- **Dev builds and Windows are byte-for-byte unchanged**: the probe never arms, `effective_path()` returns the
+  process PATH, and `apply_path()` adds no `env` call to any `Command`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- 17 new Rust unit tests (223 total, up from 206): the `PathState` machine (a `Pending` reader blocks until
+  `publish`; a seed publishes immediately; the probe overrides a seed; a failed probe keeps a seeded value; a
+  timeout downgrades to the process PATH; `override_path` is `None` unless ready **and** different), the
+  fingerprint (mtime / shell change / file-appears / file-disappears), the cache rules, and `path_cache`
+  persistence + legacy-file upgrade. Pure helpers gate `#[cfg(any(unix, test))]` (the `explorer_select_arg`
+  precedent) so a Windows host still type-checks and runs them.
+- The actual win (a GUI launch not stalling on a heavy rc) can't be unit-tested — real-box checklists went into
+  `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md`; `CLAUDE.md` records the new PATH seam.
