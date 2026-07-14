@@ -3756,3 +3756,64 @@ instead.
   and ends in a generic, and that the named family is genuinely bundled locally.
 - Checks green: `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (681 passed). The GUI check
   (does it actually *look* right on each distro) is recorded in `TRAJECTORY_TO_LINUX.md`.
+
+### 352. [x] Batch the boot IPC waterfall — one aggregated `boot_state` command + parallel event listeners + a no-flash loading gate
+
+`init()` was a waterfall: it awaited **13 event-listen registrations one at a time**, then `platform`, then
+`windowsBuild`, then refresh batch A, then batch B, then serial `listSchedules` / `listRecurrings` /
+`appVersion` / `getLastVersion` / `listCanvasWindows` — **34 invokes across 22 sequential waves**, 16 of them
+gating the first meaningful render. Every one of those round-trips is an evaluate-JS hop on the webview main
+thread, which is costliest on WebKitGTK. Boot is now **14 invokes in 2 concurrent waves**.
+
+**What shipped** (branch `batch-boot-ipc-waterfall`, PR
+[#112](https://github.com/ErikdeJager/ReCue/pull/112), 2026-07-14):
+
+- **One aggregated Rust `boot_state` command** (`BootState` struct + a pure, unit-testable `boot_state_from`)
+  returning **all 21 boot reads** in a single round-trip: sessions, recents, repo colors, Overview
+  panels/order, the legacy `open_files`, canvas layout/tabs/templates, settings, sidebar width/collapsed, folder
+  order, diff-seen, schedules, recurrings, last + running version, platform, Windows build, and the detached
+  canvas ids. It is `async` + `spawn_blocking` (the Windows `cmd /C ver` probe stays off the webview main
+  thread, matching #308/#330/#353), and the probe is awaited **before** any store lock, so no mutex guard
+  crosses an `await`.
+- **The 13 `listen` registrations batched** into one parallel wave (`Promise.all` inside each `subscribe*Events`
+  helper, and across the four helpers).
+- **Boot restructured into two concurrent waves**: the `boot_state` fetch **races** the listener wave, but the
+  payload is applied only **after** the listeners resolve — preserving today's invariant that a live
+  `session://output` / `session://exited` can never land un-handled.
+- **`store.applyBootState`** — the single place the payload becomes state, in **one `set()`**. `refresh()` is
+  now a thin fetch + apply (keeping its name, so `store.refresh.test.ts` keeps its entry point).
+- **A `booted` flag** gating three empty-state affordances (the Overview `EmptyState`, the Sidebar "No
+  repositories yet." hint, and the empty-canvas center hint) so none of them can flash before content arrives.
+  Deliberately **no spinner or skeleton** — it is complementary to Task #348's pre-paint window-show gate.
+
+**Key decisions**
+
+- **`platform` + `windowsBuild` must land in the *same* `set()` as `sessions`** — the #346 invariant, since
+  `terminalPool` reads them at host-creation time. This was made an explicit acceptance criterion **and** a
+  test, not just a code comment.
+- **Every existing command and `ipc.ts` wrapper is kept and still registered.** This is a batching *read*, not a
+  replacement — some become boot-unused but remain the API surface for Settings/About and other call sites. **No
+  command was deleted.**
+- **A single point of failure was consciously accepted**: one command now replaces three independent try/catch
+  groups. `boot_state` is infallible server-side (in-memory store reads), and the only realistic failure ("not
+  running inside Tauri") already sank all three groups before. `booted` flips true **even when `boot_state`
+  fails**, so the UI never strands on a blank screen.
+- **Only one new pure module was extracted** (`src/boot.ts` → `resolveCanvases`: persisted tabs, stale
+  `activeId` fallback, the legacy `canvas_layout` migration, and the detached-window override), keeping the rest
+  of the derivation inside the store action to avoid an import cycle with `store.ts`.
+- **The detached canvas window (#84) boots identically** — every `IS_MAIN_WINDOW`-only side effect (the legacy
+  `open_files` clear, terminal respawn, canvas-migration persist, the update toast + `setLastVersion`, the usage
+  poll) is preserved verbatim.
+- Out of scope, and left to their owners: the sidebar's post-boot git refreshes (Task #359),
+  `maybeOnboardAgent`'s three `agent_info` probes, `pruneMissingFolders`' `dir_exists` calls (all already
+  void-ed off the critical path), and the boot resume loop (Task #355).
+
+**Dependencies:** none.
+
+**Notes**
+
+- A Rust unit test proves **each `boot_state_from` field equals what its individual getter/command returns** —
+  so the aggregate can't silently drift from the surface it replaced. `store.refresh.test.ts` was re-pointed at
+  a `makeBootState()` fixture with every prior assertion kept, plus new coverage: boot issues only `bootState` +
+  the four subscribes; `platform` and `sessions` land together; `booted` flips even on failure.
+- Platform-neutral win, largest on WebKitGTK; real-box checks recorded in `TRAJECTORY_TO_LINUX.md`.
