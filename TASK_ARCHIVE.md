@@ -5129,3 +5129,45 @@ alphas mapped to the nearest tokens; board gaps as literal 10px (no `--space-10`
 Overview's ScheduleCard/RecurringCard chrome untouched (379 owns `Overview.tsx`).
 
 **Dependencies:** Tasks 372, 380.
+
+### 383. [x] UI v2 (12/12): parity & polish sweep — §12 audit, accent/light/interaction/reduced-motion/dense/cross-platform audits, token hygiene, bundle budget, docs
+
+The closing card of the 12-card **UI v2 reskin epic**: walks the spec's §12 v1→v2 parity checklist end-to-end,
+audits the accent / light-theme / interaction / reduced-motion / dense-mode / cross-platform-CSS contracts,
+reconciles token drift the parallel cards introduced, keeps the first-paint bundle budget green, and updates
+CLAUDE.md's styling docs for the v2 system. With this card the epic is complete — **the maintainer ships v2.0.0
+separately; no version bump / patch notes here**.
+
+**What shipped** (branch `task-383-parity-polish-sweep`, PR
+[#138](https://github.com/ErikdeJager/ReCue/pull/138), merged 2026-07-15 into `ui-rework`):
+
+- **Motion policy (§2.5) — the one deliberate JS touch:** xterm's canvas cursor blink is unreachable by the CSS
+  reduced-motion killswitch, so a new pure `Terminal/motionPolicy.ts` (+ `motionPolicy.test.ts`) threads the
+  effective `cursorBlink` (= setting && !reducedMotion) through `terminalPool.applyTerminalSettings`/`createHost`
+  — applied live on the running xterms, never a host dispose (#18).
+- **Token hygiene** — undocumented literal drift across eleven modules swept onto tokens (BusyIndicator, Canvas,
+  CloneRepo, DiffInspector, Kanban, Onboarding, Overview, Sidebar, TemplateEditor, Usage); demo-exact literals
+  recorded in ASSUMPTIONS (modal 12px radius, 379's 8px button radius + text shadow, 382's 10px board gaps,
+  terminal/ANSI + pre-paint hexes) deliberately stay. `--text-faint` reconciled to one definition (379's values);
+  a new `theme.test.ts` guard asserts **no custom property is declared twice per theme block** (pinning the
+  merge-drift bug class), plus further foundation guards.
+- **`--shadow-popover` alias** — remaining floating-chrome consumers migrated to `--shadow-menu`/`--shadow-modal`
+  where owned; the alias retained for the consumers that remain.
+- **Docs sweep** — CLAUDE.md's seven v2-falsified statements surgically corrected (the Stack Inter line,
+  `data-platform` consumer, styling conventions, the five-place pre-paint invariant incl. tauri.conf.json's
+  `backgroundColor`, Settings 740×540 + new sections/settings, sidebar default 248, Layout tree additions);
+  **TRAJECTORY_TO_WINDOWS.md / TRAJECTORY_TO_LINUX.md** gain the v2 real-box check items (wave perf on
+  WebKitGTK/WebView2, color-mix fallbacks, scrollbar styling, per-OS kbd hints).
+- Bundle budget re-verified green (`bundle:report -- --check`); light-theme deferred-polish findings recorded in
+  the PR body under "Light polish deferred (§13)" (no tracked file designated for them).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 383)
+
+- Fix rule everywhere: **reskin scope only** (CSS/markup/title attrs) — logic-needing findings recorded in the PR
+  body as out of scope; `accentCompanions`/store logic untouched (no broken derivation found requiring it).
+- Detached windows adopting dense/accent/theme only at next boot is recorded 373/377 behavior — expected, not a
+  parity gap.
+- Dependencies exactly 381 + 382 (cards 1–11 all landed first); the untracked handoff dir meant the full §12
+  checklist was inlined in the plan for the worktree implementer.
+
+**Dependencies:** Tasks 381, 382. (Closes the UI v2 epic: 372–383.)
