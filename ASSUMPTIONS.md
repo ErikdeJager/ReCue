@@ -3230,3 +3230,17 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Disclosure/box are hidden in the collapsed sidebar rail (no room) and in the empty-hairline state, preserving current behavior; whole feature stays fail-open + Claude-only via the existing showUsage gate.
 - Each bucket row shows a humanized label, mini progress bar, percent, and its own reset countdown; per-bucket critical-red at >=90% reusing existing fill classes/tokens.
 - Store usage slice gains a required buckets field, so every `usage:` object literal (store defaults/reset branches + test files) must add `buckets: []`; tsc enumerates them.
+
+## Task 371
+
+- The new border-follow + unfocus behavior is gated by the existing opt-in "Focus panels on hover" setting (`autoFocusOnHover`, #368) — the card describes it as an extension of that function; with the setting off nothing changes.
+- This deliberately reverses #368's recorded decision that "hover moves keyboard focus only, never the highlight" — that reversal is exactly what the card asks for.
+- "Border" = the existing selection affordances reused as-is: Overview's `cardSelected` ring via `select(id)` (sidebar highlight follows) and Canvas's `panelActive` ring via `setActiveLeaf` (which already syncs `selectedId`, #79); no new CSS.
+- Unfocus triggers on ENTERING another panel/card (the moment the border jumps), not on merely leaving into dead space/sidebar/tab strip — mousing to the sidebar does not interrupt typing.
+- Hover-select applies to every Overview card and Canvas panel kind; only locally-owned agent/shell-terminal panels count as input panels (focus their xterm) — all others (file/diff/kanban/filetree/scheduled/recurring/pending, and an agent panel owned by another window per #84) blur the previously-focused terminal.
+- The #368 text-field guard extends to the whole behavior: while an INPUT/TEXTAREA/SELECT/contenteditable outside `.xterm` has focus, hover changes nothing (not even the border), otherwise the Canvas active-leaf effect would steal focus from the field.
+- Hover-driven selection must not auto-scroll the Overview wall (suppressed via a module-scoped flag) — scrollIntoView would drag cards under the stationary cursor and cascade selections; explicit selects (click/sidebar/keyboard) still scroll.
+- Hover-select is suppressed while any pointer button is held (`e.buttons !== 0`) and while a canvas drag is active, so dnd-kit drags never spray selections.
+- Scheduled/recurring cards are non-input at the card level; a recurring card's embedded rotating child terminal still gets #368's own body-level hover focus.
+- Big mode and sidebar rows are out of scope (no panel-border semantics); `Terminal.tsx`'s #368 body handler stays unchanged (it also covers big mode).
+- `blurTerminals()` also clears the pool's pending focus request so a queued focus (#351 gate) can never land after the pointer moved to a non-input panel.
