@@ -746,9 +746,19 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > notifications, clipboard-image paste, the self-update) are logged in **`TRAJECTORY_TO_LINUX.md`**.
 >
 > **Linux performance (#346).** Four fixes for the "everything is slow on Arch" report:
-> (1) `linux_webkit.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at boot **only** when the
-> NVIDIA proprietary driver or a VM is detected (user env always respected;
-> `RECUE_DISABLE_DMABUF=1|0` force-overrides; healthy AMD/Intel Mesa stacks keep DMA-BUF);
+> (1) **(#346/#347)** `linux_webkit.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at boot only
+> where DMA-BUF is genuinely bad — the pure, unit-tested `decide_dmabuf` over a **GPU-aware**
+> probe (`/sys/class/drm/card*` driver names + PCI vendors → `Mesa`/`NvidiaBlob`/`Virtual`,
+> the NVIDIA kernel-module flavor+version, `__GLX_VENDOR_LIBRARY_NAME`/`__NV_PRIME_RENDER_OFFLOAD`,
+> a tightened VM detector): disable when the **NVIDIA blob is the only renderer**, when GL is
+> **PRIME-routed** to it, or in a **VM with no native Mesa GPU** — otherwise keep DMA-BUF. #346
+> disabled it on the mere *presence* of the NVIDIA kernel module, which on a **hybrid laptop**
+> (Intel/AMD iGPU + NVIDIA dGPU, where the webview renders on the healthy Mesa iGPU) forced CPU
+> webview rendering and **was itself** the reported slowness (#347 — it also fixes the coarse VM
+> heuristic: a bare-metal Xen dom0 / a `"PowerEdge KVM 1000"` no longer read as VMs). The user's
+> own env is never touched, `RECUE_DISABLE_DMABUF=1|0` force-overrides (a tri-state
+> `RendererOverride` — the seam a future Settings renderer-override card plugs into), and **one**
+> boot line names the evidence for **both** outcomes;
 > (2) the terminal pool probes the WebGL renderer string once (Linux only) and skips the
 > xterm WebGL addon when it's software-rasterized (llvmpipe/SwiftShader → DOM renderer,
 > `webglRenderer.ts`); (3) `session_scrollback` ships **base64** (`ScrollbackReply.b64`,

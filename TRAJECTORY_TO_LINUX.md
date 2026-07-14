@@ -180,6 +180,10 @@ listed here too — it is now done, see Task #351 below.)_
       stay smooth and typing stays responsive (coalescing + b64 scrollback in effect);
       scrollback replays correctly after a view switch and after a session Restart.
 
+> **Superseded by #347 for the DMA-BUF items above** — the workaround is no longer applied
+> on the mere presence of the NVIDIA module, and it now logs one line for **both** outcomes.
+> See the next section for the corrected checklist.
+
 ## 2026-07-14
 
 ### Native GTK dialogs were always light (Task #349)
@@ -266,6 +270,86 @@ listed here too — it is now done, see Task #351 below.)_
       untouched (no `[recue] GTK:` line) and dialogs follow the desktop theme;
       `RECUE_GTK_THEME=Adwaita:dark npm run tauri dev` makes them dark (the AppImage-free
       smoke test).
+
+### DMA-BUF detection regression (Task #347)
+
+Symptom (same hybrid Arch box, Hyprland/Wayland): ReCue was still slow *because of* #346's
+own workaround. The boot log said it all —
+
+```
+[recue] WebKitGTK: set WEBKIT_DISABLE_DMABUF_RENDERER=1 (nvidia: true, vm: false)
+/sys/class/drm/card0 -> driver=nvidia, vendor=0x10de   (RTX 4080 Max-Q, nvidia-open)
+/sys/class/drm/card1 -> driver=i915,   vendor=0x8086   (Intel Iris Xe — renders the webview)
+```
+
+On a hybrid laptop the NVIDIA card *exists* but the webview renders on the Intel/AMD iGPU
+through **Mesa**, where DMA-BUF is healthy. #346's `nvidia_driver_present()` tripped on the
+mere presence of the kernel module (`/proc/driver/nvidia/version` / `/sys/module/nvidia`),
+so ReCue forced the whole webview to CPU rendering — which then cascaded into software
+WebGL (llvmpipe) and xterm's DOM renderer. The "fix" *was* the reported slowness. #346's
+`vm_detected()` was equally coarse: the mere existence of `/sys/hypervisor/type` (true on a
+bare-metal **Xen dom0**) and loose DMI **substring** matches (`"kvm"`, `"standard pc"` — so
+a real `"PowerEdge KVM 1000"` read as a VM).
+
+**The new policy** (`linux_webkit.rs`, the pure `decide_dmabuf` — every rule unit-tested on
+every host):
+
+| # | Condition | DMA-BUF | `reason` |
+|---|-----------|---------|----------|
+| 1 | `WEBKIT_DISABLE_DMABUF_RENDERER` already exported | untouched | `WEBKIT_DISABLE_DMABUF_RENDERER already set by the user` |
+| 2 | `RECUE_DISABLE_DMABUF=1` / `=0` | disabled / left on | `RECUE_DISABLE_DMABUF forced on` / `… forced off` |
+| 3 | NVIDIA blob loaded **and** GL routed to it (`__GLX_VENDOR_LIBRARY_NAME=nvidia` / `__NV_PRIME_RENDER_OFFLOAD=1`) | disabled | `NVIDIA GL selected via env (PRIME offload)` |
+| 4 | NVIDIA blob loaded **and no Mesa card** (incl. an unreadable `/sys/class/drm`) | disabled | `NVIDIA blob driver is the only renderer` |
+| 5 | VM **and no Mesa card** | disabled | `virtual machine without a native Mesa GPU` |
+| 6 | otherwise (hybrid, nouveau, AMD/Intel, VM w/ passthrough GPU) | **left on** | `Mesa GPU present (healthy DMA-BUF)` / `no known-bad renderer detected` |
+
+The inputs: a GPU inventory from `/sys/class/drm/card*` (DRM driver name → `Mesa` /
+`NvidiaBlob` / `Virtual` / `Unknown`, PCI-vendor fallback), the NVIDIA kernel-module flavor
++ version (`nvidia-open` vs the proprietary blob — logged, but they gate identically: both
+ship the same proprietary userspace EGL), and a **tightened** VM detector (a Xen **control
+domain** is bare metal; DMI is matched **exactly**, not by substring; two independent
+signals are required — the CPUID `hypervisor` flag alone or a DMI hit alone is never
+enough). Both outcomes now print exactly **one** boot line naming the evidence, e.g.
+
+```
+[recue] WebKitGTK: DMA-BUF left on — Mesa GPU present (healthy DMA-BUF)
+  (gpus: nvidia[blob],i915[mesa]; nvidia: open 610.43.03; vm: no; session: wayland)
+  — override with RECUE_DISABLE_DMABUF=1|0
+```
+
+The `RECUE_DISABLE_DMABUF` override is now an explicit tri-state (`RendererOverride::Auto /
+ForceDisable / ForceKeep`) so a future Settings → renderer-override card can feed a
+persisted mode into the same seam (`resolve_override`) without touching the policy. The
+frontend software-WebGL check (`webglRenderer.ts`) is unchanged: it is a **fail-safe** whose
+main cause of firing was this very workaround, so on a correctly-detected box it now reads a
+hardware renderer and WebGL is used again (`terminalPool` logs the renderer string once).
+
+**Files**: `src-tauri/src/linux_webkit.rs` (detection rewrite + tests), `src-tauri/src/lib.rs`
+(call-site comment), `src/components/Terminal/webglRenderer.ts` +
+`src/components/Terminal/terminalPool.ts` (comment / one-time diagnostic log).
+
+### Needs real-box verification (DMA-BUF detection, #347)
+
+- [ ] **Hybrid Intel/AMD iGPU + NVIDIA dGPU** (the reporter's Arch box, Wayland): the boot
+      line reads `DMA-BUF left on — Mesa GPU present (healthy DMA-BUF)` and names both cards;
+      `WEBKIT_DISABLE_DMABUF_RENDERER` is **not** in the app's environment; no "skipping WebGL
+      renderer (software rasterizer)" console warning (instead `[recue] terminals: WebGL
+      renderer: Mesa Intel(R) Graphics …`); typing echo + paint are snappy.
+- [ ] **NVIDIA blob as the only GPU** (desktop, no iGPU): the line reads `DMA-BUF disabled —
+      NVIDIA blob driver is the only renderer`, and the app is usable (not blank/crawling).
+- [ ] **PRIME offload** on the hybrid box (`__NV_PRIME_RENDER_OFFLOAD=1
+      __GLX_VENDOR_LIBRARY_NAME=nvidia npm run tauri dev`): the line reads `DMA-BUF disabled —
+      NVIDIA GL selected via env (PRIME offload)`.
+- [ ] **AMD-only / Intel-only / nouveau**: `DMA-BUF left on`, no regression vs before.
+- [ ] **A VM** (QEMU/KVM, VMware, VirtualBox, Hyper-V — virtio-gpu/vmwgfx display):
+      `DMA-BUF disabled — virtual machine without a native Mesa GPU`. A **bare-metal Xen
+      dom0** must NOT read as a VM.
+- [ ] Overrides: `RECUE_DISABLE_DMABUF=1` / `=0` force the workaround on/off (the line names
+      the force), and a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` is respected untouched
+      (`DMA-BUF untouched — … already set by the user`).
+- [ ] Ground truth to read the boot line against: `ls /sys/class/drm`,
+      `readlink -f /sys/class/drm/card*/device/driver`, `cat /proc/driver/nvidia/version`,
+      `cat /sys/class/dmi/id/{sys_vendor,product_name}`.
 
 ### AppImage child-process environment (Task #350)
 

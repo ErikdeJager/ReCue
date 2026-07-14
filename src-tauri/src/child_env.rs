@@ -34,8 +34,10 @@
 //! `explorer_select_arg` / `reveal_file_linux` precedent) so the macOS/Windows hosts
 //! still type-check and unit-test them.
 //!
-//! `WEBKIT_DISABLE_DMABUF_RENDERER` is deliberately **not** stripped: #346 sets it for
-//! ReCue's own webview, it is not AppImage-injected, and it is inert for CLI children.
+//! `WEBKIT_DISABLE_DMABUF_RENDERER` is deliberately **not** stripped: #346/#347 set it for
+//! ReCue's own webview (and since #347 only where DMA-BUF is genuinely bad — a hybrid
+//! iGPU+dGPU box never exports it at all), it is not AppImage-injected, and it is inert for
+//! CLI children.
 
 /// AppImage runtime / `AppRun` bookkeeping — never meaningful to a child.
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
