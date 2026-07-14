@@ -891,9 +891,12 @@ impl SessionManager {
             cmd.arg(arg);
         }
         cmd.cwd(cwd);
-        // Inherit the parent environment so the child can resolve PATH etc.,
-        // then make sure it has a sensible TERM for the TUI.
-        for (key, value) in std::env::vars_os() {
+        // Inherit the parent environment so the child can resolve PATH etc. — with the
+        // AppImage-injected vars scrubbed out on Linux (#350; a byte-for-byte no-op on
+        // macOS/Windows and outside an AppImage) — then make sure it has a sensible TERM
+        // for the TUI. `CommandBuilder` starts from an empty env set, so a var the scrub
+        // omits is genuinely absent from the child.
+        for (key, value) in crate::child_env::child_env_vars() {
             cmd.env(key, value);
         }
         cmd.env("TERM", "xterm-256color");
@@ -2040,6 +2043,73 @@ mod tests {
             mgr.kill_session(&info.id),
             Err(SessionError::SessionNotFound(_))
         ));
+    }
+
+    /// The standing regression guard for the bounded-parallel boot resume (#355): four
+    /// threads spawn through **one** `SessionManager` at once. Every session must register
+    /// under its own id and stream its own `Output` + a final `Exited` — no lost, doubled,
+    /// or cross-wired events, no wedged reader thread. (Concurrent spawns are safe because
+    /// `spawn_with_id` holds the map lock only for the O(1) insert (#260) and `portable-pty`
+    /// cloexecs both pty fds and closes every fd ≥ 3 in the child's `pre_exec`, so one
+    /// thread's fresh pty can never leak into another thread's `fork`.)
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_spawns_register_every_session() {
+        const N: usize = 4;
+        let (tx, rx) = mpsc::channel();
+        let mgr = Arc::new(SessionManager::new(tx));
+
+        let spawns: Vec<_> = (0..N)
+            .map(|_| {
+                let mgr = Arc::clone(&mgr);
+                std::thread::spawn(move || {
+                    mgr.spawn_program("sh", &["-c", "printf 'hi-from-pty'"], &tmp(), None)
+                        .expect("concurrent spawn sh")
+                        .id
+                })
+            })
+            .collect();
+        let ids: Vec<String> = spawns
+            .into_iter()
+            .map(|handle| handle.join().expect("spawn thread"))
+            .collect();
+
+        let unique: HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), N, "each spawn must get its own id");
+        assert_eq!(mgr.session_count(), N, "every session must be registered");
+
+        // Drain until every session has exited (or we time out), collecting per-id output.
+        let mut output: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut exited: HashSet<String> = HashSet::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while exited.len() < N && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(SessionEvent::Output { id, bytes, .. }) => {
+                    output.entry(id).or_default().extend(bytes);
+                }
+                Ok(SessionEvent::Exited { id, code }) => {
+                    assert_eq!(code, Some(0), "clean exit for {id}");
+                    assert!(exited.insert(id), "a session exited twice");
+                }
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        assert_eq!(
+            exited.len(),
+            N,
+            "timed out waiting for every session to exit"
+        );
+        for id in &ids {
+            assert!(exited.contains(id), "no Exited event for {id}");
+            let bytes = output.get(id).cloned().unwrap_or_default();
+            assert!(
+                String::from_utf8_lossy(&bytes).contains("hi-from-pty"),
+                "no output for {id}"
+            );
+        }
     }
 
     #[cfg(unix)]
