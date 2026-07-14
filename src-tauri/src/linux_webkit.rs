@@ -19,9 +19,12 @@
 //! 1. A user-set `WEBKIT_DISABLE_DMABUF_RENDERER` (any value) is always respected — we
 //!    never write the variable ourselves.
 //! 2. `RECUE_DISABLE_DMABUF=1|true|on|yes` forces the workaround on; `0|false|off|no`
-//!    forces it off (the [`RendererOverride`] tri-state — the support escape hatches, see
-//!    `TRAJECTORY_TO_LINUX.md`, and the seam a future Settings renderer-override card
-//!    feeds into).
+//!    forces it off (the support escape hatch, see `TRAJECTORY_TO_LINUX.md`); otherwise the
+//!    persisted **Settings → Rendering** mode (#357) decides — `off` disables DMA-BUF, `on`
+//!    keeps it, `auto` (the default, and any missing/garbage value) defers to the detection
+//!    below. It is read straight off disk by [`crate::early_settings`], because GTK reads the
+//!    env at init and Tauri's `Store` only exists after that. Both feed #346/#347's
+//!    [`RendererOverride`] tri-state through [`resolve_dmabuf_override`].
 //! 3. NVIDIA GL explicitly selected via env (`__GLX_VENDOR_LIBRARY_NAME=nvidia` /
 //!    `__NV_PRIME_RENDER_OFFLOAD=1`) while the blob is loaded → disable (the user routed
 //!    GL through the blob, so the hybrid exemption does not apply).
@@ -32,8 +35,16 @@
 //!    with a real passthrough GPU all render through Mesa, where DMA-BUF is healthy and
 //!    fast — disabling it there *costs* performance.
 //!
+//! **Polarity is the one thing to get right:** the *setting* names the **renderer**
+//! (`on` = DMA-BUF on = [`RendererOverride::ForceKeep`]); the *env var* names the
+//! **workaround** (`RECUE_DISABLE_DMABUF=1` = disable it = [`RendererOverride::ForceDisable`]).
+//!
 //! Either way exactly **one** diagnostic line is printed at boot naming the evidence
-//! ([`describe_probe`]), so a real-box report can be read back against the policy.
+//! ([`describe_probe`]), so a real-box report can be read back against the policy. That
+//! same line — plus what decided it — is captured into a [`RendererReport`] (#357) and
+//! served to Settings → Rendering by the `renderer_diagnostics` command, so a user can
+//! read (and copy) the decision without a terminal. The report is only ever set on Linux,
+//! so the Settings section is Linux-only by construction.
 //!
 //! `WEBKIT_DISABLE_COMPOSITING_MODE` is never set automatically (it turns off accelerated
 //! compositing wholesale); the opt-in `RECUE_DISABLE_COMPOSITING=1` is honored for
@@ -63,9 +74,12 @@ pub fn apply_webkit_env_workarounds() {
     {
         let (nvidia_kernel, nvidia_version) = probe_nvidia();
         let (gpus, gpu_drivers) = probe_gpus();
+        // The tri-state override + where it came from (#357: the env var, else the
+        // persisted Settings mode, else auto).
+        let (over, source, mode) = resolve_override();
         let probe = DmabufProbe {
             user_set_dmabuf: std::env::var_os(WEBKIT_DMABUF_VAR).is_some(),
-            over: resolve_override(),
+            over,
             nvidia_kernel,
             nvidia_version,
             nvidia_gl_env: nvidia_gl_env(),
@@ -78,8 +92,16 @@ pub fn apply_webkit_env_workarounds() {
         if decision.disable {
             std::env::set_var(WEBKIT_DMABUF_VAR, "1");
         }
+        // A user-exported WEBKIT_DISABLE_DMABUF_RENDERER beats everything (rule 1), so it
+        // — not the override we resolved — is what actually decided this run.
+        let source = if probe.user_set_dmabuf {
+            OverrideSource::UserEnv
+        } else {
+            source
+        };
         // Exactly one line, for **both** outcomes (#347 — #346 only logged the disable
-        // case), naming the evidence a real-box report is read back against.
+        // case), naming the evidence a real-box report is read back against. Since #357 the
+        // same line is also captured for Settings → Rendering.
         let outcome = if probe.user_set_dmabuf {
             "untouched"
         } else if decision.disable {
@@ -87,11 +109,21 @@ pub fn apply_webkit_env_workarounds() {
         } else {
             "left on"
         };
-        eprintln!(
-            "[recue] WebKitGTK: DMA-BUF {outcome} — {} ({}) — override with {RECUE_DMABUF_VAR}=1|0",
-            decision.reason,
-            describe_probe(&probe),
+        let evidence = describe_probe(&probe);
+        let reason = decision_reason(source, mode, decision.reason);
+        let log_line = format!(
+            "[recue] WebKitGTK: DMA-BUF {outcome} — {reason} ({evidence}) — override with {RECUE_DMABUF_VAR}=1|0 or Settings → Rendering",
         );
+        eprintln!("{log_line}");
+        // Best-effort, set once (a second `run()` in one process is not a thing).
+        let _ = BOOT_REPORT.set(RendererReport {
+            dmabuf_disabled: decision.disable,
+            reason,
+            evidence,
+            log_line,
+            source: source_label(source).to_string(),
+            setting: mode_label(mode).to_string(),
+        });
 
         // Debug-only opt-in; respect a user-set value like the DMA-BUF var above.
         if parse_force_flag(std::env::var(RECUE_COMPOSITING_VAR).ok().as_deref()) == Some(true)
@@ -107,9 +139,8 @@ pub fn apply_webkit_env_workarounds() {
 // The pure model + decision (compiled and unit-tested on every host)
 // ---------------------------------------------------------------------------
 
-/// How the renderer decision may be overridden. Only `RECUE_DISABLE_DMABUF` produces a
-/// non-`Auto` value today; a future Settings renderer-override card feeds a persisted
-/// mode into the same seam (see [`resolve_override`]).
+/// How the renderer decision may be overridden — by `RECUE_DISABLE_DMABUF` or, since #357,
+/// by the persisted Settings mode (see [`resolve_dmabuf_override`] / [`resolve_override`]).
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
 #[cfg_attr(test, allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +151,162 @@ pub(crate) enum RendererOverride {
     ForceDisable,
     /// Never disable the DMA-BUF renderer.
     ForceKeep,
+}
+
+/// The settings-blob key holding the persisted DMA-BUF mode (#357). **Must** equal the TS
+/// field name in `src/types/index.ts` — `Settings.linuxDmabufRenderer` (the settings blob is
+/// opaque JSON whose keys are the TS names verbatim; the `agents.rs::read_custom_command`
+/// precedent). Coupled by comment only, like that one.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) const DMABUF_SETTING_KEY: &str = "linuxDmabufRenderer";
+
+/// The persisted **Settings → Rendering** DMA-BUF mode (#357). Named after the *renderer*,
+/// not the workaround: `On` keeps DMA-BUF, `Off` disables it (⇒ CPU webview rendering),
+/// `Auto` defers to #347's detection. See the polarity note in the module docs.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg_attr(test, allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DmabufMode {
+    Auto,
+    On,
+    Off,
+}
+
+/// What actually decided this run's DMA-BUF outcome — reported to Settings so a user whose
+/// saved setting is being overridden by an env var can *see* that, rather than think the
+/// setting silently did nothing.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg_attr(test, allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OverrideSource {
+    /// #347's hardware detection.
+    Auto,
+    /// The persisted `linuxDmabufRenderer` setting.
+    Setting,
+    /// `RECUE_DISABLE_DMABUF` (beats the setting).
+    Env,
+    /// The user's own `WEBKIT_DISABLE_DMABUF_RENDERER` (beats everything; never written).
+    UserEnv,
+}
+
+/// Parse the persisted mode. Trimmed + ASCII-lowercased; `None` and anything unrecognized
+/// (an old `sessions.json` with no key, a hand-edited garbage value) → [`DmabufMode::Auto`],
+/// i.e. exactly today's behavior. Fail-open by construction.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn normalize_dmabuf_mode(raw: Option<&str>) -> DmabufMode {
+    match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("on") => DmabufMode::On,
+        Some("off") => DmabufMode::Off,
+        _ => DmabufMode::Auto,
+    }
+}
+
+/// Resolve the override in force, and what produced it (#357). `env` is the already-parsed
+/// `RECUE_DISABLE_DMABUF` flag ([`parse_force_flag`]) — it **wins over the setting**, which
+/// in turn wins over auto-detection.
+///
+/// Mind the polarity: the env var names the *workaround* (`Some(true)` = "disable DMA-BUF"),
+/// the setting names the *renderer* (`On` = "keep DMA-BUF").
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn resolve_dmabuf_override(
+    env: Option<bool>,
+    mode: DmabufMode,
+) -> (RendererOverride, OverrideSource) {
+    match env {
+        Some(true) => return (RendererOverride::ForceDisable, OverrideSource::Env),
+        Some(false) => return (RendererOverride::ForceKeep, OverrideSource::Env),
+        None => {}
+    }
+    match mode {
+        DmabufMode::Off => (RendererOverride::ForceDisable, OverrideSource::Setting),
+        DmabufMode::On => (RendererOverride::ForceKeep, OverrideSource::Setting),
+        DmabufMode::Auto => (RendererOverride::Auto, OverrideSource::Auto),
+    }
+}
+
+/// The persisted mode's wire/label form — `"auto"` / `"on"` / `"off"`, matching the TS union.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn mode_label(mode: DmabufMode) -> &'static str {
+    match mode {
+        DmabufMode::Auto => "auto",
+        DmabufMode::On => "on",
+        DmabufMode::Off => "off",
+    }
+}
+
+/// The decision source's wire form, mirrored verbatim by the TS `RendererReport["source"]`.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn source_label(source: OverrideSource) -> &'static str {
+    match source {
+        OverrideSource::Auto => "auto",
+        OverrideSource::Setting => "setting",
+        OverrideSource::Env => "env",
+        OverrideSource::UserEnv => "user_env",
+    }
+}
+
+/// The human reason for the boot line + the Settings readout. A **Settings**-sourced
+/// override names itself (`decide_dmabuf` only knows it got a `RendererOverride`, so its
+/// own reason would misattribute it to the env var); every other source keeps #347's
+/// `decide_dmabuf` reason verbatim.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn decision_reason(
+    source: OverrideSource,
+    mode: DmabufMode,
+    auto_reason: &str,
+) -> String {
+    match (source, mode) {
+        (OverrideSource::Setting, DmabufMode::Off) => {
+            format!("forced off in Settings ({DMABUF_SETTING_KEY}=off)")
+        }
+        (OverrideSource::Setting, DmabufMode::On) => {
+            format!("forced on in Settings ({DMABUF_SETTING_KEY}=on)")
+        }
+        _ => auto_reason.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The boot report (#357) — un-gated: it crosses the IPC boundary on every OS
+// ---------------------------------------------------------------------------
+
+/// What ReCue decided about the WebKitGTK DMA-BUF renderer at boot (#357), for
+/// Settings → Rendering. Only ever set on Linux — [`boot_report`] returns `None` on
+/// macOS/Windows, which is what hides the whole Settings section there.
+///
+/// Fields stay **snake_case** on the wire (the `AgentInfo` precedent — no
+/// `serde(rename_all)` anywhere in `commands.rs`); the TS `RendererReport` mirrors them.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RendererReport {
+    /// Did ReCue export `WEBKIT_DISABLE_DMABUF_RENDERER=1`?
+    pub dmabuf_disabled: bool,
+    /// Why — `decide_dmabuf`'s reason, or the Settings override naming itself.
+    pub reason: String,
+    /// The evidence the probes saw ([`describe_probe`]).
+    pub evidence: String,
+    /// The exact `[recue] WebKitGTK: …` line printed at boot.
+    pub log_line: String,
+    /// `"auto"` | `"setting"` | `"env"` | `"user_env"` ([`source_label`]).
+    pub source: String,
+    /// The normalized persisted mode in effect **at boot**: `"auto"` | `"on"` | `"off"`.
+    /// Settings compares its draft against this to decide whether to show the
+    /// "restart to apply" note — so a fresh install (nothing persisted ⇒ `"auto"`) whose
+    /// draft is still `auto` shows none.
+    pub setting: String,
+}
+
+static BOOT_REPORT: std::sync::OnceLock<RendererReport> = std::sync::OnceLock::new();
+
+/// The boot rendering decision, or `None` when nothing was decided (macOS/Windows, or a
+/// Linux build whose `apply_webkit_env_workarounds` never ran).
+pub fn boot_report() -> Option<RendererReport> {
+    BOOT_REPORT.get().cloned()
 }
 
 /// Which NVIDIA kernel module (if any) is loaded. `Open` (nvidia-open) and `Proprietary`
@@ -498,17 +685,23 @@ fn read_trimmed(path: &std::path::Path) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// The renderer override in force. **Settings seam (#347):** a future persisted
-/// `dmabufMode` setting is OR'd in here (the env var still winning). It must be readable
-/// *before* `tauri::Builder` — GTK/WebKit read the env at init — so it would come from the
-/// app-data `sessions.json` read directly rather than through `app.path()`.
+/// The renderer override in force, what produced it, and the persisted mode it saw — the
+/// seam #347 left open, filled by #357.
+///
+/// The `RECUE_DISABLE_DMABUF` env var wins; otherwise the persisted **Settings → Rendering**
+/// mode decides. It must be readable *before* `tauri::Builder` (GTK/WebKit read the env at
+/// init and the Tauri `Store` only exists inside `.setup()`), so it comes from a direct
+/// read of the app-data `sessions.json` via the shared [`crate::early_settings`] rather than
+/// through `app.path()`. One extra few-kB read at boot, before any thread — and the only way.
+/// Fail-open at every step: any miss ⇒ `Auto` ⇒ exactly #347's detection.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn resolve_override() -> RendererOverride {
-    match parse_force_flag(std::env::var(RECUE_DMABUF_VAR).ok().as_deref()) {
-        Some(true) => RendererOverride::ForceDisable,
-        Some(false) => RendererOverride::ForceKeep,
-        None => RendererOverride::Auto,
-    }
+fn resolve_override() -> (RendererOverride, OverrideSource, DmabufMode) {
+    let env = parse_force_flag(std::env::var(RECUE_DMABUF_VAR).ok().as_deref());
+    let raw = crate::early_settings::read_settings()
+        .and_then(|s| crate::early_settings::settings_str(&s, DMABUF_SETTING_KEY));
+    let mode = normalize_dmabuf_mode(raw.as_deref());
+    let (over, source) = resolve_dmabuf_override(env, mode);
+    (over, source, mode)
 }
 
 /// The GPU inventory: one entry per `/sys/class/drm/cardN`, classified from its DRM driver
@@ -1081,18 +1274,31 @@ mod tests {
         }
 
         // Read-only reads; the values depend on the host, we only assert they resolve.
+        // `resolve_override` also reads the persisted `sessions.json` (#357) — on a CI
+        // runner there is none, which must simply fail open to `Auto`.
         let vm = probe_vm(&classes);
         let gl_env = nvidia_gl_env();
+        let (over, source, mode) = resolve_override();
         assert!(matches!(
-            resolve_override(),
+            over,
             RendererOverride::Auto | RendererOverride::ForceDisable | RendererOverride::ForceKeep
         ));
+        // The resolved pair is always self-consistent.
+        assert_eq!(
+            resolve_dmabuf_override(
+                parse_force_flag(std::env::var(RECUE_DMABUF_VAR).ok().as_deref()),
+                mode
+            ),
+            (over, source)
+        );
+        assert!(!mode_label(mode).is_empty());
+        assert!(!source_label(source).is_empty());
         assert!(read_trimmed(Path::new("/definitely/not/a/file")).is_none());
 
         // And the whole probe → decision path resolves to a reason string.
         let probe = DmabufProbe {
             user_set_dmabuf: false,
-            over: resolve_override(),
+            over,
             nvidia_kernel: flavor,
             nvidia_version: version,
             gpus: classes,
@@ -1101,7 +1307,168 @@ mod tests {
             vm,
             session_type: std::env::var("XDG_SESSION_TYPE").ok(),
         };
-        assert!(!decide_dmabuf(&probe).reason.is_empty());
+        let decision = decide_dmabuf(&probe);
+        assert!(!decision.reason.is_empty());
+        assert!(!decision_reason(source, mode, decision.reason).is_empty());
         assert!(describe_probe(&probe).contains("gpus: "));
+    }
+
+    // --- the persisted Settings mode (#357) ------------------------------------------------
+
+    #[test]
+    fn normalize_dmabuf_mode_parses_the_persisted_value() {
+        assert_eq!(normalize_dmabuf_mode(Some("on")), DmabufMode::On);
+        assert_eq!(normalize_dmabuf_mode(Some("OFF")), DmabufMode::Off);
+        assert_eq!(normalize_dmabuf_mode(Some(" auto ")), DmabufMode::Auto);
+        assert_eq!(normalize_dmabuf_mode(Some("  On")), DmabufMode::On);
+        assert_eq!(normalize_dmabuf_mode(Some("Off ")), DmabufMode::Off);
+        // Absent (an older sessions.json) / blank / hand-edited garbage → today's behavior.
+        assert_eq!(normalize_dmabuf_mode(None), DmabufMode::Auto);
+        assert_eq!(normalize_dmabuf_mode(Some("")), DmabufMode::Auto);
+        assert_eq!(normalize_dmabuf_mode(Some("bogus")), DmabufMode::Auto);
+        assert_eq!(normalize_dmabuf_mode(Some("1")), DmabufMode::Auto);
+        assert_eq!(normalize_dmabuf_mode(Some("true")), DmabufMode::Auto);
+    }
+
+    #[test]
+    fn resolve_dmabuf_override_gets_the_polarity_right() {
+        // The SETTING names the renderer: on = keep DMA-BUF, off = disable it.
+        assert_eq!(
+            resolve_dmabuf_override(None, DmabufMode::Off),
+            (RendererOverride::ForceDisable, OverrideSource::Setting)
+        );
+        assert_eq!(
+            resolve_dmabuf_override(None, DmabufMode::On),
+            (RendererOverride::ForceKeep, OverrideSource::Setting)
+        );
+        assert_eq!(
+            resolve_dmabuf_override(None, DmabufMode::Auto),
+            (RendererOverride::Auto, OverrideSource::Auto)
+        );
+
+        // The ENV VAR names the workaround: RECUE_DISABLE_DMABUF=1 = disable it. And it
+        // wins over EVERY setting value, including one that says the opposite.
+        for mode in [DmabufMode::Auto, DmabufMode::On, DmabufMode::Off] {
+            assert_eq!(
+                resolve_dmabuf_override(Some(true), mode),
+                (RendererOverride::ForceDisable, OverrideSource::Env),
+                "{mode:?}"
+            );
+            assert_eq!(
+                resolve_dmabuf_override(Some(false), mode),
+                (RendererOverride::ForceKeep, OverrideSource::Env),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_persisted_mode_drives_decide_dmabuf_end_to_end() {
+        // Setting `off` on a healthy Intel Mesa box (where auto would KEEP DMA-BUF) must
+        // disable it — the user override beats the detection.
+        let (over, source) = resolve_dmabuf_override(None, DmabufMode::Off);
+        let mut p = probe(vec![GpuClass::Mesa], NvidiaKernel::Absent);
+        assert!(!decide_dmabuf(&p).disable, "auto keeps it here");
+        p.over = over;
+        assert!(decide_dmabuf(&p).disable);
+        assert_eq!(
+            decision_reason(source, DmabufMode::Off, decide_dmabuf(&p).reason),
+            "forced off in Settings (linuxDmabufRenderer=off)"
+        );
+
+        // Setting `on` on an NVIDIA-blob-only box (where auto would DISABLE it) must keep
+        // DMA-BUF.
+        let (over, source) = resolve_dmabuf_override(None, DmabufMode::On);
+        let mut p = probe(vec![GpuClass::NvidiaBlob], NvidiaKernel::Proprietary);
+        assert!(decide_dmabuf(&p).disable, "auto disables it here");
+        p.over = over;
+        assert!(!decide_dmabuf(&p).disable);
+        assert_eq!(
+            decision_reason(source, DmabufMode::On, decide_dmabuf(&p).reason),
+            "forced on in Settings (linuxDmabufRenderer=on)"
+        );
+    }
+
+    #[test]
+    fn decision_reason_only_relabels_a_settings_override() {
+        // Auto / env keep #347's reason verbatim…
+        assert_eq!(
+            decision_reason(OverrideSource::Auto, DmabufMode::Auto, "Mesa GPU present"),
+            "Mesa GPU present"
+        );
+        assert_eq!(
+            decision_reason(
+                OverrideSource::Env,
+                DmabufMode::On,
+                "RECUE_DISABLE_DMABUF forced on"
+            ),
+            "RECUE_DISABLE_DMABUF forced on"
+        );
+        // …as does the user's own exported var (which beats the setting entirely).
+        assert_eq!(
+            decision_reason(
+                OverrideSource::UserEnv,
+                DmabufMode::Off,
+                "WEBKIT_DISABLE_DMABUF_RENDERER already set by the user"
+            ),
+            "WEBKIT_DISABLE_DMABUF_RENDERER already set by the user"
+        );
+        // A Setting source with mode Auto can't happen (resolve_dmabuf_override never
+        // produces it), but it must still degrade to the auto reason rather than lie.
+        assert_eq!(
+            decision_reason(OverrideSource::Setting, DmabufMode::Auto, "auto reason"),
+            "auto reason"
+        );
+    }
+
+    #[test]
+    fn boot_report_is_absent_until_boot_ran() {
+        // The report is only ever set by `apply_webkit_env_workarounds` (Linux), which the
+        // tests never call — it mutates the process env. So on every host, including this
+        // one, it reads `None`, which is exactly what hides Settings → Rendering on
+        // macOS/Windows: the section is Linux-only *by construction*, not by a UI check.
+        assert!(boot_report().is_none());
+    }
+
+    #[test]
+    fn renderer_report_serializes_snake_case() {
+        // The IPC contract with the TS `RendererReport` (`src/types/index.ts`): field names
+        // go over the wire verbatim, snake_case, with no `serde(rename_all)` — the
+        // `AgentInfo` precedent. A rename here would silently blank the Settings readout.
+        let json = serde_json::to_value(RendererReport {
+            dmabuf_disabled: true,
+            reason: "forced off in Settings (linuxDmabufRenderer=off)".into(),
+            evidence: "gpus: nvidia[blob]; nvidia: open 610.43.03; vm: no; session: wayland".into(),
+            log_line: "[recue] WebKitGTK: DMA-BUF disabled — …".into(),
+            source: "setting".into(),
+            setting: "off".into(),
+        })
+        .expect("the report serializes");
+
+        assert_eq!(json["dmabuf_disabled"], true);
+        assert_eq!(json["source"], "setting");
+        assert_eq!(json["setting"], "off");
+        assert!(json["reason"].is_string());
+        assert!(json["evidence"].is_string());
+        assert!(json["log_line"].is_string());
+        // Exactly these six keys — nothing extra leaks, nothing is missing.
+        let obj = json.as_object().expect("an object");
+        assert_eq!(obj.len(), 6, "{obj:?}");
+    }
+
+    #[test]
+    fn labels_match_the_ts_unions() {
+        assert_eq!(mode_label(DmabufMode::Auto), "auto");
+        assert_eq!(mode_label(DmabufMode::On), "on");
+        assert_eq!(mode_label(DmabufMode::Off), "off");
+        // Round-trip: every label re-normalizes to its own mode (the TS Settings field
+        // writes exactly these strings into the blob).
+        for mode in [DmabufMode::Auto, DmabufMode::On, DmabufMode::Off] {
+            assert_eq!(normalize_dmabuf_mode(Some(mode_label(mode))), mode);
+        }
+        assert_eq!(source_label(OverrideSource::Auto), "auto");
+        assert_eq!(source_label(OverrideSource::Setting), "setting");
+        assert_eq!(source_label(OverrideSource::Env), "env");
+        assert_eq!(source_label(OverrideSource::UserEnv), "user_env");
     }
 }

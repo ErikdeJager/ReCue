@@ -1037,6 +1037,128 @@ make map contents depend on scroll history) and defaulting `showDiffLineCounts` 
       closing it, subsequent busy→idle settles run **no** `git status` for that repo.
 - [ ] **Focus backstop**: alt-tab away and back → the `+A/−D` badge picks up a file edited in an
       external editor (full volley, at most once per 30 s).
+
+### Renderer overrides in Settings (Task #357)
+
+ReCue makes **two** rendering decisions on Linux, and until now a user could only influence
+either through **environment variables** — which a `.desktop` / AppImage launch from a desktop
+menu never sees. Tauri's own [Linux-graphics guidance](https://v2.tauri.app/develop/debug/linux-graphics/)
+explicitly recommends shipping user-facing rendering-mode settings, precisely because
+WebKitGTK masks the WebGL renderer string and auto-detection is unreliable. #357 adds the UI,
+plus a plain-text readout of what auto-detection actually decided at boot.
+
+**Settings → Rendering** (Linux only — the nav entry and the pane are filtered out on
+macOS/Windows, and `renderer_diagnostics` returns `null` there):
+
+| Control | Values | Scope |
+|---|---|---|
+| **DMA-BUF renderer** | Auto (default) / On / Off | **next launch** |
+| **Terminal renderer** | Auto (default) / WebGL / DOM | **live, on Save** |
+| **Diagnostics** | the boot line + evidence + what decided it + the probed WebGL renderer | read-only, **Copy** button |
+
+Both default to `auto`, so every existing install and both other OSes behave byte-for-byte as
+they did (`mergeSettings` fills the missing keys with `auto`).
+
+**Precedence (unchanged rules 1–2 of #347, with the setting slotted underneath):**
+
+```
+user-exported WEBKIT_DISABLE_DMABUF_RENDERER  >  RECUE_DISABLE_DMABUF  >  Settings  >  auto
+```
+
+When an env var wins, the Settings pane **says so** ("Overridden this run by …") rather than
+letting the saved setting look silently broken.
+
+**The polarity is the sharp edge.** The *setting* names the **renderer** (`on` = DMA-BUF on =
+`RendererOverride::ForceKeep`); the *env var* names the **workaround** (`RECUE_DISABLE_DMABUF=1`
+= disable it = `ForceDisable`). `resolve_dmabuf_override(env, mode)` is the one place both meet,
+and its unit tests assert the matrix in both directions.
+
+**Why the DMA-BUF setting can only apply at the next launch.** GTK/WebKit read
+`WEBKIT_DISABLE_DMABUF_RENDERER` **once, at init** — and Tauri's `Store` is only constructed
+inside `.setup()`, i.e. *after* GTK init. There is no seam in between, so the persisted mode has
+to be read **straight off disk before `tauri::Builder`**. That is what the new shared
+**`src-tauri/src/early_settings.rs`** does: it re-derives Tauri's Linux `app_data_dir()` rule
+(`$XDG_DATA_HOME` when absolute, else `$HOME/.local/share`, joined with the bundle identifier —
+guarded by an `include_str!("../tauri.conf.json")` drift test), reads `sessions.json`, and hands
+back the opaque settings blob. Fail-open at every step: a missing file / bad JSON / missing key →
+`None` → `auto` → exactly #347's behavior. **`linux_gtk.rs` (#349) now uses the same reader**
+(its duplicate `store_path` / `theme_from_store_json` / consts are gone). There is deliberately
+**no in-app "Restart now" button** — a relaunch would kill every running agent's PTY.
+
+**The live terminal-renderer swap never disposes a host.** That is the #18 invariant: disposing a
+pooled xterm replays scrollback whose absolute cursor moves were encoded for a different width,
+garbling `claude`'s TUI. Instead the WebGL addon is **loaded/disposed on the running xterm** (the
+same path `onContextLoss` already takes — disposing it reverts xterm to its DOM renderer), then
+`refresh()` + `scheduleResize()`. It deliberately does **not** call `clearTextureAtlas()`: the
+glyph atlas is **shared** across the pool, and clearing it from under the other terminals is the
+#221 "font jumble" bug (and the font has long since loaded by then anyway).
+
+**The #364 context-loss latch outranks this setting.** The single gate is
+`terminalPool.webglPermitted()` = `webglFallback.allowsWebgl() && rendererDecision().webgl` —
+**latch first**, so a window that already fell back never even constructs #346's probe canvas.
+Consequence: forcing **DOM** always takes effect (a live addon is unloaded immediately), but
+forcing **WebGL** on a window that has suffered an *unrecovered* WebGL context loss does **not**
+re-attach the addon — that is precisely the context storm on a sick driver the latch exists to
+prevent, and re-arming it is a relaunch. `host.loadWebgl()` re-checks both `disposed` **and** the
+latch *after* its lazy `import("@xterm/addon-webgl")` (#356) resolves, and attaches #364's full
+`onContextLoss` handler to the instance the chunk yields; the Settings diagnostics readout
+reports `active: "dom"` with a "WebGL context lost and not restored" reason in that state, so the
+UI never claims a renderer the window isn't on.
+
+**Files**: `src-tauri/src/early_settings.rs` (**new** — shared pre-GTK reader + tests),
+`src-tauri/src/linux_webkit.rs` (`DmabufMode` / `OverrideSource` / `normalize_dmabuf_mode` /
+`resolve_dmabuf_override` / `decision_reason` + the `RendererReport` `OnceLock`),
+`src-tauri/src/linux_gtk.rs` (converged onto `early_settings`), `src-tauri/src/commands.rs`
+(`renderer_diagnostics`), `src-tauri/src/lib.rs`, `src/components/Terminal/webglRenderer.ts`
+(pure `decideTerminalRenderer`), `src/components/Terminal/terminalPool.ts`
+(`applyTerminalRenderer` / `terminalRendererReport` / `host.webgl`),
+`src/components/Settings/Settings.tsx` + `.module.css`, `src/store.ts`, `src/ipc.ts`,
+`src/types/index.ts`.
+
+#### Verified on a real box (Arch, Hyprland/Wayland, hybrid Intel i915 + NVIDIA-open 610.43.03)
+
+Run against an **isolated `XDG_DATA_HOME`** so the developer's real `sessions.json` was never
+touched. The boot line's evidence matches the independently-read ground truth exactly
+(`/sys/class/drm/card0 → nvidia (0x10de)`, `card1 → i915 (0x8086)`,
+`/proc/driver/nvidia/version → Open Kernel Module 610.43.03`, DMI `ASUSTeK … ROG Zephyrus M16`,
+`XDG_SESSION_TYPE=wayland`):
+
+- [x] **No key persisted** (fresh install) → `DMA-BUF left on — Mesa GPU present (healthy DMA-BUF)`
+      — #347's detection, unchanged.
+- [x] **`linuxDmabufRenderer: "off"`** → `DMA-BUF disabled — forced off in Settings (linuxDmabufRenderer=off)`.
+- [x] **`linuxDmabufRenderer: "on"`** → `DMA-BUF left on — forced on in Settings (linuxDmabufRenderer=on)`.
+- [x] **`RECUE_DISABLE_DMABUF=1` + setting `on`** → `DMA-BUF disabled — RECUE_DISABLE_DMABUF forced on`
+      (the env beats the setting).
+- [x] **`WEBKIT_DISABLE_DMABUF_RENDERER=1` + setting `off`** → `DMA-BUF untouched — … already set
+      by the user` (the user's own env beats everything; we never write the variable).
+
+#### Needs real-box verification (renderer overrides, #357)
+
+The GUI paths below could not be exercised headlessly (they need a human at the window):
+
+- [ ] Settings → **Rendering** appears (Linux) with both controls + the diagnostics block; the
+      readout's DMA-BUF half matches the `[recue] WebKitGTK: …` line printed on stderr, and its
+      terminal half names the probed WebGL renderer (expected here: `Mesa Intel(R) Graphics …`).
+- [ ] **Copy diagnostics** puts the whole block on the clipboard ("Diagnostics copied" toast).
+- [ ] The **"Restart ReCue to apply this"** note appears only when the DMA-BUF draft differs from
+      the mode that was in effect at boot — and is **absent** on a fresh install left at Auto.
+- [ ] **Terminal renderer = DOM → Save** with 2+ agents open: every terminal keeps its contents
+      (no clear, no scrollback replay, no TUI garble), and the WebGL addon is gone. Switch back to
+      **WebGL → Save**: same, no font jumble in the *other* already-running terminals (#221).
+- [ ] **Terminal renderer = WebGL** on a box whose probe says llvmpipe: the addon loads anyway and
+      no "skipping WebGL renderer" warning is logged.
+- [ ] A **detached canvas window** (#105) keeps the DOM renderer whatever the setting says.
+- [ ] **#364 latch beats a forced WebGL.** Force a context loss in one terminal (devtools:
+      `getContext("webgl2").getExtension("WEBGL_lose_context").loseContext()`, no restore) → the
+      window latches to DOM. Then set **Terminal renderer = WebGL → Save**: the addon is **not**
+      re-attached in any terminal, and the diagnostics readout says `dom` /
+      "WebGL context lost and not restored". Relaunching re-arms it.
+- [ ] The shipped **AppImage** (no env vars set at all) can reach both switches and the readout —
+      the whole reason this task exists.
+- [ ] **macOS / Windows regression:** no Rendering entry in the Settings nav, and terminals render
+      exactly as before.
+
+
 ## 2026-07-14 — Login-shell PATH probe off the startup critical path (#360)
 
 The `.desktop`/AppImage launch inherits the session environment, not the login-shell PATH,

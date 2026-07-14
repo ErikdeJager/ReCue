@@ -22,3 +22,39 @@
 export function isSoftwareWebGLRenderer(renderer: string): boolean {
   return /llvmpipe|softpipe|swiftshader|lavapipe|software/i.test(renderer);
 }
+
+/** The persisted Settings → Rendering terminal-renderer mode (#357, Linux only):
+ * `"auto"` runs the probe above, `"webgl"` / `"dom"` override it. Mirrors the TS
+ * `Settings.linuxTerminalRenderer` union. */
+export type TerminalRendererMode = "auto" | "webgl" | "dom";
+
+/** Which xterm renderer to use, and a human reason for the Settings readout + the
+ * one-time console diagnostic. */
+export interface TerminalRendererDecision {
+  /** Load xterm's `WebglAddon`? (false ⇒ its DOM renderer.) */
+  webgl: boolean;
+  /** Why — e.g. `"forced in Settings"`, `"software rasterizer: llvmpipe (…)"`. */
+  reason: string;
+}
+
+/**
+ * Resolve the terminal renderer (#357). Pure: the caller supplies the already-probed
+ * renderer string (`null` when there is no WebGL context at all).
+ *
+ * The **user override wins over the probe** — a box whose renderer string WebKitGTK masks,
+ * or that the heuristic reads wrong, is exactly why this setting exists (Tauri's own
+ * Linux-graphics guidance recommends shipping the switch). `"auto"` is unchanged #346
+ * behavior: no WebGL context, or a software rasterizer (llvmpipe/SwiftShader), ⇒ the DOM
+ * renderer, which beats CPU-rendered GL.
+ */
+export function decideTerminalRenderer(
+  mode: TerminalRendererMode,
+  renderer: string | null,
+): TerminalRendererDecision {
+  if (mode === "webgl") return { webgl: true, reason: "forced in Settings" };
+  if (mode === "dom") return { webgl: false, reason: "forced in Settings" };
+  if (renderer === null) return { webgl: false, reason: "no WebGL context" };
+  if (isSoftwareWebGLRenderer(renderer))
+    return { webgl: false, reason: `software rasterizer: ${renderer}` };
+  return { webgl: true, reason: renderer };
+}

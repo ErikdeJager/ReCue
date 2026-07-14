@@ -39,7 +39,10 @@ import {
   parseTemplateJson,
   serializeTemplate,
 } from "./components/TemplateManager/templateIo";
-import { applyTerminalSettings } from "./components/Terminal/terminalPool";
+import {
+  applyTerminalRenderer,
+  applyTerminalSettings,
+} from "./components/Terminal/terminalPool";
 import { decodeOutputB64 } from "./decodeOutput";
 import {
   ALL_GIT_REFRESH_KINDS,
@@ -1089,6 +1092,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // True by default (#335): show the per-agent added/removed line-count badge. Off
   // hides it AND stops ReCue running any `diff_line_counts` git read.
   showDiffLineCounts: true,
+  // Rendering (#357), Linux only. Both default to "auto", so every existing install (whose
+  // blob lacks the keys → mergeSettings fills them) and every macOS/Windows box behaves
+  // byte-for-byte as before: #346/#347's DMA-BUF detection and the #346 WebGL probe.
+  linuxDmabufRenderer: "auto",
+  linuxTerminalRenderer: "auto",
   defaultView: "overview",
   confirmDestructive: true,
   canvasCloseBehavior: "ask",
@@ -1168,6 +1176,12 @@ function applySettingsEffects(s: Settings): void {
     lineHeight: s.terminalLineHeight,
     cursorBlink: s.terminalCursorBlink,
   });
+  // Terminal renderer override (#357, Linux only): converge every pooled xterm onto the
+  // chosen WebGL/DOM renderer WITHOUT disposing a host (the #18 invariant). It reads the
+  // mode from the store, and this runs after `set({ settings })` in both `saveSettings`
+  // and the boot `refresh()`, so the pool reconciles on Save and also heals any host that
+  // was created during boot before the blob had loaded. A no-op off Linux.
+  applyTerminalRenderer();
   if (typeof document === "undefined") return; // non-DOM env (e.g. unit tests)
   // Accent (#102/#107): override --accent AND its derived companion tokens
   // (--accent-hover / -dim / -fg) on :root, so hover / dim / on-accent surfaces all

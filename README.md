@@ -167,6 +167,12 @@ under `$XDG_DATA_HOME`, never uses `sudo`, and is safe to re-run. A desktop inte
 Lever, appimaged, AppImageLauncher) or a hand-written entry works too — see
 [`docs/linux-desktop-integration.md`](docs/linux-desktop-integration.md), which also covers
 WM_CLASS/`app_id` matching and icon troubleshooting.
+  If the app window or its terminals render slowly, the two rendering switches live in
+  **Settings → Rendering** (Linux only): the **DMA-BUF renderer** (auto / on / off — the
+  WebKitGTK GPU path; applies at the **next launch**) and the **terminal renderer** (auto /
+  WebGL / DOM — applies immediately), plus a copy-pasteable readout of what ReCue detected
+  at startup. `RECUE_DISABLE_DMABUF=1|0` still overrides the DMA-BUF choice for one run, and
+  a `WEBKIT_DISABLE_DMABUF_RENDERER` you export yourself is always respected untouched.
 
 Each `tauri build` produces the bundle for the OS it runs on; build on a macOS host for
 the macOS artifacts, a Windows host for the Windows installers, and a Linux host (or the

@@ -2914,6 +2914,19 @@ pub fn windows_build() -> u32 {
     }
 }
 
+/// What ReCue decided about the WebKitGTK DMA-BUF renderer at boot (#357), for
+/// **Settings → Rendering**: the exact boot line, its reason + evidence, what decided it
+/// (auto-detection / the persisted setting / `RECUE_DISABLE_DMABUF` / the user's own
+/// `WEBKIT_DISABLE_DMABUF_RENDERER`), and the persisted mode that was in effect.
+///
+/// `None` on macOS and Windows — nothing is decided there ([`linux_webkit`] is a no-op), so
+/// the frontend hides the whole Rendering section. Read-only; no state, no env, no I/O (the
+/// report was captured once at boot into a `OnceLock`).
+#[tauri::command]
+pub fn renderer_diagnostics() -> Option<crate::linux_webkit::RendererReport> {
+    crate::linux_webkit::boot_report()
+}
+
 /// Parse the Windows build number out of `cmd /C ver` output, e.g.
 /// `"Microsoft Windows [Version 10.0.19045.4046]"` → `Some(19045)` — the **third**
 /// dotted component of the bracketed version. Tolerant of `ver`'s leading blank line

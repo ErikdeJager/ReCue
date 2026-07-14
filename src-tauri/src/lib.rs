@@ -8,6 +8,7 @@ mod agents;
 mod boot;
 mod child_env;
 mod commands;
+mod early_settings;
 mod files;
 mod git;
 mod linux_desktop;
@@ -386,6 +387,7 @@ pub fn run() {
             commands::platform,
             commands::install_kind,
             commands::windows_build,
+            commands::renderer_diagnostics,
             usage::claude_session_usage,
         ])
         .build(tauri::generate_context!())
