@@ -3296,3 +3296,17 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Row hover wash = color-mix(text-primary 4%, transparent) with a plain token fallback declaration before it (the demo's rgba(205,214,244,.04) has no token equivalent).
 - Context menus / checkout picker / color picker styles are kept byte-identical (Task 375 owns floating-chrome look); this card only keeps them working.
 - Rail dot tooltips gain the §6 state suffix ("— running/awaiting input/idle") via a new tiny pure helper railDotState + unit test — a strict superset of today's name-only tooltip.
+
+## Task 373
+
+- A Shortcuts section already exists (#318): the card's "new Shortcuts section" is implemented as completing it — adding the missing ⌘F (global search) and the new ⌘D entries, keeping the existing grouped superset (⌘⌥1–6, ⇧arrows, ⌘S, diff keys) rather than trimming to the demo's 5 rows, and restyling rows to the demo's label-left/kbd-chip-right form.
+- The dialog uses the Task-372 `--radius-window` token (10px) rather than the demo's literal 12px — the foundation token is the epic's floating-chrome contract.
+- ⌘D is main-window-only (mirrors ⌘N/⌘B/⌘K/⌘T "swallowed but inert" in a detached window — settings are main-authoritative and not broadcast cross-window; a detached window adopts dense at its next boot, same staleness as theme/accent today) and inert while the Settings modal is open, so Save can't clobber the just-toggled flag with a stale draft.
+- The confirm toast fires on the ⌘D path only ("Dense panels on"/"Dense panels off", the demo's strings); the Settings-checkbox path saves silently like every other setting.
+- `accentColor: "random"` resolves once per window document per run (module-level memo): re-saves never re-roll mid-run; each launch rolls fresh; a detached window rolls independently (accepted, no cross-window accent sync exists today).
+- The "?" swatch is card-defined (absent from the demo): styled like the existing neutral custom-swatch (crust well + hairline + "?" glyph), placed after the 14 palette swatches; active state uses the same demo ring.
+- Kept all 14 REPO_PALETTE swatches (demo shows 10) and kept the Light theme fully selectable/functional (demo mocks it with a toast) — the parity/"light must not regress" constraints win over the demo.
+- Settings' six segmented rows stay plain-button markup restyled to the demo's 26px crust-well/Surface0-active values instead of swapping onto the 372 SegmentedControl atom (whose looks are 20/22px; smaller diff, demo-exact, zero behavior risk); the active segment drops the old accent fill per the "accent never encodes state" rule.
+- New checkbox labels/copy chosen by me: "Dense panels" (+ kbdHint ⌘D help), "Background animation", "Cap agent card width" — consumers of the latter two land in cards 3/5, so they persist but are visually inert here, per the card.
+- The Slider restyle (4px crust track, 12px accent thumb, per demo) is included here — PLAN-372 explicitly deferred it to card 2.
+- Dense's visible tiling waits on cards 5/6 consuming the 372 stage vars; this card's verifiable effect is the persisted flag, the toast, and the `dense` class on <html> zeroing the vars.
