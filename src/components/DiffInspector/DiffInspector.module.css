@@ -14,66 +14,30 @@
   outline-offset: -1px;
 }
 
-/* --- Summary --- */
+/* --- Summary (UI v2 §8: two control rows) --- */
 .summary {
   flex-shrink: 0;
-  padding: var(--space-12);
+  padding: 0;
   border-bottom: 1px solid var(--border-hairline);
 }
 
-.summaryRow {
+/* Row 1: the "N file(s) +a −d" meta + the Focused|Accordion segmented control. */
+.toolbar {
   display: flex;
+  min-width: 0;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-8);
-  margin-bottom: var(--space-6);
+  padding: var(--space-6) 10px;
 }
 
-.branch {
+.meta {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
-  color: var(--text-secondary);
-  font-family: var(--mono);
-  font-size: var(--fs-meta);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.summaryActions {
-  display: flex;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-6);
-}
-
-.modeToggle {
-  display: inline-flex;
-  padding: var(--space-1);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
-  background: var(--bg-base);
-}
-
-.mode,
-.modeActive {
-  padding: var(--space-1) var(--space-6);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: var(--fs-meta-sm);
-  cursor: pointer;
-}
-
-.mode:hover {
-  color: var(--text-secondary);
-}
-
-.modeActive {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
 }
 
 /* --- Source toggle + branch-compare pickers (#81) --- */
@@ -82,7 +46,12 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-6);
-  margin-bottom: var(--space-6);
+  padding: 0 10px var(--space-6);
+}
+
+/* Pushes the sort/line toggles + refresh right when the pickers are absent. */
+.spacer {
+  flex: 1;
 }
 
 .comparePickers {
@@ -93,13 +62,15 @@
   gap: var(--space-4);
 }
 
+/* A crust input well on the base panel (UI v2 §8). */
 .branchSelect {
   min-width: 0;
   flex: 1;
+  height: 22px;
   padding: var(--space-1) var(--space-4);
   border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
-  background: var(--bg-base);
+  border-radius: 0;
+  background: var(--content-bg);
   color: var(--text-secondary);
   font-family: var(--mono);
   font-size: var(--fs-meta-sm);
@@ -121,8 +92,8 @@
 
 .refresh {
   display: flex;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   align-items: center;
   justify-content: center;
   border: 0;
@@ -133,17 +104,12 @@
 }
 
 .refresh:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
 .spinning {
   animation: diff-spin 0.8s linear infinite;
-}
-
-.counts {
-  color: var(--text-secondary);
-  font-size: var(--fs-meta);
 }
 
 .add {
@@ -166,44 +132,8 @@
   text-align: center;
 }
 
-/* --- Changed-files list --- */
-.files {
-  flex-shrink: 0;
-  max-height: 180px;
-  overflow-y: auto;
-  border-bottom: 1px solid var(--border-hairline);
-}
-
-.fileRow {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: var(--space-8);
-  padding: var(--space-4) var(--space-12);
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.fileRow:hover {
-  background: var(--bg-hover);
-}
-
-.fileActive {
-  background: var(--accent-dim);
-}
-
-.glyph {
-  flex-shrink: 0;
-  width: 12px;
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-  font-weight: 600;
-  text-align: center;
-}
-
+/* File-status glyph tints (StatusBadge / picker rows). Yellow M mirrors the
+   FileTree's modified tint (UI v2 §8). */
 .glyphAdd {
   color: var(--diff-add-fg);
 }
@@ -213,27 +143,7 @@
 }
 
 .glyphMod {
-  color: var(--text-secondary);
-}
-
-.filePath {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-}
-
-.fileCounts {
-  display: flex;
-  flex-shrink: 0;
-  gap: var(--space-6);
-  font-size: var(--fs-meta-sm);
+  color: var(--status-awaiting);
 }
 
 /* --- Diff body --- */
@@ -243,6 +153,7 @@
   /* Long lines soft-wrap (#80) instead of scrolling right; keep vertical scroll. */
   overflow-x: hidden;
   overflow-y: auto;
+  padding: var(--space-2) 0 var(--space-8);
 }
 
 .code {
@@ -262,12 +173,13 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: var(--space-2) var(--space-8);
-  /* Opaque fill + hairline divider so the floating header never lets the code lines
-     beneath it bleed through while it sticks. */
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border-hairline);
-  color: var(--text-muted);
+  padding: 0 var(--space-12);
+  /* Blue tint over an OPAQUE base under-layer (UI v2 §8) so the floating header
+     never lets the code lines beneath it bleed through while it sticks. */
+  background: var(--bg-panel);
+  background:
+    linear-gradient(var(--diff-hunk-bg), var(--diff-hunk-bg)), var(--bg-panel);
+  color: var(--diff-hunk-fg);
 }
 
 .line {
@@ -302,7 +214,7 @@
      lets this flex item shrink below its content so wrapping actually kicks in. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: var(--text-primary);
+  color: var(--text-secondary);
 }
 
 /* Prism syntax highlighting in the diff (#229), mirroring the FileViewer's token
@@ -381,6 +293,19 @@
   background: var(--diff-del-bg);
 }
 
+/* Add/del-colored code text + markers (UI v2 §8). Prism token spans (the
+   `.content :global(.token…)` child rules above) still override inside
+   highlighted files, so #229 is preserved; plain files read green/red. */
+.addRow .content,
+.addRow .marker {
+  color: var(--diff-add-fg);
+}
+
+.delRow .content,
+.delRow .marker {
+  color: var(--diff-del-fg);
+}
+
 /* --- Split layout --- */
 .splitLine {
   display: flex;
@@ -417,20 +342,23 @@
 
 /* --- Redesigned file display (#231) --- */
 
-/* Small square status badge (M/A/D); color comes from glyphAdd/glyphDel/glyphMod
-   (currentColor drives the tinted border). */
+/* Small square status chip (M/A/D); color comes from glyphAdd/glyphDel/glyphMod —
+   a borderless 15% currentColor tint (UI v2 §8; transparent fallback first, the
+   menu.css color-mix precedent). */
 .badge {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: 1px solid currentColor;
+  width: 14px;
+  height: 14px;
+  border: 0;
   border-radius: var(--radius-chip);
+  background: transparent;
+  background: color-mix(in srgb, currentColor 15%, transparent);
   font-family: var(--mono);
-  font-size: var(--fs-meta-xs);
-  font-weight: 600;
+  font-size: 9px;
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -500,7 +428,8 @@
   min-width: 320px;
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-control);
-  background: var(--bg-elevated);
+  /* Crust card fill on the base panel — the v2 inset-well pattern (§8). */
+  background: var(--content-bg);
 }
 .cardOpen {
   border-color: var(--border-strong);
@@ -517,7 +446,7 @@
   cursor: pointer;
 }
 .cardHeader:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 .cardBody {
   max-height: 420px;
@@ -525,29 +454,30 @@
   border-top: 1px solid var(--border-hairline);
 }
 
-/* Focused mode: nav strip + sub-header + body. */
+/* Focused mode: the pager row (‹ pill › + seen toggle) + body (UI v2 §8 — the
+   pager flows straight into the hunks, no border). */
 .focusNav {
   display: flex;
   align-items: center;
-  gap: var(--space-8);
-  padding: var(--space-8) var(--space-12);
-  border-bottom: 1px solid var(--border-hairline);
+  gap: var(--space-6);
+  padding: var(--space-6) 10px;
 }
+/* Ghost 24×24 pager arrows. */
 .navArrow {
   display: flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--border-strong);
+  width: 24px;
+  height: 24px;
+  border: 0;
   border-radius: var(--radius-control);
-  background: transparent;
+  background: none;
   color: var(--text-secondary);
   cursor: pointer;
 }
 .navArrow:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 .navArrow:disabled {
@@ -559,24 +489,29 @@
   flex: 1;
   min-width: 0;
 }
+/* Centered 26px crust file pill. */
 .pickerPill {
   display: flex;
   width: 100%;
+  height: 26px;
   align-items: center;
-  gap: var(--space-8);
-  padding: var(--space-4) var(--space-12);
-  border: 1px solid var(--border-strong);
+  justify-content: center;
+  gap: 7px;
+  padding: 0 var(--space-8);
+  border: 1px solid var(--border-hairline);
   border-radius: var(--radius-control);
-  background: var(--bg-base);
+  background: var(--content-bg);
   color: var(--text-primary);
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 .pickerPill:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 .pickerName {
   overflow: hidden;
-  flex: 1;
+  flex: 0 1 auto;
+  min-width: 0;
   font-family: var(--mono);
   font-size: var(--fs-meta);
   font-weight: 600;
@@ -584,16 +519,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The folded-in per-file counts ride small inside the pill (UI v2 §8). */
+.pickerPill .countsPair {
+  font-size: var(--fs-meta-xs);
+}
 .pickerIndex {
   flex-shrink: 0;
   color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
 }
 .pickerBackdrop {
   position: fixed;
   inset: 0;
   z-index: 10;
 }
+/* Floating chrome (UI v2 §10) — the same token values as the global `.menu-pop`,
+   styled locally: its 200px min-width + entry animation don't fit an anchored
+   full-pill-width listbox. */
 .pickerMenu {
   position: absolute;
   z-index: 11;
@@ -604,9 +546,9 @@
   overflow-y: auto;
   padding: var(--space-4);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
+  border-radius: var(--radius-window);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-menu);
 }
 .pickerItem {
   display: flex;
@@ -622,7 +564,7 @@
   cursor: pointer;
 }
 .pickerItem:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 .pickerItemActive {
   background: var(--accent-dim);
@@ -634,13 +576,6 @@
   font-size: var(--fs-meta-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.focusSubheader {
-  display: flex;
-  align-items: center;
-  gap: var(--space-8);
-  padding: var(--space-6) var(--space-12);
-  border-bottom: 1px solid var(--border-hairline);
 }
 
 /* --- Per-file "seen" review marker (#278) --- */
@@ -679,7 +614,7 @@
   cursor: pointer;
 }
 .seenButton:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 .seenButton:focus-visible {
   outline: 1px solid var(--accent);
@@ -717,13 +652,4 @@
   font-family: var(--mono);
   font-size: var(--fs-meta-xs);
   line-height: 1.4;
-}
-.focusPath {
-  overflow: hidden;
-  flex: 1;
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-  color: var(--text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
