@@ -3143,3 +3143,236 @@ environment. **A byte-for-byte no-op on macOS, on Windows, and on any non-AppIma
   `/tmp/.mount_` segment in `PATH`/`XDG_DATA_DIRS`/`LD_LIBRARY_PATH`; `xdg-open`, the Ctrl-click link open,
   "Reveal in File Manager", "Open data folder", `git`, and a spawned `claude` agent all work under the
   AppImage; and ReCue's own window/dialogs are visually unchanged (the app's *own* process env is untouched).
+
+### 353. [x] Move the straggler sync Tauri commands (PTY spawn/kill/scrollback, agent probes, git writes) off the webview main thread
+
+In Tauri 2 a command declared `pub fn` runs **on the webview/main thread**; only `pub async fn` is dispatched
+to the async runtime. A set of commands that do genuinely blocking work were still synchronous, so the window
+froze while they ran: the whole **PTY spawn family** (a `cwd` stat + a full `$PATH` scan + `openpty()` + a copy
+of the entire process env + `fork`/`exec`, inline — plus `git worktree add` for the worktree variants and a
+`~/.claude/projects` glob for a fork), the **agent probes** (`agent_info` / `claude_version` spawn
+`<binary> --version` **and wait** — and because the command was sync, `maybeOnboardAgent`'s `Promise.all` over
+`SELECTABLE_AGENTS` executed them *serially on the main thread*, freezing a not-yet-onboarded install for
+~1–2 s × N), **`session_scrollback`** (a 256 KB copy + base64 per terminal mount, N of them at boot),
+**`search_session_output`** (that copy plus a UTF-8 decode + ANSI strip + scan for **every live session**, on
+every keystroke in the global search modal), **`kill_session`**, the **git writes** `pull_branch` (a *network*
+`git pull` on the main thread) / `checkout_branch` / `create_branch` (the trio #330 explicitly deferred), and
+the schedule/recurring creators + manual fire (an eager `git worktree add`, and a possible inline first spawn).
+All 17 now run `async fn` + `tauri::async_runtime::spawn_blocking`, the pattern from #200/#299/#316/#328/#330.
+The win is largest on Linux/WebKitGTK, where main-thread work is the known bottleneck (#346), but it is
+platform-neutral — no `#[cfg]` arm is introduced or changed.
+
+**What shipped** (branch `sync-commands-off-main-thread`, PR
+[#107](https://github.com/ErikdeJager/ReCue/pull/107), 2026-07-14) — **`src-tauri/src/commands.rs` only**:
+
+- **17 commands converted** to `pub async fn` + `spawn_blocking`: `spawn_session`, `spawn_terminal`,
+  `spawn_worktree_agent`, `spawn_worktree_agent_new_branch`, `resume_session`, `fork_session`, `kill_session`,
+  `session_scrollback`, `search_session_output`, `agent_info`, `claude_version`, `pull_branch`,
+  `checkout_branch`, `create_branch`, `create_schedule`, `create_recurring`, `fire_schedule_now`.
+- **The state-plumbing crux.** `State<'_, T>` is a **borrow** — not `'static`, so it can never be captured by a
+  `spawn_blocking` closure (`F: FnOnce() -> R + Send + 'static`). Every converted command therefore drops its
+  `State` args, takes an owned **`app: AppHandle`** (`Clone + Send + Sync + 'static`), and resolves
+  `app.state::<SessionManager>()` / `app.state::<Store>()` **inside** the closure — the same route the
+  boot-resume thread, the event forwarder, and `fire_schedule_now` already used. Bodies moved **verbatim** into
+  private `*_blocking` helpers; the commands are thin wrappers. Because a `State` arg is what forces an async
+  command to return `Result`, dropping it also let the two non-`Result` commands (`agent_info`,
+  `search_session_output`) keep their bare return types — **so `src/ipc.ts`, the store, and every TS type are
+  untouched** (an `AppHandle` param is injected by Tauri, never sent by `invoke`).
+- **Three commands deliberately stay sync, each with the rationale recorded in-code**: **`write_stdin`** —
+  per-keystroke, the work is a `memcpy` + one `write`/`flush` (microseconds), and async would **destroy write
+  ordering**, since `terminalPool.ts` fires it un-awaited from xterm's `onData`, so two quick keystrokes would
+  become two racing tasks that could reach the PTY out of order (a corrupted prompt); **`resize_pty`** — a
+  cheap ioctl, fired-and-forgotten from a `ResizeObserver`, where racing async resizes could land out of order
+  and leave the PTY on a stale size (a garbled TUI) for zero win; **`list_sessions`** — an in-memory `Vec`
+  clone, called about once at boot.
+
+**Key decisions**
+
+- **No `pty.rs` / `store.rs` changes at all.** Their `std::sync::Mutex`es stay as-is — **no `tokio::sync`, no
+  `Arc<SessionManager>` managed-state swap**. No guard can cross an `.await`, because every lock is taken
+  inside a synchronous method called from *inside* the blocking closure, and the `Send` bound on Tauri's
+  spawned command future makes the alternative a compile error (`std::sync::MutexGuard` is `!Send`). This also
+  kept the diff clear of the concurrent Tasks #350/#354, which edit `pty.rs` internals.
+- **`async fn` + `spawn_blocking`, never `#[tauri::command(async)]`** — the latter runs the blocking body on a
+  *tokio worker* thread rather than the blocking pool, which can starve the runtime.
+- **Scope rule: convert every sync command that spawns a process or shells out to git.** That is 6 more than
+  the card listed (the two worktree spawns, `search_session_output`, and the deferred `pull`/`checkout`/`create`
+  branch trio) plus the three schedule/recurring commands. Deliberately **not** converted, and recorded rather
+  than silently skipped: the `files.rs` family, `list_skills`, `save_clipboard_image`, the openers, and the
+  in-memory store getters/setters — a different (mostly sub-millisecond FS/opener) family;
+  `search_file_contents` is flagged as the one plausible remaining straggler for a follow-up card.
+- **Ordering is the one real semantic change** — async commands are no longer FIFO with each other. Safe here
+  because every converted command targets a distinct id or is an idempotent user-initiated one-shot, and
+  `session_scrollback` is explicitly safe out of order: its reply carries the absolute `end` offset that
+  `replayDedupe.ts` dedupes the live stream against (#261/#346).
+- **The blocking-`write_all` problem for `write_stdin` is a non-goal, not an oversight.** Making it
+  non-blocking *without* losing FIFO order needs a per-session writer thread + an `mpsc` queue in `pty.rs` —
+  a separate, larger change, recorded as a follow-up rather than bodged in with `spawn_blocking`.
+
+**Dependencies:** none. (Builds on the landed `spawn_blocking` + `AppHandle`-state pattern: #200/#299/#316/#328/#330.)
+
+**Notes**
+
+- No automated command-level test was added — the repo has no `tauri::test` mock-app harness and the change is
+  structural. Acceptance rests on the compile-time `Send` guarantee, clippy `-D warnings`, the unchanged
+  existing suites, and enumerated manual smoke checks (GUI responsiveness is not CI-assertable): spawning an
+  agent while others print no longer stalls the window and the new terminal still paints claude's startup
+  exactly once; Settings → Sessions stays interactive while the `--version` probes run (they now genuinely run
+  **concurrently** on the blocking pool); fast typing stays byte-for-byte in order; and Remove / Fork / Restart
+  / Start-now / Pull / Checkout / Create-branch / worktree spawn all keep their existing toasts.
+- Known, pre-existing hazard noted rather than fixed: a concurrent same-id spawn (double-clicking Restart) is
+  now genuinely parallel rather than serialized on the main thread. The race already existed (the boot-resume
+  thread races main-thread commands) and the frontend guards the affordances — out of scope, but worth
+  remembering if a stray process is ever observed.
+
+### 356. [x] Code-split the frontend bundle — lazy routes, panels, modals, markdown/Prism, and the xterm WebGL addon
+
+The whole frontend was **one 1,351.5 kB (391.1 kB gzip) chunk** parsed before first paint — `vite.config.ts`
+had no `build` section at all, and mermaid (#254) was the app's only dynamic import. Everything else came
+along eagerly: the react-markdown + remark-gfm + micromark/mdast/hast stack (151 kB), Prism plus its ~24
+statically-imported language grammars (70.6 kB), the xterm WebGL addon (107.4 kB — even on a machine that
+would never use it), every modal, every panel, and *both* window routes, so a **detached canvas window** (#84)
+parsed the sidebar, Overview, and eleven modals it can never show. Deferring all of that cuts first-paint JS to
+**854.3 kB / 245.5 kB gzip** for the main window and **769.6 kB / 221.3 kB** for a detached canvas window — a
+startup win on every OS and a large one on Linux/WebKitGTK, where JS parse is the slowest (#346).
+
+**What shipped** (branch `code-split-frontend-356`, PR [#111](https://github.com/ErikdeJager/ReCue/pull/111),
+2026-07-14) — frontend only, no Rust change:
+
+- **Route split** — `src/App.tsx` is now a `Suspense` router over a lazy `MainApp` (extracted verbatim into
+  the new `src/MainApp.tsx`) and a lazy `CanvasWindow`. Window identity is fixed for a window's lifetime
+  (URL-derived, #84), so exactly one route chunk is ever fetched. The fallback is a bare `div.app` — it paints
+  the app background and nothing else, deliberately, so it stays complementary with Task #348's
+  `visible:false` → `show()` window gate (which needs a background-painted first commit, never white).
+- **Lazy panels** — `ItemContent.tsx` (the single live-render site for panel content, #157) `React.lazy`s
+  `FileViewer` / `KanbanPanel` / `DiffInspector` / `FileTree`. Since those four are the *only* importers of the
+  markdown and Prism stacks, this is what carries all ~221 kB of them out of the first-paint graph — **without
+  touching `prism.ts`, `mermaid.ts`, `markdownCheckboxes.tsx`, or any unit-tested pure module**. Each lazy
+  branch gets its **own** `Suspense` boundary, reusing the existing `.placeholder` "Loading…" style.
+- **Lazy modals** — a new `src/components/ModalHost.tsx` holds ten gates (Settings, NewSession, CloneRepo,
+  CreatePanel, GlobalSearch, CanvasClose, TemplateUse / Manager / Editor, Onboarding), each subscribing to its
+  own store flag — so `MainApp` no longer re-renders when a modal opens (a small bonus win). The Suspense
+  fallback is **`null`** on purpose: an empty modal shell would be a visible regression, whereas `null` means
+  the modal simply appears once its chunk lands. `Toaster`, `BigModeModal`, `UpdateModal`, and `ClaudeMissing`
+  stay static (first-paint or safety-critical — the update install overlay must never be a chunk away).
+- **Lazy xterm WebGL addon** — `terminalPool.createHost()` now `import()`s `@xterm/addon-webgl` on demand,
+  while xterm core / `addon-fit` / `addon-web-links` / the xterm CSS stay eager (terminals *are* the first
+  paint). `disposed` is hoisted above the WebGL block to guard a late attach into a torn-down host, a `.catch()`
+  keeps the DOM renderer if the chunk or the constructor fails, and the #221 font-atlas rebuild `await`s
+  `webglReady` so it still runs exactly once.
+- **Idle prefetch** — a new `src/prefetch.ts` warms the deferred chunks after first paint via
+  `requestIdleCallback` (feature-detected, with a `setTimeout` fallback for older WKWebView/Safari), so the
+  first Settings / ⌘N / file-panel open is instant. A detached window skips the modal warm-up.
+- **Regression guard** — `build: { manifest: true }` plus a new dependency-free `scripts/bundle-report.mjs`
+  (Node builtins only) computes each route's first-paint closure — the entry chunk plus its **static** import
+  closure plus the route chunk and its static closure, deliberately *not* following `dynamicImports` — reports
+  raw + gzip, and with `--check` fails the build over budget (900 kB raw / 260 kB gzip). `npm run bundle:report`
+  added to `package.json`.
+
+**Key decisions**
+
+- **No `manualChunks`, and the reason is recorded in `CLAUDE.md`.** Rollup chunking only decides *which file* a
+  module lands in — a statically reachable module is still fetched, parsed, and executed before first render
+  whatever chunk it sits in. **Only a dynamic `import()` removes work from the first-paint path.** The CLAUDE.md
+  bullet spells out the durable rule: never static-import react-markdown / prismjs / `@xterm/addon-webgl` back
+  into the entry graph — and the `--check` budget is what enforces it mechanically.
+- **Lazy the four *consumers*, not the markdown/Prism internals.** Refactoring `FileViewer` into an async
+  markdown/prism loader would have won the same bytes while churning unit-tested pure modules; lazying the four
+  components that exclusively import them wins it for free.
+- **Never wrap `ItemContent` (or a `Terminal` branch) in one shared Suspense boundary.** A suspending boundary
+  hides its already-rendered children with `display:none`, which would leave a pooled xterm un-measurable and
+  misfit — the #18 class of bug. Per-branch boundaries mean a terminal is never inside one.
+- **xterm core and `terminalPool` stay eager and synchronous.** The pool's sync API is consumed from React
+  effects and from `store.ts`; making it async would churn the app's most delicate subsystem (#18 pool, #221
+  font atlas, #261 write coalescing, #346) to defer code needed milliseconds later. Only the *addon* is deferred.
+- **Accepted trade-off (the plan's top risk):** a main-window terminal now paints its first frames on xterm's
+  DOM renderer and swaps to WebGL a few ms later when the chunk resolves. xterm supports `loadAddon` after
+  `open()` — that was already the code's order, just synchronous — and both renderers are known-good in
+  production (#105/#346). Rollback is a one-line restore of the static import. On Linux with a software
+  rasterizer the chunk is **never fetched at all** — a pure win.
+- **Three modals move from "always mounted, self-gated" to "mounted only while open."** `NewSessionModal`'s
+  focus restore was moved into its effect cleanup so it still fires now that close means unmount.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Verified deferred into their own async chunks, absent from both routes' first-paint closure: react-markdown /
+  remark-gfm / micromark / hast, prismjs, `@xterm/addon-webgl`, all ten modals, FileViewer, KanbanPanel,
+  DiffInspector, FileTree. **Mermaid remains a further lazy chunk *inside* FileViewer**, so a markdown file with
+  no ` ```mermaid ` fence still never fetches it.
+- Checks green: `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (671 tests / 47 files), and
+  `node scripts/bundle-report.mjs --check`.
+- Code-splitting is only observable in a **production** build (`vite dev` serves unbundled ESM), so the
+  async-chunk-under-`tauri://`-offline check and the WebGL late-attach on WKWebView / WebView2 are real-box
+  items rather than CI-assertable ones.
+
+### 351. [x] Lazy-mount Overview terminals — visibility-gated xterm creation + a bounded scrollback-replay queue
+
+Overview's wall is a **horizontally scrolling** row of cards, of which roughly three are visible at a time —
+but every card's terminal was **fully mounted at boot**. So N resumed agents meant N eager `createHost` calls,
+each constructing an XTerm, opening its **own WebGL context**, fetching up to 256 KB of scrollback, ANSI-parsing
+it on the webview main thread, awaiting three `document.fonts.load` calls and firing a resize IPC — ten agents
+≈ 2.5 MB parsed and 10 GL contexts in the first seconds, the dominant boot cost and worst on Linux/WebKitGTK
+(where `TRAJECTORY_TO_LINUX.md` already listed "Overview terminal virtualization" as future work — this task
+closes it). Terminals are now created **only when their card first scrolls into view**, and the replays that do
+happen are **serialized** rather than racing each other on the single main thread.
+
+**What shipped** (branch `lazy-mount-overview-terminals`, PR
+[#103](https://github.com/ErikdeJager/ReCue/pull/103), 2026-07-14) — frontend only, no Rust change:
+
+- **`useVisibleOnce.ts`** (new) + **`Terminal.tsx`** — a **latching** `IntersectionObserver` gates
+  `mountTerminal`: once a slot has been visible, it stays mounted forever. The gate lives in `Terminal.tsx`,
+  **not** in Overview, so it covers every terminal surface (Overview cards, Canvas panels, big mode #157,
+  detached windows #84) through the one component instead of adding an Overview-only path.
+- **`TerminalScrollRootContext`** — filled by `Overview.tsx` with its scrolling wall element. This matters:
+  `IntersectionObserver` clips against an intermediate scroll container **before** applying `rootMargin`, so a
+  viewport-rooted observer could never pre-load an off-screen wall card. With the wall as the root, the 600px
+  horizontal pre-load margin (≥1.5 cards at the 400px default column min-width) is real. Everywhere else the
+  root stays the viewport.
+- **`replayQueue.ts`** (new, pure + unit-tested) + **`terminalPool.ts`** — scrollback replays run through a
+  bounded FIFO queue (`MAX_CONCURRENT_REPLAYS = 1`, a macrotask yield between jobs), each awaiting its
+  `term.write` callback (resolve-once, with a 2 s safety timeout), so one ANSI parse can never stack on
+  another. A queued-but-unstarted hydration is **cancelled** on host dispose.
+- **`pendingOutput.ts`** (new, pure + unit-tested) — the pre-replay live buffer is capped at 2 MB (oldest
+  dropped) **only while the scrollback fetch has not yet been dispatched**. That window is provably gap-free:
+  the backend pushes to its `Scrollback` before emitting, so every pre-dispatch chunk is already ≤ the
+  snapshot's `end` offset. After dispatch the buffer is uncapped, so every byte above `end` survives
+  `dedupeAgainstScrollback`.
+- **Pending focus** — `focusTerminal` gained a short-lived (3 s) pending focus, so ⌘/Ctrl+1–9 onto a
+  not-yet-created host still lands and the user can type immediately. Without it the CanvasSurface's
+  active-leaf effect would silently no-op against a host that doesn't exist yet.
+
+**Key decisions**
+
+- **"Virtualize" means deferred creation only — never recycling.** Once a terminal is created it is never
+  disposed or parked on scroll-out. Disposing on scroll-out would re-enter the **#18 invariant**: replayed
+  scrollback carries cursor-positioned escape sequences computed for a specific PTY width, so a re-replay at a
+  different size garbles claude's TUI. Zero boot benefit, guaranteed corruption.
+- **No output is lost, and no new mechanism was invented.** `outputBus` already drops chunks for a
+  listener-less session, and that is *already* today's behavior for any session not rendered in the current
+  view (booting straight into Canvas, or spawning an agent while on Canvas). The backend's 256 KB `Scrollback`
+  retains the bytes and `replayDedupe` drops the overlap at creation — so deferring host creation **re-uses an
+  already-exercised path**. History older than the 256 KB window is not recoverable; accepted, and unchanged
+  from today.
+- **Everything else about an unmounted agent keeps working** — the busy/idle dot, notifications, global search
+  (Rust-side scrollback search, #337) and auto-continue (#296) are all backend-driven and never touch the pool.
+- **Rejected the card's third fix direction** ("replay a smaller initial tail, the rest on idle"): it needs a
+  new backend `session_scrollback` parameter and trades away user-visible history for a win the visibility gate
+  already delivers.
+- **Non-terminal Overview panels (FileViewer / DiffInspector / Kanban / FileTree / Scheduled / Recurring) are
+  not gated** in this task — their mount cost is far smaller. Noted as a follow-up that can reuse the same hook.
+- No backend change and no new user setting; rollback is two constants.
+
+**Dependencies:** none.
+
+**Notes**
+
+- New unit tests cover the pure parts per repo convention (the pool itself is coverage-excluded DOM/xterm glue):
+  the bounded-concurrency FIFO (limit, ordering, `cancel`, a rejecting/throwing job, the yield) and the
+  pending-output cap (drops oldest, preserves order, `Infinity` keeps all). Checks green: `npm run lint`,
+  `npm run format:check`, `npm test` (686 passing), `npm run test:coverage` (90.93% lines, gate 75%),
+  `npm run build`.
+- Pure WebView/TS — `IntersectionObserver` is supported by WKWebView, WebView2/Chromium **and** WebKitGTK, so
+  there is no `#[cfg]` divergence and no OS primitive involved; identical on all three, with the biggest win on
+  Linux.
