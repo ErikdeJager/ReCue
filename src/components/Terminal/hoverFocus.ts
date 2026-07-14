@@ -16,3 +16,23 @@ export function shouldHoverFocus(
   if (el.isContentEditable) return false;
   return true;
 }
+
+/** Should a hover over a panel move the selection border / focus (#371)?
+ * Extends shouldHoverFocus (#368) with a buttons guard so a dnd-kit drag or any
+ * held pointer button never sprays hover-selects across panels. */
+export function shouldHoverSelect(
+  enabled: boolean,
+  buttons: number,
+  activeElement: Element | null,
+): boolean {
+  return buttons === 0 && shouldHoverFocus(enabled, activeElement);
+}
+
+/** The focused element iff it belongs to a pooled xterm (its helper <textarea>
+ * lives inside `.xterm`) — the thing blurTerminals() must blur; null otherwise. */
+export function focusedTerminalElement(
+  activeElement: Element | null,
+): HTMLElement | null {
+  if (!activeElement || !activeElement.closest(".xterm")) return null;
+  return activeElement as HTMLElement;
+}

@@ -627,8 +627,11 @@ function SettingsModal() {
                     className={styles.checkRow}
                   />
                   <p className={styles.helpText}>
-                    When on, moving the mouse over an agent or terminal panel
-                    focuses it so you can type immediately without clicking.
+                    When on, moving the mouse over a panel selects it (the
+                    highlight border follows the pointer) and an agent or
+                    terminal panel is focused so you can type immediately.
+                    Hovering a panel without terminal input unfocuses the
+                    previous terminal, so keystrokes never keep going to it.
                     Text fields you are editing are never interrupted.
                   </p>
                 </div>

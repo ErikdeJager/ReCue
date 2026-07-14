@@ -1,4 +1,10 @@
-import { type ReactElement, useEffect, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
 import { ExternalLink, GripVertical, Maximize2, X } from "lucide-react";
 import {
@@ -10,18 +16,20 @@ import {
 } from "react-resizable-panels";
 
 import { noAutoCapitalize } from "../../inputProps";
+import { useSessionOwners } from "../../ownership";
 import { effectiveRepo, repoName, sessionLabel } from "../../paths";
 import { kbdHint } from "../../platform";
 import { repoColor, useStore } from "../../store";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
-import { IS_MAIN_WINDOW } from "../../windowContext";
+import { IS_MAIN_WINDOW, ownedHere } from "../../windowContext";
 import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import ItemContent from "../ItemContent/ItemContent";
 import { itemTitle, panelTitle } from "../ItemContent/itemTitle";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
-import { focusTerminal } from "../Terminal/terminalPool";
+import { shouldHoverSelect } from "../Terminal/hoverFocus";
+import { blurTerminals, focusTerminal } from "../Terminal/terminalPool";
 import {
   collectLeaves,
   collectSplits,
@@ -182,10 +190,32 @@ function LeafPanel({
     }
   }, [isActive, content.kind, content.sessionId]);
 
+  // Hover-select (#371, extending #368): with "Focus panels on hover" on, entering a
+  // panel moves the active-leaf highlight here — focusing its terminal when this
+  // window renders one (locally-owned agent/shell PTY, #84), otherwise blurring the
+  // previously focused xterm so keystrokes never silently keep flowing to it.
+  const autoFocusOnHover = useStore((s) => s.settings.autoFocusOnHover);
+  const owners = useSessionOwners();
+  const ptyId =
+    (content.kind === "agent" || content.kind === "terminal") &&
+    content.sessionId &&
+    ownedHere(owners, content.sessionId)
+      ? content.sessionId
+      : undefined;
+  const handleHoverEnter = (e: ReactMouseEvent) => {
+    if (dragActive) return; // canvas drag in progress — edge zones own the pointer
+    if (!shouldHoverSelect(autoFocusOnHover, e.buttons, document.activeElement))
+      return;
+    if (ptyId) focusTerminal(ptyId);
+    else blurTerminals();
+    if (!isActive) setActiveLeaf(leaf.id);
+  };
+
   return (
     <div
       className={`${styles.panel} ${isActive ? styles.panelActive : ""}`}
       onPointerDown={() => setActiveLeaf(leaf.id)}
+      onMouseEnter={handleHoverEnter}
     >
       {/* The whole header bar is the drag handle (#144, mirroring Overview #70):
           the dnd-kit move listeners live on the <header>, so grabbing anywhere on

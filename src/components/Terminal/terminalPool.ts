@@ -52,6 +52,7 @@ import { onSessionOutput } from "../../outputBus";
 import { isLinux, isWindows } from "../../platform";
 import { useStore } from "../../store";
 import { IS_MAIN_WINDOW } from "../../windowContext";
+import { focusedTerminalElement } from "./hoverFocus";
 import { makePasteKeyHandler } from "./pasteHandler";
 import {
   PENDING_CAP_BYTES,
@@ -902,6 +903,15 @@ export function focusTerminal(sessionId: string): void {
     return;
   }
   pendingFocus = { id: sessionId, at: Date.now() };
+}
+
+/** Unfocus whichever pooled xterm currently holds keyboard focus (#371): entering a
+ * non-terminal panel with hover-focus on must stop keystrokes reaching the previous
+ * agent. Also clears a pending focus request so a queued focus can't land after the
+ * pointer has moved on. Never disposes a host (#18). */
+export function blurTerminals(): void {
+  pendingFocus = null;
+  focusedTerminalElement(document.activeElement)?.blur();
 }
 
 /**
