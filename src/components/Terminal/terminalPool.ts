@@ -122,10 +122,14 @@ function webglAllowed(): boolean {
   }
   const renderer = probeWebglRendererString();
   webglAllowedMemo = renderer !== null && !isSoftwareWebGLRenderer(renderer);
+  // Memoized, so each branch logs at most once per window — the frontend counterpart of
+  // the Rust DMA-BUF boot line (#347), so a real-box report shows both halves.
   if (!webglAllowedMemo) {
     console.warn(
       `[recue] terminals: skipping WebGL renderer (software rasterizer${renderer ? `: ${renderer}` : " — no WebGL context"}); using the DOM renderer`,
     );
+  } else {
+    console.info(`[recue] terminals: WebGL renderer: ${renderer}`);
   }
   return webglAllowedMemo;
 }

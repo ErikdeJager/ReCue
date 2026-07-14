@@ -60,11 +60,14 @@ pub fn run() {
     // thread-safe). See `path_env`.
     path_env::restore_user_path();
 
-    // Linux/WebKitGTK renderer workaround (#346): on NVIDIA's proprietary driver (and
-    // in VMs) WebKitGTK's DMA-BUF renderer makes the whole webview crawl — laggy input
-    // echo, slow paint. Export the documented kill-switch before GTK/WebKit initialize
-    // (and, like the PATH restore above, before any threads — env mutation isn't
-    // thread-safe). No-op on macOS/Windows and on healthy AMD/Intel Mesa stacks; the
+    // Linux/WebKitGTK renderer workaround (#346, GPU-aware since #347): where the NVIDIA
+    // blob actually renders the webview, WebKitGTK's DMA-BUF renderer makes the whole
+    // thing crawl — laggy input echo, slow paint. Export the documented kill-switch before
+    // GTK/WebKit initialize (and, like the PATH restore above, before any threads — env
+    // mutation isn't thread-safe), but *only* where DMA-BUF is genuinely bad: the blob is
+    // the sole renderer, GL is PRIME-routed to it, or we're in a VM with no native GPU. A
+    // hybrid iGPU+dGPU laptop, nouveau, and any Mesa stack keep DMA-BUF (disabling it there
+    // forces CPU rendering — it *was* the reported slowness). No-op on macOS/Windows; the
     // user's own env and `RECUE_DISABLE_DMABUF` override it. See `linux_webkit`.
     linux_webkit::apply_webkit_env_workarounds();
 
