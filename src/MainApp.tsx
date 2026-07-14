@@ -29,6 +29,11 @@ import Sidebar from "./components/Sidebar/Sidebar";
 import { reconcileTerminals } from "./components/Terminal/terminalPool";
 import Toaster from "./components/Toaster/Toaster";
 import UpdateModal from "./components/Update/UpdateModal";
+import WaveBackground from "./components/WaveBackground/WaveBackground";
+import {
+  overviewIsEmpty,
+  selectWavePreset,
+} from "./components/WaveBackground/wavePresets";
 import { useOsFileDrop } from "./osFileDrop";
 import { prefetchDeferredChunks } from "./prefetch";
 import { useStore } from "./store";
@@ -60,6 +65,8 @@ function MainApp() {
   const overviewPanels = useStore((s) => s.overviewPanels);
   const canvases = useStore((s) => s.canvases);
   const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
+  const schedules = useStore((s) => s.schedules);
+  const recurrings = useStore((s) => s.recurrings);
   const init = useStore((s) => s.init);
   const beginCanvasLift = useStore((s) => s.beginCanvasLift);
   const cancelCanvasLift = useStore((s) => s.cancelCanvasLift);
@@ -152,6 +159,14 @@ function MainApp() {
     if (content) applyCanvasDrop(String(over.id), content);
   };
 
+  // The wave background preset (UI v2 §3, task 377): one canvas spans the whole
+  // stage — behind Overview AND behind the Canvas strip + panes — and a view
+  // switch is a live config mutation on the same engine (never a remount).
+  const wavePreset = selectWavePreset(
+    view === "canvas" ? "canvas" : "overview",
+    overviewIsEmpty({ sessions, overviewPanels, schedules, recurrings }),
+  );
+
   return (
     <div className="app">
       {claudeMissing && <ClaudeMissing />}
@@ -168,6 +183,7 @@ function MainApp() {
         <div className="app-body">
           <Sidebar />
           <main className="main">
+            <WaveBackground preset={wavePreset} />
             <div className="main-content">
               {view === "overview" ? (
                 <Overview />

@@ -43,6 +43,12 @@ body {
 }
 
 .main {
+  /* Hosts the task-377 wave layer at z -1: position anchors it, isolation keeps
+     its negative z-index inside this stacking context (below all content, above
+     the crust). The background stays — it is the backgroundAnimation-off /
+     pre-engine-load static stage. */
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex: 1;
   flex-direction: column;

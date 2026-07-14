@@ -20,6 +20,7 @@ import { computeSessionOwners, sessionIdsInLayout } from "../Canvas/canvasTree";
 import CanvasSurface, { CanvasDragOverlay } from "../Canvas/CanvasSurface";
 import { reconcileTerminals } from "../Terminal/terminalPool";
 import Toaster from "../Toaster/Toaster";
+import WaveBackground from "../WaveBackground/WaveBackground";
 import styles from "./CanvasWindow.module.css";
 
 /**
@@ -90,6 +91,9 @@ function CanvasWindow() {
   return (
     <div className="app">
       <div className={styles.window}>
+        {/* Wave background (UI v2 §3, task 377): a detached window is its own
+            document, so it runs its own engine + seed — always the canvas preset. */}
+        <WaveBackground preset="canvas" />
         <header className={styles.header}>
           <span className={styles.title}>{canvas?.name ?? "Canvas"}</span>
         </header>
