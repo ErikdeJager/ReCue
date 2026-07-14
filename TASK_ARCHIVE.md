@@ -4846,3 +4846,57 @@ functionality lost.
 - Pure CSS/TSX, token-driven — identical on macOS/Windows/Linux. Rollback = revert the PR.
 
 **Dependencies:** Task 372.
+
+### 377. [x] UI v2 (3/12): Wave background system — vendor WaveEngine.js verbatim + a lazy React WaveBackground host behind Overview, Canvas, and detached canvas windows
+
+Card 3 of the UI v2 reskin epic (spec §3 + the fx.js reference host; **no version bump / patch notes**). Ships the
+"signature" v2 wave: the vendored `WaveEngine.js` flow-field animation on one Canvas2D layer per window — behind
+the Overview stage, the Canvas view (ONE canvas spanning tab strip AND panes), and each detached canvas window —
+random seed every launch, live accent recolor, per-surface presets switched without remount, honoring the
+`backgroundAnimation` setting (OFF ⇒ no canvas at all) and reduced motion (settle ~5s then freeze).
+
+**What shipped** (branch `task-377-wave-background`, PR
+[#132](https://github.com/ErikdeJager/ReCue/pull/132), merged 2026-07-14 into `ui-rework`):
+
+- **Vendored verbatim** — `src/vendor/WaveEngine.js` (397 lines, plain script, no exports) copied byte-for-byte
+  from the local-only handoff bundle; a sha256-pinning unit test (`waveEngine.test.ts`, `10ae1e3e…c12a` /
+  17,450 bytes) makes any future edit fail CI; ESLint ignores + `.prettierignore` entries keep lint/format green
+  without touching it. Consumed via a `?raw` import + `new Function` wrapper (`waveEngineLoader.ts` — legal under
+  the app's `csp: null`), which also unit-tests the `{frame,resize,reseed,setConfig}` shape and seed determinism.
+- **Lazy chunk (#356)** — the engine (raw source + wrapper) is reachable only via dynamic `import()` from the
+  host; `bundle:report -- --check` stays green with the wave out of both routes' first-paint closures.
+- **`WaveBackground` host** (`components/WaveBackground/`) — replicates the fx.js contract: CSS-pixel buffer (no
+  devicePixelRatio scaling — softer + cheaper on Retina/WebKitGTK), `{alpha:false}` 2d context, rAF loop with
+  ~48fps cap + dt clamp [0.001, 0.05] + `document.hidden` skip-and-reset-timebase, ResizeObserver-driven
+  `eng.resize` (sizes < 4 ignored). Pure tick/gate logic extracted into `waveTick.ts` (+ tests); presets in
+  `wavePresets.ts` (+ tests): Overview 420/0.85/0.04/3.4 · Canvas 420/0.8/0.035/3.4 · first-launch hero
+  950/1.05/0.07/3.4 — **live `setConfig` swaps on the same instance, never a remount/reseed**.
+- **Mounted per window document** — inside `.main` behind `.main-content` (main window) and inside `.window`
+  (detached, canvas preset always), `aria-hidden` + `pointer-events: none`, z-order via `z-index: -1` +
+  `isolation: isolate` on the container (no other z-index changes). Seed rolled once per window document per
+  launch (an OFF→ON re-toggle reuses it; a detached window rolls its own).
+- **Live recolor** — a MutationObserver on `<html>` style/`data-theme` reads the **computed** `--accent`
+  (covering swatches, custom, 373's "random", and theme flips); `bgColor` follows computed `--bg-base` (light
+  crust in light theme; a flip fades over a few frames since the engine has no hard-clear).
+- **Settings + reduced motion** — `backgroundAnimation` OFF unmounts the canvas entirely (live on Save; the host
+  waits for `booted` so a persisted OFF never flashes). Reduced motion (OS media query OR `body.reduce-motion`)
+  settles 240 frames then freezes, keeping a no-op rAF alive so un-toggling resumes and an accent change while
+  frozen re-arms one settle window.
+- **Minimal transparency CSS** (no reskin) — `.wall`/`.filterEmpty`/`.canvas`/`.area` go transparent, Overview
+  `.card` gains an explicit opaque bg, empty-state copy gets a text-shadow; the tab strip + detached header stay
+  opaque (card 6 owns the transparent strip). No pooled xterm touched.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 377)
+
+- `?raw` + `new Function` is the only consumption path that never edits the vendored file; the hash test enforces
+  the "vendor verbatim" rule. The handoff dir is untracked, so the plan pointed at the main checkout's absolute
+  path (worktrees don't have it).
+- ONE engine per window spanning the whole stage makes the "one canvas behind strip and panes" rule fall out of
+  placement; the hero preset wires to the first-launch EmptyState via a shared pure `overviewIsEmpty` helper
+  (adopted by Overview.tsx so the two can't drift); the repo-filter empty state keeps the overview preset.
+- Deviation from fx.js: the frozen loop keeps a no-op rAF alive instead of cancelling (resume + refreeze
+  behavior). Detached windows adopt setting/accent changes at their next boot (settings aren't broadcast).
+- Pure Canvas2D — renderer-agnostic (unaffected by the #346/#357 Linux WebGL decisions and the #364 latch);
+  identical on macOS/Windows/Linux. Rollback = revert the PR.
+
+**Dependencies:** Tasks 372, 373.
