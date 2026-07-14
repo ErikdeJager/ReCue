@@ -2981,3 +2981,16 @@ Lazy-mount Overview terminals — visibility-gated xterm creation + a bounded sc
 - Non-terminal Overview panels (FileViewer / DiffInspector / Kanban / FileTree / Scheduled / Recurring) are NOT gated in this task (smaller mount cost); noted as a follow-up that can reuse the same hook.
 - No backend change and no new user setting: `session_scrollback` stays sync (Tasks 353/355 own that), and the rollback path is two constants.
 - Docs updated as part of the task (repo convention): a `(#351)` note in CLAUDE.md and closing the "Overview terminal virtualization" future-work item in TRAJECTORY_TO_LINUX.md with real-box verification checks.
+
+## Task 355
+
+Bounded-parallel boot resume + a one-shot claude project-log index
+
+- Dropped "resume visible/selected sessions first" from scope: `selectedId` is not persisted at all, and `canvases`/`settings` are deliberately opaque frontend-owned JSON blobs the Rust store must not parse; with a 4-wide pool the reordering win is a few hundred ms. Records are dispatched in persisted order. (Visibility is Task 351's concern.)
+- Fixed pool width `RESUME_CONCURRENCY = 4`, clamped to the record count; not derived from `available_parallelism` (the work is process-creation/IO-bound, and a wider pool just piles concurrent spawns onto the OS during first paint).
+- The projects-dir cache is a **boot-scoped snapshot** (`title::ProjectLogIndex`, built once, dropped when the loop ends) rather than a global/TTL cache — the live title worker keeps its per-call `locate_log`, so a project dir created after boot is always seen and there is nothing to invalidate.
+- The index lists each project dir's `*.jsonl` filenames (name -> dir) instead of only caching the dir list, making lookups O(1) and the cost O(M) rather than O(N x M) stats; a project dir whose listing fails falls back to the old per-dir `is_file` probe so Found/Absent/Unknown (and the fail-open Fork guard) semantics are preserved exactly.
+- New `src-tauri/src/boot.rs` module (rather than growing `lib.rs`) so the pool + worker-count helpers are unit-testable without a Tauri app; `lib.rs`'s setup block collapses to one call.
+- No batching of `Store::set_forkable` and no new events/error toasts: it already persists only on change (~zero writes on a normal boot), and a failed resume stays best-effort (`let _ =`) so the child's own exit remains the single existing signal.
+- Frontend is explicitly untouched: `booting` / `RECONNECT_BACKSTOP_MS` / the #30 reconnecting flow stay as-is (faster resume only makes more resumes land inside that window).
+- `SessionManager`/`pty.rs` production code is unchanged (already concurrency-safe per #260; portable-pty 0.9.0 cloexecs pty fds + closes fds>=3 in the child on unix and passes bInheritHandles=FALSE on Windows) — only a unix-gated concurrent-spawn regression test is added there.
