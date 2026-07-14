@@ -142,15 +142,42 @@ fn worktree_parent_for_cwd(sessions: &[PersistedSession], cwd: &str) -> Option<S
         .and_then(|s| s.worktree_parent.clone())
 }
 
+/// Spawn a new agent session in `cwd`.
+///
+/// **Async + off the main thread (#353):** a `pub fn` Tauri command runs on the webview
+/// (main) thread, and this one ends in `SessionManager::spawn_session_with_prompt` →
+/// `spawn_with_id`, which does a `cwd` stat, a **full `$PATH` scan** (`find_on_path`),
+/// an `openpty()`, a copy of the **whole process environment**, and a `fork`/`exec` of
+/// the agent binary — so starting an agent froze the window. `spawn_blocking` moves all
+/// of that onto the blocking pool. The state is reached through an owned `AppHandle`
+/// rather than `State<'_, _>` (a borrow is not `'static`, so it can never be captured by
+/// the closure); that changes nothing on the wire — Tauri injects those args, `invoke`
+/// never sends them. Spawning a PTY off the main thread is already what the boot-resume
+/// thread does on every launch, on all three OSes, so no `#[cfg]` arm is involved.
 #[tauri::command]
-pub fn spawn_session(
-    manager: State<'_, SessionManager>,
-    store: State<'_, Store>,
+pub async fn spawn_session(
+    app: AppHandle,
     cwd: String,
     name: Option<String>,
     agent: Option<String>,
     prompt: Option<String>,
 ) -> Result<PersistedSession, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        spawn_session_blocking(&app, cwd, name, agent, prompt)
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+fn spawn_session_blocking(
+    app: &AppHandle,
+    cwd: String,
+    name: Option<String>,
+    agent: Option<String>,
+    prompt: Option<String>,
+) -> Result<PersistedSession, SessionError> {
+    let manager = app.state::<SessionManager>();
+    let store = app.state::<Store>();
     // The coding agent for this session (#101). Until the Settings selector (the
     // follow-up) the frontend omits it, so it defaults to Claude.
     let agent = agent.unwrap_or_else(|| crate::agents::DEFAULT_AGENT_ID.to_string());
@@ -209,28 +236,49 @@ pub fn spawn_session(
 /// agent and is **not** persisted in `sessions.json` — the item lives in
 /// `overview_panels` (frontend) and a fresh shell is respawned on boot. Kill it
 /// with `kill_session` (the PTY registry is shared).
+///
+/// Async + off the main thread (#353) — same `spawn_with_id` cost as `spawn_session`.
 #[tauri::command]
-pub fn spawn_terminal(
-    manager: State<'_, SessionManager>,
-    cwd: String,
-    id: String,
-) -> Result<(), SessionError> {
-    manager.spawn_terminal(id, cwd.as_str())?;
-    Ok(())
+pub async fn spawn_terminal(app: AppHandle, cwd: String, id: String) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<SessionManager>()
+            .spawn_terminal(id, cwd.as_str())
+            .map(|_| ())
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
 /// Start an agent in an **isolated git worktree** for an existing `branch` of
 /// `repo` (#74). Creates the app-managed worktree folder if absent, reuses it
 /// otherwise (multiple agents per worktree), spawns `claude` there, and persists
 /// the record with `worktree_parent = repo` (its `repo_path` is the worktree).
+///
+/// Async + off the main thread (#353) — this is the heaviest spawn path: `git worktree
+/// add` checks out a **whole tree** before the PTY spawn's `$PATH` scan + fork/exec. See
+/// the `spawn_session` note.
 #[tauri::command]
-pub fn spawn_worktree_agent(
-    manager: State<'_, SessionManager>,
-    store: State<'_, Store>,
+pub async fn spawn_worktree_agent(
+    app: AppHandle,
     repo: String,
     branch: String,
     agent: Option<String>,
 ) -> Result<PersistedSession, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        spawn_worktree_agent_blocking(&app, repo, branch, agent)
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+fn spawn_worktree_agent_blocking(
+    app: &AppHandle,
+    repo: String,
+    branch: String,
+    agent: Option<String>,
+) -> Result<PersistedSession, SessionError> {
+    let manager = app.state::<SessionManager>();
+    let store = app.state::<Store>();
     let agent = agent.unwrap_or_else(|| crate::agents::DEFAULT_AGENT_ID.to_string());
     let dest = worktree_path(&store, &repo, &branch)?;
     // `git worktree add` fails if the folder already exists, so only add when it
@@ -270,15 +318,33 @@ pub fn spawn_worktree_agent(
 /// empty = HEAD) of `repo` (#124, extends #74). Creates the branch + its worktree
 /// folder via `git worktree add -b`, spawns `claude` there, and persists the record
 /// with `worktree_parent = repo`. Branch-name validation surfaces as `SessionError::Git`.
+///
+/// Async + off the main thread (#353) — `git worktree add -b` + a PTY spawn; see the
+/// `spawn_worktree_agent` note.
 #[tauri::command]
-pub fn spawn_worktree_agent_new_branch(
-    manager: State<'_, SessionManager>,
-    store: State<'_, Store>,
+pub async fn spawn_worktree_agent_new_branch(
+    app: AppHandle,
     repo: String,
     name: String,
     base: String,
     agent: Option<String>,
 ) -> Result<PersistedSession, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        spawn_worktree_agent_new_branch_blocking(&app, repo, name, base, agent)
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+fn spawn_worktree_agent_new_branch_blocking(
+    app: &AppHandle,
+    repo: String,
+    name: String,
+    base: String,
+    agent: Option<String>,
+) -> Result<PersistedSession, SessionError> {
+    let manager = app.state::<SessionManager>();
+    let store = app.state::<Store>();
     let agent = agent.unwrap_or_else(|| crate::agents::DEFAULT_AGENT_ID.to_string());
     let dest = worktree_path(&store, &repo, &name)?;
     git::worktree_add_new_branch(&repo, &name, &base, &dest).map_err(SessionError::Git)?;
@@ -336,6 +402,18 @@ pub async fn remove_worktree(
     .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
+/// Write keystrokes to a session's PTY.
+///
+/// **Stays synchronous on purpose (#353)** — while its siblings moved off the webview
+/// thread, this one must not. It is the **per-keystroke** hot path, and the work is a
+/// `memcpy` plus one `write`/`flush` to the PTY master (microseconds); an async hop would
+/// cost a task spawn + a thread hand-off per character. Decisively, it would also
+/// **destroy write ordering**: `terminalPool.ts` fires `void writeStdin(...)` from xterm's
+/// `onData` **without awaiting**, so two quick keystrokes would become two independent
+/// blocking tasks racing for the per-session writer lock and could reach the PTY out of
+/// order — a corrupted prompt. Making this non-blocking *without* losing FIFO order needs
+/// a per-session writer thread + an `mpsc` queue in `pty.rs`; that is a separate,
+/// deliberately deferred change, not a `spawn_blocking` wrapper.
 #[tauri::command]
 pub fn write_stdin(
     manager: State<'_, SessionManager>,
@@ -345,6 +423,13 @@ pub fn write_stdin(
     manager.write_stdin(&id, &data)
 }
 
+/// Resize a session's PTY to `cols` × `rows`.
+///
+/// **Stays synchronous on purpose (#353)** — a cheap ioctl (`TIOCSWINSZ` on unix,
+/// `ResizePseudoConsole` on Windows), and like `write_stdin` it is fired-and-forgotten
+/// (from a `ResizeObserver` in `terminalPool.ts`). Racing async resizes could land **out
+/// of order**, leaving the PTY on a stale size while xterm believes otherwise (a garbled
+/// TUI until the next resize) — a real regression for no measurable win.
 #[tauri::command]
 pub fn resize_pty(
     manager: State<'_, SessionManager>,
@@ -355,12 +440,20 @@ pub fn resize_pty(
     manager.resize_pty(&id, cols, rows)
 }
 
+/// Restart a persisted session under the same id (#63) — the exit overlay's Restart.
+///
+/// Async + off the main thread (#353) — the same `spawn_with_id` cost as `spawn_session`
+/// (stat + `$PATH` scan + `openpty` + env copy + fork/exec). See that note.
 #[tauri::command]
-pub fn resume_session(
-    manager: State<'_, SessionManager>,
-    store: State<'_, Store>,
-    id: String,
-) -> Result<PersistedSession, SessionError> {
+pub async fn resume_session(app: AppHandle, id: String) -> Result<PersistedSession, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || resume_session_blocking(&app, id))
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+fn resume_session_blocking(app: &AppHandle, id: String) -> Result<PersistedSession, SessionError> {
+    let manager = app.state::<SessionManager>();
+    let store = app.state::<Store>();
     let record = store
         .session(&id)
         .ok_or_else(|| SessionError::SessionNotFound(id.clone()))?;
@@ -387,12 +480,25 @@ pub fn resume_session(
 /// source's `repo_path` + `worktree_parent` (same cwd / worktree). A source with no
 /// materialized conversation is refused up front (#134, see below) rather than spawned
 /// into a `claude` that would exit 1 and leave a dead "Process exited" panel (#63).
+///
+/// Async + off the main thread (#353) — the `~/.claude/projects/*/<uuid>.jsonl` glob
+/// (`title::has_conversation`) plus the full `spawn_with_id` cost. See `spawn_session`.
 #[tauri::command]
-pub fn fork_session(
-    manager: State<'_, SessionManager>,
-    store: State<'_, Store>,
+pub async fn fork_session(
+    app: AppHandle,
     source_id: String,
 ) -> Result<PersistedSession, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || fork_session_blocking(&app, source_id))
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+fn fork_session_blocking(
+    app: &AppHandle,
+    source_id: String,
+) -> Result<PersistedSession, SessionError> {
+    let manager = app.state::<SessionManager>();
+    let store = app.state::<Store>();
     let source = store
         .session(&source_id)
         .ok_or_else(|| SessionError::SessionNotFound(source_id.clone()))?;
@@ -443,12 +549,21 @@ pub fn fork_session(
     Ok(record)
 }
 
+/// Remove an agent (#63): kill its child process and forget its persisted record.
+///
+/// Async + off the main thread (#353) — a child kill plus a full `sessions.json` rewrite;
+/// not latency-critical, and each call targets a distinct id, so out-of-order completion
+/// is harmless.
 #[tauri::command]
-pub fn kill_session(
-    manager: State<'_, SessionManager>,
-    store: State<'_, Store>,
-    id: String,
-) -> Result<(), SessionError> {
+pub async fn kill_session(app: AppHandle, id: String) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || kill_session_blocking(&app, id))
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+fn kill_session_blocking(app: &AppHandle, id: String) -> Result<(), SessionError> {
+    let manager = app.state::<SessionManager>();
+    let store = app.state::<Store>();
     // The session may not be live (e.g. it failed to resume on boot); forget it
     // from the store either way so Remove = kill + forget and it never reappears.
     let _ = manager.kill_session(&id);
@@ -517,11 +632,28 @@ pub struct ScrollbackReply {
     pub end: u64,
 }
 
+/// Async + off the main thread (#353) — copying up to `SCROLLBACK_CAP` (256 KB) out of a
+/// session's ring buffer and base64-encoding it is paid **once per terminal mount**, so an
+/// agent wall of N terminals paid N of them on the webview thread at boot (worst on
+/// Linux/WebKitGTK, cf. #346). Reordering is safe: the reply carries the absolute `end`
+/// offset and `replayDedupe.ts` drops any live chunk already covered by it, so a snapshot
+/// that lands later is still correct. State is reached through an owned `AppHandle` (a
+/// borrowed `State` is not `'static` and could never be captured by the closure).
 #[tauri::command]
-pub fn session_scrollback(
-    manager: State<'_, SessionManager>,
+pub async fn session_scrollback(
+    app: AppHandle,
     id: String,
 ) -> Result<ScrollbackReply, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || session_scrollback_blocking(&app, id))
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+fn session_scrollback_blocking(
+    app: &AppHandle,
+    id: String,
+) -> Result<ScrollbackReply, SessionError> {
+    let manager = app.state::<SessionManager>();
     let (bytes, end) = manager.scrollback(&id)?;
     Ok(ScrollbackReply {
         b64: encode_output(&bytes),
@@ -543,13 +675,30 @@ pub struct SessionOutputMatch {
 /// each) and in total (`limit`, default 50), ANSI-stripped server-side, and it never
 /// fails (a blank query / no matches → an empty vec). The scrollback is only the
 /// in-memory tail, so a match older than that window simply isn't surfaced.
+///
+/// Async + off the main thread (#353) — this is N × (a 256 KB scrollback copy + a UTF-8
+/// decode + an ANSI strip + a scan), and it runs on **every keystroke** in the global
+/// search modal; on the webview thread that made typing in it stutter. A join error
+/// flattens to an empty vec — the same fail-open value a no-match search returns — so the
+/// bare (non-`Result`) return type the frontend expects is preserved.
 #[tauri::command]
-pub fn search_session_output(
-    manager: State<'_, SessionManager>,
+pub async fn search_session_output(
+    app: AppHandle,
+    query: String,
+    limit: Option<usize>,
+) -> Vec<SessionOutputMatch> {
+    tauri::async_runtime::spawn_blocking(move || search_session_output_blocking(&app, query, limit))
+        .await
+        .unwrap_or_default()
+}
+
+fn search_session_output_blocking(
+    app: &AppHandle,
     query: String,
     limit: Option<usize>,
 ) -> Vec<SessionOutputMatch> {
     const PER_SESSION: usize = 5;
+    let manager = app.state::<SessionManager>();
     let total = limit.unwrap_or(50).clamp(1, 500);
     manager
         .search_output(&query, PER_SESSION, total)
@@ -558,6 +707,11 @@ pub fn search_session_output(
         .collect()
 }
 
+/// Every persisted session record (#30), read once at boot.
+///
+/// **Stays synchronous on purpose (#353)** — a pure in-memory `Vec` clone under a
+/// `Mutex` (microseconds, no I/O). Moving it to the blocking pool would buy nothing and
+/// only add a thread hop.
 #[tauri::command]
 pub fn list_sessions(store: State<'_, Store>) -> Vec<PersistedSession> {
     store.sessions()
@@ -1064,11 +1218,15 @@ fn broadcast_schedules(app: &AppHandle, store: &Store) {
 /// Create a scheduled session (#93): persist a record that the poll loop fires at
 /// `at` (unix secs). `branch` (a non-current branch to check out), `name`, and
 /// `prompt` are optional; the backend owns the id + `created_at`.
+///
+/// Async + off the main thread (#353) — a **worktree** schedule runs `git worktree add`
+/// **eagerly, at schedule time** (#259), i.e. a whole-tree checkout while the New Session
+/// modal is open. `broadcast_schedules`' `app.emit` is thread-safe (`lib.rs` already emits
+/// from its poll thread), so the body runs unchanged, just on the blocking pool.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // a flat Tauri command surface (cwd + branch/new-branch + name/prompt/at/agent)
-pub fn create_schedule(
+pub async fn create_schedule(
     app: AppHandle,
-    store: State<'_, Store>,
     cwd: String,
     branch: Option<String>,
     name: Option<String>,
@@ -1079,6 +1237,38 @@ pub fn create_schedule(
     base: Option<String>,
     worktree: Option<bool>,
 ) -> Result<ScheduledSession, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        create_schedule_blocking(
+            &app,
+            cwd,
+            branch,
+            name,
+            prompt,
+            at,
+            agent,
+            create_branch,
+            base,
+            worktree,
+        )
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors the flat command surface above
+fn create_schedule_blocking(
+    app: &AppHandle,
+    cwd: String,
+    branch: Option<String>,
+    name: Option<String>,
+    prompt: Option<String>,
+    at: u64,
+    agent: Option<String>,
+    create_branch: Option<bool>,
+    base: Option<String>,
+    worktree: Option<bool>,
+) -> Result<ScheduledSession, SessionError> {
+    let store = app.state::<Store>();
     // New-branch intent (#125): when create_branch is set, `branch` is the new branch
     // name (created at fire time) and `base` its base (empty/None = HEAD).
     let create_branch = create_branch.unwrap_or(false);
@@ -1147,7 +1337,7 @@ pub fn create_schedule(
         .add_schedule(sched.clone())
         .map_err(|e| SessionError::Io(e.to_string()))?;
     // Keep every window's pending-schedule list in sync (#280).
-    broadcast_schedules(&app, &store);
+    broadcast_schedules(app, &store);
     Ok(sched)
 }
 
@@ -1235,22 +1425,33 @@ pub fn fire_due_schedules(app: &AppHandle) {
 /// the schedule is **re-added** (kept intact so the user can retry) and the error is
 /// returned for the UI to toast. An unknown / already-fired id is a no-op success (the
 /// frontend already removed it, or the poll loop just fired it).
+///
+/// Async + off the main thread (#353) — "Start now" prepares the worktree / checks out or
+/// creates the branch **and** spawns the seeded PTY, all on a button click. The body is
+/// unchanged (it already reached its state through the `AppHandle`); only the thread it
+/// runs on differs — and the poll loop already runs the identical path off-thread.
 #[tauri::command]
-pub fn fire_schedule_now(app: AppHandle, id: String) -> Result<(), SessionError> {
+pub async fn fire_schedule_now(app: AppHandle, id: String) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || fire_schedule_now_blocking(&app, id))
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+fn fire_schedule_now_blocking(app: &AppHandle, id: String) -> Result<(), SessionError> {
     let store = app.state::<Store>();
     let Some(sched) = store.take_schedule(&id) else {
         return Ok(());
     };
     let manager = app.state::<SessionManager>();
-    if let Err(message) = fire_one_schedule(&store, &manager, &app, &sched) {
+    if let Err(message) = fire_one_schedule(&store, &manager, app, &sched) {
         // Keep the schedule intact so the user can fix the cause and try again.
         let _ = store.add_schedule(sched);
         // Re-add restores the pending list — sync every window (#280).
-        broadcast_schedules(&app, &store);
+        broadcast_schedules(app, &store);
         return Err(SessionError::Spawn(message));
     }
     // Fired & removed (`take_schedule`) — sync every window (#280).
-    broadcast_schedules(&app, &store);
+    broadcast_schedules(app, &store);
     Ok(())
 }
 
@@ -1391,12 +1592,16 @@ fn broadcast_recurrings(app: &AppHandle, store: &Store) {
 /// branch) its branch are created **eagerly** now so items can be opened inside it
 /// before the first fire (idempotent at fire time). `first_fire_at` seeds
 /// `next_fire_at` (immediate = now); `interval_secs` is the repeat cadence.
+///
+/// Async + off the main thread (#353) — like `create_schedule` this can run an eager
+/// `git worktree add`, and (#300) an immediate `first_fire_at` even spawns its first child
+/// PTY inline. The whole body still runs **sequentially** on one blocking thread, so the
+/// #300 ordering (immediate fire → broadcast → return the post-fire record) is preserved
+/// exactly.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // flat Tauri command surface, like create_schedule
-pub fn create_recurring(
+pub async fn create_recurring(
     app: AppHandle,
-    store: State<'_, Store>,
-    manager: State<'_, SessionManager>,
     cwd: String,
     branch: Option<String>,
     name: Option<String>,
@@ -1408,6 +1613,41 @@ pub fn create_recurring(
     base: Option<String>,
     worktree: Option<bool>,
 ) -> Result<RecurringSession, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        create_recurring_blocking(
+            &app,
+            cwd,
+            branch,
+            name,
+            prompt,
+            interval_secs,
+            first_fire_at,
+            agent,
+            create_branch,
+            base,
+            worktree,
+        )
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors the flat command surface above
+fn create_recurring_blocking(
+    app: &AppHandle,
+    cwd: String,
+    branch: Option<String>,
+    name: Option<String>,
+    prompt: Option<String>,
+    interval_secs: u64,
+    first_fire_at: u64,
+    agent: Option<String>,
+    create_branch: Option<bool>,
+    base: Option<String>,
+    worktree: Option<bool>,
+) -> Result<RecurringSession, SessionError> {
+    let store = app.state::<Store>();
+    let manager = app.state::<SessionManager>();
     let create_branch = create_branch.unwrap_or(false);
     let worktree = worktree.unwrap_or(false);
     let branch = branch.filter(|b| !b.is_empty());
@@ -1474,7 +1714,7 @@ pub fn create_recurring(
     // its time, and emit `recurring://error` rather than failing the whole create. A
     // future `first_fire_at` is left for the poll loop to fire when it comes due.
     if rec.next_fire_at <= now_secs() {
-        if let Err(message) = fire_one_recurring(&store, &manager, &app, &rec) {
+        if let Err(message) = fire_one_recurring(&store, &manager, app, &rec) {
             let _ = store.mark_recurring_fired(
                 &rec.id,
                 rec.current_session_id.clone(),
@@ -1491,7 +1731,7 @@ pub fn create_recurring(
     }
     // Broadcast AFTER the (possible) immediate fire so `recurring://changed` carries the
     // rotated `current_session_id` — the frontend's child-exclusion depends on it.
-    broadcast_recurrings(&app, &store);
+    broadcast_recurrings(app, &store);
     // Return the post-fire record (rotated `current_session_id` + advanced `next_fire_at`)
     // so the frontend's optimistic add already owns the child — no blank duplicate card.
     Ok(store.recurring(&rec.id).unwrap_or(rec))
@@ -1883,24 +2123,41 @@ pub async fn fetch_remotes(cwd: String) -> Result<(), SessionError> {
 /// (#181), the sidebar repo / worktree "Pull" item. On success returns git's stdout
 /// summary for the toast; a diverged / upstream-less / non-repo folder surfaces as a
 /// typed `SessionError::Git { message }` shown as an error toast (no merge happens).
+// Async + off the main thread (#353) — this is a **network** `git pull` (deferred by
+// #330 as a "user-initiated one-shot"): on a slow/unreachable remote it froze the whole
+// window until git gave up. Same `spawn_blocking` shape as `fetch_remotes`; a join error
+// maps to `SessionError::Io`, and git's own error/summary strings are unchanged.
 #[tauri::command]
-pub fn pull_branch(cwd: String) -> Result<String, SessionError> {
-    git::pull_ff(&cwd).map_err(SessionError::Git)
+pub async fn pull_branch(cwd: String) -> Result<String, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || git::pull_ff(&cwd).map_err(SessionError::Git))
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
 /// Check out a branch in `cwd` (the first git write — see #27). Errors surface as
 /// a typed `SessionError::Git { message }` carrying git's explanation.
+// Async + off the main thread (#353) — a checkout on a large repo rewrites the whole
+// working tree; on the webview thread that stalled the UI. See the `pull_branch` note.
 #[tauri::command]
-pub fn checkout_branch(cwd: String, branch: String) -> Result<(), SessionError> {
-    git::checkout_branch(&cwd, &branch).map_err(SessionError::Git)
+pub async fn checkout_branch(cwd: String, branch: String) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git::checkout_branch(&cwd, &branch).map_err(SessionError::Git)
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
 /// Create + check out a new branch `name` from `base` (empty = HEAD) in `cwd` — the
 /// branch-creation git write (#124). Validation (invalid / already-existing name,
 /// unknown base) surfaces as `SessionError::Git { message }` for inline display.
+// Async + off the main thread (#353) — same `git checkout` cost as `checkout_branch`.
 #[tauri::command]
-pub fn create_branch(cwd: String, name: String, base: String) -> Result<(), SessionError> {
-    git::create_branch(&cwd, &name, &base).map_err(SessionError::Git)
+pub async fn create_branch(cwd: String, name: String, base: String) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git::create_branch(&cwd, &name, &base).map_err(SessionError::Git)
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
 /// Two-dot branch comparison for the diff viewer (#81) — `git diff base target`,
@@ -2454,9 +2711,16 @@ fn binary_version(binary: &str) -> Option<String> {
 
 /// `claude --version` (#100 Settings → About). Best-effort: `None` if the CLI is
 /// missing or errors, so the UI just omits the line. (Behavior unchanged by #141.)
+// Async + off the main thread (#353) — `binary_version` **spawns `claude --version` and
+// waits** for it (~1s on a cold node start), which on the webview thread froze the whole
+// window. A join error (a panicked blocking task) flattens to `None`, the same fail-open
+// value a missing/erroring CLI already produces.
 #[tauri::command]
-pub fn claude_version() -> Option<String> {
-    binary_version("claude")
+pub async fn claude_version() -> Option<String> {
+    tauri::async_runtime::spawn_blocking(|| binary_version("claude"))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Metadata about a coding agent (#141), for the #142 Settings selector + the
@@ -2477,29 +2741,41 @@ pub struct AgentInfo {
 /// Report the selected agent's binary, install hint, capabilities, and whether its
 /// CLI is present (#141) — the backend foundation the #142 missing-binary screen +
 /// agent selector consume. An unknown id resolves to Claude (per `agent_spec`).
+// Async + off the main thread (#353) — the probe (`binary_version`) **spawns
+// `<binary> --version` and waits**. The first-launch agent picker fires one `agent_info`
+// per selectable agent via `Promise.all`, but as a sync command they executed **serially
+// on the webview thread**, freezing the window for ~1-2s × N. The settings blob (needed
+// only to resolve a **custom** agent's real program, #325) is read up front — a cheap
+// in-memory clone, in a statement whose `State` temporary is dropped before the `.await`
+// — and only the probe crosses onto the blocking pool, so the N probes now genuinely run
+// concurrently. Taking an owned `AppHandle` (never a borrowed `State`) is also what lets
+// this async command keep its bare, non-`Result` return type. Semantics are unchanged,
+// including the unset-custom case (no command set ⇒ never probed ⇒ `version: None`); a
+// join error flattens to `None`, the same fail-open value a missing CLI produces.
 #[tauri::command]
-pub fn agent_info(store: State<'_, Store>, agent: String) -> AgentInfo {
+pub async fn agent_info(app: AppHandle, agent: String) -> AgentInfo {
     let spec = crate::agents::agent_spec(&agent);
     // The custom agent (#325) has no fixed binary — its real program comes from the
     // user's `customAgentCommand` in Settings. Resolve it so the presence/version probe
     // and the ClaudeMissing banner name the **actual** program (falling back to the
     // "custom" placeholder when unset). Built-in agents keep their spec's binary.
-    let (binary_name, version) = if spec.id == "custom" {
-        match crate::agents::read_custom_command(&store.settings())
+    let program = if spec.id == "custom" {
+        let settings = app.state::<Store>().settings();
+        crate::agents::read_custom_command(&settings)
             .and_then(|cmd| crate::agents::parse_custom_command(&cmd))
             .map(|(program, _args)| program)
-        {
-            Some(program) => {
-                let v = binary_version(&program);
-                (program, v)
-            }
-            None => (spec.binary_name.to_string(), None),
-        }
     } else {
-        (
-            spec.binary_name.to_string(),
-            binary_version(spec.binary_name),
-        )
+        Some(spec.binary_name.to_string())
+    };
+    let binary_name = program
+        .clone()
+        .unwrap_or_else(|| spec.binary_name.to_string());
+    let version = match program {
+        Some(program) => tauri::async_runtime::spawn_blocking(move || binary_version(&program))
+            .await
+            .ok()
+            .flatten(),
+        None => None,
     };
     AgentInfo {
         id: spec.id.to_string(),
