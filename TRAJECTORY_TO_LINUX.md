@@ -94,18 +94,38 @@ real box across Arch, Ubuntu, and Mint:
 
 - [ ] The **AppImage launches** on Arch, Ubuntu (22.04+), and Mint (21 + 22) — glibc /
       webkit2gtk-4.1 floor holds; newer distros may need `libfuse2` for the AppImage runtime.
+      _(partial — see the #365 walk: **Arch ✓**, proven with the **published CI** AppImage, so the
+      ubuntu-22.04 → current-Arch floor holds; `libfuse2` was **not** needed (libfuse3 runtime).
+      Ubuntu/Mint still to walk.)_
 - [ ] A `claude` session **spawns** (PTY inherits the session `$SHELL`; `claude` on PATH via
       the login-shell probe from a `.desktop`/AppImage launch).
+      _(partial — see the #365 walk: the login-shell probe was caught running **inside the
+      AppImage** and resolved a clean PATH containing `claude`; the agent-PTY half needs the GUI
+      → maintainer checklist M1.)_
 - [ ] **`xdg-open`** opens the browser on a ⌘/Ctrl-click URL and opens folders for
       "Reveal in File Manager" (repo) and Settings → Data "Open data folder".
+      _(partial — see the #365 walk: both `xdg-open` invocations verified live on Arch (Brave +
+      Thunar); driving them from the app needs the GUI → M2.)_
 - [ ] **`reveal_file_in_finder`** highlights the file via `FileManager1.ShowItems` on each DE
       (GNOME/Nautilus, KDE/Dolphin, Cinnamon/Nemo → Mint, Xfce/Thunar), else opens the parent
       folder.
+      _(partial — see the #365 walk: **Xfce/Thunar verified** (method reply, file selected);
+      GNOME/Nautilus, KDE/Dolphin, Cinnamon/Nemo untested — no such DE on the tested box.)_
 - [ ] Keyboard hints render **Ctrl+…** (not ⌘) and "Reveal in File Manager".
+      _(partial — see the #365 walk: the pure logic is proven by `src/platform.test.ts`; the
+      on-screen rendering needs the GUI → M3.)_
 - [ ] **Native notifications** (libnotify / D-Bus) fire on the #336 watch feature.
+      _(partial — see the #365 walk: the D-Bus service is activatable and `notify-send` delivers a
+      visible toast on Arch/Hyprland; the app's watch → toast path needs the GUI → M4.)_
 - [ ] **Clipboard image paste** (`save_clipboard_image`) works under X11 and Wayland.
+      _(partial — see the #365 walk: both backends are compiled in and the **Wayland** clipboard
+      round-trips an image byte-exact; the Ctrl+V path needs the GUI → M5. **X11 untested — no X11
+      session on the tested box.**)_
 - [ ] The **in-app updater** recognizes the AppImage (`linux-x86_64` in `latest.json`) and
       relaunches after applying.
+      _(partial — see the #365 walk: `latest.json` carries a signed `linux-x86_64` AppImage entry,
+      and `$APPIMAGE` survives in the app's own env (the #350 regression check); the actual
+      self-update needs a published N+1 → M10.)_
 
 ## 2026-07-08
 
@@ -169,16 +189,26 @@ listed here too — it is now done, see Task #351 below.)_
 
 - [ ] **NVIDIA + Wayland**: boot logs `[recue] WebKitGTK: set WEBKIT_DISABLE_DMABUF_RENDERER=1`,
       and terminals are responsive (echo, paint, spawn).
-- [ ] **AMD + Wayland** and **Intel + Wayland**: DMA-BUF is left **on** (no log line), no
-      regression vs before.
-- [ ] `RECUE_DISABLE_DMABUF=1` / `=0` force the workaround on/off; a user-exported
+      _(N/A — **superseded by #347**: that log line no longer exists, and the tested box is hybrid,
+      not NVIDIA-only. Walk the #347 checklist's D1/D2 instead.)_
+- [ ] **AMD + Wayland** and **Intel + Wayland**: DMA-BUF is left **on** (~~no log line~~ — post-#347
+      there is **always** exactly one boot line, for both outcomes), no regression vs before.
+      _(partial — see the #365 walk: the **Intel** half is verified as the Mesa GPU of a hybrid
+      Intel+NVIDIA box (DMA-BUF left on). **AMD untested — no AMD GPU on the tested box.**)_
+- [x] `RECUE_DISABLE_DMABUF=1` / `=0` force the workaround on/off; a user-exported
       `WEBKIT_DISABLE_DMABUF_RENDERER` is respected untouched.
+      — verified on Arch/Hyprland (Wayland), hybrid Intel+NVIDIA, 2026-07-14 (#365); all three
+      boot lines quoted verbatim in the walk. Environment-independent (same code path on any box).
 - [ ] On a box where WebGL is software (llvmpipe — e.g. NVIDIA without working GL in the
       webview): the console logs the "skipping WebGL renderer" warning, terminals use the
       DOM renderer, and input echo is responsive.
+      _(blocked — see the #365 walk, finding **F4**: WebKitGTK does **not** forward the webview
+      console to stderr, so this warning is unreadable from a terminal. Needs the WebKit
+      inspector → M8.)_
 - [ ] Release AppImage under a busy `claude` TUI (many parallel agents): display updates
       stay smooth and typing stays responsive (coalescing + b64 scrollback in effect);
       scrollback replays correctly after a view switch and after a session Restart.
+      _(blocked — GUI + subjective. Protocol written out as maintainer step M9 in the #365 walk.)_
 
 > **Superseded by #347 for the DMA-BUF items above** — the workaround is no longer applied
 > on the mere presence of the NVIDIA module, and it now logs one line for **both** outcomes.
@@ -262,14 +292,29 @@ listed here too — it is now done, see Task #351 below.)_
       FileSwitcher → Browse… open dialog, and the template-export save dialog all render
       **dark** — on Arch, Ubuntu and Mint, under GNOME / KDE / Cinnamon / Xfce, on both Wayland
       and X11.
+      _(partial — see the #365 walk: the **boot line is verified** on Arch/Hyprland, both for a
+      fresh install (`recue theme: unset`) and a persisted `theme:"dark"` — and it confirms the
+      AppRun really does force `Adwaita:light` first. The **dialogs rendering dark** needs the GUI
+      → M7; Ubuntu/Mint and GNOME/KDE/Cinnamon/X11 untested — not this box.)_
 - [ ] **AppImage, ReCue theme = Light**: after Settings → Appearance → Light → Save → quit →
       relaunch, `GTK_THEME=Adwaita:light` and the same three dialogs render light.
-- [ ] **Overrides honored**: `APPIMAGE_GTK_THEME=Adwaita:dark ./ReCue*.AppImage` (no ReCue
+      _(partial — see the #365 walk: with a persisted `theme:"light"` the **effective**
+      `GTK_THEME` is `Adwaita:light`. Note there is correctly **no** `[recue] GTK:` line in this
+      case: the AppRun's forced value already equals the target and the policy only logs when it
+      changes the value. Dialogs need the GUI → M7.)_
+- [x] **Overrides honored**: `APPIMAGE_GTK_THEME=Adwaita:dark ./ReCue*.AppImage` (no ReCue
       override line logged) and `RECUE_GTK_THEME=<theme>` win over the policy.
+      — verified on Arch/Hyprland (Wayland), 2026-07-14 (#365), with values chosen so they cannot
+      coincide with the default: `RECUE_GTK_THEME=HighContrast` → forced verbatim;
+      `APPIMAGE_GTK_THEME=Adwaita:light` → **no** ReCue line and **not** clobbered to dark.
+      Environment-independent (pure env policy).
 - [ ] **Non-AppImage run** (`npm run tauri dev`, a distro package): `GTK_THEME` is left
       untouched (no `[recue] GTK:` line) and dialogs follow the desktop theme;
       `RECUE_GTK_THEME=Adwaita:dark npm run tauri dev` makes them dark (the AppImage-free
       smoke test).
+      _(partial — see the #365 walk: the **env half is verified** against the raw (non-AppImage)
+      release binary — no `[recue] GTK:` line and `GTK_THEME` unset; with `RECUE_GTK_THEME=Adwaita:dark`
+      it is forced. "Dialogs follow the desktop theme" needs the GUI → M7.)_
 
 ### DMA-BUF detection regression (Task #347)
 
@@ -335,21 +380,48 @@ hardware renderer and WebGL is used again (`terminalPool` logs the renderer stri
       `WEBKIT_DISABLE_DMABUF_RENDERER` is **not** in the app's environment; no "skipping WebGL
       renderer (software rasterizer)" console warning (instead `[recue] terminals: WebGL
       renderer: Mesa Intel(R) Graphics …`); typing echo + paint are snappy.
+      _(partial — see the #365 walk. **The first two clauses PASS on exactly this box** (Arch/
+      Hyprland, Intel i915 + NVIDIA-open 610.43.03): the boot line reads `DMA-BUF left on — Mesa
+      GPU present (healthy DMA-BUF) (gpus: nvidia[blob],i915[mesa]; nvidia: open 610.43.03; vm: no;
+      session: wayland)`, every field matching `/sys` ground truth, and `WEBKIT_DISABLE_DMABUF_RENDERER`
+      is absent from the app's env — **#347 is confirmed fixed**. The WebGL-console clause is
+      **unreadable from a terminal** (finding **F4**) and "snappy" is subjective → both go to the
+      GUI checklist (M8, M9).)_
 - [ ] **NVIDIA blob as the only GPU** (desktop, no iGPU): the line reads `DMA-BUF disabled —
       NVIDIA blob driver is the only renderer`, and the app is usable (not blank/crawling).
-- [ ] **PRIME offload** on the hybrid box (`__NV_PRIME_RENDER_OFFLOAD=1
+      _(N/A — not this box: the tested machine is a hybrid laptop; it has no NVIDIA-only
+      configuration. Still to walk on a desktop with a single NVIDIA card.)_
+- [x] **PRIME offload** on the hybrid box (`__NV_PRIME_RENDER_OFFLOAD=1
       __GLX_VENDOR_LIBRARY_NAME=nvidia npm run tauri dev`): the line reads `DMA-BUF disabled —
       NVIDIA GL selected via env (PRIME offload)`.
+      — verified on Arch/Hyprland (Wayland), the real hybrid Intel+NVIDIA box, 2026-07-14 (#365):
+      the line reads exactly `DMA-BUF disabled — NVIDIA GL selected via env (PRIME offload)
+      (… nvidia: open 610.43.03, GL routed to nvidia; …)` — for both vars together **and for each
+      one alone**.
 - [ ] **AMD-only / Intel-only / nouveau**: `DMA-BUF left on`, no regression vs before.
+      _(N/A — not this box: no AMD GPU, no nouveau, and the Intel iGPU is only present as half of a
+      hybrid pair. The hybrid case is covered above.)_
 - [ ] **A VM** (QEMU/KVM, VMware, VirtualBox, Hyper-V — virtio-gpu/vmwgfx display):
       `DMA-BUF disabled — virtual machine without a native Mesa GPU`. A **bare-metal Xen
       dom0** must NOT read as a VM.
-- [ ] Overrides: `RECUE_DISABLE_DMABUF=1` / `=0` force the workaround on/off (the line names
+      _(N/A — not this box: bare metal, zero VM signals (no `/sys/hypervisor/type`, no CPUID
+      hypervisor flag, DMI = ASUSTeK ROG). The detector correctly reports `vm: no`.)_
+- [x] Overrides: `RECUE_DISABLE_DMABUF=1` / `=0` force the workaround on/off (the line names
       the force), and a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` is respected untouched
       (`DMA-BUF untouched — … already set by the user`).
-- [ ] Ground truth to read the boot line against: `ls /sys/class/drm`,
+      — verified on Arch/Hyprland (Wayland), 2026-07-14 (#365); all three boot lines quoted
+      verbatim in the walk. Environment-independent (pure env policy).
+      **Instrument caveat (finding F3):** do **not** try to confirm the resulting
+      `WEBKIT_DISABLE_DMABUF_RENDERER=1` in `/proc/<pid>/environ` — that file is the *exec-time*
+      snapshot and never shows a variable the process `setenv()`s itself. Read `env` in a ReCue
+      shell terminal instead. `/proc/<pid>/environ` **is** valid for the *negative* (the var absent
+      at exec, which is what the hybrid box above asserts).
+- [x] Ground truth to read the boot line against: `ls /sys/class/drm`,
       `readlink -f /sys/class/drm/card*/device/driver`, `cat /proc/driver/nvidia/version`,
       `cat /sys/class/dmi/id/{sys_vendor,product_name}`.
+      — collected on Arch/Hyprland, 2026-07-14 (#365) and reproduced in the walk's Box-under-test
+      block. `scripts/linux-verify.sh`'s `B-gpu` check now prints this ground truth **and** predicts
+      `decide_dmabuf`'s outcome on any box, so the boot line can be diffed against it directly.
 
 ### AppImage child-process environment (Task #350)
 
@@ -399,13 +471,34 @@ pure and host-independent so macOS/Windows CI unit-tests it too):
 - [ ] A ReCue shell terminal's `env` carries no `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`/
       `GTK_THEME`/`GDK_BACKEND` and no `/tmp/.mount_` segment in `PATH` / `XDG_DATA_DIRS` /
       `LD_LIBRARY_PATH`.
+      _(partial — see the #365 walk: **two of the three scrub seams are proven live under the
+      AppImage** by snapshotting the app's real children — `child_env::command()` (the login-shell
+      PATH probe) and `scrub_command()` (`claude --version` / `opencode --version`) both ran with
+      none of those vars, no `LD_LIBRARY_PATH`, `XDG_DATA_DIRS=/usr/share`, and a `PATH` free of
+      `/tmp/.mount_`. The **PTY seam** (`child_env_vars()` → an actual shell terminal) is the one
+      this box literally names and needs one GUI panel → M6, where `npm run verify:linux`'s
+      `env-appimage` check asserts exactly this.)_
 - [ ] `xdg-open` from inside a ReCue terminal, the Ctrl-click link open, "Reveal in File
       Manager", and Settings → Data → "Open data folder" all work under the AppImage.
+      _(blocked — needs the GUI → M2. The standalone `xdg-open` / `dbus-send` calls do work on this
+      box with a clean env (see checklist A's A3/A4 notes).)_
 - [ ] A `claude` agent spawns, runs its tools, and `git` works inside it (no dynamic-loader
       / symbol errors).
+      _(partial — see the #365 walk: the app spawned `claude --version` under the AppImage with a
+      **fully scrubbed** env (no `LD_LIBRARY_PATH` — exactly the dynamic-loader failure class this
+      box guards). A full agent + its tools + `git` needs the GUI → M6.)_
 - [ ] GTK apps launched from a ReCue terminal use the user's own theme (no forced
       `Adwaita:light`).
-- [ ] ReCue's own window/dialogs are visually unchanged (the app process env is untouched).
+      _(partial — see the #365 walk: the scrubbed children carry **no `GTK_THEME` at all** (dropped,
+      as no `APPIMAGE_ORIGINAL_GTK_THEME` backup existed), so a GTK app falls back to the user's own
+      theme. Actually launching one needs the GUI → M6.)_
+- [x] ReCue's own window/dialogs are visually unchanged (the app process env is untouched).
+      — verified on Arch/Hyprland (Wayland), locally built AppImage, 2026-07-14 (#365): the app's own
+      `/proc/<pid>/environ` still carries `APPDIR` / `APPIMAGE` / `GTK_THEME` / `GDK_BACKEND` / the
+      `/tmp/.mount_…` `LD_LIBRARY_PATH`, and WebKit's helper processes (`WebKitNetworkProcess`,
+      `WebKitWebProcess`) inherit the **full** AppImage env — so the webview still loads its bundled
+      libraries, and the window renders. Scope: the mechanism (#350 scrubs *children only*, never the
+      app itself) is proven end-to-end; a pixel-level dialog inspection is on the maintainer list (M7).
 
 ### Performance: lazy-mounted Overview terminals (Task #351)
 
@@ -451,6 +544,12 @@ restores eager mounting, `MAX_CONCURRENT_REPLAYS = Infinity` restores parallel r
 
 ### Needs real-box verification (performance, #351)
 
+> **All five boxes below are `BLOCKED — needs maintainer at the GUI`** (the #365 walk): each needs
+> ~10 resumed agents, on-screen scrolling, and a devtools console. None is reachable from a
+> terminal — the webview console does not reach stderr (finding **F4**). They are written out as a
+> single scripted protocol, **maintainer step M9**, whose verdict is pinned to the build it refers
+> to (Tasks #351/#353/#355/#356 all move these numbers).
+
 - [ ] Release AppImage on Linux/WebKitGTK with ~10 resumed agents, booting into **Overview**:
       `document.querySelectorAll(".xterm").length` ≈ the visible-card count (not 10), and the
       first visible terminals paint noticeably sooner than before.
@@ -461,3 +560,212 @@ restores eager mounting, `MAX_CONCURRENT_REPLAYS = Infinity` restores parallel r
       macrotask yield between replays).
 - [ ] ⌘/Ctrl+E big mode on a never-mounted card paints its terminal; a Canvas tab switched to
       with Ctrl+1–9 takes keystrokes immediately (pending-focus).
+
+### Real-box verification walk — Arch/Hyprland (Task #365)
+
+The first end-to-end walk of every `- [ ]` box above on a real Linux box. The deliverable is
+**evidence, not a pass rate**: a recorded FAIL is a successful outcome, a tick without
+evidence is a failed one. **Nothing here changed any Rust or TS source** — this task added
+`scripts/linux-verify.sh` (a read-only evidence collector, `npm run verify:linux`), one
+`package.json` script, and this section.
+
+**Box under test**
+
+```
+distro          Arch Linux, kernel 7.1.3-arch1-2 x86_64
+session         XDG_SESSION_TYPE=wayland, XDG_CURRENT_DESKTOP=Hyprland (v0.55.4)
+GPUs            card0 -> driver=nvidia vendor=0x10de   (RTX 4080 Max-Q)
+                card1 -> driver=i915   vendor=0x8086   (Intel Iris Xe — renders the webview)
+nvidia kernel   NVIDIA UNIX Open Kernel Module 610.43.03  ("nvidia-open")
+VM              none — bare metal (no /sys/hypervisor/type, no CPUID hypervisor flag;
+                DMI = ASUSTeK / ROG Zephyrus M16 GU604VZ)
+file manager    thunar.desktop        (Xfce/Thunar — the ONLY file manager installed)
+browser         brave-browser.desktop
+D-Bus (session) org.freedesktop.FileManager1 + org.freedesktop.Notifications, both activatable
+notifications   a daemon owns org.freedesktop.Notifications (name owner :1.5)
+clipboard       wl-paste / wl-copy present; xclip ABSENT
+FUSE            libfuse3.so.4 only — libfuse.so.2 is NOT installed
+shell           $SHELL=/bin/bash;  claude at /home/erik/.local/bin/claude
+artifacts       (a) locally built AppImage  ReCue_1.2.1_amd64.AppImage  — the main subject
+                (b) the PUBLISHED v1.2.1 release AppImage (~/Applications/ReCue.AppImage),
+                    built by CI on ubuntu-22.04 — used for A1 and as a pre-#347 control
+app version     1.2.1
+commit SHA      5192ad1c867ca57b5e4e8582b83b405f0ef09e06  (contains #347 and #350)
+date            2026-07-14
+```
+
+**Two scope limits, stated up front**
+
+1. **The locally built AppImage does NOT prove CI's distro floor.** It links this host's Arch
+   glibc/webkit, not ubuntu-22.04's. It proves the **code**, not the floor. The floor is proved
+   only by the *published* CI artifact — which is why A1 was **also** walked against
+   `~/Applications/ReCue.AppImage` (the real shipped v1.2.1). That one launches fine here, so
+   the ubuntu-22.04 → current-Arch floor **holds** — but it predates #347/#350, so it cannot
+   verify any box about them.
+2. **The performance verdicts are a snapshot of commit `5192ad1`.** Tasks #351/#353/#355/#356
+   (lazy Overview terminals, main-thread offload, code-split) all landed just before this walk
+   and move exactly the numbers B5 and L1–L5 ask about.
+
+**Method** — every launch used an **isolated data dir** (`XDG_DATA_HOME=$(mktemp -d)`; Tauri's
+Linux `app_data_dir()` is `$XDG_DATA_HOME/com.recue.app`) so the maintainer's live sessions
+were never resumed or rewritten, and every launch was bounded with `timeout`. Boot-line
+evidence is the app's own `eprintln!` on stderr. `scripts/linux-verify.sh` reproduces every
+headless check; `--open` adds the three that pop windows.
+
+**Results** — 34 boxes (not the 15 the card guessed; #347/#349/#350/#351 each appended their
+own checklist since #346). **6 PASS · 0 FAIL · 16 PARTIAL · 8 BLOCKED · 4 N/A.**
+
+| # | Item | Verdict | Evidence |
+|---|------|---------|----------|
+| **A1** | AppImage launches (Arch / Ubuntu / Mint) | PARTIAL | **Arch ✓ with the *published CI* AppImage** *and* a local build: `hyprctl clients` → `class=Recue title=ReCue xwayland=true`; no loader/GTK fatal. **No `libfuse2` needed** — the runtime uses libfuse3 (`APPDIR=/tmp/.mount_ReCue_…`). Ubuntu/Mint: no such box. |
+| **A2** | `claude` spawns (PTY `$SHELL`; PATH via the login-shell probe) | PARTIAL | Caught the probe **live inside the AppImage**: child `/bin/bash -ilc printf '%s' "__RECUE_PATH__${PATH}__RECUE_PATH__"` → PATH clean of `/tmp/.mount_` and containing `/home/erik/.local/bin/claude`. The app then spawned `claude --version` successfully. A real agent PTY needs the GUI. |
+| **A3** | `xdg-open` → browser + folders | PARTIAL | `xdg-open https://example.com` → rc=0 (Brave); `xdg-open <dir>` → rc=0 (Thunar) — the exact processes `open_url` / `os_open` spawn. In-app Ctrl-click / Reveal / Open-data-folder need the GUI. |
+| **A4** | `reveal_file_in_finder` via `FileManager1.ShowItems` | PARTIAL | The verbatim `dbus-send … ShowItems array:string:file://…/README.md string:""` → `method return … reply_serial=2`, no error; Thunar selected the file. **Xfce/Thunar only** — GNOME/Nautilus, KDE/Dolphin, Cinnamon/Nemo are not installable on this box. |
+| **A5** | Ctrl hints + "Reveal in File Manager" | PARTIAL | Pure logic proven (`src/platform.test.ts`, 4 Linux cases, in the 686 green tests). On-screen rendering needs the GUI. |
+| **A6** | Native notifications (#336 watch) | PARTIAL | `org.freedesktop.Notifications` activatable (owner `:1.5`); `notify-send` delivered a **visible toast**. The app's watch → toast path needs the GUI. |
+| **A7** | Clipboard image paste (X11 **and** Wayland) | PARTIAL | Both backends compiled in (`Cargo.lock`: `wl-clipboard-rs` + `x11rb`). Wayland plumbing round-trips **byte-exact**: `wl-copy -t image/png < icon.png` → `wl-paste --list-types` = `image/png`, 28270/28270 B. Ctrl+V→`save_clipboard_image` needs the GUI. **X11 half: N/A — no X11 session on this box.** |
+| **A8** | Updater sees the AppImage + relaunches | PARTIAL | Manifest ✓: `latest.json` v1.2.1 carries signed `linux-x86_64` **and** `linux-x86_64-appimage` → `…/ReCue_1.2.1_amd64.AppImage`. Precondition ✓ (**#350 regression check**): the app's own env still has `APPIMAGE=…`, which `install_appimage` rewrites in place. End-to-end self-update needs a published N+1 → BLOCKED. |
+| **B1** | NVIDIA + Wayland logs `set WEBKIT_DISABLE_DMABUF_RENDERER=1` | N/A | **Superseded by #347** (that line no longer exists) **and** not this box (hybrid, not NVIDIA-only). See D1/D2. |
+| **B2** | AMD + Wayland / Intel + Wayland: DMA-BUF left **on** | PARTIAL | Intel (as the Mesa half of this hybrid) ✓ — DMA-BUF **is** left on (see D1). AMD: no such box. *Premise corrected in place:* post-#347 there is **always** exactly one boot line, so "no log line" is stale. |
+| **B3** | `RECUE_DISABLE_DMABUF=1` / `=0`; user var respected | **PASS** ✓ | All three boot lines verbatim — see D6. Environment-independent. |
+| **B4** | Software WebGL → "skipping WebGL renderer" console warning | BLOCKED | **WebKitGTK does not forward the webview console to stderr** — only the two Rust `eprintln!` lines appear in a bounded launch. Reading it needs the WebKit inspector. See finding **F4**. |
+| **B5** | Release AppImage under a busy `claude` TUI: smooth | BLOCKED | GUI + subjective. Protocol on the maintainer checklist. |
+| **G1** | AppImage, theme=Dark → `GTK_THEME=Adwaita:dark` + dark dialogs | PARTIAL | Boot line ✓ on a **fresh install** (`[recue] GTK: set GTK_THEME=Adwaita:dark (was Adwaita:light; recue theme: unset)`) *and* with a persisted `theme:"dark"` (`… recue theme: dark`). Note this also **confirms fact 1 of #349**: the AppRun really does force `Adwaita:light`. Dialogs rendering dark needs the GUI; other distros/DEs are N/A. |
+| **G2** | AppImage, theme=Light → `GTK_THEME=Adwaita:light` + light dialogs | PARTIAL | Seeded an isolated `sessions.json` with `settings.theme="light"` → effective `GTK_THEME=Adwaita:light`. **No boot line, correctly**: the AppRun's forced value already equals the target, and the policy only logs when it *changes* the value (proven by the `HighContrast` case below). Dialogs need the GUI. |
+| **G3** | Overrides honored (`APPIMAGE_GTK_THEME`, `RECUE_GTK_THEME`) | **PASS** ✓ | Unambiguously (values chosen so they can't coincide with the default): `RECUE_GTK_THEME=HighContrast` → `[recue] GTK: set GTK_THEME=HighContrast (was Adwaita:light)`. `APPIMAGE_GTK_THEME=Adwaita:light` → **no ReCue line**, not clobbered to dark. |
+| **G4** | Non-AppImage run: `GTK_THEME` untouched | PARTIAL | Raw release binary (no `$APPIMAGE`) → **no `[recue] GTK:` line**, `GTK_THEME` unset. `RECUE_GTK_THEME=Adwaita:dark` → `set GTK_THEME=Adwaita:dark (was unset)`. "Dialogs follow the desktop theme" needs the GUI. |
+| **D1** | **Hybrid iGPU + NVIDIA dGPU → DMA-BUF left on** | PARTIAL | **The headline result — #347 is correct on the exact box it was written for.** Boot line, verbatim:<br>`[recue] WebKitGTK: DMA-BUF left on — Mesa GPU present (healthy DMA-BUF) (gpus: nvidia[blob],i915[mesa]; nvidia: open 610.43.03; vm: no; session: wayland)`<br>Every evidence field matches `/sys` ground truth, and `WEBKIT_DISABLE_DMABUF_RENDERER` is **absent** from the app's env. The remaining two clauses (the WebGL console line; "typing echo + paint are snappy") are BLOCKED — see F4 and B5. |
+| **D2** | NVIDIA blob as the only GPU | N/A | No NVIDIA-only machine here (this box is hybrid). |
+| **D3** | **PRIME offload → DMA-BUF disabled** | **PASS** ✓ | On this real hybrid box, all three variants give exactly the specified line:<br>`DMA-BUF disabled — NVIDIA GL selected via env (PRIME offload) (… nvidia: open 610.43.03, GL routed to nvidia; …)`<br>for `__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia`, and for **each var alone**. |
+| **D4** | AMD-only / Intel-only / nouveau | N/A | No such GPU on this box. |
+| **D5** | A VM (and a bare-metal Xen dom0 must not read as one) | N/A | Bare metal — zero VM signals. Not testable here. |
+| **D6** | Overrides force the workaround on/off | **PASS** ✓ | Three launches, boot lines verbatim:<br>`RECUE_DISABLE_DMABUF=1` → `DMA-BUF disabled — RECUE_DISABLE_DMABUF forced on`<br>`RECUE_DISABLE_DMABUF=0` → `DMA-BUF left on — RECUE_DISABLE_DMABUF forced off`<br>`WEBKIT_DISABLE_DMABUF_RENDERER=1` preset → `DMA-BUF untouched — … already set by the user`<br>*Instrument note (**F3**): the "var is now set in the env" half **cannot** be read from `/proc/<pid>/environ` — see below.* |
+| **D7** | Ground truth to read the boot line against | **PASS** ✓ | Collected and reproduced in the Box-under-test block; `scripts/linux-verify.sh`'s `B-gpu` check prints it (and predicts `decide_dmabuf`'s outcome) on any box. |
+| **E1** | A ReCue shell terminal's env is scrubbed | PARTIAL | **Two of the three #350 seams proven live under the AppImage** by snapshotting the app's real children: the `child_env::command()` seam (the login-shell probe) and the `scrub_command()` seam (`claude --version`, `opencode --version`) both ran with **no** `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`/`GTK_THEME`/`GDK_BACKEND`, **no** `LD_LIBRARY_PATH`, `XDG_DATA_DIRS=/usr/share`, and a `PATH` free of `/tmp/.mount_`. The **PTY seam** (`child_env_vars()` → a shell terminal) needs one GUI panel: run `npm run verify:linux` inside it (its `env-appimage` check *is* this box). |
+| **E2** | `xdg-open` / Reveal / Open-data-folder from inside the AppImage | BLOCKED | The standalone calls work with a clean env (A3/A4); driving them from the app needs the GUI. |
+| **E3** | A `claude` agent spawns; `git` works inside it | PARTIAL | The app spawned `claude --version` under the AppImage with a **fully scrubbed** env (no `LD_LIBRARY_PATH` → exactly the dynamic-loader failure class this box is about). A full agent + its tools + `git` needs the GUI. |
+| **E4** | GTK apps from a ReCue terminal use the user's own theme | PARTIAL | The scrubbed children carry **no `GTK_THEME` at all** (dropped — no `APPIMAGE_ORIGINAL_GTK_THEME` backup existed), so a GTK app launched from one falls back to the user's own theme. Launching one needs the GUI. |
+| **E5** | ReCue's own window/dialogs unchanged (app env untouched) | **PASS** ✓ | The app's own `/proc/<pid>/environ` still carries `APPDIR` / `APPIMAGE` / `GTK_THEME` / `GDK_BACKEND` / the `/tmp/.mount_…` `LD_LIBRARY_PATH`, and WebKit's helper processes (`WebKitNetworkProcess`, `WebKitWebProcess`) inherit the **full** AppImage env — so the webview still loads its bundled libs. The window renders (`hyprctl clients`). Scope: the *mechanism* (#350 scrubs children only, never the app) is proven; a pixel-level dialog inspection is on the maintainer list. |
+| **L1–L5** | #351 lazy-mounted Overview terminals (5 boxes) | BLOCKED | All five need ~10 resumed agents, on-screen scrolling, and a devtools console (`document.querySelectorAll(".xterm").length`). None is reachable from a terminal. |
+
+**A note on what the AppImage actually is on Wayland.** `hyprctl clients` reports the ReCue
+AppImage window as **`xwayland: true`** and its env carries `GDK_BACKEND=x11` — the AppRun's
+`linuxdeploy-plugin-gtk.sh` hook hard-exports it (Task #362). Meanwhile the DMA-BUF boot line
+prints `session: wayland`, because `linux_webkit` reads `XDG_SESSION_TYPE` (the *login session*)
+and not the *toolkit backend*. Both statements are true and neither is a bug; they are just
+answering different questions. A `tauri dev` run is a native Wayland client, the AppImage is not.
+
+**Findings**
+
+- **F1 — the AppImage cannot be built on Arch (two independent blockers).** Neither affects CI
+  (ubuntu-22.04), but it means nobody can build or test the Linux artifact on the one distro
+  ReCue's Linux work is actually being done on.
+  1. `linuxdeploy`'s bundled `strip` (old binutils) cannot parse Arch's modern relocation
+     sections: `ERROR: Strip call failed: … unknown type [0x13] section '.relr.dyn'` for ~30
+     system libs, then it aborts. Worked around with `NO_STRIP=1`.
+  2. With that fixed, the GTK plugin dies: `[gtk/stderr] cp: cannot stat
+     '/usr/lib/gdk-pixbuf-2.0/2.10.0': No such file or directory` → `ERROR: Failed to run
+     plugin: gtk (exit code: 1)`. Root cause: `linuxdeploy-plugin-gtk.sh` does
+     `copy_tree "$(pkg-config --variable=gdk_pixbuf_binarydir gdk-pixbuf-2.0)"`, and Arch's
+     `gdk-pixbuf2 2.44.7-1` **still advertises** `/usr/lib/gdk-pixbuf-2.0/2.10.0` in its `.pc`
+     while **no longer shipping that directory** (loaders are built into the library).
+     Worked around here with a `$TMPDIR`-only `PKG_CONFIG_PATH` shim.
+  *Caveat this creates:* the locally built AppImage therefore carries a shimmed
+  `GDK_PIXBUF_MODULE_FILE` path. It launched and rendered correctly, and no box ticked above
+  depends on pixbuf loaders — but it is one more reason the local artifact is not the shipped one.
+  **Proposed card:** *Make the AppImage buildable on Arch* — set `NO_STRIP=1` and shim the
+  gdk-pixbuf loaders dir in a documented `npm run build:appimage`, or document the two blockers
+  in `TRAJECTORY_TO_LINUX.md` as a known local-build limitation.
+
+- **F2 — the shipped v1.2.1 AppImage still has the #347 DMA-BUF bug.** Launching the *published*
+  release on this box logs the **pre-#347** line:
+  `[recue] WebKitGTK: set WEBKIT_DISABLE_DMABUF_RENDERER=1 (nvidia: true, vm: false, forced: false)`
+  — i.e. every Linux user on the current release is still getting the forced-CPU webview that
+  #347 diagnosed as *itself* the reported slowness. #346–#351 are all on `main` and **unreleased**.
+  **Proposed card:** *Cut a release containing #346–#351* so Linux users actually receive the
+  DMA-BUF fix, the env scrub and the terminal-boot work.
+
+- **F3 — `/proc/<pid>/environ` cannot verify a variable the app sets itself.** The #347 checklist
+  (and #365's own plan) say to confirm `WEBKIT_DISABLE_DMABUF_RENDERER=1` in `/proc/<pid>/environ`
+  after `RECUE_DISABLE_DMABUF=1`. It structurally cannot appear there: `/proc/<pid>/environ` is the
+  **exec-time** stack snapshot, and a runtime `setenv()` — which is exactly what `linux_webkit` and
+  `linux_gtk` do — never rewrites it. Observed: with `RECUE_DISABLE_DMABUF=1` the boot line reads
+  `DMA-BUF disabled — … forced on` while `/proc/<pid>/environ` shows **no**
+  `WEBKIT_DISABLE_DMABUF_RENDERER`. The instrument is valid only for the **negative** (absent at
+  exec — which is what D1 needs, and it holds) and for user-preset values. The value ReCue sets *is*
+  visible in a **child** process's env (`std::env::vars_os()` reflects `setenv`), so a ReCue shell
+  terminal is the right instrument.
+  **Proposed card:** *Fix the DMA-BUF checklist's verification instrument* — replace the
+  `/proc/<pid>/environ` instruction with "read `env` in a ReCue shell terminal", and note the
+  exec-time-snapshot caveat.
+
+- **F4 — the webview console never reaches stderr under WebKitGTK.** A bounded AppImage launch
+  emits exactly the two Rust `eprintln!` lines and nothing else; `[recue] terminals: WebGL
+  renderer: …` / `skipping WebGL renderer (software rasterizer…)` are invisible. So B4 — and D1's
+  third clause — cannot be verified from a terminal at all, only through the WebKit inspector.
+  **Proposed card:** *Surface the terminal-pool WebGL diagnostic on stderr* — have
+  `terminalPool` report the renderer string through a tiny Rust `log_diagnostic` command so the
+  WebGL decision is greppable from a normal launch on every OS.
+
+- **F5 — stale premise in the #346 checklist (prose only; corrected in this commit).** B2 asserted
+  DMA-BUF is left on "(no log line)". Post-#347 there is **always** exactly one boot line, for both
+  outcomes. Corrected in place; no card needed.
+
+**Maintainer checklist (GUI — not reachable from a terminal)**
+
+Roughly 15 minutes. **Always launch with an isolated data dir** so your live sessions are not
+resumed or rewritten:
+
+```bash
+APP=~/Applications/ReCue.AppImage          # or a locally built one
+XDG_DATA_HOME=$(mktemp -d) "$APP"
+```
+
+- [ ] **M1 (A2) — agent spawn from a real launcher.** Launch ReCue from the **desktop launcher /
+      `.desktop` entry** (not a terminal — the login-shell PATH probe only matters there, and it is
+      release-only). Add a folder → start an agent. **Pass when** `claude` boots in the terminal
+      (no "not found"). Result: \_\_\_\_
+- [ ] **M2 (A3, E2) — the three `xdg-open` paths, under the AppImage.** Ctrl-click an `http` link
+      inside an agent terminal; repo context menu → **Reveal in File Manager**; Settings → Data →
+      **Open data folder**. **Pass when** Brave opens for the link and Thunar opens (file selected,
+      for the reveal) for the other two. Result: \_\_\_\_
+- [ ] **M3 (A5) — Linux copy.** Open any context menu with a shortcut hint and the repo menu.
+      **Pass when** hints read **Ctrl+…** (never ⌘) and the item reads **"Reveal in File Manager"**.
+      Result: \_\_\_\_
+- [ ] **M4 (A6) — native notification.** Agent header ⋯ → **Watch**, then drive that agent to a
+      busy→idle edge. **Pass when** a native desktop toast appears (accept the one-time permission
+      prompt). Result: \_\_\_\_
+- [ ] **M5 (A7) — clipboard image paste.** Copy a screenshot, then Ctrl+V into an agent terminal.
+      **Pass when** the image is saved and its path is inserted. Result: \_\_\_\_
+- [ ] **M6 (E1, E3, E4) — the #350 scrub, from inside a ReCue shell terminal (AppImage only).**
+      Open a **shell terminal** panel and run:
+      ```bash
+      npm run verify:linux            # its env-appimage check is exactly this box
+      env | grep -E 'APPDIR|APPIMAGE|OWD|ARGV0|GTK_THEME|GDK_BACKEND|/tmp/.mount_'
+      git status && claude --version  # and launch any GTK app, e.g. `thunar .`
+      ```
+      **Pass when** `verify:linux` prints `PASS env-appimage`, the `grep` finds **nothing**, `git`
+      and `claude` run without dynamic-loader/symbol errors, and the GTK app uses **your** theme
+      (not Adwaita:light). Result: \_\_\_\_
+- [ ] **M7 (G1, G2, G4) — GTK dialog theme.** With ReCue's theme = **Dark**, open the folder picker,
+      FileSwitcher → **Browse…**, and a template **export** dialog. Then Settings → Appearance →
+      **Light** → Save → **quit and relaunch** → open the same three. **Pass when** all three are
+      **dark** in the first pass and **light** in the second. Result: \_\_\_\_
+- [ ] **M8 (B4, D1) — the WebGL renderer.** Open the WebKit inspector (`RECUE_DEVTOOLS=1` /
+      right-click → Inspect) → Console. **Pass when** a normal launch logs
+      `[recue] terminals: WebGL renderer: Mesa Intel(R) …` (hardware) and **no** "skipping WebGL
+      renderer (software rasterizer…)". Then relaunch with `RECUE_DISABLE_DMABUF=1` — **pass when**
+      the warning *does* appear (the fallback works). Result: \_\_\_\_
+- [ ] **M9 (B5, L1–L5) — performance under a busy wall** (this is a snapshot of commit `5192ad1`).
+      Boot into **Overview** with ~10 resumed agents. **Pass when**: (a) only the visible cards have
+      a terminal (`document.querySelectorAll(".xterm").length` ≈ visible-card count, not 10) and the
+      first cards paint promptly; (b) scrolling the wall right fills each revealed card **once** —
+      history intact, no duplicated startup paint or stray glyph, and scrolling back never
+      re-replays; (c) Overview → Canvas → Overview does not repaint scrollback; (d) typing into a
+      busy agent stays responsive while another card hydrates; (e) Ctrl+E big-mode on a
+      never-mounted card paints it, and a Ctrl+1–9 Canvas tab takes keystrokes immediately;
+      (f) a session **Restart** replays scrollback cleanly. Result: \_\_\_\_
+- [ ] **M10 (A8) — the self-update, at the next published release.** With an installed AppImage of
+      version *N* and *N+1* published: Settings → Updates → Check → Update now. **Pass when** it
+      downloads, replaces the file at `$APPIMAGE` in place, and relaunches into *N+1*.
+      Result: \_\_\_\_
