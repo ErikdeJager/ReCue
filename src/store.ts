@@ -1083,7 +1083,10 @@ export function kanbanColumnColor(
  */
 export const DEFAULT_SETTINGS: Settings = {
   terminalFontSize: 12.5,
-  terminalLineHeight: 1.2,
+  // Default terminal line height (#367): 1.0, dropped from the old 1.2. New / never-saved
+  // installs get 1.0 straight from this default; an install that once saved 1.2 explicitly
+  // is one-time migrated down by `migrateTerminalLineHeight` (guarded by the flag below).
+  terminalLineHeight: 1.0,
   terminalCursorBlink: true,
   theme: "dark",
   accentColor: "",
@@ -1129,6 +1132,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // False so the first-launch agent picker runs once for new AND existing installs
   // (an older sessions.json lacks the key → merges to false → detected next launch).
   onboarded: false,
+  // False by default (#367): opt-in one-time flag. An older blob lacks the key →
+  // mergeSettings back-fills false → the terminal line-height migration is eligible to run
+  // once (bump an explicit legacy 1.2 → 1.0), then set true so it never re-triggers. Same
+  // rationale as `onboarded: false`.
+  terminalLineHeightMigrated: false,
 };
 
 /** Merge a persisted (possibly partial / null) settings blob over the defaults so
@@ -1137,6 +1145,40 @@ export function mergeSettings(
   raw: Partial<Settings> | null | undefined,
 ): Settings {
   return { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
+}
+
+/** The legacy default terminal line height (#367), migrated down to 1.0. */
+const LEGACY_LINE_HEIGHT = 1.2;
+
+/**
+ * One-time migration (#367) of the terminal line height. New / never-saved installs get
+ * 1.0 from `DEFAULT_SETTINGS`, but an install that once saved settings has an explicit
+ * `terminalLineHeight: 1.2` persisted (a stored value wins over the default in
+ * `mergeSettings`), so it needs an active bump to 1.0.
+ *
+ * Gated by the `terminalLineHeightMigrated` flag (mirrors `onboarded`): once set, the
+ * migration never runs again — so a user who *re-picks* 1.2 after the migration keeps it.
+ * Only a value that is **exactly** the old default 1.2 is bumped; any other deliberately
+ * chosen value (1.0/1.1/1.3/1.5/1.8/…) is left untouched. The `1e-6` epsilon guards the
+ * float compare defensively (the slider yields an exact 1.2, but nearby steps must not
+ * match). `changed` is true only when the value was actually bumped — it drives whether
+ * the migrated blob is persisted once — while the flag is stamped true regardless, so an
+ * install whose value wasn't legacy still records that the one-time check has run.
+ */
+export function migrateTerminalLineHeight(s: Settings): {
+  settings: Settings;
+  changed: boolean;
+} {
+  if (s.terminalLineHeightMigrated) return { settings: s, changed: false };
+  const wasLegacy = Math.abs(s.terminalLineHeight - LEGACY_LINE_HEIGHT) < 1e-6;
+  return {
+    settings: {
+      ...s,
+      terminalLineHeight: wasLegacy ? 1.0 : s.terminalLineHeight,
+      terminalLineHeightMigrated: true,
+    },
+    changed: wasLegacy,
+  };
 }
 
 /** Companion accent tokens derived from a chosen accent hex (#107): a lightened
@@ -3421,7 +3463,12 @@ export const useStore = create<AppState>()((set, get) => ({
     // Settings (#100): merge the persisted blob over the defaults and apply its
     // side-effects (theme / accent / reduce-motion / live terminal options) before the
     // first paint.
-    const settings = mergeSettings(boot.settings);
+    const merged = mergeSettings(boot.settings);
+    // One-time #367 line-height migration: bump an explicit legacy 1.2 down to 1.0 (and
+    // stamp the flag) before the settings are applied / land in the store, so terminals
+    // render 1.0 from the first paint. `lineHeightMigrated` gates the one-off persist below.
+    const { settings, changed: lineHeightMigrated } =
+      migrateTerminalLineHeight(merged);
     applySettingsEffects(settings);
 
     // Persisted sessions are resumed on boot (claude --resume) — show them as
@@ -3540,6 +3587,12 @@ export const useStore = create<AppState>()((set, get) => ({
         void ipc
           .setCanvases({ canvases, activeId: activeCanvasId })
           .catch(() => {});
+      }
+      // #367: persist the one-time line-height migration once (an explicit legacy 1.2 was
+      // bumped to 1.0) so the migrated value + the set flag become the source of truth and
+      // the bump never re-runs. Only fires when a value actually changed.
+      if (lineHeightMigrated) {
+        void ipc.setSettings(settings).catch(() => {});
       }
       // #110: the legacy per-repo `open_files` map (#45) is **no longer** folded
       // into `overviewPanels`. The #59 fold ran on every boot, and because nothing
