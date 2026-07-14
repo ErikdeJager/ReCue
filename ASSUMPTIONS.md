@@ -2966,3 +2966,18 @@ Eliminate the white startup flash: hidden-until-painted windows + themed pre-pai
 - Added beyond the card's literal text: a `set_theme_background` command called from `saveSettings` on a theme change, so already-open windows' native background is updated (no stale-color gutter on resize); plus `show()` on the focus/existing-window branches of the canvas-window commands.
 - Detached canvas windows get the same treatment (`.visible(false)` + `.background_color(theme)`), and the reveal hook lives in `App()` — the shared root of both the main and canvas-window routes.
 - No `color-scheme` declaration is added (explicit background suffices; avoids UA form-control/scrollbar restyling), and no bundle/code-splitting work is assumed (Task 356).
+
+## Task 351
+
+Lazy-mount Overview terminals — visibility-gated xterm creation + a bounded scrollback-replay queue
+
+- Committed to two of the card's three fix directions: an IntersectionObserver deferred-mount gate + a bounded FIFO scrollback-replay queue (MAX_CONCURRENT_REPLAYS = 1). Rejected the third ("smaller initial tail, rest on idle") — it needs a new backend `session_scrollback` parameter and trades away user-visible history for a win the gate already delivers.
+- "Virtualize" is read as **deferred creation only**, never recycling: once a terminal is created it is never disposed/parked on scroll-out. Disposing on scroll-out would re-enter the #18 garbled-redraw trap for zero boot benefit.
+- The gate lives in `Terminal.tsx` (not Overview), so it applies to every terminal surface — Overview, Canvas panels, big mode (#157), detached windows (#84) — via the one component, rather than adding an Overview-only code path.
+- Bytes arriving while a session has no terminal are dropped by `outputBus` and recovered from the backend's 256 KB `Scrollback` at creation (deduped by absolute offset). This is already today's behavior for any session not rendered in the current view (e.g. booting into Canvas view), so no new mechanism is introduced; history older than the 256 KB window is not recoverable — accepted.
+- The IntersectionObserver root is provided by Overview (its scrolling wall) through a small React context, because IO clips against intermediate scroll containers *before* applying `rootMargin` — a viewport-rooted observer could not pre-load off-screen wall cards. Pre-load margin chosen as "200px 600px" (≥1.5 cards at the 400px default column min-width).
+- `focusTerminal` gains a short-lived (3 s) pending-focus so a Canvas panel focused before its deferred mount still receives keystrokes; without it the CanvasSurface active-leaf effect would silently no-op.
+- The pre-replay pending buffer is capped (2 MB, oldest dropped) only until the scrollback fetch is dispatched — provably gap-free, since the backend pushes to its Scrollback before emitting, so pre-dispatch chunks are ≤ the snapshot's end offset.
+- Non-terminal Overview panels (FileViewer / DiffInspector / Kanban / FileTree / Scheduled / Recurring) are NOT gated in this task (smaller mount cost); noted as a follow-up that can reuse the same hook.
+- No backend change and no new user setting: `session_scrollback` stays sync (Tasks 353/355 own that), and the rollback path is two constants.
+- Docs updated as part of the task (repo convention): a `(#351)` note in CLAUDE.md and closing the "Overview terminal virtualization" future-work item in TRAJECTORY_TO_LINUX.md with real-box verification checks.
