@@ -4520,3 +4520,54 @@ with no code change.
   dropped under the global reduced-motion killswitch; pure WebView, identical on macOS/Windows/Linux.
 
 **Dependencies:** none. (Extends the already-landed usage bar #154; self-contained.)
+
+### 371. [x] Focus-on-hover moves the selection border to the hovered panel and unfocuses the agent on entering another panel
+
+Extends the opt-in "Focus panels on hover" setting (#368, `autoFocusOnHover`, default off): with it on, moving the
+mouse into **any** Overview card or Canvas panel now also moves the visible selection/highlight border there — and
+entering a panel with no terminal input (diff, file, kanban, filetree, scheduled, recurring, pending, or an agent
+panel owned by another window per #84) **blurs** the previously focused agent xterm, so the user can never see the
+border on one panel while keystrokes silently keep flowing to another. This deliberately **reverses #368's recorded
+decision** ("hover moves keyboard focus only, never the highlight") — exactly what the card asked for. With the
+setting off, behavior is byte-for-byte unchanged.
+
+**What shipped** (branch `task-371-hover-select`, PR
+[#126](https://github.com/ErikdeJager/ReCue/pull/126), merged 2026-07-14 into `ui-rework`):
+
+- **Pure helpers (`Terminal/hoverFocus.ts`)** — `shouldHoverSelect(enabled, buttons, activeElement)` wraps the #368
+  `shouldHoverFocus` guard with a `buttons === 0` check so a dnd-kit drag / any held pointer button never sprays
+  hover-selects; `focusedTerminalElement(activeElement)` returns the focused element iff it lives inside `.xterm`
+  (the pooled xterm helper `<textarea>`), else `null`. Both unit-tested in `hoverFocus.test.ts` (node-env fakes).
+- **Pool blur API (`Terminal/terminalPool.ts`)** — new `blurTerminals()`: clears the pool's `pendingFocus` request
+  (so a queued #351 focus can't land after the pointer moved on) and blurs the focused xterm element via
+  `focusedTerminalElement`. Plain DOM `blur()` — never disposes a host (#18).
+- **Canvas (`CanvasSurface.tsx` `LeafPanel`)** — an `onMouseEnter` handler on the panel root: skip while
+  `dragActive`; guard via `shouldHoverSelect`; derive the locally-rendered PTY id (agent/terminal content that is
+  `ownedHere` per #84's `useSessionOwners`) → `focusTerminal(ptyId)` else `blurTerminals()`; then
+  `setActiveLeaf(leaf.id)` if not already active (which syncs `selectedId`/sidebar via the existing #79 path).
+  Works identically in detached canvas windows (own store/pool/document).
+- **Overview (`Overview.tsx`)** — `PanelColumn` gains an optional `ptyFocusId` prop + the same guarded hover
+  handler (focus-or-blur, then the card's select action when not already selected); `SessionCard` passes the
+  session id when `ownedHere`, `ExtraPanel` passes the panel id only for shell-terminal panels (a terminal panel's
+  PTY id **is** the panel id); file/diff/kanban/filetree and Schedule/Recurring cards pass nothing ⇒ blur. A
+  module-scoped `hoverSelecting` flag, raised just before a hover select and consumed by the `[selectedId]`
+  scroll effect, keeps a hover-driven select from `scrollIntoView`-ing the wall (scrolling would drag cards under
+  the stationary cursor and cascade selections); explicit selects still scroll.
+- **Copy/docs** — Settings → Behavior help text and the `autoFocusOnHover` doc comment (`types/index.ts`) now
+  describe the border-follow + unfocus extension.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 371)
+
+- **Unfocus fires on ENTERING another panel** (the moment the border jumps), not on leaving into dead space,
+  the sidebar, or the tab strip — mousing to the sidebar to click something never interrupts typing.
+- **The #368 text-field guard covers the whole behavior** — while an INPUT/TEXTAREA/SELECT/contenteditable outside
+  `.xterm` has focus (rename field, FileViewer/Kanban textarea, modal field), hover changes nothing, not even the
+  border (otherwise the Canvas active-leaf focus effect would steal focus from the field).
+- **Existing selection affordances reused as-is** — Overview's `cardSelected` ring via the card's select action
+  and Canvas's `panelActive` ring via `setActiveLeaf`; no new CSS, no new setting, no persistence changes.
+- **Big mode and sidebar rows are out of scope** (no panel-border semantics); `Terminal.tsx`'s #368 body-level
+  handler stays unchanged (it also covers big mode, and a recurring card's embedded child terminal).
+- Pure WebView/DOM (React `onMouseEnter`, `document.activeElement`, `blur()`, `MouseEvent.buttons`) — identical on
+  macOS, Windows, and Linux; no Rust, no platform seams; rollback = revert (additive, fully behind the opt-in).
+
+**Dependencies:** none.
