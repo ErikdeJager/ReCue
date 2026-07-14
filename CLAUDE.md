@@ -61,12 +61,10 @@ be unit-tested). Concretely:
   (#363) — `main.tsx` writes it **synchronously** from the UA (`detectPlatform` /
   `applyPlatformAttribute` in `platform.ts`) *before* the first render, because the store's
   `platform` signal is an async IPC and static CSS tokens can't wait for it (the store then
-  re-applies the authoritative backend value). Its one consumer today is the
-  `:root[data-platform="linux"]` **`--ui`** override in `tokens.css` (the bundled Inter):
-  the shared `:root --ui` line is **never** edited, so macOS/Windows stay byte-for-byte
-  unchanged — there is no single ordering of one shared font list that is both safe on
-  Windows (which would pick up a locally-installed Inter over Segoe UI) and effective on
-  Linux (where the generics always resolve to *something*).
+  re-applies the authoritative backend value). (Superseded by UI v2 task 372 —
+  JetBrains Mono is `--ui` on every OS; the #363 Linux-only Inter `--ui` override is
+  retired, and `data-platform` remains as the platform-CSS seam, currently with no CSS
+  consumer.)
 - **CSS / WebView too:** WKWebView (macOS) and WebView2/Chromium (Windows) diverge — and
   **Linux is Chromium too (WebKitGTK/WebView)**, so the Chromium-friendly choices carry
   over: prefer `::-webkit-scrollbar` styling, ship plain-color fallbacks alongside
@@ -114,10 +112,9 @@ steady-state boot pays **zero** probe cost.
 - **Frontend:** React + TypeScript + Vite, **Zustand** for state, plain CSS with
   CSS-variable design tokens (CSS Modules), **xterm.js** terminals (⌘-clickable
   `http`/`https` links via `@xterm/addon-web-links`, #109), **Lucide**
-  icons, **JetBrains Mono** (bundled, offline — the terminal `--mono` face on every OS)
-  and **Inter Variable** (bundled, offline, latin subset only — the **Linux-only** UI
-  face, #363; macOS keeps San Francisco and Windows Segoe UI, so its woff2 is never even
-  fetched there), **react-markdown + remark-gfm**
+  icons, **JetBrains Mono** (bundled, offline — the terminal `--mono` face AND, since
+  UI v2 task 372, the `--ui` face on every OS; the #363 bundled-Inter Linux-only UI
+  face is superseded/retired), **react-markdown + remark-gfm**
   (GFM markdown, no raw HTML) + **Prism.js** (curated-language code highlighting —
   JS/TS/JSX, Rust, Python, JSON/YAML/TOML, CSS, markup, Bash, **Java**, **INI/.env/
   .properties** #150) — both in the universal **`FileViewer`** (#40/#44), whose **raw
@@ -1147,11 +1144,12 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   not its children, so the reveal fires only once `MainApp` / `CanvasWindow` has actually
   mounted, never on the empty fallback frame (and a chunk that never loads can't deadlock
   the window shut: the 2 s Rust fallback still shows it).
-  **Invariant:** the two pre-paint hexes (`#1e1e2e` dark / `#eff1f5` light) are duplicated
-  in **four** places — `--bg-base` in `src/styles/tokens.css`, the inline style in
-  `index.html`, `THEME_BG` in `src/theme.ts`, and `background_for_theme` in `commands.rs`
-  — keep them in sync (the TS/HTML/CSS trio is guarded by `src/theme.test.ts`, the Rust
-  mapping by its own unit test). Platform-neutral: no `#[cfg]` arms (on macOS
+  **Invariant:** the two pre-paint hexes (`#11111b` dark / `#dce0e8` light — the crust
+  stage since UI v2 task 372) are duplicated in **five** places — `--bg-base` in
+  `src/styles/tokens.css`, the inline style in `index.html`, `THEME_BG` in `src/theme.ts`,
+  `background_for_theme` in `commands.rs`, and `"backgroundColor"` in
+  `src-tauri/tauri.conf.json` — keep them in sync (the TS/HTML/CSS trio is guarded by
+  `src/theme.test.ts`, the Rust mapping by its own unit test, tauri.conf.json by review). Platform-neutral: no `#[cfg]` arms (on macOS
   `set_background_color` is a no-op for the *webview* layer, but the document's inline
   `html` background paints over it before the window is ever revealed).
 - **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`,

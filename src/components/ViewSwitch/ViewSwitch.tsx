@@ -2,6 +2,7 @@ import { LayoutGrid, PanelsTopLeft } from "lucide-react";
 
 import { useStore } from "../../store";
 import type { View } from "../../types";
+import SegmentedControl from "../SegmentedControl/SegmentedControl";
 import styles from "./ViewSwitch.module.css";
 
 const OPTIONS: { value: View; label: string; icon: typeof LayoutGrid }[] = [
@@ -11,8 +12,10 @@ const OPTIONS: { value: View; label: string; icon: typeof LayoutGrid }[] = [
 
 /**
  * Segmented Overview / Canvas control (#25, #46, #75). Lives in the sidebar,
- * under the New session button, so it's always visible. With `compact` (#168) it
- * renders as icon-only buttons stacked to fit the collapsed sidebar rail.
+ * under the New session button, so it's always visible. The expanded mode
+ * renders through the shared `SegmentedControl` atom (UI v2 task 372) in its
+ * rounded `chrome` look; with `compact` (#168) it renders as icon-only buttons
+ * stacked to fit the collapsed sidebar rail (card 4 owns the rail restyle).
  */
 function ViewSwitch({ compact = false }: { compact?: boolean }) {
   const view = useStore((s) => s.view);
@@ -20,9 +23,22 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
 
   const go = (value: View) => setView(value);
 
+  if (!compact) {
+    return (
+      <SegmentedControl
+        options={OPTIONS.map(({ value, label }) => ({ value, label }))}
+        value={view}
+        onChange={go}
+        ariaLabel="View"
+        chrome
+        stretch
+      />
+    );
+  }
+
   return (
     <div
-      className={compact ? styles.groupCompact : styles.group}
+      className={styles.groupCompact}
       role="tablist"
       aria-label="View"
       onKeyDown={(event) => {
@@ -54,25 +70,13 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
             type="button"
             role="tab"
             aria-selected={selected}
-            aria-label={compact ? option.label : undefined}
-            title={compact ? option.label : undefined}
+            aria-label={option.label}
+            title={option.label}
             tabIndex={selected ? 0 : -1}
-            className={
-              compact
-                ? selected
-                  ? styles.iconActive
-                  : styles.iconOption
-                : selected
-                  ? styles.active
-                  : styles.option
-            }
+            className={selected ? styles.iconActive : styles.iconOption}
             onClick={() => go(option.value)}
           >
-            {compact ? (
-              <Icon size={16} strokeWidth={1.5} aria-hidden />
-            ) : (
-              option.label
-            )}
+            <Icon size={16} strokeWidth={1.5} aria-hidden />
           </button>
         );
       })}

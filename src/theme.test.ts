@@ -134,3 +134,38 @@ describe("pre-paint background hexes stay in sync", () => {
     expect(Object.keys(THEME_BG).sort()).toEqual(themes.sort());
   });
 });
+
+/**
+ * v2 foundation tokens (task 372): the stage vars + dense hook and the derived accent
+ * tints are the contract later UI v2 cards (dense mode #2, Overview/Canvas stages #5/#6)
+ * build on — pin them so they can't silently drift out of tokens.css.
+ */
+describe("v2 foundation tokens (task 372)", () => {
+  const tokens = read("./styles/tokens.css");
+
+  it("declares the three stage vars with the §2.4 values", () => {
+    expect(tokens).toMatch(/--stage-gap:\s*8px\s*;/);
+    expect(tokens).toMatch(/--stage-pad-overview:\s*12px\s*;/);
+    expect(tokens).toMatch(/--stage-pad-canvas:\s*10px\s*;/);
+  });
+
+  it("a :root.dense rule zeroes all three stage vars", () => {
+    const block = tokens.match(/:root\.dense\s*\{([^}]*)\}/);
+    expect(block).not.toBeNull();
+    const body = block![1];
+    expect(body).toMatch(/--stage-gap:\s*0px\s*;/);
+    expect(body).toMatch(/--stage-pad-overview:\s*0px\s*;/);
+    expect(body).toMatch(/--stage-pad-canvas:\s*0px\s*;/);
+  });
+
+  it("derives the accent tints from the single var(--accent) via color-mix", () => {
+    for (const tint of ["fill", "border", "hover"]) {
+      const decl = tokens.match(
+        new RegExp(`--accent-tint-${tint}:\\s*([^;]+);`),
+      );
+      expect(decl, `--accent-tint-${tint} exists`).not.toBeNull();
+      expect(decl![1]).toContain("color-mix(");
+      expect(decl![1]).toContain("var(--accent)");
+    }
+  });
+});

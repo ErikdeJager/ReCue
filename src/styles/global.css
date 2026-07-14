@@ -47,7 +47,9 @@ body {
   flex: 1;
   flex-direction: column;
   min-width: 0;
-  background: var(--bg-panel);
+  /* Crust stage (UI v2 task 372): the content stage paints --bg-base so the first
+     painted frame matches the native pre-paint color (#348). */
+  background: var(--bg-base);
 }
 
 .main-content {
