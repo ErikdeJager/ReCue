@@ -1,0 +1,31 @@
+/*
+ * Bundled UI font — Inter Variable, latin subset (#363).
+ *
+ * Applied ONLY on Linux (see the `:root[data-platform="linux"]` --ui override in tokens.css):
+ * macOS keeps San Francisco (-apple-system) and Windows keeps Segoe UI (system-ui), so this
+ * face is never matched there and its woff2 is never fetched — a @font-face file is loaded
+ * lazily, only when an element actually resolves to the family.
+ *
+ * Bundled + offline (never a CDN), like the JetBrains Mono faces imported in src/main.tsx.
+ * Only the latin subset is declared (a hand-written face rather than importing the package's
+ * index.css), so a single 48,256 B file ships instead of the 218,512 B of all seven subsets;
+ * non-latin codepoints fall outside `unicode-range` and fall through to the system faces
+ * listed after it in --ui (no tofu). The `unicode-range` below is copied verbatim from
+ * @fontsource-variable/inter's own latin block.
+ *
+ * `format("woff2")` (not the `woff2-variations` hint fontsource emits): every engine
+ * understands `woff2`, and an engine without variable-font support still renders the file's
+ * default instance rather than skipping the src entirely.
+ */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2")
+    format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}

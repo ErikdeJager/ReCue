@@ -57,3 +57,31 @@ export function joinPath(platform: string, root: string, rel: string): string {
   const joined = `${trimmed}/${rel}`;
   return isWindows(platform) ? joined.replace(/\//g, "\\") : joined;
 }
+
+/** Detect the host OS family **synchronously** from the WebView (#363), for the things
+ * that cannot wait for the async backend `platform()` IPC — today, the `data-platform`
+ * attribute that keys the Linux `--ui` font override in tokens.css (CSS tokens are
+ * static; an async signal would flip the font mid-boot). Pure: pass
+ * `navigator.userAgent` + `navigator.platform`. Returns the same domain as the store's
+ * `platform` signal (`""` when unknown, which reads as the macOS/default stack
+ * everywhere, exactly as before). Order matters — the Windows and macOS UAs are checked
+ * first so their strings can never be mistaken for Linux. */
+export function detectPlatform(userAgent: string, navPlatform: string): string {
+  const s = `${userAgent} ${navPlatform}`;
+  if (/windows|win32|win64/i.test(s)) return "windows";
+  if (/mac os x|macintosh|macintel/i.test(s)) return "macos";
+  if (/linux|x11|bsd/i.test(s)) return "linux";
+  return "";
+}
+
+/** Mirror the OS family onto `<html>` as `data-platform` (#363) so CSS can branch on it
+ * — the `:root[data-platform="linux"]` `--ui` override in tokens.css. Mirrors how
+ * `applySettingsEffects` writes `data-theme` (#333). DOM-guarded (the store/unit tests
+ * run in node); an empty platform removes the attribute, which leaves the unchanged
+ * macOS/Windows stack in effect. */
+export function applyPlatformAttribute(platform: string): void {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (platform) root.setAttribute("data-platform", platform);
+  else root.removeAttribute("data-platform");
+}

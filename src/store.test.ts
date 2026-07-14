@@ -49,6 +49,18 @@ function session(id: string): SessionView {
   };
 }
 
+/**
+ * Fire (and reset) any busy→idle debounce window an earlier test left open — the
+ * #212/#359 accumulator is module-level in `store.ts`, and a test that settles a session
+ * under real timers leaves its window pending. Call under fake timers, before asserting
+ * on a fresh window's scope. */
+async function drainGitRefreshWindow(): Promise<void> {
+  useStore.getState().setBusy("__drain", true);
+  useStore.getState().setBusy("__drain", false);
+  // …async, so the volley's promise chain (and its in-flight guard) settles too.
+  await vi.advanceTimersByTimeAsync(600);
+}
+
 /** A session with explicit repo / createdAt / worktree parent for ordering tests. */
 function ovSession(
   id: string,
@@ -199,36 +211,49 @@ describe("app store", () => {
     expect(useStore.getState().sessionBusy.s1).toBeUndefined();
   });
 
-  it("re-reads branch labels on a busy→idle settle, debounced (#212)", () => {
+  it("re-reads branch labels on a busy→idle settle, debounced (#212)", async () => {
     vi.useFakeTimers();
     const refresh = vi.fn();
     // Replace refreshBranches so we observe the debounced call (the real one hits
-    // the host-less ipc); restore via real timers + the beforeEach reset.
-    useStore.setState({ refreshBranches: refresh });
+    // the host-less ipc); it is still reached through the #359 volley
+    // (`refreshRepoGit` → `refreshBranches(scope)`). Restore via real timers + the
+    // beforeEach reset.
+    useStore.setState({ refreshBranches: refresh, sessions: [session("s1")] });
     const setBusy = useStore.getState().setBusy;
+    await drainGitRefreshWindow();
+    refresh.mockClear();
 
     setBusy("s1", true); // idle→busy: no refresh
     expect(refresh).not.toHaveBeenCalled();
     setBusy("s1", false); // busy→idle: schedules a debounced refresh
     expect(refresh).not.toHaveBeenCalled(); // still debounced
-    vi.advanceTimersByTime(600);
+    await vi.advanceTimersByTimeAsync(600);
     expect(refresh).toHaveBeenCalledTimes(1);
+    // Scoped to the settling session's own folder (#359) — not every sidebar repo.
+    expect(refresh).toHaveBeenCalledWith(["/repo/s1"]);
     vi.useRealTimers();
   });
 
-  it("coalesces a burst of busy→idle settles into one branch refresh (#212)", () => {
+  it("coalesces a burst of busy→idle settles into one volley over the union of folders (#212/#359)", async () => {
     vi.useFakeTimers();
     const refresh = vi.fn();
-    useStore.setState({ refreshBranches: refresh });
+    useStore.setState({
+      refreshBranches: refresh,
+      sessions: [session("s1"), session("s2")],
+    });
     const setBusy = useStore.getState().setBusy;
+    await drainGitRefreshWindow();
+    refresh.mockClear();
 
     setBusy("s1", true);
     setBusy("s2", true);
     setBusy("s1", false); // schedules
-    vi.advanceTimersByTime(200); // within the window
+    await vi.advanceTimersByTimeAsync(200); // within the window
     setBusy("s2", false); // resets the debounce
-    vi.advanceTimersByTime(600);
+    await vi.advanceTimersByTimeAsync(600);
     expect(refresh).toHaveBeenCalledTimes(1);
+    // One volley, scoped to the union of the two settling sessions' folders (#359).
+    expect(refresh).toHaveBeenCalledWith(["/repo/s1", "/repo/s2"]);
     vi.useRealTimers();
   });
 
@@ -300,21 +325,58 @@ describe("app store", () => {
     expect(useStore.getState().fileTreeRefresh).toEqual({});
   });
 
-  it("also re-lists open trees on the busy→idle settle, debounced (#264)", () => {
+  it("also re-lists open trees on the busy→idle settle, debounced (#264)", async () => {
     vi.useFakeTimers();
     const bump = vi.fn();
     useStore.setState({
       refreshBranches: vi.fn(),
       refreshFileStatuses: vi.fn(),
       bumpFileTreeRefresh: bump,
+      // An unknown session id ⇒ the volley is unscoped (#359, fail-safe), so every open
+      // tree is re-listed exactly as before.
+      sessions: [],
     });
     const setBusy = useStore.getState().setBusy;
+    await drainGitRefreshWindow();
+    bump.mockClear();
+
     setBusy("s1", true); // idle→busy: no refresh
     expect(bump).not.toHaveBeenCalled();
     setBusy("s1", false); // busy→idle: schedules the debounced refresh
     expect(bump).not.toHaveBeenCalled(); // still debounced
-    vi.advanceTimersByTime(600);
+    await vi.advanceTimersByTimeAsync(600);
     expect(bump).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("re-lists only the settling session's OPEN tree on a scoped settle (#264/#359)", async () => {
+    vi.useFakeTimers();
+    const bump = vi.fn();
+    useStore.setState({
+      refreshBranches: vi.fn(),
+      refreshFileStatuses: vi.fn(),
+      bumpFileTreeRefresh: bump,
+      sessions: [session("s1")],
+      // A tree is open for the settling session's repo, but not for the other one.
+      fileTreeMounts: { "/repo/s1": 1 },
+    });
+    const setBusy = useStore.getState().setBusy;
+    await drainGitRefreshWindow();
+    bump.mockClear();
+
+    setBusy("s1", true);
+    setBusy("s1", false);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(bump).toHaveBeenCalledTimes(1);
+    expect(bump).toHaveBeenCalledWith("/repo/s1");
+
+    // With no tree open for that repo, the settle re-lists nothing at all.
+    bump.mockClear();
+    useStore.setState({ fileTreeMounts: {} });
+    setBusy("s1", true);
+    setBusy("s1", false);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(bump).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 

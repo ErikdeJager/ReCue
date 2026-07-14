@@ -40,7 +40,10 @@ be unit-tested). Concretely:
 - **Reuse the established cross-platform seams instead of re-deriving them** — Rust:
   `path_env::home_dir()` (`%USERPROFILE%` on Windows, `$HOME` on unix, never raw `$HOME`),
   `git::hidden_command()` (the `CREATE_NO_WINDOW` console-flash guard — **every**
-  shelled-out `git`/CLI probe goes through it; a no-op on unix/Linux), `pty::resolve_command()` /
+  shelled-out `git`/CLI probe goes through it; a no-op on unix/Linux),
+  `child_env::child_env_vars()` / `child_env::scrub_command()` / `child_env::command()` (the
+  #350 AppImage env scrub — **every** spawned child, PTY or shell-out, gets its env through
+  one of these; a no-op on macOS/Windows and outside an AppImage), `pty::resolve_command()` /
   `find_on_path` / `launch_target` (PATHEXT + `cmd.exe /C` for `.cmd` agents on Windows; the
   bare name on unix/Linux) / `default_shell` (`$SHELL` on Linux, `/bin/bash`→`/bin/sh`
   fallback), `os_open` (macOS `open` / Windows `explorer.exe` / **Linux `xdg-open`**),
@@ -48,7 +51,17 @@ be unit-tested). Concretely:
   Frontend: `joinPath` / `splitPath` (split on `/` **or** `\`; Linux gets `/`-paths),
   `kbdHint` / `revealLabel` (⌘↔Ctrl — **Ctrl on Windows AND Linux**; "Reveal in
   Finder"↔"…Explorer"↔"…File Manager"), `openUrl`→the http/https-only `open_url`
-  (`xdg-open` on Linux), and `metaKey || ctrlKey` for **every** shortcut handler.
+  (`xdg-open` on Linux), and `metaKey || ctrlKey` for **every** shortcut handler. For
+  platform-conditional **CSS** the seam is the **`data-platform`** attribute on `<html>`
+  (#363) — `main.tsx` writes it **synchronously** from the UA (`detectPlatform` /
+  `applyPlatformAttribute` in `platform.ts`) *before* the first render, because the store's
+  `platform` signal is an async IPC and static CSS tokens can't wait for it (the store then
+  re-applies the authoritative backend value). Its one consumer today is the
+  `:root[data-platform="linux"]` **`--ui`** override in `tokens.css` (the bundled Inter):
+  the shared `:root --ui` line is **never** edited, so macOS/Windows stay byte-for-byte
+  unchanged — there is no single ordering of one shared font list that is both safe on
+  Windows (which would pick up a locally-installed Inter over Segoe UI) and effective on
+  Linux (where the generics always resolve to *something*).
 - **CSS / WebView too:** WKWebView (macOS) and WebView2/Chromium (Windows) diverge — and
   **Linux is Chromium too (WebKitGTK/WebView)**, so the Chromium-friendly choices carry
   over: prefer `::-webkit-scrollbar` styling, ship plain-color fallbacks alongside
@@ -90,7 +103,10 @@ even though it works in `tauri dev`.
 - **Frontend:** React + TypeScript + Vite, **Zustand** for state, plain CSS with
   CSS-variable design tokens (CSS Modules), **xterm.js** terminals (⌘-clickable
   `http`/`https` links via `@xterm/addon-web-links`, #109), **Lucide**
-  icons, **JetBrains Mono** (bundled, offline), **react-markdown + remark-gfm**
+  icons, **JetBrains Mono** (bundled, offline — the terminal `--mono` face on every OS)
+  and **Inter Variable** (bundled, offline, latin subset only — the **Linux-only** UI
+  face, #363; macOS keeps San Francisco and Windows Segoe UI, so its woff2 is never even
+  fetched there), **react-markdown + remark-gfm**
   (GFM markdown, no raw HTML) + **Prism.js** (curated-language code highlighting —
   JS/TS/JSX, Rust, Python, JSON/YAML/TOML, CSS, markup, Bash, **Java**, **INI/.env/
   .properties** #150) — both in the universal **`FileViewer`** (#40/#44), whose **raw
@@ -105,13 +121,37 @@ even though it works in `tauri dev`.
   Tauri **dialog** (folder picker) plugin
 - Dark (default) and Light themes (#333) — a Catppuccin **Latte** token override
   selected in Settings → Appearance (the terminal stays dark in both)
+- **Code-split bundle (#356).** The frontend is **not** one chunk: everything not needed to
+  paint the sidebar + terminals is behind a dynamic `import()`. Lazy boundaries — the two
+  **window routes** (`App.tsx` is a `Suspense` router over `src/MainApp.tsx` and
+  `CanvasWindow`, so a detached window #84 never downloads the sidebar/Overview/modals); the
+  four **content panels** in `ItemContent.tsx` (`FileViewer` / `KanbanPanel` /
+  `DiffInspector` / `FileTree` — which is what carries the whole **react-markdown + Prism**
+  stack out of the first-paint graph), each in its **own** per-branch `Suspense` (never one
+  boundary around `ItemContent` — a suspending boundary `display:none`s its children, which
+  would un-measure a pooled xterm, the #18 class of bug); the ten modals in
+  `components/ModalHost.tsx` (Suspense fallback **`null`** — an empty modal shell would be a
+  visible regression); the **`@xterm/addon-webgl`** addon in `terminalPool.createHost()`
+  (xterm core / fit / web-links stay **static** — terminals *are* the first paint; the addon
+  attaches a few ms later, and on a software rasterizer #346 its chunk is never fetched); and
+  **mermaid** (#254). `src/prefetch.ts` warms the deferred chunks on idle
+  (`requestIdleCallback`, feature-detected with a `setTimeout` fallback for older WKWebView).
+  **Rule: only a dynamic `import()` removes work from the first-paint path** — a statically
+  reachable module is parsed before first render whatever chunk it lands in, so
+  `manualChunks` is deliberately **not** used; never static-import `react-markdown` /
+  `prismjs` / `@xterm/addon-webgl` into the entry graph. Guarded by
+  `node scripts/bundle-report.mjs --check` (per-route first-paint closure from Vite's
+  `build.manifest`, with a budget): main window **854 kB raw / 246 kB gzip**, down from a
+  single 1,351 kB / 391 kB chunk; the detached canvas window is lighter still (770 kB).
 
 ## Architecture (data flow)
 
 - **Spawn:** `spawn_session(cwd, name)` → `SessionManager` (`pty.rs`) opens a PTY
   running `claude --session-id <uuid>`, registers it by id, and persists a record
   (`store.rs`). A per-session reader thread pushes output to a bounded scrollback
-  buffer and an `mpsc` channel. A **fork** (#126, `fork_session`) is a spawn variant
+  buffer and an `mpsc` channel, and a per-session **exit-waiter thread** (#354) owns the
+  `Child`, blocks in `wait()`, and is the **sole** emitter of `Exited` — see the Exit
+  handling convention. A **fork** (#126, `fork_session`) is a spawn variant
   that branches a source agent's conversation into a new parallel session
   (`--session-id <new> --resume <source> --fork-session`) — see Conventions.
 - **Output:** `lib.rs` forwards the channel to the `session://output` /
@@ -246,6 +286,27 @@ even though it works in `tauri dev`.
   terminals (#109). `open_url` is **cross-platform** (#217): macOS `open`, Windows
   `cmd /C start "" <url>`, else `xdg-open` — so the same path (and the #210 feedback
   button) opens the browser on Windows too, not a File Explorer folder.
+- **Lazy terminal mount (#351):** a pooled xterm is created on **first visibility**, not
+  on React mount — `Terminal.tsx` gates `mountTerminal` on a **latching**
+  `IntersectionObserver` (`Terminal/useVisibleOnce.ts`), so booting into an Overview wall
+  of N resumed agents no longer builds N xterms + N WebGL contexts + N 256 KB
+  scrollback replays on the single WebView main thread (the dominant boot cost, worst on
+  Linux/WebKitGTK). The observer's root comes from a `TerminalScrollRootContext` that
+  **Overview** fills with its horizontally scrolling wall — IntersectionObserver clips a
+  target against every intermediate scroll container *before* applying `rootMargin`, so a
+  viewport-rooted observer could never pre-load a card scrolled out of the wall; everywhere
+  else (Canvas panels, big mode #157, detached windows #84) the context is `null` ⇒ the
+  viewport root. The replays that do happen are **serialized** through a bounded FIFO queue
+  (`Terminal/replayQueue.ts`, `MAX_CONCURRENT_REPLAYS = 1`, a macrotask yield between jobs),
+  and the pre-replay live buffer is byte-capped (`Terminal/pendingOutput.ts`) only until the
+  fetch is dispatched. **Nothing is lost:** bytes emitted while a session has no terminal are
+  simply not subscribed (`outputBus` already drops them — the normal state today for any
+  session not rendered in the current view), the backend `Scrollback` retains them, and
+  `replayDedupe.ts` drops the scrollback↔live overlap by absolute offset at creation. The
+  gate defers **creation only** — a host is still never disposed or recycled on a scroll-out
+  or view switch (the #18 invariant); it latches, and falls back to eager mounting where
+  `IntersectionObserver` is absent. Pure WebView/TS, so identical on macOS, Windows, and
+  Linux.
 - **Overview customization:** columns are grouped by repo (#36) — by a session's
   pure **`effectiveRepo`** (`paths.ts`), so a worktree agent (#74) sits in its
   **parent repo's** cluster sharing its color, text-badged "worktree" rather than
@@ -259,7 +320,11 @@ even though it works in `tauri dev`.
   dnd-kit) — each column is a sortable keyed by session/panel id, so a reorder
   reparents DOM nodes and never remounts a terminal (pool intact). Persisted per
   repo: `overview_panels` (panel defs) + `overview_order` (the unified item
-  order, merged with live items so spawn/exit don't scramble it).
+  order, merged with live items so spawn/exit don't scramble it). The wall scrolls
+  horizontally, so only ~3 cards are on screen at a time — it is the
+  `TerminalScrollRootContext` root for the #351 visibility gate, and an off-screen agent
+  card costs **no** xterm at boot until it is scrolled to (or its column is scrolled into
+  view by a sidebar click, #79).
 - **Sidebar tree (#45/#59):** each repo lists its sessions **and** its non-agent
   items — the **same `overview_panels` Overview shows, 1:1**: file viewers, diff
   viewers, shell terminals (#72), and scheduled sessions (#94). #59 folded the old per-repo `open_files` into
@@ -583,8 +648,10 @@ even though it works in `tauri dev`.
 ├── index.html              # Vite entry
 ├── src/                    # Frontend (React + TS)
 │   ├── main.tsx            # React bootstrap (loads fonts + tokens + global CSS)
-│   ├── App.tsx             # Root: main shell (sidebar + Overview/Canvas) OR a
-│   │                       #   detached CanvasWindow, by window identity (#84)
+│   ├── App.tsx             # Root: a Suspense router over the two LAZY window routes —
+│   │                       #   MainApp or the detached CanvasWindow (#84/#356)
+│   ├── MainApp.tsx         # Main-window route chunk: sidebar + Overview/Canvas + ModalHost (#356)
+│   ├── prefetch.ts         # Idle warm-up of the deferred chunks (rIC → setTimeout) (#356)
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
@@ -609,6 +676,7 @@ even though it works in `tauri dev`.
 │   │                       #   Checkbox, Slider (#122), SkillAutocomplete (#114), PatchNotes (#192),
 │   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
 │   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState
+│   │                       #   ModalHost.tsx — the ten lazily-mounted top-level modals (#356)
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
@@ -617,6 +685,7 @@ even though it works in `tauri dev`.
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
+│   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen)
@@ -649,6 +718,8 @@ npm run tauri build    # build an (unsigned) bundle for the host OS (macOS .app/
                        #   to match CI's AppImage-only Linux output, #345)
 
 npm run build          # type-check + build the frontend only
+npm run bundle:report  # per-route first-paint JS, raw + gzip (after a build) (#356)
+                       #   add `-- --check` to fail over the first-paint budget
 npm run lint           # ESLint (frontend)
 npm run format         # Prettier write (frontend)
 npm run format:check   # Prettier check (frontend)
@@ -697,9 +768,19 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > notifications, clipboard-image paste, the self-update) are logged in **`TRAJECTORY_TO_LINUX.md`**.
 >
 > **Linux performance (#346).** Four fixes for the "everything is slow on Arch" report:
-> (1) `linux_webkit.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at boot **only** when the
-> NVIDIA proprietary driver or a VM is detected (user env always respected;
-> `RECUE_DISABLE_DMABUF=1|0` force-overrides; healthy AMD/Intel Mesa stacks keep DMA-BUF);
+> (1) **(#346/#347)** `linux_webkit.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at boot only
+> where DMA-BUF is genuinely bad — the pure, unit-tested `decide_dmabuf` over a **GPU-aware**
+> probe (`/sys/class/drm/card*` driver names + PCI vendors → `Mesa`/`NvidiaBlob`/`Virtual`,
+> the NVIDIA kernel-module flavor+version, `__GLX_VENDOR_LIBRARY_NAME`/`__NV_PRIME_RENDER_OFFLOAD`,
+> a tightened VM detector): disable when the **NVIDIA blob is the only renderer**, when GL is
+> **PRIME-routed** to it, or in a **VM with no native Mesa GPU** — otherwise keep DMA-BUF. #346
+> disabled it on the mere *presence* of the NVIDIA kernel module, which on a **hybrid laptop**
+> (Intel/AMD iGPU + NVIDIA dGPU, where the webview renders on the healthy Mesa iGPU) forced CPU
+> webview rendering and **was itself** the reported slowness (#347 — it also fixes the coarse VM
+> heuristic: a bare-metal Xen dom0 / a `"PowerEdge KVM 1000"` no longer read as VMs). The user's
+> own env is never touched, `RECUE_DISABLE_DMABUF=1|0` force-overrides (a tri-state
+> `RendererOverride` — the seam a future Settings renderer-override card plugs into), and **one**
+> boot line names the evidence for **both** outcomes;
 > (2) the terminal pool probes the WebGL renderer string once (Linux only) and skips the
 > xterm WebGL addon when it's software-rasterized (llvmpipe/SwiftShader → DOM renderer,
 > `webglRenderer.ts`); (3) `session_scrollback` ships **base64** (`ScrollbackReply.b64`,
@@ -708,6 +789,37 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > consecutive contiguous same-session output chunks (`pty::coalesce_output_events`) into
 > one emit — each emit is an evaluate-JS on the webview main thread, costliest on
 > WebKitGTK. (3)+(4) are platform-neutral wins; (1)+(2) are unreachable on macOS/Windows.
+>
+> **WebGL context loss (#364).** The same DOM-renderer fallback also covers a *runtime* loss:
+> when xterm's WebGL addon fires `onContextLoss` (an **unrecovered** loss — GPU OOM, driver
+> reset, suspend; the addon handles a recoverable one itself within ~3s, so we never re-attach
+> or retry), the pool clears its addon reference (so the #221 one-shot font-atlas rebuild can't
+> call into a disposed renderer) and **disposes** the addon — xterm swaps its render service
+> back to the DOM renderer and re-lays-out the **same** buffer, so the #18 pooled terminal is
+> never remounted and no scrollback is replayed — then **latches** the window (the pure
+> `Terminal/webglFallback.ts`): no terminal in it re-attaches WebGL for the rest of the run, since
+> a driver that dropped one context drops the next one too. One `console.warn` per window; the
+> latch is per-document, so a detached canvas window (#84) latches independently. Platform-neutral
+> code that merely *fires* most often on WebKitGTK. The addon is loaded lazily (#356), so the
+> handler is attached to the resolved addon instance and both the `disposed` flag and the latch
+> are re-checked after the `import()` settles — a host torn down (or a window latched by another
+> terminal's loss) mid-load never attaches WebGL.
+>
+> **AppImage child environment (#350).** Under the AppImage, every child ReCue spawned
+> inherited the AppRun's environment — `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`, a forced
+> `GTK_THEME=Adwaita:light` + `GDK_BACKEND=x11`, and `PATH`/`LD_LIBRARY_PATH`/`XDG_DATA_DIRS`/…
+> segments under the transient `/tmp/.mount_…` FUSE mount — which is documented to break
+> `xdg-open` and to degrade a system binary that then loads the AppImage's bundled libraries.
+> **`src-tauri/src/child_env.rs`** (modeled on `linux_webkit.rs`) is the one scrub seam: a pure,
+> unit-tested core (`is_appimage_segment` / `filter_segments` / `scrub_env` / `env_diff` — a
+> **value-based** rule that strips any `$APPDIR`-owned `:`-segment from **any** var, drops the
+> marker/forced vars, restores an `APPIMAGE_ORIGINAL_<VAR>` backup verbatim, and never empties
+> `PATH`) plus three entry points every spawn goes through — `child_env_vars()` (the `pty.rs`
+> PTY env copy), `scrub_command()` (inside `git::hidden_command`, so every `git`/CLI probe) and
+> `command()` (the `os_open`/`open_url`/`reveal_file_in_finder`/`reveal_file_linux` openers +
+> the `path_env` login-shell probe). It **arms only when `APPDIR`/`APPIMAGE` is set**, so macOS,
+> Windows and a non-AppImage Linux build are byte-for-byte unchanged (no `env`/`env_remove` call
+> is added at all); `WEBKIT_DISABLE_DMABUF_RENDERER` (#346, ReCue's own webview) is not stripped.
 >
 > **Keeping the port current with `main`.** When `main`'s later features (#144+) merge into the
 > Windows branch, each new feature is re-audited against the same abstractions so Windows
@@ -931,6 +1043,28 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   (`booting`): a code-0 exit there keeps the overlay rather than auto-forgetting,
   and **app shutdown keeps records** (`kill_all` doesn't delete them) so they
   auto-resume on next boot (#30) — the only path that "offers to restart."
+  **The `Exited` event is driven by the child, not the PTY (#354).** A per-session
+  **exit-waiter thread** (`pty.rs exit_waiter`) owns the `Child`, blocks in `wait()`, and
+  is the **sole** emitter of `SessionEvent::Exited` (the reader thread no longer sends it —
+  exactly **one** `Exited` per PTY generation, which the consume-once `intentionalKills`
+  bookkeeping relies on). Before, the exit was derived from the reader hitting **EOF** — but
+  on unix a PTY master only EOFs once **every** holder of the slave fd is gone, and claude's
+  subprocesses (MCP servers, tool children) inherit it, so an agent that had already exited
+  kept its card alive for seconds ("instances exit slow"). The waiter still waits (bounded,
+  `EXIT_DRAIN_MS`) on the reader's `reader_done` flag first, so trailing output still
+  precedes `Exited`. On unix a kill signals the child's whole **process group**
+  (`hangup_group`/`kill_group`: `killpg` SIGHUP → bounded grace → SIGKILL — portable-pty
+  already `setsid()`s the child, so `pgid == pid` and the group holds nothing but its own
+  descendants), so no MCP/tool child is orphaned (#31); `kill_session` is **non-blocking**
+  (the escalation runs off-thread, instead of portable-pty's ~200ms in-command sleep); and
+  `kill_all` (shutdown) pays **one** shared grace for all sessions and **silences** the exit
+  events (an `ExitState.silent` flag set **before any signal**) — a prompt `Exited` could now
+  reach the still-live webview, and an agent that exits 0 on SIGHUP would read as a *clean*
+  exit, so `isCleanExit` would **delete the persisted record** and the session would not come
+  back (#30/#63). A signal death maps to exit code **1** (portable-pty), never 0, so a killed
+  agent can never be mistaken for a clean exit. **Windows is unchanged**: no job object — the
+  kill is still `ChildKiller::kill()` → `TerminateProcess` on the direct child; it inherits
+  only the platform-neutral child-wait-driven `Exited`.
 - **Window chrome:** the **standard native macOS title bar** (#19) — native
   traffic lights, native title (`title: "ReCue"`), native drag, no custom
   positioning. The window config carries no `titleBarStyle`/`hiddenTitle`/
@@ -942,7 +1076,44 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   (`open_canvas_window`) with the label `canvas-<id>` and a `?canvas=<id>` route, so
   no JS window-create permission is needed — only the `canvas-*` capability so the
   new window can invoke commands + listen to events.
+  **Hidden until painted (#348)** — every window (main + detached canvas) is created
+  **`visible: false`** with a **themed native `backgroundColor`** (`tauri.conf.json`
+  `app.windows[0]` / `WebviewWindowBuilder::background_color`, from the pure
+  `commands::background_for_theme`; `lib.rs` `setup` re-colors the main window from the
+  **persisted** theme right after the `Store` is managed, so a light-theme user's window
+  never flashes dark). `index.html` carries an **inline `<style>`** (the *only* styling
+  that exists at first paint — every stylesheet is JS-imported via `main.tsx`) plus an
+  inline boot script that reads the **`recue.theme` localStorage mirror** (written by
+  `applySettingsEffects`, `src/theme.ts`) so the first frame is already the right theme.
+  The frontend then shows the window from **`useRevealWindow`** → the Rust
+  **`reveal_window`** command (JS can't call `window.show()` — `core:window:default` grants
+  no `allow-show`, and widening it isn't needed since window ops are already Rust-owned),
+  with `schedule_reveal_fallback` showing any still-hidden window after **2 s** so a dead
+  bundle can't leave the app invisible; a runtime theme switch pushes the new native color
+  via `set_theme_background`. Because `App()` is a **`Suspense` router over two lazy route
+  chunks** (#356), the hook is called from a **`RevealOnPaint`** component rendered *inside*
+  that boundary, as a sibling of the route — a pending boundary commits its **fallback**,
+  not its children, so the reveal fires only once `MainApp` / `CanvasWindow` has actually
+  mounted, never on the empty fallback frame (and a chunk that never loads can't deadlock
+  the window shut: the 2 s Rust fallback still shows it).
+  **Invariant:** the two pre-paint hexes (`#1e1e2e` dark / `#eff1f5` light) are duplicated
+  in **four** places — `--bg-base` in `src/styles/tokens.css`, the inline style in
+  `index.html`, `THEME_BG` in `src/theme.ts`, and `background_for_theme` in `commands.rs`
+  — keep them in sync (the TS/HTML/CSS trio is guarded by `src/theme.test.ts`, the Rust
+  mapping by its own unit test). Platform-neutral: no `#[cfg]` arms (on macOS
+  `set_background_color` is a no-op for the *webview* layer, but the document's inline
+  `html` background paints over it before the window is ever revealed).
 - **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`,
+  Windows NSIS/MSI installers, or a Linux **AppImage** (#345, host-OS dependent); the
+  **updater artifacts are minisign-signed** on all three. Release builds use a tuned
+  **`[profile.release]`** (#358 — fat `lto`, `codegen-units = 1`, `strip = true`, size
+  `opt-level = "s"`) so the binary — and with it every bundle, above all the AppImage, whose
+  squashfs is paged in on **every** cold start — is materially smaller; it deliberately keeps
+  **`panic = "unwind"`** (**never** set `panic = "abort"`, and the manifest says why) so a
+  panic in a reader / monitor / title / forwarder / poll thread kills only that thread instead
+  of the whole app and every live PTY session. The extra link time is paid only by
+  `release.yml` (a version-bump push); the PR gate and `tauri dev` build with the dev/test
+  profiles. macOS
   Windows NSIS/MSI installers, or — on Linux — an **AppImage** *and* a **`.deb`** (#345/#361,
   host-OS dependent); the **updater artifacts are minisign-signed** on all three. On Linux
   only the **AppImage** is an updater artifact (Tauri's Linux updater can only replace the
