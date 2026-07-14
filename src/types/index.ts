@@ -389,6 +389,10 @@ export interface Settings {
   defaultView: View;
   /** Confirm destructive Sidebar actions (Remove / Kill all / Close all). */
   confirmDestructive: boolean;
+  /** Focus-follows-mouse (#368): when true, hovering an agent or shell terminal panel
+   * focuses it immediately so keystrokes are captured without a click. Off by default
+   * (opt-in). Read live by Terminal.tsx; not a side-effecting setting. */
+  autoFocusOnHover: boolean;
   /** What closing a Canvas tab *with contents* does (#137): `ask` shows a modal,
    * `kill` tears down its agents/items, `keep` just drops the tab (today's behavior).
    * Self-contained — independent of `confirmDestructive`. */

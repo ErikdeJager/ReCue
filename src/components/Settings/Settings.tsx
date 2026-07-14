@@ -602,6 +602,19 @@ function SettingsModal() {
                 />
                 <div className={styles.field}>
                   <Checkbox
+                    checked={draft.autoFocusOnHover}
+                    onChange={(v) => update("autoFocusOnHover", v)}
+                    label="Focus panels on hover"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    When on, moving the mouse over an agent or terminal panel
+                    focuses it so you can type immediately without clicking.
+                    Text fields you are editing are never interrupted.
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
                     checked={draft.autoSave}
                     onChange={(v) => update("autoSave", v)}
                     label="Auto-save files"

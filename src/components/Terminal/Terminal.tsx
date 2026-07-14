@@ -1,7 +1,13 @@
 import { useEffect, useRef } from "react";
 
 import { useStore } from "../../store";
-import { mountTerminal, resetTerminal, unmountTerminal } from "./terminalPool";
+import { shouldHoverFocus } from "./hoverFocus";
+import {
+  focusTerminal,
+  mountTerminal,
+  resetTerminal,
+  unmountTerminal,
+} from "./terminalPool";
 import { useVisibleOnce } from "./useVisibleOnce";
 import styles from "./Terminal.module.css";
 
@@ -41,6 +47,8 @@ function Terminal({ sessionId, repoPath }: TerminalProps) {
   const terminalExit = useStore((s) => s.terminalExits[sessionId]);
   const restartSession = useStore((s) => s.restartSession);
   const restartTerminal = useStore((s) => s.restartTerminal);
+  // Focus-follows-mouse (#368): opt-in; read live so a Save takes effect without a restart.
+  const autoFocusOnHover = useStore((s) => s.settings.autoFocusOnHover);
 
   const exitedCode = isItem ? terminalExit : session?.exitedCode;
   const reconnecting = isItem ? false : session?.reconnecting;
@@ -67,8 +75,24 @@ function Terminal({ sessionId, repoPath }: TerminalProps) {
     if (ok) resetTerminal(sessionId);
   };
 
+  // Focus-follows-mouse (#368): when the setting is on, entering the terminal body focuses
+  // its pooled xterm so keystrokes land without a click — unless the user is typing in a
+  // real text field (rename input, FileViewer/Kanban textarea, a modal), which
+  // `shouldHoverFocus` guards. `onMouseEnter` (not pointerenter) = classic hover-intent,
+  // once per entry, no touch-tap trigger. Attached to the body wrapper, not the header,
+  // so header buttons stay usable.
+  const handleHoverFocus = () => {
+    if (shouldHoverFocus(autoFocusOnHover, document.activeElement)) {
+      focusTerminal(sessionId);
+    }
+  };
+
   return (
-    <div ref={wrapperRef} className={styles.wrapper}>
+    <div
+      ref={wrapperRef}
+      className={styles.wrapper}
+      onMouseEnter={handleHoverFocus}
+    >
       <div ref={slotRef} className={styles.slot} />
       {exitedCode === undefined && reconnecting && (
         <div className={styles.exitOverlay} role="status">
