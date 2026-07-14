@@ -3209,3 +3209,14 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Wired as a single main-window Zustand store subscription (not by instrumenting the ~9 folder-add sites), keyed to the sidebar's top-level folder set (recents ∪ worktree parents ∪ recurring cwds ∪ non-worktree session repos), so worktree child dirs are never assigned a stray color. Detached windows don't assign.
 - Known minor limitation (not fixed): a detached canvas window open when a new folder is added won't show the new color live (repo colors have no cross-window broadcast today); it appears on that window's next boot.
 - No backend/Rust changes; pure TS/WebView so identical on macOS/Windows/Linux.
+
+## Task 366
+
+- Mechanism: CSS `zoom` on `<html>` via applySettingsEffects (tokens/CSS are px-based, so root font-size scaling wouldn't propagate; `zoom` is the only uniform whole-app scale and works on WKWebView/WebView2/WebKitGTK). Native WebView `setZoom` kept as a documented fallback only.
+- Terminals scale with the display zoom (they reparent into `#root`); the terminal font-size/line-height settings stay independent as the base size. Not building a per-terminal counter-zoom.
+- New setting `displaySize` = integer percent, default 100, range 80–150, step 5% (bounds/step chosen for safe layout + accessibility; could be widened later).
+- Default 100% clears the `zoom` property entirely (no-op) so a default install is byte-for-byte unchanged.
+- Pure frontend only — settings blob is opaque JSON on the Rust side, so no Rust/capability change.
+- No pre-paint mirror (no index.html boot-script change): display size settles post-boot like accent/Overview-min-width, accepting a one-frame settle (only theme is pre-painted, #348).
+- Live change reaches an already-open detached canvas window only on that window's next boot (same as live theme changes today); acceptable.
+- OS file-drop hit-testing (osFileDrop.ts) flagged for real-box verification at non-100% zoom; adjust `targetAt` by the scale only if it lands wrong (conditional touch).
