@@ -3358,3 +3358,40 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - CreatePanelModal type icons and GlobalSearch row icons stay accent (they encode panel type like the sidebar rows; §10's muted-icon rule is applied to menu lists, not launcher type icons).
 - Existing per-modal z-index layering (100/200/210/220) is positioning, kept site-local and unchanged (the demo's uniform z-70 is a single-page artifact).
 - PatchNotes gets only the v2 micro-eyebrow category restyle; the surrounding Settings → Updates pane is Task 373's.
+
+## Task 379
+
+- Filtered empty-repo state keeps the calm "overview" wave preset (demo wins: waveMood() boosts to 950 only on the whole-app empty toggle) — 377's selectWavePreset is NOT re-mapped.
+- Included the demo/spec's faint "the wave keeps you company until then" line in the empty-repo state; the card's "no taglines" rule applies to the first-launch hero only.
+- The empty-repo "New session" button calls startRepoSession(filter.path) (#127 — skips the folder step for a git folder) rather than the global openNewSession, scoping the flow to the filtered repo.
+- capAgentWidth caps agent-conversation cards only (SessionCard + RecurringCard) at max-width 900px (a literal safely above the #176 min-width slider's 600px max); other card kinds stay uncapped; the cap stays active in dense mode; uncapped leftover stage shows the wave (cards left-aligned, no centering).
+- Repo-group divider borders (.cardGroupStart + its #343 light override) are removed — grouping now reads via the 2px band + 8px gaps like the demo; the light-theme opaque border override is kept on .card for dense/adjacent dark terminals.
+- Selection ring switches from the #50 repo-colored frame + header tint to the demo's plain 1px accent ring (header tint removed); sidebar sync is already shared selectedId — no new wiring.
+- The header/body hairline stays as the header's border-bottom (renders identically to the demo's body border-top); "bottom-anchored at the prompt" is xterm's existing behavior (claude's TUI paints full-screen) — no forced flex-end.
+- "xterm theme fed from tokens" = adding 16 literal --terminal-ansi-* tokens (Catppuccin Mocha terminal scheme, NOT overridden in light — terminal stays dark) read at terminal creation; bg/fg/cursor/selection were already token-fed; no live re-theme on accent change (parity with today's creation-time cursor color).
+- Tips show only on the first-launch EmptyState ("whenever ReCue is empty"), not on the empty-repo filter state; tips.json stores mac-style chords converted per-OS by a pure renderTip (⌘→Ctrl+, ⇧→Shift+, ⌥→Alt+, ⏎→Enter — kbdHint semantics).
+- Tip affordance = a small ghost chip (Lightbulb icon + "tip") that shuffles to a guaranteed-different random tip; wordmark/tip get text-shadows with a light-theme halo override.
+- Non-agent cards get the demo's 8px repo-colored leading square (radius 3, demo-exact); scheduled/recurring cards keep their functional Clock/RefreshCw leading icons.
+- Filter bar per demo: unchromed row with "Show all" as an accent text link beside the label (no right-aligned chip); kept the #247 "· this branch" own-mode suffix.
+- Demo-exact button radii kept: hero button 6px (--radius-btn), empty-repo button 8px literal; the on-accent ⌘N chip uses color-mix(--accent-fg 16%) with the demo rgba fallback.
+- Added --text-faint (dark #45475a / light #9ca0b0) since the spec's §2.1 text scale lists "faint" but Task 372 didn't land it (flagged as possibly duplicated by sibling Task 380 — keep one definition at merge).
+- Diff-card inner content (summary row + diff lines) is DiffInspector's turf (cards 7/8); this card delivers only the card chrome around it, per the parity-constraints note.
+
+## Task 380
+
+- "Distribute panels evenly" already exists (#186, `equalizeCanvas` in CanvasTabs) — verified; restyle only, no new aux button; kept its disabled-when-<2-panels behavior (the demo mock has no disabled state).
+- Demo wins on Distribute placement: it sits inline after Templates (removed #205's `margin-left:auto` far-right push).
+- Border alphas: the card prose says "hairline border" for tabs AND panels — mapped the demo's off-token rgba(205,214,244,.10/.12) to `--border-hairline` (token discipline; no new literals).
+- Agent Canvas-panel headers regain a status dot (spec §8 "repo dot/status" + the demo's pulsing dot): reuse the 372-restyled BusyIndicator, deliberately reversing #95's "agent panels drop the dot" for Canvas headers only; non-agent panels keep the repo dot, now 8px rounded-square (radius 3) per the demo.
+- "Restyle dividers to hairlines": the react-resizable-panels Separator becomes the transparent `--stage-gap` gap (wave peeks through) with a centered 1px `--border-hairline` line (accent on hover/active) drawn via ::before, oriented off the library's aria-orientation attribute; an invisible ±4px ::after hit-area extension keeps resize working in dense (gap 0), with a `max(var(--stage-gap), 1px)` fallback documented if a WebView misbehaves.
+- The empty state's ghost "New tab ⌘T" button calls `addCanvas()` (a fresh empty tab), matching the spec/demo copy verbatim even though the state means "active tab is empty".
+- The always-visible dashed drop border of today's empty canvas is replaced by the centered stack; the accent dashed border + tint now appear only while a drag hovers the center droppable (droppability itself unchanged, `canvas-center` id kept).
+- Detached window "same chrome" (spec/demo don't show it): the header becomes the same transparent 6px/10px strip with the tab name styled as an active tab block (base fill + hairline, 600/11px), no added buttons.
+- In-tab pop-out/✕ buttons keep today's ~18-20px hit areas (not the demo's ~16px mock sizes) but adopt the demo's hover treatment: color-only, ✕ turning `--status-error`.
+- Templates ▾: only the trigger button is restyled (22px ghost); the dropdown surface/items (`.menu*` rules + menu JSX) are left byte-identical — Task 375 (refined, not landed) owns the menu primitive.
+- DetachedNote/MaximizedNote/DetachedCanvasNote restyle = swap buttons to the 372 atoms (`btn btn-neutral`), keep layout; no text-shadow (they sit on opaque panels, not the wave).
+- Empty-state copy reuses 377's constant dark text-shadow (0 1px 6px rgba(17,17,27,.65)); on merge conflict with 377's `.centerHint` line, this card's version wins (same value).
+- Empty-state subtitle uses `--text-muted` (not the demo's Surface1 #45475a) for light-theme legibility; the decorative grip does use `--surface-1` per the demo.
+- `.panel` background crust→base per the card; panel INNER content backgrounds are cards 7/8's — the transitional look is accepted (terminals unaffected, xterm paints its own bg).
+- Header metrics taken demo-exact: 30px fixed, padding 0 10px, gap 8, title 12px/600 (`--fs-ui`), meta 10px (`--fs-meta-xs`), 13px icons, 22px actions with Surface0 hover (was the stronger post-372 `--bg-hover`/Surface1).
+- No CLAUDE.md edit (card 12 owns the docs sweep) and no new unit tests (CSS/markup-only card; the existing suite must stay green).
