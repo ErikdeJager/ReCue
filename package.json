@@ -18,6 +18,7 @@
     "format:rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "verify:linux": "bash scripts/linux-verify.sh",
     "sign:mac": "scripts/sign-macos-local.sh",
     "build:mac": "npm run tauri build && RECUE_CREATE_IDENTITY=1 scripts/sign-macos-local.sh \"$(node -e \"const fs=require('fs');const p=['src-tauri/target/universal-apple-darwin/release/bundle/macos/ReCue.app','src-tauri/target/release/bundle/macos/ReCue.app'].find(f=>fs.existsSync(f));if(!p){console.error('ReCue.app not found — run `npm run tauri build` first');process.exit(1)}process.stdout.write(p)\")\""
   },
