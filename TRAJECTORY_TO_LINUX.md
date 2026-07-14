@@ -886,6 +886,58 @@ to exit code 1, never 0, so a killed agent can't be mistaken for a clean exit ei
       Restart appears promptly, and Restart works.
 - [ ] Sanity-check on a desktop where an MCP server double-forks / `setsid`s itself: the agent's
       exit is still immediate (only the reader thread lingers — documented, best-effort).
+
+### Boot git storm — tiered, scoped, coalesced sidebar refresh (Task #359)
+
+Platform-neutral, but the win is largest on Linux (the report's origin): a spawned `git`
+process on top of a resuming PTY storm is exactly what made "everything is slow on Arch"
+worse at start-up.
+
+- **What it cost before.** On boot — and on **every** agent's busy→idle settle — the Sidebar
+  fired a five-action volley over **every** folder: `current_branches` (1 spawn/folder),
+  `file_statuses` (1, and the heaviest — it walks the whole worktree), `github_web_urls` (2),
+  `diff_line_counts` (3, **plus up to 2000 untracked whole-file reads**) and
+  `branch_ahead_behind` (1) ⇒ **~7–8 `git` spawns + up to 2000 file reads per folder**, all
+  racing the boot resume of every persisted PTY.
+- **What it costs now.** The boot critical path is **one** `git` spawn per folder (the branch
+  label — the sidebar's primary text). Everything else is **tier 2**: it runs after the first
+  paint (double `requestAnimationFrame`, with a `setTimeout` fallback — never
+  `requestIdleCallback`, whose WebKitGTK support isn't worth relying on) **and** after the
+  boot-resume window settles (the existing 4 s `RECONNECT_BACKSTOP_MS`, a hard cap, so a slow
+  or failed `--resume` can never defer it forever).
+- **Scoped.** The busy→idle volley now targets **only the settling session's folder** (the #212
+  contract is about exactly that folder); an unknown session id falls back to unscoped.
+  `file_statuses` is issued **only** for repos with a **mounted FileTree** — its sole consumer
+  — so the heaviest git command leaves the boot path entirely.
+- **Coalesced.** One in-flight guard + a merged trailing rerun (`src/gitRefresh.ts` +
+  `refreshRepoGit` in `src/store.ts`), so volleys can never stack on a big repo. The focus /
+  visibility backstop still re-reads **everything** (at most once per 30 s) so an externally
+  edited folder's badges stay correct.
+- **Cheaper git.** `diff_line_counts` drops the redundant `has_head` pre-check (3 spawns → 2 —
+  `git diff --numstat HEAD` already fails exactly where `has_head` was false; pinned by a new
+  unborn-repo test), bounds the untracked pass with a **total-byte budget** on top of the
+  file/size caps, and **streams** line counts instead of `fs::read`-ing whole files.
+  `github_web_url_for` is 2 spawns → 1 (`git config --local --get-regexp` + a pure
+  `pick_remote_url`). **Files**: `src-tauri/src/git.rs`, `src/gitRefresh.ts`, `src/store.ts`,
+  `src/components/Sidebar/Sidebar.tsx`.
+
+Deliberately **not** done: viewport-gating the sidebar (a short, non-virtualized list; it would
+make map contents depend on scroll history) and defaulting `showDiffLineCounts` off on Linux
+(silently removing a feature on one OS — against CLAUDE.md's cross-platform rule).
+
+### Needs real-box verification (boot git storm, #359)
+
+- [ ] **Arch, several persisted agents + 3 or more folders**: on launch the sidebar's branch
+      labels appear with the **first paint** and the app is interactive **before** the
+      badge/tint volley runs; a `ps`/`strace` sample during the resume window shows **no**
+      burst of `git` processes (one `git rev-parse` per folder, then quiet until ~4 s in).
+- [ ] **Scoped settle**: `git checkout -b tmp-359` inside one agent's terminal updates **that**
+      folder's sidebar label within ~1 s of it settling, and spawns **no** `git` for the other
+      folders.
+- [ ] **Open-tree gating**: with a FileTree panel open the tree tints immediately; after
+      closing it, subsequent busy→idle settles run **no** `git status` for that repo.
+- [ ] **Focus backstop**: alt-tab away and back → the `+A/−D` badge picks up a file edited in an
+      external editor (full volley, at most once per 30 s).
 ## 2026-07-14 — Login-shell PATH probe off the startup critical path (#360)
 
 The `.desktop`/AppImage launch inherits the session environment, not the login-shell PATH,
