@@ -512,3 +512,26 @@ revert).
       any exposed native gutter is the **new** theme color.
 - [ ] Confirmed on **Arch**, **Ubuntu**, and **Mint** (the fully-supported distros), on
       both Wayland and X11.
+
+### Bounded-parallel boot resume (#355)
+
+Boot resume now reconnects persisted sessions **4 at a time** (`src-tauri/src/boot.rs`,
+`RESUME_CONCURRENCY`) over **one** shared snapshot of `~/.claude/projects`
+(`title::ProjectLogIndex`) instead of one-at-a-time with a per-session directory rescan.
+Pure `std::thread` + `std::fs` — no OS-specific code — so Linux inherits it unchanged; the
+only Linux-flavored consideration is that 4 concurrent `fork`/`exec` + reader threads now
+land while WebKitGTK is still doing its first paint (kept small for exactly that reason,
+cf. #346). The resumed PTYs still spawn through `pty::spawn_with_id`, so they inherit the
+#350 AppImage env scrub (`child_env::child_env_vars`) unchanged; the loop runs on its own
+`std::thread` (not the async runtime), so it never blocks the #353 `spawn_blocking` command
+path either.
+
+### Needs real-box verification (boot resume, #355)
+
+- [ ] On Arch/Ubuntu/Mint with ≥8 persisted agents: every terminal reconnects (visibly faster
+      than before), each shows its own scrollback exactly once (no duplicate/missing output, no
+      stray glyph), no wall of exit toasts, busy dots settle normally.
+- [ ] Under the release **AppImage**, the 4 concurrently-resumed agents still get the scrubbed
+      child env (#350) — no `/tmp/.mount_…` segments leak into an agent's `PATH`/`LD_LIBRARY_PATH`.
+- [ ] The bounded-parallel resume does not delay the #348 window reveal (the window still
+      appears promptly, not after the 2 s Rust fallback).

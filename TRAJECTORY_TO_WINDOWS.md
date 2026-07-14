@@ -993,3 +993,25 @@ window is unmapped — the reveal therefore fires from **both** an rAF and a 0 m
       window still appears within ~2 s instead of never showing.
 - [ ] **Runtime theme switch**: switch Dark↔Light, Save, then resize the window quickly —
       any exposed native gutter is the **new** theme color.
+
+### Bounded-parallel boot resume (#355)
+
+Boot resume now reconnects persisted sessions **4 at a time** (`src-tauri/src/boot.rs`,
+`RESUME_CONCURRENCY`) over **one** shared snapshot of `~/.claude/projects`
+(`title::ProjectLogIndex`, read through the cross-platform `home_dir()` — `%USERPROFILE%` on
+Windows). Pure `std::thread` + `std::fs`, no OS-specific code; concurrent spawns are safe on
+Windows because `portable-pty` passes `bInheritHandles = FALSE` to `CreateProcessW` (the
+ConPTY is handed over via `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`), and `SessionManager` holds
+its map lock only for the O(1) insert (#260). A unix-gated concurrent-spawn test
+(`pty::tests::concurrent_spawns_register_every_session`) is the standing regression guard.
+The loop runs on its own `std::thread` (not the async runtime), so it is independent of the
+#353 `spawn_blocking` command path, and each resumed PTY still goes through
+`pty::spawn_with_id` — so the `PATHEXT` / `cmd.exe /C` agent resolution (#140) is unchanged.
+
+#### Still needs manual Windows verification (#355)
+
+- [ ] With ≥8 persisted agents, relaunch: 4 **concurrent ConPTY creations** are the
+      Windows-specific thing to eyeball — every terminal must reconnect with its own scrollback
+      exactly once (no cross-wired/garbled output, no stray glyph, no wall of exit toasts).
+- [ ] The bounded-parallel resume does not delay the #348 window reveal (the window still
+      appears promptly, not after the 2 s Rust fallback).
