@@ -375,6 +375,7 @@ pub fn run() {
             commands::claude_version,
             commands::agent_info,
             commands::platform,
+            commands::install_kind,
             commands::windows_build,
             usage::claude_session_usage,
         ])

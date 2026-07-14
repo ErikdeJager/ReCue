@@ -10,6 +10,7 @@ import {
   joinPath,
   kbdHint,
   revealLabel,
+  selfUpdates,
 } from "./platform";
 
 describe("platform display helpers (#143/#345)", () => {
@@ -168,5 +169,27 @@ describe("UI font tokens (#363)", () => {
     // The src resolves inside the bundle (a bare package specifier Vite emits as an
     // asset) — never an http(s) URL.
     expect(fontsCss).not.toMatch(/url\(\s*["']?https?:/);
+  });
+});
+
+describe("selfUpdates — the in-app updater gate (#361)", () => {
+  it("is true for every self-managed install kind", () => {
+    // macOS .app / Windows installer / any dev build.
+    expect(selfUpdates("bundle")).toBe(true);
+    // A Linux AppImage: Tauri's Linux updater replaces exactly that file.
+    expect(selfUpdates("appimage")).toBe(true);
+    // Before the boot read resolves — the pre-load default must preserve today's
+    // behavior on macOS/Windows/AppImage (it never reads as package-managed).
+    expect(selfUpdates("")).toBe(true);
+  });
+
+  it("is false only for a distro-packaged system install", () => {
+    // pacman / the AUR recue-bin / the .deb: the package manager owns the binary.
+    expect(selfUpdates("system")).toBe(false);
+  });
+
+  it("treats an unknown kind as self-updating (fail-open)", () => {
+    // A future/garbage value must never silently disable the updater everywhere.
+    expect(selfUpdates("something-else")).toBe(true);
   });
 });
