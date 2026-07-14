@@ -17,6 +17,16 @@
 // resizes are debounced + only applied while visible, so `claude` repaints once
 // at a stable size instead of mid-redraw. Terminal bytes still flow through the
 // output bus, never React state (core convention).
+//
+// #351 defers *creation* without touching any of that: `Terminal.tsx` calls
+// `mountTerminal` only once its slot first becomes visible (a latching
+// IntersectionObserver gate, `useVisibleOnce.ts`), so an Overview wall of N agents no
+// longer builds N xterms + N WebGL contexts + N scrollback replays at boot. The replays
+// that do happen are serialized through a bounded FIFO queue (`replayQueue.ts`), and live
+// bytes arriving before a host exists are simply not subscribed — the backend's retained
+// `Scrollback` replays them at creation (exactly the path a session not rendered in the
+// current view already took). Creation is deferred; a host is still NEVER disposed or
+// recycled on a scroll-out / view switch — that is the #18 invariant above.
 
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -43,8 +53,14 @@ import { isLinux, isWindows } from "../../platform";
 import { useStore } from "../../store";
 import { IS_MAIN_WINDOW } from "../../windowContext";
 import { makePasteKeyHandler } from "./pasteHandler";
+import {
+  PENDING_CAP_BYTES,
+  type PendingChunk,
+  pushPending,
+} from "./pendingOutput";
 import { terminalsToDispose } from "./poolReconcile";
 import { dedupeAgainstScrollback } from "./replayDedupe";
+import { createReplayQueue } from "./replayQueue";
 import styles from "./Terminal.module.css";
 import { isSoftwareWebGLRenderer } from "./webglRenderer";
 import { windowsPtyOption } from "./windowsPty";
@@ -54,6 +70,48 @@ import { windowsPtyOption } from "./windowsPty";
 // (the observer keeps firing during the animation, resetting the timer), short
 // enough to still feel instant.
 const RESIZE_DEBOUNCE_MS = 120;
+
+// Scrollback replays are SERIALIZED (#351). Hydrating a terminal is an IPC round-trip
+// plus an ANSI parse of up to 256 KB on the single WebView main thread; several of those
+// racing each other (a boot straight into an Overview wall, or a fast scroll across it)
+// means nothing paints until they all finish. One at a time — with a macrotask yield
+// between jobs — makes the first terminal paint as fast as a single replay and keeps input
+// echo responsive while the rest fill in. Raise this if first-paint latency for the LAST
+// terminal ever matters more than main-thread smoothness.
+const MAX_CONCURRENT_REPLAYS = 1;
+const replays = createReplayQueue(MAX_CONCURRENT_REPLAYS);
+
+// A `term.write` callback must never be able to wedge the replay queue (a terminal
+// disposed mid-write, or an xterm that never calls back).
+const WRITE_TIMEOUT_MS = 2000;
+
+/** Resolve once the write has been parsed by xterm — or after a safety timeout.
+ * Awaiting the write callback is what actually spreads the ANSI parse across the
+ * queue: the next terminal's fetch only starts after this one has been parsed. */
+function writeAndWait(term: XTerm, bytes: Uint8Array): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, WRITE_TIMEOUT_MS);
+    try {
+      term.write(bytes, done);
+    } catch {
+      done();
+    }
+  });
+}
+
+// A focus request for a session whose terminal does not exist yet (#351): the Canvas's
+// active-leaf effect can call `focusTerminal` a frame before the visibility gate creates
+// the host. The request is replayed by the next `mountTerminal` for that id, and expires
+// so a stale request can never steal focus much later.
+const PENDING_FOCUS_MS = 3000;
+let pendingFocus: { id: string; at: number } | null = null;
 
 interface TerminalHost {
   /** Persistent DOM node holding the xterm; reparented between slots. */
@@ -413,10 +471,20 @@ function createHost(sessionId: string): TerminalHost {
   // OVERLAP on a fresh spawn (which otherwise double-paints startup → stray glyph).
   let replayed = false;
   let scrollbackEnd = 0;
-  const pending: { bytes: Uint8Array; offset: number }[] = [];
+  const pending: PendingChunk[] = [];
+  // While the host still waits its turn in the replay queue (#351) the buffer is CAPPED:
+  // those bytes are all ≤ the snapshot's `end` (the backend rings them before emitting),
+  // so dropping the oldest can never leave a hole above `end` — see pendingOutput.ts.
+  // The moment the fetch is dispatched we keep every byte, because everything above `end`
+  // must survive for `dedupeAgainstScrollback`.
+  let trimmable = true;
   const unsubscribe = onSessionOutput(sessionId, (bytes, offset) => {
     if (!replayed) {
-      pending.push({ bytes, offset });
+      pushPending(
+        pending,
+        { bytes, offset },
+        trimmable ? PENDING_CAP_BYTES : Number.POSITIVE_INFINITY,
+      );
       return;
     }
     // After replay, live is always newer than the snapshot, but dedupe defensively in
@@ -427,30 +495,41 @@ function createHost(sessionId: string): TerminalHost {
     scheduleFlush();
   });
 
-  void sessionScrollback(sessionId)
-    .then((reply) => {
+  /** Write the buffered live chunks that the snapshot didn't already cover, then open the
+   * gate so subsequent output writes straight through. */
+  const flushPending = () => {
+    for (const { bytes, offset } of pending) {
+      const fresh = dedupeAgainstScrollback(bytes, offset, scrollbackEnd);
+      if (fresh.length) term.write(fresh);
+    }
+    pending.length = 0;
+    replayed = true;
+  };
+
+  // Hydration is QUEUED, not run eagerly (#351): the subscription above is already live
+  // (installed synchronously), so nothing is missed while this waits its turn — bytes are
+  // buffered, and the backend's retained scrollback covers whatever the buffer drops.
+  // `disposed` is declared up by the WebGL block (#356 hoisted it so the lazily imported
+  // addon can bail out too); this job reads the same flag.
+  replays.enqueue(sessionId, async () => {
+    if (disposed) return;
+    trimmable = false; // from here on, keep every byte (see pendingOutput.ts)
+    try {
+      const reply = await sessionScrollback(sessionId);
       scrollbackEnd = reply.end;
       // base64 → bytes (#346): the reply carries the retained scrollback as a compact
       // string (the #261 live-output encoding) instead of a JSON integer array that
       // cost a megabyte-plus parse per terminal mount.
       const replayBytes = decodeOutputB64(reply.b64);
-      if (!disposed && replayBytes.length) {
-        term.write(replayBytes);
-      }
-    })
-    .catch(() => {
+      if (!disposed && replayBytes.length)
+        await writeAndWait(term, replayBytes);
+    } catch {
       // no scrollback / backend unavailable — leave scrollbackEnd at 0 so nothing is
       // dropped (every live chunk then writes in full).
-    })
-    .finally(() => {
-      if (disposed) return;
-      for (const { bytes, offset } of pending) {
-        const fresh = dedupeAgainstScrollback(bytes, offset, scrollbackEnd);
-        if (fresh.length) term.write(fresh);
-      }
-      pending.length = 0;
-      replayed = true;
-    });
+    }
+    if (disposed) return;
+    flushPending();
+  });
 
   // Reflow when the container's box changes (view re-tile, inspector slide,
   // window resize, or a reparent into a differently-sized slot).
@@ -516,6 +595,10 @@ function createHost(sessionId: string): TerminalHost {
 
   host.dispose = () => {
     disposed = true;
+    // A queued-but-unstarted hydration for a disposed host must never run (#351). An
+    // already-running one is left alone — the `disposed` flag makes its remaining steps
+    // no-ops, and it still releases its queue slot.
+    replays.cancel(sessionId);
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
     // Flush any buffered tail bytes (and cancel the pending frame) before the term
     // goes away, so a final burst isn't dropped on teardown (#261).
@@ -546,6 +629,9 @@ function ensureHost(sessionId: string): TerminalHost {
  * Show the session's terminal in `slot`, creating it on first use. Reparents the
  * single live xterm node into the slot (no dispose/recreate) and refits it to
  * the slot's size so `claude` repaints once at the right dimensions.
+ *
+ * Since #351 the caller (`Terminal.tsx`) only calls this once the slot has become
+ * visible, so "first use" is first visibility rather than React mount.
  */
 export function mountTerminal(sessionId: string, slot: HTMLElement): void {
   const host = ensureHost(sessionId);
@@ -554,6 +640,14 @@ export function mountTerminal(sessionId: string, slot: HTMLElement): void {
     slot.appendChild(host.container);
   }
   host.scheduleResize();
+  // Land a focus request that arrived before this host existed (#351).
+  if (
+    pendingFocus?.id === sessionId &&
+    Date.now() - pendingFocus.at < PENDING_FOCUS_MS
+  ) {
+    pendingFocus = null;
+    host.term.focus();
+  }
 }
 
 /**
@@ -576,7 +670,9 @@ export function unmountTerminal(sessionId: string, slot: HTMLElement): void {
  * the host and recreate a fresh one in the same slot: it refetches the (now
  * fresh) backend scrollback and re-subscribes to live output, so the relaunched
  * agent paints from a clean state. Recreate eagerly so the new host is listening
- * before the resumed PTY's first output arrives.
+ * before the resumed PTY's first output arrives — the output subscription is installed
+ * synchronously in `createHost`; only its scrollback hydration is queued (#351), and the
+ * pending buffer holds whatever the resumed PTY emits meanwhile.
  */
 export function resetTerminal(sessionId: string): void {
   const stale = hosts.get(sessionId);
@@ -590,9 +686,18 @@ export function resetTerminal(sessionId: string): void {
 }
 
 /** Focus the pooled xterm for `sessionId` (Canvas panel keyboard nav, #76) so
- * subsequent keystrokes go to it. No-op if it isn't mounted. */
+ * subsequent keystrokes go to it. If the host does not exist yet (the #351 visibility
+ * gate creates it a frame later), remember the request so the next `mountTerminal` for
+ * this session lands it — otherwise switching to a Canvas tab with ⌘/Ctrl+1–9 and typing
+ * immediately would go nowhere. */
 export function focusTerminal(sessionId: string): void {
-  hosts.get(sessionId)?.term.focus();
+  const host = hosts.get(sessionId);
+  if (host) {
+    pendingFocus = null;
+    host.term.focus();
+    return;
+  }
+  pendingFocus = { id: sessionId, at: Date.now() };
 }
 
 /**
@@ -603,5 +708,6 @@ export function reconcileTerminals(active: Iterable<string>): void {
   for (const id of terminalsToDispose(hosts.keys(), active)) {
     hosts.get(id)?.dispose();
     hosts.delete(id);
+    if (pendingFocus?.id === id) pendingFocus = null;
   }
 }
