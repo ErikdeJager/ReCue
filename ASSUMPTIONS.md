@@ -3264,3 +3264,17 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Minimal CLAUDE.md touch only where this card falsifies stated invariants (pre-paint hexes, #363 Inter seam); the full doc sweep stays with card 12.
 - No italic mono faces bundled — em/italic text renders synthetic-oblique (the demo ships none either).
 - --shadow-popover kept as a legacy alias = var(--shadow-menu) so all 27 existing popover/modal consumers get the v2 depth before their reskin cards land.
+
+## Task 376
+
+- Toasts are floating chrome (rounded), not square blocks: the demo renders them at radius 9px; the plan uses the Task-372 floating-chrome token `--radius-window` (10px) since spec §10 says "radius ~10" and the 1px delta keeps the toast on the shared token instead of a literal.
+- Icon mapping: success → Lucide `Check` (13px, strokeWidth 2.5 — demo-exact) in `--status-done`; error → `CircleAlert` (13px) in `--status-error`; info → `Info` (13px) in `--accent` (the demo's icon is accent-colored; info is the neutral tone, so accent-on-info does not encode status).
+- Auto-dismiss TTL stays 3500ms (store untouched): the card allows tuning and spec prose says ~2.2s, but real app messages are longer/more consequential than the demo's short mock confirmations, and keeping 3500 leaves store.test.ts's fake-timer test byte-for-byte green.
+- Kept `z-index: 70` (today's app stacking scale) rather than the demo's 90 — the demo's z-scale is its own; relative layering vs update overlay (200) / BigMode (220) is preserved as parity.
+- Dropped the demo's `white-space: nowrap`: real messages must wrap, so `min-height: 34px` (demo's fixed 34px for single-line) + `max-width: min(520px, calc(100vw - 32px))` + `overflow-wrap: anywhere`.
+- Tone borders removed: uniform `--border-strong` for all tones (demo shows one uniform border); tone is encoded solely by the icon color.
+- Stacking layout (demo shows only one toast): kept v1's column semantics — centered column, 8px gap (the demo's icon/text gap reused), newest nearest the bottom edge.
+- Centering transform lives on the container; the 180ms rise animates plain translateY on the toast child — visually identical to the demo's combined translate(-50%,8px) keyframe, avoids transform clash.
+- Reduced-motion needs no per-component code: the rise stays a CSS animation, so global.css's existing killswitch (media query + body.reduce-motion) drops it while toasts still appear — today's behavior.
+- Both Toaster mounts (MainApp + detached CanvasWindow) are preserved untouched; the restyle is entirely inside the shared component.
+- Added a small file-content guard test (platform.test.ts idiom) pinning bottom-center position, the v2 tokens, the --dur-slow rise, and the tone-icon mapping.
