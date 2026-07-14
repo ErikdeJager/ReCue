@@ -43,7 +43,7 @@ import { decodeOutputB64 } from "./decodeOutput";
 import * as ipc from "./ipc";
 import { notifyAgentReady } from "./notify";
 import { emitSessionOutput } from "./outputBus";
-import { isWindows } from "./platform";
+import { applyPlatformAttribute, isWindows } from "./platform";
 import {
   cloneRepoName,
   effectiveRepo,
@@ -3149,6 +3149,11 @@ export const useStore = create<AppState>()((set, get) => ({
     // read the build number so xterm.js can configure its ConPTY handling.
     try {
       set({ platform: await ipc.platform() });
+      // Keep the <html> data-platform attribute (written synchronously from the UA in
+      // main.tsx, #363) in agreement with the backend's authoritative answer — a no-op in
+      // practice, but it means the Linux --ui font override can never disagree with the
+      // store's platform signal.
+      applyPlatformAttribute(get().platform);
       set({ windowsBuild: await ipc.windowsBuild() });
     } catch {
       // Outside Tauri; leave "" / 0 → the macOS-default labels + no windowsPty.
