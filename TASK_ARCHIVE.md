@@ -4143,3 +4143,91 @@ program name. The fix pins it at the source rather than patching the generated e
 - Docs: new `docs/linux-desktop-integration.md`, a README "Linux desktop integration" section (documenting
   download-then-run, plus Gear Lever/appimaged as the zero-effort alternative), a dated `TRAJECTORY_TO_LINUX.md`
   entry with the real measurements, and two `CLAUDE.md` additions.
+
+### 365. [x] Walk the Linux real-box verification checklist on Arch/Hyprland — evidence, honest ticks, and recorded findings
+
+An evidence-backed pass over every "Needs real-box verification" box in `TRAJECTORY_TO_LINUX.md`, run on a real
+hybrid Intel+NVIDIA Arch/Hyprland box. **The deliverable is evidence and an honest checklist, not a pass rate** —
+nothing found was fixed; failures were recorded as findings for the maintainer to file.
+
+**What shipped** (branch `linux-verify-walk`, PR [#119](https://github.com/ErikdeJager/ReCue/pull/119),
+2026-07-14) — **no behavior change to any Rust or TS source**; the diff touches exactly three files:
+`TRAJECTORY_TO_LINUX.md` (a dated section: box fingerprint, results table, findings, maintainer checklist), the
+new read-only evidence collector `scripts/linux-verify.sh`, and one `verify:linux` script in `package.json`.
+
+**Verdict: 34 boxes** as of the walked commit `5192ad1` — not the 15 the card guessed, nor the 13 the plan counted
+(#347/#349/#350/#351 had each appended a checklist of their own since #346). **6 PASS · 0 FAIL · 16 PARTIAL ·
+8 BLOCKED · 4 N/A.** Only **6** boxes are ticked, every one environment-independent, and **each tick names the
+environment it was proved on**. A partially covered box stays `- [ ]` with an inline note recording what *was*
+seen — a box is never ticked unless it was actually exercised.
+
+**Box under test:** Arch 7.1.3 · Wayland · Hyprland v0.55.4 · `card0` nvidia (RTX 4080 Max-Q, nvidia-open
+610.43.03) + `card1` i915 (Intel Iris Xe) · bare metal (0 VM signals) · Thunar + Brave · libfuse3 only · commit
+`5192ad1` (contains #347 and #350). Every launch used an **isolated data dir** (`XDG_DATA_HOME=$(mktemp -d)`) and
+a `timeout`, so the maintainer's live `claude` sessions were never resumed or rewritten.
+
+**The headline: Task #347 is confirmed fixed on the exact box it was written for.** The boot line reads
+`[recue] WebKitGTK: DMA-BUF left on — Mesa GPU present (healthy DMA-BUF) (gpus: nvidia[blob],i915[mesa]; nvidia:
+open 610.43.03; vm: no; session: wayland)`, every evidence field matches `/sys` ground truth, and
+`WEBKIT_DISABLE_DMABUF_RENDERER` is **absent** from the app's environment. PRIME offload and all three override
+forms produce exactly their specified lines. **Task #350** is confirmed on two of its three scrub seams, caught
+live under the AppImage: the login-shell PATH probe and the `claude --version` / `opencode --version` probes all
+run with no `APPDIR`/`APPIMAGE`/`GTK_THEME`/`GDK_BACKEND`, no `LD_LIBRARY_PATH`, and a `PATH` free of
+`/tmp/.mount_` — while WebKit's own helper processes correctly keep the full AppImage env.
+
+**Findings (recorded, not fixed — the maintainer files these as cards)**
+
+- **F1 — the AppImage cannot currently be built on Arch**, for two independent reasons: linuxdeploy's bundled
+  `strip` can't parse Arch's `.relr.dyn` sections (`unknown type [0x13]`) and aborts (needs `NO_STRIP=1`); then
+  `linuxdeploy-plugin-gtk.sh` dies on `cp: cannot stat '/usr/lib/gdk-pixbuf-2.0/2.10.0'`, because Arch's
+  `gdk-pixbuf2 2.44.7-1` still advertises that dir in its `.pc` but no longer ships it. **CI (ubuntu-22.04) is
+  unaffected** — but nobody can build or test the Linux artifact on the distro the Linux work is actually being
+  done on.
+- **F2 — cut a release containing #346–#351.** The **shipped v1.2.1 AppImage still has the #347 bug**: launching
+  the published release on this box logs the pre-#347 line `set WEBKIT_DISABLE_DMABUF_RENDERER=1 (nvidia: true,
+  vm: false, forced: false)`. **Every Linux user on the current release is still getting the forced-CPU webview
+  that #347 diagnosed as itself the cause of the reported slowness.** All of #346–#351 are on `main` and
+  unreleased.
+- **F3 — the DMA-BUF checklist's verification instrument was structurally wrong.** The #347 checklist (and #365's
+  own plan) said to confirm `WEBKIT_DISABLE_DMABUF_RENDERER=1` in `/proc/<pid>/environ`. That **cannot work**:
+  `/proc/<pid>/environ` is the **exec-time snapshot** and never reflects a runtime `setenv()` — which is exactly
+  what `linux_webkit`/`linux_gtk` do. Verified: with `RECUE_DISABLE_DMABUF=1` the boot line says "disabled" while
+  `/proc/environ` shows no such var. Corrected inline in the doc ("read `env` in a ReCue shell terminal").
+- **F4 — the terminal-pool WebGL diagnostic is unreadable from a terminal.** WebKitGTK does **not** forward the
+  webview console to stderr, so `[recue] terminals: WebGL renderer: …` is only reachable through the WebKit
+  inspector — making one whole box (#346's B4) and a clause of #347's D1 unverifiable headlessly **on every OS**.
+  Proposed fix: report the renderer string through a small Rust `log_diagnostic` command.
+- **F5 — a stale premise in the #346 checklist** (prose only, corrected in this PR): it asserted DMA-BUF is left
+  on "(no log line)". Post-#347 there is **always** exactly one boot line, for both outcomes.
+
+**Key decisions**
+
+- **Depended on Tasks #347 and #350 and walked the *fixed* build** — the key judgment call. #347 rewrites the
+  DMA-BUF decision *and* the #346 checklist itself (today's boot line being, per #347, the bug on this exact
+  hybrid box), and #350 scrubs the AppImage env from the very `xdg-open`/`dbus-send`/`git`/`claude` child spawns
+  that several boxes test. **Verifying earlier would have enshrined ticks that were stale on arrival.**
+- **Nothing from the earlier research session was ticked on trust** — its AppImage-launch / DMA-BUF-log
+  observations were pre-#347 and pre-#350, so they were re-verified against the branch build.
+- **Tasks #348 (7 boxes) and #355 (3 boxes) merged to `main` *while this walk was running* and were deliberately
+  left unwalked and unverified** — the artifact was built from `5192ad1`, which does not contain their code, so
+  any verdict on them would have been **fabricated**. They need their own pass. This is precisely the staleness
+  trap #365 exists to avoid.
+- **Boxes covering absent environments stay unticked** with an explicit `N/A — not this box` scope note (no
+  AMD/NVIDIA-only GPU, no GNOME/KDE/Cinnamon, no X11 session, no libfuse2).
+- **Agent-vs-human split**: every headless check was performed by the implementer (PATH probe, `xdg-open`
+  handlers, a verbatim `dbus-send` FileManager1.ShowItems, notification-daemon activatability, the `latest.json`
+  `linux-x86_64` entry, GPU/`/sys` ground truth, the whole DMA-BUF override matrix). Every GUI-only step was
+  handed to the maintainer as a **written checklist (M1–M10) with blank verdict slots**.
+
+**Dependencies:** 347, 350.
+
+**Notes**
+
+- Two scope limits are stated in the doc: the **locally built AppImage does not prove CI's ubuntu-22.04 glibc
+  floor** (it links Arch's — so the launch box was *also* walked against the real published artifact, which runs
+  fine here), and the **performance verdicts are a snapshot of `5192ad1`** (#351/#353/#355/#356 move exactly those
+  numbers).
+- `scripts/linux-verify.sh` is read-only and reusable, so Ubuntu and Mint can be walked later unchanged.
+- The updater end-to-end (download → replace → relaunch) is **blocked** until a newer release is published; only
+  the signed `linux-x86_64` manifest entry and the app's own `APPIMAGE` env (a #350 regression check) were
+  verifiable.
