@@ -429,6 +429,25 @@ function createHost(sessionId: string): TerminalHost {
         "--terminal-selection",
         "rgba(88, 91, 112, 0.5)",
       ),
+      // ANSI palette from tokens (UI v2 §7, task 379) — creation-time read like the
+      // bg/fg/cursor entries above; identical values for every pooled terminal, so
+      // the shared WebGL glyph atlas (#221) stays shared.
+      black: cssToken("--terminal-ansi-black", "#45475a"),
+      red: cssToken("--terminal-ansi-red", "#f38ba8"),
+      green: cssToken("--terminal-ansi-green", "#a6e3a1"),
+      yellow: cssToken("--terminal-ansi-yellow", "#f9e2af"),
+      blue: cssToken("--terminal-ansi-blue", "#89b4fa"),
+      magenta: cssToken("--terminal-ansi-magenta", "#f5c2e7"),
+      cyan: cssToken("--terminal-ansi-cyan", "#94e2d5"),
+      white: cssToken("--terminal-ansi-white", "#bac2de"),
+      brightBlack: cssToken("--terminal-ansi-bright-black", "#585b70"),
+      brightRed: cssToken("--terminal-ansi-bright-red", "#f38ba8"),
+      brightGreen: cssToken("--terminal-ansi-bright-green", "#a6e3a1"),
+      brightYellow: cssToken("--terminal-ansi-bright-yellow", "#f9e2af"),
+      brightBlue: cssToken("--terminal-ansi-bright-blue", "#89b4fa"),
+      brightMagenta: cssToken("--terminal-ansi-bright-magenta", "#f5c2e7"),
+      brightCyan: cssToken("--terminal-ansi-bright-cyan", "#94e2d5"),
+      brightWhite: cssToken("--terminal-ansi-bright-white", "#a6adc8"),
     },
   });
 

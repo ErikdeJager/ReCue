@@ -12,6 +12,7 @@ import {
   GripVertical,
   Maximize2,
   Play,
+  Plus,
   RefreshCw,
   X,
 } from "lucide-react";
@@ -119,8 +120,11 @@ function Wall({
 interface PanelColumnProps {
   id: string;
   color: string;
-  groupStart: boolean;
   selected?: boolean;
+  /** Cap the card at 900px (task 379) — the 373 "cap agent card width" setting;
+   * agent-conversation cards only, so file/diff/kanban/scheduled panels stay
+   * uncapped. */
+  capped?: boolean;
   title: ReactNode;
   /** Optional slot before the title (e.g. the agent activity indicator, #71). */
   leading?: ReactNode;
@@ -140,8 +144,8 @@ interface PanelColumnProps {
 function PanelColumn({
   id,
   color,
-  groupStart,
   selected = false,
+  capped = false,
   title,
   leading,
   actions,
@@ -158,13 +162,10 @@ function PanelColumn({
     transition,
     isDragging,
   } = useSortable({ id });
-  // `--card-color` drives the repo-colored selection frame (#50) — a pseudo-
-  // element can't read an inline style, so expose the dynamic color as a var.
   const style = {
     borderTopColor: color,
     transform: CSS.Transform.toString(transform),
     transition,
-    "--card-color": color,
   } as CSSProperties;
   // Hover-select (#371, extending #368): entering the card moves the selection ring
   // here (same path as a body click) — focusing its terminal when this window renders
@@ -187,7 +188,7 @@ function PanelColumn({
     <div
       ref={setNodeRef}
       data-item-id={id}
-      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${groupStart ? styles.cardGroupStart : ""} ${isDragging ? styles.cardDragging : ""}`}
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${capped ? styles.cardCapped : ""} ${isDragging ? styles.cardDragging : ""}`}
       style={style}
       onMouseEnter={handleHoverEnter}
     >
@@ -197,7 +198,7 @@ function PanelColumn({
           and never start a drag. The body (a sibling) stays separately clickable. */}
       <header className={styles.header} {...attributes} {...listeners}>
         <span className={styles.dragHandle} title="Drag to reorder" aria-hidden>
-          <GripVertical size={14} strokeWidth={1.5} />
+          <GripVertical size={13} strokeWidth={1.5} />
         </span>
         {leading}
         <div className={styles.titleBlock}>{title}</div>
@@ -220,7 +221,6 @@ interface SessionCardProps {
   session: SessionView;
   branch: string;
   color: string;
-  groupStart: boolean;
   selected: boolean;
   busy: boolean;
   /** The session has been active at least once (#112) → yellow when idle. */
@@ -233,7 +233,6 @@ function SessionCard({
   session,
   branch,
   color,
-  groupStart,
   selected,
   busy,
   hasBeenActive,
@@ -243,6 +242,9 @@ function SessionCard({
   const maximizeItem = useStore((s) => s.maximizeItem);
   const platform = useStore((s) => s.platform);
   const renameSession = useStore((s) => s.renameSession);
+  // Agent-conversation cards only (373's "cap agent card width" setting, default
+  // on); file/diff/kanban/scheduled panels stay uncapped.
+  const capWidth = useStore((s) => s.settings.capAgentWidth);
   // Hover-select (#371): focus this agent's PTY only when THIS window renders it —
   // a session owned by a detached window (#84) shows a DetachedNote, so hovering it
   // must blur instead of queueing a focus for the other window's terminal.
@@ -348,18 +350,14 @@ function SessionCard({
           worktree agents too: `session.repoPath` is the worktree folder, so views
           open against the worktree (the old clickable "worktree" badge is now a
           static indicator in the title). */}
-      <OpenViewButton
-        repoPath={session.repoPath}
-        className={styles.action}
-        iconSize={15}
-      />
+      <OpenViewButton repoPath={session.repoPath} className={styles.action} />
       {/* Secondary actions — Fork (#126) / Copy resume (#28) / Watch (#336) — folded
           into one "…" dropdown (#340) so the header stays uncluttered; all gating
           (#138/#142 fork, #142 resume) lives inside the shared menu. */}
       <AgentHeaderMenu
         session={session}
         className={styles.action}
-        iconSize={15}
+        iconSize={14}
       />
       {/* Maximize into big mode (#157). */}
       <button
@@ -375,16 +373,16 @@ function SessionCard({
         title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
         aria-label="Open in big mode"
       >
-        <Maximize2 size={15} strokeWidth={1.5} />
+        <Maximize2 size={14} strokeWidth={1.5} />
       </button>
       <button
         type="button"
-        className={styles.action}
+        className={`${styles.action} ${styles.actionDanger}`}
         onClick={onRemove}
         title="Remove (kill + forget)"
         aria-label="Remove session"
       >
-        <X size={15} strokeWidth={1.5} />
+        <X size={14} strokeWidth={1.5} />
       </button>
     </>
   );
@@ -395,8 +393,8 @@ function SessionCard({
     <PanelColumn
       id={session.id}
       color={color}
-      groupStart={groupStart}
       selected={selected}
+      capped={capWidth}
       title={title}
       leading={<BusyIndicator busy={busy} hasBeenActive={hasBeenActive} />}
       actions={actions}
@@ -430,7 +428,6 @@ interface ExtraPanelProps {
   repoPath: string;
   branch: string;
   color: string;
-  groupStart: boolean;
   selected: boolean;
   onSelect: () => void;
   onClose: () => void;
@@ -441,7 +438,6 @@ function ExtraPanel({
   repoPath,
   branch,
   color,
-  groupStart,
   selected,
   onSelect,
   onClose,
@@ -494,16 +490,16 @@ function ExtraPanel({
         title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
         aria-label="Open in big mode"
       >
-        <Maximize2 size={15} strokeWidth={1.5} />
+        <Maximize2 size={14} strokeWidth={1.5} />
       </button>
       <button
         type="button"
-        className={styles.action}
+        className={`${styles.action} ${styles.actionDanger}`}
         onClick={onClose}
         title="Close panel"
         aria-label="Close panel"
       >
-        <X size={15} strokeWidth={1.5} />
+        <X size={14} strokeWidth={1.5} />
       </button>
     </>
   );
@@ -511,9 +507,17 @@ function ExtraPanel({
     <PanelColumn
       id={panel.id}
       color={color}
-      groupStart={groupStart}
       selected={selected}
       title={title}
+      leading={
+        // The demo's 8px repo-colored square in the dot slot — non-agent cards'
+        // repo cue (UI v2 §7, task 379).
+        <span
+          className={styles.repoLead}
+          style={{ background: color }}
+          aria-hidden
+        />
+      }
       actions={actions}
       onClickBody={onSelect}
       ptyFocusId={
@@ -533,7 +537,6 @@ interface ScheduleCardProps {
   schedule: ScheduledSession;
   branch: string;
   color: string;
-  groupStart: boolean;
   selected: boolean;
   onSelect: () => void;
   onCancel: () => void;
@@ -547,7 +550,6 @@ function ScheduleCard({
   schedule,
   branch,
   color,
-  groupStart,
   selected,
   onSelect,
   onCancel,
@@ -596,7 +598,7 @@ function ScheduleCard({
         title="Start now"
         aria-label="Start now"
       >
-        <Play size={15} strokeWidth={1.5} />
+        <Play size={14} strokeWidth={1.5} />
       </button>
       {/* Maximize into big mode (#157). */}
       <button
@@ -612,16 +614,16 @@ function ScheduleCard({
         title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
         aria-label="Open in big mode"
       >
-        <Maximize2 size={15} strokeWidth={1.5} />
+        <Maximize2 size={14} strokeWidth={1.5} />
       </button>
       <button
         type="button"
-        className={styles.action}
+        className={`${styles.action} ${styles.actionDanger}`}
         onClick={onCancel}
         title="Cancel schedule"
         aria-label="Cancel schedule"
       >
-        <X size={15} strokeWidth={1.5} />
+        <X size={14} strokeWidth={1.5} />
       </button>
     </>
   );
@@ -629,7 +631,6 @@ function ScheduleCard({
     <PanelColumn
       id={schedule.id}
       color={color}
-      groupStart={groupStart}
       selected={selected}
       title={title}
       leading={
@@ -659,7 +660,6 @@ interface RecurringCardProps {
   recurring: RecurringSession;
   branch: string;
   color: string;
-  groupStart: boolean;
   selected: boolean;
   onSelect: () => void;
   onCancel: () => void;
@@ -672,13 +672,14 @@ function RecurringCard({
   recurring,
   branch,
   color,
-  groupStart,
   selected,
   onSelect,
   onCancel,
 }: RecurringCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
   const platform = useStore((s) => s.platform);
+  // A recurring card hosts an agent conversation, so it honors the 373 cap too.
+  const capWidth = useStore((s) => s.settings.capAgentWidth);
   const title = (
     <>
       <span className={styles.agentTitle}>
@@ -714,16 +715,16 @@ function RecurringCard({
         title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
         aria-label="Open in big mode"
       >
-        <Maximize2 size={15} strokeWidth={1.5} />
+        <Maximize2 size={14} strokeWidth={1.5} />
       </button>
       <button
         type="button"
-        className={styles.action}
+        className={`${styles.action} ${styles.actionDanger}`}
         onClick={onCancel}
         title="Cancel recurring session"
         aria-label="Cancel recurring session"
       >
-        <X size={15} strokeWidth={1.5} />
+        <X size={14} strokeWidth={1.5} />
       </button>
     </>
   );
@@ -731,8 +732,8 @@ function RecurringCard({
     <PanelColumn
       id={recurring.id}
       color={color}
-      groupStart={groupStart}
       selected={selected}
+      capped={capWidth}
       title={title}
       leading={
         <RefreshCw
@@ -781,6 +782,11 @@ function Overview() {
   const select = useStore((s) => s.select);
   const removeSession = useStore((s) => s.removeSession);
   const openNewSession = useStore((s) => s.openNewSession);
+  // Empty-repo state (task 379): "New session" scoped to the filtered folder —
+  // startRepoSession (#127) skips the folder step (a git folder opens straight at
+  // the branch step); ⌘N itself still opens the global flow.
+  const startRepoSession = useStore((s) => s.startRepoSession);
+  const platform = useStore((s) => s.platform);
   const filter = useStore((s) => s.overviewRepoFilter);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const repoColors = useStore((s) => s.repoColors);
@@ -964,7 +970,29 @@ function Overview() {
       )}
       {clusters.length === 0 ? (
         <div className={styles.filterEmpty}>
-          {filter ? "Nothing to show for this repo." : "No agents yet."}
+          {filter ? (
+            <>
+              <span className={styles.filterEmptyTitle}>
+                No sessions in <strong>{repoName(filter.path)}</strong> yet
+              </span>
+              <button
+                type="button"
+                className={styles.newSessionBtn}
+                onClick={() => startRepoSession(filter.path)}
+              >
+                <Plus size={14} strokeWidth={2.2} />
+                New session
+                <span className={styles.kbdChip}>
+                  {kbdHint(platform, "⌘N", "Ctrl+N")}
+                </span>
+              </button>
+              <span className={styles.filterEmptyHint}>
+                the wave keeps you company until then
+              </span>
+            </>
+          ) : (
+            "No agents yet."
+          )}
         </div>
       ) : (
         <DndContext
@@ -973,15 +1001,13 @@ function Overview() {
           onDragEnd={onDragEnd}
         >
           <Wall wallRef={wallRef}>
-            {clusters.map((cluster, clusterIdx) => (
+            {clusters.map((cluster) => (
               <SortableContext
                 key={cluster.repo}
                 items={cluster.keys}
                 strategy={horizontalListSortingStrategy}
               >
-                {cluster.items.map((item, itemIdx) => {
-                  // Divider before every cluster except the first rendered one.
-                  const groupStart = clusterIdx > 0 && itemIdx === 0;
+                {cluster.items.map((item) => {
                   const color = repoColor(cluster.repo, repoColors);
                   const branch = branches[cluster.repo] ?? "";
                   if (item.kind === "agent") {
@@ -992,7 +1018,6 @@ function Overview() {
                         session={session}
                         branch={branches[session.repoPath] ?? ""}
                         color={color}
-                        groupStart={groupStart}
                         selected={session.id === selectedId}
                         busy={sessionBusy[session.id] ?? false}
                         hasBeenActive={sessionActive[session.id] ?? false}
@@ -1008,7 +1033,6 @@ function Overview() {
                         schedule={item.schedule}
                         branch={branch}
                         color={color}
-                        groupStart={groupStart}
                         selected={item.schedule.id === selectedId}
                         onSelect={() => select(item.schedule.id)}
                         onCancel={() => void cancelSchedule(item.schedule.id)}
@@ -1023,7 +1047,6 @@ function Overview() {
                         recurring={item.recurring}
                         branch={branch}
                         color={color}
-                        groupStart={groupStart}
                         selected={item.recurring.id === selectedId}
                         onSelect={() => select(item.recurring.id)}
                         onCancel={() => void cancelRecurring(item.recurring.id)}
@@ -1039,7 +1062,6 @@ function Overview() {
                       repoPath={item.repoKey}
                       branch={branches[item.repoKey] ?? branch}
                       color={color}
-                      groupStart={groupStart}
                       selected={item.panel.id === selectedId}
                       onSelect={() => select(item.panel.id)}
                       onClose={() =>
