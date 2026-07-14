@@ -2092,6 +2092,125 @@ pub fn set_last_version(store: State<'_, Store>, version: String) -> Result<(), 
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+// --- Boot (#352) ---
+
+/// Everything the frontend needs at boot, in ONE IPC round-trip (#352).
+///
+/// The boot used to be ~22 **sequential** round-trips (13 event-listener registrations,
+/// `platform`, `windows_build`, two `Promise.all` batches, then five more serial singles);
+/// 16 of them gated the first meaningful render, and every round-trip is an evaluate-JS hop
+/// on the webview main thread (costliest on Linux/WebKitGTK, #346). Each field below is
+/// **exactly** what its individual command returns — every one of those commands stays
+/// registered for its other call sites; this is a batching read, not a replacement.
+///
+/// Cheap: every `Store` getter is an in-memory clone under one mutex (no disk I/O). The
+/// only real work is the Windows `cmd /C ver` probe, which runs on the blocking pool.
+#[derive(Serialize)]
+pub struct BootState {
+    /// `list_sessions`
+    pub sessions: Vec<PersistedSession>,
+    /// `list_recents`
+    pub recents: Vec<String>,
+    /// `list_repo_colors`
+    pub repo_colors: std::collections::HashMap<String, String>,
+    /// `list_overview_panels`
+    pub overview_panels: std::collections::HashMap<String, Vec<OverviewPanel>>,
+    /// `list_overview_order`
+    pub overview_order: std::collections::HashMap<String, Vec<String>>,
+    /// `list_open_files` (legacy, read once on boot only to clear it, #110)
+    pub open_files: std::collections::HashMap<String, Vec<String>>,
+    /// `get_canvas_layout` (legacy single layout, migrated once into `canvases`, #46→#58)
+    pub canvas_layout: serde_json::Value,
+    /// `get_canvases`
+    pub canvases: serde_json::Value,
+    /// `get_canvas_templates`
+    pub canvas_templates: serde_json::Value,
+    /// `get_settings`
+    pub settings: serde_json::Value,
+    /// `get_sidebar_width`
+    pub sidebar_width: Option<u32>,
+    /// `get_sidebar_collapsed`
+    pub sidebar_collapsed: Option<bool>,
+    /// `get_repo_order`
+    pub repo_order: Vec<String>,
+    /// `get_diff_seen`
+    pub diff_seen: serde_json::Value,
+    /// `list_schedules`
+    pub schedules: Vec<ScheduledSession>,
+    /// `list_recurrings`
+    pub recurrings: Vec<RecurringSession>,
+    /// `get_last_version`
+    pub last_version: Option<String>,
+    /// `app_version`
+    pub app_version: String,
+    /// `platform`
+    pub platform: String,
+    /// `windows_build` (`0` on non-Windows)
+    pub windows_build: u32,
+    /// `list_canvas_windows` (#84)
+    pub detached_canvas_ids: Vec<String>,
+}
+
+/// Assemble the boot payload from the persisted store — the **pure** half of `boot_state`
+/// (no `AppHandle`, no OS probe), so it is unit-testable against a temp-file `Store`.
+pub fn boot_state_from(
+    store: &Store,
+    platform: String,
+    windows_build: u32,
+    app_version: String,
+    detached_canvas_ids: Vec<String>,
+) -> BootState {
+    BootState {
+        sessions: store.sessions(),
+        recents: store.recents(),
+        repo_colors: store.repo_colors(),
+        overview_panels: store.overview_panels(),
+        overview_order: store.overview_order(),
+        open_files: store.open_files(),
+        canvas_layout: store.canvas_layout(),
+        canvases: store.canvases(),
+        canvas_templates: store.canvas_templates(),
+        settings: store.settings(),
+        sidebar_width: store.sidebar_width(),
+        sidebar_collapsed: store.sidebar_collapsed(),
+        repo_order: store.repo_order(),
+        diff_seen: store.diff_seen(),
+        schedules: store.schedules(),
+        recurrings: store.recurrings(),
+        last_version: store.last_version(),
+        app_version,
+        platform,
+        windows_build,
+        detached_canvas_ids,
+    }
+}
+
+/// The one boot read (#352): everything the frontend needs, in a single round-trip.
+/// Purely additive — every individual command it batches stays registered and works.
+#[tauri::command]
+pub async fn boot_state(
+    app: AppHandle,
+    store: State<'_, Store>,
+) -> Result<BootState, SessionError> {
+    // The one non-trivial read: the Windows `cmd /C ver` probe (#143 `windows_build`).
+    // Run it on the blocking pool (the #330 `current_branches` pattern) so it can't stall
+    // an async worker — and await it FIRST, so no store lock is ever live across an await.
+    // A no-op `0` on macOS/Linux; a join error degrades to 0 (xterm reflow simply stays
+    // off, today's fallback).
+    let win_build = tauri::async_runtime::spawn_blocking(windows_build)
+        .await
+        .unwrap_or(0);
+    // Infallible in practice (in-memory reads only) — async + a borrowed `State` just
+    // requires a `Result` return (the `clone_repo` precedent).
+    Ok(boot_state_from(
+        &store,
+        platform(),
+        win_build,
+        app_version(),
+        detached_canvas_ids(&app, None),
+    ))
+}
+
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
 /// untouched — only the recently-used folder list is emptied.
 #[tauri::command]
@@ -2522,6 +2641,142 @@ mod tests {
             auto_continue_disabled: false,
             watch: false,
         }
+    }
+
+    /// A temp-file `Store` path, mirroring `store.rs`'s test helper.
+    fn temp_store_path(tag: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("recue-commands-{tag}-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    /// #352: the batched `boot_state` must return **exactly** what the individual
+    /// commands/getters it replaces return — this is the regression guard for "one
+    /// round-trip carries the same data as the N it batches". Every field is asserted
+    /// against the very getter its own command calls, plus the four passed-through
+    /// scalars (platform / windows build / app version / detached canvas ids).
+    #[test]
+    fn boot_state_from_matches_the_individual_getters() {
+        let path = temp_store_path("bootstate");
+        let store = Store::load(&path);
+
+        // Populate a representative slice of every persisted shape the boot reads.
+        store.add_session(mk_session("/repo/a", None)).unwrap();
+        store.touch_recent("/repo/a").unwrap();
+        store.set_repo_color("/repo/a", "#fab387").unwrap();
+        store
+            .set_overview_panels(
+                "/repo/a",
+                vec![OverviewPanel {
+                    id: "p1".into(),
+                    kind: "diff".into(),
+                    file: None,
+                    diff_source: None,
+                    compare_base: None,
+                    compare_target: None,
+                    commit_sha: None,
+                }],
+            )
+            .unwrap();
+        store
+            .set_overview_order("/repo/a", vec!["p1".into()])
+            .unwrap();
+        store
+            .set_open_files("/repo/a", vec!["CLAUDE.md".into()])
+            .unwrap();
+        store
+            .set_canvas_layout(serde_json::json!({ "kind": "leaf", "id": "l1" }))
+            .unwrap();
+        store
+            .set_canvases(serde_json::json!({ "canvases": [], "activeId": "c1" }))
+            .unwrap();
+        store
+            .set_canvas_templates(serde_json::json!([{ "id": "t1", "name": "T" }]))
+            .unwrap();
+        store
+            .set_settings(serde_json::json!({ "theme": "dark" }))
+            .unwrap();
+        store.set_sidebar_width(320).unwrap();
+        store.set_sidebar_collapsed(true).unwrap();
+        store.set_repo_order(vec!["/repo/a".into()]).unwrap();
+        store
+            .set_diff_seen(serde_json::json!({ "/repo/a": { "src/x.rs": "d1" } }))
+            .unwrap();
+        store.set_last_version("1.2.0".into()).unwrap();
+        store
+            .add_schedule(ScheduledSession {
+                id: "s1".into(),
+                cwd: "/repo/a".into(),
+                branch: None,
+                create_branch: false,
+                branch_base: None,
+                worktree: false,
+                worktree_path: None,
+                name: None,
+                prompt: None,
+                fire_at: 42,
+                created_at: 0,
+                agent: "claude".into(),
+            })
+            .unwrap();
+        store
+            .add_recurring(RecurringSession {
+                id: "r1".into(),
+                cwd: "/repo/a".into(),
+                branch: None,
+                create_branch: false,
+                branch_base: None,
+                worktree: false,
+                worktree_path: None,
+                name: None,
+                prompt: None,
+                interval_secs: 3600,
+                next_fire_at: 99,
+                current_session_id: None,
+                created_at: 0,
+                agent: "claude".into(),
+            })
+            .unwrap();
+
+        let boot = boot_state_from(
+            &store,
+            "linux".to_string(),
+            0,
+            "1.2.3".to_string(),
+            vec!["c1".to_string()],
+        );
+
+        // Every store-backed field equals what its individual command would return.
+        assert_eq!(boot.sessions, store.sessions());
+        assert_eq!(boot.recents, store.recents());
+        assert_eq!(boot.repo_colors, store.repo_colors());
+        assert_eq!(boot.overview_panels, store.overview_panels());
+        assert_eq!(boot.overview_order, store.overview_order());
+        assert_eq!(boot.open_files, store.open_files());
+        assert_eq!(boot.canvas_layout, store.canvas_layout());
+        assert_eq!(boot.canvases, store.canvases());
+        assert_eq!(boot.canvas_templates, store.canvas_templates());
+        assert_eq!(boot.settings, store.settings());
+        assert_eq!(boot.sidebar_width, store.sidebar_width());
+        assert_eq!(boot.sidebar_collapsed, store.sidebar_collapsed());
+        assert_eq!(boot.repo_order, store.repo_order());
+        assert_eq!(boot.diff_seen, store.diff_seen());
+        assert_eq!(boot.schedules, store.schedules());
+        assert_eq!(boot.recurrings, store.recurrings());
+        assert_eq!(boot.last_version, store.last_version());
+        // …and the four scalars are passed through untouched.
+        assert_eq!(boot.platform, "linux");
+        assert_eq!(boot.windows_build, 0);
+        assert_eq!(boot.app_version, "1.2.3");
+        assert_eq!(boot.detached_canvas_ids, vec!["c1".to_string()]);
+
+        // Nothing was invented: the payload is a plain JSON object of the 21 fields.
+        let value = serde_json::to_value(&boot).expect("serialize");
+        assert!(value.get("sessions").is_some());
+        assert_eq!(value.as_object().map(|o| o.len()), Some(21));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

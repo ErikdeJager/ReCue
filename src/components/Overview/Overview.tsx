@@ -715,6 +715,8 @@ function Overview() {
   const startScheduleNow = useStore((s) => s.startScheduleNow);
   const recurrings = useStore((s) => s.recurrings);
   const cancelRecurring = useStore((s) => s.cancelRecurring);
+  // The boot payload has landed (#352) — gates the empty state (see below).
+  const booted = useStore((s) => s.booted);
   // PTY ownership across windows (#84) is resolved inside the shared ItemContent
   // (#157) now — an agent owned by a detached canvas window shows a note there.
 
@@ -743,7 +745,10 @@ function Overview() {
   }, [selectedId]);
 
   // The welcome empty state only when there's truly nothing — no agents and no
-  // extra panels (a repo can have a diff/markdown panel without an agent, #39/#41).
+  // extra panels (a repo can have a diff/markdown panel without an agent, #39/#41)
+  // — and only once the boot payload has landed (#352): before that everything is
+  // empty simply because nothing has loaded yet, and showing "No active sessions"
+  // for that round-trip would flash the wrong state right before the content pops in.
   const anyPanels = Object.values(overviewPanels).some(
     (list) => list.length > 0,
   );
@@ -753,7 +758,7 @@ function Overview() {
     schedules.length === 0 &&
     recurrings.length === 0
   ) {
-    return <EmptyState onNewSession={() => openNewSession()} />;
+    return booted ? <EmptyState onNewSession={() => openNewSession()} /> : null;
   }
 
   // The sidebar filter (#34/#197) narrows the wall to one repo's agents — or, when

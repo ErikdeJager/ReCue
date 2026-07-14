@@ -178,3 +178,58 @@ latency by definition), Overview terminal virtualization, `[profile.release]` tu
 - [ ] Release AppImage under a busy `claude` TUI (many parallel agents): display updates
       stay smooth and typing stays responsive (coalescing + b64 scrollback in effect);
       scrollback replays correctly after a view switch and after a session Restart.
+
+## 2026-07-14
+
+### Boot IPC batching (Task #352)
+
+Boot used to be **~22 sequential IPC waves (34 invokes)** — 13 event-listener `listen`
+registrations awaited one at a time, then `platform`, then `windows_build`, then two
+`Promise.all` batches, then five more serial singles — and **16 of those waves gated the
+first meaningful paint**, so the window sat on "No active sessions" / "No repositories yet."
+while they drained. Each round-trip is an **evaluate-JS hop on the webview main thread**
+(the same cost model as #346's coalesced emits), which is **costliest on WebKitGTK**, so a
+Linux boot paid the waterfall hardest.
+
+- **One aggregated `boot_state` command** (`commands.rs`: `BootState` + the pure
+  `boot_state_from`, registered in `lib.rs`) returns every slice the boot needs — sessions,
+  recents, repo colors, Overview panels/order, legacy open files, canvas layout/tabs/
+  templates, settings, sidebar width/collapsed, folder order, diff-seen, schedules,
+  recurrings, last + running version, platform, Windows build, detached canvas ids. Every
+  `Store` getter is an in-memory clone under one mutex (no disk I/O); the only real work is
+  the Windows `cmd /C ver` probe, which runs on the blocking pool and is awaited **before**
+  any store lock (so no `MutexGuard` is ever held across an `await`). Purely additive: all
+  21 individual commands stay registered for their other call sites, and a Rust unit test
+  asserts each `boot_state_from` field equals what its individual getter returns.
+- **The 13 `listen` registrations now go out as one parallel wave** (`Promise.all` inside
+  each `subscribe*Events` helper + across the four helpers in `store.init()`), racing the
+  single `boot_state` fetch. The **apply** is still strictly sequenced after the
+  subscription await — a live `session://output` / `session://exited` must never land before
+  its handler exists — so the window in which an event can arrive un-handled *shrinks* from
+  ~16 round-trips to ~1.
+- **One `set()`** (`store.applyBootState`) turns the payload into state, so `platform` /
+  `windowsBuild` land in the **same** store update as `sessions` — the terminal pool reads
+  them at host-creation time (`webglAllowed()` (#346) / `windowsPtyOption()`), and mounting
+  `sessions` is what creates those hosts.
+- **No empty-state flash:** a `booted` flag gates the Overview `EmptyState`, the Sidebar's
+  "No repositories yet." hint, and the empty-canvas center hint (the droppable stays
+  mounted). Deliberately **no spinner/skeleton** — the gap is now ~1 round-trip, so
+  rendering nothing composes with the pre-paint window gate rather than trading one flash
+  for another. `boot_state` failing (outside Tauri) still flips `booted`, so the UI can
+  never strand on a blank.
+
+Platform-neutral (pure TS/React + existing `#[cfg]`-correct Rust helpers — nothing
+OS-specific was added), so macOS and Windows get the same win; WebKitGTK gets the biggest one.
+
+### Needs real-box verification (boot batching, #352)
+
+- [ ] Boot the AppImage on Linux with several persisted agents, a couple of repos, canvas
+      tabs, a schedule and a recurring: everything appears **in one go**, not in stages,
+      and noticeably faster than before.
+- [ ] **No flash**: "No active sessions" / "No repositories yet." never appear before the
+      content.
+- [ ] Terminals still resume + repaint correctly, and the Linux software-WebGL probe (#346)
+      still decides correctly — i.e. `platform` is loaded before the first terminal host is
+      created.
+- [ ] A popped-out canvas window (#84) boots through its own `boot_state`, renders its
+      canvas, claims its PTYs, and re-docks on close.
