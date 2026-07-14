@@ -1,5 +1,5 @@
 .sidebar {
-  /* Width is set inline (#108, drag-resizable + persisted); default 260px. */
+  /* Width is set inline (#108, drag-resizable + persisted); default 248px (374). */
   position: relative;
   display: flex;
   flex-direction: column;
@@ -29,29 +29,14 @@
   background: var(--accent-dim);
 }
 
-/* Primary action — slim: icon + label left, a subtle ⌘N hint pushed right. */
+/* Primary action (UI v2 task 374): the 26px accent block comes from the atoms
+   (.btn .btn-accent .btn-chrome, atoms.css) — this module class carries layout
+   only. The 10px side margins are the sidebar's v2 frame padding; the 4px bottom
+   keeps the New ↔ Schedule buttons (#93/#99) one compact cluster. */
 .newButton {
   display: flex;
   min-width: 0;
-  align-items: center;
-  gap: var(--space-6);
-  /* Bottom margin tightened to 4px (#99) so the New ↔ Schedule buttons (#93) read
-     as one compact cluster; the top/side margins stay at 12px. */
-  margin: var(--space-12) var(--space-12) var(--space-4);
-  padding: var(--space-4) var(--space-12);
-  border: 0;
-  border-radius: var(--radius-control);
-  background: var(--accent);
-  color: var(--accent-fg);
-  font: inherit;
-  font-size: var(--fs-ui);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.newButton:hover {
-  background: var(--accent-hover);
+  margin: 10px 10px var(--space-4);
 }
 
 /* Mirror the Schedule button's #301 truncation: the + icon keeps its intrinsic
@@ -76,33 +61,20 @@
   display: flex;
   align-items: stretch;
   gap: var(--space-4);
-  margin: 0 var(--space-12) var(--space-12);
+  margin: 0 10px var(--space-8);
 }
 
-/* Schedule session (#93): a secondary, ghost-style button under the accent New
-   session button — same shape, lower emphasis. Fills the action row (#294). */
+/* Schedule session (#93, UI v2 task 374): the 26px neutral block comes from the
+   atoms (.btn .btn-neutral .btn-chrome) — the module class only fills the row. */
 .scheduleButton {
-  display: flex;
   flex: 1;
   min-width: 0;
-  align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-4) var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
 }
 
-.scheduleButton:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+/* In the neutral block button the clock follows the button's own text color
+   (v2 demo) — the ScheduleRow's clock below keeps the blue `.scheduleIcon`. */
+.scheduleButton .scheduleIcon {
+  color: inherit;
 }
 
 /* The clock icon keeps its intrinsic 15px at every sidebar width — only the
@@ -122,51 +94,31 @@
   text-align: left;
 }
 
-/* ⋯ overflow button (#294): a square ghost button matching the schedule button's
-   height, opening the extra-session-options dropdown. */
+/* ⋯ overflow button (#294, UI v2 task 374): a 26×26 neutral block beside the
+   Schedule button — the look comes from the atoms (.btn .btn-neutral .btn-chrome
+   .btn-icon); the module class pins the 26px square (overriding .btn-icon's 24px). */
 .dotsButton {
-  display: flex;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  /* Narrower horizontal footprint (#301); height still comes from the row's
-     align-items: stretch so it matches the schedule button exactly. */
-  width: 24px;
-  padding: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-
-.dotsButton:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.kbd {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-  font-weight: 400;
-  opacity: 0.7;
 }
 
 /* Always-visible Overview/Focus toggle, aligned with the New session button. */
 .viewSwitch {
-  margin: 0 var(--space-12) var(--space-12);
+  margin: 0 10px var(--space-8);
 }
 
+/* The scrolling tree (UI v2 §5, task 374): a 1px row rhythm from the container
+   (per-row margins shrink to indents only) and a ~6px side inset (the 10px frame
+   minus a 4px scroll gutter). */
 .repos {
+  display: flex;
   flex: 1;
   min-height: 0;
+  flex-direction: column;
+  gap: 1px;
   overflow-y: auto;
-  padding-bottom: var(--space-12);
+  padding: 0 var(--space-6) var(--space-12);
 }
 
 /* Footer (#100): a thin bottom bar pinned below the scrolling repo list, a flex
@@ -176,20 +128,19 @@
 .footer {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-4);
   flex-shrink: 0;
-  height: 36px;
-  padding: 0 var(--space-8);
+  padding: 2px 10px 10px;
 }
 
 .footerButton {
   display: flex;
-  width: 30px;
+  width: 26px;
   height: 26px;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -198,8 +149,9 @@
     background var(--dur-fast) var(--ease-out);
 }
 
+/* Base fill on the mantle footer (v2 demo, task 374). */
 .footerButton:hover {
-  background: var(--bg-hover);
+  background: var(--bg-panel);
   color: var(--text-primary);
 }
 
@@ -265,14 +217,43 @@
   }
 }
 
-.emptyHint {
-  margin: var(--space-12);
+/* First-launch empty block (UI v2 §5, task 374 — replaces the old `.emptyHint`):
+   a centered column filling the tree area, with two neutral entry-point buttons
+   (their look comes from the .btn atoms). */
+.emptyBlock {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
   color: var(--text-muted);
+}
+
+.emptyTitle {
+  color: var(--text-secondary);
   font-size: var(--fs-meta);
 }
 
+.emptyExplainer {
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.6;
+  text-align: center;
+}
+
+.emptyAction {
+  flex-shrink: 0;
+}
+
+/* A repo group: rows on a 1px rhythm (matching the `.repos` container gap), an
+   8px spacer to the next group (UI v2 §5). */
 .group {
-  margin-bottom: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: var(--space-8);
 }
 
 /* A folder group being drag-reordered (#211): fade it like the row drag (#47). */
@@ -283,13 +264,14 @@
 /* The repo header is one selector (#68): its hover + active-filter highlight
    enclose both the title and the "+" as a single rounded control. The whole bar is
    the drag grip (#211 — no separate handle), so it shows a grab cursor; the inner
-   title/+ buttons set their own pointer cursor. */
+   title/+ buttons set their own pointer cursor. 24px per UI v2 §5 (task 374). */
 .repoHeader {
   display: flex;
   align-items: center;
-  height: 30px;
-  padding-right: var(--space-8);
-  border-radius: var(--radius-chip);
+  gap: var(--space-6);
+  height: 24px;
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-btn);
   cursor: grab;
   transition: background var(--dur-fast) var(--ease-out);
 }
@@ -299,7 +281,9 @@
 }
 
 .repoHeader:hover {
-  background: var(--bg-hover);
+  /* Plain fallback first, then the v2 4%-text wash (CLAUDE.md WebView guidance). */
+  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
 /* Active Overview filter (#34): the whole header reads as the selected control
@@ -310,7 +294,7 @@
 }
 
 /* Repo title — left-click filters Overview to this repo (#34). Transparent: the
-   selector box lives on .repoHeader (#68). */
+   selector box lives on .repoHeader (#68), which also carries the padding (374). */
 .repoTitle {
   display: flex;
   flex: 1;
@@ -318,7 +302,7 @@
   align-items: center;
   gap: var(--space-6);
   height: 100%;
-  padding: 0 var(--space-8);
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
@@ -344,10 +328,10 @@
 
 /* Per-repo color identity (#35/#128): a static, non-interactive repo-colored folder
    marker (Lucide Folder) before the repo name — replaces the #115 cube (itself the
-   #113 disclosure triangle, since reverted). A 14px slot matching the activity-indicator
-   footprint (#95), inset (margin-left 16px) so it lines up with the agent rows'
-   activity dots (row margin 8px + rowBusy padding 8px). The folder is tinted to the
-   repo color via the inline `color` (the icon strokes use currentColor). */
+   #113 disclosure triangle, since reverted). A 14px slot matching the
+   activity-indicator footprint (#95), anchored at the header's own left padding
+   (UI v2 §5 — the old 16px inset is gone). The folder is tinted to the repo color
+   via the inline `color` (the icon strokes use currentColor). */
 .repoFolder {
   display: flex;
   width: 14px;
@@ -355,29 +339,22 @@
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  margin-left: var(--space-16);
 }
 
 .repoName {
   /* Grow to reclaim the header width: with the branch moved to its own line (#236),
      the name no longer shares the row with an inline badge. Still shrinks + truncates
-     when the name is long. */
+     when the name is long. Weight 600 at the v2 row size (UI v2 §5, task 374); the
+     session count beside it is the shared `.chip-count` atom. */
   flex: 1;
   min-width: 0;
   overflow: hidden;
   font-family: var(--mono);
-  /* Compact tree (#111): every sidebar row label is 10px (font size only). */
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-row);
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
-}
-
-.count {
-  margin-left: auto;
-  flex-shrink: 0;
-  color: var(--text-muted);
-  font-size: var(--fs-meta-xs);
 }
 
 /* In-flight clone "phantom" folder (#299): a transient, inert repo-header-like row —
@@ -388,21 +365,21 @@
 .phantomHeader {
   display: flex;
   align-items: center;
-  height: 30px;
-  padding-right: var(--space-8);
+  gap: var(--space-6);
+  height: 24px;
+  padding: 0 var(--space-6);
   opacity: 0.75;
 }
 
-/* The clone name — aligned with a real .repoName: the 16px folder inset lives on
-   .repoFolder, and this 8px left pad mirrors the .repoTitle button's padding. */
+/* The clone name — aligned with a real .repoName (the header carries the padding
+   + gap, matching `.repoHeader` since task 374). */
 .phantomName {
   flex: 1;
   min-width: 0;
-  padding-left: var(--space-8);
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-row);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -454,8 +431,8 @@
   align-items: center;
   gap: var(--space-6);
   width: 100%;
-  height: 22px;
-  padding: 0 var(--space-8) 0 var(--space-16);
+  height: 17px;
+  padding: 0 var(--space-6);
   border: 0;
   /* Rounded corners so the active accent-dim fill matches `.worktreeHeader`'s box
      (#251); invisible while the background is transparent. */
@@ -506,20 +483,32 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-out);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
 }
 
 .plus:hover:not(:disabled) {
   color: var(--text-primary);
 }
 
-/* Worktree "+" with an unknown parent (#196) — non-interactive, muted. */
-.plus:disabled {
-  color: var(--text-muted);
-  cursor: default;
-  opacity: 0.5;
+/* Hover-revealed repo-header "+" (UI v2 §5, task 374): invisible at rest but
+   still in-flow (space reserved → the #211 drag-grip geometry and the header
+   layout never shift) and still clickable/focusable — it sits inside the header's
+   own hover area, so a pointer reaching it has already revealed it. Keyboard
+   focus reveals it too. The worktree header's `+` (outside `.repoHeader`) stays
+   always visible. */
+.repoHeader .plus {
+  opacity: 0;
 }
 
+.repoHeader:hover .plus,
+.repoHeader .plus:focus-visible,
+.repoHeader .plusCoral {
+  opacity: 1;
+}
+
+/* Empty repo (UI v2 §5): the accent "+" stays always visible beside the dimmed name. */
 .plusCoral {
   color: var(--accent);
 }
@@ -528,30 +517,31 @@
   color: var(--accent-hover);
 }
 
+/* Agent row (UI v2 §5, task 374): 26px, indented 12px under the branch label;
+   selection is a plain Surface0 fill (the old accent-dim + left border are gone). */
 .row {
   display: flex;
   align-items: center;
-  margin: var(--space-1) var(--space-8);
-  border-radius: var(--radius-control);
-  border-left: 2px solid transparent;
+  height: 26px;
+  margin: 0 0 0 12px;
+  padding: 0 7px 0 0;
+  border-radius: var(--radius-btn);
 }
 
 .row:hover {
-  background: var(--bg-hover);
+  /* Plain fallback first, then the v2 4%-text wash (CLAUDE.md WebView guidance). */
+  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
-.rowSelected {
-  border-left-color: var(--accent);
-  background: var(--accent-dim);
+.rowSelected,
+.rowSelected:hover {
+  background: var(--bg-elevated);
 }
 
 /* A session row being dragged toward Canvas (#47). */
 .rowDragging {
   opacity: 0.6;
-}
-
-.rowSelected:hover {
-  background: var(--accent-dim);
 }
 
 .rowMain {
@@ -560,7 +550,7 @@
   min-width: 0;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-6) var(--space-8);
+  padding: 0 0 0 var(--space-2);
   border: 0;
   background: transparent;
   color: inherit;
@@ -568,14 +558,19 @@
   cursor: pointer;
 }
 
-/* Primary label = the branch (a git ref → mono), prominent. */
+/* Primary label = the branch (a git ref → mono): secondary at rest, primary when
+   the row is selected (UI v2 §5). */
 .rowPrimary {
   overflow: hidden;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font-family: var(--mono);
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-row);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rowSelected .rowPrimary {
+  color: var(--text-primary);
 }
 
 /* Secondary = the optional custom name, thin/muted beneath the branch. */
@@ -647,16 +642,18 @@
   pointer-events: auto;
 }
 
+/* The hover ✕ turns red (UI v2 §5, task 374). */
 .remove:hover {
-  color: var(--text-primary);
+  color: var(--status-error);
 }
 
-/* Activity indicator slot (#71): the row's far left, before the label. */
+/* Activity indicator slot (#71): the row's far left, before the label. The 14px
+   BusyIndicator slot centers the 7px dot (UI v2 §5 — 6px pad ≈ the demo's 7px). */
 .rowBusy {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  padding-left: var(--space-8);
+  padding-left: var(--space-6);
 }
 
 /* Per-agent added/removed line counts (#335): the in-flow child of the `.trailing` slot
@@ -668,7 +665,7 @@
   align-items: center;
   gap: var(--space-4);
   font-family: var(--mono);
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
 }
 .diffAdd {
@@ -705,23 +702,27 @@
   color: var(--status-awaiting);
 }
 
-/* --- Opened-file tree rows (#45) — children of a repo, below its sessions --- */
+/* --- Opened-file tree rows (#45) — children of a repo, below its sessions.
+   22px item rows indented 12px (UI v2 §5, task 374); selection = Surface0. --- */
 .fileRow {
   display: flex;
   align-items: center;
-  margin: var(--space-1) var(--space-8);
-  border-radius: var(--radius-control);
+  height: 22px;
+  margin: 0 0 0 12px;
+  border-radius: var(--radius-btn);
 }
 
 .fileRow:hover {
-  background: var(--bg-hover);
+  /* Plain fallback first, then the v2 4%-text wash (CLAUDE.md WebView guidance). */
+  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
-/* Selected sidebar item (#79): the accent-dim treatment a selected session row
+/* Selected sidebar item (#79): the Surface0 treatment a selected session row
    gets, extended to file/diff/terminal items. */
 .fileRowSelected,
 .fileRowSelected:hover {
-  background: var(--accent-dim);
+  background: var(--bg-elevated);
 }
 
 /* Pending scheduled-session row (#93/#94): a draggable item like file/diff rows —
@@ -730,17 +731,20 @@
 .scheduleRow {
   display: flex;
   align-items: center;
-  margin: var(--space-1) var(--space-8);
-  border-radius: var(--radius-control);
+  height: 22px;
+  margin: 0 0 0 12px;
+  border-radius: var(--radius-btn);
 }
 
 .scheduleRow:hover {
-  background: var(--bg-hover);
+  /* Plain fallback first, then the v2 4%-text wash (CLAUDE.md WebView guidance). */
+  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
 .scheduleRowSelected,
 .scheduleRowSelected:hover {
-  background: var(--accent-dim);
+  background: var(--bg-elevated);
 }
 
 .scheduleRowDragging {
@@ -752,8 +756,8 @@
   flex: 1;
   min-width: 0;
   align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-4) var(--space-8) var(--space-4) var(--space-20);
+  gap: 7px;
+  padding: 0 0 0 7px;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
@@ -769,29 +773,31 @@
 .scheduleName {
   overflow: hidden;
   flex-shrink: 1;
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The fire time, right-aligned at 10px (UI v2 §5). */
 .scheduleWhen {
   flex-shrink: 0;
   margin-left: auto;
   padding-left: var(--space-6);
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
 }
 
 /* "recurring" badge on a recurring row (#294): a small static chip distinguishing it
-   from a one-shot schedule, styled like the worktree/fork badges. */
+   from a one-shot schedule, styled like the worktree/fork badges (v2: 9.5px, 4px
+   radius — task 374). */
 .recurringBadge {
   flex-shrink: 0;
   padding: 0 var(--space-4);
   border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-micro);
   color: var(--text-muted);
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-micro);
   line-height: 1.4;
 }
 
@@ -860,12 +866,12 @@
   flex: 1;
   min-width: 0;
   align-items: center;
-  gap: var(--space-6);
-  /* Extra left padding indents files under their repo's sessions. */
-  padding: var(--space-4) var(--space-8) var(--space-4) var(--space-20);
+  gap: 7px;
+  padding: 0 0 0 7px;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
+  font-size: var(--fs-meta);
   text-align: left;
   cursor: pointer;
 }
@@ -878,7 +884,7 @@
 .fileName {
   overflow: hidden;
   font-family: var(--mono);
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1111,37 +1117,43 @@
 }
 
 /* --- Worktree sub-group (#74/#240): an isolated worktree under its parent repo,
-   rendered flush at the repo's own level (no indent / left rail) — a "worktree"
-   badge on the header is the sole worktree cue. Just vertical spacing keeps it a
-   discrete block. --- */
+   its header flush at the repo's own level — a "worktree" badge on the header is
+   the sole worktree cue. Its child rows indent 24px (UI v2 §5, task 374); the 1px
+   row rhythm comes from the group's own gap. --- */
 .worktreeGroup {
-  margin: var(--space-1) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Worktree child rows indent 24px (UI v2 §5) — deeper than the repo's own 12px. */
+.worktreeGroup .row,
+.worktreeGroup .fileRow,
+.worktreeGroup .scheduleRow {
+  margin-left: 24px;
 }
 
 .worktreeHeader {
   display: flex;
   align-items: center;
   gap: var(--space-6);
-  height: 26px;
-  /* Left padding lands the GitBranch icon in the same 16px icon column as the repo's
-     Folder marker (#128) and the `.repoBranchLine` icon, so the worktree branch lines
-     up with the repo branch (#240). */
-  padding: 0 var(--space-8) 0 var(--space-16);
-  border-radius: var(--radius-chip);
+  height: 20px;
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-btn);
   color: var(--text-muted);
 }
 
-/* "worktree" marker (#240): mirrors the Overview/Canvas badge (#96) at the sidebar's
-   compact 10px label size. Now that the worktree isn't indented, this chip is the cue
+/* "worktree" marker (#240): mirrors the Overview/Canvas badge (#96) at the v2
+   micro size (task 374). Now that the worktree isn't indented, this chip is the cue
    that distinguishes a worktree branch from the repo's own branch line. */
 .worktreeBadge {
   flex-shrink: 0;
   padding: 0 var(--space-4);
   border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-micro);
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-micro);
 }
 
 .worktreeIcon {
@@ -1161,7 +1173,7 @@
   background: transparent;
   color: inherit;
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1183,9 +1195,10 @@
   color: var(--accent);
 }
 
-/* --- Collapsed icon rail (#168) ---
-   The sidebar minimized to a ~56px column of icons: New/Schedule/view-switch,
-   then per repo a repo-colored folder icon with that repo's per-session activity
+/* --- Collapsed icon rail (#168, UI v2 §6 — task 374) ---
+   The sidebar minimized to a 44px column of 28px controls: the accent-tinted New
+   session block, hairline dividers, the Overview/Canvas ghost icon buttons, then
+   per repo a repo-colored folder icon with that repo's per-session 7px activity
    dots stacked beneath it, each worktree as its own branch glyph (with its dots).
    No text, no item/schedule/session rows — to reach an item the user expands. */
 .collapsed {
@@ -1198,31 +1211,43 @@
   min-height: 0;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-12) 0 var(--space-8);
+  gap: 5px;
+  padding: 10px 0 var(--space-8);
   overflow: hidden;
 }
 
-.railButton {
+/* Accent-tinted 28×28 New session block (UI v2 §6): tints derive from the single
+   var(--accent) via --accent-tint-* so a custom accent recolors it live; each
+   color-mix-bearing declaration ships a plain --accent-dim fallback first. */
+.railNew {
   display: flex;
-  width: 36px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-secondary);
+  border: 1px solid var(--accent-dim); /* plain fallback */
+  border-color: var(--accent-tint-border);
+  border-radius: var(--radius-btn);
+  background: var(--accent-dim); /* plain fallback */
+  background: var(--accent-tint-fill);
+  color: var(--accent);
   cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
-.railButton:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+.railNew:hover {
+  background: var(--accent-dim); /* plain fallback */
+  background: var(--accent-tint-hover);
+}
+
+/* 22×1 hairline divider between the rail's control clusters (UI v2 §6). */
+.railDivider {
+  width: 22px;
+  height: 1px;
+  flex-shrink: 0;
+  margin: 3px 0;
+  background: var(--border-hairline);
 }
 
 .railRepos {
@@ -1242,27 +1267,28 @@
   width: 100%;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-2);
 }
 
-/* The repo-colored folder icon — left-click filters Overview, right-click opens
-   the repo menu. Tint comes from the inline `color` (icon strokes = currentColor). */
+/* The repo-colored folder icon (28×26, UI v2 §6) — left-click filters Overview,
+   right-click opens the repo menu. Tint comes from the inline `color` (icon
+   strokes = currentColor); hover is a Base fill on the mantle rail. */
 .railFolder {
   display: flex;
-  width: 36px;
-  height: 32px;
+  width: 28px;
+  height: 26px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-btn);
   background: transparent;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
 }
 
 .railFolder:hover {
-  background: var(--bg-hover);
+  background: var(--bg-panel);
 }
 
 /* Collapsed-rail clone indicator (#299): a dimmed, gently pulsing folder icon per
@@ -1271,8 +1297,8 @@
    reduced-motion, leaving a static dimmed icon. */
 .railPhantom {
   display: flex;
-  width: 36px;
-  height: 32px;
+  width: 28px;
+  height: 26px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
@@ -1296,19 +1322,19 @@
   padding: var(--space-1) 0;
 }
 
-/* Rail agent dot (#228): the BusyIndicator wrapped in a clickable, selectable button.
-   A compact square so the dot column's footprint is unchanged; hover + selected
-   (mirroring the expanded .rowSelected accent) give the same feedback as a row. */
+/* Rail agent dot (#228, UI v2 §6: a ~16×14 button around the 7px dot): the
+   BusyIndicator wrapped in a clickable, selectable button. Hover keeps a faint
+   wash; selected keeps the accent-dim fill. */
 .railDot {
   display: flex;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 14px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-micro);
   background: transparent;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
@@ -1335,19 +1361,19 @@
 .railWorktree {
   position: relative;
   display: flex;
-  width: 32px;
-  height: 28px;
+  width: 28px;
+  height: 20px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-btn);
   color: var(--text-muted);
   cursor: context-menu;
   transition: background var(--dur-fast) var(--ease-out);
 }
 
 .railWorktree:hover {
-  background: var(--bg-hover);
+  background: var(--bg-panel);
 }
 
 /* Collapsed footer: too narrow for a row, so stack the Settings gear + chevron. */

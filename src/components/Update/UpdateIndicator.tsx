@@ -55,7 +55,7 @@ function UpdateIndicator() {
           : `Update available version ${version}, open Updates settings`
       }
     >
-      <Download size={13} strokeWidth={1.5} className={styles.indicatorIcon} />
+      <Download size={12} strokeWidth={1.5} className={styles.indicatorIcon} />
       {!collapsed && (
         <span className={styles.indicatorText}>
           <span className={styles.indicatorTitle}>

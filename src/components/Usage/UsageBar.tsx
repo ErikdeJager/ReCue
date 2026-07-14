@@ -74,8 +74,10 @@ function UsageBar() {
     countdown ? `, ${countdown}` : ""
   }`;
 
-  const track = (
-    <div className={styles.track}>
+  // The v2 inset meter (`.meter`, task 374) applies only in the expanded sidebar;
+  // the collapsed rail keeps the bare full-bleed track.
+  const track = (trackClass: string | undefined) => (
+    <div className={trackClass}>
       <div
         className={`${styles.fill} ${critical ? styles.fillCritical : ""}`}
         style={{ width: `${pct}%` }}
@@ -92,7 +94,7 @@ function UsageBar() {
         title={`${rounded}% of 5-hour limit used`}
         aria-label={label}
       >
-        {track}
+        {track(styles.track)}
       </div>
     );
   }
@@ -153,7 +155,7 @@ function UsageBar() {
         <span className={styles.reset}>{countdown}</span>
         <span className={styles.percent}>{rounded}%</span>
       </div>
-      {track}
+      {track(`${styles.track} ${styles.meter}`)}
     </div>
   );
 }

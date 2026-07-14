@@ -115,6 +115,9 @@
 .kbd-hint {
   margin-left: auto;
   color: var(--text-muted);
+  /* Explicit face: a <kbd> element's UA default is the system monospace, not
+     the bundled JetBrains Mono (task 374). */
+  font-family: var(--ui);
   font-size: var(--fs-micro);
   font-weight: 400;
 }

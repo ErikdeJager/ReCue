@@ -76,7 +76,7 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
             className={selected ? styles.iconActive : styles.iconOption}
             onClick={() => go(option.value)}
           >
-            <Icon size={16} strokeWidth={1.5} aria-hidden />
+            <Icon size={14} strokeWidth={1.5} aria-hidden />
           </button>
         );
       })}

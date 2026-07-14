@@ -23,6 +23,7 @@ import {
   FileDiff,
   FileText,
   Folder,
+  FolderOpen,
   FolderTree,
   GitBranch,
   GitFork,
@@ -66,6 +67,7 @@ import {
   REPO_PALETTE,
   repoColor,
   repoOrder,
+  SIDEBAR_WIDTH_DEFAULT,
   useStore,
 } from "../../store";
 import type {
@@ -82,6 +84,7 @@ import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import ViewsMenu from "../ViewsMenu/ViewsMenu";
 import { aheadBehindBadge } from "./branchStatus";
 import { diffCountBadge } from "./diffCounts";
+import { railDotState } from "./railDotState";
 import styles from "./Sidebar.module.css";
 
 /** Fixed width of the collapsed sidebar icon rail (#168/#214). Snug around its
@@ -1258,7 +1261,7 @@ function WorktreeHeader({
           "worktree" word) — distinct from a repo's Folder icon (#128). Labelled so
           the meaning survives without the text. */}
       <GitBranch
-        size={compact ? 16 : 12}
+        size={12}
         strokeWidth={1.5}
         className={styles.worktreeIcon}
         role="img"
@@ -1539,7 +1542,7 @@ function RepoBranchLine({
         aria-pressed={isFiltered}
       >
         <GitBranch
-          size={12}
+          size={11}
           strokeWidth={1.5}
           className={styles.repoBranchIcon}
           aria-hidden
@@ -1948,7 +1951,7 @@ function RepoGroup({
         >
           <span className={styles.repoName}>{repoName(repo)}</span>
           {!isEmpty && (
-            <span className={styles.count}>{repoSessions.length}</span>
+            <span className="chip-count">{repoSessions.length}</span>
           )}
         </button>
         <button
@@ -2420,6 +2423,12 @@ function Sidebar() {
   );
   const reposKey = repos.join("\n");
 
+  // First-launch empty state (UI v2 §5, task 374): no folders, no in-flight clones,
+  // and boot settled (#352 — before that the empty tree just hasn't loaded yet).
+  // Shows the centered "No folders yet" block and hides the footer extras
+  // (update pill / auto-continue prompt / usage meter).
+  const firstLaunch = booted && repos.length === 0 && cloningRepos.length === 0;
+
   // Tier 1 (#359) — the branch label is the sidebar's primary text (`sessionLabel` falls
   // back to it), so read it as soon as the folder set is known: **one** `git rev-parse`
   // per folder, and the only git work on the boot critical path. Keyed on the repo set
@@ -2672,25 +2681,21 @@ function Sidebar() {
   // footer) and each WorktreeHeader's own menu sit over the rail unchanged.
   const rail = (
     <div className={styles.rail} onContextMenu={openBgMenu}>
+      {/* Accent-tinted New session block (UI v2 §6, task 374). The rail's Schedule
+          button is gone (§6) — scheduling stays reachable collapsed via ⌘⇧N and the
+          background context menu's "Schedule session". */}
       <button
         type="button"
-        className={styles.railButton}
+        className={styles.railNew}
         onClick={() => openNewSession()}
         title={`New session ${kbdHint(platform, "⌘N", "Ctrl+N")}`}
         aria-label="New session"
       >
-        <Plus size={18} strokeWidth={1.5} />
+        <Plus size={14} strokeWidth={2.2} />
       </button>
-      <button
-        type="button"
-        className={styles.railButton}
-        onClick={() => openSchedule()}
-        title={`Schedule session ${kbdHint(platform, "⌘⇧N", "Ctrl+Shift+N")}`}
-        aria-label="Schedule session"
-      >
-        <Clock size={16} strokeWidth={1.5} />
-      </button>
+      <div className={styles.railDivider} aria-hidden />
       <ViewSwitch compact />
+      <div className={styles.railDivider} aria-hidden />
       <div className={styles.railRepos} onContextMenu={openBgMenu}>
         {/* In-flight clones in the collapsed rail (#299): a minimal, inert dimmed +
         pulsing folder icon per phantom (no branch line / dots fit the narrow rail), so
@@ -2702,7 +2707,7 @@ function Sidebar() {
             title={`Cloning ${clone.name}…`}
             aria-label={`Cloning ${clone.name}`}
           >
-            <Folder size={18} strokeWidth={2} />
+            <Folder size={14} strokeWidth={2} />
           </div>
         ))}
         {repos.map((repo) => {
@@ -2723,13 +2728,17 @@ function Sidebar() {
           ];
           // Rail agent dot (#228): now a clickable, selectable target — left-click
           // selects/jumps; right-click opens the shared agent menu (stopPropagation so
-          // it isn't the rail's background/repo menu). The BusyIndicator is the dot.
+          // it isn't the rail's background/repo menu). The BusyIndicator is the dot;
+          // the tooltip appends the dot's state (UI v2 §6, task 374).
           const dot = (s: SessionView, base: string) => {
             const dotLabel = sessionLabel(
               s.name,
               autoNameOn ? s.autoName : null,
               base,
             ).primary;
+            const busy = sessionBusy[s.id] ?? false;
+            const active = sessionActive[s.id] ?? false;
+            const dotTip = `${dotLabel} — ${railDotState(busy, active)}`;
             return (
               <button
                 key={s.id}
@@ -2748,16 +2757,20 @@ function Sidebar() {
                   const pos = clampAgentMenuPos(event.clientX, event.clientY);
                   setRailMenu({ session: s, x: pos.x, y: pos.y });
                 }}
-                title={dotLabel}
-                aria-label={dotLabel}
+                title={dotTip}
+                aria-label={dotTip}
               >
-                <BusyIndicator
-                  busy={sessionBusy[s.id] ?? false}
-                  hasBeenActive={sessionActive[s.id] ?? false}
-                />
+                <BusyIndicator busy={busy} hasBeenActive={active} />
               </button>
             );
           };
+          // Folder tooltip (UI v2 §6, task 374): "<repo> — N session(s)" counting the
+          // repo's own + worktree agents; "empty" when it has none.
+          const sessionCount = repoSessions.length + worktreeAgents.length;
+          const folderTip =
+            sessionCount === 0
+              ? `${repoName(repo)} — empty`
+              : `${repoName(repo)} — ${sessionCount} session${sessionCount === 1 ? "" : "s"}`;
           return (
             <div key={repo} className={styles.railRepo}>
               <button
@@ -2769,11 +2782,11 @@ function Sidebar() {
                   setView("overview");
                 }}
                 onContextMenu={(event) => openRepoMenu(repo, event)}
-                title={repoName(repo)}
-                aria-label={repoName(repo)}
+                title={folderTip}
+                aria-label={folderTip}
                 aria-pressed={isFiltered}
               >
-                <Folder size={18} strokeWidth={2} />
+                <Folder size={14} strokeWidth={2} />
               </button>
               {repoSessions.length > 0 && (
                 <div className={styles.railDots}>
@@ -2844,7 +2857,7 @@ function Sidebar() {
           onPointerDown={onResizeDown}
           onPointerMove={onResizeMove}
           onPointerUp={onResizeUp}
-          onDoubleClick={() => setSidebarWidth(260)}
+          onDoubleClick={() => setSidebarWidth(SIDEBAR_WIDTH_DEFAULT)}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar (double-click to reset)"
@@ -2857,12 +2870,12 @@ function Sidebar() {
         <>
           <button
             type="button"
-            className={styles.newButton}
+            className={`btn btn-accent btn-chrome ${styles.newButton}`}
             onClick={() => openNewSession()}
           >
-            <Plus size={16} strokeWidth={1.5} className={styles.newIcon} />
+            <Plus size={12} strokeWidth={2.4} className={styles.newIcon} />
             <span className={styles.newLabel}>New session</span>
-            <kbd className={styles.kbd}>
+            <kbd className="kbd-hint kbd-hint-onfill">
               {kbdHint(platform, "⌘N", "Ctrl+N")}
             </kbd>
           </button>
@@ -2873,28 +2886,28 @@ function Sidebar() {
           <div className={styles.scheduleActionRow}>
             <button
               type="button"
-              className={styles.scheduleButton}
+              className={`btn btn-neutral btn-chrome ${styles.scheduleButton}`}
               onClick={() => openSchedule()}
             >
               <Clock
-                size={15}
+                size={12}
                 strokeWidth={1.5}
                 className={styles.scheduleIcon}
               />
               <span className={styles.scheduleLabel}>Schedule session</span>
-              <kbd className={styles.kbd}>
+              <kbd className="kbd-hint">
                 {kbdHint(platform, "⌘⇧N", "Ctrl+Shift+N")}
               </kbd>
             </button>
             <button
               type="button"
-              className={styles.dotsButton}
+              className={`btn btn-neutral btn-chrome btn-icon ${styles.dotsButton}`}
               onClick={dotsMenu.openMenu}
               title="More session options"
               aria-label="More session options"
               aria-haspopup="menu"
             >
-              <MoreHorizontal size={16} strokeWidth={1.5} />
+              <MoreHorizontal size={13} strokeWidth={1.5} />
             </button>
           </div>
           <RowContextMenu
@@ -2908,13 +2921,41 @@ function Sidebar() {
           </div>
 
           <div className={styles.repos} onContextMenu={openBgMenu}>
-            {/* Only once the boot payload has landed (#352): before that the repo list
-            is empty simply because nothing has loaded yet, and the hint would flash the
-            wrong state for a round-trip right before the folders pop in. */}
-            {booted && repos.length === 0 && cloningRepos.length === 0 && (
-              <p className={styles.emptyHint} onContextMenu={bgMenu.openMenu}>
-                No repositories yet.
-              </p>
+            {/* First-launch empty block (UI v2 §5, task 374 — supersedes the plain
+            "No repositories yet." hint): a centered column with the two entry-point
+            actions. Only once the boot payload has landed (#352): before that the
+            repo list is empty simply because nothing has loaded yet, and the block
+            would flash the wrong state right before the folders pop in. The
+            background context menu (#172) still opens on it. */}
+            {firstLaunch && (
+              <div
+                className={styles.emptyBlock}
+                onContextMenu={bgMenu.openMenu}
+              >
+                <FolderOpen size={20} strokeWidth={1.5} aria-hidden />
+                <span className={styles.emptyTitle}>No folders yet</span>
+                <span className={styles.emptyExplainer}>
+                  Sessions group by the
+                  <br />
+                  folder they run in
+                </span>
+                <button
+                  type="button"
+                  className={`btn btn-neutral btn-chrome ${styles.emptyAction}`}
+                  onClick={() => void addFolder()}
+                >
+                  <FolderOpen size={12} strokeWidth={1.5} aria-hidden />
+                  Open a folder…
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-neutral btn-chrome ${styles.emptyAction}`}
+                  onClick={() => openCloneRepo()}
+                >
+                  <GitBranch size={12} strokeWidth={1.5} aria-hidden />
+                  Clone a repo…
+                </button>
+              </div>
             )}
 
             {/* In-flight clones (#299): rendered at the top and OUTSIDE the sortable
@@ -2948,18 +2989,19 @@ function Sidebar() {
       )}
 
       {/* In-app update box (#190): directly above the footer/Settings gear, hidden
-          unless an update is available/failed; collapses to its icon in the rail. */}
-      <UpdateIndicator />
+          unless an update is available/failed; collapses to its icon in the rail.
+          Hidden with the usage meter on first launch (UI v2 §5, task 374). */}
+      {!firstLaunch && <UpdateIndicator />}
 
       {/* Auto-restart prompt (#309): directly above the usage bar — offers to enable
           "auto continue after limit reset" when the Claude 5-hour limit is reached and
           the setting is off; hidden otherwise / when suppressed in Settings. */}
-      <AutoContinuePrompt />
+      {!firstLaunch && <AutoContinuePrompt />}
 
       {/* 5-hour Claude usage (#154): the thin separator above the footer — a plain
           hairline with no usage data, the thin usage fill (+ reset countdown + %)
-          once data arrives. */}
-      <UsageBar />
+          once data arrives. Hidden on first launch (UI v2 §5, task 374). */}
+      {!firstLaunch && <UsageBar />}
 
       {/* Footer (#100): a thin bottom bar pinned below the scrolling repo list,
           holding the Settings gear and (#168) the collapse/expand chevron. When
@@ -2977,20 +3019,23 @@ function Sidebar() {
           <SettingsIcon size={16} strokeWidth={1.5} />
         </button>
         {/* Feedback (#210): opens the bug-report / feature-request Google Form in
-            the default browser. Stacks with the others in the collapsed rail.
-            Hovering/focusing it dismisses the #241 nudge. */}
-        <button
-          ref={feedbackBtnRef}
-          type="button"
-          className={styles.footerButton}
-          onClick={() => void openUrl(FEEDBACK_FORM_URL)}
-          onMouseEnter={() => setFeedbackNudgeDismissed(true)}
-          onFocus={() => setFeedbackNudgeDismissed(true)}
-          title="Send feedback"
-          aria-label="Send feedback"
-        >
-          <Bug size={16} strokeWidth={1.5} />
-        </button>
+            the default browser. Expanded-only since UI v2 §6 (task 374) — the rail
+            drops it (still reachable by expanding); hovering/focusing it dismisses
+            the #241 nudge. */}
+        {!sidebarCollapsed && (
+          <button
+            ref={feedbackBtnRef}
+            type="button"
+            className={styles.footerButton}
+            onClick={() => void openUrl(FEEDBACK_FORM_URL)}
+            onMouseEnter={() => setFeedbackNudgeDismissed(true)}
+            onFocus={() => setFeedbackNudgeDismissed(true)}
+            title="Send feedback"
+            aria-label="Send feedback"
+          >
+            <Bug size={16} strokeWidth={1.5} />
+          </button>
+        )}
         {/* Attention nudge (#241): a glowing pill to the right of the feedback button,
             position:fixed (anchored to the button's measured rect) so it escapes the
             sidebar's overflow clip and shows its full text at any width.
