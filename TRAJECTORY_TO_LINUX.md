@@ -677,3 +677,70 @@ document.querySelectorAll("canvas").forEach((c) => {
 - [ ] Regression, on each OS: a main-window terminal still creates a WebGL canvas at startup on
       macOS/Windows and on a hardware-GL Linux box; a detached canvas window (#84/#105) and a
       software-rasterizer Linux box (#346) still have none.
+
+
+### UI font: bundle Inter Variable (latin), applied Linux-only (#363)
+
+**The bug.** `tokens.css`'s one UI stack is
+`--ui: -apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif`. On macOS
+`-apple-system` wins (San Francisco); on Windows `system-ui` wins (Segoe UI). On **Linux**
+neither Apple entry resolves and `ui-sans-serif` is not a WebKit generic, so the UI lands on
+whatever `system-ui` / `sans-serif` resolve to through **fontconfig** — a per-distro, per-box
+lottery. Measured on the reporting Arch box: the only installed sans faces are **Adwaita
+Sans**, **Adwaita Mono** and **FreeSans** (no Inter / Cantarell / Ubuntu / Noto Sans / DejaVu
+Sans), `fc-match sans-serif` → **FreeSans**, and the GTK UI font
+(`org.gnome.desktop.interface font-name`) is **`JetBrainsMono Nerd Font 12`** — i.e. if
+WebKitGTK maps CSS `system-ui` to the GTK font setting, the entire UI was rendering in a
+**monospace** face. That alone explains "reads noticeably worse than macOS/Windows".
+
+**The fix.**
+
+- **Bundled the face, offline** (never a CDN, like JetBrains Mono):
+  `@fontsource-variable/inter` (OFL-1.1) with a **hand-written** `@font-face` in
+  `src/styles/fonts.css` naming only the **latin** subset — one **48,256 B** woff2, versus the
+  **218,512 B** all-seven-subsets that `import "@fontsource-variable/inter"` would emit. One
+  variable file covers the 400/500/600 weights the UI actually uses with real (non-synthetic)
+  weights. `format("woff2")` (not fontsource's `woff2-variations` hint) so an engine without
+  variable-font support renders the default instance instead of skipping the `src`. The latin
+  `unicode-range` is copied verbatim, so non-latin codepoints skip the face and fall through
+  to system faces — no tofu.
+- **Applied Linux-only** via a new `:root[data-platform="linux"]` `--ui` override. The shared
+  `:root --ui` line is **not touched**: there is no single ordering that works for both OSes —
+  prepending Linux faces before `system-ui` would silently steal **Windows** (a dev box with
+  Inter installed would stop rendering Segoe UI), and appending them after it is a **no-op on
+  Linux** (the generic always resolves to *something*). A platform-scoped override is the only
+  correct shape. Listing system faces *without* bundling would also have been a no-op on the
+  very box that reported the bug (none of Inter/Cantarell/Ubuntu/Noto Sans is installed there).
+- **A new frontend seam: `data-platform` on `<html>`** (`detectPlatform` /
+  `applyPlatformAttribute` in `src/platform.ts`, written from `main.tsx` **before**
+  `createRoot().render()`). It must be **synchronous** — the store's `platform` signal is an
+  async IPC and would flip the font mid-boot — so it is read from the WebView's own UA
+  (Windows and macOS patterns checked *before* Linux so their strings can't be mistaken for
+  it). Mirrors the `data-theme="light"` attribute (#333). The main window and a detached
+  canvas window (#84) load the same entry, so both get it; `store.ts` re-applies the
+  authoritative backend value when it lands (a no-op in practice).
+- **Zero cost off Linux:** a `@font-face` file is fetched lazily, only when an element
+  actually resolves to the family. macOS/Windows never name `Inter Variable`, so the woff2 is
+  never fetched or decoded — it only occupies 47 KB inside the bundle. Verified: `npm run
+  build` emits exactly one `inter-latin-wght-normal-*.woff2` at **48,256 B**, taking the total
+  woff2 payload from 116,076 B to **164,332 B**.
+
+A user-facing "use my desktop UI font" opt-out (Settings → Appearance) is a plausible
+follow-up — deliberately out of scope here; today Linux gets ReCue's deterministic face.
+
+### Needs real-box verification (UI font, #363)
+
+- [ ] **Linux (Arch/Ubuntu/Mint, `npm run tauri dev` and the AppImage):** `<html>` carries
+      `data-platform="linux"`; `body`'s computed `font-family` starts with `Inter Variable`;
+      the Network tab shows one `inter-latin-wght-normal-*.woff2` from the app origin
+      (`tauri://localhost`), **never** a CDN; the sidebar / Overview / Settings visibly render
+      in Inter rather than FreeSans/DejaVu/the GTK mono face. Confirms WebKitGTK's variable-font
+      support (worst case on an ancient engine: the 400 instance renders, bold is synthesized —
+      still Inter).
+- [ ] **Linux, non-latin text:** a CJK/Cyrillic filename in the file tree still renders (falls
+      through the `--ui` tail) — no tofu boxes.
+- [ ] **Linux, detached canvas window (#84):** it renders in Inter too (same entry point).
+- [ ] **macOS / Windows (the "unchanged" claim):** `<html>` carries `data-platform="macos"` /
+      `"windows"`, `body` computes to the unchanged `-apple-system …` stack (San Francisco /
+      Segoe UI), and **no** `inter-*.woff2` request appears in the Network tab — including on a
+      Windows box that has **Inter installed system-wide**.
