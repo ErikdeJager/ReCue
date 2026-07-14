@@ -4231,3 +4231,64 @@ run with no `APPDIR`/`APPIMAGE`/`GTK_THEME`/`GDK_BACKEND`, no `LD_LIBRARY_PATH`,
 - The updater end-to-end (download → replace → relaunch) is **blocked** until a newer release is published; only
   the signed `linux-x86_64` manifest entry and the app's own `APPIMAGE` env (a #350 regression check) were
   verifiable.
+
+### 357. [x] Settings → Rendering (Linux-only): DMA-BUF + terminal-renderer overrides with a boot-decision readout
+
+Tauri's own Linux graphics guidance explicitly recommends user-facing rendering-mode settings, because WebKitGTK
+masks WebGL renderer strings and auto-detection is unreliable. Until now ReCue's only overrides were env vars
+(`RECUE_DISABLE_DMABUF`, `WEBKIT_DISABLE_DMABUF_RENDERER`) — which a `.desktop` or AppImage launch never sees. This
+fills the `RendererOverride` tri-state seam that #347 deliberately left open, and surfaces **what the auto-detection
+actually decided at boot** so a user can diagnose rather than guess.
+
+**What shipped** (branch `settings-rendering-linux`, PR
+[#118](https://github.com/ErikdeJager/ReCue/pull/118), 2026-07-14):
+
+- **A Linux-only Settings → Rendering section** — a dedicated pane (icon `MonitorCog`, after Appearance), filtered
+  out of the nav on macOS/Windows by construction (`renderer_diagnostics` returns `null` there). A stale
+  `"rendering"` deep-link clamps to the default pane.
+- **DMA-BUF renderer control** (Auto / On / Off) — persisted as `linuxDmabufRenderer`, feeding #347's
+  `RendererOverride`. Applies at the **next launch** (GTK reads the env once at init), with an inline "Restart
+  ReCue to apply this" note shown **only** when the draft differs from the mode that was in effect at boot — so a
+  fresh install never sees a spurious note.
+- **Terminal renderer control** (Auto / WebGL / DOM) — persisted as `linuxTerminalRenderer`, applied **live** on
+  Save: the `WebglAddon` is loaded/disposed on the *running* xterm, so **no pooled host is ever disposed** (the #18
+  no-replay invariant) and the **shared glyph atlas is never cleared** (the #221 font-jumble bug).
+- **A diagnostics readout + Copy button** — the exact boot line, its reason, the evidence the probes saw, what
+  decided it, and the probed WebGL renderer string. Works with **zero terminals open** (the probe runs on demand).
+  Backed by a read-only `renderer_diagnostics` command over a `OnceLock` captured at boot.
+- **New shared `src-tauri/src/early_settings.rs`** — reads the settings blob straight off `sessions.json`
+  **before `tauri::Builder`** (the Tauri `Store` only exists inside `.setup()`, i.e. *after* GTK init). Fail-open at
+  every step, with an `include_str!("../tauri.conf.json")` identifier drift guard. **`linux_gtk.rs` (#349)
+  converges onto it** — its duplicate `store_path` / `theme_from_store_json` / consts are deleted, retiring the
+  duplication #349 had to introduce.
+
+**Key decisions**
+
+- **Precedence, and never a silently-broken setting**: a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` >
+  `RECUE_DISABLE_DMABUF` > the persisted Setting > auto-detection. #347's rules 1–2 are untouched, and the setting
+  is only consulted when no env override exists. Crucially, **when an env var wins, the pane says so** rather than
+  letting the saved setting look mysteriously ineffective.
+- **The polarity is the sharp edge here, and it is asserted in both directions.** The *setting* names the
+  **renderer** (`on` = DMA-BUF on = `ForceKeep`); the *env var* names the **workaround** (`=1` = disable =
+  `ForceDisable`). Getting this backwards would invert the user's intent, so `resolve_dmabuf_override`'s tests pin
+  both directions.
+- **A dedicated section, not rows inside Appearance** — these are engine/diagnostic switches plus a log readout, and
+  a filtered `SECTIONS` array makes the whole thing vanish on macOS/Windows, leaving Appearance byte-identical there.
+- **No in-app "Restart now" button** — a relaunch would kill every running agent's PTY. A Copy-diagnostics button
+  (for bug reports) is offered instead.
+- **No change to #347's detection logic**, to `isSoftwareWebGLRenderer`, or to any macOS/Windows behavior. Both
+  settings default to `"auto"`, so existing installs are unchanged. No new dependency, no capability change.
+
+**Dependencies:** 347 (whose `RendererOverride` seam this fills).
+
+**Notes**
+
+- **Verified on the real Arch/Hyprland box the original bug came from** (hybrid Intel i915 + NVIDIA-open
+  610.43.03), against an isolated `XDG_DATA_HOME` so the developer's real `sessions.json` was never touched: **all
+  five DMA-BUF scenarios** produce the correct boot line — no key → auto ("left on"); `off` → "forced off in
+  Settings"; `on` → "forced on in Settings"; `RECUE_DISABLE_DMABUF=1` beats the setting; and a user-exported
+  `WEBKIT_DISABLE_DMABUF_RENDERER` beats everything and is left untouched. The readout's evidence matches `/sys`
+  ground truth exactly.
+- Checks green: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, `cargo test` (252 pass),
+  `npm run build`, `npm run lint`, `npm run format:check`, `npm test` (691 pass) — and the first-paint bundle is
+  still within the #356 budget.
