@@ -2925,3 +2925,16 @@ Fix the Linux DMA-BUF workaround misfiring on hybrid Intel+NVIDIA GPUs (GPU-awar
 - `src/components/Terminal/webglRenderer.ts` keeps its logic unchanged (it is a correct consequence-level fail-safe); only its comment plus a one-time Linux `console.info` of the WebGL renderer string in `terminalPool.ts` are added for support diagnostics.
 - One boot diagnostic line is printed on Linux for BOTH outcomes (kept / disabled) with the evidence — #346 only logged the disable case, which is why the misfire was invisible.
 - No app version bump / patch-notes file (mirrors #346; releases are batched by the maintainer).
+
+## Task 349
+
+Linux: native file dialogs follow ReCue's theme (fix always-white Adwaita dialogs in the AppImage)
+
+- Committed to fix option (a) — correct `GTK_THEME` at boot before GTK init — and explicitly rejected (b) the tauri-plugin-dialog `xdg-portal` feature (hard-requires a running xdg-desktop-portal backend; on a minimal/wlroots box dialogs would stop working entirely, turning a cosmetic bug into a functional one), keeping (b) documented in TRAJECTORY_TO_LINUX.md as the fallback. Also rejected unsetting `GTK_THEME` (the user's system theme may not exist/render against the AppImage's bundled GTK — the reason the hook forces Adwaita) and runtime tao `set_theme` (needs a direct `gtk` dep and is a no-op while `GTK_THEME` is set).
+- Source of truth for the variant is ReCue's own persisted `settings.theme` (#333), not the system color-scheme: the dialog belongs to the app, and it is deterministic + unit-testable. Missing/unreadable/unknown → `Adwaita:dark`, matching the frontend `DEFAULT_SETTINGS.theme = "dark"` (fail-open).
+- Only the Adwaita *variant* is chosen (`Adwaita:dark` / `Adwaita:light`) — the family the AppImage actually bundles — never a different theme name.
+- Scoped the env write to the AppImage-polluted environment only (`APPIMAGE`/`APPDIR` present). A dev / distro-package Linux run leaves `GTK_THEME` untouched so a themed desktop is not downgraded to Adwaita; making non-AppImage dialogs follow ReCue's theme is an explicit non-goal.
+- Accepted that a theme toggle re-themes native dialogs only on the **next launch** (GTK reads `GTK_THEME` at init; post-boot env mutation is thread-unsafe). Surfaced as a muted Linux-only hint under Settings → Appearance → Theme.
+- Escape hatches: honor the hook's `APPIMAGE_GTK_THEME` (never clobber it) and add a new `RECUE_GTK_THEME=<literal value>` force override, mirroring `RECUE_DISABLE_DMABUF` (#346); documented in TRAJECTORY_TO_LINUX.md + a one-liner in README's Linux section.
+- Reading the theme before the Tauri app exists means resolving `sessions.json` directly: `$XDG_DATA_HOME` (if absolute) else `$HOME/.local/share`, + the hardcoded identifier `com.recue.app`. Guarded by a unit test that parses `tauri.conf.json` via `include_str!` so the identifier can't drift; any read failure fails open to dark.
+- New module `src-tauri/src/linux_gtk.rs` (mirrors `linux_webkit.rs`) rather than extending `linux_webkit.rs`, to avoid colliding with Task 347, which edits that file; the only shared touchpoint is an appended call in `run()`.
