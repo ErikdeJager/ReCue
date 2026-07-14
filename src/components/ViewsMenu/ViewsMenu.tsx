@@ -10,7 +10,6 @@ import {
 
 import { useStore } from "../../store";
 import FilePicker from "../FilePicker/FilePicker";
-import styles from "./ViewsMenu.module.css";
 
 /**
  * The addable non-agent **view set** (#82), extracted (#164) into one shared
@@ -21,9 +20,10 @@ import styles from "./ViewsMenu.module.css";
  * board** open a searchable `FilePicker` (#56) inline — Kanban scoped to `.md` with
  * the create-or-open flow (#142/#151). `onClose` dismisses the host popover/menu.
  *
- * `includeNewSession` (default `true`) renders the leading **"New session here"**
- * instant-spawn action + its separator (#177). Host menus that already render their
- * own top-level "New session" — the repo context menu and the worktree header menu
+ * `includeNewSession` (default `true`) renders the trailing **"New session here"**
+ * instant-spawn action + its separator (#177; moved after the view items per the
+ * UI v2 §10 demo order, task 375). Host menus that already render their own
+ * top-level "New session" — the repo context menu and the worktree header menu
  * — pass `false` to avoid the duplicate (#201); the header `OpenViewButton` (#165/#213,
  * including worktree agents) keeps the default so it remains a new-session affordance.
  */
@@ -115,27 +115,6 @@ function ViewsMenu({
 
   return (
     <>
-      {/* Instant agent spawn on this folder's current branch — no modal (#177).
-          A separate action from the "add a view" items, so it sits apart above
-          a separator. Suppressed (#201) when the host menu already renders its own
-          top-level "New session" (repo / worktree header), so there's no duplicate. */}
-      {includeNewSession && (
-        <>
-          <button
-            type="button"
-            role="menuitem"
-            className={styles.item}
-            onClick={() => {
-              void spawnSession(repoPath);
-              onClose();
-            }}
-          >
-            <Plus size={14} strokeWidth={1.5} className={styles.icon} />
-            New session here
-          </button>
-          <div className={styles.sep} role="separator" />
-        </>
-      )}
       {items.map((v) => {
         const Icon = v.icon;
         return (
@@ -143,14 +122,36 @@ function ViewsMenu({
             key={v.key}
             type="button"
             role="menuitem"
-            className={styles.item}
+            className="menu-item"
             onClick={v.run}
           >
-            <Icon size={14} strokeWidth={1.5} className={styles.icon} />
+            <Icon size={13} strokeWidth={1.5} className="menu-icon" />
             {v.label}
           </button>
         );
       })}
+      {/* Instant agent spawn on this folder's current branch — no modal (#177).
+          A separate action from the "add a view" items, so it sits apart below a
+          separator (view items first — the demo's §10 order, task 375). Suppressed
+          (#201) when the host menu already renders its own top-level "New session"
+          (repo / worktree header), so there's no duplicate. */}
+      {includeNewSession && (
+        <>
+          <div className="menu-sep" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            onClick={() => {
+              void spawnSession(repoPath);
+              onClose();
+            }}
+          >
+            <Plus size={13} strokeWidth={1.5} className="menu-icon" />
+            New session here
+          </button>
+        </>
+      )}
     </>
   );
 }

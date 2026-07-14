@@ -156,7 +156,8 @@
 }
 
 /* --- Tab-strip dropdown menus (#117/#205): shared by the "+" (New tab) and
-   "Templates ▾" dropdowns. --- */
+   "Templates ▾" dropdowns. The LOOK comes from the shared menu.css primitive
+   (task 375, `menu-pop`/`menu-item`); these classes keep only positioning. --- */
 .menuWrap {
   position: relative;
   display: flex;
@@ -168,52 +169,11 @@
    which would clip a menu sitting below the 34px strip. `top`/`right` are set
    inline from the button's viewport rect (CanvasTabs.tsx), mirroring the sidebar
    context menu (#31). */
-.menu {
+.menuPos {
   position: fixed;
   z-index: 20;
   display: flex;
-  min-width: 160px;
   flex-direction: column;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
-}
-
-.menuItem {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-8);
-  padding: var(--space-6) var(--space-8);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-/* Shortcut hint on a menu item (#206): muted mono, pushed to the right edge. */
-.menuKbd {
-  flex-shrink: 0;
-  color: var(--text-muted);
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-  font-weight: 400;
-}
-
-.menuItem:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-.menuItem:disabled {
-  color: var(--text-muted);
-  cursor: not-allowed;
 }
 
 /* Empty-canvas center drop target. */

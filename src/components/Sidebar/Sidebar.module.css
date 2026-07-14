@@ -915,116 +915,16 @@
   opacity: 0.6;
 }
 
-/* --- Repo right-click context menu (#31) --- */
+/* --- Repo right-click context menu (#31) — the LOOK comes from the shared
+   menu.css primitive (task 375, `menu-pop`/`menu-item`/…); these two classes
+   keep only the site-local positioning + z-index. --- */
 .menuOverlay {
-  position: fixed;
-  inset: 0;
   z-index: 200;
 }
 
-.menu {
+.menuPos {
   position: fixed;
   z-index: 201;
-  min-width: 150px;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
-  animation: menu-in var(--dur-fast) var(--ease-out);
-}
-
-.menuItem,
-.menuItemDanger,
-.menuDanger {
-  display: block;
-  width: 100%;
-  padding: var(--space-6) var(--space-8);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.menuItem:hover:not([aria-disabled="true"]) {
-  background: var(--bg-hover);
-}
-
-/* Unavailable Fork menu item (#138): aria-disabled (not native, so the explanatory
-   `title` tooltip still shows) + a no-op click. */
-.menuItem[aria-disabled="true"] {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* "Views" section (#82): a small muted header over the icon-led view buttons. */
-.menuSection {
-  padding: var(--space-6) var(--space-8) var(--space-4);
-  color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
-  font-weight: 500;
-  letter-spacing: 0.03em;
-}
-
-/* View-adding buttons (#82): icon + label, so the available views read at a
-   glance. Overrides the base .menuItem `display: block` (later = wins). */
-.menuItemView {
-  display: flex;
-  align-items: center;
-  gap: var(--space-8);
-}
-
-.menuIcon {
-  flex-shrink: 0;
-  color: var(--text-secondary);
-}
-
-/* Checkable menu item trailing slot (#296/#302): a fixed-width, centered check-glyph
-   slot that follows the label, so the check reads after the text (empty when off).
-   Inline so the base `.menuItem` block layout is untouched. */
-.menuCheck {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  margin-left: var(--space-6);
-  color: var(--accent);
-  vertical-align: middle;
-}
-
-/* Hairline divider grouping destructive items apart from neutral ones (#54). */
-.menuSeparator {
-  height: 1px;
-  margin: var(--space-4) var(--space-6);
-  background: var(--border-hairline);
-}
-
-/* Destructive menu item (#54): Catppuccin Red (--status-error) so it reads as
-   dangerous, with a subtle red-tinted hover. */
-.menuItemDanger {
-  color: var(--status-error);
-}
-
-.menuItemDanger:hover {
-  background: color-mix(in srgb, var(--status-error) 14%, transparent);
-}
-
-/* Destructive confirm (#54): a red fill + the explicit "Kill N & forget?" label
-   make the danger unmistakable. */
-.menuDanger {
-  background: color-mix(in srgb, var(--status-error) 14%, transparent);
-  color: var(--status-error);
-  font-weight: 500;
-}
-
-.menuDanger:hover {
-  background: color-mix(in srgb, var(--status-error) 22%, transparent);
 }
 
 /* --- Repo color picker (#35) --- */
@@ -1072,17 +972,6 @@
   border-radius: var(--radius-chip);
   background: transparent;
   cursor: pointer;
-}
-
-@keyframes menu-in {
-  from {
-    opacity: 0;
-    transform: scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
 }
 
 /* --- Repo "Checkout branch…" picker (#266): a sub-panel of the repo context menu,
@@ -1195,7 +1084,8 @@
   font-size: var(--fs-meta-sm);
 }
 
-/* "Create new branch" toggle reuses .menuItem but adds the icon row layout. */
+/* "Create new branch" toggle reuses the global `menu-item` (menu.css) but keeps
+   the icon row layout explicit for the sub-panel's tighter rows. */
 .checkoutCreateToggle {
   display: flex;
   align-items: center;
