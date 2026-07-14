@@ -768,6 +768,21 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > one emit — each emit is an evaluate-JS on the webview main thread, costliest on
 > WebKitGTK. (3)+(4) are platform-neutral wins; (1)+(2) are unreachable on macOS/Windows.
 >
+> **WebGL context loss (#364).** The same DOM-renderer fallback also covers a *runtime* loss:
+> when xterm's WebGL addon fires `onContextLoss` (an **unrecovered** loss — GPU OOM, driver
+> reset, suspend; the addon handles a recoverable one itself within ~3s, so we never re-attach
+> or retry), the pool clears its addon reference (so the #221 one-shot font-atlas rebuild can't
+> call into a disposed renderer) and **disposes** the addon — xterm swaps its render service
+> back to the DOM renderer and re-lays-out the **same** buffer, so the #18 pooled terminal is
+> never remounted and no scrollback is replayed — then **latches** the window (the pure
+> `Terminal/webglFallback.ts`): no terminal in it re-attaches WebGL for the rest of the run, since
+> a driver that dropped one context drops the next one too. One `console.warn` per window; the
+> latch is per-document, so a detached canvas window (#84) latches independently. Platform-neutral
+> code that merely *fires* most often on WebKitGTK. The addon is loaded lazily (#356), so the
+> handler is attached to the resolved addon instance and both the `disposed` flag and the latch
+> are re-checked after the `import()` settles — a host torn down (or a window latched by another
+> terminal's loss) mid-load never attaches WebGL.
+>
 > **AppImage child environment (#350).** Under the AppImage, every child ReCue spawned
 > inherited the AppRun's environment — `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`, a forced
 > `GTK_THEME=Adwaita:light` + `GDK_BACKEND=x11`, and `PATH`/`LD_LIBRARY_PATH`/`XDG_DATA_DIRS`/…

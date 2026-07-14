@@ -638,3 +638,42 @@ manifest parses and the benchmark test compiles warning-free.)
 
 **Files**: `src-tauri/Cargo.toml` (the profile), `src-tauri/src/pty.rs` (the `#[ignore]`d
 benchmark test only — no production-code change), `TRAJECTORY_TO_WINDOWS.md`, `CLAUDE.md`.
+
+### WebGL context loss (Task #364)
+
+Platform-neutral code (pure WebView/xterm — no native, path, or shell call), but it **fires**
+overwhelmingly on Linux/WebKitGTK, where a GPU under memory pressure, a driver reset, or a
+suspend/resume can revoke a live WebGL context. The pool's `onContextLoss` handler now disposes
+the addon (xterm falls back to its DOM renderer and re-lays-out the **same** buffer — the #18
+pooled terminal is never remounted and no scrollback is replayed), clears its own addon
+reference so the #221 font-atlas rebuild can't call into a disposed renderer, and **latches**
+the window: no terminal in it re-attaches WebGL for the rest of the run (a sick driver that
+dropped one context drops the next one too — retrying is a context storm). The latch lives in
+the pure, unit-tested `src/components/Terminal/webglFallback.ts`.
+
+This is the one path that **cannot be exercised on CI** — a context loss needs a real GPU +
+WebView. Force one from the webview devtools console (`WEBGL_lose_context` is the standard
+extension for exactly this; the #346 renderer probe already uses it):
+
+```js
+document.querySelectorAll("canvas").forEach((c) => {
+  const gl = c.getContext("webgl2") || c.getContext("webgl");
+  gl?.getExtension("WEBGL_lose_context")?.loseContext();
+});
+```
+
+#### Needs real-box verification (context loss, #364)
+
+- [ ] **Loss recovery**: with 2+ agents open and painted, force the loss above and wait ~3s (the
+      addon's restore window). Every terminal still shows its content — no clear, no scrollback
+      replay, no garbled TUI — and typing still echoes into `claude`. The `<canvas>` elements are
+      gone from `.xterm-screen` (the DOM renderer is in force).
+- [ ] **Warned once**: exactly **one** `[recue] terminals: WebGL context lost and not restored …`
+      line in the console, no matter how many terminals lost their context.
+- [ ] **Latched**: a **newly spawned** agent (and a Restart-recreated one) gets **no** WebGL
+      canvas and logs no further warning.
+- [ ] **Still reflows**: switching Overview ↔ Canvas and resizing the window reflows the
+      fallen-back terminals normally (no remount, no replay).
+- [ ] Regression, on each OS: a main-window terminal still creates a WebGL canvas at startup on
+      macOS/Windows and on a hardware-GL Linux box; a detached canvas window (#84/#105) and a
+      software-rasterizer Linux box (#346) still have none.
