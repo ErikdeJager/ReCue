@@ -40,9 +40,31 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 /// What the frontend receives. `used_percent` is validated + clamped to 0–100 here;
 /// `resets_at` is passed through raw (an ISO-8601 string, or a stringified unix
 /// timestamp) so JS owns the countdown clock without a date crate in Rust.
+///
+/// `buckets` (#370) carries **every** usage window the API reports (five-hour, weekly,
+/// …) as a generic list, so the sidebar's expandable "all usage" viewer is adaptive —
+/// a new metric added by Anthropic appears with no code change. The `used_percent` /
+/// `resets_at` scalars keep the five-hour window verbatim for the existing bar, so
+/// nothing about the five-hour path changes; `buckets` is purely additive.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSnapshot {
+    /// 0–100, clamped.
+    pub used_percent: f64,
+    /// Raw `resets_at` (ISO-8601 or stringified unix secs/ms), or `None`.
+    pub resets_at: Option<String>,
+    /// All usage windows the API reports (#370), adaptive; the frontend orders/labels.
+    pub buckets: Vec<UsageBucket>,
+}
+
+/// One usage window (#370): a top-level object in the usage response that carries a
+/// percentage (`five_hour`, `seven_day`, …). Serialized camelCase like `UsageSnapshot`.
+/// `key` is the raw API key; the frontend humanizes + orders it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBucket {
+    /// Raw API key, e.g. `"five_hour"`.
+    pub key: String,
     /// 0–100, clamped.
     pub used_percent: f64,
     /// Raw `resets_at` (ISO-8601 or stringified unix secs/ms), or `None`.
@@ -271,7 +293,38 @@ fn parse_snapshot(v: &serde_json::Value) -> Option<UsageSnapshot> {
     Some(UsageSnapshot {
         used_percent: used.clamp(0.0, 100.0),
         resets_at,
+        buckets: parse_buckets(v),
     })
+}
+
+/// Adaptive scan of every usage window in the response (#370): iterate the top-level
+/// object and keep each `(key, val)` where `val` is an object carrying a **finite**
+/// `utilization` OR `used_percentage` number. Non-object values and objects without a
+/// numeric percentage (metadata fields) are skipped — genuine windows always carry a
+/// percentage. Clamped 0–100; `resets_at` is stringified for JS. `serde_json` has no
+/// `preserve_order` here, so iteration is deterministic (alphabetical); the frontend
+/// owns the final ordering + labels.
+fn parse_buckets(v: &serde_json::Value) -> Vec<UsageBucket> {
+    let Some(obj) = v.as_object() else {
+        return Vec::new();
+    };
+    obj.iter()
+        .filter_map(|(key, val)| {
+            let val = val.as_object()?;
+            let pct = val
+                .get("utilization")
+                .or_else(|| val.get("used_percentage"))
+                .and_then(serde_json::Value::as_f64)?;
+            if !pct.is_finite() {
+                return None;
+            }
+            Some(UsageBucket {
+                key: key.clone(),
+                used_percent: pct.clamp(0.0, 100.0),
+                resets_at: val.get("resets_at").and_then(value_to_string),
+            })
+        })
+        .collect()
 }
 
 /// A JSON string → its inner string; a JSON number → its decimal text; else `None`.
@@ -437,5 +490,67 @@ mod tests {
         assert!(parse_snapshot(&json!({"seven_day":{}})).is_none());
         assert!(parse_snapshot(&json!({"five_hour":{}})).is_none());
         assert!(parse_snapshot(&json!({"five_hour":{"utilization":"nope"}})).is_none());
+    }
+
+    #[test]
+    fn parse_buckets_includes_all_windows() {
+        let v = json!({
+            "five_hour": {"utilization": 33.0, "resets_at": "2026-04-11T07:00:00+00:00"},
+            "seven_day": {"used_percentage": 12, "resets_at": 1760166000},
+        });
+        let buckets = parse_buckets(&v);
+        assert_eq!(buckets.len(), 2);
+        let fh = buckets.iter().find(|b| b.key == "five_hour").unwrap();
+        assert_eq!(fh.used_percent, 33.0);
+        assert_eq!(fh.resets_at.as_deref(), Some("2026-04-11T07:00:00+00:00"));
+        // The alternate percent field + numeric resets are accepted just like five_hour.
+        let sd = buckets.iter().find(|b| b.key == "seven_day").unwrap();
+        assert_eq!(sd.used_percent, 12.0);
+        assert_eq!(sd.resets_at.as_deref(), Some("1760166000"));
+    }
+
+    #[test]
+    fn parse_buckets_is_adaptive_and_clamps() {
+        // A key the code has never heard of is still surfaced (#370 adaptivity), and its
+        // percentage is clamped 0–100 exactly like the five-hour scalar.
+        let v = json!({
+            "monthly": {"utilization": 140.0},
+            "five_hour": {"utilization": 10.0},
+        });
+        let buckets = parse_buckets(&v);
+        let monthly = buckets.iter().find(|b| b.key == "monthly").unwrap();
+        assert_eq!(monthly.used_percent, 100.0);
+        assert_eq!(monthly.resets_at, None);
+    }
+
+    #[test]
+    fn parse_buckets_skips_non_windows() {
+        // Non-object values and objects without a numeric percentage (metadata) are
+        // skipped — only genuine windows (carrying a percentage) survive.
+        let v = json!({
+            "five_hour": {"utilization": 5.0},
+            "version": "1.2.3",
+            "meta": {"note": "no percentage here"},
+            "bad_pct": {"utilization": "nope"},
+        });
+        let buckets = parse_buckets(&v);
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].key, "five_hour");
+    }
+
+    #[test]
+    fn snapshot_carries_all_buckets() {
+        let v = json!({
+            "five_hour": {"utilization": 33.0, "resets_at": "x"},
+            "seven_day": {"utilization": 50.0},
+        });
+        let s = parse_snapshot(&v).unwrap();
+        // Five-hour scalars unchanged…
+        assert_eq!(s.used_percent, 33.0);
+        assert_eq!(s.resets_at.as_deref(), Some("x"));
+        // …and the generic list carries every window.
+        assert_eq!(s.buckets.len(), 2);
+        assert!(s.buckets.iter().any(|b| b.key == "five_hour"));
+        assert!(s.buckets.iter().any(|b| b.key == "seven_day"));
     }
 }

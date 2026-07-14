@@ -1,8 +1,10 @@
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { isClaudeActive, useStore } from "../../store";
 import { formatResetCountdown } from "../../time";
 import styles from "./Usage.module.css";
+import { prepareUsageBuckets } from "./usageBuckets";
 
 /**
  * The thin separator above the sidebar footer (#154), which doubles as a Claude
@@ -17,9 +19,15 @@ import styles from "./Usage.module.css";
  *   0% the fill is empty, so the bar still reads as a plain separator — but "0%" is
  *   shown on the right.
  *
+ * The meta row also carries an **up-chevron disclosure** (#370) to the left of the
+ * countdown: clicking it expands a box (above the bar) listing **all** usage windows
+ * the API reports (5-hour, weekly, …), each with its own %/countdown. The list is
+ * **adaptive** — it renders whatever buckets the backend returns, so a new metric
+ * appears automatically. Expand/collapse is transient (collapsed on every launch).
+ *
  * The 180s store poll (started at boot) feeds it; this component only renders + ticks
- * the countdown. In the collapsed rail the meta row is dropped (no room) — just the
- * track shows.
+ * the countdown. In the collapsed rail the meta row (and disclosure/box) are dropped
+ * (no room) — just the track shows.
  */
 function UsageBar() {
   const claudeActive = useStore(isClaudeActive);
@@ -27,7 +35,12 @@ function UsageBar() {
   const available = useStore((s) => s.usage.available);
   const usedPercent = useStore((s) => s.usage.usedPercent);
   const resetsAtMs = useStore((s) => s.usage.resetsAtMs);
+  const buckets = useStore((s) => s.usage.buckets);
   const collapsed = useStore((s) => s.sidebarCollapsed);
+
+  // Expandable "all usage" viewer (#370). Transient: collapsed on every launch, not
+  // persisted.
+  const [expanded, setExpanded] = useState(false);
 
   // Re-render the countdown each ~30s while visible. Self-cleaning; the data itself
   // is refreshed independently by the 180s store poll.
@@ -70,7 +83,8 @@ function UsageBar() {
     </div>
   );
 
-  // Collapsed rail: no room for the meta row — the filled track alone is the bar.
+  // Collapsed rail: no room for the meta row / disclosure — the filled track alone is
+  // the bar (unchanged).
   if (collapsed) {
     return (
       <div
@@ -83,9 +97,59 @@ function UsageBar() {
     );
   }
 
+  const hasMore = buckets.length > 0;
+  const rows = expanded ? prepareUsageBuckets(buckets) : [];
+
   return (
     <div className={styles.usage} aria-label={label}>
+      {expanded && hasMore && (
+        <div
+          className={styles.box}
+          role="list"
+          aria-label="All Claude usage windows"
+        >
+          {rows.map((b) => {
+            const bPct = Math.max(0, Math.min(100, b.usedPercent));
+            const bCritical = bPct >= 90;
+            return (
+              <div key={b.key} className={styles.boxRow} role="listitem">
+                <span className={styles.boxLabel}>{b.label}</span>
+                <span className={styles.boxBar}>
+                  <span
+                    className={`${styles.boxFill} ${
+                      bCritical ? styles.fillCritical : ""
+                    }`}
+                    style={{ width: `${bPct}%` }}
+                  />
+                </span>
+                <span className={styles.boxPercent}>{Math.round(bPct)}%</span>
+                <span className={styles.boxReset}>
+                  {b.resetsAtMs != null
+                    ? formatResetCountdown(b.resetsAtMs, now)
+                    : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className={styles.meta}>
+        {hasMore && (
+          <button
+            type="button"
+            className={styles.disclosure}
+            aria-expanded={expanded}
+            aria-label={expanded ? "Hide all usage" : "Show all usage"}
+            title={expanded ? "Hide all usage" : "Show all usage"}
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? (
+              <ChevronDown size={11} strokeWidth={1.5} />
+            ) : (
+              <ChevronUp size={11} strokeWidth={1.5} />
+            )}
+          </button>
+        )}
         <span className={styles.reset}>{countdown}</span>
         <span className={styles.percent}>{rounded}%</span>
       </div>

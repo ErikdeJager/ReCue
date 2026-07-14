@@ -35,7 +35,12 @@ beforeEach(() => {
   useStore.setState({
     autoContinue: IDLE_AUTO_CONTINUE,
     sessions: [claudeSession("s1")],
-    usage: { usedPercent: null, resetsAtMs: null, available: false },
+    usage: {
+      usedPercent: null,
+      resetsAtMs: null,
+      available: false,
+      buckets: [],
+    },
     settings: { ...DEFAULT_SETTINGS },
   });
 });
@@ -58,7 +63,12 @@ describe("refreshUsage — showSessionUsage gate (#326)", () => {
   it("clears any stale usage data to unavailable when turned off", async () => {
     useStore.setState({
       settings: { ...DEFAULT_SETTINGS, showSessionUsage: false },
-      usage: { usedPercent: 42, resetsAtMs: 10_000, available: true },
+      usage: {
+        usedPercent: 42,
+        resetsAtMs: 10_000,
+        available: true,
+        buckets: [],
+      },
     });
     await useStore.getState().refreshUsage();
     expect(m(ipc.claudeSessionUsage)).not.toHaveBeenCalled();
@@ -66,6 +76,7 @@ describe("refreshUsage — showSessionUsage gate (#326)", () => {
       usedPercent: null,
       resetsAtMs: null,
       available: false,
+      buckets: [],
     });
   });
 
