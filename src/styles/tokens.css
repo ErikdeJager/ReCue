@@ -5,11 +5,17 @@
  * Colors are remapped onto the Catppuccin Mocha palette (#33) — softer/less black
  * than the original near-black theme. Consume them from CSS Modules
  * (var(--token)); do not introduce off-system values.
+ *
+ * One exception to "single source of truth": `--bg-base` (dark AND light) is duplicated
+ * as a literal hex in `index.html` (the inline pre-paint <style>), `src/theme.ts`
+ * (THEME_BG) and `src-tauri/src/commands.rs` (background_for_theme) — this stylesheet is
+ * JS-imported, so it does not exist at first paint (#348). Keep the four in sync; the
+ * TS/HTML/CSS trio is guarded by `src/theme.test.ts`.
  */
 
 :root {
   /* --- Surfaces (Catppuccin Mocha) --- */
-  --bg-base: #1e1e2e; /* Base */
+  --bg-base: #1e1e2e; /* Base — also duplicated for the pre-paint frame, see header (#348) */
   --bg-sidebar: #181825; /* Mantle */
   --bg-panel: #1e1e2e; /* Base */
   --bg-elevated: #313244; /* Surface0 */
@@ -74,6 +80,10 @@
   --syn-accent: #f5c2e7; /* Pink */
 
   /* --- Fonts --- */
+  /* The UI stack is deliberately NOT edited (#363): -apple-system wins on macOS (San
+     Francisco) and system-ui wins on Windows (Segoe UI). Linux — where both generics
+     resolve through fontconfig to whatever the box happens to have — overrides this in
+     the `:root[data-platform="linux"]` block below, so macOS/Windows stay unchanged. */
   --ui: -apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 
@@ -116,6 +126,31 @@
   --dur-fast: 120ms;
   --dur-slow: 180ms;
   --ease-out: ease-out;
+}
+
+/*
+ * Linux UI font (#363). The :root --ui above is deliberately left alone: -apple-system
+ * resolves only on Apple platforms and system-ui resolves to Segoe UI on Windows, so
+ * macOS/Windows are byte-for-byte unchanged (a Windows box with Inter installed keeps
+ * Segoe UI). On Linux, though, BOTH generics resolve through fontconfig to whatever the
+ * box happens to have (FreeSans / DejaVu Sans / even the GTK font, which may be a
+ * MONOSPACE face) — a lottery that reads far worse than SF Pro / Segoe UI.
+ *
+ * So Linux gets its own stack, keyed off the data-platform attribute src/main.tsx writes
+ * onto <html> synchronously (before the first paint — the backend platform() IPC is async
+ * and would flip the font mid-boot). The first family is the BUNDLED Inter
+ * (src/styles/fonts.css), so the result is deterministic on every distro instead of
+ * depending on what is installed; the system faces after it only ever serve codepoints
+ * outside the bundled latin subset.
+ *
+ * Specificity: [data-platform="linux"] beats the plain :root regardless of source order,
+ * and the :root[data-theme="light"] block never declares --ui, so the two attributes
+ * compose without conflict. The terminal font (--mono) is untouched on every OS.
+ */
+:root[data-platform="linux"] {
+  --ui:
+    "Inter Variable", "Inter", "Adwaita Sans", "Cantarell", "Ubuntu",
+    "Noto Sans", ui-sans-serif, system-ui, sans-serif;
 }
 
 /*

@@ -36,14 +36,21 @@ const EDGES: CanvasEdge[] = ["top", "right", "bottom", "left"];
 /** Empty-canvas center target — the first drop creates the first panel. */
 function CenterDrop() {
   const { setNodeRef, isOver } = useDroppable({ id: "canvas-center" });
+  // The hint waits for the boot payload (#352): until it lands the canvas is empty
+  // simply because the persisted tabs haven't loaded, so the hint would flash right
+  // before the panels appear. The droppable itself stays mounted — drop targets are
+  // unaffected. (A detached canvas window #84 has its own store, so its own `booted`.)
+  const booted = useStore((s) => s.booted);
   return (
     <div
       ref={setNodeRef}
       className={`${styles.center} ${isOver ? styles.centerOver : ""}`}
     >
-      <p className={styles.centerHint}>
-        Drag an agent or file from the sidebar here
-      </p>
+      {booted && (
+        <p className={styles.centerHint}>
+          Drag an agent or file from the sidebar here
+        </p>
+      )}
     </div>
   );
 }

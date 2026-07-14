@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -57,6 +57,28 @@ const INPUT_ECHO_MS: u64 = 300;
 /// dedup makes re-reading an unchanged title a cheap no-op; extending the last
 /// value lengthens the window.
 const TITLE_REREAD_OFFSETS_MS: &[u64] = &[0, 1_500, 4_000, 8_000, 15_000, 30_000];
+/// After the agent's process is reaped, how long the exit waiter waits for the reader thread
+/// to drain the PTY to EOF before it concludes that **descendants** are still holding the
+/// slave open (#354). Keeps trailing output ordered before `Exited` in the normal case (the
+/// reader EOFs within milliseconds once the last holder of the slave is gone).
+const EXIT_DRAIN_MS: u64 = 150;
+/// After hanging up those lingering descendants, a second bounded wait for the reader's EOF
+/// before escalating to SIGKILL (#354). Worst-case added exit latency: `EXIT_DRAIN_MS` +
+/// `EXIT_HUP_GRACE_MS`.
+const EXIT_HUP_GRACE_MS: u64 = 250;
+/// Poll granularity while waiting on the reader-done / reaped flags (#354).
+const EXIT_POLL_MS: u64 = 10;
+/// `kill_session`: grace between the group SIGHUP and the escalation SIGKILL (#354). It runs
+/// off-thread, so the caller never blocks. Mirrors portable-pty's own ~200ms grace, with
+/// headroom for `claude` to flush its conversation log before it is forced. (Unix only — the
+/// Windows kill path stays `TerminateProcess`, which needs no escalation.)
+#[cfg_attr(windows, allow(dead_code))]
+const KILL_GRACE_MS: u64 = 500;
+/// `kill_all` (app shutdown): the **one** shared grace between the SIGHUP sweep and the
+/// SIGKILL sweep (#354) — paid once, not once per session (portable-pty's `Child::kill()`
+/// sleeps ~200ms *per child*, so 10 agents stalled the quit for ~2s). Unix only, as above.
+#[cfg_attr(windows, allow(dead_code))]
+const SHUTDOWN_GRACE_MS: u64 = 200;
 
 /// Errors surfaced to the frontend. Serialized as `{ kind, message }` so the UI
 /// can branch on `kind` (e.g. show the "claude not found" surface).
@@ -228,6 +250,26 @@ struct ActivityState {
 /// Per-session activity map shared between the reader threads, `write_stdin`, and
 /// the monitor thread (which derives busy/idle), keyed by session id.
 type Activity = Arc<Mutex<HashMap<String, Arc<ActivityState>>>>;
+
+/// Per-**spawn** (per PTY generation) exit bookkeeping (#354), shared by the reader thread,
+/// the exit waiter, and the kill paths. A Restart under the same session id creates a fresh
+/// one, so a stale generation's flags can never be confused with the live one's.
+#[derive(Default)]
+struct ExitState {
+    /// The reader loop has hit EOF **and already sent its last `Output`** — so `Exited` can
+    /// be emitted without racing ahead of trailing output.
+    reader_done: AtomicBool,
+    /// The exit waiter has reaped the child (its `wait()` returned) — lets a kill escalation
+    /// stop early instead of SIGKILLing a process that already died on the SIGHUP.
+    reaped: AtomicBool,
+    /// Suppress this generation's `Exited` event entirely. Set by (a) `kill_all` at app
+    /// shutdown — now that the exit fires promptly it could reach a still-live webview, and
+    /// an agent that exits 0 on SIGHUP would read as a **clean exit**, so `isCleanExit` would
+    /// **delete the persisted record**, breaking the #30/#63 rule that a quit keeps sessions
+    /// for the next boot; and (b) a same-id respawn (Restart), so a stale generation's late
+    /// exit can never be attributed to the fresh session.
+    silent: AtomicBool,
+}
 
 /// Per-session hysteresis state for the busy/idle decision (#315), owned solely by the
 /// monitor thread. `emitted` is the last busy value we sent (dedup); `sticky` means we've
@@ -420,10 +462,26 @@ struct Session {
     // would stall every other session's keystrokes, resizes, and scrollback reads.
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    /// Signals the child **without owning it** (portable-pty's `clone_killer`, #354) — the
+    /// exit waiter owns the `Child` and blocks in `wait()`, so no kill path can ever be stuck
+    /// behind a blocking wait (before #354, `kill_session` and `reader_loop` contended on the
+    /// same `child` mutex). Unix: SIGHUP to the direct pid — used only as a fallback when the
+    /// pid is unknown, since the normal path signals the whole process group. Windows:
+    /// `TerminateProcess`, i.e. exactly the pre-#354 Windows kill.
+    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    /// The direct child's pid — on unix **also its process-group id**, because portable-pty's
+    /// unix spawn `setsid()`s the child (so `pgid == pid`, a fresh session holding nothing but
+    /// its own descendants). Read only by the unix group-kill paths; Windows keeps signalling
+    /// the direct child through `killer` (#354).
+    #[cfg_attr(windows, allow(dead_code))]
+    pid: Option<u32>,
+    /// Exit bookkeeping for THIS spawn (see `ExitState`, #354).
+    exit: Arc<ExitState>,
     scrollback: Arc<Mutex<Scrollback>>,
     // Reader thread; detached on drop (it finishes when the PTY closes).
     _reader: JoinHandle<()>,
+    // Exit-waiter thread (#354); detached on drop (it finishes when the child is reaped).
+    _waiter: JoinHandle<()>,
 }
 
 /// Owns the registry of sessions and their PTYs.
@@ -691,8 +749,12 @@ impl SessionManager {
             .map_err(|e| SessionError::Io(e.to_string()))
     }
 
-    /// Kill a session's child and forget it (frees the slot). The reader thread
-    /// observes the closed PTY and emits the final `Exited` event.
+    /// Kill a session's child and forget it (frees the slot). **Non-blocking** (#354): the
+    /// SIGHUP goes out immediately (on unix to the child's whole process group, so claude's
+    /// MCP servers / tool children die with it — #31) and the SIGKILL escalation runs on a
+    /// short-lived detached thread, instead of sleeping ~200ms inside the Tauri command.
+    /// The session's **exit waiter** still emits exactly one final `Exited` event once the
+    /// child actually terminates — the frontend's `intentionalKills` bookkeeping is unchanged.
     pub fn kill_session(&self, id: &str) -> Result<(), SessionError> {
         let session = {
             let mut sessions = self.lock_sessions()?;
@@ -703,9 +765,7 @@ impl SessionManager {
         if let Ok(mut map) = self.activity.lock() {
             map.remove(id);
         }
-        if let Ok(mut child) = session.child.lock() {
-            let _ = child.kill();
-        }
+        kill_now(&session);
         // `session` drops here, closing the master/writer.
         Ok(())
     }
@@ -713,14 +773,46 @@ impl SessionManager {
     /// Kill every live child and clear the registry — used on app shutdown so no
     /// orphan `claude` processes survive (#31). Best-effort and infallible
     /// (recovers a poisoned lock); the dropped sessions close their PTYs too.
+    ///
+    /// **Silent** (#354): every generation it kills is flagged `silent` **before any signal**,
+    /// so no `Exited` event is emitted at all. Now that the exit fires promptly (off the
+    /// child's `wait()`, not the reader's EOF) such an event could reach the still-live
+    /// webview, and an agent that exits 0 on SIGHUP would look like a **clean exit** —
+    /// `isCleanExit` would then delete its persisted record and the session would NOT come
+    /// back on the next launch. A quit keeps sessions (#30/#63).
+    ///
+    /// **Bounded** (#354): two sweeps with **one** shared grace, rather than portable-pty's
+    /// ~200ms-per-child serial kill (10 agents ⇒ a ~2s shutdown stall). Deliberately does not
+    /// reuse `kill_now`, whose escalation thread might not survive process exit — that would
+    /// leave orphans.
     pub fn kill_all(&self) {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for (_, session) in sessions.drain() {
-            if let Ok(mut child) = session.child.lock() {
-                let _ = child.kill();
+        let sessions: Vec<Session> = {
+            let mut map = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            map.drain().map(|(_, session)| session).collect()
+        };
+        for session in &sessions {
+            session.exit.silent.store(true, Ordering::SeqCst);
+        }
+        // Sweep 1: hang up everything (unix: each child's whole process group; Windows:
+        // `TerminateProcess` on the direct child, exactly as before).
+        for session in &sessions {
+            #[cfg(unix)]
+            hangup_group(session.pid);
+            #[cfg(windows)]
+            if let Ok(mut killer) = session.killer.lock() {
+                let _ = killer.kill();
+            }
+        }
+        // Sweep 2 (unix): ONE shared grace, then SIGKILL any survivor, so no `claude` / MCP
+        // child is orphaned (#31).
+        #[cfg(unix)]
+        {
+            std::thread::sleep(Duration::from_millis(SHUTDOWN_GRACE_MS));
+            for session in &sessions {
+                kill_group(session.pid);
             }
         }
         if let Ok(mut map) = self.activity.lock() {
@@ -800,6 +892,13 @@ impl SessionManager {
     #[cfg(all(test, unix))]
     pub fn session_count(&self) -> usize {
         self.lock_sessions().map(|s| s.len()).unwrap_or(0)
+    }
+
+    /// A session's child pid — on unix also its **process-group id** (#354). Used only by the
+    /// unix PTY tests, to assert the whole group is gone after an exit / a kill.
+    #[cfg(all(test, unix))]
+    pub fn session_pid(&self, id: &str) -> Option<u32> {
+        self.lock_sessions().ok()?.get(id)?.pid
     }
 
     /// Spawn an arbitrary program in a PTY with a generated id (test helper). Not
@@ -891,9 +990,12 @@ impl SessionManager {
             cmd.arg(arg);
         }
         cmd.cwd(cwd);
-        // Inherit the parent environment so the child can resolve PATH etc.,
-        // then make sure it has a sensible TERM for the TUI.
-        for (key, value) in std::env::vars_os() {
+        // Inherit the parent environment so the child can resolve PATH etc. — with the
+        // AppImage-injected vars scrubbed out on Linux (#350; a byte-for-byte no-op on
+        // macOS/Windows and outside an AppImage) — then make sure it has a sensible TERM
+        // for the TUI. `CommandBuilder` starts from an empty env set, so a var the scrub
+        // omits is genuinely absent from the child.
+        for (key, value) in crate::child_env::child_env_vars() {
             cmd.env(key, value);
         }
         // Give the child the **restored** login-shell PATH (#345/#360) rather than this
@@ -925,7 +1027,14 @@ impl SessionManager {
             .map_err(|e| SessionError::Io(e.to_string()))?;
 
         let scrollback = Arc::new(Mutex::new(Scrollback::new(SCROLLBACK_CAP)));
-        let child = Arc::new(Mutex::new(child));
+        // The child is **owned by the exit waiter** (#354), which blocks in `wait()` and is the
+        // single emitter of `Exited`. The kill paths keep only a cloned *killer* (a signalling
+        // handle portable-pty hands out for exactly this split) and the pid — on unix also the
+        // **process-group id**, since portable-pty's unix spawn `setsid()`s the child.
+        let pid = child.process_id();
+        let killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>> =
+            Arc::new(Mutex::new(child.clone_killer()));
+        let exit = Arc::new(ExitState::default());
         // Wrap the writer + master in per-session locks (#260) so blocking writes /
         // resizes never hold the global `sessions` map lock.
         let writer = Arc::new(Mutex::new(writer));
@@ -946,22 +1055,36 @@ impl SessionManager {
 
         let reader_handle = std::thread::spawn({
             let id = id.clone();
-            let child = Arc::clone(&child);
             let scrollback = Arc::clone(&scrollback);
             let activity = Arc::clone(&self.activity);
+            let state = Arc::clone(&activity_state);
+            let exit = Arc::clone(&exit);
+            let events = events.clone();
             let base = self.base;
             move || {
                 reader_loop(
                     id,
                     reader,
-                    &child,
                     &scrollback,
                     &events,
-                    &activity_state,
+                    &state,
                     base,
                     &activity,
+                    &exit,
                 )
             }
+        });
+
+        // The exit waiter (#354) owns the `Child` and blocks in `wait()`, so the `Exited` event
+        // is driven by the agent's process actually terminating rather than by the PTY reader
+        // hitting EOF — which on unix only happens once **every** holder of the slave fd (an MCP
+        // server, a tool child) is gone, and so used to delay the exit by seconds.
+        let waiter_handle = std::thread::spawn({
+            let id = id.clone();
+            let exit = Arc::clone(&exit);
+            let state = Arc::clone(&activity_state);
+            let activity = Arc::clone(&self.activity);
+            move || exit_waiter(id, child, pid, exit, events, state, activity)
         });
 
         let session = Session {
@@ -969,11 +1092,28 @@ impl SessionManager {
             cwd: cwd.to_path_buf(),
             master,
             writer,
-            child,
+            killer,
+            pid,
+            exit,
             scrollback,
             _reader: reader_handle,
+            _waiter: waiter_handle,
         };
-        self.lock_sessions()?.insert(id.clone(), session);
+        // A same-id respawn (Restart, #63) supersedes the previous PTY generation. Silence it
+        // (its late exit must never be attributed to the fresh session — the frontend consumes
+        // an `intentionalKills` flag exactly once) and make sure it is really dead, so a stale
+        // generation can't leak a live child. Normally it exited long ago and this is a no-op.
+        let previous = self.lock_sessions()?.insert(id.clone(), session);
+        if let Some(previous) = previous {
+            previous.exit.silent.store(true, Ordering::SeqCst);
+            // Only signal a generation that is still running. In the normal Restart case the old
+            // child is long dead and already reaped — and once its group is empty its pid may
+            // have been recycled, so signalling it would be the one way `killpg` could reach a
+            // process that isn't ours. Its waiter has already done any descendant cleanup.
+            if !previous.exit.reaped.load(Ordering::SeqCst) {
+                kill_now(&previous);
+            }
+        }
 
         // Kick off a title re-read burst (#169) the moment the session is registered,
         // so a fresh agent's first `ai-title` — and a resumed/forked session's
@@ -1062,18 +1202,25 @@ fn consume_report(bytes: &[u8]) -> Option<usize> {
     }
 }
 
-/// Reads a session's PTY until it closes, pushing bytes to scrollback and the
-/// event channel, then emits the final exit code.
+/// Reads a session's PTY until it closes, pushing bytes to scrollback and the event channel.
+///
+/// It no longer emits the `Exited` event (#354): the PTY master only reports EOF once **every**
+/// holder of the slave fd is gone — including claude's subprocesses (MCP servers, tool children)
+/// — so an exit derived from it arrived seconds late, or not at all. The session's
+/// [`exit_waiter`] is now the **sole** emitter (exactly one `Exited` per PTY generation, which
+/// the frontend's consume-once `intentionalKills` bookkeeping relies on). All this loop owes the
+/// waiter is the `reader_done` flag, set **after** its last `Output` has been sent, so trailing
+/// output still precedes the exit.
 #[allow(clippy::too_many_arguments)]
 fn reader_loop(
     id: String,
     mut reader: Box<dyn Read + Send>,
-    child: &Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     scrollback: &Arc<Mutex<Scrollback>>,
     events: &Sender<SessionEvent>,
     state: &Arc<ActivityState>,
     base: Instant,
     activity: &Activity,
+    exit: &Arc<ExitState>,
 ) {
     let mut buf = [0u8; READ_CHUNK];
     loop {
@@ -1105,7 +1252,7 @@ fn reader_loop(
                     })
                     .is_err()
                 {
-                    return; // receiver dropped (app shutting down)
+                    break; // receiver dropped (app shutting down)
                 }
             }
         }
@@ -1113,17 +1260,149 @@ fn reader_loop(
 
     // Stop tracking activity — but only if the map still points to *our* atomic
     // (a restart with the same id may have replaced it; don't drop the new one).
+    forget_activity(activity, &id, state);
+
+    // Every `Output` for this generation has now been sent, so the waiter may emit `Exited`
+    // without racing ahead of trailing output (#354). This is also how the waiter learns that
+    // the PTY slave is finally free — if it stays unset, descendants are still holding it open.
+    exit.reader_done.store(true, Ordering::SeqCst);
+}
+
+/// Stop tracking a session's activity stamps — but only if the map still points at **our**
+/// atomic (a Restart under the same id may already have replaced it; don't drop the new one).
+/// Idempotent, and called from both the reader loop and the exit waiter (#354).
+fn forget_activity(activity: &Activity, id: &str, state: &Arc<ActivityState>) {
     if let Ok(mut map) = activity.lock() {
-        if matches!(map.get(&id), Some(a) if Arc::ptr_eq(a, state)) {
-            map.remove(&id);
+        if matches!(map.get(id), Some(a) if Arc::ptr_eq(a, state)) {
+            map.remove(id);
+        }
+    }
+}
+
+/// Poll `flag` for up to `ms`, returning whether it became set (#354). Used to wait — bounded —
+/// on the reader's EOF and on the child being reaped, without dragging in a condvar.
+fn wait_flag(flag: &AtomicBool, ms: u64) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    loop {
+        if flag.load(Ordering::SeqCst) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(EXIT_POLL_MS));
+    }
+}
+
+/// Best-effort SIGHUP to everything still running under this session's PTY (#354).
+///
+/// Unix: the child's whole **process group**. portable-pty `setsid()`s the child at spawn, so
+/// `pgid == pid` and the group contains exactly its own descendants (claude's MCP servers / tool
+/// children) — never anything else of ours. Safe even after the leader has been reaped: POSIX
+/// keeps a pid reserved while it is still a live pgid, so the id cannot have been recycled while
+/// any group member lives.
+#[cfg(unix)]
+fn hangup_group(pid: Option<u32>) {
+    if let Some(pid) = pid.filter(|p| *p > 1) {
+        unsafe { libc::killpg(pid as libc::pid_t, libc::SIGHUP) };
+    }
+}
+
+/// Windows: a no-op — the ConPTY kill path is deliberately unchanged (#354). The direct child is
+/// terminated by `ChildKiller::kill()` (`TerminateProcess`), exactly as before; there is no job
+/// object / process-tree kill.
+#[cfg(windows)]
+fn hangup_group(_pid: Option<u32>) {}
+
+/// Best-effort SIGKILL to the session's whole process group — the escalation after
+/// [`hangup_group`] when the agent (or one of its descendants) ignored the hangup (#354). Same
+/// unix-only pgid semantics; see [`hangup_group`].
+#[cfg(unix)]
+fn kill_group(pid: Option<u32>) {
+    if let Some(pid) = pid.filter(|p| *p > 1) {
+        unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+    }
+}
+
+/// Windows: a no-op, for the same reason as [`hangup_group`] (#354).
+#[cfg(windows)]
+fn kill_group(_pid: Option<u32>) {}
+
+/// Signal a session's child — and, on unix, its whole **process group** — to die, **without
+/// blocking the caller** (#354).
+///
+/// `kill_session` runs inside a Tauri command (and inside the #294 recurring rotation), and
+/// portable-pty's unix `Child::kill()` sends SIGHUP to the *direct pid only*, then sleeps up to
+/// ~200ms before escalating — a stall the user felt as "exit is slow", while claude's
+/// descendants survived as orphans (#31) and kept the PTY slave open. Here the SIGHUP goes out
+/// to the whole group immediately and the SIGKILL escalation runs on a short-lived detached
+/// thread. The `Exited` event is still emitted (exactly once) by the session's exit waiter when
+/// the child actually dies, so the frontend's `intentionalKills` bookkeeping is unchanged.
+fn kill_now(session: &Session) {
+    #[cfg(unix)]
+    if session.pid.is_some() {
+        hangup_group(session.pid);
+        let pid = session.pid;
+        let exit = Arc::clone(&session.exit);
+        std::thread::spawn(move || {
+            if !wait_flag(&exit.reaped, KILL_GRACE_MS) {
+                // The child ignored SIGHUP → force it, group-wide.
+                kill_group(pid);
+            }
+        });
+        return;
+    }
+    // Windows (and the pathological unix child with no pid): portable-pty's killer —
+    // `TerminateProcess` on Windows, i.e. exactly the pre-#354 behavior.
+    if let Ok(mut killer) = session.killer.lock() {
+        let _ = killer.kill();
+    }
+}
+
+/// Owns a session's `Child` and turns its **real termination** into the `Exited` event (#354).
+///
+/// Previously the exit was derived from the reader's EOF — but on unix a PTY master only EOFs
+/// once **every** holder of the slave fd is gone, and claude's subprocesses (MCP servers, tool
+/// children) inherit it. So an agent that had already exited kept its card alive for seconds
+/// ("instances exit slow"). `wait()` returns the moment the direct child dies, regardless of
+/// those descendants.
+#[allow(clippy::too_many_arguments)]
+fn exit_waiter(
+    id: String,
+    mut child: Box<dyn Child + Send + Sync>,
+    pid: Option<u32>,
+    exit: Arc<ExitState>,
+    events: Sender<SessionEvent>,
+    state: Arc<ActivityState>,
+    activity: Activity,
+) {
+    // 1. Block until the agent's own process terminates, and reap it. Same code mapping as
+    //    before: portable-pty maps a **signal death to exit code 1**, never 0 — so a killed
+    //    agent can never be misread as a clean code-0 exit and have its record forgotten (#63).
+    let code = child.wait().ok().map(|status| status.exit_code() as i32);
+    exit.reaped.store(true, Ordering::SeqCst);
+
+    // 2. Give the reader a bounded moment to drain the tail and hit EOF, so trailing output
+    //    still precedes `Exited`. If it doesn't EOF, descendants are still holding the PTY slave
+    //    open: hang up the whole group, then escalate. (Windows: both signals are no-ops, so
+    //    only the bounded wait applies.)
+    if !wait_flag(&exit.reader_done, EXIT_DRAIN_MS) {
+        hangup_group(pid);
+        if !wait_flag(&exit.reader_done, EXIT_HUP_GRACE_MS) {
+            kill_group(pid);
         }
     }
 
-    let code = child
-        .lock()
-        .ok()
-        .and_then(|mut child| child.wait().ok())
-        .map(|status| status.exit_code() as i32);
+    // 3. Stop tracking activity (idempotent with the reader's own call, and guarded so a Restart
+    //    under the same id keeps its fresh state).
+    forget_activity(&activity, &id, &state);
+
+    // 4. A silenced generation — app shutdown via `kill_all`, or a stale same-id respawn — emits
+    //    nothing. On shutdown the persisted records MUST survive so sessions auto-resume on the
+    //    next boot (#30/#63).
+    if exit.silent.load(Ordering::SeqCst) {
+        return;
+    }
     let _ = events.send(SessionEvent::Exited { id, code });
 }
 
@@ -2061,6 +2340,238 @@ mod tests {
         ));
     }
 
+    // --- Fast, reliable exit + process-group kill (#354) ---
+
+    /// True once **nothing** is left in `pid`'s process group: `killpg(pgid, 0)` — the
+    /// existence probe, which delivers no signal — fails (ESRCH). On unix `pid` is also the
+    /// pgid, because portable-pty `setsid()`s the child at spawn.
+    #[cfg(unix)]
+    fn group_gone(pid: u32) -> bool {
+        unsafe { libc::killpg(pid as libc::pid_t, 0) != 0 }
+    }
+
+    /// Poll `pred` until it holds or `timeout` elapses; returns whether it held.
+    #[cfg(unix)]
+    fn wait_until(mut pred: impl FnMut() -> bool, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if pred() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    /// The stand-in for a lingering claude subprocess (an MCP server / tool child): a
+    /// backgrounded 30s `sleep` that **inherits the PTY slave** and **ignores SIGHUP** (an
+    /// ignored disposition survives fork+exec).
+    ///
+    /// The `trap` is load-bearing, not paranoia: when a session leader holding a controlling
+    /// terminal dies, the kernel SIGHUPs its foreground process group — so a *plain* background
+    /// child is killed for us and the master EOFs anyway, and a test using one would pass even
+    /// against the pre-#354 code (verified). A descendant that shrugs the hangup off is the
+    /// reported case: the master then never EOFs at all (verified), the old EOF-driven `Exited`
+    /// never arrives, and the pid-only kill leaves it orphaned (#31).
+    #[cfg(unix)]
+    const STUBBORN_DESCENDANT: &str = r#"(trap "" HUP; sleep 30) &"#;
+
+    /// A PTY master only reports EOF once **every** holder of the slave fd is gone — and
+    /// claude's subprocesses inherit it. So the old EOF-driven exit kept an already-exited
+    /// agent's card alive for seconds ("instances exit slow"). Here `sh` leaves a
+    /// [`STUBBORN_DESCENDANT`] behind and exits 0: the `Exited` event must still arrive promptly
+    /// (#354 — pre-fix the reader stayed blocked and it never came), still **after** the
+    /// trailing output, and the descendant must be cleaned up rather than orphaned (#31).
+    #[cfg(unix)]
+    #[test]
+    fn exit_is_reported_even_when_descendants_hold_the_pty() {
+        let (mgr, rx) = manager();
+        let script = format!("{STUBBORN_DESCENDANT} printf bye; exit 0");
+        let info = mgr
+            .spawn_program("sh", &["-c", &script], &tmp(), None)
+            .expect("spawn sh");
+        let pid = mgr.session_pid(&info.id).expect("session pid");
+
+        let started = Instant::now();
+        let mut output = Vec::new();
+        let exit = loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(SessionEvent::Output { bytes, .. }) => output.extend(bytes),
+                Ok(SessionEvent::Exited { code, .. }) => break code,
+                Ok(_) => {}
+                Err(_) => panic!("timed out waiting for the exit event"),
+            }
+        };
+        assert_eq!(exit, Some(0));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the exit must not wait on the lingering descendant"
+        );
+        // Trailing output still precedes `Exited` (the waiter waits on the reader's EOF).
+        assert!(String::from_utf8_lossy(&output).contains("bye"));
+        // …and the descendant that was holding the slave open is hung up, not orphaned (#31).
+        assert!(
+            wait_until(|| group_gone(pid), Duration::from_secs(3)),
+            "the child's process group must be gone"
+        );
+    }
+
+    /// `kill_session` must return **immediately** (portable-pty's `Child::kill()` sleeps ~200ms
+    /// before escalating, inside the Tauri command), free the slot, and take out the child's
+    /// **whole process group** — pre-#354 it SIGHUPed the direct pid only, so a
+    /// [`STUBBORN_DESCENDANT`] survived as an orphan (#31). It emits **exactly one** `Exited`
+    /// (the frontend consumes its `intentionalKills` flag once), whose code is **never**
+    /// `Some(0)`: portable-pty maps a signal death to 1, so `isCleanExit` can never auto-forget
+    /// a killed agent's record (#63).
+    #[cfg(unix)]
+    #[test]
+    fn kill_session_is_prompt_and_kills_the_whole_group() {
+        let (mgr, rx) = manager();
+        let script = format!("{STUBBORN_DESCENDANT} cat");
+        let info = mgr
+            .spawn_program("sh", &["-c", &script], &tmp(), None)
+            .expect("spawn sh");
+        let pid = mgr.session_pid(&info.id).expect("session pid");
+        // Let the shell get as far as backgrounding the `sleep`.
+        std::thread::sleep(Duration::from_millis(300));
+
+        let started = Instant::now();
+        mgr.kill_session(&info.id).expect("kill");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "kill_session must not block the caller (took {elapsed:?})"
+        );
+        assert_eq!(mgr.session_count(), 0);
+        assert!(
+            wait_until(|| group_gone(pid), Duration::from_secs(3)),
+            "the child AND its backgrounded descendant must be gone"
+        );
+
+        let mut exits = Vec::new();
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        while Instant::now() < deadline {
+            if let Ok(SessionEvent::Exited { code, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                exits.push(code);
+            }
+        }
+        assert_eq!(exits.len(), 1, "exactly one Exited per PTY generation");
+        assert_ne!(
+            exits[0],
+            Some(0),
+            "a killed agent must never read as a clean (record-deleting) exit"
+        );
+    }
+
+    /// App shutdown (`kill_all`) must be **silent** (#354): now that the exit fires promptly, an
+    /// `Exited` could reach the still-live webview, and an agent that exits 0 on SIGHUP would
+    /// read as a clean exit — `isCleanExit` would delete its persisted record and the session
+    /// would NOT come back on the next launch. A quit keeps sessions (#30/#63). It must still
+    /// empty the registry and leave no orphaned process group (#31).
+    #[cfg(unix)]
+    #[test]
+    fn kill_all_is_silent_and_leaves_no_process_group() {
+        let (mgr, rx) = manager();
+        let script = format!("{STUBBORN_DESCENDANT} cat");
+        let one = mgr
+            .spawn_program("sh", &["-c", &script], &tmp(), None)
+            .expect("spawn one");
+        let two = mgr
+            .spawn_program("sh", &["-c", &script], &tmp(), None)
+            .expect("spawn two");
+        let pid_one = mgr.session_pid(&one.id).expect("pid one");
+        let pid_two = mgr.session_pid(&two.id).expect("pid two");
+        std::thread::sleep(Duration::from_millis(300));
+
+        mgr.kill_all();
+        assert_eq!(mgr.session_count(), 0);
+        assert!(
+            wait_until(
+                || group_gone(pid_one) && group_gone(pid_two),
+                Duration::from_secs(3)
+            ),
+            "no orphaned process group may survive a quit"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            if let Ok(SessionEvent::Exited { .. }) = rx.recv_timeout(Duration::from_millis(100)) {
+                panic!("kill_all must emit no Exited — the persisted records would be deleted");
+            }
+        }
+    }
+
+    /// The standing regression guard for the bounded-parallel boot resume (#355): four
+    /// threads spawn through **one** `SessionManager` at once. Every session must register
+    /// under its own id and stream its own `Output` + a final `Exited` — no lost, doubled,
+    /// or cross-wired events, no wedged reader thread. (Concurrent spawns are safe because
+    /// `spawn_with_id` holds the map lock only for the O(1) insert (#260) and `portable-pty`
+    /// cloexecs both pty fds and closes every fd ≥ 3 in the child's `pre_exec`, so one
+    /// thread's fresh pty can never leak into another thread's `fork`.)
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_spawns_register_every_session() {
+        const N: usize = 4;
+        let (tx, rx) = mpsc::channel();
+        let mgr = Arc::new(SessionManager::new(tx));
+
+        let spawns: Vec<_> = (0..N)
+            .map(|_| {
+                let mgr = Arc::clone(&mgr);
+                std::thread::spawn(move || {
+                    mgr.spawn_program("sh", &["-c", "printf 'hi-from-pty'"], &tmp(), None)
+                        .expect("concurrent spawn sh")
+                        .id
+                })
+            })
+            .collect();
+        let ids: Vec<String> = spawns
+            .into_iter()
+            .map(|handle| handle.join().expect("spawn thread"))
+            .collect();
+
+        let unique: HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), N, "each spawn must get its own id");
+        assert_eq!(mgr.session_count(), N, "every session must be registered");
+
+        // Drain until every session has exited (or we time out), collecting per-id output.
+        let mut output: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut exited: HashSet<String> = HashSet::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while exited.len() < N && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(SessionEvent::Output { id, bytes, .. }) => {
+                    output.entry(id).or_default().extend(bytes);
+                }
+                Ok(SessionEvent::Exited { id, code }) => {
+                    assert_eq!(code, Some(0), "clean exit for {id}");
+                    assert!(exited.insert(id), "a session exited twice");
+                }
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        assert_eq!(
+            exited.len(),
+            N,
+            "timed out waiting for every session to exit"
+        );
+        for id in &ids {
+            assert!(exited.contains(id), "no Exited event for {id}");
+            let bytes = output.get(id).cloned().unwrap_or_default();
+            assert!(
+                String::from_utf8_lossy(&bytes).contains("hi-from-pty"),
+                "no output for {id}"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn busy_state_tracks_output_then_goes_idle() {
@@ -2433,5 +2944,90 @@ mod tests {
     #[test]
     fn coalesce_empty_is_empty() {
         assert_eq!(coalesce_output_events(vec![]), vec![]);
+    }
+
+    // --- Output hot-path throughput benchmark (#358) ---
+
+    /// Throughput of the PTY output hot path — the only CPU-bound work between a `read()`
+    /// on the PTY and the `session://output` emit: [`Scrollback::push`] (VecDeque churn
+    /// under the 256 KB cap), [`coalesce_output_events`] (#346's contiguous-run merge), and
+    /// `commands::encode_output` (#261's base64). Not a correctness test and not a
+    /// regression gate — it exists so the `[profile.release]` `opt-level` choice (`"s"` vs
+    /// `3`, #358) stays reproducible instead of being an opinion. `#[ignore]`d because it is
+    /// a measurement, not an assertion (and it churns 64 MB three times).
+    ///
+    /// Run it against the profile under test:
+    ///
+    /// ```text
+    /// cargo test --manifest-path src-tauri/Cargo.toml --release \
+    ///   -- --ignored --nocapture bench_output_hot_path
+    /// ```
+    ///
+    /// (`cargo test --release` builds the test with the `bench` profile, which inherits
+    /// `[profile.release]`; run it ~5× and take the median per stage.) The decision rule
+    /// #358 applied: keep the size-oriented `opt-level = "s"` unless it is >15% slower on
+    /// the aggregate and some stage drops below ~200 MB/s — a busy `claude` TUI repaint
+    /// storm produces single-digit MB/s, so anything at ≥200 MB/s is nowhere near a
+    /// bottleneck.
+    #[test]
+    #[ignore]
+    fn bench_output_hot_path() {
+        /// Synthetic PTY output pushed through each stage.
+        const TOTAL: usize = 64 * 1024 * 1024;
+        /// 8 KB reads, exactly like `reader_loop`.
+        const CHUNKS: usize = TOTAL / READ_CHUNK;
+        /// Events per coalesce batch — a plausible forwarder drain (32 × 8 KB = 256 KB, so
+        /// the merged run also hits `COALESCE_MAX_BYTES` and the flush path is exercised).
+        const BATCH: usize = 32;
+
+        // A claude TUI repaint is mostly ESC sequences + ASCII; vary the bytes so nothing
+        // folds into a constant.
+        let chunk: Vec<u8> = (0..READ_CHUNK).map(|i| (i % 251) as u8).collect();
+
+        // 1) Scrollback::push — the reader thread's per-chunk write under the 256 KB cap.
+        let mut sb = Scrollback::new(SCROLLBACK_CAP);
+        let t = std::time::Instant::now();
+        for _ in 0..CHUNKS {
+            sb.push(&chunk);
+        }
+        let push = t.elapsed();
+
+        // 2) coalesce_output_events — contiguous same-session runs, so the merge is taken.
+        let batches = CHUNKS / BATCH;
+        let t = std::time::Instant::now();
+        let mut merged = 0usize;
+        for b in 0..batches {
+            let events: Vec<SessionEvent> = (0..BATCH)
+                .map(|i| {
+                    let n = (b * BATCH + i + 1) as u64;
+                    SessionEvent::Output {
+                        id: "bench".to_string(),
+                        bytes: chunk.clone(),
+                        offset: n * READ_CHUNK as u64,
+                    }
+                })
+                .collect();
+            merged += coalesce_output_events(events).len();
+        }
+        let coalesce = t.elapsed();
+
+        // 3) encode_output — the base64 the forwarder puts on the wire.
+        let t = std::time::Instant::now();
+        let mut encoded = 0usize;
+        for _ in 0..CHUNKS {
+            encoded += crate::commands::encode_output(&chunk).len();
+        }
+        let encode = t.elapsed();
+
+        let mb = TOTAL as f64 / (1024.0 * 1024.0);
+        let rate = |d: std::time::Duration| mb / d.as_secs_f64();
+        println!(
+            "bench_output_hot_path: {mb:.0} MB | push {push:?} ({:.0} MB/s) | \
+             coalesce {coalesce:?} ({:.0} MB/s, {merged} events out) | \
+             encode {encode:?} ({:.0} MB/s, {encoded} b64 bytes)",
+            rate(push),
+            rate(coalesce),
+            rate(encode),
+        );
     }
 }

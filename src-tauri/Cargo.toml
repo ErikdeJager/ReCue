@@ -52,5 +52,58 @@ png = "0.18.1"
 # (transitive); pulling it direct adds no new compile. Pure-Rust, platform-neutral.
 base64 = "0.22"
 
+# Kill an agent's whole PTY **process group** on unix (#354). portable-pty's unix spawn
+# already makes the child a session/process-group leader (`setsid()`), so `killpg(child_pid,
+# …)` reaches claude's MCP servers / tool children and nothing else. libc is already in the
+# dependency tree (via portable-pty), so this adds no new compile; Windows never sees it —
+# its kill path stays `ChildKiller::kill()` → `TerminateProcess`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [lints.clippy]
 all = "warn"
+
+# Release profile (#358). Cargo's stock `release` defaults (no LTO, 16 codegen units, an
+# unstripped symbol table) shipped a needlessly large binary — which every bundle pays for,
+# and which the Linux **AppImage pays for at every launch**: its squashfs image is
+# decompressed / paged in on cold start (a known Tauri+AppImage cost —
+# tauri-apps/tauri discussions #11157). These are Tauri's standard size recommendations
+# MINUS `panic = "abort"`, which is deliberately rejected (see the block comment below).
+#
+# Only `release.yml` (a version-bump push to `main`) pays the extra build time: the PR gate
+# (`ci.yml`) runs clippy / `cargo test` / `llvm-cov` on the dev+test profiles, and
+# `npm run tauri dev` uses the dev profile — neither is affected.
+[profile.release]
+# Cross-crate ("fat") LTO: inline + dead-code-eliminate across the whole dependency graph
+# (tauri, wry, portable-pty, ureq/rustls, serde). The biggest win after `strip`. It costs
+# link time and link-time memory — if a release leg ever OOMs or the pipeline gets painful,
+# drop to `lto = "thin"`, which keeps most of the win for roughly a third of the link cost.
+lto = true
+# One codegen unit: no cross-unit duplication, best inlining, smallest code.
+codegen-units = 1
+# Optimize for size. The only CPU-bound work in ReCue's hot path is the PTY output pipeline
+# (`Scrollback::push` → `coalesce_output_events` → `commands::encode_output`), which runs at
+# hundreds of MB/s while a busy `claude` TUI repaint storm produces single-digit MB/s — so
+# there is no throughput to lose here, and size is what this profile is buying. The
+# `#[ignore]`d `pty::tests::bench_output_hot_path` measures those three stages if anyone
+# wants to revisit `"s"` vs `3`:
+#   cargo test --manifest-path src-tauri/Cargo.toml --release \
+#     -- --ignored --nocapture bench_output_hot_path
+opt-level = "s"
+# Drop the symbol table from the shipped artifact. `debug` is already false in release, and
+# there is no crash reporter / symbolication pipeline that depends on symbols. On MSVC debug
+# info lives in a PDB that release never emits, so this is near-free there; on macOS the
+# strip happens at link time, long before the bundler code-signs, so Hardened Runtime /
+# entitlements / notarization (#292/#314/#321) are unaffected.
+strip = true
+
+# `panic` is DELIBERATELY LEFT AT THE DEFAULT ("unwind"). **Do not set `panic = "abort"`.**
+# ReCue is a supervisor of many long-lived PTY sessions, driven by always-running threads:
+# the per-session reader (`pty.rs reader_loop`), the busy/idle monitor, the title worker, the
+# event forwarder, and the schedule/recurring poll loop (`lib.rs`). With unwinding, a panic
+# in any of them — including one thrown from inside a dependency — kills **only that thread**;
+# the process, every other live agent, and every detached canvas window survive. The backend
+# is written for exactly that: there is not one `lock().unwrap()` in the tree — every mutex
+# take handles a poisoned lock explicitly. With `panic = "abort"` the same panic takes the
+# whole app down and every live session with it, in exchange for the *smallest* of the four
+# size levers (unwind tables / landing pads, typically ~5–10%). Not worth it here.
