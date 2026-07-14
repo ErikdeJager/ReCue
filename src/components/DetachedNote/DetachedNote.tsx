@@ -20,7 +20,7 @@ function DetachedNote({ ownerLabel }: { ownerLabel?: string }) {
       {canvasId && (
         <button
           type="button"
-          className={styles.button}
+          className="btn btn-neutral"
           onClick={() => focusCanvasWindow(canvasId)}
         >
           <ExternalLink size={14} strokeWidth={1.5} /> Focus window
