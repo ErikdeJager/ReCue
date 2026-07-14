@@ -3124,3 +3124,18 @@ Ship a native Arch/AUR package (`recue-bin`) + Linux install docs, and gate the 
 - PKGBUILD `depends` start at `webkit2gtk-4.1 gtk3 glibc gcc-libs` and are finalized from the real `ldd` output on the Arch box; no appindicator dep (ReCue ships no tray) unless ldd shows it.
 - The PKGBUILD does NOT hand-edit the `.desktop` entry — it inherits whatever Tauri generates, so Task 362's StartupWMClass fix flows into the AUR package for free.
 - Docs split: a concise README "Install (Linux)" section (AppImage + `fuse2` / `--appimage-extract` vs AUR, and which one self-updates) plus a full `docs/linux-packaging.md` (install matrix, updater rule, maintainer AUR runbook), rather than a packaging/aur/README.md.
+
+## Task 360
+
+Take the login-shell PATH probe off the startup critical path (async probe + fingerprinted cache)
+
+- Chose the safest design over the fastest: the process env is NEVER mutated for PATH (no `set_var` at all). The probe result lands in a `Mutex`+`Condvar` cell in `path_env`; `find_on_path` / `spawn_with_id` / `hidden_command` read that. Rules out the getenv/setenv data race the card flags.
+- The probe thread works from an env SNAPSHOT (SHELL/PATH/HOME/ZDOTDIR) captured on the main thread, so it never calls getenv concurrently with anything.
+- Reordered `run()`: `linux_webkit::apply_webkit_env_workarounds()` (which still `set_var`s) must run BEFORE `path_env::start_probe()` spawns any thread.
+- Two readers, deliberately: `effective_path()` BLOCKS (spawn/lookup path — the correctness gate) while `apply_path()` is NON-blocking (git shell-outs + xdg-open-class helpers), because Tauri v2 runs sync commands on the main thread and a blocking git call would stall the webview — the exact failure this task removes.
+- Cache persists as a backend-internal `path_cache: Option<PathCache>` scalar in `store.rs` (like `sidebar_width`/`repo_order`) — no Tauri command, no frontend change.
+- The cache stores the DISCOVERED login-shell PATH, not the merged one, so no per-launch segment (AppImage `/tmp/.mount_…`) is ever persisted; the merge against the current process PATH is redone every boot.
+- Cache key = `$SHELL` + mtime/presence of the rc files that can set PATH (/etc/profile, /etc/paths(.d), ~/.profile, the zsh/bash/fish rc sets, ZDOTDIR-aware). A stale-fingerprint cache is NOT seeded (readers wait for the probe) rather than optimistically used.
+- A background re-probe republishes in-memory when it differs from the seeded value (later spawns in the same session get the fresh PATH) and rewrites the cache; a failed/timed-out probe never downgrades a good seed.
+- Scope call: `commands.rs`'s `os_open` / `open_url` / `reveal_file_in_finder` / `reveal_file_linux` (and `usage.rs`'s `security`, `lib.rs`'s `tccutil`) are left alone — they launch system binaries always present in the minimal GUI PATH, and skipping them keeps the diff off Task 350's seams.
+- Release-only + Windows no-op preserved exactly (state stays `Inherit` ⇒ `effective_path()` == the process PATH ⇒ byte-for-byte today's behavior in dev and on Windows).
