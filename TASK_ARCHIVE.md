@@ -4794,3 +4794,55 @@ rearchitecture: every dnd-kit listener, context-menu handler, and onClick chain 
   revert the PR (no persisted-data/IPC/schema changes; the 248px default only affects fresh installs/reset).
 
 **Dependencies:** Task 372.
+
+### 375. [x] UI v2 (9/12): Floating chrome I — shared menu primitive (menu.css), all context menus/popovers, New-session popover reskin
+
+Card 9 of the UI v2 reskin epic (spec §10 "Floating chrome" + demo; **no version bump / patch notes**). Every
+anchored floating surface — all right-click context menus, the header/tab dropdown popovers, and the (already
+anchored) New-session popover — gets the one v2 menu look: Base bg, strong hairline, ~10px radius, deep
+`--shadow-menu`, a 130ms .97→1 scale-in, 28px/11.5px items with 13px muted icons and Surface0 hover — with zero
+functionality lost.
+
+**What shipped** (branch `task-375-menu-primitive`, PR
+[#130](https://github.com/ErikdeJager/ReCue/pull/130), merged 2026-07-14 into `ui-rework`):
+
+- **`src/styles/menu.css`** (new, imported once in `main.tsx`) — a **global-class stylesheet primitive** (the 372
+  atoms.css pattern, deliberately *not* a wrapper component): container (min-width 200px, 4px padding, Base bg,
+  `--border-strong`, radius 10, `--shadow-menu`, 130ms .97→1 pop), 28px items (radius 6, `--fs-row`, Surface0
+  hover), 9.5px uppercase letterspaced section labels, hairline separators, danger items (red text, 12% red-tint
+  hover), right-aligned kbd hints and checkable-row check glyphs. Each menu keeps its own positioning/dismissal
+  logic and z-index — only the look classes are shared. A new `src/menu.test.ts` file-content guard pins the
+  contract.
+- **Applied to every owned menu surface** — Sidebar's shared menu CSS (~120 lines of duplicated look deleted):
+  `RowContextMenu` (schedule/recurring/file/kanban/diff/filetree/terminal rows, the ⋯ scheduling menu, the
+  background menu), `AgentContextMenu`, the worktree-header / repo branch-line / repo context menus (whose
+  `files`/`colors`/`checkout` sub-panels inherit the new container); `AgentHeaderMenu` (now animated like the
+  rest); `ViewsMenu`/`ViewsPopover` (their duplicate item/sep CSS deleted); the CanvasTabs **templates menu**; and
+  the **FileTree context menu** (the third duplicated copy of the old look — its form/input sub-styles stay
+  local). In-menu icons resized 14→13 + muted per §10; viewport-clamp margins bumped for the wider 200px
+  min-width.
+- **New-session popover reskin** — keeps its anchored fixed 12px/12px, 300px form; uniform 12px radius (drops the
+  #65 mixed-corner trick — the demo shows uniform), `--shadow-modal`, a **progress-dot row** (6px dots, current
+  step accent, others Surface1; 2 dots for the normal flow, 3 for schedule/recurring; aria-hidden decoration; a
+  #127/#263 skip-folder open shows dot 2 active); crust 28px inputs; recents/branch rows at 30–32px with
+  **Surface0 pre-selection fills** (moving off `--accent-dim` — the accent never encodes selection); the demo's
+  action-row skin (neutral bordered Cancel/Worktree ⌘⏎ left, accent Continue/Start ⏎ right, kbd hints); "+ add
+  branch" goes muted-with-hover. The branch-filter >4 threshold, remote-branches subheader (#180), inline
+  add-branch form (#124), and the branch-step Cancel are all kept (parity over the demo's omissions); the
+  schedule + recurring steps inherit the same skin.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 375)
+
+- **Global-class stylesheet over a wrapper component** — positioning/dismissal stay site-local; smallest diff.
+- **Every existing menu item and order kept** beyond the demo's illustrative sets (Open in canvas, Watch, Pull,
+  View on GitHub, Copy relative path, …); no icons added or removed.
+- ViewsPopover follows the demo layout ("Open a view" label + view items first, "New session here" last after a
+  separator) with deliberately **no ⌘N hint** (⌘N opens the modal; the item instant-spawns — a hint would
+  mislabel).
+- `--shadow-popover` alias kept for the ~20 consumers this card doesn't own (FileSwitcher/GlobalSearch/Settings/
+  modals — cards 10–12); only owned surfaces migrate to `--shadow-menu`/`--shadow-modal`.
+- Menu animation = a 130ms literal (spec band 130–160; `--dur-fast` is 120); reduced-motion rides the existing
+  global killswitch. SkillAutocomplete/FilePicker/FileSwitcher/GlobalSearch internals untouched.
+- Pure CSS/TSX, token-driven — identical on macOS/Windows/Linux. Rollback = revert the PR.
+
+**Dependencies:** Task 372.
