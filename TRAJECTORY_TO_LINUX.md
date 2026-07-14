@@ -178,3 +178,21 @@ latency by definition), Overview terminal virtualization, `[profile.release]` tu
 - [ ] Release AppImage under a busy `claude` TUI (many parallel agents): display updates
       stay smooth and typing stays responsive (coalescing + b64 scrollback in effect);
       scrollback replays correctly after a view switch and after a session Restart.
+
+## 2026-07-14
+
+### Bounded-parallel boot resume (#355)
+
+Boot resume now reconnects persisted sessions **4 at a time** (`src-tauri/src/boot.rs`,
+`RESUME_CONCURRENCY`) over **one** shared snapshot of `~/.claude/projects`
+(`title::ProjectLogIndex`) instead of one-at-a-time with a per-session directory rescan.
+Pure `std::thread` + `std::fs` — no OS-specific code — so Linux inherits it unchanged; the
+only Linux-flavored consideration is that 4 concurrent `fork`/`exec` + reader threads now
+land while WebKitGTK is still doing its first paint (kept small for exactly that reason,
+cf. #346).
+
+### Needs real-box verification (boot resume, #355)
+
+- [ ] On Arch/Ubuntu/Mint with ≥8 persisted agents: every terminal reconnects (visibly faster
+      than before), each shows its own scrollback exactly once (no duplicate/missing output, no
+      stray glyph), no wall of exit toasts, busy dots settle normally.

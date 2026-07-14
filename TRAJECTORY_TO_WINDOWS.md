@@ -956,3 +956,20 @@ returns `true` before touching the event).
   the temp-PNG path exactly once.
 - Re-confirm macOS ⌘V pastes once and Ctrl+V still emits `^V` (gated off), and Linux
   Ctrl+Shift+V native paste is unaffected.
+
+### Bounded-parallel boot resume (#355)
+
+Boot resume now reconnects persisted sessions **4 at a time** (`src-tauri/src/boot.rs`,
+`RESUME_CONCURRENCY`) over **one** shared snapshot of `~/.claude/projects`
+(`title::ProjectLogIndex`, read through the cross-platform `home_dir()` — `%USERPROFILE%` on
+Windows). Pure `std::thread` + `std::fs`, no OS-specific code; concurrent spawns are safe on
+Windows because `portable-pty` passes `bInheritHandles = FALSE` to `CreateProcessW` (the
+ConPTY is handed over via `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`), and `SessionManager` holds
+its map lock only for the O(1) insert (#260). A unix-gated concurrent-spawn test
+(`pty::tests::concurrent_spawns_register_every_session`) is the standing regression guard.
+
+#### Still needs manual Windows verification (#355)
+
+- [ ] With ≥8 persisted agents, relaunch: 4 **concurrent ConPTY creations** are the
+      Windows-specific thing to eyeball — every terminal must reconnect with its own scrollback
+      exactly once (no cross-wired/garbled output, no stray glyph, no wall of exit toasts).
