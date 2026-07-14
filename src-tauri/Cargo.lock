@@ -2981,6 +2981,7 @@ version = "1.2.1"
 dependencies = [
  "base64 0.22.1",
  "glib",
+ "libc",
  "png 0.18.1",
  "portable-pty",
  "serde",

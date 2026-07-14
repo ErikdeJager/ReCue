@@ -1,3 +1,5 @@
+import { lazy, type ReactNode, Suspense } from "react";
+
 import { useSessionOwners } from "../../ownership";
 import { useStore } from "../../store";
 import type { CanvasContent } from "../../types";
@@ -5,15 +7,39 @@ import { ownedHere } from "../../windowContext";
 import { sameItem } from "../Canvas/canvasDrop";
 import TemplatePendingPanel from "../Canvas/TemplatePendingPanel";
 import DetachedNote from "../DetachedNote/DetachedNote";
-import DiffInspector from "../DiffInspector/DiffInspector";
-import FileTree from "../FileTree/FileTree";
-import FileViewer from "../FileViewer/FileViewer";
-import KanbanPanel from "../Kanban/KanbanPanel";
 import MaximizedNote from "../MaximizedNote/MaximizedNote";
 import RecurringPanel from "../RecurringPanel/RecurringPanel";
 import ScheduledPanel from "../ScheduledPanel/ScheduledPanel";
 import Terminal from "../Terminal/Terminal";
 import styles from "./ItemContent.module.css";
+
+// The four content panels that are NOT the app's first paint (terminals are) — and that
+// carry the whole markdown + Prism stack (react-markdown / remark-gfm / micromark / hast /
+// prismjs, ~221 kB) plus their own weight. Loading them through `import()` keeps every byte
+// of that out of the first-paint graph (#356); each is fetched the moment a panel of that
+// kind actually renders, and warmed on idle by `src/prefetch.ts` so it is already in memory.
+// Mermaid (#254) stays a further lazy chunk *inside* FileViewer — a markdown file with no
+// ```mermaid fence still never fetches it.
+const DiffInspector = lazy(() => import("../DiffInspector/DiffInspector"));
+const FileTree = lazy(() => import("../FileTree/FileTree"));
+const FileViewer = lazy(() => import("../FileViewer/FileViewer"));
+const KanbanPanel = lazy(() => import("../Kanban/KanbanPanel"));
+
+/**
+ * One Suspense boundary per lazy branch — **never** one around the whole component.
+ * A suspending boundary hides its already-rendered children with `display: none`; a
+ * pooled xterm (#18) inside one would become un-measurable and misfit on resume. Wrapping
+ * only the four lazy panels means a terminal is never inside a boundary. The fallback
+ * reuses the existing muted `.placeholder` style and FileViewer's own "Loading…" copy, so
+ * a restored file/diff/kanban/tree panel looks exactly as it does today.
+ */
+function PanelSuspense({ children }: { children: ReactNode }) {
+  return (
+    <Suspense fallback={<div className={styles.placeholder}>Loading…</div>}>
+      {children}
+    </Suspense>
+  );
+}
 
 /**
  * The single source of truth for rendering an item's **live content** from a
@@ -74,28 +100,40 @@ function ItemContent({
   }
   if (content.kind === "file" && content.repoPath && content.file) {
     return (
-      <FileViewer
-        repoPath={content.repoPath}
-        file={content.file}
-        active={active}
-      />
+      <PanelSuspense>
+        <FileViewer
+          repoPath={content.repoPath}
+          file={content.file}
+          active={active}
+        />
+      </PanelSuspense>
     );
   }
   if (content.kind === "kanban" && content.repoPath && content.file) {
     return (
-      <KanbanPanel
-        repoPath={content.repoPath}
-        file={content.file}
-        active={active}
-      />
+      <PanelSuspense>
+        <KanbanPanel
+          repoPath={content.repoPath}
+          file={content.file}
+          active={active}
+        />
+      </PanelSuspense>
     );
   }
   if (content.kind === "diff" && content.repoPath) {
-    return <DiffInspector repoPath={content.repoPath} active={active} />;
+    return (
+      <PanelSuspense>
+        <DiffInspector repoPath={content.repoPath} active={active} />
+      </PanelSuspense>
+    );
   }
   if (content.kind === "filetree" && content.repoPath) {
     // Stateless repo data (#167), like diff — no ownership/PTY guard needed.
-    return <FileTree repoPath={content.repoPath} />;
+    return (
+      <PanelSuspense>
+        <FileTree repoPath={content.repoPath} />
+      </PanelSuspense>
+    );
   }
   if (content.kind === "scheduled" && content.scheduleId) {
     return <ScheduledPanel scheduleId={content.scheduleId} />;
