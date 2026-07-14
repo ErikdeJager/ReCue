@@ -2209,6 +2209,8 @@ function Sidebar() {
   // In-flight clones (#299): each shows a transient, non-draggable "phantom" folder +
   // progress bar in the repo list (and a dimmed indicator in the collapsed rail).
   const cloningRepos = useStore((s) => s.cloningRepos);
+  // The boot payload has landed (#352) — gates the "No repositories yet." hint.
+  const booted = useStore((s) => s.booted);
   // The single, coalesced git-refresh entry point (#359) — supersedes the five separate
   // refresh actions this component used to fire in one volley.
   const refreshRepoGit = useStore((s) => s.refreshRepoGit);
@@ -2902,7 +2904,10 @@ function Sidebar() {
           </div>
 
           <div className={styles.repos} onContextMenu={openBgMenu}>
-            {repos.length === 0 && cloningRepos.length === 0 && (
+            {/* Only once the boot payload has landed (#352): before that the repo list
+            is empty simply because nothing has loaded yet, and the hint would flash the
+            wrong state for a round-trip right before the folders pop in. */}
+            {booted && repos.length === 0 && cloningRepos.length === 0 && (
               <p className={styles.emptyHint} onContextMenu={bgMenu.openMenu}>
                 No repositories yet.
               </p>

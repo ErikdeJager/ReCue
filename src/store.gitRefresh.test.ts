@@ -5,19 +5,58 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // which relies on the real, host-less ipc — is unaffected), mirroring
 // `store.refresh.test.ts`.
 vi.mock("./ipc", () => ({
-  listSessions: vi.fn(),
-  listRecents: vi.fn(),
+  // #352: the boot read is one batched `boot_state` command, applied by `applyBootState`.
+  bootState: vi.fn(),
   currentBranches: vi.fn(),
   githubWebUrls: vi.fn(),
   diffLineCounts: vi.fn(),
   branchAheadBehind: vi.fn(),
   fileStatuses: vi.fn(),
+  // Fire-and-forget writes/probes `applyBootState` may kick off after the payload lands.
+  setOpenFiles: vi.fn(),
+  setCanvases: vi.fn(),
+  setLastVersion: vi.fn(),
+  spawnTerminal: vi.fn(),
+  claudeSessionUsage: vi.fn(),
 }));
 
 import * as ipc from "./ipc";
 import { DEFAULT_SETTINGS, useStore } from "./store";
+import type { BootState, SessionRecord } from "./types";
 
 const m = vi.mocked;
+
+/** A benign boot payload (#352); each test overrides only the fields it needs. */
+function makeBootState(over: Partial<BootState> = {}): BootState {
+  return {
+    sessions: [],
+    recents: [],
+    repo_colors: {},
+    overview_panels: {},
+    overview_order: {},
+    open_files: {},
+    canvas_layout: null,
+    // A valid canvas state skips the migration branch (no crypto/randomUUID needed).
+    canvases: {
+      canvases: [{ id: "c1", name: "Canvas 1", layout: null }],
+      activeId: "c1",
+    },
+    canvas_templates: null,
+    settings: null,
+    sidebar_width: null,
+    sidebar_collapsed: null,
+    repo_order: [],
+    diff_seen: null,
+    schedules: [],
+    recurrings: [],
+    last_version: null,
+    app_version: "1.0.0",
+    platform: "macos",
+    windows_build: 0,
+    detached_canvas_ids: [],
+    ...over,
+  };
+}
 
 /** A deferred promise, so a test can hold a volley "in flight". */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -30,6 +69,12 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m(ipc.bootState).mockResolvedValue(makeBootState());
+  m(ipc.setOpenFiles).mockResolvedValue(undefined);
+  m(ipc.setCanvases).mockResolvedValue(undefined);
+  m(ipc.setLastVersion).mockResolvedValue(undefined);
+  m(ipc.spawnTerminal).mockResolvedValue(undefined);
+  m(ipc.claudeSessionUsage).mockResolvedValue(null);
   m(ipc.currentBranches).mockResolvedValue({});
   m(ipc.githubWebUrls).mockResolvedValue({});
   m(ipc.diffLineCounts).mockResolvedValue({});
@@ -94,18 +139,18 @@ describe("refreshRepoGit — boot deferral (#359)", () => {
 
   it("flushes the deferred volley from the 4s reconnect backstop, even if no session ever resumes", async () => {
     vi.useFakeTimers();
-    // One persisted record whose resume never produces output → `refresh()` marks the
+    // One persisted record whose resume never produces output → the boot apply marks the
     // resume window open; only the unconditional backstop closes it.
-    m(ipc.listSessions).mockResolvedValue([
-      {
-        id: "s1",
-        claude_session_id: "s1",
-        repo_path: "/repo/a",
-        name: null,
-        created_at: 0,
-      },
-    ]);
-    m(ipc.listRecents).mockResolvedValue(["/repo/a"]);
+    const record: SessionRecord = {
+      id: "s1",
+      claude_session_id: "s1",
+      repo_path: "/repo/a",
+      name: null,
+      created_at: 0,
+    };
+    m(ipc.bootState).mockResolvedValue(
+      makeBootState({ sessions: [record], recents: ["/repo/a"] }),
+    );
 
     await useStore.getState().refresh();
     expect(useStore.getState().resumeSettled).toBe(false);
@@ -124,8 +169,9 @@ describe("refreshRepoGit — boot deferral (#359)", () => {
 
   it("runs immediately (no deferral) when there is nothing to resume", async () => {
     vi.useFakeTimers();
-    m(ipc.listSessions).mockResolvedValue([]);
-    m(ipc.listRecents).mockResolvedValue(["/repo/a"]);
+    m(ipc.bootState).mockResolvedValue(
+      makeBootState({ sessions: [], recents: ["/repo/a"] }),
+    );
 
     await useStore.getState().refresh();
     expect(useStore.getState().resumeSettled).toBe(true);

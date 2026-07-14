@@ -20,22 +20,29 @@ use std::process::Command;
 
 use serde::Serialize;
 
-/// Build a `Command` that does **not** flash a console window on Windows. A GUI app
+/// The shared "shell out to a helper process" seam for `git` and `<cli> --version`
+/// probes: a console-flash guard **and** the AppImage env scrub (#350).
+///
+/// It builds a `Command` that does **not** flash a console window on Windows. A GUI app
 /// has no attached console, so each shelled-out `git` (or `<cli> --version`) call
 /// would otherwise pop a transient black `conhost` window — and `current_branch` /
 /// `working_diff` / branch listing run on every refresh, so it flashes constantly.
 /// Sets `CREATE_NO_WINDOW` (0x0800_0000) on Windows; a **no-op on unix**, so macOS
 /// keeps spawning `git` exactly as before. Shared by `git.rs` and `commands.rs`.
+///
+/// It then applies `child_env::scrub_command`, so under a Linux AppImage the child runs
+/// against the *system* libraries and data dirs rather than the AppImage's bundled ones
+/// (#350). That is likewise a no-op on macOS/Windows and outside an AppImage — no
+/// `env`/`env_remove` override is added at all.
 pub(crate) fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let cmd = Command::new(program);
-    #[cfg(windows)]
-    let mut cmd = cmd;
+    let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    crate::child_env::scrub_command(&mut cmd);
     cmd
 }
 
