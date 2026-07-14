@@ -39,6 +39,25 @@
   --terminal-bg: #11111b; /* Crust — deep bg so terminal content stands out */
   --terminal-fg: #cdd6f4; /* terminal text — stays light in both themes (#333) */
   --terminal-selection: rgba(88, 91, 112, 0.5); /* Surface2 — text selection */
+  /* Terminal ANSI palette (UI v2 task 379 — xterm theme fed from tokens). Literals,
+     like --terminal-bg/-fg: the light block must NOT override them (#333). Catppuccin
+     Mocha terminal scheme. */
+  --terminal-ansi-black: #45475a; /* Surface1 */
+  --terminal-ansi-red: #f38ba8;
+  --terminal-ansi-green: #a6e3a1;
+  --terminal-ansi-yellow: #f9e2af;
+  --terminal-ansi-blue: #89b4fa;
+  --terminal-ansi-magenta: #f5c2e7; /* Pink */
+  --terminal-ansi-cyan: #94e2d5; /* Teal */
+  --terminal-ansi-white: #bac2de; /* Subtext1 */
+  --terminal-ansi-bright-black: #585b70; /* Surface2 */
+  --terminal-ansi-bright-red: #f38ba8;
+  --terminal-ansi-bright-green: #a6e3a1;
+  --terminal-ansi-bright-yellow: #f9e2af;
+  --terminal-ansi-bright-blue: #89b4fa;
+  --terminal-ansi-bright-magenta: #f5c2e7;
+  --terminal-ansi-bright-cyan: #94e2d5;
+  --terminal-ansi-bright-white: #a6adc8; /* Subtext0 */
   --scrim: rgba(17, 17, 27, 0.8); /* Crust-based full-window dim overlay */
 
   /* --- Borders (low-alpha Text — subtle, theme-tinted) --- */
@@ -49,6 +68,7 @@
   --text-primary: #cdd6f4; /* Text */
   --text-secondary: #a6adc8; /* Subtext0 */
   --text-muted: #6c7086; /* Overlay0 */
+  --text-faint: #45475a; /* Surface1 — faintest hints (UI v2 §2.1, task 379) */
 
   /* --- Accent (brand only — Peach; never a status) --- */
   --accent: #fab387; /* Peach */
@@ -200,6 +220,7 @@
   --text-primary: #4c4f69; /* Text */
   --text-secondary: #5c5f77; /* Subtext1 (~5:1 — was #6c6f85) */
   --text-muted: #6c6f85; /* Subtext0 (~4:1 — was #8c8fa1) */
+  --text-faint: #9ca0b0; /* Overlay0 — faintest hints (task 379) */
 
   /* --- Accent (Latte Peach, darkened default so it reads on light; #343 — a custom
      accent's inline vars still win) --- */

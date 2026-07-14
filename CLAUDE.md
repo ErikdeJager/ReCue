@@ -550,7 +550,9 @@ steady-state boot pays **zero** probe cost.
   for the non-claude picks, + the #296 auto-continue-after-limit toggle),
   **Appearance** (a **Dark/Light theme** toggle #333 + an accent swatch over the Catppuccin
   palette + a reduce-motion toggle +
-  the Overview panel min-width #176), **Rendering** (**Linux only** #357 — filtered out of
+  the Overview panel min-width #176 + the `capAgentWidth` cap-agent-card-width toggle,
+  task 373 — consumed by the Overview wall's 900px `.cardCapped` on agent/recurring
+  cards, task 379), **Rendering** (**Linux only** #357 — filtered out of
   the nav on macOS/Windows: a **DMA-BUF renderer** control (auto/on/off, applied at the
   **next launch** — GTK reads the env once at init, so the persisted mode is read straight
   off `sessions.json` **before** `tauri::Builder` via the shared Rust `early_settings`), a
@@ -681,6 +683,7 @@ steady-state boot pays **zero** probe cost.
 │   ├── useKeyboardNav.ts   # Global keyboard shortcuts (#24/#76/#77/#84/#93)
 │   ├── useAutoSaveFile.ts  # Read + hot-reload + debounced-write hook (FileViewer raw + Kanban) (#148)
 │   ├── autoContinue.ts     # Pure auto-continue-after-limit reducer + isLimitReached (#296/#305)
+│   ├── tips.ts / tips.json # Startup tips for the empty-state hero (UI v2 #379)
 │   ├── updater.ts          # In-app auto-update: check / download+install / relaunch (#190)
 │   ├── components/         # React components (CSS Module alongside each):
 │   │                       #   Sidebar, Overview, Canvas (+ CanvasSurface),
