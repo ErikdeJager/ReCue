@@ -37,6 +37,7 @@ import { onSessionOutput } from "../../outputBus";
 import { isLinux, isWindows } from "../../platform";
 import { useStore } from "../../store";
 import { IS_MAIN_WINDOW } from "../../windowContext";
+import { makePasteKeyHandler } from "./pasteHandler";
 import { terminalsToDispose } from "./poolReconcile";
 import { dedupeAgainstScrollback } from "./replayDedupe";
 import styles from "./Terminal.module.css";
@@ -272,39 +273,23 @@ function createHost(sessionId: string): TerminalHost {
   });
   term.loadAddon(webLinks);
 
-  // Windows paste (#220): by terminal convention xterm forwards Ctrl+V as the literal
-  // control byte ^V (0x16) rather than pasting, so on Windows we intercept the
-  // Ctrl+V / Ctrl+Shift+V chord, read the OS clipboard ourselves, and paste it —
-  // returning false so xterm does NOT also emit ^V. macOS is untouched: ⌘V keeps its
-  // native paste and Ctrl+V stays ^V (we only act when `isWindows`). Ctrl+C is never
-  // touched, so it remains the agent's SIGINT. Platform is read live from the store
-  // (set once at boot, long before any keystroke). Shared by agent + shell terminals.
-  term.attachCustomKeyEventHandler((event) => {
-    if (event.type !== "keydown") return true;
-    if (!isWindows(useStore.getState().platform)) return true;
-    const isPaste =
-      event.ctrlKey &&
-      !event.altKey &&
-      !event.metaKey &&
-      (event.key === "v" || event.key === "V");
-    if (!isPaste) return true;
-    // Read text first; fall back to an image (saved as a temp PNG, its path pasted so
-    // claude attaches it). `term.paste` respects bracketed-paste mode (multi-line OK).
-    void (async () => {
-      try {
-        const text = await clipboardReadText();
-        if (text) {
-          term.paste(text);
-          return;
-        }
-        const imagePath = await saveClipboardImage();
-        if (imagePath) term.paste(imagePath);
-      } catch {
-        // best-effort: nothing pastes on a clipboard failure
-      }
-    })();
-    return false;
-  });
+  // Windows paste (#220): on Windows we intercept the Ctrl+V / Ctrl+Shift+V chord,
+  // read the OS clipboard ourselves, and paste it via `term.paste` (bracketed-paste-
+  // aware) — returning false so xterm does NOT also emit ^V, and preventDefault-ing
+  // the keydown so the browser's default paste action does NOT fire xterm's native
+  // `paste` listener a second time (the double-paste bug — see pasteHandler.ts).
+  // macOS/Linux are untouched: ⌘V keeps its native paste and Ctrl+V stays ^V (we
+  // only act when `isWindows`). Ctrl+C is never touched, so it remains the agent's
+  // SIGINT. Platform is read live from the store (set once at boot, long before any
+  // keystroke). Shared by agent + shell terminals.
+  term.attachCustomKeyEventHandler(
+    makePasteKeyHandler({
+      isWin: () => isWindows(useStore.getState().platform),
+      paste: (text) => term.paste(text),
+      readText: clipboardReadText,
+      saveImage: saveClipboardImage,
+    }),
+  );
 
   const safeFit = () => {
     try {
