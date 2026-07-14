@@ -2963,3 +2963,489 @@ Windows behavior is unchanged.**
 - The per-GPU runtime behavior (DMABUF auto-set on NVIDIA, left alone on AMD/Intel, llvmpipe → DOM
   renderer, AppImage under a busy TUI) can't be exercised on CI — walked via the
   `TRAJECTORY_TO_LINUX.md` checklist on real boxes.
+
+### 349. [x] Linux: native file dialogs follow ReCue's own theme (fix the always-white Adwaita dialogs in the AppImage)
+
+In the shipped **AppImage** every native dialog — the folder picker ("Choose a working directory"), the
+open-file dialog (FileSwitcher → Browse…) and the save dialog (template export) — rendered white/light
+Adwaita no matter the desktop's theme or ReCue's own Dark/Light setting (#333), so a dark-desktop user in
+a dark app got a blinding white dialog. Three facts stack up: (1) Tauri's AppImage bundler injects the
+vendored `linuxdeploy-plugin-gtk.sh` AppRun hook, which bundles GTK and then **forces `GTK_THEME`** for
+the whole process, picking the variant by grepping the *system theme name* for the substring `dark` — so
+`catppuccin-mocha-yellow-standard+default` (and any `color-scheme: prefer-dark` setup whose theme name
+lacks "dark") falls through to `GTK_THEME=Adwaita:light`; (2) `tauri-plugin-dialog` (2.7.1) resolves to
+rfd's **in-process GTK3** backend on Linux (`Cargo.lock`: `rfd 0.16` + `gtk-sys 0.18`, **no `ashpd`**), so
+every dialog is a GTK3 widget created inside our process and themed by that polluted env; (3) GTK3's
+`get_theme_name()` gives **`GTK_THEME` absolute precedence** — `gtk-theme-name` /
+`gtk-application-prefer-dark-theme` are not even read when it is set, which is why tao's
+`Window::set_theme` cannot fix it. The env itself must be corrected, **before GTK initializes**.
+**macOS and Windows are byte-for-byte unchanged** (no env write, no file read).
+
+**What shipped** (branch `linux-gtk-dialog-theme`, PR [#101](https://github.com/ErikdeJager/ReCue/pull/101),
+2026-07-14):
+
+- **`src-tauri/src/linux_gtk.rs`** (new, mirroring `linux_webkit.rs`'s shape) — `apply_gtk_theme_env()`
+  builds a `GtkThemeProbe` from the environment + the persisted store and exports `GTK_THEME`. The pure,
+  unit-tested `gtk_theme_env` policy, in order: **(1)** `RECUE_GTK_THEME=<literal GTK_THEME value>` forces
+  the value **everywhere** (the support escape hatch — and the way to smoke-test this in `tauri dev`
+  without building an AppImage; a blank/whitespace value is treated as unset); **(2)** not in an AppImage
+  (`$APPIMAGE`/`$APPDIR` unset — a dev run, `.deb`, or distro package) → leave `GTK_THEME` untouched, since
+  the desktop's real GTK theme already applies and forcing Adwaita would be a downgrade; **(3)**
+  `APPIMAGE_GTK_THEME` set → leave it alone (the hook already copied the user's explicit choice verbatim —
+  ReCue never clobbers it); **(4)** otherwise pick the **Adwaita** variant — the family the AppImage
+  actually bundles and the only one guaranteed to render against the bundled GTK — from ReCue's own
+  `settings.theme`: `light` (case-insensitive, trimmed) → `Adwaita:light`, everything else including a
+  fresh install with no persisted settings → `Adwaita:dark` (matching `DEFAULT_SETTINGS.theme = "dark"`).
+  One `[recue] GTK: set GTK_THEME=… (was …; recue theme: …)` log line on the write.
+- **Reading the theme before Tauri exists** — the `Store` is only constructed in `.setup()`, i.e. *after*
+  GTK init, so the module reads `settings.theme` straight out of `sessions.json` itself: read-only and
+  **fail-open** (`theme_from_store_json` returns `None` for malformed JSON, a missing/`null` `settings`, a
+  missing or non-string `theme` → dark, which is the default theme anyway). `store_path()` re-derives
+  Tauri's Linux `app_data_dir()` rule (`$XDG_DATA_HOME` when absolute, else `path_env::home_dir()` +
+  `.local/share`, joined with the identifier), reusing the shared `home_dir()` seam rather than reading
+  `$HOME`. A **drift-guard test** parses `tauri.conf.json` via `include_str!` and asserts its `identifier`
+  still equals the hardcoded `com.recue.app`, so the hand-derived path can't silently rot.
+- **`src-tauri/src/lib.rs`** — `mod linux_gtk;` + one call in `run()`, immediately after
+  `linux_webkit::apply_webkit_env_workarounds()` and before `tauri::Builder` — i.e. before GTK init **and**
+  before any thread spawns (env mutation isn't thread-safe; `set_var` is `unsafe` in Rust 2024 for exactly
+  that reason), joining the existing pre-GTK env writes.
+- **`src/components/Settings/Settings.tsx`** — a Linux-only (`isLinux(platform)`) sentence appended to the
+  existing Theme help text: native file dialogs adopt the theme the next time ReCue starts. Absent on
+  macOS/Windows; no new CSS, store state, or component.
+- **Docs** — `TRAJECTORY_TO_LINUX.md` gained a dated `### Native GTK dialogs were always light (Task #349)`
+  entry (bug / fix / rejected options / real-box checklist); `README.md`'s Linux build section gained a
+  one-line override note (`APPIMAGE_GTK_THEME=Adwaita:dark`, or `RECUE_GTK_THEME=<gtk theme>`).
+
+**Key decisions**
+
+- **Fix the env, don't swap the backend.** The **`xdg-portal`** feature of `tauri-plugin-dialog` was
+  rejected and kept only as the *documented fallback*: it hard-requires a running `xdg-desktop-portal` +
+  backend, and rfd has no GTK fallback when built with it — on a minimal/wlroots box the dialogs would stop
+  working **entirely**, turning a cosmetic bug into "cannot open a folder" (unacceptable for the
+  best-effort-other-distros promise). It also follows the *system* theme, so a light-desktop + dark-ReCue
+  user would still mismatch. Also rejected: **unsetting `GTK_THEME`** (the user's real theme may not exist
+  under the AppImage's `XDG_DATA_DIRS` or render against the *bundled* GTK — precisely why the hook forces
+  Adwaita; it would trade a white dialog for a possibly-broken one) and **runtime tao `set_theme`** (needs a
+  direct `gtk` dep and is a no-op while `GTK_THEME` is set — fact 3).
+- **The variant follows ReCue's own theme, not the system color-scheme** — the dialog belongs to the app,
+  and this is deterministic + unit-testable on any host. Only the Adwaita **variant** is chosen, never a
+  different theme *name*.
+- **Scoped to the AppImage-polluted env only.** A dev / distro-package run is left alone; making
+  non-AppImage dialogs follow ReCue's theme rather than the desktop's is an explicit non-goal.
+- **Accepted limitation:** `GTK_THEME` is read at GTK init, so toggling the theme in Settings re-themes the
+  app instantly but the **native dialogs pick up the new variant on the next launch** — surfaced as the
+  muted Linux-only Settings hint above.
+- **A separate module, not an extension of `linux_webkit.rs`** — Task 347 is editing that file; the only
+  shared touchpoint is the append-only call list in `run()`. Complementary to Task 350 (which scrubs
+  AppImage-polluted env from *child* processes — a different process's env; `GTK_THEME` landing on its
+  strip-list for children is fine and expected).
+- No dependency / `Cargo.toml` / `Cargo.lock` / `tauri.conf.json` / capability / dialog-call-site
+  (`src/ipc.ts`) change. No version bump or patch-notes file (releases are batched by the maintainer).
+
+**Dependencies:** none. (Builds on landed work only: #333 the `settings.theme` field, #345 the Linux port +
+AppImage leg, #346 `linux_webkit.rs`'s pre-GTK env pattern.)
+
+**Notes**
+
+- The pure decision core (`gtk_theme_env` / `adwaita_variant` / `theme_from_store_json`) is `, test)`-widened
+  (the `reveal_file_linux` / `explorer_select_arg` precedent) so the macOS and Windows hosts still type-check
+  **and** unit-test it; only the thin env-probe + `set_var` + file-read shell is Linux-only.
+- The GUI/AppImage surface (a dark folder picker in the real AppImage, the light variant after a toggle +
+  relaunch, both escape hatches honored, a non-AppImage run leaving `GTK_THEME` untouched) can't be
+  exercised on CI — logged in `TRAJECTORY_TO_LINUX.md`'s real-box checklist (Arch/Ubuntu/Mint ×
+  GNOME/KDE/Cinnamon/Xfce, Wayland + X11).
+- Benign side effect: a dark `GTK_THEME` also darkens the GTK window background and WebKitGTK's
+  `prefers-color-scheme`. ReCue's CSS keys off `data-theme`, not `prefers-color-scheme`, so nothing in the UI
+  changes — and a dark native background *helps* (does not fight) Task 348's white-startup-flash work.
+
+### 350. [x] Scrub the AppImage-injected environment from every child process ReCue spawns
+
+Under the Linux **AppImage**, every process ReCue spawned — each `claude`/codex agent PTY, every #72 shell
+terminal, every `git` shell-out and `<cli> --version` probe, `xdg-open`, `dbus-send`, the login-shell PATH
+probe — inherited the AppImage runtime's polluted environment: the bookkeeping vars (`APPDIR`, `APPIMAGE`,
+`APPIMAGE_UUID`, `ARGV0`, `OWD`), the scalars the vendored `linuxdeploy-plugin-gtk` AppRun hook forces for
+the *webview* (`GTK_THEME=Adwaita:light`, `GDK_BACKEND=x11`), and `$APPDIR`-prefixed values for `PATH`,
+`LD_LIBRARY_PATH`, `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GIO_MODULE_DIR`, `GDK_PIXBUF_MODULE_FILE`,
+`GI_TYPELIB_PATH`, `PYTHONPATH`, `PERLLIB`, `QT_PLUGIN_PATH`, `GST_*`, … — all pointing into the transient
+`/tmp/.mount_…` FUSE mount. That is documented to break `xdg-open` and to degrade or outright break a system
+binary that ends up loading the AppImage's bundled libraries (tauri-apps/tauri#10617,
+AppImage/AppImageKit#124). One shared, pure, unit-tested scrub seam now gives children the user's real
+environment. **A byte-for-byte no-op on macOS, on Windows, and on any non-AppImage Linux build** (dev,
+`.deb`, pacman).
+
+**What shipped** (branch `scrub-appimage-child-env`, PR [#102](https://github.com/ErikdeJager/ReCue/pull/102),
+2026-07-14):
+
+- **`src-tauri/src/child_env.rs`** (new, modeled on `linux_webkit.rs`) — the pure core plus three
+  process-level entry points. The rule is **value-based, not an exhaustive var list**: any `:`-separated
+  segment living under `$APPDIR` (or under the `/tmp/.mount_` prefix) is stripped from **any** variable, so a
+  future AppRun's newly injected path vars are covered automatically — only a new *scalar* forcing would need
+  a `FORCED_VARS` entry. Per key: `APPIMAGE_ORIGINAL_*` bookkeeping and the marker vars are dropped; a forced
+  scalar is restored from its `APPIMAGE_ORIGINAL_<VAR>` backup if one exists, else dropped; any var with a
+  backup is restored **verbatim**; otherwise the AppImage-owned segments are stripped. A var whose segments
+  were *all* AppImage-owned is **removed entirely, never set to `""`** — an empty `LD_LIBRARY_PATH` segment
+  means "current working directory" to the dynamic loader (a consumer then falls back to its FreeDesktop
+  default, which is exactly the pre-AppImage state, since AppRun only ever *prepends*). `PATH` is on a
+  `NEVER_UNSET` list, so an all-AppImage `PATH` is left untouched rather than emptied.
+- **Entry points** — `child_env_vars()` (the PTY env snapshot for `portable_pty::CommandBuilder`, which
+  starts from an *empty* env set, so a var omitted here is genuinely absent from the child; non-UTF-8 pairs
+  pass through verbatim — they cannot be AppImage vars), `scrub_command(&mut Command)` (snapshot → `scrub_env`
+  → `env_diff` → `env_remove`/`env` overrides), and `command(program)` (construct + scrub). Outside an
+  AppImage the diff is empty, so **zero** `env`/`env_remove` calls are made and the `Command` is byte-for-byte
+  what it was before.
+- **Five spawn seams wired** — `pty.rs::spawn_with_id` (the single spawn behind `spawn_session` /
+  `spawn_session_with_prompt` / `resume_session` / `fork_session` / `spawn_terminal`) copies the scrubbed env
+  instead of raw `std::env::vars_os()`, still setting `TERM=xterm-256color` after; `git::hidden_command`
+  applies the scrub, covering every `git` shell-out and `<cli> --version` probe (its doc comment now names it
+  the shared "shell out to a helper process" seam — console-flash guard **and** AppImage scrub); `commands.rs`'s
+  `os_open` / `open_url` / `reveal_file_in_finder` / `reveal_file_linux` (`dbus-send` + the `xdg-open`
+  parent-dir fallback) build through `child_env::command`; and `path_env::login_shell_path_blocking` runs the
+  `$SHELL -ilc` probe through it too.
+- **Docs** — `CLAUDE.md` gained `child_env.rs` in the `src-tauri/` layout tree, `child_env_vars()` /
+  `scrub_command()` in the "reuse the established cross-platform seams" Rust list (next to
+  `git::hidden_command()`), and a sentence in the Linux block; `TRAJECTORY_TO_LINUX.md` gained a dated
+  `### AppImage child-process environment (Task #350)` entry + its real-box checklist.
+
+**Key decisions**
+
+- **One shared seam, not a `pty.rs`-only patch.** The card only named the PTY spawn, but `git`, `xdg-open`,
+  `dbus-send` and the login-shell probe inherit the same pollution — so all five go through one module.
+- **Gated `#[cfg(all(unix, not(target_os = "macos")))]`**, not the card's `#[cfg(unix)]`, so macOS stays
+  byte-for-byte (it shares the unix arm but never sees an AppImage). The pure helpers are `, test)`-widened +
+  `cfg_attr(test, allow(dead_code))` — the `explorer_select_arg` / `reveal_file_linux` / `should_disable_dmabuf`
+  precedent — so the macOS/Windows hosts still type-check **and** unit-test them without tripping clippy's
+  `--all-targets -D warnings` dead-code check.
+- **The scrub arms only when `APPDIR` or `APPIMAGE` is present in the env map**, making every other run a
+  provable identity transform — pinned by the first unit test and by `scrub_command`'s empty-diff path.
+- **Binary resolution is untouched:** `find_on_path` / `resolve_command` still use ReCue's *own* process
+  `PATH` (already repaired by #345's login-shell probe). The scrub changes what the child *inherits*, never
+  which binary is found.
+- **`WEBKIT_DISABLE_DMABUF_RENDERER` is deliberately not stripped** — #346 sets it for ReCue's own webview,
+  it isn't AppImage-injected, and it's inert for CLI children. The macOS-only spawns (`usage.rs`'s `security`,
+  `lib.rs`'s `tccutil`) are likewise left alone; no AppImage exists there.
+- **Complementary with Task #349, not overlapping:** #349 *sets* `GTK_THEME` for ReCue's **own** process (so
+  the native dialogs are dark); this task *strips* it from **children** under the AppImage (so a GTK app
+  launched from a ReCue terminal uses the user's own theme). No frontend, store, IPC, or bundling-config
+  change.
+
+**Dependencies:** none.
+
+**Notes**
+
+- The pure core (`is_appimage_segment` / `filter_segments` / `scrub_env` / `env_diff`) is unit-tested on every
+  host: the no-AppImage identity case, the full AppImage map (markers, forced scalars, `PATH`,
+  `LD_LIBRARY_PATH`, `XDG_DATA_DIRS`, the GTK module vars, untouched user vars, no emitted empty segment), the
+  never-empty `PATH` guard, the `APPIMAGE_ORIGINAL_*` restore + backup-key removal, the `APPDIR`-absent /
+  `/tmp/.mount_`-only (`--appimage-extract-and-run`) case, idempotence, and `env_diff` both ways. A prefix
+  false-positive guard is included: `/home/u/squashfs-root2/bin` is **not** under `/home/u/squashfs-root`.
+- The AppImage surface can't be exercised on CI — logged in `TRAJECTORY_TO_LINUX.md`'s real-box checklist: a
+  ReCue shell terminal's `env` carries no `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`/`GTK_THEME`/`GDK_BACKEND` and no
+  `/tmp/.mount_` segment in `PATH`/`XDG_DATA_DIRS`/`LD_LIBRARY_PATH`; `xdg-open`, the Ctrl-click link open,
+  "Reveal in File Manager", "Open data folder", `git`, and a spawned `claude` agent all work under the
+  AppImage; and ReCue's own window/dialogs are visually unchanged (the app's *own* process env is untouched).
+
+### 353. [x] Move the straggler sync Tauri commands (PTY spawn/kill/scrollback, agent probes, git writes) off the webview main thread
+
+In Tauri 2 a command declared `pub fn` runs **on the webview/main thread**; only `pub async fn` is dispatched
+to the async runtime. A set of commands that do genuinely blocking work were still synchronous, so the window
+froze while they ran: the whole **PTY spawn family** (a `cwd` stat + a full `$PATH` scan + `openpty()` + a copy
+of the entire process env + `fork`/`exec`, inline — plus `git worktree add` for the worktree variants and a
+`~/.claude/projects` glob for a fork), the **agent probes** (`agent_info` / `claude_version` spawn
+`<binary> --version` **and wait** — and because the command was sync, `maybeOnboardAgent`'s `Promise.all` over
+`SELECTABLE_AGENTS` executed them *serially on the main thread*, freezing a not-yet-onboarded install for
+~1–2 s × N), **`session_scrollback`** (a 256 KB copy + base64 per terminal mount, N of them at boot),
+**`search_session_output`** (that copy plus a UTF-8 decode + ANSI strip + scan for **every live session**, on
+every keystroke in the global search modal), **`kill_session`**, the **git writes** `pull_branch` (a *network*
+`git pull` on the main thread) / `checkout_branch` / `create_branch` (the trio #330 explicitly deferred), and
+the schedule/recurring creators + manual fire (an eager `git worktree add`, and a possible inline first spawn).
+All 17 now run `async fn` + `tauri::async_runtime::spawn_blocking`, the pattern from #200/#299/#316/#328/#330.
+The win is largest on Linux/WebKitGTK, where main-thread work is the known bottleneck (#346), but it is
+platform-neutral — no `#[cfg]` arm is introduced or changed.
+
+**What shipped** (branch `sync-commands-off-main-thread`, PR
+[#107](https://github.com/ErikdeJager/ReCue/pull/107), 2026-07-14) — **`src-tauri/src/commands.rs` only**:
+
+- **17 commands converted** to `pub async fn` + `spawn_blocking`: `spawn_session`, `spawn_terminal`,
+  `spawn_worktree_agent`, `spawn_worktree_agent_new_branch`, `resume_session`, `fork_session`, `kill_session`,
+  `session_scrollback`, `search_session_output`, `agent_info`, `claude_version`, `pull_branch`,
+  `checkout_branch`, `create_branch`, `create_schedule`, `create_recurring`, `fire_schedule_now`.
+- **The state-plumbing crux.** `State<'_, T>` is a **borrow** — not `'static`, so it can never be captured by a
+  `spawn_blocking` closure (`F: FnOnce() -> R + Send + 'static`). Every converted command therefore drops its
+  `State` args, takes an owned **`app: AppHandle`** (`Clone + Send + Sync + 'static`), and resolves
+  `app.state::<SessionManager>()` / `app.state::<Store>()` **inside** the closure — the same route the
+  boot-resume thread, the event forwarder, and `fire_schedule_now` already used. Bodies moved **verbatim** into
+  private `*_blocking` helpers; the commands are thin wrappers. Because a `State` arg is what forces an async
+  command to return `Result`, dropping it also let the two non-`Result` commands (`agent_info`,
+  `search_session_output`) keep their bare return types — **so `src/ipc.ts`, the store, and every TS type are
+  untouched** (an `AppHandle` param is injected by Tauri, never sent by `invoke`).
+- **Three commands deliberately stay sync, each with the rationale recorded in-code**: **`write_stdin`** —
+  per-keystroke, the work is a `memcpy` + one `write`/`flush` (microseconds), and async would **destroy write
+  ordering**, since `terminalPool.ts` fires it un-awaited from xterm's `onData`, so two quick keystrokes would
+  become two racing tasks that could reach the PTY out of order (a corrupted prompt); **`resize_pty`** — a
+  cheap ioctl, fired-and-forgotten from a `ResizeObserver`, where racing async resizes could land out of order
+  and leave the PTY on a stale size (a garbled TUI) for zero win; **`list_sessions`** — an in-memory `Vec`
+  clone, called about once at boot.
+
+**Key decisions**
+
+- **No `pty.rs` / `store.rs` changes at all.** Their `std::sync::Mutex`es stay as-is — **no `tokio::sync`, no
+  `Arc<SessionManager>` managed-state swap**. No guard can cross an `.await`, because every lock is taken
+  inside a synchronous method called from *inside* the blocking closure, and the `Send` bound on Tauri's
+  spawned command future makes the alternative a compile error (`std::sync::MutexGuard` is `!Send`). This also
+  kept the diff clear of the concurrent Tasks #350/#354, which edit `pty.rs` internals.
+- **`async fn` + `spawn_blocking`, never `#[tauri::command(async)]`** — the latter runs the blocking body on a
+  *tokio worker* thread rather than the blocking pool, which can starve the runtime.
+- **Scope rule: convert every sync command that spawns a process or shells out to git.** That is 6 more than
+  the card listed (the two worktree spawns, `search_session_output`, and the deferred `pull`/`checkout`/`create`
+  branch trio) plus the three schedule/recurring commands. Deliberately **not** converted, and recorded rather
+  than silently skipped: the `files.rs` family, `list_skills`, `save_clipboard_image`, the openers, and the
+  in-memory store getters/setters — a different (mostly sub-millisecond FS/opener) family;
+  `search_file_contents` is flagged as the one plausible remaining straggler for a follow-up card.
+- **Ordering is the one real semantic change** — async commands are no longer FIFO with each other. Safe here
+  because every converted command targets a distinct id or is an idempotent user-initiated one-shot, and
+  `session_scrollback` is explicitly safe out of order: its reply carries the absolute `end` offset that
+  `replayDedupe.ts` dedupes the live stream against (#261/#346).
+- **The blocking-`write_all` problem for `write_stdin` is a non-goal, not an oversight.** Making it
+  non-blocking *without* losing FIFO order needs a per-session writer thread + an `mpsc` queue in `pty.rs` —
+  a separate, larger change, recorded as a follow-up rather than bodged in with `spawn_blocking`.
+
+**Dependencies:** none. (Builds on the landed `spawn_blocking` + `AppHandle`-state pattern: #200/#299/#316/#328/#330.)
+
+**Notes**
+
+- No automated command-level test was added — the repo has no `tauri::test` mock-app harness and the change is
+  structural. Acceptance rests on the compile-time `Send` guarantee, clippy `-D warnings`, the unchanged
+  existing suites, and enumerated manual smoke checks (GUI responsiveness is not CI-assertable): spawning an
+  agent while others print no longer stalls the window and the new terminal still paints claude's startup
+  exactly once; Settings → Sessions stays interactive while the `--version` probes run (they now genuinely run
+  **concurrently** on the blocking pool); fast typing stays byte-for-byte in order; and Remove / Fork / Restart
+  / Start-now / Pull / Checkout / Create-branch / worktree spawn all keep their existing toasts.
+- Known, pre-existing hazard noted rather than fixed: a concurrent same-id spawn (double-clicking Restart) is
+  now genuinely parallel rather than serialized on the main thread. The race already existed (the boot-resume
+  thread races main-thread commands) and the frontend guards the affordances — out of scope, but worth
+  remembering if a stray process is ever observed.
+
+### 356. [x] Code-split the frontend bundle — lazy routes, panels, modals, markdown/Prism, and the xterm WebGL addon
+
+The whole frontend was **one 1,351.5 kB (391.1 kB gzip) chunk** parsed before first paint — `vite.config.ts`
+had no `build` section at all, and mermaid (#254) was the app's only dynamic import. Everything else came
+along eagerly: the react-markdown + remark-gfm + micromark/mdast/hast stack (151 kB), Prism plus its ~24
+statically-imported language grammars (70.6 kB), the xterm WebGL addon (107.4 kB — even on a machine that
+would never use it), every modal, every panel, and *both* window routes, so a **detached canvas window** (#84)
+parsed the sidebar, Overview, and eleven modals it can never show. Deferring all of that cuts first-paint JS to
+**854.3 kB / 245.5 kB gzip** for the main window and **769.6 kB / 221.3 kB** for a detached canvas window — a
+startup win on every OS and a large one on Linux/WebKitGTK, where JS parse is the slowest (#346).
+
+**What shipped** (branch `code-split-frontend-356`, PR [#111](https://github.com/ErikdeJager/ReCue/pull/111),
+2026-07-14) — frontend only, no Rust change:
+
+- **Route split** — `src/App.tsx` is now a `Suspense` router over a lazy `MainApp` (extracted verbatim into
+  the new `src/MainApp.tsx`) and a lazy `CanvasWindow`. Window identity is fixed for a window's lifetime
+  (URL-derived, #84), so exactly one route chunk is ever fetched. The fallback is a bare `div.app` — it paints
+  the app background and nothing else, deliberately, so it stays complementary with Task #348's
+  `visible:false` → `show()` window gate (which needs a background-painted first commit, never white).
+- **Lazy panels** — `ItemContent.tsx` (the single live-render site for panel content, #157) `React.lazy`s
+  `FileViewer` / `KanbanPanel` / `DiffInspector` / `FileTree`. Since those four are the *only* importers of the
+  markdown and Prism stacks, this is what carries all ~221 kB of them out of the first-paint graph — **without
+  touching `prism.ts`, `mermaid.ts`, `markdownCheckboxes.tsx`, or any unit-tested pure module**. Each lazy
+  branch gets its **own** `Suspense` boundary, reusing the existing `.placeholder` "Loading…" style.
+- **Lazy modals** — a new `src/components/ModalHost.tsx` holds ten gates (Settings, NewSession, CloneRepo,
+  CreatePanel, GlobalSearch, CanvasClose, TemplateUse / Manager / Editor, Onboarding), each subscribing to its
+  own store flag — so `MainApp` no longer re-renders when a modal opens (a small bonus win). The Suspense
+  fallback is **`null`** on purpose: an empty modal shell would be a visible regression, whereas `null` means
+  the modal simply appears once its chunk lands. `Toaster`, `BigModeModal`, `UpdateModal`, and `ClaudeMissing`
+  stay static (first-paint or safety-critical — the update install overlay must never be a chunk away).
+- **Lazy xterm WebGL addon** — `terminalPool.createHost()` now `import()`s `@xterm/addon-webgl` on demand,
+  while xterm core / `addon-fit` / `addon-web-links` / the xterm CSS stay eager (terminals *are* the first
+  paint). `disposed` is hoisted above the WebGL block to guard a late attach into a torn-down host, a `.catch()`
+  keeps the DOM renderer if the chunk or the constructor fails, and the #221 font-atlas rebuild `await`s
+  `webglReady` so it still runs exactly once.
+- **Idle prefetch** — a new `src/prefetch.ts` warms the deferred chunks after first paint via
+  `requestIdleCallback` (feature-detected, with a `setTimeout` fallback for older WKWebView/Safari), so the
+  first Settings / ⌘N / file-panel open is instant. A detached window skips the modal warm-up.
+- **Regression guard** — `build: { manifest: true }` plus a new dependency-free `scripts/bundle-report.mjs`
+  (Node builtins only) computes each route's first-paint closure — the entry chunk plus its **static** import
+  closure plus the route chunk and its static closure, deliberately *not* following `dynamicImports` — reports
+  raw + gzip, and with `--check` fails the build over budget (900 kB raw / 260 kB gzip). `npm run bundle:report`
+  added to `package.json`.
+
+**Key decisions**
+
+- **No `manualChunks`, and the reason is recorded in `CLAUDE.md`.** Rollup chunking only decides *which file* a
+  module lands in — a statically reachable module is still fetched, parsed, and executed before first render
+  whatever chunk it sits in. **Only a dynamic `import()` removes work from the first-paint path.** The CLAUDE.md
+  bullet spells out the durable rule: never static-import react-markdown / prismjs / `@xterm/addon-webgl` back
+  into the entry graph — and the `--check` budget is what enforces it mechanically.
+- **Lazy the four *consumers*, not the markdown/Prism internals.** Refactoring `FileViewer` into an async
+  markdown/prism loader would have won the same bytes while churning unit-tested pure modules; lazying the four
+  components that exclusively import them wins it for free.
+- **Never wrap `ItemContent` (or a `Terminal` branch) in one shared Suspense boundary.** A suspending boundary
+  hides its already-rendered children with `display:none`, which would leave a pooled xterm un-measurable and
+  misfit — the #18 class of bug. Per-branch boundaries mean a terminal is never inside one.
+- **xterm core and `terminalPool` stay eager and synchronous.** The pool's sync API is consumed from React
+  effects and from `store.ts`; making it async would churn the app's most delicate subsystem (#18 pool, #221
+  font atlas, #261 write coalescing, #346) to defer code needed milliseconds later. Only the *addon* is deferred.
+- **Accepted trade-off (the plan's top risk):** a main-window terminal now paints its first frames on xterm's
+  DOM renderer and swaps to WebGL a few ms later when the chunk resolves. xterm supports `loadAddon` after
+  `open()` — that was already the code's order, just synchronous — and both renderers are known-good in
+  production (#105/#346). Rollback is a one-line restore of the static import. On Linux with a software
+  rasterizer the chunk is **never fetched at all** — a pure win.
+- **Three modals move from "always mounted, self-gated" to "mounted only while open."** `NewSessionModal`'s
+  focus restore was moved into its effect cleanup so it still fires now that close means unmount.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Verified deferred into their own async chunks, absent from both routes' first-paint closure: react-markdown /
+  remark-gfm / micromark / hast, prismjs, `@xterm/addon-webgl`, all ten modals, FileViewer, KanbanPanel,
+  DiffInspector, FileTree. **Mermaid remains a further lazy chunk *inside* FileViewer**, so a markdown file with
+  no ` ```mermaid ` fence still never fetches it.
+- Checks green: `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (671 tests / 47 files), and
+  `node scripts/bundle-report.mjs --check`.
+- Code-splitting is only observable in a **production** build (`vite dev` serves unbundled ESM), so the
+  async-chunk-under-`tauri://`-offline check and the WebGL late-attach on WKWebView / WebView2 are real-box
+  items rather than CI-assertable ones.
+
+### 351. [x] Lazy-mount Overview terminals — visibility-gated xterm creation + a bounded scrollback-replay queue
+
+Overview's wall is a **horizontally scrolling** row of cards, of which roughly three are visible at a time —
+but every card's terminal was **fully mounted at boot**. So N resumed agents meant N eager `createHost` calls,
+each constructing an XTerm, opening its **own WebGL context**, fetching up to 256 KB of scrollback, ANSI-parsing
+it on the webview main thread, awaiting three `document.fonts.load` calls and firing a resize IPC — ten agents
+≈ 2.5 MB parsed and 10 GL contexts in the first seconds, the dominant boot cost and worst on Linux/WebKitGTK
+(where `TRAJECTORY_TO_LINUX.md` already listed "Overview terminal virtualization" as future work — this task
+closes it). Terminals are now created **only when their card first scrolls into view**, and the replays that do
+happen are **serialized** rather than racing each other on the single main thread.
+
+**What shipped** (branch `lazy-mount-overview-terminals`, PR
+[#103](https://github.com/ErikdeJager/ReCue/pull/103), 2026-07-14) — frontend only, no Rust change:
+
+- **`useVisibleOnce.ts`** (new) + **`Terminal.tsx`** — a **latching** `IntersectionObserver` gates
+  `mountTerminal`: once a slot has been visible, it stays mounted forever. The gate lives in `Terminal.tsx`,
+  **not** in Overview, so it covers every terminal surface (Overview cards, Canvas panels, big mode #157,
+  detached windows #84) through the one component instead of adding an Overview-only path.
+- **`TerminalScrollRootContext`** — filled by `Overview.tsx` with its scrolling wall element. This matters:
+  `IntersectionObserver` clips against an intermediate scroll container **before** applying `rootMargin`, so a
+  viewport-rooted observer could never pre-load an off-screen wall card. With the wall as the root, the 600px
+  horizontal pre-load margin (≥1.5 cards at the 400px default column min-width) is real. Everywhere else the
+  root stays the viewport.
+- **`replayQueue.ts`** (new, pure + unit-tested) + **`terminalPool.ts`** — scrollback replays run through a
+  bounded FIFO queue (`MAX_CONCURRENT_REPLAYS = 1`, a macrotask yield between jobs), each awaiting its
+  `term.write` callback (resolve-once, with a 2 s safety timeout), so one ANSI parse can never stack on
+  another. A queued-but-unstarted hydration is **cancelled** on host dispose.
+- **`pendingOutput.ts`** (new, pure + unit-tested) — the pre-replay live buffer is capped at 2 MB (oldest
+  dropped) **only while the scrollback fetch has not yet been dispatched**. That window is provably gap-free:
+  the backend pushes to its `Scrollback` before emitting, so every pre-dispatch chunk is already ≤ the
+  snapshot's `end` offset. After dispatch the buffer is uncapped, so every byte above `end` survives
+  `dedupeAgainstScrollback`.
+- **Pending focus** — `focusTerminal` gained a short-lived (3 s) pending focus, so ⌘/Ctrl+1–9 onto a
+  not-yet-created host still lands and the user can type immediately. Without it the CanvasSurface's
+  active-leaf effect would silently no-op against a host that doesn't exist yet.
+
+**Key decisions**
+
+- **"Virtualize" means deferred creation only — never recycling.** Once a terminal is created it is never
+  disposed or parked on scroll-out. Disposing on scroll-out would re-enter the **#18 invariant**: replayed
+  scrollback carries cursor-positioned escape sequences computed for a specific PTY width, so a re-replay at a
+  different size garbles claude's TUI. Zero boot benefit, guaranteed corruption.
+- **No output is lost, and no new mechanism was invented.** `outputBus` already drops chunks for a
+  listener-less session, and that is *already* today's behavior for any session not rendered in the current
+  view (booting straight into Canvas, or spawning an agent while on Canvas). The backend's 256 KB `Scrollback`
+  retains the bytes and `replayDedupe` drops the overlap at creation — so deferring host creation **re-uses an
+  already-exercised path**. History older than the 256 KB window is not recoverable; accepted, and unchanged
+  from today.
+- **Everything else about an unmounted agent keeps working** — the busy/idle dot, notifications, global search
+  (Rust-side scrollback search, #337) and auto-continue (#296) are all backend-driven and never touch the pool.
+- **Rejected the card's third fix direction** ("replay a smaller initial tail, the rest on idle"): it needs a
+  new backend `session_scrollback` parameter and trades away user-visible history for a win the visibility gate
+  already delivers.
+- **Non-terminal Overview panels (FileViewer / DiffInspector / Kanban / FileTree / Scheduled / Recurring) are
+  not gated** in this task — their mount cost is far smaller. Noted as a follow-up that can reuse the same hook.
+- No backend change and no new user setting; rollback is two constants.
+
+**Dependencies:** none.
+
+**Notes**
+
+- New unit tests cover the pure parts per repo convention (the pool itself is coverage-excluded DOM/xterm glue):
+  the bounded-concurrency FIFO (limit, ordering, `cancel`, a rejecting/throwing job, the yield) and the
+  pending-output cap (drops oldest, preserves order, `Infinity` keeps all). Checks green: `npm run lint`,
+  `npm run format:check`, `npm test` (686 passing), `npm run test:coverage` (90.93% lines, gate 75%),
+  `npm run build`.
+- Pure WebView/TS — `IntersectionObserver` is supported by WKWebView, WebView2/Chromium **and** WebKitGTK, so
+  there is no `#[cfg]` divergence and no OS primitive involved; identical on all three, with the biggest win on
+  Linux.
+
+### 347. [x] Fix the Linux DMA-BUF workaround misfiring on hybrid Intel+NVIDIA GPUs (GPU-aware detection)
+
+**#346's own workaround had become the "slow on Arch" bug.** Its `nvidia_driver_present()` returned true on the
+mere *presence* of the kernel module (`/proc/driver/nvidia/version` or `/sys/module/nvidia`) — but on a **hybrid
+laptop** the NVIDIA card exists while the webview actually renders on the Intel/AMD **iGPU via Mesa**, where
+DMA-BUF is healthy and fast. So ReCue forced `WEBKIT_DISABLE_DMABUF_RENDERER=1` on a machine that didn't need
+it, pushing the bundled Skia WebKit into CPU rendering, which then cascaded into software WebGL → xterm's DOM
+renderer. Verified on the reporter's Arch/Hyprland box (`card0` = nvidia blob RTX 4080 Max-Q on nvidia-open
+610.43.03, `card1` = `i915` Intel Iris Xe rendering the webview; boot log
+`set WEBKIT_DISABLE_DMABUF_RENDERER=1 (nvidia: true, vm: false)`). `vm_detected()` was equally coarse: it
+tripped on the mere existence of `/sys/hypervisor/type` (which also exists on a **bare-metal Xen dom0**) and on
+loose DMI *substring* matches including `"standard pc"` and `"kvm"`, which appear in real hardware product
+strings.
+
+**What shipped** (branch `linux-dmabuf-hybrid-gpu`, PR [#104](https://github.com/ErikdeJager/ReCue/pull/104),
+2026-07-14):
+
+- **`src-tauri/src/linux_webkit.rs` rewritten** around pure, unit-tested types and functions
+  (`RendererOverride` / `NvidiaKernel` / `GpuClass` / `DmabufProbe` / `DmabufDecision` / `VmSignals`;
+  `decide_dmabuf`, `nvidia_kernel_flavor`, `nvidia_driver_version`, `classify_gpu`, `is_hypervisor_dmi`,
+  `vm_detected`, `cpuinfo_has_hypervisor_flag`, `only_virtual_gpus`, `describe_probe`, plus the kept
+  `parse_force_flag`), over thin Linux-only `/sys` + `/proc` probes.
+- **The new policy** (ordered, in `decide_dmabuf`): a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` always
+  wins and is never touched → `RECUE_DISABLE_DMABUF` force-overrides both ways → **disable** only when GL is
+  explicitly PRIME-routed to the blob (`__GLX_VENDOR_LIBRARY_NAME=nvidia` / `__NV_PRIME_RENDER_OFFLOAD=1` — the
+  hybrid exemption cannot apply, since the webview's GL *is* NVIDIA's), or when the **NVIDIA blob is the sole
+  renderer** (no Mesa-driven DRM card), or in a **VM with no native Mesa GPU** → otherwise **keep** it. So a
+  hybrid iGPU+dGPU laptop, nouveau, an AMD/Intel-only box, and a passthrough VM all keep the faster DMA-BUF
+  path. An unreadable `/sys/class/drm` leaves the GPU list empty and lands on "disable" — conservative, exactly
+  as #346 was.
+- **GPU inventory** from `/sys/class/drm/card*` (DRM driver-name → Mesa / NvidiaBlob / Virtual / Unknown, with a
+  PCI vendor-id fallback) rather than counting render nodes — the same signal, more precise, and trivially
+  pure-testable.
+- **VM detection tightened** to require **two independent signals** (the CPUID `hypervisor` flag plus
+  DMI/hypervisor-node/virtual-GPU corroboration, or an exact DMI hit with only-virtual GPUs), with **exact —
+  not substring — DMI matching** and an explicit **bare-metal Xen dom0 exclusion** (`/proc/xen/capabilities`
+  containing `control_d`). `"PowerEdge KVM 1000"` and a real "Standard PC Server Board" no longer read as VMs.
+- **One boot diagnostic line for *both* outcomes**, naming the evidence — e.g. `[recue] WebKitGTK: DMA-BUF left
+  on — Mesa GPU present (healthy DMA-BUF) (gpus: nvidia[blob],i915[mesa]; nvidia: open 610.43.03; vm: no;
+  session: wayland) — override with RECUE_DISABLE_DMABUF=1|0`. **#346 logged only the disable case, which is
+  exactly why the misfire was invisible.**
+- **Frontend (comment/log only, zero logic change)** — `webglRenderer.ts`'s header is reframed as what it is (a
+  consequence-level fail-safe, not a detector), and `terminalPool.ts::webglAllowed()` now logs the WebGL
+  renderer string once on Linux for support diagnostics. Once DMA-BUF is correctly left on, that probe reads a
+  hardware renderer (`Mesa Intel(R) Graphics …`) and xterm's WebGL addon is used again — no change needed there.
+
+**Key decisions**
+
+- **nvidia-open gates *identically* to the proprietary blob**, and is only *logged* separately. The card grouped
+  it with nouveau; that was deliberately not done, because it ships the same proprietary userspace EGL the
+  workaround targets — and an nvidia-open-**only** desktop still needs the workaround. What actually fixes the
+  reported box is the Mesa-present/hybrid rule, not a driver-flavor exemption.
+- **No NVIDIA driver-version gate.** The version is parsed for the diagnostic log only; a wrong threshold would
+  risk a blank or garbled webview, which is worse than slow.
+- **The `RendererOverride` tri-state (Auto / ForceDisable / ForceKeep) is the seam** a future Settings
+  renderer-override card plugs into — resolved today from `RECUE_DISABLE_DMABUF` alone, with an in-code note
+  that a *persisted* setting must be read **before `tauri::Builder`** (GTK reads the env at init). No Tauri
+  command, IPC, or settings field was added here.
+- Escape hatches unchanged: a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` is never touched, and the
+  `RECUE_DISABLE_COMPOSITING` debug opt-in is untouched.
+
+**Dependencies:** none. (Corrects #346, which introduced the detection.)
+
+**Notes**
+
+- 23 unit tests, including the named **`hybrid_intel_nvidia_open_keeps_dmabuf`** regression guard built from the
+  reporter's verbatim `/sys` strings, plus a Linux-only no-panic/consistency smoke test over the impure probes.
+  Every pure fn is `, test)`-widened so the macOS and Windows hosts still type-check and run them;
+  **macOS/Windows behavior is byte-for-byte unchanged** (the arm is unreachable there).
+- Per-GPU runtime behavior can't be exercised on CI — a dated `### DMA-BUF detection regression (Task #347)`
+  section + real-box checklist went into `TRAJECTORY_TO_LINUX.md`, and `CLAUDE.md`'s Linux-performance item (1)
+  was restated under the new policy (`#346/#347`).

@@ -5,9 +5,11 @@
 //! `store`; read-only git support is added by a later task.
 
 mod agents;
+mod child_env;
 mod commands;
 mod files;
 mod git;
+mod linux_gtk;
 mod linux_webkit;
 mod path_env;
 mod pty;
@@ -59,13 +61,26 @@ pub fn run() {
     // thread-safe). See `path_env`.
     path_env::restore_user_path();
 
-    // Linux/WebKitGTK renderer workaround (#346): on NVIDIA's proprietary driver (and
-    // in VMs) WebKitGTK's DMA-BUF renderer makes the whole webview crawl — laggy input
-    // echo, slow paint. Export the documented kill-switch before GTK/WebKit initialize
-    // (and, like the PATH restore above, before any threads — env mutation isn't
-    // thread-safe). No-op on macOS/Windows and on healthy AMD/Intel Mesa stacks; the
+    // Linux/WebKitGTK renderer workaround (#346, GPU-aware since #347): where the NVIDIA
+    // blob actually renders the webview, WebKitGTK's DMA-BUF renderer makes the whole
+    // thing crawl — laggy input echo, slow paint. Export the documented kill-switch before
+    // GTK/WebKit initialize (and, like the PATH restore above, before any threads — env
+    // mutation isn't thread-safe), but *only* where DMA-BUF is genuinely bad: the blob is
+    // the sole renderer, GL is PRIME-routed to it, or we're in a VM with no native GPU. A
+    // hybrid iGPU+dGPU laptop, nouveau, and any Mesa stack keep DMA-BUF (disabling it there
+    // forces CPU rendering — it *was* the reported slowness). No-op on macOS/Windows; the
     // user's own env and `RECUE_DISABLE_DMABUF` override it. See `linux_webkit`.
     linux_webkit::apply_webkit_env_workarounds();
+
+    // Linux/GTK dialog theming (#349): the AppImage's bundled GTK hook forces
+    // `GTK_THEME=Adwaita:light` unless the *system* theme's name literally contains
+    // "dark", the dialog plugin's rfd backend builds its dialogs as in-process GTK3
+    // widgets, and `GTK_THEME` outranks every GtkSettings property — so the folder/open/
+    // save dialogs came up white in a dark app. Correct the variable here, from ReCue's
+    // own theme, before GTK initializes (and, like the two calls above, before any thread
+    // spawns). No-op on macOS/Windows and outside an AppImage; the user's own
+    // `APPIMAGE_GTK_THEME` / `RECUE_GTK_THEME` override it. See `linux_gtk`.
+    linux_gtk::apply_gtk_theme_env();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

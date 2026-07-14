@@ -401,14 +401,17 @@ function NewSessionModal() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, close]);
 
-  // Capture the opener on open; restore focus to it on close (a11y #49).
+  // Capture the opener on open; restore focus to it on close (a11y #49). The restore
+  // lives in the effect's **cleanup** (like CloneRepoModal's) so it fires whether the
+  // modal re-renders with `open: false` or is unmounted outright — since #356 the modal
+  // is lazily mounted only while open, so the old `else` branch would never have run.
   useEffect(() => {
-    if (open) {
-      openerRef.current = document.activeElement as HTMLElement | null;
-    } else {
+    if (!open) return;
+    openerRef.current = document.activeElement as HTMLElement | null;
+    return () => {
       openerRef.current?.focus?.();
       openerRef.current = null;
-    }
+    };
   }, [open]);
 
   // Keep the highlighted recent — or the folder picker (#123) — scrolled into view
