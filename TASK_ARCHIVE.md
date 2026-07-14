@@ -3577,3 +3577,311 @@ seconds of staggered reconnect on a busy install. The resume loop is now a **4-w
   gating, and a unix-gated `concurrent_spawns_register_every_session` regression guard in `pty.rs`.
 - Real-box-check entries went into `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md` — **four concurrent
   ConPTY creations are worth eyeballing on Windows**, since that is the one path CI cannot exercise.
+
+### 358. [x] Tune `[profile.release]` (LTO, one CGU, strip, size opt-level) — deliberately keeping `panic = "unwind"`
+
+`src-tauri/Cargo.toml` had **no `[profile.release]` at all**, so release builds ran on Cargo's stock defaults:
+no LTO, 16 codegen units, unstripped symbols. The resulting binary is decompressed and paged in from the
+AppImage's squashfs at **every** launch, so its size is a direct cold-start cost (an acknowledged upstream
+AppImage issue). This adds Tauri's standard size profile — **minus** the one lever that would have been actively
+harmful. It also closes the "deliberately untouched" `[profile.release]` item that #346 logged in
+`TRAJECTORY_TO_LINUX.md`.
+
+**What shipped** (branch `release-profile-tuning`, PR [#108](https://github.com/ErikdeJager/ReCue/pull/108),
+2026-07-14):
+
+- **`src-tauri/Cargo.toml`** — a heavily-commented `[profile.release]`: `lto = true` (fat), `codegen-units = 1`,
+  `strip = true`, `opt-level = "s"`.
+- **`src-tauri/src/pty.rs`** — an `#[ignore]`d `bench_output_hot_path` test (test-only; **no production-code
+  change**) timing the three CPU-bound stages of the PTY output path — `Scrollback::push` at 8 KB chunks against
+  the 256 KB cap, `coalesce_output_events`, and `commands::encode_output` — with `std::time::Instant` and **no
+  new dependency** (no criterion). Shipped rather than thrown away so the `opt-level` choice stays reproducible,
+  including for Task #361's AUR package.
+- **Docs** — a dated `TRAJECTORY_TO_LINUX.md` entry (profile, the panic rationale, CI build-time cost, the
+  `lto = "thin"` fallback), a short mirrored `TRAJECTORY_TO_WINDOWS.md` note (on MSVC `strip` is near-free and
+  release carries no PDB), and one sentence in `CLAUDE.md`'s **Builds & distribution** bullet.
+
+**Key decisions**
+
+- **`panic = "abort"` was rejected, and the reasoning is recorded *in the manifest* so nobody "completes" the
+  profile later.** Technically nothing needs unwinding — the backend has no `catch_unwind`, no `#[should_panic]`,
+  and no production `unwrap`/`expect` outside one startup `.expect`. But ReCue **supervises long-lived PTY
+  sessions from always-running threads** (the per-session reader loop, the busy/idle monitor, the title worker,
+  the `lib.rs` event forwarder, the schedule/recurring poll, the `path_env` probe), and every mutex take already
+  handles a poisoned lock — there is not one `lock().unwrap()` in the tree. Under unwinding, a panic in any of
+  those threads kills **only that thread** while every other live agent and detached window survives.
+  `panic = "abort"` would trade that live property away — the whole app dies, every agent lost — for the
+  **smallest** of the four size levers (~5–10% of unwind tables).
+- **Fat `lto = true`, not `"thin"`.** The extra link time is paid only by `release.yml` (version-bump pushes,
+  four serialized Rust binaries — the macOS universal target counts twice) and produces a draft release a human
+  publishes later; it is **never** paid by the PR gate, since `ci.yml` uses the dev/test profiles. `lto = "thin"`
+  is documented as the one-word fallback if a leg OOMs (the arm64 macOS runner has ~7 GB, and universal means
+  two LTO links).
+- **`opt-level = "s"` by the plan's own decision rule.** `3` was to be shipped only if `"s"` proved >15% slower
+  on the aggregate hot path *and* a stage dropped below ~200 MB/s — and a claude repaint storm is single-digit
+  MB/s, with #261/#346 having already moved the costly work off the critical path.
+- **The card's "23.6 MB / 86 MB" figures were treated as unverified** — acceptance was gated on a *relative*
+  delta (binary ≥25% smaller) rather than absolute numbers.
+- **No release build was added to the PR gate** (`ci.yml` explicitly refuses per-PR `tauri build` cost). Accepted
+  consequence: a broken release link would surface only on the next version-bump push; rollback is a one-line
+  revert of the profile block.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **No size or benchmark numbers are claimed, and this is the honest gap in the task.** The implementing box has
+  no `webkit2gtk-4.1` / `javascriptcoregtk-4.1` system libraries — `cargo check` fails identically on untouched
+  `main` — so it could not **link** a binary: no `cargo build --release`, no AppImage, no `cargo test` run, and
+  no benchmark. Per the plan's own decision rule, an unrunnable benchmark defaults to `opt-level = "s"`. The
+  measurements are logged as **pending real-box verification** in `TRAJECTORY_TO_LINUX.md`, with the exact
+  commands to obtain them.
+- Green in CI: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` (so the manifest parses and the
+  new test compiles warning-free), `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (671
+  tests). `cargo test` compiles the test target but fails at **link** on those missing system libs — a
+  pre-existing environment gap, not a defect of this change.
+- Untouched: no `[profile.dev|test|bench]`, no `.cargo/config.toml`, no `RUSTFLAGS`, no new dependency.
+
+### 364. [x] Recover from an unrecovered xterm WebGL context loss (dispose the addon → DOM renderer, latched)
+
+**The card's premise was partly wrong, and the task was rescoped honestly rather than built to the letter.** It
+said the WebGL addon was attached "without a context-loss handler" — but `terminalPool.ts` has had a minimal
+`addon.onContextLoss(() => addon.dispose())` since #18. What was *actually* missing is what happens around that
+dispose: the pool kept a **dangling reference** to the disposed addon, so the async #221 font-atlas rebuild
+could still call `clearTextureAtlas()` on it — and, worse, **burn the one-shot module-global `fontAtlasRebuilt`
+flag that every other live terminal still needs**. There was also no anti-retry latch (a sick GPU could be
+hammered with a context-loss storm as each new terminal attached a fresh addon), no warning, and no observable
+state. WebGL contexts drop on OOM/suspend, likelier on WebKitGTK.
+
+**What shipped** (branch `xterm-webgl-context-loss`, PR
+[#109](https://github.com/ErikdeJager/ReCue/pull/109), 2026-07-14) — frontend only:
+
+- **`src/components/Terminal/webglFallback.ts`** (new, pure and dependency-free) — the per-document WebGL
+  fallback latch plus a per-session renderer record: `allowsWebgl` / `noteRenderer` / `noteContextLoss` /
+  `rendererOf` / `hasLostContext` / `forget` / `reset`, exposed through a `webglFallback` singleton so the main
+  window and each detached canvas window (#84) latch **independently**.
+- **`terminalPool.ts`** — on an **unrecovered** context loss, `createHost` now clears its addon reference,
+  latches + warns once, disposes the addon (xterm swaps back to its DOM renderer and re-lays-out the **same**
+  buffer), and forces a belt-and-braces `term.refresh(0, term.rows - 1)`. The window is then latched to the DOM
+  renderer for the rest of the run, so a newly created terminal (spawn / Restart / template) attaches no
+  `WebglAddon` at all. `webglFallback.allowsWebgl()` is checked **before** `webglAllowed()`, so a fallen-back
+  window never even constructs the #346 probe canvas.
+- `host.dispose` forgets the session's renderer record (keeping the map bounded) but **deliberately does not
+  clear the latch** — disposing the terminal that lost its context must not re-arm WebGL. The latch likewise
+  survives `resetTerminal` (session Restart) and `forget()`.
+
+**Key decisions**
+
+- **The latch is window-wide (a module singleton per document), not per-session.** A real GL loss is
+  driver/process-level, so a terminal spawned after the loss would immediately lose its context too. Rollback to
+  a per-session key is noted in the plan.
+- **No re-attach, and no `webglcontextrestored` handling.** Verified against `@xterm/addon-webgl@0.19.0`: the
+  addon itself waits ~3 s for a restore and only fires `onContextLoss` when the context is **unrecoverable** —
+  so a retry path would be redundant at best and a context storm at worst.
+- **A new module rather than extending `webglRenderer.ts`** — that keeps `webglRenderer.ts` a pure classifier
+  and kept this diff conflict-free with the concurrent Task #357, which extends that same file.
+- **No user-facing surface** (no toast, badge, or setting) — a single `console.warn` in #346's style. The
+  user-visible outcome is simply that the terminal keeps working. `webglFallback.allowsWebgl()` / `reset()` are
+  documented as the seam for Task #357's Settings renderer override (an explicit "force WebGL" must clear the
+  latch).
+- **The #18 pool invariant holds**: no host / xterm / container / PTY dispose, no scrollback replay, no remount —
+  the renderer swaps underneath the same live buffer.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Unit tests cover the pure module at 100% lines/branches/functions. The one path CI cannot exercise — the
+  actual `WEBGL_lose_context` smoke test — is recorded as a real-box verification step in
+  `TRAJECTORY_TO_LINUX.md`, with one clause added to `CLAUDE.md`.
+- Unchanged elsewhere: detached windows (#105) and Linux software-WebGL boxes (#346) still never construct the
+  addon at all; macOS/Windows main-window terminals still do.
+
+### 363. [x] Give the UI font a Linux leg — bundle Inter Variable (latin), applied Linux-only
+
+`tokens.css`'s `--ui` stack (`-apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif`) resolves to
+San Francisco on macOS and Segoe UI on Windows, but on Linux it falls through to whatever the distro's default
+sans happens to be — which reads noticeably worse than the other two targets. The card suggested simply adding
+Linux-common faces (Inter, Cantarell, Ubuntu, Noto Sans) ahead of the generic. **That was measured on the
+reporting Arch box and rejected**: `fc-list` showed that **none** of those faces are installed (only Adwaita
+Sans/Mono + FreeSans, with `fc-match sans-serif` → FreeSans), so a fallback-only list would have been a **no-op
+on the very machine that reported the bug**, and non-deterministic everywhere else. So the face is **bundled**
+instead.
+
+**What shipped** (branch `linux-ui-font`, PR [#110](https://github.com/ErikdeJager/ReCue/pull/110),
+2026-07-14) — frontend only, no Rust change:
+
+- **Inter Variable bundled offline** (`@fontsource-variable/inter`, OFL-1.1 — never a CDN, like the existing
+  JetBrains Mono) via a **hand-written `@font-face`** in the new `src/styles/fonts.css` naming only the **latin**
+  subset: one **48,256 B** woff2 ships, instead of the **218,512 B** that `import "@fontsource-variable/inter"`
+  would have emitted across all seven subsets. Variable rather than static because the UI uses weights
+  400/500/600 — one file, real weights.
+- **Applied Linux-only** through a new `:root[data-platform="linux"]` `--ui` override. The shared `:root --ui`
+  line is **not touched**, so macOS and Windows render byte-for-byte as before — and never fetch the woff2 at
+  all, since a `@font-face` file loads only when an element actually matches the family. A short system-face
+  tail is kept in the Linux stack for non-latin glyph coverage.
+- **A new seam for platform-conditional CSS** — `data-platform` on `<html>`, written **synchronously** from the
+  WebView user-agent (`detectPlatform` / `applyPlatformAttribute` in `src/platform.ts`) from `main.tsx`
+  **before the first render**. The store's `platform` signal is an async IPC and would have flipped the font
+  mid-boot. `store.ts` re-applies the attribute from the authoritative backend `platform()` when it lands (a
+  no-op in practice, and a self-heal if the UA sniff were ever wrong).
+
+**Key decisions**
+
+- **The ordering hazard was verified, not assumed.** Prepending `"Inter"` into the *shared* stack is **not**
+  platform-neutral: macOS is safe (`-apple-system` wins first), but **Windows is not** — neither
+  `-apple-system` nor `"SF Pro Text"` resolve there, so a user who happened to have Inter installed would get
+  it *instead of* Segoe UI. Appending after `system-ui` is safe on macOS/Windows but a no-op on Linux (the
+  generic always resolves; fontconfig even defines a `system-ui` generic). Hence a **platform-scoped override**,
+  never a re-ordering of the shared list.
+- **`format("woff2")`, not fontsource's `format("woff2-variations")`** — an engine that doesn't know the newer
+  keyword degrades to the default instance rather than skipping the `src` entirely (which would mean no font at
+  all). The verbatim latin `unicode-range` lets non-latin codepoints fall through to system faces, so no tofu.
+- **Consistent with Task #356's bundle budget:** a woff2 is not JS, is never parsed by the engine, and is
+  fetched only on Linux — +47 KB on disk (~0.9% of `dist/`), with **zero** JS-parse cost.
+- **`index.html` was deliberately not touched** (Task #348 owns it), so the two land independently.
+- Out of scope and recorded rather than built: the `--mono`/terminal font, mermaid's `fontFamily`, and a
+  user-facing "UI font" setting or opt-out for Linux users who prefer their desktop font.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Measured, not assumed** (`npm run build`): exactly **one** `dist/assets/inter-latin-wght-normal-*.woff2` at
+  48,256 B; total woff2 payload 164,332 B (up from 116,076 B) — both matching the plan exactly. The
+  bare-package `url()` resolution in plain CSS was empirically verified against this repo's own Vite 7.3.6.
+- Tests: `detectPlatform` over the real WKWebView / WebView2 / WebKitGTK user-agent strings plus the unknown
+  case, and a **mechanical regression guard** that reads `tokens.css` + `fonts.css` off disk and asserts the
+  `:root --ui` stack still equals the original **exactly**, that the Linux block leads with `"Inter Variable"`
+  and ends in a generic, and that the named family is genuinely bundled locally.
+- Checks green: `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (681 passed). The GUI check
+  (does it actually *look* right on each distro) is recorded in `TRAJECTORY_TO_LINUX.md`.
+
+### 352. [x] Batch the boot IPC waterfall — one aggregated `boot_state` command + parallel event listeners + a no-flash loading gate
+
+`init()` was a waterfall: it awaited **13 event-listen registrations one at a time**, then `platform`, then
+`windowsBuild`, then refresh batch A, then batch B, then serial `listSchedules` / `listRecurrings` /
+`appVersion` / `getLastVersion` / `listCanvasWindows` — **34 invokes across 22 sequential waves**, 16 of them
+gating the first meaningful render. Every one of those round-trips is an evaluate-JS hop on the webview main
+thread, which is costliest on WebKitGTK. Boot is now **14 invokes in 2 concurrent waves**.
+
+**What shipped** (branch `batch-boot-ipc-waterfall`, PR
+[#112](https://github.com/ErikdeJager/ReCue/pull/112), 2026-07-14):
+
+- **One aggregated Rust `boot_state` command** (`BootState` struct + a pure, unit-testable `boot_state_from`)
+  returning **all 21 boot reads** in a single round-trip: sessions, recents, repo colors, Overview
+  panels/order, the legacy `open_files`, canvas layout/tabs/templates, settings, sidebar width/collapsed, folder
+  order, diff-seen, schedules, recurrings, last + running version, platform, Windows build, and the detached
+  canvas ids. It is `async` + `spawn_blocking` (the Windows `cmd /C ver` probe stays off the webview main
+  thread, matching #308/#330/#353), and the probe is awaited **before** any store lock, so no mutex guard
+  crosses an `await`.
+- **The 13 `listen` registrations batched** into one parallel wave (`Promise.all` inside each `subscribe*Events`
+  helper, and across the four helpers).
+- **Boot restructured into two concurrent waves**: the `boot_state` fetch **races** the listener wave, but the
+  payload is applied only **after** the listeners resolve — preserving today's invariant that a live
+  `session://output` / `session://exited` can never land un-handled.
+- **`store.applyBootState`** — the single place the payload becomes state, in **one `set()`**. `refresh()` is
+  now a thin fetch + apply (keeping its name, so `store.refresh.test.ts` keeps its entry point).
+- **A `booted` flag** gating three empty-state affordances (the Overview `EmptyState`, the Sidebar "No
+  repositories yet." hint, and the empty-canvas center hint) so none of them can flash before content arrives.
+  Deliberately **no spinner or skeleton** — it is complementary to Task #348's pre-paint window-show gate.
+
+**Key decisions**
+
+- **`platform` + `windowsBuild` must land in the *same* `set()` as `sessions`** — the #346 invariant, since
+  `terminalPool` reads them at host-creation time. This was made an explicit acceptance criterion **and** a
+  test, not just a code comment.
+- **Every existing command and `ipc.ts` wrapper is kept and still registered.** This is a batching *read*, not a
+  replacement — some become boot-unused but remain the API surface for Settings/About and other call sites. **No
+  command was deleted.**
+- **A single point of failure was consciously accepted**: one command now replaces three independent try/catch
+  groups. `boot_state` is infallible server-side (in-memory store reads), and the only realistic failure ("not
+  running inside Tauri") already sank all three groups before. `booted` flips true **even when `boot_state`
+  fails**, so the UI never strands on a blank screen.
+- **Only one new pure module was extracted** (`src/boot.ts` → `resolveCanvases`: persisted tabs, stale
+  `activeId` fallback, the legacy `canvas_layout` migration, and the detached-window override), keeping the rest
+  of the derivation inside the store action to avoid an import cycle with `store.ts`.
+- **The detached canvas window (#84) boots identically** — every `IS_MAIN_WINDOW`-only side effect (the legacy
+  `open_files` clear, terminal respawn, canvas-migration persist, the update toast + `setLastVersion`, the usage
+  poll) is preserved verbatim.
+- Out of scope, and left to their owners: the sidebar's post-boot git refreshes (Task #359),
+  `maybeOnboardAgent`'s three `agent_info` probes, `pruneMissingFolders`' `dir_exists` calls (all already
+  void-ed off the critical path), and the boot resume loop (Task #355).
+
+**Dependencies:** none.
+
+**Notes**
+
+- A Rust unit test proves **each `boot_state_from` field equals what its individual getter/command returns** —
+  so the aggregate can't silently drift from the surface it replaced. `store.refresh.test.ts` was re-pointed at
+  a `makeBootState()` fixture with every prior assertion kept, plus new coverage: boot issues only `bootState` +
+  the four subscribes; `platform` and `sessions` land together; `booted` flips even on failure.
+- Platform-neutral win, largest on WebKitGTK; real-box checks recorded in `TRAJECTORY_TO_LINUX.md`.
+
+### 354. [x] Fast, reliable session exit — kill the PTY process group and derive `Exited` from the child, not the reader's EOF
+
+`kill_session` / `kill_all` only killed the **direct** child pid, and the `Exited` event was **EOF-driven** — but
+on unix a PTY master only EOFs once **every** holder of the slave fd is gone, and claude's subprocesses (MCP
+servers, tool children) inherit it. So an already-exited agent's card stayed alive for seconds (the reported
+"instances exit slow"), and with a descendant that ignores SIGHUP the master **never EOFs at all** — verified
+with a PTY probe where the reader was still blocked after 8 s.
+
+**What shipped** (branch `fast-session-exit`, PR [#113](https://github.com/ErikdeJager/ReCue/pull/113),
+2026-07-14):
+
+- **`Exited` is now driven by the child, not the reader.** A per-session **exit-waiter thread**
+  (`pty.rs exit_waiter`) owns the `Child`, blocks in `wait()`, and is the **sole** emitter of
+  `SessionEvent::Exited`. The reader's send is **deleted**, not merely guarded, so there is still exactly **one**
+  `Exited` per PTY generation — the frontend's consume-once `intentionalKills` contract is untouched.
+- **Trailing output still precedes `Exited`** — the waiter waits, bounded (`EXIT_DRAIN_MS`, 150 ms), on a
+  `reader_done` flag the reader sets after its last `Output`, then hangs up lingering descendants and escalates
+  to SIGKILL after a further 250 ms. Worst-case added exit latency ~400 ms; normally a few ms.
+- **Unix process-group kill (no orphans)** — `hangup_group` / `kill_group` (`killpg` SIGHUP → bounded grace →
+  SIGKILL) back `kill_session`, `kill_all`, and the waiter's cleanup of descendants still holding the slave.
+- **`kill_session` is non-blocking**: the SIGHUP goes out immediately and the SIGKILL escalation runs off-thread,
+  replacing portable-pty's ~200 ms sleep *inside* the Tauri command. **`kill_all` is bounded**: one shared 200 ms
+  grace for all sessions rather than ~200 ms × N serially, run inline rather than on detached threads (which may
+  not survive process exit → orphans).
+- **Same-id respawn (Restart) hardening** — a superseded generation is silenced and killed, so a stale waiter's
+  late exit can never be attributed to the fresh session.
+
+**Key decisions**
+
+- **No `pre_exec`/`setsid` of our own, and no `nix` dependency.** The root cause was confirmed *in the vendored
+  crate*: portable-pty 0.9.0's unix spawn **already** calls `setsid()` in `pre_exec` (`src/unix.rs:257`), so the
+  child is a session/process-group leader (`pgid == pid`) and `killpg(child_pid)` is already correct — it can
+  only ever reach the agent's **own** descendants. The only new dep is `libc`, gated
+  `[target.'cfg(unix)'.dependencies]` and already in the lock file via portable-pty.
+- **The subtlest bug this task had to avoid: `kill_all` must be *silent*.** An `ExitState::silent` flag is set
+  **before any signal** on shutdown, so a shutdown kill emits **no** `Exited` at all. Without it, a claude that
+  traps SIGHUP and exits **0** would reach the still-live webview, `isCleanExit` would read it as a *clean* exit,
+  and `forgetExitedSession` would **delete the persisted record** — silently breaking #30's "quitting keeps your
+  sessions" guarantee. `kill_session`, by contrast, still emits exactly one `Exited`, so `intentionalKills`
+  bookkeeping is unchanged.
+- **Exit-code semantics are preserved by construction, not by a new flag.** portable-pty maps a signal death to
+  exit code **1** (never 0), so a killed agent can never be misread as a clean code-0 exit and get its record
+  forgotten (#63). Documented and **asserted in a test** rather than adding a "killed" field to the event payload.
+- **SIGHUP first, not SIGTERM** (matching portable-pty's and a terminal's own semantics), escalating to SIGKILL.
+- **Deliberately did *not* killpg the tty's foreground process group** (`MasterPty::process_group_leader`): the
+  setsid'd child's own group already covers claude's non-detached descendants. A descendant that `setsid`s
+  *itself* is recorded as a known, best-effort limitation.
+- **Windows is byte-for-byte untouched** — no job object (an explicit non-goal), no `libc` compiled there, and
+  the kill path stays `ChildKiller::kill()` → `TerminateProcess` (verified in the crate: both `WinChild::kill`
+  and the cloned `WinChildKiller::kill` call `TerminateProcess(handle, 1)`). Windows still *inherits* the
+  platform-neutral child-wait-driven `Exited`, which is a cfg-free improvement. `pid` and the two grace
+  constants carry `#[cfg_attr(windows, allow(dead_code))]` so a Windows `clippy --all-targets -- -D warnings`
+  stays clean.
+- **No frontend change at all** — `isCleanExit`, `forgetExitedSession`, `intentionalKills`, the Restart overlay
+  and "shutdown keeps records" are exactly as they were.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Three new `#[cfg(unix)]` tests (plus a `session_pid` accessor and a `group_gone` helper): a prompt exit despite
+  a lingering descendant; a prompt whole-group kill (asserting **exactly one** `Exited`, **never code 0**); and a
+  **silent** `kill_all` leaving no process group behind. **Each was verified to fail against a pre-#354
+  simulation** and pass after — the tests genuinely pin the bug, rather than merely describing the new code.
+- Docs: the `CLAUDE.md` "Exit handling (#63)" convention + Spawn bullet, and dated entries with real-box
+  checklists in `TRAJECTORY_TO_LINUX.md` / `TRAJECTORY_TO_WINDOWS.md` (the Windows `TerminateProcess` path and a
+  real MCP-server-holding-the-slave scenario are the items CI cannot exercise).

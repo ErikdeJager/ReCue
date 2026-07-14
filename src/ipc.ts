@@ -13,6 +13,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AgentInfo,
   AheadBehind,
+  BootState,
   BranchList,
   CanvasNode,
   CanvasTemplate,
@@ -160,6 +161,15 @@ export const setSessionWatch = (id: string, watch: boolean) =>
 
 export const sessionScrollback = (id: string) =>
   invoke<ScrollbackReply>("session_scrollback", { id });
+
+/** Everything the boot needs, in **one** round-trip (#352) — sessions, recents, repo
+ * colors, Overview panels/order, legacy open files, canvas layout/tabs/templates,
+ * settings, sidebar width/collapsed, folder order, diff-seen, schedules, recurrings,
+ * last + running app version, platform, Windows build, detached canvas ids. The
+ * individual commands below all remain (other call sites use them); this batches the
+ * ~21 boot reads that used to run as ~22 sequential waves, each an evaluate-JS hop on
+ * the webview main thread (costliest on Linux/WebKitGTK, #346). */
+export const bootState = () => invoke<BootState>("boot_state");
 
 export const listSessions = () => invoke<SessionRecord[]>("list_sessions");
 
@@ -742,28 +752,35 @@ export interface SessionEventHandlers {
   onForkable: (payload: ForkablePayload) => void;
 }
 
-/** Subscribe to the per-session output/exit/state/name/forkable events. Returns an unlisten fn. */
+/** Subscribe to the per-session output/exit/state/name/forkable events. Returns an
+ * unlisten fn. Each `listen()` is its own `invoke` (`plugin:event|listen`), so they
+ * register as **one parallel wave** rather than five sequential round-trips (#352). */
 export async function subscribeSessionEvents(
   handlers: SessionEventHandlers,
 ): Promise<UnlistenFn> {
-  const unlistenOutput = await listen<OutputPayload>(
-    "session://output",
-    (event) => handlers.onOutput(event.payload),
-  );
-  const unlistenExited = await listen<ExitPayload>(
-    "session://exited",
-    (event) => handlers.onExited(event.payload),
-  );
-  const unlistenState = await listen<StatePayload>("session://state", (event) =>
-    handlers.onState(event.payload),
-  );
-  const unlistenName = await listen<NamePayload>("session://name", (event) =>
-    handlers.onName(event.payload),
-  );
-  const unlistenForkable = await listen<ForkablePayload>(
-    "session://forkable",
-    (event) => handlers.onForkable(event.payload),
-  );
+  const [
+    unlistenOutput,
+    unlistenExited,
+    unlistenState,
+    unlistenName,
+    unlistenForkable,
+  ] = await Promise.all([
+    listen<OutputPayload>("session://output", (event) =>
+      handlers.onOutput(event.payload),
+    ),
+    listen<ExitPayload>("session://exited", (event) =>
+      handlers.onExited(event.payload),
+    ),
+    listen<StatePayload>("session://state", (event) =>
+      handlers.onState(event.payload),
+    ),
+    listen<NamePayload>("session://name", (event) =>
+      handlers.onName(event.payload),
+    ),
+    listen<ForkablePayload>("session://forkable", (event) =>
+      handlers.onForkable(event.payload),
+    ),
+  ]);
   return () => {
     unlistenOutput();
     unlistenExited();
@@ -782,18 +799,18 @@ export interface CanvasEventHandlers {
 
 /** Subscribe to cross-window canvas sync events (#84): `canvas://changed`
  * (tab/layout edits in any window) and `canvas://windows` (a detached window
- * opened/closed). Returns an unlisten fn. */
+ * opened/closed). Returns an unlisten fn. Registered as one wave (#352). */
 export async function subscribeCanvasEvents(
   handlers: CanvasEventHandlers,
 ): Promise<UnlistenFn> {
-  const unlistenChanged = await listen<PersistedCanvases>(
-    "canvas://changed",
-    (event) => handlers.onCanvasesChanged(event.payload),
-  );
-  const unlistenWindows = await listen<{ detached: string[] }>(
-    "canvas://windows",
-    (event) => handlers.onWindowsChanged(event.payload.detached),
-  );
+  const [unlistenChanged, unlistenWindows] = await Promise.all([
+    listen<PersistedCanvases>("canvas://changed", (event) =>
+      handlers.onCanvasesChanged(event.payload),
+    ),
+    listen<{ detached: string[] }>("canvas://windows", (event) =>
+      handlers.onWindowsChanged(event.payload.detached),
+    ),
+  ]);
   return () => {
     unlistenChanged();
     unlistenWindows();
@@ -813,22 +830,21 @@ export interface ScheduleEventHandlers {
 
 /** Subscribe to scheduled-session events (#93/#280): `schedule://fired` (a schedule
  * became a live agent), `schedule://error`, and `schedule://changed` (the pending
- * list changed). Returns an unlisten fn. */
+ * list changed). Returns an unlisten fn. Registered as one wave (#352). */
 export async function subscribeScheduleEvents(
   handlers: ScheduleEventHandlers,
 ): Promise<UnlistenFn> {
-  const unlistenFired = await listen<ScheduleFiredPayload>(
-    "schedule://fired",
-    (event) => handlers.onFired(event.payload),
-  );
-  const unlistenError = await listen<ScheduleErrorPayload>(
-    "schedule://error",
-    (event) => handlers.onError(event.payload),
-  );
-  const unlistenChanged = await listen<ScheduledSession[]>(
-    "schedule://changed",
-    (event) => handlers.onChanged(event.payload),
-  );
+  const [unlistenFired, unlistenError, unlistenChanged] = await Promise.all([
+    listen<ScheduleFiredPayload>("schedule://fired", (event) =>
+      handlers.onFired(event.payload),
+    ),
+    listen<ScheduleErrorPayload>("schedule://error", (event) =>
+      handlers.onError(event.payload),
+    ),
+    listen<ScheduledSession[]>("schedule://changed", (event) =>
+      handlers.onChanged(event.payload),
+    ),
+  ]);
   return () => {
     unlistenFired();
     unlistenError();
@@ -849,22 +865,21 @@ export interface RecurringEventHandlers {
 
 /** Subscribe to recurring-session events (#294): `recurring://fired` (a child
  * rotated), `recurring://error`, and `recurring://changed` (the list changed).
- * Returns an unlisten fn. */
+ * Returns an unlisten fn. Registered as one wave (#352). */
 export async function subscribeRecurringEvents(
   handlers: RecurringEventHandlers,
 ): Promise<UnlistenFn> {
-  const unlistenFired = await listen<RecurringFiredPayload>(
-    "recurring://fired",
-    (event) => handlers.onFired(event.payload),
-  );
-  const unlistenError = await listen<RecurringErrorPayload>(
-    "recurring://error",
-    (event) => handlers.onError(event.payload),
-  );
-  const unlistenChanged = await listen<RecurringSession[]>(
-    "recurring://changed",
-    (event) => handlers.onChanged(event.payload),
-  );
+  const [unlistenFired, unlistenError, unlistenChanged] = await Promise.all([
+    listen<RecurringFiredPayload>("recurring://fired", (event) =>
+      handlers.onFired(event.payload),
+    ),
+    listen<RecurringErrorPayload>("recurring://error", (event) =>
+      handlers.onError(event.payload),
+    ),
+    listen<RecurringSession[]>("recurring://changed", (event) =>
+      handlers.onChanged(event.payload),
+    ),
+  ]);
   return () => {
     unlistenFired();
     unlistenError();
