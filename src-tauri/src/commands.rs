@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use tauri::window::Color;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window};
 use uuid::Uuid;
 
@@ -1147,6 +1148,64 @@ fn broadcast_canvas_windows(app: &AppHandle, exclude: Option<&str>) {
     );
 }
 
+/// Pre-paint window background per theme (#348) — the OS paints this native color while
+/// the WebView boots. MUST equal `--bg-base` in `src/styles/tokens.css` (and `THEME_BG` in
+/// `src/theme.ts` / the inline `<style>` in `index.html`): Catppuccin Mocha Base for dark,
+/// Latte Base for light (#333). Pure — an unknown/absent theme means the dark default.
+/// Platform-neutral: the same color is applied on macOS, Windows and Linux.
+pub fn background_for_theme(theme: Option<&str>) -> Color {
+    match theme {
+        Some("light") => Color(0xef, 0xf1, 0xf5, 0xff),
+        _ => Color(0x1e, 0x1e, 0x2e, 0xff),
+    }
+}
+
+/// The persisted theme's background color (#348). The settings blob is opaque JSON owned
+/// by the frontend (#100); we read only `theme`, best-effort.
+pub fn window_background(store: &Store) -> Color {
+    let settings = store.settings();
+    background_for_theme(settings.get("theme").and_then(|v| v.as_str()))
+}
+
+/// How long Rust waits before showing a window the frontend never revealed (#348).
+const REVEAL_FALLBACK_MS: u64 = 2000;
+
+/// Show + focus the calling window (#348). Windows are created hidden (`visible: false`)
+/// with a themed native background so the OS never paints a white rectangle; the frontend
+/// calls this from `useRevealWindow` once React has committed its first frame. Idempotent.
+#[tauri::command]
+pub fn reveal_window(window: Window) {
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// Safety net for the hidden-until-painted startup (#348): if the frontend never calls
+/// `reveal_window` (a crashed bundle, a dead dev server), show the window anyway after a
+/// short delay so the app can never end up running-but-invisible. A window that is already
+/// visible is left alone.
+pub fn schedule_reveal_fallback(app: &AppHandle, label: &str) {
+    let app = app.clone();
+    let label = label.to_string();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(REVEAL_FALLBACK_MS));
+        if let Some(window) = app.get_webview_window(&label) {
+            if !matches!(window.is_visible(), Ok(true)) {
+                let _ = window.show();
+            }
+        }
+    });
+}
+
+/// Re-apply the themed native background to every open window after a runtime theme switch
+/// (#348), so a resize/repaint gap never exposes the previous theme's color. Best-effort.
+#[tauri::command]
+pub fn set_theme_background(app: AppHandle, theme: String) {
+    let color = background_for_theme(Some(theme.as_str()));
+    for window in app.webview_windows().into_values() {
+        let _ = window.set_background_color(Some(color));
+    }
+}
+
 /// Open (or focus, if already open) a detached window showing one canvas (#84).
 /// The window loads a canvas-only route (`index.html?canvas=<id>`) under the label
 /// `canvas-<id>`; closing it re-docks the canvas by re-broadcasting the (now
@@ -1156,6 +1215,7 @@ fn broadcast_canvas_windows(app: &AppHandle, exclude: Option<&str>) {
 pub fn open_canvas_window(app: AppHandle, id: String, title: String) -> Result<(), SessionError> {
     let label = format!("canvas-{id}");
     if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.show(); // it may still be hidden pre-reveal (#348)
         let _ = existing.set_focus();
         return Ok(());
     }
@@ -1164,8 +1224,14 @@ pub fn open_canvas_window(app: AppHandle, id: String, title: String) -> Result<(
         .title(title)
         .inner_size(1000.0, 760.0)
         .min_inner_size(640.0, 480.0)
+        // Hidden until the frontend paints its first themed frame (#348) — the native
+        // background is the current theme's --bg-base, so a pop-out never flashes white.
+        .visible(false)
+        .background_color(window_background(&app.state::<Store>()))
         .build()
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Never leave a detached window invisible if its frontend fails to boot (#348).
+    schedule_reveal_fallback(&app, &label);
     // Re-dock on close: when this window is destroyed, re-broadcast the detached
     // set (excluding this label) so the main window reclaims the canvas + terminals.
     let on_close = app.clone();
@@ -1184,7 +1250,10 @@ pub fn open_canvas_window(app: AppHandle, id: String, title: String) -> Result<(
 #[tauri::command]
 pub fn focus_canvas_window(app: AppHandle, id: String) -> bool {
     match app.get_webview_window(&format!("canvas-{id}")) {
-        Some(window) => window.set_focus().is_ok(),
+        Some(window) => {
+            let _ = window.show(); // it may still be hidden pre-reveal (#348)
+            window.set_focus().is_ok()
+        }
         None => false,
     }
 }
@@ -2349,6 +2418,125 @@ pub fn set_last_version(store: State<'_, Store>, version: String) -> Result<(), 
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+// --- Boot (#352) ---
+
+/// Everything the frontend needs at boot, in ONE IPC round-trip (#352).
+///
+/// The boot used to be ~22 **sequential** round-trips (13 event-listener registrations,
+/// `platform`, `windows_build`, two `Promise.all` batches, then five more serial singles);
+/// 16 of them gated the first meaningful render, and every round-trip is an evaluate-JS hop
+/// on the webview main thread (costliest on Linux/WebKitGTK, #346). Each field below is
+/// **exactly** what its individual command returns — every one of those commands stays
+/// registered for its other call sites; this is a batching read, not a replacement.
+///
+/// Cheap: every `Store` getter is an in-memory clone under one mutex (no disk I/O). The
+/// only real work is the Windows `cmd /C ver` probe, which runs on the blocking pool.
+#[derive(Serialize)]
+pub struct BootState {
+    /// `list_sessions`
+    pub sessions: Vec<PersistedSession>,
+    /// `list_recents`
+    pub recents: Vec<String>,
+    /// `list_repo_colors`
+    pub repo_colors: std::collections::HashMap<String, String>,
+    /// `list_overview_panels`
+    pub overview_panels: std::collections::HashMap<String, Vec<OverviewPanel>>,
+    /// `list_overview_order`
+    pub overview_order: std::collections::HashMap<String, Vec<String>>,
+    /// `list_open_files` (legacy, read once on boot only to clear it, #110)
+    pub open_files: std::collections::HashMap<String, Vec<String>>,
+    /// `get_canvas_layout` (legacy single layout, migrated once into `canvases`, #46→#58)
+    pub canvas_layout: serde_json::Value,
+    /// `get_canvases`
+    pub canvases: serde_json::Value,
+    /// `get_canvas_templates`
+    pub canvas_templates: serde_json::Value,
+    /// `get_settings`
+    pub settings: serde_json::Value,
+    /// `get_sidebar_width`
+    pub sidebar_width: Option<u32>,
+    /// `get_sidebar_collapsed`
+    pub sidebar_collapsed: Option<bool>,
+    /// `get_repo_order`
+    pub repo_order: Vec<String>,
+    /// `get_diff_seen`
+    pub diff_seen: serde_json::Value,
+    /// `list_schedules`
+    pub schedules: Vec<ScheduledSession>,
+    /// `list_recurrings`
+    pub recurrings: Vec<RecurringSession>,
+    /// `get_last_version`
+    pub last_version: Option<String>,
+    /// `app_version`
+    pub app_version: String,
+    /// `platform`
+    pub platform: String,
+    /// `windows_build` (`0` on non-Windows)
+    pub windows_build: u32,
+    /// `list_canvas_windows` (#84)
+    pub detached_canvas_ids: Vec<String>,
+}
+
+/// Assemble the boot payload from the persisted store — the **pure** half of `boot_state`
+/// (no `AppHandle`, no OS probe), so it is unit-testable against a temp-file `Store`.
+pub fn boot_state_from(
+    store: &Store,
+    platform: String,
+    windows_build: u32,
+    app_version: String,
+    detached_canvas_ids: Vec<String>,
+) -> BootState {
+    BootState {
+        sessions: store.sessions(),
+        recents: store.recents(),
+        repo_colors: store.repo_colors(),
+        overview_panels: store.overview_panels(),
+        overview_order: store.overview_order(),
+        open_files: store.open_files(),
+        canvas_layout: store.canvas_layout(),
+        canvases: store.canvases(),
+        canvas_templates: store.canvas_templates(),
+        settings: store.settings(),
+        sidebar_width: store.sidebar_width(),
+        sidebar_collapsed: store.sidebar_collapsed(),
+        repo_order: store.repo_order(),
+        diff_seen: store.diff_seen(),
+        schedules: store.schedules(),
+        recurrings: store.recurrings(),
+        last_version: store.last_version(),
+        app_version,
+        platform,
+        windows_build,
+        detached_canvas_ids,
+    }
+}
+
+/// The one boot read (#352): everything the frontend needs, in a single round-trip.
+/// Purely additive — every individual command it batches stays registered and works.
+#[tauri::command]
+pub async fn boot_state(
+    app: AppHandle,
+    store: State<'_, Store>,
+) -> Result<BootState, SessionError> {
+    // The one non-trivial read: the Windows `cmd /C ver` probe (#143 `windows_build`).
+    // Run it on the blocking pool (the #330 `current_branches` pattern) so it can't stall
+    // an async worker — and await it FIRST, so no store lock is ever live across an await.
+    // A no-op `0` on macOS/Linux; a join error degrades to 0 (xterm reflow simply stays
+    // off, today's fallback).
+    let win_build = tauri::async_runtime::spawn_blocking(windows_build)
+        .await
+        .unwrap_or(0);
+    // Infallible in practice (in-memory reads only) — async + a borrowed `State` just
+    // requires a `Result` return (the `clone_repo` precedent).
+    Ok(boot_state_from(
+        &store,
+        platform(),
+        win_build,
+        app_version(),
+        detached_canvas_ids(&app, None),
+    ))
+}
+
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
 /// untouched — only the recently-used folder list is emptied.
 #[tauri::command]
@@ -2805,6 +2993,27 @@ pub async fn agent_info(app: AppHandle, agent: String) -> AgentInfo {
 mod tests {
     use super::*;
 
+    /// The pre-paint background must match `--bg-base` (Catppuccin Mocha Base) for dark and
+    /// every non-light / unknown / absent value (#348) — a fresh install has no `theme` key.
+    #[test]
+    fn background_for_theme_defaults_to_the_dark_base() {
+        let dark = Color(0x1e, 0x1e, 0x2e, 0xff);
+        assert_eq!(background_for_theme(None), dark);
+        assert_eq!(background_for_theme(Some("dark")), dark);
+        assert_eq!(background_for_theme(Some("bogus")), dark);
+        assert_eq!(background_for_theme(Some("")), dark);
+    }
+
+    /// Light (#333) maps to the Catppuccin Latte Base — the same `--bg-base` the light token
+    /// block, `THEME_BG` in `src/theme.ts` and the `index.html` inline style carry.
+    #[test]
+    fn background_for_theme_maps_light_to_the_latte_base() {
+        assert_eq!(
+            background_for_theme(Some("light")),
+            Color(0xef, 0xf1, 0xf5, 0xff)
+        );
+    }
+
     /// Build a minimal `PersistedSession` for the `worktree_parent_for_cwd` tests (#331) —
     /// only `repo_path` + `worktree_parent` matter to the resolver.
     fn mk_session(repo_path: &str, worktree_parent: Option<&str>) -> PersistedSession {
@@ -2823,6 +3032,142 @@ mod tests {
             auto_continue_disabled: false,
             watch: false,
         }
+    }
+
+    /// A temp-file `Store` path, mirroring `store.rs`'s test helper.
+    fn temp_store_path(tag: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("recue-commands-{tag}-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    /// #352: the batched `boot_state` must return **exactly** what the individual
+    /// commands/getters it replaces return — this is the regression guard for "one
+    /// round-trip carries the same data as the N it batches". Every field is asserted
+    /// against the very getter its own command calls, plus the four passed-through
+    /// scalars (platform / windows build / app version / detached canvas ids).
+    #[test]
+    fn boot_state_from_matches_the_individual_getters() {
+        let path = temp_store_path("bootstate");
+        let store = Store::load(&path);
+
+        // Populate a representative slice of every persisted shape the boot reads.
+        store.add_session(mk_session("/repo/a", None)).unwrap();
+        store.touch_recent("/repo/a").unwrap();
+        store.set_repo_color("/repo/a", "#fab387").unwrap();
+        store
+            .set_overview_panels(
+                "/repo/a",
+                vec![OverviewPanel {
+                    id: "p1".into(),
+                    kind: "diff".into(),
+                    file: None,
+                    diff_source: None,
+                    compare_base: None,
+                    compare_target: None,
+                    commit_sha: None,
+                }],
+            )
+            .unwrap();
+        store
+            .set_overview_order("/repo/a", vec!["p1".into()])
+            .unwrap();
+        store
+            .set_open_files("/repo/a", vec!["CLAUDE.md".into()])
+            .unwrap();
+        store
+            .set_canvas_layout(serde_json::json!({ "kind": "leaf", "id": "l1" }))
+            .unwrap();
+        store
+            .set_canvases(serde_json::json!({ "canvases": [], "activeId": "c1" }))
+            .unwrap();
+        store
+            .set_canvas_templates(serde_json::json!([{ "id": "t1", "name": "T" }]))
+            .unwrap();
+        store
+            .set_settings(serde_json::json!({ "theme": "dark" }))
+            .unwrap();
+        store.set_sidebar_width(320).unwrap();
+        store.set_sidebar_collapsed(true).unwrap();
+        store.set_repo_order(vec!["/repo/a".into()]).unwrap();
+        store
+            .set_diff_seen(serde_json::json!({ "/repo/a": { "src/x.rs": "d1" } }))
+            .unwrap();
+        store.set_last_version("1.2.0".into()).unwrap();
+        store
+            .add_schedule(ScheduledSession {
+                id: "s1".into(),
+                cwd: "/repo/a".into(),
+                branch: None,
+                create_branch: false,
+                branch_base: None,
+                worktree: false,
+                worktree_path: None,
+                name: None,
+                prompt: None,
+                fire_at: 42,
+                created_at: 0,
+                agent: "claude".into(),
+            })
+            .unwrap();
+        store
+            .add_recurring(RecurringSession {
+                id: "r1".into(),
+                cwd: "/repo/a".into(),
+                branch: None,
+                create_branch: false,
+                branch_base: None,
+                worktree: false,
+                worktree_path: None,
+                name: None,
+                prompt: None,
+                interval_secs: 3600,
+                next_fire_at: 99,
+                current_session_id: None,
+                created_at: 0,
+                agent: "claude".into(),
+            })
+            .unwrap();
+
+        let boot = boot_state_from(
+            &store,
+            "linux".to_string(),
+            0,
+            "1.2.3".to_string(),
+            vec!["c1".to_string()],
+        );
+
+        // Every store-backed field equals what its individual command would return.
+        assert_eq!(boot.sessions, store.sessions());
+        assert_eq!(boot.recents, store.recents());
+        assert_eq!(boot.repo_colors, store.repo_colors());
+        assert_eq!(boot.overview_panels, store.overview_panels());
+        assert_eq!(boot.overview_order, store.overview_order());
+        assert_eq!(boot.open_files, store.open_files());
+        assert_eq!(boot.canvas_layout, store.canvas_layout());
+        assert_eq!(boot.canvases, store.canvases());
+        assert_eq!(boot.canvas_templates, store.canvas_templates());
+        assert_eq!(boot.settings, store.settings());
+        assert_eq!(boot.sidebar_width, store.sidebar_width());
+        assert_eq!(boot.sidebar_collapsed, store.sidebar_collapsed());
+        assert_eq!(boot.repo_order, store.repo_order());
+        assert_eq!(boot.diff_seen, store.diff_seen());
+        assert_eq!(boot.schedules, store.schedules());
+        assert_eq!(boot.recurrings, store.recurrings());
+        assert_eq!(boot.last_version, store.last_version());
+        // …and the four scalars are passed through untouched.
+        assert_eq!(boot.platform, "linux");
+        assert_eq!(boot.windows_build, 0);
+        assert_eq!(boot.app_version, "1.2.3");
+        assert_eq!(boot.detached_canvas_ids, vec!["c1".to_string()]);
+
+        // Nothing was invented: the payload is a plain JSON object of the 21 fields.
+        let value = serde_json::to_value(&boot).expect("serialize");
+        assert!(value.get("sessions").is_some());
+        assert_eq!(value.as_object().map(|o| o.len()), Some(21));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

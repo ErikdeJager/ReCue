@@ -3376,3 +3376,635 @@ happen are **serialized** rather than racing each other on the single main threa
 - Pure WebView/TS — `IntersectionObserver` is supported by WKWebView, WebView2/Chromium **and** WebKitGTK, so
   there is no `#[cfg]` divergence and no OS primitive involved; identical on all three, with the biggest win on
   Linux.
+
+### 347. [x] Fix the Linux DMA-BUF workaround misfiring on hybrid Intel+NVIDIA GPUs (GPU-aware detection)
+
+**#346's own workaround had become the "slow on Arch" bug.** Its `nvidia_driver_present()` returned true on the
+mere *presence* of the kernel module (`/proc/driver/nvidia/version` or `/sys/module/nvidia`) — but on a **hybrid
+laptop** the NVIDIA card exists while the webview actually renders on the Intel/AMD **iGPU via Mesa**, where
+DMA-BUF is healthy and fast. So ReCue forced `WEBKIT_DISABLE_DMABUF_RENDERER=1` on a machine that didn't need
+it, pushing the bundled Skia WebKit into CPU rendering, which then cascaded into software WebGL → xterm's DOM
+renderer. Verified on the reporter's Arch/Hyprland box (`card0` = nvidia blob RTX 4080 Max-Q on nvidia-open
+610.43.03, `card1` = `i915` Intel Iris Xe rendering the webview; boot log
+`set WEBKIT_DISABLE_DMABUF_RENDERER=1 (nvidia: true, vm: false)`). `vm_detected()` was equally coarse: it
+tripped on the mere existence of `/sys/hypervisor/type` (which also exists on a **bare-metal Xen dom0**) and on
+loose DMI *substring* matches including `"standard pc"` and `"kvm"`, which appear in real hardware product
+strings.
+
+**What shipped** (branch `linux-dmabuf-hybrid-gpu`, PR [#104](https://github.com/ErikdeJager/ReCue/pull/104),
+2026-07-14):
+
+- **`src-tauri/src/linux_webkit.rs` rewritten** around pure, unit-tested types and functions
+  (`RendererOverride` / `NvidiaKernel` / `GpuClass` / `DmabufProbe` / `DmabufDecision` / `VmSignals`;
+  `decide_dmabuf`, `nvidia_kernel_flavor`, `nvidia_driver_version`, `classify_gpu`, `is_hypervisor_dmi`,
+  `vm_detected`, `cpuinfo_has_hypervisor_flag`, `only_virtual_gpus`, `describe_probe`, plus the kept
+  `parse_force_flag`), over thin Linux-only `/sys` + `/proc` probes.
+- **The new policy** (ordered, in `decide_dmabuf`): a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` always
+  wins and is never touched → `RECUE_DISABLE_DMABUF` force-overrides both ways → **disable** only when GL is
+  explicitly PRIME-routed to the blob (`__GLX_VENDOR_LIBRARY_NAME=nvidia` / `__NV_PRIME_RENDER_OFFLOAD=1` — the
+  hybrid exemption cannot apply, since the webview's GL *is* NVIDIA's), or when the **NVIDIA blob is the sole
+  renderer** (no Mesa-driven DRM card), or in a **VM with no native Mesa GPU** → otherwise **keep** it. So a
+  hybrid iGPU+dGPU laptop, nouveau, an AMD/Intel-only box, and a passthrough VM all keep the faster DMA-BUF
+  path. An unreadable `/sys/class/drm` leaves the GPU list empty and lands on "disable" — conservative, exactly
+  as #346 was.
+- **GPU inventory** from `/sys/class/drm/card*` (DRM driver-name → Mesa / NvidiaBlob / Virtual / Unknown, with a
+  PCI vendor-id fallback) rather than counting render nodes — the same signal, more precise, and trivially
+  pure-testable.
+- **VM detection tightened** to require **two independent signals** (the CPUID `hypervisor` flag plus
+  DMI/hypervisor-node/virtual-GPU corroboration, or an exact DMI hit with only-virtual GPUs), with **exact —
+  not substring — DMI matching** and an explicit **bare-metal Xen dom0 exclusion** (`/proc/xen/capabilities`
+  containing `control_d`). `"PowerEdge KVM 1000"` and a real "Standard PC Server Board" no longer read as VMs.
+- **One boot diagnostic line for *both* outcomes**, naming the evidence — e.g. `[recue] WebKitGTK: DMA-BUF left
+  on — Mesa GPU present (healthy DMA-BUF) (gpus: nvidia[blob],i915[mesa]; nvidia: open 610.43.03; vm: no;
+  session: wayland) — override with RECUE_DISABLE_DMABUF=1|0`. **#346 logged only the disable case, which is
+  exactly why the misfire was invisible.**
+- **Frontend (comment/log only, zero logic change)** — `webglRenderer.ts`'s header is reframed as what it is (a
+  consequence-level fail-safe, not a detector), and `terminalPool.ts::webglAllowed()` now logs the WebGL
+  renderer string once on Linux for support diagnostics. Once DMA-BUF is correctly left on, that probe reads a
+  hardware renderer (`Mesa Intel(R) Graphics …`) and xterm's WebGL addon is used again — no change needed there.
+
+**Key decisions**
+
+- **nvidia-open gates *identically* to the proprietary blob**, and is only *logged* separately. The card grouped
+  it with nouveau; that was deliberately not done, because it ships the same proprietary userspace EGL the
+  workaround targets — and an nvidia-open-**only** desktop still needs the workaround. What actually fixes the
+  reported box is the Mesa-present/hybrid rule, not a driver-flavor exemption.
+- **No NVIDIA driver-version gate.** The version is parsed for the diagnostic log only; a wrong threshold would
+  risk a blank or garbled webview, which is worse than slow.
+- **The `RendererOverride` tri-state (Auto / ForceDisable / ForceKeep) is the seam** a future Settings
+  renderer-override card plugs into — resolved today from `RECUE_DISABLE_DMABUF` alone, with an in-code note
+  that a *persisted* setting must be read **before `tauri::Builder`** (GTK reads the env at init). No Tauri
+  command, IPC, or settings field was added here.
+- Escape hatches unchanged: a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` is never touched, and the
+  `RECUE_DISABLE_COMPOSITING` debug opt-in is untouched.
+
+**Dependencies:** none. (Corrects #346, which introduced the detection.)
+
+**Notes**
+
+- 23 unit tests, including the named **`hybrid_intel_nvidia_open_keeps_dmabuf`** regression guard built from the
+  reporter's verbatim `/sys` strings, plus a Linux-only no-panic/consistency smoke test over the impure probes.
+  Every pure fn is `, test)`-widened so the macOS and Windows hosts still type-check and run them;
+  **macOS/Windows behavior is byte-for-byte unchanged** (the arm is unreachable there).
+- Per-GPU runtime behavior can't be exercised on CI — a dated `### DMA-BUF detection regression (Task #347)`
+  section + real-box checklist went into `TRAJECTORY_TO_LINUX.md`, and `CLAUDE.md`'s Linux-performance item (1)
+  was restated under the new policy (`#346/#347`).
+
+### 348. [x] Eliminate the white startup flash — hidden-until-painted windows + a themed pre-paint background
+
+Every launch (and every Canvas pop-out, #84) flashed a white rectangle before the UI appeared. **Four
+independent gaps compounded:** (1) `tauri.conf.json`'s window declared no `backgroundColor` and no
+`visible: false`, so the OS mapped the window and painted its **default white surface** as soon as it was
+created — long before the webview had anything to show; (2) `index.html` was 13 completely **unstyled** lines —
+every stylesheet reaches the page through JS (`main.tsx` imports the fonts, `tokens.css` and `global.css`; each
+component imports its own CSS Module), so from document-parse until the ~1.35 MB bundle had been fetched,
+parsed and executed the document had **zero** styles and the WebView painted white (`body { background:
+var(--bg-base) }` lives in `global.css` — far too late to help); (3) `open_canvas_window` built its
+`canvas-<id>` window with no background color, visible immediately; and (4) the **theme** (#333) lives in the
+opaque Rust `settings` blob and only reaches the frontend *asynchronously*, so a Light-theme user got
+white → dark → light. Any pre-paint color therefore has to know the theme **before the JS bundle runs**, in
+both the native window (created by Rust before the webview exists) and the raw HTML document.
+
+**What shipped** (branch `white-startup-flash-348`, PR [#105](https://github.com/ErikdeJager/ReCue/pull/105),
+2026-07-14):
+
+- **`tauri.conf.json`** — the main window is created with `backgroundColor: "#1e1e2e"` **and**
+  `visible: false`, so there is no white OS surface at creation.
+- **`index.html`** — an inline pre-paint `<style>` (dark, plus an `html[data-theme="light"]` rule) and a
+  **synchronous** boot script that reads the `recue.theme` localStorage mirror before first paint.
+- **`src/theme.ts`** (new) — the never-throwing theme mirror: `THEME_STORAGE_KEY`, `THEME_BG`,
+  `themeFromStored`, `readStoredTheme`, `storeTheme`. `store.ts`'s `applySettingsEffects` writes the mirror on
+  every settings apply; the **Rust settings blob stays the source of truth**, and the mirror is only a
+  best-effort pre-paint hint.
+- **`src/useRevealWindow.ts`** (new) — an idempotent post-commit reveal fired from `App()` (the shared root of
+  *both* the main and the detached-canvas routes), on **rAF and a 0 ms timer, whichever lands first** — a hidden
+  WebView may not tick rAF at all.
+- **`commands.rs`** — the pure `background_for_theme` / `window_background` mapping (unit-tested), the new
+  `reveal_window` and `set_theme_background` commands, and **`schedule_reveal_fallback`**: any still-hidden
+  window is shown after 2 s regardless, so a crashed bundle or a dead dev server can never leave the app
+  running-but-invisible. `open_canvas_window` now builds hidden + themed, and `focus_canvas_window` (plus the
+  already-open branch) `show()`s before `set_focus()`.
+- **`lib.rs`** — re-colors the main window from the **persisted** theme in `setup` (after the `Store` is
+  managed, but before the window is ever shown) and schedules its reveal fallback.
+- **`store.ts`** — `saveSettings` pushes the new native background to every window on a theme change, so an
+  already-open window has no stale-color gutter on resize.
+
+**Key decisions**
+
+- **Pre-paint color is the theme's `--bg-base`** (`#1e1e2e` Mocha / `#eff1f5` Latte) — not `--bg-sidebar` or
+  `--terminal-bg`. That hex is necessarily duplicated in four places (`index.html`, `theme.ts`, `commands.rs`,
+  `tokens.css`), so **`src/theme.test.ts` carries an anti-drift guard** asserting all four agree for both
+  themes.
+- **A localStorage mirror, not a Rust-built window with an `initialization_script`.** All windows share one
+  origin, so the mirror is readable pre-paint by both routes. A missing or stale mirror degrades to *today's*
+  behavior (one dark→light flip) and self-heals that same launch — **no white flash either way**. The
+  alternative was a bigger, riskier change to how the main window is created.
+- **Reveal via an app-owned Rust `reveal_window` command, not `getCurrentWindow().show()`** — this avoids
+  widening `capabilities/default.json` with `core:window:allow-show`, and matches the existing Rust-owned
+  window commands (`open_canvas_window` / `focus_canvas_window` / `close_canvas_window`).
+- **Reveal fires on React's first commit, not on the settings/session IPC** — so backend latency can never
+  delay the window appearing.
+- **Added beyond the card's literal text:** `set_theme_background` (so an open window's *native* background
+  follows a theme change), the same hidden+themed treatment for detached canvas windows, and the 2 s Rust-side
+  reveal fallback.
+- **No `color-scheme` declaration was added** — an explicit background suffices, and `color-scheme` would drag
+  UA form-control and scrollbar restyling along with it.
+
+**Dependencies:** none. (Complementary with #356, whose route-level Suspense fallback is a bare
+background-painting `div.app` precisely so the first commit paints the app background, never white.)
+
+**Notes**
+
+- Platform-neutral: **no `#[cfg]` divergence at all** — macOS, Windows and Linux alike. `backgroundColor` +
+  `visible:false` works on WebKitGTK since Tauri 2.1.0 (ReCue is on 2.11.3).
+- The startup surface can't be asserted on CI, so "Needs real-box verification (startup flash, #348)" checklists
+  went into **both** `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md`; `CLAUDE.md`'s "Window chrome"
+  convention now records the hidden-until-painted rule and the four-place pre-paint hex invariant.
+
+### 355. [x] Bounded-parallel boot resume + a one-shot claude project-log index
+
+On boot, persisted sessions were reconnected **strictly one at a time** on a single thread, and every one of
+them re-scanned `~/.claude/projects` from scratch (a `read_dir` plus a stat per project dir) to decide
+forkability. So N sessions cost N serial spawns **and** N directory walks before the last terminal appeared —
+seconds of staggered reconnect on a busy install. The resume loop is now a **4-wide worker pool** over one
+**snapshot** of the claude projects tree, with byte-identical events, error handling, and UI behavior.
+
+**What shipped** (branch `bounded-parallel-boot-resume`, PR
+[#106](https://github.com/ErikdeJager/ReCue/pull/106), 2026-07-14):
+
+- **`src-tauri/src/boot.rs`** (new) — `resume_persisted_sessions(app)` runs a bounded worker pool
+  (`RESUME_CONCURRENCY = 4`, clamped to the record count) over the persisted records, with the pure,
+  unit-testable helpers `run_bounded` / `resume_worker_count` / `next_record` / `plan_for`. `lib.rs`'s setup
+  block collapses to a single `thread::spawn(move || boot::resume_persisted_sessions(resume))`.
+- **`title::ProjectLogIndex`** (new) — one directory scan per boot. It snapshots
+  `~/.claude/projects/*/<uuid>.jsonl` **listing each project dir's `.jsonl` filenames** (name → dir), so a
+  lookup is O(1) and the whole cost is O(M) rather than N × M stats. Its semantics match `title::has_conversation`
+  **exactly**: a shared `conversation_from(LogLocation)` helper, the fail-open `Unknown ⇒ true`, and a per-dir
+  stat fallback so a project dir whose listing fails never reports `Absent` where `locate_log` would have
+  reported `Found` (which would have wrongly disabled the Fork affordance).
+- **Per-record behavior is unchanged** — same order (resume → forkable → `set_forkable` →
+  `session://forkable`), same best-effort `let _ =` handling, no new events or payload fields, and the
+  #101/#141 capability gating preserved (a codex / opencode / custom record is not resumed and reports
+  `forkable: false` without touching the index at all).
+
+**Key decisions**
+
+- **A boot-scoped snapshot, not a global or TTL cache.** The index is built once and dropped when the loop
+  ends; the live title worker keeps its per-call `locate_log`. So a project dir created *after* boot is always
+  seen, and there is **nothing to invalidate** — the classic staleness bug is designed out rather than managed.
+- **Fixed pool width of 4, not `available_parallelism`.** The work is process-creation/IO-bound, and a wider
+  pool would just pile concurrent spawns onto the OS during first paint.
+- **Dropped "resume visible/selected sessions first" from the card's scope**, deliberately: `selectedId` is not
+  persisted at all, and `canvases`/`settings` are opaque frontend-owned JSON blobs the Rust store must not
+  parse. With a 4-wide pool the reordering win is a few hundred ms. Records are dispatched in persisted order;
+  visibility is Task #351's concern.
+- **`pty.rs` production code is untouched** — `SessionManager` was already concurrency-safe (#260), and
+  portable-pty 0.9.0 cloexecs the pty fds and closes fds ≥ 3 in the child on unix (and passes
+  `bInheritHandles=FALSE` on Windows). Only a unix-gated concurrent-spawn **regression test** was added there.
+- **No frontend change** (`git diff --stat -- src/` is empty): `booting` / `RECONNECT_BACKSTOP_MS` / the #30
+  reconnecting flow all stay as-is — a faster resume simply means more resumes land inside that window.
+- No batching of `Store::set_forkable` and no new events or error toasts: it already persists only on change
+  (≈zero writes on a normal boot), and a failed resume stays best-effort, so the child's own exit remains the
+  single existing signal.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Tests: a **peak-concurrency probe** (50 items / 4 workers, `AtomicUsize` + `fetch_max` — each item runs
+  exactly once and `peak <= 4`), the single-worker sequential case, a **snapshot proof** (a project dir created
+  after `build_in` is invisible to the index), the fail-open + unlistable-dir fallback (unix-gated), capability
+  gating, and a unix-gated `concurrent_spawns_register_every_session` regression guard in `pty.rs`.
+- Real-box-check entries went into `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md` — **four concurrent
+  ConPTY creations are worth eyeballing on Windows**, since that is the one path CI cannot exercise.
+
+### 358. [x] Tune `[profile.release]` (LTO, one CGU, strip, size opt-level) — deliberately keeping `panic = "unwind"`
+
+`src-tauri/Cargo.toml` had **no `[profile.release]` at all**, so release builds ran on Cargo's stock defaults:
+no LTO, 16 codegen units, unstripped symbols. The resulting binary is decompressed and paged in from the
+AppImage's squashfs at **every** launch, so its size is a direct cold-start cost (an acknowledged upstream
+AppImage issue). This adds Tauri's standard size profile — **minus** the one lever that would have been actively
+harmful. It also closes the "deliberately untouched" `[profile.release]` item that #346 logged in
+`TRAJECTORY_TO_LINUX.md`.
+
+**What shipped** (branch `release-profile-tuning`, PR [#108](https://github.com/ErikdeJager/ReCue/pull/108),
+2026-07-14):
+
+- **`src-tauri/Cargo.toml`** — a heavily-commented `[profile.release]`: `lto = true` (fat), `codegen-units = 1`,
+  `strip = true`, `opt-level = "s"`.
+- **`src-tauri/src/pty.rs`** — an `#[ignore]`d `bench_output_hot_path` test (test-only; **no production-code
+  change**) timing the three CPU-bound stages of the PTY output path — `Scrollback::push` at 8 KB chunks against
+  the 256 KB cap, `coalesce_output_events`, and `commands::encode_output` — with `std::time::Instant` and **no
+  new dependency** (no criterion). Shipped rather than thrown away so the `opt-level` choice stays reproducible,
+  including for Task #361's AUR package.
+- **Docs** — a dated `TRAJECTORY_TO_LINUX.md` entry (profile, the panic rationale, CI build-time cost, the
+  `lto = "thin"` fallback), a short mirrored `TRAJECTORY_TO_WINDOWS.md` note (on MSVC `strip` is near-free and
+  release carries no PDB), and one sentence in `CLAUDE.md`'s **Builds & distribution** bullet.
+
+**Key decisions**
+
+- **`panic = "abort"` was rejected, and the reasoning is recorded *in the manifest* so nobody "completes" the
+  profile later.** Technically nothing needs unwinding — the backend has no `catch_unwind`, no `#[should_panic]`,
+  and no production `unwrap`/`expect` outside one startup `.expect`. But ReCue **supervises long-lived PTY
+  sessions from always-running threads** (the per-session reader loop, the busy/idle monitor, the title worker,
+  the `lib.rs` event forwarder, the schedule/recurring poll, the `path_env` probe), and every mutex take already
+  handles a poisoned lock — there is not one `lock().unwrap()` in the tree. Under unwinding, a panic in any of
+  those threads kills **only that thread** while every other live agent and detached window survives.
+  `panic = "abort"` would trade that live property away — the whole app dies, every agent lost — for the
+  **smallest** of the four size levers (~5–10% of unwind tables).
+- **Fat `lto = true`, not `"thin"`.** The extra link time is paid only by `release.yml` (version-bump pushes,
+  four serialized Rust binaries — the macOS universal target counts twice) and produces a draft release a human
+  publishes later; it is **never** paid by the PR gate, since `ci.yml` uses the dev/test profiles. `lto = "thin"`
+  is documented as the one-word fallback if a leg OOMs (the arm64 macOS runner has ~7 GB, and universal means
+  two LTO links).
+- **`opt-level = "s"` by the plan's own decision rule.** `3` was to be shipped only if `"s"` proved >15% slower
+  on the aggregate hot path *and* a stage dropped below ~200 MB/s — and a claude repaint storm is single-digit
+  MB/s, with #261/#346 having already moved the costly work off the critical path.
+- **The card's "23.6 MB / 86 MB" figures were treated as unverified** — acceptance was gated on a *relative*
+  delta (binary ≥25% smaller) rather than absolute numbers.
+- **No release build was added to the PR gate** (`ci.yml` explicitly refuses per-PR `tauri build` cost). Accepted
+  consequence: a broken release link would surface only on the next version-bump push; rollback is a one-line
+  revert of the profile block.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **No size or benchmark numbers are claimed, and this is the honest gap in the task.** The implementing box has
+  no `webkit2gtk-4.1` / `javascriptcoregtk-4.1` system libraries — `cargo check` fails identically on untouched
+  `main` — so it could not **link** a binary: no `cargo build --release`, no AppImage, no `cargo test` run, and
+  no benchmark. Per the plan's own decision rule, an unrunnable benchmark defaults to `opt-level = "s"`. The
+  measurements are logged as **pending real-box verification** in `TRAJECTORY_TO_LINUX.md`, with the exact
+  commands to obtain them.
+- Green in CI: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` (so the manifest parses and the
+  new test compiles warning-free), `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (671
+  tests). `cargo test` compiles the test target but fails at **link** on those missing system libs — a
+  pre-existing environment gap, not a defect of this change.
+- Untouched: no `[profile.dev|test|bench]`, no `.cargo/config.toml`, no `RUSTFLAGS`, no new dependency.
+
+### 364. [x] Recover from an unrecovered xterm WebGL context loss (dispose the addon → DOM renderer, latched)
+
+**The card's premise was partly wrong, and the task was rescoped honestly rather than built to the letter.** It
+said the WebGL addon was attached "without a context-loss handler" — but `terminalPool.ts` has had a minimal
+`addon.onContextLoss(() => addon.dispose())` since #18. What was *actually* missing is what happens around that
+dispose: the pool kept a **dangling reference** to the disposed addon, so the async #221 font-atlas rebuild
+could still call `clearTextureAtlas()` on it — and, worse, **burn the one-shot module-global `fontAtlasRebuilt`
+flag that every other live terminal still needs**. There was also no anti-retry latch (a sick GPU could be
+hammered with a context-loss storm as each new terminal attached a fresh addon), no warning, and no observable
+state. WebGL contexts drop on OOM/suspend, likelier on WebKitGTK.
+
+**What shipped** (branch `xterm-webgl-context-loss`, PR
+[#109](https://github.com/ErikdeJager/ReCue/pull/109), 2026-07-14) — frontend only:
+
+- **`src/components/Terminal/webglFallback.ts`** (new, pure and dependency-free) — the per-document WebGL
+  fallback latch plus a per-session renderer record: `allowsWebgl` / `noteRenderer` / `noteContextLoss` /
+  `rendererOf` / `hasLostContext` / `forget` / `reset`, exposed through a `webglFallback` singleton so the main
+  window and each detached canvas window (#84) latch **independently**.
+- **`terminalPool.ts`** — on an **unrecovered** context loss, `createHost` now clears its addon reference,
+  latches + warns once, disposes the addon (xterm swaps back to its DOM renderer and re-lays-out the **same**
+  buffer), and forces a belt-and-braces `term.refresh(0, term.rows - 1)`. The window is then latched to the DOM
+  renderer for the rest of the run, so a newly created terminal (spawn / Restart / template) attaches no
+  `WebglAddon` at all. `webglFallback.allowsWebgl()` is checked **before** `webglAllowed()`, so a fallen-back
+  window never even constructs the #346 probe canvas.
+- `host.dispose` forgets the session's renderer record (keeping the map bounded) but **deliberately does not
+  clear the latch** — disposing the terminal that lost its context must not re-arm WebGL. The latch likewise
+  survives `resetTerminal` (session Restart) and `forget()`.
+
+**Key decisions**
+
+- **The latch is window-wide (a module singleton per document), not per-session.** A real GL loss is
+  driver/process-level, so a terminal spawned after the loss would immediately lose its context too. Rollback to
+  a per-session key is noted in the plan.
+- **No re-attach, and no `webglcontextrestored` handling.** Verified against `@xterm/addon-webgl@0.19.0`: the
+  addon itself waits ~3 s for a restore and only fires `onContextLoss` when the context is **unrecoverable** —
+  so a retry path would be redundant at best and a context storm at worst.
+- **A new module rather than extending `webglRenderer.ts`** — that keeps `webglRenderer.ts` a pure classifier
+  and kept this diff conflict-free with the concurrent Task #357, which extends that same file.
+- **No user-facing surface** (no toast, badge, or setting) — a single `console.warn` in #346's style. The
+  user-visible outcome is simply that the terminal keeps working. `webglFallback.allowsWebgl()` / `reset()` are
+  documented as the seam for Task #357's Settings renderer override (an explicit "force WebGL" must clear the
+  latch).
+- **The #18 pool invariant holds**: no host / xterm / container / PTY dispose, no scrollback replay, no remount —
+  the renderer swaps underneath the same live buffer.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Unit tests cover the pure module at 100% lines/branches/functions. The one path CI cannot exercise — the
+  actual `WEBGL_lose_context` smoke test — is recorded as a real-box verification step in
+  `TRAJECTORY_TO_LINUX.md`, with one clause added to `CLAUDE.md`.
+- Unchanged elsewhere: detached windows (#105) and Linux software-WebGL boxes (#346) still never construct the
+  addon at all; macOS/Windows main-window terminals still do.
+
+### 363. [x] Give the UI font a Linux leg — bundle Inter Variable (latin), applied Linux-only
+
+`tokens.css`'s `--ui` stack (`-apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif`) resolves to
+San Francisco on macOS and Segoe UI on Windows, but on Linux it falls through to whatever the distro's default
+sans happens to be — which reads noticeably worse than the other two targets. The card suggested simply adding
+Linux-common faces (Inter, Cantarell, Ubuntu, Noto Sans) ahead of the generic. **That was measured on the
+reporting Arch box and rejected**: `fc-list` showed that **none** of those faces are installed (only Adwaita
+Sans/Mono + FreeSans, with `fc-match sans-serif` → FreeSans), so a fallback-only list would have been a **no-op
+on the very machine that reported the bug**, and non-deterministic everywhere else. So the face is **bundled**
+instead.
+
+**What shipped** (branch `linux-ui-font`, PR [#110](https://github.com/ErikdeJager/ReCue/pull/110),
+2026-07-14) — frontend only, no Rust change:
+
+- **Inter Variable bundled offline** (`@fontsource-variable/inter`, OFL-1.1 — never a CDN, like the existing
+  JetBrains Mono) via a **hand-written `@font-face`** in the new `src/styles/fonts.css` naming only the **latin**
+  subset: one **48,256 B** woff2 ships, instead of the **218,512 B** that `import "@fontsource-variable/inter"`
+  would have emitted across all seven subsets. Variable rather than static because the UI uses weights
+  400/500/600 — one file, real weights.
+- **Applied Linux-only** through a new `:root[data-platform="linux"]` `--ui` override. The shared `:root --ui`
+  line is **not touched**, so macOS and Windows render byte-for-byte as before — and never fetch the woff2 at
+  all, since a `@font-face` file loads only when an element actually matches the family. A short system-face
+  tail is kept in the Linux stack for non-latin glyph coverage.
+- **A new seam for platform-conditional CSS** — `data-platform` on `<html>`, written **synchronously** from the
+  WebView user-agent (`detectPlatform` / `applyPlatformAttribute` in `src/platform.ts`) from `main.tsx`
+  **before the first render**. The store's `platform` signal is an async IPC and would have flipped the font
+  mid-boot. `store.ts` re-applies the attribute from the authoritative backend `platform()` when it lands (a
+  no-op in practice, and a self-heal if the UA sniff were ever wrong).
+
+**Key decisions**
+
+- **The ordering hazard was verified, not assumed.** Prepending `"Inter"` into the *shared* stack is **not**
+  platform-neutral: macOS is safe (`-apple-system` wins first), but **Windows is not** — neither
+  `-apple-system` nor `"SF Pro Text"` resolve there, so a user who happened to have Inter installed would get
+  it *instead of* Segoe UI. Appending after `system-ui` is safe on macOS/Windows but a no-op on Linux (the
+  generic always resolves; fontconfig even defines a `system-ui` generic). Hence a **platform-scoped override**,
+  never a re-ordering of the shared list.
+- **`format("woff2")`, not fontsource's `format("woff2-variations")`** — an engine that doesn't know the newer
+  keyword degrades to the default instance rather than skipping the `src` entirely (which would mean no font at
+  all). The verbatim latin `unicode-range` lets non-latin codepoints fall through to system faces, so no tofu.
+- **Consistent with Task #356's bundle budget:** a woff2 is not JS, is never parsed by the engine, and is
+  fetched only on Linux — +47 KB on disk (~0.9% of `dist/`), with **zero** JS-parse cost.
+- **`index.html` was deliberately not touched** (Task #348 owns it), so the two land independently.
+- Out of scope and recorded rather than built: the `--mono`/terminal font, mermaid's `fontFamily`, and a
+  user-facing "UI font" setting or opt-out for Linux users who prefer their desktop font.
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Measured, not assumed** (`npm run build`): exactly **one** `dist/assets/inter-latin-wght-normal-*.woff2` at
+  48,256 B; total woff2 payload 164,332 B (up from 116,076 B) — both matching the plan exactly. The
+  bare-package `url()` resolution in plain CSS was empirically verified against this repo's own Vite 7.3.6.
+- Tests: `detectPlatform` over the real WKWebView / WebView2 / WebKitGTK user-agent strings plus the unknown
+  case, and a **mechanical regression guard** that reads `tokens.css` + `fonts.css` off disk and asserts the
+  `:root --ui` stack still equals the original **exactly**, that the Linux block leads with `"Inter Variable"`
+  and ends in a generic, and that the named family is genuinely bundled locally.
+- Checks green: `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (681 passed). The GUI check
+  (does it actually *look* right on each distro) is recorded in `TRAJECTORY_TO_LINUX.md`.
+
+### 352. [x] Batch the boot IPC waterfall — one aggregated `boot_state` command + parallel event listeners + a no-flash loading gate
+
+`init()` was a waterfall: it awaited **13 event-listen registrations one at a time**, then `platform`, then
+`windowsBuild`, then refresh batch A, then batch B, then serial `listSchedules` / `listRecurrings` /
+`appVersion` / `getLastVersion` / `listCanvasWindows` — **34 invokes across 22 sequential waves**, 16 of them
+gating the first meaningful render. Every one of those round-trips is an evaluate-JS hop on the webview main
+thread, which is costliest on WebKitGTK. Boot is now **14 invokes in 2 concurrent waves**.
+
+**What shipped** (branch `batch-boot-ipc-waterfall`, PR
+[#112](https://github.com/ErikdeJager/ReCue/pull/112), 2026-07-14):
+
+- **One aggregated Rust `boot_state` command** (`BootState` struct + a pure, unit-testable `boot_state_from`)
+  returning **all 21 boot reads** in a single round-trip: sessions, recents, repo colors, Overview
+  panels/order, the legacy `open_files`, canvas layout/tabs/templates, settings, sidebar width/collapsed, folder
+  order, diff-seen, schedules, recurrings, last + running version, platform, Windows build, and the detached
+  canvas ids. It is `async` + `spawn_blocking` (the Windows `cmd /C ver` probe stays off the webview main
+  thread, matching #308/#330/#353), and the probe is awaited **before** any store lock, so no mutex guard
+  crosses an `await`.
+- **The 13 `listen` registrations batched** into one parallel wave (`Promise.all` inside each `subscribe*Events`
+  helper, and across the four helpers).
+- **Boot restructured into two concurrent waves**: the `boot_state` fetch **races** the listener wave, but the
+  payload is applied only **after** the listeners resolve — preserving today's invariant that a live
+  `session://output` / `session://exited` can never land un-handled.
+- **`store.applyBootState`** — the single place the payload becomes state, in **one `set()`**. `refresh()` is
+  now a thin fetch + apply (keeping its name, so `store.refresh.test.ts` keeps its entry point).
+- **A `booted` flag** gating three empty-state affordances (the Overview `EmptyState`, the Sidebar "No
+  repositories yet." hint, and the empty-canvas center hint) so none of them can flash before content arrives.
+  Deliberately **no spinner or skeleton** — it is complementary to Task #348's pre-paint window-show gate.
+
+**Key decisions**
+
+- **`platform` + `windowsBuild` must land in the *same* `set()` as `sessions`** — the #346 invariant, since
+  `terminalPool` reads them at host-creation time. This was made an explicit acceptance criterion **and** a
+  test, not just a code comment.
+- **Every existing command and `ipc.ts` wrapper is kept and still registered.** This is a batching *read*, not a
+  replacement — some become boot-unused but remain the API surface for Settings/About and other call sites. **No
+  command was deleted.**
+- **A single point of failure was consciously accepted**: one command now replaces three independent try/catch
+  groups. `boot_state` is infallible server-side (in-memory store reads), and the only realistic failure ("not
+  running inside Tauri") already sank all three groups before. `booted` flips true **even when `boot_state`
+  fails**, so the UI never strands on a blank screen.
+- **Only one new pure module was extracted** (`src/boot.ts` → `resolveCanvases`: persisted tabs, stale
+  `activeId` fallback, the legacy `canvas_layout` migration, and the detached-window override), keeping the rest
+  of the derivation inside the store action to avoid an import cycle with `store.ts`.
+- **The detached canvas window (#84) boots identically** — every `IS_MAIN_WINDOW`-only side effect (the legacy
+  `open_files` clear, terminal respawn, canvas-migration persist, the update toast + `setLastVersion`, the usage
+  poll) is preserved verbatim.
+- Out of scope, and left to their owners: the sidebar's post-boot git refreshes (Task #359),
+  `maybeOnboardAgent`'s three `agent_info` probes, `pruneMissingFolders`' `dir_exists` calls (all already
+  void-ed off the critical path), and the boot resume loop (Task #355).
+
+**Dependencies:** none.
+
+**Notes**
+
+- A Rust unit test proves **each `boot_state_from` field equals what its individual getter/command returns** —
+  so the aggregate can't silently drift from the surface it replaced. `store.refresh.test.ts` was re-pointed at
+  a `makeBootState()` fixture with every prior assertion kept, plus new coverage: boot issues only `bootState` +
+  the four subscribes; `platform` and `sessions` land together; `booted` flips even on failure.
+- Platform-neutral win, largest on WebKitGTK; real-box checks recorded in `TRAJECTORY_TO_LINUX.md`.
+
+### 354. [x] Fast, reliable session exit — kill the PTY process group and derive `Exited` from the child, not the reader's EOF
+
+`kill_session` / `kill_all` only killed the **direct** child pid, and the `Exited` event was **EOF-driven** — but
+on unix a PTY master only EOFs once **every** holder of the slave fd is gone, and claude's subprocesses (MCP
+servers, tool children) inherit it. So an already-exited agent's card stayed alive for seconds (the reported
+"instances exit slow"), and with a descendant that ignores SIGHUP the master **never EOFs at all** — verified
+with a PTY probe where the reader was still blocked after 8 s.
+
+**What shipped** (branch `fast-session-exit`, PR [#113](https://github.com/ErikdeJager/ReCue/pull/113),
+2026-07-14):
+
+- **`Exited` is now driven by the child, not the reader.** A per-session **exit-waiter thread**
+  (`pty.rs exit_waiter`) owns the `Child`, blocks in `wait()`, and is the **sole** emitter of
+  `SessionEvent::Exited`. The reader's send is **deleted**, not merely guarded, so there is still exactly **one**
+  `Exited` per PTY generation — the frontend's consume-once `intentionalKills` contract is untouched.
+- **Trailing output still precedes `Exited`** — the waiter waits, bounded (`EXIT_DRAIN_MS`, 150 ms), on a
+  `reader_done` flag the reader sets after its last `Output`, then hangs up lingering descendants and escalates
+  to SIGKILL after a further 250 ms. Worst-case added exit latency ~400 ms; normally a few ms.
+- **Unix process-group kill (no orphans)** — `hangup_group` / `kill_group` (`killpg` SIGHUP → bounded grace →
+  SIGKILL) back `kill_session`, `kill_all`, and the waiter's cleanup of descendants still holding the slave.
+- **`kill_session` is non-blocking**: the SIGHUP goes out immediately and the SIGKILL escalation runs off-thread,
+  replacing portable-pty's ~200 ms sleep *inside* the Tauri command. **`kill_all` is bounded**: one shared 200 ms
+  grace for all sessions rather than ~200 ms × N serially, run inline rather than on detached threads (which may
+  not survive process exit → orphans).
+- **Same-id respawn (Restart) hardening** — a superseded generation is silenced and killed, so a stale waiter's
+  late exit can never be attributed to the fresh session.
+
+**Key decisions**
+
+- **No `pre_exec`/`setsid` of our own, and no `nix` dependency.** The root cause was confirmed *in the vendored
+  crate*: portable-pty 0.9.0's unix spawn **already** calls `setsid()` in `pre_exec` (`src/unix.rs:257`), so the
+  child is a session/process-group leader (`pgid == pid`) and `killpg(child_pid)` is already correct — it can
+  only ever reach the agent's **own** descendants. The only new dep is `libc`, gated
+  `[target.'cfg(unix)'.dependencies]` and already in the lock file via portable-pty.
+- **The subtlest bug this task had to avoid: `kill_all` must be *silent*.** An `ExitState::silent` flag is set
+  **before any signal** on shutdown, so a shutdown kill emits **no** `Exited` at all. Without it, a claude that
+  traps SIGHUP and exits **0** would reach the still-live webview, `isCleanExit` would read it as a *clean* exit,
+  and `forgetExitedSession` would **delete the persisted record** — silently breaking #30's "quitting keeps your
+  sessions" guarantee. `kill_session`, by contrast, still emits exactly one `Exited`, so `intentionalKills`
+  bookkeeping is unchanged.
+- **Exit-code semantics are preserved by construction, not by a new flag.** portable-pty maps a signal death to
+  exit code **1** (never 0), so a killed agent can never be misread as a clean code-0 exit and get its record
+  forgotten (#63). Documented and **asserted in a test** rather than adding a "killed" field to the event payload.
+- **SIGHUP first, not SIGTERM** (matching portable-pty's and a terminal's own semantics), escalating to SIGKILL.
+- **Deliberately did *not* killpg the tty's foreground process group** (`MasterPty::process_group_leader`): the
+  setsid'd child's own group already covers claude's non-detached descendants. A descendant that `setsid`s
+  *itself* is recorded as a known, best-effort limitation.
+- **Windows is byte-for-byte untouched** — no job object (an explicit non-goal), no `libc` compiled there, and
+  the kill path stays `ChildKiller::kill()` → `TerminateProcess` (verified in the crate: both `WinChild::kill`
+  and the cloned `WinChildKiller::kill` call `TerminateProcess(handle, 1)`). Windows still *inherits* the
+  platform-neutral child-wait-driven `Exited`, which is a cfg-free improvement. `pid` and the two grace
+  constants carry `#[cfg_attr(windows, allow(dead_code))]` so a Windows `clippy --all-targets -- -D warnings`
+  stays clean.
+- **No frontend change at all** — `isCleanExit`, `forgetExitedSession`, `intentionalKills`, the Restart overlay
+  and "shutdown keeps records" are exactly as they were.
+
+**Dependencies:** none.
+
+**Notes**
+
+- Three new `#[cfg(unix)]` tests (plus a `session_pid` accessor and a `group_gone` helper): a prompt exit despite
+  a lingering descendant; a prompt whole-group kill (asserting **exactly one** `Exited`, **never code 0**); and a
+  **silent** `kill_all` leaving no process group behind. **Each was verified to fail against a pre-#354
+  simulation** and pass after — the tests genuinely pin the bug, rather than merely describing the new code.
+- Docs: the `CLAUDE.md` "Exit handling (#63)" convention + Spawn bullet, and dated entries with real-box
+  checklists in `TRAJECTORY_TO_LINUX.md` / `TRAJECTORY_TO_WINDOWS.md` (the Windows `TerminateProcess` path and a
+  real MCP-server-holding-the-slave scenario are the items CI cannot exercise).
+
+### 359. [x] Tame the boot git storm — tier, scope, and coalesce the sidebar git refresh volley
+
+Right after boot's batch A, the Sidebar effect fired **five** git reads per repo — `refreshBranches` +
+`refreshFileStatuses` + `refreshGithubUrls` + `refreshDiffLineCounts` + `refreshBranchAheadBehind` — roughly six
+`git` process spawns per repo, and `diff_line_counts` additionally **read up to 2000 untracked files per repo**
+to count their lines. The same volley re-fired **unscoped** on every session's busy→idle edge (debounced 600 ms)
+— so during boot resume of many sessions it stormed repeatedly at exactly the moment the app was trying to become
+interactive, plus a 15 s poll on top.
+
+**What shipped** (branch `tame-boot-git-storm`, PR [#114](https://github.com/ErikdeJager/ReCue/pull/114),
+2026-07-14):
+
+- **Tiered the boot volley.** `refreshBranches` (one `git rev-parse` per folder) **stays** on the critical
+  path — it is the sidebar's primary label source via `sessionLabel`. The **decorations** (GitHub URLs #327,
+  ahead/behind #338, per-agent line counts #335, FileTree tints #252) now run **after first paint** *and* **after
+  the boot-resume window settles**.
+- **`resumeSettled`** — a new store flag, true immediately when zero session records were persisted, else flipped
+  by the **existing** 4 s `RECONNECT_BACKSTOP_MS`. That's a **hard cap**: a slow or failed `claude --resume` can
+  never defer the decorations forever. Deliberately *not* keyed on "every session emitted output", which a
+  never-resuming session would hang on.
+- **Scoped the busy→idle volley** to the settling session's **own folder** (exactly the #212 contract). The
+  600 ms debounce accumulates a `Set` of folders; an unknown session id falls back to an unscoped volley
+  (fail-safe).
+- **`file_statuses` is read only for repos with a mounted FileTree** — its sole consumer — removing the heaviest
+  `git` command (a full working-tree walk) from the boot path entirely. A boot with no tree open now does **zero**
+  `git status` reads.
+- **Coalesced all five reads** behind one `refreshRepoGit({ repos?, kinds?, whenSettled?, throttleFull? })`
+  action with an in-flight guard + a merged trailing rerun, replacing ~8 copy-pasted five-call blocks. The
+  focus/visibility backstop still runs a **full, unscoped** volley (throttled to ≤1 per 30 s), so a folder edited
+  in an external editor still updates its badges.
+- **Cheaper git (`git.rs`)** — `diff_line_counts` drops a redundant `has_head` spawn (3 → **2**; `git diff
+  --numstat HEAD` already fails exactly where `has_head` was false, pinned by a new unborn-repo test), gains a
+  **total-byte budget** (16 MB/repo) on top of the existing file/size caps, and **streams** line counts instead
+  of `fs::read`-ing whole files. `github_web_url_for` goes 2 spawns → **1** (a single
+  `git config --local --get-regexp` + the pure `pick_remote_url`).
+
+**Key decisions**
+
+- **The card's "or default `showDiffLineCounts` off on Linux" option was explicitly rejected** — that would be a
+  silent per-OS feature removal. The badge keeps working on all three OSes; it is simply made cheaper, deferred,
+  and per-repo scoped.
+- **"After first paint" = a double `requestAnimationFrame`** (with a `setTimeout` fallback), **not**
+  `requestIdleCallback` — its support on WKWebView/WebKitGTK isn't worth relying on. Complementary to Task
+  #348's pre-paint window-show gate.
+- **Viewport-based skipping was rejected** (as the card permitted): the sidebar is short and non-virtualized, and
+  scroll-dependent data would pop in and interact badly with worktree nesting, the collapsed rail, and detached
+  windows.
+- **The "any settle refreshes every repo" safety net is preserved** for externally edited folders — that's what
+  the throttled focus/visibility full volley is for; the 15 s interval poll keeps the cheap branches +
+  ahead/behind pair.
+- Untracked line counting keeps its bounded-fidelity tradeoff: pathological untracked trees may undercount, as
+  they already do today under the existing caps.
+
+**Dependencies:** none.
+
+**Notes**
+
+- New pure `src/gitRefresh.ts` (`normalizeRequest` / `mergeRequests` / `mergeScoped` — which deletes a scoped key
+  the read no longer returns, and is referentially stable — plus `afterPaint` / `focusRefreshKinds`) with unit
+  tests, and new store-level tests for tiering / deferral / scoping / coalescing / open-tree gating.
+- Checks green: `npm test` (703 passed), `npm run build`, `npm run lint`, `npm run format:check`,
+  `npm run lint:rust`, `npm run format:rust`, `cargo test` (210 passed).
+- Platform-neutral: no `#[cfg]` divergence, no new shell-out primitive, no OS-specific frontend API.
+
+### 360. [x] Take the login-shell PATH probe off the startup critical path (async probe + fingerprinted cache)
+
+`restore_user_path()` ran **synchronously at the top of `run()`, before the window existed**, waiting up to 3 s
+on `$SHELL -ilc` (release builds only) — so a heavy interactive rc (oh-my-zsh, nvm) delayed the window by
+exactly that much. The probe now resolves **concurrently with window creation**, and a fingerprinted cache means
+a steady-state boot pays **zero** probe cost.
+
+**What shipped** (branch `async-path-probe`, PR [#115](https://github.com/ErikdeJager/ReCue/pull/115),
+2026-07-14):
+
+- **`path_env::start_probe()`** — snapshots the env and returns immediately; the probe runs on its own thread
+  while the window is being created.
+- **The result lands in an in-process `Mutex` + `Condvar` cell** (`PathState`: `Inherit` / `Pending` / `Ready`).
+- **Two readers, deliberately different.** `effective_path()` **blocks** (bounded by a 5 s `WAIT_TIMEOUT`, with a
+  timeout-downgrade so a wedged probe can't make every later reader pay the cap) and backs `pty::find_on_path`
+  (both cfg arms) + `spawn_with_id`'s child env — this is the **correctness gate**, since a spawn must not
+  resolve `claude` against a minimal GUI PATH. `apply_path()` **never blocks** and backs `git::hidden_command`,
+  which runs inside *synchronous* Tauri commands on the main thread — a blocking git call there would stall the
+  webview, which is the exact failure this task exists to remove.
+- **A cross-launch cache** — a backend-internal `path_cache` scalar in `store.rs` (getter + setter, **no Tauri
+  command, no frontend change**), keyed by `$SHELL` plus the mtime/presence of every rc file that can set PATH
+  (`/etc/profile`, `/etc/paths` and `/etc/paths.d` as a directory, `~/.profile`, the zsh/bash/fish rc sets,
+  ZDOTDIR-aware). A hit **seeds** the PATH at boot with no subprocess at all; the probe still re-runs in the
+  background and refreshes the cache, republishing in-memory if it differs so later spawns get the fresh value.
+
+**Key decisions**
+
+- **The process env is never mutated for PATH — no `set_var` at all.** This is the safest design rather than the
+  fastest: `set_var` races a concurrent `getenv`, which is precisely the data race the card flagged. The probe
+  thread also works from a **main-thread env snapshot** (SHELL/PATH/HOME/ZDOTDIR), so it never calls `getenv`
+  concurrently with anything either.
+- **`linux_webkit` / `linux_gtk` must still run *first*.** They are the last `set_var`s in the process, and
+  `start_probe()` is the first thing to spawn a thread — so that ordering in `run()` is **load-bearing**, and is
+  documented as such.
+- **The cache stores the raw *discovered* login-shell PATH, never the merged one** — so no per-launch segment (an
+  AppImage `/tmp/.mount_…/usr/bin`, a dev-shell PATH) is ever persisted. The merge against the current process
+  PATH is redone every boot.
+- **A stale-fingerprint cache is not optimistically used** — readers wait for the probe instead. And a
+  failed/timed-out probe **never downgrades a good seed** (`publish_fallback` only fills a non-`Ready` slot);
+  with no seed it publishes today's fallback unchanged.
+- **Scope call:** `commands.rs`'s `os_open` / `open_url` / `reveal_file_in_finder` / `reveal_file_linux` (and
+  `usage.rs`'s `security`, `lib.rs`'s `tccutil`) are left alone — they launch system binaries always present in
+  the minimal GUI PATH, and skipping them kept the diff off Task #350's seams.
+- **Dev builds and Windows are byte-for-byte unchanged**: the probe never arms, `effective_path()` returns the
+  process PATH, and `apply_path()` adds no `env` call to any `Command`.
+
+**Dependencies:** none.
+
+**Notes**
+
+- 17 new Rust unit tests (223 total, up from 206): the `PathState` machine (a `Pending` reader blocks until
+  `publish`; a seed publishes immediately; the probe overrides a seed; a failed probe keeps a seeded value; a
+  timeout downgrades to the process PATH; `override_path` is `None` unless ready **and** different), the
+  fingerprint (mtime / shell change / file-appears / file-disappears), the cache rules, and `path_cache`
+  persistence + legacy-file upgrade. Pure helpers gate `#[cfg(any(unix, test))]` (the `explorer_select_arg`
+  precedent) so a Windows host still type-checks and runs them.
+- The actual win (a GUI launch not stalling on a heavy rc) can't be unit-tested — real-box checklists went into
+  `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md`; `CLAUDE.md` records the new PATH seam.

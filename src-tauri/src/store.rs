@@ -13,6 +13,8 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use crate::path_env::PathCache;
+
 /// Maximum number of recent working directories retained.
 const RECENTS_CAP: usize = 12;
 
@@ -314,6 +316,14 @@ pub struct PersistedState {
     /// an existing install run the re-prompt exactly once on its first boot after updating.
     #[serde(default)]
     pub perm_reprompt_done: bool,
+    /// Cached login-shell PATH probe result (#360). Kept as a dedicated value (like
+    /// `repo_order` / `sidebar_width`), separate from the Settings blob, and **not**
+    /// exposed as a Tauri command — it is backend-internal (no frontend shape). A hit
+    /// (same `$SHELL` + rc-file fingerprint) lets a boot publish the restored PATH with
+    /// no subprocess at all, so nothing waits on the probe. `None` until the first
+    /// release-build probe; `default` keeps old files loading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_cache: Option<PathCache>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -671,6 +681,19 @@ impl Store {
     /// Persist the sidebar folder order (#211).
     pub fn set_repo_order(&self, order: Vec<String>) -> io::Result<()> {
         self.update(|state| state.repo_order = order)
+    }
+
+    /// The cached login-shell PATH probe result (#360); `None` until the first
+    /// release-build probe (debug builds and Windows never probe). Backend-internal —
+    /// read once at boot by `path_env::seed_from_cache`, never exposed to the frontend.
+    pub fn path_cache(&self) -> Option<PathCache> {
+        self.with(|state| state.path_cache.clone())
+    }
+
+    /// Persist a fresh login-shell PATH probe result (#360). Written at most once per
+    /// boot, and only when the value actually changed.
+    pub fn set_path_cache(&self, cache: PathCache) -> io::Result<()> {
+        self.update(|state| state.path_cache = Some(cache))
     }
 
     /// The per-repo diff "seen" markers (#278) — opaque JSON; `null` until first
@@ -1031,6 +1054,42 @@ mod tests {
         store.set_repo_order(vec![]).unwrap();
         assert!(Store::load(&path).repo_order().is_empty());
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn path_cache_set_and_persist() {
+        let path = temp_path("pathcache");
+        let store = Store::load(&path);
+        // Unset until the first release-build probe (debug builds never probe).
+        assert_eq!(store.path_cache(), None);
+
+        let cache = PathCache {
+            shell: "/bin/zsh".to_string(),
+            fingerprint: "v1|shell=/bin/zsh|/etc/profile=100".to_string(),
+            path: "/home/u/.local/bin:/usr/bin".to_string(),
+        };
+        store.set_path_cache(cache.clone()).unwrap();
+
+        let reloaded = Store::load(&path);
+        assert_eq!(reloaded.path_cache(), Some(cache));
+
+        // A later probe overwrites it in place.
+        let fresh = PathCache {
+            shell: "/bin/bash".to_string(),
+            fingerprint: "v1|shell=/bin/bash|/etc/profile=200".to_string(),
+            path: "/opt/homebrew/bin:/usr/bin".to_string(),
+        };
+        store.set_path_cache(fresh.clone()).unwrap();
+        assert_eq!(Store::load(&path).path_cache(), Some(fresh));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn persisted_state_without_a_path_cache_loads_as_none() {
+        // An existing `sessions.json` predating #360 has no `path_cache` key.
+        let state: PersistedState =
+            serde_json::from_str(r#"{"sessions":[],"recents":[]}"#).expect("legacy state loads");
+        assert_eq!(state.path_cache, None);
     }
 
     #[test]

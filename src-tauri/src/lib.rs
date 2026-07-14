@@ -5,6 +5,7 @@
 //! `store`; read-only git support is added by a later task.
 
 mod agents;
+mod boot;
 mod child_env;
 mod commands;
 mod early_settings;
@@ -55,13 +56,6 @@ fn reprompt_macos_permissions() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // A bundled `.app` launched from Finder/Dock inherits launchd's minimal PATH, so
-    // `claude` (Homebrew/npm/nvm/…) isn't found and every agent fails to start —
-    // whereas `tauri dev`, launched from a terminal, inherits the full shell PATH.
-    // Restore the login-shell PATH *before* any threads spawn (env mutation isn't
-    // thread-safe). See `path_env`.
-    path_env::restore_user_path();
-
     // Linux/WebKitGTK renderer workaround (#346, GPU-aware since #347): where the NVIDIA
     // blob actually renders the webview, WebKitGTK's DMA-BUF renderer makes the whole
     // thing crawl — laggy input echo, slow paint. Export the documented kill-switch before
@@ -82,6 +76,24 @@ pub fn run() {
     // spawns). No-op on macOS/Windows and outside an AppImage; the user's own
     // `APPIMAGE_GTK_THEME` / `RECUE_GTK_THEME` override it. See `linux_gtk`.
     linux_gtk::apply_gtk_theme_env();
+
+    // Login-shell PATH probe (#345/#360). A bundled `.app` launched from Finder/Dock
+    // inherits launchd's minimal PATH (a Linux `.desktop`/AppImage launch, the session
+    // env), so `claude` (Homebrew/npm/nvm/…) isn't found and every agent fails to start
+    // — whereas `tauri dev`, launched from a terminal, inherits the full shell PATH.
+    //
+    // This **used to run synchronously here**, blocking the main thread for up to 3 s on
+    // a `$SHELL -ilc` round-trip — so a heavy oh-my-zsh/nvm rc delayed the *window* by
+    // that much. It now arms the probe and returns immediately: it resolves concurrently
+    // with window creation and publishes into `path_env`'s in-process cell, which the
+    // binary-lookup + child-spawn seams read (`effective_path` / `apply_path`). The
+    // process env is never mutated — that would race a concurrent `getenv` — so only
+    // spawn/resume ever waits, never the window.
+    //
+    // Must come **after** the two `set_var` calls above (it is the first thing in the
+    // process to spawn a thread, and env mutation isn't thread-safe). Release + unix
+    // only; a no-op in debug builds and on Windows (#140).
+    path_env::start_probe();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -111,6 +123,42 @@ pub fn run() {
                 .map(|dir| dir.join("sessions.json"))
                 .unwrap_or_else(|_| PathBuf::from("recue-sessions.json"));
             app.manage(Store::load(&store_path));
+
+            // Startup flash (#348): the main window is created hidden (`visible: false`)
+            // with a dark native background (tauri.conf.json). Re-color it to the persisted
+            // theme *before* it is ever shown — so a light-theme user's window never flashes
+            // dark — then let the frontend reveal it once React has painted (`reveal_window`),
+            // with a Rust fallback in case the bundle never boots. Needs the Store, so it runs
+            // right after it is managed. Platform-neutral (macOS/Windows/Linux).
+            if let Some(window) = app.get_webview_window("main") {
+                let color = commands::window_background(&app.state::<Store>());
+                let _ = window.set_background_color(Some(color));
+            }
+            commands::schedule_reveal_fallback(app.handle(), "main");
+
+            // Login-shell PATH cache (#360). Publish the previous launch's probe result
+            // immediately when it still applies (same `$SHELL`, same rc-file mtime
+            // fingerprint) so a steady-state boot never waits on the probe at all — then
+            // persist the fresh result from a background thread once it lands. Runs
+            // **before** the resume thread below, so a cache hit is already published by
+            // the time the first `resume_session` asks for the PATH. The cache holds only
+            // the raw *discovered* PATH; the merge against this launch's own PATH is
+            // redone every boot. No-op in debug builds and on Windows (no probe armed).
+            {
+                let cached = app.state::<Store>().path_cache();
+                path_env::seed_from_cache(cached.clone());
+
+                let handle = app.handle().clone();
+                thread::spawn(move || {
+                    // Blocks until the probe lands (bounded); `None` when none ran or it
+                    // failed — in which case the existing cache is deliberately kept.
+                    if let Some(fresh) = path_env::await_probe() {
+                        if cached.as_ref() != Some(&fresh) {
+                            let _ = handle.state::<Store>().set_path_cache(fresh);
+                        }
+                    }
+                });
+            }
 
             // One-time post-update permission re-prompt (macOS, #321). When a user updates
             // from an old ad-hoc build into a properly-signed one, the code signature
@@ -201,43 +249,11 @@ pub fn run() {
 
             // Resume persisted sessions OFF the startup critical path so the
             // window appears immediately; each one reconnects as its PTY comes
-            // up. Best-effort: failures (e.g. claude missing) leave the record
-            // in place for the UI to show.
+            // up. Bounded-parallel (4 at a time) over one shared snapshot of the
+            // claude projects dir (#355 — see `boot`). Best-effort: failures (e.g.
+            // claude missing) leave the record in place for the UI to show (#30/#63).
             let resume = app.handle().clone();
-            thread::spawn(move || {
-                let manager = resume.state::<SessionManager>();
-                let store = resume.state::<Store>();
-                for record in store.sessions() {
-                    let spec = crate::agents::agent_spec(&record.agent);
-                    // Only resume agents that support id-based resume (#141). A Codex
-                    // record has no app-ownable session id, so resuming by id would
-                    // fail/garble — leave it dormant (the record persists; the user can
-                    // relaunch it as a fresh session). Claude resumes exactly as before.
-                    if spec.supports_resume {
-                        let _ = manager.resume_session(
-                            &record.claude_session_id,
-                            &record.repo_path,
-                            record.name.clone(),
-                            &record.agent,
-                        );
-                    }
-                    // Seed forkability once at boot (#138): read the on-disk log so a
-                    // resumed session **with** history shows Fork available immediately,
-                    // rather than waiting for its first busy→idle edge. A non-claude-log
-                    // agent (Codex, #141) is never forkable — no glob. Persist-on-change,
-                    // then notify the UI (the persisted value also covers a missed emit).
-                    let forkable = spec.supports_auto_name
-                        && crate::title::has_conversation(&record.claude_session_id);
-                    let _ = store.set_forkable(&record.id, forkable);
-                    let _ = resume.emit(
-                        "session://forkable",
-                        commands::ForkablePayload {
-                            id: record.id.clone(),
-                            forkable,
-                        },
-                    );
-                }
-            });
+            thread::spawn(move || boot::resume_persisted_sessions(resume));
 
             // Scheduled sessions (#93): a poll loop fires due schedules into live
             // agents. Polling (vs per-schedule timers) handles create/update/cancel
@@ -270,6 +286,9 @@ pub fn run() {
             commands::set_session_watch,
             commands::session_scrollback,
             commands::search_session_output,
+            // The one batched boot read (#352) — additive; every command it batches
+            // stays registered below for its other call sites.
+            commands::boot_state,
             commands::list_sessions,
             commands::list_recents,
             commands::remove_recent,
@@ -292,6 +311,8 @@ pub fn run() {
             commands::focus_canvas_window,
             commands::close_canvas_window,
             commands::list_canvas_windows,
+            commands::reveal_window,
+            commands::set_theme_background,
             commands::create_schedule,
             commands::list_schedules,
             commands::cancel_schedule,

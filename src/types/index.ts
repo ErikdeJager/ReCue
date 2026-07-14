@@ -617,3 +617,36 @@ export interface SessionView {
    * `watchAllAgents` setting can force notifications on regardless of this flag. */
   watch?: boolean;
 }
+
+/** Everything the frontend needs at boot, in ONE IPC round-trip (#352 — mirrors
+ * `commands::BootState`, so the fields keep the Rust snake_case names). Each field is
+ * exactly what its individual command returns; all of those commands remain registered
+ * for their other call sites (this is a batching read, not a replacement). */
+export interface BootState {
+  sessions: SessionRecord[];
+  recents: string[];
+  repo_colors: Record<string, string>;
+  overview_panels: Record<string, OverviewPanel[]>;
+  overview_order: Record<string, string[]>;
+  /** Legacy per-repo opened files (#45), read once on boot only to clear it (#110). */
+  open_files: Record<string, string[]>;
+  /** Legacy single Canvas layout (#46), migrated once into `canvases` (#58). */
+  canvas_layout: CanvasNode | null;
+  canvases: PersistedCanvases | null;
+  canvas_templates: CanvasTemplate[] | null;
+  settings: Partial<Settings> | null;
+  sidebar_width: number | null;
+  sidebar_collapsed: boolean | null;
+  repo_order: string[];
+  diff_seen: DiffSeenMap | null;
+  schedules: ScheduledSession[];
+  recurrings: RecurringSession[];
+  last_version: string | null;
+  app_version: string;
+  /** "macos" | "windows" | "linux" (#143). */
+  platform: string;
+  /** Windows build number, `0` elsewhere (#140). */
+  windows_build: number;
+  /** Canvas ids with a detached window open (#84). */
+  detached_canvas_ids: string[];
+}

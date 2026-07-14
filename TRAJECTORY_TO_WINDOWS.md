@@ -956,3 +956,158 @@ returns `true` before touching the event).
   the temp-PNG path exactly once.
 - Re-confirm macOS ⌘V pastes once and Ctrl+V still emits `^V` (gated off), and Linux
   Ctrl+Shift+V native paste is unaffected.
+
+## 2026-07-14
+
+### White startup flash (#348)
+
+Platform-neutral fix (no `#[cfg]` arms) — windows are created **hidden**
+(`visible: false`) with a **themed native background** (`tauri.conf.json` /
+`WebviewWindowBuilder::background_color`, from `commands::background_for_theme`; `lib.rs`
+`setup` re-colors the main window from the persisted theme before it is ever shown),
+`index.html` gained an **inline pre-paint `<style>`** + a synchronous **`recue.theme`
+localStorage mirror** read (every stylesheet is JS-imported, so the document had *zero*
+styles — a white canvas — until the ~1.35 MB bundle parsed), and the frontend reveals the
+window from `useRevealWindow` → the Rust `reveal_window` command once React has committed
+its first frame, with `schedule_reveal_fallback` (2 s) as a safety net. The paint race is
+a GUI behavior and cannot be unit-tested, so it needs a real-box check per OS.
+
+Windows-specific notes: WebView2 honors the window-layer `backgroundColor` (unlike macOS,
+where `set_background_color` is a webview-layer no-op — harmless there, since the
+document's inline `html` background paints over it before the window is revealed), and the
+config's alpha channel is ignored for the window layer, which is fine (we ship opaque
+`#1e1e2e` / `#eff1f5`). Watch for WebView2 suspending `requestAnimationFrame` while the
+window is unmapped — the reveal therefore fires from **both** an rAF and a 0 ms timer.
+
+### Needs real-box verification (startup flash, #348)
+
+- [ ] **Dark (default) launch** (`npm run tauri dev` **and** an installed NSIS/MSI build):
+      no white rectangle at any point — the window first appears already dark.
+- [ ] **Light theme** (Settings → Appearance → Light → Save, quit, relaunch): the window
+      appears **light** — no white flash and no dark→light flip.
+- [ ] **Detached canvas window**: pop a Canvas tab out (button **and** drag tear-off) in
+      both themes — no white flash; closing it re-docks as before.
+- [ ] **Reveal timing**: the window appears promptly (frontend reveal), not after a ~2 s
+      pause (which would mean only the Rust fallback fired).
+- [ ] **Reveal fallback**: with the Vite dev server stopped (or a broken bundle), the
+      window still appears within ~2 s instead of never showing.
+- [ ] **Runtime theme switch**: switch Dark↔Light, Save, then resize the window quickly —
+      any exposed native gutter is the **new** theme color.
+
+### Bounded-parallel boot resume (#355)
+
+Boot resume now reconnects persisted sessions **4 at a time** (`src-tauri/src/boot.rs`,
+`RESUME_CONCURRENCY`) over **one** shared snapshot of `~/.claude/projects`
+(`title::ProjectLogIndex`, read through the cross-platform `home_dir()` — `%USERPROFILE%` on
+Windows). Pure `std::thread` + `std::fs`, no OS-specific code; concurrent spawns are safe on
+Windows because `portable-pty` passes `bInheritHandles = FALSE` to `CreateProcessW` (the
+ConPTY is handed over via `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`), and `SessionManager` holds
+its map lock only for the O(1) insert (#260). A unix-gated concurrent-spawn test
+(`pty::tests::concurrent_spawns_register_every_session`) is the standing regression guard.
+The loop runs on its own `std::thread` (not the async runtime), so it is independent of the
+#353 `spawn_blocking` command path, and each resumed PTY still goes through
+`pty::spawn_with_id` — so the `PATHEXT` / `cmd.exe /C` agent resolution (#140) is unchanged.
+
+#### Still needs manual Windows verification (#355)
+
+- [ ] With ≥8 persisted agents, relaunch: 4 **concurrent ConPTY creations** are the
+      Windows-specific thing to eyeball — every terminal must reconnect with its own scrollback
+      exactly once (no cross-wired/garbled output, no stray glyph, no wall of exit toasts).
+- [ ] The bounded-parallel resume does not delay the #348 window reveal (the window still
+      appears promptly, not after the 2 s Rust fallback).
+
+### `[profile.release]` tuned — the Windows leg too (Task #358)
+
+`src-tauri/Cargo.toml` gained a real `[profile.release]` (`lto = true`, `codegen-units = 1`,
+`opt-level = "s"`, `strip = true`) to shrink the shipped binary; the substance and the
+benchmark live in `TRAJECTORY_TO_LINUX.md` (the AppImage pays for binary size at every cold
+start), but the profile is a **single Cargo setting applied to all three targets** — no
+`#[cfg]`, no platform code. For Windows specifically:
+
+- `strip = true` is near-free and safe on MSVC — debug info lives in a PDB that the release
+  profile never emits, so there is nothing extra to strip and nothing to lose.
+- `lto` / `codegen-units` / `opt-level` are platform-neutral codegen settings; LTO on
+  `crate-type = ["staticlib", "cdylib", "rlib"]` is the stock Tauri template configuration.
+- `panic` deliberately stays `"unwind"` (**do not** set `panic = "abort"`): a panic in a
+  reader / monitor / title / forwarder / poll thread must kill only that thread, not every
+  live PTY session. The manifest comment says so.
+- Build cost lands only on `release.yml` (a version-bump push). The PR gate builds with the
+  dev/test profiles and is unaffected.
+
+**Needs real-box verification (Windows, #358)**: the MSVC leg only builds in `release.yml`, so
+its first exercise of the new profile is the next release run — confirm it links under LTO and
+that the resulting **NSIS/MSI installer installs and runs**, then note the binary/installer
+size delta.
+
+### Fast, reliable session exit — the `Exited` event now comes from the child (#354)
+
+Two backend bugs made agents exit slowly and leave orphans on **unix** (macOS + Linux): the
+`Exited` event was derived from the PTY reader hitting **EOF** (which on unix only happens once
+*every* holder of the slave fd is gone — and claude's MCP servers / tool children inherit it), and
+the kill signalled only the **direct pid**, blocking ~200 ms inside the Tauri command. The fix is a
+per-session **exit-waiter thread** that owns the `Child`, blocks in `wait()`, and is the **sole**
+emitter of `Exited`, plus a unix **process-group** kill (`killpg` SIGHUP → bounded grace →
+SIGKILL, off-thread).
+
+**Windows is deliberately untouched.** No job object / `TerminateJobObject`, and **no `libc` is
+compiled on Windows** (the new dep is `[target.'cfg(unix)'.dependencies]`-only). The Windows kill
+path is still `ChildKiller::kill()` → `TerminateProcess` — verified byte-for-byte equivalent:
+portable-pty's `WinChild::kill()` and the `clone_killer()`-derived `WinChildKiller::kill()` both
+call `TerminateProcess(handle, 1)`, so swapping the owned `Child` for a cloned killer changes
+nothing (including the exit code 1, which can never be misread as a clean code-0 exit). The
+`hangup_group` / `kill_group` helpers have explicit **no-op Windows arms**, so every call site
+stays `#[cfg]`-free.
+
+What Windows **does** inherit is the platform-neutral half: `Exited` now fires when the child is
+reaped rather than when the ConPTY reader EOFs, `kill_session` no longer blocks its command, and
+`kill_all` flags each generation `silent` before signalling — so a shutdown emits **no** `Exited`
+and the persisted records still survive to auto-resume on the next launch (#30/#63).
+
+Not compilable on this Linux box (no `rustup` / MSVC target), so the Windows arms are guarded by
+inspection + attributes rather than a cross-compile: `pid` / `KILL_GRACE_MS` / `SHUTDOWN_GRACE_MS`
+carry `#[cfg_attr(windows, allow(dead_code))]` so a Windows `clippy --all-targets -- -D warnings`
+stays clean, and all three new tests are `#[cfg(unix)]`.
+
+#### Still needs manual Windows verification (#354)
+
+- Remove an agent that has MCP servers / a tool child running → the card vanishes at once, and
+  Task Manager shows no orphaned `claude.cmd` / `node` children of it.
+- Let an agent exit on its own (`/exit`) → the "Agent exited" toast + auto-forget (#63) fires
+  promptly, not after seconds.
+- Quit the app with 3+ live agents, then relaunch → no orphan processes, and **every** session
+  comes back (the shutdown-silence rule — this is the key record-loss regression check).
+- `kill -9`-equivalent (End task) an agent's process → the "Process exited (code N)" overlay +
+  Restart appears promptly, and Restart works (the same-id respawn silences the stale generation).
+- `cargo clippy --all-targets -- -D warnings` and `cargo test` are clean on a Windows checkout.
+## 2026-07-14 — Login-shell PATH probe off the startup critical path (#360)
+
+Windows has **no** login-shell PATH problem — a GUI app inherits the user/system PATH from the
+registry (#140) — so `path_env`'s probe has always been a no-op there, and #360 keeps it that way.
+The change is deliberately **byte-for-byte inert on Windows**:
+
+- `path_env::start_probe()` has an empty (non-unix) body: the probe never arms, so the `PathState`
+  cell stays `Inherit` forever.
+- `effective_path()` therefore returns `std::env::var_os("PATH")` — this process's own PATH — so
+  `pty::find_on_path` (the Windows arm, incl. `PATHEXT` resolution of `claude.cmd`) and
+  `spawn_with_id`'s child env resolve **exactly** as before, with **no** wait: `wait_path` returns
+  immediately on `Inherit`, it never blocks.
+- `apply_path()` adds **no** `env` call at all while the state is `Inherit`, so every
+  `git::hidden_command` `Command` (each `git` shell-out, each `<cli> --version` probe) is
+  byte-for-byte today's — the `CREATE_NO_WINDOW` console-flash guard is untouched (the `#[cfg(windows)]`
+  arm was only restructured so `let mut cmd` is declared once for both arms).
+- `seed_from_cache()` / `await_probe()` are no-ops (`None`), so nothing is ever written to the new
+  backend-internal `path_cache` scalar on Windows.
+- The pure helpers (`rc_candidates` / `fingerprint_from` / `cache_applies` / `probe_publication` /
+  `merge_paths` / `common_dirs` / `extract_marked`) are gated `#[cfg(any(unix, test))]` +
+  `#[cfg_attr(test, allow(dead_code))]` — the `explorer_select_arg` precedent — so a **Windows host
+  still type-checks and unit-tests them** even though only unix runs the probe. The `PathState`
+  machine itself is cfg-free (its impl carries `#[cfg_attr(not(unix), allow(dead_code))]` for the
+  probe-only methods) and is unit-tested on every host.
+
+### Needs manual Windows verification (#360)
+
+- [ ] **Nothing should change at all.** On a Windows build: the window appears as before; agents
+      spawn (`claude.cmd` still resolves via `PATHEXT` → `cmd.exe /C`), shell terminals open,
+      git panels populate, and `claude --version` (the `ClaudeMissing` / Settings → Data & About
+      probe) still reports a version — with **no** console-window flash.
+- [ ] **`sessions.json` gains no `path_cache` key** after a Windows run (the probe never arms).

@@ -11,6 +11,7 @@ import {
   IDLE_AUTO_CONTINUE,
   type AutoContinueState,
 } from "./autoContinue";
+import { resolveCanvases } from "./boot";
 import { overviewPanelToContent } from "./components/Canvas/canvasDrop";
 import { canvasToTemplate } from "./components/Canvas/canvasToTemplate";
 import { rewriteScheduledLeaves } from "./components/Canvas/canvasSchedule";
@@ -43,10 +44,19 @@ import {
   applyTerminalSettings,
 } from "./components/Terminal/terminalPool";
 import { decodeOutputB64 } from "./decodeOutput";
+import {
+  ALL_GIT_REFRESH_KINDS,
+  focusRefreshKinds,
+  type GitRefreshKind,
+  type GitRefreshRequest,
+  mergeRequests,
+  mergeScoped,
+  normalizeRequest,
+} from "./gitRefresh";
 import * as ipc from "./ipc";
 import { notifyAgentReady } from "./notify";
 import { emitSessionOutput } from "./outputBus";
-import { isWindows } from "./platform";
+import { applyPlatformAttribute, isWindows } from "./platform";
 import {
   cloneRepoName,
   effectiveRepo,
@@ -58,12 +68,14 @@ import {
   sessionLabel,
   splitPath,
 } from "./paths";
+import { storeTheme } from "./theme";
 import { formatInterval, parseResetsAt } from "./time";
 import * as updater from "./updater";
 import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
 import type {
   AgentInfo,
   AheadBehind,
+  BootState,
   BranchList,
   CanvasContent,
   CanvasEdge,
@@ -264,37 +276,123 @@ function persistDiffSeen(): void {
   }, 300);
 }
 
-// Branch-label refresh debounce (#212): an in-terminal `git checkout` settles on a
-// session's busy→idle edge, so re-read branch labels then (mirrors the #97 title
-// reader's cadence). Coalesce a burst of sessions settling together into a single
-// `current_branches` call, like `sidebarWidthPersistTimer`. The same edge is exactly
-// when an agent's file edits land, so the FileTree git-status coloring (#252) is
-// refreshed on the same debounced tick.
+// --- The coalesced git-refresh volley (#359) -------------------------------------
+//
+// Every sidebar git read (branch labels #212/#225, GitHub URLs #327, per-agent line
+// counts #335, ahead/behind #338, FileTree tints #252) runs through **one** action —
+// `refreshRepoGit` — behind these three module-level guards, so the five reads can never
+// stack up on each other or storm `git` spawns on boot:
+//
+//   * `gitRefreshInFlight` — one volley at a time; a request arriving mid-flight is
+//     **merged** into `gitRefreshPending` and runs exactly once when the current one
+//     resolves (union of repos and of kinds).
+//   * `gitRefreshDeferred` — a `whenSettled` request (the boot tier-2 decorations) held
+//     until the boot-resume window has settled (`resumeSettled`, hard-capped by the
+//     existing `RECONNECT_BACKSTOP_MS` timeout), then flushed once.
+//   * `lastFullRefreshAt` — throttles a **full, unscoped** volley requested with
+//     `throttleFull` (the focus/visibility backstop) to at most one per
+//     `FOCUS_FULL_REFRESH_MIN_MS`.
+//
+// The pure request algebra (normalize / merge / scoped-map merge / focus policy) lives in
+// `./gitRefresh`; only the effects live here.
+let gitRefreshInFlight = false;
+let gitRefreshPending: GitRefreshRequest | null = null;
+let gitRefreshDeferred: GitRefreshRequest | null = null;
+let lastFullRefreshAt = 0;
+
+/** Run one volley: fan out to the requested sub-refreshes (each already fail-open, with
+ *  its own try/catch), then run any request merged in while it was in flight. The
+ *  in-flight flag is cleared in a `finally`, so it can never stick. */
+async function runGitRefresh(req: GitRefreshRequest): Promise<void> {
+  if (gitRefreshInFlight) {
+    gitRefreshPending = mergeRequests(gitRefreshPending, req);
+    return;
+  }
+  gitRefreshInFlight = true;
+  try {
+    const s = useStore.getState();
+    const repos = req.repos ?? undefined; // undefined = every sidebar folder
+    const jobs: Promise<unknown>[] = [];
+    if (req.kinds.includes("branches")) jobs.push(s.refreshBranches(repos));
+    if (req.kinds.includes("githubUrls")) jobs.push(s.refreshGithubUrls(repos));
+    if (req.kinds.includes("diffLineCounts")) {
+      jobs.push(s.refreshDiffLineCounts(repos));
+    }
+    if (req.kinds.includes("aheadBehind")) {
+      jobs.push(s.refreshBranchAheadBehind(repos));
+    }
+    if (req.kinds.includes("fileStatuses")) {
+      // The ONLY consumer of `fileStatuses` is an open FileTree (#252) — so read `git
+      // status` (the heaviest of the five: it walks the whole working tree) for repos
+      // with a **mounted tree** only, never for every sidebar folder.
+      const open = Object.keys(s.fileTreeMounts);
+      const target = repos ? open.filter((r) => repos.includes(r)) : open;
+      if (target.length > 0) jobs.push(s.refreshFileStatuses(target));
+    }
+    if (
+      req.repos === null &&
+      req.kinds.length === ALL_GIT_REFRESH_KINDS.length
+    ) {
+      lastFullRefreshAt = Date.now();
+    }
+    await Promise.all(jobs);
+  } finally {
+    gitRefreshInFlight = false;
+    const next = gitRefreshPending;
+    gitRefreshPending = null;
+    if (next) void runGitRefresh(next);
+  }
+}
+
+/** Flush the boot tier-2 request held until the resume window settled (#359). Called from
+ *  the `RECONNECT_BACKSTOP_MS` timeout in `refresh()` — a fixed, unconditional cap, so a
+ *  slow or failed `--resume` can never defer the volley forever. */
+function flushDeferredGitRefresh(): void {
+  const req = gitRefreshDeferred;
+  gitRefreshDeferred = null;
+  if (req) void runGitRefresh(req);
+}
+
+// Git-refresh debounce (#212/#359): an in-terminal `git checkout` settles on a session's
+// busy→idle edge, so re-read that folder's git state then (mirrors the #97 title reader's
+// cadence). Coalesce a burst of sessions settling together into a single volley, like
+// `sidebarWidthPersistTimer` — accumulating the **set of folders** that settled, so the
+// volley is scoped to exactly those (an unknown session id ⇒ unscoped, fail-safe). The
+// same edge is exactly when an agent's file edits land, so the FileTree git-status
+// coloring (#252) + re-list (#264) ride the same debounced tick.
 const BRANCH_REFRESH_DEBOUNCE_MS = 600;
 let branchRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-function scheduleBranchRefresh(): void {
+// The folders that settled inside the current debounce window; `unscoped` wins over any
+// accumulated set (it is the superset) — an unknown session id (a shell terminal, a
+// recurring child whose record hasn't landed) falls back to it, so we never *miss* a
+// folder.
+let pendingGitRefreshScope = new Set<string>();
+let pendingGitRefreshUnscoped = false;
+function scheduleGitRefresh(folder?: string): void {
+  if (folder) pendingGitRefreshScope.add(folder);
+  else pendingGitRefreshUnscoped = true;
   if (branchRefreshTimer) clearTimeout(branchRefreshTimer);
   branchRefreshTimer = setTimeout(() => {
     branchRefreshTimer = undefined;
-    void useStore.getState().refreshBranches();
-    void useStore.getState().refreshFileStatuses();
-    // Re-resolve each repo's GitHub web URL on the same edge (#327) — cheap local
-    // `git remote` reads, so the View-on-GitHub menu item tracks a remote change
-    // (added/removed/retargeted) without a restart.
-    void useStore.getState().refreshGithubUrls();
-    // Re-read each agent's added/removed line counts on the same edge (#335) — a
-    // finished turn is exactly when its file edits land. Self-guards on the setting,
-    // so it's a cheap no-op (zero git reads) when the badge is turned off.
-    void useStore.getState().refreshDiffLineCounts();
-    // Re-read each folder's ahead/behind vs upstream on the same edge (#338) — an
-    // in-terminal commit/checkout shifts the count. A cheap local `git rev-list`
-    // against the already-fetched remote-tracking ref (no network fetch).
-    void useStore.getState().refreshBranchAheadBehind();
-    // A finished turn is exactly when an agent's just-written files land. The
-    // git-status re-tint above can't add a *new* row (rows come only from `list_dir`),
-    // so also re-list every open tree's loaded levels so created/removed files appear
-    // right after the agent settles, without collapsing expanded folders (#264).
-    useStore.getState().bumpFileTreeRefresh();
+    const unscoped = pendingGitRefreshUnscoped;
+    const scope = [...pendingGitRefreshScope];
+    pendingGitRefreshUnscoped = false;
+    pendingGitRefreshScope = new Set();
+    void useStore
+      .getState()
+      .refreshRepoGit({ repos: unscoped ? undefined : scope });
+    // A finished turn is exactly when an agent's just-written files land. The git-status
+    // re-tint above can't add a *new* row (rows come only from `list_dir`), so also
+    // re-list every open tree's loaded levels so created/removed files appear right after
+    // the agent settles, without collapsing expanded folders (#264).
+    if (unscoped) {
+      useStore.getState().bumpFileTreeRefresh();
+    } else {
+      const mounts = useStore.getState().fileTreeMounts;
+      for (const repo of scope) {
+        if (mounts[repo]) useStore.getState().bumpFileTreeRefresh(repo);
+      }
+    }
   }, BRANCH_REFRESH_DEBOUNCE_MS);
 }
 
@@ -328,9 +426,12 @@ function maybeNotifyWatched(id: string): void {
   void notifyAgentReady(label.primary, "Finished or awaiting your input");
 }
 
-/** Shallow-equality of two `path → url` maps (#327) — lets `refreshGithubUrls` skip a
- *  re-render (referential stability for the sidebar selector) when nothing changed. */
-function urlMapsEqual(
+/** Shallow-equality of two `path → string` maps — lets `refreshGithubUrls` (#327, the
+ *  `path → url` map) and `refreshBranches` (#359, the `path → branch` map) skip a
+ *  re-render (referential stability for the sidebar selectors) when nothing changed.
+ *  Without the `branches` guard the 15s poll (#225) re-rendered every sidebar row on
+ *  every tick. */
+function stringMapsEqual(
   a: Record<string, string>,
   b: Record<string, string>,
 ): boolean {
@@ -1093,6 +1194,11 @@ function applySettingsEffects(s: Settings): void {
   // default accent.
   if (s.theme === "light") root.setAttribute("data-theme", "light");
   else root.removeAttribute("data-theme");
+  // Pre-paint theme mirror (#348): index.html's inline boot script reads this
+  // synchronously on the next launch (and in a detached canvas window) so the very
+  // first frame is already the right theme instead of dark-then-light. Best-effort —
+  // storeTheme never throws.
+  storeTheme(s.theme);
   if (s.accentColor) {
     const { hover, dim, fg } = accentCompanions(s.accentColor);
     root.style.setProperty("--accent", s.accentColor);
@@ -1368,6 +1474,13 @@ export interface AppState {
   /** Terminal items (#72) whose shell has exited → exit code (or null); drives the
    * Terminal exit overlay for non-agent PTYs (they aren't in `sessions`). */
   terminalExits: Record<string, number | null>;
+  /** Whether the boot-resume window has settled (#359) — the gate for the tier-2 git
+   * volley (`refreshRepoGit({ whenSettled: true })`). `true` when `refresh()` loaded
+   * **zero** persisted session records (nothing to resume); otherwise flipped `true` by
+   * the existing `RECONNECT_BACKSTOP_MS` (4s) backstop, a fixed unconditional cap — so a
+   * slow or failed `claude --resume` can never defer the decorations forever. Not keyed
+   * on "every session emitted output" (a session that never resumes would hang the gate). */
+  resumeSettled: boolean;
   claudeMissing: boolean;
   /** Host OS family (#143), read once at boot from the backend `platform()` command
    * — "windows" / "macos" / "linux", or "" until loaded. Drives OS-appropriate
@@ -1377,6 +1490,11 @@ export interface AppState {
    * until loaded. Only consumed under an `isWindows` guard, to set xterm.js's
    * `windowsPty.buildNumber` for correct ConPTY handling. */
   windowsBuild: number;
+  /** True once the boot payload (#352 `boot_state`) has been applied — **or** has
+   * failed (e.g. running outside Tauri), so the UI never hangs on a blank. Gates the
+   * empty states so "No active sessions" / "No repositories yet." / the empty-canvas
+   * hint can't flash before the real content pops in. */
+  booted: boolean;
   toasts: Toast[];
   /** New session modal (rendered by #10); `newSessionRepo` optionally prefills it. */
   newSessionOpen: boolean;
@@ -1633,25 +1751,61 @@ export interface AppState {
   // --- Async / cross-cutting actions ---
   init: () => Promise<void>;
   refresh: () => Promise<void>;
-  refreshBranches: () => Promise<void>;
+  /**
+   * The single entry point for the sidebar's git reads (#359) — branch labels (#212),
+   * GitHub URLs (#327), FileTree tints (#252), per-agent line counts (#335) and
+   * ahead/behind (#338). Coalesced behind one in-flight guard (a request arriving
+   * mid-volley is merged and runs once afterwards), optionally **scoped** to a set of
+   * folders and/or a subset of `kinds`.
+   *
+   * - `repos` — the folder paths to read (the key of every map involved, worktrees
+   *   included). Omitted/empty ⇒ every sidebar folder.
+   * - `kinds` — omitted/empty ⇒ all five.
+   * - `whenSettled` — hold the request until the boot-resume window has settled, so the
+   *   boot decorations never race the persisted PTYs' resume (hard-capped by the 4s
+   *   reconnect backstop).
+   * - `throttleFull` — downgrade a *full, unscoped* request to the cheap
+   *   branches+ahead/behind pair when a full volley ran within the last 30s (the
+   *   focus/visibility backstop).
+   *
+   * `file_statuses` is issued **only** for repos with a mounted FileTree — its sole
+   * consumer — never for every sidebar folder.
+   */
+  refreshRepoGit: (opts?: {
+    repos?: readonly string[];
+    kinds?: readonly GitRefreshKind[];
+    whenSettled?: boolean;
+    throttleFull?: boolean;
+  }) => Promise<void>;
+  /** Turn one batched boot payload (#352 `boot_state`) into state — the **single**
+   * place the payload becomes state, in **one** `set()` (so `platform`/`windowsBuild`
+   * are already loaded the moment `sessions` mount their terminals, #346). `null` (the
+   * command failed / outside Tauri) keeps the defaults but still flips `booted`, so the
+   * loading gate never strands the UI on a blank. */
+  applyBootState: (boot: BootState | null) => void;
+  /** Re-read branch labels (#212) into `branches` — one `current_branches` batch IPC.
+   * Scoped to `repos` when given (#359, merged into the map), else every sidebar folder
+   * (full replace). Fail-open (a backend miss leaves the map). */
+  refreshBranches: (repos?: readonly string[]) => Promise<void>;
   /** Re-resolve each sidebar repo's GitHub web URL (#327), filling `githubUrls`. Runs on
-   * the same cadence as `refreshBranches`; fail-open (a backend miss leaves the map). */
-  refreshGithubUrls: () => Promise<void>;
-  /** Re-read git file statuses (#252) — one repo when `repo` is given (the FileTree
-   * mount / Refresh path), else every repo in the sidebar set (load / busy→idle /
-   * git-write paths). Fail-open per repo (a failed read leaves the prior map). */
-  refreshFileStatuses: (repo?: string) => Promise<void>;
+   * the same cadence as `refreshBranches` and takes the same optional `repos` scope
+   * (#359); fail-open (a backend miss leaves the map). */
+  refreshGithubUrls: (repos?: readonly string[]) => Promise<void>;
+  /** Re-read git file statuses (#252) — one repo (or a given set: the #359 volley passes
+   * the repos with a **mounted FileTree**, the map's only consumer), else every repo in
+   * the sidebar set. Fail-open per repo (a failed read leaves the prior map). */
+  refreshFileStatuses: (repo?: string | readonly string[]) => Promise<void>;
   /** Re-read each sidebar repo's added/removed line counts (#335), filling
    * `diffLineCounts`. Self-guards on `settings.showDiffLineCounts`: off ⇒ returns
-   * immediately with **no** `diff_line_counts` git reads. One batch IPC round-trip;
-   * fail-open (a backend miss leaves the map as-is). */
-  refreshDiffLineCounts: () => Promise<void>;
+   * immediately with **no** `diff_line_counts` git reads. One batch IPC round-trip, over
+   * the optional `repos` scope (#359); fail-open (a backend miss leaves the map as-is). */
+  refreshDiffLineCounts: (repos?: readonly string[]) => Promise<void>;
   /** Re-read each sidebar folder's ahead/behind vs upstream (#338), filling
    * `branchAheadBehind`. Runs on the same cadence as `refreshBranches`; one batch IPC
-   * round-trip that reads the already-fetched remote-tracking ref (no network fetch).
-   * Full replace so a folder that lost its upstream drops out; fail-open (a backend miss
-   * leaves the map as-is). */
-  refreshBranchAheadBehind: () => Promise<void>;
+   * round-trip that reads the already-fetched remote-tracking ref (no network fetch),
+   * over the optional `repos` scope (#359). A folder that lost its upstream drops out of
+   * the map (within the scope); fail-open (a backend miss leaves the map as-is). */
+  refreshBranchAheadBehind: (repos?: readonly string[]) => Promise<void>;
   /** Bump the FileTree re-list signal (#253/#264): one repo when `repo` is given, else
    * every repo with a mounted tree. Each mounted FileTree re-fetches its currently
    * loaded directory levels in place — surfacing files created/removed on disk —
@@ -2361,9 +2515,13 @@ export const useStore = create<AppState>()((set, get) => ({
   sessionBusy: {},
   sessionActive: {},
   terminalExits: {},
+  // Default true: with no persisted sessions there is nothing to wait for (#359), and a
+  // window that never calls `refresh()` (a detached canvas) must never hold a volley.
+  resumeSettled: true,
   claudeMissing: false,
   platform: "",
   windowsBuild: 0,
+  booted: false,
   toasts: [],
   newSessionOpen: false,
   newSessionRepo: null,
@@ -2537,11 +2695,17 @@ export const useStore = create<AppState>()((set, get) => ({
       };
     });
     // Busy→idle settle (#212): a turn just finished, so an in-terminal `git checkout`
-    // during it has completed — re-read branch labels (debounced) so the sidebar
-    // worktree/repo label tracks the new branch without an app restart. This is the
-    // single transition point (the `session://state` handler's only caller).
+    // during it has completed — re-read that folder's git state (debounced) so the
+    // sidebar worktree/repo label tracks the new branch without an app restart. This is
+    // the single transition point (the `session://state` handler's only caller).
+    //
+    // Scoped to the **settling session's own folder** (#359): the #212 contract is about
+    // that folder, so the volley no longer re-reads every repo (~7–8 `git` spawns per
+    // folder) whenever any one agent settles. An unknown id (a shell terminal, a session
+    // whose record hasn't landed) falls back to an unscoped volley — fail-safe.
     if (wasBusy && !busy) {
-      scheduleBranchRefresh();
+      const folder = get().sessions.find((x) => x.id === id)?.repoPath;
+      scheduleGitRefresh(folder);
       maybeNotifyWatched(id);
     }
   },
@@ -2903,271 +3067,278 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   init: async () => {
-    // Subscribe exactly once. The flag is set *before* the await so StrictMode's
+    // Boot is TWO concurrent waves (#352). Wave 1: the single batched `boot_state`
+    // round-trip, started immediately so it flies in parallel with the listener wave
+    // below (it used to be ~22 sequential waves / 34 invokes, 16 of them gating the
+    // first meaningful paint — and every round-trip is an evaluate-JS hop on the
+    // webview main thread, costliest on Linux/WebKitGTK, #346). `.catch(() => null)`
+    // attaches the handler NOW, so a rejection (outside Tauri) is never an unhandled
+    // promise rejection while we await the subscriptions.
+    const bootPromise = ipc.bootState().catch(() => null);
+
+    // Wave 2: the 13 `listen` registrations (each its own invoke) as ONE parallel
+    // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
       eventsSubscribed = true;
       try {
-        await ipc.subscribeSessionEvents({
-          onOutput: ({ id, b64, offset }) => {
-            // Decode the compact base64 payload with a tight byte loop instead of a
-            // multi-KB JSON.parse, then feed the bytes straight to the outputBus (off
-            // the React re-render path) (#261). `offset` (absolute end-offset) rides
-            // along so the terminal can dedupe the scrollback ↔ live overlap.
-            emitSessionOutput(id, decodeOutputB64(b64), offset);
-            // First live output proves a reconnecting session is alive — clear the
-            // flag exactly once. An O(1) Set check keeps this per-chunk hot path off
-            // a linear scan over every session (#261); `markConnected` does the one
-            // store write (it also drains the Set) (#30).
-            if (reconnectingIds.has(id)) {
-              reconnectingIds.delete(id);
-              get().markConnected(id);
-            }
-          },
-          onState: ({ id, busy }) => {
-            // Busy/idle from the backend heuristic (#42); emitted only on change.
-            // `setBusy` also schedules a debounced branch-label refresh on the
-            // busy→idle edge (#212) so an in-terminal `git checkout` is reflected.
-            get().setBusy(id, busy);
-          },
-          onName: ({ id, name }) => {
-            // claude's own auto-title (#97); fills the label for an unnamed agent
-            // (a custom name #57 still wins in sessionLabel).
-            get().setAutoName(id, name);
-          },
-          onForkable: ({ id, forkable }) => {
-            // Forkability changed (#138) — gates the Fork affordance up front.
-            get().setForkable(id, forkable);
-          },
-          onExited: ({ id, code }) => {
-            // Recurring child rotation/crash (#294): a session owned as a recurring's
-            // *current* child that exits — killed on rotation, or crashed on its own —
-            // must NOT surface a "Process exited" overlay or toast (it's an internal,
-            // rotating agent, not a user agent). The rotation-order race (its exit vs
-            // the `recurring://fired` swapping `current_session_id`) is also covered by
-            // `intentionalKills` in `onFired` below (which handles the case where the
-            // record already points at the *new* child by the time this exit lands).
-            const owningRec = get().recurrings.find(
-              (r) => r.current_session_id === id,
-            );
-            if (owningRec) {
-              intentionalKills.delete(id);
-              if (IS_MAIN_WINDOW) {
-                // Clear the pointer so the panel shows "next run in…" until the next
-                // fire (a genuine crash); a rotation's `onFired` sets the fresh child.
-                // Drop the dead child so its pooled xterm reconciles away.
-                set((s) => ({
-                  recurrings: s.recurrings.map((r) =>
-                    r.id === owningRec.id
-                      ? { ...r, current_session_id: null }
-                      : r,
-                  ),
-                }));
-                get().dropSession(id);
+        await Promise.all([
+          ipc.subscribeSessionEvents({
+            onOutput: ({ id, b64, offset }) => {
+              // Decode the compact base64 payload with a tight byte loop instead of a
+              // multi-KB JSON.parse, then feed the bytes straight to the outputBus (off
+              // the React re-render path) (#261). `offset` (absolute end-offset) rides
+              // along so the terminal can dedupe the scrollback ↔ live overlap.
+              emitSessionOutput(id, decodeOutputB64(b64), offset);
+              // First live output proves a reconnecting session is alive — clear the
+              // flag exactly once. An O(1) Set check keeps this per-chunk hot path off
+              // a linear scan over every session (#261); `markConnected` does the one
+              // store write (it also drains the Set) (#30).
+              if (reconnectingIds.has(id)) {
+                reconnectingIds.delete(id);
+                get().markConnected(id);
               }
-              return;
-            }
-            // Session lifecycle (forget / toast / kill) is owned by the **main**
-            // window (#84) — it's the source of truth for the session list. A
-            // detached canvas window is a renderer: it only reflects the exit
-            // locally so a terminal it shows gets the "Process exited" overlay,
-            // never forgetting/killing/toasting (which the main window does).
-            if (!IS_MAIN_WINDOW) {
-              if (get().sessions.some((s) => s.id === id)) {
-                get().markExited(id, code);
-              } else {
-                get().markTerminalExited(id, code);
+            },
+            onState: ({ id, busy }) => {
+              // Busy/idle from the backend heuristic (#42); emitted only on change.
+              // `setBusy` also schedules a debounced branch-label refresh on the
+              // busy→idle edge (#212) so an in-terminal `git checkout` is reflected.
+              get().setBusy(id, busy);
+            },
+            onName: ({ id, name }) => {
+              // claude's own auto-title (#97); fills the label for an unnamed agent
+              // (a custom name #57 still wins in sessionLabel).
+              get().setAutoName(id, name);
+            },
+            onForkable: ({ id, forkable }) => {
+              // Forkability changed (#138) — gates the Fork affordance up front.
+              get().setForkable(id, forkable);
+            },
+            onExited: ({ id, code }) => {
+              // Recurring child rotation/crash (#294): a session owned as a recurring's
+              // *current* child that exits — killed on rotation, or crashed on its own —
+              // must NOT surface a "Process exited" overlay or toast (it's an internal,
+              // rotating agent, not a user agent). The rotation-order race (its exit vs
+              // the `recurring://fired` swapping `current_session_id`) is also covered by
+              // `intentionalKills` in `onFired` below (which handles the case where the
+              // record already points at the *new* child by the time this exit lands).
+              const owningRec = get().recurrings.find(
+                (r) => r.current_session_id === id,
+              );
+              if (owningRec) {
+                intentionalKills.delete(id);
+                if (IS_MAIN_WINDOW) {
+                  // Clear the pointer so the panel shows "next run in…" until the next
+                  // fire (a genuine crash); a rotation's `onFired` sets the fresh child.
+                  // Drop the dead child so its pooled xterm reconciles away.
+                  set((s) => ({
+                    recurrings: s.recurrings.map((r) =>
+                      r.id === owningRec.id
+                        ? { ...r, current_session_id: null }
+                        : r,
+                    ),
+                  }));
+                  get().dropSession(id);
+                }
+                return;
               }
-              return;
-            }
-            // One event per close. An intentional kill (Remove/Forget) already
-            // toasts and is never auto-forgotten or double-toasted here (#32).
-            const intentional = intentionalKills.delete(id);
-            // Terminal item (#72): a shell PTY, not a claude session (not in
-            // `sessions`). On an unintentional exit, record it so the pooled
-            // <Terminal> shows a Restart overlay; an intentional × already removed
-            // the panel, so just swallow it.
-            if (!get().sessions.some((s) => s.id === id)) {
-              if (!intentional) get().markTerminalExited(id, code);
-              return;
-            }
-            // Clean exit (code 0 while running): the user ended the agent — forget
-            // it like Remove so it vanishes everywhere and won't return on next
-            // boot, with a brief "Agent exited" toast and no overlay/Restart (#63).
-            if (isCleanExit(code, booting, intentional)) {
-              void get().forgetExitedSession(id);
-              return;
-            }
-            // Non-zero / crash exit (or a failed boot resume): keep the session
-            // and its exit code so the Terminal shows the "Process exited" overlay
-            // + Restart (#63/#30). The generic exit toast is suppressed for
-            // intentional kills and during the boot window; others toast once.
-            get().markExited(id, code);
-            if (!booting && !intentional) {
-              get().pushToast(
-                code != null
-                  ? `Session exited (code ${code})`
-                  : "Session exited",
-              );
-            }
-          },
-        });
-        // Cross-window canvas sync (#84): a tab/layout edit in any window, and
-        // the detached-window set changing, both flow through the backend.
-        await ipc.subscribeCanvasEvents({
-          onCanvasesChanged: ({ canvases }) => get().applyCanvasSync(canvases),
-          onWindowsChanged: (ids) => get().setDetachedCanvasIds(ids),
-        });
-        // Scheduled sessions (#93/#280): the backend engine fires schedules into live
-        // agents. The **main** window owns the scheduled→live transition; a **detached**
-        // canvas window (#84) also listens because it can hold a scheduled panel, so it
-        // must follow the same fire (and keep its own `schedules` slice in sync). Both
-        // subscribe; the per-window behavior is branched inside each handler. (Tauri
-        // events are global on macOS and Windows alike, so this path is identical.)
-        await ipc.subscribeScheduleEvents({
-          onFired: ({ id, session }) => {
-            get().upsertSession(toSessionView(session));
-            if (!IS_MAIN_WINDOW) {
-              // Detached canvas (#280): reflect the fire locally so the rewritten
-              // agent leaf (arriving via `canvas://changed`) finds its session and
-              // renders the terminal instead of "Session closed." The main window
-              // owns the leaf rewrite, persistence, recents, and toast.
-              set((s) => ({
-                schedules: s.schedules.filter((x) => x.id !== id),
-              }));
-              return;
-            }
-            // The recent to surface is the *parent repo* for a worktree session
-            // (its `repo_path` is the app-managed worktree folder), else the
-            // session's own folder. This mirrors the backend, which touches
-            // `sched.cwd` (the parent repo) — never the worktree dir — so the
-            // worktree shows only as a sub-group under its parent, not as a
-            // duplicate empty top-level folder (#279). The interactive worktree
-            // spawn path likewise never adds the worktree dir to recents.
-            const recentPath = session.worktree_parent ?? session.repo_path;
-            set((s) => ({
-              schedules: s.schedules.filter((x) => x.id !== id),
-              recents: [
-                recentPath,
-                ...s.recents.filter((r) => r !== recentPath),
-              ],
-            }));
-            // Rewrite any Canvas leaf showing this pending schedule into the live
-            // agent (#280), in place (same leaf id → the #18 pooled terminal
-            // reparents), then persist so the main window — and any detached canvas
-            // holding it (via `canvas://changed`) — render the agent rather than the
-            // now-removed schedule's "no longer pending" panel.
-            const liveContent: CanvasContent = {
-              kind: "agent",
-              sessionId: session.id,
-              repoPath: session.repo_path,
-            };
-            const { canvases, activeCanvasId } = get();
-            const nextCanvases = rewriteScheduledLeaves(
-              canvases,
-              id,
-              liveContent,
-            );
-            if (nextCanvases !== canvases) {
-              set({ canvases: nextCanvases });
-              void ipc
-                .setCanvases({
-                  canvases: nextCanvases,
-                  activeId: activeCanvasId,
-                })
-                .catch(() => {});
-            }
-            get().pushToast(
-              `Scheduled agent started${session.name ? `: ${session.name}` : ""}`,
-            );
-          },
-          onError: ({ id, message }) => {
-            set((s) => ({
-              schedules: s.schedules.filter((x) => x.id !== id),
-            }));
-            // Only the main window toasts the failure (it owns the schedule surface).
-            if (IS_MAIN_WINDOW) {
-              get().pushToast(
-                message || "Scheduled agent failed to start",
-                "error",
-              );
-            }
-          },
-          onChanged: (schedules) => get().applyScheduleSync(schedules),
-        });
-        // Recurring sessions (#294): the backend poll rotates each recurring's child
-        // agent. Both windows subscribe (a detached canvas #84 can hold a recurring
-        // panel, so it must follow the rotation + keep its `recurrings` slice fresh).
-        await ipc.subscribeRecurringEvents({
-          onFired: ({ id, session, next_fire_at }) => {
-            // Swap the retiring child for the fresh one. Order matters (#300): claim the
-            // child in the `recurrings` record FIRST, then `upsertSession` — so the child
-            // is already owned (excluded from Overview/Sidebar) the instant it enters
-            // `sessions`, never flashing as its own standalone column.
-            const { recurrings, present, prev } = applyRecurringFire(
-              get().recurrings,
-              id,
-              session.id,
-              next_fire_at,
-            );
-            if (present) {
-              set({ recurrings });
+              // Session lifecycle (forget / toast / kill) is owned by the **main**
+              // window (#84) — it's the source of truth for the session list. A
+              // detached canvas window is a renderer: it only reflects the exit
+              // locally so a terminal it shows gets the "Process exited" overlay,
+              // never forgetting/killing/toasting (which the main window does).
+              if (!IS_MAIN_WINDOW) {
+                if (get().sessions.some((s) => s.id === id)) {
+                  get().markExited(id, code);
+                } else {
+                  get().markTerminalExited(id, code);
+                }
+                return;
+              }
+              // One event per close. An intentional kill (Remove/Forget) already
+              // toasts and is never auto-forgotten or double-toasted here (#32).
+              const intentional = intentionalKills.delete(id);
+              // Terminal item (#72): a shell PTY, not a claude session (not in
+              // `sessions`). On an unintentional exit, record it so the pooled
+              // <Terminal> shows a Restart overlay; an intentional × already removed
+              // the panel, so just swallow it.
+              if (!get().sessions.some((s) => s.id === id)) {
+                if (!intentional) get().markTerminalExited(id, code);
+                return;
+              }
+              // Clean exit (code 0 while running): the user ended the agent — forget
+              // it like Remove so it vanishes everywhere and won't return on next
+              // boot, with a brief "Agent exited" toast and no overlay/Restart (#63).
+              if (isCleanExit(code, booting, intentional)) {
+                void get().forgetExitedSession(id);
+                return;
+              }
+              // Non-zero / crash exit (or a failed boot resume): keep the session
+              // and its exit code so the Terminal shows the "Process exited" overlay
+              // + Restart (#63/#30). The generic exit toast is suppressed for
+              // intentional kills and during the boot window; others toast once.
+              get().markExited(id, code);
+              if (!booting && !intentional) {
+                get().pushToast(
+                  code != null
+                    ? `Session exited (code ${code})`
+                    : "Session exited",
+                );
+              }
+            },
+          }),
+          // Cross-window canvas sync (#84): a tab/layout edit in any window, and
+          // the detached-window set changing, both flow through the backend.
+          ipc.subscribeCanvasEvents({
+            onCanvasesChanged: ({ canvases }) =>
+              get().applyCanvasSync(canvases),
+            onWindowsChanged: (ids) => get().setDetachedCanvasIds(ids),
+          }),
+          // Scheduled sessions (#93/#280): the backend engine fires schedules into live
+          // agents. The **main** window owns the scheduled→live transition; a **detached**
+          // canvas window (#84) also listens because it can hold a scheduled panel, so it
+          // must follow the same fire (and keep its own `schedules` slice in sync). Both
+          // subscribe; the per-window behavior is branched inside each handler. (Tauri
+          // events are global on macOS and Windows alike, so this path is identical.)
+          ipc.subscribeScheduleEvents({
+            onFired: ({ id, session }) => {
               get().upsertSession(toSessionView(session));
-            } else {
-              // The fired event beat the record's arrival (#300 — the immediate
-              // create-time fire's event racing the command return / `recurring://changed`
-              // broadcast). Upserting now would render an unowned standalone column, so
-              // stash the child; `createRecurring` / `applyRecurringSync` adopt it once the
-              // record — which the backend already marks with `current_session_id` — lands.
-              pendingRecurringChildren.set(id, session);
-            }
-            if (prev && prev !== session.id) {
-              // Swallow the old child's pending exit event (the kill lands async) so
-              // it never shows a "Process exited" overlay/toast, then drop it.
-              intentionalKills.add(prev);
-              get().dropSession(prev);
-            }
-            // Surface the (possibly new) folder in recents — main window only, and
-            // the *parent repo* for a worktree child (mirrors the backend).
-            if (IS_MAIN_WINDOW) {
+              if (!IS_MAIN_WINDOW) {
+                // Detached canvas (#280): reflect the fire locally so the rewritten
+                // agent leaf (arriving via `canvas://changed`) finds its session and
+                // renders the terminal instead of "Session closed." The main window
+                // owns the leaf rewrite, persistence, recents, and toast.
+                set((s) => ({
+                  schedules: s.schedules.filter((x) => x.id !== id),
+                }));
+                return;
+              }
+              // The recent to surface is the *parent repo* for a worktree session
+              // (its `repo_path` is the app-managed worktree folder), else the
+              // session's own folder. This mirrors the backend, which touches
+              // `sched.cwd` (the parent repo) — never the worktree dir — so the
+              // worktree shows only as a sub-group under its parent, not as a
+              // duplicate empty top-level folder (#279). The interactive worktree
+              // spawn path likewise never adds the worktree dir to recents.
               const recentPath = session.worktree_parent ?? session.repo_path;
               set((s) => ({
+                schedules: s.schedules.filter((x) => x.id !== id),
                 recents: [
                   recentPath,
                   ...s.recents.filter((r) => r !== recentPath),
                 ],
               }));
-            }
-          },
-          onError: ({ message }) => {
-            // The record is kept + re-armed backend-side; just toast (main window).
-            if (IS_MAIN_WINDOW) {
-              get().pushToast(
-                message || "Recurring agent failed to start",
-                "error",
+              // Rewrite any Canvas leaf showing this pending schedule into the live
+              // agent (#280), in place (same leaf id → the #18 pooled terminal
+              // reparents), then persist so the main window — and any detached canvas
+              // holding it (via `canvas://changed`) — render the agent rather than the
+              // now-removed schedule's "no longer pending" panel.
+              const liveContent: CanvasContent = {
+                kind: "agent",
+                sessionId: session.id,
+                repoPath: session.repo_path,
+              };
+              const { canvases, activeCanvasId } = get();
+              const nextCanvases = rewriteScheduledLeaves(
+                canvases,
+                id,
+                liveContent,
               );
-            }
-          },
-          onChanged: (recurrings) => get().applyRecurringSync(recurrings),
-        });
+              if (nextCanvases !== canvases) {
+                set({ canvases: nextCanvases });
+                void ipc
+                  .setCanvases({
+                    canvases: nextCanvases,
+                    activeId: activeCanvasId,
+                  })
+                  .catch(() => {});
+              }
+              get().pushToast(
+                `Scheduled agent started${session.name ? `: ${session.name}` : ""}`,
+              );
+            },
+            onError: ({ id, message }) => {
+              set((s) => ({
+                schedules: s.schedules.filter((x) => x.id !== id),
+              }));
+              // Only the main window toasts the failure (it owns the schedule surface).
+              if (IS_MAIN_WINDOW) {
+                get().pushToast(
+                  message || "Scheduled agent failed to start",
+                  "error",
+                );
+              }
+            },
+            onChanged: (schedules) => get().applyScheduleSync(schedules),
+          }),
+          // Recurring sessions (#294): the backend poll rotates each recurring's child
+          // agent. Both windows subscribe (a detached canvas #84 can hold a recurring
+          // panel, so it must follow the rotation + keep its `recurrings` slice fresh).
+          ipc.subscribeRecurringEvents({
+            onFired: ({ id, session, next_fire_at }) => {
+              // Swap the retiring child for the fresh one. Order matters (#300): claim the
+              // child in the `recurrings` record FIRST, then `upsertSession` — so the child
+              // is already owned (excluded from Overview/Sidebar) the instant it enters
+              // `sessions`, never flashing as its own standalone column.
+              const { recurrings, present, prev } = applyRecurringFire(
+                get().recurrings,
+                id,
+                session.id,
+                next_fire_at,
+              );
+              if (present) {
+                set({ recurrings });
+                get().upsertSession(toSessionView(session));
+              } else {
+                // The fired event beat the record's arrival (#300 — the immediate
+                // create-time fire's event racing the command return / `recurring://changed`
+                // broadcast). Upserting now would render an unowned standalone column, so
+                // stash the child; `createRecurring` / `applyRecurringSync` adopt it once the
+                // record — which the backend already marks with `current_session_id` — lands.
+                pendingRecurringChildren.set(id, session);
+              }
+              if (prev && prev !== session.id) {
+                // Swallow the old child's pending exit event (the kill lands async) so
+                // it never shows a "Process exited" overlay/toast, then drop it.
+                intentionalKills.add(prev);
+                get().dropSession(prev);
+              }
+              // Surface the (possibly new) folder in recents — main window only, and
+              // the *parent repo* for a worktree child (mirrors the backend).
+              if (IS_MAIN_WINDOW) {
+                const recentPath = session.worktree_parent ?? session.repo_path;
+                set((s) => ({
+                  recents: [
+                    recentPath,
+                    ...s.recents.filter((r) => r !== recentPath),
+                  ],
+                }));
+              }
+            },
+            onError: ({ message }) => {
+              // The record is kept + re-armed backend-side; just toast (main window).
+              if (IS_MAIN_WINDOW) {
+                get().pushToast(
+                  message || "Recurring agent failed to start",
+                  "error",
+                );
+              }
+            },
+            onChanged: (recurrings) => get().applyRecurringSync(recurrings),
+          }),
+        ]);
       } catch {
         // Event subscription only works inside the Tauri webview.
         eventsSubscribed = false;
       }
     }
-    // Host OS family (#143), once, for OS-appropriate display labels — read BEFORE the
-    // first refresh (#346) so the platform signal is loaded before any terminal host
-    // is created: the Linux software-WebGL probe and the Windows ConPTY option
-    // (`windowsPtyOption`) both read it at host-creation time, and `refresh` is what
-    // first populates `sessions` (whose terminals mount immediately). On Windows also
-    // read the build number so xterm.js can configure its ConPTY handling.
-    try {
-      set({ platform: await ipc.platform() });
-      set({ windowsBuild: await ipc.windowsBuild() });
-    } catch {
-      // Outside Tauri; leave "" / 0 → the macOS-default labels + no windowsPty.
-    }
-    await get().refresh();
+    // Apply the payload only AFTER the listeners exist: the *fetch* may race the
+    // registration, the **apply** must not — a live `session://output` / `session://
+    // exited` must never land while its handler doesn't exist (#352). The detached
+    // window id set (#84), the platform signal + Windows build (#143/#346), and every
+    // persisted slice all arrive in this one payload, applied in a single `set()`
+    // (which also re-applies the `data-platform` attribute, #363 — see `applyBootState`).
+    get().applyBootState(await bootPromise);
     // Default view on launch (#103): apply the saved preference once at boot (main
     // window only). `init` runs only on mount, so a mid-session view change is never
     // overridden (unlike `refresh`, which can re-run).
@@ -3181,13 +3352,6 @@ export const useStore = create<AppState>()((set, get) => ({
       // forget so a slow disk check never delays the rest of boot.
       void get().pruneMissingFolders();
     }
-    // Learn the current detached-window set — a just-opened window may have missed
-    // the `canvas://windows` broadcast that fired before it began listening (#84).
-    try {
-      get().setDetachedCanvasIds(await ipc.listCanvasWindows());
-    } catch {
-      // Outside Tauri / no windows; leave the (empty) default.
-    }
     // FileTree disk-change poll (#264): runs in *any* window that can show a tree (the
     // main shell or a detached canvas), each refreshing only its own mounted trees, so
     // files created/removed on disk surface within a few seconds. Idempotent.
@@ -3195,127 +3359,146 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   refresh: async () => {
-    try {
-      const [records, recents] = await Promise.all([
-        ipc.listSessions(),
-        ipc.listRecents(),
-      ]);
-      // Persisted sessions are resumed on boot (claude --resume) — show them as
-      // "reconnecting" (neutral) until their first output / a real exit, never as
-      // a wall of errors (#30). Branch labels refresh from the sidebar.
-      booting = records.length > 0;
-      const views = records.map((r) => ({
-        ...toSessionView(r),
-        reconnecting: true,
-      }));
-      // Mirror the reconnecting flag into the Set the output hot path checks (#261).
-      reconnectingIds.clear();
-      for (const v of views) reconnectingIds.add(v.id);
-      set({
-        sessions: views,
-        recents,
-        // Seed the live "has been active" flag (#112) from the persisted records so
-        // a previously-active agent shows the yellow "finished / needs input" dot
-        // right after boot (reconnecting → idle), never reverting to gray.
-        sessionActive: Object.fromEntries(
-          views.filter((v) => v.hasBeenActive).map((v) => [v.id, true]),
-        ),
-      });
-      // End the boot window: stop suppressing exit toasts, and clear any flag
-      // still set (e.g. a resumed session whose first output raced the listener —
-      // its scrollback still replays the conversation).
-      setTimeout(() => {
-        booting = false;
-        reconnectingIds.clear(); // backstop fired — none are reconnecting now (#261)
-        if (get().sessions.some((x) => x.reconnecting)) {
-          set((s) => ({
-            sessions: s.sessions.map((x) =>
-              x.reconnecting ? { ...x, reconnecting: false } : x,
-            ),
-          }));
-        }
-      }, RECONNECT_BACKSTOP_MS);
-    } catch {
-      // Backend unreachable (e.g. running outside Tauri).
+    // The boot read, in one round-trip (#352). Kept as an action (the test entry
+    // point, and the one place a re-load is triggered from) — it is now just the
+    // fetch + the apply; a rejection (outside Tauri) applies `null`, which keeps the
+    // defaults and still flips `booted`. Never touches the view (that stays `init`-only).
+    get().applyBootState(await ipc.bootState().catch(() => null));
+  },
+
+  applyBootState: (boot) => {
+    // Command failed / outside Tauri: keep every default, but still flip `booted` so
+    // the empty-state gate resolves rather than stranding the UI on a blank (#352).
+    if (!boot) {
+      // Nothing will ever resume, so close the resume window immediately and release
+      // any deferred tier-2 git volley (#359) rather than holding it forever.
+      set({ booted: true, resumeSettled: true });
+      flushDeferredGitRefresh();
+      return;
     }
-    // Repo colors + Overview panel layouts load independently so a failure here
-    // doesn't block sessions.
-    try {
-      const [
-        colors,
-        panels,
-        order,
-        files,
-        canvas,
-        canvasesState,
-        rawSettings,
-        rawSidebarWidth,
-        rawTemplates,
-        rawSidebarCollapsed,
-        rawRepoOrder,
-        rawDiffSeen,
-      ] = await Promise.all([
-        ipc.listRepoColors(),
-        ipc.listOverviewPanels(),
-        ipc.listOverviewOrder(),
-        ipc.listOpenFiles(),
-        ipc.getCanvasLayout(),
-        ipc.getCanvases(),
-        ipc.getSettings(),
-        ipc.getSidebarWidth(),
-        ipc.getCanvasTemplates(),
-        ipc.getSidebarCollapsed(),
-        ipc.getRepoOrder(),
-        ipc.getDiffSeen(),
-      ]);
-      // Settings (#100): merge the persisted blob over the defaults and apply its
-      // side-effects (live terminal options) before the first paint.
-      const settings = mergeSettings(rawSettings);
-      applySettingsEffects(settings);
+
+    // Settings (#100): merge the persisted blob over the defaults and apply its
+    // side-effects (theme / accent / reduce-motion / live terminal options) before the
+    // first paint.
+    const settings = mergeSettings(boot.settings);
+    applySettingsEffects(settings);
+
+    // Persisted sessions are resumed on boot (claude --resume) — show them as
+    // "reconnecting" (neutral) until their first output / a real exit, never as
+    // a wall of errors (#30). Branch labels refresh from the sidebar.
+    booting = boot.sessions.length > 0;
+    const views = boot.sessions.map((r) => ({
+      ...toSessionView(r),
+      reconnecting: true,
+    }));
+    // Mirror the reconnecting flag into the Set the output hot path checks (#261).
+    reconnectingIds.clear();
+    for (const v of views) reconnectingIds.add(v.id);
+
+    // Multi-canvas (#58): the persisted tabs, else the one-shot migration of the old
+    // single `canvas_layout`, else one empty canvas — and a detached window (#84)
+    // always shows its own canvas. Pure (`boot.ts`), so it is unit-tested on its own.
+    const { canvases, activeCanvasId, migrated } = resolveCanvases(
+      boot.canvases,
+      boot.canvas_layout,
+      IS_MAIN_WINDOW,
+      DETACHED_CANVAS_ID,
+    );
+
+    // ONE store update carries the whole payload. `platform` / `windowsBuild` are
+    // listed first, but what matters is that they land in the **same** `set()` as
+    // `sessions` (#346): the terminal pool reads them at host-creation time
+    // (`webglAllowed()` / `windowsPtyOption()`), and rendering `sessions` is what
+    // leads to those hosts — a `set` is applied synchronously, so
+    // `useStore.getState().platform` is already correct by the time React renders them.
+    // (Since #351 a host is built on first *visibility* rather than on mount, which only
+    // widens that margin — the signal can never be read before it has landed.)
+    set({
+      platform: boot.platform,
+      windowsBuild: boot.windows_build,
+      sessions: views,
+      // Seed the live "has been active" flag (#112) from the persisted records so
+      // a previously-active agent shows the yellow "finished / needs input" dot
+      // right after boot (reconnecting → idle), never reverting to gray.
+      sessionActive: Object.fromEntries(
+        views.filter((v) => v.hasBeenActive).map((v) => [v.id, true]),
+      ),
+      recents: boot.recents,
+      repoColors: boot.repo_colors,
+      overviewPanels: boot.overview_panels,
+      overviewOrder: boot.overview_order,
+      canvases,
+      activeCanvasId,
+      // Saved Canvas templates (#117); absent (null) → none saved yet.
+      canvasTemplates: boot.canvas_templates ?? [],
+      settings,
       // Sidebar width (#108): restore the persisted value re-clamped to the range
       // (or the default when absent).
-      const sidebarWidth = clampSidebarWidth(
-        rawSidebarWidth ?? SIDEBAR_WIDTH_DEFAULT,
-      );
+      sidebarWidth: clampSidebarWidth(
+        boot.sidebar_width ?? SIDEBAR_WIDTH_DEFAULT,
+      ),
       // Sidebar collapsed-to-rail flag (#168): default expanded when absent.
-      const sidebarCollapsed = rawSidebarCollapsed ?? false;
+      sidebarCollapsed: boot.sidebar_collapsed ?? false,
       // Top-level folder order (#211): the saved repo paths (empty until first
       // drag), merged with the live repo set at render via `mergeRepoOrder`.
-      const folderOrder = rawRepoOrder ?? [];
+      folderOrder: boot.repo_order ?? [],
       // Diff "seen" markers (#278): the persisted `{ repoPath: { filePath: digest } }`
       // map, or empty until first marked. Loaded in every window (a diff panel lives in
       // the main window and a detached canvas alike).
-      const diffSeen = (rawDiffSeen as DiffSeenMap | null) ?? {};
-      // Multi-canvas (#58): use the persisted tabs; else migrate the old single
-      // canvas_layout into "Canvas 1"; else start with one empty canvas. Persist
-      // the migrated shape once so the new field becomes the source of truth.
-      let canvases: CanvasTab[];
-      let activeCanvasId: string;
-      if (canvasesState && canvasesState.canvases.length > 0) {
-        canvases = canvasesState.canvases;
-        activeCanvasId = canvases.some((c) => c.id === canvasesState.activeId)
-          ? canvasesState.activeId
-          : (canvases[0]?.id ?? "");
-      } else {
-        const first: CanvasTab = {
-          id: crypto.randomUUID(),
-          name: "Canvas 1",
-          layout: canvas ?? null,
-        };
-        canvases = [first];
-        activeCanvasId = first.id;
-        // Only the main window migrates/persists the canvas shape (#84); a
-        // detached renderer never writes it.
-        if (IS_MAIN_WINDOW) {
-          void ipc
-            .setCanvases({ canvases, activeId: activeCanvasId })
-            .catch(() => {});
-        }
+      diffSeen: boot.diff_seen ?? {},
+      // Scheduled (#93) + recurring (#294) sessions — the backend owns the timers, the
+      // frontend just lists the pending ones. Loaded in **every** window (#280): a
+      // detached canvas (#84) can hold a scheduled/recurring panel, which needs the
+      // record to render. Live mutations sync via `schedule://*` / `recurring://*`.
+      schedules: boot.schedules,
+      recurrings: boot.recurrings,
+      // The detached-window set (#84) — a just-opened window may have missed the
+      // `canvas://windows` broadcast that fired before it began listening. It rides in
+      // the same update as `sessions` + `canvases`, so PTY ownership
+      // (`computeSessionOwners`) is already right when the terminals first mount.
+      detachedCanvasIds: boot.detached_canvas_ids,
+      // Nothing to resume ⇒ the boot decorations (#359) may run as soon as the first
+      // paint is out; otherwise they wait for the backstop below.
+      resumeSettled: views.length === 0,
+      booted: true,
+    });
+    // Keep the <html> data-platform attribute (written synchronously from the UA in
+    // main.tsx, #363) in agreement with the backend's authoritative answer — a no-op in
+    // practice, but it means the Linux --ui font override can never disagree with the
+    // store's platform signal. It rides the same apply as the `platform` field itself.
+    applyPlatformAttribute(boot.platform);
+    // Re-apply through the action so its guard still runs (#84): the main window never
+    // renders a detached canvas as its active tab — if the persisted active tab is
+    // already detached, switch to a still-docked one. A no-op on the (identical) ids.
+    get().setDetachedCanvasIds(boot.detached_canvas_ids);
+
+    // End the boot window: stop suppressing exit toasts, and clear any flag
+    // still set (e.g. a resumed session whose first output raced the listener —
+    // its scrollback still replays the conversation).
+    setTimeout(() => {
+      booting = false;
+      reconnectingIds.clear(); // backstop fired — none are reconnecting now (#261)
+      // The resume window is over (a hard cap — a slow/failed resume can't extend it),
+      // so release the deferred tier-2 git volley (#359).
+      set({ resumeSettled: true });
+      flushDeferredGitRefresh();
+      if (get().sessions.some((x) => x.reconnecting)) {
+        set((s) => ({
+          sessions: s.sessions.map((x) =>
+            x.reconnecting ? { ...x, reconnecting: false } : x,
+          ),
+        }));
       }
-      // A detached window (#84) always shows its own canvas, regardless of the
-      // persisted active tab (which tracks the main window).
-      if (!IS_MAIN_WINDOW && DETACHED_CANVAS_ID) {
-        activeCanvasId = DETACHED_CANVAS_ID;
+    }, RECONNECT_BACKSTOP_MS);
+
+    // --- Fire-and-forget side effects (main window only, exactly as before) ---
+    if (IS_MAIN_WINDOW) {
+      // Persist the migrated canvas shape once so the new field becomes the source of
+      // truth (#58); a detached renderer (#84) never writes it.
+      if (migrated) {
+        void ipc
+          .setCanvases({ canvases, activeId: activeCanvasId })
+          .catch(() => {});
       }
       // #110: the legacy per-repo `open_files` map (#45) is **no longer** folded
       // into `overviewPanels`. The #59 fold ran on every boot, and because nothing
@@ -3324,77 +3507,34 @@ export const useStore = create<AppState>()((set, get) => ({
       // persisted panels, and was re-created as a fresh markdown panel). Every real
       // install long since migrated and persisted its panels, so we drop the fold
       // entirely — `overviewPanels` loads from the persisted layout only — and
-      // permanently **empty** the stale `open_files` map (main window only; the Rust
-      // setter drops each now-empty key) so it can never resurrect an item again.
-      if (IS_MAIN_WINDOW) {
-        for (const repo of Object.keys(files)) {
-          void ipc.setOpenFiles(repo, []).catch(() => {});
-        }
+      // permanently **empty** the stale `open_files` map (the Rust setter drops each
+      // now-empty key) so it can never resurrect an item again.
+      for (const repo of Object.keys(boot.open_files)) {
+        void ipc.setOpenFiles(repo, []).catch(() => {});
       }
-      set({
-        repoColors: colors,
-        overviewPanels: panels,
-        overviewOrder: order,
-        canvases,
-        activeCanvasId,
-        settings,
-        sidebarWidth,
-        sidebarCollapsed,
-        folderOrder,
-        diffSeen,
-        // Saved Canvas templates (#117); absent (null) → none saved yet.
-        canvasTemplates: rawTemplates ?? [],
-      });
       // Terminal items can't resume (#72): respawn a fresh shell for each
       // persisted terminal panel under its repo so the item is usable after a
-      // restart (previous output/history is gone, by design). Main window only —
-      // a detached window (#84) must not re-spawn shells the main window owns.
-      if (IS_MAIN_WINDOW) {
-        for (const [repo, list] of Object.entries(panels)) {
-          for (const p of list) {
-            if (p.kind === "terminal") {
-              void ipc.spawnTerminal(repo, p.id).catch(() => {});
-            }
+      // restart (previous output/history is gone, by design). A detached window (#84)
+      // must not re-spawn shells the main window owns.
+      for (const [repo, list] of Object.entries(boot.overview_panels)) {
+        for (const p of list) {
+          if (p.kind === "terminal") {
+            void ipc.spawnTerminal(repo, p.id).catch(() => {});
           }
         }
       }
-    } catch {
-      // Backend unreachable; leave colors/panels/order/canvas/width as-is.
-    }
-    // Scheduled sessions (#93) — re-armed timers live in the backend, so the frontend
-    // just lists the pending ones. Loaded in **every** window (#280), not only the
-    // main one: a detached canvas (#84) can hold a scheduled panel, which needs the
-    // schedule's data to render (else it falsely shows "no longer pending"). Live
-    // mutations + the fire then sync via `schedule://changed` / `schedule://fired`.
-    try {
-      set({ schedules: await ipc.listSchedules() });
-    } catch {
-      // Backend unreachable; leave schedules as-is.
-    }
-    // Recurring sessions (#294) — the backend re-arms them; the frontend just lists
-    // them. Loaded in every window like schedules (a detached canvas #84 can hold a
-    // recurring panel). Live mutations + rotations sync via `recurring://*`.
-    try {
-      set({ recurrings: await ipc.listRecurrings() });
-    } catch {
-      // Backend unreachable; leave recurrings as-is.
-    }
-    // In-app updater (#190) — main window only. (1) Post-update toast: if the
-    // running version is higher than the one recorded last boot, the app just
-    // self-updated → toast it, then record the running version. (2) Best-effort
-    // update check (inert today — placeholder pubkey + no signed release).
-    if (IS_MAIN_WINDOW) {
-      try {
-        const running = await ipc.appVersion();
-        const last = await ipc.getLastVersion();
-        if (last && versionIncreased(last, running)) {
-          get().pushToast(`Updated to v${running}`, "success");
-        }
-        if (last !== running) {
-          void ipc.setLastVersion(running).catch(() => {});
-        }
-      } catch {
-        // Outside Tauri / command missing — skip the version compare.
+      // In-app updater (#190). (1) Post-update toast: if the running version is higher
+      // than the one recorded last boot, the app just self-updated → toast it, then
+      // record the running version. Both versions ride in the boot payload, so this
+      // step now costs **zero** extra round-trips (#352). (2) Best-effort update check.
+      if (
+        boot.last_version &&
+        versionIncreased(boot.last_version, boot.app_version)
+      ) {
+        get().pushToast(`Updated to v${boot.app_version}`, "success");
+      }
+      if (boot.last_version !== boot.app_version) {
+        void ipc.setLastVersion(boot.app_version).catch(() => {});
       }
       void get().checkForUpdate();
       // 5-hour usage bar (#154): kick off the 180s poll, kept alive at module scope
@@ -3404,72 +3544,130 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  refreshBranches: async () => {
-    const repos = repoOrder(get().recents, get().sessions);
+  refreshRepoGit: async (opts) => {
+    const req = normalizeRequest(opts);
+    // Boot tier-2 (#359): hold the decorations until the boot-resume window has settled,
+    // so they never race the persisted PTYs' resume. Merged if several arrive; flushed
+    // once by the `RECONNECT_BACKSTOP_MS` backstop (a hard cap — a slow/failed resume can
+    // never defer them forever).
+    if (opts?.whenSettled && !get().resumeSettled) {
+      gitRefreshDeferred = mergeRequests(gitRefreshDeferred, req);
+      return;
+    }
+    // The focus/visibility backstop asks for a full volley; downgrade it to the cheap
+    // branches+ahead/behind pair when a full one ran recently (#359).
+    if (opts?.throttleFull && req.repos === null) {
+      req.kinds = focusRefreshKinds(Date.now(), lastFullRefreshAt);
+    }
+    await runGitRefresh(req);
+  },
+
+  refreshBranches: async (scope) => {
+    const repos = scope?.length
+      ? [...scope]
+      : repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     try {
       // One IPC round-trip for all repos instead of one per repo.
-      set({ branches: await ipc.currentBranches(repos) });
+      const next = await ipc.currentBranches(repos);
+      set((s) => {
+        // Scoped (#359): merge into the full map — set each scoped folder from the read,
+        // deleting one it no longer resolves — so other folders' labels survive.
+        const merged = scope?.length
+          ? mergeScoped(s.branches, repos, next)
+          : next;
+        return stringMapsEqual(s.branches, merged) ? {} : { branches: merged };
+      });
     } catch {
       // Backend unreachable; leave branches as-is.
     }
   },
 
-  refreshGithubUrls: async () => {
-    const repos = repoOrder(get().recents, get().sessions);
+  refreshGithubUrls: async (scope) => {
+    const repos = scope?.length
+      ? [...scope]
+      : repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     try {
       // One IPC round-trip for all repos (only github.com remotes come back). A full
       // replace is correct: a repo whose remote stopped being GitHub drops out.
       const next = await ipc.githubWebUrls(repos);
-      set((s) =>
-        urlMapsEqual(s.githubUrls, next) ? {} : { githubUrls: next },
-      );
+      set((s) => {
+        const merged = scope?.length
+          ? mergeScoped(s.githubUrls, repos, next)
+          : next;
+        return stringMapsEqual(s.githubUrls, merged)
+          ? {}
+          : { githubUrls: merged };
+      });
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
     }
   },
 
-  refreshDiffLineCounts: async () => {
+  refreshDiffLineCounts: async (scope) => {
     // The privacy/perf opt-out (#335): off ⇒ never invoke the git read at all.
     if (!get().settings.showDiffLineCounts) return;
-    const repos = repoOrder(get().recents, get().sessions);
+    const repos = scope?.length
+      ? [...scope]
+      : repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     try {
       // One batch IPC round-trip for every working tree (agents keyed by repoPath).
       const next = await ipc.diffLineCounts(repos);
-      set((s) =>
-        diffCountsMapsEqual(s.diffLineCounts, next)
+      set((s) => {
+        const merged = scope?.length
+          ? mergeScoped(
+              s.diffLineCounts,
+              repos,
+              next,
+              (a, b) => a.added === b.added && a.removed === b.removed,
+            )
+          : next;
+        return diffCountsMapsEqual(s.diffLineCounts, merged)
           ? {}
-          : { diffLineCounts: next },
-      );
+          : { diffLineCounts: merged };
+      });
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
     }
   },
 
-  refreshBranchAheadBehind: async () => {
-    const repos = repoOrder(get().recents, get().sessions);
+  refreshBranchAheadBehind: async (scope) => {
+    const repos = scope?.length
+      ? [...scope]
+      : repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     try {
       // One batch IPC round-trip for every folder (repos + worktree paths). A full
-      // replace is correct: a folder that lost its upstream drops out of the map.
+      // replace is correct: a folder that lost its upstream drops out of the map — and
+      // `mergeScoped` reproduces exactly that within a scoped read (#359).
       const next = await ipc.branchAheadBehind(repos);
-      set((s) =>
-        aheadBehindMapsEqual(s.branchAheadBehind, next)
+      set((s) => {
+        const merged = scope?.length
+          ? mergeScoped(
+              s.branchAheadBehind,
+              repos,
+              next,
+              (a, b) => a.ahead === b.ahead && a.behind === b.behind,
+            )
+          : next;
+        return aheadBehindMapsEqual(s.branchAheadBehind, merged)
           ? {}
-          : { branchAheadBehind: next },
-      );
+          : { branchAheadBehind: merged };
+      });
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
     }
   },
 
   refreshFileStatuses: async (repo) => {
-    // Scope: one repo for the FileTree's own mount/Refresh (cheap, immediate), or the
-    // whole sidebar repo set (mirroring `refreshBranches`) for the load / busy→idle /
-    // git-write paths so any open tree reflects an agent's edits without a restart.
-    const repos = repo ? [repo] : repoOrder(get().recents, get().sessions);
+    // Scope: one repo (or a set) for the FileTree's own mount/Refresh and the #359 volley
+    // — which reads statuses for **mounted trees only**, since an open FileTree is the
+    // map's sole consumer — or, with no scope, the whole sidebar repo set.
+    const scope =
+      typeof repo === "string" ? [repo] : repo?.length ? [...repo] : undefined;
+    const repos = scope ?? repoOrder(get().recents, get().sessions);
     if (repos.length === 0) return;
     // One `git status --porcelain` per repo, in parallel; a failed repo is left as-is.
     const results = await Promise.allSettled(
@@ -3720,6 +3918,12 @@ export const useStore = create<AppState>()((set, get) => ({
     const prev = get().settings;
     set({ settings });
     applySettingsEffects(settings);
+    // Theme switched at runtime (#348/#333): push the new native window background to
+    // every open window (main + detached canvases), so a resize/repaint gap can never
+    // expose the previous theme's color behind the webview. Best-effort.
+    if (settings.theme !== prev.theme) {
+      void ipc.setThemeBackground(settings.theme).catch(() => {});
+    }
     // React to the session-usage toggle at runtime (#326): starting/stopping the poll
     // is the load-bearing token-access gate, so it must fire immediately on Save.
     if (settings.showSessionUsage !== prev.showSessionUsage) {
@@ -4809,15 +5013,11 @@ export const useStore = create<AppState>()((set, get) => ({
       }));
       get().select(record.id);
       get().pushToast(`Started ${record.name ?? cwd}`);
-      // A checkout (or a brand-new repo) can change the branch label — refresh.
-      void get().refreshBranches();
-      // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
-      void get().refreshFileStatuses();
-      void get().refreshDiffLineCounts();
-      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
-      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
-      void get().refreshBranchAheadBehind();
+      // A checkout (or a brand-new repo) changes the branch label, which files differ
+      // from HEAD (the FileTree tint #252 + the per-agent line counts #335) and
+      // ahead/behind vs upstream (#338) — one unscoped volley covers all of them (#359;
+      // unscoped because a spawn can add a brand-new folder).
+      void get().refreshRepoGit();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4844,14 +5044,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().upsertSession(toSessionView(record));
       get().select(record.id);
       get().pushToast(`Started isolated worktree on ${branch}`);
-      void get().refreshBranches();
-      // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
-      void get().refreshFileStatuses();
-      void get().refreshDiffLineCounts();
-      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
-      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
-      void get().refreshBranchAheadBehind();
+      // The new worktree folder is a brand-new key in every git map — one unscoped
+      // volley fills its branch label / tint / counts / ahead-behind (#359).
+      void get().refreshRepoGit();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4891,14 +5086,9 @@ export const useStore = create<AppState>()((set, get) => ({
       }));
       get().select(record.id);
       get().pushToast(`Created ${name} & started`);
-      void get().refreshBranches();
-      // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
-      void get().refreshFileStatuses();
-      void get().refreshDiffLineCounts();
-      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
-      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
-      void get().refreshBranchAheadBehind();
+      // The branch-create switched HEAD: label, tint, counts and ahead/behind all move
+      // (#359 — one unscoped volley).
+      void get().refreshRepoGit();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -4919,14 +5109,9 @@ export const useStore = create<AppState>()((set, get) => ({
       get().upsertSession(toSessionView(record));
       get().select(record.id);
       get().pushToast(`Created ${name} worktree & started`);
-      void get().refreshBranches();
-      // A checkout / branch-create can change which files differ from HEAD — refresh
-      // the FileTree coloring (#252) and the per-agent line counts (#335) too.
-      void get().refreshFileStatuses();
-      void get().refreshDiffLineCounts();
-      // A checkout / branch-create switches HEAD, so ahead/behind vs upstream changes
-      // — refresh the sidebar's `↑A ↓B` indicator too (#338).
-      void get().refreshBranchAheadBehind();
+      // A brand-new worktree folder + branch — one unscoped volley fills every git map
+      // for it (#359).
+      void get().refreshRepoGit();
       return true;
     } catch (err) {
       if (isSessionError(err) && err.kind === "BinaryNotFound") {
@@ -5633,10 +5818,9 @@ export const useStore = create<AppState>()((set, get) => ({
           : `Pulled ${repoName(cwd)}`,
       );
       // A `--ff-only` pull fast-forwards the local branch to its upstream, so the
-      // ahead/behind vs upstream (and the branch label / counts) all shift — refresh
-      // the sidebar's `↑A ↓B` indicator (#338) alongside the branch label.
-      void get().refreshBranches();
-      void get().refreshBranchAheadBehind();
+      // ahead/behind vs upstream (#338) and the branch label / counts all shift — one
+      // volley, scoped to the pulled folder (#359).
+      void get().refreshRepoGit({ repos: [cwd] });
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Pull failed";
       get().pushToast(`Pull failed: ${message}`, "error");
@@ -5651,12 +5835,10 @@ export const useStore = create<AppState>()((set, get) => ({
     try {
       await ipc.fetchRemotes(cwd);
       get().pushToast(`Fetched ${repoName(cwd)}`);
-      await get().refreshBranches();
-      // A fetch can fast-forward-adjacent state; keep the per-agent counts fresh (#335).
-      void get().refreshDiffLineCounts();
-      // A fetch moves the remote-tracking ref, so ahead/behind vs upstream changes —
-      // re-read the sidebar's `↑A ↓B` indicator (#338).
-      void get().refreshBranchAheadBehind();
+      // A fetch moves the remote-tracking ref, so ahead/behind vs upstream (#338) — and
+      // the branch label / per-agent counts (#335) — shift for the fetched folder: one
+      // scoped volley (#359).
+      await get().refreshRepoGit({ repos: [cwd] });
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Fetch failed";
       get().pushToast(`Fetch failed: ${message}`, "error");
@@ -5671,13 +5853,11 @@ export const useStore = create<AppState>()((set, get) => ({
     try {
       await ipc.checkoutBranch(repo, branch);
       get().pushToast(`Checked out ${branch}`);
-      // Both the branch label (#212) and which files differ from HEAD (#252) change —
-      // refresh those + the per-agent line counts (#335) so the sidebar follows.
-      await get().refreshBranches();
-      void get().refreshFileStatuses(repo);
-      void get().refreshDiffLineCounts();
-      // A checkout switches HEAD to a branch with its own upstream divergence (#338).
-      void get().refreshBranchAheadBehind();
+      // The branch label (#212), which files differ from HEAD (the FileTree tint #252 +
+      // the per-agent line counts #335) and the upstream divergence (#338) all change —
+      // one volley scoped to the checked-out folder (#359). The tint is read only when a
+      // tree is actually open (a closed one needs no status read).
+      await get().refreshRepoGit({ repos: [repo] });
     } catch (err) {
       const message = isSessionError(err) ? err.message : "Checkout failed";
       get().pushToast(`Checkout failed: ${message}`, "error");
@@ -5695,11 +5875,9 @@ export const useStore = create<AppState>()((set, get) => ({
       return isSessionError(err) ? err.message : "Could not create branch";
     }
     get().pushToast(`Created ${name}`);
-    await get().refreshBranches();
-    void get().refreshFileStatuses(repo);
-    void get().refreshDiffLineCounts();
-    // A new branch has no upstream yet (or inherits the base's) — refresh `↑A ↓B` (#338).
-    void get().refreshBranchAheadBehind();
+    // The new branch switches HEAD (label + tint + counts) and has no upstream yet (or
+    // inherits the base's) — one volley scoped to the folder (#359).
+    await get().refreshRepoGit({ repos: [repo] });
     return true;
   },
 }));

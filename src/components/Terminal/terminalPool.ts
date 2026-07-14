@@ -62,6 +62,7 @@ import { terminalsToDispose } from "./poolReconcile";
 import { dedupeAgainstScrollback } from "./replayDedupe";
 import { createReplayQueue } from "./replayQueue";
 import styles from "./Terminal.module.css";
+import { webglFallback } from "./webglFallback";
 import {
   decideTerminalRenderer,
   type TerminalRendererDecision,
@@ -239,6 +240,28 @@ function rendererDecision(): TerminalRendererDecision {
 }
 
 /**
+ * May a terminal in this window attach xterm's WebGL addon *right now*? The AND of the two
+ * independent gates, deliberately in this order:
+ *
+ *   1. The **#364 context-loss latch**. Once any terminal in this window has suffered an
+ *      UNRECOVERED WebGL context loss, none re-attaches the addon for the rest of the run
+ *      — a GPU that dropped one context will drop the next, so retrying is a context storm
+ *      on an already-sick driver. Checked FIRST, so a fallen-back window never even
+ *      constructs the #346 probe canvas — and, crucially, **the latch beats the #357
+ *      Settings override**: a user forcing "WebGL" on a window that already lost a context
+ *      does NOT get the addon back (it would re-run exactly the failure the latch caught).
+ *      Only a relaunch re-arms it.
+ *   2. The **#346/#357 decision** — the one-time software-rasterizer probe folded together
+ *      with the persisted Settings mode (auto / force-webgl / force-dom).
+ *
+ * Callers add the third constraint, `IS_MAIN_WINDOW` (#105 — a detached canvas window
+ * always renders through xterm's DOM renderer).
+ */
+function webglPermitted(): boolean {
+  return webglFallback.allowsWebgl() && rendererDecision().webgl;
+}
+
+/**
  * Apply the Linux terminal-renderer override (#357) to the **live** pool — without
  * disposing any host. That is the #18 invariant: a dispose would replay scrollback whose
  * absolute cursor moves were encoded for another width, garbling `claude`'s TUI. xterm
@@ -247,18 +270,19 @@ function rendererDecision(): TerminalRendererDecision {
  * is an addon operation, never a terminal one.
  *
  * A converge-to-target loop: it only acts on a host whose addon state differs from the
- * decision, so it is safe to call repeatedly (it runs on every Save, and on boot after the
+ * target, so it is safe to call repeatedly (it runs on every Save, and on boot after the
  * settings blob loads). No-op off Linux and in a detached canvas window (#105 — those
- * always use the DOM renderer).
+ * always use the DOM renderer). The target is `webglPermitted()`, so a window latched to
+ * DOM by a context loss (#364) stays there even if the user then forces "WebGL".
  */
 export function applyTerminalRenderer(): void {
   if (!IS_MAIN_WINDOW) return;
   if (!isLinux(useStore.getState().platform)) return;
-  const decision = rendererDecision();
+  const wantWebgl = webglPermitted();
   for (const host of hosts.values()) {
-    if (decision.webgl && !host.webgl) {
+    if (wantWebgl && !host.webgl) {
       void host.loadWebgl();
-    } else if (!decision.webgl && host.webgl) {
+    } else if (!wantWebgl && host.webgl) {
       host.unloadWebgl();
     } else {
       continue; // already on the target renderer
@@ -283,12 +307,19 @@ export function terminalRendererReport(): {
 } {
   const { platform, settings } = useStore.getState();
   const decision = rendererDecision();
+  // The #364 latch overrides the decision (including a forced "webgl"), so the readout has
+  // to say so — otherwise Settings would claim WebGL on a window that fell back to the DOM
+  // renderer after an unrecovered context loss.
+  const webgl = decision.webgl && webglFallback.allowsWebgl();
+  const latched = decision.webgl && !webgl;
   return {
     mode: settings.linuxTerminalRenderer,
     // A detached canvas window is always DOM (#105), whatever the decision says.
-    active: IS_MAIN_WINDOW && decision.webgl ? "webgl" : "dom",
+    active: IS_MAIN_WINDOW && webgl ? "webgl" : "dom",
     renderer: isLinux(platform) ? probedRenderer() : null,
-    reason: decision.reason,
+    reason: latched
+      ? "WebGL context lost and not restored; DOM renderer for the rest of this run"
+      : decision.reason,
   };
 }
 
@@ -441,26 +472,75 @@ function createHost(sessionId: string): TerminalHost {
   // Linux when the one-time probe says WebGL is software-rasterized (#346) or the user
   // forced the DOM renderer in Settings → Rendering (#357) — see `rendererDecision`.
   // The main window on macOS/Windows keeps WebGL, so its rendering is provably unchanged.
+  // And skipped once ANY terminal in this window has suffered an UNRECOVERED WebGL
+  // context loss (#364): a GPU that dropped one context (OOM / driver reset / suspend,
+  // likeliest on WebKitGTK) will drop the next one too, so re-attaching would be a
+  // context storm on an already-sick driver. `webglPermitted()` checks that latch BEFORE
+  // the #346/#357 decision, so a fallen-back window doesn't even construct the probe
+  // canvas — and the latch outranks a forced "webgl" from Settings.
   //
   // The addon is fetched as its own chunk (#356), so the terminal paints its first
   // frame(s) on xterm's DOM renderer and swaps to WebGL a few ms later, when the chunk
   // resolves — xterm supports `loadAddon` after `open()`, which is exactly the order the
   // code already used, only synchronously. When the decision is DOM (a detached window, a
-  // software rasterizer, or the Settings override) the chunk is never even requested.
-  // Any failure (chunk error, WebGL ctor throw) leaves `host.webgl` undefined ⇒ the DOM
-  // renderer, as today.
+  // software rasterizer, the Settings override, or the #364 latch) the chunk is never even
+  // requested. Any failure (chunk error, WebGL ctor throw) leaves `host.webgl` undefined ⇒
+  // the DOM renderer, as today.
+  //
+  // Because the load is async, the #364 handler is attached to the addon *instance the
+  // chunk resolves to*, and both guards are re-checked after the await: `disposed` (the
+  // host was torn down mid-load — never attach to a dead terminal) and the latch (another
+  // terminal in this window lost its context while our chunk was in flight — attaching now
+  // would be exactly the context storm the latch exists to prevent).
+  //
+  // The renderer record starts at "dom" for every host, which is literally true until the
+  // chunk resolves, and is upgraded to "webgl" only once the addon has actually attached.
+  webglFallback.noteRenderer(sessionId, "dom");
   host.loadWebgl = async () => {
-    if (disposed || host.webgl) return;
+    // The latch is re-checked here too (not just at the call site) so the #357 live toggle
+    // can never re-attach the addon on a window that already lost a context.
+    if (disposed || host.webgl || !webglFallback.allowsWebgl()) return;
     try {
       const { WebglAddon } = await import("@xterm/addon-webgl");
-      // Re-check: the host may have been disposed — or a concurrent call may have won the
-      // race — while the chunk was in flight.
-      if (disposed || host.webgl) return;
+      // Re-check after the await: the host may have been disposed, a concurrent call may
+      // have won the race, or another terminal in this window may have latched the whole
+      // window to DOM (#364) — while the chunk was in flight.
+      if (disposed || host.webgl || !webglFallback.allowsWebgl()) return;
       const addon = new WebglAddon();
-      addon.onContextLoss(() => addon.dispose());
+      addon.onContextLoss(() => {
+        // Fired ONLY when the context was not restored within the addon's ~3s window,
+        // i.e. the renderer is dead (the addon handles a *recovered* loss internally, so
+        // there is nothing to re-attach or retry). Disposing the addon is the documented
+        // recovery: xterm swaps its render service back to the DOM renderer and re-lays
+        // out the SAME buffer — no host dispose, no scrollback replay, so the #18 pool
+        // invariant holds and `claude`'s width-specific TUI is not garbled.
+        //
+        // Clear our reference FIRST: the #221 font-atlas block below runs async (it awaits
+        // `webglReady` + the font load), and on a disposed addon it would both call into a
+        // dead renderer AND burn the one-shot module-global `fontAtlasRebuilt` flag that
+        // the other live terminals still need.
+        host.webgl = undefined;
+        if (webglFallback.noteContextLoss(sessionId)) {
+          console.warn(
+            "[recue] terminals: WebGL context lost and not restored; falling back to xterm's DOM renderer for the rest of this run",
+          );
+        }
+        addon.dispose();
+        // Belt-and-braces repaint: the addon's own dispose already sets the DOM renderer
+        // and re-handles the resize, but a forced refresh guarantees the rows repaint from
+        // the existing buffer even if that internal path changes in a future xterm.
+        try {
+          term.refresh(0, term.rows - 1);
+        } catch {
+          // terminal already torn down — nothing to repaint
+        }
+      });
       term.loadAddon(addon);
       host.webgl = addon;
+      webglFallback.noteRenderer(sessionId, "webgl");
     } catch {
+      // Chunk error or WebGL ctor throw ⇒ stay on the DOM renderer (already the recorded
+      // state). NOT a context loss, so the window is deliberately not latched.
       host.webgl = undefined;
     }
   };
@@ -468,11 +548,10 @@ function createHost(sessionId: string): TerminalHost {
     if (!host.webgl) return;
     host.webgl.dispose(); // xterm reverts to its DOM renderer
     host.webgl = undefined;
+    webglFallback.noteRenderer(sessionId, "dom");
   };
   const webglReady: Promise<void> =
-    IS_MAIN_WINDOW && rendererDecision().webgl
-      ? host.loadWebgl()
-      : Promise.resolve();
+    IS_MAIN_WINDOW && webglPermitted() ? host.loadWebgl() : Promise.resolve();
 
   // Clickable http/https links (#109). Hover underlines a URL; the custom activate
   // handler opens it only on a ⌘/Ctrl-click (`metaKey || ctrlKey`, #143 — Ctrl on
@@ -729,6 +808,9 @@ function createHost(sessionId: string): TerminalHost {
     dataSub.dispose();
     webLinks.dispose();
     host.webgl?.dispose();
+    // Keep the renderer record bounded (reconcile / resetTerminal / detached-window churn
+    // all route through here). The context-loss LATCH is deliberately not cleared (#364).
+    webglFallback.forget(sessionId);
     term.dispose();
     container.remove();
   };
