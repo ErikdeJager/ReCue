@@ -4076,3 +4076,70 @@ replace an `$APPIMAGE`.
   `""` default still do.
 - Checks green: `npm run build`, `lint`, `test` (680 passed), `format:check`, `cargo test` (213 passed), clippy
   `-D warnings`, `cargo fmt --check`, `bash -n scripts/aur-bump.sh`, `makepkg --printsrcinfo`.
+
+### 362. [x] Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a consented desktop-integration path
+
+The AppImage's internal desktop entry said `StartupWMClass=recue` while the user-installed one said `Recue` — and
+a wrong WM_CLASS breaks icon/taskbar grouping (the window doesn't associate with its launcher entry). The root
+cause is that ReCue never *owned* its window identity: it inherited it from `argv[0]` (which an AppImage's
+`AppRun` may rewrite) plus GDK's capitalization rule, which derives an X11 `res_class` by capitalizing the
+program name. The fix pins it at the source rather than patching the generated entry.
+
+**What shipped** (branch `linux-wmclass`, PR [#117](https://github.com/ErikdeJager/ReCue/pull/117),
+2026-07-14):
+
+- **`src-tauri/src/linux_desktop.rs`** (new, mirroring `linux_webkit.rs` / `linux_gtk.rs`) — `APP_WM_CLASS =
+  "recue"` + `pin_wm_class()` → `glib::set_prgname()`, called from `run()` **before `tauri::Builder`**. ReCue now
+  owns its WM_CLASS / Wayland `app_id` outright. `glib = "0.18"` is target-gated to Linux and was **already in the
+  lockfile** via tao/gtk, so `cargo tree -d` shows no duplicate and no new crate compiles.
+- **A custom desktop-entry template** (`src-tauri/linux/recue.desktop`) wired via `bundle.linux.deb.desktopTemplate`
+  (+ `rpm` for parity). The **deb** seam is what controls the **AppImage**'s internal entry — its `.AppDir` is packed
+  from the deb data tree, and there is no `appimage.desktopTemplate` (verified in the bundler source). `Exec` stays
+  the bare `{{exec}}` placeholder (linuxdeploy's `AppRun` parses that line), and the entry gains `StartupNotify=true`
+  + `Keywords=`.
+- **Anti-drift Rust tests** (running on **every** OS): the template's `StartupWMClass=` must equal `APP_WM_CLASS`,
+  the bundler placeholders must survive, `tauri.conf.json` must still point at the template, and the install script
+  must never hardcode the value.
+- **A release-workflow assertion** — the Linux leg extracts the freshly built AppImage's desktop entry and
+  **hard-fails** on a wrong `StartupWMClass` / `Icon` / `Exec` (extraction *tooling* trouble only warns).
+- **`scripts/install-linux-desktop.sh`** — consent-gated (`[y/N]` unless `--yes`), XDG-only (**never `sudo`**,
+  nothing outside `$XDG_DATA_HOME`), idempotent, with `--uninstall`. It copies `StartupWMClass` **verbatim from the
+  AppImage's own entry** rather than hardcoding it. **The app itself still never writes a desktop file** — no
+  silent auto-integration.
+- **Linux icon quality** — `bundle.icon` reordered/extended so the embedded window icon is **256×256** (it was
+  32×32, since tauri-codegen picks the first PNG) and the installed hicolor set gains 64×64 + 512×512.
+  macOS/Windows still take `icon.icns` / `icon.ico`.
+
+**Key decisions**
+
+- **Lowercase `recue` is the single canonical identifier** — it is the Wayland `app_id` (the reporting box runs
+  Hyprland, where `res_class` does not exist at all), the X11 `res_name`, and the desktop-entry basename. GNOME
+  matches `res_name` → `StartupWMClass` first, and KDE matches case-insensitively.
+- **Rejected `app.enableGTKAppId`** (it would introduce a *third* identifier, `com.recue.app`) and
+  **`mainBinaryName`** (it would touch macOS/Windows bundle internals and the code-signing surface for a
+  Linux-only concern). Also rejected a `gdk_set_program_class` FFI pin: the safe binding panics pre-`gtk_init`,
+  and it only affects X11 `res_class`, which no shell needs once `res_name`/`app_id` match.
+- **Fixed at the source, not post-processed in CI** — the card allowed patching the artifact; wiring the template
+  through the bundler means the AUR package (#361) inherits the correct entry for free.
+- No tray work (excluded by the card), no MIME/file associations, and no deb/rpm/AUR packaging (that is #361,
+  which reuses these canonical identifiers).
+
+**Dependencies:** none.
+
+**Notes**
+
+- **Measured on a real Arch/Hyprland box, not assumed** — and the hostile-input case was actually tested:
+
+  | run | result |
+  | --- | --- |
+  | shipped 1.2.1 AppImage | `xprop` → `WM_CLASS = "recue", "Recue"`; Hyprland `class: Recue`, `xwayland: true` |
+  | this build, native launch | Wayland `app_id` = **`recue`**, `xwayland: false` — matches the shipped entry exactly |
+  | this build, **hostile `argv[0]`** (`exec -a HostileRunName`) | still **`recue`** — the pin genuinely owns the value |
+  | this build, `GDK_BACKEND=x11` + hostile `argv[0]` | `WM_CLASS = "recue", "Recue"` — `res_name` pinned; `res_class` is GDK's capitalization |
+
+- The AppImage was built from the branch and its generated `.AppDir` entry extracted, confirming the template took
+  effect (`StartupWMClass=recue`, `Exec=recue`, `Icon=recue`, `StartupNotify`, `Keywords`, plus the new
+  64×64/512×512 icons).
+- Docs: new `docs/linux-desktop-integration.md`, a README "Linux desktop integration" section (documenting
+  download-then-run, plus Gear Lever/appimaged as the zero-effort alternative), a dated `TRAJECTORY_TO_LINUX.md`
+  entry with the real measurements, and two `CLAUDE.md` additions.
