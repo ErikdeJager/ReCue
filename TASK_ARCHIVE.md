@@ -4292,3 +4292,139 @@ actually decided at boot** so a user can diagnose rather than guess.
 - Checks green: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, `cargo test` (252 pass),
   `npm run build`, `npm run lint`, `npm run format:check`, `npm test` (691 pass) — and the first-paint bundle is
   still within the #356 budget.
+
+### 367. [x] Default terminal line height to 1.0 (one-time migrate the old 1.2 default)
+
+The Settings → Terminal line-height default had been **1.2** since settings first shipped (#100). New installs and
+users who never re-picked it wanted the tighter **1.0**. But because the settings blob persists opaquely and a
+stored value wins over the default (`mergeSettings` is `{ ...DEFAULT_SETTINGS, ...raw }`), merely changing the
+default fixes only *new* / never-saved installs — every install that ever saved settings has `terminalLineHeight:
+1.2` persisted explicitly and would keep it. So the change also carries a **one-time migration** that bumps an
+install still sitting on the old 1.2 default down to 1.0, while leaving any other deliberately-chosen value — and
+any 1.2 a user re-picks *after* the migration — untouched.
+
+**What shipped** (branch `task-367-terminal-line-height-1-0`, PR
+[#120](https://github.com/ErikdeJager/ReCue/pull/120), merged 2026-07-14):
+
+- **New default 1.0** — `DEFAULT_SETTINGS.terminalLineHeight` is now `1.0` (`store.ts`), and the pooled-terminal
+  fallback `currentTerminalSettings.lineHeight` in `terminalPool.ts` tracks it (`1.0`), so an xterm created before
+  `applyTerminalSettings` runs matches the new default.
+- **A persisted one-time migration flag** — a new `terminalLineHeightMigrated: boolean` on the `Settings` interface
+  (`types/index.ts`), defaulting **false** in `DEFAULT_SETTINGS` so an older blob lacking the key is back-filled
+  `false` and thus eligible for the one-time bump — mirroring the `onboarded` precedent.
+- **A pure, exported `migrateTerminalLineHeight(s)`** (`store.ts`) — returns `{ settings, changed }`: if already
+  flagged, no-op; else bump *exactly* ~1.2 (`Math.abs(v - LEGACY_LINE_HEIGHT) < 1e-6`, `LEGACY_LINE_HEIGHT = 1.2`)
+  to 1.0, always stamp the flag `true`, and report `changed` only when a value was actually bumped.
+- **Wired into `applyBootState`** (the sole settings-load path) — computes the migration after `mergeSettings`,
+  lands the migrated settings in the boot `set(...)` and live terminals, and — in the existing **main-window-only**
+  side-effects block, beside the #58 canvas `migrated` persist — persists the blob **once** via `ipc.setSettings`
+  only when a value was actually bumped (best-effort `.catch`). Detached windows show the migrated value but never
+  persist (the main window owns settings persistence).
+- **"Reset to defaults" preserves the flag** — the Settings handler now seeds the draft from `DEFAULT_SETTINGS`
+  while preserving both `onboarded` **and** `terminalLineHeightMigrated`, so a reset-then-re-pick-1.2 can't re-arm
+  the migration and clobber the deliberate value.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 367)
+
+- **One-time-flag over a schema/version system** — a single persisted boolean mirroring `onboarded` suffices; no
+  settings-version machinery was introduced.
+- **Exact-1.2 match with a defensive epsilon** — `1e-6` is far tighter than the 0.1 slider step (1.1/1.3 are 0.1
+  away, so they never collide) yet robust to any FP drift; the slider emits `Number("1.2") === 1.2` exactly, so
+  strict equality would also have matched.
+- **Persist only when it actually bumped** — `changed = wasLegacy` minimizes writes; the flag is always `true`
+  in-memory after boot, and the only way to change line height is `saveSettings` (which spreads in-memory settings),
+  so a re-picked 1.2 always carries `flag: true` and can never be re-bumped — the one hole ("Reset to defaults")
+  is closed by preserving the flag there.
+- **Frontend-only** — the settings blob is opaque on the Rust side, so no backend change and no per-OS gating;
+  identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Self-contained; independent of the concurrently-planned Tasks 366/368/369.)
+
+**Notes**
+
+- New unit tests cover the default value (`terminalLineHeight === 1.0`, `terminalLineHeightMigrated === false`), the
+  migration (bump 1.2→1.0 with `changed: true`; leave 1.0/1.1/1.3/1.5/1.8 unchanged with `changed: false` while
+  still stamping the flag; already-migrated 1.2 stays 1.2 — the re-picked-1.2 guarantee), and the `mergeSettings`
+  back-fill of the new flag.
+
+### 368. [x] Focus-follows-mouse — opt-in auto-focus of a hovered terminal panel
+
+Until now a terminal (agent PTY or #72 shell) captured the keyboard only after a **click**. This adds an opt-in
+"focus follows mouse" (sloppy focus) mode: when enabled, moving the pointer over a terminal panel focuses it
+immediately, so keystrokes land without a click. Off by default, so today's click-to-focus stays the norm.
+
+**What shipped** (branch `focus-follows-mouse`, PR
+[#121](https://github.com/ErikdeJager/ReCue/pull/121), merged 2026-07-14):
+
+- **A new opt-in boolean setting `autoFocusOnHover`** (`false` by default) on the `Settings` interface
+  (`types/index.ts`) + `DEFAULT_SETTINGS` (`store.ts`) — added to the opaque settings blob, so **no Rust change** and
+  **no `applySettingsEffects` wiring** (it's read **live** per-hover via `useStore((s) => s.settings.autoFocusOnHover)`).
+  `mergeSettings` back-fills `false` for an older blob and preserves a persisted `true`.
+- **A Settings → Behavior "Focus panels on hover" checkbox** + help line (`Settings.tsx`), using the existing
+  `Checkbox`/`field`/`helpText` patterns; toggling + Save persists it and takes effect without a restart.
+- **A pure `shouldHoverFocus(enabled, activeElement)` helper** (new `Terminal/hoverFocus.ts`) — the focus-steal
+  guard: returns `false` when disabled; when enabled, skips stealing focus from a real editable field
+  (`INPUT`/`TEXTAREA`/`SELECT`/`contenteditable`) so a FileViewer/Kanban raw `<textarea>`, a rename input, or a modal
+  field is never interrupted — but treats xterm's own helper `<textarea>` (inside `.xterm`) as OK to leave, so
+  moving **between** terminals does move focus. Unit-tested (`hoverFocus.test.ts`).
+- **A single `onMouseEnter` handler on the terminal body wrapper** in `Terminal.tsx` that calls
+  `terminalPool.focusTerminal(sessionId)` behind the guard. Because `Terminal.tsx` is the sole render site for both
+  the `agent` and `terminal` kinds (via `ItemContent`), this one change covers **every** view — Overview, Canvas,
+  big mode — and both window types (main + detached).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 368)
+
+- **Only the two xterm-backed panel kinds are hover-focus targets** — non-xterm panels (FileViewer, DiffInspector,
+  Kanban, FileTree, Scheduled, Recurring, pending template) have no single keyboard-capture element and would fight
+  their own inputs, so they are deliberately left alone.
+- **`onMouseEnter` on the body wrapper, not the header** — hover intent that fires once per pointer entry (no focus
+  spam), ignores touch taps, and keeps the header's drag handle / action buttons usable.
+- **Hover moves keyboard focus only** — it does **not** move the Canvas "active leaf" highlight (that stays
+  `pointerDown`-driven), so the visual selection doesn't jump with the mouse.
+- **Detached windows** pick up the setting on their own `init()` load; a live toggle reaches a detached window on its
+  next load — consistent with how the settings blob propagates today.
+- **Cross-platform:** pure WebView/DOM event handling, no OS-specific key handling — identical on macOS, Windows,
+  and Linux.
+
+**Dependencies:** none. (Self-contained; inert unless the user opts in.)
+
+### 369. [x] Unique repo colors first — prefer an unused palette color for a new folder
+
+A new top-level folder's default repo color (#35) was a hash of its path into the 14-entry `REPO_PALETTE`, so
+distinct folders frequently collided on the same color. This makes each **newly-added** folder visually distinct:
+it now takes a palette color **not already used** by another folder, only repeating once every palette color is in
+use. Existing folders are grandfathered (never recolored).
+
+**What shipped** (branch `task-369-unique-repo-colors`, PR
+[#122](https://github.com/ErikdeJager/ReCue/pull/122), merged 2026-07-14):
+
+- **A pure `sidebarRepos(recents, sessions, recurrings)` helper** (`store.ts`) — the canonical top-level-folder set
+  (`repoOrder(recents ∪ worktreeParents ∪ recurringCwds, non-worktree sessions)`), mirroring `pruneMissingFolders`,
+  so worktree **child** dirs (nested, sharing the parent's color) are never assigned a stray color.
+- **A pure, unit-tested `pickRepoColor(path, colors, existingRepos)` helper** (`store.ts`, after `repoColor`) —
+  returns the **first unused** `REPO_PALETTE` color (in palette order), where "used" is each *other* current
+  folder's **effective** color (`repoColor(r, colors)` — user override / prior assignment, else hashed default);
+  falls back to the stable hashed default (`repoColor(path, {})`) once all 14 are in use. Deterministic; a
+  user-override color outside the palette consumes no slot; ignores `path`'s own color.
+- **A main-window-only `useStore.subscribe` block in `init()`** (guarded by a module-level `folderColorSubStarted`
+  flag against StrictMode double-invoke) — seeds `knownRepos` from the **post-boot** folder set (so boot-present
+  folders are grandfathered), then on any change to `recents`/`sessions`/`recurrings` (cheap reference-equality
+  gate) assigns + **persists** (`setRepoColor` → existing `set_repo_color` / `repo_colors` storage) a distinct color
+  to each folder that appears afterwards and has none, threading an accumulating colors map so a batch of new
+  folders each avoid the others' just-picked colors.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 369)
+
+- **First-unused-in-palette-order**, not random-among-unused — deterministic, stable, testable.
+- **Fallback once all 14 are used** is the existing stable hash default (matches today's pick), not round-robin.
+- **Auto-assigned colors persist** via the same `repo_colors` map as user overrides, so a folder keeps its color
+  permanently; a user override or prior assignment always wins and is never overwritten. **No Rust change** — reuses
+  the #35 storage.
+- **Grandfather boot-present folders** — `knownRepos` is seeded from the post-`applyBootState` set, so the feature
+  only affects folders added afterwards.
+- **Main window only** — it owns the `set_repo_color` write and the window-global recents/sessions/recurrings, so a
+  detached window can't double-assign. **Known limitation (recorded):** a detached canvas window open when a folder
+  is added shows the new color only on its next boot (repo colors have no live cross-window broadcast today).
+- **Cross-platform:** pure TS/WebView, no OS-specific paths — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Self-contained; reuses the #35 `set_repo_color` / `repo_colors` storage.)
