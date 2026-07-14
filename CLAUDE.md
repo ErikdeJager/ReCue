@@ -39,6 +39,11 @@ be unit-tested). Concretely:
   original behavior byte-for-byte; the Windows and Linux arms are additive.
 - **Reuse the established cross-platform seams instead of re-deriving them** — Rust:
   `path_env::home_dir()` (`%USERPROFILE%` on Windows, `$HOME` on unix, never raw `$HOME`),
+  `path_env::effective_path()` / `path_env::apply_path()` (the **PATH** seam, #360 — never
+  `std::env::var("PATH")` on a spawn path: `effective_path` *blocks* (bounded) for the
+  login-shell probe and backs binary lookup + child spawns, `apply_path` *never* blocks and
+  backs the `hidden_command` helper processes that run on the main thread; both are the
+  process PATH in dev / on Windows),
   `git::hidden_command()` (the `CREATE_NO_WINDOW` console-flash guard — **every**
   shelled-out `git`/CLI probe goes through it; a no-op on unix/Linux),
   `child_env::child_env_vars()` / `child_env::scrub_command()` / `child_env::command()` (the
@@ -92,10 +97,16 @@ Claude Code CLI itself.
 
 `claude` is assumed to be installed and authenticated on `PATH` (the app surfaces a
 clear error if it is missing). Because a bundled `.app` launched from Finder/Dock
-inherits launchd's minimal `PATH` (not the shell's), `run()` first calls
-`path_env::restore_user_path()` to adopt the **login-shell PATH** at startup
-(release builds only) — without it `claude` reads as "not found" in `tauri build`
-even though it works in `tauri dev`.
+inherits launchd's minimal `PATH` (not the shell's — same for a Linux `.desktop`/AppImage
+launch), `run()` calls `path_env::start_probe()` to resolve the **login-shell PATH**
+(release builds only) — without it `claude` reads as "not found" in `tauri build` even
+though it works in `tauri dev`. The probe used to run **synchronously**, so a heavy
+oh-my-zsh/nvm rc delayed the window by up to 3s; since **#360** it runs **concurrently
+with window creation** and publishes into an in-process `path_env` cell that the
+binary-lookup / child-spawn seams read (`effective_path` / `apply_path`) — the process
+env is **never** mutated (that would race a concurrent `getenv`), only spawn/resume ever
+waits, and the result is cached across launches (keyed by `$SHELL` + rc-file mtimes) so a
+steady-state boot pays **zero** probe cost.
 
 ## Stack
 
@@ -686,9 +697,10 @@ even though it works in `tauri dev`.
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
 │   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
+│   ├── src/path_env.rs     # Login-shell PATH: async probe + PathState cell + rc-mtime cache (#360; Finder/.desktop-launch fix, macOS+Linux)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
-│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen)
+│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen, path cache #360)
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + commits (#230) + per-file status (#252) + list (local+remote #180) + checkout + worktree (#74) + fetch (#180) + pull --ff-only (#181) + clone (#295/#308)
 │   ├── src/files.rs        # Repo file access (lazy list_dir tree + search_files picker + search_file_contents in-tree content search #202, read/write_text_file #141, move_into_repo OS-drop #253, create_dir/delete_path/rename_path #267/#291, path-validated)
 │   ├── src/usage.rs        # Best-effort read of Claude's five-hour usage snapshot for the usage bar (#154)

@@ -1079,3 +1079,35 @@ stays clean, and all three new tests are `#[cfg(unix)]`.
 - `kill -9`-equivalent (End task) an agent's process → the "Process exited (code N)" overlay +
   Restart appears promptly, and Restart works (the same-id respawn silences the stale generation).
 - `cargo clippy --all-targets -- -D warnings` and `cargo test` are clean on a Windows checkout.
+## 2026-07-14 — Login-shell PATH probe off the startup critical path (#360)
+
+Windows has **no** login-shell PATH problem — a GUI app inherits the user/system PATH from the
+registry (#140) — so `path_env`'s probe has always been a no-op there, and #360 keeps it that way.
+The change is deliberately **byte-for-byte inert on Windows**:
+
+- `path_env::start_probe()` has an empty (non-unix) body: the probe never arms, so the `PathState`
+  cell stays `Inherit` forever.
+- `effective_path()` therefore returns `std::env::var_os("PATH")` — this process's own PATH — so
+  `pty::find_on_path` (the Windows arm, incl. `PATHEXT` resolution of `claude.cmd`) and
+  `spawn_with_id`'s child env resolve **exactly** as before, with **no** wait: `wait_path` returns
+  immediately on `Inherit`, it never blocks.
+- `apply_path()` adds **no** `env` call at all while the state is `Inherit`, so every
+  `git::hidden_command` `Command` (each `git` shell-out, each `<cli> --version` probe) is
+  byte-for-byte today's — the `CREATE_NO_WINDOW` console-flash guard is untouched (the `#[cfg(windows)]`
+  arm was only restructured so `let mut cmd` is declared once for both arms).
+- `seed_from_cache()` / `await_probe()` are no-ops (`None`), so nothing is ever written to the new
+  backend-internal `path_cache` scalar on Windows.
+- The pure helpers (`rc_candidates` / `fingerprint_from` / `cache_applies` / `probe_publication` /
+  `merge_paths` / `common_dirs` / `extract_marked`) are gated `#[cfg(any(unix, test))]` +
+  `#[cfg_attr(test, allow(dead_code))]` — the `explorer_select_arg` precedent — so a **Windows host
+  still type-checks and unit-tests them** even though only unix runs the probe. The `PathState`
+  machine itself is cfg-free (its impl carries `#[cfg_attr(not(unix), allow(dead_code))]` for the
+  probe-only methods) and is unit-tested on every host.
+
+### Needs manual Windows verification (#360)
+
+- [ ] **Nothing should change at all.** On a Windows build: the window appears as before; agents
+      spawn (`claude.cmd` still resolves via `PATHEXT` → `cmd.exe /C`), shell terminals open,
+      git panels populate, and `claude --version` (the `ClaudeMissing` / Settings → Data & About
+      probe) still reports a version — with **no** console-window flash.
+- [ ] **`sessions.json` gains no `path_cache` key** after a Windows run (the probe never arms).

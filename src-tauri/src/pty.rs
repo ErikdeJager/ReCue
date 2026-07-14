@@ -998,6 +998,17 @@ impl SessionManager {
         for (key, value) in crate::child_env::child_env_vars() {
             cmd.env(key, value);
         }
+        // Give the child the **restored** login-shell PATH (#345/#360) rather than this
+        // process's minimal GUI PATH: `portable-pty` resolves the program against the
+        // builder's own PATH entry, and `claude` itself shells out to node/git/ripgrep.
+        // `effective_path` blocks only while a first-launch (cache-miss) probe is still
+        // in flight — never on the window's critical path (the boot resume runs on a
+        // background thread, and by the time a user can click "New session" the probe has
+        // long landed). In debug builds / on Windows it is this process's own PATH, so the
+        // child env is byte-for-byte what the `vars_os` copy above already gave it.
+        if let Some(path) = crate::path_env::effective_path() {
+            cmd.env("PATH", path);
+        }
         cmd.env("TERM", "xterm-256color");
 
         let child = pair
@@ -1698,13 +1709,19 @@ fn non_macos_unix_shell() -> String {
 
 /// Resolve `program` to an executable path via `PATH` (or a direct path). Unix:
 /// the historic behavior (a `/` means a direct path; otherwise scan `PATH`).
+///
+/// The PATH comes from `path_env::effective_path()`, **not** the process env (#360): on
+/// a GUI launch the restored login-shell PATH is resolved by a background probe, and
+/// this is the gate that waits for it — finding `claude` outranks a bounded wait, and it
+/// only ever waits on a cache-miss boot. In debug builds and on Windows no probe arms,
+/// so it is exactly this process's own PATH, as before.
 #[cfg(unix)]
 fn find_on_path(program: &str) -> Option<PathBuf> {
     if program.contains('/') {
         let direct = PathBuf::from(program);
         return is_executable(&direct).then_some(direct);
     }
-    let paths = std::env::var_os("PATH")?;
+    let paths = crate::path_env::effective_path()?;
     std::env::split_paths(&paths).find_map(|dir| {
         let candidate = dir.join(program);
         is_executable(&candidate).then_some(candidate)
@@ -1732,7 +1749,9 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
     if Path::new(program).is_absolute() || program.contains(['/', '\\']) {
         return resolve(PathBuf::from(program));
     }
-    let paths = std::env::var_os("PATH")?;
+    // Same seam as the unix arm (#360) — on Windows no probe ever arms, so this is the
+    // process's own (registry-inherited) PATH and resolution is unchanged (#140).
+    let paths = crate::path_env::effective_path()?;
     std::env::split_paths(&paths).find_map(|dir| resolve(dir.join(program)))
 }
 

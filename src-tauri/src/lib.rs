@@ -55,13 +55,6 @@ fn reprompt_macos_permissions() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // A bundled `.app` launched from Finder/Dock inherits launchd's minimal PATH, so
-    // `claude` (Homebrew/npm/nvm/…) isn't found and every agent fails to start —
-    // whereas `tauri dev`, launched from a terminal, inherits the full shell PATH.
-    // Restore the login-shell PATH *before* any threads spawn (env mutation isn't
-    // thread-safe). See `path_env`.
-    path_env::restore_user_path();
-
     // Linux/WebKitGTK renderer workaround (#346, GPU-aware since #347): where the NVIDIA
     // blob actually renders the webview, WebKitGTK's DMA-BUF renderer makes the whole
     // thing crawl — laggy input echo, slow paint. Export the documented kill-switch before
@@ -82,6 +75,24 @@ pub fn run() {
     // spawns). No-op on macOS/Windows and outside an AppImage; the user's own
     // `APPIMAGE_GTK_THEME` / `RECUE_GTK_THEME` override it. See `linux_gtk`.
     linux_gtk::apply_gtk_theme_env();
+
+    // Login-shell PATH probe (#345/#360). A bundled `.app` launched from Finder/Dock
+    // inherits launchd's minimal PATH (a Linux `.desktop`/AppImage launch, the session
+    // env), so `claude` (Homebrew/npm/nvm/…) isn't found and every agent fails to start
+    // — whereas `tauri dev`, launched from a terminal, inherits the full shell PATH.
+    //
+    // This **used to run synchronously here**, blocking the main thread for up to 3 s on
+    // a `$SHELL -ilc` round-trip — so a heavy oh-my-zsh/nvm rc delayed the *window* by
+    // that much. It now arms the probe and returns immediately: it resolves concurrently
+    // with window creation and publishes into `path_env`'s in-process cell, which the
+    // binary-lookup + child-spawn seams read (`effective_path` / `apply_path`). The
+    // process env is never mutated — that would race a concurrent `getenv` — so only
+    // spawn/resume ever waits, never the window.
+    //
+    // Must come **after** the two `set_var` calls above (it is the first thing in the
+    // process to spawn a thread, and env mutation isn't thread-safe). Release + unix
+    // only; a no-op in debug builds and on Windows (#140).
+    path_env::start_probe();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -123,6 +134,30 @@ pub fn run() {
                 let _ = window.set_background_color(Some(color));
             }
             commands::schedule_reveal_fallback(app.handle(), "main");
+
+            // Login-shell PATH cache (#360). Publish the previous launch's probe result
+            // immediately when it still applies (same `$SHELL`, same rc-file mtime
+            // fingerprint) so a steady-state boot never waits on the probe at all — then
+            // persist the fresh result from a background thread once it lands. Runs
+            // **before** the resume thread below, so a cache hit is already published by
+            // the time the first `resume_session` asks for the PATH. The cache holds only
+            // the raw *discovered* PATH; the merge against this launch's own PATH is
+            // redone every boot. No-op in debug builds and on Windows (no probe armed).
+            {
+                let cached = app.state::<Store>().path_cache();
+                path_env::seed_from_cache(cached.clone());
+
+                let handle = app.handle().clone();
+                thread::spawn(move || {
+                    // Blocks until the probe lands (bounded); `None` when none ran or it
+                    // failed — in which case the existing cache is deliberately kept.
+                    if let Some(fresh) = path_env::await_probe() {
+                        if cached.as_ref() != Some(&fresh) {
+                            let _ = handle.state::<Store>().set_path_cache(fresh);
+                        }
+                    }
+                });
+            }
 
             // One-time post-update permission re-prompt (macOS, #321). When a user updates
             // from an old ad-hoc build into a properly-signed one, the code signature
