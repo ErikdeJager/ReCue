@@ -748,6 +748,17 @@ export const rendererDiagnostics = () =>
 export interface UsageSnapshot {
   usedPercent: number;
   resetsAt: string | null;
+  /** Every usage window the API reports (#370) — five-hour, weekly, … — adaptive, so
+   * a new metric surfaces with no code change. The scalars above keep the five-hour
+   * window verbatim for the existing bar; `buckets` is purely additive. */
+  buckets: UsageBucket[];
+}
+/** One usage window (#370): a raw API `key` (`five_hour`, `seven_day`, …), its clamped
+ * percentage, and its own raw `resetsAt`. The frontend humanizes + orders it. */
+export interface UsageBucket {
+  key: string;
+  usedPercent: number;
+  resetsAt: string | null;
 }
 export const claudeSessionUsage = () =>
   invoke<UsageSnapshot | null>("claude_session_usage");

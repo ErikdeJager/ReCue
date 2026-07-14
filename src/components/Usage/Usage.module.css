@@ -18,6 +18,8 @@
 }
 
 .reset {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -56,4 +58,112 @@
    masquerade as the critical state. */
 .fillCritical {
   background: var(--usage-critical);
+}
+
+/* --- Expandable "all usage" viewer (#370) --- */
+
+/* The up/down disclosure chevron, left of the reset countdown in the meta row. A
+   chromeless icon button that inherits the meta color, brightening on hover. Shown
+   only when the API reports usage buckets, and only in the non-rail bar. */
+.disclosure {
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-muted);
+  line-height: 0;
+  cursor: pointer;
+}
+
+.disclosure:hover {
+  color: var(--text-secondary);
+}
+
+/* The expanded box: sits above the meta row (first child of .usage) so it grows
+   upward from the sidebar bottom. Tokens only → Dark + Light + custom-accent. */
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: var(--space-4) var(--space-8) 0;
+  padding: var(--space-8);
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chip);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-xs);
+  /* A gentle entry — auto-dropped by the reduced-motion killswitch (global.css). */
+  animation: usageBoxIn var(--dur-slow) var(--ease-out);
+}
+
+@keyframes usageBoxIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* One window row: label · mini bar (grows) · percent · countdown. Fixed side columns
+   keep the mini bars aligned across rows. */
+.boxRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.boxLabel {
+  flex: 0 0 auto;
+  width: 5.5em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.boxBar {
+  flex: 1 1 auto;
+  min-width: 24px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-hairline);
+}
+
+.boxFill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* Combined selector so the critical red always wins over .boxFill regardless of
+   source order (mirrors .fill + .fillCritical). */
+.boxFill.fillCritical {
+  background: var(--usage-critical);
+}
+
+.boxPercent {
+  flex: 0 0 auto;
+  width: 2.5em;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.boxReset {
+  flex: 0 0 auto;
+  width: 4em;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }

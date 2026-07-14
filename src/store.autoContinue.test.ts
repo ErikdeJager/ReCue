@@ -66,7 +66,12 @@ describe("applyAutoContinue (store wiring)", () => {
   it("arms (no injection) when the limit is reached with live Claude sessions", () => {
     useStore.setState({
       sessions: [claudeSession("s1"), claudeSession("s2")],
-      usage: { usedPercent: 100, resetsAtMs: 10_000, available: true },
+      usage: {
+        usedPercent: 100,
+        resetsAtMs: 10_000,
+        available: true,
+        buckets: [],
+      },
     });
     useStore.getState().applyAutoContinue();
     const ac = useStore.getState().autoContinue;
@@ -78,7 +83,12 @@ describe("applyAutoContinue (store wiring)", () => {
   it("sends Enter → continue → Enter to each fired session on reset, then disarms", async () => {
     useStore.setState({
       sessions: [claudeSession("s1")],
-      usage: { usedPercent: 5, resetsAtMs: 1_000, available: true },
+      usage: {
+        usedPercent: 5,
+        resetsAtMs: 1_000,
+        available: true,
+        buckets: [],
+      },
       autoContinue: { armed: true, resetsAtMs: 1_000, sessionIds: ["s1"] },
     });
     useStore.getState().applyAutoContinue();
@@ -101,7 +111,12 @@ describe("applyAutoContinue (store wiring)", () => {
         defaultAgent: "claude",
       },
       sessions: [claudeSession("s1")],
-      usage: { usedPercent: 100, resetsAtMs: 10_000, available: true },
+      usage: {
+        usedPercent: 100,
+        resetsAtMs: 10_000,
+        available: true,
+        buckets: [],
+      },
     });
     useStore.getState().applyAutoContinue();
     expect(useStore.getState().autoContinue.armed).toBe(false);
@@ -116,7 +131,12 @@ describe("applyAutoContinue (store wiring)", () => {
         defaultAgent: "codex",
       },
       sessions: [claudeSession("s1")],
-      usage: { usedPercent: 100, resetsAtMs: 10_000, available: true },
+      usage: {
+        usedPercent: 100,
+        resetsAtMs: 10_000,
+        available: true,
+        buckets: [],
+      },
     });
     useStore.getState().applyAutoContinue();
     expect(useStore.getState().autoContinue.armed).toBe(false);
@@ -128,7 +148,12 @@ describe("applyAutoContinue (store wiring)", () => {
   it("excludes an auto-continue-disabled agent from the captured arm-set", () => {
     useStore.setState({
       sessions: [claudeSession("s1"), disabledClaudeSession("s2")],
-      usage: { usedPercent: 100, resetsAtMs: 10_000, available: true },
+      usage: {
+        usedPercent: 100,
+        resetsAtMs: 10_000,
+        available: true,
+        buckets: [],
+      },
     });
     useStore.getState().applyAutoContinue();
     const ac = useStore.getState().autoContinue;
@@ -140,7 +165,12 @@ describe("applyAutoContinue (store wiring)", () => {
   it("on reset, nudges only the enabled agent (skips the disabled one)", async () => {
     useStore.setState({
       sessions: [claudeSession("s1"), disabledClaudeSession("s2")],
-      usage: { usedPercent: 5, resetsAtMs: 1_000, available: true },
+      usage: {
+        usedPercent: 5,
+        resetsAtMs: 1_000,
+        available: true,
+        buckets: [],
+      },
       // Both were captured at arm time (simulating an agent disabled *after* arming);
       // the fire step still filters s2 out because it's disabled now.
       autoContinue: {

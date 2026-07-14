@@ -1679,11 +1679,14 @@ export interface AppState {
     notes: string | null;
   };
   /** 5-hour Claude session usage (#154). `available` false → the bar hides. Fed by a
-   * 180s poll; the OAuth token + HTTP live entirely in Rust. */
+   * 180s poll; the OAuth token + HTTP live entirely in Rust. `buckets` (#370) carries
+   * every usage window the API reports for the expandable "all usage" viewer; empty
+   * when unavailable. The scalars keep the five-hour window unchanged. */
   usage: {
     usedPercent: number | null;
     resetsAtMs: number | null;
     available: boolean;
+    buckets: { key: string; usedPercent: number; resetsAtMs: number | null }[];
   };
   /** Transient auto-continue-after-limit-reset machine state (#296) — NOT persisted;
    * only the `autoContinueAfterLimit` setting is. Fed by the usage poll. */
@@ -2666,7 +2669,7 @@ export const useStore = create<AppState>()((set, get) => ({
     confirming: false,
     notes: null,
   },
-  usage: { usedPercent: null, resetsAtMs: null, available: false },
+  usage: { usedPercent: null, resetsAtMs: null, available: false, buckets: [] },
   autoContinue: IDLE_AUTO_CONTINUE,
   schedules: [],
   recurrings: [],
@@ -3081,7 +3084,12 @@ export const useStore = create<AppState>()((set, get) => ({
       const u = get().usage;
       if (u.available || u.usedPercent != null || u.resetsAtMs != null) {
         set({
-          usage: { usedPercent: null, resetsAtMs: null, available: false },
+          usage: {
+            usedPercent: null,
+            resetsAtMs: null,
+            available: false,
+            buckets: [],
+          },
         });
       }
       get().applyAutoContinue();
@@ -3089,7 +3097,14 @@ export const useStore = create<AppState>()((set, get) => ({
     }
     // Gate to Claude (forward-compatible). Non-Claude → hide, don't even call out.
     if (!isClaudeActive(get())) {
-      set({ usage: { usedPercent: null, resetsAtMs: null, available: false } });
+      set({
+        usage: {
+          usedPercent: null,
+          resetsAtMs: null,
+          available: false,
+          buckets: [],
+        },
+      });
       // Still run the auto-continue reducer so it disarms (fail-open) when the
       // usage feed goes unavailable, e.g. a non-Claude session becoming active.
       get().applyAutoContinue();
@@ -3103,12 +3118,29 @@ export const useStore = create<AppState>()((set, get) => ({
               usedPercent: snap.usedPercent,
               resetsAtMs: parseResetsAt(snap.resetsAt),
               available: true,
+              buckets: snap.buckets.map((b) => ({
+                key: b.key,
+                usedPercent: b.usedPercent,
+                resetsAtMs: parseResetsAt(b.resetsAt),
+              })),
             }
-          : { usedPercent: null, resetsAtMs: null, available: false },
+          : {
+              usedPercent: null,
+              resetsAtMs: null,
+              available: false,
+              buckets: [],
+            },
       });
     } catch {
       // Outside Tauri / command missing → hide; recover on the next tick.
-      set({ usage: { usedPercent: null, resetsAtMs: null, available: false } });
+      set({
+        usage: {
+          usedPercent: null,
+          resetsAtMs: null,
+          available: false,
+          buckets: [],
+        },
+      });
     }
     // Drive the auto-continue machine off the fresh snapshot (#296).
     get().applyAutoContinue();
@@ -4140,7 +4172,12 @@ export const useStore = create<AppState>()((set, get) => ({
       } else {
         get().stopUsagePolling();
         set({
-          usage: { usedPercent: null, resetsAtMs: null, available: false },
+          usage: {
+            usedPercent: null,
+            resetsAtMs: null,
+            available: false,
+            buckets: [],
+          },
         });
         get().applyAutoContinue(); // disarm #296 immediately (no usage data)
       }
