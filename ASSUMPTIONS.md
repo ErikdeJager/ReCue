@@ -2953,3 +2953,16 @@ Scrub the AppImage-injected environment from every child process ReCue spawns
 - Complementary with Task 349 (dark GTK dialogs): that card SETS `GTK_THEME` for ReCue's own process, this one STRIPS it from children under the AppImage only; outside an AppImage the scrub stays a no-op (deliberate boundary, noted in non-goals as the single place a follow-up would extend).
 - Non-UTF-8 env vars are passed through verbatim (they cannot be AppImage vars) and env ordering between the scrubbed and passthrough groups is treated as insignificant to a child.
 - macOS-only spawns (`usage.rs`'s `security`, `lib.rs`'s `tccutil`) are left untouched; no frontend/TS change. Docs: CLAUDE.md (layout + seams list) and TRAJECTORY_TO_LINUX.md (dated entry + real-box checklist).
+
+## Task 348
+
+Eliminate the white startup flash: hidden-until-painted windows + themed pre-paint background
+
+- Pre-paint color = the theme's `--bg-base` (#1e1e2e Mocha / #eff1f5 Latte), not `--bg-sidebar`/`--terminal-bg`; duplicated in `index.html`, `src/theme.ts` and `commands.rs` with a vitest sync-guard against `tokens.css`.
+- The window learns the theme pre-paint from a best-effort `recue.theme` localStorage mirror written by `applySettingsEffects` (all windows share one origin); the Rust settings blob stays the source of truth. A missing/stale mirror degrades to today's behavior (one dark→light flip) and self-heals that same launch — no white flash either way. Chose this over creating the main window from a Rust builder with an `initialization_script` (bigger, riskier change).
+- Reveal is a new app-owned Rust command `reveal_window` invoked from a React mount effect, NOT `getCurrentWindow().show()` — avoids widening `capabilities/default.json` with `core:window:allow-show` and matches the existing Rust-owned window commands (open/focus/close_canvas_window).
+- Reveal fires on React's first commit (0 ms timer + rAF, whichever first, idempotent) rather than waiting for the settings/session IPC, so backend latency can never delay the window.
+- Added a Rust-side reveal fallback (show any still-hidden window after 2 s) so a crashed bundle / dead dev server can never leave the app running-but-invisible — the main hazard is a hidden WebView possibly throttling rAF.
+- Added beyond the card's literal text: a `set_theme_background` command called from `saveSettings` on a theme change, so already-open windows' native background is updated (no stale-color gutter on resize); plus `show()` on the focus/existing-window branches of the canvas-window commands.
+- Detached canvas windows get the same treatment (`.visible(false)` + `.background_color(theme)`), and the reveal hook lives in `App()` — the shared root of both the main and canvas-window routes.
+- No `color-scheme` declaration is added (explicit background suffices; avoids UA form-control/scrollbar restyling), and no bundle/code-splitting work is assumed (Task 356).
