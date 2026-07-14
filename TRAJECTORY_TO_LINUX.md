@@ -178,3 +178,61 @@ latency by definition), Overview terminal virtualization, `[profile.release]` tu
 - [ ] Release AppImage under a busy `claude` TUI (many parallel agents): display updates
       stay smooth and typing stays responsive (coalescing + b64 scrollback in effect);
       scrollback replays correctly after a view switch and after a session Restart.
+
+## 2026-07-14
+
+### AppImage child-process environment (Task #350)
+
+Symptom (Linux **AppImage** only): every process ReCue spawns inherited the AppImage
+runtime's environment. The runtime mounts the payload at a transient FUSE mountpoint
+(`/tmp/.mount_ReCueXXXXXX`) and its `AppRun` (linuxdeploy + the tauri
+`linuxdeploy-plugin-gtk` hook) exports `APPDIR` / `APPIMAGE` / `APPIMAGE_UUID` / `ARGV0` /
+`OWD`, forces `GTK_THEME=Adwaita:light` + `GDK_BACKEND=x11`, and prefixes `PATH`,
+`LD_LIBRARY_PATH`, `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GIO_MODULE_DIR`,
+`GDK_PIXBUF_MODULE_FILE`, `GI_TYPELIB_PATH`, … with the mountpoint. None of that is meant
+for a child: it is documented to break `xdg-open` (tauri-apps/tauri#10617,
+AppImage/AppImageKit#124) and to degrade or break a system binary that then loads the
+AppImage's bundled libraries through `LD_LIBRARY_PATH` — i.e. every `claude`/codex agent
+PTY, every shell terminal, every `git` shell-out, `xdg-open` and `dbus-send`.
+
+Fix — one shared, pure, unit-tested scrub seam, `src-tauri/src/child_env.rs` (modeled on
+`linux_webkit.rs`: compiles on every OS, the real work cfg-gated inside, the decision logic
+pure and host-independent so macOS/Windows CI unit-tests it too):
+
+- **Pure core.** `is_appimage_segment` / `filter_segments` / `scrub_env` / `env_diff`. The
+  rule is **value-based**, not an exhaustive var list — any `:`-segment under `$APPDIR` (or
+  under the `/tmp/.mount_` prefix, for `--appimage-extract-and-run` / an AppRun that only
+  exports `APPIMAGE`) is stripped from **any** variable, so a future AppRun's new path vars
+  are covered automatically. Marker vars and `APPIMAGE_ORIGINAL_*` bookkeeping are dropped;
+  a forced scalar (`GTK_THEME`, `GDK_BACKEND`) is restored from its `APPIMAGE_ORIGINAL_<VAR>`
+  backup when one exists, else dropped; a var whose segments were *all* AppImage-owned is
+  removed entirely rather than emptied (an empty `LD_LIBRARY_PATH` segment means CWD to the
+  loader) — except `PATH`, which is on a `NEVER_UNSET` list and keeps its original value.
+- **Wiring.** `pty.rs::spawn_with_id` copies `child_env::child_env_vars()` into the
+  `CommandBuilder` (still setting `TERM=xterm-256color` after) — agent PTYs *and* the #72
+  shell terminals; `git::hidden_command` applies `child_env::scrub_command` (every `git`
+  shell-out + every `<cli> --version` probe); `commands.rs`'s `os_open` / `open_url` /
+  `reveal_file_in_finder` / `reveal_file_linux` (`dbus-send` + `xdg-open`) build their
+  `Command` via `child_env::command`; and `path_env`'s login-shell PATH probe does the same.
+- **Byte-for-byte no-op elsewhere.** The scrub arms **only** when `APPDIR` or `APPIMAGE` is
+  set, so macOS, Windows and a non-AppImage Linux build (dev, `.deb`, pacman) are unchanged:
+  `child_env_vars()` is exactly `std::env::vars_os()` there, and `scrub_command` makes
+  **zero** `env`/`env_remove` calls when the diff is empty. `WEBKIT_DISABLE_DMABUF_RENDERER`
+  (#346, ReCue's own webview) is deliberately **not** stripped.
+
+**Files**: `src-tauri/src/child_env.rs` (new), `src-tauri/src/lib.rs` (module),
+`src-tauri/src/pty.rs`, `src-tauri/src/git.rs`, `src-tauri/src/commands.rs`,
+`src-tauri/src/path_env.rs`.
+
+### Needs real-box verification (AppImage env scrub, #350)
+
+- [ ] A ReCue shell terminal's `env` carries no `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`/
+      `GTK_THEME`/`GDK_BACKEND` and no `/tmp/.mount_` segment in `PATH` / `XDG_DATA_DIRS` /
+      `LD_LIBRARY_PATH`.
+- [ ] `xdg-open` from inside a ReCue terminal, the Ctrl-click link open, "Reveal in File
+      Manager", and Settings → Data → "Open data folder" all work under the AppImage.
+- [ ] A `claude` agent spawns, runs its tools, and `git` works inside it (no dynamic-loader
+      / symbol errors).
+- [ ] GTK apps launched from a ReCue terminal use the user's own theme (no forced
+      `Adwaita:light`).
+- [ ] ReCue's own window/dialogs are visually unchanged (the app process env is untouched).
