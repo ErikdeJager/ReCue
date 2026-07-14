@@ -35,7 +35,7 @@ import {
   compareVersions,
   patchnotesFor,
 } from "../../patchnotes";
-import { isLinux, kbdHint } from "../../platform";
+import { isLinux, kbdHint, selfUpdates } from "../../platform";
 import { DEFAULT_SETTINGS, REPO_PALETTE, useStore } from "../../store";
 import type { Settings as SettingsType } from "../../types";
 import Checkbox from "../Checkbox/Checkbox";
@@ -130,6 +130,12 @@ function SettingsModal() {
   const checkForUpdate = useStore((s) => s.checkForUpdate);
   const installUpdate = useStore((s) => s.installUpdate);
   const mockUpdate = useStore((s) => s.mockUpdate);
+  // #361: a distro-packaged install (pacman / the AUR `recue-bin` / the .deb) is owned
+  // by the package manager — the Updates pane then hides every self-update action and
+  // points at the package manager instead. "Current version" + the #192 patch notes
+  // still render. Every other install kind (incl. the "" pre-load default) is unchanged.
+  const installKind = useStore((s) => s.installKind);
+  const canSelfUpdate = selfUpdates(installKind);
 
   const [draft, setDraft] = useState<SettingsType>(saved);
   const [section, setSection] = useState<Section>(
@@ -757,6 +763,12 @@ function SettingsModal() {
               // update is available — the new version, a labelled "What's new" slot
               // (filled by #192), and an "Update now" button driving #190's
               // download→freeze/progress→restart flow. No new updater logic here.
+              //
+              // #361: on a **package-managed** install (`installKind === "system"` — a
+              // Linux release binary with no $APPIMAGE: pacman / the AUR `recue-bin` /
+              // the .deb) every self-update action is hidden and replaced by a note
+              // pointing at the package manager. The current version and the baked-in
+              // patch notes below still render — they're just information.
               <div className={styles.updates}>
                 <div className={styles.field}>
                   <span className={styles.fieldLabel}>
@@ -765,35 +777,56 @@ function SettingsModal() {
                   </span>
                 </div>
 
-                <button
-                  type="button"
-                  className={styles.dataButton}
-                  onClick={() => void checkForUpdate()}
-                  disabled={
-                    updateState.status === "checking" ||
-                    updateState.status === "downloading"
-                  }
-                >
-                  <RefreshCw
-                    size={15}
-                    strokeWidth={1.5}
-                    className={
-                      updateState.status === "checking"
-                        ? styles.spin
-                        : undefined
-                    }
-                  />
-                  {updateState.status === "checking"
-                    ? "Checking…"
-                    : "Check for updates"}
-                </button>
+                {!canSelfUpdate && (
+                  <p className={styles.updateStatus}>
+                    ReCue was installed by your package manager, so the in-app
+                    updater is disabled — the package manager owns this install.
+                    {isLinux(platform) ? (
+                      <>
+                        {" "}
+                        Update it with{" "}
+                        <code className={styles.updateCmd}>
+                          sudo pacman -Syu recue-bin
+                        </code>{" "}
+                        (Arch/AUR), or your distro&rsquo;s updater.
+                      </>
+                    ) : (
+                      <> Update it with your package manager.</>
+                    )}
+                  </p>
+                )}
 
-                {updateState.status === "idle" && (
+                {canSelfUpdate && (
+                  <button
+                    type="button"
+                    className={styles.dataButton}
+                    onClick={() => void checkForUpdate()}
+                    disabled={
+                      updateState.status === "checking" ||
+                      updateState.status === "downloading"
+                    }
+                  >
+                    <RefreshCw
+                      size={15}
+                      strokeWidth={1.5}
+                      className={
+                        updateState.status === "checking"
+                          ? styles.spin
+                          : undefined
+                      }
+                    />
+                    {updateState.status === "checking"
+                      ? "Checking…"
+                      : "Check for updates"}
+                  </button>
+                )}
+
+                {canSelfUpdate && updateState.status === "idle" && (
                   <p className={styles.updateStatus}>
                     You&rsquo;re up to date.
                   </p>
                 )}
-                {updateState.status === "error" && (
+                {canSelfUpdate && updateState.status === "error" && (
                   <p
                     className={`${styles.updateStatus} ${styles.updateError}`}
                     role="alert"
@@ -802,8 +835,9 @@ function SettingsModal() {
                   </p>
                 )}
 
-                {(updateState.status === "available" ||
-                  updateState.status === "downloading") &&
+                {canSelfUpdate &&
+                  (updateState.status === "available" ||
+                    updateState.status === "downloading") &&
                   updateState.version && (
                     <div className={styles.field}>
                       <span className={styles.fieldLabel}>
@@ -921,8 +955,11 @@ function SettingsModal() {
                 )}
 
                 {/* Dev-only (#193): fake an available update to exercise the whole
-                    flow without a real release. Tree-shaken from production builds. */}
-                {import.meta.env.DEV && (
+                    flow without a real release. Tree-shaken from production builds.
+                    Hidden on a package-managed install (#361) — every surface the
+                    mock drives (the indicator, this pane's available block) is gated
+                    off there, so the button would be inert. */}
+                {import.meta.env.DEV && canSelfUpdate && (
                   <button
                     type="button"
                     className={styles.dataButton}

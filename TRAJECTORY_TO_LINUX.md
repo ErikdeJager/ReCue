@@ -983,6 +983,84 @@ WebKitGTK/tokio/PTY-reader threads. Consequences for Linux specifically:
 - [ ] **GTK/WebKit env workarounds unaffected** (#346/#349): the DMA-BUF kill-switch and the
       `GTK_THEME` correction still apply (they run before the probe arms), dialogs still theme
       correctly, and the webview is not slower.
+### Native Arch package + updater / pacman separation (Task #361)
+
+- **Problem**: the AppImage was the *only* Linux artifact, and it is a poor fit for Arch. It
+  bundles the whole Ubuntu 22.04 GTK/WebKit userland (~90 MB of `libwebkit2gtk-4.1` alone,
+  ~165 shared libs) instead of Arch's current webkit2gtk-4.1 2.52 (Skia); its AppRun hook
+  forces `GTK_THEME` **and `GDK_BACKEND=x11`** (so no native Wayland); cold start pays
+  squashfs decompression; and it will not run at all without **FUSE 2** (`fuse2` on Arch).
+
+- **Shipped**: a second official Linux artifact — a **`.deb`** (the Linux release leg is now
+  `--bundles appimage,deb`) — and an in-repo AUR package, **`packaging/aur/recue-bin/`**
+  (`PKGBUILD` + `.SRCINFO`), that **repacks that `.deb`** into a native pacman package
+  linking the **system** webkit2gtk/GTK. `scripts/aur-bump.sh <version>` re-pins it to a
+  published release (downloads the `.deb`, hashes it, rewrites `pkgver`/`pkgrel`/
+  `sha256sums`, regenerates `.SRCINFO`) and prints the manual publish runbook. Publishing to
+  the AUR stays **manual by design**: no AUR account / SSH-key secret exists for this repo,
+  and auto-pushing a package on every release is a maintainer act, not a build side effect.
+
+- **The key constraint — detection must be RUNTIME.** Tauri's Linux updater can only replace
+  an **AppImage** (the file at `$APPIMAGE`). The AUR package repacks the **same binary** the
+  `.deb` carries, so no compile-time flag/feature can tell "AppImage build" from "distro
+  build" apart. The AppImage runtime exports **`$APPIMAGE`**; a `/usr/bin` install does not.
+  That single env var is the whole discriminator. So `commands.rs` gained a pure
+  `classify_install(os, appimage, override_kind, debug)` + an `install_kind()` command:
+  `"bundle"` (macOS `.app` / Windows installer / **any debug build**) and `"appimage"` are
+  self-updating; a **Linux release binary with no `$APPIMAGE`** is `"system"` — pacman/apt
+  owns it. An **empty** `APPIMAGE` string counts as unset (`std::env::var` yields `Some("")`
+  for a present-but-empty var). `RECUE_INSTALL_KIND=appimage|system|bundle` force-overrides
+  it (mirroring #346's `RECUE_DISABLE_DMABUF`) so either state is exercisable on any box —
+  every row is unit-tested, so macOS/Windows CI covers the Linux-only paths too.
+
+- **The updater gate**: a pure `selfUpdates(installKind)` (`src/platform.ts`) is false **only**
+  for `"system"`. On a package-managed install `store.checkForUpdate()` short-circuits to
+  `idle` with **no network call at all**, the sidebar `UpdateIndicator` never renders,
+  `installUpdate()` is a no-op that toasts, and Settings → Updates hides Check/Update-now and
+  shows a `sudo pacman -Syu recue-bin` note (current version + the #192 patch notes still
+  render). The **pre-load default `""` reads as self-updating**, so macOS/Windows/AppImage are
+  byte-for-byte unchanged — `src/store.update.test.ts` asserts exactly that (mocked
+  `./updater`: `"system"` never calls it; `"appimage"`/`"bundle"`/`""` still do).
+  The boot **"Updated to v…"** toast is left alone — it's a pure version compare and fires
+  correctly after a `pacman -Syu` upgrade too.
+
+- **The `.deb` is NOT an updater artifact**: it gets no `.sig`, and `latest.json`'s
+  `linux-x86_64` entry keeps pointing at the **`.AppImage`**. The AppImage remains the
+  default, self-updating download.
+
+- **Verified on a real Arch box** (this one — `webkit2gtk-4.1 2.52.5` installed):
+  `npm run tauri build -- --bundles deb` produced `ReCue_1.2.1_amd64.deb`, and the PKGBUILD's
+  `package()` body was run **verbatim** against it — the `bsdtar` `data.tar.*` repack yields
+  `/usr/bin/recue` + `/usr/share/applications/ReCue.desktop` + the hicolor icons.
+  `makepkg --printsrcinfo` parses the PKGBUILD and generated the committed `.SRCINFO`.
+  - **`depends` was derived from the real binary, not guessed** (`objdump -p … | grep NEEDED`,
+    each `.so` mapped via `pacman -Qo`): `webkit2gtk-4.1 gtk3 glib2 cairo gdk-pixbuf2 libsoup3
+    dbus glibc gcc-libs`. Notably the binary does **not** link `libayatana-appindicator`
+    (ReCue ships no tray) — it is deliberately **not** a dependency.
+  - **Correction to an assumption**: Tauri's `.deb` installs the binary under its **cargo**
+    name — already the lowercase **`/usr/bin/recue`**, not `/usr/bin/ReCue`. The PKGBUILD's
+    lowercase-alias symlink is therefore a no-op today and kept only as a guard.
+
+### Needs real-box verification (Arch package + updater gate, #361)
+
+- [ ] A release run uploads **both** `ReCue_<v>_amd64.deb` and `ReCue_<v>_amd64.AppImage` to
+      the draft, and the merged `latest.json`'s `linux-x86_64` entry still points at the
+      **`.AppImage`** (the `.deb` must get no `.sig`). Check before publishing the draft.
+- [ ] `scripts/aur-bump.sh <version>` against that **published** release rewrites `pkgver` +
+      `sha256sums` and regenerates `.SRCINFO`; `makepkg -si` then installs cleanly and
+      `namcap` is clean.
+- [ ] The installed package launches from the app menu **and** as `recue` from a terminal;
+      `ldd /usr/bin/recue` resolves to `/usr/lib` (system webkit2gtk 2.52), not a bundled
+      userland; no `GTK_THEME`/`GDK_BACKEND` forcing; cold start visibly faster than the
+      AppImage. Re-check that the CI (ubuntu-22.04-built) binary's `NEEDED` set still matches
+      the `depends` above — it was derived from an Arch-built binary.
+- [ ] On that pacman install: no update indicator, Settings → Updates shows the
+      package-manager note, and **no update HTTP request** is made (watch the network).
+- [ ] The AppImage still self-updates end-to-end (check → download → relaunch).
+- [ ] A FUSE-less run (`--appimage-extract` + `squashfs-root/AppRun`) starts, and its update
+      UI is hidden (no `$APPIMAGE` ⇒ classified `system`, which is correct — there is no
+      AppImage file for the updater to replace).
+- [ ] macOS + Windows: the update flow is unchanged (indicator → modal → Settings pane).
 ---
 
 ## 2026-07-14
