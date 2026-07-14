@@ -5091,3 +5091,41 @@ editable-raw tinting, unified rows keeping both line-number gutters (the demo's 
 information), and the locked gutter metrics, all as summarized above.
 
 **Dependencies:** Tasks 372, 380.
+
+### 382. [x] UI v2 (8/12): Boards & ops panels reskin — Kanban board, FileTree, Scheduled/Recurring panels
+
+Card 8 of the UI v2 reskin epic (spec §8 Board + Ops tabs + demo; **no version bump / patch notes**). The four
+"board & ops" panel bodies move onto the v2 language with zero functionality lost — card DnD, per-column color
+settings (#239), git-status tints, and every keyboard flow unchanged.
+
+**What shipped** (branch `task-382-boards-ops-reskin`, PR
+[#137](https://github.com/ErikdeJager/ReCue/pull/137), merged 2026-07-15 into `ui-rework`):
+
+- **Kanban (`KanbanPanel`)** — a dedicated 30px toolbar row below the panel header ("Saved" + a **Board | Raw**
+  `SegmentedControl` right-aligned; segment icons = the demo's lucide `Kanban`/`Terminal` 12px glyphs); 250px
+  crust columns identified by the 8px color dot only (the #233 top accent stripe, uppercase names, count pill,
+  and header underline removed per the demo); Base/hairline cards with 8px padding whose **done state regains
+  strikethrough + 60% opacity** (demo wins over #248) and a 12px green `--status-done` checkbox with a crust
+  check (shared Checkbox restyled via structural selectors — no API change; body task-list checkboxes match);
+  the #234 hover-lift replaced by the demo's flat border-strengthen (shadows only on floating chrome — the
+  DragOverlay preview keeps its shadow); ghost "+ Add card" per column, dashed "+ Add column" block; Raw = a
+  10px-inset crust well with a hairline border (demo wins over the card's "flush" prose).
+- **FileTree** — v2 search + refresh toolbar (the refresh button keeps the demo's `--radius-chrome` despite the
+  in-panel square rule — demo wins); 24px rows with default `--text-secondary` text and muted folder icons; git
+  states tint the **whole row** (icons included) and tinted file rows + ghost rows gain a trailing right-aligned
+  9px **M/A/D status letter** (in the demo though absent from the card prose; presentation-only); ignored rows go
+  faint `--surface-1`; the indentation formula + 17px icon alignment nudge kept as-is.
+- **ScheduledPanel + RecurringPanel** — v2 context line (branch icon, "repo · will check out branch", worktree
+  badge), crust fields, the faint `--surface-1` hint line + 9.5px accent resolve line ("Starts today 6:00 PM ·
+  in 2h 41m"; `SCHEDULE_TIME_HINT` copy already matched the demo), and the ScheduledPanel's **accent ▶ Start
+  now** restyled to the demo's 30px accent block. RecurringPanel is restyle-only — it has no Start-now today
+  (`fire_one_recurring` is an internal Rust fn, not a command; no new feature added).
+- **SkillAutocomplete** — the dropdown adopts the landed `menu.css` surface by adding the global `menu-pop`
+  class (positioning stays module-local); the two-line name+desc options keep their stacked layout restyled to
+  Surface0 hover/active + the v2 type scale; keyboard flow byte-identical.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 382) — the toolbar row kept out of 380's panel header; demo border
+alphas mapped to the nearest tokens; board gaps as literal 10px (no `--space-10` token — the #240 trap);
+Overview's ScheduleCard/RecurringCard chrome untouched (379 owns `Overview.tsx`).
+
+**Dependencies:** Tasks 372, 380.
