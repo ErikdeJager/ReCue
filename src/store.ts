@@ -12,6 +12,7 @@ import {
   type AutoContinueState,
 } from "./autoContinue";
 import { resolveCanvases } from "./boot";
+import { attentionQueue } from "./components/Attention/attentionQueue";
 import { overviewPanelToContent } from "./components/Canvas/canvasDrop";
 import { canvasToTemplate } from "./components/Canvas/canvasToTemplate";
 import { rewriteScheduledLeaves } from "./components/Canvas/canvasSchedule";
@@ -1636,6 +1637,15 @@ export interface AppState {
    * never cleared until the session is removed. An idle session with this set shows
    * the yellow "finished / needs input" indicator instead of never-active gray. */
   sessionActive: Record<string, boolean>;
+  /** Timestamp (ms epoch) of each session's most recent busy→idle edge (#398 —
+   * the Attention view). Stamped by `setBusy` on the edge, cleared when the session
+   * next goes busy; the Attention FIFO queue orders by it (oldest idle first). A
+   * boot-persisted-awaiting session has no entry and falls back to its `createdAt`. */
+  sessionIdleSince: Record<string, number>;
+  /** Sessions the user has acknowledged in the Attention view (#398): dismissed from
+   * the triage queue while staying alive, until they next go busy (the flag is cleared
+   * by `setBusy` on the next busy edge, so a fresh idle edge re-queues them). */
+  dismissedAttention: Record<string, true>;
   /** Terminal items (#72) whose shell has exited → exit code (or null); drives the
    * Terminal exit overlay for non-agent PTYs (they aren't in `sessions`). */
   terminalExits: Record<string, number | null>;
@@ -1799,6 +1809,13 @@ export interface AppState {
   markRunning: (id: string) => void;
   /** Set a session's busy/idle state from the backend heuristic (#42). */
   setBusy: (id: string, busy: boolean) => void;
+  /** Acknowledge the selected idle agent in the Attention queue (#398): remove it from
+   * the queue (the session stays alive) and advance selection to the next queued agent.
+   * A no-op when `id` isn't a current queue member. */
+  dismissAttention: (id: string) => void;
+  /** Acknowledge every current Attention queue member at once (#398) — all stay alive;
+   * empties the queue and clears the selection. */
+  dismissAllAttention: () => void;
   /** Apply claude's auto-title (#97) to a session (no-op if unchanged). */
   setAutoName: (id: string, autoName: string | null) => void;
   /** Update a session's forkability (#138) — gates the Fork affordance (no-op if
@@ -2398,12 +2415,19 @@ async function killAgentsInRepo(repoPath: string): Promise<number> {
     return {
       sessions: s.sessions.filter((x) => !idSet.has(x.id)),
       selectedId: clearSelection ? null : s.selectedId,
-      view: clearSelection ? "overview" : s.view,
+      // Preserve the Attention view on removal (#398); only leave canvas/overview.
+      view: clearSelection && s.view !== "attention" ? "overview" : s.view,
       sessionBusy: Object.fromEntries(
         Object.entries(s.sessionBusy).filter(([id]) => !idSet.has(id)),
       ),
       sessionActive: Object.fromEntries(
         Object.entries(s.sessionActive).filter(([id]) => !idSet.has(id)),
+      ),
+      sessionIdleSince: Object.fromEntries(
+        Object.entries(s.sessionIdleSince).filter(([id]) => !idSet.has(id)),
+      ),
+      dismissedAttention: Object.fromEntries(
+        Object.entries(s.dismissedAttention).filter(([id]) => !idSet.has(id)),
       ),
     };
   });
@@ -2548,12 +2572,21 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
       schedules: s.schedules.filter((x) => !scheduleIds.has(x.id)),
       overviewPanels: map,
       selectedId: clearSelection ? null : s.selectedId,
-      view: clearSelection ? "overview" : s.view,
+      // Preserve the Attention view on removal (#398); only leave canvas/overview.
+      view: clearSelection && s.view !== "attention" ? "overview" : s.view,
       sessionBusy: Object.fromEntries(
         Object.entries(s.sessionBusy).filter(([id]) => !agentIds.has(id)),
       ),
       sessionActive: Object.fromEntries(
         Object.entries(s.sessionActive).filter(([id]) => !agentIds.has(id)),
+      ),
+      sessionIdleSince: Object.fromEntries(
+        Object.entries(s.sessionIdleSince).filter(([id]) => !agentIds.has(id)),
+      ),
+      dismissedAttention: Object.fromEntries(
+        Object.entries(s.dismissedAttention).filter(
+          ([id]) => !agentIds.has(id),
+        ),
       ),
       terminalExits: Object.fromEntries(
         Object.entries(s.terminalExits).filter(([id]) => !removedIds.has(id)),
@@ -2692,6 +2725,8 @@ export const useStore = create<AppState>()((set, get) => ({
   maximizedItem: null,
   sessionBusy: {},
   sessionActive: {},
+  sessionIdleSince: {},
+  dismissedAttention: {},
   terminalExits: {},
   // Default true: with no persisted sessions there is nothing to wait for (#359), and a
   // window that never calls `refresh()` (a detached canvas) must never hold a volley.
@@ -2833,9 +2868,13 @@ export const useStore = create<AppState>()((set, get) => ({
     set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
-      view: s.selectedId === id ? "overview" : s.view,
+      // Keep the Attention view when its selected agent is removed (#398) — the
+      // queue advances to the next idle agent; only bounce to Overview from canvas.
+      view: s.selectedId === id && s.view !== "attention" ? "overview" : s.view,
       sessionBusy: omitKey(s.sessionBusy, id),
       sessionActive: omitKey(s.sessionActive, id),
+      sessionIdleSince: omitKey(s.sessionIdleSince, id),
+      dismissedAttention: omitKey(s.dismissedAttention, id),
     }));
     // An agent removed from the left panel (Remove #57, or a clean exit #63) also
     // disappears from every Canvas tab showing it (#152). The PTY is killed by the
@@ -2856,6 +2895,8 @@ export const useStore = create<AppState>()((set, get) => ({
 
   setBusy: (id, busy) => {
     const wasBusy = get().sessionBusy[id] ?? false;
+    // Capture the transition time before `set` for the Attention FIFO stamp (#398).
+    const now = Date.now();
     set((s) => {
       if ((s.sessionBusy[id] ?? false) === busy) return {}; // no-op, skip re-render
       // First activity marks the session "has been active" (#112): it stays set
@@ -2866,11 +2907,23 @@ export const useStore = create<AppState>()((set, get) => ({
         busy && !s.sessionActive[id]
           ? { ...s.sessionActive, [id]: true }
           : s.sessionActive;
+      // Attention triage bookkeeping (#398): a busy→idle edge stamps `idleSince[id]`
+      // (the FIFO sort key); a going-busy edge clears the stamp AND any dismissal, so
+      // the agent re-enters the queue at the back on its next idle edge.
+      const sessionIdleSince = busy
+        ? omitKey(s.sessionIdleSince, id)
+        : { ...s.sessionIdleSince, [id]: now };
+      const dismissedAttention =
+        busy && s.dismissedAttention[id]
+          ? omitKey(s.dismissedAttention, id)
+          : s.dismissedAttention;
       return {
         sessionBusy: busy
           ? { ...s.sessionBusy, [id]: true }
           : omitKey(s.sessionBusy, id),
         sessionActive,
+        sessionIdleSince,
+        dismissedAttention,
       };
     });
     // Busy→idle settle (#212): a turn just finished, so an in-terminal `git checkout`
@@ -2887,6 +2940,46 @@ export const useStore = create<AppState>()((set, get) => ({
       scheduleGitRefresh(folder);
       maybeNotifyWatched(id);
     }
+  },
+
+  dismissAttention: (id) => {
+    const s = get();
+    const queue = attentionQueue({
+      sessions: s.sessions,
+      sessionBusy: s.sessionBusy,
+      sessionActive: s.sessionActive,
+      dismissed: s.dismissedAttention,
+      idleSince: s.sessionIdleSince,
+      recurringChildIds: ownedChildSessionIds(s.recurrings),
+    });
+    const idx = queue.findIndex((q) => q.id === id);
+    if (idx === -1) return; // not a current queue member → no-op
+    // Advance to the next queued agent (the one after `id` in the pre-dismiss queue).
+    const next = queue[idx + 1]?.id ?? null;
+    set((st) => ({
+      dismissedAttention: { ...st.dismissedAttention, [id]: true },
+    }));
+    get().select(next);
+  },
+
+  dismissAllAttention: () => {
+    const s = get();
+    const queue = attentionQueue({
+      sessions: s.sessions,
+      sessionBusy: s.sessionBusy,
+      sessionActive: s.sessionActive,
+      dismissed: s.dismissedAttention,
+      idleSince: s.sessionIdleSince,
+      recurringChildIds: ownedChildSessionIds(s.recurrings),
+    });
+    if (queue.length > 0) {
+      set((st) => {
+        const dismissedAttention = { ...st.dismissedAttention };
+        for (const q of queue) dismissedAttention[q.id] = true;
+        return { dismissedAttention };
+      });
+    }
+    get().select(null);
   },
 
   setAutoName: (id, autoName) =>
@@ -5731,8 +5824,9 @@ export const useStore = create<AppState>()((set, get) => ({
     await Promise.all(
       recurringIds.map((id) => ipc.cancelRecurring(id).catch(() => {})),
     );
+    const idSet = new Set(ids);
     set((s) => {
-      const clearSelection = s.selectedId != null && ids.includes(s.selectedId);
+      const clearSelection = s.selectedId != null && idSet.has(s.selectedId);
       return {
         sessions: s.sessions.filter(
           (x) => x.repoPath !== repoPath && x.worktreeParent !== repoPath,
@@ -5743,7 +5837,14 @@ export const useStore = create<AppState>()((set, get) => ({
           (r) => r.cwd !== repoPath && !worktreeDests.includes(r.cwd),
         ),
         selectedId: clearSelection ? null : s.selectedId,
-        view: clearSelection ? "overview" : s.view,
+        // Preserve the Attention view on removal (#398); only leave canvas/overview.
+        view: clearSelection && s.view !== "attention" ? "overview" : s.view,
+        sessionIdleSince: Object.fromEntries(
+          Object.entries(s.sessionIdleSince).filter(([id]) => !idSet.has(id)),
+        ),
+        dismissedAttention: Object.fromEntries(
+          Object.entries(s.dismissedAttention).filter(([id]) => !idSet.has(id)),
+        ),
         // Drop a now-dangling Overview filter on the forgotten repo (#34/#247).
         overviewRepoFilter:
           s.overviewRepoFilter?.path === repoPath ? null : s.overviewRepoFilter,

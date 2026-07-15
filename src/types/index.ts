@@ -334,7 +334,7 @@ export interface ForkablePayload {
 
 // --- Frontend UI state ---
 
-export type View = "overview" | "canvas";
+export type View = "overview" | "canvas" | "attention";
 
 /**
  * Application settings (#100), persisted as an opaque blob through the Rust store

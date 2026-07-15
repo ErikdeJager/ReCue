@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   DndContext,
   type DragEndEvent,
@@ -40,6 +40,11 @@ import { prefetchDeferredChunks } from "./prefetch";
 import { overviewClusters, useStore } from "./store";
 import { useKeyboardNav } from "./useKeyboardNav";
 import { ownedHere } from "./windowContext";
+
+// The Attention triage view (#398) is a lazy chunk — kept off the first-paint graph
+// (#356) and warmed on idle by `src/prefetch.ts`. Its own per-branch Suspense (below)
+// never wraps a live terminal, honoring the #18 pool invariant.
+const Attention = lazy(() => import("./components/Attention/Attention"));
 
 /**
  * Application shell: a sidebar region (#9) and the main content area, which
@@ -210,6 +215,10 @@ function MainApp() {
             <div className="main-content">
               {view === "overview" ? (
                 <Overview />
+              ) : view === "attention" ? (
+                <Suspense fallback={<div className="main-content-loading" />}>
+                  <Attention />
+                </Suspense>
               ) : (
                 <Canvas dragActive={dragActive} />
               )}
