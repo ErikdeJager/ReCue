@@ -2360,7 +2360,6 @@ function Sidebar() {
   const bgMenuItems: RowMenuItem[] = [
     { label: "New folder…", onActivate: () => void addFolder() },
     { label: "Clone Repo…", onActivate: () => openCloneRepo() },
-    { label: "Schedule session", onActivate: () => openSchedule() },
     {
       label: sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar",
       onActivate: () => toggleSidebarCollapsed(),
@@ -2684,8 +2683,7 @@ function Sidebar() {
   const rail = (
     <div className={styles.rail} onContextMenu={openBgMenu}>
       {/* Accent-tinted New session block (UI v2 §6, task 374). The rail's Schedule
-          button is gone (§6) — scheduling stays reachable collapsed via ⌘⇧N and the
-          background context menu's "Schedule session". */}
+          button is gone (§6) — scheduling stays reachable collapsed via ⌘⇧N. */}
       <button
         type="button"
         className={styles.railNew}
