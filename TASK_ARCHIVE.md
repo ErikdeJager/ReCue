@@ -6036,3 +6036,65 @@ native primitives and on-system tokens only — identical on macOS, Windows, and
 **Dependencies:** none. (Deliberately kept minimal so **Task 406** — which reworks the same file's
 button placement/size — builds cleanly on top; 406 depends on this task, serializing the two
 ViewSwitch changes.)
+
+### 403. [x] Robust activity indicator — stop the busy dot flickering when a panel is focused
+
+Focusing an agent panel — by hover-focus (#368/#371) or by clicking — no longer flips its busy/
+activity dot from idle to "busy" for a moment. Previously `term.focus()` made xterm send a
+DECSET-1004 focus-in report (`ESC[I`) to the PTY, claude repainted in response, and the backend
+busy **monitor** read that one-shot repaint as work — blinking the dot blue for ~700 ms (or, if
+within the #315 5 s hysteresis window, sticky-blue ~5 s). In the new **Attention** triage view that
+blink removed-and-re-added the agent's card (the queue includes an agent iff `active && !busy &&
+!dismissed`) and even resurrected a previously **dismissed** card (the store's `setBusy` clears
+`dismissedAttention` on a going-busy edge). Fixing the busy **source** in the monitor fixes every
+consumer at once.
+
+**What shipped** (branch `robust-activity-indicator-403`, PR
+[#160](https://github.com/ErikdeJager/ReCue/pull/160), merged 2026-07-15 into `iteration-1`) — a
+**backend-only** change in `src-tauri/src/pty.rs`, platform-neutral (no `#[cfg]`):
+
+- **`last_report: AtomicU64`** added to `ActivityState` (`AtomicU64::new(0)` init) — the ms
+  timestamp of the last automatic terminal report.
+- **`write_stdin`** now stamps `last_report` (`now.max(1)`) when the data **is** an
+  `is_noninput_report` (focus/mouse report), while still (per #185) **not** stamping `last_input` for
+  it; the bytes are written to the PTY unchanged.
+- **`monitor_loop`** loads `rep = last_report` and computes a **`report_repaint`** signal — `rep != 0
+  && rep >= inp && out >= rep && out - rep <= REPORT_REPAINT_MS` (new `const REPORT_REPAINT_MS: u64 =
+  300`) — threaded through the per-session snapshot tuple.
+- **`decide_busy`** gained a `suppress_on: bool` param that gates the **idle→busy edge only**:
+  `let busy = if suppress_on && !st.emitted { false } else { busy };`. An already-busy session
+  (`emitted == true`) is untouched, so #185's protection (a *working* agent that gets focused is
+  never wrongly settled to idle) is preserved, and a real turn started with Enter (which stamps
+  `last_input`, making `rep >= inp` false) is never suppressed. `report_repaint` is passed as
+  `suppress_on`.
+- **Tests:** new `#[cfg(test)]` unit tests — a report-repaint on an idle session stays idle;
+  a report during ongoing work stays busy (#185); the same fresh tick with `suppress_on = false`
+  goes busy (normal work); a follow-up tick after the window elapses flips busy (a real turn wins);
+  and `focus_report_stamps_last_report_not_last_input`. Existing `decide_busy_*` call sites updated
+  for the new arg.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 403)
+
+- Interpreted "activity indicator" as the **backend-derived** busy/idle dot (`session://state`,
+  the `pty.rs` monitor) — nothing on the frontend sets busy, so the fix belongs in the monitor.
+- Root cause diagnosed as a **focus-report repaint**, not a resize/SIGWINCH: hover-focus/click →
+  `focusTerminal` → `host.term.focus()` → xterm's DECSET-1004 `ESC[I` → claude repaints → the
+  monitor reads that one-shot output as work.
+- Read the user's "the debounce is already there in some conditions but should always be applied"
+  as: #185 already skips the `last_input` echo-stamp for reports; **extend that same report handling**
+  to also suppress the spurious idle→busy edge (the remaining gap), rather than inventing a new
+  mechanism.
+- Chose an **asymmetric, targeted** fix — gate only the idle→busy edge on `report_repaint` — over a
+  broad min-on debounce (rejected because `active_fast` stays true for the whole 700 ms window after
+  a one-shot burst, so it can't distinguish a repaint from sustained output). Never touches busy→idle,
+  so #185 holds; `rep >= inp` cancels suppression the moment a real keystroke follows a report.
+- **Backend-only** by design: deliberately did **not** add a frontend debounce to the Attention
+  queue or `BusyIndicator` — fixing the source makes the dot, queue membership, and the
+  `setBusy` un-dismiss-on-busy edge all robust automatically. `REPORT_REPAINT_MS = 300` (one echo
+  window) chosen as a conservative, single-point-tunable default.
+
+**Cross-platform:** platform-neutral Rust — the same busy monitor runs on macOS, Windows, and Linux;
+no `#[cfg]`, path, or shell primitives.
+
+**Dependencies:** none. (Task 404 — defaulting hover-focus **on** — depends on this landing first,
+since it increases focus events and so makes this fix more important.)
