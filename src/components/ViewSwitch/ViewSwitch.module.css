@@ -1,7 +1,54 @@
-/* Expanded mode renders through the shared SegmentedControl atom (UI v2 task 372);
-   only the compact rail mode keeps local styles (restyled by card 4 / task 374). */
+/* Expanded mode renders the two main views (Overview + Attention) through the shared
+   SegmentedControl atom (UI v2 task 372) and appends a smaller standalone Canvas
+   button (#406); the compact rail mode keeps local icon-button styles. */
 
-/* Compact (icon-only) mode for the collapsed sidebar rail (#168, UI v2 §6): two
+/* Expanded row: the two-segment main control stretches to fill, the smaller Canvas
+   button hugs its content beside it (#406). */
+.expanded {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The Overview + Attention SegmentedControl fills the remaining row width. */
+.mainControl {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Secondary Canvas view (#406): a visibly smaller, lighter icon button beside the two
+   main segments. Chrome-radius + Surface0 active fill so its selected state matches the
+   segmented thumb (--bg-elevated resolves to Surface0). Tokens only — no color-mix. */
+.canvasBtn,
+.canvasBtnActive {
+  display: inline-flex;
+  width: 24px;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-chrome-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.canvasBtn:hover {
+  color: var(--text-primary);
+}
+
+.canvasBtnActive {
+  border-color: var(--border-hairline);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* Compact (icon-only) mode for the collapsed sidebar rail (#168, UI v2 §6): three
    stacked 28×28 ghost icon buttons — no crust well/border, Surface0 active fill. */
 .groupCompact {
   display: flex;
@@ -32,6 +79,16 @@
 
 .iconActive {
   background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* Canvas is the de-emphasized secondary view (#406): a touch lighter than the two main
+   icons while idle (kept at the full 28×28 tap target); hover/active still brighten. */
+.iconOption.iconCanvas {
+  color: var(--text-muted);
+}
+
+.iconOption.iconCanvas:hover {
   color: var(--text-primary);
 }
 
