@@ -25,7 +25,9 @@ function EmptyState({ onNewSession }: EmptyStateProps) {
   const renderedTip = tip ? renderTip(platform, tip) : "";
   return (
     <div className={styles.empty}>
-      <div className={styles.wordmark}>ReCue</div>
+      <div className={styles.wordmark}>
+        Re<span className={styles.accent}>Cue</span>
+      </div>
       {onNewSession && (
         <button type="button" className={styles.button} onClick={onNewSession}>
           <Plus size={12} strokeWidth={2.4} />
