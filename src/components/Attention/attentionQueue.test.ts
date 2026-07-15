@@ -20,6 +20,7 @@ const emptyInput = {
   sessionBusy: {} as Record<string, boolean>,
   sessionActive: {} as Record<string, boolean>,
   dismissed: {} as Record<string, boolean>,
+  eligible: {} as Record<string, boolean>,
   idleSince: {} as Record<string, number>,
   recurringChildIds: new Set<string>(),
 };
@@ -31,6 +32,7 @@ describe("attentionQueue membership (#398)", () => {
       ...emptyInput,
       sessions: [s],
       sessionActive: { a: true },
+      eligible: { a: true },
     });
     expect(q.map((x) => x.id)).toEqual(["a"]);
   });
@@ -40,8 +42,21 @@ describe("attentionQueue membership (#398)", () => {
       ...emptyInput,
       sessions: [sess("a")],
       sessionActive: {},
+      eligible: { a: true },
     });
     expect(q.map((x) => x.id)).toEqual(["a"]);
+  });
+
+  it("excludes an idle agent whose admission grace hasn't confirmed yet", () => {
+    // The busy heuristic settles ~700ms after any output pause, so a raw idle edge
+    // is NOT membership — only the store's ATTENTION_GRACE_MS confirmation is.
+    const q = attentionQueue({
+      ...emptyInput,
+      sessions: [sess("a")],
+      sessionActive: { a: true },
+      eligible: {},
+    });
+    expect(q).toHaveLength(0);
   });
 
   it("excludes a busy (blue) agent even when it has been active", () => {
@@ -50,6 +65,7 @@ describe("attentionQueue membership (#398)", () => {
       sessions: [sess("a")],
       sessionActive: { a: true },
       sessionBusy: { a: true },
+      eligible: { a: true },
     });
     expect(q).toHaveLength(0);
   });
@@ -60,6 +76,7 @@ describe("attentionQueue membership (#398)", () => {
       sessions: [sess("a")],
       sessionActive: {},
       sessionBusy: { a: true },
+      eligible: { a: true },
     });
     expect(q).toHaveLength(0);
   });
@@ -70,6 +87,7 @@ describe("attentionQueue membership (#398)", () => {
       sessions: [sess("a")],
       sessionActive: {},
       dismissed: { a: true },
+      eligible: { a: true },
     });
     expect(q).toHaveLength(0);
   });
@@ -80,6 +98,7 @@ describe("attentionQueue membership (#398)", () => {
       sessions: [sess("a")],
       sessionActive: { a: true },
       dismissed: { a: true },
+      eligible: { a: true },
     });
     expect(q).toHaveLength(0);
   });
@@ -89,6 +108,7 @@ describe("attentionQueue membership (#398)", () => {
       ...emptyInput,
       sessions: [sess("a")],
       sessionActive: { a: true },
+      eligible: { a: true },
       recurringChildIds: new Set(["a"]),
     });
     expect(q).toHaveLength(0);
@@ -99,6 +119,7 @@ describe("attentionQueue membership (#398)", () => {
       ...emptyInput,
       sessions: [sess("a", { exitedCode: 1 })],
       sessionActive: { a: true },
+      eligible: { a: true },
     });
     expect(q).toHaveLength(0);
   });
@@ -108,6 +129,7 @@ describe("attentionQueue membership (#398)", () => {
       ...emptyInput,
       sessions: [sess("a", { exitedCode: 0 })],
       sessionActive: { a: true },
+      eligible: { a: true },
     });
     expect(q).toHaveLength(0);
   });
@@ -117,6 +139,7 @@ describe("attentionQueue membership (#398)", () => {
       ...emptyInput,
       sessions: [sess("a", { reconnecting: true })],
       sessionActive: { a: true },
+      eligible: { a: true },
     });
     expect(q).toHaveLength(0);
   });
@@ -128,6 +151,7 @@ describe("attentionQueue ordering — FIFO oldest idle first (#398)", () => {
       ...emptyInput,
       sessions: [sess("new"), sess("old"), sess("mid")],
       sessionActive: { new: true, old: true, mid: true },
+      eligible: { new: true, old: true, mid: true },
       idleSince: { new: 3000, old: 1000, mid: 2000 },
     });
     expect(q.map((x) => x.id)).toEqual(["old", "mid", "new"]);
@@ -144,6 +168,7 @@ describe("attentionQueue ordering — FIFO oldest idle first (#398)", () => {
         sess("boot", { createdAt: 1500 }),
       ],
       sessionActive: { live: true, boot: true },
+      eligible: { live: true, boot: true },
       idleSince: { live: 3_000_000 },
     });
     expect(q.map((x) => x.id)).toEqual(["boot", "live"]);
@@ -163,6 +188,12 @@ describe("attentionQueue ordering — FIFO oldest idle first (#398)", () => {
         sess("freshOld", { createdAt: 1_000 }), // no idleSince → key 1_000_000 ms
       ],
       sessionActive: { awaitOld: true, awaitRecent: true },
+      eligible: {
+        freshNow: true,
+        awaitOld: true,
+        awaitRecent: true,
+        freshOld: true,
+      },
       idleSince: { awaitOld: 5_000_000, awaitRecent: 9_000_000 },
     });
     expect(q.map((x) => x.id)).toEqual([
@@ -182,6 +213,7 @@ describe("attentionQueue ordering — FIFO oldest idle first (#398)", () => {
         sess("early", { createdAt: 1 }),
       ],
       sessionActive: { z: true, a: true, early: true },
+      eligible: { z: true, a: true, early: true },
       // Identical idleSince forces the tie-break onto createdAt, then id.
       idleSince: { z: 5000, a: 5000, early: 5000 },
     });

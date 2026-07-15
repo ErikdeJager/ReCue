@@ -324,6 +324,7 @@ export function useKeyboardNav(): void {
             sessionBusy: state.sessionBusy,
             sessionActive: state.sessionActive,
             dismissed: state.dismissedAttention,
+            eligible: state.attentionEligible,
             idleSince: state.sessionIdleSince,
             recurringChildIds: ownedChildSessionIds(state.recurrings),
           }).map((q) => q.id);

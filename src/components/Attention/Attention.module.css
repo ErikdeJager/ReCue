@@ -74,6 +74,21 @@
 }
 
 /* --- Queue card --- */
+/* Entrance: cards are keyed by session id, so a DOM insertion IS a genuine queue
+   entry (the admission grace has confirmed the idle). The global reduced-motion
+   killswitch (global.css) zeroes the animation automatically. */
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .card {
   position: relative;
   display: flex;
@@ -85,11 +100,20 @@
   background: var(--bg-panel);
   cursor: pointer;
   text-align: left;
-  transition: background var(--dur-fast) var(--ease-out);
+  animation: card-enter 140ms var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
 .card:hover {
   background: var(--bg-hover);
+}
+
+/* Inset keyboard-focus ring: the global :focus-visible rule's +2px outline-offset
+   would clip against .queueList's scrollport (only 2px padding-right). */
+.card:focus-visible {
+  outline-offset: -2px;
 }
 
 /* Selection = Surface0 fill (UI v2 §7 — the accent never encodes selection). */
@@ -141,7 +165,7 @@
   font-family: var(--mono);
   font-size: var(--fs-micro);
   font-weight: 500;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-eyebrow);
 }
 
 /* The NEW marker (task 410) — a fresh, never-worked agent. Mirrors .idleTag but uses
@@ -154,12 +178,39 @@
   font-family: var(--mono);
   font-size: var(--fs-micro);
   font-weight: 500;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-eyebrow);
 }
 
 .idleAge {
   color: var(--text-faint);
   font-size: var(--fs-meta-xs);
+}
+
+/* --- Keybind-tips footer — rendered only while the queue is non-empty. Pinned
+   under the flex:1 scrolling .queueList; over the transparent wave stage, so it
+   carries the same legibility text-shadow as .empty. --- */
+.queueFooter {
+  display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-4) var(--space-8);
+  margin-top: var(--space-8);
+  padding: 0 var(--space-4);
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+  text-shadow: 0 1px 6px rgba(17, 17, 27, 0.65);
+}
+
+.footerItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  white-space: nowrap;
+}
+
+.footerItem kbd {
+  color: var(--text-muted);
 }
 
 /* --- Diff +/- stat (#335) — mirrors the sidebar tokens. --- */

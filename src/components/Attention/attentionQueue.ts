@@ -15,6 +15,14 @@ export interface AttentionQueueInput {
   sessionActive: Record<string, boolean>;
   /** Sessions the user has acknowledged (#398) — excluded until they go busy again. */
   dismissed: Record<string, boolean>;
+  /** Sessions whose idle state the store's **admission grace** has confirmed. The
+   * backend settles busy→idle after only ~700ms of output quiet, and its #315 sticky
+   * hold engages only *after* a first spurious settle — so a working agent whose
+   * output pauses briefly used to flicker into the queue and out again. The store
+   * grants this flag `ATTENTION_GRACE_MS` after an idle edge (or spawn/boot) and
+   * revokes it the moment the session goes busy, so only confirmed-idle agents are
+   * ever members. */
+  eligible: Record<string, boolean>;
   /** Timestamp (ms epoch) of each session's most recent busy→idle edge (#398). */
   idleSince: Record<string, number>;
   /** Recurring-owned child session ids (#294) — they render only in their recurring
@@ -28,9 +36,10 @@ export interface AttentionQueueInput {
  * agent) OR it finished a turn and is **awaiting** input (active-but-idle "IDLE", #112)
  * — in true **FIFO** order (oldest wait first).
  *
- * An agent is a member **iff** it is not busy (`!sessionBusy`) AND has not been
- * dismissed (`!dismissed`), excluding recurring-owned children, exited sessions
- * (`exitedCode != null`), and boot-reconnecting ones. Being active is **no longer**
+ * An agent is a member **iff** it is not busy (`!sessionBusy`), is **confirmed idle**
+ * (`eligible` — the admission grace), AND has not been dismissed (`!dismissed`),
+ * excluding recurring-owned children, exited sessions (`exitedCode != null`), and
+ * boot-reconnecting ones. Being active is **no longer**
  * required (task 410) — a freshly spawned idle agent qualifies; it simply drops out the
  * moment it goes busy and re-appears when it settles again. The sort key is the
  * busy→idle edge time `idleSince[id]`, falling back to the session's `createdAt` (unix
@@ -39,14 +48,21 @@ export interface AttentionQueueInput {
  * order is stable and deterministic.
  */
 export function attentionQueue(input: AttentionQueueInput): SessionView[] {
-  const { sessions, sessionBusy, dismissed, idleSince, recurringChildIds } =
-    input;
+  const {
+    sessions,
+    sessionBusy,
+    dismissed,
+    eligible,
+    idleSince,
+    recurringChildIds,
+  } = input;
 
   const members = sessions.filter((s) => {
     if (recurringChildIds.has(s.id)) return false;
     if (s.exitedCode != null) return false;
     if (s.reconnecting) return false;
     if (sessionBusy[s.id]) return false;
+    if (!eligible[s.id]) return false;
     if (dismissed[s.id]) return false;
     return true;
   });
