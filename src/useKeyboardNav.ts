@@ -28,6 +28,7 @@ import { useEffect } from "react";
 import { attentionQueue } from "./components/Attention/attentionQueue";
 import { panelTypeForDigit } from "./components/CreatePanelModal/panelTypes";
 import { saveFocused } from "./saverRegistry";
+import { isGlobalSearchChord } from "./searchChord";
 import {
   adjacentId,
   overviewClusterKeys,
@@ -136,13 +137,10 @@ export function useKeyboardNav(): void {
       // never reaches a focused claude/terminal (which would otherwise trigger its own
       // find/forward). The same chord opens and closes. Main window only — swallowed but
       // inert in a detached canvas window (#84); inert while the new-session or
-      // create-panel modal is open (mirrors ⌘K's guard).
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "f"
-      ) {
+      // create-panel modal is open (mirrors ⌘K's guard). The chord is EXACTLY ONE of
+      // Cmd/Ctrl (isGlobalSearchChord, #399): when BOTH are held this is false, so the
+      // macOS native-fullscreen combo Ctrl+⌘+F falls through un-preventDefaulted to the OS.
+      if (isGlobalSearchChord(e)) {
         e.preventDefault();
         e.stopPropagation();
         if (IS_MAIN_WINDOW) {
