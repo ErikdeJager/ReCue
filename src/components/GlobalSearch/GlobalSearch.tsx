@@ -538,7 +538,7 @@ function GlobalSearch() {
                               {renderHighlight(
                                 splitHighlight(r.title, debouncedQuery),
                               )}
-                              {r.line != null && (
+                              {r.line != null && r.kind !== "output" && (
                                 <span className={styles.rowLine}>
                                   :{r.line}
                                 </span>
