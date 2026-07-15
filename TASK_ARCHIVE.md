@@ -640,9 +640,9 @@ ships as v2.0.0 after card 12, no per-card version bump / patch notes).
 - #381 UI v2 (7/12): Content viewers reskin — the FileViewer toolbar (Saved status + segmented Rendered|Raw) + markdown type ramp, and the DiffInspector meta/pager + tinted diff rows.
 - #382 UI v2 (8/12): Boards & ops panels reskin — the Kanban board, FileTree, and Scheduled/Recurring panel bodies onto the v2 language, zero functionality lost.
 - #383 UI v2 (12/12): parity & polish sweep — the §12 v1→v2 parity checklist, the accent/light/interaction/reduced-motion/dense/cross-platform audits, token-drift reconciliation, the first-paint bundle budget, and the CLAUDE.md styling docs; with this card the epic is complete.
+- #384 Wave background optimization pass — the UI v2 wave (#377) moves rendering to a **Web Worker + OffscreenCanvas** where supported (the verbatim sha-pinned engine unmodified, today's main-thread loop as a byte-for-byte fallback), with governed frame cost: **paused entirely when panels tile over the stage** (the common working state → zero frames), fps-capped 48→24 while any agent is busy, and adaptively downscaled on sustained overruns; a new Appearance setting `pauseWaveWhenCovered` (default ON) exposes the covered-pause.
 
-**Post-v2 polish (#385–#396).** _(#384, #392, #394, #395 and #397+ are written out in
-full at the end of this file.)_
+**Post-v2 polish (#385–#396).** _(#398+ are written out in full at the end of this file.)_
 
 - #385 Restore the pre-UI-rework blue "shimmer" busy indicator — brought back the calm blue dot with a Claude-style sheen **sweeping across it** (replacing the v2 opacity-pulse "blink" + its tinted ring), keeping the three-state semantics + reduced-motion behavior + token system.
 - #386 Agent/panel borders use the owning folder's color — the selection/focus highlight around each Overview card / Canvas panel now uses its folder's `repoColor` instead of the global `--accent`, per the v2 rule that the accent never encodes selection.
@@ -656,6 +656,10 @@ full at the end of this file.)_
 - #394 Improve ⌘F search across live agent terminal output — verify + fidelity fix of the #337/#353 terminal-output search: the ANSI stripper (`pty.rs strip_ansi`, the search path's sole caller) now expands a non-erasing cursor-forward (CUF, `ESC[nC`) into spaces (clamped at 64) so a phrase the user saw spaced (`A B`) matches the searched text; the non-navigable `:line` badge is hidden for `output`-kind rows.
 - #395 Sidebar repo header — active-agent count in the "+" slot — each repo header shows its count of active (running) agents at rest in the same slot the New-session **+** occupies, swapping to the clickable **+** on hover / keyboard-focus with zero layout shift; the always-on total-sessions chip is removed (empty/none-running cases keep today's behavior, no "0").
 - #396 Style the "Dark mode is the recommended experience" Settings note as a yellow caution — restyled the #342 plain-grey note as an on-system **yellow caution** (matching the untested-agent caution elsewhere in the modal) so it reads as a deliberate warning.
+
+**Continued polish (#397+).** _(#398+ are written out in full at the end of this file.)_
+
+- #397 ⌘F search — per-folder filter chips (⌘-Number) with lifted per-repo cap — a row of muted folder chips under the search bar; **⌘-Number** (Ctrl+N on Windows/Linux) lights the Nth chip and narrows results to that folder (again / Escape / click clears), and while a folder filter is active #393's per-repo 6-item cap is **lifted** so all its matches show. Reuses #393's `rankAndGroup` with `perRepoCap: Infinity` — no `search.ts` logic change; the global ⌘1–9 Canvas-jump is inert while the modal owns ⌘-Number.
 ---
 
 ## Design reference (dark theme only)
@@ -711,130 +715,9 @@ below.
 
 > The tasks below are kept **written out in full** (Description / What shipped / Key files /
 > Dependencies). They are the 20 most recently archived, so they appear in **archive order**,
-> not strict numeric order: #397, #384, #398, #402, #399, #400, #401, #405, #403, #406,
-> #404, #409, #411, #407, #410, #408, #412, #414, #415, #413. Every earlier task is condensed in the
+> not strict numeric order: #398, #402, #399, #400, #401, #405, #403, #406, #404, #409,
+> #411, #407, #410, #408, #412, #414, #415, #413, #417, #418. Every earlier task is condensed in the
 > index above.
-
-### 397. [x] ⌘F search — per-folder filter chips (⌘-Number) with lifted per-repo cap
-
-The ⌘F global search modal now shows a row of **folder chips** under the search bar (muted at rest);
-pressing **⌘-Number** (⌘1/Ctrl+1, …) lights the Nth chip and narrows results to only that folder,
-and pressing it again / Escape / clicking clears the filter. While a folder filter is active, Task
-393's per-repo 6-item cap is **lifted** for that folder so all its matches show (no "… +N more").
-
-**What shipped** (branch `task-397-search-folder-filter-chips`, PR
-[#151](https://github.com/ErikdeJager/ReCue/pull/151), merged 2026-07-15 into `ui-rework`):
-
-- **`useKeyboardNav.ts`**: the global ⌘1–9 Canvas-jump is now inert while `globalSearchOpen`, so the
-  modal owns ⌘-Number.
-- **`GlobalSearch.tsx`**: transient `filterRepo` state; `chips = grouped.map(g => g.repo).slice(0,
-  9)` (derived from 393's unfiltered active-first `grouped`, so chip #N == the Nth result group);
-  `visibleGroups` re-runs `rankAndGroup(allResults.filter(r => r.repo === filterRepo), { activeRepos,
-  perRepoCap: Infinity })` to lift the cap; `flat`/render point at `visibleGroups`; the chip row
-  (shown when the query is non-empty and ≥2 folders match) with a color dot + name + `⌘N`/`Ctrl+N`
-  hint (`kbdHint`); ⌘-Number handled in `onInputKeyDown` (`/^Digit[1-9]$/` on `e.code` +
-  `metaKey||ctrlKey`), filter-aware Escape (peel filter, then close), stale-filter auto-clear, and a
-  highlight reset on filter change.
-- **`GlobalSearch.module.css`**: `.filterChips` / `.filterChip` / `.filterChipActive` (Surface0 lit
-  state — accent never encodes selection) / `.filterDot` / `.filterName` / `.filterKbd`, token-only.
-- **`search.test.ts`**: an uncapped (`perRepoCap: Infinity`) contract test — every item present,
-  `hiddenCount === 0`.
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 397)
-
-- Reuses Task 393's `rankAndGroup(results, { activeRepos, perRepoCap })` — the cap-lift is just
-  `perRepoCap: Infinity`; **no `search.ts` logic change**. Chips derived from 393's active-first
-  `grouped` so ⌘N filters the Nth group.
-- Only the first 9 matching folders get chips + ⌘1–9; the chip row shows only when the query is
-  non-empty AND ≥2 folders match; the filter is transient local state (resets on modal close).
-- Active chip lights up with Surface0 fill + primary text + full-opacity dot (muted at rest); the
-  filter auto-clears if its folder stops matching; global ⌘1–9 guarded with `!globalSearchOpen`.
-
-**Cross-platform:** pure TS/React/tokenized CSS; keyboard via `metaKey||ctrlKey` + `kbdHint` labels
-(⌘-Number on macOS, Ctrl+Number on Windows/Linux) — identical on all three.
-
-**Dependencies:** Task 393. (Soft `GlobalSearch.tsx`/`search.test.ts` overlap with sibling 394.)
-
-### 384. [x] Wave background optimization pass — off-main-thread rendering, frame governance, and a pause-when-covered setting
-
-The UI v2 wave background (task 377) no longer competes with the webview main thread for every
-frame. Rendering moves to a **Web Worker + OffscreenCanvas** where the platform supports it (the
-verbatim, sha256-pinned engine runs unmodified inside the worker via the same `?raw` + `new
-Function` loader), with today's main-thread loop as a byte-for-byte fallback. Frame cost is now
-governed — **paused entirely when panels tile over the stage** (the common working state costs zero
-frames), fps-capped 48→24 while any agent is busy, and adaptively downscaled on sustained overruns —
-and a new Appearance setting **`pauseWaveWhenCovered` (default ON)** exposes the covered-pause.
-
-**What shipped** (branch `task-384-wave-optimization`, PR
-[#152](https://github.com/ErikdeJager/ReCue/pull/152), merged 2026-07-15 into `ui-rework`):
-
-- **Pure gate — `waveTick.ts`/`.test.ts`**: `gateFrame` input gains `covered`/`busy`; `covered` is a
-  `document.hidden`-style skip (no `eng.frame`, timebase reset so resume never integrates the paused
-  span, `frames` counter left intact so reduced-motion settle/freeze is preserved); `BUSY_FPS_CAP =
-  24` applied when any session is busy (48 otherwise), dt-integrated so drift speed is unchanged.
-- **Pure covered predicate — `wavePresets.ts`/`.test.ts`**: `waveCovered({ view, overviewHasCards,
-  activeCanvasLayout, activeCanvasDetached })` — Overview covered iff `overviewClusters(...)` is
-  non-empty (filter-aware; a zero-match repo filter and the first-launch hero are NOT covered);
-  Canvas (main) covered iff the active tab is not detached AND `layout !== null`; detached window
-  covered iff its canvas `layout !== null`.
-- **Pure governor — NEW `waveGovernor.ts`/`.test.ts`**: a reducer fed each drawn frame's `eng.frame`
-  wall time; over rolling ~4s windows (≥30 drawn frames) an avg > ~8ms steps render scale
-  1 → 0.75 → 0.5 (CSS upscales; the engine's area-scaled `targetCount` compounds the win) and never
-  steps back up within a run; plus the stats aggregation (fps/avg/p95) for the probe.
-- **Pure mode resolver — NEW `waveMode.ts`/`.test.ts`**: `resolveWaveMode(override, detected)`
-  (`"main"` always honored; `"worker"` only when detected) + a thin `detectWorkerWave` probe
-  (`Worker` + `OffscreenCanvas` + `transferControlToOffscreen` + a throwaway 2d-context check).
-- **Lazy runtime — NEW `waveHost.ts`** (reached only via `import("./waveHost")` — the #356 boundary,
-  keeps the engine chunk out of first paint AND off the main thread in worker mode): `startWave`
-  owns both runtimes — `readColors`/recolor `MutationObserver`, the ~150ms trailing-debounced
-  `ResizeObserver` (one buffer reset per resize settle, fixing sidebar-drag thrash), the
-  `recue.waveStats` probe. Worker mode `transferControlToOffscreen()`s the element (try/catch →
-  `onFallback`), spawns the worker, and forwards recolors/presets/resizes/state as messages.
-- **Worker entry + protocol — NEW `waveWorker.ts` + `waveMessages.ts`**: the engine-in-worker rAF
-  loop (ctx-failure posts `{type:"fallback"}`) and the typed host↔worker message set.
-- **Component slimmed — `WaveBackground.tsx`**: props `{ preset, covered }`; reads
-  `pauseWaveWhenCovered` + an any-busy selector reactively (`effectiveCovered = pauseWhenCovered &&
-  covered`); `import("./waveHost")` + handle setters; an epoch/`forceMain` one-retry remount is the
-  only allowed remount (heals StrictMode's one-shot-transfer double-mount) — preset/pause/setting
-  changes never remount. `backgroundAnimation` OFF still unmounts the canvas and wins over all.
-- **Covered wiring**: `MainApp.tsx` computes `waveCovered(...)` from the exact `overviewClusters`
-  helper the wall renders from (new `activeCanvasId`/`overviewOrder`/`overviewRepoFilter` selectors);
-  `CanvasWindow.tsx` computes it per-document (canvases are broadcast, so a detached window's covered
-  state tracks live).
-- **Setting**: `pauseWaveWhenCovered: boolean` in the Appearance group (`types/index.ts`),
-  `DEFAULT_SETTINGS` `true` (`store.ts`), a "Pause when covered by panels" checkbox under "Background
-  animation" (disabled while it's off) in `Settings.tsx`; `store.test.ts` asserts the `mergeSettings`
-  back-fill (`mergeSettings({}).pauseWaveWhenCovered === true`) so old blobs upgrade with no migration.
-- **`vitest.config.ts`**, `TRAJECTORY_TO_LINUX.md`/`TRAJECTORY_TO_WINDOWS.md` (real-box worker/fallback
-  smoke notes), and a surgical `CLAUDE.md` note extending the wave/Appearance text.
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 384)
-
-- The vendored engine is verifiably DOM-free (only Math/parseInt/String + the ctx passed to
-  `frame()`), so it runs unmodified in a worker; worker mode is feature-detected with the current
-  main-thread loop as fallback (WebKitGTK ≤2.38 / Ubuntu 22.04 floor simply falls back). The engine
-  file (`src/vendor/WaveEngine.js`) and its sha256 pin are untouched — all six optimizations are
-  strictly host-side and independently revertible.
-- Pause = a gate skip identical to `document.hidden` (rAF stays scheduled, timebase reset, frame
-  counter frozen so reduced-motion semantics survive); resume is instant, never a remount/reseed. The
-  one allowed remount is the init-failure retry (fresh, never-transferred canvas — also heals the
-  StrictMode dev double-mount).
-- `pauseWaveWhenCovered` consumed reactively via `useStore` (`applySettingsEffects` untouched — same
-  pattern as `backgroundAnimation`); the checkbox is disabled while `backgroundAnimation` is off.
-- Detached windows adopt the setting at next boot (settings aren't broadcast — recorded 373/377
-  behavior), but their covered state tracks live because `canvases` are broadcast. Busy = any store
-  `sessionBusy`; the 24fps cap applies in both modes. Dev overrides `recue.waveMode`
-  (`"main"`/`"worker"`) + `recue.waveStats`, following the `recue.theme` precedent. Governor constants
-  (8ms/4s/≥30-frame windows) are pinned by behavior tests (one-way, floor 0.5), not exact numbers.
-
-**Cross-platform:** all new logic is pure TS + React/store + Web Worker/OffscreenCanvas (Chromium/
-WebKitGTK/WebView2 all support it, with the feature-detected main-thread fallback); no paths, shell,
-or OS primitives; no Rust changes (`settings` is an opaque backend blob). Worker-mode wave on Arch
-WebKitGTK, clean fallback on stock Ubuntu 22.04, and a WebView2 smoke are logged for real-box
-verification in `TRAJECTORY_TO_LINUX.md`/`TRAJECTORY_TO_WINDOWS.md`.
-
-**Dependencies:** Task 381, Task 382, Task 383 (serialized after the full UI v2 epic; 372–380 already
-archived).
 
 ### 398. [x] Attention view — a FIFO triage queue for idle agents needing input
 
@@ -1776,6 +1659,70 @@ cap didn't help.
   of scope).
 
 **Cross-platform:** pure frontend / TS / CSS with no OS-specific primitive — identical on macOS,
+Windows, and Linux.
+
+**Dependencies:** none.
+
+### 417. [x] Keep homepage empty-state tips on a single line (never wrap)
+
+The startup **tip** under the "New session" button on the empty-state hero now always sits on
+exactly one line — never wrapping to a second. A tip too wide for the available space truncates
+with an ellipsis (full text on hover) instead of wrapping or overflowing the layout.
+
+**What shipped** (branch `task-417-single-line-tips`, PR
+[#178](https://github.com/ErikdeJager/ReCue/pull/178), merged 2026-07-15 into `dev`):
+
+- **`src/components/EmptyState/EmptyState.module.css`** — `.tipText` gains `white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;` (keeping `min-width: 0` so the flex item can shrink
+  and the ellipsis triggers); `.tipRow`'s cap widens `max-width: 460px` → `min(92%, 700px)` so every
+  curated ≤100-char tip fits on one line while still bounding to the container on a narrow window
+  (where the ellipsis engages).
+- **`src/components/EmptyState/EmptyState.tsx`** — computes `renderedTip` once and renders the tip
+  span as `<span className={styles.tipText} title={renderedTip}>{renderedTip}</span>`, so a truncated
+  tip is still fully readable via the native tooltip.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 417)
+
+- The single-line requirement takes precedence over showing full text: an over-long tip truncates
+  with an ellipsis rather than wrapping/overflowing.
+- The 700px cap relies on the existing `tips.test.ts` ≤100-char / no-newline guarantee (JetBrains
+  Mono's uniform advance makes a fixed single-line width hold for all tips); a future over-long tip
+  simply truncates, so the change is self-correcting.
+- Interpreted "tips underneath the new session button" as the EmptyState hero tip fed by
+  `src/tips.json` — the only such surface. Tip content, catalog, shuffle logic, and `renderTip` are
+  untouched.
+
+**Cross-platform:** pure CSS + one JSX `title` attribute — `white-space: nowrap` /
+`text-overflow: ellipsis` are universal; no `#[cfg]` / `platform` branch — identical on macOS
+(WKWebView) and Windows/Linux (Chromium).
+
+**Dependencies:** none.
+
+### 418. [x] Update the Canvas empty-state hint to say "Drag in a panel from the left"
+
+An empty Canvas tab's hint now reads **"Drag in a panel from the left, or start with an empty tab"**
+instead of "Open a view from a session, or start with an empty tab", so the copy accurately
+describes how a user fills a Canvas tab (by dragging a sidebar row in from the left).
+
+**What shipped** (branch `update-canvas-empty-state-hint`, PR
+[#177](https://github.com/ErikdeJager/ReCue/pull/177), merged 2026-07-15 into `dev`):
+
+- **`src/components/Canvas/CanvasSurface.tsx`** — the `centerHint` line in `CenterDrop()` changed its
+  leading clause "Open a view from a session" → "Drag in a panel from the left", keeping the trailing
+  ", or start with an empty tab" (which describes the "New tab" button below), the `centerTitle`
+  heading, the icon, and the button unchanged. `CanvasSurface` is the shared surface for both the
+  main Canvas view and detached canvas windows (#84), and the string appeared exactly once, so both
+  places update from one edit.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 418)
+
+- The card's before/after `…` was truncation shorthand, not literal copy — only the leading clause is
+  replaced, preserving the trailing "New tab" clause; final copy: "Drag in a panel from the left, or
+  start with an empty tab".
+- "From the left" is accurate on all platforms (the sidebar drag source is always left of the canvas;
+  layout is not OS-conditional).
+
+**Cross-platform:** a pure user-facing copy change, no branch/logic/CSS — identical on macOS,
 Windows, and Linux.
 
 **Dependencies:** none.
