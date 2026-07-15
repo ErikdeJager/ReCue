@@ -129,6 +129,10 @@
   min-height: 0;
   background: var(--content-bg);
   border: 1px solid var(--border-hairline);
+  /* Task 409: a modest, board-scoped corner softening (an intentional exception to
+     the v2 square-panel language, not a full revert). `overflow: hidden` above clips
+     the header + card area to these rounded corners cleanly. */
+  border-radius: var(--radius-btn);
   overflow: hidden;
 }
 
@@ -299,20 +303,36 @@
   position: relative;
   background: var(--bg-panel);
   border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
+  /* Task 409: a modest, board-scoped corner softening (an intentional exception to
+     the v2 square-panel language, not a full revert) — kept ≤ the column radius.
+     `.cardPlaceholder`/`.cardOverlay` inherit this shape for a consistent look. */
+  border-radius: var(--radius-micro);
   padding: var(--space-8) 9px;
   transition:
     border-color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 
-/* Flat hover (v2 task 382, superseding the #234 lift): the border strengthens +
-   grab cursor signal the card is draggable. Excluded while dragging
-   (`.cardPlaceholder`) and on the floating `.cardOverlay`; `:active` shows
-   grabbing. */
+/* Hover (Task 409, restoring the #234 lift the v2 task 382 flattened): the border
+   strengthens, a grab cursor + a soft ~2px rise with a drop shadow signal the card
+   is draggable. Excluded while dragging (`.cardPlaceholder`) and on the floating
+   `.cardOverlay` (which keeps its own `--shadow-menu`); `:active` shows grabbing. */
 .card:not(.cardPlaceholder):not(.cardOverlay):hover {
   border-color: var(--border-strong);
   cursor: grab;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+}
+
+/* Reduced-motion: the global killswitch (global.css) only clamps transition
+   durations, so the static hover transform/shadow would still jump in instantly.
+   Explicitly drop them, leaving only the border-strengthen + grab cursor. */
+:global(body.reduce-motion)
+  .card:not(.cardPlaceholder):not(.cardOverlay):hover {
+  transform: none;
+  box-shadow: none;
 }
 
 .card:not(.cardPlaceholder):not(.cardOverlay):active {
@@ -708,6 +728,15 @@
 }
 .composerInput::placeholder {
   color: var(--text-muted);
+}
+/* #407: the composer input already carries the per-column accent border
+   (--col-accent, matching the card-edit accent edge), so the shared :focus-visible
+   ring (global.css) is a redundant second edge on it — drop it here. The accent
+   border remains the field's sole, always-present edge. Scoped to this input; the
+   global ring is untouched everywhere else. */
+.composerInput:focus,
+.composerInput:focus-visible {
+  outline: none;
 }
 .composerActions {
   display: flex;

@@ -44,20 +44,23 @@ interface QueueCardProps {
   counts: DiffLineCounts | undefined;
   showDiffLineCounts: boolean;
   idleLabel: string;
+  hasBeenActive: boolean;
   active: boolean;
   onSelect: () => void;
 }
 
-/** One idle-agent card in the triage queue: the yellow "awaiting" dot, the agent name,
- * its repo · branch, its working-tree +/- stat, and an IDLE marker + idle age. A pure
+/** One waiting-agent card in the triage queue: a busy dot (yellow "awaiting" once the
+ * agent has worked, gray "NEW" while it never has — task 410), the agent name, its
+ * repo · branch, its working-tree +/- stat, and an IDLE / NEW marker + idle age. A pure
  * select target — the destructive Remove (kill + forget) now lives in the right-pane
- * agent header, on the agent it acts on. */
+ * agent header (task 412), on the agent it acts on. */
 function QueueCard({
   primary,
   metaLine,
   counts,
   showDiffLineCounts,
   idleLabel,
+  hasBeenActive,
   active,
   onSelect,
 }: QueueCardProps) {
@@ -75,12 +78,16 @@ function QueueCard({
         }
       }}
     >
-      <BusyIndicator busy={false} hasBeenActive />
+      <BusyIndicator busy={false} hasBeenActive={hasBeenActive} />
       <div className={styles.cardInfo}>
         <span className={styles.cardName}>{primary}</span>
         <span className={styles.cardMeta}>{metaLine}</span>
         <span className={styles.cardFooter}>
-          <span className={styles.idleTag}>IDLE</span>
+          {hasBeenActive ? (
+            <span className={styles.idleTag}>IDLE</span>
+          ) : (
+            <span className={styles.newTag}>NEW</span>
+          )}
           {idleLabel && <span className={styles.idleAge}>{idleLabel}</span>}
           <DiffStat counts={counts} enabled={showDiffLineCounts} />
         </span>
@@ -90,8 +97,10 @@ function QueueCard({
 }
 
 /**
- * The **Attention** view (#398): a FIFO triage queue for agents that have gone idle and
- * likely need the user (an active-but-idle "awaiting" agent, #112). Oldest-idle first.
+ * The **Attention** view (#398, expanded by task 410): a FIFO triage queue for every
+ * agent that currently needs the user — a freshly **started** agent that hasn't worked
+ * yet ("NEW") as well as an active-but-idle "awaiting" agent (#112, "IDLE"). It drops an
+ * agent the moment it goes busy and re-surfaces it when it settles again. Oldest wait first.
  *
  * Two panes over the shared wave background (transparent, like Overview): a middle
  * **queue** of idle-agent cards and a right **agent** pane showing the selected agent's
@@ -188,7 +197,7 @@ function Attention() {
         <div className={styles.queueHeader}>
           <span className={styles.queueTitle}>
             Attention <span className={styles.queueDot}>·</span> {queue.length}{" "}
-            idle
+            waiting
           </span>
           {queue.length > 0 && (
             <button
@@ -222,6 +231,7 @@ function Attention() {
                   counts={diffLineCounts[session.repoPath]}
                   showDiffLineCounts={showDiffLineCounts}
                   idleLabel={formatIdleAge(sessionIdleSince[session.id], now)}
+                  hasBeenActive={sessionActive[session.id] ?? false}
                   active={session.id === activeId}
                   onSelect={() => select(session.id)}
                 />

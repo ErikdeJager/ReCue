@@ -5413,8 +5413,16 @@ export const useStore = create<AppState>()((set, get) => ({
     }
 
     if (s.view !== "canvas") {
-      // Overview (or any non-canvas): select; Overview scrolls its column in.
-      set({ selectedId: item.id });
+      // Overview: select; Overview scrolls its column in. Attention (#411): a
+      // sidebar click is intent to go work on that item, so switch to Overview and
+      // select it there — the Attention queue can only surface idle-agent members in
+      // its pane, whereas Overview renders a column for every sidebar item (#174).
+      // Mirrors the Canvas branch's existing "not shown here → go to Overview" rule.
+      set(
+        s.view === "attention"
+          ? { view: "overview", selectedId: item.id }
+          : { selectedId: item.id },
+      );
       return;
     }
     // Canvas (#79/#207): jump to the item's panel if it's in the active tab;
