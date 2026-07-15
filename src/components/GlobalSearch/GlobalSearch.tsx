@@ -387,9 +387,24 @@ function GlobalSearch() {
     };
   }, [debouncedQuery, recents, sessions, branches, fileNav]);
 
+  // Repos with a currently-running agent (`exitedCode === undefined`) — surfaced first in
+  // the grouped results (task 393), grouped by `effectiveRepo` like the rows themselves.
+  const activeRepos = useMemo(
+    () =>
+      new Set(
+        sessions
+          .filter((s) => s.exitedCode === undefined)
+          .map((s) => effectiveRepo(s)),
+      ),
+    [sessions],
+  );
+
   const grouped = useMemo(
-    () => rankAndGroup([...storeResults, ...fileResults, ...outputResults]),
-    [storeResults, fileResults, outputResults],
+    () =>
+      rankAndGroup([...storeResults, ...fileResults, ...outputResults], {
+        activeRepos,
+      }),
+    [storeResults, fileResults, outputResults, activeRepos],
   );
   const flat = useMemo(() => flatOrder(grouped), [grouped]);
 
@@ -546,6 +561,11 @@ function GlobalSearch() {
                     })}
                   </div>
                 ))}
+                {rg.hiddenCount > 0 && (
+                  <p className={styles.moreHint} aria-hidden>
+                    … +{rg.hiddenCount} more
+                  </p>
+                )}
               </div>
             ))
           )}
