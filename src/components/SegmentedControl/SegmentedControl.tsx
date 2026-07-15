@@ -50,6 +50,13 @@ function SegmentedControl<T extends string>({
     .filter(Boolean)
     .join(" ");
 
+  // Roving tabindex: exactly one segment must stay tabbable. When `value` matches no
+  // option — e.g. ViewSwitch on the Canvas view, whose value isn't among the two main
+  // segments (#406) — fall back to the first segment so the control never drops out of
+  // the keyboard tab order entirely.
+  const selectedIdx = options.findIndex((o) => o.value === value);
+  const tabbableIdx = selectedIdx === -1 ? 0 : selectedIdx;
+
   return (
     <div
       className={rootClass}
@@ -75,7 +82,7 @@ function SegmentedControl<T extends string>({
         tabs[next]?.focus();
       }}
     >
-      {options.map((option) => {
+      {options.map((option, i) => {
         const selected = value === option.value;
         return (
           <button
@@ -84,7 +91,7 @@ function SegmentedControl<T extends string>({
             role="tab"
             aria-selected={selected}
             title={option.title}
-            tabIndex={selected ? 0 : -1}
+            tabIndex={i === tabbableIdx ? 0 : -1}
             className={selected ? styles.active : styles.option}
             onClick={() => onChange(option.value)}
           >
