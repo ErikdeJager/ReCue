@@ -393,13 +393,18 @@ function SettingsModal() {
                       </button>
                     ))}
                   </div>
-                  <p className={styles.helpText}>
+                  <span className={styles.fieldWarn}>
+                    <TriangleAlert size={13} strokeWidth={2} aria-hidden />
                     Dark mode is the recommended experience.
-                    {/* #349: GTK reads GTK_THEME at init, so the native dialogs
-                        adopt a changed theme only on the next launch. */}
-                    {isLinux(platform) &&
-                      " Native file dialogs adopt this theme the next time ReCue starts."}
-                  </p>
+                  </span>
+                  {/* #349: GTK reads GTK_THEME at init, so the native dialogs
+                      adopt a changed theme only on the next launch. */}
+                  {isLinux(platform) && (
+                    <p className={styles.helpText}>
+                      Native file dialogs adopt this theme the next time ReCue
+                      starts.
+                    </p>
+                  )}
                 </div>
                 <div className={styles.field}>
                   <span className={styles.fieldLabel}>Accent color</span>

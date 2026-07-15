@@ -154,7 +154,8 @@
   border-color: var(--accent);
 }
 
-/* Untested-agent caution under the coding-agent selector. */
+/* Shared Settings caution style: the untested-agent caution under the
+   coding-agent selector, and the Appearance theme recommendation (#396). */
 .fieldWarn {
   display: flex;
   align-items: center;
