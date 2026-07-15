@@ -73,7 +73,7 @@ function CenterDrop() {
           <PanelsTopLeft size={22} strokeWidth={1.5} aria-hidden />
           <p className={styles.centerTitle}>No panels yet</p>
           <p className={styles.centerHint}>
-            Open a view from a session, or start with an empty tab
+            Drag in a panel from the left, or start with an empty tab
           </p>
           <button
             type="button"
