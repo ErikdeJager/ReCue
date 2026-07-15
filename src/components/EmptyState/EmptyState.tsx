@@ -22,6 +22,7 @@ function EmptyState({ onNewSession }: EmptyStateProps) {
   const newSessionKey = useKeybindLabel("new-session");
   const [tipIdx, setTipIdx] = useState(() => randomTipIndex(TIPS.length));
   const tip = TIPS[tipIdx];
+  const renderedTip = tip ? renderTip(platform, tip) : "";
   return (
     <div className={styles.empty}>
       <div className={styles.wordmark}>ReCue</div>
@@ -46,7 +47,9 @@ function EmptyState({ onNewSession }: EmptyStateProps) {
             <Lightbulb size={11} strokeWidth={1.8} aria-hidden />
             tip
           </button>
-          <span className={styles.tipText}>{renderTip(platform, tip)}</span>
+          <span className={styles.tipText} title={renderedTip}>
+            {renderedTip}
+          </span>
         </div>
       )}
     </div>

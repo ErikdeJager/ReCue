@@ -54,7 +54,7 @@
   align-items: center;
   gap: var(--space-8);
   margin-top: 18px;
-  max-width: 460px;
+  max-width: min(92%, 700px);
   text-shadow: 0 1px 6px rgba(17, 17, 27, 0.65);
 }
 
@@ -87,4 +87,7 @@
   font-size: var(--fs-meta-sm);
   text-align: left;
   min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
