@@ -708,12 +708,12 @@ function SettingsModal() {
                   <Checkbox
                     checked={draft.autoFocusOnHover}
                     onChange={(v) => update("autoFocusOnHover", v)}
-                    label="Focus panels on hover"
+                    label="Auto-focus agents and panels on hover"
                     className={styles.checkRow}
                   />
                   <p className={styles.helpText}>
-                    When on, moving the mouse over a panel selects it (the
-                    highlight border follows the pointer) and an agent or
+                    When on, moving the mouse over an agent or panel selects it
+                    (the highlight border follows the pointer) and an agent or
                     terminal panel is focused so you can type immediately.
                     Hovering a panel without terminal input unfocuses the
                     previous terminal, so keystrokes never keep going to it.
