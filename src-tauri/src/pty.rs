@@ -49,6 +49,13 @@ const MONITOR_TICK_MS: u64 = 200;
 /// #55) unless it arrives at least this long after the last keystroke. Tuned so
 /// keystroke echo never reads as busy, while sustained autonomous output does.
 const INPUT_ECHO_MS: u64 = 300;
+/// A repaint that lands within this long of an automatic focus/mouse report is treated
+/// as *caused by* that report, not by real work (#403), so it must not flip an idle
+/// session's dot to busy. Focusing/hovering a terminal makes claude repaint once; that
+/// one-shot paint clears well within this window, while a genuine turn keeps producing
+/// output past it and legitimately goes busy. Kept ≤ `BUSY_WINDOW_MS` so a real turn's
+/// sustained output (which outlasts this window) is never suppressed.
+const REPORT_REPAINT_MS: u64 = 300;
 /// Title re-read schedule (#169): after each poke (a busy→idle edge or a session
 /// spawn), the title worker re-reads claude's `ai-title` at these offsets (ms),
 /// spanning ~30s. `claude` writes the LLM-generated title **asynchronously**, a
@@ -234,6 +241,13 @@ pub fn coalesce_output_events(events: Vec<SessionEvent>) -> Vec<SessionEvent> {
 struct ActivityState {
     last_output: AtomicU64,
     last_input: AtomicU64,
+    /// ms timestamp of the last automatic terminal report (focus/mouse) written via
+    /// `write_stdin`; used by the monitor to suppress the spurious idle→busy edge from a
+    /// focus-triggered repaint (#403). A focus/mouse report is *not* a keystroke (it does
+    /// not stamp `last_input`, #185), yet it can make claude repaint — which the reader
+    /// stamps into `last_output`. Without this stamp that lone repaint would read as fresh
+    /// work and blink the dot blue for a tick when a panel is merely focused/hovered.
+    last_report: AtomicU64,
     /// Whether the session booted with an initial prompt (#93/#116) — a scheduled /
     /// prompt-seeded agent works immediately with **no** `write_stdin`, so it has
     /// "work to do" from spawn even though `last_input` stays 0. An interactive
@@ -729,6 +743,17 @@ impl SessionManager {
                     state.last_input.store(now.max(1), Ordering::Relaxed);
                 }
             }
+        } else {
+            // An automatic focus/mouse report (not a keystroke, #185). Record *when* it was
+            // sent so the monitor can tell a focus-triggered repaint from real work and not
+            // flip the idle→busy edge just because a panel was focused/hovered (#403). We
+            // still don't stamp `last_input` — the bytes are written to the PTY unchanged.
+            if let Ok(map) = self.activity.lock() {
+                if let Some(state) = map.get(id) {
+                    let now = self.base.elapsed().as_millis() as u64;
+                    state.last_report.store(now.max(1), Ordering::Relaxed);
+                }
+            }
         }
         // Hold the global map lock only long enough to clone the per-session writer
         // handle, then drop it (#260). The blocking `write_all`/`flush` — which can
@@ -1072,6 +1097,7 @@ impl SessionManager {
         let activity_state = Arc::new(ActivityState {
             last_output: AtomicU64::new(0),
             last_input: AtomicU64::new(0),
+            last_report: AtomicU64::new(0),
             seeded: AtomicBool::new(seeded),
             uses_claude_log,
         });
@@ -1447,9 +1473,29 @@ fn exit_waiter(
 /// re-activation and then holding on `active_hold` is consistent. A genuinely quiet stretch
 /// longer than `BACKGROUND_HOLD_MS` (e.g. a long single tool call with no output) legitimately
 /// settles to idle — that is *not* the #315 flicker and is intentionally left to settle.
-fn decide_busy(st: &mut BusyDecision, now: u64, active_fast: bool, active_hold: bool) -> bool {
+///
+/// `suppress_on` (#403) gates the **idle→busy edge only**: when it is set — the recent output is
+/// attributable to a focus/mouse-report repaint — a currently-idle session (`!emitted`) is held
+/// idle instead of flipping to busy for a tick when a panel is merely focused/hovered. An
+/// already-busy session is untouched, so #185's protection of a working agent is preserved, and
+/// once the report-repaint window elapses (output still flowing) a real turn wins on the next tick.
+fn decide_busy(
+    st: &mut BusyDecision,
+    now: u64,
+    active_fast: bool,
+    active_hold: bool,
+    suppress_on: bool,
+) -> bool {
     let prev = st.emitted;
     let busy = if st.sticky { active_hold } else { active_fast };
+    // A currently-idle session whose only recent output is a focus/mouse-report repaint
+    // must NOT flip to busy (#403). Gates the idle→busy edge only: an already-busy
+    // session (prev == true) is untouched, so #185's protection is preserved.
+    let busy = if suppress_on && !st.emitted {
+        false
+    } else {
+        busy
+    };
 
     // Flicker detection: a re-activation soon after a settle → sticky (background/paused turn).
     if !prev
@@ -1496,7 +1542,7 @@ fn monitor_loop(
         // Snapshot the two raw guarded activity signals per session under the lock, then
         // release it before sending. Both read the same atomics; `active_fast` gates the
         // clean-turn settle, `active_hold` the sticky background hold (#315).
-        let snapshot: Vec<(String, bool, bool, bool)> = {
+        let snapshot: Vec<(String, bool, bool, bool, bool)> = {
             let map = match activity.lock() {
                 Ok(map) => map,
                 Err(poisoned) => poisoned.into_inner(),
@@ -1505,6 +1551,7 @@ fn monitor_loop(
                 .map(|(id, state)| {
                     let out = state.last_output.load(Ordering::Relaxed);
                     let inp = state.last_input.load(Ordering::Relaxed);
+                    let rep = state.last_report.load(Ordering::Relaxed);
                     let seeded = state.seeded.load(Ordering::Relaxed);
                     // Busy requires the session to actually *have work to do* (#116):
                     // either the user has submitted input (`inp != 0`) or it booted
@@ -1521,17 +1568,33 @@ fn monitor_loop(
                     // `active_hold` = within the longer sticky window (#315). fast ⊂ hold.
                     let active_fast = recent && now.saturating_sub(out) < BUSY_WINDOW_MS;
                     let active_hold = recent && now.saturating_sub(out) < BACKGROUND_HOLD_MS;
-                    (id.clone(), active_fast, active_hold, state.uses_claude_log)
+                    // The recent output is attributable to an automatic focus/mouse report's
+                    // repaint (#403): a report was sent (`rep != 0`) at/after the last
+                    // keystroke (`rep >= inp`, so a report during a real turn's typing doesn't
+                    // qualify), the output arrived at/after that report (`out >= rep`), and it
+                    // did so within the short repaint window. Used to gate the idle→busy edge
+                    // only (see `decide_busy`) — an already-busy session is untouched (#185).
+                    let report_repaint = rep != 0
+                        && rep >= inp
+                        && out >= rep
+                        && out.saturating_sub(rep) <= REPORT_REPAINT_MS;
+                    (
+                        id.clone(),
+                        active_fast,
+                        active_hold,
+                        report_repaint,
+                        state.uses_claude_log,
+                    )
                 })
                 .collect()
         };
         // Forget sessions that are gone (killed/exited) so a reused id starts fresh.
         let live: HashSet<&str> = snapshot.iter().map(|(id, ..)| id.as_str()).collect();
         decisions.retain(|id, _| live.contains(id.as_str()));
-        for (id, active_fast, active_hold, uses_claude_log) in &snapshot {
+        for (id, active_fast, active_hold, report_repaint, uses_claude_log) in &snapshot {
             let st = decisions.entry(id.clone()).or_default();
             let prev = st.emitted;
-            let busy = decide_busy(st, now, *active_fast, *active_hold);
+            let busy = decide_busy(st, now, *active_fast, *active_hold, *report_repaint);
             if prev != busy {
                 if events
                     .send(SessionEvent::State {
@@ -2003,12 +2066,12 @@ mod tests {
         // settles the instant `active_fast` drops (~BUSY_WINDOW_MS), and never goes sticky.
         let mut st = BusyDecision::default();
         // Output flowing → busy (fast window active; hold is a superset, also active).
-        assert!(decide_busy(&mut st, 1_000, true, true));
+        assert!(decide_busy(&mut st, 1_000, true, true, false));
         assert!(st.emitted);
         assert!(!st.sticky);
         // Quiet past the fast window but within the hold window, and NO prior settle to
         // re-activate against → settles to idle immediately, staying in normal mode.
-        assert!(!decide_busy(&mut st, 1_800, false, true));
+        assert!(!decide_busy(&mut st, 1_800, false, true, false));
         assert!(!st.emitted);
         assert!(!st.sticky, "a clean single turn must not go sticky");
         assert_eq!(st.settled_at, 1_800);
@@ -2018,12 +2081,12 @@ mod tests {
     fn decide_busy_holds_blue_through_background_bursts() {
         let mut st = BusyDecision::default();
         // First turn goes busy, then settles once (records settled_at).
-        assert!(decide_busy(&mut st, 1_000, true, true));
-        assert!(!decide_busy(&mut st, 1_800, false, true));
+        assert!(decide_busy(&mut st, 1_000, true, true, false));
+        assert!(!decide_busy(&mut st, 1_800, false, true, false));
         assert_eq!(st.settled_at, 1_800);
         assert!(!st.sticky);
         // A quick re-activation within BACKGROUND_HOLD_MS of that settle → flicker → sticky.
-        assert!(decide_busy(&mut st, 2_400, true, true));
+        assert!(decide_busy(&mut st, 2_400, true, true, false));
         assert!(st.sticky, "a quick re-activation must arm sticky mode");
         assert!(st.emitted);
         // Now background bursts arrive >BUSY_WINDOW_MS apart: each tick is quiet on the fast
@@ -2031,14 +2094,14 @@ mod tests {
         // blue→yellow→blue flicker.
         for now in [3_400_u64, 4_400, 5_400, 6_400] {
             assert!(
-                decide_busy(&mut st, now, false, true),
+                decide_busy(&mut st, now, false, true, false),
                 "sticky must hold blue through burst gaps (now={now})"
             );
             assert!(st.emitted);
             assert!(st.sticky);
         }
         // Finally fully quiet past the hold window → emits false exactly once, sticky cleared.
-        assert!(!decide_busy(&mut st, 12_000, false, false));
+        assert!(!decide_busy(&mut st, 12_000, false, false, false));
         assert!(!st.emitted);
         assert!(!st.sticky, "settling clears sticky mode");
         assert_eq!(st.settled_at, 12_000);
@@ -2050,7 +2113,7 @@ mod tests {
         // enter NORMAL mode, never be mis-read as flicker.
         let mut st = BusyDecision::default();
         assert_eq!(st.settled_at, 0);
-        assert!(decide_busy(&mut st, 500, true, true));
+        assert!(decide_busy(&mut st, 500, true, true, false));
         assert!(st.emitted);
         assert!(!st.sticky, "the first activation must not be sticky");
     }
@@ -2059,19 +2122,81 @@ mod tests {
     fn decide_busy_fresh_turn_after_long_idle_is_not_sticky() {
         let mut st = BusyDecision::default();
         // A turn runs and settles at t.
-        assert!(decide_busy(&mut st, 1_000, true, true));
-        assert!(!decide_busy(&mut st, 1_800, false, true));
+        assert!(decide_busy(&mut st, 1_000, true, true, false));
+        assert!(!decide_busy(&mut st, 1_800, false, true, false));
         let settled = st.settled_at;
         assert_eq!(settled, 1_800);
         // A brand-new turn starts well beyond BACKGROUND_HOLD_MS later → NOT flicker, so it
         // stays in normal mode and settles fast on the next quiet tick.
         let later = settled + BACKGROUND_HOLD_MS + 1;
-        assert!(decide_busy(&mut st, later, true, true));
+        assert!(decide_busy(&mut st, later, true, true, false));
         assert!(!st.sticky, "a fresh turn after a long idle is not flicker");
         // Next quiet on the fast window → settles immediately (snappy), still not sticky.
-        assert!(!decide_busy(&mut st, later + 800, false, true));
+        assert!(!decide_busy(&mut st, later + 800, false, true, false));
         assert!(!st.emitted);
         assert!(!st.sticky);
+    }
+
+    #[test]
+    fn decide_busy_report_repaint_does_not_wake_an_idle_session() {
+        // An IDLE agent (dot yellow) is focused/hovered: claude repaints once in response
+        // to the focus report, so `active_fast` reads true for a tick — but the output is
+        // attributable to the report (`suppress_on = true`). The dot must stay idle (#403):
+        // no idle→busy edge, so the Attention queue never removes-and-re-adds the card.
+        let mut st = BusyDecision::default();
+        assert!(
+            !decide_busy(&mut st, 1_000, true, true, true),
+            "a focus-report repaint must not flip an idle session to busy"
+        );
+        assert!(!st.emitted);
+        assert!(!st.sticky);
+        assert_eq!(st.settled_at, 0, "no phantom settle was recorded");
+    }
+
+    #[test]
+    fn decide_busy_report_repaint_leaves_a_working_session_busy() {
+        // A BUSY agent (continuous output) is focused. The focus report fires while it is
+        // already working, so even though `suppress_on = true` this tick, an already-busy
+        // session must stay busy — #185's protection of a working agent is preserved. The
+        // suppression gates the idle→busy edge only, never a busy→busy hold.
+        let mut st = BusyDecision::default();
+        assert!(decide_busy(&mut st, 1_000, true, true, false)); // real work → busy
+        assert!(st.emitted);
+        assert!(
+            decide_busy(&mut st, 1_100, true, true, true),
+            "a report during ongoing work must keep the dot blue"
+        );
+        assert!(st.emitted);
+    }
+
+    #[test]
+    fn decide_busy_without_suppression_still_goes_busy() {
+        // Sanity contrast: the very same fresh `active_fast` tick with `suppress_on = false`
+        // (no report attribution) still turns the dot blue — genuine work is never suppressed.
+        let mut st = BusyDecision::default();
+        assert!(decide_busy(&mut st, 1_000, true, true, false));
+        assert!(st.emitted);
+    }
+
+    #[test]
+    fn decide_busy_real_turn_wins_after_report_window_elapses() {
+        // A real turn that *starts* with a focus report (e.g. the user clicks in, then the
+        // agent works): the first tick is suppressed (report-attributed), but once the
+        // report-repaint window elapses the output keeps flowing and `suppress_on` turns
+        // false — the next tick must flip to busy. Genuine sustained work always wins.
+        let mut st = BusyDecision::default();
+        assert!(
+            !decide_busy(&mut st, 1_000, true, true, true),
+            "the report-attributed first tick is suppressed"
+        );
+        assert!(!st.emitted);
+        // Output is still flowing a beat later, now beyond the report-repaint window, so the
+        // monitor no longer attributes it to the report (`suppress_on = false`).
+        assert!(
+            decide_busy(&mut st, 1_400, true, true, false),
+            "a sustained burst past the report window must go busy"
+        );
+        assert!(st.emitted);
     }
 
     #[test]
@@ -2837,6 +2962,58 @@ mod tests {
             !saw_idle,
             "a focus/mouse report must not flip a working agent to idle (#185)"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn focus_report_stamps_last_report_not_last_input() {
+        // #403: an automatic focus/mouse report is recorded in `last_report` (so the
+        // monitor can attribute a focus-triggered repaint to it) but must NOT stamp
+        // `last_input` (#185 preserved). A real keystroke does the opposite.
+        let (mgr, _rx) = manager();
+        let info = mgr
+            .spawn_program("sh", &["-c", "sleep 2"], &tmp(), None)
+            .expect("spawn sh");
+
+        mgr.write_stdin(&info.id, "\x1b[I")
+            .expect("write focus report");
+        {
+            let map = mgr.activity.lock().expect("activity lock");
+            let st = map.get(&info.id).expect("activity state");
+            assert!(
+                st.last_report.load(Ordering::Relaxed) > 0,
+                "a focus report must stamp last_report (#403)"
+            );
+            assert_eq!(
+                st.last_input.load(Ordering::Relaxed),
+                0,
+                "a focus report must NOT stamp last_input (#185)"
+            );
+        }
+
+        // A real keystroke stamps last_input and leaves last_report as it was.
+        let report_at = {
+            let map = mgr.activity.lock().expect("activity lock");
+            map.get(&info.id)
+                .unwrap()
+                .last_report
+                .load(Ordering::Relaxed)
+        };
+        mgr.write_stdin(&info.id, "x").expect("write keystroke");
+        {
+            let map = mgr.activity.lock().expect("activity lock");
+            let st = map.get(&info.id).expect("activity state");
+            assert!(
+                st.last_input.load(Ordering::Relaxed) > 0,
+                "a real keystroke must stamp last_input (#55)"
+            );
+            assert_eq!(
+                st.last_report.load(Ordering::Relaxed),
+                report_at,
+                "a real keystroke must not touch last_report"
+            );
+        }
+        let _ = mgr.kill_session(&info.id);
     }
 
     #[test]
