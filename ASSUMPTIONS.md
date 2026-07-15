@@ -3723,3 +3723,15 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - The card's before/after `…` is truncation shorthand, not literal copy: the real hint is "Open a view from a session, or start with an empty tab", so I replace only the leading clause and keep ", or start with an empty tab" (which describes the "New tab" button below) → final copy "Drag in a panel from the left, or start with an empty tab". Alternative the caller could pick: replace the whole line with a bare "Drag in a panel from the left…" ending in an ellipsis and dropping the tail clause.
 - "From the left" refers to the sidebar drag sources; verified the sidebar is always left-of-canvas on all platforms (layout is not OS-conditional), so the copy is accurate cross-platform.
 - Kept the existing single Unicode `…` convention irrelevant here since the final hint is a plain statement with no trailing ellipsis (matches the current no-ellipsis form).
+
+## Task 416
+
+- Build indicator is event-driven: shown only while a real first-run `docker build` is in flight (the `container://building` event sets it; `ensureContainerImage()` resolving clears it), so an already-built image never flashes the text — chosen over an optimistic "show on toggle-ON" that would flicker for built images.
+- Toast suppressed only while the modal is open (`!newSessionOpen`); a container build that starts after the modal closes (a post-close spawn) still toasts, so build feedback is never lost.
+- Warning copy: "Building the dev container (first run)…" (yellow) — the card said "something like 'First will build the container…'"; picked present-continuous to match the accompanying spinner. Free to tweak the exact string.
+- Build-state kept modal-local (a `useState` + a modal-scoped `container://building` listener); the only store change is the one-line toast gate — chosen over adding a store field to keep the change small and cohesive.
+- Popover anchored above-and-to-the-left (per explicit user guidance), portaled to `document.body` via `createPortal` with `position: fixed` from the icon's bounding rect, clamped ≥8px from every viewport edge and flipping below if there's no room above.
+- Portaled popover closes on outside-click (checks both trigger + panel), capture-phase Escape (unchanged), and on modal scroll; repositions on window resize.
+- Right-group order is kbd hint then the "i" icon (info icon rightmost); yellow uses the existing `--status-awaiting` token; spinner is lucide `<Loader>` + a module-local `spin` keyframe (reduce-motion handled by the global killswitch).
+- Docker-stopped ("start Docker") hint relocated to its own full-width line below the row so the row's justify-between cleanly distributes just the toggle (left) and the kbd+info group (right).
+- Pure frontend/CSS only; no Rust/backend changes. Optional pure `showBuildIndicator` helper + tests suggested for coverage, matching the folder's existing pure-helper test pattern.
