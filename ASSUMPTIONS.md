@@ -3458,3 +3458,63 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Governor constants: 8ms avg eng.frame budget over 4s windows of drawn frames (≥30 frames) per degrade step; tests pin behavior (one-way, floor 0.5), not the exact numbers.
 - Real-box verification items (worker wave on Arch WebKitGTK, fallback on stock Ubuntu 22.04, WebView2 smoke) are logged in TRAJECTORY_TO_LINUX.md / TRAJECTORY_TO_WINDOWS.md per the CLAUDE.md rule; CLAUDE.md gets only a surgical note extending task 383's wave/Appearance text.
 - Dependencies listed as Task 381, 382, 383 per the card's "once all 12 UI v2 tasks are implemented and archived" (372–380 already archived; these three transitively serialize after the epic).
+
+## Task 385
+- "Use the busy indicator from before the UI rework" = restore the full pre-rework visual (~10px dot + soft glow + sweeping sheen), dropping the UI-v2 opacity pulse AND the added tinted ring — not merely swapping the animation.
+- Re-introduce the `--busy-sheen` glint token (removed by the UI-v2 restyle) in both the Dark and Latte-light blocks, faithful to `main`.
+- Keep the current UI-v2 status palette (`--status-*` + `-dim`); restore only the animation/visual.
+- Add plain-token fallbacks before each color-mix (task-383 cross-platform rule).
+- No CLAUDE.md edit; only component-local comments reverted. Props/markup/aria unchanged, so all four consumers inherit the fix.
+
+## Task 386
+- Ambiguous "…in their accent color when focussed" resolved as the FOLDER's own color, not the global accent (UI-v2 "accent never encodes selection").
+- Accent borders in scope: Overview selected-card ring (`.cardSelected::after`) + Canvas focused-panel frame (`.panelActive`) → both move to folder color via inline `--repo-color`.
+- Also a subtle ~30% folder-tint on the resting card/panel border (plain fallback first); dial-back-able.
+- Folder color = repoColor(effectiveRepo) for agents / repoColor(repoPath) otherwise.
+- Overview 2px repo-color top band unchanged. Out of scope: Sidebar rows, BigMode, non-folder accent affordances.
+
+## Task 387
+- "Popup" = the #370 expandable "all usage" viewer box in UsageBar.tsx, not a separate tooltip.
+- Reset-cell format: <24h → compact countdown; 24h–7d → weekday abbrev; ≥7d → short date. `title` tooltip adds precise local date/time + "5d 2h" duration.
+- Main five-hour bar line unchanged. Frontend-only (resetsAtMs already exposed).
+- Formatting via Date#toLocale* (formatFireTime seam), now-injectable + unit-tested; fail-open preserved.
+
+## Task 388
+- "New folder" = background menu's "New folder…" → `addFolder` store action (native picker → register into recents); not git-init / mkdir.
+- Reuse exact labels + handlers (`addFolder`, `openCloneRepo`) from the background menu.
+- Placed after "Recurring session…" before the "Auto continue" toggle (no separator in RowMenuItem); cosmetic.
+- Scoped to `dotsMenuItems`; the "Schedule session" removal is sibling Task 389 (disjoint arrays).
+
+## Task 389
+- "Global left panel context menu" = sidebar background/empty-area menu (#172), items in the single `bgMenuItems` array in Sidebar.tsx.
+- Delete only the one schedule line; keep `openSchedule` (footer button + ⌘⇧N still use it).
+- Update one stale collapsed-rail comment; ⌘⇧N stays the collapsed fallback.
+- Per-repo/folder menus, the ⋯ menu (Task 388), the button, and ⌘⇧N untouched.
+
+## Task 390
+- Setting `terminalBackgroundLightness` (0–100), default 0 = today's `#11111b`; older blobs back-fill to 0 (no migration flag).
+- Slider 0–100 step 5 in Appearance section (terminal-scoped).
+- Ramp = linear RGB interp from `#11111b` toward gray `#3a3a45`, kept ≥7:1 contrast with `--terminal-fg`; endpoint tunable.
+- Color computed in JS (not color-mix), applied to xterm ITheme.background + cursorAccent; wrapper padding via new `--terminal-bg-user` var (plain fallback).
+- Don't override the `--terminal-bg` token; no clearTextureAtlas; one synchronous applyTerminalSettings pass across all pooled hosts (#221/#18).
+
+## Task 391
+- "cmd+K launch panel" = the Create-panel launcher (#189) at `src/components/CreatePanelModal/`; the filtered options are its six panel TYPES on the first ("type") step (today pickable only by click or 1–6).
+- Enter selects the highlighted type and advances the existing 2-step flow (folder/target step, or startRepoSession for Session); it doesn't skip choosing a folder.
+- Number keys still work but index the currently-displayed (filtered) list; digits intercepted from the input.
+- Plain case-insensitive substring over the type label; empty query shows all; highlight resets to top on filter change.
+- Ordering left to Task 392 (iterate PANEL_TYPES as-is + add pure filterPanelTypes()); deps none (trivial overlap).
+
+## Task 392
+- One shared source of truth (new `src/itemTypeOrder.ts`) consumed by the three registries (panelTypes.ts, ViewsMenu.tsx, templateBlocks.ts).
+- ViewsMenu keeps "New session here" at the bottom (task 375); only its 5 view items reorder. "Session first" applies where Session is co-listed.
+- ⌘F global-search KIND_ORDER left unchanged (search grouping, already canonical).
+- cmd+K digits (1–6, ⌘⌥1–6) remap to the new canonical order.
+- Only ORDER changes; labels/icons/entries/behavior preserved. Soft overlap with Task 391 on CreatePanelModal.tsx/panelTypes.ts.
+
+## Task 393
+- "Active" repo = ≥1 LIVE/running agent (session.exitedCode === undefined), grouped by effectiveRepo — not the busy heuristic. Recurring children count as live.
+- "6 items per repo" = 6 TOTAL visible across all kind sections (not 6 per kind), filled in KIND_ORDER (agents first); one "…" per repo group.
+- "…" is a non-interactive muted "+N more" indicator, excluded from keyboard nav.
+- Secondary order within each tier stays alphabetical repoName-then-path.
+- Cap+ordering live in pure search.ts, source-agnostic (covers sibling #394's scrollback source).
