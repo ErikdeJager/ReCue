@@ -661,6 +661,7 @@ ships as v2.0.0 after card 12, no per-card version bump / patch notes).
 
 - #397 ⌘F search — per-folder filter chips (⌘-Number) with lifted per-repo cap — a row of muted folder chips under the search bar; **⌘-Number** (Ctrl+N on Windows/Linux) lights the Nth chip and narrows results to that folder (again / Escape / click clears), and while a folder filter is active #393's per-repo 6-item cap is **lifted** so all its matches show. Reuses #393's `rankAndGroup` with `perRepoCap: Infinity` — no `search.ts` logic change; the global ⌘1–9 Canvas-jump is inert while the modal owns ⌘-Number.
 - #398 Attention view — a FIFO triage queue for idle agents needing input — a third top-level view that FIFO-queues agents gone idle (oldest-idle first) so the user triages them one at a time: the queue on the left, the selected agent's **real live terminal** on the right (via `ItemContent`, so a `DetachedNote` shows when another window owns the PTY), then dismiss (keep alive) or kill and advance. Pure derived state — no new Rust / git read / persistence; ⌘⏎ (Ctrl+Enter) dismisses, Shift+↑/↓ cycle the queue, and the ViewSwitch segment carries a live idle-count badge.
+- #402 Default the wave "Pause when covered by panels" setting to OFF (opt-in) — `pauseWaveWhenCovered` (#384) now defaults **off**, so a fresh install keeps the background wave animating even when the Overview wall has cards or a Canvas tab has panels; pausing-while-covered is now an explicit opt-in. A `DEFAULT_SETTINGS` value flip only — no migration (the `mergeSettings` back-fill handles the upgrade); a user who saved settings since #384 keeps their persisted `true`.
 ---
 
 ## Design reference (dark theme only)
@@ -716,55 +717,9 @@ below.
 
 > The tasks below are kept **written out in full** (Description / What shipped / Key files /
 > Dependencies). They are the 20 most recently archived, so they appear in **archive order**,
-> not strict numeric order: #402, #399, #400, #401, #405, #403, #406, #404, #409, #411,
-> #407, #410, #408, #412, #414, #415, #413, #417, #418, #420. Every earlier task is condensed in the
+> not strict numeric order: #399, #400, #401, #405, #403, #406, #404, #409, #411, #407,
+> #410, #408, #412, #414, #415, #413, #417, #418, #420, #419. Every earlier task is condensed in the
 > index above.
-
-### 402. [x] Default the wave "Pause when covered by panels" setting to OFF (opt-in)
-
-The Settings → Appearance toggle **"Pause when covered by panels"** (`pauseWaveWhenCovered`,
-introduced by task 384) now defaults **OFF**. On a fresh install the background wave keeps animating
-even when the Overview wall has cards or a Canvas tab has panels; pausing while covered is now an
-explicit opt-in rather than the default. No behavior of the pause mechanism itself changed — only its
-default value and the accompanying doc/comment/test copy.
-
-**What shipped** (branch `task-402-wave-pause-default-off`, PR
-[#154](https://github.com/ErikdeJager/ReCue/pull/154), merged 2026-07-15 into `ui-rework`):
-
-- **`src/store.ts`**: `DEFAULT_SETTINGS.pauseWaveWhenCovered` flipped `true` → `false`, with a
-  rewritten comment stating the new default and rationale. No migration code — the shallow
-  `mergeSettings(raw)` back-fill handles the upgrade exactly as it did when the setting was introduced
-  (just with the opposite default).
-- **`src/types/index.ts`**: the `pauseWaveWhenCovered` doc comment updated "Default true" →
-  "Default false (opt-in, task 402)", keeping the description of what pausing does.
-- **`src/store.test.ts`**: the default-value/back-fill unit test renamed and updated — asserts
-  `DEFAULT_SETTINGS.pauseWaveWhenCovered === false`, `mergeSettings({}).pauseWaveWhenCovered ===
-  false`, the delete-key back-fill to `false`, and a persisted-`true`-is-preserved override (replacing
-  the old persisted-`false` case, since `false` is now the default).
-- **`src/components/WaveBackground/WaveBackground.tsx`**: the pause-when-covered comment dropped the
-  "(default)" parenthetical ("only when this is on (opt-in since task 402)"). No logic change — the
-  reactive `useStore((s) => s.settings.pauseWaveWhenCovered)` read is unchanged.
-- **`CLAUDE.md`**: the Settings → Appearance note corrected from "default on" to "default off
-  (opt-in, task 402), disabled while the wave is off".
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 402)
-
-- "Default off" = flip the `DEFAULT_SETTINGS` value only; no migration code (the `mergeSettings`
-  back-fill mirrors how task 384 introduced the setting).
-- Existing users who saved settings since task 384 persist `pauseWaveWhenCovered: true` explicitly
-  (`saveSettings` writes the whole blob), so their pause stays **ON** — treated as acceptable (they
-  made a choice; this is a default flip, not a forced behavior change). Users who never saved get the
-  new **OFF** default.
-- Left the historical task-384 `TASK_ARCHIVE.md` entry unchanged (it correctly records that 384
-  shipped default ON); updated `CLAUDE.md` + TS/comment copy instead. `Settings.tsx` help text left
-  as-is (it states no default). Correcting the "(default on)" parenthetical in the
-  `TRAJECTORY_TO_*.md` logs was optional/low-priority (historical) and skipped.
-
-**Cross-platform:** a one-value default flip plus comment/test/doc copy — no runtime logic and no
-OS-specific code paths; identical on macOS, Windows, and Linux.
-
-**Dependencies:** none. (Built on task 384, which introduced `pauseWaveWhenCovered` — already
-merged/archived.)
 
 ### 399. [x] Let macOS Ctrl+⌘+F native fullscreen through — ⌘F opens search only on the plain search chord
 
@@ -1681,5 +1636,39 @@ polish — no behavior change.
 
 **Cross-platform:** pure frontend CSS + JSX, no platform branching — byte-identical on macOS,
 Windows, and Linux.
+
+**Dependencies:** none.
+
+### 419. [x] Cap the width of every Overview panel, not just agent cards
+
+With the "cap card width" setting on (default), the 900px maximum now applies to **every** Overview
+column type — file, diff, terminal, kanban, filetree, and scheduled panels — not just agent and
+recurring cards, giving the wall a consistent comfortable maximum instead of letting non-agent
+panels stretch unbounded.
+
+**What shipped** (branch `cap-overview-panel-width`, PR
+[#180](https://github.com/ErikdeJager/ReCue/pull/180), merged 2026-07-15 into `dev`):
+
+- **`src/components/Overview/Overview.tsx`** — `ExtraPanel` (file/diff/terminal/kanban/filetree) and
+  `ScheduleCard` now read `capWidth = useStore((s) => s.settings.capAgentWidth)` and pass
+  `capped={capWidth}` to their `PanelColumn`, reusing the existing `.card` → `.cardCapped`
+  (`max-width: 900px`) mechanism that `SessionCard` / `RecurringCard` already used. Broadened the
+  `PanelColumn.capped` prop doc + `SessionCard` inline comments.
+- Copy broadened without touching the persisted key: the **`capAgentWidth`** settings key, its
+  default `true`, and its `mergeSettings` back-fill are unchanged (so old blobs and the store tests
+  stay green) — only its *meaning* widened. Settings → Appearance label "Cap agent card width" →
+  **"Cap Overview panel width"**, help text → "Limit Overview panels to a comfortable maximum width.";
+  the `types/index.ts` / `store.ts` / `.cardCapped` CSS comments broadened to match.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 419)
+
+- Reuse `capAgentWidth` as the single gate — no new key, no migration — for migration-safety and
+  store-test stability; the cap stays **gated by the toggle for all panel types** (turning it off
+  leaves every column uncapped).
+- One shared 900px cap for every panel type (no per-type values); Overview-wall only — Big mode /
+  Canvas / detached windows untouched. The #176 min-width floor and horizontal scroll are unchanged.
+
+**Cross-platform:** pure frontend CSS-class application + a store read, no OS branch — identical on
+macOS, Windows, and Linux.
 
 **Dependencies:** none.
