@@ -552,7 +552,7 @@ steady-state boot pays **zero** probe cost.
   palette **with a "?" random-per-launch swatch** (task 373, `resolvedRandomAccent`) + a
   reduce-motion toggle + **Dense panels** (the ⌘D toggle's checkbox twin, task 373) +
   **Background animation** (the #377 wave on/off) + **Pause when covered by panels**
-  (`pauseWaveWhenCovered`, task 384 — default on, disabled while the wave is off; the wave
+  (`pauseWaveWhenCovered`, task 384 — default off (opt-in, task 402), disabled while the wave is off; the wave
   stops rendering while the Overview wall has cards / a Canvas tab has panels and resumes
   live when the stage clears) + a display-size slider #366 +
   the Overview panel min-width #176 + the `capAgentWidth` cap-agent-card-width toggle,
