@@ -74,6 +74,13 @@
   outline: none;
 }
 
+/* Surface0 highlight for the filter-as-you-type selection (task 391 — the accent
+   never encodes selection, mirroring .folderActive). */
+.typeActive {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
 .typeIcon {
   flex-shrink: 0;
   color: var(--accent);
