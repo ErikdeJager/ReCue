@@ -657,10 +657,11 @@ ships as v2.0.0 after card 12, no per-card version bump / patch notes).
 - #395 Sidebar repo header — active-agent count in the "+" slot — each repo header shows its count of active (running) agents at rest in the same slot the New-session **+** occupies, swapping to the clickable **+** on hover / keyboard-focus with zero layout shift; the always-on total-sessions chip is removed (empty/none-running cases keep today's behavior, no "0").
 - #396 Style the "Dark mode is the recommended experience" Settings note as a yellow caution — restyled the #342 plain-grey note as an on-system **yellow caution** (matching the untested-agent caution elsewhere in the modal) so it reads as a deliberate warning.
 
-**Continued polish (#397+).** _(#399+ are written out in full at the end of this file.)_
+**Continued polish (#397+).** _(#400+ are written out in full at the end of this file.)_
 
 - #397 ⌘F search — per-folder filter chips (⌘-Number) with lifted per-repo cap — a row of muted folder chips under the search bar; **⌘-Number** (Ctrl+N on Windows/Linux) lights the Nth chip and narrows results to that folder (again / Escape / click clears), and while a folder filter is active #393's per-repo 6-item cap is **lifted** so all its matches show. Reuses #393's `rankAndGroup` with `perRepoCap: Infinity` — no `search.ts` logic change; the global ⌘1–9 Canvas-jump is inert while the modal owns ⌘-Number.
 - #398 Attention view — a FIFO triage queue for idle agents needing input — a third top-level view that FIFO-queues agents gone idle (oldest-idle first) so the user triages them one at a time: the queue on the left, the selected agent's **real live terminal** on the right (via `ItemContent`, so a `DetachedNote` shows when another window owns the PTY), then dismiss (keep alive) or kill and advance. Pure derived state — no new Rust / git read / persistence; ⌘⏎ (Ctrl+Enter) dismisses, Shift+↑/↓ cycle the queue, and the ViewSwitch segment carries a live idle-count badge.
+- #399 Let macOS Ctrl+⌘+F native fullscreen through — the ⌘F/Ctrl+F global-search chord no longer swallows macOS's native **Ctrl+⌘+F** fullscreen combo: a pure `isGlobalSearchChord` predicate (+ unit test) fires the handler only when **exactly one** of Cmd/Ctrl is held, so Cmd+Ctrl+F falls through to the OS while plain Ctrl+F still opens search on macOS. A no-op on Windows/Linux (Ctrl+F alone still matches).
 - #402 Default the wave "Pause when covered by panels" setting to OFF (opt-in) — `pauseWaveWhenCovered` (#384) now defaults **off**, so a fresh install keeps the background wave animating even when the Overview wall has cards or a Canvas tab has panels; pausing-while-covered is now an explicit opt-in. A `DEFAULT_SETTINGS` value flip only — no migration (the `mergeSettings` back-fill handles the upgrade); a user who saved settings since #384 keeps their persisted `true`.
 ---
 
@@ -717,50 +718,9 @@ below.
 
 > The tasks below are kept **written out in full** (Description / What shipped / Key files /
 > Dependencies). They are the 20 most recently archived, so they appear in **archive order**,
-> not strict numeric order: #399, #400, #401, #405, #403, #406, #404, #409, #411, #407,
-> #410, #408, #412, #414, #415, #413, #417, #418, #420, #419. Every earlier task is condensed in the
+> not strict numeric order: #400, #401, #405, #403, #406, #404, #409, #411, #407, #410,
+> #408, #412, #414, #415, #413, #417, #418, #420, #419, #416. Every earlier task is condensed in the
 > index above.
-
-### 399. [x] Let macOS Ctrl+⌘+F native fullscreen through — ⌘F opens search only on the plain search chord
-
-The global-search chord (⌘F on macOS / Ctrl+F on Windows & Linux) no longer swallows macOS's native
-**Ctrl+⌘+F** enter-fullscreen combo. The ⌘F handler now fires only when **exactly one** of Cmd/Ctrl is
-held; when **both** are held the handler does not `preventDefault`, so Ctrl+⌘+F falls through to the
-OS. Plain Ctrl+F still opens search on macOS (unchanged), and ⌘F/Ctrl+F search is otherwise identical.
-
-**What shipped** (branch `let-ctrl-cmd-f-fullscreen-through`, PR
-[#155](https://github.com/ErikdeJager/ReCue/pull/155), merged 2026-07-15 into `ui-rework`):
-
-- **NEW `src/searchChord.ts`**: a pure `isGlobalSearchChord(e)` predicate over a structural
-  `ChordEvent` slice (`metaKey`/`ctrlKey`/`shiftKey`/`altKey`/`key`) — true iff `(meta||ctrl) &&
-  !(meta&&ctrl) && !shift && !alt && key.toLowerCase()==="f"`. Platform-agnostic (no dependence on the
-  async `platform()` signal, so correct from the first frame), extracted for unit-testability per the
-  `pasteHandler.ts` / `hoverFocus.ts` convention.
-- **NEW `src/searchChord.test.ts`**: matches ⌘F and Ctrl+F; rejects Cmd+Ctrl+F (the fullscreen
-  carve-out), Cmd+Shift+F, Cmd+Alt+F, a non-F key with Cmd, and a bare F; case-insensitive on the F.
-- **`src/useKeyboardNav.ts`**: the inline `(e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey &&
-  e.key.toLowerCase()==="f"` check replaced by `isGlobalSearchChord(e)`, with an updated comment
-  documenting the exactly-one-of-Cmd/Ctrl carve-out. All other guards (main-window-only, modal-open)
-  unchanged.
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 399)
-
-- Chose a platform-agnostic "exactly one of Cmd/Ctrl" guard over a `platform()`-signal-based
-  `metaKey && !ctrlKey` / `ctrlKey && !metaKey` split — equivalent for the canonical chords, needs no
-  async platform lookup (correct from the first frame), and keeps plain Ctrl+F opening search on macOS
-  unchanged.
-- Scoped the modifier carve-out to the ⌘F search block only; every other ⌘-shortcut
-  (⌘N/⌘B/⌘K/⌘T/⌘E/⌘D/⌘\/⌘1-9) left unchanged (none reported to collide with a native Cmd+Ctrl combo).
-- Extracted a pure predicate + node unit test rather than an inline one-liner (matching
-  `pasteHandler.ts`/`hoverFocus.ts`). No Settings → Shortcuts copy change (the ⌘F/Ctrl+F "Global
-  search" hint stays accurate, so `shortcuts.test.ts` is untouched).
-
-**Cross-platform:** pure TS + a `metaKey||ctrlKey`-based predicate; the carve-out only affects the
-macOS-native Cmd+Ctrl+F combo (a no-op on Windows/Linux, where Ctrl+F alone still matches). Identical
-search behavior on all three OSes.
-
-**Dependencies:** none. (Built on the merged/archived ⌘F global search #337/#353 and the
-`metaKey||ctrlKey` shortcut convention.)
 
 ### 400. [x] Order folder pickers most-recently-used — count every panel open as a repo "use"
 
@@ -1670,5 +1630,53 @@ panels stretch unbounded.
 
 **Cross-platform:** pure frontend CSS-class application + a store read, no OS branch — identical on
 macOS, Windows, and Linux.
+
+**Dependencies:** none.
+
+### 416. [x] Dev-container new-session modal — portal info popover, inline build feedback, kbd-hint layout
+
+Three rough edges on the New Session modal's "Run in dev container" toggle row fixed in one cohesive
+change: the info "i" popover now overlays the whole app (no longer clipped inside the 300px scrolling
+modal), a first-run image build is surfaced as inline yellow warning text + spinner beside the Start
+button (instead of a toast), and the row lays out justify-between (toggle left; kbd hint + "i" info
+icon grouped right).
+
+**What shipped** (branch `task-416-container-modal-popover`, PR
+[#181](https://github.com/ErikdeJager/ReCue/pull/181), merged 2026-07-15 into `dev`):
+
+- **`ContainerInfoPopover.tsx`** — the popover panel is now `createPortal`'d to `document.body` with
+  `position: fixed`, anchored **above-and-to-the-left** of the "i" trigger from its
+  `getBoundingClientRect()`, clamped ≥8px from every viewport edge (flips below if there's no room
+  above). Outside-click checks **both** trigger and panel refs (the panel is no longer a descendant),
+  the capture-phase Escape (closes only the popover) is unchanged, a modal **scroll closes** it, and
+  a window **resize repositions** it. ARIA (`aria-expanded`/`aria-label`, panel `role="note"`) kept.
+- **`NewSessionModal.tsx`** — the toggle row restructured to `justify-content: space-between`: the
+  checkbox "Run in dev container" on the left, a new `.containerRowActions` group (kbd hint then the
+  "i" icon) on the right, and the docker-stopped "start Docker" hint relocated to its own full-width
+  line below. The kbd moved out of the checkbox label; the chord renders via
+  `chordLabel(CONTAINER_TOGGLE_CHORD, platform)` (⌘⇧C / Ctrl+Shift+C). A modal-local
+  `containerBuilding` state (reset on open) subscribes to `container://building` while open and is
+  cleared when `ensureContainerImage()` settles; a yellow `.buildingHint` ("Building the dev container
+  (first run)…") + lucide `<Loader>` spinner renders left of Start only during a genuine first-run
+  build (an already-built image never flashes).
+- **`store.ts`** — the `container://building` toast is gated on `!get().newSessionOpen`, so the modal's
+  inline indicator owns the in-modal case while a build starting **after** the modal closes still
+  toasts (feedback never lost).
+- **`containerAvailability.ts` (+ test)** — a pure `showBuildIndicator(useContainer, building,
+  blocked)` helper used at the render site, with unit cases.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 416)
+
+- The build indicator is **event-driven** (shown only while a real `docker build` is in flight), not
+  optimistic on toggle-ON, so a built image never flashes; toast suppressed only while the modal is
+  open.
+- Build state kept **modal-local** (`useState` + a modal-scoped listener); the only store change is
+  the one-line toast gate — keeps the change small and cohesive.
+- Popover anchored above-left (per explicit user guidance), portaled with viewport clamping; the
+  right group is kbd-then-"i" (info icon rightmost); yellow uses the existing `--status-awaiting`
+  token; the spinner relies on the global reduced-motion killswitch.
+
+**Cross-platform:** pure frontend / CSS; the only OS-sensitive bit (the chord glyphs) already routes
+through `chordLabel` — identical on macOS, Windows, and Linux. No Rust / backend change.
 
 **Dependencies:** none.
