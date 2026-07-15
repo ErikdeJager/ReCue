@@ -3552,3 +3552,16 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Count color = neutral --text-secondary (mono, tabular-nums, --fs-micro, "line-changes" typographic treatment), not the repo/status/accent color.
 - Scoped to the expanded RepoGroup header only; collapsed rail + WorktreeHeader "+" out of scope; new CSS scoped under `.newSlot` so the shared `.plus` class is undisturbed.
 - Keyboard swap via :focus-within + visibility:hidden (not :has()), for cross-platform WebView support + zero layout shift.
+
+## Task 398
+
+- Reuse #335's existing `diff_line_counts` command / `diffLineCounts` store map (keyed by `session.repoPath`, worktree-aware, refreshed on the #212 busy→idle cadence) for the +/- diff stat — the card's "small Rust addition" is already shipped, so NO new Rust command/git read is added.
+- Header ✓ = dismiss-all (acknowledge/clear every current queue member; all sessions stay alive) — confirming the card's proposed interpretation of the wireframe's ✓.
+- No dedicated "switch to Attention" keyboard chord: reached via the ViewSwitch segment + its count badge. `⌘\` stays the Overview↔Canvas toggle (not extended to a 3-way cycle); `⌘1–9` canvas guard unchanged.
+- `⌘⏎`/Ctrl+Enter dismiss is captured app-wide ONLY while the Attention view is active (and no modal open); elsewhere it passes through untouched (schedule modal etc.). Plain Enter is never intercepted (still submits to the terminal).
+- Selection uses the shared `selectedId` (not a local attention state) so `⌘E` big-mode works for the attention-selected agent for free; the view keeps `selectedId` pointed at a queued agent via an auto-select-top effect.
+- Ordering tie-break: sort key = `sessionIdleSince[id] ?? createdAt*1000` (createdAt is unix seconds), ascending, ties broken by ascending `createdAt` then `id`. Boot-persisted-awaiting agents (no recorded edge) fall back to `createdAt` and are queued on boot; their "Xm ago" label is omitted (unknown).
+- Queue excludes recurring-owned child sessions (mirroring `maybeNotifyWatched`) and exited/reconnecting sessions, in addition to the card's `sessionActive && !sessionBusy && !dismissed` rule.
+- Card × (kill) is confirm-gated per `settings.confirmDestructive` via a lightweight inline two-step (arm-then-confirm) on the ×, reusing `removeSession`; removal paths are patched to keep the user in the Attention view (not bounce to Overview) so a kill just advances to the next queued agent.
+- ViewSwitch Attention segment uses the `AlertTriangle` icon in both expanded (composed label: icon + visually-hidden "Attention" + count badge, `title="Attention"`) and compact-rail modes; count badge hidden at 0; live count via a store selector returning a primitive number.
+- Empty state is a small custom "All caught up" block (not the `EmptyState` hero wordmark). The Attention view reuses MainApp's single `WaveBackground` (transparent panes) rather than mounting its own; it inherits the existing "overview" wave preset (no `wavePresets.ts` change). Settings "Default view on launch" picker is left at Overview/Canvas only (launching into an empty triage surface is undesirable), though the `View` type permits "attention".
