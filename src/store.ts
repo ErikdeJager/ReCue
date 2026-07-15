@@ -4935,7 +4935,29 @@ export const useStore = create<AppState>()((set, get) => ({
         }
       }
     }
-    // Attention view / nothing focused: deliberate no-op.
+    // 4. Attention: ⌘W REMOVES the focused agent (kill + forget), exactly like the
+    // right-pane header ×. This is the deliberate exception to the "never destructive"
+    // rule above — in Attention the focused item is always an agent, and removing it is
+    // the view's primary close affordance (⌘⏎ dismisses non-destructively). Resolve the
+    // effective active id the same way the view does: the selected agent when it's a
+    // current queue member, else the top of the queue. Selection advances on its own —
+    // removeSession → dropSession recomputes the queue and the view re-selects the top.
+    if (s.view === "attention") {
+      const queue = attentionQueue({
+        sessions: s.sessions,
+        sessionBusy: s.sessionBusy,
+        sessionActive: s.sessionActive,
+        dismissed: s.dismissedAttention,
+        idleSince: s.sessionIdleSince,
+        recurringChildIds: ownedChildSessionIds(s.recurrings),
+      });
+      const activeId = queue.some((q) => q.id === s.selectedId)
+        ? s.selectedId
+        : (queue[0]?.id ?? null);
+      if (activeId) void s.removeSession(activeId);
+      return;
+    }
+    // Nothing focused: deliberate no-op.
   },
 
   // Canvas templates (#117): the editor builds a draft layout of inert blocks with

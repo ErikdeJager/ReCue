@@ -5,7 +5,8 @@
 // `settings.keybinds` overrides (Settings → Shortcuts). The defaults:
 //
 //   ⌥1 / ⌥2 / ⌥3       switch to Overview / Attention / Canvas
-//   ⌘W / Ctrl+W        close the focused panel (big mode → Canvas leaf → Overview ×)
+//   ⌘W / Ctrl+W        close the focused panel (big mode → Canvas leaf → Overview × →
+//                      remove the focused Attention agent)
 //   ⌘, / Ctrl+,        open Settings
 //   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
 //   ⌘N / Ctrl+N        open the new-session flow from anywhere            (#26)
@@ -157,9 +158,10 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
       }
       return "swallow";
     }
-    // ⌘W: close what the user is looking at (see store.closeFocusedPanel). Inert
-    // while a modal owns the keyboard — and still swallowed there, so the chord
-    // can never fall through to a WebView "close window" default.
+    // ⌘W: close what the user is looking at (see store.closeFocusedPanel) — in
+    // Attention it removes (kills + forgets) the focused agent, the view's primary
+    // close affordance. Inert while a modal owns the keyboard — and still swallowed
+    // there, so the chord can never fall through to a WebView "close window" default.
     case "close-panel": {
       const modalOpen =
         state.newSessionOpen ||

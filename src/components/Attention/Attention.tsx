@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCheck, Inbox, Maximize2, X } from "lucide-react";
 
 import { effectiveRepo, repoName, sessionLabel } from "../../paths";
@@ -52,16 +46,14 @@ interface QueueCardProps {
   idleLabel: string;
   hasBeenActive: boolean;
   active: boolean;
-  confirmDestructive: boolean;
   onSelect: () => void;
-  onRemove: () => void;
 }
 
-/** One waiting-agent card in the triage queue. A busy dot (yellow "awaiting" once the
+/** One waiting-agent card in the triage queue: a busy dot (yellow "awaiting" once the
  * agent has worked, gray "NEW" while it never has — task 410), the agent name, its
- * repo · branch, its working-tree +/- stat, an IDLE / NEW marker + idle age, and a
- * hover × that does the destructive Remove (kill + forget) — confirm-gated with an
- * inline two-step arm when `confirmDestructive` is on (#103), matching the sidebar. */
+ * repo · branch, its working-tree +/- stat, and an IDLE / NEW marker + idle age. A pure
+ * select target — the destructive Remove (kill + forget) now lives in the right-pane
+ * agent header (task 412), on the agent it acts on. */
 function QueueCard({
   primary,
   metaLine,
@@ -70,38 +62,8 @@ function QueueCard({
   idleLabel,
   hasBeenActive,
   active,
-  confirmDestructive,
   onSelect,
-  onRemove,
 }: QueueCardProps) {
-  const [armed, setArmed] = useState(false);
-  const timer = useRef<number | null>(null);
-  const clearTimer = () => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current);
-      timer.current = null;
-    }
-  };
-  // Auto-disarm on unmount so a stale timer never fires into a gone component.
-  useEffect(() => clearTimer, []);
-
-  const disarm = () => {
-    clearTimer();
-    setArmed(false);
-  };
-
-  const handleRemove = (event: ReactMouseEvent) => {
-    event.stopPropagation(); // don't also select the card
-    if (confirmDestructive && !armed) {
-      setArmed(true);
-      clearTimer();
-      timer.current = window.setTimeout(() => setArmed(false), 2500);
-      return;
-    }
-    disarm();
-    onRemove();
-  };
-
   return (
     <div
       className={`${styles.card} ${active ? styles.cardActive : ""}`}
@@ -130,20 +92,6 @@ function QueueCard({
           <DiffStat counts={counts} enabled={showDiffLineCounts} />
         </span>
       </div>
-      <button
-        type="button"
-        className={`${styles.cardRemove} ${armed ? styles.cardRemoveArmed : ""}`}
-        onClick={handleRemove}
-        onBlur={disarm}
-        title={
-          armed
-            ? "Click again to remove (kill + forget)"
-            : "Remove (kill + forget)"
-        }
-        aria-label="Remove session"
-      >
-        <X size={14} strokeWidth={1.5} />
-      </button>
     </div>
   );
 }
@@ -162,7 +110,9 @@ function QueueCard({
  * reply/input box — the user types straight into the terminal.
  *
  * Selection is the shared `selectedId`, so ⌘E (big mode), the sidebar highlight, and the
- * Shift+↑/↓ queue nav (`useKeyboardNav`) all cooperate; ⌘⏎ dismisses the selected agent.
+ * Shift+↑/↓ queue nav (`useKeyboardNav`) all cooperate. The right-pane header × — and the
+ * app-wide ⌘W (`closeFocusedPanel`) — REMOVE (kill + forget) the focused agent; ⌘⏎ only
+ * dismisses it (leaves the queue, keeps the agent alive).
  */
 function Attention() {
   const sessions = useStore((s) => s.sessions);
@@ -176,7 +126,6 @@ function Attention() {
   const diffLineCounts = useStore((s) => s.diffLineCounts);
   const autoNameOn = useStore((s) => s.settings.autoName);
   const showDiffLineCounts = useStore((s) => s.settings.showDiffLineCounts);
-  const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const select = useStore((s) => s.select);
   const dismissAllAttention = useStore((s) => s.dismissAllAttention);
   const removeSession = useStore((s) => s.removeSession);
@@ -284,9 +233,7 @@ function Attention() {
                   idleLabel={formatIdleAge(sessionIdleSince[session.id], now)}
                   hasBeenActive={sessionActive[session.id] ?? false}
                   active={session.id === activeId}
-                  confirmDestructive={confirmDestructive}
                   onSelect={() => select(session.id)}
-                  onRemove={() => void removeSession(session.id)}
                 />
               );
             })}
@@ -331,6 +278,15 @@ function Attention() {
                   aria-label="Open in big mode"
                 >
                   <Maximize2 size={15} strokeWidth={1.5} />
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.action} ${styles.actionDanger}`}
+                  onClick={() => void removeSession(activeSession.id)}
+                  title="Remove (kill + forget)"
+                  aria-label="Remove session"
+                >
+                  <X size={15} strokeWidth={1.5} />
                 </button>
               </div>
             </header>
