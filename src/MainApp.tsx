@@ -60,7 +60,7 @@ const Attention = lazy(() => import("./components/Attention/Attention"));
  *
  * This is the **main-window route chunk** (#356) — `App.tsx` lazy-loads it, so a
  * detached canvas window (#84) never downloads the sidebar / Overview / modals.
- * The ten lazy modals live behind `<ModalHost />`; `Toaster`, `BigModeModal`,
+ * The eleven lazy modals live behind `<ModalHost />`; `Toaster`, `BigModeModal`,
  * `UpdateModal` and `ClaudeMissing` stay static (first-paint or safety-critical —
  * the update install overlay must never be a chunk away).
  */

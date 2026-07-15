@@ -20,6 +20,7 @@ import type {
   CommitInfo,
   DiffLineCounts,
   DiffSeenMap,
+  EditorInfo,
   ExitPayload,
   FileDiff,
   FileStatusEntry,
@@ -733,6 +734,15 @@ export const windowsBuild = () => invoke<number>("windows_build");
  * generalized missing-binary screen (`version: null` ⇒ the CLI isn't installed). */
 export const agentInfo = (agent: string) =>
   invoke<AgentInfo>("agent_info", { agent });
+/** Detect which catalog editors are installed ("Open in editor") — existence-based
+ * (PATH / Toolbox scripts / app bundles / known install dirs), never `--version`.
+ * Feeds the first-use picker + the Settings → Editor annotations. */
+export const detectEditors = () => invoke<EditorInfo[]>("detect_editors");
+/** Open the folder `path` in `editor` (a catalog id, or `"custom"` → the user's
+ * `customEditorCommand`), detached. Rejects with a typed `SessionError` — a
+ * `BinaryNotFound` kind means the choice is stale and the picker should reopen. */
+export const openInEditor = (path: string, editor: string) =>
+  invoke<void>("open_in_editor", { path, editor });
 
 /** The boot rendering decision (#357) for Settings → Rendering: the DMA-BUF outcome, its
  * reason + evidence, and what decided it. `null` on macOS/Windows — nothing is decided

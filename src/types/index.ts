@@ -62,6 +62,17 @@ export interface AgentInfo {
   version: string | null;
 }
 
+/** One editor catalog entry's live detection result ("Open in editor", from the
+ * `detect_editors` command) — snake_case to match the Rust serialization, like
+ * `AgentInfo`. Existence-based: `found` means a launchable install was resolved;
+ * `via` names where ("PATH" / "Toolbox" / "Applications" / "Program Files"). */
+export interface EditorInfo {
+  id: string;
+  display_name: string;
+  found: boolean;
+  via: string | null;
+}
+
 /** What ReCue decided about the WebKitGTK DMA-BUF renderer at boot (#357), for
  * Settings → Rendering. Mirrors Rust's `linux_webkit::RendererReport` — snake_case on the
  * wire, like `AgentInfo`. `renderer_diagnostics` returns `null` on macOS/Windows (nothing
@@ -504,6 +515,19 @@ export interface Settings {
    *  (lacking the key) is eligible for the one-time bump; set true once so a user who
    *  later re-picks 1.2 is never re-migrated. Mirrors `onboarded`. */
   terminalLineHeightMigrated: boolean;
+  // Editor ("Open in editor")
+  /** The editor "Open in editor" (⌘O, menus) launches: a catalog id from
+   * `src/editors.ts` (`"vscode"`, `"idea"`, …), `"custom"` (→ `customEditorCommand`),
+   * or `null` = not chosen yet — the next use opens the picker modal ("ask every
+   * time" when the user unchecks Remember). */
+  preferredEditor: string | null;
+  /** Launch command for the **custom** editor, used when `preferredEditor ===
+   * "custom"`. An **argv** like `customAgentCommand` (program + args, split on
+   * spaces, quote to group) — NOT a shell line. Every `{path}` occurrence is
+   * replaced with the target folder; without a placeholder the folder is appended
+   * as the last arg. Terminal editors go through their emulator, e.g.
+   * `alacritty -e nvim {path}`. */
+  customEditorCommand: string;
 }
 
 // --- Canvas (#46): a recursive binary split-panel (BSP) layout tree ---
