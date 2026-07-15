@@ -5738,3 +5738,77 @@ verification in `TRAJECTORY_TO_LINUX.md`/`TRAJECTORY_TO_WINDOWS.md`.
 
 **Dependencies:** Task 381, Task 382, Task 383 (serialized after the full UI v2 epic; 372–380 already
 archived).
+
+### 398. [x] Attention view — a FIFO triage queue for idle agents needing input
+
+A third top-level view, **Attention**, that FIFO-queues agents which have gone idle and likely need
+the user (a finished turn / awaiting-input), **oldest-idle first**, and lets the user triage them
+one-by-one: glance at the queue on the left, read/respond in the selected agent's **real live
+terminal** on the right, then dismiss (keep alive) or kill (destructive) and advance to the next. It
+turns "which of my N agents is waiting on me?" into a single ordered worklist. Built entirely on
+already-shipped infrastructure — no new Rust, no new git read, nothing persisted (the queue is
+derived from the live busy/idle maps + persisted `hasBeenActive`).
+
+**What shipped** (branch `task-398-attention-view`, PR
+[#153](https://github.com/ErikdeJager/ReCue/pull/153), merged 2026-07-15 into `ui-rework`):
+
+- **`View` type** (`src/types/index.ts`) extended to `"overview" | "canvas" | "attention"`, threaded
+  everywhere it ripples.
+- **Pure helper — NEW `Attention/attentionQueue.ts` + `.test.ts`**: `attentionQueue(...)` filters to
+  `sessionActive[id] && !sessionBusy[id] && !dismissed[id]` (excluding recurring-owned child
+  sessions and exited/reconnecting sessions), sorted ascending by `sessionIdleSince[id] ??
+  createdAt*1000` (createdAt is unix seconds), tie-broken by `createdAt` then `id`; plus
+  `formatIdleAge(idleSinceMs, nowMs)` ("just now" / "Xm ago" / "Xh ago", `""` when unknown).
+- **Store — `store.ts`**: new `sessionIdleSince: Record<string, number>` (ms epoch of the last
+  busy→idle edge) and `dismissedAttention: Record<string, true>` (dismissed-since-last-idle). `setBusy`
+  stamps `sessionIdleSince[id]` on the idle edge and omits both keys on the busy edge (so a dismissed
+  agent re-enters the queue on its next idle). Actions `dismissAttention(id)` (mark dismissed +
+  advance selection to the next queued id) and `dismissAllAttention()` (dismiss every current member +
+  clear selection). The four removal-path view resets now **preserve** `"attention"` (a card-× kill
+  advances to the next queued agent instead of ejecting to Overview), and the new maps are cleaned on
+  removal.
+- **Attention view — NEW `Attention/Attention.tsx` + `.module.css`** (default export, lazy-imported):
+  a transparent two-pane content area (wave shows through) — a middle **queue** pane (`Attention · N
+  idle` header + ✓ dismiss-all, then oldest-first idle-agent cards: yellow busy dot, `sessionLabel`
+  name, `repo · branch`, +/- diff stat, `IDLE` marker, live "Xm ago", hover ×) and a right **agent**
+  pane (panel header + the selected agent's real pooled terminal rendered **only** via `ItemContent` —
+  so a `DetachedNote` shows automatically when another window owns the PTY; fork + ⌘E-maximize icons;
+  no reply/input box). An `activeId` auto-select effect keeps the shared `selectedId` pointed at a
+  queued agent (so ⌘E big-mode works for free); a ~30s tick refreshes the idle-age labels; the ×
+  reuses `removeSession` behind a lightweight inline two-step confirm gated by `confirmDestructive`; an
+  "All caught up" custom empty state when the queue is empty.
+- **ViewSwitch** (`ViewSwitch.tsx` + `.module.css`): a third **Attention** segment (lucide
+  `AlertTriangle`) with a **live count badge** (queue length, hidden at 0) in both the expanded
+  `SegmentedControl` (composed label: icon + visually-hidden "Attention" + count) and the compact rail.
+- **Mount + code-split** (`MainApp.tsx`): `lazy(() => import("./components/Attention/Attention"))`,
+  three-way view render in its own per-branch `Suspense` (no live terminal ever inside a suspending
+  boundary — the #18 invariant); `prefetch.ts` warms the chunk on idle.
+- **Keyboard** (`useKeyboardNav.ts`): `⌘⏎`/`Ctrl+Enter` dismisses the selected agent (captured only
+  while the Attention view is active + no modal open — passes through to the schedule modal / terminal
+  otherwise; plain Enter never intercepted); `Shift+↑/↓` cycle the queue selection.
+  `Settings/shortcuts.ts` documents the new chords; `global.css` got the small shared bits.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 398)
+
+- Reuses #335's `diff_line_counts` / `diffLineCounts` store map (keyed by `session.repoPath`,
+  worktree-aware, #212 cadence) for the +/- stat — the card's "small Rust addition" was already
+  shipped, so **no new Rust command / git read**.
+- Header ✓ = dismiss-all (all sessions stay alive), confirming the wireframe's proposed ✓. No
+  dedicated "switch to Attention" chord (reached via the ViewSwitch segment); `⌘\` stays the
+  Overview↔Canvas toggle, `⌘1–9` canvas guard unchanged.
+- Selection uses the shared `selectedId` (not a local attention state) so `⌘E` maximizes the
+  attention-selected agent for free. Ordering tie-break: `sessionIdleSince[id] ?? createdAt*1000`
+  ascending, then `createdAt`, then `id`; boot-persisted-awaiting agents fall back to `createdAt`
+  (queued on boot, "Xm ago" omitted). Queue excludes recurring-child + exited/reconnecting sessions.
+- The × kill is confirm-gated via an inline two-step (arm-then-confirm); removal paths patched to keep
+  the user in Attention. Empty state is a small custom "All caught up" block (not the `EmptyState`
+  hero); the view reuses MainApp's single `WaveBackground` (transparent panes, overview preset — no
+  `wavePresets.ts` change); Settings "Default view on launch" stays Overview/Canvas only.
+
+**Cross-platform:** pure TS + React/store + tokenized CSS; every key handler uses `metaKey ||
+ctrlKey`, every hint routes through `kbdHint` (⌘⏎ on macOS, Ctrl+Enter on Windows/Linux); no OS
+primitives, no Rust change — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Built on the merged/archived busy model #42/#112/#315, terminal pool +
+ownership #18/#84, `ItemContent`/`DetachedNote`, big mode #157, per-agent diff stat #335,
+`WaveBackground` #377, `ViewSwitch`/`SegmentedControl`, `kbdHint`.)
