@@ -26,6 +26,9 @@ function prefetchModals(): void {
   void import("./components/NewSessionModal/NewSessionModal");
   void import("./components/GlobalSearch/GlobalSearch");
   void import("./components/CreatePanelModal/CreatePanelModal");
+  // The Attention triage view (#398) — a main-window lazy route branch in MainApp; a
+  // detached canvas window (#84) never renders it, so it's warmed only here.
+  void import("./components/Attention/Attention");
 }
 
 type IdleWindow = Window & {

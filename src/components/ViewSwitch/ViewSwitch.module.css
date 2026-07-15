@@ -11,6 +11,7 @@
 
 .iconOption,
 .iconActive {
+  position: relative;
   display: flex;
   width: 28px;
   height: 28px;
@@ -32,4 +33,66 @@
 .iconActive {
   background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+/* --- Attention segment (#398) --- */
+
+/* Expanded-mode Attention label: the AlertTriangle icon plus the count pill,
+   centered in the segment. */
+.attnLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Visually-hidden accessible name for the icon-only Attention segment (the
+   `title`/`aria-label` route on the compact rail; here it names the segment for
+   screen readers without showing text next to the icon). */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Live queue-count badge (#398) — an accent pill beside the icon in expanded mode.
+   On-system tokens only: the accent fill + its readable companion foreground. */
+.count {
+  display: inline-flex;
+  min-width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Compact-rail count badge (#398): a small accent pill overlaid on the top-right
+   of the icon button, so the collapsed rail still surfaces the queue size. */
+.countCompact {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  display: inline-flex;
+  min-width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  line-height: 1;
 }

@@ -72,6 +72,16 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         description: "Select previous / next column (Overview)",
       },
       {
+        mac: "⇧↑/↓",
+        win: "Shift+↑/↓",
+        description: "Select previous / next agent (Attention)",
+      },
+      {
+        mac: "⌘⏎",
+        win: "Ctrl+Enter",
+        description: "Dismiss the selected agent (Attention)",
+      },
+      {
         mac: "⇧ + arrows",
         win: "Shift + arrows",
         description: "Move the focused panel (Canvas)",

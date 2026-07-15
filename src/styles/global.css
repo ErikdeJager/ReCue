@@ -64,6 +64,12 @@ body {
   overflow: hidden;
 }
 
+/* Transparent placeholder for a lazy view chunk's Suspense fallback (#398) — the wave
+   background shows through until the chunk lands (a few ms off local disk). */
+.main-content-loading {
+  height: 100%;
+}
+
 /* --- Keyboard focus ring (on-brand, keyboard-only) --- */
 :focus-visible {
   outline: 2px solid var(--accent);

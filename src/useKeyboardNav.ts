@@ -1,6 +1,8 @@
 // Global keyboard shortcuts.
 //
 //   Shift+← / Shift+→  select prev/next column in Overview (any kind)     (#24/#174)
+//   Shift+↑ / Shift+↓  select prev/next agent in the Attention queue      (#398)
+//   ⌘⏎ / Ctrl+Enter    dismiss the selected agent in Attention            (#398)
 //   Shift+arrows       move the focused panel spatially in Canvas         (#76)
 //   ⌘1 … ⌘9            jump to canvas N (Canvas view only)                (#76)
 //   ⌘\                 toggle the main view (Overview ↔ Canvas)           (#77)
@@ -23,9 +25,15 @@
 
 import { useEffect } from "react";
 
+import { attentionQueue } from "./components/Attention/attentionQueue";
 import { panelTypeForDigit } from "./components/CreatePanelModal/panelTypes";
 import { saveFocused } from "./saverRegistry";
-import { adjacentId, overviewClusterKeys, useStore } from "./store";
+import {
+  adjacentId,
+  overviewClusterKeys,
+  ownedChildSessionIds,
+  useStore,
+} from "./store";
 import { IS_MAIN_WINDOW } from "./windowContext";
 
 export function useKeyboardNav(): void {
@@ -194,6 +202,33 @@ export function useKeyboardNav(): void {
         return;
       }
 
+      // ⌘⏎ / Ctrl+Enter — dismiss the selected agent in the Attention view (#398): it
+      // leaves the queue (and the page) but stays alive, and selection advances to the
+      // next queued agent. Only in the Attention view of the main window, and inert
+      // while a modal owns the keyboard — otherwise the combo passes straight through
+      // (return WITHOUT preventing default) so ⌘⏎ still reaches a focused terminal.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key === "Enter"
+      ) {
+        const state = useStore.getState();
+        if (
+          !IS_MAIN_WINDOW ||
+          state.view !== "attention" ||
+          state.newSessionOpen ||
+          state.settingsOpen ||
+          state.globalSearchOpen
+        ) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        if (state.selectedId) state.dismissAttention(state.selectedId);
+        return;
+      }
+
       // ⌘D / Ctrl+D — toggle dense panels (UI v2 §9, task 373). Persisted like any
       // setting and toasted. Main window only (settings are main-authoritative and not
       // broadcast cross-window — swallowed but inert in a detached canvas window, like
@@ -301,6 +336,32 @@ export function useKeyboardNav(): void {
       const state = useStore.getState();
       // Don't navigate while the new-session modal/popover is open (#27).
       if (state.newSessionOpen) return;
+
+      // Attention (#398): Shift+↑/↓ cycle the triage queue selection (prev/next). Main
+      // window only (the Attention view never renders in a detached canvas window).
+      // Shift+←/→ are inert here. Uses the SAME `attentionQueue` ordering the view
+      // renders, so nav can never land on a non-queued agent.
+      if (state.view === "attention" && IS_MAIN_WINDOW) {
+        if (key === "ArrowUp" || key === "ArrowDown") {
+          e.preventDefault();
+          e.stopPropagation();
+          const ids = attentionQueue({
+            sessions: state.sessions,
+            sessionBusy: state.sessionBusy,
+            sessionActive: state.sessionActive,
+            dismissed: state.dismissedAttention,
+            idleSince: state.sessionIdleSince,
+            recurringChildIds: ownedChildSessionIds(state.recurrings),
+          }).map((q) => q.id);
+          const id = adjacentId(
+            ids,
+            state.selectedId,
+            key === "ArrowDown" ? 1 : -1,
+          );
+          if (id) state.select(id);
+        }
+        return;
+      }
 
       // Canvas: Shift+arrows move the keyboard-focused panel spatially (#76). A
       // detached canvas window (#84) is always canvas-spatial (it has no Overview).
