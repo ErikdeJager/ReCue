@@ -26,6 +26,14 @@
   text-shadow: 0 2px 24px rgba(239, 241, 245, 0.9);
 }
 
+/* The "Cue" half of the wordmark in the app accent (Peach by default; a custom
+   accent from Settings → Appearance recolors it live via var(--accent)). The
+   inherited font-size/weight/letter-spacing/text-shadow keep it identical to
+   "Re" — only the color differs. */
+.accent {
+  color: var(--accent);
+}
+
 /* ONE compact accent "New session ⌘N" button (28px, demo-exact). The ⌘N span
    is the 372 `.kbd-hint`/`.kbd-hint-onfill` atom pair (global classes). */
 .button {
