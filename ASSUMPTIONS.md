@@ -3580,3 +3580,12 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Scoped the modifier carve-out to the ⌘F search block only; left every other ⌘-shortcut (⌘N/⌘B/⌘K/⌘T/⌘E/⌘D/⌘\/⌘1-9) unchanged since none were reported to collide with a native macOS Cmd+Ctrl combo.
 - Extracted a pure predicate (`src/searchChord.ts`) + node unit test rather than an inline-only one-liner, matching the pasteHandler.ts/hoverFocus.ts convention (tests run in the node env; hooks are excluded from coverage).
 - No Settings -> Shortcuts copy change: the ⌘F / Ctrl+F "Global search" hint stays accurate, so shortcuts.test.ts is untouched.
+
+## Task 401 — Soften UI v2 element borders and focus rings
+
+- "Too thick" element borders are addressed by lowering border-token alpha, not pixel width: nearly every border is already 1px (the practical rendering floor), so the perceived heaviness is color weight; softening --border-hairline/--border-strong in both themes is the correct lever.
+- "Focus subtle / easy on the eyes" = softer color (accent @ ~70% via color-mix) plus a slightly thinner ring (2px -> 1.5px), NOT removing the ring — accessibility keeps it clearly visible.
+- Focus ring stays on the accent (its established, legitimate use per DESIGN-SPEC), formalized into a new --focus-ring token; interpreted the "not accent-as-status" note as "don't move focus to a status color," and the CLAUDE.md accent-never-status rule as applying to fills, not the focus ring.
+- Introduced new tokens --focus-ring + --focus-ring-width (no dedicated focus token existed); kept custom-accent-live behavior via the app's plain-fallback-first color-mix pattern.
+- Left deliberate accent/identity/selection borders out of scope: the 3px blockquote accent border, the Overview repo-color top band, the scrollbar transparent inset border, the Settings active-swatch selection ring, and all --accent-tint-* borders.
+- Concrete alpha values (dark strong 0.15->0.11, hairline 0.08->0.06; light strong 0.18->0.13, hairline 0.1->0.08) are a conservative "a bit smaller" starting point, tunable in one place.
