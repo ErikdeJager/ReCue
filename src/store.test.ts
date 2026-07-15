@@ -3448,15 +3448,37 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
     expect(s().schedules).toHaveLength(1);
   });
 
-  it("no-ops in the Attention view", () => {
+  it("removes the focused agent in the Attention view (kill + forget)", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
     useStore.setState({
       view: "attention",
-      selectedId: "p1",
-      overviewPanels: {
-        "/repo/x": [{ id: "p1", kind: "markdown", file: "a.md" }],
-      },
+      sessions: [session("a1")],
+      sessionActive: { a1: true }, // queue-eligible: has been active, not busy
+      dismissedAttention: {},
+      selectedId: "a1",
     });
     s().closeFocusedPanel();
-    expect(s().overviewPanels["/repo/x"]).toHaveLength(1);
+    // removeSession → killSession is async; let it settle.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("a1");
+    expect(s().sessions).toHaveLength(0);
+    killSpy.mockRestore();
+  });
+
+  it("no-ops in the Attention view with an empty queue", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "attention",
+      sessions: [session("a1")],
+      sessionActive: {}, // never active → not in the queue
+      dismissedAttention: {},
+      selectedId: "a1",
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+    killSpy.mockRestore();
   });
 });
