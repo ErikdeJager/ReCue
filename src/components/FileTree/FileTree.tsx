@@ -27,6 +27,7 @@ import {
   searchFileContents,
   searchFiles,
 } from "../../ipc";
+import { rankFileMatches } from "../../fileRank";
 import { noAutoCapitalize } from "../../inputProps";
 import { splitPath } from "../../paths";
 import { joinPath, revealLabel } from "../../platform";
@@ -271,6 +272,14 @@ function FileTree({ repoPath }: { repoPath: string }) {
       cancelled = true;
     };
   }, [debounced, repoPath]);
+
+  // Rank the "Files" hits best-match first (task 415) — a filename match (esp. an
+  // exact/prefix basename) sorts above one that only matches a directory segment. The
+  // raw `fileHits` still drive the count + cap note (ranking only reorders, never drops).
+  const rankedFileHits = useMemo(
+    () => rankFileMatches(debounced, fileHits),
+    [fileHits, debounced],
+  );
 
   // Close the context menu and reset its inline step/draft (#267).
   const closeMenu = useCallback(() => {
@@ -606,7 +615,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
         {fileCount > 0 ? (
           <div className={styles.group}>
             <div className={styles.groupHeader}>Files</div>
-            {fileHits.map((path) => (
+            {rankedFileHits.map((path) => (
               <div key={path} className={styles.result}>
                 <button
                   type="button"
