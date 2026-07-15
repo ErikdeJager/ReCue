@@ -6,6 +6,7 @@ import {
   Clock,
   FolderOpen,
   GitBranch,
+  Loader,
   Plus,
   RefreshCw,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import {
   listBranches,
   listSkills,
   pickDirectory,
+  subscribeContainerEvents,
 } from "../../ipc";
 import { matchBranchFilter } from "../../branchFilter";
 import { chordLabel, CONTAINER_TOGGLE_CHORD, eventChord } from "../../keybinds";
@@ -37,6 +39,7 @@ import SkillAutocomplete from "../SkillAutocomplete/SkillAutocomplete";
 import {
   containerToggleState,
   DOCKER_RECHECK_MS,
+  showBuildIndicator,
 } from "./containerAvailability";
 import ContainerInfoPopover from "./ContainerInfoPopover";
 import { moveFolderHighlight } from "./folderNav";
@@ -145,6 +148,12 @@ function NewSessionModal() {
   // step's toggle / the ⌘⇧C chord). Immediate sessions only — the defer modes
   // (schedule/recurring) don't offer it. Reset on every open.
   const [useContainer, setUseContainer] = useState(false);
+  // The one-time default-image `docker build` is in flight (#416): while true AND
+  // the modal is open, an inline yellow "Building…" indicator shows beside Start (in
+  // place of the store's `container://building` toast, which is suppressed while the
+  // modal is open). Set from the `container://building` event, cleared when the
+  // toggle's `ensureContainerImage()` prefetch resolves.
+  const [containerBuilding, setContainerBuilding] = useState(false);
   // The probed docker runtime state gating the toggle: "absent" hides the row,
   // "stopped" disables it with a start-Docker hint, "running" enables it.
   // "unknown" (pre-probe) renders nothing — no flash for docker-less installs.
@@ -201,6 +210,7 @@ function NewSessionModal() {
     setIntervalUnit("hour");
     setPickerActive(false);
     setUseContainer(false);
+    setContainerBuilding(false);
     setDockerStatus("unknown");
     setAddBranchActive(false);
     setNewBranchName("");
@@ -438,6 +448,27 @@ function NewSessionModal() {
     };
   }, [open, step, deferMode]);
 
+  // While the modal is open, listen for the one-time default-image `docker build`
+  // (#416): its `container://building` event flips on the inline indicator beside
+  // Start (the store suppresses its usual toast while the modal is open — feedback
+  // isn't lost, just relocated). The build's end is signalled by the toggle's
+  // `ensureContainerImage()` prefetch resolving (see toggleContainer).
+  useEffect(() => {
+    if (!open) return;
+    let un: (() => void) | undefined;
+    let cancelled = false;
+    subscribeContainerEvents({ onBuilding: () => setContainerBuilding(true) })
+      .then((f) => {
+        if (cancelled) f();
+        else un = f;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      un?.();
+    };
+  }, [open]);
+
   // Escape closes the popover.
   useEffect(() => {
     if (!open) return;
@@ -588,7 +619,15 @@ function NewSessionModal() {
   const toggleContainer = () => {
     setUseContainer((v) => {
       const next = !v;
-      if (next) void ensureContainerImage().catch(() => {});
+      if (next) {
+        // The prefetch resolves when the image exists / a real build finishes —
+        // either way the inline "Building…" indicator should clear (#416). A build
+        // that actually started first flipped it on via the container://building
+        // event; an already-built image never fires it, so it stays off (no flash).
+        void ensureContainerImage()
+          .catch(() => {})
+          .finally(() => setContainerBuilding(false));
+      }
       return next;
     });
   };
@@ -1497,23 +1536,25 @@ function NewSessionModal() {
               (() => {
                 const blocked = containerToggleState(dockerStatus) !== "ready";
                 return (
-                  <div className={styles.containerRow}>
-                    <Checkbox
-                      checked={useContainer}
-                      onChange={() => toggleContainer()}
-                      disabled={busy || blocked}
-                      label={
-                        <>
-                          Run in dev container{" "}
-                          {!blocked && (
-                            <kbd className={styles.btnKbd}>
-                              {chordLabel(CONTAINER_TOGGLE_CHORD, platform)}
-                            </kbd>
-                          )}
-                        </>
-                      }
-                    />
-                    <ContainerInfoPopover />
+                  <>
+                    {/* justify-between (#416): checkbox left; kbd hint + info "i" on
+                        the right. The docker-stopped hint drops to its own line below. */}
+                    <div className={styles.containerRow}>
+                      <Checkbox
+                        checked={useContainer}
+                        onChange={() => toggleContainer()}
+                        disabled={busy || blocked}
+                        label="Run in dev container"
+                      />
+                      <div className={styles.containerRowActions}>
+                        {!blocked && (
+                          <kbd className={styles.btnKbd}>
+                            {chordLabel(CONTAINER_TOGGLE_CHORD, platform)}
+                          </kbd>
+                        )}
+                        <ContainerInfoPopover />
+                      </div>
+                    </div>
                     {blocked && (
                       <span className={styles.containerHint} role="status">
                         <AlertTriangle
@@ -1524,7 +1565,7 @@ function NewSessionModal() {
                         Docker isn’t running — start it to enable dev containers
                       </span>
                     )}
-                  </div>
+                  </>
                 );
               })()}
 
@@ -1568,6 +1609,25 @@ function NewSessionModal() {
                   </kbd>
                 </button>
               )}
+              {/* Inline first-run build feedback (#416): shown only while the
+                  one-time default-image build runs with the modal open (the store's
+                  toast is suppressed meanwhile). */}
+              {!deferMode &&
+                showBuildIndicator(
+                  useContainer,
+                  containerBuilding,
+                  containerToggleState(dockerStatus) !== "ready",
+                ) && (
+                  <span className={styles.buildingHint} role="status">
+                    <Loader
+                      size={12}
+                      strokeWidth={1.5}
+                      className={styles.buildingSpin}
+                      aria-hidden
+                    />
+                    Building the dev container (first run)…
+                  </span>
+                )}
               <button
                 type="submit"
                 className={styles.create}
