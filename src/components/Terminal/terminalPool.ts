@@ -981,8 +981,8 @@ export function resetTerminal(sessionId: string): void {
 /** Focus the pooled xterm for `sessionId` (Canvas panel keyboard nav, #76) so
  * subsequent keystrokes go to it. If the host does not exist yet (the #351 visibility
  * gate creates it a frame later), remember the request so the next `mountTerminal` for
- * this session lands it — otherwise switching to a Canvas tab with ⌘/Ctrl+1–9 and typing
- * immediately would go nowhere. */
+ * this session lands it — otherwise switching to a Canvas tab (a tab click, or
+ * hover-focus onto a fresh panel) and typing immediately would go nowhere. */
 export function focusTerminal(sessionId: string): void {
   const host = hosts.get(sessionId);
   if (host) {

@@ -13,5 +13,7 @@
   "Double-click an agent's title to rename it",
   "Drop files from your file manager onto a file tree to move them into the repo",
   "⌘F searches file names and contents across a repo",
-  "⌘1–⌘9 jump straight to a Canvas tab"
+  "⌥1, ⌥2 and ⌥3 switch between Overview, Attention, and Canvas",
+  "⌘W closes the focused panel in Canvas, Overview, or big mode",
+  "Every shortcut is rebindable in Settings → Shortcuts"
 ]

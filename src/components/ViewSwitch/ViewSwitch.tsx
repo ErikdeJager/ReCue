@@ -2,6 +2,7 @@ import { AlertTriangle, LayoutGrid, PanelsTopLeft } from "lucide-react";
 
 import { useStore } from "../../store";
 import type { View } from "../../types";
+import { useKeybindLabel } from "../../useKeybind";
 import SegmentedControl, {
   type SegmentedOption,
 } from "../SegmentedControl/SegmentedControl";
@@ -31,6 +32,14 @@ const OPTIONS: { value: View; label: string; icon: typeof LayoutGrid }[] = [
 function ViewSwitch({ compact = false }: { compact?: boolean }) {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
+  // Live view keybinds (⌥1/⌥2/⌥3 by default, rebindable) surfaced as tooltips.
+  const viewKeys: Record<View, string> = {
+    overview: useKeybindLabel("view-overview"),
+    attention: useKeybindLabel("view-attention"),
+    canvas: useKeybindLabel("view-canvas"),
+  };
+  const withKey = (label: string, v: View) =>
+    viewKeys[v] ? `${label} (${viewKeys[v]})` : label;
 
   const go = (value: View) => setView(value);
 
@@ -41,8 +50,16 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
     // segment active here — the standalone Canvas button carries the active state
     // instead (the intended "Canvas is a secondary mode" affordance).
     const mainOptions: SegmentedOption<View>[] = [
-      { value: "overview", label: "Overview" },
-      { value: "attention", label: "Attention", title: "Attention" },
+      {
+        value: "overview",
+        label: "Overview",
+        title: withKey("Overview", "overview"),
+      },
+      {
+        value: "attention",
+        label: "Attention",
+        title: withKey("Attention", "attention"),
+      },
     ];
     const canvasActive = view === "canvas";
     return (
@@ -60,7 +77,7 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
           type="button"
           className={canvasActive ? styles.canvasBtnActive : styles.canvasBtn}
           aria-label="Canvas"
-          title="Canvas"
+          title={withKey("Canvas", "canvas")}
           aria-pressed={canvasActive}
           onClick={() => go("canvas")}
         >
@@ -106,7 +123,7 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
             role="tab"
             aria-selected={selected}
             aria-label={option.label}
-            title={option.label}
+            title={withKey(option.label, option.value)}
             tabIndex={selected ? 0 : -1}
             className={[
               selected ? styles.iconActive : styles.iconOption,

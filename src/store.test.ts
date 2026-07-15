@@ -3298,3 +3298,165 @@ describe("cloneRepo (#295/#299)", () => {
     expect(last?.tone).toBe("error");
   });
 });
+
+describe("settings.keybinds (keybind rework)", () => {
+  it("defaults keybinds to {} and back-fills an older blob", () => {
+    expect(DEFAULT_SETTINGS.keybinds).toEqual({});
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.keybinds;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>).keybinds,
+    ).toEqual({});
+  });
+
+  it("preserves persisted overrides verbatim", () => {
+    const merged = mergeSettings({
+      keybinds: { "close-panel": "mod+shift+x", "view-canvas": "" },
+    });
+    expect(merged.keybinds).toEqual({
+      "close-panel": "mod+shift+x",
+      "view-canvas": "",
+    });
+  });
+});
+
+describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
+  const s = () => useStore.getState();
+  const leaf = (id: string, content: CanvasContent): CanvasNode => ({
+    type: "leaf",
+    id,
+    content,
+  });
+  const split = (a: CanvasNode, b: CanvasNode): CanvasNode => ({
+    type: "split",
+    id: "sp",
+    dir: "row",
+    sizes: [50, 50],
+    a,
+    b,
+  });
+
+  it("closes an open big-mode overlay first, touching nothing else", () => {
+    useStore.setState({
+      view: "canvas",
+      maximizedItem: { kind: "diff", repoPath: "/repo/x" },
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: leaf("l1", { kind: "diff", repoPath: "/repo/x" }),
+        },
+      ],
+      activeCanvasId: "c1",
+      activeLeafId: "l1",
+    });
+    s().closeFocusedPanel();
+    expect(s().maximizedItem).toBeNull();
+    // The underlying panel is untouched — only the overlay closed.
+    expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(1);
+    expect(s().activeLeafId).toBe("l1");
+  });
+
+  it("removes the focused Canvas leaf and advances focus to its neighbor", () => {
+    useStore.setState({
+      view: "canvas",
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: split(
+            leaf("la", { kind: "diff", repoPath: "/repo/x" }),
+            leaf("lb", {
+              kind: "terminal",
+              repoPath: "/repo/x",
+              sessionId: "t1",
+            }),
+          ),
+        },
+      ],
+      activeCanvasId: "c1",
+      activeLeafId: "la",
+    });
+    s().closeFocusedPanel();
+    const leaves = collectLeaves(s().canvases[0]?.layout ?? null);
+    expect(leaves.map((l) => l.id)).toEqual(["lb"]);
+    // Focus advanced to the surviving neighbor, so a repeat ⌘W keeps working…
+    expect(s().activeLeafId).toBe("lb");
+    s().closeFocusedPanel();
+    expect(s().canvases[0]?.layout).toBeNull();
+    expect(s().activeLeafId).toBeNull();
+    // …and with nothing left, a further call is a safe no-op.
+    s().closeFocusedPanel();
+    expect(s().canvases[0]?.layout).toBeNull();
+  });
+
+  it("no-ops in Canvas when the focused leaf is stale or nothing is focused", () => {
+    useStore.setState({
+      view: "canvas",
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: leaf("l1", { kind: "diff", repoPath: "/repo/x" }),
+        },
+      ],
+      activeCanvasId: "c1",
+      activeLeafId: "gone",
+    });
+    s().closeFocusedPanel();
+    expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(1);
+    useStore.setState({ activeLeafId: null });
+    s().closeFocusedPanel();
+    expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(1);
+  });
+
+  it("removes the selected non-agent panel in Overview (the hover-× action)", async () => {
+    useStore.setState({
+      view: "overview",
+      selectedId: "p1",
+      overviewPanels: {
+        "/repo/x": [{ id: "p1", kind: "markdown", file: "a.md" }],
+      },
+    });
+    s().closeFocusedPanel();
+    // removeOverviewPanel is async; let it settle.
+    await Promise.resolve();
+    expect(s().overviewPanels["/repo/x"]).toBeUndefined();
+  });
+
+  it("never closes an agent / schedule / recurring by keyboard", () => {
+    const schedule: ScheduledSession = {
+      id: "sch1",
+      cwd: "/repo/x",
+      branch: null,
+      prompt: null,
+      name: null,
+      fireAtMs: 999,
+      createdAt: 0,
+    } as unknown as ScheduledSession;
+    useStore.setState({
+      view: "overview",
+      sessions: [session("a1")],
+      schedules: [schedule],
+      selectedId: "a1",
+      overviewPanels: {},
+    });
+    s().closeFocusedPanel();
+    expect(s().sessions).toHaveLength(1);
+    useStore.setState({ selectedId: "sch1" });
+    s().closeFocusedPanel();
+    expect(s().schedules).toHaveLength(1);
+  });
+
+  it("no-ops in the Attention view", () => {
+    useStore.setState({
+      view: "attention",
+      selectedId: "p1",
+      overviewPanels: {
+        "/repo/x": [{ id: "p1", kind: "markdown", file: "a.md" }],
+      },
+    });
+    s().closeFocusedPanel();
+    expect(s().overviewPanels["/repo/x"]).toHaveLength(1);
+  });
+});

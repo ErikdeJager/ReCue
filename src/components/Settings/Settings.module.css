@@ -807,3 +807,82 @@
 .saveButton:hover {
   background: var(--accent-hover);
 }
+
+/* --- Editable keybind rows (keybind rework) --- */
+
+.keybindControls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-shrink: 0;
+}
+
+/* The chord chip as a button: the `.kbd-chip` atom's look with an interactive
+   border; recording swaps to an accent outline; unbound reads muted. */
+.keybindChip {
+  padding: 2px 8px;
+  min-width: 64px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-micro);
+  background: var(--border-hairline);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-meta-xs);
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.keybindChip:hover {
+  border-color: var(--border-strong, var(--text-muted));
+}
+
+.keybindChipRecording {
+  border-color: var(--accent);
+  /* Plain-token fallback first, then the color-mix tint (the cross-platform rule). */
+  background: var(--surface-0);
+  background: var(--accent-tint-fill);
+  color: var(--accent);
+}
+
+.keybindChipUnbound {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Per-row reset-to-default — a quiet icon button that only renders when the
+   binding differs from its default. */
+.keybindReset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-micro);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.keybindReset:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Inline rejection message from the recorder (reserved / taken / bare key). */
+.keybindError {
+  margin: 0;
+  color: var(--status-error);
+  font-size: var(--fs-meta-xs);
+}
+
+/* Duplicate-binding badge (only reachable via a hand-edited settings blob). */
+.keybindConflict {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  color: var(--status-awaiting);
+  vertical-align: middle;
+}

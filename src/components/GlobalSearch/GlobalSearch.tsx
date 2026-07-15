@@ -26,6 +26,7 @@ import {
   sessionLabel,
 } from "../../paths";
 import { kbdHint } from "../../platform";
+import { useKeybindLabel } from "../../useKeybind";
 import {
   ownedChildSessionIds,
   repoColor,
@@ -109,6 +110,8 @@ function GlobalSearch() {
   const branches = useStore((s) => s.branches);
   const repoColors = useStore((s) => s.repoColors);
   const platform = useStore((s) => s.platform);
+  // The live (rebindable) global-search chord — shown as the input's kbd chip.
+  const searchKey = useKeybindLabel("global-search");
   const selectItem = useStore((s) => s.selectItem);
   const addOverviewPanel = useStore((s) => s.addOverviewPanel);
   const close = useStore((s) => s.closeGlobalSearch);
@@ -470,8 +473,9 @@ function GlobalSearch() {
 
   const onInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     // ⌘-Number / Ctrl+Number — toggle the Nth folder-filter chip (task 397). The input
-    // is reliably focused; ⌘1–9 is freed from the Canvas-jump while the modal is open
-    // (useKeyboardNav's globalSearchOpen guard). Matched on `e.code` for layout robustness.
+    // is reliably focused, and ⌘1–9 belongs to this modal outright since the keybind
+    // rework removed the global Canvas-jump chord. Matched on `e.code` for layout
+    // robustness.
     if (
       (event.metaKey || event.ctrlKey) &&
       !event.shiftKey &&
@@ -536,7 +540,6 @@ function GlobalSearch() {
 
   // Track a running flat index across the grouped render so ↑/↓ and click agree.
   let flatIndex = -1;
-  const hint = kbdHint(platform, "⌘F", "Ctrl+F");
 
   return (
     <div className={`modal-scrim ${styles.overlay}`} onClick={close}>
@@ -562,7 +565,7 @@ function GlobalSearch() {
             onKeyDown={onInputKeyDown}
             aria-label="Search everything"
           />
-          <kbd className="kbd-chip">{hint}</kbd>
+          {searchKey && <kbd className="kbd-chip">{searchKey}</kbd>}
         </div>
 
         {debouncedQuery.trim() !== "" && chips.length >= 2 && (

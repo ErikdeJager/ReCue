@@ -2,8 +2,8 @@ import { useState } from "react";
 import { Lightbulb, Plus } from "lucide-react";
 
 import { useStore } from "../../store";
-import { kbdHint } from "../../platform";
 import { nextTipIndex, randomTipIndex, renderTip, TIPS } from "../../tips";
+import { useKeybindLabel } from "../../useKeybind";
 import styles from "./EmptyState.module.css";
 
 interface EmptyStateProps {
@@ -19,6 +19,7 @@ interface EmptyStateProps {
  */
 function EmptyState({ onNewSession }: EmptyStateProps) {
   const platform = useStore((s) => s.platform);
+  const newSessionKey = useKeybindLabel("new-session");
   const [tipIdx, setTipIdx] = useState(() => randomTipIndex(TIPS.length));
   const tip = TIPS[tipIdx];
   return (
@@ -28,9 +29,9 @@ function EmptyState({ onNewSession }: EmptyStateProps) {
         <button type="button" className={styles.button} onClick={onNewSession}>
           <Plus size={12} strokeWidth={2.4} />
           New session
-          <span className="kbd-hint kbd-hint-onfill">
-            {kbdHint(platform, "⌘N", "Ctrl+N")}
-          </span>
+          {newSessionKey && (
+            <span className="kbd-hint kbd-hint-onfill">{newSessionKey}</span>
+          )}
         </button>
       )}
       {tip && (

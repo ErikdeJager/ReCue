@@ -19,12 +19,17 @@ describe("tips catalog (task 379)", () => {
     }
   });
 
-  it("every ⌘ occurrence in every tip matches the chord pattern (anti-typo)", () => {
+  it("every ⌘/⌥ chord in every tip matches the chord pattern (anti-typo)", () => {
     for (const tip of TIPS) {
-      const cmdCount = [...tip].filter((ch) => ch === "⌘").length;
+      // A chord lead is ⌘, or a ⌥ NOT sitting in modifier position after ⌘
+      // (the keybind rework's bare ⌥-digit view chords).
+      const chars = [...tip];
+      const leadCount = chars.filter(
+        (ch, i) => ch === "⌘" || (ch === "⌥" && chars[i - 1] !== "⌘"),
+      ).length;
       const matches = [...tip.matchAll(CHORD_RE)];
-      expect(matches.length, `unrecognized ⌘ chord in tip: "${tip}"`).toBe(
-        cmdCount,
+      expect(matches.length, `unrecognized ⌘/⌥ chord in tip: "${tip}"`).toBe(
+        leadCount,
       );
     }
   });
@@ -61,9 +66,19 @@ describe("renderTip", () => {
     );
   });
 
-  it("converts every chord in a multi-chord tip (⌘1–⌘9 → Ctrl+1–Ctrl+9)", () => {
+  it("converts every chord in a multi-chord tip", () => {
     expect(renderTip("windows", "⌘1–⌘9 jump straight to a Canvas tab")).toBe(
       "Ctrl+1–Ctrl+9 jump straight to a Canvas tab",
+    );
+  });
+
+  it("converts bare ⌥ view chords (⌥1 → Alt+1, keybind rework)", () => {
+    expect(renderTip("linux", "⌥1, ⌥2 and ⌥3 switch views")).toBe(
+      "Alt+1, Alt+2 and Alt+3 switch views",
+    );
+    // A modifier ⌥ after ⌘ still reads as Ctrl+Alt+…
+    expect(renderTip("windows", "⌘⌥K does a thing")).toBe(
+      "Ctrl+Alt+K does a thing",
     );
   });
 });

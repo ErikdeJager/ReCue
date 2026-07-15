@@ -8,8 +8,8 @@ import {
 import { CheckCheck, Inbox, Maximize2, X } from "lucide-react";
 
 import { effectiveRepo, repoName, sessionLabel } from "../../paths";
-import { kbdHint } from "../../platform";
 import { ownedChildSessionIds, useStore } from "../../store";
+import { useKeybindLabel } from "../../useKeybind";
 import type { DiffLineCounts, SessionView } from "../../types";
 import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
@@ -168,11 +168,11 @@ function Attention() {
   const autoNameOn = useStore((s) => s.settings.autoName);
   const showDiffLineCounts = useStore((s) => s.settings.showDiffLineCounts);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
-  const platform = useStore((s) => s.platform);
   const select = useStore((s) => s.select);
   const dismissAllAttention = useStore((s) => s.dismissAllAttention);
   const removeSession = useStore((s) => s.removeSession);
   const maximizeItem = useStore((s) => s.maximizeItem);
+  const bigModeKey = useKeybindLabel("big-mode");
 
   const recurringChildIds = useMemo(
     () => ownedChildSessionIds(recurrings),
@@ -313,7 +313,11 @@ function Attention() {
                       repoPath: activeSession.repoPath,
                     })
                   }
-                  title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+                  title={
+                    bigModeKey
+                      ? `Open in big mode (${bigModeKey})`
+                      : "Open in big mode"
+                  }
                   aria-label="Open in big mode"
                 >
                   <Maximize2 size={15} strokeWidth={1.5} />

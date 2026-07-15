@@ -58,7 +58,8 @@ import {
   sessionLabel,
   worktreeGroupPaths,
 } from "../../paths";
-import { joinPath, kbdHint, revealLabel } from "../../platform";
+import { joinPath, revealLabel } from "../../platform";
+import { useKeybindLabel } from "../../useKeybind";
 import { formatFireTime, formatNextRun } from "../../time";
 import {
   dedupeBranchLabels,
@@ -2220,6 +2221,12 @@ function Sidebar() {
   const openCloneRepo = useStore((s) => s.openCloneRepo);
   const addFolder = useStore((s) => s.addFolder);
   const platform = useStore((s) => s.platform);
+  // Live keybind labels (keybind rework): rebindable hints read the effective
+  // chord so a rebound shortcut never shows a stale hint; "" (unbound) hides it.
+  const newSessionKey = useKeybindLabel("new-session");
+  const scheduleKey = useKeybindLabel("schedule-session");
+  const sidebarKey = useKeybindLabel("toggle-sidebar");
+  const settingsKey = useKeybindLabel("open-settings");
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
@@ -2705,12 +2712,13 @@ function Sidebar() {
   const rail = (
     <div className={styles.rail} onContextMenu={openBgMenu}>
       {/* Accent-tinted New session block (UI v2 §6, task 374). The rail's Schedule
-          button is gone (§6) — scheduling stays reachable collapsed via ⌘⇧N. */}
+          button is gone (§6) — scheduling stays reachable collapsed via its
+          schedule-session keybind. */}
       <button
         type="button"
         className={styles.railNew}
         onClick={() => openNewSession()}
-        title={`New session ${kbdHint(platform, "⌘N", "Ctrl+N")}`}
+        title={newSessionKey ? `New session ${newSessionKey}` : "New session"}
         aria-label="New session"
       >
         <Plus size={14} strokeWidth={2.2} />
@@ -2897,9 +2905,9 @@ function Sidebar() {
           >
             <Plus size={12} strokeWidth={2.4} className={styles.newIcon} />
             <span className={styles.newLabel}>New session</span>
-            <kbd className="kbd-hint kbd-hint-onfill">
-              {kbdHint(platform, "⌘N", "Ctrl+N")}
-            </kbd>
+            {newSessionKey && (
+              <kbd className="kbd-hint kbd-hint-onfill">{newSessionKey}</kbd>
+            )}
           </button>
 
           {/* Schedule a session to launch later (#93) — same flow, plus a time step.
@@ -2917,9 +2925,7 @@ function Sidebar() {
                 className={styles.scheduleIcon}
               />
               <span className={styles.scheduleLabel}>Schedule session</span>
-              <kbd className="kbd-hint">
-                {kbdHint(platform, "⌘⇧N", "Ctrl+Shift+N")}
-              </kbd>
+              {scheduleKey && <kbd className="kbd-hint">{scheduleKey}</kbd>}
             </button>
             <button
               type="button"
@@ -3035,7 +3041,7 @@ function Sidebar() {
           type="button"
           className={styles.footerButton}
           onClick={() => setSettingsOpen(true)}
-          title="Settings"
+          title={settingsKey ? `Settings ${settingsKey}` : "Settings"}
           aria-label="Settings"
         >
           <SettingsIcon size={16} strokeWidth={1.5} />
@@ -3084,11 +3090,9 @@ function Sidebar() {
           type="button"
           className={`${styles.footerButton} ${styles.footerCollapseToggle}`}
           onClick={() => toggleSidebarCollapsed()}
-          title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar ${kbdHint(
-            platform,
-            "⌘B",
-            "Ctrl+B",
-          )}`}
+          title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar${
+            sidebarKey ? ` ${sidebarKey}` : ""
+          }`}
           aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           {sidebarCollapsed ? (
