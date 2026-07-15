@@ -709,6 +709,15 @@
 .composerInput::placeholder {
   color: var(--text-muted);
 }
+/* #407: the composer input already carries the per-column accent border
+   (--col-accent, matching the card-edit accent edge), so the shared :focus-visible
+   ring (global.css) is a redundant second edge on it — drop it here. The accent
+   border remains the field's sole, always-present edge. Scoped to this input; the
+   global ring is untouched everywhere else. */
+.composerInput:focus,
+.composerInput:focus-visible {
+  outline: none;
+}
 .composerActions {
   display: flex;
   align-items: center;
