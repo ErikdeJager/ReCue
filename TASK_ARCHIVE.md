@@ -5995,3 +5995,44 @@ plain `var(--accent)` fallback (the app's established rule) — no macOS-only ef
 macOS, Windows, and Linux (all Chromium/WebKit).
 
 **Dependencies:** none. (Tuning of the UI v2 design tokens from tasks 372–383.)
+
+### 405. [x] Remove the Attention queue-count badge from the ViewSwitch
+
+The **Attention** button in the sidebar view switcher no longer shows a number badge counting the
+idle agents awaiting input. Attention is meant to be an **optional** mode — like Overview and
+Canvas — and the live count pill made it read as required/urgent. The badge is removed from **both**
+ViewSwitch renderings; the Attention button itself (icon + accessible name + view-switch behavior)
+is untouched.
+
+**What shipped** (branch `remove-attention-count-badge`, PR
+[#159](https://github.com/ErikdeJager/ReCue/pull/159), merged 2026-07-15 into `iteration-1`):
+
+- **`src/components/ViewSwitch/ViewSwitch.tsx`** — removed the `attentionCount` `useStore` selector
+  block and the now-unused `attentionQueue` / `ownedChildSessionIds` imports. In the **expanded**
+  branch (via the shared `SegmentedControl`) the Attention segment keeps its `AlertTriangle` icon +
+  visually-hidden "Attention" name but drops the `{attentionCount > 0 && <span className={styles.count}>…}`
+  pill. In the **compact rail** branch, the `showCount` computation and the overlaid
+  `{showCount && <span className={styles.countCompact}>…}` badge are gone. Updated the component
+  doc-comment to note the button is icon-only with no queue-count badge (#405).
+- **`src/components/ViewSwitch/ViewSwitch.module.css`** — deleted the now-dead `.count` (expanded
+  accent pill) and `.countCompact` (compact-rail overlay) rules; kept `.attnLabel` / `.srOnly` (the
+  icon-only segment still needs a screen-reader name). Net: 6 insertions, 64 deletions across the two
+  files.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 405)
+
+- Read "should NOT show number of items" as removing the count badge in **both** renderings (expanded
+  `.count` pill + compact-rail `.countCompact` badge) **and** the `attentionCount` store selector that
+  fed them — while keeping the Attention button (icon + accessible name) and its view-switch behavior.
+- Left the Attention **view's** own "N idle" header count intact (`Attention.tsx`) — the card is
+  specifically about the left-panel/view-switch button feeling required, not the in-view header. The
+  `attentionQueue` engine, store, and dismiss logic are untouched.
+- Kept `.attnLabel` / `.srOnly` (the icon-only segment still needs a screen-reader name); only
+  `.count` / `.countCompact` were removed.
+
+**Cross-platform:** pure React/TS + CSS-token cleanup in the ViewSwitch component; no path/shell/
+native primitives and on-system tokens only — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Deliberately kept minimal so **Task 406** — which reworks the same file's
+button placement/size — builds cleanly on top; 406 depends on this task, serializing the two
+ViewSwitch changes.)
