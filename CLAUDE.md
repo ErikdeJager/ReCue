@@ -282,7 +282,13 @@ steady-state boot pays **zero** probe cost.
 - **Views:** the store holds `sessions / selectedId / view / recents / branches /
   canvases / activeCanvasId / claudeMissing / toasts / schedules / settings /
   sidebarWidth / folderOrder`; the app mounts one of
-  **Overview or Canvas** (#46/#75 — Focus was removed). Each session's xterm is owned
+  **Overview, Attention, or Canvas** (#46/#75 — the original Focus view was removed;
+  **Attention** #398 is a FIFO triage queue of idle agents awaiting the user). The
+  sidebar **`ViewSwitch`** presents **Overview + Attention** as the two equal-weight
+  *main* views and **Canvas** as a smaller, de-emphasized *secondary* button (#406),
+  with no queue-count badge (#405); in expanded mode Overview/Attention are text
+  segments, and only the collapsed rail renders Attention as its `AlertTriangle` icon.
+  Each session's xterm is owned
   by a **persistent terminal
   pool** (`Terminal/terminalPool.ts`), created once and **reparented** into the
   active view's slot (parked off-screen otherwise) — so a view switch never

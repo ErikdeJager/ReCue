@@ -1,75 +1,72 @@
 import { AlertTriangle, LayoutGrid, PanelsTopLeft } from "lucide-react";
 
-import { ownedChildSessionIds, useStore } from "../../store";
+import { useStore } from "../../store";
 import type { View } from "../../types";
-import { attentionQueue } from "../Attention/attentionQueue";
 import SegmentedControl, {
   type SegmentedOption,
 } from "../SegmentedControl/SegmentedControl";
 import styles from "./ViewSwitch.module.css";
 
+// Order shared by the compact rail (Overview → Attention → Canvas, #406). Expanded
+// mode builds its own two-segment array + a standalone Canvas button below.
 const OPTIONS: { value: View; label: string; icon: typeof LayoutGrid }[] = [
   { value: "overview", label: "Overview", icon: LayoutGrid },
-  { value: "canvas", label: "Canvas", icon: PanelsTopLeft },
   { value: "attention", label: "Attention", icon: AlertTriangle },
+  { value: "canvas", label: "Canvas", icon: PanelsTopLeft },
 ];
 
 /**
- * Segmented Overview / Canvas / Attention control (#25, #46, #75, #398). Lives in the
- * sidebar, under the New session button, so it's always visible. The expanded mode
- * renders through the shared `SegmentedControl` atom (UI v2 task 372) in its rounded
- * `chrome` look; with `compact` (#168) it renders as icon-only buttons stacked to fit
- * the collapsed sidebar rail. The **Attention** segment (#398) is icon-only (the lucide
- * `AlertTriangle`, accessible name "Attention") with a live count badge = the number of
- * idle agents awaiting the user; the badge hides at 0.
+ * View switcher (#25, #46, #75, #398, #405, #406). Lives in the sidebar, under the New
+ * session button, so it's always visible. **Overview** and **Attention** are the two
+ * prominent, equal-weight *main* views; **Canvas** is a visually smaller, de-emphasized
+ * *secondary* view (#406). The expanded mode renders the two main views through the
+ * shared `SegmentedControl` atom (UI v2 task 372, its rounded `chrome` look) followed by
+ * a smaller standalone Canvas button in the same row; with `compact` (#168) it renders
+ * as icon-only buttons stacked to fit the collapsed sidebar rail, in the same
+ * Overview → Attention → Canvas order (Canvas subtly de-emphasized). In expanded mode
+ * **Overview** and **Attention** are equal-weight text segments; only the compact rail
+ * renders Attention as the lucide `AlertTriangle` icon (accessible name "Attention").
+ * Neither mode shows a queue-count badge (#405).
  */
 function ViewSwitch({ compact = false }: { compact?: boolean }) {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
-  // The live Attention queue size (#398) — a number selector so the badge re-renders
-  // only when the count changes (never on unrelated store writes).
-  const attentionCount = useStore(
-    (s) =>
-      attentionQueue({
-        sessions: s.sessions,
-        sessionBusy: s.sessionBusy,
-        sessionActive: s.sessionActive,
-        dismissed: s.dismissedAttention,
-        idleSince: s.sessionIdleSince,
-        recurringChildIds: ownedChildSessionIds(s.recurrings),
-      }).length,
-  );
 
   const go = (value: View) => setView(value);
 
   if (!compact) {
-    const options: SegmentedOption<View>[] = OPTIONS.map(
-      ({ value, label, icon: Icon }) =>
-        value === "attention"
-          ? {
-              value,
-              title: "Attention",
-              label: (
-                <span className={styles.attnLabel}>
-                  <Icon size={14} strokeWidth={1.5} aria-hidden />
-                  <span className={styles.srOnly}>Attention</span>
-                  {attentionCount > 0 && (
-                    <span className={styles.count}>{attentionCount}</span>
-                  )}
-                </span>
-              ),
-            }
-          : { value, label },
-    );
+    // Overview + Attention are the two equal-weight main segments; Canvas is a
+    // separate, visibly smaller secondary button appended after the control (#406).
+    // With only two segments in the control, `view === "canvas"` leaves neither
+    // segment active here — the standalone Canvas button carries the active state
+    // instead (the intended "Canvas is a secondary mode" affordance).
+    const mainOptions: SegmentedOption<View>[] = [
+      { value: "overview", label: "Overview" },
+      { value: "attention", label: "Attention", title: "Attention" },
+    ];
+    const canvasActive = view === "canvas";
     return (
-      <SegmentedControl
-        options={options}
-        value={view}
-        onChange={go}
-        ariaLabel="View"
-        chrome
-        stretch
-      />
+      <div className={styles.expanded}>
+        <SegmentedControl
+          options={mainOptions}
+          value={view}
+          onChange={go}
+          ariaLabel="View"
+          chrome
+          stretch
+          className={styles.mainControl}
+        />
+        <button
+          type="button"
+          className={canvasActive ? styles.canvasBtnActive : styles.canvasBtn}
+          aria-label="Canvas"
+          title="Canvas"
+          aria-pressed={canvasActive}
+          onClick={() => go("canvas")}
+        >
+          <PanelsTopLeft size={14} strokeWidth={1.5} aria-hidden />
+        </button>
+      </div>
     );
   }
 
@@ -101,7 +98,7 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
       {OPTIONS.map((option) => {
         const selected = view === option.value;
         const Icon = option.icon;
-        const showCount = option.value === "attention" && attentionCount > 0;
+        const isCanvas = option.value === "canvas";
         return (
           <button
             key={option.value}
@@ -111,13 +108,15 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
             aria-label={option.label}
             title={option.label}
             tabIndex={selected ? 0 : -1}
-            className={selected ? styles.iconActive : styles.iconOption}
+            className={[
+              selected ? styles.iconActive : styles.iconOption,
+              isCanvas ? styles.iconCanvas : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
             onClick={() => go(option.value)}
           >
             <Icon size={14} strokeWidth={1.5} aria-hidden />
-            {showCount && (
-              <span className={styles.countCompact}>{attentionCount}</span>
-            )}
           </button>
         );
       })}

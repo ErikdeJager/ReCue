@@ -17,7 +17,7 @@ are appended (as `## Task <N>` or `### N. [x]` entries) after the index.
 
 ## Project context
 
-**ReCue** — a **macOS and Windows** desktop app (**Rust + Tauri 2 + React/TypeScript**) for
+**ReCue** — a **macOS, Windows, and Linux** desktop app (**Rust + Tauri 2 + React/TypeScript**) for
 running and managing many live coding-agent CLI sessions at once (Claude by default; Codex and
 OpenCode are pluggable, #101/#141): an **Overview** "agent wall" of real terminals, a **Canvas**
 split-panel workspace (with file, **git-diff**, and terminal viewers), and a repo-grouped
@@ -5995,3 +5995,201 @@ plain `var(--accent)` fallback (the app's established rule) — no macOS-only ef
 macOS, Windows, and Linux (all Chromium/WebKit).
 
 **Dependencies:** none. (Tuning of the UI v2 design tokens from tasks 372–383.)
+
+### 405. [x] Remove the Attention queue-count badge from the ViewSwitch
+
+The **Attention** button in the sidebar view switcher no longer shows a number badge counting the
+idle agents awaiting input. Attention is meant to be an **optional** mode — like Overview and
+Canvas — and the live count pill made it read as required/urgent. The badge is removed from **both**
+ViewSwitch renderings; the Attention button itself (icon + accessible name + view-switch behavior)
+is untouched.
+
+**What shipped** (branch `remove-attention-count-badge`, PR
+[#159](https://github.com/ErikdeJager/ReCue/pull/159), merged 2026-07-15 into `iteration-1`):
+
+- **`src/components/ViewSwitch/ViewSwitch.tsx`** — removed the `attentionCount` `useStore` selector
+  block and the now-unused `attentionQueue` / `ownedChildSessionIds` imports. In the **expanded**
+  branch (via the shared `SegmentedControl`) the Attention segment keeps its `AlertTriangle` icon +
+  visually-hidden "Attention" name but drops the `{attentionCount > 0 && <span className={styles.count}>…}`
+  pill. In the **compact rail** branch, the `showCount` computation and the overlaid
+  `{showCount && <span className={styles.countCompact}>…}` badge are gone. Updated the component
+  doc-comment to note the button is icon-only with no queue-count badge (#405).
+- **`src/components/ViewSwitch/ViewSwitch.module.css`** — deleted the now-dead `.count` (expanded
+  accent pill) and `.countCompact` (compact-rail overlay) rules; kept `.attnLabel` / `.srOnly` (the
+  icon-only segment still needs a screen-reader name). Net: 6 insertions, 64 deletions across the two
+  files.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 405)
+
+- Read "should NOT show number of items" as removing the count badge in **both** renderings (expanded
+  `.count` pill + compact-rail `.countCompact` badge) **and** the `attentionCount` store selector that
+  fed them — while keeping the Attention button (icon + accessible name) and its view-switch behavior.
+- Left the Attention **view's** own "N idle" header count intact (`Attention.tsx`) — the card is
+  specifically about the left-panel/view-switch button feeling required, not the in-view header. The
+  `attentionQueue` engine, store, and dismiss logic are untouched.
+- Kept `.attnLabel` / `.srOnly` (the icon-only segment still needs a screen-reader name); only
+  `.count` / `.countCompact` were removed.
+
+**Cross-platform:** pure React/TS + CSS-token cleanup in the ViewSwitch component; no path/shell/
+native primitives and on-system tokens only — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Deliberately kept minimal so **Task 406** — which reworks the same file's
+button placement/size — builds cleanly on top; 406 depends on this task, serializing the two
+ViewSwitch changes.)
+
+### 403. [x] Robust activity indicator — stop the busy dot flickering when a panel is focused
+
+Focusing an agent panel — by hover-focus (#368/#371) or by clicking — no longer flips its busy/
+activity dot from idle to "busy" for a moment. Previously `term.focus()` made xterm send a
+DECSET-1004 focus-in report (`ESC[I`) to the PTY, claude repainted in response, and the backend
+busy **monitor** read that one-shot repaint as work — blinking the dot blue for ~700 ms (or, if
+within the #315 5 s hysteresis window, sticky-blue ~5 s). In the new **Attention** triage view that
+blink removed-and-re-added the agent's card (the queue includes an agent iff `active && !busy &&
+!dismissed`) and even resurrected a previously **dismissed** card (the store's `setBusy` clears
+`dismissedAttention` on a going-busy edge). Fixing the busy **source** in the monitor fixes every
+consumer at once.
+
+**What shipped** (branch `robust-activity-indicator-403`, PR
+[#160](https://github.com/ErikdeJager/ReCue/pull/160), merged 2026-07-15 into `iteration-1`) — a
+**backend-only** change in `src-tauri/src/pty.rs`, platform-neutral (no `#[cfg]`):
+
+- **`last_report: AtomicU64`** added to `ActivityState` (`AtomicU64::new(0)` init) — the ms
+  timestamp of the last automatic terminal report.
+- **`write_stdin`** now stamps `last_report` (`now.max(1)`) when the data **is** an
+  `is_noninput_report` (focus/mouse report), while still (per #185) **not** stamping `last_input` for
+  it; the bytes are written to the PTY unchanged.
+- **`monitor_loop`** loads `rep = last_report` and computes a **`report_repaint`** signal — `rep != 0
+  && rep >= inp && out >= rep && out - rep <= REPORT_REPAINT_MS` (new `const REPORT_REPAINT_MS: u64 =
+  300`) — threaded through the per-session snapshot tuple.
+- **`decide_busy`** gained a `suppress_on: bool` param that gates the **idle→busy edge only**:
+  `let busy = if suppress_on && !st.emitted { false } else { busy };`. An already-busy session
+  (`emitted == true`) is untouched, so #185's protection (a *working* agent that gets focused is
+  never wrongly settled to idle) is preserved, and a real turn started with Enter (which stamps
+  `last_input`, making `rep >= inp` false) is never suppressed. `report_repaint` is passed as
+  `suppress_on`.
+- **Tests:** new `#[cfg(test)]` unit tests — a report-repaint on an idle session stays idle;
+  a report during ongoing work stays busy (#185); the same fresh tick with `suppress_on = false`
+  goes busy (normal work); a follow-up tick after the window elapses flips busy (a real turn wins);
+  and `focus_report_stamps_last_report_not_last_input`. Existing `decide_busy_*` call sites updated
+  for the new arg.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 403)
+
+- Interpreted "activity indicator" as the **backend-derived** busy/idle dot (`session://state`,
+  the `pty.rs` monitor) — nothing on the frontend sets busy, so the fix belongs in the monitor.
+- Root cause diagnosed as a **focus-report repaint**, not a resize/SIGWINCH: hover-focus/click →
+  `focusTerminal` → `host.term.focus()` → xterm's DECSET-1004 `ESC[I` → claude repaints → the
+  monitor reads that one-shot output as work.
+- Read the user's "the debounce is already there in some conditions but should always be applied"
+  as: #185 already skips the `last_input` echo-stamp for reports; **extend that same report handling**
+  to also suppress the spurious idle→busy edge (the remaining gap), rather than inventing a new
+  mechanism.
+- Chose an **asymmetric, targeted** fix — gate only the idle→busy edge on `report_repaint` — over a
+  broad min-on debounce (rejected because `active_fast` stays true for the whole 700 ms window after
+  a one-shot burst, so it can't distinguish a repaint from sustained output). Never touches busy→idle,
+  so #185 holds; `rep >= inp` cancels suppression the moment a real keystroke follows a report.
+- **Backend-only** by design: deliberately did **not** add a frontend debounce to the Attention
+  queue or `BusyIndicator` — fixing the source makes the dot, queue membership, and the
+  `setBusy` un-dismiss-on-busy edge all robust automatically. `REPORT_REPAINT_MS = 300` (one echo
+  window) chosen as a conservative, single-point-tunable default.
+
+**Cross-platform:** platform-neutral Rust — the same busy monitor runs on macOS, Windows, and Linux;
+no `#[cfg]`, path, or shell primitives.
+
+**Dependencies:** none. (Task 404 — defaulting hover-focus **on** — depends on this landing first,
+since it increases focus events and so makes this fix more important.)
+
+### 406. [x] Make Overview + Attention the main view buttons; Canvas a smaller secondary button
+
+The sidebar view switcher now reads as a prominence hierarchy: **Overview** and **Attention** are
+the two equal-weight "main" buttons, and **Canvas** is a visibly smaller, de-emphasized secondary
+button after them — swapping Canvas and Attention (Attention rises to sit beside Overview, Canvas is
+demoted to the end at a smaller size). The intent is that Overview and Attention read as the primary
+daily views while Canvas is an optional/power-user view. Layout/visual only — no store or shortcut
+change.
+
+**What shipped** (branch `view-switch-main-buttons-406`, PR
+[#161](https://github.com/ErikdeJager/ReCue/pull/161), merged 2026-07-15 into `iteration-1`) — 120
+insertions / 35 deletions across the two ViewSwitch files:
+
+- **`src/components/ViewSwitch/ViewSwitch.tsx`** — in **expanded** mode, Overview + Attention render
+  as a **two-segment** shared `SegmentedControl` (`chrome stretch`), followed by a separate, smaller
+  Canvas `<button>` (`aria-label="Canvas"`, `title`, `aria-pressed={view === "canvas"}`,
+  `PanelsTopLeft` icon, `.canvasBtn` / `.canvasBtnActive`) inside a new `.expanded` flex row. With
+  only two segments in the control, `view === "canvas"` correctly leaves neither segment active and
+  the Canvas button shows the active state instead (the intended "Canvas is a secondary mode"
+  affordance). The `OPTIONS` array is reordered to `overview, attention, canvas`, so the **compact
+  rail** stacks the icons in that order with an `isCanvas` de-emphasis (`.iconCanvas`), keeping all
+  three as valid tap targets with roving arrow-key nav.
+- **`src/components/ViewSwitch/ViewSwitch.module.css`** — added the `.expanded` row container, the
+  `.canvasBtn` / `.canvasBtnActive` styles (chrome-radius tokens, Surface0 active fill matching the
+  segmented thumb, `--text-secondary`→`--text-primary` on hover/active), and the compact-rail
+  `.iconCanvas` de-emphasis. On-system tokens only.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 406)
+
+- Read "Overview and Attention should be the main buttons, the canvas should be a smaller button" +
+  "Canvas and attention should swap places" as a **two-item main control** (Overview + Attention,
+  equal weight) via the shared `SegmentedControl` **plus a separate, visibly smaller Canvas button**
+  appended after it — chosen over "three equal segments reordered" because the card explicitly asks
+  for a size/prominence hierarchy, not just a reorder.
+- **Did not** modify the shared `SegmentedControl` atom (used by other UI v2 toolbars) to get
+  per-segment sizing — the hierarchy is built **inside** ViewSwitch. (An acceptable fallback of
+  ViewSwitch rendering its own three buttons was on the table, but the atom is never touched.)
+- Compact rail reordered to Overview, Attention, Canvas (Canvas last) for consistency, with an
+  optional Canvas de-emphasis; kept the 28px icon tap targets + roving nav.
+- Keyboard shortcuts unchanged: `⌘\` (Overview↔Canvas) and `⌘1–9` (canvas) are layout-independent
+  and stay; no `shortcuts.ts` change for a pure visual tweak. Accessibility preserved via
+  `aria-pressed`/`aria-label` on the split-out Canvas button and the tablist's `aria-selected`.
+
+**Cross-platform:** pure React/TS + CSS-token layout in the ViewSwitch component; no path/shell/
+native primitives and on-system tokens only — identical (and theme-correct in dark/light) on macOS,
+Windows, and Linux.
+
+**Dependencies:** Task 405 (remove the Attention count badge). Both tasks edit
+`ViewSwitch.tsx`/`.module.css`; serializing avoided a merge conflict and let 406 build on the
+badge-free, icon-only Attention button.
+
+### 404. [x] Default focus-follows-mouse (auto-focus agents & panels on hover) ON + clarify the label
+
+"Auto-focus on hover" (#368/#371) is now the **default** — agents and panels are focused/selected
+when the mouse moves over them — instead of the prior opt-in/off default, and the Settings toggle is
+reworded to say that **agents and panels** (not just "panels") are auto-focused. The hover-focus
+**behavior** itself is unchanged; this is a default-value + copy change.
+
+**What shipped** (branch `default-auto-focus-on-hover`, PR
+[#162](https://github.com/ErikdeJager/ReCue/pull/162), merged 2026-07-15 into `iteration-1`) — 18
+insertions / 13 deletions across four files:
+
+- **`src/store.ts`** — `DEFAULT_SETTINGS.autoFocusOnHover` flipped `false → true`, with the comment
+  updated to on-by-default (opt-out): because `mergeSettings` back-fills a **missing** key from the
+  default, an existing install that never chose the setting gets hover-focus **on**, while a user who
+  explicitly persisted `false` keeps it off.
+- **`src/types/index.ts`** — the `autoFocusOnHover` doc comment changed from "Off by default (opt-in)"
+  to "On by default (opt-out)".
+- **`src/components/Settings/Settings.tsx`** — the Behavior `Checkbox` label reworded from "Focus
+  panels on hover" to **"Auto-focus agents and panels on hover"**; the help text (blur/text-field
+  behavior) kept accurate.
+- **`src/store.test.ts`** — the default/back-fill test retitled `defaults autoFocusOnHover to true and
+  back-fills it (#404)`: asserts `DEFAULT_SETTINGS.autoFocusOnHover === true`, a blob **missing** the
+  key back-fills to `true`, an explicit `true` stays `true`, and an explicit `false` stays `false`
+  (opt-out preserved).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 404)
+
+- "Default behaviour is hover focus turned on" = flip `DEFAULT_SETTINGS.autoFocusOnHover` false→true;
+  the #368/#371 feature behavior is untouched.
+- **No migration flag.** Relied on `mergeSettings` back-fill semantics (missing key → new default) so
+  everyone who hasn't opted out gets hover-focus, while an explicitly-saved `false` is preserved —
+  deliberately **not** migrating to protect a never-chosen off-state (contrast `terminalLineHeight`
+  #367, which did migrate), because the card wants on-by-default for all non-opted-out users.
+- "The default option should say that agents and panels are auto focussed on hover" = reword the
+  Settings label to name agents **and** panels and update the type + `DEFAULT_SETTINGS` comments from
+  "opt-in/off" to "on by default (opt-out)".
+
+**Cross-platform:** pure store/TS default + copy change; no path/shell/native primitives — identical
+on macOS, Windows, and Linux.
+
+**Dependencies:** Task 403 (the robust-activity-indicator fix). Turning hover-focus on by default
+amplifies the focus-report busy blink, so 403 landed first to keep the default-on experience
+flicker-free.

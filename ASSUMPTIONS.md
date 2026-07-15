@@ -3598,3 +3598,33 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Bump the worktree PARENT (via session.worktreeParent / effectiveRepo), never the worktree sub-folder, mirroring #331; bump on every addOverviewPanel call including dedup re-opens.
 - Deliberately leave the sidebar folder order (alphabetical `repoOrder` + #211 manual drag) untouched — `recents` order drives only the pickers, so manual drag order is preserved.
 - No new "last-used timestamp" model; the existing MRU-ordered, persisted, capped `recents` list is the recency signal. No backend change (touch_recent/add_recent already exist).
+
+## Task 403 — Robust activity indicator (stop the busy dot flickering when a panel is focused)
+
+- Interpreted "activity indicator" as the backend-derived busy/idle dot (`session://state`, `pty.rs` monitor), not a frontend state — nothing on the frontend sets busy, so the fix belongs in the monitor.
+- Diagnosed the root cause as a focus-report repaint: hover-focus/click calls `term.focus()` → xterm sends a DECSET-1004 focus-in report (`ESC[I`) → claude repaints → the monitor reads that one-shot output as work → a ~700ms (or, if within the #315 5s window, sticky) busy blink. Confirmed hover-focus calls `focusTerminal`→`host.term.focus()` with no resize coupling, so the report — not a SIGWINCH resize — is the trigger.
+- Read the user's "the debounce is already there in some conditions but should always be applied" as: #185 already skips the `last_input` echo-stamp for focus/mouse reports; extend the SAME report handling to also suppress the spurious idle→busy edge (the remaining gap), rather than inventing a new mechanism.
+- Chose an asymmetric, targeted fix over a broad min-on debounce: gate ONLY the idle→busy edge on a new `report_repaint` signal (a new `last_report` atomic stamped for `is_noninput_report` data; output within `REPORT_REPAINT_MS`=300 of it, with `rep >= inp` so a real keystroke after a report cancels suppression). This preserves #185 (never force a working agent to idle — we never touch busy→idle) and never delays a genuine turn started by Enter (Enter stamps `last_input`). A broad "sustained N ticks" debounce was rejected because `active_fast` stays true for the whole 700ms window after a one-shot burst, so it can't distinguish a one-shot repaint from sustained output.
+- Backend-only: deliberately did NOT add a frontend debounce to the Attention queue or BusyIndicator — fixing the source makes every consumer (dot + queue membership + the setBusy un-dismiss-on-busy edge) robust automatically. Platform-neutral (no `#[cfg]`).
+- `REPORT_REPAINT_MS` = 300 (one echo window) chosen as a conservative default; tunable in one place.
+
+## Task 404 — Default focus-follows-mouse (auto-focus agents & panels on hover) ON + clarify the label
+
+- Interpreted "default behaviour is hover focus turned on" as flipping `DEFAULT_SETTINGS.autoFocusOnHover` false→true; the feature behavior (#368/#371) is unchanged.
+- Back-fill semantics: `mergeSettings` fills a MISSING key from the (new) default, so existing installs that never chose the setting get hover-focus ON, while a user who explicitly persisted `false` keeps it off. Read the card ("default behaviour is hover focus turned on") as wanting on-by-default for everyone who hasn't opted out — so NO migration flag to preserve a never-chosen off-state (contrast terminalLineHeight #367, which did migrate).
+- "The default option should say that agents and panels are auto focussed on hover" = reword the Settings label from "Focus panels on hover" to name agents AND panels (e.g. "Auto-focus agents and panels on hover"); update the type + DEFAULT_SETTINGS comments from "opt-in/off" to "on by default (opt-out)".
+- Set a dependency on Task 403: turning hover-focus on by default amplifies the focus-report busy blink, so the 403 fix should land first.
+
+## Task 405 — Remove the Attention queue-count badge from the ViewSwitch
+
+- Read "should NOT show number of items" as removing the count badge in BOTH ViewSwitch renderings (expanded `.count` pill + compact-rail `.countCompact` badge) and the `attentionCount` store selector that feeds them — but keeping the Attention button itself (icon + accessible name) and its view-switch behavior.
+- Left the Attention VIEW's own "N idle" header count intact (Attention.tsx) — the card is specifically about the left-panel/view-switch button feeling required, not the in-view header. Kept the `attentionQueue` engine, store, and dismiss logic untouched.
+- Kept `.attnLabel`/`.srOnly` (the icon-only segment still needs a screen-reader name); only `.count`/`.countCompact` are removed.
+
+## Task 406 — Make Overview + Attention the main view buttons; Canvas a smaller secondary button
+
+- Interpreted "Overview and Attention should be the main buttons, the canvas should be a smaller button" + "Canvas and attention should swap places" as: a two-item main control (Overview + Attention, equal weight) via the shared SegmentedControl, plus a separate, visibly SMALLER Canvas button appended after it; Attention takes the slot next to Overview, Canvas is demoted to the end. Chose this over "three equal segments reordered" because the card explicitly calls for a size/prominence hierarchy (main vs smaller), not just a reorder.
+- Will NOT modify the shared `SegmentedControl` atom (used by other UI v2 toolbars) to get per-segment sizing — build the hierarchy inside ViewSwitch. Offered an acceptable fallback (ViewSwitch renders its own three buttons with Canvas styled smaller) if splitting Canvas out of the tablist proves awkward for a11y, but never touching the shared atom.
+- Compact rail: reorder icons to Overview, Attention, Canvas (Canvas last) for consistency; de-emphasizing Canvas there is optional (28px icons).
+- Keyboard shortcuts unchanged: `⌘\` (Overview↔Canvas) and `⌘1–9` (canvas) are layout-independent and stay; no shortcuts.ts change for a pure visual tweak.
+- Set a dependency on Task 405: both edit ViewSwitch.tsx/.module.css; serializing avoids a merge conflict and lets 406 build on the badge-free Attention button.
