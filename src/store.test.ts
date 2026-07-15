@@ -2487,17 +2487,21 @@ describe("mergeSettings (#100/#176)", () => {
     ).toBe(true);
   });
 
-  it("defaults autoFocusOnHover to false and back-fills it (#368)", () => {
-    expect(DEFAULT_SETTINGS.autoFocusOnHover).toBe(false);
-    // A pre-#368 blob (no key) merges to the opt-in default (off).
+  it("defaults autoFocusOnHover to true and back-fills it (#404)", () => {
+    expect(DEFAULT_SETTINGS.autoFocusOnHover).toBe(true);
+    // A blob *missing* the key merges to the new opt-out default (on).
     const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
     delete old.autoFocusOnHover;
     expect(
       mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>).autoFocusOnHover,
-    ).toBe(false);
-    // A persisted true (opted in) is preserved over the default.
+    ).toBe(true);
+    // A persisted true stays true.
     expect(mergeSettings({ autoFocusOnHover: true }).autoFocusOnHover).toBe(
       true,
+    );
+    // A persisted false (a user who explicitly opted out) is preserved.
+    expect(mergeSettings({ autoFocusOnHover: false }).autoFocusOnHover).toBe(
+      false,
     );
   });
 

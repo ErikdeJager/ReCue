@@ -424,8 +424,8 @@ export interface Settings {
    * hover also moves the selection/active-panel highlight to the hovered Overview card
    * or Canvas panel, and entering a panel with no terminal input (diff/file/kanban/
    * filetree/scheduled/recurring, or an agent owned by another window) blurs the
-   * previously focused terminal so keystrokes never silently keep flowing to it. Off
-   * by default (opt-in). Read live by Terminal.tsx / Overview / CanvasSurface; not a
+   * previously focused terminal so keystrokes never silently keep flowing to it. On
+   * by default (opt-out). Read live by Terminal.tsx / Overview / CanvasSurface; not a
    * side-effecting setting. */
   autoFocusOnHover: boolean;
   /** What closing a Canvas tab *with contents* does (#137): `ask` shows a modal,
