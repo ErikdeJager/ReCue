@@ -175,10 +175,14 @@
   color: var(--text-secondary);
 }
 
+/* Wider (5em) + no-wrap so the #387 reset labels — a weekday abbrev ("Wed") for a
+   multi-day reset or a short date ("Aug 12") for the 7-day window — never clip at the
+   default sidebar width. */
 .boxReset {
   flex: 0 0 auto;
-  width: 4em;
+  width: 5em;
   text-align: right;
+  white-space: nowrap;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }

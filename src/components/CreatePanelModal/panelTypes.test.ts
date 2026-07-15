@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ITEM_TYPE_ORDER } from "../../itemTypeOrder";
-import { PANEL_TYPES, panelTypeForDigit } from "./panelTypes";
+import { filterPanelTypes, PANEL_TYPES, panelTypeForDigit } from "./panelTypes";
 
 describe("Create-panel type registry (#189)", () => {
   it("has the six addable types in the canonical digit order (task 392)", () => {
@@ -28,5 +28,41 @@ describe("Create-panel type registry (#189)", () => {
     expect(panelTypeForDigit(6)).toBe("kanban");
     expect(panelTypeForDigit(0)).toBeUndefined();
     expect(panelTypeForDigit(7)).toBeUndefined();
+  });
+});
+
+describe("filterPanelTypes (#189, task 391)", () => {
+  it("returns the whole list for an empty or whitespace query", () => {
+    expect(filterPanelTypes("").map((t) => t.key)).toEqual(
+      PANEL_TYPES.map((t) => t.key),
+    );
+    expect(filterPanelTypes("   ").map((t) => t.key)).toEqual(
+      PANEL_TYPES.map((t) => t.key),
+    );
+  });
+
+  it("filters by a label substring (both viewer types for 'vie')", () => {
+    const keys = filterPanelTypes("vie").map((t) => t.key);
+    expect(keys).toContain("file");
+    expect(keys).toContain("diff");
+    expect(keys).not.toContain("session");
+    expect(keys).not.toContain("terminal");
+  });
+
+  it("is case-insensitive ('KAN' matches the Kanban board)", () => {
+    expect(filterPanelTypes("KAN").map((t) => t.key)).toEqual(["kanban"]);
+    expect(filterPanelTypes("kan").map((t) => t.key)).toEqual(["kanban"]);
+  });
+
+  it("returns an empty array when nothing matches", () => {
+    expect(filterPanelTypes("zzz-nope")).toEqual([]);
+  });
+
+  it("preserves PANEL_TYPES order in the filtered result", () => {
+    const filtered = filterPanelTypes("e").map((t) => t.key);
+    const canonical = PANEL_TYPES.filter((t) =>
+      t.label.toLowerCase().includes("e"),
+    ).map((t) => t.key);
+    expect(filtered).toEqual(canonical);
   });
 });

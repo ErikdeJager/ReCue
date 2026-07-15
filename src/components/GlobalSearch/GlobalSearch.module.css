@@ -185,3 +185,11 @@
   color: var(--accent);
   font-weight: 600;
 }
+
+/* Non-interactive overflow indicator under a capped repo group (task 393). */
+.moreHint {
+  margin: 0;
+  padding: var(--space-4) var(--space-8) var(--space-6);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+}

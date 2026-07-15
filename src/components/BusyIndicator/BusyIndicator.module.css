@@ -1,13 +1,16 @@
-/* Activity indicator (#88/#112; restyled by UI v2 task 372): a 7px dot with a 2.5px
-   tinted ring, centered in the same fixed 14px slot (#95 — sidebar rows and card
-   headers reserve it, so the footprint never shifts between states). Running = a
-   --status-running (blue) dot + ring with a gentle 1.6s opacity pulse; settled = a
-   steady --status-awaiting (yellow) dot + ring; fresh/idle = a calm --status-idle
-   dot, no ring. Dot and ring live on one ::before pseudo-element (the ring is a
-   box-shadow), so they pulse together — opacity-only, compositor-cheap. The global
-   reduced-motion killswitch (global.css) freezes the pulse at its 0% frame (full
-   opacity), leaving a solid blue ringed dot — still unambiguous vs the gray idle
-   dot. The 3-state + sticky semantics live in the backend monitor/store, not here. */
+/* Activity indicator (#88, supersedes the #71 spinner arc; the pre-UI-v2 sweep
+   restored by task 385, replacing UI v2 task 372's blinking opacity pulse + ring):
+   a calm dot that gains a soft Claude-style shimmer — a sheen sweeping across it —
+   while the session is working. Idle and busy share one 10px dot in a fixed 14px
+   slot (#95 — sidebar rows and card headers reserve it, so the footprint never
+   shifts between states). Only the sheen's background-position animates, so the
+   loop stays compositor-cheap with no layout/paint churn. The global reduced-motion
+   killswitch (global.css) neutralizes the sweep; the media query below then hides
+   the sheen so the busy state is a solid, softly glowing --status-running dot —
+   still clearly distinct from the calm --status-idle dot. Every color-mix()-bearing
+   glow/fill declares a plain-token fallback line first (the cross-platform rule,
+   task 383). The 3-state + sticky semantics live in the backend monitor/store, not
+   here. */
 .ball {
   position: relative;
   display: inline-flex;
@@ -16,40 +19,83 @@
   flex-shrink: 0;
 }
 
-/* The dot: idle = a calm --status-idle dot (7px), centered in the 14px slot. */
+/* The dot: idle = a calm --status-idle dot (10px), centered in the 14px slot. */
 .ball::before {
   content: "";
   position: absolute;
-  inset: 3.5px;
+  inset: 2px;
   border-radius: var(--radius-dot);
   background: var(--status-idle);
 }
 
-/* Busy: blue dot + tinted ring, pulsing 1 → .4 (demo-exact). Plain dim-token
-   fallback first, then the demo-exact color-mix (the cross-platform rule, 383). */
+/* Busy: the dot turns --status-running (blue) with a soft glow so it reads as
+   active even between sheen passes. Plain dim-token fallback first, then the
+   color-mix (the cross-platform rule, task 383). */
 .busy::before {
   background: var(--status-running);
-  box-shadow: 0 0 0 2.5px var(--status-running-dim);
-  box-shadow: 0 0 0 2.5px
-    color-mix(in srgb, var(--status-running) 18%, transparent);
-  animation: busy-pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 4px var(--status-running-dim);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--status-running) 60%, transparent);
 }
 
-/* Settled (#112): the agent has been active and is now idle — a steady yellow
-   dot + tinted ring, no animation ("finished — needs input"). */
+/* Settled (#112): the agent has been active and is now idle — a solid
+   --status-awaiting (yellow) dot with the same soft glow as busy but no sheen and
+   no animation, so it reads as "finished, needs your input" and is clearly distinct
+   from both the calm gray idle dot and the blue working dot. The base .ball::after
+   stays at opacity 0 (no .settled override), so there is no shimmer. Plain dim-token
+   fallback first, then the color-mix (task 383). */
 .settled::before {
   background: var(--status-awaiting);
-  box-shadow: 0 0 0 2.5px var(--status-awaiting-dim);
-  box-shadow: 0 0 0 2.5px
-    color-mix(in srgb, var(--status-awaiting) 15%, transparent);
+  box-shadow: 0 0 4px var(--status-awaiting-dim);
+  box-shadow: 0 0 4px
+    color-mix(in srgb, var(--status-awaiting) 60%, transparent);
 }
 
-@keyframes busy-pulse {
-  0%,
-  100% {
-    opacity: 1;
+/* The sheen overlay, clipped to the dot. Idle: invisible. */
+.ball::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: var(--radius-dot);
+  opacity: 0;
+}
+
+/* Busy: a bright band sweeps across the dot via an animated background-position
+   (compositor-cheap, no repaint). The gradient's mid stop is fallback-first — a
+   plain rgba glint, then the --busy-sheen color-mix (the cross-platform rule,
+   task 383/385). Geometry/timing is tunable. */
+.busy::after {
+  opacity: 1;
+  background-image: linear-gradient(
+    110deg,
+    transparent 35%,
+    rgba(205, 214, 244, 0.8) 50%,
+    transparent 65%
+  );
+  background-image: linear-gradient(
+    110deg,
+    transparent 35%,
+    color-mix(in srgb, var(--busy-sheen) 80%, transparent) 50%,
+    transparent 65%
+  );
+  background-repeat: no-repeat;
+  background-size: 250% 100%;
+  animation: busy-shimmer 1.4s ease-in-out infinite;
+}
+
+/* The band travels off both edges so each pass reads as a glint with a brief rest. */
+@keyframes busy-shimmer {
+  from {
+    background-position: 200% 0;
   }
-  50% {
-    opacity: 0.4;
+  to {
+    background-position: -80% 0;
+  }
+}
+
+/* Reduced motion: the global killswitch already stops the sweep; hide the sheen so
+   the busy state is an unambiguous solid (glowing) blue dot, distinct from idle. */
+@media (prefers-reduced-motion: reduce) {
+  .busy::after {
+    opacity: 0;
   }
 }

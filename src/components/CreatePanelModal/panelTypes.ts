@@ -52,3 +52,15 @@ export const PANEL_TYPES: PanelType[] = byItemTypeOrder(
 export function panelTypeForDigit(digit: number): PanelTypeKey | undefined {
   return PANEL_TYPES[digit - 1]?.key;
 }
+
+/**
+ * The launcher's type-step filter (#189, task 391): a case-insensitive **substring**
+ * match over the type labels, preserving `PANEL_TYPES`' order. An empty / whitespace
+ * query returns the whole list. Pure — the filter-as-you-type source of truth.
+ */
+export function filterPanelTypes(query: string): PanelType[] {
+  const q = query.trim().toLowerCase();
+  return q
+    ? PANEL_TYPES.filter((t) => t.label.toLowerCase().includes(q))
+    : PANEL_TYPES;
+}

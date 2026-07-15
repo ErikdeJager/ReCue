@@ -93,6 +93,157 @@ describe("rankAndGroup (#337)", () => {
     ]);
     expect(flatOrder(grouped).map((r) => r.title)).toEqual(["ag", "out"]);
   });
+
+  it("reports hiddenCount 0 and keeps single-arg calls working (task 393)", () => {
+    const grouped = rankAndGroup([
+      result({ kind: "agent", repo: "/a/alpha", title: "solo", score: 60 }),
+    ]);
+    expect(grouped[0]!.hiddenCount).toBe(0);
+  });
+});
+
+describe("rankAndGroup active-first ordering (task 393)", () => {
+  it("surfaces an active repo before an inactive one alphabetically later", () => {
+    const grouped = rankAndGroup(
+      [
+        result({ kind: "agent", repo: "/r/alpha", title: "a", score: 50 }),
+        result({ kind: "agent", repo: "/r/zeta", title: "z", score: 50 }),
+      ],
+      { activeRepos: new Set(["/r/zeta"]) },
+    );
+    // "zeta" is active → it renders above the alphabetically-earlier inactive "alpha".
+    expect(grouped.map((g) => g.repo)).toEqual(["/r/zeta", "/r/alpha"]);
+  });
+
+  it("keeps alphabetical order among repos of the same activeness", () => {
+    const grouped = rankAndGroup(
+      [
+        result({ kind: "agent", repo: "/r/zeta", title: "z", score: 50 }),
+        result({ kind: "agent", repo: "/r/beta", title: "b", score: 50 }),
+        result({ kind: "agent", repo: "/i/delta", title: "d", score: 50 }),
+        result({ kind: "agent", repo: "/i/charlie", title: "c", score: 50 }),
+      ],
+      { activeRepos: new Set(["/r/zeta", "/r/beta"]) },
+    );
+    // Both active repos first (beta < zeta), then both inactive (charlie < delta).
+    expect(grouped.map((g) => g.repo)).toEqual([
+      "/r/beta",
+      "/r/zeta",
+      "/i/charlie",
+      "/i/delta",
+    ]);
+  });
+
+  it("defaults to alphabetical order when no repo is active", () => {
+    const grouped = rankAndGroup([
+      result({ kind: "agent", repo: "/r/zeta", title: "z", score: 50 }),
+      result({ kind: "agent", repo: "/r/alpha", title: "a", score: 50 }),
+    ]);
+    expect(grouped.map((g) => g.repo)).toEqual(["/r/alpha", "/r/zeta"]);
+  });
+});
+
+describe("rankAndGroup per-repo cap (task 393)", () => {
+  it("caps a repo at 6 items and records the hidden overflow", () => {
+    const results = Array.from({ length: 9 }, (_, i) =>
+      result({
+        kind: "file",
+        repo: "/r/big",
+        title: `f${i}.ts`,
+        score: 100 - i,
+      }),
+    );
+    const grouped = rankAndGroup(results);
+    const rg = grouped[0]!;
+    const total = rg.groups.reduce((n, g) => n + g.items.length, 0);
+    expect(total).toBe(6);
+    expect(rg.hiddenCount).toBe(3);
+  });
+
+  it("shows no overflow for a repo at or under the cap", () => {
+    const results = Array.from({ length: 6 }, (_, i) =>
+      result({
+        kind: "file",
+        repo: "/r/six",
+        title: `f${i}.ts`,
+        score: 100 - i,
+      }),
+    );
+    const grouped = rankAndGroup(results);
+    const rg = grouped[0]!;
+    const total = rg.groups.reduce((n, g) => n + g.items.length, 0);
+    expect(total).toBe(6);
+    expect(rg.hiddenCount).toBe(0);
+  });
+
+  it("fills the cap across kind sections in KIND_ORDER (4 agent + 3 file → 4 + 2)", () => {
+    const results = [
+      ...Array.from({ length: 4 }, (_, i) =>
+        result({
+          kind: "agent",
+          repo: "/r/mix",
+          title: `a${i}`,
+          score: 90 - i,
+        }),
+      ),
+      ...Array.from({ length: 3 }, (_, i) =>
+        result({
+          kind: "file",
+          repo: "/r/mix",
+          title: `f${i}.ts`,
+          score: 40 - i,
+        }),
+      ),
+    ];
+    const grouped = rankAndGroup(results);
+    const rg = grouped[0]!;
+    const agents = rg.groups.find((g) => g.kind === "agent")!;
+    const files = rg.groups.find((g) => g.kind === "file")!;
+    expect(agents.items.length).toBe(4);
+    expect(files.items.length).toBe(2);
+    expect(rg.hiddenCount).toBe(1);
+  });
+
+  it("drops an entire kind section once the cap is exhausted", () => {
+    const results = [
+      ...Array.from({ length: 6 }, (_, i) =>
+        result({
+          kind: "agent",
+          repo: "/r/full",
+          title: `a${i}`,
+          score: 90 - i,
+        }),
+      ),
+      result({ kind: "file", repo: "/r/full", title: "z.ts", score: 40 }),
+      result({ kind: "output", repo: "/r/full", title: "o", score: 20 }),
+    ];
+    const grouped = rankAndGroup(results);
+    const rg = grouped[0]!;
+    expect(rg.groups.map((g) => g.kind)).toEqual(["agent"]);
+    expect(rg.hiddenCount).toBe(2);
+  });
+
+  it("flatOrder excludes the capped-out items", () => {
+    const results = Array.from({ length: 9 }, (_, i) =>
+      result({
+        kind: "file",
+        repo: "/r/big",
+        title: `f${i}.ts`,
+        score: 100 - i,
+      }),
+    );
+    const grouped = rankAndGroup(results);
+    expect(flatOrder(grouped)).toHaveLength(6);
+  });
+
+  it("honors a custom perRepoCap", () => {
+    const results = Array.from({ length: 5 }, (_, i) =>
+      result({ kind: "file", repo: "/r/c", title: `f${i}.ts`, score: 100 - i }),
+    );
+    const grouped = rankAndGroup(results, { perRepoCap: 2 });
+    expect(flatOrder(grouped)).toHaveLength(2);
+    expect(grouped[0]!.hiddenCount).toBe(3);
+  });
 });
 
 describe("splitHighlight (#337)", () => {

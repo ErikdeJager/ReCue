@@ -117,6 +117,15 @@
   flex: 1 0 var(--overview-card-min, 400px);
   flex-direction: column;
   border: 1px solid var(--border-hairline);
+  /* Folder-color resting tint (task 386): a subtle wash of the owning folder's
+     color over the hairline (full strength only when selected). Plain hairline
+     first as the cross-platform color-mix fallback; `--repo-color` is set inline
+     per card, absent ⇒ `transparent` ⇒ the plain hairline shows through. */
+  border-color: color-mix(
+    in srgb,
+    var(--repo-color, transparent) 30%,
+    var(--border-hairline)
+  );
   /* Repo-color top band (#36) — filled via inline borderTopColor, full width. */
   border-top: 2px solid transparent;
   /* Explicitly opaque over the wave background (task 377) — nothing readable
@@ -137,17 +146,20 @@
    light-slate separator in Latte. The inline border-top-color still wins for
    the repo band. Dark is untouched (still the token hairlines). */
 :global([data-theme="light"]) .card {
-  border-color: #acb0be; /* Latte Surface2 */
+  border-color: #acb0be; /* Latte Surface2 — plain color-mix fallback */
+  border-color: color-mix(in srgb, var(--repo-color, transparent) 30%, #acb0be);
 }
 
-/* Selection (UI v2 §7, task 379): a 1px accent inset ring, square,
-   click-through, no layout shift — synced with the sidebar row via the shared
-   selectedId. */
+/* Selection (UI v2 §7, task 379/386): a 1px inset ring in the owning folder's
+   color (task 386 — the accent never encodes selection), square, click-through,
+   no layout shift — synced with the sidebar row via the shared selectedId.
+   `--repo-color` is set inline per card; a plain accent fallback keeps a ring
+   even where it's absent. */
 .cardSelected::after {
   content: "";
   position: absolute;
   inset: 0;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--repo-color, var(--accent));
   pointer-events: none;
   z-index: 2;
 }

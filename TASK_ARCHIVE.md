@@ -5171,3 +5171,262 @@ separately; no version bump / patch notes here**.
   checklist was inlined in the plan for the worktree implementer.
 
 **Dependencies:** Tasks 381, 382. (Closes the UI v2 epic: 372–383.)
+
+### 388. [x] Add "New folder…" and "Clone Repo…" to the ⋯ session-options menu
+
+The sidebar's **⋯** overflow button (beside the "+ Schedule session" footer row, the "More session
+options" menu from #294) now also offers **New folder…** and **Clone Repo…**, so a user can add or
+clone a folder without first hunting for empty sidebar background to right-click — the same two
+entries the global background context menu (#172) already carries.
+
+**What shipped** (branch `task-388-dots-menu-new-folder-clone`, PR
+[#139](https://github.com/ErikdeJager/ReCue/pull/139), merged 2026-07-15 into `ui-rework`):
+
+- **Two `RowMenuItem` entries** inserted into the `dotsMenuItems` array in
+  `src/components/Sidebar/Sidebar.tsx`, between the existing "Recurring session…" and the
+  conditional "Auto continue after limit reset" toggle:
+  `{ label: "New folder…", onActivate: () => void addFolder() }` and
+  `{ label: "Clone Repo…", onActivate: () => openCloneRepo() }`.
+- **Reuses the exact handlers** the background menu (`bgMenuItems`) already uses — `addFolder`
+  (native directory picker → register into recents; no agent spawned) and `openCloneRepo`
+  (opens the lazy `CloneRepoModal`) — both already destructured in `Sidebar()`. No new imports,
+  store actions, CSS, or backend touched (2-line diff).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 388)
+
+- "New folder" = the background menu's "New folder…" → the `addFolder` store action (native picker →
+  recents), **not** git-init / mkdir; labels + handlers reused verbatim.
+- Placed after "Recurring session…" and before the "Auto continue" toggle (there is no separator in
+  `RowMenuItem`; purely cosmetic ordering).
+- Scoped to `dotsMenuItems` only; disjoint from sibling Task 389's `bgMenuItems` edit — no code
+  overlap or ordering requirement between them.
+
+**Cross-platform:** both actions are already platform-neutral (native picker via `pickDirectory`;
+the modal → `clone_repo`), no `#[cfg]` / platform seam — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none.
+
+### 389. [x] Remove "Schedule session" from the global sidebar background context menu
+
+Right-clicking the sidebar's empty background (the global, non-folder-scoped background context
+menu #172) no longer offers a redundant **"Schedule session"** item — scheduling is already the
+dedicated "+ Schedule session" footer button and **⌘⇧N**, so the duplicate is dropped.
+
+**What shipped** (branch `task-389-remove-schedule-bg-menu`, PR
+[#140](https://github.com/ErikdeJager/ReCue/pull/140), merged 2026-07-15 into `ui-rework`):
+
+- **One entry removed** from the `bgMenuItems` array in `src/components/Sidebar/Sidebar.tsx`:
+  `{ label: "Schedule session", onActivate: () => openSchedule() }`. Because `bgMenuItems` is a
+  single array rendered once, the entry vanishes from **both** the expanded list and the collapsed
+  rail's background menu. Remaining entries ("New folder…", "Clone Repo…", collapse/expand toggle,
+  and the conditional filter/destructive spreads) are untouched.
+- **`openSchedule` kept** — still used by the footer Schedule button (and ⌘⇧N), so no dead
+  selector/import.
+- **Stale comment updated** — the collapsed-rail comment that claimed scheduling "stays reachable
+  collapsed via ⌘⇧N and the background context menu's 'Schedule session'" now references **⌘⇧N
+  only** (the collapsed fallback path).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 389)
+
+- "Global left panel context menu" = the sidebar background/empty-area menu (#172), i.e. the single
+  `bgMenuItems` array — not any per-repo/per-folder or per-row menu (all left untouched).
+- Delete only the one schedule line; keep `openSchedule` (footer button + ⌘⇧N still use it).
+- The footer "+ Schedule session" button, ⌘⇧N, the ⋯ overflow menu (Task 388), and all
+  scheduling backend are unchanged.
+
+**Cross-platform:** a one-line array deletion + a comment tweak — pure WebView/TS, no OS-specific
+code, CSS, or backend, so identical on macOS, Windows, and Linux.
+
+**Dependencies:** none.
+
+### 385. [x] Restore the pre-UI-rework blue "shimmer" busy indicator (drop the blinking pulse)
+
+Brings back the pre-UI-v2 agent activity dot the user preferred: a calm blue dot with a soft glow
+and a Claude-style **sheen sweeping across it** while an agent works — replacing the UI-v2 dot
+that "just blinks" (a plain opacity pulse) and carried an added tinted ring. The three-state
+semantics (busy/settled/fresh), reduced-motion behavior, props/markup/aria, and the token system
+are all preserved — a visual-only restoration.
+
+**What shipped** (branch `restore-busy-shimmer-indicator`, PR
+[#141](https://github.com/ErikdeJager/ReCue/pull/141), merged 2026-07-15 into `ui-rework`):
+
+- **`BusyIndicator.module.css` rewritten** to the sweep visual: a ~10px dot (`inset: 2px`) with a
+  soft glow (`box-shadow: 0 0 4px …`, no ring); `.busy::after` is a bright band swept across via
+  animated `background-position` (`busy-shimmer 1.4s ease-in-out infinite`, compositor-cheap);
+  `.settled` = solid yellow dot + glow, no sweep/animation; the old `busy-pulse` keyframes and
+  ring `box-shadow`s deleted.
+- **`--busy-sheen` token re-added** to `src/styles/tokens.css` in both the Dark `:root`
+  (`var(--text-primary)`, == #cdd6f4) and Latte `:root[data-theme="light"]` (`#eff1f5`) blocks —
+  the glint the sweep gradient mixes.
+- **Reduced-motion:** `@media (prefers-reduced-motion: reduce) { .busy::after { opacity: 0 } }`
+  hides the sheen (not a frozen mid-sweep band), leaving a solid glowing blue dot still distinct
+  from the gray idle dot.
+- **`BusyIndicator.tsx`** JSDoc/prop comments reverted to the sweep wording (comment-only; no
+  code/markup/prop/aria change) — so all four consumers (sidebar rows, collapsed rail, Overview
+  headers, Canvas panel headers) inherit the fix untouched.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 385)
+
+- "Use the busy indicator from before the UI rework" = restore the full pre-rework visual (dot +
+  glow + sweeping sheen) and drop **both** the opacity pulse and the added ring — not merely swap
+  the animation.
+- Keep the current UI-v2 status palette (`--status-*` + `-dim`); restore only the animation/visual.
+- Add a plain-token fallback before each `color-mix()` (task-383 cross-platform rule); the CLAUDE.md
+  busy-indicator note already described the sweep, so no doc edit was needed.
+
+**Cross-platform:** pure WebView CSS/tokens (`background-position`/`opacity` animation + `color-mix`
+with plain fallbacks) — identical on macOS (WKWebView), Windows (WebView2), and Linux (WebKitGTK);
+no `#[cfg]` / native / path / shell code.
+
+**Dependencies:** none.
+
+### 386. [x] Agent/panel borders use the owning folder's color (not the app accent)
+
+The border/selection/focus highlight around each Overview agent card and each Canvas panel now
+uses its **owning folder's color** (per-repo `repoColor`) instead of the global app `--accent`, so
+selection reads as "belongs to that folder" and never fights the folder identity — aligning with
+the UI v2 rule that the accent never encodes selection.
+
+**What shipped** (branch `task-386-folder-color-borders`, PR
+[#142](https://github.com/ErikdeJager/ReCue/pull/142), merged 2026-07-15 into `ui-rework`):
+
+- **Folder color threaded as an inline `--repo-color` custom property** — on the Overview
+  `PanelColumn` root (`Overview.tsx`, alongside the existing `borderTopColor`) and, in
+  `CanvasSurface.tsx`'s `LeafPanel`, computed from `metaRepo` (`repoColor(metaRepo, repoColors)`,
+  worktree-aware via `effectiveRepo`) and set on the panel root.
+- **Overview CSS** — `.cardSelected::after` selection ring → `var(--repo-color, var(--accent))`;
+  `.card` (and the Latte light override) gains a subtle ~30% folder-tinted resting border
+  (fallback-first `color-mix`), with the 2px repo-color top band kept as-is.
+- **Canvas CSS** — `.panelActive` keyboard-focus frame's `border-color` + inset `box-shadow` →
+  `var(--repo-color, var(--accent))`; `.panel` resting border gains the same subtle folder tint.
+- Non-folder accent affordances (drag/edge-drop zones, resize-handle hover, rename/tab inputs,
+  primary buttons) keep `--accent` untouched; changing the app accent no longer recolors
+  selection rings / focus frames.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 386)
+
+- Ambiguous "…in their accent color when focussed" resolved as the **folder's own** color, not the
+  global accent (UI-v2 "accent never encodes selection").
+- Folder color = `repoColor(effectiveRepo)` for agents / `repoColor(repoPath)` otherwise; a subtle
+  30% resting tint (dial-back-able via the single mix ratio) reserves full strength for
+  selected/focused.
+- Scope limited to the two accent frame-borders (`.cardSelected::after`, `.panelActive`); Sidebar
+  rows, BigMode, and the Overview top band are out of scope.
+
+**Cross-platform:** pure CSS + an inline custom property computed in TS, each `color-mix` border
+fallback-first — identical on macOS, Windows, and Linux; detached Canvas windows (#84) render the
+same `CanvasSurface`, so they inherit it.
+
+**Dependencies:** none.
+
+### 387. [x] Usage popup — weekday reset labels & human-readable reset durations
+
+In the expandable "all usage" popup below the sidebar's Claude usage bar, the unreadable raw hour
+count for a far-future reset (e.g. `122h` for the seven-day window) is replaced with a
+human-friendly label — a weekday abbreviation (`Mon`/`Tue`/…) for multi-day resets, a short date
+(`Aug 12`) beyond a week, the existing compact countdown under 24h — plus a precise local
+date/time-and-duration tooltip. "When does this limit reset?" is now instantly readable.
+
+**What shipped** (branch `task-387-usage-reset-labels`, PR
+[#143](https://github.com/ErikdeJager/ReCue/pull/143), merged 2026-07-15 into `ui-rework`):
+
+- **Two pure `now`-injectable helpers added to `src/time.ts`** (unit-tested in `time.test.ts`):
+  `formatDurationShort(ms)` → readable `<1m` / `Nm` / `Hh Mm` / `Dd Hh` (or `Dd`); and
+  `formatUsageReset(resetsAtMs, nowMs)` → `< 24h` delegates to `formatResetCountdown` (five-hour
+  row byte-for-byte unchanged), `24h–7d` → `toLocaleDateString({weekday:"short"})`, `≥7d` →
+  `toLocaleDateString({month:"short",day:"numeric"})`.
+- **`UsageBar.tsx`** popup reset cell now uses `formatUsageReset` for the visible label plus a
+  `title` tooltip (`Resets <local date/time> · in <formatDurationShort>`); a `resetsAtMs == null`
+  bucket still renders an empty cell (fail-open).
+- **`Usage.module.css`** — `.boxReset` widened so a weekday/short-date isn't clipped at the default
+  sidebar width.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 387)
+
+- "Popup" = the #370 expandable "all usage" viewer box in `UsageBar.tsx`, not a separate tooltip.
+- The main five-hour bar line ("Resets in …") and `formatResetCountdown`'s other callers
+  (recurring/schedule UI) are untouched; frontend-only (`resetsAtMs` already exposed, no
+  `usage.rs` change).
+- Formatting via `Date#toLocale*` (the `formatFireTime` seam), locale/timezone-robust tests.
+
+**Cross-platform:** frontend-only, `Date#toLocaleDateString`/`toLocaleString` behaves identically
+on WKWebView / WebView2 / WebKitGTK; no OS-specific code.
+
+**Dependencies:** none.
+
+### 391. [x] ⌘K launcher — filter-as-you-type type picker (search input + arrow/Enter selection)
+
+The ⌘K "Create panel" launcher's first (type) step is now keyboard-first beyond the digit keys: a
+search input auto-focused on open filters the listed panel types as you type, the top match stays
+highlighted, ↑/↓ move the highlight, and Enter starts creating the highlighted type. The 1–6 number
+keys keep working (now indexing the filtered list). A user can launch a Session / Terminal / File
+tree / File viewer / Diff viewer / Kanban board by typing its name instead of remembering a number.
+
+**What shipped** (branch `task-391-cmdk-type-filter`, PR
+[#144](https://github.com/ErikdeJager/ReCue/pull/144), merged 2026-07-15 into `ui-rework`):
+
+- **Pure `filterPanelTypes(query)`** added to `panelTypes.ts` (+ `panelTypes.test.ts` cases):
+  case-insensitive substring over labels, whole list for an empty/whitespace query, preserving
+  `PANEL_TYPES` order.
+- **`CreatePanelModal.tsx`** type step gains a search input (auto-focused, reusing `.search` +
+  `noAutoCapitalize`) with `typeQuery`/`typeIndex`/`filteredTypes` state (highlight resets to top on
+  filter change), an `onTypeSearchKeyDown` handler (↑/↓ clamp, Enter → `selectType` of the
+  highlighted row, digits 1–6 → the Nth **filtered** row, `preventDefault` so the digit never
+  enters the input), an empty-state message, and combobox/`aria-activedescendant` a11y. The old
+  `onDialogKeyDown` digit branch and `firstTypeRef` were removed.
+- **`CreatePanelModal.module.css`** — `.typeActive` highlight mirroring `.folderActive` (Surface0).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 391)
+
+- "cmd+K launch panel" = the Create-panel launcher (#189); the filtered options are its six panel
+  **types** on the first step (previously pickable only by click / 1–6).
+- Enter selects the highlighted type and advances the existing 2-step flow (folder step, or
+  `startRepoSession` for Session) — it does not skip choosing a folder; plain case-insensitive
+  substring (no fuzzy ranking).
+- Ordering deliberately left to sibling Task 392 (iterate `PANEL_TYPES` as-is) — the only shared
+  file is `panelTypes.ts` (392 reorders the array, this adds a function), a trivial non-semantic
+  overlap; no hard dependency.
+
+**Cross-platform:** only bare keys (letters/digits/arrows/Enter/Escape), no ⌘/Ctrl handling added
+here; `useKeyboardNav`'s capture handler only swallows modified digits/arrows, so bare keys reach
+the input on all three OSes. Pure WebView/TS.
+
+**Dependencies:** none. (Soft file overlap with Task 392 on `panelTypes.ts`.)
+
+### 393. [x] ⌘F search — surface active-agent repos first & cap each repo to 6 results
+
+In the ⌘F / Ctrl+F global search modal, repos with a live/running agent are listed **first**
+(instead of strictly alphabetical), and each repo group shows at most **6** results with a "…"
+overflow indicator underneath when more matches exist — so a live agent in an alphabetically-later
+repo isn't buried, and a repo with many hits can't flood the list.
+
+**What shipped** (branch `task-393-search-active-first-cap`, PR
+[#145](https://github.com/ErikdeJager/ReCue/pull/145), merged 2026-07-15 into `ui-rework`):
+
+- **Pure logic in `search.ts`** (+ `search.test.ts`): `PER_REPO_ITEM_CAP = 6` and a `hiddenCount`
+  field on `RepoResults`; `rankAndGroup` now takes `{ activeRepos, perRepoCap }` (defaults preserve
+  the single-arg form) — the **primary** repo-sort key is active-vs-inactive (active repos first),
+  **secondary** the existing `repoName`-then-path alphabetical; each repo group is trimmed to 6
+  **total** items filled in `KIND_ORDER`, with the dropped count accumulated on `hiddenCount`.
+  `flatOrder` needs no change (it iterates the already-capped groups, so keyboard nav skips
+  overflow automatically).
+- **`GlobalSearch.tsx`** computes `activeRepos` (`sessions.filter(exitedCode === undefined).map(
+  effectiveRepo)`) and passes `{ activeRepos }` to `rankAndGroup`; renders a non-interactive
+  `.moreHint` "… +N more" indicator per repo group when `hiddenCount > 0` (excluded from
+  `flatIndex`/nav).
+- **`GlobalSearch.module.css`** — a muted, tokenized `.moreHint` row.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 393)
+
+- "Active" repo = ≥1 **live/running** agent (`session.exitedCode === undefined`), grouped by
+  `effectiveRepo` — not the busy heuristic; recurring children count as live.
+- "6 items per repo" = 6 **total** visible across all kind sections (not 6 per kind), filled in
+  `KIND_ORDER`; the "…" is a non-interactive muted "+N more" indicator excluded from keyboard nav;
+  secondary order within each tier stays alphabetical.
+- Cap + ordering live in pure `search.ts`, **source-agnostic** so they also cover sibling #394's
+  scrollback source with no further change.
+
+**Cross-platform:** pure TypeScript + React + tokenized CSS (no paths/shell/OS primitives, no
+`color-mix`) — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Soft file overlap with sibling Task 394 on the same modal.)

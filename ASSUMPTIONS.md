@@ -3525,3 +3525,30 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - "Currently active" = every backend-registered session (running, busy AND idle); the frontend already filters hits to store-known sessions so exited/forgotten agents don't surface. Kept as-is.
 - Output search keeps the ≥2-char query gate; only the 256KB scrollback tail is searched; activation selects the agent without scrolling its xterm to the match (out of scope).
 - Ordering / 6-per-repo cap deliberately untouched (siblings 393/392); output flows through the shared source-agnostic rankAndGroup.
+
+## Task 396
+- Reuse the existing `.fieldWarn` caution pattern (yellow `--status-awaiting` + `TriangleAlert` icon) rather than a new class — consistent with the untested-agent caution already in the same Settings modal; satisfies "not by color alone" (icon + text).
+- Chose `--status-awaiting` (yellow `#f9e2af` dark / `#df8e1d` light) as the on-system warning-yellow: the app's designated status yellow, correct in both themes; there is no separate `--warning` token.
+- Split the Linux-only "Native file dialogs adopt this theme…" sentence out of the recolored note, keeping it plain muted `.helpText` (informational, not a warning); the `isLinux(platform)` gate preserved.
+- No wording change to the note text. Target string at `Settings.tsx:397`; `TriangleAlert`/`isLinux`/`platform` already in scope (no new imports/CSS/backend).
+
+## Task 397
+- DEPENDS ON Task 393 (confirmed): reuses 393's `rankAndGroup(results, { activeRepos, perRepoCap })` signature, active-first ordering, and 6-item cap/hiddenCount; the cap-lift just passes `perRepoCap: Infinity`.
+- Chips derived from 393's unfiltered active-first `grouped`, so chip #N == the Nth result group and ⌘N filters that group.
+- Only the first 9 matching folders get chips + ⌘1–⌘9 (⌘/Ctrl+Number caps at 9); folders beyond 9 remain in results but aren't chip-filterable.
+- Chip row shown only when the query is non-empty AND ≥2 folders match.
+- Cap-lift = fully uncapped for the selected folder; upstream PER_REPO_FILE_CAP=20 still bounds matches.
+- Filter is transient local component state (no persistence/store slice); resets on modal close.
+- Toggle: ⌘N/click toggles; Escape clears an active filter first, then closes.
+- Active chip lights up with Surface0 fill + primary text + full-opacity repo dot; muted at rest (accent never encodes selection).
+- Active filter auto-clears if its folder stops matching; global ⌘1–9 Canvas-jump guarded with `!globalSearchOpen`; ⌘-Number handled in the modal input keydown (e.code Digit1–9 + metaKey||ctrlKey), hinted via kbdHint.
+- No `search.ts` logic change (reuses 393's perRepoCap); one contract unit test added for the Infinity path.
+
+## Task 395
+- "Active agent" = running/live session (exitedCode === undefined), matching store.ts killAgentsInRepo + sibling Task 393 (chosen over "busy" for consistency).
+- Count is the repo's OWN running agents only (excludes worktree agents + recurring-owned children, mirroring the existing repoSessions filter); worktree sub-groups keep their own WorktreeHeader count — avoids double-counting.
+- Removed the existing always-on total-sessions `chip-count` beside the repo name, consolidating to the single count in the "+" slot (two numbers in one header would be redundant).
+- At zero running agents: no count; keep today's behavior — empty repo → always-visible accent "+"; non-empty-but-none-running → "+" hidden at rest, revealed on hover/focus (no "0" clutter).
+- Count color = neutral --text-secondary (mono, tabular-nums, --fs-micro, "line-changes" typographic treatment), not the repo/status/accent color.
+- Scoped to the expanded RepoGroup header only; collapsed rail + WorktreeHeader "+" out of scope; new CSS scoped under `.newSlot` so the shared `.plus` class is undisturbed.
+- Keyboard swap via :focus-within + visibility:hidden (not :has()), for cross-platform WebView support + zero layout shift.
