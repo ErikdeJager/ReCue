@@ -137,7 +137,7 @@ steady-state boot pays **zero** probe cost.
   `DiffInspector` / `FileTree` — which is what carries the whole **react-markdown + Prism**
   stack out of the first-paint graph), each in its **own** per-branch `Suspense` (never one
   boundary around `ItemContent` — a suspending boundary `display:none`s its children, which
-  would un-measure a pooled xterm, the #18 class of bug); the ten modals in
+  would un-measure a pooled xterm, the #18 class of bug); the eleven modals in
   `components/ModalHost.tsx` (Suspense fallback **`null`** — an empty modal shell would be a
   visible regression); the **`@xterm/addon-webgl`** addon in `terminalPool.createHost()`
   (xterm core / fit / web-links stay **static** — terminals *are* the first paint; the addon
@@ -308,7 +308,8 @@ steady-state boot pays **zero** probe cost.
   with focus advancing to a spatial neighbor so repeated ⌘W keeps closing; else the
   selected Overview panel's hover-× — never an agent/schedule/recurring, those are
   destructive), **⌘,** opens Settings, plus the carried-over ⌘E big mode (#284) / ⌘N /
-  ⌘⇧N / ⌘K / ⌘F / ⌘B / ⌘D. **Removed:** ⌘T (new tab #206), ⌘1–9 (canvas jump #76 — the
+  ⌘⇧N / ⌘K / ⌘F / ⌘B / ⌘D and the Open-in-editor pair **⌘O/⌘⇧O** (see the Open-in-editor
+  bullet). **Removed:** ⌘T (new tab #206), ⌘1–9 (canvas jump #76 — the
   modal-internal new-session-recents #61/#66 and global-search folder-chip #397 digits
   are unaffected), ⌘\ (view toggle #77). Overrides persist as **`settings.keybinds`**
   (action id → serialized chord, `""` = unbound; only overrides stored, so new defaults
@@ -325,6 +326,35 @@ steady-state boot pays **zero** probe cost.
   `src-tauri/src/menu.rs` rebuilds `Menu::default` at setup with the predefined items
   swapped for a custom **⇧⌘W** Close Window (Edit-menu clipboard items untouched —
   WKWebView needs them; Windows/Linux create no default menu, so nothing to do there).
+- **Open in editor:** launch the user's preferred external editor/IDE at a folder —
+  from the agent header **⋯ menu** (`AgentHeaderMenu`, so it appears on Overview cards,
+  Canvas panels, Big mode, and Attention), the sidebar **agent-row / repo / branch-line /
+  worktree** context menus (next to "Reveal in Finder"), or the rebindable **⌘O**
+  (open the *selected* item's folder — an agent resolves via `contentForSelected` to its
+  `repoPath`, already the worktree for worktree agents) / **⌘⇧O** (re-open the picker to
+  choose again). The Rust **`editors.rs`** (mirroring `agents.rs`) owns an `EditorSpec`
+  catalog — VS Code, Cursor, Windsurf, Zed (`zed`/`zeditor`), Sublime, Notepad++
+  (`-openFoldersAsWorkspace`), TextMate, Kate, the JetBrains family (idea/webstorm/
+  pycharm/phpstorm/rustrover/goland/clion/rider/Android Studio/Fleet) — with **one
+  resolver for detection AND launch** (they can never disagree; existence-based, never
+  `--version` — JetBrains launchers boot a JVM): ① CLI on the login-shell PATH via
+  `pty::resolve_command` (#360/#140), ② the JetBrains **Toolbox scripts dir** per OS,
+  ③ a macOS `/Applications`+`~/Applications` bundle → `open -na <app> --args <path>`,
+  ④ known Windows install paths (`%VAR%` templates), ⑤ the versioned
+  `%ProgramFiles%\JetBrains\<Product> <ver>` layout. Launches are detached
+  fire-and-forget like `os_open` — CLI/script launches through `git::hidden_command`
+  (CREATE_NO_WINDOW + `apply_path` + the #350 AppImage scrub), `open`/direct GUI exes
+  through `child_env::command`. Commands: `detect_editors` (spawn_blocking; feeds the
+  picker + Settings annotations) and `open_in_editor(path, editor)`. The preference is
+  **global**: `settings.preferredEditor` (`null` = ask every time) + a
+  `customEditorCommand` argv (tokenized by `agents::parse_custom_command`, `{path}`
+  substituted / appended — the inclusivity valve for terminal editors,
+  `alacritty -e nvim {path}`), edited in **Settings → Editor** (a native select over the
+  `src/editors.ts` label mirror + "— detected" annotations). First use (or a
+  `BinaryNotFound` launch — the self-heal) opens the **`EditorPickerModal`** (lazy, the
+  Onboarding pattern) listing detected editors + the custom row, with **"Remember my
+  choice" checked by default**; it renders in the main ModalHost **and** detached canvas
+  windows (an exported `EditorPickerGate`).
 - **Lazy terminal mount (#351):** a pooled xterm is created on **first visibility**, not
   on React mount — `Terminal.tsx` gates `mountTerminal` on a **latching**
   `IntersectionObserver` (`Terminal/useVisibleOnce.ts`), so booting into an Overview wall
@@ -572,8 +602,8 @@ steady-state boot pays **zero** probe cost.
   focus-trapped **Settings modal** (`components/Settings`) — a **fixed 740×540** size
   (clamped to 92vw/88vh — #119's fixed-size precedent, resized by UI v2 task 373)
   so every section renders identically and a tall section
-  scrolls inside the content pane (the nav + action row stay put) — with **eight** sections
-  (**nine** on Linux, which additionally gets **Rendering**, #357) —
+  scrolls inside the content pane (the nav + action row stay put) — with **nine** sections
+  (**ten** on Linux, which additionally gets **Rendering**, #357) —
   **Terminal** (font size / line height via the custom **`Slider`** #122 + cursor
   blink → the live pooled xterms via `terminalPool.applyTerminalSettings`),
   **Sessions** (the #97 auto-name toggle + the #142 **Coding agent** selector →
@@ -598,7 +628,9 @@ steady-state boot pays **zero** probe cost.
   **Diagnostics** readout of the boot decision (`renderer_diagnostics` → the
   `linux_webkit::RendererReport` captured in a `OnceLock`; `null` off Linux)), **Behavior** (default launch view + confirm-destructive
   gating #103 + the Canvas tab-close default `canvasCloseBehavior`: Ask / Always kill / Never
-  kill #137 + the diff display/line/sort defaults #237/#258), **Kanban** (per-column colors by
+  kill #137 + the diff display/line/sort defaults #237/#258), **Editor** (the Open-in-editor
+  preferred-editor select over the `src/editors.ts` catalog mirror with live "— detected"
+  annotations + the `{path}` custom command — see the Open-in-editor bullet), **Kanban** (per-column colors by
   name #239), **Updates** (check for updates / current version / "What's new" / update now
   #191), **Shortcuts** (#318/373, made **editable** by the keybind rework — the
   rebindable actions of the `src/keybinds.ts` registry render as click-to-record rows
@@ -725,6 +757,7 @@ steady-state boot pays **zero** probe cost.
 │   ├── windowContext.ts    # Window identity (#84): main vs canvas-<id>, ownership helpers
 │   ├── ownership.ts        # useSessionOwners hook — which window renders each PTY (#84)
 │   ├── keybinds.ts         # Configurable-keybind registry + pure chord logic (keybind rework)
+│   ├── editors.ts          # Label mirror of the Rust editor catalog ("Open in editor")
 │   ├── useKeybind.ts       # useKeybindLabel — live hint labels off settings.keybinds
 │   ├── useKeyboardNav.ts   # Global keyboard dispatcher over the keybinds registry (#24/#76/#84)
 │   ├── useAutoSaveFile.ts  # Read + hot-reload + debounced-write hook (FileViewer raw + Kanban) (#148)
@@ -748,7 +781,8 @@ steady-state boot pays **zero** probe cost.
 │   │                       #   WaveBackground (UI v2 wave layer, task 377 — lazy src/vendor/WaveEngine.js;
 │   │                       #     lazy waveHost runs it on the main thread OR from an OffscreenCanvas
 │   │                       #     Web Worker + a governed/paused-when-covered loop, task 384)
-│   │                       #   ModalHost.tsx — the ten lazily-mounted top-level modals (#356)
+│   │                       #   EditorPicker (the "Open in editor" first-use/re-pick modal)
+│   │                       #   ModalHost.tsx — the eleven lazily-mounted top-level modals (#356)
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base) +
 │   │                       #   the UI v2 primitives: atoms.css (buttons/chips/kbd hints),
 │   │                       #   menu.css (anchored menus/popovers), modal.css (centered
@@ -761,6 +795,7 @@ steady-state boot pays **zero** probe cost.
 │   ├── src/main.rs         # Binary entry point
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
+│   ├── src/editors.rs      # "Open in editor": EditorSpec catalog + shared detect/launch resolver
 │   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
 │   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
 │   ├── src/path_env.rs     # Login-shell PATH: async probe + PathState cell + rc-mtime cache (#360; Finder/.desktop-launch fix, macOS+Linux)

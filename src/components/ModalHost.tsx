@@ -11,13 +11,17 @@ import { useStore } from "../store";
 //
 // NOT here (deliberately static, see MainApp): Toaster, BigModeModal, UpdateModal,
 // ClaudeMissing — first-paint or safety-critical (the update install overlay must never be
-// a chunk away).
+// a chunk away). The EditorPicker gate is additionally exported — a detached canvas
+// window (#84) renders it too (its agent headers carry the same ⋯ menu).
 const CanvasCloseModal = lazy(
   () => import("./CanvasCloseModal/CanvasCloseModal"),
 );
 const CloneRepoModal = lazy(() => import("./CloneRepoModal/CloneRepoModal"));
 const CreatePanelModal = lazy(
   () => import("./CreatePanelModal/CreatePanelModal"),
+);
+const EditorPickerModal = lazy(
+  () => import("./EditorPicker/EditorPickerModal"),
 );
 const GlobalSearch = lazy(() => import("./GlobalSearch/GlobalSearch"));
 const NewSessionModal = lazy(() => import("./NewSessionModal/NewSessionModal"));
@@ -131,6 +135,18 @@ function OnboardingGate() {
   );
 }
 
+/** The "Open in editor" picker gate — exported because it also mounts in detached
+ * canvas windows (#84): their agent headers carry the same ⋯ menu and the
+ * open/choose-editor chords work there, so the picker must exist per window. */
+export function EditorPickerGate() {
+  const open = useStore((s) => s.editorPickerOpen);
+  return (
+    <Gate open={open}>
+      <EditorPickerModal />
+    </Gate>
+  );
+}
+
 /** All of the main window's lazy modals, each mounted only while its store flag is set. */
 function ModalHost() {
   return (
@@ -145,6 +161,7 @@ function ModalHost() {
       <TemplateManagerGate />
       <TemplateEditorGate />
       <OnboardingGate />
+      <EditorPickerGate />
     </>
   );
 }

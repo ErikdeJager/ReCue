@@ -9,6 +9,7 @@ mod boot;
 mod child_env;
 mod commands;
 mod early_settings;
+mod editors;
 mod files;
 mod git;
 mod linux_desktop;
@@ -398,6 +399,8 @@ pub fn run() {
             commands::app_version,
             commands::claude_version,
             commands::agent_info,
+            commands::detect_editors,
+            commands::open_in_editor,
             commands::platform,
             commands::install_kind,
             commands::windows_build,
