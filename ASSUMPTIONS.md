@@ -3573,3 +3573,10 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Left the historical TASK_ARCHIVE.md task-384 entry unchanged (it correctly records 384 shipped default ON); updated CLAUDE.md + TS/comment copy instead.
 - Updated the existing store.test.ts default-value test to assert false and to keep an override assertion for a persisted true; Settings.tsx help text left as-is (states no default).
 - Correcting the "(default on)" parenthetical in TRAJECTORY_TO_LINUX/WINDOWS.md is marked optional/low-priority (historical logs); the smoke-verification steps still hold.
+
+## Task 399 — Let macOS Ctrl+⌘+F native fullscreen through (⌘F opens search only on the plain search chord)
+
+- Chose a platform-agnostic "exactly one of Cmd/Ctrl" guard (`(meta||ctrl) && !(meta&&ctrl)`) over a platform-signal-based `metaKey && !ctrlKey`/`ctrlKey && !metaKey` split: equivalent for the canonical chords, needs no async `platform()` lookup (correct from the first frame), and keeps plain Ctrl+F opening search on macOS unchanged.
+- Scoped the modifier carve-out to the ⌘F search block only; left every other ⌘-shortcut (⌘N/⌘B/⌘K/⌘T/⌘E/⌘D/⌘\/⌘1-9) unchanged since none were reported to collide with a native macOS Cmd+Ctrl combo.
+- Extracted a pure predicate (`src/searchChord.ts`) + node unit test rather than an inline-only one-liner, matching the pasteHandler.ts/hoverFocus.ts convention (tests run in the node env; hooks are excluded from coverage).
+- No Settings -> Shortcuts copy change: the ⌘F / Ctrl+F "Global search" hint stays accurate, so shortcuts.test.ts is untouched.
