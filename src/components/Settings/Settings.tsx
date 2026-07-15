@@ -515,6 +515,19 @@ function SettingsModal() {
                   Scales the entire interface. The terminal font size is set
                   separately under Terminal.
                 </p>
+                <Slider
+                  label="Terminal background"
+                  valueLabel={`${draft.terminalBackgroundLightness}%`}
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={draft.terminalBackgroundLightness}
+                  onChange={(v) => update("terminalBackgroundLightness", v)}
+                />
+                <p className={styles.helpText}>
+                  Lighten the agent terminal background from near-black toward
+                  gray.
+                </p>
               </>
             )}
 

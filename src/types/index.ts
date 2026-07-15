@@ -352,6 +352,11 @@ export interface Settings {
   terminalLineHeight: number;
   /** xterm cursor blink. */
   terminalCursorBlink: boolean;
+  /** Terminal background lightness (#390): 0 = near-black `#11111b` (default, today's
+   * look byte-for-byte), 100 = a soft gray. Lightens ONLY the agent/shell terminal
+   * background (xterm canvas + its padding frame); terminal-only and dark in both
+   * themes, so it never touches the light/dark theme toggle or non-terminal surfaces. */
+  terminalBackgroundLightness: number;
   // Appearance (wired by a follow-up)
   /** UI theme (#333): "dark" (default, Catppuccin Mocha) or "light" (Catppuccin
    * Latte). Applied as a `data-theme` attribute on <html> by applySettingsEffects;
