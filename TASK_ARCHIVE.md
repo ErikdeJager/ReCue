@@ -6098,3 +6098,54 @@ no `#[cfg]`, path, or shell primitives.
 
 **Dependencies:** none. (Task 404 — defaulting hover-focus **on** — depends on this landing first,
 since it increases focus events and so makes this fix more important.)
+
+### 406. [x] Make Overview + Attention the main view buttons; Canvas a smaller secondary button
+
+The sidebar view switcher now reads as a prominence hierarchy: **Overview** and **Attention** are
+the two equal-weight "main" buttons, and **Canvas** is a visibly smaller, de-emphasized secondary
+button after them — swapping Canvas and Attention (Attention rises to sit beside Overview, Canvas is
+demoted to the end at a smaller size). The intent is that Overview and Attention read as the primary
+daily views while Canvas is an optional/power-user view. Layout/visual only — no store or shortcut
+change.
+
+**What shipped** (branch `view-switch-main-buttons-406`, PR
+[#161](https://github.com/ErikdeJager/ReCue/pull/161), merged 2026-07-15 into `iteration-1`) — 120
+insertions / 35 deletions across the two ViewSwitch files:
+
+- **`src/components/ViewSwitch/ViewSwitch.tsx`** — in **expanded** mode, Overview + Attention render
+  as a **two-segment** shared `SegmentedControl` (`chrome stretch`), followed by a separate, smaller
+  Canvas `<button>` (`aria-label="Canvas"`, `title`, `aria-pressed={view === "canvas"}`,
+  `PanelsTopLeft` icon, `.canvasBtn` / `.canvasBtnActive`) inside a new `.expanded` flex row. With
+  only two segments in the control, `view === "canvas"` correctly leaves neither segment active and
+  the Canvas button shows the active state instead (the intended "Canvas is a secondary mode"
+  affordance). The `OPTIONS` array is reordered to `overview, attention, canvas`, so the **compact
+  rail** stacks the icons in that order with an `isCanvas` de-emphasis (`.iconCanvas`), keeping all
+  three as valid tap targets with roving arrow-key nav.
+- **`src/components/ViewSwitch/ViewSwitch.module.css`** — added the `.expanded` row container, the
+  `.canvasBtn` / `.canvasBtnActive` styles (chrome-radius tokens, Surface0 active fill matching the
+  segmented thumb, `--text-secondary`→`--text-primary` on hover/active), and the compact-rail
+  `.iconCanvas` de-emphasis. On-system tokens only.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 406)
+
+- Read "Overview and Attention should be the main buttons, the canvas should be a smaller button" +
+  "Canvas and attention should swap places" as a **two-item main control** (Overview + Attention,
+  equal weight) via the shared `SegmentedControl` **plus a separate, visibly smaller Canvas button**
+  appended after it — chosen over "three equal segments reordered" because the card explicitly asks
+  for a size/prominence hierarchy, not just a reorder.
+- **Did not** modify the shared `SegmentedControl` atom (used by other UI v2 toolbars) to get
+  per-segment sizing — the hierarchy is built **inside** ViewSwitch. (An acceptable fallback of
+  ViewSwitch rendering its own three buttons was on the table, but the atom is never touched.)
+- Compact rail reordered to Overview, Attention, Canvas (Canvas last) for consistency, with an
+  optional Canvas de-emphasis; kept the 28px icon tap targets + roving nav.
+- Keyboard shortcuts unchanged: `⌘\` (Overview↔Canvas) and `⌘1–9` (canvas) are layout-independent
+  and stay; no `shortcuts.ts` change for a pure visual tweak. Accessibility preserved via
+  `aria-pressed`/`aria-label` on the split-out Canvas button and the tablist's `aria-selected`.
+
+**Cross-platform:** pure React/TS + CSS-token layout in the ViewSwitch component; no path/shell/
+native primitives and on-system tokens only — identical (and theme-correct in dark/light) on macOS,
+Windows, and Linux.
+
+**Dependencies:** Task 405 (remove the Attention count badge). Both tasks edit
+`ViewSwitch.tsx`/`.module.css`; serializing avoided a merge conflict and let 406 build on the
+badge-free, icon-only Attention button.
