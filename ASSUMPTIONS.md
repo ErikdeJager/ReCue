@@ -3518,3 +3518,10 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - "…" is a non-interactive muted "+N more" indicator, excluded from keyboard nav.
 - Secondary order within each tier stays alphabetical repoName-then-path.
 - Cap+ordering live in pure search.ts, source-agnostic (covers sibling #394's scrollback source).
+
+## Task 394
+- MAJOR / potential duplicate: the card's core feature (⌘F GlobalSearch already greps every live agent's in-memory scrollback via Rust `search_session_output`/`SessionManager::search_output`, ANSI-stripped, capped per-session 5 + total 50, snippet-clamped, rendered as a "Terminal output" group) ALREADY SHIPPED as Task #337 and was moved off the main thread by #353. Task 394 is rescoped to VERIFY that shipped feature + a small side-effect-free improvement, not a from-scratch build; the merge lane may prefer to close it as a duplicate.
+- Chosen "improve" delta: expand claude's non-erasing cursor-forward CSI moves (ESC[<n>C) into spaces inside `strip_ansi` (its only caller is the search path) so on-screen phrases actually match; optional TSX polish hiding the non-navigable ":line" badge on output rows. Backend-only, collision-free with siblings 392/393.
+- "Currently active" = every backend-registered session (running, busy AND idle); the frontend already filters hits to store-known sessions so exited/forgotten agents don't surface. Kept as-is.
+- Output search keeps the ≥2-char query gate; only the 256KB scrollback tail is searched; activation selects the agent without scrolling its xterm to the match (out of scope).
+- Ordering / 6-per-repo cap deliberately untouched (siblings 393/392); output flows through the shared source-agnostic rankAndGroup.
