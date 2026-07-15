@@ -345,7 +345,8 @@
   /* Grow to reclaim the header width: with the branch moved to its own line (#236),
      the name no longer shares the row with an inline badge. Still shrinks + truncates
      when the name is long. Weight 600 at the v2 row size (UI v2 §5, task 374); the
-     session count beside it is the shared `.chip-count` atom. */
+     running-agent count now lives in the new-session slot to the right (`.newSlot`,
+     #395), swapping to the "+" on hover — no longer a `.chip-count` atom beside the name. */
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -515,6 +516,56 @@
 
 .plusCoral:hover {
   color: var(--accent-hover);
+}
+
+/* New-session count slot (#395): a fixed-size box that holds the running-agent count
+   (in flow) with the "+" overlaid on top. Only `.newSlot` positioning is added here —
+   the shared `.plus`/`.plusCoral`/`.repoHeader .plus` reveal rules are untouched, so
+   the WorktreeHeader's `+` (outside a `.newSlot`) stays in-flow + always visible. The
+   count is a neutral mono/tabular number (never accent, never a status color). */
+.newSlot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 22px;
+  height: 22px;
+}
+
+.agentCount {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--text-secondary);
+}
+
+/* Overlay the "+" on the count so the swap never moves anything. */
+.newSlot .plus {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* When a count is shown: the "+" is hidden at rest and revealed on header hover /
+   keyboard focus; the count is hidden (visibility, so its width is preserved → zero
+   layout shift) in the same states. */
+.newSlotCounted .plus {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.repoHeader:hover .newSlotCounted .plus,
+.newSlotCounted:focus-within .plus {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.repoHeader:hover .newSlotCounted .agentCount,
+.newSlotCounted:focus-within .agentCount {
+  visibility: hidden;
 }
 
 /* Agent row (UI v2 §5, task 374): 26px, indented 12px under the branch label;

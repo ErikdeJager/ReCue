@@ -1860,6 +1860,13 @@ function RepoGroup({
     (s) => s.repoPath === repo && !s.worktreeParent && !ownedChildIds.has(s.id),
   );
   const isEmpty = repoSessions.length === 0;
+  // Active (running) agent count for the header's new-session slot (#395): shown at
+  // rest where the "+" appears on hover. "Active" = not exited (`exitedCode` unset),
+  // the codebase-wide convention; worktree/recurring-owned children are already
+  // excluded from `repoSessions`.
+  const activeCount = repoSessions.filter(
+    (s) => s.exitedCode === undefined,
+  ).length;
   // Branch-line gate (#250): show the repo's own branch line only when the folder
   // has at least one of its *own* items opened — own sessions, own non-agent panels
   // (files/diffs/terminals/kanban), or own-folder schedules. A worktree sub-group
@@ -1950,20 +1957,35 @@ function RepoGroup({
           aria-pressed={folderActive}
         >
           <span className={styles.repoName}>{repoName(repo)}</span>
-          {!isEmpty && (
-            <span className="chip-count">{repoSessions.length}</span>
-          )}
         </button>
-        <button
-          type="button"
-          className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
-          onClick={() => void startRepoSession(repo)}
-          onPointerDown={(event) => event.stopPropagation()}
-          title="New session in this repo"
-          aria-label="New session in this repo"
+        {/* New-session slot (#395): at rest it shows the count of the repo's own
+        running agents; hovering the header (or focusing the "+") swaps the count out
+        for the clickable "+", mirroring the agent row's diff `+/- ↔ ×` slot-swap. The
+        count and the "+" share the same fixed-width slot, so the swap shifts nothing.
+        A repo with no running agents falls through to the untouched `.repoHeader .plus`
+        hover-reveal (or the always-visible accent `.plusCoral` when empty). */}
+        <span
+          className={`${styles.newSlot} ${activeCount > 0 ? styles.newSlotCounted : ""}`}
         >
-          <Plus size={14} strokeWidth={1.5} />
-        </button>
+          {activeCount > 0 && (
+            <span
+              className={styles.agentCount}
+              aria-label={`${activeCount} active agent${activeCount === 1 ? "" : "s"}`}
+            >
+              {activeCount}
+            </span>
+          )}
+          <button
+            type="button"
+            className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
+            onClick={() => void startRepoSession(repo)}
+            onPointerDown={(event) => event.stopPropagation()}
+            title="New session in this repo"
+            aria-label="New session in this repo"
+          >
+            <Plus size={14} strokeWidth={1.5} />
+          </button>
+        </span>
       </div>
 
       {/* Current branch on its own line below the header (#236, supersedes the #225
