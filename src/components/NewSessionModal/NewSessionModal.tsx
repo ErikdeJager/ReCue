@@ -17,6 +17,7 @@ import {
   listSkills,
   pickDirectory,
 } from "../../ipc";
+import { matchBranchFilter } from "../../branchFilter";
 import { repoName } from "../../paths";
 import { kbdHint } from "../../platform";
 import { useStore } from "../../store";
@@ -850,7 +851,10 @@ function NewSessionModal() {
   };
 
   // Filter the branch list as the user types; keep a row selected (top match —
-  // locals first, then remotes #180) so Enter always starts something.
+  // locals first, then remotes #180) so Enter always starts something. When the
+  // typed text matches no existing branch, jump straight to the create-branch
+  // action pre-filled with that text (#408) — Enter then creates it (⌘⏎ as a
+  // worktree) instead of forcing a click on "+ add branch" and a retype.
   const onBranchQueryChange = (value: string) => {
     setBranchQuery(value);
     setAddBranchActive(false); // re-filtering returns the highlight to a branch (#124)
@@ -868,15 +872,39 @@ function NewSessionModal() {
     const remoteStillValid =
       selectedRemote !== null && nlRemote.includes(selectedRemote);
     if (localStillValid || remoteStillValid) return;
-    if (nlLocal.length > 0) {
-      setSelectedBranch(nlLocal[0] ?? null);
-      setSelectedRemote(null);
-    } else if (nlRemote.length > 0) {
-      setSelectedBranch(null);
-      setSelectedRemote(nlRemote[0] ?? null);
-    } else {
+    const match = matchBranchFilter(value, nlLocal, nlRemote);
+    // Don't convert to create while the on-open `git fetch` is still filling the
+    // remote list (#408) — a query matching an incoming remote shouldn't jump to
+    // create prematurely; until it settles, just clear the selection.
+    if (match.kind === "create" && fetchingRemotes) {
       setSelectedBranch(null);
       setSelectedRemote(null);
+      return;
+    }
+    switch (match.kind) {
+      case "local":
+        setSelectedBranch(match.value);
+        setSelectedRemote(null);
+        break;
+      case "remote":
+        setSelectedBranch(null);
+        setSelectedRemote(match.value);
+        break;
+      case "create":
+        // Convert the no-match query into a create-branch action, pre-filled with
+        // the typed text (original case). The addBranchActive effect focuses the
+        // new-branch name input; onNewBranchKeyDown handles Enter/⌘⏎/defer.
+        setAddBranchActive(true);
+        setNewBranchName(value.trim());
+        setBranchQuery("");
+        setSelectedBranch(null);
+        setSelectedRemote(null);
+        setBranchError(null);
+        break;
+      case "none":
+        setSelectedBranch(null);
+        setSelectedRemote(null);
+        break;
     }
   };
 

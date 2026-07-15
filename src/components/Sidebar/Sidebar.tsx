@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 
 import { agentSupportsResume } from "../../agents";
+import { matchBranchFilter } from "../../branchFilter";
 import { afterPaint } from "../../gitRefresh";
 import { noAutoCapitalize } from "../../inputProps";
 import {
@@ -2612,6 +2613,36 @@ function Sidebar() {
       )
     : [];
 
+  // Type-to-filter with a create-branch fallback (#408): when the typed value
+  // matches no local/remote branch, jump straight to the create-branch input
+  // pre-filled with that text (original case, focused) instead of forcing a click
+  // on "Create new branch" and a retype. Enter there creates + checks out off the
+  // folder's current branch, exactly like the explicit toggle.
+  const onCheckoutFilterChange = (value: string) => {
+    const q = value.trim().toLowerCase();
+    const nlLocal = checkoutList
+      ? sortCheckoutBranches(checkoutList.all).filter(
+          (b) => !q || b.toLowerCase().includes(q),
+        )
+      : [];
+    const nlRemote = checkoutList
+      ? (checkoutList.remote ?? []).filter(
+          (r) => !q || r.toLowerCase().includes(q),
+        )
+      : [];
+    if (
+      !checkoutLoading &&
+      matchBranchFilter(value, nlLocal, nlRemote).kind === "create"
+    ) {
+      setCheckoutCreating(true);
+      setCheckoutNewName(value.trim());
+      setCheckoutFilter("");
+      setCheckoutError(null);
+      return;
+    }
+    setCheckoutFilter(value);
+  };
+
   // Drag-to-resize the sidebar (#108): a right-edge handle with pointer capture so
   // the drag tracks even when the pointer leaves the thin handle. The store clamps
   // to [180, 560] + persists (debounced); double-click resets to the default.
@@ -3157,7 +3188,7 @@ function Sidebar() {
                         value={checkoutFilter}
                         placeholder="Filter branches…"
                         onChange={(event) =>
-                          setCheckoutFilter(event.currentTarget.value)
+                          onCheckoutFilterChange(event.currentTarget.value)
                         }
                         aria-label="Filter branches"
                         autoFocus={!checkoutCreating}
