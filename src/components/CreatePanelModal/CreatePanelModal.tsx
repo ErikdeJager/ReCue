@@ -9,11 +9,7 @@ import { useStore } from "../../store";
 import type { OverviewPanel } from "../../types";
 import FilePicker from "../FilePicker/FilePicker";
 import styles from "./CreatePanelModal.module.css";
-import {
-  PANEL_TYPES,
-  type PanelTypeKey,
-  panelTypeForDigit,
-} from "./panelTypes";
+import { filterPanelTypes, PANEL_TYPES, type PanelTypeKey } from "./panelTypes";
 
 // The non-agent types map to an `overviewPanels` kind (a File viewer is a
 // `markdown` panel; the rest are 1:1). `session` is handled separately (spawns an
@@ -64,10 +60,20 @@ function CreatePanelModal() {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
 
+  // Type-step filter (#189, task 391): a search input filters the listed types
+  // as you type; ↑/↓ move the highlight, Enter / 1–6 pick the highlighted / Nth row.
+  const [typeQuery, setTypeQuery] = useState("");
+  const [typeIndex, setTypeIndex] = useState(0);
+
   const dialogRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const firstTypeRef = useRef<HTMLButtonElement>(null);
+  const typeSearchRef = useRef<HTMLInputElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+
+  const filteredTypes = useMemo(() => filterPanelTypes(typeQuery), [typeQuery]);
+
+  // Reset the type highlight to the top whenever the type filter changes.
+  useEffect(() => setTypeIndex(0), [typeQuery]);
 
   // The target folders: open repos + their worktrees (live session `repoPath`s,
   // which include #74 worktree folders) unioned with `recents`, deduped in order.
@@ -100,11 +106,11 @@ function CreatePanelModal() {
   // Reset the highlight to the top whenever the filter changes.
   useEffect(() => setActiveIndex(0), [query]);
 
-  // Focus per step: the first type chip (type step) or the folder search (target).
+  // Focus per step: the type search (type step) or the folder search (target).
   // The FilePicker autofocuses its own input (file step).
   useEffect(() => {
     const t = setTimeout(() => {
-      if (step === "type") firstTypeRef.current?.focus();
+      if (step === "type") typeSearchRef.current?.focus();
       else if (step === "target") searchRef.current?.focus();
     }, 0);
     return () => clearTimeout(t);
@@ -150,19 +156,12 @@ function CreatePanelModal() {
     setQuery("");
   };
 
-  // Dialog-level keys: digit 1–6 selects a type (type step); Tab is trapped inside.
+  // Dialog-level keys: Escape closes; Tab is trapped inside. (The type step's digit
+  // 1–6 / arrow selection is handled on its search input, `onTypeSearchKeyDown`.)
   const onDialogKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
       close();
-      return;
-    }
-    if (step === "type" && /^[1-6]$/.test(event.key)) {
-      const key = panelTypeForDigit(Number(event.key));
-      if (key) {
-        event.preventDefault();
-        selectType(key);
-      }
       return;
     }
     // Focus-trap (a11y #49): keep Tab inside the dialog.
@@ -180,6 +179,29 @@ function CreatePanelModal() {
         event.preventDefault();
         first.focus();
       }
+    }
+  };
+
+  // Type search keys (#189, task 391): ↑/↓ move the highlight within the filtered
+  // list, Enter starts the highlighted type, 1–6 pick the Nth displayed row. Escape /
+  // Tab bubble to `onDialogKeyDown` (close / focus-trap).
+  const onTypeSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown") {
+      if (filteredTypes.length === 0) return;
+      event.preventDefault();
+      setTypeIndex((i) => Math.min(i + 1, filteredTypes.length - 1));
+    } else if (event.key === "ArrowUp") {
+      if (filteredTypes.length === 0) return;
+      event.preventDefault();
+      setTypeIndex((i) => Math.max(i - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const t = filteredTypes[typeIndex];
+      if (t) selectType(t.key);
+    } else if (/^[1-6]$/.test(event.key)) {
+      event.preventDefault();
+      const t = filteredTypes[Number(event.key) - 1];
+      if (t) selectType(t.key);
     }
   };
 
@@ -223,33 +245,58 @@ function CreatePanelModal() {
         {step === "type" ? (
           <>
             <p className={styles.label}>Choose a type</p>
+            <input
+              ref={typeSearchRef}
+              className={styles.search}
+              {...noAutoCapitalize}
+              type="text"
+              value={typeQuery}
+              placeholder="Search item types…"
+              onChange={(event) => setTypeQuery(event.currentTarget.value)}
+              onKeyDown={onTypeSearchKeyDown}
+              role="combobox"
+              aria-expanded="true"
+              aria-controls="create-panel-type-list"
+              aria-activedescendant={
+                filteredTypes[typeIndex]
+                  ? `create-panel-type-${filteredTypes[typeIndex].key}`
+                  : undefined
+              }
+              aria-label="Search item types"
+            />
             <div
+              id="create-panel-type-list"
               className={styles.types}
               role="listbox"
               aria-label="Panel type"
             >
-              {PANEL_TYPES.map((t, i) => {
-                const Icon = t.icon;
-                return (
-                  <button
-                    key={t.key}
-                    ref={i === 0 ? firstTypeRef : undefined}
-                    type="button"
-                    role="option"
-                    aria-selected={false}
-                    className={styles.type}
-                    onClick={() => selectType(t.key)}
-                  >
-                    <Icon
-                      size={15}
-                      strokeWidth={1.5}
-                      className={styles.typeIcon}
-                    />
-                    <span className={styles.typeLabel}>{t.label}</span>
-                    <kbd className="modal-kbd">{i + 1}</kbd>
-                  </button>
-                );
-              })}
+              {filteredTypes.length === 0 ? (
+                <p className={styles.empty}>No matching types.</p>
+              ) : (
+                filteredTypes.map((t, i) => {
+                  const Icon = t.icon;
+                  return (
+                    <button
+                      key={t.key}
+                      id={`create-panel-type-${t.key}`}
+                      type="button"
+                      role="option"
+                      aria-selected={i === typeIndex}
+                      className={`${styles.type} ${i === typeIndex ? styles.typeActive : ""}`}
+                      onMouseEnter={() => setTypeIndex(i)}
+                      onClick={() => selectType(t.key)}
+                    >
+                      <Icon
+                        size={15}
+                        strokeWidth={1.5}
+                        className={styles.typeIcon}
+                      />
+                      <span className={styles.typeLabel}>{t.label}</span>
+                      <kbd className="modal-kbd">{i + 1}</kbd>
+                    </button>
+                  );
+                })
+              )}
             </div>
             <div className={styles.actions}>
               <button
