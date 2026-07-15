@@ -357,7 +357,8 @@
 }
 
 .copyCode:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
   outline-offset: 1px;
 }
 

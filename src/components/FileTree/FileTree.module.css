@@ -257,7 +257,8 @@
    outline + dim fill), so it's identical on macOS and Windows. Defined after
    `.row:hover` so it wins the equal-specificity tie during a drag. */
 .dropTarget {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
   outline-offset: -1px;
   background: var(--accent-dim);
 }

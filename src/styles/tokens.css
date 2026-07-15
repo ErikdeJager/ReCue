@@ -61,8 +61,8 @@
   --scrim: rgba(17, 17, 27, 0.8); /* Crust-based full-window dim overlay */
 
   /* --- Borders (low-alpha Text — subtle, theme-tinted) --- */
-  --border-hairline: rgba(205, 214, 244, 0.08);
-  --border-strong: rgba(205, 214, 244, 0.15);
+  --border-hairline: rgba(205, 214, 244, 0.06);
+  --border-strong: rgba(205, 214, 244, 0.11);
 
   /* --- Text --- */
   --text-primary: #cdd6f4; /* Text */
@@ -82,6 +82,13 @@
   --accent-tint-fill: color-mix(in srgb, var(--accent) 10%, transparent);
   --accent-tint-border: color-mix(in srgb, var(--accent) 35%, transparent);
   --accent-tint-hover: color-mix(in srgb, var(--accent) 18%, transparent);
+
+  /* --- Focus ring (keyboard-only; softened accent, one knob to tune). Derived
+     from the single var(--accent) so a custom accent recolors it live, like the
+     --accent-tint-* tokens; consumers carry the plain-color fallback (a full
+     var(--accent) outline) for engines without color-mix. --- */
+  --focus-ring-width: 1.5px; /* was a hard 2px */
+  --focus-ring: color-mix(in srgb, var(--accent) 70%, transparent);
 
   /* --- Diff --- */
   --diff-add-fg: #a6e3a1; /* Green */
@@ -221,8 +228,8 @@
   --scrim: rgba(76, 79, 105, 0.35); /* soft dark dim for modals */
 
   /* --- Borders (low-alpha Latte Text) --- */
-  --border-hairline: rgba(76, 79, 105, 0.1);
-  --border-strong: rgba(76, 79, 105, 0.18);
+  --border-hairline: rgba(76, 79, 105, 0.08);
+  --border-strong: rgba(76, 79, 105, 0.13);
 
   /* --- Text (Latte — darkened for contrast on light surfaces, #343) --- */
   --text-primary: #4c4f69; /* Text */
@@ -236,6 +243,9 @@
   --accent-hover: #f56b17; /* lighter Peach (hover) */
   --accent-dim: rgba(224, 90, 10, 0.14);
   --accent-fg: #ffffff; /* readable on the vivid Latte Peach */
+
+  /* --- Focus ring (Latte accent @ 70%; width inherits from :root) --- */
+  --focus-ring: color-mix(in srgb, var(--accent) 70%, transparent);
 
   /* --- Diff (Latte) --- */
   --diff-add-fg: #40a02b; /* Green */
