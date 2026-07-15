@@ -5171,3 +5171,70 @@ separately; no version bump / patch notes here**.
   checklist was inlined in the plan for the worktree implementer.
 
 **Dependencies:** Tasks 381, 382. (Closes the UI v2 epic: 372–383.)
+
+### 388. [x] Add "New folder…" and "Clone Repo…" to the ⋯ session-options menu
+
+The sidebar's **⋯** overflow button (beside the "+ Schedule session" footer row, the "More session
+options" menu from #294) now also offers **New folder…** and **Clone Repo…**, so a user can add or
+clone a folder without first hunting for empty sidebar background to right-click — the same two
+entries the global background context menu (#172) already carries.
+
+**What shipped** (branch `task-388-dots-menu-new-folder-clone`, PR
+[#139](https://github.com/ErikdeJager/ReCue/pull/139), merged 2026-07-15 into `ui-rework`):
+
+- **Two `RowMenuItem` entries** inserted into the `dotsMenuItems` array in
+  `src/components/Sidebar/Sidebar.tsx`, between the existing "Recurring session…" and the
+  conditional "Auto continue after limit reset" toggle:
+  `{ label: "New folder…", onActivate: () => void addFolder() }` and
+  `{ label: "Clone Repo…", onActivate: () => openCloneRepo() }`.
+- **Reuses the exact handlers** the background menu (`bgMenuItems`) already uses — `addFolder`
+  (native directory picker → register into recents; no agent spawned) and `openCloneRepo`
+  (opens the lazy `CloneRepoModal`) — both already destructured in `Sidebar()`. No new imports,
+  store actions, CSS, or backend touched (2-line diff).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 388)
+
+- "New folder" = the background menu's "New folder…" → the `addFolder` store action (native picker →
+  recents), **not** git-init / mkdir; labels + handlers reused verbatim.
+- Placed after "Recurring session…" and before the "Auto continue" toggle (there is no separator in
+  `RowMenuItem`; purely cosmetic ordering).
+- Scoped to `dotsMenuItems` only; disjoint from sibling Task 389's `bgMenuItems` edit — no code
+  overlap or ordering requirement between them.
+
+**Cross-platform:** both actions are already platform-neutral (native picker via `pickDirectory`;
+the modal → `clone_repo`), no `#[cfg]` / platform seam — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none.
+
+### 389. [x] Remove "Schedule session" from the global sidebar background context menu
+
+Right-clicking the sidebar's empty background (the global, non-folder-scoped background context
+menu #172) no longer offers a redundant **"Schedule session"** item — scheduling is already the
+dedicated "+ Schedule session" footer button and **⌘⇧N**, so the duplicate is dropped.
+
+**What shipped** (branch `task-389-remove-schedule-bg-menu`, PR
+[#140](https://github.com/ErikdeJager/ReCue/pull/140), merged 2026-07-15 into `ui-rework`):
+
+- **One entry removed** from the `bgMenuItems` array in `src/components/Sidebar/Sidebar.tsx`:
+  `{ label: "Schedule session", onActivate: () => openSchedule() }`. Because `bgMenuItems` is a
+  single array rendered once, the entry vanishes from **both** the expanded list and the collapsed
+  rail's background menu. Remaining entries ("New folder…", "Clone Repo…", collapse/expand toggle,
+  and the conditional filter/destructive spreads) are untouched.
+- **`openSchedule` kept** — still used by the footer Schedule button (and ⌘⇧N), so no dead
+  selector/import.
+- **Stale comment updated** — the collapsed-rail comment that claimed scheduling "stays reachable
+  collapsed via ⌘⇧N and the background context menu's 'Schedule session'" now references **⌘⇧N
+  only** (the collapsed fallback path).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 389)
+
+- "Global left panel context menu" = the sidebar background/empty-area menu (#172), i.e. the single
+  `bgMenuItems` array — not any per-repo/per-folder or per-row menu (all left untouched).
+- Delete only the one schedule line; keep `openSchedule` (footer button + ⌘⇧N still use it).
+- The footer "+ Schedule session" button, ⌘⇧N, the ⋯ overflow menu (Task 388), and all
+  scheduling backend are unchanged.
+
+**Cross-platform:** a one-line array deletion + a comment tweak — pure WebView/TS, no OS-specific
+code, CSS, or backend, so identical on macOS, Windows, and Linux.
+
+**Dependencies:** none.
