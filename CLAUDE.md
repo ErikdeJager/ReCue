@@ -551,7 +551,10 @@ steady-state boot pays **zero** probe cost.
   **Appearance** (a **Dark/Light theme** toggle #333 + an accent swatch over the Catppuccin
   palette **with a "?" random-per-launch swatch** (task 373, `resolvedRandomAccent`) + a
   reduce-motion toggle + **Dense panels** (the ⌘D toggle's checkbox twin, task 373) +
-  **Background animation** (the #377 wave on/off) + a display-size slider #366 +
+  **Background animation** (the #377 wave on/off) + **Pause when covered by panels**
+  (`pauseWaveWhenCovered`, task 384 — default on, disabled while the wave is off; the wave
+  stops rendering while the Overview wall has cards / a Canvas tab has panels and resumes
+  live when the stage clears) + a display-size slider #366 +
   the Overview panel min-width #176 + the `capAgentWidth` cap-agent-card-width toggle,
   task 373 — consumed by the Overview wall's 900px `.cardCapped` on agent/recurring
   cards, task 379), **Rendering** (**Linux only** #357 — filtered out of
@@ -704,7 +707,9 @@ steady-state boot pays **zero** probe cost.
 │   │                       #   SkillAutocomplete (#114), PatchNotes (#192),
 │   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
 │   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState,
-│   │                       #   WaveBackground (UI v2 wave layer, task 377 — lazy src/vendor/WaveEngine.js)
+│   │                       #   WaveBackground (UI v2 wave layer, task 377 — lazy src/vendor/WaveEngine.js;
+│   │                       #     lazy waveHost runs it on the main thread OR from an OffscreenCanvas
+│   │                       #     Web Worker + a governed/paused-when-covered loop, task 384)
 │   │                       #   ModalHost.tsx — the ten lazily-mounted top-level modals (#356)
 │   ├── styles/             # tokens.css (design tokens) + global.css (reset/base) +
 │   │                       #   the UI v2 primitives: atoms.css (buttons/chips/kbd hints),

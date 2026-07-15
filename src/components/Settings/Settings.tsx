@@ -483,6 +483,19 @@ function SettingsModal() {
                 </div>
                 <div className={styles.field}>
                   <Checkbox
+                    checked={draft.pauseWaveWhenCovered}
+                    onChange={(v) => update("pauseWaveWhenCovered", v)}
+                    disabled={!draft.backgroundAnimation}
+                    label="Pause when covered by panels"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Pauses the background animation while panels tile over it.
+                    It resumes the moment the stage is clear.
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
                     checked={draft.capAgentWidth}
                     onChange={(v) => update("capAgentWidth", v)}
                     label="Cap agent card width"

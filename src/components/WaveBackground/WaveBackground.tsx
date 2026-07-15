@@ -1,37 +1,54 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useStore } from "../../store";
 import type { WaveConfig } from "../../vendor/waveEngineLoader";
 import styles from "./WaveBackground.module.css";
+import type { WaveHandle } from "./waveHost";
 import { WAVE_BASE, WAVE_PRESETS, type WavePresetName } from "./wavePresets";
-import { gateFrame, initialGateState, rearmSettle } from "./waveTick";
 
 /**
  * The wave background layer (UI v2 §3, task 377): one Canvas2D running the
  * vendored WaveEngine behind the whole stage — the Overview wall, the Canvas
  * strip + panes (ONE canvas spans both), and each detached canvas window.
- * The engine itself is lazy-loaded (#356 — the mermaid precedent), so the
- * vendored source never rides the first-paint path.
+ *
+ * The runtime lives in the lazy `waveHost` (task 384) — the engine + all of its
+ * glue never ride the first-paint path (#356). `waveHost` renders either on the
+ * main thread (today's loop) or, where supported, from an OffscreenCanvas Web
+ * Worker; it also governs frame cost under load and pauses when panels cover the
+ * stage (`covered` + the `pauseWaveWhenCovered` setting).
  */
 
 // One per window document: rolled once per launch (random seed every launch, §3);
 // a detached canvas window is its own document, so it rolls its own.
 const LAUNCH_SEED = ((Math.random() * 99999) | 0) + 1;
 
-export default function WaveBackground({ preset }: { preset: WavePresetName }) {
+export default function WaveBackground({
+  preset,
+  covered,
+}: {
+  preset: WavePresetName;
+  covered: boolean;
+}) {
   const enabled = useStore((s) => s.settings.backgroundAnimation);
   const booted = useStore((s) => s.booted);
   // OFF ⇒ no canvas element at all (plain static crust from .main/.window). Waiting
   // for `booted` keeps a disabled persisted setting from flashing a wave pre-boot.
   if (!enabled || !booted) return null;
-  return <WaveCanvas preset={preset} />;
+  return <WaveCanvas preset={preset} covered={covered} />;
 }
 
 /** Inner component so the outer setting gate never conditionalizes hooks. */
-function WaveCanvas({ preset }: { preset: WavePresetName }) {
+function WaveCanvas({
+  preset,
+  covered,
+}: {
+  preset: WavePresetName;
+  covered: boolean;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
   // ONE mutable config object, shared with the engine for its whole lifetime —
-  // preset switches and recolors are plain mutations the engine reads next frame.
+  // preset switches and recolors are plain mutations the engine reads next frame
+  // (main mode) / that get forwarded to the worker (worker mode).
   const cfgRef = useRef<WaveConfig | null>(null);
   cfgRef.current ??= {
     ...WAVE_BASE,
@@ -40,101 +57,87 @@ function WaveCanvas({ preset }: { preset: WavePresetName }) {
     bgColor: "#11111b",
   };
 
-  // Live preset switch (Overview ↔ Canvas ↔ hero): mutate the shared config —
-  // never remount the canvas, never reseed (the pattern visibly persists).
+  // The pause-when-covered setting (task 384): panels tiling over the stage pause
+  // the wave only when this is on (default). backgroundAnimation OFF already
+  // unmounts the canvas entirely and wins over this.
+  const pauseWhenCovered = useStore((s) => s.settings.pauseWaveWhenCovered);
+  const anyBusy = useStore((s) => Object.values(s.sessionBusy).some(Boolean));
+  const effectiveCovered = pauseWhenCovered && covered;
+
+  const handleRef = useRef<WaveHandle | null>(null);
+  // The init-failure remount seam (the ONLY allowed remount): a fresh <canvas key>
+  // for a one-shot-transfer retry; `forceMain` skips worker detection after a
+  // worker-init failure. Preset / pause / setting changes NEVER remount.
+  const [epoch, setEpoch] = useState(0);
+  const [forceMain, setForceMain] = useState(false);
+  const retried = useRef({ transfer: false, workerInit: false });
+
+  // Read the latest covered/busy through refs so the mount effect can start the
+  // engine with current values without listing them as deps (no stale closure, no
+  // remount on their change — the dedicated effects below push updates).
+  const coveredRef = useRef(effectiveCovered);
+  coveredRef.current = effectiveCovered;
+  const busyRef = useRef(anyBusy);
+  busyRef.current = anyBusy;
+
+  // Live preset switch (Overview ↔ Canvas ↔ hero): mutate the shared config, then
+  // notify the handle (worker mode forwards it) — never remount, never reseed.
   useEffect(() => {
     if (cfgRef.current) Object.assign(cfgRef.current, WAVE_PRESETS[preset]);
+    handleRef.current?.configChanged();
   }, [preset]);
+
+  // Push covered / busy to the running engine.
+  useEffect(() => {
+    handleRef.current?.setCovered(effectiveCovered);
+  }, [effectiveCovered]);
+  useEffect(() => {
+    handleRef.current?.setBusy(anyBusy);
+  }, [anyBusy]);
 
   useEffect(() => {
     const canvas = ref.current;
     const cfg = cfgRef.current;
     if (!canvas || !cfg) return;
+    let handle: WaveHandle | null = null;
     let disposed = false;
-    let raf = 0;
-    let state = initialGateState();
-    let ro: ResizeObserver | null = null;
-    let mo: MutationObserver | null = null;
-
-    // The live resolved colors always come off <html>'s computed style: the
-    // default tokens, an accent swatch, a custom hex, 373's per-launch "random"
-    // (written inline on <html>), and a theme flip (data-theme) all land there.
-    const readColors = () => {
-      const cs = getComputedStyle(document.documentElement);
-      cfg.primaryColor = cs.getPropertyValue("--accent").trim() || "#fab387";
-      cfg.bgColor = cs.getPropertyValue("--bg-base").trim() || "#11111b";
-    };
-    readColors();
-
-    // The #356 lazy boundary: the vendored engine is its own async chunk.
-    void import("../../vendor/waveEngineLoader").then(({ createEngine }) => {
-      if (disposed || !ref.current) return;
-      // Buffer sized in CSS pixels — deliberately no devicePixelRatio scaling,
-      // matching the reference host (softer look, ~4× cheaper on Retina/WebKitGTK).
-      let w = Math.max(4, canvas.clientWidth | 0);
-      let h = Math.max(4, canvas.clientHeight | 0);
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d", { alpha: false });
-      if (!ctx) return; // fail-open: the static crust stays
-      const eng = createEngine(LAUNCH_SEED, w, h, cfg);
-
-      const reducedNow = () =>
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
-        document.body.classList.contains("reduce-motion");
-
-      // rAF stays scheduled every frame (deviation from fx.js, which cancels on
-      // freeze): a reduce-motion un-toggle resumes and a recolor re-arms without
-      // extra listeners; a skipped frame is two comparisons, and hidden windows
-      // are throttled by the browser anyway.
-      const loop = (now: number) => {
-        if (disposed) return;
-        raf = requestAnimationFrame(loop);
-        const gate = gateFrame(state, now, {
-          hidden: document.hidden,
-          reduced: reducedNow(),
-        });
-        state = gate.next;
-        if (!gate.draw) return;
-        eng.setConfig(cfg);
-        eng.frame(ctx, gate.dt);
-      };
-      raf = requestAnimationFrame(loop);
-
-      ro = new ResizeObserver(() => {
-        const nw = canvas.clientWidth | 0;
-        const nh = canvas.clientHeight | 0;
-        if (nw < 4 || nh < 4 || (nw === w && nh === h)) return;
-        w = nw;
-        h = nh;
-        // Resetting the buffer clears it — the engine's needBg repaints the
-        // background and the strands redraw from their kept positions.
-        canvas.width = w;
-        canvas.height = h;
-        eng.resize(w, h);
+    void import("./waveHost").then(({ startWave }) => {
+      // The `disposed` gate makes StrictMode's mount→cleanup→mount safe: the first
+      // mount's cleanup runs before this microtask resolves, so only the surviving
+      // mount ever transfers the canvas / starts a worker.
+      if (disposed) return;
+      handle = startWave({
+        canvas,
+        cfg,
+        seed: LAUNCH_SEED,
+        covered: coveredRef.current,
+        busy: busyRef.current,
+        forceMain,
+        onFallback: (reason) => {
+          if (reason === "transfer") {
+            if (retried.current.transfer) return;
+            retried.current.transfer = true;
+            setEpoch((e) => e + 1); // remount for a fresh (untransferred) canvas
+          } else {
+            if (retried.current.workerInit) return;
+            retried.current.workerInit = true;
+            setForceMain(true); // give up the worker, run the main-thread loop
+            setEpoch((e) => e + 1);
+          }
+        },
       });
-      ro.observe(canvas);
-
-      // Live recolor seam: applySettingsEffects writes custom/random accents
-      // inline on <html> and theme flips toggle data-theme — re-read the computed
-      // colors and grant a frozen (reduced-motion) wave one more settle window.
-      mo = new MutationObserver(() => {
-        readColors();
-        state = rearmSettle(state);
-      });
-      mo.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["style", "data-theme"],
-      });
+      handleRef.current = handle;
+      // Sync to the latest in case covered/busy changed during the async import.
+      handle.setCovered(coveredRef.current);
+      handle.setBusy(busyRef.current);
     });
 
     return () => {
       disposed = true;
-      cancelAnimationFrame(raf);
-      ro?.disconnect();
-      mo?.disconnect();
+      handle?.dispose();
+      handleRef.current = null;
     };
-  }, []);
+  }, [epoch, forceMain]);
 
-  return <canvas ref={ref} className={styles.wave} aria-hidden />;
+  return <canvas key={epoch} ref={ref} className={styles.wave} aria-hidden />;
 }

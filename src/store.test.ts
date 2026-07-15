@@ -2447,6 +2447,22 @@ describe("mergeSettings (#100/#176)", () => {
     expect(mergeSettings({ theme: "light" }).theme).toBe("light");
   });
 
+  it("defaults pauseWaveWhenCovered to true and back-fills it (task 384)", () => {
+    expect(DEFAULT_SETTINGS.pauseWaveWhenCovered).toBe(true);
+    // An old blob without the key back-fills to true via mergeSettings (no migration).
+    expect(mergeSettings({}).pauseWaveWhenCovered).toBe(true);
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.pauseWaveWhenCovered;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .pauseWaveWhenCovered,
+    ).toBe(true);
+    // A persisted false (opted out) is preserved over the default.
+    expect(
+      mergeSettings({ pauseWaveWhenCovered: false }).pauseWaveWhenCovered,
+    ).toBe(false);
+  });
+
   it("defaults autoFocusOnHover to false and back-fills it (#368)", () => {
     expect(DEFAULT_SETTINGS.autoFocusOnHover).toBe(false);
     // A pre-#368 blob (no key) merges to the opt-in default (off).

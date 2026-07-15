@@ -371,6 +371,11 @@ export interface Settings {
   /** Animate the app background (UI v2 wave, card 3). Default true; the visual
    * consumer lands with the wave background — until then the flag persists inertly. */
   backgroundAnimation: boolean;
+  /** Pause the wave while panels cover the stage (UI v2 task 384). Default true; the
+   * wave stops rendering (zero frames) whenever the Overview wall has cards / the
+   * active Canvas tab has panels, and resumes live the instant the stage is clear.
+   * Ignored when backgroundAnimation is off (that unmounts the canvas entirely). */
+  pauseWaveWhenCovered: boolean;
   /** Dense panels (UI v2 §9): collapse every stage gap and pane padding to 0 so
    * panels tile edge-to-edge (hairlines keep them separated). Applied as a `dense`
    * class on <html> by applySettingsEffects (the task-372 `:root.dense` token hook);
