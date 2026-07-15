@@ -3690,3 +3690,23 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - The legacy default 0 is also the opt-out endpoint, so the one-time bump nudges a deliberately-chosen 0 back to 25 the first boot after shipping; the flag makes it a one-shot (user re-sets 0 and it sticks). Accepted, same tradeoff as #367, and nearly all stored 0s are the untouched old default.
 - Keep the slider in the Appearance section where #390 placed it (the orientation hint guessed Terminal); moving/relabeling it is gratuitous churn and out of scope.
 - Left the color math (`terminalBackground.ts`, ~#1b1b26 at 25%) and live-apply path untouched; also bumped the `terminalPool.ts` module-level `background` fallback 0 → 25 to track the new default (belt-and-braces, mirroring the existing `lineHeight` fallback comment).
+
+## Task 413
+
+- Editable auto-saving textarea (markdown Raw mode / plain-text files) is NOT line-capped — it always holds the full file so auto/manual (⌘S) saves write the complete file; textareas are natively fast and >256 KB files are already read-only. This is the deliberate "don't corrupt saves" choice.
+- The line cap applies only to read-only render paths: rendered markdown, Prism code, and the read-only raw <pre> (incl. the existing >256 KB tooLarge path). It is orthogonal to and additive with the existing 256 KB LARGE_BYTES byte threshold.
+- Defaults chosen: initial cap LINE_CAP=500 lines, LINE_CHUNK=1000 lines per "show more" click, plus a "Show all" button (both chunked and all-at-once reveal offered). Tunable single-source constants.
+- Reveal control is a pinned footer bar at the bottom of the viewer (always visible), not placed inside the scroll region.
+- While rendered markdown is truncated, its interactive #173 task-list checkboxes are rendered read-only (interactive:false) so a toggle cannot write a partial buffer; full interactivity returns once all lines are revealed or the user edits in Raw mode.
+- Mermaid needs no code change: capping the markdown source omits fences beyond the cap; a fence split by the cap degrades to its code block + error note until revealed (acceptable preview artifact).
+- Scope limited to the universal FileViewer; KanbanPanel and other ReactMarkdown consumers (PatchNotes/Settings) are out of scope. No backend change (read_text_file still reads the whole file, 5 MB cap).
+- Pure frontend/TS/CSS — no OS-specific code, so cross-platform is satisfied with no platform branching.
+
+## Task 415
+
+- Primary fix targets the FilePicker-based dropdowns (file-viewer switcher, Kanban/markdown open, CreatePanelModal, TemplatePendingPanel) plus the FileTree in-panel search's "Files" group; those are the "file viewer or kanban" dropdowns the card names.
+- Scoring is done in the frontend as a pure, Vitest-tested helper (`src/fileRank.ts`) over the already-capped backend result set; no backend/IPC/cap change (deliverable said keep caps intact, and ReCue favors pure TS helpers).
+- Interpreted "file name scores higher than file contents" per surface: FilePicker does NOT search content, so there its meaning is basename-match ranked above directory-only-match; FileTree already renders content matches in a separate group BELOW filename matches, so that requirement is already met — this task only ranks within the filename group and leaves content matches unchanged (not re-ranked).
+- Scoring tiers mirror the existing GlobalSearch `scoreFilename` model (exact > prefix > word-boundary > mid-substring > directory-only) for cross-surface consistency; GlobalSearch already ranks correctly and is left untouched (reference model, non-goal).
+- Empty query does not reorder (browse-all keeps backend walk order); tie-breakers are shorter full path, then alphabetical, then stable input order, so the root-level exact-named file wins.
+- Cap-boundary limitation accepted: ranking reorders only the returned (≤500 / ≤100) set; a pathological ultra-broad query that hits the cap ranks just the first-N-by-walk. Fine for real queries; documented, not fixed.
