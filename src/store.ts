@@ -1204,6 +1204,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // False by default (#336): watch notifications are opt-in per agent. When turned on,
   // EVERY agent (except recurring-owned children) notifies on its busy→idle edge.
   watchAllAgents: false,
+  // No shortcut overrides: every action on its registry default (`keybinds.ts`).
+  // An older blob lacking the key back-fills to {} via mergeSettings.
+  keybinds: {},
   // False so the first-launch agent picker runs once for new AND existing installs
   // (an older sessions.json lacks the key → merges to false → detected next launch).
   onboarded: false,
@@ -2131,6 +2134,13 @@ export interface AppState {
    * close it (same chord); when closed, maximize the item `selectedId` resolves to
    * (`contentForSelected`) — a no-op when nothing maximizable is selected. */
   toggleMaximizeSelected: () => void;
+  /** Close the focused panel — the ⌘W / Ctrl+W keybind (`close-panel`). Precedence:
+   * an open big-mode overlay closes first; in Canvas view (or a detached canvas
+   * window, #84) the focused leaf (`activeLeafId`) is removed exactly like its
+   * header ×; in Overview the selected **non-agent** panel is removed exactly like
+   * its hover × (`removeOverviewPanel` — agents / schedules / recurrings are never
+   * closed by keyboard: Remove/Cancel are destructive). Anything else is a no-op. */
+  closeFocusedPanel: () => void;
   /** Add a new empty Canvas tab (default "Canvas N") and select it (#58). */
   addCanvas: () => void;
   /** Close a Canvas tab; always keeps ≥1 (closing the last leaves an empty one) (#58). */
@@ -4752,6 +4762,62 @@ export const useStore = create<AppState>()((set, get) => ({
     }
     const content = contentForSelected(s);
     if (content) s.maximizeItem(content);
+  },
+
+  // ⌘W / Ctrl+W (`close-panel` keybind): close what the user is looking at, most
+  // specific first, and never destructively — each branch reuses the exact action
+  // its × button calls, so keyboard and mouse can't drift.
+  closeFocusedPanel: () => {
+    const s = get();
+    // 1. Big mode is the topmost "open panel" — close the overlay.
+    if (s.maximizedItem) {
+      s.closeMaximized();
+      return;
+    }
+    // 2. Canvas (or a detached canvas window, which is always canvas): remove the
+    // focused leaf, exactly like CanvasSurface's header ×. Hover-focus (#371) and
+    // Shift+arrows keep `activeLeafId` on the panel the user is on. Focus then
+    // advances to a spatial neighbor (else the first remaining leaf) so repeated
+    // ⌘W keeps closing panels instead of dangling after the first.
+    if (s.view === "canvas" || !IS_MAIN_WINDOW) {
+      const closingId = s.activeLeafId;
+      const layout =
+        s.canvases.find((c) => c.id === s.activeCanvasId)?.layout ?? null;
+      if (!layout || !closingId) return;
+      if (!collectLeaves(layout).some((l) => l.id === closingId)) return;
+      const neighbor = (["left", "up", "right", "down"] as const)
+        .map((dir) => spatialNeighbor(layout, closingId, dir))
+        .find((id) => id !== null);
+      const nextLayout = removeLeaf(layout, closingId);
+      s.setActiveCanvasLayout(nextLayout);
+      const leaves = collectLeaves(nextLayout);
+      const nextId =
+        (neighbor && leaves.some((l) => l.id === neighbor)
+          ? neighbor
+          : leaves[0]?.id) ?? null;
+      const leaf = leaves.find((l) => l.id === nextId);
+      // Keep the sidebar selection in sync with the focused panel (#79),
+      // mirroring moveCanvasFocus.
+      set({
+        activeLeafId: nextId,
+        selectedId: leaf
+          ? leafItemId(leaf.content, s.overviewPanels)
+          : s.selectedId,
+      });
+      return;
+    }
+    // 3. Overview: remove the selected non-agent panel (its hover-× action). An
+    // agent / schedule / recurring id resolves to no overviewPanels entry, so those
+    // stay — killing an agent by ⌘W would be destructive, not "close".
+    if (s.view === "overview" && s.selectedId) {
+      for (const [repoKey, panels] of Object.entries(s.overviewPanels)) {
+        if (panels.some((p) => p.id === s.selectedId)) {
+          void s.removeOverviewPanel(repoKey, s.selectedId);
+          return;
+        }
+      }
+    }
+    // Attention view / nothing focused: deliberate no-op.
   },
 
   // Canvas templates (#117): the editor builds a draft layout of inert blocks with

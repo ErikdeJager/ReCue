@@ -486,6 +486,14 @@ export interface Settings {
    * edge, regardless of its per-agent `watch` flag (the per-agent flags are retained for
    * when this is turned back off). Default `false` — watch is otherwise opt-in per agent. */
   watchAllAgents: boolean;
+  // Shortcuts
+  /** Keyboard-shortcut overrides (Settings → Shortcuts): rebindable action id
+   * (`KeybindActionId`, `src/keybinds.ts`) → serialized chord (`"mod+w"`,
+   * `"alt+1"`, …), `""` = explicitly unbound. Only **overrides** live here — an
+   * untouched action has no key and follows its registry default, so new defaults
+   * reach existing installs. Read live by `useKeyboardNav` on every keydown (no
+   * applySettingsEffects step); invalid persisted chords read as unbound. */
+  keybinds: Record<string, string>;
   /** Whether the first-launch coding-agent picker has run. Defaults `false`, so an
    * existing install also runs the one-time detection on its next launch (auto-pick
    * if exactly one CLI is installed, the picker modal if 2+). Set once, then never

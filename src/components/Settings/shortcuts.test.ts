@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { KEYBIND_ACTIONS } from "../../keybinds";
 import { SHORTCUT_GROUPS } from "./shortcuts";
 
-describe("SHORTCUT_GROUPS (#318)", () => {
+describe("SHORTCUT_GROUPS (fixed shortcuts, keybind rework)", () => {
   it("has at least one group", () => {
     expect(SHORTCUT_GROUPS.length).toBeGreaterThan(0);
   });
@@ -24,24 +25,27 @@ describe("SHORTCUT_GROUPS (#318)", () => {
     }
   });
 
-  it("lists the complete global chord map (UI v2 task 373)", () => {
+  it("keeps the fixed contextual chords documented", () => {
     const macs = SHORTCUT_GROUPS.flatMap((g) => g.shortcuts.map((s) => s.mac));
-    // Every global ⌘-chord wired in useKeyboardNav.ts must be documented here,
-    // including the #337 ⌘F global search and the task-373 ⌘D dense toggle.
-    for (const chord of [
-      "⌘N",
-      "⌘⇧N",
-      "⌘B",
-      "⌘K",
-      "⌘F",
-      "⌘T",
-      "⌘E",
-      "⌘\\",
-      "⌘D",
-    ]) {
+    // The hardcoded (non-rebindable) chords of useKeyboardNav.ts + the
+    // component-scoped diff keys.
+    for (const chord of ["⌘S", "⌘⏎", "⇧←/→", "⇧↑/↓"]) {
       expect(macs).toContain(chord);
     }
-    // The canvas-jump digits are documented as a range entry.
-    expect(macs.some((m) => m.includes("⌘1") && m.includes("⌘9"))).toBe(true);
+    expect(macs.some((m) => m.includes("⌘⌥1") && m.includes("⌘⌥6"))).toBe(true);
+  });
+
+  it("never duplicates a rebindable action (those render from the registry)", () => {
+    const macs = SHORTCUT_GROUPS.flatMap((g) => g.shortcuts.map((s) => s.mac));
+    // The rebindable defaults must not reappear in the fixed list…
+    for (const gone of ["⌘N", "⌘⇧N", "⌘B", "⌘K", "⌘F", "⌘E", "⌘D", "⌘W"]) {
+      expect(macs).not.toContain(gone);
+    }
+    // …and the chords the rework removed outright are gone everywhere.
+    expect(macs).not.toContain("⌘T");
+    expect(macs).not.toContain("⌘\\");
+    expect(macs.some((m) => m.includes("⌘1") && m.includes("⌘9"))).toBe(false);
+    // Sanity: the registry actually carries the rebindable set instead.
+    expect(KEYBIND_ACTIONS.length).toBeGreaterThanOrEqual(12);
   });
 });

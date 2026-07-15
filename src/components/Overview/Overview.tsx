@@ -48,7 +48,6 @@ import {
   sessionInFilter,
   sessionLabel,
 } from "../../paths";
-import { kbdHint } from "../../platform";
 import { ownedHere } from "../../windowContext";
 import { formatFireTime, formatInterval, formatNextRun } from "../../time";
 import type {
@@ -68,6 +67,7 @@ import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import ItemContent from "../ItemContent/ItemContent";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
+import { useKeybindLabel } from "../../useKeybind";
 import { shouldHoverSelect } from "../Terminal/hoverFocus";
 import { blurTerminals, focusTerminal } from "../Terminal/terminalPool";
 import { TerminalScrollRootContext } from "../Terminal/useVisibleOnce";
@@ -245,7 +245,7 @@ function SessionCard({
   onRemove,
 }: SessionCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
   const renameSession = useStore((s) => s.renameSession);
   // Agent-conversation cards only (373's "cap agent card width" setting, default
   // on); file/diff/kanban/scheduled panels stay uncapped.
@@ -375,7 +375,9 @@ function SessionCard({
             repoPath: session.repoPath,
           })
         }
-        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+        title={
+          bigModeKey ? `Open in big mode (${bigModeKey})` : "Open in big mode"
+        }
         aria-label="Open in big mode"
       >
         <Maximize2 size={14} strokeWidth={1.5} />
@@ -450,7 +452,7 @@ function ExtraPanel({
   const setOverviewPanelFile = useStore((s) => s.setOverviewPanelFile);
   const moveOverviewPanelToFile = useStore((s) => s.moveOverviewPanelToFile);
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
   // Hover-select (#371): a shell terminal panel's PTY session id IS the panel id
   // (overviewPanelToContent) — focus it on hover when this window renders it.
   // File/diff/kanban/filetree panels have no terminal input ⇒ blur instead.
@@ -492,7 +494,9 @@ function ExtraPanel({
         type="button"
         className={styles.action}
         onClick={() => maximizeItem(content)}
-        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+        title={
+          bigModeKey ? `Open in big mode (${bigModeKey})` : "Open in big mode"
+        }
         aria-label="Open in big mode"
       >
         <Maximize2 size={14} strokeWidth={1.5} />
@@ -561,7 +565,7 @@ function ScheduleCard({
   onStartNow,
 }: ScheduleCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
   // Disable "Start now" while the spawn is in flight (the card vanishes on success
   // via `schedule://fired`; on failure it stays and the button re-enables).
   const [starting, setStarting] = useState(false);
@@ -616,7 +620,9 @@ function ScheduleCard({
             repoPath: schedule.cwd,
           })
         }
-        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+        title={
+          bigModeKey ? `Open in big mode (${bigModeKey})` : "Open in big mode"
+        }
         aria-label="Open in big mode"
       >
         <Maximize2 size={14} strokeWidth={1.5} />
@@ -682,7 +688,7 @@ function RecurringCard({
   onCancel,
 }: RecurringCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
   // A recurring card hosts an agent conversation, so it honors the 373 cap too.
   const capWidth = useStore((s) => s.settings.capAgentWidth);
   const title = (
@@ -717,7 +723,9 @@ function RecurringCard({
             repoPath: recurring.cwd,
           })
         }
-        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+        title={
+          bigModeKey ? `Open in big mode (${bigModeKey})` : "Open in big mode"
+        }
         aria-label="Open in big mode"
       >
         <Maximize2 size={14} strokeWidth={1.5} />
@@ -791,7 +799,7 @@ function Overview() {
   // startRepoSession (#127) skips the folder step (a git folder opens straight at
   // the branch step); ⌘N itself still opens the global flow.
   const startRepoSession = useStore((s) => s.startRepoSession);
-  const platform = useStore((s) => s.platform);
+  const newSessionKey = useKeybindLabel("new-session");
   const filter = useStore((s) => s.overviewRepoFilter);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const repoColors = useStore((s) => s.repoColors);
@@ -987,9 +995,9 @@ function Overview() {
               >
                 <Plus size={14} strokeWidth={2.2} />
                 New session
-                <span className={styles.kbdChip}>
-                  {kbdHint(platform, "⌘N", "Ctrl+N")}
-                </span>
+                {newSessionKey && (
+                  <span className={styles.kbdChip}>{newSessionKey}</span>
+                )}
               </button>
               <span className={styles.filterEmptyHint}>
                 the wave keeps you company until then

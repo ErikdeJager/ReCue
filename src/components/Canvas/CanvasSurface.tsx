@@ -26,8 +26,8 @@ import {
 import { noAutoCapitalize } from "../../inputProps";
 import { useSessionOwners } from "../../ownership";
 import { effectiveRepo, repoName, sessionLabel } from "../../paths";
-import { kbdHint } from "../../platform";
 import { repoColor, useStore } from "../../store";
+import { useKeybindLabel } from "../../useKeybind";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
 import { IS_MAIN_WINDOW, ownedHere } from "../../windowContext";
 import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
@@ -52,8 +52,9 @@ const EDGES: CanvasEdge[] = ["top", "right", "bottom", "left"];
 
 /** Empty-canvas center target — the first drop creates the first panel. The UI v2
  * empty state (§8): a centered stack on the wave — icon, "No panels yet", hint,
- * and a ghost "New tab ⌘T" button. The droppable node still fills the area, so
- * dropping a sidebar item here still creates the first panel. */
+ * and a ghost "New tab" button (its ⌘T chord was removed by the keybind rework).
+ * The droppable node still fills the area, so dropping a sidebar item here still
+ * creates the first panel. */
 function CenterDrop() {
   const { setNodeRef, isOver } = useDroppable({ id: "canvas-center" });
   // The copy waits for the boot payload (#352): until it lands the canvas is empty
@@ -62,7 +63,6 @@ function CenterDrop() {
   // unaffected. (A detached canvas window #84 has its own store, so its own `booted`.)
   const booted = useStore((s) => s.booted);
   const addCanvas = useStore((s) => s.addCanvas);
-  const platform = useStore((s) => s.platform);
   return (
     <div
       ref={setNodeRef}
@@ -81,9 +81,6 @@ function CenterDrop() {
             onClick={() => addCanvas()}
           >
             <Plus size={12} strokeWidth={1.5} /> New tab
-            <span className="kbd-hint">
-              {kbdHint(platform, "⌘T", "Ctrl+T")}
-            </span>
           </button>
         </>
       )}
@@ -121,7 +118,7 @@ function LeafPanel({
   const setLeafFile = useStore((s) => s.setLeafFile);
   const setLeafFileAbsolute = useStore((s) => s.setLeafFileAbsolute);
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
   const renameSession = useStore((s) => s.renameSession);
   const isActive = leaf.id === activeLeafId;
 
@@ -420,7 +417,11 @@ function LeafPanel({
               type="button"
               className={styles.panelClose}
               onClick={() => maximizeItem(content)}
-              title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+              title={
+                bigModeKey
+                  ? `Open in big mode (${bigModeKey})`
+                  : "Open in big mode"
+              }
               aria-label="Open in big mode"
             >
               <Maximize2 size={13} strokeWidth={1.5} />

@@ -26,7 +26,6 @@ import {
 } from "lucide-react";
 
 import { noAutoCapitalize } from "../../inputProps";
-import { kbdHint } from "../../platform";
 import { useStore } from "../../store";
 import type { CanvasTab } from "../../types";
 import styles from "./Canvas.module.css";
@@ -194,7 +193,6 @@ function useDropdownMenu() {
 function CanvasTabs() {
   const canvases = useStore((s) => s.canvases);
   const activeCanvasId = useStore((s) => s.activeCanvasId);
-  const platform = useStore((s) => s.platform);
   const addCanvas = useStore((s) => s.addCanvas);
   const reorderCanvases = useStore((s) => s.reorderCanvases);
   const popOutCanvas = useStore((s) => s.popOutCanvas);
@@ -263,13 +261,14 @@ function CanvasTabs() {
       </DndContext>
       {/* "+" → create a new empty canvas tab in one click (#222, reverting the #205
           dropdown). The "from template" entry point lives in the Templates ▾ menu
-          below. ⌘T/Ctrl+T (#206) also creates a tab; its hint stays on this tooltip. */}
+          below. The ⌘T chord (#206) was removed by the keybind rework — this
+          button is the way to add a tab. */}
       <button
         type="button"
         className={styles.tabAdd}
         onClick={() => addCanvas()}
-        title={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
-        aria-label={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
+        title="New tab"
+        aria-label="New tab"
       >
         {/* #273: the Plus glyph is a sparse cross, so at 1.5 stroke it reads
             visually smaller than the denser LayoutTemplate/Grid2x2 neighbors. A

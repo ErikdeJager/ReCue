@@ -14,6 +14,10 @@ mod git;
 mod linux_desktop;
 mod linux_gtk;
 mod linux_webkit;
+// Compiled on every OS so all hosts type-check + unit-test it (the tauri menu API
+// is portable); only macOS *calls* it — Windows/Linux have no default menu.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod menu;
 mod path_env;
 mod pty;
 mod skills;
@@ -167,6 +171,16 @@ pub fn run() {
                         }
                     }
                 });
+            }
+
+            // macOS app menu (keybind rework): swap the default menu's ⌘W Close
+            // Window accelerator for ⇧⌘W so the webview receives plain ⌘W (the
+            // rebindable close-panel keybind). Best-effort — on failure the
+            // default menu stands (⌘W then closes the window, never a crash).
+            // Windows/Linux create no default menu, so there is nothing to do.
+            #[cfg(target_os = "macos")]
+            if let Err(e) = menu::install(app) {
+                eprintln!("[recue] menu setup failed (default menu kept): {e}");
             }
 
             // One-time post-update permission re-prompt (macOS, #321). When a user updates

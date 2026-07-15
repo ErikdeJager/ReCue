@@ -301,6 +301,30 @@ steady-state boot pays **zero** probe cost.
   terminals (#109). `open_url` is **cross-platform** (#217): macOS `open`, Windows
   `cmd /C start "" <url>`, else `xdg-open` — so the same path (and the #210 feedback
   button) opens the browser on Windows too, not a File Explorer folder.
+- **Configurable keybinds (keybind rework):** every non-contextual global shortcut is a
+  rebindable action in the **`src/keybinds.ts`** registry. Defaults: **⌥1/⌥2/⌥3** switch
+  Overview/Attention/Canvas, **⌘W** closes the focused panel (`store.closeFocusedPanel`:
+  an open big-mode overlay first; else the active Canvas leaf exactly like its header ×,
+  with focus advancing to a spatial neighbor so repeated ⌘W keeps closing; else the
+  selected Overview panel's hover-× — never an agent/schedule/recurring, those are
+  destructive), **⌘,** opens Settings, plus the carried-over ⌘E big mode (#284) / ⌘N /
+  ⌘⇧N / ⌘K / ⌘F / ⌘B / ⌘D. **Removed:** ⌘T (new tab #206), ⌘1–9 (canvas jump #76 — the
+  modal-internal new-session-recents #61/#66 and global-search folder-chip #397 digits
+  are unaffected), ⌘\ (view toggle #77). Overrides persist as **`settings.keybinds`**
+  (action id → serialized chord, `""` = unbound; only overrides stored, so new defaults
+  reach old installs) and are edited in Settings → Shortcuts; `useKeyboardNav.ts`
+  dispatches by serializing each keydown (`eventChord`, physical `e.code`, so ⌥-digit
+  survives macOS glyph composition and letters survive non-QWERTY layouts) and looking
+  it up. **`mod` is platform-resolved** — ⌘ on macOS, Ctrl on Windows AND Linux — so a
+  bare macOS ⌃-chord (readline ⌃E/⌃N/⌃W…) now flows to the focused terminal instead of
+  triggering the app (the old `metaKey || ctrlKey` matching swallowed it; on Windows/
+  Linux Ctrl-chords are the app's `mod`, as before). Hint sites (Sidebar / EmptyState /
+  ViewSwitch tooltips / GlobalSearch chip / big-mode titles / tips) render live labels
+  via `useKeybindLabel`, so a rebind never leaves a stale hint. On macOS the default
+  Tauri menu's **⌘W Close Window accelerator would preempt the webview**, so
+  `src-tauri/src/menu.rs` rebuilds `Menu::default` at setup with the predefined items
+  swapped for a custom **⇧⌘W** Close Window (Edit-menu clipboard items untouched —
+  WKWebView needs them; Windows/Linux create no default menu, so nothing to do there).
 - **Lazy terminal mount (#351):** a pooled xterm is created on **first visibility**, not
   on React mount — `Terminal.tsx` gates `mountTerminal` on a **latching**
   `IntersectionObserver` (`Terminal/useVisibleOnce.ts`), so booting into an Overview wall
@@ -483,8 +507,9 @@ steady-state boot pays **zero** probe cost.
   persists then broadcasts `canvas://changed` (the **main** window is authoritative
   for `activeId`; a detached window's write merges only the `canvases` array);
   opening/closing a window broadcasts `canvas://windows` (the detached id set). The
-  main tab strip marks detached tabs ("in window"), ⌘1–9 (#76) and a detached-tab
-  click **`focus_canvas_window`** (raise) instead of switching, and **closing a
+  main tab strip marks detached tabs ("in window"), a detached-tab
+  click **`focus_canvas_window`**s (raises) instead of switching (the #76 ⌘1–9
+  canvas-jump chord was removed by the keybind rework), and **closing a
   detached window re-docks** its canvas (its `Destroyed` handler re-broadcasts the
   set; the main window reclaims the PTYs). Detached windows are **per-session** — not
   restored on relaunch (capability `canvas-*` in `capabilities/default.json`).
@@ -575,8 +600,13 @@ steady-state boot pays **zero** probe cost.
   gating #103 + the Canvas tab-close default `canvasCloseBehavior`: Ask / Always kill / Never
   kill #137 + the diff display/line/sort defaults #237/#258), **Kanban** (per-column colors by
   name #239), **Updates** (check for updates / current version / "What's new" / update now
-  #191), **Shortcuts** (#318, completed by UI v2 task 373 — a read-only grouped keybind
-  reference, incl. ⌘F/⌘D, every chord through `kbdHint`), and **Data & About** (open data
+  #191), **Shortcuts** (#318/373, made **editable** by the keybind rework — the
+  rebindable actions of the `src/keybinds.ts` registry render as click-to-record rows
+  (press the new combo; Backspace unbinds, Esc cancels; reserved/conflicting chords
+  are refused inline with per-row reset-to-default), staged in the draft like every
+  section and persisted as `settings.keybinds` overrides; the fixed contextual chords
+  (⌘S / ⌘⏎ / ⌘⌥1–6 / Shift+arrows / the diff keys, `shortcuts.ts`) stay a read-only
+  reference below, every chord through `kbdHint`), and **Data & About** (open data
   folder, clear recents, app + agent versions). A
   modal-local **draft** applies only on **Save** via `applySettingsEffects` (the `theme`
   field #333 toggles `data-theme="light"` on `<html>` → the `:root[data-theme="light"]`
@@ -694,7 +724,9 @@ steady-state boot pays **zero** probe cost.
 │   ├── time.ts             # Schedule time helpers (toLocalInput, formatFireTime) (#93/#94)
 │   ├── windowContext.ts    # Window identity (#84): main vs canvas-<id>, ownership helpers
 │   ├── ownership.ts        # useSessionOwners hook — which window renders each PTY (#84)
-│   ├── useKeyboardNav.ts   # Global keyboard shortcuts (#24/#76/#77/#84/#93)
+│   ├── keybinds.ts         # Configurable-keybind registry + pure chord logic (keybind rework)
+│   ├── useKeybind.ts       # useKeybindLabel — live hint labels off settings.keybinds
+│   ├── useKeyboardNav.ts   # Global keyboard dispatcher over the keybinds registry (#24/#76/#84)
 │   ├── useAutoSaveFile.ts  # Read + hot-reload + debounced-write hook (FileViewer raw + Kanban) (#148)
 │   ├── autoContinue.ts     # Pure auto-continue-after-limit reducer + isLimitReached (#296/#305)
 │   ├── tips.ts / tips.json # Startup tips for the empty-state hero (UI v2 #379)

@@ -50,9 +50,10 @@ import Checkbox from "../Checkbox/Checkbox";
 import { markdownLinkComponents } from "../markdownCheckboxes";
 import PatchNotes from "../PatchNotes/PatchNotes";
 import Slider from "../Slider/Slider";
+import { chordForAction, chordLabel } from "../../keybinds";
 import { terminalRendererReport } from "../Terminal/terminalPool";
 import styles from "./Settings.module.css";
-import { SHORTCUT_GROUPS } from "./shortcuts";
+import ShortcutsPane from "./ShortcutsPane";
 
 type Section =
   | "terminal"
@@ -466,8 +467,18 @@ function SettingsModal() {
                     className={styles.checkRow}
                   />
                   <p className={styles.helpText}>
-                    Tile panels edge-to-edge with no gaps (
-                    {kbdHint(platform, "⌘D", "Ctrl+D")}).
+                    Tile panels edge-to-edge with no gaps
+                    {(() => {
+                      // The live (draft) binding, so a rebind in this same modal
+                      // session reads back correctly here.
+                      const chord = chordForAction(
+                        "dense-panels",
+                        draft.keybinds,
+                      );
+                      const label = chordLabel(chord, platform);
+                      return label ? ` (${label})` : "";
+                    })()}
+                    .
                   </p>
                 </div>
                 <div className={styles.field}>
@@ -1307,35 +1318,15 @@ function SettingsModal() {
             )}
 
             {section === "shortcuts" && (
-              // Read-only keyboard-shortcut reference (#318): grouped, cross-platform
-              // via `kbdHint`. No inputs — nothing here mutates the draft.
-              <div className={styles.shortcutsSection}>
-                <p className={styles.helpText}>
-                  Reference only — shortcuts can&rsquo;t be changed here.
-                </p>
-                {SHORTCUT_GROUPS.map((group) => (
-                  <div key={group.title} className={styles.shortcutGroup}>
-                    <span className={styles.fieldLabel}>{group.title}</span>
-                    <ul className={styles.shortcutList}>
-                      {group.shortcuts.map((shortcut) => (
-                        <li
-                          key={shortcut.description}
-                          className={styles.shortcutRow}
-                        >
-                          {/* Label-left / key-chip-right (UI v2 §10); the chip is
-                              the task-372 `.kbd-chip` atom (atoms.css, global). */}
-                          <span className={styles.shortcutDesc}>
-                            {shortcut.description}
-                          </span>
-                          <kbd className={`kbd-chip ${styles.shortcutKey}`}>
-                            {kbdHint(platform, shortcut.mac, shortcut.win)}
-                          </kbd>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
+              // Editable keybinds (the keybind rework, superseding the #318
+              // read-only reference): rebindable actions stage into the draft
+              // like every other section; the fixed contextual chords render
+              // read-only below.
+              <ShortcutsPane
+                platform={platform}
+                keybinds={draft.keybinds}
+                onChange={(next) => update("keybinds", next)}
+              />
             )}
 
             {section === "data" && (
