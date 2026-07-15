@@ -1180,3 +1180,25 @@ already in CI.
 - [ ] **Reduced motion on Windows** (OS setting *and* the app toggle): the wave settles
       then freezes, dot pulse/menu/modal/toast entrances drop, and the terminal cursor
       stops blinking (#383) while the terminal itself keeps rendering.
+
+### Needs real-box verification (Open in editor)
+
+- [ ] **`code` on PATH launches without a console flash.** With VS Code's installer
+      "Add to PATH" set, ⌘O→Ctrl+O / a menu "Open in editor" resolves `code` (PATHEXT →
+      `code.cmd`) and launches through `cmd /C` under `CREATE_NO_WINDOW` — VS Code opens
+      the folder, no transient conhost window.
+- [ ] **`%LOCALAPPDATA%` / `%ProgramFiles%` probes hit.** With nothing on PATH, the
+      picker still detects a user-install VS Code (`%LOCALAPPDATA%\Programs\Microsoft VS
+      Code\Code.exe`), Cursor, and Notepad++ (`%ProgramFiles%\Notepad++`), and launching
+      opens the right app (via "Program Files").
+- [ ] **Notepad++ opens the folder as a workspace.** The `-openFoldersAsWorkspace` flag
+      lands the folder in the Folder-as-Workspace panel instead of trying to open its
+      files.
+- [ ] **JetBrains Toolbox `.cmd` scripts.** With a Toolbox-installed IDE and scripts
+      enabled, detection reports "Toolbox" (`%LOCALAPPDATA%\JetBrains\Toolbox\scripts\
+      idea.cmd`) and launch opens the IDE at the folder (again no console flash).
+- [ ] **Standalone JetBrains versioned dir.** A non-Toolbox install under
+      `%ProgramFiles%\JetBrains\IntelliJ IDEA <ver>\bin\idea64.exe` detects and launches;
+      with two versions installed the newest dir wins.
+- [ ] **Custom command with a quoted path.** `"C:\Program Files\X\x.exe" {path}` in
+      Settings → Editor tokenizes (quoted program survives) and receives the folder.

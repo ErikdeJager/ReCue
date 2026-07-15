@@ -1,21 +1,31 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Eye, EyeOff, GitFork, MoreHorizontal } from "lucide-react";
+import {
+  Copy,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  GitFork,
+  MoreHorizontal,
+} from "lucide-react";
 
 import { agentSupportsResume } from "../../agents";
 import { ensureNotificationPermission } from "../../notify";
 import { forkUnavailableReason } from "../../paths";
 import { useStore } from "../../store";
 import type { SessionView } from "../../types";
+import { useKeybindLabel } from "../../useKeybind";
 
 import styles from "./AgentHeaderMenu.module.css";
 
 /**
  * The shared **"…" (more-actions) menu** (#340) for an agent panel header. It folds
- * the three secondary agent actions — **Fork conversation** (#126/#138/#142), **Copy
- * resume command** (#28), and the per-agent **Watch** toggle (#336) — from separate
- * always-visible icon buttons into one dropdown, so the Overview card / Canvas panel /
- * Big-mode header stays uncluttered while all three stay one click away. Rendered
- * identically at every agent-header site (one source of truth).
+ * the secondary agent actions — **Fork conversation** (#126/#138/#142), **Copy
+ * resume command** (#28), **Open in editor** (the agent's working folder — its
+ * worktree for worktree agents — in the user's preferred editor), and the per-agent
+ * **Watch** toggle (#336) — from separate always-visible icon buttons into one
+ * dropdown, so the Overview card / Canvas panel / Big-mode header stays uncluttered
+ * while they all stay one click away. Rendered identically at every agent-header
+ * site (one source of truth).
  *
  * Modeled on {@link ../ViewsMenu/ViewsPopover} — a self-contained popover host that
  * dismisses on outside `mousedown` + `Escape` and stops `pointerdown` on its root so
@@ -53,6 +63,8 @@ function AgentHeaderMenu({
   const forkSession = useStore((s) => s.forkSession);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const toggleWatch = useStore((s) => s.toggleWatch);
+  const openInEditor = useStore((s) => s.openInEditor);
+  const editorHint = useKeybindLabel("open-in-editor");
 
   const forkReason = forkUnavailableReason(session);
   const canFork = forkReason === null;
@@ -140,6 +152,21 @@ function AgentHeaderMenu({
               Copy resume command
             </button>
           )}
+          {/* Launch the preferred editor at the agent's working folder (its
+              worktree for worktree agents); first use opens the picker. */}
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            title={`Open ${session.repoPath} in your editor${editorHint ? ` (${editorHint})` : ""}`}
+            onClick={() => {
+              void openInEditor(session.repoPath);
+              setOpen(false);
+            }}
+          >
+            <ExternalLink size={13} strokeWidth={1.5} className="menu-icon" />
+            Open in editor
+          </button>
           <div className="menu-sep" role="separator" />
           {/* Per-agent "watch" toggle (#336) — notify on this agent's busy→idle edge;
               ensures notification permission at opt-in time (mirroring WatchButton). */}
