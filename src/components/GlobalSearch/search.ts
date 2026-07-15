@@ -59,6 +59,9 @@ export interface KindGroup {
 export interface RepoResults {
   repo: string;
   groups: KindGroup[];
+  /** How many matches for this repo were trimmed off by `perRepoCap` (0 when nothing was
+   * hidden) — the modal renders a non-interactive "+N more" indicator when > 0. */
+  hiddenCount: number;
 }
 
 /** The within-repo rendering order of item types. Titles (agent/terminal/…) rank above
@@ -79,6 +82,10 @@ export const KIND_ORDER: ResultKind[] = [
 export const FILENAME_SCORE = 35;
 export const CONTENT_SCORE = 25;
 export const OUTPUT_SCORE = 20;
+
+/** Max visible items per repo group before an overflow indicator ("+N more") replaces the
+ * rest — a per-repo total across kind sections, filled in `KIND_ORDER`. */
+export const PER_REPO_ITEM_CAP = 6;
 
 /** Whether `idx` in `lowerText` starts at a word boundary — the string start or just
  * after a `/`, `-`, `_`, `.`, or space. Used to rank a boundary-anchored match above a
@@ -147,12 +154,21 @@ function basename(relPath: string): string {
 }
 
 /**
- * Group `results` **by repo, then by item type** (#337), each `(repo, kind)` bucket sorted
- * by score desc then title A→Z. Repos order by display name then full path; kinds by
- * `KIND_ORDER`. Empty buckets are dropped. Pure — the modal renders the returned tree and
- * flattens it (`flatOrder`) for ↑/↓ navigation.
+ * Group `results` **by repo, then by item type** (#337, task 393), each `(repo, kind)`
+ * bucket sorted by score desc then title A→Z. Repos with a currently-running agent
+ * (`opts.activeRepos`) sort **first**, then by display name then full path; kinds by
+ * `KIND_ORDER`. Each repo group is trimmed to `opts.perRepoCap` items **total** across its
+ * kind sections (filled in `KIND_ORDER`), the trimmed count recorded on `hiddenCount` so
+ * the modal can show a "+N more" indicator. Empty buckets are dropped. Pure + source-
+ * agnostic (the cap/priority never special-cases a `ResultKind`) — the modal renders the
+ * returned tree and flattens it (`flatOrder`) for ↑/↓ navigation.
  */
-export function rankAndGroup(results: SearchResult[]): RepoResults[] {
+export function rankAndGroup(
+  results: SearchResult[],
+  opts: { activeRepos?: ReadonlySet<string>; perRepoCap?: number } = {},
+): RepoResults[] {
+  const activeRepos = opts.activeRepos ?? new Set<string>();
+  const perRepoCap = opts.perRepoCap ?? PER_REPO_ITEM_CAP;
   const byRepo = new Map<string, Map<ResultKind, SearchResult[]>>();
   for (const r of results) {
     let kinds = byRepo.get(r.repo);
@@ -165,6 +181,9 @@ export function rankAndGroup(results: SearchResult[]): RepoResults[] {
     else kinds.set(r.kind, [r]);
   }
   const repos = [...byRepo.keys()].sort((a, b) => {
+    const activeDelta =
+      (activeRepos.has(b) ? 1 : 0) - (activeRepos.has(a) ? 1 : 0);
+    if (activeDelta !== 0) return activeDelta;
     const byName = repoName(a)
       .toLowerCase()
       .localeCompare(repoName(b).toLowerCase());
@@ -183,7 +202,25 @@ export function rankAndGroup(results: SearchResult[]): RepoResults[] {
       );
       groups.push({ kind, items });
     }
-    return { repo, groups };
+    // Trim to `perRepoCap` items total, walking kinds in KIND_ORDER; count the rest.
+    let remaining = perRepoCap;
+    let hiddenCount = 0;
+    const capped: KindGroup[] = [];
+    for (const g of groups) {
+      if (remaining <= 0) {
+        hiddenCount += g.items.length;
+        continue;
+      }
+      if (g.items.length <= remaining) {
+        capped.push(g);
+        remaining -= g.items.length;
+      } else {
+        capped.push({ kind: g.kind, items: g.items.slice(0, remaining) });
+        hiddenCount += g.items.length - remaining;
+        remaining = 0;
+      }
+    }
+    return { repo, groups: capped, hiddenCount };
   });
 }
 

@@ -123,7 +123,7 @@ function Tab({ tab, active }: { tab: CanvasTab; active: boolean }) {
         title={detached ? "Focus window" : "Open in new window"}
         aria-label={detached ? "Focus canvas window" : "Open canvas in window"}
       >
-        <ExternalLink size={13} strokeWidth={1.5} />
+        <ExternalLink size={12} strokeWidth={1.5} />
       </button>
       <button
         type="button"
@@ -132,7 +132,7 @@ function Tab({ tab, active }: { tab: CanvasTab; active: boolean }) {
         title="Close canvas"
         aria-label={`Close ${tab.name}`}
       >
-        <X size={14} strokeWidth={1.5} />
+        <X size={13} strokeWidth={1.5} />
       </button>
     </div>
   );
@@ -271,11 +271,11 @@ function CanvasTabs() {
         title={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
         aria-label={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
       >
-        {/* #273: the Plus glyph is a sparse cross, so at size 14/1.5 it reads
+        {/* #273: the Plus glyph is a sparse cross, so at 1.5 stroke it reads
             visually smaller than the denser LayoutTemplate/Grid2x2 neighbors. A
-            larger 16px glyph + heavier 2px stroke gives it comparable mass while
-            the 20px button box (hit-area/hover/disabled) stays unchanged. */}
-        <Plus size={16} strokeWidth={2} />
+            larger 15px glyph + heavier 2px stroke gives it comparable mass while
+            the 22px button box (hit-area/hover/disabled) stays unchanged. */}
+        <Plus size={15} strokeWidth={2} />
       </button>
       {/* Templates ▾ menu (#117/#205/#222): "New tab from template…" (the primary "use"
           action) plus template management (New / Save current / Manage). */}
@@ -290,12 +290,12 @@ function CanvasTabs() {
           aria-haspopup="menu"
           aria-expanded={templatesMenu.open}
         >
-          <LayoutTemplate size={14} strokeWidth={1.5} />
-          <ChevronDown size={11} strokeWidth={1.5} />
+          <LayoutTemplate size={13} strokeWidth={1.5} />
+          <ChevronDown size={10} strokeWidth={1.5} />
         </button>
         {templatesMenu.open && templatesMenu.menuPos && (
           <div
-            className={styles.menu}
+            className={`menu-pop ${styles.menuPos}`}
             role="menu"
             style={{
               top: templatesMenu.menuPos.top,
@@ -304,7 +304,7 @@ function CanvasTabs() {
           >
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               disabled={!hasTemplates}
               onClick={() => {
@@ -316,7 +316,7 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               onClick={() => {
                 templatesMenu.close();
@@ -327,7 +327,7 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               disabled={!canSaveAsTemplate}
               onClick={() => {
@@ -339,7 +339,7 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               onClick={() => {
                 templatesMenu.close();
@@ -351,18 +351,18 @@ function CanvasTabs() {
           </div>
         )}
       </div>
-      {/* "Distribute evenly" (#186): moved to the right edge of the strip (#205)
-          via .tabDistribute's margin-left:auto. Rebalances the active canvas's
-          panels; disabled when there's nothing to even (<2 panels). */}
+      {/* "Distribute evenly" (#186): inline after Templates (UI v2 §8 — the #205
+          far-right auto-margin is gone). Rebalances the active canvas's panels;
+          disabled when there's nothing to even (<2 panels). */}
       <button
         type="button"
-        className={`${styles.tabAdd} ${styles.tabDistribute}`}
+        className={styles.tabAdd}
         onClick={() => equalizeCanvas()}
         disabled={!canEqualize}
         title="Distribute panels evenly"
         aria-label="Distribute panels evenly"
       >
-        <Grid2x2 size={14} strokeWidth={1.5} />
+        <Grid2x2 size={13} strokeWidth={1.5} />
       </button>
     </div>
   );

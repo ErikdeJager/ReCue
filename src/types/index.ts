@@ -334,7 +334,7 @@ export interface ForkablePayload {
 
 // --- Frontend UI state ---
 
-export type View = "overview" | "canvas";
+export type View = "overview" | "canvas" | "attention";
 
 /**
  * Application settings (#100), persisted as an opaque blob through the Rust store
@@ -352,15 +352,39 @@ export interface Settings {
   terminalLineHeight: number;
   /** xterm cursor blink. */
   terminalCursorBlink: boolean;
+  /** Terminal background lightness (#390): 0 = near-black `#11111b` (default, today's
+   * look byte-for-byte), 100 = a soft gray. Lightens ONLY the agent/shell terminal
+   * background (xterm canvas + its padding frame); terminal-only and dark in both
+   * themes, so it never touches the light/dark theme toggle or non-terminal surfaces. */
+  terminalBackgroundLightness: number;
   // Appearance (wired by a follow-up)
   /** UI theme (#333): "dark" (default, Catppuccin Mocha) or "light" (Catppuccin
    * Latte). Applied as a `data-theme` attribute on <html> by applySettingsEffects;
    * the terminal stays dark in both. */
   theme: "dark" | "light";
-  /** Accent color hex from `REPO_PALETTE`, or "" to use the default token. */
+  /** Accent color: a hex from `REPO_PALETTE`, "" to use the default token, or the
+   * literal `"random"` sentinel (UI v2 task 373) — re-resolved to a random
+   * `REPO_PALETTE` member once per launch by applySettingsEffects. */
   accentColor: string;
   /** Force reduced motion beyond the OS setting. */
   reduceMotion: boolean;
+  /** Animate the app background (UI v2 wave, card 3). Default true; the visual
+   * consumer lands with the wave background — until then the flag persists inertly. */
+  backgroundAnimation: boolean;
+  /** Pause the wave while panels cover the stage (UI v2 task 384). Default false
+   * (opt-in, task 402); the wave stops rendering (zero frames) whenever the Overview
+   * wall has cards / the active Canvas tab has panels, and resumes live the instant
+   * the stage is clear.
+   * Ignored when backgroundAnimation is off (that unmounts the canvas entirely). */
+  pauseWaveWhenCovered: boolean;
+  /** Dense panels (UI v2 §9): collapse every stage gap and pane padding to 0 so
+   * panels tile edge-to-edge (hairlines keep them separated). Applied as a `dense`
+   * class on <html> by applySettingsEffects (the task-372 `:root.dense` token hook);
+   * toggled by ⌘D or Settings → Appearance. Default false. */
+  densePanels: boolean;
+  /** Cap Overview agent cards at a comfortable max width (UI v2, card 5). Default
+   * true (opt-out); the visual consumer lands with the Overview reskin. */
+  capAgentWidth: boolean;
   /** Overview column minimum width in px (320–600); the floor before columns
    * scroll horizontally (#176). Applied as the `--overview-card-min` CSS var. */
   overviewPanelMinWidth: number;
@@ -396,8 +420,13 @@ export interface Settings {
   /** Confirm destructive Sidebar actions (Remove / Kill all / Close all). */
   confirmDestructive: boolean;
   /** Focus-follows-mouse (#368): when true, hovering an agent or shell terminal panel
-   * focuses it immediately so keystrokes are captured without a click. Off by default
-   * (opt-in). Read live by Terminal.tsx; not a side-effecting setting. */
+   * focuses it immediately so keystrokes are captured without a click. Since #371 the
+   * hover also moves the selection/active-panel highlight to the hovered Overview card
+   * or Canvas panel, and entering a panel with no terminal input (diff/file/kanban/
+   * filetree/scheduled/recurring, or an agent owned by another window) blurs the
+   * previously focused terminal so keystrokes never silently keep flowing to it. Off
+   * by default (opt-in). Read live by Terminal.tsx / Overview / CanvasSurface; not a
+   * side-effecting setting. */
   autoFocusOnHover: boolean;
   /** What closing a Canvas tab *with contents* does (#137): `ask` shows a modal,
    * `kill` tears down its agents/items, `keep` just drops the tab (today's behavior).

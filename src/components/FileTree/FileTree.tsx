@@ -366,8 +366,9 @@ function FileTree({ repoPath }: { repoPath: string }) {
     setMenuMode("menu");
     setNewFolderName("");
     setRenameName("");
+    // Clamp for the shared menu primitive's 200px min-width (task 375).
     setMenu({
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 200)),
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 208)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - 200)),
       path,
       isDir,
@@ -501,13 +502,13 @@ function FileTree({ repoPath }: { repoPath: string }) {
               data-filetree-droptarget={node.path}
             >
               <Chevron
-                size={13}
+                size={12}
                 strokeWidth={1.5}
                 className={styles.chevron}
                 aria-hidden
               />
               <FolderIcon
-                size={13}
+                size={12}
                 strokeWidth={1.5}
                 className={styles.folderIcon}
                 aria-hidden
@@ -519,10 +520,11 @@ function FileTree({ repoPath }: { repoPath: string }) {
         );
       }
       const isRevealed = node.path === revealTarget;
-      // Tint the file name + icon by its working-tree status (#252): green = new,
-      // yellow = edited, dimmed gray = gitignored (#270); unchanged files keep the
-      // default styling.
-      const cls = statusClass(statusMap?.[node.path]);
+      // Tint the whole row by its working-tree status (#252, v2 task 382): green =
+      // new, yellow = edited, faint = gitignored (#270); unchanged files keep the
+      // default styling. Tinted A/M rows also get a trailing status letter.
+      const code = statusMap?.[node.path];
+      const cls = statusClass(code);
       return (
         <button
           key={node.path}
@@ -537,12 +539,17 @@ function FileTree({ repoPath }: { repoPath: string }) {
           data-filetree-droptarget={parentDir(node.path)}
         >
           <FileText
-            size={13}
+            size={12}
             strokeWidth={1.5}
             className={styles.fileIcon}
             aria-hidden
           />
           <span className={styles.name}>{node.name}</span>
+          {(code === "A" || code === "M") && (
+            <span className={styles.statusLetter} aria-hidden>
+              {code}
+            </span>
+          )}
         </button>
       );
     });
@@ -565,12 +572,15 @@ function FileTree({ repoPath }: { repoPath: string }) {
             data-filetree-droptarget={path}
           >
             <FileText
-              size={13}
+              size={12}
               strokeWidth={1.5}
               className={styles.fileIcon}
               aria-hidden
             />
             <span className={styles.name}>{name}</span>
+            <span className={styles.statusLetter} aria-hidden>
+              D
+            </span>
           </div>
         );
       },
@@ -605,7 +615,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                   title={`Open ${path}`}
                 >
                   <FileText
-                    size={13}
+                    size={12}
                     strokeWidth={1.5}
                     className={styles.fileIcon}
                     aria-hidden
@@ -644,7 +654,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 >
                   <div className={styles.contentHead}>
                     <FileText
-                      size={13}
+                      size={12}
                       strokeWidth={1.5}
                       className={styles.fileIcon}
                       aria-hidden
@@ -745,7 +755,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
       {menu ? (
         <>
           <div
-            className={styles.menuOverlay}
+            className={`menu-overlay ${styles.menuOverlay}`}
             onClick={closeMenu}
             onContextMenu={(event) => {
               event.preventDefault();
@@ -753,7 +763,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
             }}
           />
           <div
-            className={styles.menu}
+            className={`menu-pop ${styles.menuPos}`}
             style={{ left: menu.x, top: menu.y }}
             role="menu"
           >
@@ -822,7 +832,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
               <button
                 type="button"
                 role="menuitem"
-                className={styles.menuItemDanger}
+                className="menu-item-confirm"
                 onClick={confirmDelete}
               >
                 {menu.isDir ? "Delete folder & its contents?" : "Delete file?"}
@@ -833,7 +843,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => setMenuMode("newFolder")}
                 >
                   New folder…
@@ -841,7 +851,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     setRenameName(splitPath(menu.path).base);
                     setMenuMode("rename");
@@ -852,7 +862,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     void revealPath(joinPath(platform, repoPath, menu.path));
                     closeMenu();
@@ -863,7 +873,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     void copyToClipboard(
                       joinPath(platform, repoPath, menu.path),
@@ -877,7 +887,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     void copyToClipboard(menu.path, "path");
                     closeMenu();
@@ -888,7 +898,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     void addToGitignore(repoPath, menu.path);
                     closeMenu();
@@ -899,7 +909,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItemDanger}
+                  className="menu-item-danger"
                   onClick={requestDelete}
                 >
                   Delete folder
@@ -911,7 +921,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     openFile(menu.path);
                     closeMenu();
@@ -923,7 +933,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                   <button
                     type="button"
                     role="menuitem"
-                    className={styles.menuItem}
+                    className="menu-item"
                     onClick={() => {
                       void openFileFromTree(repoPath, menu.path, "kanban");
                       closeMenu();
@@ -935,7 +945,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     void revealPath(joinPath(platform, repoPath, menu.path));
                     closeMenu();
@@ -946,7 +956,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     void copyToClipboard(
                       joinPath(platform, repoPath, menu.path),
@@ -960,7 +970,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     void copyToClipboard(menu.path, "path");
                     closeMenu();
@@ -971,7 +981,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item"
                   onClick={() => {
                     void addToGitignore(repoPath, menu.path);
                     closeMenu();
@@ -982,7 +992,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItemDanger}
+                  className="menu-item-danger"
                   onClick={requestDelete}
                 >
                   Delete

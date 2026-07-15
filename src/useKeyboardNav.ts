@@ -1,6 +1,8 @@
 // Global keyboard shortcuts.
 //
 //   Shift+← / Shift+→  select prev/next column in Overview (any kind)     (#24/#174)
+//   Shift+↑ / Shift+↓  select prev/next agent in the Attention queue      (#398)
+//   ⌘⏎ / Ctrl+Enter    dismiss the selected agent in Attention            (#398)
 //   Shift+arrows       move the focused panel spatially in Canvas         (#76)
 //   ⌘1 … ⌘9            jump to canvas N (Canvas view only)                (#76)
 //   ⌘\                 toggle the main view (Overview ↔ Canvas)           (#77)
@@ -12,6 +14,7 @@
 //                      for type N (session/file/diff/terminal/kanban/tree)
 //   ⌘T / Ctrl+T        new Canvas tab (switches to Canvas view)           (#206)
 //   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
+//   ⌘D / Ctrl+D        toggle dense panels (UI v2 §9)                     (#373)
 //
 // xterm forwards keystrokes to the PTY when a terminal is focused, so the
 // listener runs in the **capture phase on window** — it fires before xterm's
@@ -22,9 +25,16 @@
 
 import { useEffect } from "react";
 
+import { attentionQueue } from "./components/Attention/attentionQueue";
 import { panelTypeForDigit } from "./components/CreatePanelModal/panelTypes";
 import { saveFocused } from "./saverRegistry";
-import { adjacentId, overviewClusterKeys, useStore } from "./store";
+import { isGlobalSearchChord } from "./searchChord";
+import {
+  adjacentId,
+  overviewClusterKeys,
+  ownedChildSessionIds,
+  useStore,
+} from "./store";
 import { IS_MAIN_WINDOW } from "./windowContext";
 
 export function useKeyboardNav(): void {
@@ -127,13 +137,10 @@ export function useKeyboardNav(): void {
       // never reaches a focused claude/terminal (which would otherwise trigger its own
       // find/forward). The same chord opens and closes. Main window only — swallowed but
       // inert in a detached canvas window (#84); inert while the new-session or
-      // create-panel modal is open (mirrors ⌘K's guard).
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "f"
-      ) {
+      // create-panel modal is open (mirrors ⌘K's guard). The chord is EXACTLY ONE of
+      // Cmd/Ctrl (isGlobalSearchChord, #399): when BOTH are held this is false, so the
+      // macOS native-fullscreen combo Ctrl+⌘+F falls through un-preventDefaulted to the OS.
+      if (isGlobalSearchChord(e)) {
         e.preventDefault();
         e.stopPropagation();
         if (IS_MAIN_WINDOW) {
@@ -193,6 +200,52 @@ export function useKeyboardNav(): void {
         return;
       }
 
+      // ⌘⏎ / Ctrl+Enter — dismiss the selected agent in the Attention view (#398): it
+      // leaves the queue (and the page) but stays alive, and selection advances to the
+      // next queued agent. Only in the Attention view of the main window, and inert
+      // while a modal owns the keyboard — otherwise the combo passes straight through
+      // (return WITHOUT preventing default) so ⌘⏎ still reaches a focused terminal.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key === "Enter"
+      ) {
+        const state = useStore.getState();
+        if (
+          !IS_MAIN_WINDOW ||
+          state.view !== "attention" ||
+          state.newSessionOpen ||
+          state.settingsOpen ||
+          state.globalSearchOpen
+        ) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        if (state.selectedId) state.dismissAttention(state.selectedId);
+        return;
+      }
+
+      // ⌘D / Ctrl+D — toggle dense panels (UI v2 §9, task 373). Persisted like any
+      // setting and toasted. Main window only (settings are main-authoritative and not
+      // broadcast cross-window — swallowed but inert in a detached canvas window, like
+      // ⌘N/⌘B/⌘K/⌘T); inert while the Settings modal is open so its draft can't clobber
+      // the toggle on Save. Matched on e.code (physical key) like ⌘E.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.code === "KeyD"
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (IS_MAIN_WINDOW && !useStore.getState().settingsOpen) {
+          useStore.getState().toggleDensePanels();
+        }
+        return;
+      }
+
       // ⌘⌥1 … ⌘⌥6 — open the Create-panel launcher straight to the folder step for
       // type N (#189). Distinct from the ⌘1–9 canvas-jump (which requires !altKey),
       // so no collision. Option+digit composes a glyph in `e.key`, so match `e.code`
@@ -236,7 +289,9 @@ export function useKeyboardNav(): void {
       // ⌘1 … ⌘9 — jump to canvas N (main window, Canvas view only, #76). Safe over
       // a focused claude session: ⌘+number never reaches the PTY. Skipped while
       // the new-session modal is open so its own ⌘1–9 recents (#61/#66) aren't
-      // taken. If canvas N is detached (#84), raise its window instead of switching.
+      // taken, and while the global-search modal is open so it owns ⌘-Number for its
+      // folder-filter chips (task 397). If canvas N is detached (#84), raise its
+      // window instead of switching.
       if (
         (e.metaKey || e.ctrlKey) &&
         !e.shiftKey &&
@@ -247,7 +302,8 @@ export function useKeyboardNav(): void {
         if (
           !IS_MAIN_WINDOW ||
           state.view !== "canvas" ||
-          state.newSessionOpen
+          state.newSessionOpen ||
+          state.globalSearchOpen
         ) {
           return;
         }
@@ -278,6 +334,32 @@ export function useKeyboardNav(): void {
       const state = useStore.getState();
       // Don't navigate while the new-session modal/popover is open (#27).
       if (state.newSessionOpen) return;
+
+      // Attention (#398): Shift+↑/↓ cycle the triage queue selection (prev/next). Main
+      // window only (the Attention view never renders in a detached canvas window).
+      // Shift+←/→ are inert here. Uses the SAME `attentionQueue` ordering the view
+      // renders, so nav can never land on a non-queued agent.
+      if (state.view === "attention" && IS_MAIN_WINDOW) {
+        if (key === "ArrowUp" || key === "ArrowDown") {
+          e.preventDefault();
+          e.stopPropagation();
+          const ids = attentionQueue({
+            sessions: state.sessions,
+            sessionBusy: state.sessionBusy,
+            sessionActive: state.sessionActive,
+            dismissed: state.dismissedAttention,
+            idleSince: state.sessionIdleSince,
+            recurringChildIds: ownedChildSessionIds(state.recurrings),
+          }).map((q) => q.id);
+          const id = adjacentId(
+            ids,
+            state.selectedId,
+            key === "ArrowDown" ? 1 : -1,
+          );
+          if (id) state.select(id);
+        }
+        return;
+      }
 
       // Canvas: Shift+arrows move the keyboard-focused panel spatially (#76). A
       // detached canvas window (#84) is always canvas-spatial (it has no Overview).

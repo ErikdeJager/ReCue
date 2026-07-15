@@ -35,6 +35,8 @@ export default defineConfig({
         "src/ownership.ts", // session-owner hook
         "src/inputProps.ts", // input-attribute UI helper
         "src/components/Terminal/terminalPool.ts", // xterm/DOM terminal pool
+        "src/components/WaveBackground/waveHost.ts", // wave runtime (DOM/canvas/worker glue, task 384)
+        "src/components/WaveBackground/waveWorker.ts", // OffscreenCanvas worker entry (task 384)
       ],
       // Hard gate: the tested logic surface must stay ≥75% line coverage (enforced by
       // `npm run test:coverage` locally and the CI frontend job).

@@ -1,57 +1,25 @@
-/* Full-width segmented control: fills its sidebar container, segments split
-   evenly. */
-.group {
-  display: flex;
-  padding: var(--space-2);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
-}
+/* Expanded mode renders through the shared SegmentedControl atom (UI v2 task 372);
+   only the compact rail mode keeps local styles (restyled by card 4 / task 374). */
 
-.option,
-.active {
-  flex: 1;
-  padding: var(--space-4) var(--space-12);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  text-align: center;
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-out);
-}
-
-.option:hover {
-  color: var(--text-primary);
-}
-
-.active {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
-
-/* Compact (icon-only) mode for the collapsed sidebar rail (#168): two stacked
-   icon buttons sized to the narrow rail (~44px, #214). */
+/* Compact (icon-only) mode for the collapsed sidebar rail (#168, UI v2 §6): two
+   stacked 28×28 ghost icon buttons — no crust well/border, Surface0 active fill. */
 .groupCompact {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  gap: 5px;
 }
 
 .iconOption,
 .iconActive {
+  position: relative;
   display: flex;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
-  padding: var(--space-4);
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -65,4 +33,66 @@
 .iconActive {
   background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+/* --- Attention segment (#398) --- */
+
+/* Expanded-mode Attention label: the AlertTriangle icon plus the count pill,
+   centered in the segment. */
+.attnLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Visually-hidden accessible name for the icon-only Attention segment (the
+   `title`/`aria-label` route on the compact rail; here it names the segment for
+   screen readers without showing text next to the icon). */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Live queue-count badge (#398) — an accent pill beside the icon in expanded mode.
+   On-system tokens only: the accent fill + its readable companion foreground. */
+.count {
+  display: inline-flex;
+  min-width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Compact-rail count badge (#398): a small accent pill overlaid on the top-right
+   of the icon button, so the collapsed rail still surfaces the queue size. */
+.countCompact {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  display: inline-flex;
+  min-width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  line-height: 1;
 }

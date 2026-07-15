@@ -5,14 +5,16 @@
 .prompt {
   display: flex;
   align-items: center;
-  gap: var(--space-6);
-  /* Same tight inset (#215) as the update box so it ties to the footer below. */
-  margin: 0 var(--space-4) var(--space-4);
-  padding: var(--space-4) var(--space-8);
+  gap: 7px;
+  height: 28px;
+  /* The 10px side inset matches the sidebar's v2 frame padding — the same 28px
+     pill geometry Task 374 gives the UpdateIndicator, so the footer is coherent. */
+  margin: 0 10px var(--space-4);
+  padding: 0 var(--space-8);
   border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-chrome);
   background: transparent;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -21,17 +23,20 @@
     border-color var(--dur-fast) var(--ease-out);
 }
 
-/* Hover light-up: an accent-tinted border + faint accent fill so the quiet chip reads
-   as clearly interactive (the icon is already accent). */
+/* Hover light-up: an accent-tinted border + a Base fill (v2, mirroring the
+   UpdateIndicator) so the quiet chip reads as clearly interactive. */
 .prompt:hover {
   border-color: var(--accent);
-  background: var(--accent-dim);
+  background: var(--bg-panel);
   color: var(--text-primary);
 }
 
-/* Collapsed rail: icon-only, centered in the inset chip. */
+/* Collapsed rail: icon-only, centered in the inset chip. The narrow rail keeps
+   the tighter inset (mirroring the UpdateIndicator) so the 28px pill still fits. */
 .promptCollapsed {
   justify-content: center;
+  margin: 0 var(--space-4) var(--space-4);
+  padding: 0;
 }
 
 /* Continuous attention glow (mirrors the #287 update-glow): while the prompt is shown
@@ -83,8 +88,8 @@
 
 .promptTitle {
   overflow: hidden;
-  font-size: var(--fs-meta-sm);
-  font-weight: 500;
+  font-size: var(--fs-meta);
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

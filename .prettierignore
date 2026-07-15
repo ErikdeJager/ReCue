@@ -12,3 +12,8 @@ Cargo.lock
 
 # Project docs use manual line wrapping — leave them as authored
 *.md
+
+# Vendored verbatim (task 377) — byte-for-byte, sha256-pinned; never reformat
+src/vendor/WaveEngine.js
+# UI v2 handoff reference material (untracked/local-only), not app code
+docs/ui-v2-handoff

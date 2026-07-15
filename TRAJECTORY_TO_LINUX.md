@@ -1632,3 +1632,55 @@ window (#84) applies it on its own boot.
       file from the file manager onto a FileTree folder still hits the correct row while zoomed
       (the physical→CSS px math combines `devicePixelRatio` with the new `zoom`). Left unchanged
       pending this check.
+
+## 2026-07-15
+
+### UI v2 reskin sweep (#372–#383)
+
+The twelve-card "UI v2" epic is a pure WebView CSS/TS reskin — no new native code, no new
+`#[cfg]` arms, and no change to the Linux-specific seams (#346/#347/#350/#357/#362 all
+untouched). Platform-sensitive pieces ride the established abstractions: JetBrains Mono
+is now the `--ui` face on every OS (#372 — the #363 Linux-only bundled Inter and its
+`@fontsource-variable/inter` dependency are retired; `data-platform` stays as the
+platform-CSS seam with currently zero CSS consumers), every hint routes through `kbdHint`
+(**Ctrl** on Linux), `color-mix()` fills declare plain token fallbacks *first* (the one
+genuinely Linux-relevant rule: an older WebKitGTK that lacks color-mix must fall back to
+the token, never to a missing fill), and the wave (#377) is a lazy vendored canvas engine
+— one per window — whose cost lands on the WebKitGTK main thread like the #351 terminal
+work did. The terminal cursor blink is now gated off under reduced motion in the pool
+(#383, an xterm options mutation — never a host dispose #18, composable with the #357
+DOM/WebGL renderer override).
+
+### Needs real-box verification (UI v2, #372–#383)
+
+- [ ] **Wave performance under each renderer mode.** With DMA-BUF auto/on/off
+      (Settings → Rendering) and again under the software-rasterizer DOM fallback
+      (`RECUE_DISABLE_DMABUF=1` on a box where that forces llvmpipe): the wave stays
+      smooth (or at least never starves terminal input); Background animation OFF
+      unmounts it cleanly.
+- [ ] **Wave worker-mode + fallback (task 384).** On WebKitGTK **≥ 2.40** (current
+      Arch) the wave should render in **worker mode** (OffscreenCanvas off the main
+      thread — set `localStorage["recue.waveStats"]="1"` and read `[wave] mode=worker …`
+      / `window.__waveStats`); on the **stock Ubuntu 22.04 floor (≤ 2.38, no
+      OffscreenCanvas)** it must cleanly **fall back to main mode** with the wave still
+      visible (never a blank stage). Force each with `localStorage["recue.waveMode"] =
+      "main" | "worker"` and reload; `"main"` always downgrades, `"worker"` still requires
+      detection. Also confirm the **pause-when-covered** setting (default on) stops the
+      wave when the Overview wall has cards / a Canvas tab has panels and resumes the
+      instant the stage clears, and that a busy agent halves the fps (24 vs 48).
+- [ ] **`color-mix()` on the oldest supported WebKitGTK** (the ubuntu-22.04 /
+      webkit2gtk-4.1 floor): accent-tinted buttons/fills and the busy-dot rings render;
+      where color-mix is unsupported the plain token fallbacks must appear (accent-dim /
+      `--status-*-dim` fills), never a missing/transparent fill.
+- [ ] **Reduced-motion freeze.** OS reduce-motion (GTK `gtk-enable-animations=0` →
+      `prefers-reduced-motion`) *and* the app toggle: the wave settles then freezes on a
+      frame, menu/modal/toast entrances drop, the busy dot goes solid, and the terminal
+      cursor stops blinking (#383).
+- [ ] **Focus-visible rings under GTK themes.** Tabbing through the sidebar cluster,
+      segmented controls, checkboxes, sliders, and modal action rows shows the 2px accent
+      ring on every stop (no GTK/WebKitGTK default outline replacing it).
+- [ ] **Dense-mode divider drag at gap 0** (WebKitGTK hit-testing): every Canvas divider
+      still drags via the ±4px `::after` hit area with `--stage-gap: 0`.
+- [ ] **JetBrains Mono UI rendering under fontconfig.** The bundled woff2 wins over any
+      locally-installed JetBrains Mono variant; hinting/antialiasing keeps the 10–12px
+      chrome type legible on a 1× (non-HiDPI) display.

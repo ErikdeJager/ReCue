@@ -3230,3 +3230,371 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Disclosure/box are hidden in the collapsed sidebar rail (no room) and in the empty-hairline state, preserving current behavior; whole feature stays fail-open + Claude-only via the existing showUsage gate.
 - Each bucket row shows a humanized label, mini progress bar, percent, and its own reset countdown; per-bucket critical-red at >=90% reusing existing fill classes/tokens.
 - Store usage slice gains a required buckets field, so every `usage:` object literal (store defaults/reset branches + test files) must add `buckets: []`; tsc enumerates them.
+
+## Task 371
+
+- The new border-follow + unfocus behavior is gated by the existing opt-in "Focus panels on hover" setting (`autoFocusOnHover`, #368) — the card describes it as an extension of that function; with the setting off nothing changes.
+- This deliberately reverses #368's recorded decision that "hover moves keyboard focus only, never the highlight" — that reversal is exactly what the card asks for.
+- "Border" = the existing selection affordances reused as-is: Overview's `cardSelected` ring via `select(id)` (sidebar highlight follows) and Canvas's `panelActive` ring via `setActiveLeaf` (which already syncs `selectedId`, #79); no new CSS.
+- Unfocus triggers on ENTERING another panel/card (the moment the border jumps), not on merely leaving into dead space/sidebar/tab strip — mousing to the sidebar does not interrupt typing.
+- Hover-select applies to every Overview card and Canvas panel kind; only locally-owned agent/shell-terminal panels count as input panels (focus their xterm) — all others (file/diff/kanban/filetree/scheduled/recurring/pending, and an agent panel owned by another window per #84) blur the previously-focused terminal.
+- The #368 text-field guard extends to the whole behavior: while an INPUT/TEXTAREA/SELECT/contenteditable outside `.xterm` has focus, hover changes nothing (not even the border), otherwise the Canvas active-leaf effect would steal focus from the field.
+- Hover-driven selection must not auto-scroll the Overview wall (suppressed via a module-scoped flag) — scrollIntoView would drag cards under the stationary cursor and cascade selections; explicit selects (click/sidebar/keyboard) still scroll.
+- Hover-select is suppressed while any pointer button is held (`e.buttons !== 0`) and while a canvas drag is active, so dnd-kit drags never spray selections.
+- Scheduled/recurring cards are non-input at the card level; a recurring card's embedded rotating child terminal still gets #368's own body-level hover focus.
+- Big mode and sidebar rows are out of scope (no panel-border semantics); `Terminal.tsx`'s #368 body handler stays unchanged (it also covers big mode).
+- `blurTerminals()` also clears the pool's pending focus request so a queued focus (#351 gate) can never land after the pointer moved to a non-input panel.
+
+## Task 372
+
+- Light pre-paint hex = Latte crust #dce0e8 (mirrors "window/stage base becomes crust"; equals today's light --content-bg, so the light content well is unchanged).
+- tauri.conf.json "backgroundColor" is a fifth synced site of the "four-place" pre-paint invariant — updated to #11111b too (version field untouched).
+- --bg-base repointed to crust AND global.css .main flipped to var(--bg-base) in this card, so the painted stage matches the new native pre-paint color (no boot flash); per-surface stage layout stays with cards 5/6.
+- Radius tokens flipped globally (--radius-control/--radius-chip → 0): sidebar + modal inner controls go transitionally square until cards 4/9/10 re-round via new --radius-chrome(7)/--radius-chrome-sm(5)/--radius-btn(6)/--radius-micro(4); --radius-window stays 10px (floating chrome).
+- Terminal-stays-dark invariant kept: --terminal-bg/-fg/-selection remain literals, deliberately NOT remapped to the surface roles (light theme would flip them).
+- Count chip = Surface0 pill per the demo (spec prose says "crust pill" — demo wins).
+- Checkbox per demo: 15px, radius 4 (--radius-micro), crust off-well, accent fill + --accent-fg check; border uses the on-system --border-strong (0.15) instead of the demo's literal .2 alpha.
+- BusyIndicator keeps its fixed 14px slot (#95 footprint) with the 7px dot + 2.5px ring centered; --status-idle repointed to #45475a (spec §2.1); --busy-sheen token deleted with the sheen; light-theme status colors untouched.
+- Type-scale mapping: fs-ui 12, new fs-row 11.5, fs-meta 11, fs-meta-sm 10.5, fs-meta-xs 10, new fs-micro 9.5, fs-eyebrow 9.5; --fs-terminal/--fs-diff → 10.5 (cosmetic — xterm font size/line-height stay user settings; DEFAULT_SETTINGS untouched).
+- Dense hook = a :root.dense class override zeroing --stage-gap/--stage-pad-overview/--stage-pad-canvas (card 2's text says "root class"); card 2 owns the setting/⌘D/toggle.
+- Accent tints land as :root tokens --accent-tint-fill/-border/-hover via color-mix from the single --accent (tracks custom/inline accents since both live on <html>); accentCompanions machinery untouched.
+- SegmentedControl primitive lands with square panel look default + rounded "chrome" variant; ViewSwitch's EXPANDED mode adopts it now as the proof consumer, its compact rail mode is left for card 4.
+- data-platform attribute machinery (platform.ts/main.tsx) is kept as the platform-CSS seam; only its single CSS consumer (the Linux --ui Inter override) retires, along with fonts.css + the @fontsource-variable/inter dependency; @fontsource/jetbrains-mono/600.css import added for the v2 600 weight.
+- platform.test.ts's #363 font-contract block is replaced with a v2 guard (single --ui declaration leading with "JetBrains Mono", no data-platform selector); theme.test.ts gains a small foundation guard (stage vars + dense hook + accent tints).
+- Minimal CLAUDE.md touch only where this card falsifies stated invariants (pre-paint hexes, #363 Inter seam); the full doc sweep stays with card 12.
+- No italic mono faces bundled — em/italic text renders synthetic-oblique (the demo ships none either).
+- --shadow-popover kept as a legacy alias = var(--shadow-menu) so all 27 existing popover/modal consumers get the v2 depth before their reskin cards land.
+
+## Task 376
+
+- Toasts are floating chrome (rounded), not square blocks: the demo renders them at radius 9px; the plan uses the Task-372 floating-chrome token `--radius-window` (10px) since spec §10 says "radius ~10" and the 1px delta keeps the toast on the shared token instead of a literal.
+- Icon mapping: success → Lucide `Check` (13px, strokeWidth 2.5 — demo-exact) in `--status-done`; error → `CircleAlert` (13px) in `--status-error`; info → `Info` (13px) in `--accent` (the demo's icon is accent-colored; info is the neutral tone, so accent-on-info does not encode status).
+- Auto-dismiss TTL stays 3500ms (store untouched): the card allows tuning and spec prose says ~2.2s, but real app messages are longer/more consequential than the demo's short mock confirmations, and keeping 3500 leaves store.test.ts's fake-timer test byte-for-byte green.
+- Kept `z-index: 70` (today's app stacking scale) rather than the demo's 90 — the demo's z-scale is its own; relative layering vs update overlay (200) / BigMode (220) is preserved as parity.
+- Dropped the demo's `white-space: nowrap`: real messages must wrap, so `min-height: 34px` (demo's fixed 34px for single-line) + `max-width: min(520px, calc(100vw - 32px))` + `overflow-wrap: anywhere`.
+- Tone borders removed: uniform `--border-strong` for all tones (demo shows one uniform border); tone is encoded solely by the icon color.
+- Stacking layout (demo shows only one toast): kept v1's column semantics — centered column, 8px gap (the demo's icon/text gap reused), newest nearest the bottom edge.
+- Centering transform lives on the container; the 180ms rise animates plain translateY on the toast child — visually identical to the demo's combined translate(-50%,8px) keyframe, avoids transform clash.
+- Reduced-motion needs no per-component code: the rise stays a CSS animation, so global.css's existing killswitch (media query + body.reduce-motion) drops it while toasts still appear — today's behavior.
+- Both Toaster mounts (MainApp + detached CanvasWindow) are preserved untouched; the restyle is entirely inside the shared component.
+- Added a small file-content guard test (platform.test.ts idiom) pinning bottom-center position, the v2 tokens, the --dur-slow rise, and the tone-icon mapping.
+
+## Task 374
+
+- Unpacked the bundled demo HTML to extract the sidebar's exact metrics; all demo hexes are mapped to existing tokens (surfaces/text/borders/accent tints), never literals, so the light theme keeps working.
+- Count chip = Surface0 pill via 372's `.chip-count` atom (demo wins over the card's "crust pill" wording — same call PLAN-372 already recorded).
+- Agent-row selection = Surface0 fill at radius 6 applied on the row itself (spec prose radius 6; the demo's inner inset span at radius 7 treated as a mock artifact); unselected agent titles go secondary, selected primary (demo).
+- Filter-active fills (repo header "all" / branch line "own" / worktree / rail folder) keep today's accent-dim + accent-text treatment — spec is silent, and it keeps "filtered" visually distinct from the new Surface0 "selected".
+- Collapsed rail follows §6/demo exactly: the rail's Schedule button and the rail footer's bug-report button are removed (scheduling stays reachable collapsed via ⌘⇧N + the background context menu; feedback via the expanded footer) — the card's only affordance relocations.
+- Rail keeps the worktree branch glyph + its own dot stack (the demo flattens worktree agents into the repo's stack, but that would silently lose the worktree right-click menu — the §12 parity constraint outranks the demo here).
+- Collapsed UpdateIndicator icon + usage track keep rendering in the rail as today (§6 silent; hiding them would lose the update affordance while collapsed).
+- Update pill keeps the #287 breathing glow and the error variant on the new 28px geometry (spec silent on both); pill radius uses --radius-chrome (7px) instead of the demo's 8px literal (spec §2.4 caps chrome radii at 7; no 8px token exists).
+- Usage meter: the no-data state keeps today's full-bleed hairline (it doubles as the footer separator); the >=90% critical red fill is kept (accent never encodes status); the #370 all-usage box keeps a small --radius-chrome-sm now that --radius-chip is 0.
+- First-launch gate = booted && repos.length === 0 && cloningRepos.length === 0; it also hides the update pill, auto-continue prompt, and usage meter per §5 "hide both on fresh install"; the footer icon row always renders.
+- Default + double-click-reset sidebar width moves 260 → 248 (spec §2.4); the [180,560] clamp and persisted user widths untouched.
+- Repo-header + becomes hover-revealed via opacity with space reserved (also revealed on :focus-visible); the empty-repo accent + and the worktree + stay always visible (demo shows both non-hover-gated).
+- Row hover wash = color-mix(text-primary 4%, transparent) with a plain token fallback declaration before it (the demo's rgba(205,214,244,.04) has no token equivalent).
+- Context menus / checkout picker / color picker styles are kept byte-identical (Task 375 owns floating-chrome look); this card only keeps them working.
+- Rail dot tooltips gain the §6 state suffix ("— running/awaiting input/idle") via a new tiny pure helper railDotState + unit test — a strict superset of today's name-only tooltip.
+
+## Task 373
+
+- A Shortcuts section already exists (#318): the card's "new Shortcuts section" is implemented as completing it — adding the missing ⌘F (global search) and the new ⌘D entries, keeping the existing grouped superset (⌘⌥1–6, ⇧arrows, ⌘S, diff keys) rather than trimming to the demo's 5 rows, and restyling rows to the demo's label-left/kbd-chip-right form.
+- The dialog uses the Task-372 `--radius-window` token (10px) rather than the demo's literal 12px — the foundation token is the epic's floating-chrome contract.
+- ⌘D is main-window-only (mirrors ⌘N/⌘B/⌘K/⌘T "swallowed but inert" in a detached window — settings are main-authoritative and not broadcast cross-window; a detached window adopts dense at its next boot, same staleness as theme/accent today) and inert while the Settings modal is open, so Save can't clobber the just-toggled flag with a stale draft.
+- The confirm toast fires on the ⌘D path only ("Dense panels on"/"Dense panels off", the demo's strings); the Settings-checkbox path saves silently like every other setting.
+- `accentColor: "random"` resolves once per window document per run (module-level memo): re-saves never re-roll mid-run; each launch rolls fresh; a detached window rolls independently (accepted, no cross-window accent sync exists today).
+- The "?" swatch is card-defined (absent from the demo): styled like the existing neutral custom-swatch (crust well + hairline + "?" glyph), placed after the 14 palette swatches; active state uses the same demo ring.
+- Kept all 14 REPO_PALETTE swatches (demo shows 10) and kept the Light theme fully selectable/functional (demo mocks it with a toast) — the parity/"light must not regress" constraints win over the demo.
+- Settings' six segmented rows stay plain-button markup restyled to the demo's 26px crust-well/Surface0-active values instead of swapping onto the 372 SegmentedControl atom (whose looks are 20/22px; smaller diff, demo-exact, zero behavior risk); the active segment drops the old accent fill per the "accent never encodes state" rule.
+- New checkbox labels/copy chosen by me: "Dense panels" (+ kbdHint ⌘D help), "Background animation", "Cap agent card width" — consumers of the latter two land in cards 3/5, so they persist but are visually inert here, per the card.
+- The Slider restyle (4px crust track, 12px accent thumb, per demo) is included here — PLAN-372 explicitly deferred it to card 2.
+- Dense's visible tiling waits on cards 5/6 consuming the 372 stage vars; this card's verifiable effect is the persisted flag, the toast, and the `dense` class on <html> zeroing the vars.
+
+## Task 375
+
+- Primitive form: a global-class stylesheet `src/styles/menu.css` (the 372 atoms.css pattern), not a wrapper component — each menu keeps its own positioning/dismissal logic and only swaps look classes; positioning + z-index stay site-local.
+- Demo-extracted contract inlined in the plan (container min-width 200px, 4px padding, base bg, --border-strong, radius 10, --shadow-menu, 130ms .97→1; 28px/11.5px items, radius 6, Surface0 hover; 9.5px uppercase .06em section labels at weight 400; danger hover 12% red tint); menu border uses --border-strong (.15) for the demo's .14.
+- Viewport clamp margins in useRowMenu/clampAgentMenuPos bumped to match the wider 200px min-width.
+- Kept every existing menu item and its order beyond the demo's illustrative sets (Open in canvas, Watch, Pull, View on GitHub, Copy relative path, etc.); no icons added/removed — existing in-menu icons resized 14→13 + muted per §10 (demo's extra Copy/Trash glyphs not added).
+- ViewsPopover follows the demo's layout: "Open a view" section label + view items first, "New session here" last after a separator; deliberately NO ⌘N hint on it (⌘N opens the modal — the item instant-spawns, a hint would mislabel).
+- FileTree's right-click context menu included ("all context menus") even though the card's Apply-to list omits it — it is the third duplicated copy of the menu look; its form/input sub-styles stay local.
+- --shadow-popover alias kept for the ~20 consumers this card doesn't own (FileSwitcher/GlobalSearch/Settings/modals — cards 10-12); only owned surfaces migrate to --shadow-menu/--shadow-modal.
+- New-session popover: uniform 12px radius (drops the #65 mixed-corner trick — demo shows uniform) and token `--shadow-modal` instead of the demo's one-off `0 16px 56px` shadow (token-driven + light-theme-safe approximation); title 12.5px demo literal; anchor stays fixed 12px/12px.
+- Progress dots: 2 for the normal flow, 3 for schedule/recurring (demo shows only the 2-step flow); only the CURRENT step is accent (demo-exact); dots are aria-hidden decoration; a #127/#263 skip-folder open shows dot 2 active.
+- Highlighted/pre-selected rows in the New-session popover (recents, branches, Choose-another) move from --accent-dim to Surface0 fills, and "+ add branch" goes muted-with-hover (demo wins; accent never encodes selection); branch-filter >4 threshold and the branch-step Cancel button are kept (parity over the demo's omissions).
+- SkillAutocomplete dropdown, FilePicker/FileSwitcher/GlobalSearch internals, and Settings selects untouched; where a picker renders inside an owned menu it inherits only the new container.
+- Menu animation duration is a 130ms literal (spec band 130–160; --dur-fast is 120ms); reduced-motion relies on the existing global killswitch, no new mechanism.
+- Checkable-row check glyph right-aligns (margin-left auto) per the demo's right-aligned trailing hints (was label-adjacent).
+
+## Task 377
+
+- The vendored plain-script engine (no export) is loaded via a `?raw` import + `new Function` wrapper (src/vendor/waveEngine.ts) — the only way to consume it without editing; legal because tauri.conf.json ships csp:null, and a sha256-pinning unit test enforces "never edit it" (10ae1e3e…c12a, 17,450 bytes). The handoff dir is untracked/local-only, so the plan instructs copying from the main checkout's absolute path (a git worktree won't have it).
+- ONE engine per window document spans the whole stage: mounted inside `.main` behind `.main-content` (main window) and inside `.window` (detached), so Overview↔Canvas↔hero are live setConfig preset swaps on the same instance — the "ONE canvas behind tab strip AND panes" rule falls out of the placement; z-order via z-index:-1 + isolation:isolate on the container (no other z-index changes; terminals/menus/modals untouched).
+- Seed is rolled once per window document per launch (module-level); an OFF→ON settings re-toggle reuses the launch seed; each detached window rolls its own.
+- Hero preset (950/1.05/0.07, trailLength 3.4 per the spec table) is wired to today's first-launch Overview EmptyState via a shared pure `overviewIsEmpty` helper (also adopted by Overview.tsx so they can't drift); the repo-filter empty state keeps the overview preset — card 5 may re-map when it reskins the heroes.
+- backgroundAnimation OFF unmounts the canvas element entirely (live via React on Save); the host also waits for `booted` so a persisted OFF never flashes a wave pre-boot. Detached windows adopt setting/accent changes only at their next boot (settings aren't broadcast — existing behavior, not a regression).
+- Reduced motion = OS media query OR the app setting (read as the body.reduce-motion class); settle = 240 frames (~5s at the 48fps cap, fx.js's number). Deviation from fx.js: the frozen loop keeps a no-op rAF alive (instead of cancelling) so un-toggling reduce-motion resumes and an accent change while frozen re-arms one settle window then re-freezes.
+- Live recolor = MutationObserver on <html> style/data-theme reading the computed --accent (covers swatch/custom/random/theme flip); bgColor reads computed --bg-base (crust; follows light theme), and a theme flip fades to the new bg over a few frames (the engine has no hard-clear API).
+- No devicePixelRatio scaling (CSS-pixel buffer), matching the reference host — softer look and cheaper on Retina/WebKitGTK.
+- Minimal transparency CSS only (no reskin): .wall/.filterEmpty/.canvas/.area go transparent, Overview .card gains an explicit opaque bg (panels must be opaque), empty-state copy gets a locally chosen text-shadow (0 1px 6px rgba(17,17,27,.65) — the packed demo's exact value isn't extractable); the tab strip + detached header stay opaque (card 6 owns the transparent strip).
+- Tooling ignores added for the vendored file (eslint ignores + .prettierignore, incl. the untracked docs/ui-v2-handoff assets) since ESLint 9 would flag its bare `catch (e) {}` and Prettier would reformat it.
+- Task 372 is already landed on this branch (archived); it is still listed as a dependency per the card.
+
+## Task 378
+
+- Demo wins on radius: centered modals get the demo's 12px (not --radius-window 10px), kept as a documented literal in the new modal.css (per PLAN-375's "card 10 may tokenize 12px" note) — tokens.css (Task 372's) is not edited.
+- The demo's modal border rgba(205,214,244,.12) maps to var(--border-strong) (.15, the card's "strong hairline"); no new token.
+- ⌘K CreatePanelModal and ⌘F GlobalSearch keep their top-anchored launcher positions (12vh/10vh) — "centered on scrim" in the card names the fleet's §10 conventions, the demo shows no launcher to override, and Spotlight-style palettes are top-anchored by convention; only the chrome (scrim fade, Base bg, 12px, --shadow-modal, 160ms pop) changes.
+- Selection fills move accent-dim → Surface0 (--bg-elevated) in ⌘K/⌘F/TemplateUse/FilePicker active rows (demo rule: accent never encodes selection — mirrors PLAN-375's same call for the New-session popover).
+- Onboarding adopts the demo's chips (Recommended = accent tint chip, Untested = neutral hairline chip — replacing today's green/yellow bordered chips) and the demo's intro copy; the Claude-first order comes from the store's existing choice order (no logic change).
+- CanvasCloseModal goes demo-exact (440px, 18px padding, 13.5px/700 title, borderless --fs-micro key hints replacing bordered kbd chips); Esc/K/⏎ handlers, Keep autofocus, and the Tab trap unchanged.
+- ClaudeMissing stays a top banner (converting it to a centered dialog would be a rearchitecture; the demo doesn't show it) — only its Dismiss button/typography align to the v2 idiom.
+- AutoContinuePrompt adopts the same 28px --radius-chrome pill geometry PLAN-374 gives the UpdateIndicator, so the sidebar footer reads coherently whichever card lands first; glow/collapsed/reduced-motion behavior kept.
+- Phantom cloning row: only the progress track moves to the crust inset idiom (var(--content-bg)); its row metrics belong to Task 374's sidebar pass — deliberately a one-declaration touch to minimize merge overlap (Update.module.css is similarly shared with 374: I touch only the modal rules, never .indicator*).
+- TemplateEditor stays a full-screen surface (not a scrim-centered dialog); only its toolbar buttons, name/config inputs, and hovers adopt the v2 idiom.
+- FileSwitcher's anchored popover gets the §10 anchored-surface look (radius-window 10px + --shadow-menu + 130ms pop) via its own module rules rather than composing 375's .menu-pop (whose min-width/4px padding would disturb the embedded FilePicker).
+- The UpdateModal install overlay keeps its no-dismiss alertdialog semantics; its progress track restyles to a crust rounded track.
+- CreatePanelModal type icons and GlobalSearch row icons stay accent (they encode panel type like the sidebar rows; §10's muted-icon rule is applied to menu lists, not launcher type icons).
+- Existing per-modal z-index layering (100/200/210/220) is positioning, kept site-local and unchanged (the demo's uniform z-70 is a single-page artifact).
+- PatchNotes gets only the v2 micro-eyebrow category restyle; the surrounding Settings → Updates pane is Task 373's.
+
+## Task 379
+
+- Filtered empty-repo state keeps the calm "overview" wave preset (demo wins: waveMood() boosts to 950 only on the whole-app empty toggle) — 377's selectWavePreset is NOT re-mapped.
+- Included the demo/spec's faint "the wave keeps you company until then" line in the empty-repo state; the card's "no taglines" rule applies to the first-launch hero only.
+- The empty-repo "New session" button calls startRepoSession(filter.path) (#127 — skips the folder step for a git folder) rather than the global openNewSession, scoping the flow to the filtered repo.
+- capAgentWidth caps agent-conversation cards only (SessionCard + RecurringCard) at max-width 900px (a literal safely above the #176 min-width slider's 600px max); other card kinds stay uncapped; the cap stays active in dense mode; uncapped leftover stage shows the wave (cards left-aligned, no centering).
+- Repo-group divider borders (.cardGroupStart + its #343 light override) are removed — grouping now reads via the 2px band + 8px gaps like the demo; the light-theme opaque border override is kept on .card for dense/adjacent dark terminals.
+- Selection ring switches from the #50 repo-colored frame + header tint to the demo's plain 1px accent ring (header tint removed); sidebar sync is already shared selectedId — no new wiring.
+- The header/body hairline stays as the header's border-bottom (renders identically to the demo's body border-top); "bottom-anchored at the prompt" is xterm's existing behavior (claude's TUI paints full-screen) — no forced flex-end.
+- "xterm theme fed from tokens" = adding 16 literal --terminal-ansi-* tokens (Catppuccin Mocha terminal scheme, NOT overridden in light — terminal stays dark) read at terminal creation; bg/fg/cursor/selection were already token-fed; no live re-theme on accent change (parity with today's creation-time cursor color).
+- Tips show only on the first-launch EmptyState ("whenever ReCue is empty"), not on the empty-repo filter state; tips.json stores mac-style chords converted per-OS by a pure renderTip (⌘→Ctrl+, ⇧→Shift+, ⌥→Alt+, ⏎→Enter — kbdHint semantics).
+- Tip affordance = a small ghost chip (Lightbulb icon + "tip") that shuffles to a guaranteed-different random tip; wordmark/tip get text-shadows with a light-theme halo override.
+- Non-agent cards get the demo's 8px repo-colored leading square (radius 3, demo-exact); scheduled/recurring cards keep their functional Clock/RefreshCw leading icons.
+- Filter bar per demo: unchromed row with "Show all" as an accent text link beside the label (no right-aligned chip); kept the #247 "· this branch" own-mode suffix.
+- Demo-exact button radii kept: hero button 6px (--radius-btn), empty-repo button 8px literal; the on-accent ⌘N chip uses color-mix(--accent-fg 16%) with the demo rgba fallback.
+- Added --text-faint (dark #45475a / light #9ca0b0) since the spec's §2.1 text scale lists "faint" but Task 372 didn't land it (flagged as possibly duplicated by sibling Task 380 — keep one definition at merge).
+- Diff-card inner content (summary row + diff lines) is DiffInspector's turf (cards 7/8); this card delivers only the card chrome around it, per the parity-constraints note.
+
+## Task 380
+
+- "Distribute panels evenly" already exists (#186, `equalizeCanvas` in CanvasTabs) — verified; restyle only, no new aux button; kept its disabled-when-<2-panels behavior (the demo mock has no disabled state).
+- Demo wins on Distribute placement: it sits inline after Templates (removed #205's `margin-left:auto` far-right push).
+- Border alphas: the card prose says "hairline border" for tabs AND panels — mapped the demo's off-token rgba(205,214,244,.10/.12) to `--border-hairline` (token discipline; no new literals).
+- Agent Canvas-panel headers regain a status dot (spec §8 "repo dot/status" + the demo's pulsing dot): reuse the 372-restyled BusyIndicator, deliberately reversing #95's "agent panels drop the dot" for Canvas headers only; non-agent panels keep the repo dot, now 8px rounded-square (radius 3) per the demo.
+- "Restyle dividers to hairlines": the react-resizable-panels Separator becomes the transparent `--stage-gap` gap (wave peeks through) with a centered 1px `--border-hairline` line (accent on hover/active) drawn via ::before, oriented off the library's aria-orientation attribute; an invisible ±4px ::after hit-area extension keeps resize working in dense (gap 0), with a `max(var(--stage-gap), 1px)` fallback documented if a WebView misbehaves.
+- The empty state's ghost "New tab ⌘T" button calls `addCanvas()` (a fresh empty tab), matching the spec/demo copy verbatim even though the state means "active tab is empty".
+- The always-visible dashed drop border of today's empty canvas is replaced by the centered stack; the accent dashed border + tint now appear only while a drag hovers the center droppable (droppability itself unchanged, `canvas-center` id kept).
+- Detached window "same chrome" (spec/demo don't show it): the header becomes the same transparent 6px/10px strip with the tab name styled as an active tab block (base fill + hairline, 600/11px), no added buttons.
+- In-tab pop-out/✕ buttons keep today's ~18-20px hit areas (not the demo's ~16px mock sizes) but adopt the demo's hover treatment: color-only, ✕ turning `--status-error`.
+- Templates ▾: only the trigger button is restyled (22px ghost); the dropdown surface/items (`.menu*` rules + menu JSX) are left byte-identical — Task 375 (refined, not landed) owns the menu primitive.
+- DetachedNote/MaximizedNote/DetachedCanvasNote restyle = swap buttons to the 372 atoms (`btn btn-neutral`), keep layout; no text-shadow (they sit on opaque panels, not the wave).
+- Empty-state copy reuses 377's constant dark text-shadow (0 1px 6px rgba(17,17,27,.65)); on merge conflict with 377's `.centerHint` line, this card's version wins (same value).
+- Empty-state subtitle uses `--text-muted` (not the demo's Surface1 #45475a) for light-theme legibility; the decorative grip does use `--surface-1` per the demo.
+- `.panel` background crust→base per the card; panel INNER content backgrounds are cards 7/8's — the transitional look is accepted (terminals unaffected, xterm paints its own bg).
+- Header metrics taken demo-exact: 30px fixed, padding 0 10px, gap 8, title 12px/600 (`--fs-ui`), meta 10px (`--fs-meta-xs`), 13px icons, 22px actions with Surface0 hover (was the stronger post-372 `--bg-hover`/Surface1).
+- No CLAUDE.md edit (card 12 owns the docs sweep) and no new unit tests (CSS/markup-only card; the existing suite must stay green).
+
+## Task 382
+
+- Kanban toolbar stays a dedicated 30px row below the panel header (the demo folds "Saved" + the segmented into the 30px header, but that header is Task 380's Canvas chrome hosting panel actions; moving inner controls there would collide) — "Saved" + segmented right-aligned per the demo order.
+- Board|Raw judge call: use the landed SegmentedControl atom (its 22px segments / crust well / Surface0 active thumb / 10.5px type match the demo's computed seg() styles exactly); the atom's hairline well border is kept over the demo's borderless well; segment icons become demo's kanban/terminal glyphs (lucide Kanban/Terminal 12px, replacing Eye/Code2 13px).
+- Demo wins over #248: done cards regain strikethrough (40%-text decoration) + 60% opacity, and the done checkbox is a 12px status-done (green) box with a crust check — implemented by restyling the shared Checkbox via structural selectors under .cardCheck (no Checkbox API change); body task-list checkboxes go green to match.
+- Removed the #233 2px column top accent stripe, the uppercase column names, the count pill, and the column-header underline (demo has none); column color identity is the 8px dot only, still driven by the #239 per-column color settings.
+- Card hover-lift (#234 translateY + shadow) replaced by the demo's flat border-strengthen hover (spec §2.5: shadows only on floating chrome); the DragOverlay drag preview keeps its shadow.
+- "Raw = flush textarea" (card prose) vs demo: demo wins — the Raw view is a 10px-inset crust well with a hairline border, not literally flush.
+- FileTree gains a trailing right-aligned 9px M/A/D status letter on tinted file rows + ghost rows (present in the demo though absent from the card prose; presentation-only spans); folders keep the roll-up tint without a letter.
+- FileTree ignored rows go faint --surface-1 (demo #45475a) instead of muted+opacity; folder icons become muted (demo) instead of accent; default row text --text-secondary; git tints color the whole row (icons included).
+- FileTree indentation formula and the 17px file-icon alignment nudge kept as-is (alignment mechanics; the demo mock doesn't demonstrate mixed folder/file depths).
+- The refresh button keeps the demo's 7px radius (--radius-chrome) despite the in-panel square rule — demo wins.
+- RecurringPanel has no Start-now today ("Start now #269/fire_one_recurring" in the constraints is a keep-list; fire_one_recurring is an internal Rust fn, not a command) — restyle-only, no new recurring fire-now feature; the accent ▶ Start now applies to ScheduledPanel, whose button is restyled to the demo's 30px accent block.
+- SkillAutocomplete dropdown adopts the landed menu.css surface by adding the global menu-pop class to the existing menu div (positioning stays module-local); the two-line name+desc options keep their stacked layout (menu items are 28px single-line) restyled to Surface0 hover/active + --fs-row/--fs-micro; keyboard flow byte-identical.
+- SCHEDULE_TIME_HINT copy unchanged (it already matches the demo hint text); the hint line renders faint (--surface-1) and the resolve line 9.5px accent per the demo.
+- Demo border alphas .06/.12/.2 mapped to the nearest tokens (--border-hairline .08 / --border-strong .15); board gaps use literal 10px (no --space-10 token exists — the #240 trap).
+- Overview's ScheduleCard/RecurringCard chrome (Overview.tsx) untouched — Task 379 owns it; only the shared panel components are edited.
+
+## Task 381
+
+- Segmented controls use the landed Task-372 SegmentedControl atom (its default square look is demo-exact: crust well, 2px pad, 22px Surface0-thumb segments); one atom tweak — `gap: 5px` on the segment rule — for icon+label segments (no visual change for text-only consumers like ViewSwitch; Settings uses its own buttons).
+- The demo puts the DiffInspector's meta + Focused|Accordion in the 30px panel header, but that header is Task 380's generic chrome — they live instead in an in-component toolbar row (mirroring the FileViewer's demo toolbar-row pattern); the meta shows only "N files +a −d" since "repo · branch" is already the 379/380 card/panel header meta (dedupe; today it was duplicated).
+- The editable Raw view keeps the plain <textarea> and SKIPS the demo's "light syntax tinting" — a transparent-text overlay-highlight risks caret/IME/scroll-sync/wrap divergence across WKWebView/WebView2/WebKitGTK, and editable-raw parity (§12) is the harder constraint.
+- Rendered markdown sits on base (--bg-panel) per the demo; Raw/code surfaces stay crust; the base→crust hairline moves from the toolbar's border-bottom onto the editor's border-top (demo-exact, no double borders; only the editor ever renders under a toolbar).
+- New tokens --diff-hunk-fg/--diff-hunk-bg (Mocha #89b4fa / rgba(137,180,250,.07), Latte #1e66f5 / .07); dark --diff-add-bg/--diff-del-bg alphas 0.12 → 0.10 per demo; Latte add/del alphas left as-is (no light demo — don't regress tuned contrast).
+- Sticky @@ hunk headers are kept: the tint composes over an opaque --bg-panel under-layer so stuck headers never let code bleed through (slight deviation from the wall demo's translucent strip on crust cards — accepted).
+- Focused mode drops the sub-header row per the demo pager; the SeenToggle (#278, + S keycap) moves into the pager row after the › arrow, and the active file's +/− counts move into the file pill (demo mock omits them; zero-functionality-lost keeps them visible; full path stays as the pill tooltip).
+- Unified rows keep both old/new line-number gutters + the marker column (the demo mock shows a single number; dropping one would lose information).
+- Unified|Split and Recent|A–Z (not in the demo) restyle to the same 22px segmented look on a second toolbar row with the source segmented + pickers; all #237 persistence wiring unchanged.
+- The #255 panel-scoped arrow-nav guard gains `[role=tablist]` so the atom's roving arrow keys (which don't stop propagation) never also step the diff file.
+- Raw segment icon = lucide Terminal (demo data-ic="terminal"; was Code2); markdown h1/h2 use weight 700 per the demo (demo wins over §2.3's "700 wordmark only" prose).
+- The M status chip fg becomes --status-awaiting (demo yellow, matching FileTree's M; was text-secondary); chip bg = color-mix(currentColor 15%, transparent) with a plain fallback first (menu.css documents color-mix as shippable).
+- The focused-mode file-picker listbox is restyled locally to the §10 floating-chrome values (base bg, strong hairline, radius-window, shadow-menu) rather than composing the global .menu-pop class (its 200px min-width + entry animation don't fit an anchored pill-width listbox).
+- .raw/.code/.codeGutterWrap/.diffGutter metrics (12px pad, 1.5 lh) are deliberately untouched — the #324 gutter alignment is locked to them; only the gutter-free .editor adopts the demo's 10px/1.6.
+
+## Task 383
+
+- Dependencies are exactly 381+382: TASK_ARCHIVE.md shows 372-380 archived; PLAN-381/382 still at root (unlanded) — the card runs strictly after them.
+- Light-theme deferred-polish findings are recorded in the PR body under a "Light polish deferred (§13)" heading (no tracked file is designated for them; TRAJECTORY files stay OS-real-box logs only).
+- xterm's canvas cursor blink is unreachable by the CSS reduced-motion killswitch; if the audit confirms it still blinks, the fix threads effective cursorBlink (= setting && !reducedMotion) through terminalPool.applyTerminalSettings/createHost — the one deliberate JS touch, justified as spec §2.5 motion policy, never a host dispose (#18).
+- Token hygiene targets only UNDOCUMENTED literal drift; demo-exact literals recorded in ASSUMPTIONS (modal 12px radius, 379's 8px button radius + rgba(17,17,27,.65) text shadow, 382's 10px board gaps, terminal/ANSI + pre-paint literals) deliberately stay.
+- --shadow-popover legacy alias: migrate remaining floating-chrome consumers to --shadow-menu/--shadow-modal, then delete the alias only if zero consumers remain, else keep it.
+- --text-faint reconciliation keeps 379's values (dark #45475a / light #9ca0b0 — the current tokens.css state); a new theme.test.ts guard asserts no custom property is declared twice per theme block (my addition, pinning the merge-drift bug class).
+- accentCompanions/store.ts may be edited ONLY if the accent audit finds a genuinely broken derivation (e.g. near-black accent → invisible tint), with a unit test; otherwise store logic is untouched.
+- Detached windows adopting dense/accent/theme only at next boot is recorded 373/377 behavior, treated as expected (not a parity gap to fix).
+- CLAUDE.md sweep scope = the seven statements v2 falsified (Stack Inter line, data-platform consumer, Styling convention, five-place pre-paint invariant incl. tauri.conf.json backgroundColor, Settings 740×540 + new sections/settings, sidebar default 248, Layout tree additions) — surgical edits, not a rewrite.
+- No version bump / patch notes (maintainer's v2.0.0 release step); the fix rule everywhere is reskin scope only (CSS/markup/title attrs) — logic-needing findings are recorded in the PR body as out of scope.
+- The untracked handoff dir is absent in implementer worktrees, so the plan inlines the full §12 checklist + all load-bearing values and points at the main checkout's absolute path for the demo contract.
+
+## Task 384
+
+- OffscreenCanvas feasibility verdict: the vendored engine is verifiably DOM-free (only Math/parseInt/String + the ctx passed to frame(); every ctx API it uses exists on OffscreenCanvasRenderingContext2D), so it runs unmodified inside a Web Worker via the same ?raw + new Function loader; worker mode is feature-detected (Worker + OffscreenCanvas + transferControlToOffscreen + a throwaway 2d-context probe) with the current main-thread loop as the fallback — WebKitGTK ≤2.38 (Ubuntu 22.04 floor) lacks it and simply falls back.
+- Chosen optimization set: (1) worker+OffscreenCanvas rendering (the card's "separate thread"), (2) the covered-pause itself, (3) busy-aware fps cap 48→24 when any session is busy (dt-integrated, same drift speed), (4) one-way adaptive render-scale downscale 1→0.75→0.5 on sustained eng.frame overruns (never back up within a run — avoids oscillation/trail resets), (5) ~150ms trailing ResizeObserver debounce (fixes sidebar-drag buffer thrash), (6) a recue.waveStats localStorage probe (fps/avg/p95/scale, window.__waveStats) so "less laggy" is measurable. Rejected: cutting spec-tuned preset values, DPR changes, pausing during resize, per-frame ImageBitmap transfer.
+- "Covered" per surface: Overview = overviewClusters(...) non-empty (reusing the exact pure helper the wall renders from, so it is filter-aware — a repo filter with zero matches and the first-launch hero are NOT covered); main-window Canvas = active tab not detached AND layout !== null (an empty tab and a detached active tab show the wave → not covered); detached window = its canvas layout !== null. BigMode/modals deliberately ignored.
+- Pause = a gate skip identical to document.hidden (rAF stays scheduled, timebase reset, frame counter frozen so reduced-motion settle/freeze semantics are preserved); resume is instant, never a remount/reseed. The one allowed remount is an init-failure retry (fresh canvas element after a transferControlToOffscreen/worker-init failure — also heals StrictMode's dev double-mount, since transfer is one-shot per element); the no-remount rule is read as preset/pause/setting-scoped.
+- pauseWaveWhenCovered is consumed reactively via useStore (applySettingsEffects untouched — the same pattern as backgroundAnimation, which is also not in applySettingsEffects); upgrade safety comes from the existing shallow mergeSettings back-fill; the checkbox is disabled while backgroundAnimation is off (OFF unmounts the canvas and wins over everything).
+- Detached windows adopt the setting's value at their next boot (settings aren't broadcast — recorded 373/377 behavior, not a regression), but their covered state tracks live because canvases ARE broadcast.
+- Busy = any store sessionBusy true; the 24fps busy cap applies in both worker and main modes for consistency.
+- Dev overrides named recue.waveMode ("main"/"worker"; "worker" still requires detection) and recue.waveStats, following the recue.theme localStorage precedent.
+- Governor constants: 8ms avg eng.frame budget over 4s windows of drawn frames (≥30 frames) per degrade step; tests pin behavior (one-way, floor 0.5), not the exact numbers.
+- Real-box verification items (worker wave on Arch WebKitGTK, fallback on stock Ubuntu 22.04, WebView2 smoke) are logged in TRAJECTORY_TO_LINUX.md / TRAJECTORY_TO_WINDOWS.md per the CLAUDE.md rule; CLAUDE.md gets only a surgical note extending task 383's wave/Appearance text.
+- Dependencies listed as Task 381, 382, 383 per the card's "once all 12 UI v2 tasks are implemented and archived" (372–380 already archived; these three transitively serialize after the epic).
+
+## Task 385
+- "Use the busy indicator from before the UI rework" = restore the full pre-rework visual (~10px dot + soft glow + sweeping sheen), dropping the UI-v2 opacity pulse AND the added tinted ring — not merely swapping the animation.
+- Re-introduce the `--busy-sheen` glint token (removed by the UI-v2 restyle) in both the Dark and Latte-light blocks, faithful to `main`.
+- Keep the current UI-v2 status palette (`--status-*` + `-dim`); restore only the animation/visual.
+- Add plain-token fallbacks before each color-mix (task-383 cross-platform rule).
+- No CLAUDE.md edit; only component-local comments reverted. Props/markup/aria unchanged, so all four consumers inherit the fix.
+
+## Task 386
+- Ambiguous "…in their accent color when focussed" resolved as the FOLDER's own color, not the global accent (UI-v2 "accent never encodes selection").
+- Accent borders in scope: Overview selected-card ring (`.cardSelected::after`) + Canvas focused-panel frame (`.panelActive`) → both move to folder color via inline `--repo-color`.
+- Also a subtle ~30% folder-tint on the resting card/panel border (plain fallback first); dial-back-able.
+- Folder color = repoColor(effectiveRepo) for agents / repoColor(repoPath) otherwise.
+- Overview 2px repo-color top band unchanged. Out of scope: Sidebar rows, BigMode, non-folder accent affordances.
+
+## Task 387
+- "Popup" = the #370 expandable "all usage" viewer box in UsageBar.tsx, not a separate tooltip.
+- Reset-cell format: <24h → compact countdown; 24h–7d → weekday abbrev; ≥7d → short date. `title` tooltip adds precise local date/time + "5d 2h" duration.
+- Main five-hour bar line unchanged. Frontend-only (resetsAtMs already exposed).
+- Formatting via Date#toLocale* (formatFireTime seam), now-injectable + unit-tested; fail-open preserved.
+
+## Task 388
+- "New folder" = background menu's "New folder…" → `addFolder` store action (native picker → register into recents); not git-init / mkdir.
+- Reuse exact labels + handlers (`addFolder`, `openCloneRepo`) from the background menu.
+- Placed after "Recurring session…" before the "Auto continue" toggle (no separator in RowMenuItem); cosmetic.
+- Scoped to `dotsMenuItems`; the "Schedule session" removal is sibling Task 389 (disjoint arrays).
+
+## Task 389
+- "Global left panel context menu" = sidebar background/empty-area menu (#172), items in the single `bgMenuItems` array in Sidebar.tsx.
+- Delete only the one schedule line; keep `openSchedule` (footer button + ⌘⇧N still use it).
+- Update one stale collapsed-rail comment; ⌘⇧N stays the collapsed fallback.
+- Per-repo/folder menus, the ⋯ menu (Task 388), the button, and ⌘⇧N untouched.
+
+## Task 390
+- Setting `terminalBackgroundLightness` (0–100), default 0 = today's `#11111b`; older blobs back-fill to 0 (no migration flag).
+- Slider 0–100 step 5 in Appearance section (terminal-scoped).
+- Ramp = linear RGB interp from `#11111b` toward gray `#3a3a45`, kept ≥7:1 contrast with `--terminal-fg`; endpoint tunable.
+- Color computed in JS (not color-mix), applied to xterm ITheme.background + cursorAccent; wrapper padding via new `--terminal-bg-user` var (plain fallback).
+- Don't override the `--terminal-bg` token; no clearTextureAtlas; one synchronous applyTerminalSettings pass across all pooled hosts (#221/#18).
+
+## Task 391
+- "cmd+K launch panel" = the Create-panel launcher (#189) at `src/components/CreatePanelModal/`; the filtered options are its six panel TYPES on the first ("type") step (today pickable only by click or 1–6).
+- Enter selects the highlighted type and advances the existing 2-step flow (folder/target step, or startRepoSession for Session); it doesn't skip choosing a folder.
+- Number keys still work but index the currently-displayed (filtered) list; digits intercepted from the input.
+- Plain case-insensitive substring over the type label; empty query shows all; highlight resets to top on filter change.
+- Ordering left to Task 392 (iterate PANEL_TYPES as-is + add pure filterPanelTypes()); deps none (trivial overlap).
+
+## Task 392
+- One shared source of truth (new `src/itemTypeOrder.ts`) consumed by the three registries (panelTypes.ts, ViewsMenu.tsx, templateBlocks.ts).
+- ViewsMenu keeps "New session here" at the bottom (task 375); only its 5 view items reorder. "Session first" applies where Session is co-listed.
+- ⌘F global-search KIND_ORDER left unchanged (search grouping, already canonical).
+- cmd+K digits (1–6, ⌘⌥1–6) remap to the new canonical order.
+- Only ORDER changes; labels/icons/entries/behavior preserved. Soft overlap with Task 391 on CreatePanelModal.tsx/panelTypes.ts.
+
+## Task 393
+- "Active" repo = ≥1 LIVE/running agent (session.exitedCode === undefined), grouped by effectiveRepo — not the busy heuristic. Recurring children count as live.
+- "6 items per repo" = 6 TOTAL visible across all kind sections (not 6 per kind), filled in KIND_ORDER (agents first); one "…" per repo group.
+- "…" is a non-interactive muted "+N more" indicator, excluded from keyboard nav.
+- Secondary order within each tier stays alphabetical repoName-then-path.
+- Cap+ordering live in pure search.ts, source-agnostic (covers sibling #394's scrollback source).
+
+## Task 394
+- MAJOR / potential duplicate: the card's core feature (⌘F GlobalSearch already greps every live agent's in-memory scrollback via Rust `search_session_output`/`SessionManager::search_output`, ANSI-stripped, capped per-session 5 + total 50, snippet-clamped, rendered as a "Terminal output" group) ALREADY SHIPPED as Task #337 and was moved off the main thread by #353. Task 394 is rescoped to VERIFY that shipped feature + a small side-effect-free improvement, not a from-scratch build; the merge lane may prefer to close it as a duplicate.
+- Chosen "improve" delta: expand claude's non-erasing cursor-forward CSI moves (ESC[<n>C) into spaces inside `strip_ansi` (its only caller is the search path) so on-screen phrases actually match; optional TSX polish hiding the non-navigable ":line" badge on output rows. Backend-only, collision-free with siblings 392/393.
+- "Currently active" = every backend-registered session (running, busy AND idle); the frontend already filters hits to store-known sessions so exited/forgotten agents don't surface. Kept as-is.
+- Output search keeps the ≥2-char query gate; only the 256KB scrollback tail is searched; activation selects the agent without scrolling its xterm to the match (out of scope).
+- Ordering / 6-per-repo cap deliberately untouched (siblings 393/392); output flows through the shared source-agnostic rankAndGroup.
+
+## Task 396
+- Reuse the existing `.fieldWarn` caution pattern (yellow `--status-awaiting` + `TriangleAlert` icon) rather than a new class — consistent with the untested-agent caution already in the same Settings modal; satisfies "not by color alone" (icon + text).
+- Chose `--status-awaiting` (yellow `#f9e2af` dark / `#df8e1d` light) as the on-system warning-yellow: the app's designated status yellow, correct in both themes; there is no separate `--warning` token.
+- Split the Linux-only "Native file dialogs adopt this theme…" sentence out of the recolored note, keeping it plain muted `.helpText` (informational, not a warning); the `isLinux(platform)` gate preserved.
+- No wording change to the note text. Target string at `Settings.tsx:397`; `TriangleAlert`/`isLinux`/`platform` already in scope (no new imports/CSS/backend).
+
+## Task 397
+- DEPENDS ON Task 393 (confirmed): reuses 393's `rankAndGroup(results, { activeRepos, perRepoCap })` signature, active-first ordering, and 6-item cap/hiddenCount; the cap-lift just passes `perRepoCap: Infinity`.
+- Chips derived from 393's unfiltered active-first `grouped`, so chip #N == the Nth result group and ⌘N filters that group.
+- Only the first 9 matching folders get chips + ⌘1–⌘9 (⌘/Ctrl+Number caps at 9); folders beyond 9 remain in results but aren't chip-filterable.
+- Chip row shown only when the query is non-empty AND ≥2 folders match.
+- Cap-lift = fully uncapped for the selected folder; upstream PER_REPO_FILE_CAP=20 still bounds matches.
+- Filter is transient local component state (no persistence/store slice); resets on modal close.
+- Toggle: ⌘N/click toggles; Escape clears an active filter first, then closes.
+- Active chip lights up with Surface0 fill + primary text + full-opacity repo dot; muted at rest (accent never encodes selection).
+- Active filter auto-clears if its folder stops matching; global ⌘1–9 Canvas-jump guarded with `!globalSearchOpen`; ⌘-Number handled in the modal input keydown (e.code Digit1–9 + metaKey||ctrlKey), hinted via kbdHint.
+- No `search.ts` logic change (reuses 393's perRepoCap); one contract unit test added for the Infinity path.
+
+## Task 395
+- "Active agent" = running/live session (exitedCode === undefined), matching store.ts killAgentsInRepo + sibling Task 393 (chosen over "busy" for consistency).
+- Count is the repo's OWN running agents only (excludes worktree agents + recurring-owned children, mirroring the existing repoSessions filter); worktree sub-groups keep their own WorktreeHeader count — avoids double-counting.
+- Removed the existing always-on total-sessions `chip-count` beside the repo name, consolidating to the single count in the "+" slot (two numbers in one header would be redundant).
+- At zero running agents: no count; keep today's behavior — empty repo → always-visible accent "+"; non-empty-but-none-running → "+" hidden at rest, revealed on hover/focus (no "0" clutter).
+- Count color = neutral --text-secondary (mono, tabular-nums, --fs-micro, "line-changes" typographic treatment), not the repo/status/accent color.
+- Scoped to the expanded RepoGroup header only; collapsed rail + WorktreeHeader "+" out of scope; new CSS scoped under `.newSlot` so the shared `.plus` class is undisturbed.
+- Keyboard swap via :focus-within + visibility:hidden (not :has()), for cross-platform WebView support + zero layout shift.
+
+## Task 398
+
+- Reuse #335's existing `diff_line_counts` command / `diffLineCounts` store map (keyed by `session.repoPath`, worktree-aware, refreshed on the #212 busy→idle cadence) for the +/- diff stat — the card's "small Rust addition" is already shipped, so NO new Rust command/git read is added.
+- Header ✓ = dismiss-all (acknowledge/clear every current queue member; all sessions stay alive) — confirming the card's proposed interpretation of the wireframe's ✓.
+- No dedicated "switch to Attention" keyboard chord: reached via the ViewSwitch segment + its count badge. `⌘\` stays the Overview↔Canvas toggle (not extended to a 3-way cycle); `⌘1–9` canvas guard unchanged.
+- `⌘⏎`/Ctrl+Enter dismiss is captured app-wide ONLY while the Attention view is active (and no modal open); elsewhere it passes through untouched (schedule modal etc.). Plain Enter is never intercepted (still submits to the terminal).
+- Selection uses the shared `selectedId` (not a local attention state) so `⌘E` big-mode works for the attention-selected agent for free; the view keeps `selectedId` pointed at a queued agent via an auto-select-top effect.
+- Ordering tie-break: sort key = `sessionIdleSince[id] ?? createdAt*1000` (createdAt is unix seconds), ascending, ties broken by ascending `createdAt` then `id`. Boot-persisted-awaiting agents (no recorded edge) fall back to `createdAt` and are queued on boot; their "Xm ago" label is omitted (unknown).
+- Queue excludes recurring-owned child sessions (mirroring `maybeNotifyWatched`) and exited/reconnecting sessions, in addition to the card's `sessionActive && !sessionBusy && !dismissed` rule.
+- Card × (kill) is confirm-gated per `settings.confirmDestructive` via a lightweight inline two-step (arm-then-confirm) on the ×, reusing `removeSession`; removal paths are patched to keep the user in the Attention view (not bounce to Overview) so a kill just advances to the next queued agent.
+- ViewSwitch Attention segment uses the `AlertTriangle` icon in both expanded (composed label: icon + visually-hidden "Attention" + count badge, `title="Attention"`) and compact-rail modes; count badge hidden at 0; live count via a store selector returning a primitive number.
+- Empty state is a small custom "All caught up" block (not the `EmptyState` hero wordmark). The Attention view reuses MainApp's single `WaveBackground` (transparent panes) rather than mounting its own; it inherits the existing "overview" wave preset (no `wavePresets.ts` change). Settings "Default view on launch" picker is left at Overview/Canvas only (launching into an empty triage surface is undesirable), though the `View` type permits "attention".
+
+## Task 402 — Default the wave "Pause when covered by panels" setting to OFF (opt-in)
+
+- "Default off" = flip DEFAULT_SETTINGS.pauseWaveWhenCovered from true to false; no migration code (shallow mergeSettings back-fill handles the upgrade, mirroring how the setting was introduced in task 384).
+- Existing users who already saved settings since task 384 persist pauseWaveWhenCovered:true explicitly (saveSettings writes the whole blob), so their pause stays ON — treated as acceptable (they made a choice; this is a default flip, not a forced behavior change). Users who never saved get the new OFF default.
+- Left the historical TASK_ARCHIVE.md task-384 entry unchanged (it correctly records 384 shipped default ON); updated CLAUDE.md + TS/comment copy instead.
+- Updated the existing store.test.ts default-value test to assert false and to keep an override assertion for a persisted true; Settings.tsx help text left as-is (states no default).
+- Correcting the "(default on)" parenthetical in TRAJECTORY_TO_LINUX/WINDOWS.md is marked optional/low-priority (historical logs); the smoke-verification steps still hold.
+
+## Task 399 — Let macOS Ctrl+⌘+F native fullscreen through (⌘F opens search only on the plain search chord)
+
+- Chose a platform-agnostic "exactly one of Cmd/Ctrl" guard (`(meta||ctrl) && !(meta&&ctrl)`) over a platform-signal-based `metaKey && !ctrlKey`/`ctrlKey && !metaKey` split: equivalent for the canonical chords, needs no async `platform()` lookup (correct from the first frame), and keeps plain Ctrl+F opening search on macOS unchanged.
+- Scoped the modifier carve-out to the ⌘F search block only; left every other ⌘-shortcut (⌘N/⌘B/⌘K/⌘T/⌘E/⌘D/⌘\/⌘1-9) unchanged since none were reported to collide with a native macOS Cmd+Ctrl combo.
+- Extracted a pure predicate (`src/searchChord.ts`) + node unit test rather than an inline-only one-liner, matching the pasteHandler.ts/hoverFocus.ts convention (tests run in the node env; hooks are excluded from coverage).
+- No Settings -> Shortcuts copy change: the ⌘F / Ctrl+F "Global search" hint stays accurate, so shortcuts.test.ts is untouched.
+
+## Task 401 — Soften UI v2 element borders and focus rings
+
+- "Too thick" element borders are addressed by lowering border-token alpha, not pixel width: nearly every border is already 1px (the practical rendering floor), so the perceived heaviness is color weight; softening --border-hairline/--border-strong in both themes is the correct lever.
+- "Focus subtle / easy on the eyes" = softer color (accent @ ~70% via color-mix) plus a slightly thinner ring (2px -> 1.5px), NOT removing the ring — accessibility keeps it clearly visible.
+- Focus ring stays on the accent (its established, legitimate use per DESIGN-SPEC), formalized into a new --focus-ring token; interpreted the "not accent-as-status" note as "don't move focus to a status color," and the CLAUDE.md accent-never-status rule as applying to fills, not the focus ring.
+- Introduced new tokens --focus-ring + --focus-ring-width (no dedicated focus token existed); kept custom-accent-live behavior via the app's plain-fallback-first color-mix pattern.
+- Left deliberate accent/identity/selection borders out of scope: the 3px blockquote accent border, the Overview repo-color top band, the scrollbar transparent inset border, the Settings active-swatch selection ring, and all --accent-tint-* borders.
+- Concrete alpha values (dark strong 0.15->0.11, hairline 0.08->0.06; light strong 0.18->0.13, hairline 0.1->0.08) are a conservative "a bit smaller" starting point, tunable in one place.
+
+## Task 400 — Order folder pickers most-recently-used (count every panel open as a repo "use")
+
+- Read the card as: the ⌘K/⌘N/template folder pickers ALREADY order by the MRU `recents` list, but `recents` was only bumped on agent spawn — so the real gap is that opening a non-agent panel (file/diff/terminal/kanban/filetree) via `addOverviewPanel` never marked the repo recently-used. Fix bumps `recents` there; no picker UI code changes needed.
+- Scoped the "create panel or repo" entry points to the three folder-list pickers: ⌘K CreatePanelModal, ⌘N/⌘⇧N NewSessionModal, and TemplateUseModal — all already read `recents` in order (verified), so the fix is the recency signal, not the ordering code.
+- Excluded ⌘F GlobalSearch (a jump-to-existing-item search, keeps its active-repo-first alphabetical grouping), CloneRepoModal (native parent-dir dialog, no repo list), and per-repo Views menus — none are folder-picking create entry points.
+- Bump the worktree PARENT (via session.worktreeParent / effectiveRepo), never the worktree sub-folder, mirroring #331; bump on every addOverviewPanel call including dedup re-opens.
+- Deliberately leave the sidebar folder order (alphabetical `repoOrder` + #211 manual drag) untouched — `recents` order drives only the pickers, so manual drag order is preserved.
+- No new "last-used timestamp" model; the existing MRU-ordered, persisted, capped `recents` list is the recency signal. No backend change (touch_recent/add_recent already exist).

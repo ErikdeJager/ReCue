@@ -13,6 +13,11 @@ export default tseslint.config(
       "src-tauri",
       "*.config.js",
       "*.config.ts",
+      // Vendored verbatim (task 377, sha256-pinned by waveEngine.test.ts) — never
+      // edited, so never linted (its bare `catch (e) {}` trips no-unused-vars).
+      "src/vendor/WaveEngine.js",
+      // UI v2 handoff reference material (untracked/local-only), not app code.
+      "docs",
     ],
   },
   js.configs.recommended,

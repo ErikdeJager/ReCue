@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   DndContext,
   type DragEndEvent,
@@ -29,11 +29,22 @@ import Sidebar from "./components/Sidebar/Sidebar";
 import { reconcileTerminals } from "./components/Terminal/terminalPool";
 import Toaster from "./components/Toaster/Toaster";
 import UpdateModal from "./components/Update/UpdateModal";
+import WaveBackground from "./components/WaveBackground/WaveBackground";
+import {
+  overviewIsEmpty,
+  selectWavePreset,
+  waveCovered,
+} from "./components/WaveBackground/wavePresets";
 import { useOsFileDrop } from "./osFileDrop";
 import { prefetchDeferredChunks } from "./prefetch";
-import { useStore } from "./store";
+import { overviewClusters, useStore } from "./store";
 import { useKeyboardNav } from "./useKeyboardNav";
 import { ownedHere } from "./windowContext";
+
+// The Attention triage view (#398) is a lazy chunk — kept off the first-paint graph
+// (#356) and warmed on idle by `src/prefetch.ts`. Its own per-branch Suspense (below)
+// never wraps a live terminal, honoring the #18 pool invariant.
+const Attention = lazy(() => import("./components/Attention/Attention"));
 
 /**
  * Application shell: a sidebar region (#9) and the main content area, which
@@ -59,7 +70,12 @@ function MainApp() {
   const sessions = useStore((s) => s.sessions);
   const overviewPanels = useStore((s) => s.overviewPanels);
   const canvases = useStore((s) => s.canvases);
+  const activeCanvasId = useStore((s) => s.activeCanvasId);
   const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
+  const schedules = useStore((s) => s.schedules);
+  const recurrings = useStore((s) => s.recurrings);
+  const overviewOrder = useStore((s) => s.overviewOrder);
+  const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
   const init = useStore((s) => s.init);
   const beginCanvasLift = useStore((s) => s.beginCanvasLift);
   const cancelCanvasLift = useStore((s) => s.cancelCanvasLift);
@@ -152,6 +168,33 @@ function MainApp() {
     if (content) applyCanvasDrop(String(over.id), content);
   };
 
+  // The wave background preset (UI v2 §3, task 377): one canvas spans the whole
+  // stage — behind Overview AND behind the Canvas strip + panes — and a view
+  // switch is a live config mutation on the same engine (never a remount).
+  const wavePreset = selectWavePreset(
+    view === "canvas" ? "canvas" : "overview",
+    overviewIsEmpty({ sessions, overviewPanels, schedules, recurrings }),
+  );
+  // Whether panels cover the stage right now, so the wave can pause (task 384):
+  // Overview ⇒ the (filter-aware) wall has cards; Canvas ⇒ the active tab is not
+  // detached and has a layout. Mirrors the actual render — Overview shows exactly
+  // `overviewClusters`, and a detached active tab renders a note, not panels.
+  const waveIsCovered = waveCovered({
+    view: view === "canvas" ? "canvas" : "overview",
+    overviewHasCards:
+      overviewClusters({
+        sessions,
+        overviewPanels,
+        overviewOrder,
+        schedules,
+        recurrings,
+        filter: overviewRepoFilter,
+      }).length > 0,
+    activeCanvasLayout:
+      canvases.find((c) => c.id === activeCanvasId)?.layout ?? null,
+    activeCanvasDetached: detachedCanvasIds.includes(activeCanvasId),
+  });
+
   return (
     <div className="app">
       {claudeMissing && <ClaudeMissing />}
@@ -168,9 +211,14 @@ function MainApp() {
         <div className="app-body">
           <Sidebar />
           <main className="main">
+            <WaveBackground preset={wavePreset} covered={waveIsCovered} />
             <div className="main-content">
               {view === "overview" ? (
                 <Overview />
+              ) : view === "attention" ? (
+                <Suspense fallback={<div className="main-content-loading" />}>
+                  <Attention />
+                </Suspense>
               ) : (
                 <Canvas dragActive={dragActive} />
               )}

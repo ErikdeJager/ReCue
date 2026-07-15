@@ -280,14 +280,14 @@ function RecurringPanel({ recurringId }: { recurringId: string }) {
       <div className={styles.meta}>
         {child ? (
           <TerminalIcon
-            size={13}
+            size={12}
             strokeWidth={1.5}
             className={styles.metaIcon}
             aria-hidden
           />
         ) : (
           <GitBranch
-            size={13}
+            size={12}
             strokeWidth={1.5}
             className={styles.metaIcon}
             aria-hidden
@@ -313,7 +313,7 @@ function RecurringPanel({ recurringId }: { recurringId: string }) {
           aria-label={editing ? "Done editing" : "Edit recurring session"}
           aria-pressed={editing}
         >
-          <Pencil size={13} strokeWidth={1.5} />
+          <Pencil size={12} strokeWidth={1.5} />
         </button>
       </div>
       <div className={styles.body}>{body}</div>

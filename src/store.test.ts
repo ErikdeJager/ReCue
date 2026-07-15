@@ -24,9 +24,11 @@ import {
   ownedChildSessionIds,
   pickRepoColor,
   placeAfterAnchor,
+  randomPaletteAccent,
   REPO_PALETTE,
   repoColor,
   repoOrder,
+  resolvedRandomAccent,
   sidebarRepos,
   useStore,
   versionIncreased,
@@ -912,6 +914,30 @@ describe("repo items — overviewPanels as the single source (#59)", () => {
     const id = useStore.getState().overviewPanels["/repo/a"]?.[0]?.id ?? "";
     await useStore.getState().removeOverviewPanel("/repo/a", id);
     expect(useStore.getState().overviewPanels["/repo/a"]).toBeUndefined();
+  });
+
+  it("addOverviewPanel bumps the repo to the front of recents (#400)", async () => {
+    // Opening any non-agent panel counts as "using" the repo, so it rises to the top
+    // of `recents` (the signal the ⌘K / ⌘N / template folder pickers order by).
+    useStore.setState({ recents: ["/repo/a", "/repo/b"] });
+    await useStore.getState().addOverviewPanel("/repo/b", "diff");
+    const { recents } = useStore.getState();
+    expect(recents[0]).toBe("/repo/b");
+    // No duplicate — the filter-before-prepend keeps the list deduped.
+    expect(recents.filter((r) => r === "/repo/b")).toHaveLength(1);
+  });
+
+  it("addOverviewPanel bumps the worktree PARENT, not the worktree folder (#400/#331)", async () => {
+    // A panel keyed by a worktree sub-folder must bump its parent repo, so the worktree
+    // dir never leaks into `recents` as a stray top-level entry (mirrors the #331 spawn).
+    useStore.setState({
+      sessions: [ovSession("wt-agent", "/wt/feat", 0, "/repo")],
+      recents: ["/other"],
+    });
+    await useStore.getState().addOverviewPanel("/wt/feat", "diff");
+    const { recents } = useStore.getState();
+    expect(recents[0]).toBe("/repo");
+    expect(recents).not.toContain("/wt/feat");
   });
 });
 
@@ -2445,6 +2471,22 @@ describe("mergeSettings (#100/#176)", () => {
     expect(mergeSettings({ theme: "light" }).theme).toBe("light");
   });
 
+  it("defaults pauseWaveWhenCovered to false and back-fills it (task 402)", () => {
+    expect(DEFAULT_SETTINGS.pauseWaveWhenCovered).toBe(false);
+    // An old blob without the key back-fills to false via mergeSettings (no migration).
+    expect(mergeSettings({}).pauseWaveWhenCovered).toBe(false);
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.pauseWaveWhenCovered;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .pauseWaveWhenCovered,
+    ).toBe(false);
+    // A persisted true (opted in) is preserved over the default.
+    expect(
+      mergeSettings({ pauseWaveWhenCovered: true }).pauseWaveWhenCovered,
+    ).toBe(true);
+  });
+
   it("defaults autoFocusOnHover to false and back-fills it (#368)", () => {
     expect(DEFAULT_SETTINGS.autoFocusOnHover).toBe(false);
     // A pre-#368 blob (no key) merges to the opt-in default (off).
@@ -2508,6 +2550,83 @@ describe("mergeSettings (#100/#176)", () => {
     });
     expect(merged.terminalLineHeight).toBe(1.5);
     expect(merged.terminalLineHeightMigrated).toBe(true);
+  });
+
+  it("defaults the UI v2 settings (task 373): backgroundAnimation on, densePanels off, capAgentWidth on", () => {
+    expect(DEFAULT_SETTINGS.backgroundAnimation).toBe(true);
+    expect(DEFAULT_SETTINGS.densePanels).toBe(false);
+    expect(DEFAULT_SETTINGS.capAgentWidth).toBe(true);
+  });
+
+  it("back-fills the UI v2 keys for an older / legacy blob and preserves stored values (task 373)", () => {
+    // An empty blob (a fresh install) gets all three defaults.
+    const empty = mergeSettings({});
+    expect(empty.backgroundAnimation).toBe(true);
+    expect(empty.densePanels).toBe(false);
+    expect(empty.capAgentWidth).toBe(true);
+    // A legacy blob lacking the keys (a pre-373 sessions.json) upgrades cleanly.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.backgroundAnimation;
+    delete old.densePanels;
+    delete old.capAgentWidth;
+    const merged = mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>);
+    expect(merged.backgroundAnimation).toBe(true);
+    expect(merged.densePanels).toBe(false);
+    expect(merged.capAgentWidth).toBe(true);
+    // Persisted values win over the defaults.
+    const stored = mergeSettings({
+      backgroundAnimation: false,
+      densePanels: true,
+      capAgentWidth: false,
+    });
+    expect(stored.backgroundAnimation).toBe(false);
+    expect(stored.densePanels).toBe(true);
+    expect(stored.capAgentWidth).toBe(false);
+  });
+});
+
+describe("random accent (UI v2 task 373)", () => {
+  it("randomPaletteAccent picks the first entry for rand()=0 and the last for rand()→1", () => {
+    expect(randomPaletteAccent(() => 0)).toBe(REPO_PALETTE[0]);
+    expect(randomPaletteAccent(() => 0.999999)).toBe(
+      REPO_PALETTE[REPO_PALETTE.length - 1],
+    );
+  });
+
+  it("randomPaletteAccent always returns a palette member", () => {
+    for (const r of [0, 0.1, 0.25, 0.5, 0.7, 0.9, 0.999999]) {
+      expect(REPO_PALETTE).toContain(randomPaletteAccent(() => r));
+    }
+    // The default (Math.random) path too.
+    expect(REPO_PALETTE).toContain(randomPaletteAccent());
+  });
+
+  it("resolvedRandomAccent memoizes one palette member per run", () => {
+    const first = resolvedRandomAccent();
+    expect(REPO_PALETTE).toContain(first);
+    // Stable across re-reads within a run (re-saving settings never re-rolls).
+    expect(resolvedRandomAccent()).toBe(first);
+    expect(resolvedRandomAccent()).toBe(first);
+  });
+});
+
+describe("toggleDensePanels (UI v2 task 373)", () => {
+  const lastToast = () => {
+    const { toasts } = useStore.getState();
+    return toasts[toasts.length - 1]?.message;
+  };
+
+  it("flips settings.densePanels and toasts the demo strings", () => {
+    useStore.setState({ settings: { ...DEFAULT_SETTINGS }, toasts: [] });
+    expect(useStore.getState().settings.densePanels).toBe(false);
+
+    useStore.getState().toggleDensePanels();
+    expect(useStore.getState().settings.densePanels).toBe(true);
+    expect(lastToast()).toBe("Dense panels on");
+
+    useStore.getState().toggleDensePanels();
+    expect(useStore.getState().settings.densePanels).toBe(false);
+    expect(lastToast()).toBe("Dense panels off");
   });
 });
 

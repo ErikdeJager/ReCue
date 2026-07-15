@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ComponentPropsWithoutRef } from "react";
-import { Code2, Copy, Eye } from "lucide-react";
+import { Copy, Eye, Terminal as TerminalIcon } from "lucide-react";
 import type { Element, ElementContent } from "hast";
 import ReactMarkdown from "react-markdown";
 import type { ExtraProps } from "react-markdown";
@@ -14,6 +14,7 @@ import {
   makeCheckboxComponents,
   rehypeTaskListPositions,
 } from "../markdownCheckboxes";
+import SegmentedControl from "../SegmentedControl/SegmentedControl";
 import { detectMode, prismLang } from "./fileType";
 import { EOF_DELETION, type GutterMarkers } from "./gutter";
 import { MermaidCode } from "./MermaidBlock";
@@ -294,33 +295,36 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
               </span>
             )
           )}
-          {/* The eye/code toggle is markdown-only (rendered ↔ raw source). Two
-              segments always shown with the active highlighted (#73). */}
+          {/* The Rendered/Raw toggle is markdown-only (rendered ↔ raw source) —
+              the shared SegmentedControl atom (UI v2 §8; two segments always shown
+              with the active highlighted, #73). */}
           {mode === "markdown" && !tooLarge && (
-            <div
-              className={styles.segmented}
-              role="group"
-              aria-label="View mode"
-            >
-              <button
-                type="button"
-                className={`${styles.segment} ${!showRaw ? styles.segmentActive : ""}`}
-                onClick={() => setShowRaw(false)}
-                aria-pressed={!showRaw}
-              >
-                <Eye size={13} strokeWidth={1.5} />
-                Rendered
-              </button>
-              <button
-                type="button"
-                className={`${styles.segment} ${showRaw ? styles.segmentActive : ""}`}
-                onClick={() => setShowRaw(true)}
-                aria-pressed={showRaw}
-              >
-                <Code2 size={13} strokeWidth={1.5} />
-                Raw
-              </button>
-            </div>
+            <SegmentedControl<"rendered" | "raw">
+              ariaLabel="View mode"
+              value={showRaw ? "raw" : "rendered"}
+              onChange={(v) => setShowRaw(v === "raw")}
+              options={[
+                {
+                  value: "rendered",
+                  label: (
+                    <>
+                      <Eye size={12} strokeWidth={1.5} aria-hidden /> Rendered
+                    </>
+                  ),
+                  title: "Rendered markdown",
+                },
+                {
+                  value: "raw",
+                  label: (
+                    <>
+                      <TerminalIcon size={12} strokeWidth={1.5} aria-hidden />{" "}
+                      Raw
+                    </>
+                  ),
+                  title: "Raw source (editable)",
+                },
+              ]}
+            />
           )}
         </div>
       )}

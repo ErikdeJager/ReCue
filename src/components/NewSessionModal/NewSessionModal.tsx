@@ -994,6 +994,13 @@ function NewSessionModal() {
     : scheduleMode
       ? "Schedule session"
       : "New session";
+  // Progress dots (task 375, demo-exact): 2 steps in the normal flow
+  // (Folder/Branch), 3 in schedule/recurring (Folder/Branch/final). The branch
+  // step maps to dot 2 even when the folder step was skipped (#127/#263); a
+  // non-git schedule flow simply never lights dot 2. Pure decoration
+  // (aria-hidden) — no logic reads it.
+  const progressSteps = deferMode ? 3 : 2;
+  const progressIndex = step === "folder" ? 0 : step === "branch" ? 1 : 2;
 
   return (
     <div className={styles.overlay} onClick={close}>
@@ -1032,14 +1039,24 @@ function NewSessionModal() {
       >
         <h2 className={styles.title}>
           {recurringMode ? (
-            <RefreshCw size={15} strokeWidth={2} className={styles.titleIcon} />
+            <RefreshCw size={14} strokeWidth={2} className={styles.titleIcon} />
           ) : scheduleMode ? (
-            <Clock size={15} strokeWidth={2} className={styles.titleIcon} />
+            <Clock size={14} strokeWidth={2} className={styles.titleIcon} />
           ) : (
-            <Plus size={15} strokeWidth={2} className={styles.titleIcon} />
+            <Plus size={14} strokeWidth={2} className={styles.titleIcon} />
           )}
           {modalTitle}
         </h2>
+
+        {/* Progress-dot row (task 375): accent = the current step. */}
+        <div className={styles.progress} aria-hidden>
+          {Array.from({ length: progressSteps }, (_, i) => (
+            <span
+              key={i}
+              className={`${styles.progressDot} ${i === progressIndex ? styles.progressDotActive : ""}`}
+            />
+          ))}
+        </div>
 
         {step === "folder" ? (
           <>
@@ -1101,7 +1118,7 @@ function NewSessionModal() {
                 className={`${styles.pickButton} ${pickerActive ? styles.pickButtonActive : ""}`}
                 onClick={() => void pick()}
               >
-                <FolderOpen size={15} strokeWidth={1.5} />
+                <FolderOpen size={13} strokeWidth={1.5} />
                 {recents.length > 0 ? "Choose another…" : "Choose folder…"}
               </button>
               {cwd && !recents.includes(cwd) && (
@@ -1136,7 +1153,7 @@ function NewSessionModal() {
               onClick={backToFolder}
               aria-label="Change folder"
             >
-              <ChevronLeft size={14} strokeWidth={1.5} />
+              <ChevronLeft size={13} strokeWidth={1.5} />
               <span className={styles.folderBackName}>
                 {cwd ? repoName(cwd) : ""}
               </span>
@@ -1195,7 +1212,7 @@ function NewSessionModal() {
                         }}
                         title={b}
                       >
-                        <GitBranch size={13} strokeWidth={1.5} />
+                        <GitBranch size={12} strokeWidth={1.5} />
                         <span className={styles.branchName}>{b}</span>
                         {b === branches?.current && (
                           <span className={styles.branchCurrent}>current</span>
@@ -1235,7 +1252,7 @@ function NewSessionModal() {
                             }}
                             title={`${r} — pull into a local branch`}
                           >
-                            <GitBranch size={13} strokeWidth={1.5} />
+                            <GitBranch size={12} strokeWidth={1.5} />
                             <span className={styles.branchName}>{r}</span>
                           </button>
                         );
@@ -1420,7 +1437,7 @@ function NewSessionModal() {
               onClick={backFromDeferStep}
               aria-label="Back"
             >
-              <ChevronLeft size={14} strokeWidth={1.5} />
+              <ChevronLeft size={13} strokeWidth={1.5} />
               <span className={styles.folderBackName}>
                 {addBranchActive && newBranchName.trim()
                   ? `new: ${newBranchName.trim()}`

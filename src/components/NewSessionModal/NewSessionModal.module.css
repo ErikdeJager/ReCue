@@ -8,7 +8,9 @@
 
 /* Panel anchored top-left at the New session button (margin 12px), expanding
    from it (#53). transform-origin: top left makes the scale-in read as the
-   button opening up. */
+   button opening up. Demo-exact UI v2 reskin (task 375): Base surface, strong
+   hairline, uniform 12px radius (drops the #65 four-value corner mix — card 10
+   may tokenize the 12px), deep --shadow-modal, 160ms .97→1 scale-in. */
 .popover {
   position: fixed;
   left: var(--space-12);
@@ -19,27 +21,22 @@
   width: 300px;
   max-height: calc(100vh - var(--space-24));
   overflow-y: auto;
-  padding: var(--space-16);
+  padding: var(--space-12);
   border: 1px solid var(--border-strong);
-  /* Top-left matches the button's --radius-control (7px) so the panel fully
-     occludes the New session button it grows from (#65) — the button's sharper
-     corner used to peek past the panel's rounder --radius-window corner. The
-     other three corners keep the 10px window radius. */
-  border-radius: var(--radius-control) var(--radius-window) var(--radius-window)
-    var(--radius-window);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
+  border-radius: 12px; /* demo literal */
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-modal);
   transform-origin: top left;
-  animation: popover-in var(--dur-slow) var(--ease-out);
+  animation: popover-in 160ms var(--ease-out);
 }
 
 .title {
   display: flex;
   align-items: center;
   gap: var(--space-6);
-  margin: 0 0 var(--space-12);
+  margin: 0 0 var(--space-8);
   color: var(--text-primary);
-  font-size: var(--fs-ui);
+  font-size: 12.5px; /* demo literal */
   font-weight: 600;
 }
 
@@ -48,17 +45,38 @@
   color: var(--accent);
 }
 
+/* Progress-dot row (task 375, demo-exact): one 6px dot per step under the title —
+   accent = the current step, Surface1 otherwise. Pure decoration (aria-hidden). */
+.progress {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.progressDot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-dot);
+  background: var(--bg-hover);
+}
+
+.progressDotActive {
+  background: var(--accent);
+}
+
 .label {
   display: block;
   margin: 0 0 var(--space-6);
-  color: var(--text-secondary);
-  font-size: var(--fs-meta-sm);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
 }
 
+/* A column so the full-width Choose-another row spans the popover and the
+   out-of-recents path preview sits under it (task 375). */
 .pickRow {
   display: flex;
-  align-items: center;
-  gap: var(--space-8);
+  flex-direction: column;
+  gap: var(--space-4);
   margin-bottom: var(--space-12);
 }
 
@@ -66,29 +84,32 @@
   display: flex;
   align-items: center;
   gap: var(--space-6);
-  flex-shrink: 0;
-  padding: var(--space-4) var(--space-8);
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-panel);
-  color: var(--text-primary);
+  border-radius: var(--radius-chrome);
+  background: transparent;
+  color: var(--text-secondary);
   font: inherit;
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta);
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .pickButton:hover {
-  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
-/* Keyboard-highlighted picker (#123): the same accent treatment a highlighted
-   recent gets, so arrow-key focus reads consistently (the search input keeps DOM
-   focus, like the recents). */
+/* Keyboard-highlighted picker (#123): the same Surface0 treatment a highlighted
+   recent gets (task 375 — accent no longer encodes selection), so arrow-key focus
+   reads consistently (the search input keeps DOM focus, like the recents). */
 .pickButtonActive,
 .pickButtonActive:hover {
-  border-color: var(--accent);
-  background: var(--accent-dim);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
 .path {
@@ -101,14 +122,16 @@
   direction: rtl;
 }
 
-/* Recents launcher (#61): a search box over a keyboard-navigable recents list. */
+/* Recents launcher (#61): a search box over a keyboard-navigable recents list.
+   Crust input skin (task 375, demo-exact): 28px, sunken --content-bg, hairline. */
 .search {
   width: 100%;
+  height: 28px;
   margin-bottom: var(--space-8);
-  padding: var(--space-6) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  padding: 0 9px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -131,10 +154,11 @@
 
 .intervalAmount {
   width: 90px;
-  padding: var(--space-6) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -142,10 +166,11 @@
 
 .intervalUnit {
   flex: 1;
-  padding: var(--space-6) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -156,14 +181,15 @@
   border-color: var(--accent);
 }
 
-/* Optional prompt for a scheduled session (#93) — multi-line, mirrors .search. */
+/* Optional prompt for a scheduled session (#93) — multi-line, mirrors .search
+   (the textarea keeps its vertical padding). */
 .promptInput {
   width: 100%;
   margin-bottom: var(--space-12);
-  padding: var(--space-6) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  padding: var(--space-6) 9px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -208,15 +234,19 @@
   overflow-y: auto;
 }
 
+/* Recent rows (task 375, demo-exact): 32px, radius-chrome, Surface0 highlight
+   (accent no longer encodes selection), Surface1 hover on the highlighted row. */
 .recent,
 .recentActive {
   display: flex;
   width: 100%;
+  height: 32px;
+  flex-shrink: 0;
   align-items: center;
   gap: var(--space-8);
-  padding: var(--space-4) var(--space-8);
+  padding: 0 9px;
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-chrome);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -228,18 +258,26 @@
 }
 
 .recent:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
 .recentActive {
-  background: var(--accent-dim);
+  background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+.recentActive:hover {
+  background: var(--bg-hover);
 }
 
 .recentName {
   flex-shrink: 0;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-row);
+}
+
+.recentActive .recentName {
+  font-weight: 600;
 }
 
 .recentPath {
@@ -248,8 +286,8 @@
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-  text-align: left;
+  font-size: var(--fs-micro);
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
   direction: rtl;
@@ -271,18 +309,22 @@
   overflow-y: auto;
 }
 
+/* Branch rows (task 375, demo-exact): 30px, radius-chrome, gap 7px, Surface0
+   highlight (accent no longer encodes selection). */
 .branch,
 .branchActive {
   display: flex;
+  height: 30px;
+  flex-shrink: 0;
   align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-4) var(--space-6);
+  gap: 7px;
+  padding: 0 9px;
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-chrome);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta);
   text-align: left;
   cursor: pointer;
   transition:
@@ -291,12 +333,12 @@
 }
 
 .branch:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
 .branchActive {
-  background: var(--accent-dim);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
@@ -311,11 +353,14 @@
 
 .branchCurrent {
   flex-shrink: 0;
+  margin-left: auto;
   color: var(--text-muted);
+  font-size: var(--fs-micro);
 }
 
 /* Remote branches subheader inside the branch listbox (#180) — separates the
-   pulled-locally remote refs from the local branches above. */
+   pulled-locally remote refs from the local branches above. Styled like the
+   shared `.menu-section` label (task 375). */
 .remoteHeader {
   display: flex;
   align-items: center;
@@ -323,8 +368,8 @@
   margin: var(--space-6) 0 var(--space-1);
   padding: 0 var(--space-6);
   color: var(--text-muted);
-  font-size: var(--fs-meta-xs);
-  letter-spacing: 0.04em;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -336,11 +381,16 @@
 }
 
 /* "+ add branch" (#124): the create-a-new-branch option after the branch list —
-   accent text so it reads as an action, not a branch. Sits just below the list
-   (outside its scroll box), mirroring #123's folder picker. */
+   muted text (task 375, demo — was accent), brightening on hover/highlight. Sits
+   just below the list (outside its scroll box), mirroring #123's folder picker. */
 .addBranch {
   margin-bottom: var(--space-12);
-  color: var(--accent);
+  color: var(--text-muted);
+}
+
+.addBranch:hover,
+.branchActive.addBranch {
+  color: var(--text-primary);
 }
 
 /* Inline new-branch form (#124): name input + base dropdown + inline error. */
@@ -366,10 +416,11 @@
 .baseSelect {
   min-width: 0;
   flex: 1;
-  padding: var(--space-4) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta-sm);
@@ -395,8 +446,8 @@
   margin-bottom: var(--space-12);
   padding: var(--space-8);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
 }
 
 .warnIcon {
@@ -412,8 +463,9 @@
   line-height: 1.4;
 }
 
-/* Right-aligned action row; wraps to a second line rather than overflowing the
-   fixed-width popover when the buttons don't fit (#89). */
+/* Action row (task 375, demo layout): Cancel pushed left (margin-right: auto),
+   Worktree + Start/Continue on the right; wraps to a second line rather than
+   overflowing the fixed-width popover when the buttons don't fit (#89). */
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -424,30 +476,39 @@
 .cancel,
 .create {
   display: inline-flex;
+  height: 28px;
   align-items: center;
   gap: var(--space-6);
-  padding: var(--space-6) var(--space-12);
-  border-radius: var(--radius-control);
+  padding: 0 var(--space-12);
+  border-radius: var(--radius-chrome);
   font: inherit;
   font-size: var(--fs-meta);
-  font-weight: 500;
   cursor: pointer;
 }
 
 .cancel {
   border: 1px solid var(--border-strong);
   background: transparent;
-  color: var(--text-primary);
+  color: var(--text-secondary);
+  font-weight: 500;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .cancel:hover {
-  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Cancel-left, actions-right (demo): the first action (always Cancel) takes the
+   auto margin, so the Worktree/Start pair sits on the opposite edge. */
+.actions .cancel:first-child {
+  margin-right: auto;
 }
 
 .create {
   border: 0;
   background: var(--accent);
   color: var(--accent-fg);
+  font-weight: 600;
   transition: background var(--dur-fast) var(--ease-out);
 }
 
@@ -465,21 +526,23 @@
    the accent Start and the plain Cancel. */
 .btnKbd {
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-micro);
   font-weight: 400;
   opacity: 0.7;
 }
 
 /* Branch step (#66): a back affordance that returns to the folder step and
-   shows which folder was chosen. */
+   shows which folder was chosen. 28px full-width row, Surface0 hover (task 375). */
 .folderBack {
   display: flex;
+  width: 100%;
+  height: 28px;
   align-items: center;
   gap: var(--space-6);
   margin-bottom: var(--space-12);
-  padding: var(--space-4) var(--space-6);
+  padding: 0 var(--space-6);
   border: 0;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-chrome);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -490,7 +553,7 @@
 }
 
 .folderBack:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
@@ -498,18 +561,19 @@
   color: var(--text-primary);
   font-family: var(--mono);
   font-size: var(--fs-meta);
+  font-weight: 600;
 }
 
 .folderBackHint {
   margin-left: auto;
   color: var(--text-muted);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-micro);
 }
 
 @keyframes popover-in {
   from {
     opacity: 0;
-    transform: scale(0.9);
+    transform: scale(0.97);
   }
   to {
     opacity: 1;

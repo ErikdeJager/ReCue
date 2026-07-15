@@ -1,36 +1,63 @@
+/* Bottom-center toast stack — UI v2 (task 376, spec §10; demo-extracted geometry).
+   Tone is encoded by the icon color only (uniform strong hairline border).
+   The 180ms rise is a plain CSS animation, so the global reduced-motion
+   killswitch (global.css) drops it automatically. */
+
 .toaster {
   position: fixed;
-  right: var(--space-24);
-  bottom: var(--space-24);
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 22px; /* demo-exact */
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
+  /* demo gap between icon/text is 8px; reuse for the stack */
   gap: var(--space-8);
-  z-index: 70;
+  z-index: 70; /* app stacking scale (unchanged) — not the demo's own 90 */
   pointer-events: none;
 }
 
 .toast {
   pointer-events: auto;
-  max-width: 420px;
-  padding: var(--space-8) var(--space-16);
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-height: 34px; /* demo: fixed 34px single-line; min- so long messages can wrap */
+  max-width: min(520px, calc(100vw - 32px));
+  padding: var(--space-6) 14px; /* demo: 0 14px; 6px vertical for the wrapped case */
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
+  /* floating chrome ~10 (spec §10; demo 9px) */
+  border-radius: var(--radius-window);
+  background: var(--bg-panel); /* Base */
+  box-shadow: var(--shadow-toast);
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-row); /* 11.5px */
+  text-align: left;
   cursor: pointer;
-  animation: toast-in var(--dur-slow) var(--ease-out);
+  animation: toast-in var(--dur-slow) var(--ease-out); /* 180ms rise */
 }
 
-.error {
-  border-color: var(--diff-del-fg);
+.icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.info {
+  color: var(--accent);
 }
 
 .success {
-  border-color: var(--status-done);
+  color: var(--status-done);
+}
+
+.error {
+  color: var(--status-error);
+}
+
+.message {
+  min-width: 0;
+  overflow-wrap: anywhere; /* pathy error messages must not overflow the block */
 }
 
 @keyframes toast-in {

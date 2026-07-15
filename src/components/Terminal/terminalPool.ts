@@ -52,6 +52,8 @@ import { onSessionOutput } from "../../outputBus";
 import { isLinux, isWindows } from "../../platform";
 import { useStore } from "../../store";
 import { IS_MAIN_WINDOW } from "../../windowContext";
+import { focusedTerminalElement } from "./hoverFocus";
+import { effectiveCursorBlink, reducedMotionActive } from "./motionPolicy";
 import { makePasteKeyHandler } from "./pasteHandler";
 import {
   PENDING_CAP_BYTES,
@@ -62,6 +64,10 @@ import { terminalsToDispose } from "./poolReconcile";
 import { dedupeAgainstScrollback } from "./replayDedupe";
 import { createReplayQueue } from "./replayQueue";
 import styles from "./Terminal.module.css";
+import {
+  TERMINAL_BG_DARKEST,
+  terminalBackgroundColor,
+} from "./terminalBackground";
 import { webglFallback } from "./webglFallback";
 import {
   decideTerminalRenderer,
@@ -159,7 +165,38 @@ let currentTerminalSettings = {
   // before applyTerminalSettings runs.
   lineHeight: 1.0,
   cursorBlink: true,
+  // 0 (#390) = the near-black `--terminal-bg` base, unchanged. `resolveTerminalBg`
+  // interpolates from the live `--terminal-bg` toward gray by this slider value.
+  background: 0,
 };
+
+/** The concrete terminal background hex for the current lightness setting (#390),
+ * interpolated from the live `--terminal-bg` token (default near-black `#11111b`)
+ * toward the gray endpoint. Read fresh so a theme change to the base still flows
+ * through. Falls back to the darkest base outside a DOM (unit tests). */
+function resolveTerminalBg(): string {
+  const base =
+    typeof document !== "undefined"
+      ? cssToken("--terminal-bg", TERMINAL_BG_DARKEST)
+      : TERMINAL_BG_DARKEST;
+  return terminalBackgroundColor(currentTerminalSettings.background, base);
+}
+
+/** Whether reduced motion is in force right now (UI v2 §2.5, task 383): the app's
+ * Settings toggle (read from the store — `set({ settings })` runs before
+ * `applySettingsEffects`, so this is already current on Save) OR the OS
+ * `prefers-reduced-motion` query. `currentTerminalSettings.cursorBlink` keeps the
+ * user's RAW setting, so un-toggling reduced motion restores blink on the next
+ * apply. */
+function reducedMotionNow(): boolean {
+  let appSetting = false;
+  try {
+    appSetting = useStore.getState().settings.reduceMotion;
+  } catch {
+    appSetting = false; // store not ready (unit tests) — the media query decides
+  }
+  return reducedMotionActive(appSetting);
+}
 
 // Linux software-WebGL fallback (#346): WebKitGTK can hand out a WebGL context that
 // is silently software-rasterized (llvmpipe/SwiftShader — e.g. NVIDIA driver or
@@ -334,13 +371,35 @@ export function applyTerminalSettings(s: {
   fontSize: number;
   lineHeight: number;
   cursorBlink: boolean;
+  background: number;
 }): void {
   currentTerminalSettings = { ...s };
+  // Effective blink (UI v2 §2.5, task 383): xterm's canvas cursor is out of reach
+  // of the CSS reduced-motion killswitch, so gate it here — an options mutation on
+  // the live xterm, never a host dispose (#18).
+  const blink = effectiveCursorBlink(s.cursorBlink, reducedMotionNow());
+  // Terminal background lightness (#390): compute the concrete hex once and apply it
+  // to every live host in this same synchronous pass, so all pooled terminals converge
+  // together (not the #221 shared-atlas hazard). Reassign the whole `theme` object —
+  // mutating a nested field won't trigger xterm's update — and never clear the atlas.
+  const bg = resolveTerminalBg();
   for (const host of hosts.values()) {
     host.term.options.fontSize = s.fontSize;
     host.term.options.lineHeight = s.lineHeight;
-    host.term.options.cursorBlink = s.cursorBlink;
+    host.term.options.cursorBlink = blink;
+    host.term.options.theme = {
+      ...host.term.options.theme,
+      background: bg,
+      cursorAccent: bg,
+    };
     host.scheduleResize();
+  }
+  // Publish to the wrapper padding-frame CSS (#390): the wrapper reads
+  // `var(--terminal-bg-user, var(--terminal-bg))`, so setting it here keeps the frame
+  // in lockstep with the xterm canvas. Runs per-document on boot + Save, covering the
+  // main window and each detached canvas window (#84).
+  if (typeof document !== "undefined") {
+    document.documentElement.style.setProperty("--terminal-bg-user", bg);
   }
 }
 
@@ -409,6 +468,11 @@ function createHost(sessionId: string): TerminalHost {
   const { platform, windowsBuild } = useStore.getState();
   const windowsPty = windowsPtyOption(platform, windowsBuild);
 
+  // Configurable terminal background (#390): the same interpolated hex backs both the
+  // xterm canvas and its cursor-contrast color, so a terminal created after a Save
+  // opens at the chosen lightness.
+  const bg = resolveTerminalBg();
+
   const term = new XTerm({
     fontFamily: cssToken(
       "--mono",
@@ -416,18 +480,43 @@ function createHost(sessionId: string): TerminalHost {
     ),
     fontSize: currentTerminalSettings.fontSize,
     lineHeight: currentTerminalSettings.lineHeight,
-    cursorBlink: currentTerminalSettings.cursorBlink,
+    // Gated by reduced motion (UI v2 §2.5, task 383) — see applyTerminalSettings.
+    cursorBlink: effectiveCursorBlink(
+      currentTerminalSettings.cursorBlink,
+      reducedMotionNow(),
+    ),
     allowProposedApi: true,
     ...(windowsPty ? { windowsPty } : {}),
     theme: {
-      background: cssToken("--terminal-bg", "#11111b"),
+      // #390: both the canvas background and the cursor's contrast color follow the
+      // configurable terminal-background lightness (default 0 = `#11111b`, unchanged).
+      background: bg,
       foreground: cssToken("--terminal-fg", "#cdd6f4"),
       cursor: cssToken("--accent", "#fab387"),
-      cursorAccent: cssToken("--terminal-bg", "#11111b"),
+      cursorAccent: bg,
       selectionBackground: cssToken(
         "--terminal-selection",
         "rgba(88, 91, 112, 0.5)",
       ),
+      // ANSI palette from tokens (UI v2 §7, task 379) — creation-time read like the
+      // bg/fg/cursor entries above; identical values for every pooled terminal, so
+      // the shared WebGL glyph atlas (#221) stays shared.
+      black: cssToken("--terminal-ansi-black", "#45475a"),
+      red: cssToken("--terminal-ansi-red", "#f38ba8"),
+      green: cssToken("--terminal-ansi-green", "#a6e3a1"),
+      yellow: cssToken("--terminal-ansi-yellow", "#f9e2af"),
+      blue: cssToken("--terminal-ansi-blue", "#89b4fa"),
+      magenta: cssToken("--terminal-ansi-magenta", "#f5c2e7"),
+      cyan: cssToken("--terminal-ansi-cyan", "#94e2d5"),
+      white: cssToken("--terminal-ansi-white", "#bac2de"),
+      brightBlack: cssToken("--terminal-ansi-bright-black", "#585b70"),
+      brightRed: cssToken("--terminal-ansi-bright-red", "#f38ba8"),
+      brightGreen: cssToken("--terminal-ansi-bright-green", "#a6e3a1"),
+      brightYellow: cssToken("--terminal-ansi-bright-yellow", "#f9e2af"),
+      brightBlue: cssToken("--terminal-ansi-bright-blue", "#89b4fa"),
+      brightMagenta: cssToken("--terminal-ansi-bright-magenta", "#f5c2e7"),
+      brightCyan: cssToken("--terminal-ansi-bright-cyan", "#94e2d5"),
+      brightWhite: cssToken("--terminal-ansi-bright-white", "#a6adc8"),
     },
   });
 
@@ -902,6 +991,15 @@ export function focusTerminal(sessionId: string): void {
     return;
   }
   pendingFocus = { id: sessionId, at: Date.now() };
+}
+
+/** Unfocus whichever pooled xterm currently holds keyboard focus (#371): entering a
+ * non-terminal panel with hover-focus on must stop keystrokes reaching the previous
+ * agent. Also clears a pending focus request so a queued focus can't land after the
+ * pointer has moved on. Never disposes a host (#18). */
+export function blurTerminals(): void {
+  pendingFocus = null;
+  focusedTerminalElement(document.activeElement)?.blur();
 }
 
 /**

@@ -134,3 +134,74 @@ describe("pre-paint background hexes stay in sync", () => {
     expect(Object.keys(THEME_BG).sort()).toEqual(themes.sort());
   });
 });
+
+/**
+ * v2 foundation tokens (task 372): the stage vars + dense hook and the derived accent
+ * tints are the contract later UI v2 cards (dense mode #2, Overview/Canvas stages #5/#6)
+ * build on — pin them so they can't silently drift out of tokens.css.
+ */
+describe("v2 foundation tokens (task 372)", () => {
+  const tokens = read("./styles/tokens.css");
+
+  it("declares the three stage vars with the §2.4 values", () => {
+    expect(tokens).toMatch(/--stage-gap:\s*8px\s*;/);
+    expect(tokens).toMatch(/--stage-pad-overview:\s*12px\s*;/);
+    expect(tokens).toMatch(/--stage-pad-canvas:\s*10px\s*;/);
+  });
+
+  it("a :root.dense rule zeroes all three stage vars", () => {
+    const block = tokens.match(/:root\.dense\s*\{([^}]*)\}/);
+    expect(block).not.toBeNull();
+    const body = block![1];
+    expect(body).toMatch(/--stage-gap:\s*0px\s*;/);
+    expect(body).toMatch(/--stage-pad-overview:\s*0px\s*;/);
+    expect(body).toMatch(/--stage-pad-canvas:\s*0px\s*;/);
+  });
+
+  it("derives the accent tints from the single var(--accent) via color-mix", () => {
+    for (const tint of ["fill", "border", "hover"]) {
+      const decl = tokens.match(
+        new RegExp(`--accent-tint-${tint}:\\s*([^;]+);`),
+      );
+      expect(decl, `--accent-tint-${tint} exists`).not.toBeNull();
+      expect(decl![1]).toContain("color-mix(");
+      expect(decl![1]).toContain("var(--accent)");
+    }
+  });
+});
+
+/**
+ * Token hygiene guard (task 383): parallel reskin cards merging into tokens.css can
+ * each bring their own copy of a token (the epic's known near-miss: `--text-faint`
+ * from tasks 379/380). A duplicate declaration is silent — last-one-wins — so a merge
+ * can flip a color without any diff on the consumer. Pin it: every custom property is
+ * declared exactly once per top-level block.
+ */
+describe("token hygiene (task 383)", () => {
+  const tokens = read("./styles/tokens.css");
+
+  // Top-level blocks only: a selector line followed by a body up to the first
+  // column-0 closing brace (tokens.css has no nested rules).
+  const blocks = [...tokens.matchAll(/^([^{\n][^\n{]*)\{([\s\S]*?)^\}/gm)];
+
+  it("finds the three theme blocks", () => {
+    const selectors = blocks.map(([, sel]) => sel.trim());
+    expect(selectors).toContain(":root");
+    expect(selectors).toContain(":root.dense");
+    expect(selectors).toContain(':root[data-theme="light"]');
+  });
+
+  it.each(blocks.map(([, sel, body]) => [sel.trim(), body]))(
+    "declares each custom property exactly once in %s",
+    (_sel, body) => {
+      const names = [...body.matchAll(/^\s*(--[\w-]+)\s*:/gm)].map((m) => m[1]);
+      const seen = new Set<string>();
+      const dupes = new Set<string>();
+      for (const name of names) {
+        if (seen.has(name)) dupes.add(name);
+        seen.add(name);
+      }
+      expect([...dupes]).toEqual([]);
+    },
+  );
+});

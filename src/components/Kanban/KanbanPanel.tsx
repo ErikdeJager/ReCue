@@ -31,10 +31,10 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
-  Code2,
-  Eye,
+  Kanban as KanbanIcon,
   Pencil,
   Plus,
+  Terminal as TerminalIcon,
   Trash2,
   Undo2,
   X,
@@ -47,6 +47,7 @@ import { kbdHint } from "../../platform";
 import { kanbanColumnColor, useStore } from "../../store";
 import { useAutoSaveFile } from "../../useAutoSaveFile";
 import Checkbox from "../Checkbox/Checkbox";
+import SegmentedControl from "../SegmentedControl/SegmentedControl";
 import {
   makeCheckboxComponents,
   markdownLinkComponents,
@@ -429,9 +430,9 @@ interface ColumnProps {
   onUndo: () => void;
 }
 
-/** One column (status lane, #233): a header (accent dot + UPPERCASE name + count pill),
+/** One column (status lane, #233): a header (accent dot + as-typed name + plain count),
  * a droppable sortable card list, and an inline add-card composer opened by the bottom
- * dashed affordance. */
+ * ghost "+ Add card" affordance. */
 function BoardColumn(props: ColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: `column:${props.col}` });
   const items = props.cards.map((_, i) => cardId(props.col, i));
@@ -620,7 +621,7 @@ function BoardColumn(props: ColumnProps) {
             className={styles.addCard}
             onClick={openComposer}
           >
-            <Plus size={13} strokeWidth={1.5} /> Add card
+            <Plus size={12} strokeWidth={1.5} /> Add card
           </button>
         )}
       </div>
@@ -897,26 +898,31 @@ function KanbanPanel({
             </span>
           )
         )}
-        <div className={styles.segmented} role="group" aria-label="View mode">
-          <button
-            type="button"
-            className={`${styles.segment} ${!showRaw ? styles.segmentActive : ""}`}
-            onClick={() => setShowRaw(false)}
-            aria-pressed={!showRaw}
-          >
-            <Eye size={13} strokeWidth={1.5} />
-            Board
-          </button>
-          <button
-            type="button"
-            className={`${styles.segment} ${showRaw ? styles.segmentActive : ""}`}
-            onClick={() => setShowRaw(true)}
-            aria-pressed={showRaw}
-          >
-            <Code2 size={13} strokeWidth={1.5} />
-            Raw
-          </button>
-        </div>
+        <SegmentedControl<"board" | "raw">
+          ariaLabel="View mode"
+          value={showRaw ? "raw" : "board"}
+          onChange={(v) => setShowRaw(v === "raw")}
+          options={[
+            {
+              value: "board",
+              label: (
+                <span className={styles.segLabel}>
+                  <KanbanIcon size={12} strokeWidth={1.5} aria-hidden /> Board
+                </span>
+              ),
+              title: "Board view",
+            },
+            {
+              value: "raw",
+              label: (
+                <span className={styles.segLabel}>
+                  <TerminalIcon size={12} strokeWidth={1.5} aria-hidden /> Raw
+                </span>
+              ),
+              title: "Raw markdown",
+            },
+          ]}
+        />
       </div>
       {showRaw ? (
         // Editable raw board markdown (#149), auto-saving via the shared #148 hook
@@ -1008,7 +1014,7 @@ function KanbanPanel({
               className={styles.addColumn}
               onClick={addColumnAndRename}
             >
-              <Plus size={14} strokeWidth={1.5} /> Add column
+              <Plus size={13} strokeWidth={1.5} /> Add column
             </button>
           </div>
           {/* Floating preview of the dragged card (#161). */}

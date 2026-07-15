@@ -61,12 +61,10 @@ be unit-tested). Concretely:
   (#363) — `main.tsx` writes it **synchronously** from the UA (`detectPlatform` /
   `applyPlatformAttribute` in `platform.ts`) *before* the first render, because the store's
   `platform` signal is an async IPC and static CSS tokens can't wait for it (the store then
-  re-applies the authoritative backend value). Its one consumer today is the
-  `:root[data-platform="linux"]` **`--ui`** override in `tokens.css` (the bundled Inter):
-  the shared `:root --ui` line is **never** edited, so macOS/Windows stay byte-for-byte
-  unchanged — there is no single ordering of one shared font list that is both safe on
-  Windows (which would pick up a locally-installed Inter over Segoe UI) and effective on
-  Linux (where the generics always resolve to *something*).
+  re-applies the authoritative backend value). (Superseded by UI v2 task 372 —
+  JetBrains Mono is `--ui` on every OS; the #363 Linux-only Inter `--ui` override is
+  retired, and `data-platform` remains as the platform-CSS seam, currently with no CSS
+  consumer.)
 - **CSS / WebView too:** WKWebView (macOS) and WebView2/Chromium (Windows) diverge — and
   **Linux is Chromium too (WebKitGTK/WebView)**, so the Chromium-friendly choices carry
   over: prefer `::-webkit-scrollbar` styling, ship plain-color fallbacks alongside
@@ -114,10 +112,9 @@ steady-state boot pays **zero** probe cost.
 - **Frontend:** React + TypeScript + Vite, **Zustand** for state, plain CSS with
   CSS-variable design tokens (CSS Modules), **xterm.js** terminals (⌘-clickable
   `http`/`https` links via `@xterm/addon-web-links`, #109), **Lucide**
-  icons, **JetBrains Mono** (bundled, offline — the terminal `--mono` face on every OS)
-  and **Inter Variable** (bundled, offline, latin subset only — the **Linux-only** UI
-  face, #363; macOS keeps San Francisco and Windows Segoe UI, so its woff2 is never even
-  fetched there), **react-markdown + remark-gfm**
+  icons, **JetBrains Mono** (bundled, offline — the terminal `--mono` face AND, since
+  UI v2 task 372, the `--ui` face on every OS; the #363 bundled-Inter Linux-only UI
+  face is superseded/retired), **react-markdown + remark-gfm**
   (GFM markdown, no raw HTML) + **Prism.js** (curated-language code highlighting —
   JS/TS/JSX, Rust, Python, JSON/YAML/TOML, CSS, markup, Bash, **Java**, **INI/.env/
   .properties** #150) — both in the universal **`FileViewer`** (#40/#44), whose **raw
@@ -145,7 +142,8 @@ steady-state boot pays **zero** probe cost.
   visible regression); the **`@xterm/addon-webgl`** addon in `terminalPool.createHost()`
   (xterm core / fit / web-links stay **static** — terminals *are* the first paint; the addon
   attaches a few ms later, and on a software rasterizer #346 its chunk is never fetched); and
-  **mermaid** (#254). `src/prefetch.ts` warms the deferred chunks on idle
+  **mermaid** (#254); and the vendored **WaveEngine** (`src/vendor/waveEngineLoader.ts`, UI v2
+  task 377 — loaded on `WaveBackground` mount). `src/prefetch.ts` warms the deferred chunks on idle
   (`requestIdleCallback`, feature-detected with a `setTimeout` fallback for older WKWebView).
   **Rule: only a dynamic `import()` removes work from the first-paint path** — a statically
   reachable module is parsed before first render whatever chunk it lands in, so
@@ -540,8 +538,9 @@ steady-state boot pays **zero** probe cost.
   and the busy indicator is never stalled. The Settings auto-name toggle (#100) gates
   it.
 - **Settings (#100/#102/#103/#107/#119):** a sidebar **footer gear** opens a centered,
-  focus-trapped **Settings modal** (`components/Settings`) — a **fixed 720×600** size
-  (clamped to 90vh, #119) so every section renders identically and a tall section
+  focus-trapped **Settings modal** (`components/Settings`) — a **fixed 740×540** size
+  (clamped to 92vw/88vh — #119's fixed-size precedent, resized by UI v2 task 373)
+  so every section renders identically and a tall section
   scrolls inside the content pane (the nav + action row stay put) — with **eight** sections
   (**nine** on Linux, which additionally gets **Rendering**, #357) —
   **Terminal** (font size / line height via the custom **`Slider`** #122 + cursor
@@ -550,8 +549,15 @@ steady-state boot pays **zero** probe cost.
   `defaultAgent`, now claude / codex / **opencode** with an inline "untested" caution
   for the non-claude picks, + the #296 auto-continue-after-limit toggle),
   **Appearance** (a **Dark/Light theme** toggle #333 + an accent swatch over the Catppuccin
-  palette + a reduce-motion toggle +
-  the Overview panel min-width #176), **Rendering** (**Linux only** #357 — filtered out of
+  palette **with a "?" random-per-launch swatch** (task 373, `resolvedRandomAccent`) + a
+  reduce-motion toggle + **Dense panels** (the ⌘D toggle's checkbox twin, task 373) +
+  **Background animation** (the #377 wave on/off) + **Pause when covered by panels**
+  (`pauseWaveWhenCovered`, task 384 — default off (opt-in, task 402), disabled while the wave is off; the wave
+  stops rendering while the Overview wall has cards / a Canvas tab has panels and resumes
+  live when the stage clears) + a display-size slider #366 +
+  the Overview panel min-width #176 + the `capAgentWidth` cap-agent-card-width toggle,
+  task 373 — consumed by the Overview wall's 900px `.cardCapped` on agent/recurring
+  cards, task 379), **Rendering** (**Linux only** #357 — filtered out of
   the nav on macOS/Windows: a **DMA-BUF renderer** control (auto/on/off, applied at the
   **next launch** — GTK reads the env once at init, so the persisted mode is read straight
   off `sessions.json` **before** `tauri::Builder` via the shared Rust `early_settings`), a
@@ -563,7 +569,9 @@ steady-state boot pays **zero** probe cost.
   gating #103 + the Canvas tab-close default `canvasCloseBehavior`: Ask / Always kill / Never
   kill #137 + the diff display/line/sort defaults #237/#258), **Kanban** (per-column colors by
   name #239), **Updates** (check for updates / current version / "What's new" / update now
-  #191), and **Data & About** (open data folder, clear recents, app + agent versions). A
+  #191), **Shortcuts** (#318, completed by UI v2 task 373 — a read-only grouped keybind
+  reference, incl. ⌘F/⌘D, every chord through `kbdHint`), and **Data & About** (open data
+  folder, clear recents, app + agent versions). A
   modal-local **draft** applies only on **Save** via `applySettingsEffects` (the `theme`
   field #333 toggles `data-theme="light"` on `<html>` → the `:root[data-theme="light"]`
   Catppuccin-Latte token block in `tokens.css` reskins the whole UI, while the terminal
@@ -642,7 +650,8 @@ steady-state boot pays **zero** probe cost.
   renderer is the single live-render site (carrying the #84 ownership guard), so a pooled
   terminal / auto-save hook is never mounted twice.
 - **Resizable sidebar (#108):** a thin right-edge drag handle sets the sidebar width,
-  clamped to **[180, 560]** (default 260) and **persisted** via a dedicated Rust
+  clamped to **[180, 560]** (default **248** since UI v2 task 374 — was 260) and
+  **persisted** via a dedicated Rust
   `sidebar_width` value (`get_sidebar_width` / `set_sidebar_width`), kept **separate**
   from the Settings blob so the modal draft can't clobber a drag. Main-window only.
 - **Reorderable folders (#211):** the top-level repo "folders" are **drag-reorderable**
@@ -682,6 +691,7 @@ steady-state boot pays **zero** probe cost.
 │   ├── useKeyboardNav.ts   # Global keyboard shortcuts (#24/#76/#77/#84/#93)
 │   ├── useAutoSaveFile.ts  # Read + hot-reload + debounced-write hook (FileViewer raw + Kanban) (#148)
 │   ├── autoContinue.ts     # Pure auto-continue-after-limit reducer + isLimitReached (#296/#305)
+│   ├── tips.ts / tips.json # Startup tips for the empty-state hero (UI v2 #379)
 │   ├── updater.ts          # In-app auto-update: check / download+install / relaunch (#190)
 │   ├── components/         # React components (CSS Module alongside each):
 │   │                       #   Sidebar, Overview, Canvas (+ CanvasSurface),
@@ -693,11 +703,20 @@ steady-state boot pays **zero** probe cost.
 │   │                       #   BusyIndicator, Usage/UsageBar (#154),
 │   │                       #   AutoContinuePrompt/AutoContinueToggle (#296/#309), CloneRepoModal (#295),
 │   │                       #   TemplateEditor + TemplateManager (#117) + TemplateUseModal (#118),
-│   │                       #   Checkbox, Slider (#122), SkillAutocomplete (#114), PatchNotes (#192),
+│   │                       #   Checkbox, Slider (#122), SegmentedControl (UI v2 #372),
+│   │                       #   SkillAutocomplete (#114), PatchNotes (#192),
 │   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
-│   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState
+│   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState,
+│   │                       #   WaveBackground (UI v2 wave layer, task 377 — lazy src/vendor/WaveEngine.js;
+│   │                       #     lazy waveHost runs it on the main thread OR from an OffscreenCanvas
+│   │                       #     Web Worker + a governed/paused-when-covered loop, task 384)
 │   │                       #   ModalHost.tsx — the ten lazily-mounted top-level modals (#356)
-│   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
+│   ├── styles/             # tokens.css (design tokens) + global.css (reset/base) +
+│   │                       #   the UI v2 primitives: atoms.css (buttons/chips/kbd hints),
+│   │                       #   menu.css (anchored menus/popovers), modal.css (centered
+│   │                       #   modals) (#372/#375/#378)
+│   ├── vendor/             # WaveEngine.js (sha-pinned vendored wave engine — never edit)
+│   │                       #   + waveEngineLoader.ts (its lazy dynamic-import seam, #377)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
 │   ├── src/lib.rs          # App builder, state wiring, event forwarding, schedule + recurring poll loop (#93/#294)
@@ -1147,11 +1166,12 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   not its children, so the reveal fires only once `MainApp` / `CanvasWindow` has actually
   mounted, never on the empty fallback frame (and a chunk that never loads can't deadlock
   the window shut: the 2 s Rust fallback still shows it).
-  **Invariant:** the two pre-paint hexes (`#1e1e2e` dark / `#eff1f5` light) are duplicated
-  in **four** places — `--bg-base` in `src/styles/tokens.css`, the inline style in
-  `index.html`, `THEME_BG` in `src/theme.ts`, and `background_for_theme` in `commands.rs`
-  — keep them in sync (the TS/HTML/CSS trio is guarded by `src/theme.test.ts`, the Rust
-  mapping by its own unit test). Platform-neutral: no `#[cfg]` arms (on macOS
+  **Invariant:** the two pre-paint hexes (`#11111b` dark / `#dce0e8` light — the crust
+  stage since UI v2 task 372) are duplicated in **five** places — `--bg-base` in
+  `src/styles/tokens.css`, the inline style in `index.html`, `THEME_BG` in `src/theme.ts`,
+  `background_for_theme` in `commands.rs`, and `"backgroundColor"` in
+  `src-tauri/tauri.conf.json` — keep them in sync (the TS/HTML/CSS trio is guarded by
+  `src/theme.test.ts`, the Rust mapping by its own unit test, tauri.conf.json by review). Platform-neutral: no `#[cfg]` arms (on macOS
   `set_background_color` is a no-op for the *webview* layer, but the document's inline
   `html` background paints over it before the window is ever revealed).
 - **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`,
@@ -1252,19 +1272,39 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   both `dev` and `build`) declaring `NSMicrophoneUsageDescription` /
   `NSSpeechRecognitionUsageDescription` so voice dictation works inside a session's PTY
   (macOS attributes a child process's mic request to the responsible app — ReCue).
-- **Styling:** CSS Modules (`*.module.css` next to each component) that consume
-  the design tokens in `src/styles/tokens.css`. The reset, base styles,
+- **Styling (UI v2, #372–#383):** CSS Modules (`*.module.css` next to each component)
+  that consume the design tokens in `src/styles/tokens.css`. The reset, base styles,
   scrollbars, keyframes, and the `prefers-reduced-motion` killswitch live in
-  `src/styles/global.css`. Tokens, global CSS, and the bundled **JetBrains Mono**
-  font (`@fontsource`, offline — never a CDN) are imported once in
-  `src/main.tsx`. Stay on-system: use tokens, never off-system colors. The color
-  tokens are a **Catppuccin Mocha** remap (#33) — accent is **Peach**, with
-  `--accent-fg` for readable text on the (light) accent fill, `--scrim` for
-  full-window dim overlays, and `--status-*` repointed to Catppuccin accents. A
-  custom accent from Settings (#102) overrides `--accent` **and** its derived
-  companions `--accent-hover` / `--accent-dim` / `--accent-fg` together
-  (`accentCompanions`, #107). See the **Design reference** in `TASK_ARCHIVE.md` (the
-  original near-black v1 palette; superseded by the Mocha tokens).
+  `src/styles/global.css`; the shared **UI v2 primitives** sit beside them —
+  `src/styles/atoms.css` (block buttons / chips / kbd hints), `menu.css` (the one
+  anchored context-menu/popover look) and `modal.css` (the centered-modal scrim/pop
+  chrome), plus the `SegmentedControl` / `Checkbox` / `Slider` atom components. All of
+  it, with the bundled **JetBrains Mono** font (`@fontsource`, offline — never a CDN),
+  is imported once in `src/main.tsx`. Stay on-system: use tokens, never off-system
+  colors. The color tokens are a **Catppuccin Mocha** remap (#33) organized into the
+  v2 **surface roles** (#372): `--surface-crust` (the content **stage** behind the
+  Overview wall / Canvas splits, painted by the vendored `WaveBackground`, #377) /
+  `--surface-mantle` (chrome: sidebar, rail, tab strip) / `--surface-base` (panels,
+  cards, menus, modals) / `--surface-0`/`-1` (selection/hover fills) — the legacy
+  aliases (`--content-bg` / `--bg-panel` / `--bg-elevated` / `--bg-hover` /
+  `--bg-sidebar`) still resolve to them. The **corner language**: panels and everything
+  inside them are square (`--radius-control`/`--radius-chip` 0); 5–7px rounding only on
+  sidebar-chrome controls (`--radius-chrome`/`-chrome-sm`/`-btn`); 999px dots/pills;
+  ~10–12px only on **floating chrome** (menus/modals/toasts — also the only shadowed
+  surfaces: `--shadow-menu`/`-modal`/`-toast`). Stage geometry rides the
+  `--stage-gap` / `--stage-pad-*` vars, zeroed by the `:root.dense` hook (**dense
+  mode**, ⌘D, #373). Accent is **Peach**, with `--accent-fg` for readable text on the
+  accent fill and `--scrim` for full-window dim overlays; the derived
+  `--accent-tint-fill/-border/-hover` tokens `color-mix()` from the single
+  `var(--accent)` — every color-mix-bearing fill/border declares a **plain token
+  fallback first** (the cross-platform rule). A custom accent from Settings (#102)
+  overrides `--accent` **and** its companions `--accent-hover` / `--accent-dim` /
+  `--accent-fg` together (`accentCompanions`, #107), and the wave recolors live.
+  **The accent never encodes status or selection**: statuses stay on the fixed
+  `--status-*` / `--diff-*` / `--usage-critical` tokens, and selection/active fills are
+  Surface0 (#375/#378). Design reference: `docs/ui-v2-handoff/DESIGN-SPEC.md` + the
+  demo `ReCue-v2-demo.html` (untracked, local-only; demo wins over prose). The
+  original near-black v1 palette lives in `TASK_ARCHIVE.md` (superseded).
 
 ## Tasks
 

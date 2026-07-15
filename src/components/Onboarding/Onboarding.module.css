@@ -1,27 +1,17 @@
-/* First-launch coding-agent picker: scrim + centered dialog listing the installed
-   agents, Claude recommended + the others badged untested. On-system tokens + the
-   shared popover shadow, mirroring CanvasCloseModal. */
+/* First-launch coding-agent picker: the shared modal-scrim/modal-pop chrome
+   (modal.css, task 378) over the demo-exact 470px dialog — stacked crust choice
+   cards, Claude accent-tint-bordered with an accent Recommended chip, the others
+   hairline-bordered with a neutral Untested chip, and a "Decide later" text ghost. */
 .overlay {
-  position: fixed;
-  inset: 0;
   z-index: 220;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--scrim);
 }
 
 .dialog {
   display: flex;
-  width: 460px;
-  max-width: calc(100vw - var(--space-32));
+  width: 470px;
   max-height: calc(100vh - var(--space-32));
   flex-direction: column;
   padding: var(--space-20);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-window);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
 }
 
 .header {
@@ -31,15 +21,15 @@
 .title {
   margin: 0 0 var(--space-6);
   color: var(--text-primary);
-  font-size: var(--fs-ui);
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .subtitle {
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--fs-meta);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .choices {
@@ -49,31 +39,41 @@
   overflow-y: auto;
 }
 
+/* Crust choice card (demo-exact: 9px radius, 10px 12px padding). */
 .choice {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 9px;
+  background: var(--content-bg);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 .choice:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent);
+  border-color: var(--border-strong); /* plain fallback (383) */
+  border-color: color-mix(in srgb, var(--text-primary) 25%, transparent);
 }
 
 .choice:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* The recommended (Claude) card leads with an accent-tint border (demo: 40%
+   accent, solid accent on hover). */
+.choiceRecommended {
+  border-color: var(--accent-dim); /* plain fallback */
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.choiceRecommended:hover {
+  border-color: var(--accent);
 }
 
 .choiceRow {
@@ -85,32 +85,34 @@
 
 .choiceName {
   color: var(--text-primary);
-  font-size: var(--fs-meta);
+  font-size: 12px;
   font-weight: 600;
 }
 
 .choiceDesc {
-  color: var(--text-secondary);
-  font-size: var(--fs-meta-xs);
-  line-height: 1.4;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
 }
 
+/* Borderless micro chip (demo: 9px/600, radius 4, 1px 6px padding). */
 .badge {
   flex-shrink: 0;
-  padding: 0 var(--space-6);
-  border: 1px solid currentcolor;
-  border-radius: var(--radius-chip);
-  font-size: var(--fs-meta-xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-micro);
+  font-size: var(--fs-micro);
   font-weight: 600;
-  line-height: 1.6;
 }
 
 .recommended {
-  color: var(--status-done);
+  background: var(--accent-dim); /* plain fallback */
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
 }
 
 .untested {
-  color: var(--status-awaiting);
+  background: var(--border-hairline);
+  color: var(--text-muted);
 }
 
 .actions {
@@ -119,21 +121,18 @@
   margin-top: var(--space-16);
 }
 
+/* "Decide later" — a text ghost (demo: no bg/border, muted, hover brightens). */
 .later {
-  padding: var(--space-4) var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-secondary);
+  padding: var(--space-4);
+  border: 0;
+  background: none;
+  color: var(--text-muted);
   font: inherit;
   font-size: var(--fs-meta);
   cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
 .later:hover {
-  background: var(--bg-hover);
   color: var(--text-primary);
 }

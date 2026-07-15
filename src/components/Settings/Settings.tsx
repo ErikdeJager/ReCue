@@ -393,13 +393,18 @@ function SettingsModal() {
                       </button>
                     ))}
                   </div>
-                  <p className={styles.helpText}>
+                  <span className={styles.fieldWarn}>
+                    <TriangleAlert size={13} strokeWidth={2} aria-hidden />
                     Dark mode is the recommended experience.
-                    {/* #349: GTK reads GTK_THEME at init, so the native dialogs
-                        adopt a changed theme only on the next launch. */}
-                    {isLinux(platform) &&
-                      " Native file dialogs adopt this theme the next time ReCue starts."}
-                  </p>
+                  </span>
+                  {/* #349: GTK reads GTK_THEME at init, so the native dialogs
+                      adopt a changed theme only on the next launch. */}
+                  {isLinux(platform) && (
+                    <p className={styles.helpText}>
+                      Native file dialogs adopt this theme the next time ReCue
+                      starts.
+                    </p>
+                  )}
                 </div>
                 <div className={styles.field}>
                   <span className={styles.fieldLabel}>Accent color</span>
@@ -407,6 +412,8 @@ function SettingsModal() {
                     {REPO_PALETTE.map((color) => {
                       // Peach is the default → store "" so the --accent token
                       // stands; any other swatch overrides --accent with its hex.
+                      // A "random" draft never equals a palette hex, so no palette
+                      // swatch reads active alongside the "?" swatch below.
                       const isDefault = color === DEFAULT_ACCENT;
                       const active =
                         (draft.accentColor || DEFAULT_ACCENT) === color;
@@ -415,7 +422,9 @@ function SettingsModal() {
                           key={color}
                           type="button"
                           className={`${styles.swatch} ${active ? styles.swatchActive : ""}`}
-                          style={{ background: color }}
+                          // `color` too: the active ring is the swatch's own color
+                          // via currentColor (UI v2 §10).
+                          style={{ background: color, color }}
                           onClick={() =>
                             update("accentColor", isDefault ? "" : color)
                           }
@@ -425,6 +434,22 @@ function SettingsModal() {
                         />
                       );
                     })}
+                    {/* "?" random accent (UI v2 task 373): persists the literal
+                        "random", resolved to a random palette member each launch. */}
+                    <button
+                      type="button"
+                      className={`${styles.swatch} ${styles.swatchRandom} ${
+                        draft.accentColor === "random"
+                          ? styles.swatchActive
+                          : ""
+                      }`}
+                      onClick={() => update("accentColor", "random")}
+                      title="Random accent — a new palette color each launch"
+                      aria-label="Random accent"
+                      aria-pressed={draft.accentColor === "random"}
+                    >
+                      ?
+                    </button>
                   </div>
                 </div>
                 <Checkbox
@@ -433,6 +458,53 @@ function SettingsModal() {
                   label="Reduce motion"
                   className={styles.checkRow}
                 />
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.densePanels}
+                    onChange={(v) => update("densePanels", v)}
+                    label="Dense panels"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Tile panels edge-to-edge with no gaps (
+                    {kbdHint(platform, "⌘D", "Ctrl+D")}).
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.backgroundAnimation}
+                    onChange={(v) => update("backgroundAnimation", v)}
+                    label="Background animation"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Animate the app background. Off keeps it static.
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.pauseWaveWhenCovered}
+                    onChange={(v) => update("pauseWaveWhenCovered", v)}
+                    disabled={!draft.backgroundAnimation}
+                    label="Pause when covered by panels"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Pauses the background animation while panels tile over it.
+                    It resumes the moment the stage is clear.
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.capAgentWidth}
+                    onChange={(v) => update("capAgentWidth", v)}
+                    label="Cap agent card width"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Limit Overview agent cards to a comfortable maximum width.
+                  </p>
+                </div>
                 <Checkbox
                   checked={draft.showDiffLineCounts}
                   onChange={(v) => update("showDiffLineCounts", v)}
@@ -460,6 +532,19 @@ function SettingsModal() {
                 <p className={styles.helpText}>
                   Scales the entire interface. The terminal font size is set
                   separately under Terminal.
+                </p>
+                <Slider
+                  label="Terminal background"
+                  valueLabel={`${draft.terminalBackgroundLightness}%`}
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={draft.terminalBackgroundLightness}
+                  onChange={(v) => update("terminalBackgroundLightness", v)}
+                />
+                <p className={styles.helpText}>
+                  Lighten the agent terminal background from near-black toward
+                  gray.
                 </p>
               </>
             )}
@@ -627,8 +712,11 @@ function SettingsModal() {
                     className={styles.checkRow}
                   />
                   <p className={styles.helpText}>
-                    When on, moving the mouse over an agent or terminal panel
-                    focuses it so you can type immediately without clicking.
+                    When on, moving the mouse over a panel selects it (the
+                    highlight border follows the pointer) and an agent or
+                    terminal panel is focused so you can type immediately.
+                    Hovering a panel without terminal input unfocuses the
+                    previous terminal, so keystrokes never keep going to it.
                     Text fields you are editing are never interrupted.
                   </p>
                 </div>
@@ -932,7 +1020,9 @@ function SettingsModal() {
                               key={color}
                               type="button"
                               className={`${styles.swatch} ${row.color === color ? styles.swatchActive : ""}`}
-                              style={{ background: color }}
+                              // `color` too: the active ring is the swatch's own
+                              // color via currentColor (UI v2 §10).
+                              style={{ background: color, color }}
                               onClick={() => setRow({ color })}
                               title={color}
                               aria-label={`Color ${color}`}
@@ -947,7 +1037,7 @@ function SettingsModal() {
                             className={`${styles.swatch} ${styles.swatchCustom} ${customActive ? styles.swatchActive : ""}`}
                             style={
                               customActive
-                                ? { background: row.color }
+                                ? { background: row.color, color: row.color }
                                 : undefined
                             }
                             title="Custom color"
@@ -1232,12 +1322,14 @@ function SettingsModal() {
                           key={shortcut.description}
                           className={styles.shortcutRow}
                         >
-                          <kbd className={styles.shortcutKey}>
-                            {kbdHint(platform, shortcut.mac, shortcut.win)}
-                          </kbd>
+                          {/* Label-left / key-chip-right (UI v2 §10); the chip is
+                              the task-372 `.kbd-chip` atom (atoms.css, global). */}
                           <span className={styles.shortcutDesc}>
                             {shortcut.description}
                           </span>
+                          <kbd className={`kbd-chip ${styles.shortcutKey}`}>
+                            {kbdHint(platform, shortcut.mac, shortcut.win)}
+                          </kbd>
                         </li>
                       ))}
                     </ul>

@@ -17,7 +17,7 @@ function MaximizedNote() {
       <p className={styles.text}>Shown in big mode</p>
       <button
         type="button"
-        className={styles.button}
+        className="btn btn-neutral"
         onClick={() => closeMaximized()}
       >
         <Minimize2 size={14} strokeWidth={1.5} /> Close big mode

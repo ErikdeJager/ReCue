@@ -1133,3 +1133,50 @@ unchanged). No `#[cfg]` arms; `zoom` is supported by WebView2/Chromium on Window
       file from Explorer onto a FileTree folder still hits the correct row while zoomed (the
       physical→CSS px math combines `devicePixelRatio` with the new `zoom`). Left unchanged pending
       this check.
+
+## 2026-07-15
+
+### UI v2 reskin sweep (#372–#383)
+
+The twelve-card "UI v2" epic is a pure WebView CSS/TS reskin — no new native code, no new
+`#[cfg]` arms, no shell-outs. Everything platform-sensitive rides the established seams:
+JetBrains Mono is now the `--ui` face on every OS (#372 — Segoe UI no longer renders the
+chrome), every shortcut hint routes through `kbdHint` (⌘→**Ctrl** on Windows; incl. the
+new ⌘D dense toggle, ⌘K/⌘F modals, the Shortcuts pane, and the tips.json chords via
+`renderTip`), all keyboard handling stays `metaKey || ctrlKey`, `color-mix()` fills carry
+plain token fallbacks (WebView2/Chromium supports color-mix, so the fallbacks are
+belt-and-braces), scrollbars stay on the global `::-webkit-scrollbar` styling, and there
+is no backdrop-filter/vibrancy anywhere. The wave background (#377) is a vendored canvas
+engine behind the stage (one per window, lazy chunk); the terminal cursor blink is now
+gated off under reduced motion in the pool (#383, an xterm options mutation — no host
+dispose). Nothing here can be exercised by unit tests beyond the token/pure-helper guards
+already in CI.
+
+### Needs real-box verification (UI v2, #372–#383)
+
+- [ ] **Wave-canvas performance on the wall (WebView2).** Boot into an Overview wall of
+      ~6 agents with Background animation ON: the wave animates smoothly behind the cards
+      with no visible input latency in a focused terminal; toggling it OFF in Settings →
+      Appearance unmounts the canvas.
+- [ ] **Wave worker-mode smoke (task 384, WebView2/Chromium).** WebView2 supports
+      OffscreenCanvas, so the wave should render in **worker mode** off the main thread
+      (`localStorage["recue.waveStats"]="1"` → `[wave] mode=worker …` / `window.__waveStats`);
+      `localStorage["recue.waveMode"]="main"` must downgrade to the main-thread loop with
+      no visual change. Confirm the new **"Pause when covered by panels"** setting (default
+      on) pauses the wave when panels cover the stage and resumes when it clears, that a
+      recolor/theme flip still recolors both modes, and that a busy agent halves the fps.
+- [ ] **Dense-mode divider drag at gap 0.** ⌘D → Ctrl+D: Overview cards + Canvas splits
+      tile edge-to-edge; every Canvas divider (both orientations) still drags via the
+      invisible ±4px hit area; the confirm toast fires.
+- [ ] **JetBrains Mono UI legibility at 125%/150% fractional scaling.** The mono UI face
+      (11–12px chrome type) stays crisp/legible under Windows fractional DPI — sidebar
+      rows, menu items, Settings nav, kbd chips.
+- [ ] **Kbd hints read `Ctrl+…` everywhere.** New session / Schedule buttons, the ⌘K/⌘F
+      modal hints, Canvas "New tab", big-mode tooltips, the Settings → Shortcuts pane,
+      and the empty-state tips all show `Ctrl+…` (no ⌘ glyph reaches Windows).
+- [ ] **Scrollbar styling on the new v2 surfaces.** The wall, Canvas panes, menu/modal
+      bodies, kanban columns, and the Settings content pane all show the themed
+      `::-webkit-scrollbar` bars (never a native gray bar).
+- [ ] **Reduced motion on Windows** (OS setting *and* the app toggle): the wave settles
+      then freezes, dot pulse/menu/modal/toast entrances drop, and the terminal cursor
+      stops blinking (#383) while the terminal itself keeps rendering.

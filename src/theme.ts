@@ -17,14 +17,15 @@ export const THEME_STORAGE_KEY = "recue.theme";
 
 /**
  * Pre-paint background per theme — MUST equal `--bg-base` in `src/styles/tokens.css`
- * (`:root` / `:root[data-theme="light"]`), the inline `<style>` in `index.html`, and
- * `background_for_theme()` in `src-tauri/src/commands.rs`. Catppuccin Mocha Base for
- * dark, Latte Base for light (#33/#333). The TS/HTML/CSS trio is guarded by the
- * anti-drift assertion in `theme.test.ts`.
+ * (`:root` / `:root[data-theme="light"]`), the inline `<style>` in `index.html`,
+ * `background_for_theme()` in `src-tauri/src/commands.rs`, and `"backgroundColor"` in
+ * `src-tauri/tauri.conf.json`. Catppuccin Mocha **Crust** for dark, Latte Crust for
+ * light (UI v2 §2.1, task 372 — the stage is crust). The TS/HTML/CSS trio is guarded
+ * by the anti-drift assertion in `theme.test.ts`.
  */
 export const THEME_BG: Record<Theme, string> = {
-  dark: "#1e1e2e",
-  light: "#eff1f5",
+  dark: "#11111b",
+  light: "#dce0e8",
 };
 
 /** Parse a stored mirror value. Pure: anything that isn't a known theme ⇒ `null`. */

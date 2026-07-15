@@ -1,136 +1,182 @@
-/* Outer column: optional filter bar (#34) above the scrolling wall. */
+/* Outer column: optional filter bar (#34) above the scrolling wall. UI v2 §7
+   (task 379) crust stage — 12px pad / 8px gaps, both 0 in dense via the
+   `:root.dense` hook on the stage vars. */
 .overview {
   display: flex;
   flex-direction: column;
   height: 100%;
+  gap: var(--stage-gap);
+  padding: var(--stage-pad-overview);
 }
 
+/* Chrome-less filter row (UI v2 §7, task 379) — plain text on the stage, only
+   rendered when a repo filter is set. */
 .filterBar {
   display: flex;
   align-items: center;
   gap: var(--space-8);
   flex-shrink: 0;
-  height: 32px;
-  padding: 0 var(--space-12);
-  border-bottom: 1px solid var(--border-hairline);
-  background: var(--bg-panel);
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: var(--fs-meta);
 }
 
 .filterLabel strong {
   color: var(--text-primary);
-  font-weight: 500;
+  font-weight: 600;
 }
 
+/* Accent text-link "Show all" — sits right after the label, gap-separated. */
 .showAll {
-  margin-left: auto;
-  padding: var(--space-4) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-secondary);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
   font: inherit;
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta);
   cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
 }
 
 .showAll:hover {
-  color: var(--text-primary);
-  border-color: var(--accent);
+  text-decoration: underline;
 }
 
+/* Empty-repo state (UI v2 §7, task 379): a centered column over the wave
+   background (task 377) — a soft shadow keeps the copy readable on the
+   animated stage. */
 .filterEmpty {
   display: flex;
   flex: 1;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: var(--bg-panel);
-  color: var(--text-muted);
-  font-size: var(--fs-meta);
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-shadow: 0 1px 6px rgba(17, 17, 27, 0.65);
 }
 
+.filterEmptyTitle strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* The demo's 34px accent "New session ⌘N" button. */
+.newSessionBtn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  height: 34px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  cursor: pointer;
+  text-shadow: none;
+}
+
+.newSessionBtn:hover {
+  background: var(--accent-hover);
+}
+
+.kbdChip {
+  font-size: var(--fs-meta-xs);
+  padding: 1px 5px;
+  border-radius: var(--radius-micro);
+  background: rgba(17, 17, 27, 0.16);
+  background: color-mix(in srgb, var(--accent-fg) 16%, transparent);
+}
+
+.filterEmptyHint {
+  color: var(--text-faint);
+  font-size: var(--fs-meta-sm);
+}
+
+/* Transparent (task 377): the stage's wave/crust shows through in the gaps —
+   the opaque cards below cover it wherever there is content. Stays the #351
+   IntersectionObserver root. */
 .wall {
   display: flex;
   flex: 1;
   min-height: 0;
-  background: var(--bg-panel);
+  gap: var(--stage-gap);
   overflow-x: auto;
   overflow-y: hidden;
 }
 
 /* Equal width, grow to fill; never shrink below the min so excess columns
-   overflow horizontally instead of squeezing. */
+   overflow horizontally instead of squeezing. UI v2 §7 (task 379): a square
+   base-bg block with a hairline border — grouping reads via band color + gaps,
+   no divider borders. */
 .card {
   position: relative;
   display: flex;
   flex: 1 0 var(--overview-card-min, 400px);
   flex-direction: column;
-  /* Repo-color top band (#36) — filled via inline borderTopColor; contiguous
-     same-repo cards share it, reading as a group. */
+  border: 1px solid var(--border-hairline);
+  /* Folder-color resting tint (task 386): a subtle wash of the owning folder's
+     color over the hairline (full strength only when selected). Plain hairline
+     first as the cross-platform color-mix fallback; `--repo-color` is set inline
+     per card, absent ⇒ `transparent` ⇒ the plain hairline shows through. */
+  border-color: color-mix(
+    in srgb,
+    var(--repo-color, transparent) 30%,
+    var(--border-hairline)
+  );
+  /* Repo-color top band (#36) — filled via inline borderTopColor, full width. */
   border-top: 2px solid transparent;
-  border-right: 1px solid var(--border-hairline);
+  /* Explicitly opaque over the wave background (task 377) — nothing readable
+     ever sits directly on the animated layer. */
+  background: var(--bg-panel);
   overflow: hidden;
 }
 
-/* First card of a new repo group — a divider separating it from the previous. */
-.cardGroupStart {
-  border-left: 1px solid var(--border-strong);
+/* The 373 `capAgentWidth` consumer (task 379) — agent-conversation cards only;
+   900px > the 600px max of the #176 min-width slider, so the two settings can't
+   conflict; OFF ⇒ class absent ⇒ cards cover the whole stage. */
+.cardCapped {
+  max-width: 900px;
 }
 
-/* Light mode only (#343): adjacent agent cards' dark terminal bodies make a
-   translucent hairline vanish against them, so the inter-column separators need an
-   opaque light-slate color in Latte. Dark is untouched (still the token hairlines). */
+/* Light mode only (#343 — still relevant in dense mode, where adjacent cards'
+   dark terminal bodies make a translucent hairline vanish): an opaque
+   light-slate separator in Latte. The inline border-top-color still wins for
+   the repo band. Dark is untouched (still the token hairlines). */
 :global([data-theme="light"]) .card {
-  border-right-color: #acb0be; /* Latte Surface2 */
-}
-:global([data-theme="light"]) .cardGroupStart {
-  border-left-color: #acb0be; /* Latte Surface2 */
+  border-color: #acb0be; /* Latte Surface2 — plain color-mix fallback */
+  border-color: color-mix(in srgb, var(--repo-color, transparent) 30%, #acb0be);
 }
 
-/* Selected agent (#50): a thin frame in the repo's own color (#35) drawn over the
-   card (no layout shift, not clipped, click-through) plus a quiet header tint —
-   echoes the sidebar's selected row, now matching the repo badge. The frame
-   color softens via color-mix where supported; the plain declaration is the
-   fallback (still the repo color, 1px). */
+/* Selection (UI v2 §7, task 379/386): a 1px inset ring in the owning folder's
+   color (task 386 — the accent never encodes selection), square, click-through,
+   no layout shift — synced with the sidebar row via the shared selectedId.
+   `--repo-color` is set inline per card; a plain accent fallback keeps a ring
+   even where it's absent. */
 .cardSelected::after {
   content: "";
   position: absolute;
   inset: 0;
-  border: 1px solid var(--card-color, var(--accent));
-  border-color: color-mix(
-    in srgb,
-    var(--card-color, var(--accent)) 70%,
-    transparent
-  );
+  border: 1px solid var(--repo-color, var(--accent));
   pointer-events: none;
   z-index: 2;
 }
 
-.cardSelected .header {
-  background: var(--bg-hover);
-  background: color-mix(
-    in srgb,
-    var(--card-color, var(--accent)) 12%,
-    transparent
-  );
-}
-
 /* The whole title bar is the drag handle (#70): grab to reorder a column within
    its repo cluster. touch-action:none lets dnd-kit's pointer sensor drag on
-   touch; the .actions group + the body (a sibling) stay clickable. */
+   touch; the .actions group + the body (a sibling) stay clickable. Fixed 36px
+   (UI v2 §7, task 379) — transparent, the card bg shows through; the hairline
+   border-bottom renders as the demo's body border-top. */
 .header {
   display: flex;
-  height: 40px;
+  height: 36px;
   flex-shrink: 0;
   align-items: center;
   gap: var(--space-8);
-  padding: 0 var(--space-6);
+  padding: 0 10px;
   border-bottom: 1px solid var(--border-hairline);
-  background: var(--bg-panel);
   cursor: grab;
   touch-action: none;
 }
@@ -148,7 +194,7 @@
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
+  color: var(--text-faint);
   transition: color var(--dur-fast) var(--ease-out);
 }
 
@@ -161,7 +207,7 @@
 .cardDragging {
   z-index: 3;
   opacity: 0.92;
-  box-shadow: var(--shadow-popover);
+  box-shadow: var(--shadow-menu);
 }
 
 .titleBlock {
@@ -184,8 +230,8 @@
   overflow: hidden;
   min-width: 0;
   color: var(--text-primary);
-  font-size: var(--fs-meta);
-  font-weight: 500;
+  font-size: var(--fs-ui);
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -201,20 +247,22 @@
   background: var(--bg-base);
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-ui);
   font-weight: 500;
 }
 
 /* "worktree" marker (#96) — mirrors the sidebar badge (#74). A worktree agent
-   inherits the parent repo's color, so this text chip is the sole worktree cue. */
+   inherits the parent repo's color, so this text chip is the sole worktree cue.
+   UI v2 §7 (task 379): the 9.5px hairline chip (also the fork/recurring badge). */
 .worktreeBadge {
   flex-shrink: 0;
-  padding: 0 var(--space-4);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
-  color: var(--text-muted);
+  padding: 1px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-micro);
+  color: var(--text-secondary);
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-micro);
+  font-weight: 400;
 }
 
 /* Repo badge (#36): the repo name / agent subtitle text. The colored repo dot was
@@ -226,7 +274,7 @@
   min-width: 0;
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
 }
 
 .metaText {
@@ -241,6 +289,15 @@
   color: var(--status-running);
 }
 
+/* Leading repo-color square on non-agent cards (UI v2 §7, task 379) — the demo's
+   8px rounded square in the activity-dot slot; background set inline. */
+.repoLead {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 3px;
+}
+
 .actions {
   display: flex;
   flex-shrink: 0;
@@ -250,8 +307,8 @@
 
 .action {
   display: flex;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   align-items: center;
   justify-content: center;
   border: 0;
@@ -265,8 +322,15 @@
 }
 
 .action:hover:not(:disabled):not([aria-disabled="true"]) {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+/* Destructive header buttons (remove / close / cancel ✕) hover red instead of
+   primary (UI v2 §7, task 379). */
+.actionDanger:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: var(--status-error);
+  background: var(--bg-elevated);
 }
 
 /* Unavailable Fork (#138): aria-disabled (not the native attribute, so the

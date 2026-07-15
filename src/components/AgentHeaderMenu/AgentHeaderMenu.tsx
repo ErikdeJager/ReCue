@@ -96,7 +96,7 @@ function AgentHeaderMenu({
       </button>
       {open && (
         <div
-          className={`${styles.popover} ${align === "left" ? styles.alignLeft : styles.alignRight}`}
+          className={`menu-pop ${styles.popover} ${align === "left" ? styles.alignLeft : styles.alignRight}`}
           role="menu"
           aria-label="Agent actions"
         >
@@ -106,7 +106,7 @@ function AgentHeaderMenu({
           <button
             type="button"
             role="menuitem"
-            className={styles.item}
+            className="menu-item"
             aria-disabled={!canFork}
             title={
               forkReason ?? "Fork conversation into a new parallel session"
@@ -118,7 +118,7 @@ function AgentHeaderMenu({
               }
             }}
           >
-            <GitFork size={14} strokeWidth={1.5} className={styles.icon} />
+            <GitFork size={13} strokeWidth={1.5} className="menu-icon" />
             Fork conversation
           </button>
           {/* Copy `claude --resume <id>` (#28) — only for agents that resume by id. */}
@@ -126,7 +126,7 @@ function AgentHeaderMenu({
             <button
               type="button"
               role="menuitem"
-              className={styles.item}
+              className="menu-item"
               title="Copy resume command (claude --resume <id>)"
               onClick={() => {
                 void copyToClipboard(
@@ -136,17 +136,17 @@ function AgentHeaderMenu({
                 setOpen(false);
               }}
             >
-              <Copy size={14} strokeWidth={1.5} className={styles.icon} />
+              <Copy size={13} strokeWidth={1.5} className="menu-icon" />
               Copy resume command
             </button>
           )}
-          <div className={styles.sep} role="separator" />
+          <div className="menu-sep" role="separator" />
           {/* Per-agent "watch" toggle (#336) — notify on this agent's busy→idle edge;
               ensures notification permission at opt-in time (mirroring WatchButton). */}
           <button
             type="button"
             role="menuitem"
-            className={styles.item}
+            className="menu-item"
             title={
               watched
                 ? "Stop watching this agent"
@@ -160,13 +160,13 @@ function AgentHeaderMenu({
           >
             {watched ? (
               <Eye
-                size={14}
+                size={13}
                 strokeWidth={1.5}
-                className={styles.icon}
+                className="menu-icon"
                 color="var(--accent)"
               />
             ) : (
-              <EyeOff size={14} strokeWidth={1.5} className={styles.icon} />
+              <EyeOff size={13} strokeWidth={1.5} className="menu-icon" />
             )}
             {watched ? "Stop watching" : "Watch"}
           </button>

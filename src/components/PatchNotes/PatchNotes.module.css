@@ -12,12 +12,13 @@
   gap: var(--space-6);
 }
 
+/* Category headers — the v2 micro eyebrow (task 378). */
 .category {
   margin: 0;
   color: var(--text-muted);
-  font-size: var(--fs-meta-xs);
+  font-size: var(--fs-micro);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 

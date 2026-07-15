@@ -1150,13 +1150,14 @@ fn broadcast_canvas_windows(app: &AppHandle, exclude: Option<&str>) {
 
 /// Pre-paint window background per theme (#348) — the OS paints this native color while
 /// the WebView boots. MUST equal `--bg-base` in `src/styles/tokens.css` (and `THEME_BG` in
-/// `src/theme.ts` / the inline `<style>` in `index.html`): Catppuccin Mocha Base for dark,
-/// Latte Base for light (#333). Pure — an unknown/absent theme means the dark default.
-/// Platform-neutral: the same color is applied on macOS, Windows and Linux.
+/// `src/theme.ts` / the inline `<style>` in `index.html` / `"backgroundColor"` in
+/// `src-tauri/tauri.conf.json`): Catppuccin Mocha Crust for dark, Latte Crust for light
+/// (UI v2 task 372 — the stage is crust). Pure — an unknown/absent theme means the dark
+/// default. Platform-neutral: the same color is applied on macOS, Windows and Linux.
 pub fn background_for_theme(theme: Option<&str>) -> Color {
     match theme {
-        Some("light") => Color(0xef, 0xf1, 0xf5, 0xff),
-        _ => Color(0x1e, 0x1e, 0x2e, 0xff),
+        Some("light") => Color(0xdc, 0xe0, 0xe8, 0xff),
+        _ => Color(0x11, 0x11, 0x1b, 0xff),
     }
 }
 
@@ -3057,24 +3058,26 @@ pub async fn agent_info(app: AppHandle, agent: String) -> AgentInfo {
 mod tests {
     use super::*;
 
-    /// The pre-paint background must match `--bg-base` (Catppuccin Mocha Base) for dark and
-    /// every non-light / unknown / absent value (#348) — a fresh install has no `theme` key.
+    /// The pre-paint background must match `--bg-base` (Catppuccin Mocha Crust, UI v2 task
+    /// 372) for dark and every non-light / unknown / absent value (#348) — a fresh install
+    /// has no `theme` key.
     #[test]
     fn background_for_theme_defaults_to_the_dark_base() {
-        let dark = Color(0x1e, 0x1e, 0x2e, 0xff);
+        let dark = Color(0x11, 0x11, 0x1b, 0xff);
         assert_eq!(background_for_theme(None), dark);
         assert_eq!(background_for_theme(Some("dark")), dark);
         assert_eq!(background_for_theme(Some("bogus")), dark);
         assert_eq!(background_for_theme(Some("")), dark);
     }
 
-    /// Light (#333) maps to the Catppuccin Latte Base — the same `--bg-base` the light token
-    /// block, `THEME_BG` in `src/theme.ts` and the `index.html` inline style carry.
+    /// Light (#333) maps to the Catppuccin Latte Crust (UI v2 task 372) — the same
+    /// `--bg-base` the light token block, `THEME_BG` in `src/theme.ts` and the
+    /// `index.html` inline style carry.
     #[test]
     fn background_for_theme_maps_light_to_the_latte_base() {
         assert_eq!(
             background_for_theme(Some("light")),
-            Color(0xef, 0xf1, 0xf5, 0xff)
+            Color(0xdc, 0xe0, 0xe8, 0xff)
         );
     }
 

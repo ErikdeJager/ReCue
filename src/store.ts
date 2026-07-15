@@ -12,6 +12,7 @@ import {
   type AutoContinueState,
 } from "./autoContinue";
 import { resolveCanvases } from "./boot";
+import { attentionQueue } from "./components/Attention/attentionQueue";
 import { overviewPanelToContent } from "./components/Canvas/canvasDrop";
 import { canvasToTemplate } from "./components/Canvas/canvasToTemplate";
 import { rewriteScheduledLeaves } from "./components/Canvas/canvasSchedule";
@@ -260,7 +261,9 @@ function worktreeParentOf(
 
 // Sidebar width (#108): drag-resizable, clamped to [min, max] and persisted
 // separately from the Settings blob (so the modal's draft can't clobber a drag).
-const SIDEBAR_WIDTH_DEFAULT = 260;
+// Default 248px (UI v2 spec §2.4, task 374). Exported so the Sidebar's
+// double-click reset shares the single source of truth.
+export const SIDEBAR_WIDTH_DEFAULT = 248;
 const SIDEBAR_WIDTH_MIN = 180;
 const SIDEBAR_WIDTH_MAX = 560;
 const clampSidebarWidth = (w: number): number =>
@@ -1136,9 +1139,27 @@ export const DEFAULT_SETTINGS: Settings = {
   // is one-time migrated down by `migrateTerminalLineHeight` (guarded by the flag below).
   terminalLineHeight: 1.0,
   terminalCursorBlink: true,
+  // 0 (#390) = near-black `#11111b`, today's terminal background byte-for-byte; the
+  // slider raises it toward gray. Default 0 needs no migration flag — a legacy blob
+  // back-fills to 0 via mergeSettings, preserving the original look.
+  terminalBackgroundLightness: 0,
   theme: "dark",
   accentColor: "",
   reduceMotion: false,
+  // True by default (UI v2 task 373): animate the app background. The visual consumer
+  // (the wave background) lands with card 3 — until then the flag persists inertly.
+  backgroundAnimation: true,
+  // False by default (task 402): the wave keeps animating even when panels cover the
+  // stage; pausing is opt-in. A legacy blob lacking the key back-fills to false via
+  // mergeSettings (no migration code); a user who previously persisted true keeps it.
+  pauseWaveWhenCovered: false,
+  // False by default (UI v2 §9, task 373): dense panels are opt-in — toggled by ⌘D or
+  // Settings → Appearance; applied as the `dense` class on <html> (the task-372
+  // `:root.dense` hook zeroing the --stage-* vars).
+  densePanels: false,
+  // True by default (UI v2 task 373, opt-out): cap Overview agent cards at a
+  // comfortable max width. The visual consumer lands with card 5's Overview reskin.
+  capAgentWidth: true,
   overviewPanelMinWidth: 400,
   // 100% = normal (#366); cleared to a no-op `zoom` so a default install is unchanged.
   displaySize: 100,
@@ -1279,14 +1300,34 @@ export function accentCompanions(hex: string): {
   return { hover, dim, fg };
 }
 
+/** A random member of the accent palette (UI v2 task 373): the `accentColor:
+ * "random"` sentinel resolves through this. Pure — `rand` injectable for tests. */
+export function randomPaletteAccent(rand: () => number = Math.random): string {
+  const idx = Math.min(
+    REPO_PALETTE.length - 1,
+    Math.floor(rand() * REPO_PALETTE.length),
+  );
+  return REPO_PALETTE[idx] ?? "#fab387";
+}
+
+let runRandomAccent: string | null = null;
+/** The per-launch resolution of `accentColor: "random"` (UI v2 task 373) — rolled
+ * once per window document (memoized), so re-saving settings never re-rolls the
+ * accent mid-run; the next launch rolls fresh. */
+export function resolvedRandomAccent(): string {
+  runRandomAccent ??= randomPaletteAccent();
+  return runRandomAccent;
+}
+
 /** Apply the imperative side-effects of settings: the terminal options to the live
- * pool (#100), the theme attribute (#333), the accent tokens (#102/#107), and the
- * reduce-motion class (#102). */
+ * pool (#100), the theme attribute (#333), the accent tokens (#102/#107), the
+ * reduce-motion class (#102), and the dense-panels class (UI v2 §9, task 373). */
 function applySettingsEffects(s: Settings): void {
   applyTerminalSettings({
     fontSize: s.terminalFontSize,
     lineHeight: s.terminalLineHeight,
     cursorBlink: s.terminalCursorBlink,
+    background: s.terminalBackgroundLightness,
   });
   // Terminal renderer override (#357, Linux only): converge every pooled xterm onto the
   // chosen WebGL/DOM renderer WITHOUT disposing a host (the #18 invariant). It reads the
@@ -1311,9 +1352,13 @@ function applySettingsEffects(s: Settings): void {
   // first frame is already the right theme instead of dark-then-light. Best-effort —
   // storeTheme never throws.
   storeTheme(s.theme);
-  if (s.accentColor) {
-    const { hover, dim, fg } = accentCompanions(s.accentColor);
-    root.style.setProperty("--accent", s.accentColor);
+  // The "random" sentinel (UI v2 task 373) resolves to a palette member chosen once
+  // per launch; "" and an explicit hex behave exactly as before.
+  const accent =
+    s.accentColor === "random" ? resolvedRandomAccent() : s.accentColor;
+  if (accent) {
+    const { hover, dim, fg } = accentCompanions(accent);
+    root.style.setProperty("--accent", accent);
     root.style.setProperty("--accent-hover", hover);
     root.style.setProperty("--accent-dim", dim);
     root.style.setProperty("--accent-fg", fg);
@@ -1326,6 +1371,9 @@ function applySettingsEffects(s: Settings): void {
   // Reduce motion (#102): force-on beyond the OS setting via a body class that
   // global.css zeroes the motion for (mirrors the prefers-reduced-motion killswitch).
   document.body.classList.toggle("reduce-motion", s.reduceMotion);
+  // Dense panels (UI v2 §9, task 372/373): the `:root.dense` hook in tokens.css
+  // zeroes --stage-gap / --stage-pad-overview / --stage-pad-canvas.
+  root.classList.toggle("dense", s.densePanels);
   // Overview column min width (#176): the floor before columns scroll horizontally.
   // Always set it — the `.card` CSS fallback only covers the pre-JS first paint.
   root.style.setProperty("--overview-card-min", `${s.overviewPanelMinWidth}px`);
@@ -1589,6 +1637,15 @@ export interface AppState {
    * never cleared until the session is removed. An idle session with this set shows
    * the yellow "finished / needs input" indicator instead of never-active gray. */
   sessionActive: Record<string, boolean>;
+  /** Timestamp (ms epoch) of each session's most recent busy→idle edge (#398 —
+   * the Attention view). Stamped by `setBusy` on the edge, cleared when the session
+   * next goes busy; the Attention FIFO queue orders by it (oldest idle first). A
+   * boot-persisted-awaiting session has no entry and falls back to its `createdAt`. */
+  sessionIdleSince: Record<string, number>;
+  /** Sessions the user has acknowledged in the Attention view (#398): dismissed from
+   * the triage queue while staying alive, until they next go busy (the flag is cleared
+   * by `setBusy` on the next busy edge, so a fresh idle edge re-queues them). */
+  dismissedAttention: Record<string, true>;
   /** Terminal items (#72) whose shell has exited → exit code (or null); drives the
    * Terminal exit overlay for non-agent PTYs (they aren't in `sessions`). */
   terminalExits: Record<string, number | null>;
@@ -1752,6 +1809,13 @@ export interface AppState {
   markRunning: (id: string) => void;
   /** Set a session's busy/idle state from the backend heuristic (#42). */
   setBusy: (id: string, busy: boolean) => void;
+  /** Acknowledge the selected idle agent in the Attention queue (#398): remove it from
+   * the queue (the session stays alive) and advance selection to the next queued agent.
+   * A no-op when `id` isn't a current queue member. */
+  dismissAttention: (id: string) => void;
+  /** Acknowledge every current Attention queue member at once (#398) — all stay alive;
+   * empties the queue and clears the selection. */
+  dismissAllAttention: () => void;
   /** Apply claude's auto-title (#97) to a session (no-op if unchanged). */
   setAutoName: (id: string, autoName: string | null) => void;
   /** Update a session's forkability (#138) — gates the Fork affordance (no-op if
@@ -1983,6 +2047,10 @@ export interface AppState {
   setRepoColor: (path: string, color: string) => Promise<void>;
   /** Apply + persist application settings (#100) and run their side-effects. */
   saveSettings: (settings: Settings) => Promise<void>;
+  /** Flip the dense-panels setting (UI v2 §9, task 373) — backs the ⌘D shortcut.
+   * Persists via `saveSettings` (which applies the `dense` root class) and toasts
+   * "Dense panels on"/"Dense panels off". */
+  toggleDensePanels: () => void;
   /** First-launch agent detection: if not yet `onboarded`, presence-check the
    * selectable CLIs. 0 installed → no-op (re-checks next launch); exactly 1 → silently
    * make it the default (+ a toast if it's an untested agent); 2+ → open the picker. */
@@ -2347,12 +2415,19 @@ async function killAgentsInRepo(repoPath: string): Promise<number> {
     return {
       sessions: s.sessions.filter((x) => !idSet.has(x.id)),
       selectedId: clearSelection ? null : s.selectedId,
-      view: clearSelection ? "overview" : s.view,
+      // Preserve the Attention view on removal (#398); only leave canvas/overview.
+      view: clearSelection && s.view !== "attention" ? "overview" : s.view,
       sessionBusy: Object.fromEntries(
         Object.entries(s.sessionBusy).filter(([id]) => !idSet.has(id)),
       ),
       sessionActive: Object.fromEntries(
         Object.entries(s.sessionActive).filter(([id]) => !idSet.has(id)),
+      ),
+      sessionIdleSince: Object.fromEntries(
+        Object.entries(s.sessionIdleSince).filter(([id]) => !idSet.has(id)),
+      ),
+      dismissedAttention: Object.fromEntries(
+        Object.entries(s.dismissedAttention).filter(([id]) => !idSet.has(id)),
       ),
     };
   });
@@ -2497,12 +2572,21 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
       schedules: s.schedules.filter((x) => !scheduleIds.has(x.id)),
       overviewPanels: map,
       selectedId: clearSelection ? null : s.selectedId,
-      view: clearSelection ? "overview" : s.view,
+      // Preserve the Attention view on removal (#398); only leave canvas/overview.
+      view: clearSelection && s.view !== "attention" ? "overview" : s.view,
       sessionBusy: Object.fromEntries(
         Object.entries(s.sessionBusy).filter(([id]) => !agentIds.has(id)),
       ),
       sessionActive: Object.fromEntries(
         Object.entries(s.sessionActive).filter(([id]) => !agentIds.has(id)),
+      ),
+      sessionIdleSince: Object.fromEntries(
+        Object.entries(s.sessionIdleSince).filter(([id]) => !agentIds.has(id)),
+      ),
+      dismissedAttention: Object.fromEntries(
+        Object.entries(s.dismissedAttention).filter(
+          ([id]) => !agentIds.has(id),
+        ),
       ),
       terminalExits: Object.fromEntries(
         Object.entries(s.terminalExits).filter(([id]) => !removedIds.has(id)),
@@ -2641,6 +2725,8 @@ export const useStore = create<AppState>()((set, get) => ({
   maximizedItem: null,
   sessionBusy: {},
   sessionActive: {},
+  sessionIdleSince: {},
+  dismissedAttention: {},
   terminalExits: {},
   // Default true: with no persisted sessions there is nothing to wait for (#359), and a
   // window that never calls `refresh()` (a detached canvas) must never hold a volley.
@@ -2782,9 +2868,13 @@ export const useStore = create<AppState>()((set, get) => ({
     set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
-      view: s.selectedId === id ? "overview" : s.view,
+      // Keep the Attention view when its selected agent is removed (#398) — the
+      // queue advances to the next idle agent; only bounce to Overview from canvas.
+      view: s.selectedId === id && s.view !== "attention" ? "overview" : s.view,
       sessionBusy: omitKey(s.sessionBusy, id),
       sessionActive: omitKey(s.sessionActive, id),
+      sessionIdleSince: omitKey(s.sessionIdleSince, id),
+      dismissedAttention: omitKey(s.dismissedAttention, id),
     }));
     // An agent removed from the left panel (Remove #57, or a clean exit #63) also
     // disappears from every Canvas tab showing it (#152). The PTY is killed by the
@@ -2805,6 +2895,8 @@ export const useStore = create<AppState>()((set, get) => ({
 
   setBusy: (id, busy) => {
     const wasBusy = get().sessionBusy[id] ?? false;
+    // Capture the transition time before `set` for the Attention FIFO stamp (#398).
+    const now = Date.now();
     set((s) => {
       if ((s.sessionBusy[id] ?? false) === busy) return {}; // no-op, skip re-render
       // First activity marks the session "has been active" (#112): it stays set
@@ -2815,11 +2907,23 @@ export const useStore = create<AppState>()((set, get) => ({
         busy && !s.sessionActive[id]
           ? { ...s.sessionActive, [id]: true }
           : s.sessionActive;
+      // Attention triage bookkeeping (#398): a busy→idle edge stamps `idleSince[id]`
+      // (the FIFO sort key); a going-busy edge clears the stamp AND any dismissal, so
+      // the agent re-enters the queue at the back on its next idle edge.
+      const sessionIdleSince = busy
+        ? omitKey(s.sessionIdleSince, id)
+        : { ...s.sessionIdleSince, [id]: now };
+      const dismissedAttention =
+        busy && s.dismissedAttention[id]
+          ? omitKey(s.dismissedAttention, id)
+          : s.dismissedAttention;
       return {
         sessionBusy: busy
           ? { ...s.sessionBusy, [id]: true }
           : omitKey(s.sessionBusy, id),
         sessionActive,
+        sessionIdleSince,
+        dismissedAttention,
       };
     });
     // Busy→idle settle (#212): a turn just finished, so an in-terminal `git checkout`
@@ -2836,6 +2940,46 @@ export const useStore = create<AppState>()((set, get) => ({
       scheduleGitRefresh(folder);
       maybeNotifyWatched(id);
     }
+  },
+
+  dismissAttention: (id) => {
+    const s = get();
+    const queue = attentionQueue({
+      sessions: s.sessions,
+      sessionBusy: s.sessionBusy,
+      sessionActive: s.sessionActive,
+      dismissed: s.dismissedAttention,
+      idleSince: s.sessionIdleSince,
+      recurringChildIds: ownedChildSessionIds(s.recurrings),
+    });
+    const idx = queue.findIndex((q) => q.id === id);
+    if (idx === -1) return; // not a current queue member → no-op
+    // Advance to the next queued agent (the one after `id` in the pre-dismiss queue).
+    const next = queue[idx + 1]?.id ?? null;
+    set((st) => ({
+      dismissedAttention: { ...st.dismissedAttention, [id]: true },
+    }));
+    get().select(next);
+  },
+
+  dismissAllAttention: () => {
+    const s = get();
+    const queue = attentionQueue({
+      sessions: s.sessions,
+      sessionBusy: s.sessionBusy,
+      sessionActive: s.sessionActive,
+      dismissed: s.dismissedAttention,
+      idleSince: s.sessionIdleSince,
+      recurringChildIds: ownedChildSessionIds(s.recurrings),
+    });
+    if (queue.length > 0) {
+      set((st) => {
+        const dismissedAttention = { ...st.dismissedAttention };
+        for (const q of queue) dismissedAttention[q.id] = true;
+        return { dismissedAttention };
+      });
+    }
+    get().select(null);
   },
 
   setAutoName: (id, autoName) =>
@@ -4189,6 +4333,15 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
+  toggleDensePanels: () => {
+    const settings = get().settings;
+    const next = !settings.densePanels;
+    // saveSettings applies the `dense` root class (applySettingsEffects) + persists;
+    // both fail-soft outside Tauri. The toast strings are the demo's exact copy.
+    void get().saveSettings({ ...settings, densePanels: next });
+    get().pushToast(next ? "Dense panels on" : "Dense panels off");
+  },
+
   maybeOnboardAgent: async () => {
     if (get().settings.onboarded) return;
     // Presence-check each selectable CLI via `agent_info` (version === null ⇒ missing).
@@ -4244,6 +4397,18 @@ export const useStore = create<AppState>()((set, get) => ({
   // also a sidebar row. Dedups so callers don't have to (one diff per repo; one
   // markdown panel per file); updates optimistically and persists the list.
   addOverviewPanel: async (repoPath, kind, file) => {
+    // Opening any panel counts as "using" this repo (#400) — bump it to the front of
+    // `recents` so the ⌘K / ⌘N / template folder pickers surface it first. Done before
+    // the dedup early-return below so a re-open ("Already open") also counts as a use.
+    // Track the worktree PARENT, never the worktree sub-folder (mirrors the #331 spawn
+    // nesting), so a worktree folder never leaks into `recents` as a stray top-level entry.
+    const recentPath =
+      get().sessions.find((x) => x.repoPath === repoPath)?.worktreeParent ??
+      repoPath;
+    void ipc.addRecent(recentPath).catch(() => {});
+    set((s) => ({
+      recents: [recentPath, ...s.recents.filter((r) => r !== recentPath)],
+    }));
     const current = get().overviewPanels[repoPath] ?? [];
     // Terminals are never deduped — multiple independent shells per repo (#72);
     // one diff per repo; one file tree per repo (#167); one markdown panel per file.
@@ -5671,8 +5836,9 @@ export const useStore = create<AppState>()((set, get) => ({
     await Promise.all(
       recurringIds.map((id) => ipc.cancelRecurring(id).catch(() => {})),
     );
+    const idSet = new Set(ids);
     set((s) => {
-      const clearSelection = s.selectedId != null && ids.includes(s.selectedId);
+      const clearSelection = s.selectedId != null && idSet.has(s.selectedId);
       return {
         sessions: s.sessions.filter(
           (x) => x.repoPath !== repoPath && x.worktreeParent !== repoPath,
@@ -5683,7 +5849,14 @@ export const useStore = create<AppState>()((set, get) => ({
           (r) => r.cwd !== repoPath && !worktreeDests.includes(r.cwd),
         ),
         selectedId: clearSelection ? null : s.selectedId,
-        view: clearSelection ? "overview" : s.view,
+        // Preserve the Attention view on removal (#398); only leave canvas/overview.
+        view: clearSelection && s.view !== "attention" ? "overview" : s.view,
+        sessionIdleSince: Object.fromEntries(
+          Object.entries(s.sessionIdleSince).filter(([id]) => !idSet.has(id)),
+        ),
+        dismissedAttention: Object.fromEntries(
+          Object.entries(s.dismissedAttention).filter(([id]) => !idSet.has(id)),
+        ),
         // Drop a now-dangling Overview filter on the forgotten repo (#34/#247).
         overviewRepoFilter:
           s.overviewRepoFilter?.path === repoPath ? null : s.overviewRepoFilter,

@@ -6,29 +6,31 @@
   height: 100%;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-base);
+  background: var(--bg-panel);
 }
 
+/* Borderless toolbar (v2 task 382 — the demo has no underline). */
 .toolbar {
   display: flex;
   flex-shrink: 0;
   align-items: center;
   gap: var(--space-6);
-  padding: var(--space-4) var(--space-6);
-  border-bottom: 1px solid var(--border-hairline);
+  padding: var(--space-8) 10px;
 }
 
-/* In-panel search box (#202): grows to fill the toolbar, refresh sits to its right. */
+/* In-panel search box (#202, v2 task 382: a 26px crust square well): grows to
+   fill the toolbar, refresh sits to its right. */
 .search {
   display: flex;
   flex: 1;
   min-width: 0;
+  height: 26px;
   align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-6);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  gap: var(--space-6);
+  padding: 0 var(--space-8);
+  border: 1px solid var(--border-hairline);
+  border-radius: 0;
+  background: var(--content-bg);
 }
 
 .search:focus-within {
@@ -47,7 +49,7 @@
   background: transparent;
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-meta-sm);
 }
 
 .searchInput:focus {
@@ -77,39 +79,45 @@
   color: var(--text-primary);
 }
 
+/* 26×26 hairline refresh button (v2 task 382 — the one demo radius here). */
 .refresh {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-4);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: none;
   color: var(--text-muted);
   cursor: pointer;
   transition: all var(--dur-fast) var(--ease-out);
 }
 
 .refresh:hover {
-  background: var(--bg-hover);
+  background: none;
   color: var(--text-primary);
 }
 
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-4) 0;
+  padding: 0 var(--space-6) var(--space-8);
 }
 
+/* 24px secondary rows (v2 task 382); hover = the 374 4%-text wash (plain
+   fallback first for engines without color-mix). */
 .row {
   display: flex;
   width: 100%;
+  height: 24px;
   align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-8);
+  gap: 5px;
+  padding: 0 var(--space-8);
   border: 0;
   background: transparent;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font: inherit;
   font-size: var(--fs-meta);
   text-align: left;
@@ -119,7 +127,8 @@
 }
 
 .row:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
 .chevron {
@@ -127,9 +136,10 @@
   color: var(--text-muted);
 }
 
+/* Muted folder icon (v2 task 382 — was accent). */
 .folderIcon {
   flex-shrink: 0;
-  color: var(--accent);
+  color: var(--text-muted);
 }
 
 .fileIcon {
@@ -157,58 +167,89 @@
   animation: reveal-flash var(--dur-slow) var(--ease-out);
 }
 
-/* ── Git-status coloring (#252) ──────────────────────────────────────────────
-   Tint a row's name (and, for files, the icon) by its working-tree status vs HEAD,
-   using the on-system status tokens (green = new, yellow = edited, red = deleted).
-   Applied to `.row`, so it covers file rows and folder roll-up rows; folder icons
-   keep the repo accent (only the name is tinted for a folder). */
-.statusAdded .name,
-.statusAdded .fileIcon {
+/* ── Git-status coloring (#252, v2 task 382) ─────────────────────────────────
+   Tint the WHOLE row by its working-tree status vs HEAD, using the on-system
+   status tokens (green = new, yellow = edited, red = deleted). Applied to
+   `.row`, so it covers file rows and folder roll-up rows; explicit `inherit`
+   overrides keep the muted chevron/icon rules from winning. */
+.statusAdded {
   color: var(--status-done);
 }
 
-.statusModified .name,
-.statusModified .fileIcon {
+.statusModified {
   color: var(--status-awaiting);
 }
 
-.statusDeleted .name,
-.statusDeleted .fileIcon {
+.statusDeleted {
   color: var(--status-error);
 }
 
-/* Gitignored rows (#270): dim the name + icons (including a folder's normally
-   accent-tinted icon) to read as muted/grayed — distinguishing ignored files/folders
-   from tracked ones. Lower priority than the A/M/D tints above (a row only ever gets
-   one status class; a tracked change always wins in the JS that picks the class). */
-.statusIgnored .name,
-.statusIgnored .fileIcon,
-.statusIgnored .folderIcon {
-  color: var(--text-muted);
-  opacity: 0.75;
+.statusAdded .chevron,
+.statusAdded .folderIcon,
+.statusAdded .fileIcon,
+.statusModified .chevron,
+.statusModified .folderIcon,
+.statusModified .fileIcon,
+.statusDeleted .chevron,
+.statusDeleted .folderIcon,
+.statusDeleted .fileIcon {
+  color: inherit;
 }
 
-/* A deleted file's "ghost" row (#252): non-interactive (a plain <div>), dimmed, red,
+/* Gitignored rows (#270, v2 task 382): faint via Surface1 COLOR (not opacity) on
+   the whole row incl. icons — distinguishing ignored files/folders from tracked
+   ones. Lower priority than the A/M/D tints above (a row only ever gets one
+   status class; a tracked change always wins in the JS that picks the class). */
+.statusIgnored {
+  color: var(--surface-1);
+}
+
+.statusIgnored .name,
+.statusIgnored .fileIcon,
+.statusIgnored .folderIcon,
+.statusIgnored .chevron {
+  color: inherit;
+  opacity: 1;
+}
+
+/* Trailing right-aligned status letter (v2 task 382): `M`/`A` on tinted file
+   rows, `D` on ghost rows — presentation-only (aria-hidden). */
+.statusLetter {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: var(--space-6);
+  font-size: 9px;
+  color: inherit;
+}
+
+/* A deleted file's "ghost" row (#252, v2 task 382: full-strength red — the
+   strikethrough carries the "gone" cue): non-interactive (a plain <div>),
    struck-through — shows what was removed from a folder that still renders. */
 .ghost {
   display: flex;
   width: 100%;
+  height: 24px;
   align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-8);
+  gap: 5px;
+  padding: 0 var(--space-8);
   color: var(--status-error);
   font-size: var(--fs-meta);
   white-space: nowrap;
   cursor: default;
-  opacity: 0.7;
 }
 
 .ghost .fileIcon {
-  color: var(--status-error);
+  color: inherit;
 }
 
 .ghost .name {
   text-decoration: line-through;
+  text-decoration-color: var(--status-error);
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--status-error) 60%,
+    transparent
+  );
 }
 
 /* OS file-drop target highlight (#253): the precise folder row (or the whole tree
@@ -216,7 +257,8 @@
    outline + dim fill), so it's identical on macOS and Windows. Defined after
    `.row:hover` so it wins the equal-specificity tie during a drag. */
 .dropTarget {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
   outline-offset: -1px;
   background: var(--accent-dim);
 }
@@ -257,7 +299,8 @@
 }
 
 .result:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
 .resultMain,
@@ -271,7 +314,7 @@
   background: transparent;
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-meta-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -344,7 +387,7 @@
 }
 
 .revealBtn:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--accent);
 }
 
@@ -365,68 +408,17 @@
   }
 }
 
-/* Cursor-positioned right-click menu (mirrors the Sidebar RowContextMenu, #167). */
+/* Cursor-positioned right-click menu (mirrors the Sidebar RowContextMenu, #167).
+   The LOOK comes from the shared menu.css primitive (task 375, `menu-pop`/
+   `menu-item`/`menu-item-danger`/`menu-item-confirm`); these two classes keep
+   only the site-local positioning + z-index. */
 .menuOverlay {
-  position: fixed;
-  inset: 0;
   z-index: 200;
 }
 
-.menu {
+.menuPos {
   position: fixed;
   z-index: 201;
-  min-width: 170px;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
-  animation: menu-in var(--dur-fast) var(--ease-out);
-}
-
-.menuItem {
-  display: block;
-  width: 100%;
-  padding: var(--space-6) var(--space-8);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.menuItem:hover {
-  background: var(--bg-hover);
-}
-
-/* Destructive menu item (#267) — Delete / Delete folder + the inline confirm. Mirrors
-   the Sidebar RowContextMenu `.menuDanger`: a faint red wash + red text, deepening on
-   hover. On-system status token + color-mix (with the token as a plain-color fallback
-   baked into `--status-error`), so it's identical on macOS and Windows. */
-.menuItemDanger {
-  display: block;
-  width: 100%;
-  padding: var(--space-6) var(--space-8);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: color-mix(in srgb, var(--status-error) 14%, transparent);
-  color: var(--status-error);
-  font: inherit;
-  font-size: var(--fs-meta);
-  font-weight: 500;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.menuItemDanger:hover {
-  background: color-mix(in srgb, var(--status-error) 22%, transparent);
 }
 
 /* New-folder inline form (#267): a name input + a Create button inside the menu. */
@@ -437,13 +429,14 @@
   padding: var(--space-4);
 }
 
+/* Crust input skin (task 375) — matches the reskinned New-session popover inputs. */
 .menuInput {
   flex: 1;
   min-width: 0;
   padding: var(--space-4) var(--space-6);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -478,15 +471,4 @@
 .menuFormBtn:disabled {
   cursor: default;
   opacity: 0.5;
-}
-
-@keyframes menu-in {
-  from {
-    opacity: 0;
-    transform: scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
 }

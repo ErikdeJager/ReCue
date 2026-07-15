@@ -1,0 +1,136 @@
+/*
+ * UI v2 floating-menu primitive (task 375, DESIGN-SPEC.md §10) — the one shared
+ * look for every anchored context menu / dropdown popover: a Base surface with a
+ * strong hairline, 10px window radius, deep --shadow-menu, and a 130ms .97→1
+ * scale-in. Token-driven only (never off-system values), so the light theme and
+ * a custom accent recolor it live. Consumed as global classes by every context
+ * menu / popover (Sidebar menus, AgentHeaderMenu, ViewsPopover, CanvasTabs
+ * templates menu, FileTree menu); positioning + z-index stay site-local.
+ * Imported once in src/main.tsx, after atoms.css. Kbd hints inside items reuse
+ * atoms.css's .kbd-hint. The reduced-motion killswitch (global.css) drops the
+ * entry animation — no extra handling needed here.
+ */
+
+.menu-pop {
+  min-width: 200px;
+  padding: var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-window);
+  box-shadow: var(--shadow-menu);
+  animation: menu-pop-in 130ms var(--ease-out); /* §2.5: 130–160ms */
+}
+
+/* Full-screen click-away catcher (the caller also closes it on right-click). */
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+}
+
+.menu-item,
+.menu-item-danger,
+.menu-item-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  height: 28px;
+  padding: 0 var(--space-8);
+  border: 0;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.menu-item:hover:not([aria-disabled="true"]):not(:disabled) {
+  background: var(--bg-elevated);
+}
+
+/* A gated (unavailable) item — dimmed + non-actionable, but still hoverable so
+   its reason tooltip shows (aria-disabled, not the native `disabled`; #138). */
+.menu-item[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Natively-disabled item (the templates menu, #117) — dimmed and inert. */
+.menu-item:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.menu-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* Section label ("OPEN A VIEW" / "VIEWS") — uppercase micro, muted. */
+.menu-section {
+  padding: 5px var(--space-8) 3px;
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.menu-sep {
+  height: 1px;
+  margin: var(--space-4) var(--space-6);
+  background: var(--border-hairline);
+}
+
+/* Destructive item — red text with a red-tinted hover. Every color-mix fill declares a
+   plain-color fallback first (the cross-platform rule), mirroring modal.css's
+   .modal-btn-danger: on an engine without color-mix (older WebKitGTK, the Ubuntu-22.04
+   floor) the red tint still shows rather than vanishing to transparent. */
+.menu-item-danger {
+  color: var(--status-error);
+}
+
+.menu-item-danger:hover {
+  background: var(--status-error-dim); /* plain fallback */
+  background: color-mix(in srgb, var(--status-error) 12%, transparent);
+}
+
+/* Armed inline confirm (#103/#293) — a red fill makes the danger unmistakable, so its
+   fallback matters most (the confirm affordance must never silently disappear). */
+.menu-item-confirm {
+  background: var(--status-error-dim); /* plain fallback */
+  background: color-mix(in srgb, var(--status-error) 14%, transparent);
+  color: var(--status-error);
+  font-weight: 500;
+}
+
+.menu-item-confirm:hover {
+  background: var(--status-error-dim); /* plain fallback */
+  background: color-mix(in srgb, var(--status-error) 22%, transparent);
+}
+
+/* Checkable item trailing slot (#296/#302) — a fixed-width accent check glyph
+   after the label (empty when off), pushed to the row's right edge. */
+.menu-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  margin-left: auto;
+  color: var(--accent);
+}
+
+@keyframes menu-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
