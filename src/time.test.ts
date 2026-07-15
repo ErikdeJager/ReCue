@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatDurationShort,
   formatFireTime,
   formatInterval,
   formatNextRun,
   formatResetCountdown,
+  formatUsageReset,
   intervalToSeconds,
   parseResetsAt,
   parseWhen,
@@ -122,6 +124,54 @@ describe("formatResetCountdown (#154)", () => {
   it("shows <1m at or past the reset", () => {
     expect(formatResetCountdown(now + 30_000, now)).toBe("<1m");
     expect(formatResetCountdown(now - 60_000, now)).toBe("<1m");
+  });
+});
+
+describe("formatDurationShort (#387)", () => {
+  it("shows <1m at or under a minute (incl. past-due)", () => {
+    expect(formatDurationShort(0)).toBe("<1m");
+    expect(formatDurationShort(30_000)).toBe("<1m");
+    expect(formatDurationShort(59_000)).toBe("<1m");
+    expect(formatDurationShort(-60_000)).toBe("<1m");
+  });
+
+  it("shows minutes only under an hour", () => {
+    expect(formatDurationShort(14 * 60_000)).toBe("14m");
+  });
+
+  it("shows hours and minutes under a day", () => {
+    expect(formatDurationShort((2 * 60 + 14) * 60_000)).toBe("2h 14m");
+  });
+
+  it("shows days and hours at or beyond a day", () => {
+    expect(formatDurationShort((5 * 1440 + 2 * 60) * 60_000)).toBe("5d 2h");
+  });
+
+  it("drops the hours when the remainder is a whole day", () => {
+    expect(formatDurationShort(5 * 1440 * 60_000)).toBe("5d");
+  });
+});
+
+describe("formatUsageReset (#387)", () => {
+  const now = Date.parse("2026-04-11T07:00:00Z");
+
+  it("delegates to the compact countdown under 24h", () => {
+    expect(formatUsageReset(now + (2 * 60 + 14) * 60_000, now)).toBe("2h 14m");
+  });
+
+  it("shows a weekday abbreviation for a multi-day (<7d) reset", () => {
+    const at = now + 3 * 86_400_000;
+    // Locale-robust: compare against the same toLocaleDateString call.
+    expect(formatUsageReset(at, now)).toBe(
+      new Date(at).toLocaleDateString([], { weekday: "short" }),
+    );
+  });
+
+  it("shows a short date for a reset a week or more out", () => {
+    const at = now + 8 * 86_400_000;
+    expect(formatUsageReset(at, now)).toBe(
+      new Date(at).toLocaleDateString([], { month: "short", day: "numeric" }),
+    );
   });
 });
 

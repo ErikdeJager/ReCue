@@ -2,7 +2,11 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { isClaudeActive, useStore } from "../../store";
-import { formatResetCountdown } from "../../time";
+import {
+  formatDurationShort,
+  formatResetCountdown,
+  formatUsageReset,
+} from "../../time";
 import styles from "./Usage.module.css";
 import { prepareUsageBuckets } from "./usageBuckets";
 
@@ -125,11 +129,20 @@ function UsageBar() {
                   />
                 </span>
                 <span className={styles.boxPercent}>{Math.round(bPct)}%</span>
-                <span className={styles.boxReset}>
-                  {b.resetsAtMs != null
-                    ? formatResetCountdown(b.resetsAtMs, now)
-                    : ""}
-                </span>
+                {b.resetsAtMs != null ? (
+                  <span
+                    className={styles.boxReset}
+                    title={`Resets ${new Date(
+                      b.resetsAtMs,
+                    ).toLocaleString()} · in ${formatDurationShort(
+                      b.resetsAtMs - now,
+                    )}`}
+                  >
+                    {formatUsageReset(b.resetsAtMs, now)}
+                  </span>
+                ) : (
+                  <span className={styles.boxReset} />
+                )}
               </div>
             );
           })}
