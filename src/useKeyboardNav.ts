@@ -5,7 +5,8 @@
 // `settings.keybinds` overrides (Settings → Shortcuts). The defaults:
 //
 //   ⌥1 / ⌥2 / ⌥3       switch to Overview / Attention / Canvas
-//   ⌘W / Ctrl+W        close the focused panel (big mode → Canvas leaf → Overview ×)
+//   ⌘W / Ctrl+W        close the focused panel (big mode → Canvas leaf → Overview × →
+//                      remove the focused Attention agent)
 //   ⌘, / Ctrl+,        open Settings
 //   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
 //   ⌘N / Ctrl+N        open the new-session flow from anywhere            (#26)
@@ -14,6 +15,8 @@
 //   ⌘K / Ctrl+K        open the Create-panel launcher (type step)         (#189)
 //   ⌘F / Ctrl+F        toggle the global search modal                     (#337)
 //   ⌘D / Ctrl+D        toggle dense panels (UI v2 §9)                     (#373)
+//   ⌘O / Ctrl+O        open the selected item's folder in your editor
+//   ⌘⇧O / Ctrl+Shift+O choose the editor "Open in editor" uses
 //
 // **Fixed** (contextual, not rebindable — listed read-only in Settings):
 //
@@ -54,6 +57,7 @@ import { detectPlatform } from "./platform";
 import { saveFocused } from "./saverRegistry";
 import {
   adjacentId,
+  contentForSelected,
   overviewClusterKeys,
   ownedChildSessionIds,
   useStore,
@@ -132,9 +136,32 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
       if (IS_MAIN_WINDOW && !state.settingsOpen) state.toggleDensePanels();
       return "swallow";
     }
-    // ⌘W: close what the user is looking at (see store.closeFocusedPanel). Inert
-    // while a modal owns the keyboard — and still swallowed there, so the chord
-    // can never fall through to a WebView "close window" default.
+    // ⌘O: open the selected item's folder in the preferred editor (an agent's
+    // `repoPath` is already its worktree for worktree agents); first use opens the
+    // picker modal. Works in both windows like big-mode (the agent-header ⋯ menu
+    // renders in detached canvases too). Inert while the Settings modal is open —
+    // the picker's remember-write must not clobber the draft (the ⌘D guard) — and
+    // while the picker itself is already up. No selection = safe no-op.
+    case "open-in-editor": {
+      if (!state.settingsOpen && !state.editorPickerOpen) {
+        const content = contentForSelected(state);
+        if (content?.repoPath) void state.openInEditor(content.repoPath);
+      }
+      return "swallow";
+    }
+    // ⌘⇧O: always re-open the editor picker for the selected item's folder (change
+    // the remembered choice without visiting Settings). Same guards as ⌘O.
+    case "choose-editor": {
+      if (!state.settingsOpen && !state.editorPickerOpen) {
+        const content = contentForSelected(state);
+        if (content?.repoPath) state.openEditorPicker(content.repoPath);
+      }
+      return "swallow";
+    }
+    // ⌘W: close what the user is looking at (see store.closeFocusedPanel) — in
+    // Attention it removes (kills + forgets) the focused agent, the view's primary
+    // close affordance. Inert while a modal owns the keyboard — and still swallowed
+    // there, so the chord can never fall through to a WebView "close window" default.
     case "close-panel": {
       const modalOpen =
         state.newSessionOpen ||

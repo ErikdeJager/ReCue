@@ -10,6 +10,7 @@ mod child_env;
 mod commands;
 mod container;
 mod early_settings;
+mod editors;
 mod files;
 mod git;
 mod linux_desktop;
@@ -417,6 +418,8 @@ pub fn run() {
             commands::agent_info,
             commands::container_runtime_status,
             commands::ensure_container_image,
+            commands::detect_editors,
+            commands::open_in_editor,
             commands::platform,
             commands::install_kind,
             commands::windows_build,

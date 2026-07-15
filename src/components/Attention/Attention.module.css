@@ -144,52 +144,22 @@
   letter-spacing: 0.04em;
 }
 
+/* The NEW marker (task 410) — a fresh, never-worked agent. Mirrors .idleTag but uses
+   the gray idle token so it reads distinct from awaiting and matches its gray dot. */
+.newTag {
+  padding: 1px 4px;
+  border: 1px solid var(--status-idle);
+  border-radius: var(--radius-micro);
+  color: var(--status-idle);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
 .idleAge {
   color: var(--text-faint);
   font-size: var(--fs-meta-xs);
-}
-
-/* Hover × (kill + forget) — hidden until the card is hovered/active, so the resting
-   card stays calm. Absolutely placed so it never shifts the footer layout. */
-.cardRemove {
-  position: absolute;
-  top: var(--space-8);
-  right: 8px;
-  display: flex;
-  width: 24px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  opacity: 0;
-  transition:
-    opacity var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
-}
-
-.card:hover .cardRemove,
-.cardActive .cardRemove,
-.cardRemove:focus-visible {
-  opacity: 1;
-}
-
-.cardRemove:hover {
-  background: var(--bg-panel);
-  color: var(--status-error);
-}
-
-/* Armed (first-click) confirm state (#103): solid danger so the second click reads
-   as destructive. */
-.cardRemoveArmed,
-.cardRemoveArmed:hover {
-  opacity: 1;
-  color: var(--status-error);
-  background: var(--status-error-dim, transparent);
 }
 
 /* --- Diff +/- stat (#335) — mirrors the sidebar tokens. --- */
@@ -311,6 +281,13 @@
 .action:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+/* The relocated Remove × — red on hover (the destructive header action, matching
+   Overview's SessionCard .actionDanger; #103 confirm-gating deliberately dropped). */
+.actionDanger:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: var(--status-error);
+  background: var(--bg-elevated);
 }
 
 .agentBody {

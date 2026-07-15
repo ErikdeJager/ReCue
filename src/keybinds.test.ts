@@ -56,6 +56,9 @@ describe("KEYBIND_ACTIONS registry", () => {
     expect(defaults["global-search"]).toBe("mod+f");
     expect(defaults["toggle-sidebar"]).toBe("mod+b");
     expect(defaults["dense-panels"]).toBe("mod+d");
+    // …the "Open in editor" pair…
+    expect(defaults["open-in-editor"]).toBe("mod+o");
+    expect(defaults["choose-editor"]).toBe("mod+shift+o");
     // …and the removed chords are bound to nothing (⌘T / ⌘1–9 / ⌘\).
     const bound = new Set(Object.values(defaults));
     expect(bound.has("mod+t")).toBe(false);

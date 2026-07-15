@@ -506,6 +506,58 @@ describe("app store", () => {
     });
   });
 
+  it("selectItem in Attention switches to Overview and selects the agent (#411)", () => {
+    useStore.setState({
+      view: "attention",
+      sessions: [{ ...session("a"), repoPath: "/repo/a" }],
+      overviewRepoFilter: null,
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "a", repoPath: "/repo/a" });
+    expect(useStore.getState().view).toBe("overview");
+    expect(useStore.getState().selectedId).toBe("a");
+  });
+
+  it("selectItem in Attention switches a non-agent item to Overview too (#411)", () => {
+    useStore.setState({ view: "attention", overviewRepoFilter: null });
+    useStore
+      .getState()
+      .selectItem({ kind: "diff", id: "p1", repoPath: "/repo/b" });
+    expect(useStore.getState().view).toBe("overview");
+    expect(useStore.getState().selectedId).toBe("p1");
+  });
+
+  it("selectItem in Overview keeps the view (regression guard for #411)", () => {
+    useStore.setState({
+      view: "overview",
+      sessions: [{ ...session("a"), repoPath: "/repo/a" }],
+      overviewRepoFilter: null,
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "a", repoPath: "/repo/a" });
+    expect(useStore.getState().view).toBe("overview");
+    expect(useStore.getState().selectedId).toBe("a");
+  });
+
+  it("selectItem in Attention switches an agent to Overview AND clears a mismatched filter (#334 + #411)", () => {
+    useStore.setState({
+      view: "attention",
+      sessions: [
+        { ...session("a"), repoPath: "/repo/a" },
+        { ...session("b"), repoPath: "/repo/b" },
+      ],
+      overviewRepoFilter: { path: "/repo/a", mode: "all" },
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "b", repoPath: "/repo/b" });
+    expect(useStore.getState().view).toBe("overview");
+    expect(useStore.getState().selectedId).toBe("b");
+    expect(useStore.getState().overviewRepoFilter).toBeNull();
+  });
+
   it("forgetRepo drops the repo's sessions + recent, selection, and filter (#31/#34)", async () => {
     useStore.setState({
       sessions: [
@@ -3448,15 +3500,39 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
     expect(s().schedules).toHaveLength(1);
   });
 
-  it("no-ops in the Attention view", () => {
+  it("removes the focused agent in the Attention view (kill + forget)", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
     useStore.setState({
       view: "attention",
-      selectedId: "p1",
-      overviewPanels: {
-        "/repo/x": [{ id: "p1", kind: "markdown", file: "a.md" }],
-      },
+      sessions: [session("a1")],
+      sessionActive: { a1: true }, // queue-eligible: has been active, not busy
+      dismissedAttention: {},
+      selectedId: "a1",
     });
     s().closeFocusedPanel();
-    expect(s().overviewPanels["/repo/x"]).toHaveLength(1);
+    // removeSession → killSession is async; let it settle.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("a1");
+    expect(s().sessions).toHaveLength(0);
+    killSpy.mockRestore();
+  });
+
+  it("no-ops in the Attention view with an empty queue", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "attention",
+      sessions: [session("a1")],
+      sessionActive: {},
+      // Dismissed → not in the queue. (Task 410 surfaces even never-active agents,
+      // so `sessionActive: {}` alone no longer empties the queue — dismissing does.)
+      dismissedAttention: { a1: true },
+      selectedId: "a1",
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+    killSpy.mockRestore();
   });
 });

@@ -3420,6 +3420,45 @@ pub async fn agent_info(app: AppHandle, agent: String) -> AgentInfo {
     }
 }
 
+/// Detect which catalog editors are installed ("Open in editor") — powers the
+/// first-use picker + the Settings → Editor "detected" annotations. Existence-based
+/// only (a stat / PATH resolution, never `--version` — JetBrains launchers boot a
+/// JVM), but the PATH arm still **blocks** on the login-shell probe the first time
+/// (`effective_path`, bounded ~5s), so like `claude_version` (#353) the whole sweep
+/// runs on the blocking pool; a join error flattens to the empty list (fail-open —
+/// the picker then offers the custom command).
+#[tauri::command]
+pub async fn detect_editors() -> Vec<crate::editors::EditorInfo> {
+    tauri::async_runtime::spawn_blocking(crate::editors::detect_all)
+        .await
+        .unwrap_or_default()
+}
+
+/// Open the folder `path` in `editor` (a catalog id, or `"custom"` → the user's
+/// `customEditorCommand`), detached. The settings blob is read up front — a cheap
+/// in-memory clone, in its own statement so the `State` temporary drops before the
+/// `.await` (the `agent_info` pattern) — and only the resolve+spawn crosses onto the
+/// blocking pool (the PATH arm can wait on the login-shell probe, #360). Errors are
+/// typed `SessionError`s: `BinaryNotFound` tells the frontend to reopen the picker.
+#[tauri::command]
+pub async fn open_in_editor(
+    app: AppHandle,
+    path: String,
+    editor: String,
+) -> Result<(), SessionError> {
+    let custom = if editor == "custom" {
+        let settings = app.state::<Store>().settings();
+        crate::editors::read_custom_editor_command(&settings)
+    } else {
+        None
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::editors::open_in_editor(&path, &editor, custom.as_deref())
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

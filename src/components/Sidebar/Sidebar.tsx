@@ -18,6 +18,7 @@ import {
   Bug,
   Check,
   Clock,
+  ExternalLink,
   Eye,
   EyeOff,
   FileDiff,
@@ -41,6 +42,7 @@ import {
 } from "lucide-react";
 
 import { agentSupportsResume } from "../../agents";
+import { matchBranchFilter } from "../../branchFilter";
 import { afterPaint } from "../../gitRefresh";
 import { noAutoCapitalize } from "../../inputProps";
 import {
@@ -471,7 +473,8 @@ interface SessionRowProps {
  * The agent right-click menu (#228), shared by the expanded `SessionRow` and the
  * collapsed-rail dots so the two never diverge: **Rename**, **Fork conversation**
  * (gated #138/#142), **Copy session ID** (resume-only #142), **Open in canvas**
- * (#153), and **Remove**. Renders a full-window dismiss overlay + the positioned menu;
+ * (#153), **Open in editor** (the agent's working folder in the preferred editor),
+ * and **Remove**. Renders a full-window dismiss overlay + the positioned menu;
  * Escape also closes. The caller pre-clamps `{x, y}` to the viewport.
  */
 function AgentContextMenu({
@@ -494,6 +497,8 @@ function AgentContextMenu({
   const forkSession = useStore((s) => s.forkSession);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const openSessionInCanvas = useStore((s) => s.openSessionInCanvas);
+  const openInEditor = useStore((s) => s.openInEditor);
+  const editorHint = useKeybindLabel("open-in-editor");
   // Per-agent "watch" toggle (#336) — the same store flag as the Overview/Canvas
   // header WatchButton, so the menu item stays in sync with those buttons.
   const toggleWatch = useStore((s) => s.toggleWatch);
@@ -585,6 +590,21 @@ function AgentContextMenu({
         >
           <PanelsTopLeft size={13} strokeWidth={1.5} className="menu-icon" />
           Open in canvas
+        </button>
+        {/* Launch the preferred editor at the agent's working folder (its worktree
+            for worktree agents); first use opens the picker. */}
+        <button
+          type="button"
+          role="menuitem"
+          className="menu-item"
+          title={`Open ${session.repoPath} in your editor${editorHint ? ` (${editorHint})` : ""}`}
+          onClick={() => {
+            onClose();
+            void openInEditor(session.repoPath);
+          }}
+        >
+          <ExternalLink size={13} strokeWidth={1.5} className="menu-icon" />
+          Open in editor
         </button>
         {/* Per-agent "watch" toggle (#336): pop a native notification when this agent
             finishes a turn / needs input. Same flag as the header WatchButton. */}
@@ -1240,6 +1260,8 @@ function WorktreeHeader({
   const githubUrl = useStore((s) =>
     parent ? s.githubUrls[parent] : undefined,
   );
+  const openInEditor = useStore((s) => s.openInEditor);
+  const editorHint = useKeybindLabel("open-in-editor");
   const { menu, openMenu, closeMenu } = useRowMenu();
   const [confirming, setConfirming] = useState(false);
   const close = () => {
@@ -1387,6 +1409,20 @@ function WorktreeHeader({
                 >
                   {revealLabel(platform)}
                 </button>
+                {/* Launch the preferred editor at the worktree folder; first use
+                    opens the picker. */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  title={`Open ${path} in your editor${editorHint ? ` (${editorHint})` : ""}`}
+                  onClick={() => {
+                    void openInEditor(path);
+                    close();
+                  }}
+                >
+                  Open in editor
+                </button>
                 <button
                   type="button"
                   role="menuitem"
@@ -1499,6 +1535,8 @@ function RepoBranchLine({
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
   const githubUrl = useStore((s) => s.githubUrls[repo]);
+  const openInEditor = useStore((s) => s.openInEditor);
+  const editorHint = useKeybindLabel("open-in-editor");
   const { menu, openMenu, closeMenu } = useRowMenu();
   // Mirrors the header menu's `menuMode` minus its `confirm` (forget) mode — this
   // menu never forgets the folder.
@@ -1665,6 +1703,20 @@ function RepoBranchLine({
                   }}
                 >
                   {revealLabel(platform)}
+                </button>
+                {/* Launch the preferred editor at this folder; first use opens
+                    the picker. */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  title={`Open ${repo} in your editor${editorHint ? ` (${editorHint})` : ""}`}
+                  onClick={() => {
+                    void openInEditor(repo);
+                    close();
+                  }}
+                >
+                  Open in editor
                 </button>
                 <button
                   type="button"
@@ -2227,6 +2279,8 @@ function Sidebar() {
   const scheduleKey = useKeybindLabel("schedule-session");
   const sidebarKey = useKeybindLabel("toggle-sidebar");
   const settingsKey = useKeybindLabel("open-settings");
+  const editorKey = useKeybindLabel("open-in-editor");
+  const openInEditor = useStore((s) => s.openInEditor);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
@@ -2611,6 +2665,36 @@ function Sidebar() {
         (r) => !checkoutQuery || r.toLowerCase().includes(checkoutQuery),
       )
     : [];
+
+  // Type-to-filter with a create-branch fallback (#408): when the typed value
+  // matches no local/remote branch, jump straight to the create-branch input
+  // pre-filled with that text (original case, focused) instead of forcing a click
+  // on "Create new branch" and a retype. Enter there creates + checks out off the
+  // folder's current branch, exactly like the explicit toggle.
+  const onCheckoutFilterChange = (value: string) => {
+    const q = value.trim().toLowerCase();
+    const nlLocal = checkoutList
+      ? sortCheckoutBranches(checkoutList.all).filter(
+          (b) => !q || b.toLowerCase().includes(q),
+        )
+      : [];
+    const nlRemote = checkoutList
+      ? (checkoutList.remote ?? []).filter(
+          (r) => !q || r.toLowerCase().includes(q),
+        )
+      : [];
+    if (
+      !checkoutLoading &&
+      matchBranchFilter(value, nlLocal, nlRemote).kind === "create"
+    ) {
+      setCheckoutCreating(true);
+      setCheckoutNewName(value.trim());
+      setCheckoutFilter("");
+      setCheckoutError(null);
+      return;
+    }
+    setCheckoutFilter(value);
+  };
 
   // Drag-to-resize the sidebar (#108): a right-edge handle with pointer capture so
   // the drag tracks even when the pointer leaves the thin handle. The store clamps
@@ -3157,7 +3241,7 @@ function Sidebar() {
                         value={checkoutFilter}
                         placeholder="Filter branches…"
                         onChange={(event) =>
-                          setCheckoutFilter(event.currentTarget.value)
+                          onCheckoutFilterChange(event.currentTarget.value)
                         }
                         aria-label="Filter branches"
                         autoFocus={!checkoutCreating}
@@ -3419,8 +3503,8 @@ function Sidebar() {
                   includeNewSession={false}
                 />
                 {/* Non-destructive folder utilities (#129): reveal in Finder /
-                    copy the absolute path. Reuses the `open`-shell-out backend
-                    (#100/#109) and the store clipboard helper. */}
+                    open in editor / copy the absolute path. Reuses the
+                    `open`-shell-out backend (#100/#109) and the store helpers. */}
                 <div className="menu-sep" role="separator" />
                 <button
                   type="button"
@@ -3432,6 +3516,20 @@ function Sidebar() {
                   }}
                 >
                   {revealLabel(platform)}
+                </button>
+                {/* Launch the preferred editor at this folder; first use opens
+                    the picker. */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  title={`Open ${menu.repo} in your editor${editorKey ? ` (${editorKey})` : ""}`}
+                  onClick={() => {
+                    void openInEditor(menu.repo);
+                    closeMenu();
+                  }}
+                >
+                  Open in editor
                 </button>
                 <button
                   type="button"

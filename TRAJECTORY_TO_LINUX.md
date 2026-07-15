@@ -1685,6 +1685,7 @@ DOM/WebGL renderer override).
       locally-installed JetBrains Mono variant; hinting/antialiasing keeps the 10–12px
       chrome type legible on a 1× (non-HiDPI) display.
 
+<<<<<<< HEAD
 ## 2026-07-15 — Dev-container agent sessions (docker-wrapped claude)
 
 The dev-container feature (New Session modal toggle) inherits the unix arms almost
@@ -1707,3 +1708,21 @@ type-check it). Real-box checks:
 - The daemon-stopped state (`systemctl --user stop docker` / no docker group): the
   toggle should show the "start Docker" hint, and enabling the service should flip it
   live on the ~3.5 s re-probe.
+=======
+### Needs real-box verification (Open in editor)
+
+- [ ] **PATH CLIs under a `.desktop`/AppImage launch.** With ReCue launched from the
+      desktop entry (minimal env), ⌘O→Ctrl+O still finds `code`/`zed` via the
+      login-shell PATH probe (#360) and the editor opens the folder.
+- [ ] **`zeditor` fallback.** On a distro whose Zed package ships the binary as
+      `zeditor` (no `zed` alias), detection still reports Zed via PATH and launches.
+- [ ] **JetBrains Toolbox scripts dir.** With Toolbox shell scripts enabled
+      (`~/.local/share/JetBrains/Toolbox/scripts`), a Toolbox-only IDE (nothing on PATH)
+      detects as "Toolbox" and launches at the folder.
+- [ ] **AppImage child-env scrub.** From the AppImage, launching a system editor must
+      not inherit `LD_LIBRARY_PATH`/`GTK_THEME` junk (#350 `child_env` seam) — the
+      editor starts with its normal system libraries/theme.
+- [ ] **Terminal editor via custom command.** `alacritty -e nvim {path}` (or the
+      user's emulator) opens nvim in the folder; `{path}` substitution lands the right
+      directory.
+>>>>>>> origin/dev

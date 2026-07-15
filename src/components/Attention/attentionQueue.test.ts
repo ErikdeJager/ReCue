@@ -35,13 +35,13 @@ describe("attentionQueue membership (#398)", () => {
     expect(q.map((x) => x.id)).toEqual(["a"]);
   });
 
-  it("excludes a never-active (gray) agent", () => {
+  it("includes a fresh never-active (gray) idle agent (task 410)", () => {
     const q = attentionQueue({
       ...emptyInput,
       sessions: [sess("a")],
       sessionActive: {},
     });
-    expect(q).toHaveLength(0);
+    expect(q.map((x) => x.id)).toEqual(["a"]);
   });
 
   it("excludes a busy (blue) agent even when it has been active", () => {
@@ -50,6 +50,26 @@ describe("attentionQueue membership (#398)", () => {
       sessions: [sess("a")],
       sessionActive: { a: true },
       sessionBusy: { a: true },
+    });
+    expect(q).toHaveLength(0);
+  });
+
+  it("excludes a fresh never-active agent while it is busy (task 410)", () => {
+    const q = attentionQueue({
+      ...emptyInput,
+      sessions: [sess("a")],
+      sessionActive: {},
+      sessionBusy: { a: true },
+    });
+    expect(q).toHaveLength(0);
+  });
+
+  it("excludes a fresh never-active agent once dismissed (task 410)", () => {
+    const q = attentionQueue({
+      ...emptyInput,
+      sessions: [sess("a")],
+      sessionActive: {},
+      dismissed: { a: true },
     });
     expect(q).toHaveLength(0);
   });
@@ -127,6 +147,30 @@ describe("attentionQueue ordering — FIFO oldest idle first (#398)", () => {
       idleSince: { live: 3_000_000 },
     });
     expect(q.map((x) => x.id)).toEqual(["boot", "live"]);
+  });
+
+  it("interleaves fresh (createdAt) and awaiting (idleSince) agents oldest-wait-first (task 410)", () => {
+    // A fresh agent keys off createdAt*1000, an awaiting one off idleSince — so the two
+    // kinds interleave purely by wait time. A fresh agent created just now sorts BEHIND
+    // an older awaiting agent, while a long-ago-created fresh agent sorts AHEAD of a
+    // just-finished awaiting one. (Also re-verifies the seconds→ms createdAt scaling.)
+    const q = attentionQueue({
+      ...emptyInput,
+      sessions: [
+        sess("freshNow", { createdAt: 10_000 }), // no idleSince → key 10_000_000 ms
+        sess("awaitOld", { createdAt: 2_000 }), // idleSince 5_000_000 ms
+        sess("awaitRecent", { createdAt: 3_000 }), // idleSince 9_000_000 ms
+        sess("freshOld", { createdAt: 1_000 }), // no idleSince → key 1_000_000 ms
+      ],
+      sessionActive: { awaitOld: true, awaitRecent: true },
+      idleSince: { awaitOld: 5_000_000, awaitRecent: 9_000_000 },
+    });
+    expect(q.map((x) => x.id)).toEqual([
+      "freshOld",
+      "awaitOld",
+      "awaitRecent",
+      "freshNow",
+    ]);
   });
 
   it("breaks ties by ascending createdAt then id (stable, deterministic)", () => {

@@ -16,6 +16,7 @@ import { useKeyboardNav } from "../../useKeyboardNav";
 import { DETACHED_CANVAS_ID, ownedHere } from "../../windowContext";
 import BigModeModal from "../BigMode/BigModeModal";
 import { applyCanvasLiftEnd } from "../Canvas/canvasDrop";
+import { EditorPickerGate } from "../ModalHost";
 import { computeSessionOwners, sessionIdsInLayout } from "../Canvas/canvasTree";
 import CanvasSurface, { CanvasDragOverlay } from "../Canvas/CanvasSurface";
 import { reconcileTerminals } from "../Terminal/terminalPool";
@@ -69,7 +70,8 @@ function CanvasWindow() {
     void init();
   }, [init]);
 
-  // Warm the deferred panel chunks once idle (#356) — no modals in a detached window.
+  // Warm the deferred panel chunks once idle (#356) — of the top-level modals only
+  // the editor picker exists in a detached window (its own lazy gate below).
   useEffect(() => prefetchDeferredChunks(false), []);
 
   // Spatial panel nav (#76) works here; new-session / view-toggle / canvas-jump
@@ -125,6 +127,9 @@ function CanvasWindow() {
         </div>
       </div>
       <BigModeModal />
+      {/* "Open in editor" first-use/re-pick modal — the agent headers here carry
+          the same ⋯ menu, and the open/choose-editor chords work per window. */}
+      <EditorPickerGate />
       <Toaster />
     </div>
   );

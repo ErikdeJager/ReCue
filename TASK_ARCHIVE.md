@@ -6193,3 +6193,283 @@ on macOS, Windows, and Linux.
 **Dependencies:** Task 403 (the robust-activity-indicator fix). Turning hover-focus on by default
 amplifies the focus-report busy blink, so 403 landed first to keep the default-on experience
 flicker-free.
+
+### 409. [x] Softer Kanban board corners + restore card hover-lift
+
+The markdown **Kanban board** (#141–#151) reads less blocky again: its **columns** and **cards**
+get a modest, board-scoped corner radius (a tasteful middle between the UI v2 square look and the
+old v1 radii), and the card **hover-lift** animation the v2 reskin (task 382) flattened is
+restored — a hovered card smoothly rises ~2px with a soft drop shadow, signalling it's draggable —
+without reverting the global v2 square-panel language anywhere else.
+
+**What shipped** (branch `softer-kanban-corners-hover-lift`, PR
+[#165](https://github.com/ErikdeJager/ReCue/pull/165), merged 2026-07-15 into `dev`) — a single
+CSS-only file, 26 insertions / 6 deletions in
+`src/components/Kanban/KanbanPanel.module.css`:
+
+- **Column corners.** `.column` gains `border-radius: var(--radius-btn)` (6px). The rule already
+  had `overflow: hidden`, so the header top corners and the card-area bottom corners clip cleanly
+  to the rounded box. A comment marks it as Task 409's deliberate, board-scoped exception to the
+  v2 square-panel language (not a full revert).
+- **Card corners.** `.card`'s `border-radius: var(--radius-chip)` (0) → `var(--radius-micro)`
+  (4px) — kept ≤ the column radius so cards read slightly tighter than columns, like the old UI.
+  Because it's on the base `.card`, `.cardPlaceholder` and the in-tree `.cardOverlay` drag ghost
+  inherit the same rounded shape.
+- **Card transition.** The `.card` `transition` list is extended to also animate `transform` and
+  `box-shadow` (alongside `border-color`/`background`), so the rise/settle is smooth.
+- **Hover-lift.** The existing `.card:not(.cardPlaceholder):not(.cardOverlay):hover` rule (which
+  already set `border-color: var(--border-strong); cursor: grab`) gains
+  `transform: translateY(-2px)` + `box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28)` — the removed #234
+  values verbatim. The origin placeholder and floating ghost are excluded (the ghost keeps its own
+  `--shadow-menu`).
+- **Reduced-motion override.** A new `:global(body.reduce-motion) .card…:hover` rule zeroes
+  `transform`/`box-shadow`, because `global.css`'s killswitch only clamps transition *durations* —
+  a static hover transform would otherwise still jump instantly. Under reduced motion only the calm
+  border-strengthen + `grab` cursor cue remains.
+
+No TSX/logic changes (the `.card`/`.column`/`.cardPlaceholder`/`.cardOverlay` class names already
+existed and were applied where needed); no new tokens, no Rust, no test changes.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 409)
+
+- Chose modest radii as a tasteful middle — columns 6px (`--radius-btn`), cards 4px
+  (`--radius-micro`), cards ≤ columns — not the old 7/5px and not v2's 0.
+- **Reused existing on-system radius tokens directly** rather than adding new tokens to
+  `tokens.css` or panel-local custom properties: keeps it token-driven, covers the in-tree drag
+  ghost, and avoids touching the global square-panel tokens (`--radius-control`/`--radius-chip`
+  stay 0, so panels/cards elsewhere stay square).
+- Restored the hover-lift with the #234 values verbatim + the explicit reduced-motion `none`
+  override (required because the global killswitch only clamps durations, not static hover
+  transforms). Kept the literal `rgba` black shadow (no card-hover shadow token exists; the
+  `--shadow-*` floating-chrome tokens are far too heavy for a 2px lift) — renders identically
+  across WebViews.
+- Scoped strictly to the outer column/card shapes + the card hover-lift; left all Kanban
+  input/composer/checkbox/code-block styling square and untouched to avoid overlap with **Task
+  407** (the new-card composer input border/focus, which owns `.composerInput`).
+
+**Cross-platform:** CSS-only, on-system radius tokens + a literal `rgba` shadow; no path/shell/
+native primitives — identical (and theme-correct in dark/light) on macOS, Windows, and Linux.
+
+**Dependencies:** none.
+
+### 411. [x] Clicking a sidebar item in Attention view switches to Overview
+
+While the app is in the **Attention** triage view (#398 — the FIFO queue of idle agents awaiting
+the user), clicking any left-sidebar item (agent / file / diff / filetree / terminal / kanban /
+schedule / recurring, expanded row **or** collapsed-rail dot) now switches the app to **Overview**
+and selects that item there — so the user lands on the thing they clicked instead of staying on the
+Attention queue, which can only surface idle-agent members in its pane. Overview and Canvas sidebar
+clicks keep today's behavior.
+
+**What shipped** (branch `attention-sidebar-click-to-overview`, PR
+[#166](https://github.com/ErikdeJager/ReCue/pull/166), merged 2026-07-15 into `dev`) — 62
+insertions / 2 deletions across two files:
+
+- **`src/store.ts`** — the one behavioral change, made in the shared **`selectItem(item)`** action
+  (the #79 choke point every sidebar row routes through). Its non-canvas branch — which previously
+  just did `set({ selectedId: item.id })` for both Overview and Attention — is now view-aware:
+  when the captured `s.view === "attention"` it `set({ view: "overview", selectedId: item.id })`,
+  else it selects in place. This mirrors the branch's existing Canvas "item not shown here → go to
+  Overview" rule. `s` is captured once at the top, and the earlier #334 filter-clear `set` doesn't
+  mutate `s.view`, so the `attention` read stays correct — meaning an Attention **agent** click
+  still composes with #334 (switch to Overview **and** clear a mismatched `overviewRepoFilter` so
+  the agent is visible on the wall).
+- **`src/store.test.ts`** — four unit tests: Attention agent click → Overview + selected;
+  Attention non-agent (file/diff) click → Overview + selected; Overview click keeps the view
+  (regression guard for the unchanged branch); and the #334 + #411 composition (Attention agent
+  click switches **and** clears the mismatched filter).
+
+No Sidebar.tsx changes were needed — all rows already route through `selectItem`, and the
+repo-header/branch-line/rail-folder clicks already `setView("overview")` themselves.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 411)
+
+- Centralized the switch in the single shared `selectItem` action rather than per-call-site — the
+  cleanest on-pattern spot, mirroring the existing Canvas→Overview "not shown here → Overview" rule.
+- The switch is **unconditional** for any sidebar item click while in Attention (all item kinds),
+  matching the verbatim "clicking on an item" request, not only agents — and it also covers the
+  collapsed-rail agent dots (they route through `selectItem` too).
+- Repo-header title / branch-line / rail-folder clicks are **not** touched — they already call
+  `setView("overview")` + set the Overview filter.
+- Because the rule lives in shared `selectItem`, **global-search** item navigation performed while
+  in Attention also lands in Overview — a consistent, intended side effect (Attention can only
+  display idle queue members), not a regression.
+- Overview and Canvas sidebar-click behavior is left exactly as today (the #79 no-auto-switch rule
+  preserved for those views).
+
+**Cross-platform:** pure frontend store state + tests; no IPC/native/path/shell code — identical on
+macOS, Windows, and Linux.
+
+**Dependencies:** none. (Concurrent Attention tasks 410 — queue membership — and 412 — agent × /
+⌘W — were kept out of scope; any `Attention.tsx` file overlap was avoided since this task edits only
+`store.ts`/`store.test.ts`.)
+
+### 407. [x] Kanban new-card composer input drops the redundant focus ring
+
+The Kanban board's **"+ Add card"** composer textarea no longer shows two concentric colored edges
+at once. It already carries a per-column accent-colored border at rest (`--col-accent`, matching the
+column's header dot), so the app's separate softened-Peach keyboard focus ring layered a redundant
+second edge on top — this drops that ring on the composer input only, leaving the accent border as
+the field's sole, always-present edge, matching how the card **edit** experience reads.
+
+**What shipped** (branch `kanban-composer-focus-ring`, PR
+[#167](https://github.com/ErikdeJager/ReCue/pull/167), merged 2026-07-15 into `dev`) — a single
+CSS-only file, 9 insertions in `src/components/Kanban/KanbanPanel.module.css`:
+
+- A dedicated rule beside the existing `.composerInput` styles:
+  `.composerInput:focus, .composerInput:focus-visible { outline: none; }`. The qualified
+  `:focus-visible` selector (specificity 0,2,0) reliably beats the global `global.css`
+  `:focus-visible` ring (0,1,0) regardless of stylesheet import order — a bare `outline: none` on
+  the base class would tie the global rule's specificity and be order-dependent — and the `:focus`
+  selector also covers any UA default outline on every engine. The `--col-accent` border was left
+  exactly as-is.
+
+No global `:focus-visible` change, no token changes, no TS/Rust — the ring is untouched everywhere
+else in the app.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 407)
+
+- Kept the composer input's existing per-column accent border (`--col-accent`, matching the column
+  dot) rather than switching it to the global `--accent` (Peach) — the edge is already an accent
+  color and the per-column tint is deliberate (#233/#239); the only real change is removing the
+  redundant focus ring.
+- Scoped strictly to the new-card composer input (`.composerInput`); the card-edit textarea
+  (`.cardEditInput`, the user's reference) and the column-rename input (`.columnNameInput`) are
+  left unchanged.
+- Kept the composer border always accent-colored (no separate focused vs unfocused state) and
+  removed the focus ring entirely, accepting the minor a11y trade-off since the composer
+  auto-focuses and the accent border + caret still delineate the field — matching the explicit
+  "no focus" request.
+- Interpreted "text area input fields" (plural) as the single new-card creation textarea per the
+  request body, not a board-wide focus-ring removal.
+
+**Cross-platform:** pure token-driven CSS, no platform branch — renders identically on WKWebView
+(macOS), WebView2/Chromium (Windows), and WebKitGTK (Linux).
+
+**Dependencies:** none. (Task 409 also edited `KanbanPanel.module.css` — card/column corners +
+hover-lift — but never touched `.composerInput`'s focus outline, so the two edits were disjoint
+within the file.)
+
+### 410. [x] Attention queue surfaces started agents until they start working
+
+The **Attention** triage view (#398) is now a control surface for *all* agents that currently need
+the user, not only agents that finished a turn. A freshly **started** agent (gray "never worked
+yet") appears in the queue so the user can drive it, and it drops out the moment it is **actively
+working** (blue/busy). When it finishes and needs input again it re-appears (yellow "awaiting"),
+exactly as before.
+
+**What shipped** (branch `task-410-attention-started-agents`, PR
+[#168](https://github.com/ErikdeJager/ReCue/pull/168), merged 2026-07-15 into `dev`) — 97 insertions
+/ 30 deletions across four files:
+
+- **`src/components/Attention/attentionQueue.ts`** — the pure membership function's predicate is
+  relaxed: the `if (!sessionActive[s.id]) return false` precondition is dropped, so an agent is a
+  member iff it is **not** a recurring child, not exited, not `reconnecting`, **not busy**, and not
+  dismissed — i.e. any non-busy agent, fresh **or** awaiting. `sessionActive` was removed from the
+  destructure (to avoid `no-unused-vars`) but **kept in the `AttentionQueueInput` interface** so
+  the four call sites + tests need no signature change; the `sortKey`
+  (`idleSince[id] ?? createdAt * 1000`) is unchanged — a fresh agent with no idle edge correctly
+  sorts by its spawn time.
+- **`src/components/Attention/Attention.tsx`** — `QueueCard` gains a real `hasBeenActive` prop
+  (passed `sessionActive[id] ?? false` at the `queue.map` call site) replacing the hardcoded
+  always-yellow indicator: a fresh agent shows the gray `--status-idle` dot + a distinct **"NEW"**
+  tag; a settled agent keeps the yellow dot + the **"IDLE"** tag. The header count wording changed
+  from "N idle" to "N waiting" to cover both.
+- **`src/components/Attention/Attention.module.css`** — a `.newTag` chip variant mirroring
+  `.idleTag` but tinted with the gray `--status-idle` token, so the fresh chip reads distinct from
+  the awaiting chip.
+- **`src/components/Attention/attentionQueue.test.ts`** — the "excludes a never-active agent" test
+  flipped to assert inclusion; added coverage for a fresh **busy** agent (excluded), a fresh
+  **dismissed** agent (excluded), and mixed fresh/awaiting FIFO ordering (the `createdAt`
+  seconds→ms fallback interleaves correctly).
+
+No `store.ts` / `useKeyboardNav.ts` logic changes — they call `attentionQueue()` and inherit the
+new membership automatically, so Shift+↑/↓ nav and dismiss / dismiss-all operate over the expanded
+set for free. No backend/Rust change.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 410)
+
+- State→membership mapping: a queue member is any non-busy agent — both fresh gray (never active)
+  and settled yellow (awaiting) — while busy blue (actively working) is excluded. Interpreted
+  "started" = fresh gray and "actively doing something" = busy; removal-on-active is driven by the
+  existing `sessionBusy` flag (no store/`setBusy` change needed).
+- FIFO ordering unchanged: fresh agents (no `idleSince`) sort by `createdAt`, interleaved
+  chronologically with awaiting agents' idle-edge times; a newly started agent goes to the back.
+- Pass the real `hasBeenActive` to each `QueueCard` (gray idle dot + "NEW" vs yellow dot + "IDLE")
+  so a fresh agent doesn't misread as "finished — needs input".
+- Kept `sessionActive` in the `AttentionQueueInput` interface (no longer read for membership) to
+  avoid churn at the 4 call sites + the test — only removed it from the function's destructure.
+- Boot-persisted never-active idle sessions enter the queue after the reconnect window settles
+  (desirable; the existing `reconnecting` exclusion prevents a boot flood). Seeded/scheduled agents
+  surface only once finished (their startup paint reads busy); a possible sub-second fresh flicker
+  before the first busy transition is acceptable and not special-cased.
+
+**Cross-platform:** pure WebView/TS (queue predicate + presentational tweaks + tests); no
+native/`#[cfg]`/path/shell code — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Concurrent Attention tasks 411 — click-to-switch — and 412 — agent × /
+⌘W — touch the same directory but are orthogonal and were kept out of scope here.)
+
+### 408. [x] Branch picker type-to-filter with create-branch fallback
+
+In every in-repo branch picker, the user can now just start typing to filter the branch list (the
+best match auto-highlights, locals before remotes). When the typed text matches **no** existing
+branch, the picker jumps straight to the create-branch option pre-filled with that text and focused,
+so Enter creates a new branch (⌘/Ctrl+Enter as an isolated worktree) instead of forcing the user to
+click "+ add branch" / "Create new branch" and retype the name.
+
+**What shipped** (branch `branch-picker-type-to-filter-create`, PR
+[#169](https://github.com/ErikdeJager/ReCue/pull/169), merged 2026-07-15 into `dev`) — 162
+insertions / 9 deletions across four files:
+
+- **`src/branchFilter.ts`** (new, 41 lines) — a pure helper `matchBranchFilter(query,
+  filteredLocals, filteredRemotes)` returning a `BranchFilterMatch` discriminated union
+  (`{kind:"local"|"remote", value}` / `{kind:"create", name}` / `{kind:"none"}`): the top matching
+  local wins, else the top matching remote, else — when the trimmed query is non-empty — the
+  create-branch fallback carrying the trimmed query as the new name; a blank/whitespace-only query
+  with no matches is `"none"`. Sibling of `paths.ts`, mirroring the `folderNav.ts` precedent.
+- **`src/branchFilter.test.ts`** (new, 53 lines) — vitest coverage: top-local wins, top-remote when
+  no locals, create on non-empty no-match, `"none"` on blank query, whitespace-only → `"none"`, and
+  the query trimmed into the create name.
+- **`src/components/NewSessionModal/NewSessionModal.tsx`** — `onBranchQueryChange` now routes a
+  no-match query through `matchBranchFilter`: on `create` it converts the filter to the create
+  action (`setAddBranchActive(true)`, seeds `newBranchName` with the typed text case-preserved,
+  clears `branchQuery`, clears both selections + the error). The existing focus effect moves the
+  caret into the pre-filled name input, and the existing `onNewBranchKeyDown`/submit/worktree/
+  defer-mode wiring handles Enter, ⌘⏎, and schedule/recurring advance for free — no new key
+  handlers. Guarded by `!fetchingRemotes` so a query matching a still-fetching remote doesn't jump
+  to create prematurely.
+- **`src/components/Sidebar/Sidebar.tsx`** — the "Checkout branch…" picker's (#266) filter
+  `onChange` gets the same behavior: a non-empty no-match query (and `!checkoutLoading`) opens the
+  create input pre-filled + focused (its `autoFocus`) and clears the filter; its existing Enter
+  handler creates + checks out off the folder's current branch. Otherwise `setCheckoutFilter(value)`
+  as before.
+
+Backend untouched — reuses `validate_new_branch`, `createBranchSession`/`createBranchWorktreeSession`,
+`createFolderBranch`, `list_branches`. The DiffInspector compare-branches selector was left alone
+(create semantics are meaningless there); the `>4`-branch filter-visibility thresholds are unchanged.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 408)
+
+- In-scope pickers: the NewSessionModal branch step (new-session + schedule/recurring +
+  per-repo/worktree/remote) and the Sidebar "Checkout branch…" picker. Out of scope: the
+  DiffInspector compare (base/target) selector.
+- Matching stays case-insensitive substring, auto-highlighting the top match (locals before
+  remotes) — not switched to prefix matching.
+- No-match trigger fires the moment a trimmed non-empty query matches zero local **and** zero
+  remote branches — no minimum query length. On jump-to-create: seed the create-name with the typed
+  text (raw case), clear the filter, focus the create-name input; base defaults to the current
+  branch. Enter creates (⌘/Ctrl+Enter = worktree in the modal); schedule/recurring records the
+  new-branch intent; the checkout picker's Enter creates + checks out.
+- Kept the existing `>4`-branch filter-visibility thresholds (did not make the filter always
+  visible); the explicit "+ add branch" / "Create new branch" buttons remain for small repos.
+- Suppress the auto-jump-to-create while remotes are still fetching (`fetchingRemotes`), so a query
+  matching a not-yet-loaded remote doesn't prematurely convert.
+- Extracted the tested pure helper `matchBranchFilter` (mirroring the `folderNav.ts` + test
+  precedent), reused by both call sites.
+
+**Cross-platform:** no path/shell/OS assumptions; the only platform-sensitive bit (⌘ vs Ctrl) is
+already handled by the reused `metaKey || ctrlKey` handlers + `kbdHint` labels — identical on macOS,
+Windows, and Linux.
+
+**Dependencies:** none.

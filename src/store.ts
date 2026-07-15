@@ -86,6 +86,7 @@ import type {
   CloningRepo,
   DiffLineCounts,
   DiffSeenMap,
+  EditorInfo,
   FileStatusCode,
   OverviewPanel,
   RecurringSession,
@@ -616,6 +617,27 @@ function isSessionError(
     "kind" in value &&
     "message" in value
   );
+}
+
+/** Launch `editor` at `path` ("Open in editor"), toasting failures. A
+ * `BinaryNotFound` — the chosen editor was uninstalled / its stale path moved —
+ * reopens the picker so the user can re-choose instead of dead-ending on a toast. */
+async function launchEditor(
+  api: Pick<AppState, "pushToast" | "openEditorPicker">,
+  path: string,
+  editor: string,
+): Promise<void> {
+  try {
+    await ipc.openInEditor(path, editor);
+  } catch (err) {
+    api.pushToast(
+      isSessionError(err) ? err.message : "Could not open the editor",
+      "error",
+    );
+    if (isSessionError(err) && err.kind === "BinaryNotFound") {
+      api.openEditorPicker(path);
+    }
+  }
 }
 
 /** True if semver `to` is strictly higher than `from` — a numeric component-wise
@@ -1218,6 +1240,12 @@ export const DEFAULT_SETTINGS: Settings = {
   // once (bump an explicit legacy 1.2 → 1.0), then set true so it never re-triggers. Same
   // rationale as `onboarded: false`.
   terminalLineHeightMigrated: false,
+  // "Open in editor": no editor chosen yet — the first use opens the picker modal
+  // (unchecking its "Remember my choice" keeps asking). Older blobs back-fill null.
+  preferredEditor: null,
+  // Custom-editor launch command (used when `preferredEditor === "custom"`); an argv
+  // with `{path}` substitution, like `customAgentCommand`. Empty until set.
+  customEditorCommand: "",
 };
 
 /** Merge a persisted (possibly partial / null) settings blob over the defaults so
@@ -1770,6 +1798,16 @@ export interface AppState {
   /** The installed agents offered in the onboarding picker (presence-checked via
    * `agent_info`); the modal renders these as the pickable rows. */
   onboardingChoices: AgentInfo[];
+  /** Whether the "Open in editor" picker modal is open — first use (no
+   * `preferredEditor` yet), the choose-editor chord (⌘⇧O), or a `BinaryNotFound`
+   * self-heal re-pick. Transient, per window (the modal also renders in detached
+   * canvas windows, whose agent headers carry the same ⋯ menu). */
+  editorPickerOpen: boolean;
+  /** The folder the picker opens once an editor is chosen. */
+  editorPickerPath: string | null;
+  /** Detection results backing the picker rows — `null` while the `detect_editors`
+   * sweep is in flight (the modal shows "Detecting editors…"). */
+  editorChoices: EditorInfo[] | null;
   /** The section the Settings modal should open at (#191): set when a caller
    * deep-links (e.g. the updater indicator → "updates"); `null` = the default
    * (Terminal). The modal seeds its initial section from this and it's cleared on
@@ -2067,6 +2105,24 @@ export interface AppState {
   /** Picker dismiss (Escape / scrim): keep the current default but mark onboarding
    * done so it doesn't re-prompt. */
   dismissOnboarding: () => void;
+  /** "Open in editor" (the ⌘O action + every menu item): launch the preferred
+   * editor at the folder `path`. No preference yet → opens the picker modal
+   * instead. Failures toast; a `BinaryNotFound` (uninstalled / stale choice)
+   * reopens the picker so the user can re-choose (self-heal). */
+  openInEditor: (path: string) => Promise<void>;
+  /** Open the editor picker modal for `path` (also the ⌘⇧O re-pick) and kick a
+   * fresh `detect_editors` sweep — results land in `editorChoices`. */
+  openEditorPicker: (path: string) => void;
+  /** Picker confirm: optionally persist the choice (`remember`; a custom command
+   * always persists — the backend reads it off the settings blob at launch), then
+   * launch the pending `editorPickerPath`. */
+  chooseEditor: (
+    id: string,
+    remember: boolean,
+    customCommand?: string,
+  ) => Promise<void>;
+  /** Picker dismiss (Escape / scrim): close without launching or persisting. */
+  closeEditorPicker: () => void;
   /** Add / close / reorder a repo's extra Overview panels (optimistic + persisted, #38).
    * Returns the new panel's id on add, the **existing** panel's id on a dedup hit
    * (#175 — so a caller can select/focus it), or `null` on a real failure (e.g. a
@@ -2785,6 +2841,9 @@ export const useStore = create<AppState>()((set, get) => ({
   settingsOpen: false,
   onboardingOpen: false,
   onboardingChoices: [],
+  editorPickerOpen: false,
+  editorPickerPath: null,
+  editorChoices: null,
   settingsSection: null,
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
   sidebarCollapsed: false,
@@ -4426,6 +4485,65 @@ export const useStore = create<AppState>()((set, get) => ({
     void get().saveSettings({ ...get().settings, onboarded: true });
   },
 
+  openInEditor: async (path) => {
+    const preferred = get().settings.preferredEditor;
+    if (!preferred) {
+      // No editor chosen yet — ask (the picker launches once the user picks, and
+      // "Remember my choice" decides whether this keeps happening).
+      get().openEditorPicker(path);
+      return;
+    }
+    await launchEditor(get(), path, preferred);
+  },
+
+  openEditorPicker: (path) => {
+    set({
+      editorPickerOpen: true,
+      editorPickerPath: path,
+      editorChoices: null,
+    });
+    // Re-detect on every open (installs change between opens). Fail-open to the
+    // empty list — outside Tauri / on a probe error the picker still offers the
+    // custom command. Guarded on the picker still being open so a late result
+    // can't repopulate a dismissed modal's state.
+    void ipc
+      .detectEditors()
+      .then((choices) => {
+        if (get().editorPickerOpen) set({ editorChoices: choices });
+      })
+      .catch(() => {
+        if (get().editorPickerOpen) set({ editorChoices: [] });
+      });
+  },
+
+  chooseEditor: async (id, remember, customCommand) => {
+    const path = get().editorPickerPath;
+    get().closeEditorPicker();
+    const trimmedCustom = customCommand?.trim();
+    if (remember || trimmedCustom !== undefined) {
+      // The app's first settings write reachable from a DETACHED canvas window
+      // (#84): settings are main-authoritative and never broadcast cross-window,
+      // so this window's in-store copy may be stale. Re-read the persisted blob
+      // and merge before writing, so remembering an editor can never resurrect
+      // stale values for unrelated keys. (The custom command persists even
+      // without Remember — the backend reads it off the blob at launch time.)
+      const raw = await ipc.getSettings().catch(() => null);
+      const base = mergeSettings(raw ?? get().settings);
+      await get().saveSettings({
+        ...base,
+        ...(remember ? { preferredEditor: id } : {}),
+        ...(trimmedCustom !== undefined
+          ? { customEditorCommand: trimmedCustom }
+          : {}),
+      });
+    }
+    if (path) await launchEditor(get(), path, id);
+  },
+
+  closeEditorPicker: () => {
+    set({ editorPickerOpen: false, editorPickerPath: null });
+  },
+
   // Extra Overview panels (#38) — the single per-repo item source (#59): each is
   // also a sidebar row. Dedups so callers don't have to (one diff per repo; one
   // markdown panel per file); updates optimistically and persists the list.
@@ -4839,7 +4957,29 @@ export const useStore = create<AppState>()((set, get) => ({
         }
       }
     }
-    // Attention view / nothing focused: deliberate no-op.
+    // 4. Attention: ⌘W REMOVES the focused agent (kill + forget), exactly like the
+    // right-pane header ×. This is the deliberate exception to the "never destructive"
+    // rule above — in Attention the focused item is always an agent, and removing it is
+    // the view's primary close affordance (⌘⏎ dismisses non-destructively). Resolve the
+    // effective active id the same way the view does: the selected agent when it's a
+    // current queue member, else the top of the queue. Selection advances on its own —
+    // removeSession → dropSession recomputes the queue and the view re-selects the top.
+    if (s.view === "attention") {
+      const queue = attentionQueue({
+        sessions: s.sessions,
+        sessionBusy: s.sessionBusy,
+        sessionActive: s.sessionActive,
+        dismissed: s.dismissedAttention,
+        idleSince: s.sessionIdleSince,
+        recurringChildIds: ownedChildSessionIds(s.recurrings),
+      });
+      const activeId = queue.some((q) => q.id === s.selectedId)
+        ? s.selectedId
+        : (queue[0]?.id ?? null);
+      if (activeId) void s.removeSession(activeId);
+      return;
+    }
+    // Nothing focused: deliberate no-op.
   },
 
   // Canvas templates (#117): the editor builds a draft layout of inert blocks with
@@ -5413,8 +5553,16 @@ export const useStore = create<AppState>()((set, get) => ({
     }
 
     if (s.view !== "canvas") {
-      // Overview (or any non-canvas): select; Overview scrolls its column in.
-      set({ selectedId: item.id });
+      // Overview: select; Overview scrolls its column in. Attention (#411): a
+      // sidebar click is intent to go work on that item, so switch to Overview and
+      // select it there — the Attention queue can only surface idle-agent members in
+      // its pane, whereas Overview renders a column for every sidebar item (#174).
+      // Mirrors the Canvas branch's existing "not shown here → go to Overview" rule.
+      set(
+        s.view === "attention"
+          ? { view: "overview", selectedId: item.id }
+          : { selectedId: item.id },
+      );
       return;
     }
     // Canvas (#79/#207): jump to the item's panel if it's in the active tab;

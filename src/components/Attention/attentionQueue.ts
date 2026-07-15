@@ -8,7 +8,10 @@ export interface AttentionQueueInput {
   sessions: readonly SessionView[];
   /** Sessions currently working (#42) — busy agents are never in the queue. */
   sessionBusy: Record<string, boolean>;
-  /** Sessions that have been active at least once (#112) — the queue's precondition. */
+  /** Sessions that have been active at least once (#112). **No longer a membership
+   * precondition** (task 410 — a fresh never-worked agent is now surfaced too);
+   * retained on the input for API stability so the four call sites keep one signature.
+   * The view reads it separately to pick the gray "NEW" vs yellow "IDLE" dot/tag. */
   sessionActive: Record<string, boolean>;
   /** Sessions the user has acknowledged (#398) — excluded until they go busy again. */
   dismissed: Record<string, boolean>;
@@ -20,32 +23,29 @@ export interface AttentionQueueInput {
 }
 
 /**
- * The Attention queue (#398): the agents that have gone idle and likely need the user
- * — **awaiting** (active-but-idle, #112) — in true **FIFO** order (oldest idle first).
+ * The Attention queue (#398, expanded by task 410): every agent that currently needs
+ * the user — whether it just **started** and hasn't worked yet (a fresh gray "NEW"
+ * agent) OR it finished a turn and is **awaiting** input (active-but-idle "IDLE", #112)
+ * — in true **FIFO** order (oldest wait first).
  *
- * An agent is a member **iff** it has been active (`sessionActive`) AND is not busy
- * (`!sessionBusy`) AND has not been dismissed since its last idle edge (`!dismissed`),
- * excluding recurring-owned children, exited sessions (`exitedCode != null`), and
- * boot-reconnecting ones. The sort key is the busy→idle edge time `idleSince[id]`,
- * falling back to the session's `createdAt` (unix **seconds**, scaled to ms) for a
- * boot-persisted-awaiting agent with no recorded transition; ties break by ascending
- * `createdAt` then `id` so the order is stable and deterministic.
+ * An agent is a member **iff** it is not busy (`!sessionBusy`) AND has not been
+ * dismissed (`!dismissed`), excluding recurring-owned children, exited sessions
+ * (`exitedCode != null`), and boot-reconnecting ones. Being active is **no longer**
+ * required (task 410) — a freshly spawned idle agent qualifies; it simply drops out the
+ * moment it goes busy and re-appears when it settles again. The sort key is the
+ * busy→idle edge time `idleSince[id]`, falling back to the session's `createdAt` (unix
+ * **seconds**, scaled to ms) for a fresh never-worked agent or a boot-persisted-awaiting
+ * one with no recorded transition; ties break by ascending `createdAt` then `id` so the
+ * order is stable and deterministic.
  */
 export function attentionQueue(input: AttentionQueueInput): SessionView[] {
-  const {
-    sessions,
-    sessionBusy,
-    sessionActive,
-    dismissed,
-    idleSince,
-    recurringChildIds,
-  } = input;
+  const { sessions, sessionBusy, dismissed, idleSince, recurringChildIds } =
+    input;
 
   const members = sessions.filter((s) => {
     if (recurringChildIds.has(s.id)) return false;
     if (s.exitedCode != null) return false;
     if (s.reconnecting) return false;
-    if (!sessionActive[s.id]) return false;
     if (sessionBusy[s.id]) return false;
     if (dismissed[s.id]) return false;
     return true;

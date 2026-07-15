@@ -33,7 +33,9 @@ export type KeybindActionId =
   | "schedule-session"
   | "global-search"
   | "toggle-sidebar"
-  | "open-settings";
+  | "open-settings"
+  | "open-in-editor"
+  | "choose-editor";
 
 export interface KeybindAction {
   id: KeybindActionId;
@@ -120,6 +122,18 @@ export const KEYBIND_ACTIONS: readonly KeybindAction[] = [
     label: "Open Settings",
     group: "App",
     defaultChord: "mod+,",
+  },
+  {
+    id: "open-in-editor",
+    label: "Open the selected item's folder in your editor",
+    group: "Editor",
+    defaultChord: "mod+o",
+  },
+  {
+    id: "choose-editor",
+    label: "Choose the editor “Open in editor” uses",
+    group: "Editor",
+    defaultChord: "mod+shift+o",
   },
 ];
 

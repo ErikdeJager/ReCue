@@ -8,6 +8,7 @@ import {
 import {
   Bot,
   ChevronDown,
+  Code,
   Copy,
   Database,
   Download,
@@ -30,6 +31,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { agentCaps, agentIsUntested, SETTINGS_AGENTS } from "../../agents";
+import { EDITORS } from "../../editors";
 import * as ipc from "../../ipc";
 import { ensureNotificationPermission } from "../../notify";
 import {
@@ -60,6 +62,7 @@ type Section =
   | "appearance"
   | "rendering"
   | "behavior"
+  | "editor"
   | "sessions"
   | "kanban"
   | "updates"
@@ -136,6 +139,11 @@ const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
     id: "behavior",
     label: "Behavior",
     icon: <MousePointerClick size={15} strokeWidth={1.5} />,
+  },
+  {
+    id: "editor",
+    label: "Editor",
+    icon: <Code size={15} strokeWidth={1.5} />,
   },
   {
     id: "sessions",
@@ -234,6 +242,31 @@ function SettingsModal() {
   const [report, setReport] = useState<RendererReport | null>(null);
   const [termInfo, setTermInfo] = useState<TerminalRendererInfo | null>(null);
 
+  // Which editors the "Open in editor" detection found (ids), fetched once on the
+  // Editor section's first visit — it only annotates the select ("— detected"), so
+  // every catalog option renders immediately and a failure just drops the suffix.
+  const [detectedEditors, setDetectedEditors] = useState<Set<string> | null>(
+    null,
+  );
+  useEffect(() => {
+    if (section !== "editor" || detectedEditors !== null) return;
+    let cancelled = false;
+    void ipc
+      .detectEditors()
+      .then((infos) => {
+        if (cancelled) return;
+        setDetectedEditors(
+          new Set(infos.filter((i) => i.found).map((i) => i.id)),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setDetectedEditors(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section, detectedEditors]);
+
   const dialogRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
 
@@ -289,7 +322,7 @@ function SettingsModal() {
     }
     if (event.key !== "Tab" || !dialogRef.current) return;
     const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
     );
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -825,6 +858,75 @@ function SettingsModal() {
                   </p>
                 </div>
               </>
+            )}
+
+            {section === "editor" && (
+              <div className={styles.field}>
+                <span className={styles.fieldLabel}>Open in editor</span>
+                <select
+                  className={styles.editorSelect}
+                  value={draft.preferredEditor ?? ""}
+                  onChange={(e) =>
+                    update(
+                      "preferredEditor",
+                      e.currentTarget.value === ""
+                        ? null
+                        : e.currentTarget.value,
+                    )
+                  }
+                  aria-label="Preferred editor"
+                >
+                  <option value="">Ask every time</option>
+                  {EDITORS.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.label}
+                      {detectedEditors?.has(e.id) ? " — detected" : ""}
+                    </option>
+                  ))}
+                  <option value="custom">Custom command…</option>
+                </select>
+                <span className={styles.fieldHelp}>
+                  The editor {"“Open in editor”"} launches — from the agent{" "}
+                  {"⋯"} menu, a folder's right-click menu, or{" "}
+                  {chordLabel(
+                    chordForAction("open-in-editor", draft.keybinds),
+                    platform,
+                  ) || "its shortcut"}
+                  . {"“Ask every time”"} opens the picker on each use.
+                </span>
+                {draft.preferredEditor === "custom" && (
+                  <>
+                    <input
+                      type="text"
+                      className={styles.commandInput}
+                      value={draft.customEditorCommand}
+                      onChange={(e) =>
+                        update("customEditorCommand", e.currentTarget.value)
+                      }
+                      placeholder="alacritty -e nvim {path}"
+                      spellCheck={false}
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      aria-label="Custom editor command"
+                    />
+                    <span className={styles.fieldHelp}>
+                      A program and its arguments, as you'd type it in a
+                      terminal (split on spaces; quote to group) — not a shell
+                      line. Every {"{path}"} is replaced with the folder;
+                      without it the folder is appended as the last argument.
+                      Terminal editors go through their emulator, e.g.{" "}
+                      <code>alacritty -e nvim {"{path}"}</code>.
+                    </span>
+                    {draft.customEditorCommand.trim() === "" && (
+                      <span className={styles.fieldWarn}>
+                        <TriangleAlert size={13} strokeWidth={2} aria-hidden />
+                        Enter a command — opening a folder with none set will
+                        fail.
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
             )}
 
             {section === "sessions" && (

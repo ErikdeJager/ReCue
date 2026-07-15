@@ -154,6 +154,25 @@
   border-color: var(--accent);
 }
 
+/* "Open in editor" preferred-editor select — the commandInput surface on a native
+   <select> (the catalog is ~19 options, past what a segmented control can hold). */
+.editorSelect {
+  max-width: 280px;
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.editorSelect:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* Shared Settings caution style: the untested-agent caution under the
    coding-agent selector, and the Appearance theme recommendation (#396). */
 .fieldWarn {
