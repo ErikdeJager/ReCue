@@ -86,24 +86,30 @@
   background: var(--border-hairline);
 }
 
-/* Destructive item — red text with a red-tinted hover. The tints are decorative,
-   so no plain-color fallback declaration is needed (color-mix ships everywhere). */
+/* Destructive item — red text with a red-tinted hover. Every color-mix fill declares a
+   plain-color fallback first (the cross-platform rule), mirroring modal.css's
+   .modal-btn-danger: on an engine without color-mix (older WebKitGTK, the Ubuntu-22.04
+   floor) the red tint still shows rather than vanishing to transparent. */
 .menu-item-danger {
   color: var(--status-error);
 }
 
 .menu-item-danger:hover {
+  background: var(--status-error-dim); /* plain fallback */
   background: color-mix(in srgb, var(--status-error) 12%, transparent);
 }
 
-/* Armed inline confirm (#103/#293) — a red fill makes the danger unmistakable. */
+/* Armed inline confirm (#103/#293) — a red fill makes the danger unmistakable, so its
+   fallback matters most (the confirm affordance must never silently disappear). */
 .menu-item-confirm {
+  background: var(--status-error-dim); /* plain fallback */
   background: color-mix(in srgb, var(--status-error) 14%, transparent);
   color: var(--status-error);
   font-weight: 500;
 }
 
 .menu-item-confirm:hover {
+  background: var(--status-error-dim); /* plain fallback */
   background: color-mix(in srgb, var(--status-error) 22%, transparent);
 }
 

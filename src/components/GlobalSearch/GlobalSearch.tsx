@@ -500,11 +500,37 @@ function GlobalSearch() {
         event.preventDefault();
         void activate(r);
       }
-    } else if (event.key === "Escape") {
+    }
+    // Escape (peel filter → close) and Tab (focus-trap) are handled at the dialog level
+    // in `onDialogKeyDown`, so they work regardless of which descendant has focus.
+  };
+
+  // Dialog-level keys mirror the sibling modals (CreatePanelModal / CloneRepoModal):
+  // Escape closes — peeling an active folder filter first, a second Escape closes the
+  // modal — and Tab is trapped inside. Both work no matter which descendant (the input,
+  // a filter chip, or a result row) currently has focus, so tabbing off the input can't
+  // leave a still-open, scrim-blocking modal that Escape no longer dismisses.
+  const onDialogKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
       event.preventDefault();
-      // Peel off an active folder filter first; a second Escape closes the modal.
       if (filterRepo) setFilterRepo(null);
       else close();
+      return;
+    }
+    if (event.key === "Tab" && dialogRef.current) {
+      const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
   };
 
@@ -521,6 +547,7 @@ function GlobalSearch() {
         aria-modal="true"
         aria-label="Search everything"
         onClick={(event) => event.stopPropagation()}
+        onKeyDown={onDialogKeyDown}
       >
         <div className={styles.searchRow}>
           <Search size={16} strokeWidth={1.5} className={styles.searchIcon} />
