@@ -8,6 +8,7 @@ mod agents;
 mod boot;
 mod child_env;
 mod commands;
+mod container;
 mod early_settings;
 mod files;
 mod git;
@@ -276,7 +277,23 @@ pub fn run() {
             // claude projects dir (#355 — see `boot`). Best-effort: failures (e.g.
             // claude missing) leave the record in place for the UI to show (#30/#63).
             let resume = app.handle().clone();
-            thread::spawn(move || boot::resume_persisted_sessions(resume));
+            thread::spawn(move || {
+                // Boot reap for dev-container sessions: kill containers a crashed
+                // previous run left behind — strictly BEFORE boot resume spawns
+                // replacements under the same `recue.session` labels. Gated on a
+                // container record actually existing, so an install that never
+                // containerized (or whose docker daemon is stopped) never pays a
+                // `docker ps` on boot.
+                if resume
+                    .state::<Store>()
+                    .sessions()
+                    .iter()
+                    .any(|s| s.container_image.is_some())
+                {
+                    container::kill_all_recue_containers();
+                }
+                boot::resume_persisted_sessions(resume)
+            });
 
             // Scheduled sessions (#93): a poll loop fires due schedules into live
             // agents. Polling (vs per-schedule timers) handles create/update/cancel
@@ -398,6 +415,8 @@ pub fn run() {
             commands::app_version,
             commands::claude_version,
             commands::agent_info,
+            commands::container_runtime_status,
+            commands::ensure_container_image,
             commands::platform,
             commands::install_kind,
             commands::windows_build,
@@ -410,7 +429,19 @@ pub fn run() {
             // Clean shutdown (#31): kill every child PTY when the app exits so no
             // orphan `claude` processes are left behind.
             if let tauri::RunEvent::Exit = event {
+                // Dev-container sweep: a PTY kill only reaches the docker *client*,
+                // so the containers themselves are killed via the docker CLI (by
+                // label), in parallel with kill_all — started FIRST so its
+                // `docker ps` round-trip overlaps kill_all's unix grace sleep. Safe
+                // w.r.t. the `silent` semantics: kill_all sets every session's
+                // silent flag in its first loop (microseconds) before any docker
+                // kill can land an exit. Bounded wait; resolves instantly when no
+                // container session ever ran (and the boot reap catches stragglers).
+                let sweep = container::spawn_kill_all_sweep();
                 handle.state::<SessionManager>().kill_all();
+                let _ = sweep.recv_timeout(std::time::Duration::from_millis(
+                    container::CONTAINER_SWEEP_BOUND_MS,
+                ));
             }
         });
 }

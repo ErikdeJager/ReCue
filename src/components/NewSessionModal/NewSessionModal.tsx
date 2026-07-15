@@ -12,11 +12,14 @@ import {
 
 import { noAutoCapitalize } from "../../inputProps";
 import {
+  containerRuntimeStatus,
+  ensureContainerImage,
   fetchRemotes,
   listBranches,
   listSkills,
   pickDirectory,
 } from "../../ipc";
+import { chordLabel, CONTAINER_TOGGLE_CHORD, eventChord } from "../../keybinds";
 import { repoName } from "../../paths";
 import { kbdHint } from "../../platform";
 import { useStore } from "../../store";
@@ -27,8 +30,14 @@ import {
   parseWhen,
   SCHEDULE_TIME_HINT,
 } from "../../time";
-import type { BranchList, SkillInfo } from "../../types";
+import type { BranchList, DockerStatus, SkillInfo } from "../../types";
+import Checkbox from "../Checkbox/Checkbox";
 import SkillAutocomplete from "../SkillAutocomplete/SkillAutocomplete";
+import {
+  containerToggleState,
+  DOCKER_RECHECK_MS,
+} from "./containerAvailability";
+import ContainerInfoPopover from "./ContainerInfoPopover";
 import { moveFolderHighlight } from "./folderNav";
 import styles from "./NewSessionModal.module.css";
 
@@ -131,6 +140,16 @@ function NewSessionModal() {
   // The "Choose folder" picker is keyboard-highlighted (#123) — a virtual option
   // after the recents (ArrowDown past the last recent; Enter opens it).
   const [pickerActive, setPickerActive] = useState(false);
+  // Dev-container opt-in: spawn the agent inside a docker container (the branch
+  // step's toggle / the ⌘⇧C chord). Immediate sessions only — the defer modes
+  // (schedule/recurring) don't offer it. Reset on every open.
+  const [useContainer, setUseContainer] = useState(false);
+  // The probed docker runtime state gating the toggle: "absent" hides the row,
+  // "stopped" disables it with a start-Docker hint, "running" enables it.
+  // "unknown" (pre-probe) renders nothing — no flash for docker-less installs.
+  const [dockerStatus, setDockerStatus] = useState<DockerStatus | "unknown">(
+    "unknown",
+  );
   // "+ add branch" (#124): the create-a-new-branch option below the branch list.
   // When active, an inline form (name + base) shows; Enter creates + starts, ⌘⏎
   // creates as a worktree. New-session (immediate) path only — schedule mode is #125.
@@ -180,6 +199,8 @@ function NewSessionModal() {
     setIntervalAmount("1");
     setIntervalUnit("hour");
     setPickerActive(false);
+    setUseContainer(false);
+    setDockerStatus("unknown");
     setAddBranchActive(false);
     setNewBranchName("");
     setBranchError(null);
@@ -385,6 +406,37 @@ function NewSessionModal() {
     };
   }, [open, deferMode, cwd]);
 
+  // Probe docker whenever the branch step shows in immediate mode — the container
+  // toggle renders only from a real answer ("absent" ⇒ no row at all, "stopped" ⇒
+  // disabled + start-Docker hint, "running" ⇒ usable). While stopped, re-probe on a
+  // slow tick so starting Docker enables the toggle live, without reopening the
+  // modal; a flip away from "running" also clears a stale opt-in.
+  useEffect(() => {
+    if (!open || step !== "branch" || deferMode) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const probe = () => {
+      containerRuntimeStatus()
+        .then((status) => {
+          if (cancelled) return;
+          setDockerStatus(status);
+          if (status !== "running") setUseContainer(false);
+          if (status === "stopped") {
+            timer = window.setTimeout(probe, DOCKER_RECHECK_MS);
+          }
+        })
+        .catch(() => {
+          // Backend unreachable (non-Tauri) — treat as no docker: row hidden.
+          if (!cancelled) setDockerStatus("absent");
+        });
+    };
+    probe();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [open, step, deferMode]);
+
   // Escape closes the popover.
   useEffect(() => {
     if (!open) return;
@@ -529,6 +581,17 @@ function NewSessionModal() {
     }
   };
 
+  // Toggle the dev-container opt-in (checkbox + the ⌘⇧C chord). Switching it ON
+  // prefetches the default docker image in the background, so a first-ever
+  // container spawn overlaps the one-time build with the user finishing the modal.
+  const toggleContainer = () => {
+    setUseContainer((v) => {
+      const next = !v;
+      if (next) void ensureContainerImage().catch(() => {});
+      return next;
+    });
+  };
+
   const create = async () => {
     // #263: no-op while the branch step is still loading its list (no selection yet).
     if (!cwd || !canCreate || branchesLoading) return;
@@ -539,6 +602,7 @@ function NewSessionModal() {
       cwd,
       undefined,
       willCheckout ? (selectedBranch ?? undefined) : undefined,
+      useContainer,
     );
     if (ok) close();
     else setBusy(false); // stay open so the error (e.g. dirty tree) can be fixed
@@ -549,7 +613,7 @@ function NewSessionModal() {
   const createWorktree = async () => {
     if (!cwd || busy || !selectedBranch) return;
     setBusy(true);
-    const ok = await spawnWorktreeSession(cwd, selectedBranch);
+    const ok = await spawnWorktreeSession(cwd, selectedBranch, useContainer);
     if (ok) close();
     else setBusy(false);
   };
@@ -566,7 +630,12 @@ function NewSessionModal() {
     }
     setBusy(true);
     setBranchError(null);
-    const result = await createBranchSession(cwd, name, newBranchBase);
+    const result = await createBranchSession(
+      cwd,
+      name,
+      newBranchBase,
+      useContainer,
+    );
     if (result === true) close();
     else {
       setBranchError(result);
@@ -585,7 +654,12 @@ function NewSessionModal() {
     }
     setBusy(true);
     setBranchError(null);
-    const result = await createBranchWorktreeSession(cwd, name, newBranchBase);
+    const result = await createBranchWorktreeSession(
+      cwd,
+      name,
+      newBranchBase,
+      useContainer,
+    );
     if (result === true) close();
     else {
       setBranchError(result);
@@ -606,6 +680,7 @@ function NewSessionModal() {
       cwd,
       remoteShortName(selectedRemote),
       selectedRemote,
+      useContainer,
     );
     if (result === true) close();
     else {
@@ -625,6 +700,7 @@ function NewSessionModal() {
       cwd,
       remoteShortName(selectedRemote),
       selectedRemote,
+      useContainer,
     );
     if (result === true) close();
     else {
@@ -957,6 +1033,22 @@ function NewSessionModal() {
       event.preventDefault();
       if (step === "recurring") void submitRecurring(true);
       else void submitSchedule(true);
+      return;
+    }
+    // ⌘⇧C / Ctrl+Shift+C toggles "Run in dev container" on the branch step —
+    // matched with the platform-resolved `eventChord` (physical `e.code`, so the
+    // chord survives non-QWERTY layouts) against the reserved fixed chord. Form-
+    // level so it fires from any branch-step field; defer modes don't offer it,
+    // and the chord is inert unless docker is actually usable (same gate as the
+    // checkbox — `containerToggleState`).
+    if (
+      step === "branch" &&
+      !deferMode &&
+      containerToggleState(dockerStatus) === "ready" &&
+      eventChord(event, platform) === CONTAINER_TOGGLE_CHORD
+    ) {
+      event.preventDefault();
+      toggleContainer();
       return;
     }
     if (event.key !== "Tab" || !formRef.current) return;
@@ -1365,6 +1457,48 @@ function NewSessionModal() {
                   </span>
                 </div>
               )}
+
+            {/* Dev-container opt-in: run the agent inside a docker container. The
+                info "i" states what it can/cannot do (no git credentials — commit
+                works, push doesn't). Immediate sessions only (defer modes skip it);
+                works with every start variant, including Worktree. The row renders
+                only when docker is installed ("hidden" otherwise); with the daemon
+                stopped it disables and tells the user to start Docker. */}
+            {!deferMode &&
+              containerToggleState(dockerStatus) !== "hidden" &&
+              (() => {
+                const blocked = containerToggleState(dockerStatus) !== "ready";
+                return (
+                  <div className={styles.containerRow}>
+                    <Checkbox
+                      checked={useContainer}
+                      onChange={() => toggleContainer()}
+                      disabled={busy || blocked}
+                      label={
+                        <>
+                          Run in dev container{" "}
+                          {!blocked && (
+                            <kbd className={styles.btnKbd}>
+                              {chordLabel(CONTAINER_TOGGLE_CHORD, platform)}
+                            </kbd>
+                          )}
+                        </>
+                      }
+                    />
+                    <ContainerInfoPopover />
+                    {blocked && (
+                      <span className={styles.containerHint} role="status">
+                        <AlertTriangle
+                          size={12}
+                          strokeWidth={1.5}
+                          aria-hidden
+                        />
+                        Docker isn’t running — start it to enable dev containers
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
 
             <div className={styles.actions}>
               <button type="button" className={styles.cancel} onClick={close}>

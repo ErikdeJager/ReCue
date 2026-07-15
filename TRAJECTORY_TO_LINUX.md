@@ -1684,3 +1684,26 @@ DOM/WebGL renderer override).
 - [ ] **JetBrains Mono UI rendering under fontconfig.** The bundled woff2 wins over any
       locally-installed JetBrains Mono variant; hinting/antialiasing keeps the 10–12px
       chrome type legible on a 1× (non-HiDPI) display.
+
+## 2026-07-15 — Dev-container agent sessions (docker-wrapped claude)
+
+The dev-container feature (New Session modal toggle) inherits the unix arms almost
+everywhere; the Linux-specific piece is **`--user uid:gid`**: native docker runs the
+container as root by default, which would leave root-owned files in the bind-mounted
+worktree (breaking host-side edits + `git worktree remove`), so the launch composer fills
+`ContainerLaunch.user` from `libc::getuid()/getgid()` on Linux only (macOS/Windows Docker
+Desktop map ownership themselves; the cfg is widened with `, test)` so other hosts still
+type-check it). Real-box checks:
+
+- `--user` ownership: files the agent creates in `/work` and `/home/agent` are owned by
+  the desktop user; `git commit` inside the container works with the injected
+  `GIT_CONFIG_*` identity + `safe.directory=*`.
+- Rootless docker / the `podman-docker` shim: do labels, `docker ps --filter label=…`,
+  `docker kill`, and `docker build -` (Dockerfile on stdin, empty context) behave the
+  same? (podman is best-effort — not a supported target yet.)
+- AppImage: every docker CLI call runs through `git::hidden_command` →
+  `child_env::scrub_command`, so the client must not inherit `/tmp/.mount_…` library
+  paths; verify a container spawn from the AppImage.
+- The daemon-stopped state (`systemctl --user stop docker` / no docker group): the
+  toggle should show the "start Docker" hint, and enabling the service should flip it
+  live on the ~3.5 s re-probe.

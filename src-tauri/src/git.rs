@@ -52,6 +52,16 @@ pub(crate) fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     }
     crate::path_env::apply_path(&mut cmd);
     crate::child_env::scrub_command(&mut cmd);
+    // ReCue's git reads must never contend with a concurrent writer in the same
+    // repo — a user running git inside a shell/agent terminal, or a dev-container
+    // agent committing while the DiffInspector / FileTree pollers run. Without this,
+    // `git status`/`git diff` opportunistically take `index.lock` to refresh the stat
+    // cache, so they could both *fail on* and *collide with* a writer's lock.
+    // `GIT_OPTIONAL_LOCKS=0` (the env form of `--no-optional-locks`) makes every
+    // read skip those optional locks; required locks (checkout, worktree add/remove,
+    // commit) are unaffected, and the var is inert for the non-git helpers
+    // (`docker`, `<cli> --version`) that share this seam.
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
     cmd
 }
 
@@ -1165,6 +1175,59 @@ pub fn worktree_remove(
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(if stderr.is_empty() {
             "could not remove worktree".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
+/// Lock the worktree at `dest` (dev-container sessions): a locked worktree is
+/// skipped by `git worktree prune` and refused by `git worktree remove` — the guard
+/// against an **in-container** `git worktree prune`, which would see every OTHER
+/// worktree's host path as missing (they don't exist inside the container) and
+/// delete their shared admin dirs. Best-effort at call sites (`let _ =`): locking
+/// an already-locked worktree fails harmlessly. Returns git's stderr on failure.
+pub fn worktree_lock(
+    repo: impl AsRef<Path>,
+    dest: impl AsRef<Path>,
+    reason: &str,
+) -> Result<(), String> {
+    let output = hidden_command("git")
+        .arg("-C")
+        .arg(repo.as_ref())
+        .args(["worktree", "lock", "--reason", reason])
+        .arg(dest.as_ref())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "could not lock worktree".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
+/// Unlock the worktree at `dest` — the counterpart `remove_worktree` runs before
+/// ReCue's own ref-counted removal (git refuses to remove a locked worktree, even
+/// with `--force`). Best-effort: unlocking a never-locked worktree fails harmlessly.
+pub fn worktree_unlock(repo: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<(), String> {
+    let output = hidden_command("git")
+        .arg("-C")
+        .arg(repo.as_ref())
+        .args(["worktree", "unlock"])
+        .arg(dest.as_ref())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "could not unlock worktree".to_string()
         } else {
             stderr
         })
@@ -2581,6 +2644,50 @@ index 0..1
         assert!(worktree_add(&dir, "feat", &dest).is_err());
 
         // A clean worktree is removable without `--force`.
+        assert!(worktree_remove(&dir, &dest, false).is_ok());
+        assert!(!dest.is_dir());
+
+        let _ = fs::remove_dir_all(&dest);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Every helper built on `hidden_command` reads with optional locks disabled, so
+    /// a host `git status`/`diff` can never take (or trip over) `index.lock` against a
+    /// concurrently committing writer — e.g. a dev-container agent in the same worktree.
+    #[test]
+    fn hidden_command_disables_optional_locks() {
+        let cmd = hidden_command("git");
+        let has = cmd.get_envs().any(|(k, v)| {
+            k == std::ffi::OsStr::new("GIT_OPTIONAL_LOCKS") && v == Some(std::ffi::OsStr::new("0"))
+        });
+        assert!(has, "hidden_command must set GIT_OPTIONAL_LOCKS=0");
+    }
+
+    /// The dev-container prune guard: a locked worktree refuses removal (even our own)
+    /// until unlocked — which is why `remove_worktree` unlocks first, and why an
+    /// in-container `git worktree prune` can't take the locked worktree's admin dir.
+    #[test]
+    fn worktree_lock_blocks_remove_until_unlock() {
+        let Some(dir) = init_repo("wt-lock") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        assert!(git_in(&dir, &["branch", "feat"]));
+
+        let dest = unique_dir("wt-lock-dest");
+        assert!(worktree_add(&dir, "feat", &dest).is_ok());
+        assert!(worktree_lock(&dir, &dest, "ReCue dev-container session").is_ok());
+        // Locking twice fails (best-effort at call sites), and a locked worktree
+        // refuses removal — with and without --force.
+        assert!(worktree_lock(&dir, &dest, "again").is_err());
+        assert!(worktree_remove(&dir, &dest, false).is_err());
+        assert!(worktree_remove(&dir, &dest, true).is_err());
+        assert!(dest.is_dir());
+
+        assert!(worktree_unlock(&dir, &dest).is_ok());
+        // Unlocking a no-longer-locked worktree fails harmlessly (best-effort).
+        assert!(worktree_unlock(&dir, &dest).is_err());
         assert!(worktree_remove(&dir, &dest, false).is_ok());
         assert!(!dest.is_dir());
 

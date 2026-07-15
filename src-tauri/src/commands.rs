@@ -112,6 +112,15 @@ pub struct RecurringErrorPayload {
     pub message: String,
 }
 
+/// Payload for `container://building`: the default dev-container image is being built
+/// (first run — one-time, minutes). The frontend toasts it so a container spawn that
+/// sits behind the build reads as progress, not a hang. Mirrors the
+/// `recurring://error` message shape.
+#[derive(Clone, Serialize)]
+pub struct ContainerBuildingPayload {
+    pub message: String,
+}
+
 /// The launch command for a **custom** coding agent (#325). The custom agent's real
 /// program + args aren't in a static `AgentSpec` — they come from the user's
 /// `customAgentCommand` in the (opaque) settings blob, read here at spawn time. Returns
@@ -143,6 +152,206 @@ fn worktree_parent_for_cwd(sessions: &[PersistedSession], cwd: &str) -> Option<S
         .and_then(|s| s.worktree_parent.clone())
 }
 
+/// Pre-flight for a dev-container spawn: resolve the image and gate the request.
+/// Claude-only (the embedded image ships only the claude CLI — a codex/opencode/custom
+/// container would fail confusingly inside the terminal); docker must be on PATH
+/// (**deliberately a `Spawn` error, not `BinaryNotFound`** — the frontend maps that
+/// kind to the full-screen ClaudeMissing surface, which would be wrong here); a
+/// `containerImage` settings override is trusted as-is, else the default image is
+/// built on demand (deduped — see `container::ensure_image`), emitting
+/// `container://building` when a build actually starts.
+fn prepare_container_spawn(app: &AppHandle, agent: &str) -> Result<String, SessionError> {
+    if agent != crate::agents::DEFAULT_AGENT_ID {
+        return Err(SessionError::Spawn(
+            "Dev-container sessions currently support the Claude Code agent only".into(),
+        ));
+    }
+    if crate::pty::find_on_path("docker").is_none() {
+        return Err(SessionError::Spawn(
+            "Docker is required for dev-container sessions — install and start Docker Desktop (or the docker CLI) and try again".into(),
+        ));
+    }
+    let store = app.state::<Store>();
+    if let Some(custom) = crate::container::read_container_image(&store.settings()) {
+        return Ok(custom);
+    }
+    let emitter = app.clone();
+    crate::container::ensure_image(crate::container::DEFAULT_CONTAINER_IMAGE, &move || {
+        let _ = emitter.emit(
+            "container://building",
+            ContainerBuildingPayload {
+                message: "Building the dev-container image (first run, a few minutes)…".into(),
+            },
+        );
+    })
+    .map_err(|e| SessionError::Spawn(format!("container image build failed: {e}")))?;
+    Ok(crate::container::DEFAULT_CONTAINER_IMAGE.to_string())
+}
+
+/// Compose the data-only `ContainerLaunch` for a session — spawn AND resume share it.
+/// All the side effects live here (the shell): ensure + seed the per-session home,
+/// generate the worktree `.git` overlay, read the host git identity, fill the Linux
+/// uid/gid arm; `container.rs` stays pure. `worktree_parent` decides the git shape:
+/// `Some` ⇒ the single-file overlay (mount the parent's `.git` + shadow `/work/.git`),
+/// `None` ⇒ the repo root rides in with its own `.git` directory, no overlay.
+fn container_launch_for(
+    store: &Store,
+    session_id: &str,
+    cwd: &str,
+    worktree_parent: Option<&str>,
+    image: String,
+) -> Result<crate::container::ContainerLaunch, SessionError> {
+    let data_dir = store
+        .data_dir()
+        .ok_or_else(|| SessionError::Io("no app data directory".to_string()))?
+        .to_path_buf();
+    let home = crate::container::container_home_dir(&data_dir, session_id);
+    crate::container::seed_home(&home, crate::usage::read_raw_credentials().as_deref())
+        .map_err(|e| SessionError::Spawn(format!("could not prepare the container home: {e}")))?;
+    let git_overlay = match worktree_parent {
+        Some(parent) => {
+            // The worktree's admin name comes from its own `.git` pointer file — never
+            // guessed from the folder name (git may have suffixed it on collision).
+            let admin = crate::container::host_worktree_admin_name(Path::new(cwd))
+                .ok_or_else(|| SessionError::Spawn(
+                    "could not prepare the container git overlay for this worktree — its .git file was not readable".into(),
+                ))?;
+            let gitfile = crate::container::prepare_gitfile(
+                &crate::container::container_git_dir(&data_dir, session_id),
+                &admin,
+            )
+            .map_err(|e| {
+                SessionError::Spawn(format!("could not write the container gitfile: {e}"))
+            })?;
+            Some(crate::container::GitOverlay {
+                repo_git_dir_host: Path::new(parent).join(".git"),
+                gitfile_host: gitfile,
+            })
+        }
+        None => None,
+    };
+    // docker's `--mount` CSV syntax can't escape a comma; refuse up front with a
+    // clear error instead of a garbled docker parse failure in the terminal.
+    let mut sources: Vec<&Path> = vec![Path::new(cwd), &home];
+    if let Some(overlay) = &git_overlay {
+        sources.push(&overlay.repo_git_dir_host);
+        sources.push(&overlay.gitfile_host);
+    }
+    if let Some(bad) = sources
+        .into_iter()
+        .find(|p| !crate::container::path_mountable(p))
+    {
+        return Err(SessionError::Spawn(format!(
+            "this folder's path contains a `,`, which docker --mount cannot express: {}",
+            bad.display()
+        )));
+    }
+    let (user_name, user_email) = crate::container::host_git_identity(Path::new(cwd));
+    // `--user` only on Linux: native docker would otherwise create root-owned files
+    // in the mounted worktree (breaking host-side edits + worktree removal). Docker
+    // Desktop on macOS/Windows maps ownership itself, so those arms pass None.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let user = crate::container::current_uid_gid();
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    let user = None;
+    crate::container::mark_active();
+    Ok(crate::container::ContainerLaunch {
+        image,
+        session_id: session_id.to_string(),
+        workdir_host: PathBuf::from(cwd),
+        git_overlay,
+        home_host: home,
+        env: crate::container::git_env_config(&user_name, &user_email),
+        user,
+    })
+}
+
+/// Boot-resume variant (called from `boot.rs`, best-effort): `Ok(None)` for a plain
+/// host record, `Ok(Some(launch))` for a container record whose home/overlay composed,
+/// `Err(())` when it couldn't — a container record must then **skip** the resume
+/// entirely (never fall back to a host PTY: the credentials/home/git universe would
+/// be wrong), keeping the normal failed-resume surface (#30/#63). The deduped
+/// `ensure_image` means N container records at boot pay for at most one build.
+pub(crate) fn boot_container_launch(
+    app: &AppHandle,
+    record: &PersistedSession,
+) -> Result<Option<crate::container::ContainerLaunch>, ()> {
+    let Some(image) = record.container_image.clone() else {
+        return Ok(None);
+    };
+    if crate::pty::find_on_path("docker").is_none() {
+        return Err(());
+    }
+    if image == crate::container::DEFAULT_CONTAINER_IMAGE {
+        let emitter = app.clone();
+        if crate::container::ensure_image(&image, &move || {
+            let _ = emitter.emit(
+                "container://building",
+                ContainerBuildingPayload {
+                    message: "Building the dev-container image (first run, a few minutes)…".into(),
+                },
+            );
+        })
+        .is_err()
+        {
+            return Err(());
+        }
+    }
+    let store = app.state::<Store>();
+    container_launch_for(
+        &store,
+        &record.id,
+        &record.repo_path,
+        record.worktree_parent.as_deref(),
+        image,
+    )
+    .map(Some)
+    .map_err(|_| ())
+}
+
+/// The docker runtime state driving the New Session modal's container toggle:
+/// `"absent"` (no docker CLI — the toggle is hidden), `"stopped"` (installed but
+/// the daemon is unreachable — the toggle shows disabled with a "start Docker"
+/// hint), `"running"`. Async + `spawn_blocking`: the probe spawns the docker CLI,
+/// which waits on a daemon connect when stopped.
+#[tauri::command]
+pub async fn container_runtime_status() -> Result<String, SessionError> {
+    tauri::async_runtime::spawn_blocking(|| crate::container::runtime_status().to_string())
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
+/// Background prefetch fired when the user switches the modal's "Run in dev
+/// container" toggle ON, so the one-time image build overlaps the user finishing the
+/// modal instead of stalling the spawn. Best-effort by design: docker missing or a
+/// custom `containerImage` override → quiet no-op (the spawn path is the
+/// authoritative error surface). Async + `spawn_blocking` — a first build takes minutes.
+#[tauri::command]
+pub async fn ensure_container_image(app: AppHandle) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if crate::pty::find_on_path("docker").is_none() {
+            return;
+        }
+        let store = app.state::<Store>();
+        if crate::container::read_container_image(&store.settings()).is_some() {
+            return;
+        }
+        let emitter = app.clone();
+        let _ =
+            crate::container::ensure_image(crate::container::DEFAULT_CONTAINER_IMAGE, &move || {
+                let _ = emitter.emit(
+                    "container://building",
+                    ContainerBuildingPayload {
+                        message: "Building the dev-container image (first run, a few minutes)…"
+                            .into(),
+                    },
+                );
+            });
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// Spawn a new agent session in `cwd`.
 ///
 /// **Async + off the main thread (#353):** a `pub fn` Tauri command runs on the webview
@@ -162,9 +371,10 @@ pub async fn spawn_session(
     name: Option<String>,
     agent: Option<String>,
     prompt: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
-        spawn_session_blocking(&app, cwd, name, agent, prompt)
+        spawn_session_blocking(&app, cwd, name, agent, prompt, container)
     })
     .await
     .map_err(|e| SessionError::Io(e.to_string()))?
@@ -176,6 +386,7 @@ fn spawn_session_blocking(
     name: Option<String>,
     agent: Option<String>,
     prompt: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     let manager = app.state::<SessionManager>();
     let store = app.state::<Store>();
@@ -195,12 +406,34 @@ fn spawn_session_blocking(
     // entry point routing through `spawn_session` (OpenViewButton "New session here",
     // NewSessionModal, CreatePanelModal, Canvas template `new-agent`, `createBranchSession`).
     let worktree_parent = worktree_parent_for_cwd(&store.sessions(), &cwd);
+    // Dev-container session (opt-in): mint the session UUID HERE so the container
+    // label == the record id == the per-session home-dir key, then compose the docker
+    // launch. When `cwd` is itself a worktree, lock it (best-effort) against an
+    // in-container `git worktree prune` before the container gets the `.git` mount.
+    let launch = match container {
+        Some(true) => {
+            let image = prepare_container_spawn(app, &agent)?;
+            let session_id = Uuid::new_v4().to_string();
+            if let Some(parent) = &worktree_parent {
+                let _ = git::worktree_lock(parent, &cwd, "ReCue dev-container session");
+            }
+            Some(container_launch_for(
+                &store,
+                &session_id,
+                &cwd,
+                worktree_parent.as_deref(),
+                image,
+            )?)
+        }
+        _ => None,
+    };
     let info = manager.spawn_session_with_prompt(
         cwd.as_str(),
         name.clone(),
         prompt.as_deref(),
         &agent,
         custom.as_deref(),
+        launch.as_ref(),
     )?;
     let record = PersistedSession {
         id: info.id.clone(),
@@ -214,12 +447,15 @@ fn spawn_session_blocking(
         agent,
         forked_from: None,
         // A freshly spawned session has no log yet → not forkable until its first
-        // real turn materializes one (#138); the title worker flips it then.
+        // real turn materializes one (#138); the title worker flips it then. A
+        // dev-container session stays unforkable for good (its log lives in the
+        // container home, so the title worker never runs for it).
         forkable: false,
         // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: launch.as_ref().map(|l| l.image.clone()),
     };
     store
         .add_session(record.clone())
@@ -264,9 +500,10 @@ pub async fn spawn_worktree_agent(
     repo: String,
     branch: String,
     agent: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
-        spawn_worktree_agent_blocking(&app, repo, branch, agent)
+        spawn_worktree_agent_blocking(&app, repo, branch, agent, container)
     })
     .await
     .map_err(|e| SessionError::Io(e.to_string()))?
@@ -277,6 +514,7 @@ fn spawn_worktree_agent_blocking(
     repo: String,
     branch: String,
     agent: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     let manager = app.state::<SessionManager>();
     let store = app.state::<Store>();
@@ -289,7 +527,30 @@ fn spawn_worktree_agent_blocking(
     }
     let dest_str = dest.to_string_lossy().to_string();
     let custom = custom_command_for(&store, &agent);
-    let info = manager.spawn_session(dest_str.as_str(), None, &agent, custom.as_deref())?;
+    // Dev-container variant: lock the worktree (best-effort, prune guard) and compose
+    // the docker launch — the worktree mounts at /work with the `.git` overlay.
+    let launch = match container {
+        Some(true) => {
+            let image = prepare_container_spawn(app, &agent)?;
+            let session_id = Uuid::new_v4().to_string();
+            let _ = git::worktree_lock(&repo, &dest, "ReCue dev-container session");
+            Some(container_launch_for(
+                &store,
+                &session_id,
+                &dest_str,
+                Some(&repo),
+                image,
+            )?)
+        }
+        _ => None,
+    };
+    let info = manager.spawn_session(
+        dest_str.as_str(),
+        None,
+        &agent,
+        custom.as_deref(),
+        launch.as_ref(),
+    )?;
     let record = PersistedSession {
         id: info.id.clone(),
         claude_session_id: info.id,
@@ -308,6 +569,7 @@ fn spawn_worktree_agent_blocking(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: launch.as_ref().map(|l| l.image.clone()),
     };
     store
         .add_session(record.clone())
@@ -329,9 +591,10 @@ pub async fn spawn_worktree_agent_new_branch(
     name: String,
     base: String,
     agent: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
-        spawn_worktree_agent_new_branch_blocking(&app, repo, name, base, agent)
+        spawn_worktree_agent_new_branch_blocking(&app, repo, name, base, agent, container)
     })
     .await
     .map_err(|e| SessionError::Io(e.to_string()))?
@@ -343,6 +606,7 @@ fn spawn_worktree_agent_new_branch_blocking(
     name: String,
     base: String,
     agent: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     let manager = app.state::<SessionManager>();
     let store = app.state::<Store>();
@@ -351,7 +615,29 @@ fn spawn_worktree_agent_new_branch_blocking(
     git::worktree_add_new_branch(&repo, &name, &base, &dest).map_err(SessionError::Git)?;
     let dest_str = dest.to_string_lossy().to_string();
     let custom = custom_command_for(&store, &agent);
-    let info = manager.spawn_session(dest_str.as_str(), None, &agent, custom.as_deref())?;
+    // Dev-container variant — same shape as `spawn_worktree_agent_blocking`.
+    let launch = match container {
+        Some(true) => {
+            let image = prepare_container_spawn(app, &agent)?;
+            let session_id = Uuid::new_v4().to_string();
+            let _ = git::worktree_lock(&repo, &dest, "ReCue dev-container session");
+            Some(container_launch_for(
+                &store,
+                &session_id,
+                &dest_str,
+                Some(&repo),
+                image,
+            )?)
+        }
+        _ => None,
+    };
+    let info = manager.spawn_session(
+        dest_str.as_str(),
+        None,
+        &agent,
+        custom.as_deref(),
+        launch.as_ref(),
+    )?;
     let record = PersistedSession {
         id: info.id.clone(),
         claude_session_id: info.id,
@@ -370,6 +656,7 @@ fn spawn_worktree_agent_new_branch_blocking(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: launch.as_ref().map(|l| l.image.clone()),
     };
     store
         .add_session(record.clone())
@@ -397,6 +684,10 @@ pub async fn remove_worktree(
     force: bool,
 ) -> Result<(), SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
+        // A dev-container session locked the worktree at spawn (the in-container
+        // `git worktree prune` guard) and git refuses to remove a locked worktree —
+        // unlock first, best-effort (a never-locked worktree fails harmlessly).
+        let _ = git::worktree_unlock(&parent, &dest);
         git::worktree_remove(&parent, &dest, force).map_err(SessionError::Git)
     })
     .await
@@ -464,11 +755,50 @@ fn resume_session_blocking(app: &AppHandle, id: String) -> Result<PersistedSessi
     if !crate::agents::agent_spec(&record.agent).supports_resume {
         return Err(SessionError::ResumeUnsupported(record.agent));
     }
+    // Dev-container session: rebuild the docker launch from the PERSISTED record
+    // (never the settings — a later image change must not break an old session's
+    // resume). The image is ensured only for the app-built default (a custom
+    // override is trusted as-is); `seed_home` is idempotent, and the persisted
+    // per-session home is exactly what makes `claude --resume <id>` find its log.
+    // Any still-labeled container from a previous generation is killed first so
+    // the label can never match two containers at once.
+    let launch = match record.container_image.clone() {
+        Some(image) => {
+            if crate::pty::find_on_path("docker").is_none() {
+                return Err(SessionError::Spawn(
+                    "Docker is required to restart this dev-container session — install and start Docker Desktop (or the docker CLI) and try again".into(),
+                ));
+            }
+            if image == crate::container::DEFAULT_CONTAINER_IMAGE {
+                let emitter = app.clone();
+                crate::container::ensure_image(&image, &move || {
+                    let _ = emitter.emit(
+                        "container://building",
+                        ContainerBuildingPayload {
+                            message: "Building the dev-container image (first run, a few minutes)…"
+                                .into(),
+                        },
+                    );
+                })
+                .map_err(|e| SessionError::Spawn(format!("container image build failed: {e}")))?;
+            }
+            crate::container::kill_session_containers(&record.id);
+            Some(container_launch_for(
+                &store,
+                &record.id,
+                &record.repo_path,
+                record.worktree_parent.as_deref(),
+                image,
+            )?)
+        }
+        None => None,
+    };
     manager.resume_session(
         &record.claude_session_id,
         &record.repo_path,
         record.name.clone(),
         &record.agent,
+        launch.as_ref(),
     )?;
     Ok(record)
 }
@@ -508,6 +838,13 @@ fn fork_session_blocking(
     if !crate::agents::agent_spec(&source.agent).supports_resume {
         return Err(SessionError::ResumeUnsupported(source.agent));
     }
+    // A dev-container source can't be forked: its conversation log lives in the
+    // per-session container home, so a fork's `--resume <source>` in a FRESH home
+    // would find nothing. Belt-and-braces — the UI already shows Fork unavailable
+    // (a container session's `forkable` never flips true).
+    if source.container_image.is_some() {
+        return Err(SessionError::ContainerUnsupported);
+    }
     // Guard (#134): forking needs the source's on-disk conversation log to exist with
     // ≥1 real turn. A brand-new / never-interacted source — including a just-created
     // fork whose log isn't materialized yet (#116 keeps it gray) — would otherwise
@@ -540,6 +877,8 @@ fn fork_session_blocking(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        // A dev-container source is refused above, so a fork is always a host PTY.
+        container_image: None,
     };
     store
         .add_session(record.clone())
@@ -565,9 +904,30 @@ pub async fn kill_session(app: AppHandle, id: String) -> Result<(), SessionError
 fn kill_session_blocking(app: &AppHandle, id: String) -> Result<(), SessionError> {
     let manager = app.state::<SessionManager>();
     let store = app.state::<Store>();
+    // Capture the record BEFORE removal — the container teardown below needs its
+    // `container_image` + the per-session dir paths.
+    let record = store.session(&id);
     // The session may not be live (e.g. it failed to resume on boot); forget it
     // from the store either way so Remove = kill + forget and it never reappears.
     let _ = manager.kill_session(&id);
+    // Dev-container session: the PTY-side hangup above reached only the docker
+    // *client* — kill the container itself (by label, detached — mirroring
+    // `kill_now`'s non-blocking shape) and then delete the per-session home +
+    // gitfile dirs. This one path serves Remove AND the clean-exit forget (both
+    // arrive via this command), so the dirs never outlive the record.
+    if record.as_ref().is_some_and(|r| r.container_image.is_some()) {
+        let dirs = store.data_dir().map(|data| {
+            (
+                crate::container::container_home_dir(data, &id),
+                crate::container::container_git_dir(data, &id),
+            )
+        });
+        let (home, gitdir) = match dirs {
+            Some((home, gitdir)) => (Some(home), Some(gitdir)),
+            None => (None, None),
+        };
+        crate::container::kill_session_container_detached(id.clone(), home, gitdir);
+    }
     store
         .remove_session(&id)
         .map_err(|e| SessionError::Io(e.to_string()))
@@ -1571,6 +1931,8 @@ fn fire_one_schedule(
             sched.prompt.as_deref(),
             &sched.agent,
             custom.as_deref(),
+            // Schedules don't carry a dev-container flag (v1 scope) — host PTY.
+            None,
         )
         .map_err(|e| e.to_string())?;
     let record = PersistedSession {
@@ -1590,6 +1952,7 @@ fn fire_one_schedule(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: None,
     };
     let _ = store.add_session(record.clone());
     // Touch the repo (not the worktree folder) as the recent.
@@ -1935,6 +2298,8 @@ fn fire_one_recurring(
             rec.prompt.as_deref(),
             &rec.agent,
             custom.as_deref(),
+            // Recurrings don't carry a dev-container flag (v1 scope) — host PTY.
+            None,
         )
         .map_err(|e| e.to_string())?;
     let record = PersistedSession {
@@ -1953,6 +2318,7 @@ fn fire_one_recurring(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: None,
     };
     let _ = store.add_session(record.clone());
     let _ = store.touch_recent(&rec.cwd);
@@ -3098,6 +3464,7 @@ mod tests {
             forkable: false,
             auto_continue_disabled: false,
             watch: false,
+            container_image: None,
         }
     }
 

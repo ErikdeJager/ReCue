@@ -1180,3 +1180,28 @@ already in CI.
 - [ ] **Reduced motion on Windows** (OS setting *and* the app toggle): the wave settles
       then freezes, dot pulse/menu/modal/toast entrances drop, and the terminal cursor
       stops blinking (#383) while the terminal itself keeps rendering.
+
+## 2026-07-15 — Dev-container agent sessions (docker-wrapped claude)
+
+Opt-in per-session docker containers (the New Session modal's "Run in dev container"
+toggle) landed cross-platform by design: the docker CLI is the PTY child (ConPTY drives
+it like any console app), every one-shot docker call (`version`/`image inspect`/`build`/
+`ps`/`kill`) goes through `git::hidden_command` (CREATE_NO_WINDOW — no console flash),
+mounts use `--mount type=bind,…` (CSV keys, so a `C:\…` drive-colon source parses; `-v`'s
+`:`-split would break), and the worktree `.git` overlay never relies on host paths being
+valid inside the (Linux) container. Windows-specific notes + real-box checks:
+
+- **The docker-label kill is the ONLY effective kill on Windows.** `hangup_group` is a
+  no-op there and `ChildKiller::kill` terminates just the docker *client*; the container
+  is killed via `docker kill` on the `recue.session=<id>` label (Remove/quit sweep/boot
+  reap). Verify on a real box: Remove a container session → `docker ps -a --filter
+  label=recue.session` is empty; quit ReCue → containers gone ≤ ~2.5 s.
+- **Real-box checks:** Docker Desktop (WSL2) bind-mount of `C:\Users\…` sources incl. the
+  app-data `worktrees`/`container-homes` dirs; ConPTY resize → docker CLI → in-container
+  TTY reflow of claude's TUI; `docker.exe` resolution via `find_on_path` (a plain .exe —
+  no PATHEXT/cmd shim needed); the daemon-stopped probe (`docker version --format`)
+  returning promptly (the toggle's "stopped" state) rather than hanging on the named pipe;
+  credentials seeding from `%USERPROFILE%\.claude\.credentials.json` (no Keychain on
+  Windows — the file is canonical, #140).
+- **No 0600 on Windows:** the per-session credentials seed relies on the app-data dir's
+  ACL (unix gets `OpenOptionsExt::mode(0o600)`).

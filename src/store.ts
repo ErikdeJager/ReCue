@@ -580,7 +580,8 @@ function panelLabel(kind: OverviewPanel["kind"], file?: string): string {
   return file ? (file.split(/[\\/]/).pop() ?? file) : "file viewer";
 }
 
-function toSessionView(record: SessionRecord): SessionView {
+// Exported for the unit tests (the `isCleanExit` precedent) — pure record→view map.
+export function toSessionView(record: SessionRecord): SessionView {
   return {
     id: record.id,
     claudeSessionId: record.claude_session_id,
@@ -601,6 +602,8 @@ function toSessionView(record: SessionRecord): SessionView {
     // Per-agent "watch" opt-in (#336): absent/false (older record) → unwatched; a
     // persisted `true` fires a native notification on this agent's busy→idle edge.
     watch: record.watch ?? false,
+    // Dev-container session: the docker image it runs in; null for a host PTY.
+    containerImage: record.container_image ?? null,
   };
 }
 
@@ -2227,14 +2230,20 @@ export interface AppState {
   setActiveLeaf: (id: string | null) => void;
   /** Move the Canvas focus to the spatially adjacent panel (#76). */
   moveCanvasFocus: (dir: "left" | "right" | "up" | "down") => void;
-  /** Optionally `git checkout <branch>` first (#27); resolves true on success. */
+  /** Optionally `git checkout <branch>` first (#27); resolves true on success.
+   * `container` opts the session into a docker dev-container (the modal toggle). */
   spawnSession: (
     cwd: string,
     name?: string,
     branch?: string,
+    container?: boolean,
   ) => Promise<boolean>;
   /** Start an agent in an isolated git worktree for an existing branch (#74). */
-  spawnWorktreeSession: (repo: string, branch: string) => Promise<boolean>;
+  spawnWorktreeSession: (
+    repo: string,
+    branch: string,
+    container?: boolean,
+  ) => Promise<boolean>;
   /** Create + check out a new branch from `base` (empty = HEAD), then start an agent
    * in the repo folder (#124). Resolves `true` on success, else an error message for
    * inline display (e.g. an invalid / already-existing name). */
@@ -2242,6 +2251,7 @@ export interface AppState {
     cwd: string,
     name: string,
     base: string,
+    container?: boolean,
   ) => Promise<true | string>;
   /** Create a new branch as an isolated worktree (#74/#124) and start an agent there
    * (the ⌘⏎ path). Resolves `true` on success, else an error message. */
@@ -2249,6 +2259,7 @@ export interface AppState {
     repo: string,
     name: string,
     base: string,
+    container?: boolean,
   ) => Promise<true | string>;
   /** Remove a worktree once its last active agent is gone (ref-counted, #74). */
   cleanupWorktreeIfEmpty: (parent: string, dest: string) => Promise<void>;
@@ -3660,6 +3671,17 @@ export const useStore = create<AppState>()((set, get) => ({
               }
             },
             onChanged: (recurrings) => get().applyRecurringSync(recurrings),
+          }),
+          // Dev-container sessions: the one-time default-image build fires this so a
+          // spawn waiting behind `docker build` reads as progress, not a hang.
+          ipc.subscribeContainerEvents({
+            onBuilding: ({ message }) => {
+              if (IS_MAIN_WINDOW) {
+                get().pushToast(
+                  message || "Building the dev-container image (first run)…",
+                );
+              }
+            },
           }),
         ]);
       } catch {
@@ -5466,19 +5488,21 @@ export const useStore = create<AppState>()((set, get) => ({
     return true;
   },
 
-  spawnSession: async (cwd, name, branch) => {
+  spawnSession: async (cwd, name, branch, container) => {
     try {
       // Optional branch checkout (#27) before spawning the agent. A failed
       // checkout (e.g. dirty tree) aborts without spawning so nothing starts on
       // the wrong branch.
       if (branch) await ipc.checkoutBranch(cwd, branch);
       // New sessions launch under the Settings-chosen coding agent (#142); existing
-      // sessions keep their recorded agent (#101).
+      // sessions keep their recorded agent (#101). `container` opts the session into
+      // a docker dev-container (the modal toggle).
       const record = await ipc.spawnSession(
         cwd,
         name,
         undefined,
         get().settings.defaultAgent,
+        container,
       );
       get().upsertSession(toSessionView(record));
       // Touch the parent repo when the backend nested this spawn under an existing
@@ -5508,7 +5532,7 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  spawnWorktreeSession: async (repo, branch) => {
+  spawnWorktreeSession: async (repo, branch, container) => {
     try {
       // Isolated worktree agent (#74): no checkout, no custom name. The backend
       // creates-or-reuses the app-managed worktree and spawns claude there; the
@@ -5517,6 +5541,7 @@ export const useStore = create<AppState>()((set, get) => ({
         repo,
         branch,
         get().settings.defaultAgent,
+        container,
       );
       get().upsertSession(toSessionView(record));
       get().select(record.id);
@@ -5537,7 +5562,7 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  createBranchSession: async (cwd, name, base) => {
+  createBranchSession: async (cwd, name, base, container) => {
     // Branch-name validation errors (invalid / already-existing / unknown base) are
     // returned for inline display; the spawn itself reuses the normal flow.
     try {
@@ -5553,6 +5578,7 @@ export const useStore = create<AppState>()((set, get) => ({
         undefined,
         undefined,
         get().settings.defaultAgent,
+        container,
       );
       get().upsertSession(toSessionView(record));
       // Same worktree-nesting recents alignment as `spawnSession` (#331): touch the
@@ -5575,13 +5601,14 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  createBranchWorktreeSession: async (repo, name, base) => {
+  createBranchWorktreeSession: async (repo, name, base, container) => {
     try {
       const record = await ipc.spawnWorktreeAgentNewBranch(
         repo,
         name,
         base,
         get().settings.defaultAgent,
+        container,
       );
       get().upsertSession(toSessionView(record));
       get().select(record.id);

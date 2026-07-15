@@ -180,11 +180,77 @@ fn now_ms() -> i64 {
 /// `home_dir()` (`$HOME` on unix, `%USERPROFILE%` on Windows, #140) like `title.rs`.
 /// Often absent on macOS (where the Keychain is canonical), present on Windows/Linux.
 fn read_token_from_file() -> Option<OauthToken> {
-    let path = crate::path_env::home_dir()?
-        .join(".claude")
-        .join(".credentials.json");
-    let raw = std::fs::read_to_string(path).ok()?;
+    let raw = read_raw_credentials_from(credentials_path()?)?;
     token_from_json(&raw)
+}
+
+/// `~/.claude/.credentials.json` via the cross-platform `home_dir()` (never raw `$HOME`).
+fn credentials_path() -> Option<std::path::PathBuf> {
+    Some(
+        crate::path_env::home_dir()?
+            .join(".claude")
+            .join(".credentials.json"),
+    )
+}
+
+/// The credentials file's **verbatim** contents (blank/unreadable ⇒ `None`). Explicit
+/// path so the unit test can point it at a temp file. Never logged.
+fn read_raw_credentials_from(path: std::path::PathBuf) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    if raw.trim().is_empty() {
+        None
+    } else {
+        Some(raw)
+    }
+}
+
+/// The RAW credentials JSON blob (verbatim — refresh token and any future fields ride
+/// along) for seeding a dev-container's per-session home. Deliberately NOT the parsed
+/// `OauthToken`, which keeps only the access token + expiry and would strand the
+/// container's `claude` without a refresh path. Freshness-aware like `read_oauth_token`
+/// (#316): a file whose access token is still valid wins (no Keychain allow-prompt);
+/// otherwise the macOS Keychain blob, falling back to the stale file as a last resort
+/// (its refresh token may still work). Never logged.
+pub(crate) fn read_raw_credentials() -> Option<String> {
+    let file = credentials_path().and_then(read_raw_credentials_from);
+    let now_ms = now_ms();
+    if let Some(raw) = &file {
+        if token_from_json(raw).is_some_and(|t| !t.is_expired(now_ms)) {
+            return file;
+        }
+    }
+    read_raw_keychain().or(file)
+}
+
+/// The macOS Keychain blob, verbatim (`security … -w` prints the item's password —
+/// the same JSON `claude` writes to the credentials file). Same one-time allow-prompt
+/// caveat as `read_token_from_keychain`.
+#[cfg(target_os = "macos")]
+fn read_raw_keychain() -> Option<String> {
+    let out = std::process::Command::new("security")
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if raw.is_empty() {
+        None
+    } else {
+        Some(raw)
+    }
+}
+
+/// Non-macOS stub — no Keychain; the credentials file is the only raw source.
+#[cfg(not(target_os = "macos"))]
+fn read_raw_keychain() -> Option<String> {
+    None
 }
 
 /// macOS Keychain item `Claude Code-credentials` — its password value is the same
@@ -346,6 +412,27 @@ mod tests {
             access_token: access.to_string(),
             expires_at,
         }
+    }
+
+    /// The dev-container seed reads the credentials file **verbatim** — unknown
+    /// fields (above all the refresh token) must survive, which is exactly why the
+    /// parsed `OauthToken` readers couldn't be reused for seeding.
+    #[test]
+    fn raw_credentials_are_returned_verbatim() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("recue-usage-raw-{}.json", std::process::id()));
+        let blob = r#"{"claudeAiOauth":{"accessToken":"abc","refreshToken":"keep-me","expiresAt":1760000000000,"futureField":true}}"#;
+        std::fs::write(&path, blob).unwrap();
+        assert_eq!(
+            read_raw_credentials_from(path.clone()).as_deref(),
+            Some(blob),
+            "the blob must ride through untouched"
+        );
+        // Blank / missing files read as no credentials, not as an empty seed.
+        std::fs::write(&path, "   ").unwrap();
+        assert_eq!(read_raw_credentials_from(path.clone()), None);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(read_raw_credentials_from(path), None);
     }
 
     #[test]

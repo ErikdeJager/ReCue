@@ -163,6 +163,44 @@ steady-state boot pays **zero** probe cost.
   handling convention. A **fork** (#126, `fork_session`) is a spawn variant
   that branches a source agent's conversation into a new parallel session
   (`--session-id <new> --resume <source> --fork-session`) — see Conventions.
+- **Dev-container sessions (opt-in):** the New Session modal's branch step has a
+  **"Run in dev container"** toggle (**⌘⇧C / Ctrl+Shift+C** — a fixed contextual chord:
+  `CONTAINER_TOGGLE_CHORD` in `keybinds.ts`, reserved so no rebind can collide; an info
+  "i" popover states the can/cannots) that spawns the agent **inside docker**:
+  `docker run --rm --init -i -t --label recue.session=<id>` wrapping the claude CLI —
+  the rewrite happens in `pty.rs` **upstream of `spawn_with_id`** (the PTY child is the
+  docker CLI; reader/busy/exit machinery untouched), all argv/gitfile/label logic in the
+  pure, unit-tested **`src-tauri/src/container.rs`**, composition (mounts, credentials,
+  identity, uid/gid) in `commands.rs`. Mounts (`--mount type=bind`, never `-v` — Windows
+  drive-colon safe): the repo (or worktree) at `/work` + a **per-session home**
+  (`<data>/container-homes/<id>`) at `/home/agent`, seeded once with the RAW
+  `~/.claude/.credentials.json` blob (macOS: the Keychain blob) so claude stays signed in
+  and **`--resume` works across restarts**; a worktree session adds the **single-file
+  `.git` overlay** (parent `.git` dir → `/repo/.git`, a generated one-line gitfile
+  bind-mounted read-only OVER `/work/.git` — the host's own gitfile is untouched, so
+  host-side git panels keep working; the worktree is `git worktree lock`ed against an
+  in-container `prune`, unlocked by `remove_worktree`). **No git credentials are
+  mounted**: identity + `safe.directory=*`/`core.fsmonitor=false`/`gc.auto=0` ride in as
+  `GIT_CONFIG_*` env, so the agent can branch + **commit** (instantly visible to the
+  host — shared `.git`) but **push fails by design**. Kill is **via the docker CLI by
+  label** (a PTY SIGHUP reaches only the docker *client*; on Windows the label-kill is
+  the ONLY effective kill): Remove/clean-exit → `kill_session_container_detached` (+
+  per-session dir cleanup), app quit → a bounded parallel sweep, boot → a reap of
+  crash strays before resume. Claude-only; `forkable:false` + `uses_claude_log=false`
+  (auto-name degrades to the branch label; fork refused with a typed
+  `ContainerUnsupported`). The default image `recue-agent:latest` is **built from an
+  embedded Dockerfile** (stdin, empty context; node 22 + git + the claude CLI) on first
+  use — deduped, prefetched on toggle-ON, surfaced via a `container://building` toast —
+  and a `containerImage` settings key overrides it (no build). The toggle itself is
+  gated by a **docker runtime probe** (`container_runtime_status`: absent → row hidden,
+  stopped → disabled + "start Docker" hint with a ~3.5s re-probe, running → usable).
+  Linux native docker additionally passes `--user uid:gid` (Docker Desktop maps
+  ownership itself). As part of this, **every `git::hidden_command` read now sets
+  `GIT_OPTIONAL_LOCKS=0`** so host status/diff polls never contend with a committing
+  container agent (or any in-terminal git writer). v1 scope: immediate sessions only
+  (schedule/recurring/template flows spawn host PTYs); the `.claude.json`
+  onboarding-seed key follows the verify-against-the-installed-CLI discipline (flagged
+  in-code).
 - **Output:** `lib.rs` forwards the channel to the `session://output` /
   `session://exited` / `session://state` Tauri events. The frontend `ipc.ts`
   subscription routes output **bytes** to `outputBus.ts` (a pub/sub the xterm

@@ -38,7 +38,23 @@ export interface SessionRecord {
    * per agent; the global `watchAllAgents` setting can force it on. Absent/false for
    * older records → unwatched. */
   watch?: boolean;
+  /** Dev-container session: the docker image it runs in (spawn + resume wrap the
+   * agent CLI in `docker run <image> …`). Absent/null for a normal host-PTY
+   * session and for older records. */
+  container_image?: string | null;
 }
+
+/** Payload of `container://building`: the default dev-container image is being
+ * built (first run, one-time) — surfaced as a toast so a spawn waiting behind the
+ * build reads as progress, not a hang. */
+export interface ContainerBuildingPayload {
+  message: string;
+}
+
+/** The docker runtime state (the `container_runtime_status` command): drives the
+ * New Session modal's container toggle — hidden when docker isn't installed,
+ * disabled-with-a-hint when installed but not running. */
+export type DockerStatus = "absent" | "stopped" | "running";
 
 /** A slash-invokable skill/command (#114, mirrors `skills::SkillInfo`). Powers
  * the scheduled-prompt autocomplete; `name` is bare (inserted as `/<name>`),
@@ -668,6 +684,9 @@ export interface SessionView {
    * record; toggled via the sidebar menu / header WatchButton. Default false. The global
    * `watchAllAgents` setting can force notifications on regardless of this flag. */
   watch?: boolean;
+  /** Dev-container session: the docker image it runs in; null/absent for a normal
+   * host-PTY session. Drives the static "container" badge beside the fork badge. */
+  containerImage?: string | null;
 }
 
 /** Everything the frontend needs at boot, in ONE IPC round-trip (#352 — mirrors

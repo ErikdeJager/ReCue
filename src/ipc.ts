@@ -18,8 +18,10 @@ import type {
   CanvasNode,
   CanvasTemplate,
   CommitInfo,
+  ContainerBuildingPayload,
   DiffLineCounts,
   DiffSeenMap,
+  DockerStatus,
   ExitPayload,
   FileDiff,
   FileStatusEntry,
@@ -93,18 +95,21 @@ export async function saveFileDialog(
 
 /** Spawn a new `claude` session in `cwd`. An optional `prompt` pre-seeds it
  * (positional, like a scheduled session #93) — used by Canvas template `new-agent`
- * blocks (#118). */
+ * blocks (#118). `container` opts the session into a docker dev-container (the
+ * modal toggle); omitted/false ⇒ a plain host PTY. */
 export const spawnSession = (
   cwd: string,
   name?: string,
   prompt?: string,
   agent?: string,
+  container?: boolean,
 ) =>
   invoke<SessionRecord>("spawn_session", {
     cwd,
     name: name ?? null,
     agent: agent ?? null,
     prompt: prompt ?? null,
+    container: container ?? null,
   });
 
 /** Spawn a plain shell terminal item (#72) in `cwd` under `id` (the panel id). */
@@ -117,11 +122,13 @@ export const spawnWorktreeAgent = (
   repo: string,
   branch: string,
   agent?: string,
+  container?: boolean,
 ) =>
   invoke<SessionRecord>("spawn_worktree_agent", {
     repo,
     branch,
     agent: agent ?? null,
+    container: container ?? null,
   });
 
 /** Remove the worktree at `dest` from its `parent` repo (#74); `force` ignores a
@@ -520,12 +527,14 @@ export const spawnWorktreeAgentNewBranch = (
   name: string,
   base: string,
   agent?: string,
+  container?: boolean,
 ) =>
   invoke<SessionRecord>("spawn_worktree_agent_new_branch", {
     repo,
     name,
     base,
     agent: agent ?? null,
+    container: container ?? null,
   });
 
 /** Create a scheduled session (#93); `at` is the fire time in unix secs. Returns
@@ -907,4 +916,31 @@ export async function subscribeRecurringEvents(
     unlistenError();
     unlistenChanged();
   };
+}
+
+/** Prefetch the default dev-container image (fired when the modal's "Run in dev
+ * container" toggle switches ON) so the one-time `docker build` overlaps the user
+ * finishing the modal. Best-effort: docker missing / a custom `containerImage`
+ * override → quiet no-op (the spawn path is the authoritative error surface). */
+export const ensureContainerImage = () =>
+  invoke<void>("ensure_container_image");
+
+/** The docker runtime state ("absent" | "stopped" | "running") — drives whether
+ * the modal's container toggle renders, and whether it's usable. */
+export const containerRuntimeStatus = () =>
+  invoke<DockerStatus>("container_runtime_status");
+
+/** Handlers for dev-container events. */
+export interface ContainerEventHandlers {
+  /** The default dev-container image is being built (first run) — toast it. */
+  onBuilding: (payload: ContainerBuildingPayload) => void;
+}
+
+/** Subscribe to `container://…` events (mirrors `subscribeRecurringEvents`). */
+export async function subscribeContainerEvents(
+  handlers: ContainerEventHandlers,
+): Promise<UnlistenFn> {
+  return listen<ContainerBuildingPayload>("container://building", (event) =>
+    handlers.onBuilding(event.payload),
+  );
 }
