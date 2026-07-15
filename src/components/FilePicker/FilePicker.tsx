@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Search } from "lucide-react";
 
 import { searchFiles } from "../../ipc";
+import { rankFileMatches } from "../../fileRank";
 import { noAutoCapitalize } from "../../inputProps";
 import styles from "./FilePicker.module.css";
 
@@ -81,7 +82,13 @@ function FilePicker({
     };
   }, [repoPath, query, ext]);
 
-  const filtered = matches ?? [];
+  // Rank the backend's walk-order matches best-match first (task 415) — a filename hit
+  // (especially an exact/prefix basename) sorts above a directory-only match. Recomputed
+  // when either the matches or the query changes; never mutates `matches`.
+  const filtered = useMemo(
+    () => rankFileMatches(query, matches ?? []),
+    [matches, query],
+  );
 
   // The trimmed search text, reused both as the filter and (#151) the new file's
   // name when a create affordance is offered.
@@ -96,8 +103,9 @@ function FilePicker({
       ? `${trimmedQuery}${suffix}`
       : trimmedQuery;
 
-  // Reset the highlight to the top whenever the result set changes.
-  useEffect(() => setActive(0), [matches]);
+  // Reset the highlight to the top whenever the result set or its ranking changes —
+  // `query` reorders `filtered` (task 415), so the top row moves as the user types.
+  useEffect(() => setActive(0), [matches, query]);
 
   // Keep the highlighted row scrolled into view as it moves.
   useEffect(() => {
