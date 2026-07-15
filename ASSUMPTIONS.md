@@ -3543,3 +3543,12 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Active chip lights up with Surface0 fill + primary text + full-opacity repo dot; muted at rest (accent never encodes selection).
 - Active filter auto-clears if its folder stops matching; global ⌘1–9 Canvas-jump guarded with `!globalSearchOpen`; ⌘-Number handled in the modal input keydown (e.code Digit1–9 + metaKey||ctrlKey), hinted via kbdHint.
 - No `search.ts` logic change (reuses 393's perRepoCap); one contract unit test added for the Infinity path.
+
+## Task 395
+- "Active agent" = running/live session (exitedCode === undefined), matching store.ts killAgentsInRepo + sibling Task 393 (chosen over "busy" for consistency).
+- Count is the repo's OWN running agents only (excludes worktree agents + recurring-owned children, mirroring the existing repoSessions filter); worktree sub-groups keep their own WorktreeHeader count — avoids double-counting.
+- Removed the existing always-on total-sessions `chip-count` beside the repo name, consolidating to the single count in the "+" slot (two numbers in one header would be redundant).
+- At zero running agents: no count; keep today's behavior — empty repo → always-visible accent "+"; non-empty-but-none-running → "+" hidden at rest, revealed on hover/focus (no "0" clutter).
+- Count color = neutral --text-secondary (mono, tabular-nums, --fs-micro, "line-changes" typographic treatment), not the repo/status/accent color.
+- Scoped to the expanded RepoGroup header only; collapsed rail + WorktreeHeader "+" out of scope; new CSS scoped under `.newSlot` so the shared `.plus` class is undisturbed.
+- Keyboard swap via :focus-within + visibility:hidden (not :has()), for cross-platform WebView support + zero layout shift.
