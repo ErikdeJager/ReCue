@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   useEffect,
@@ -188,6 +189,13 @@ function LeafPanel({
   const metaText = metaRepo
     ? `${repoName(metaRepo)}${branch ? ` · ${branch}` : ""}`
     : null;
+  // Folder-color panel border/focus frame (task 386): the resting tint + the
+  // #76 keyboard-focus frame resolve `--repo-color` off the owning folder's color
+  // instead of the app accent (UI v2 §7 — the accent never encodes selection). An
+  // agent uses its parent repo's color (`metaRepo` = `effectiveRepo`, so a worktree
+  // agent shares its parent's); absent (a folderless panel) ⇒ the plain accent
+  // fallback in the CSS still frames it.
+  const folderColor = metaRepo ? repoColor(metaRepo, repoColors) : undefined;
 
   // Double-click the header to rename the agent inline (#188) — same state machine
   // as the sidebar rename (#57) and the tab rename (CanvasTabs): seed the current
@@ -258,6 +266,11 @@ function LeafPanel({
   return (
     <div
       className={`${styles.panel} ${isActive ? styles.panelActive : ""}`}
+      style={
+        folderColor
+          ? ({ "--repo-color": folderColor } as CSSProperties)
+          : undefined
+      }
       onPointerDown={() => setActiveLeaf(leaf.id)}
       onMouseEnter={handleHoverEnter}
     >
