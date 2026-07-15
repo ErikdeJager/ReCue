@@ -230,14 +230,25 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border-hairline);
+  /* Folder-color resting tint (task 386): a subtle wash of the owning folder's
+     color over the hairline (full strength only when keyboard-focused). Plain
+     hairline first as the cross-platform color-mix fallback; `--repo-color` is set
+     inline per panel, absent ⇒ `transparent` ⇒ the plain hairline shows through. */
+  border-color: color-mix(
+    in srgb,
+    var(--repo-color, transparent) 30%,
+    var(--border-hairline)
+  );
   background: var(--bg-panel);
 }
 
-/* The keyboard-focused panel (#76): a subtle accent frame so it's clear which
-   panel Shift+arrows move from and where keystrokes go. */
+/* The keyboard-focused panel (#76): the owning folder's color frame (task 386 —
+   the accent never encodes selection) so it's clear which panel Shift+arrows move
+   from and where keystrokes go. `--repo-color` is set inline per panel; a plain
+   accent fallback keeps a frame even where it's absent. */
 .panelActive {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  border-color: var(--repo-color, var(--accent));
+  box-shadow: inset 0 0 0 1px var(--repo-color, var(--accent));
 }
 
 /* The whole header bar is the drag handle (#144, mirroring Overview #70):

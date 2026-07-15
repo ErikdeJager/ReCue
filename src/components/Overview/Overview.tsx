@@ -164,6 +164,11 @@ function PanelColumn({
   } = useSortable({ id });
   const style = {
     borderTopColor: color,
+    // Folder-color border/selection ring (task 386): the resting tint + selection
+    // ring resolve `--repo-color` off this per-repo color instead of the app accent,
+    // so selection never rides the accent (UI v2 §7). A worktree agent shares its
+    // parent repo's color (its cluster's `color` already comes via `effectiveRepo`).
+    "--repo-color": color,
     transform: CSS.Transform.toString(transform),
     transition,
   } as CSSProperties;
