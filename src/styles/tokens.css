@@ -103,6 +103,9 @@
   --status-running-dim: rgba(137, 180, 250, 0.14);
   --status-awaiting-dim: rgba(249, 226, 175, 0.14);
   --status-idle: #45475a; /* Surface1 (UI v2 §2.1 — was Overlay0) */
+  --busy-sheen: var(
+    --text-primary
+  ); /* busy-dot glint (== #cdd6f4 Text); task 385 */
 
   /* Usage bar critical state (#154): a fixed, vivid red for >=95% — deliberately
      more saturated / "on the nose" than the soft Catppuccin --status-error, and kept
@@ -252,6 +255,7 @@
   --status-running-dim: rgba(30, 102, 245, 0.12); /* (task 383) */
   --status-awaiting-dim: rgba(223, 142, 29, 0.12);
   --status-idle: #9ca0b0; /* Overlay0 */
+  --busy-sheen: #eff1f5; /* Latte Base — soft near-white glint (#343/385) */
   /* --usage-critical: NOT overridden (the fixed vivid red reads on both) */
 
   /* --- Syntax highlighting (Catppuccin Latte) --- */
