@@ -10,7 +10,8 @@
    Token-driven (no off-system color / no platform-divergent CSS). Inset so it isn't
    clipped by the panel's container. */
 .panel:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
   outline-offset: -1px;
 }
 
@@ -618,7 +619,8 @@
   background: var(--bg-elevated);
 }
 .seenButton:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
   outline-offset: 1px;
 }
 
