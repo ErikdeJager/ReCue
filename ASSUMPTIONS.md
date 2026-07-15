@@ -3682,3 +3682,11 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - "Focused agent" in Attention = the effective active queue selection (selectedId when it is a current queue member, else the top of the queue), mirroring how the Attention pane already resolves activeId. ⌘W with an empty queue is a no-op.
 - The × is placed as the rightmost control in the agent-pane header .agentActions group (after the ⋯ more-actions and Maximize buttons), i.e. the top-right corner of the individual agent.
 - No dispatcher change is needed for ⌘W: the close-panel keybind already routes to store.closeFocusedPanel in every view; only closeFocusedPanel's Attention branch changes (it was a deliberate no-op). ⌘W stays inert while a modal owns the keyboard (existing guard); ⌘⏎ dismiss is untouched.
+
+## Task 414
+
+- "Terminal lighten" == the existing #390 `terminalBackgroundLightness` background slider (Settings → Appearance), not a new foreground/ANSI-palette brightening feature: the task's "% slider, opt out by reducing" maps exactly onto it, so this is a re-default (0 → 25), not a new control.
+- Reach existing installs, not just fresh ones: added a one-time migration (`migrateTerminalBackground` + `terminalBackgroundMigrated` flag) mirroring the #367 line-height precedent, bumping an explicitly-stored legacy 0 → 25 once. This fulfills "brightened by default" even for installs that saved settings after #390 shipped (whose stored 0 would otherwise win over the new default).
+- The legacy default 0 is also the opt-out endpoint, so the one-time bump nudges a deliberately-chosen 0 back to 25 the first boot after shipping; the flag makes it a one-shot (user re-sets 0 and it sticks). Accepted, same tradeoff as #367, and nearly all stored 0s are the untouched old default.
+- Keep the slider in the Appearance section where #390 placed it (the orientation hint guessed Terminal); moving/relabeling it is gratuitous churn and out of scope.
+- Left the color math (`terminalBackground.ts`, ~#1b1b26 at 25%) and live-apply path untouched; also bumped the `terminalPool.ts` module-level `background` fallback 0 → 25 to track the new default (belt-and-braces, mirroring the existing `lineHeight` fallback comment).
