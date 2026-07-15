@@ -165,9 +165,12 @@ let currentTerminalSettings = {
   // before applyTerminalSettings runs.
   lineHeight: 1.0,
   cursorBlink: true,
-  // 0 (#390) = the near-black `--terminal-bg` base, unchanged. `resolveTerminalBg`
-  // interpolates from the live `--terminal-bg` toward gray by this slider value.
-  background: 0,
+  // 25 (#414) = a slightly brightened background; tracks
+  // DEFAULT_SETTINGS.terminalBackgroundLightness, used for any xterm created before
+  // applyTerminalSettings runs. 0 is the near-black `--terminal-bg` base.
+  // `resolveTerminalBg` interpolates from the live `--terminal-bg` toward gray by this
+  // slider value.
+  background: 25,
 };
 
 /** The concrete terminal background hex for the current lightness setting (#390),

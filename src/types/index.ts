@@ -531,6 +531,12 @@ export interface Settings {
    *  (lacking the key) is eligible for the one-time bump; set true once so a user who
    *  later re-picks 1.2 is never re-migrated. Mirrors `onboarded`. */
   terminalLineHeightMigrated: boolean;
+  /** One-time #414 migration marker: whether the terminal background-lightness
+   *  default raise (0 → 25) has been applied for this install. Defaults false so an
+   *  older blob (lacking the key) is eligible for the one-time bump of an explicit
+   *  legacy 0; set true once so a user who later re-picks 0 is never re-migrated.
+   *  Mirrors `terminalLineHeightMigrated`. */
+  terminalBackgroundMigrated: boolean;
   // Editor ("Open in editor")
   /** The editor "Open in editor" (⌘O, menus) launches: a catalog id from
    * `src/editors.ts` (`"vscode"`, `"idea"`, …), `"custom"` (→ `customEditorCommand`),
