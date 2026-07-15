@@ -3674,3 +3674,11 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Keep the existing filter-visibility thresholds (>4 branches) — do not make the filter always visible. The explicit "+ add branch" / "Create new branch" buttons remain for small repos; the fast-path create lives within the existing filter.
 - Suppress the auto-jump-to-create while remotes are still fetching (`fetchingRemotes`), so a query matching a not-yet-loaded remote doesn't prematurely convert.
 - Extract a tested pure helper `src/branchFilter.ts` (`matchBranchFilter`) for the local/remote/create decision, mirroring the `folderNav.ts` + test precedent; reused by both call sites.
+
+## Task 412
+
+- × semantics = the existing "kill + forget" (store.removeSession), unchanged from today's queue ×; NOT the non-destructive "remove from queue" (that stays the existing ⌘⏎/dismissAttention). ⌘W does the same removeSession.
+- The relocated header × fires removeSession directly with NO inline two-step confirm arm — matching the Overview agent-header × convention (which ignores settings.confirmDestructive) — so ⌘W and the × do literally the same thing; this drops the queue card's old #103 inline confirm arm.
+- "Focused agent" in Attention = the effective active queue selection (selectedId when it is a current queue member, else the top of the queue), mirroring how the Attention pane already resolves activeId. ⌘W with an empty queue is a no-op.
+- The × is placed as the rightmost control in the agent-pane header .agentActions group (after the ⋯ more-actions and Maximize buttons), i.e. the top-right corner of the individual agent.
+- No dispatcher change is needed for ⌘W: the close-panel keybind already routes to store.closeFocusedPanel in every view; only closeFocusedPanel's Attention branch changes (it was a deliberate no-op). ⌘W stays inert while a modal owns the keyboard (existing guard); ⌘⏎ dismiss is untouched.
