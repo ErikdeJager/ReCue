@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CheckCheck, Inbox, Maximize2, X } from "lucide-react";
 
 import { effectiveRepo, repoName, sessionLabel } from "../../paths";
+import { kbdHint } from "../../platform";
 import { ownedChildSessionIds, useStore } from "../../store";
 import { useKeybindLabel } from "../../useKeybind";
 import type { DiffLineCounts, SessionView } from "../../types";
@@ -100,7 +101,9 @@ function QueueCard({
  * The **Attention** view (#398, expanded by task 410): a FIFO triage queue for every
  * agent that currently needs the user — a freshly **started** agent that hasn't worked
  * yet ("NEW") as well as an active-but-idle "awaiting" agent (#112, "IDLE"). It drops an
- * agent the moment it goes busy and re-surfaces it when it settles again. Oldest wait first.
+ * agent the moment it goes busy and re-surfaces it once the store's **admission grace**
+ * (`ATTENTION_GRACE_MS`) confirms the settle — so a mid-turn output pause never flickers
+ * a working agent's card in and out. Oldest wait first.
  *
  * Two panes over the shared wave background (transparent, like Overview): a middle
  * **queue** of idle-agent cards and a right **agent** pane showing the selected agent's
@@ -119,6 +122,7 @@ function Attention() {
   const sessionBusy = useStore((s) => s.sessionBusy);
   const sessionActive = useStore((s) => s.sessionActive);
   const dismissedAttention = useStore((s) => s.dismissedAttention);
+  const attentionEligible = useStore((s) => s.attentionEligible);
   const sessionIdleSince = useStore((s) => s.sessionIdleSince);
   const recurrings = useStore((s) => s.recurrings);
   const selectedId = useStore((s) => s.selectedId);
@@ -126,11 +130,13 @@ function Attention() {
   const diffLineCounts = useStore((s) => s.diffLineCounts);
   const autoNameOn = useStore((s) => s.settings.autoName);
   const showDiffLineCounts = useStore((s) => s.settings.showDiffLineCounts);
+  const platform = useStore((s) => s.platform);
   const select = useStore((s) => s.select);
   const dismissAllAttention = useStore((s) => s.dismissAllAttention);
   const removeSession = useStore((s) => s.removeSession);
   const maximizeItem = useStore((s) => s.maximizeItem);
   const bigModeKey = useKeybindLabel("big-mode");
+  const closePanelKey = useKeybindLabel("close-panel");
 
   const recurringChildIds = useMemo(
     () => ownedChildSessionIds(recurrings),
@@ -143,6 +149,7 @@ function Attention() {
         sessionBusy,
         sessionActive,
         dismissed: dismissedAttention,
+        eligible: attentionEligible,
         idleSince: sessionIdleSince,
         recurringChildIds,
       }),
@@ -151,6 +158,7 @@ function Attention() {
       sessionBusy,
       sessionActive,
       dismissedAttention,
+      attentionEligible,
       sessionIdleSince,
       recurringChildIds,
     ],
@@ -237,6 +245,37 @@ function Attention() {
                 />
               );
             })}
+          </div>
+        )}
+        {/* Keybind tips for working the queue — only while there's something queued.
+            Fixed contextual chords via kbdHint (the shortcuts.ts strings verbatim);
+            rebindable actions via useKeybindLabel, hidden when unbound (""). */}
+        {queue.length > 0 && (
+          <div className={styles.queueFooter}>
+            <span className={styles.footerItem}>
+              <kbd className="kbd-chip">
+                {kbdHint(platform, "⇧↑/↓", "Shift+↑/↓")}
+              </kbd>
+              navigate
+            </span>
+            <span className={styles.footerItem}>
+              <kbd className="kbd-chip">
+                {kbdHint(platform, "⌘⏎", "Ctrl+Enter")}
+              </kbd>
+              dismiss
+            </span>
+            {closePanelKey && (
+              <span className={styles.footerItem}>
+                <kbd className="kbd-chip">{closePanelKey}</kbd>
+                remove
+              </span>
+            )}
+            {bigModeKey && (
+              <span className={styles.footerItem}>
+                <kbd className="kbd-chip">{bigModeKey}</kbd>
+                big mode
+              </span>
+            )}
           </div>
         )}
       </div>

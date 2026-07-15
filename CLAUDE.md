@@ -321,7 +321,13 @@ steady-state boot pays **zero** probe cost.
   canvases / activeCanvasId / claudeMissing / toasts / schedules / settings /
   sidebarWidth / folderOrder`; the app mounts one of
   **Overview, Attention, or Canvas** (#46/#75 — the original Focus view was removed;
-  **Attention** #398 is a FIFO triage queue of idle agents awaiting the user). The
+  **Attention** #398 is a FIFO triage queue of idle agents awaiting the user — queue
+  admission waits a 5s **confirmed-idle grace** (`attentionEligible` / `ATTENTION_GRACE_MS`
+  in `store.ts`, deliberately = the backend's `BACKGROUND_HOLD_MS`), because the ~700ms
+  busy-heuristic settle fires mid-turn on any output pause and #315's sticky hold only
+  engages *after* a first flicker — so a working agent never blinks into the queue, a
+  seeded spawn never flashes as "NEW", and the watched-agent notification #336 rides the
+  same confirmed settle; the queue pane also shows keybind tips while non-empty). The
   sidebar **`ViewSwitch`** presents **Overview + Attention** as the two equal-weight
   *main* views and **Canvas** as a smaller, de-emphasized *secondary* button (#406),
   with no queue-count badge (#405); in expanded mode Overview/Attention are text

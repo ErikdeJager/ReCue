@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { collectLeaves } from "./components/Canvas/canvasTree";
 import {
@@ -7,6 +7,7 @@ import {
   adjacentSessionId,
   anchorAgentForPanel,
   applyRecurringFire,
+  cancelAllAttentionGrace,
   contentForSelected,
   DEFAULT_SETTINGS,
   dedupeBranchLabels,
@@ -46,6 +47,7 @@ import type {
 } from "./types";
 import { effectiveRepo } from "./paths";
 import * as ipc from "./ipc";
+import * as notify from "./notify";
 import { isMockUpdate } from "./updater";
 
 function session(id: string): SessionView {
@@ -116,6 +118,9 @@ describe("accentCompanions (#107)", () => {
 
 beforeEach(() => {
   vi.useRealTimers();
+  // Drop any admission-grace timers a prior test armed (they're module-level; a
+  // leaked REAL 5s timer would otherwise fire into a later test's state, #398).
+  cancelAllAttentionGrace();
   useStore.setState({
     sessions: [],
     selectedId: null,
@@ -133,6 +138,9 @@ beforeEach(() => {
     canvasTemplates: [],
     sessionBusy: {},
     sessionActive: {},
+    sessionIdleSince: {},
+    dismissedAttention: {},
+    attentionEligible: {},
     claudeMissing: false,
     toasts: [],
     cloningRepos: [],
@@ -3581,7 +3589,8 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
     useStore.setState({
       view: "attention",
       sessions: [session("a1")],
-      sessionActive: { a1: true }, // queue-eligible: has been active, not busy
+      sessionActive: { a1: true }, // has been active, not busy
+      attentionEligible: { a1: true }, // admission grace confirmed (#398)
       dismissedAttention: {},
       selectedId: "a1",
     });
@@ -3600,6 +3609,7 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
       view: "attention",
       sessions: [session("a1")],
       sessionActive: {},
+      attentionEligible: { a1: true }, // confirmed idle — dismissal is the excluder
       // Dismissed → not in the queue. (Task 410 surfaces even never-active agents,
       // so `sessionActive: {}` alone no longer empties the queue — dismissing does.)
       dismissedAttention: { a1: true },
@@ -3610,5 +3620,134 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
     expect(killSpy).not.toHaveBeenCalled();
     expect(s().sessions).toHaveLength(1);
     killSpy.mockRestore();
+  });
+});
+
+describe("attention admission grace (#398 flicker fix)", () => {
+  const s = () => useStore.getState();
+
+  /** A full busy→idle cycle — the raw settle edge the backend emits ~700ms into any
+   * output pause. Membership must NOT follow it; only the grace confirmation may. */
+  function armIdle(id: string) {
+    s().setBusy(id, true);
+    s().setBusy(id, false);
+  }
+
+  beforeEach(() => {
+    // The grace is a module-level setTimeout: run every test under fake timers and
+    // stub the #212 git volley the settle edge schedules (600ms debounce).
+    vi.useFakeTimers();
+    useStore.setState({
+      sessions: [session("s1")],
+      refreshRepoGit: vi.fn().mockResolvedValue(undefined),
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("confirms eligibility only after ATTENTION_GRACE_MS of uninterrupted idle", async () => {
+    armIdle("s1");
+    // The dot-facing stamp is immediate (yellow at the raw settle); membership isn't.
+    expect(s().sessionIdleSince.s1).toBeDefined();
+    expect(s().attentionEligible.s1).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(s().attentionEligible.s1).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(s().attentionEligible.s1).toBe(true);
+  });
+
+  it("a flicker (busy resumes mid-grace) never grants eligibility", async () => {
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(3_000);
+    s().setBusy("s1", true); // output resumed — the pause was mid-turn
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(s().attentionEligible.s1).toBeUndefined();
+  });
+
+  it("going busy revokes granted eligibility instantly", async () => {
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+    s().setBusy("s1", true);
+    expect(s().attentionEligible.s1).toBeUndefined();
+  });
+
+  it("a NEW insert runs the grace (a seeded spawn goes busy first and never flashes)", async () => {
+    useStore.setState({ sessions: [] });
+    s().upsertSession(session("s2"));
+    expect(s().attentionEligible.s2).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s2).toBe(true);
+  });
+
+  it("a record UPDATE neither re-arms nor demotes an eligible member", async () => {
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+    s().upsertSession({ ...session("s1"), name: "renamed" });
+    expect(s().attentionEligible.s1).toBe(true); // not demoted
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s().attentionEligible.s1).toBe(true); // and no stray timer re-ran
+  });
+
+  it("dropSession cancels a pending grace and clears eligibility", async () => {
+    armIdle("s1");
+    s().dropSession("s1");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s().attentionEligible.s1).toBeUndefined();
+  });
+
+  it("markExited cancels a pending grace (an exited agent is never confirmed idle)", async () => {
+    armIdle("s1");
+    s().markExited("s1", 1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s().attentionEligible.s1).toBeUndefined();
+  });
+
+  it("markRunning (restart) revokes eligibility and re-runs the grace", async () => {
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+    s().markRunning("s1"); // Restart under the same id (#63)
+    expect(s().attentionEligible.s1).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+  });
+
+  it("a fired grace for an unknown id (shell terminal / removed) grants nothing", async () => {
+    armIdle("ghost"); // never in `sessions` — e.g. a shell terminal's settle
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s().attentionEligible.ghost).toBeUndefined();
+  });
+
+  it("the watched-agent notification rides the confirmed settle, not the raw edge (#336)", async () => {
+    const notifySpy = vi
+      .spyOn(notify, "notifyAgentReady")
+      .mockResolvedValue(undefined);
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, watchAllAgents: true },
+    });
+    armIdle("s1");
+    expect(notifySpy).not.toHaveBeenCalled(); // no longer fires on the raw edge
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    notifySpy.mockRestore();
+  });
+
+  it("a flickering settle never notifies a watched agent", async () => {
+    const notifySpy = vi
+      .spyOn(notify, "notifyAgentReady")
+      .mockResolvedValue(undefined);
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, watchAllAgents: true },
+    });
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(3_000);
+    s().setBusy("s1", true); // the pause was mid-turn — output resumed
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(notifySpy).not.toHaveBeenCalled();
+    notifySpy.mockRestore();
   });
 });

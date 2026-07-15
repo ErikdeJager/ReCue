@@ -434,6 +434,61 @@ function maybeNotifyWatched(id: string): void {
   void notifyAgentReady(label.primary, "Finished or awaiting your input");
 }
 
+/** Attention admission grace (#398 flicker fix): the backend settles busy→idle after
+ * only ~700ms of output quiet (`BUSY_WINDOW_MS`), and its #315 sticky hold engages
+ * only AFTER a first spurious settle + re-activation — so a working agent whose output
+ * pauses >700ms (a long silent tool call, a subagent, an API stall) emitted a real
+ * idle edge, flickered into the Attention queue, and vanished when output resumed.
+ * Queue membership therefore doesn't gate on the raw edge: `attentionEligible` is
+ * granted only once a session has stayed idle for this long — deliberately equal to
+ * the backend's `BACKGROUND_HOLD_MS`, the codebase's definition of "truly quiet".
+ * The busy dot keeps its snappy ~700ms settle; only the queue (and the watched-agent
+ * notification, which rides the same gate) waits for the confirmation. */
+const ATTENTION_GRACE_MS = 5_000;
+/** One pending grace timer per session id — armed on the idle edge / spawn / restart,
+ * canceled on busy resume or removal (the `reconnectingIds` drain discipline). */
+const attentionGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelAttentionGrace(id: string): void {
+  const timer = attentionGraceTimers.get(id);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    attentionGraceTimers.delete(id);
+  }
+}
+
+/** Boot re-entrancy (`applyBootState` replaces the session set wholesale) + the test
+ * suite's reset (a leaked real 5s timer would otherwise fire mid-suite). */
+export function cancelAllAttentionGrace(): void {
+  for (const timer of attentionGraceTimers.values()) clearTimeout(timer);
+  attentionGraceTimers.clear();
+}
+
+/** Arm (or restart) `id`'s admission grace: if the session is still present and still
+ * idle when it fires, it becomes a confirmed-idle Attention queue member — and, when
+ * `notify` is set (a real busy→idle settle outside boot), the watched-agent
+ * notification (#336) fires now, on the confirmed settle, never on a flicker. */
+function armAttentionGrace(id: string, notify: boolean): void {
+  cancelAttentionGrace(id);
+  attentionGraceTimers.set(
+    id,
+    setTimeout(() => {
+      attentionGraceTimers.delete(id);
+      const state = useStore.getState();
+      // Re-check live state (belt and braces — removal and busy also cancel the
+      // timer): a session gone or re-busied mid-grace is not confirmed idle. A
+      // non-session id (a shell terminal's settle also lands in `setBusy`) drops
+      // out here too.
+      if (!state.sessions.some((x) => x.id === id)) return;
+      if (state.sessionBusy[id]) return;
+      useStore.setState((s) => ({
+        attentionEligible: { ...s.attentionEligible, [id]: true },
+      }));
+      if (notify) maybeNotifyWatched(id);
+    }, ATTENTION_GRACE_MS),
+  );
+}
+
 /** Shallow-equality of two `path → string` maps — lets `refreshGithubUrls` (#327, the
  *  `path → url` map) and `refreshBranches` (#359, the `path → branch` map) skip a
  *  re-render (referential stability for the sidebar selectors) when nothing changed.
@@ -1726,6 +1781,12 @@ export interface AppState {
    * the triage queue while staying alive, until they next go busy (the flag is cleared
    * by `setBusy` on the next busy edge, so a fresh idle edge re-queues them). */
   dismissedAttention: Record<string, true>;
+  /** Sessions whose idle state the **admission grace** has confirmed (#398 flicker
+   * fix) — the Attention queue's membership gate. Granted `ATTENTION_GRACE_MS` after
+   * a busy→idle edge (or spawn / restart / boot), revoked the moment the session goes
+   * busy or is removed, so a mid-turn output pause (which settles the backend's ~700ms
+   * busy heuristic) never flickers a working agent's card into the queue. */
+  attentionEligible: Record<string, true>;
   /** Terminal items (#72) whose shell has exited → exit code (or null); drives the
    * Terminal exit overlay for non-agent PTYs (they aren't in `sessions`). */
   terminalExits: Record<string, number | null>;
@@ -2532,6 +2593,7 @@ async function killAgentsInRepo(repoPath: string): Promise<number> {
     ),
   ];
   ids.forEach((id) => intentionalKills.add(id));
+  for (const id of ids) cancelAttentionGrace(id);
   await Promise.all(ids.map((id) => ipc.killSession(id).catch(() => {})));
   useStore.setState((s) => {
     const clearSelection = s.selectedId != null && idSet.has(s.selectedId);
@@ -2551,6 +2613,9 @@ async function killAgentsInRepo(repoPath: string): Promise<number> {
       ),
       dismissedAttention: Object.fromEntries(
         Object.entries(s.dismissedAttention).filter(([id]) => !idSet.has(id)),
+      ),
+      attentionEligible: Object.fromEntries(
+        Object.entries(s.attentionEligible).filter(([id]) => !idSet.has(id)),
       ),
     };
   });
@@ -2667,6 +2732,7 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
   // Kill PTYs (intentional, so the exit doesn't toast / show Restart, #32).
   const killIds = [...agentIds, ...termPtyIds];
   killIds.forEach((id) => intentionalKills.add(id));
+  for (const id of killIds) cancelAttentionGrace(id);
   await Promise.all(killIds.map((id) => ipc.killSession(id).catch(() => {})));
   await Promise.all(
     [...scheduleIds].map((id) => ipc.cancelSchedule(id).catch(() => {})),
@@ -2710,6 +2776,9 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
         Object.entries(s.dismissedAttention).filter(
           ([id]) => !agentIds.has(id),
         ),
+      ),
+      attentionEligible: Object.fromEntries(
+        Object.entries(s.attentionEligible).filter(([id]) => !agentIds.has(id)),
       ),
       terminalExits: Object.fromEntries(
         Object.entries(s.terminalExits).filter(([id]) => !removedIds.has(id)),
@@ -2850,6 +2919,7 @@ export const useStore = create<AppState>()((set, get) => ({
   sessionActive: {},
   sessionIdleSince: {},
   dismissedAttention: {},
+  attentionEligible: {},
   terminalExits: {},
   // Default true: with no persisted sessions there is nothing to wait for (#359), and a
   // window that never calls `refresh()` (a detached canvas) must never hold a volley.
@@ -2985,12 +3055,20 @@ export const useStore = create<AppState>()((set, get) => ({
   setSessions: (sessions) => set({ sessions }),
   setRecents: (recents) => set({ recents }),
 
-  upsertSession: (session) =>
+  upsertSession: (session) => {
+    // A genuinely NEW session starts its Attention admission grace (#398 flicker
+    // fix) — one choke point for every spawn path (spawn / worktree / fork /
+    // schedule-fire). A record UPDATE must never re-arm it: that would demote an
+    // already-eligible queue member for another grace window.
+    const isNew = !get().sessions.some((x) => x.id === session.id);
     set((s) => ({
       sessions: [...s.sessions.filter((x) => x.id !== session.id), session],
-    })),
+    }));
+    if (isNew) armAttentionGrace(session.id, false);
+  },
 
   dropSession: (id) => {
+    cancelAttentionGrace(id);
     set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
@@ -3001,6 +3079,7 @@ export const useStore = create<AppState>()((set, get) => ({
       sessionActive: omitKey(s.sessionActive, id),
       sessionIdleSince: omitKey(s.sessionIdleSince, id),
       dismissedAttention: omitKey(s.dismissedAttention, id),
+      attentionEligible: omitKey(s.attentionEligible, id),
     }));
     // An agent removed from the left panel (Remove #57, or a clean exit #63) also
     // disappears from every Canvas tab showing it (#152). The PTY is killed by the
@@ -3010,12 +3089,14 @@ export const useStore = create<AppState>()((set, get) => ({
 
   markExited: (id, code) => {
     reconnectingIds.delete(id); // no longer reconnecting (#261)
+    cancelAttentionGrace(id); // an exited session can't be confirmed idle (#398)
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, exitedCode: code, reconnecting: false } : x,
       ),
       // An exited session is not working — clear any busy flag (#42).
       sessionBusy: omitKey(s.sessionBusy, id),
+      attentionEligible: omitKey(s.attentionEligible, id),
     }));
   },
 
@@ -3023,6 +3104,9 @@ export const useStore = create<AppState>()((set, get) => ({
     const wasBusy = get().sessionBusy[id] ?? false;
     // Capture the transition time before `set` for the Attention FIFO stamp (#398).
     const now = Date.now();
+    // Going busy revokes the admission grace (and, in the reducer below, any granted
+    // eligibility) — the queue drops the agent instantly; the next idle edge re-arms.
+    if (busy) cancelAttentionGrace(id);
     set((s) => {
       if ((s.sessionBusy[id] ?? false) === busy) return {}; // no-op, skip re-render
       // First activity marks the session "has been active" (#112): it stays set
@@ -3043,6 +3127,12 @@ export const useStore = create<AppState>()((set, get) => ({
         busy && s.dismissedAttention[id]
           ? omitKey(s.dismissedAttention, id)
           : s.dismissedAttention;
+      // Going busy also revokes confirmed-idle eligibility (#398 flicker fix); the
+      // idle edge does NOT grant it — that's the admission grace timer's job.
+      const attentionEligible =
+        busy && s.attentionEligible[id]
+          ? omitKey(s.attentionEligible, id)
+          : s.attentionEligible;
       return {
         sessionBusy: busy
           ? { ...s.sessionBusy, [id]: true }
@@ -3050,6 +3140,7 @@ export const useStore = create<AppState>()((set, get) => ({
         sessionActive,
         sessionIdleSince,
         dismissedAttention,
+        attentionEligible,
       };
     });
     // Busy→idle settle (#212): a turn just finished, so an in-terminal `git checkout`
@@ -3064,7 +3155,13 @@ export const useStore = create<AppState>()((set, get) => ({
     if (wasBusy && !busy) {
       const folder = get().sessions.find((x) => x.id === id)?.repoPath;
       scheduleGitRefresh(folder);
-      maybeNotifyWatched(id);
+      // The Attention admission grace (#398 flicker fix): eligibility — and the
+      // watched-agent notification (#336), which used to fire right here on the raw
+      // edge — land only once the session has stayed idle for the whole grace.
+      // `booting` is captured NOW, at arm time: the boot backstop (4s) is shorter
+      // than the grace (5s), so a fire-time check alone would let a boot-window
+      // settle notify after `booting` flips false.
+      armAttentionGrace(id, !booting);
     }
   },
 
@@ -3075,6 +3172,7 @@ export const useStore = create<AppState>()((set, get) => ({
       sessionBusy: s.sessionBusy,
       sessionActive: s.sessionActive,
       dismissed: s.dismissedAttention,
+      eligible: s.attentionEligible,
       idleSince: s.sessionIdleSince,
       recurringChildIds: ownedChildSessionIds(s.recurrings),
     });
@@ -3095,6 +3193,7 @@ export const useStore = create<AppState>()((set, get) => ({
       sessionBusy: s.sessionBusy,
       sessionActive: s.sessionActive,
       dismissed: s.dismissedAttention,
+      eligible: s.attentionEligible,
       idleSince: s.sessionIdleSince,
       recurringChildIds: ownedChildSessionIds(s.recurrings),
     });
@@ -3133,11 +3232,16 @@ export const useStore = create<AppState>()((set, get) => ({
 
   markRunning: (id) => {
     reconnectingIds.delete(id); // no longer reconnecting (#261)
+    // A restart is a fresh idle life (#398): revoke stale eligibility and run a
+    // fresh admission grace so the agent re-surfaces in the queue only after it.
+    cancelAttentionGrace(id);
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, exitedCode: undefined, reconnecting: false } : x,
       ),
+      attentionEligible: omitKey(s.attentionEligible, id),
     }));
+    armAttentionGrace(id, false);
   },
 
   markConnected: (id) => {
@@ -3913,6 +4017,9 @@ export const useStore = create<AppState>()((set, get) => ({
     // Mirror the reconnecting flag into the Set the output hot path checks (#261).
     reconnectingIds.clear();
     for (const v of views) reconnectingIds.add(v.id);
+    // Boot re-entrancy: the session set is replaced wholesale, so drop any pending
+    // admission-grace timers from the previous set (#398).
+    cancelAllAttentionGrace();
 
     // Multi-canvas (#58): the persisted tabs, else the one-shot migration of the old
     // single `canvas_layout`, else one empty canvas — and a detached window (#84)
@@ -3941,6 +4048,13 @@ export const useStore = create<AppState>()((set, get) => ({
       // right after boot (reconnecting → idle), never reverting to gray.
       sessionActive: Object.fromEntries(
         views.filter((v) => v.hasBeenActive).map((v) => [v.id, true]),
+      ),
+      // Boot views are idle (a resume never goes busy on its own — no has-work, #116)
+      // and queue-excluded while `reconnecting` anyway, so seed the confirmed-idle
+      // eligibility DIRECTLY (#398): an awaiting agent surfaces the moment its
+      // reconnecting flag clears — the pre-grace boot UX, no 5s wait.
+      attentionEligible: Object.fromEntries(
+        views.map((v) => [v.id, true] as const),
       ),
       recents: boot.recents,
       repoColors: boot.repo_colors,
@@ -5020,6 +5134,7 @@ export const useStore = create<AppState>()((set, get) => ({
         sessionBusy: s.sessionBusy,
         sessionActive: s.sessionActive,
         dismissed: s.dismissedAttention,
+        eligible: s.attentionEligible,
         idleSince: s.sessionIdleSince,
         recurringChildIds: ownedChildSessionIds(s.recurrings),
       });
@@ -6129,6 +6244,7 @@ export const useStore = create<AppState>()((set, get) => ({
       recurringIds.map((id) => ipc.cancelRecurring(id).catch(() => {})),
     );
     const idSet = new Set(ids);
+    for (const id of ids) cancelAttentionGrace(id);
     set((s) => {
       const clearSelection = s.selectedId != null && idSet.has(s.selectedId);
       return {
@@ -6148,6 +6264,9 @@ export const useStore = create<AppState>()((set, get) => ({
         ),
         dismissedAttention: Object.fromEntries(
           Object.entries(s.dismissedAttention).filter(([id]) => !idSet.has(id)),
+        ),
+        attentionEligible: Object.fromEntries(
+          Object.entries(s.attentionEligible).filter(([id]) => !idSet.has(id)),
         ),
         // Drop a now-dangling Overview filter on the forgotten repo (#34/#247).
         overviewRepoFilter:
