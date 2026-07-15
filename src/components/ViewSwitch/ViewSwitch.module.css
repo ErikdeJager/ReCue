@@ -35,10 +35,10 @@
   color: var(--text-primary);
 }
 
-/* --- Attention segment (#398) --- */
+/* --- Attention segment (#398, #405) --- */
 
-/* Expanded-mode Attention label: the AlertTriangle icon plus the count pill,
-   centered in the segment. */
+/* Expanded-mode Attention label: the AlertTriangle icon centered in the segment
+   (icon-only, no count badge — #405). */
 .attnLabel {
   display: inline-flex;
   align-items: center;
@@ -58,41 +58,4 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-/* Live queue-count badge (#398) — an accent pill beside the icon in expanded mode.
-   On-system tokens only: the accent fill + its readable companion foreground. */
-.count {
-  display: inline-flex;
-  min-width: 15px;
-  height: 15px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--accent-fg);
-  font-size: var(--fs-micro);
-  font-weight: 700;
-  line-height: 1;
-}
-
-/* Compact-rail count badge (#398): a small accent pill overlaid on the top-right
-   of the icon button, so the collapsed rail still surfaces the queue size. */
-.countCompact {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  display: inline-flex;
-  min-width: 14px;
-  height: 14px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 3px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--accent-fg);
-  font-size: var(--fs-micro);
-  font-weight: 700;
-  line-height: 1;
 }
