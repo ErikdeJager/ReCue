@@ -3735,3 +3735,17 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Right-group order is kbd hint then the "i" icon (info icon rightmost); yellow uses the existing `--status-awaiting` token; spinner is lucide `<Loader>` + a module-local `spin` keyframe (reduce-motion handled by the global killswitch).
 - Docker-stopped ("start Docker") hint relocated to its own full-width line below the row so the row's justify-between cleanly distributes just the toggle (left) and the kbd+info group (right).
 - Pure frontend/CSS only; no Rust/backend changes. Optional pure `showBuildIndicator` helper + tests suggested for coverage, matching the folder's existing pure-helper test pattern.
+
+## Task 420
+
+- Split point is "Re" | "Cue" so exactly the "Cue" glyphs take var(--accent) (matches the card's example); "Re" keeps var(--text-primary).
+- Implemented as an inline <span> child of the existing .wordmark div (not a new heading), so the inherited font/size/weight/letter-spacing/text-shadow are unchanged — color only, no light-theme override needed since var(--accent) is already theme-tuned.
+- No unit test added; EmptyState is pure presentational JSX, so verification is lint + build + manual smoke (accent-override live recolor, dark/light legibility).
+
+## Task 419
+
+- Reuse the existing `capAgentWidth` settings key (no new key, no migration) as the single gate; broaden its meaning/copy to "cap Overview panel width" while keeping the key for migration-safety and store-test stability.
+- The cap stays gated by the toggle for ALL panels (interpretation a) — turning it off leaves every column uncapped, rather than always-capping non-agent panels regardless of the toggle.
+- Same 900px `.cardCapped` value for every panel type (agent/recurring/file/diff/terminal/kanban/filetree/scheduled) for visual consistency; no per-type cap values.
+- Cap is Overview-wall only; Big mode / Canvas / detached windows are untouched.
+- Update the Settings label ("Cap agent card width" -> "Cap Overview panel width") and help text as a copy-only tweak; key and store default (true) unchanged.
