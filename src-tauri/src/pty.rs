@@ -328,12 +328,24 @@ impl Scrollback {
 const OUTPUT_SNIPPET_MAX_CHARS: usize = 200;
 /// Characters of leading context kept before the match when a long line is windowed.
 const OUTPUT_SNIPPET_CONTEXT_CHARS: usize = 40;
+/// Upper bound on the spaces a single cursor-forward (CUF, `ESC[<n>C`) run emits when
+/// `strip_ansi` approximates the visible layout (#337): `claude` spaces columns with
+/// non-erasing CUF moves, so search-fidelity needs them rendered as spaces — but a
+/// pathological `ESC[999999C` must not balloon the stripped string.
+const CURSOR_FORWARD_SPACE_CAP: usize = 64;
 
 /// Strip ANSI / terminal control sequences from `s`, best-effort, leaving readable text
 /// (#337). Terminal scrollback is full of CSI color/cursor codes, OSC title sets, and
 /// lone escapes; searching them raw would both miss matches split by escapes and surface
 /// garbage snippets. Handles:
-///   - **CSI** — `ESC [` … a final byte in `@`..=`~` (colors, cursor moves).
+///   - **CSI** — `ESC [` … a final byte in `@`..=`~` (colors, cursor moves). A
+///     **cursor-forward** move (CUF, final byte `C`) is the one exception that emits
+///     text: `claude` spaces columns with non-erasing `ESC[<n>C` moves, so `A\u{1b}[3CB`
+///     is visually `A   B`; dropping the sequence wholesale would collapse it to `AB` and
+///     a user searching the phrase they *see* (`A B`) would miss it. So a CUF becomes
+///     `n` spaces (default `1` when the parameter is empty/unparseable), clamped to
+///     [`CURSOR_FORWARD_SPACE_CAP`]. This is a **search-only, best-effort approximation of
+///     the visible layout** — every other CSI final byte still emits nothing.
 ///   - **OSC** — `ESC ]` … terminated by `BEL` (0x07) or `ST` (`ESC \`).
 ///   - **Other** `ESC`-prefixed escapes — the `ESC` plus its single following byte.
 ///
@@ -349,11 +361,25 @@ pub fn strip_ansi(s: &str) -> String {
                 Some('[') => {
                     // CSI: parameter/intermediate bytes until a final byte @..=~.
                     chars.next();
+                    let mut params = String::new();
                     while let Some(&p) = chars.peek() {
                         chars.next();
                         if ('@'..='~').contains(&p) {
+                            // A cursor-forward (CUF) move approximates visible spacing: emit
+                            // its parameter count of spaces, clamped. Every other final byte
+                            // still emits nothing.
+                            if p == 'C' {
+                                let n = params
+                                    .parse::<usize>()
+                                    .unwrap_or(1)
+                                    .clamp(1, CURSOR_FORWARD_SPACE_CAP);
+                                for _ in 0..n {
+                                    out.push(' ');
+                                }
+                            }
                             break;
                         }
+                        params.push(p);
                     }
                 }
                 Some(']') => {
@@ -1883,6 +1909,35 @@ mod tests {
         assert_eq!(strip_ansi("a\tb\nc"), "a\tb\nc");
         // A lone C0 control (e.g. BEL) is dropped, not emitted.
         assert_eq!(strip_ansi("x\u{07}y"), "xy");
+    }
+
+    #[test]
+    fn strip_ansi_cursor_forward_becomes_spaces() {
+        // A cursor-forward move (CUF, final byte `C`) approximates claude's column spacing:
+        // `A\u{1b}[3CB` is visually `A   B`, so it emits 3 spaces instead of collapsing to `AB`.
+        assert_eq!(strip_ansi("A\u{1b}[3CB"), "A   B");
+        // An empty parameter defaults to 1 space.
+        assert_eq!(strip_ansi("A\u{1b}[CB"), "A B");
+        // A pathological parameter clamps to CURSOR_FORWARD_SPACE_CAP (never balloons).
+        let huge = strip_ansi("A\u{1b}[999999CB");
+        assert_eq!(huge, format!("A{}B", " ".repeat(CURSOR_FORWARD_SPACE_CAP)));
+        // Every OTHER CSI final byte still emits nothing — a cursor-position move stays fully
+        // removed (guards against over-eager parameter parsing spilling spaces).
+        assert_eq!(strip_ansi("\u{1b}[2;5Hfoo"), "foo");
+    }
+
+    #[test]
+    fn strip_ansi_cursor_forward_enables_phrase_match() {
+        // End-to-end fidelity win: claude spaces words with a non-erasing single CUF
+        // (`ESC[1C`), so `A\u{1b}[1CB` is visually `A B`. After CUF→spaces the user's typed
+        // phrase (`a b`) matches, where the old wholesale-drop collapsed it to `AB` and
+        // missed. (A wider `ESC[3C` gap emits the literal `A   B` — searchable at that exact
+        // spacing — this asserts the common single-space case a user would actually type.)
+        let stripped = strip_ansi("A\u{1b}[1CB");
+        assert_eq!(stripped, "A B");
+        let hits = match_output_lines(&stripped, "a b", 5, OUTPUT_SNIPPET_MAX_CHARS);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, 1);
     }
 
     #[test]
