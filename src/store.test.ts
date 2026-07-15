@@ -915,6 +915,30 @@ describe("repo items — overviewPanels as the single source (#59)", () => {
     await useStore.getState().removeOverviewPanel("/repo/a", id);
     expect(useStore.getState().overviewPanels["/repo/a"]).toBeUndefined();
   });
+
+  it("addOverviewPanel bumps the repo to the front of recents (#400)", async () => {
+    // Opening any non-agent panel counts as "using" the repo, so it rises to the top
+    // of `recents` (the signal the ⌘K / ⌘N / template folder pickers order by).
+    useStore.setState({ recents: ["/repo/a", "/repo/b"] });
+    await useStore.getState().addOverviewPanel("/repo/b", "diff");
+    const { recents } = useStore.getState();
+    expect(recents[0]).toBe("/repo/b");
+    // No duplicate — the filter-before-prepend keeps the list deduped.
+    expect(recents.filter((r) => r === "/repo/b")).toHaveLength(1);
+  });
+
+  it("addOverviewPanel bumps the worktree PARENT, not the worktree folder (#400/#331)", async () => {
+    // A panel keyed by a worktree sub-folder must bump its parent repo, so the worktree
+    // dir never leaks into `recents` as a stray top-level entry (mirrors the #331 spawn).
+    useStore.setState({
+      sessions: [ovSession("wt-agent", "/wt/feat", 0, "/repo")],
+      recents: ["/other"],
+    });
+    await useStore.getState().addOverviewPanel("/wt/feat", "diff");
+    const { recents } = useStore.getState();
+    expect(recents[0]).toBe("/repo");
+    expect(recents).not.toContain("/wt/feat");
+  });
 });
 
 describe("action toasts (#83)", () => {
