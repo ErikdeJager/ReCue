@@ -6193,3 +6193,113 @@ on macOS, Windows, and Linux.
 **Dependencies:** Task 403 (the robust-activity-indicator fix). Turning hover-focus on by default
 amplifies the focus-report busy blink, so 403 landed first to keep the default-on experience
 flicker-free.
+
+### 409. [x] Softer Kanban board corners + restore card hover-lift
+
+The markdown **Kanban board** (#141–#151) reads less blocky again: its **columns** and **cards**
+get a modest, board-scoped corner radius (a tasteful middle between the UI v2 square look and the
+old v1 radii), and the card **hover-lift** animation the v2 reskin (task 382) flattened is
+restored — a hovered card smoothly rises ~2px with a soft drop shadow, signalling it's draggable —
+without reverting the global v2 square-panel language anywhere else.
+
+**What shipped** (branch `softer-kanban-corners-hover-lift`, PR
+[#165](https://github.com/ErikdeJager/ReCue/pull/165), merged 2026-07-15 into `dev`) — a single
+CSS-only file, 26 insertions / 6 deletions in
+`src/components/Kanban/KanbanPanel.module.css`:
+
+- **Column corners.** `.column` gains `border-radius: var(--radius-btn)` (6px). The rule already
+  had `overflow: hidden`, so the header top corners and the card-area bottom corners clip cleanly
+  to the rounded box. A comment marks it as Task 409's deliberate, board-scoped exception to the
+  v2 square-panel language (not a full revert).
+- **Card corners.** `.card`'s `border-radius: var(--radius-chip)` (0) → `var(--radius-micro)`
+  (4px) — kept ≤ the column radius so cards read slightly tighter than columns, like the old UI.
+  Because it's on the base `.card`, `.cardPlaceholder` and the in-tree `.cardOverlay` drag ghost
+  inherit the same rounded shape.
+- **Card transition.** The `.card` `transition` list is extended to also animate `transform` and
+  `box-shadow` (alongside `border-color`/`background`), so the rise/settle is smooth.
+- **Hover-lift.** The existing `.card:not(.cardPlaceholder):not(.cardOverlay):hover` rule (which
+  already set `border-color: var(--border-strong); cursor: grab`) gains
+  `transform: translateY(-2px)` + `box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28)` — the removed #234
+  values verbatim. The origin placeholder and floating ghost are excluded (the ghost keeps its own
+  `--shadow-menu`).
+- **Reduced-motion override.** A new `:global(body.reduce-motion) .card…:hover` rule zeroes
+  `transform`/`box-shadow`, because `global.css`'s killswitch only clamps transition *durations* —
+  a static hover transform would otherwise still jump instantly. Under reduced motion only the calm
+  border-strengthen + `grab` cursor cue remains.
+
+No TSX/logic changes (the `.card`/`.column`/`.cardPlaceholder`/`.cardOverlay` class names already
+existed and were applied where needed); no new tokens, no Rust, no test changes.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 409)
+
+- Chose modest radii as a tasteful middle — columns 6px (`--radius-btn`), cards 4px
+  (`--radius-micro`), cards ≤ columns — not the old 7/5px and not v2's 0.
+- **Reused existing on-system radius tokens directly** rather than adding new tokens to
+  `tokens.css` or panel-local custom properties: keeps it token-driven, covers the in-tree drag
+  ghost, and avoids touching the global square-panel tokens (`--radius-control`/`--radius-chip`
+  stay 0, so panels/cards elsewhere stay square).
+- Restored the hover-lift with the #234 values verbatim + the explicit reduced-motion `none`
+  override (required because the global killswitch only clamps durations, not static hover
+  transforms). Kept the literal `rgba` black shadow (no card-hover shadow token exists; the
+  `--shadow-*` floating-chrome tokens are far too heavy for a 2px lift) — renders identically
+  across WebViews.
+- Scoped strictly to the outer column/card shapes + the card hover-lift; left all Kanban
+  input/composer/checkbox/code-block styling square and untouched to avoid overlap with **Task
+  407** (the new-card composer input border/focus, which owns `.composerInput`).
+
+**Cross-platform:** CSS-only, on-system radius tokens + a literal `rgba` shadow; no path/shell/
+native primitives — identical (and theme-correct in dark/light) on macOS, Windows, and Linux.
+
+**Dependencies:** none.
+
+### 411. [x] Clicking a sidebar item in Attention view switches to Overview
+
+While the app is in the **Attention** triage view (#398 — the FIFO queue of idle agents awaiting
+the user), clicking any left-sidebar item (agent / file / diff / filetree / terminal / kanban /
+schedule / recurring, expanded row **or** collapsed-rail dot) now switches the app to **Overview**
+and selects that item there — so the user lands on the thing they clicked instead of staying on the
+Attention queue, which can only surface idle-agent members in its pane. Overview and Canvas sidebar
+clicks keep today's behavior.
+
+**What shipped** (branch `attention-sidebar-click-to-overview`, PR
+[#166](https://github.com/ErikdeJager/ReCue/pull/166), merged 2026-07-15 into `dev`) — 62
+insertions / 2 deletions across two files:
+
+- **`src/store.ts`** — the one behavioral change, made in the shared **`selectItem(item)`** action
+  (the #79 choke point every sidebar row routes through). Its non-canvas branch — which previously
+  just did `set({ selectedId: item.id })` for both Overview and Attention — is now view-aware:
+  when the captured `s.view === "attention"` it `set({ view: "overview", selectedId: item.id })`,
+  else it selects in place. This mirrors the branch's existing Canvas "item not shown here → go to
+  Overview" rule. `s` is captured once at the top, and the earlier #334 filter-clear `set` doesn't
+  mutate `s.view`, so the `attention` read stays correct — meaning an Attention **agent** click
+  still composes with #334 (switch to Overview **and** clear a mismatched `overviewRepoFilter` so
+  the agent is visible on the wall).
+- **`src/store.test.ts`** — four unit tests: Attention agent click → Overview + selected;
+  Attention non-agent (file/diff) click → Overview + selected; Overview click keeps the view
+  (regression guard for the unchanged branch); and the #334 + #411 composition (Attention agent
+  click switches **and** clears the mismatched filter).
+
+No Sidebar.tsx changes were needed — all rows already route through `selectItem`, and the
+repo-header/branch-line/rail-folder clicks already `setView("overview")` themselves.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 411)
+
+- Centralized the switch in the single shared `selectItem` action rather than per-call-site — the
+  cleanest on-pattern spot, mirroring the existing Canvas→Overview "not shown here → Overview" rule.
+- The switch is **unconditional** for any sidebar item click while in Attention (all item kinds),
+  matching the verbatim "clicking on an item" request, not only agents — and it also covers the
+  collapsed-rail agent dots (they route through `selectItem` too).
+- Repo-header title / branch-line / rail-folder clicks are **not** touched — they already call
+  `setView("overview")` + set the Overview filter.
+- Because the rule lives in shared `selectItem`, **global-search** item navigation performed while
+  in Attention also lands in Overview — a consistent, intended side effect (Attention can only
+  display idle queue members), not a regression.
+- Overview and Canvas sidebar-click behavior is left exactly as today (the #79 no-auto-switch rule
+  preserved for those views).
+
+**Cross-platform:** pure frontend store state + tests; no IPC/native/path/shell code — identical on
+macOS, Windows, and Linux.
+
+**Dependencies:** none. (Concurrent Attention tasks 410 — queue membership — and 412 — agent × /
+⌘W — were kept out of scope; any `Attention.tsx` file overlap was avoided since this task edits only
+`store.ts`/`store.test.ts`.)
