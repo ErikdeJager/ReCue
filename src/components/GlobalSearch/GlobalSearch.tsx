@@ -73,6 +73,10 @@ const KIND_LABEL: Record<ResultKind, string> = {
  * small so a keystroke's fan-out across every open repo stays bounded. */
 const PER_REPO_FILE_CAP = 20;
 
+/** How many folder-filter chips to show under the search bar (⌘1…⌘9), one per matching
+ * repo in group order — matches the single-digit ⌘-Number range (task 397). */
+const MAX_FILTER_CHIPS = 9;
+
 /** First non-empty line of a multi-line prompt, trimmed — the display title for a
  * scheduled / recurring session with no custom name. */
 function firstLine(text: string | null | undefined): string {
@@ -114,6 +118,9 @@ function GlobalSearch() {
   const [fileResults, setFileResults] = useState<SearchResult[]>([]);
   const [outputResults, setOutputResults] = useState<SearchResult[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  // The one active folder-filter chip (⌘-Number narrows results to a single repo,
+  // lifting the per-repo cap for it), or null when unfiltered (task 397).
+  const [filterRepo, setFilterRepo] = useState<string | null>(null);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -137,8 +144,9 @@ function GlobalSearch() {
     return () => clearTimeout(t);
   }, [query]);
 
-  // Reset the highlight to the top whenever the query changes.
+  // Reset the highlight to the top whenever the query — or the active filter — changes.
   useEffect(() => setActiveIndex(0), [debouncedQuery]);
+  useEffect(() => setActiveIndex(0), [filterRepo]);
 
   // The cluster repo a non-agent panel folder groups under: a worktree folder groups under
   // its parent repo (resolved via a worktree agent running there), else the folder itself.
@@ -399,14 +407,42 @@ function GlobalSearch() {
     [sessions],
   );
 
-  const grouped = useMemo(
-    () =>
-      rankAndGroup([...storeResults, ...fileResults, ...outputResults], {
-        activeRepos,
-      }),
-    [storeResults, fileResults, outputResults, activeRepos],
+  const allResults = useMemo(
+    () => [...storeResults, ...fileResults, ...outputResults],
+    [storeResults, fileResults, outputResults],
   );
-  const flat = useMemo(() => flatOrder(grouped), [grouped]);
+
+  // Active-first, per-repo-capped grouping — the source of the filter chips (chip #N is
+  // the Nth group, since `grouped` is already active-first ordered).
+  const grouped = useMemo(
+    () => rankAndGroup(allResults, { activeRepos }),
+    [allResults, activeRepos],
+  );
+
+  // The matching repos, in group order — chips (up to 9) map ⌘1…⌘9 onto them (task 397).
+  const matchingRepos = useMemo(() => grouped.map((g) => g.repo), [grouped]);
+  const chips = useMemo(
+    () => matchingRepos.slice(0, MAX_FILTER_CHIPS),
+    [matchingRepos],
+  );
+
+  // Drop a stale filter as soon as its folder no longer matches the query (so the list
+  // never goes empty behind an orphaned filter).
+  useEffect(() => {
+    if (filterRepo && !matchingRepos.includes(filterRepo)) setFilterRepo(null);
+  }, [filterRepo, matchingRepos]);
+
+  // What renders + navigates: the capped groups when unfiltered, else the chosen folder
+  // alone with the per-repo cap lifted (Infinity ⇒ keep everything, hiddenCount 0).
+  const visibleGroups = useMemo(() => {
+    if (!filterRepo) return grouped;
+    return rankAndGroup(
+      allResults.filter((r) => r.repo === filterRepo),
+      { activeRepos, perRepoCap: Number.POSITIVE_INFINITY },
+    );
+  }, [filterRepo, grouped, allResults, activeRepos]);
+
+  const flat = useMemo(() => flatOrder(visibleGroups), [visibleGroups]);
 
   // Clamp the highlight to the current result count.
   useEffect(() => {
@@ -433,6 +469,21 @@ function GlobalSearch() {
   };
 
   const onInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    // ⌘-Number / Ctrl+Number — toggle the Nth folder-filter chip (task 397). The input
+    // is reliably focused; ⌘1–9 is freed from the Canvas-jump while the modal is open
+    // (useKeyboardNav's globalSearchOpen guard). Matched on `e.code` for layout robustness.
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      /^Digit[1-9]$/.test(event.code)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      const repo = chips[Number(event.code.slice(5)) - 1];
+      if (repo) setFilterRepo((p) => (p === repo ? null : repo));
+      return;
+    }
     if (event.key === "ArrowDown") {
       if (flat.length === 0) return;
       event.preventDefault();
@@ -451,7 +502,9 @@ function GlobalSearch() {
       }
     } else if (event.key === "Escape") {
       event.preventDefault();
-      close();
+      // Peel off an active folder filter first; a second Escape closes the modal.
+      if (filterRepo) setFilterRepo(null);
+      else close();
     }
   };
 
@@ -485,6 +538,40 @@ function GlobalSearch() {
           <kbd className="kbd-chip">{hint}</kbd>
         </div>
 
+        {debouncedQuery.trim() !== "" && chips.length >= 2 && (
+          <div
+            className={styles.filterChips}
+            role="group"
+            aria-label="Filter by folder"
+          >
+            {chips.map((repo, i) => {
+              const on = filterRepo === repo;
+              return (
+                <button
+                  key={repo}
+                  type="button"
+                  className={`${styles.filterChip} ${on ? styles.filterChipActive : ""}`}
+                  aria-pressed={on}
+                  title={repo}
+                  onClick={() =>
+                    setFilterRepo((p) => (p === repo ? null : repo))
+                  }
+                >
+                  <span
+                    className={styles.filterDot}
+                    style={{ background: repoColor(repo, repoColors) }}
+                    aria-hidden
+                  />
+                  <span className={styles.filterName}>{repoName(repo)}</span>
+                  <kbd className={styles.filterKbd}>
+                    {kbdHint(platform, `⌘${i + 1}`, `Ctrl+${i + 1}`)}
+                  </kbd>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <div className={styles.results}>
           {debouncedQuery.trim() === "" ? (
             <p className={styles.hint}>
@@ -496,7 +583,7 @@ function GlobalSearch() {
               No results for “{debouncedQuery.trim()}”.
             </p>
           ) : (
-            grouped.map((rg) => (
+            visibleGroups.map((rg) => (
               <div key={rg.repo} className={styles.repoGroup}>
                 <div className={styles.repoHeader}>
                   <span

@@ -48,6 +48,71 @@
   outline: none;
 }
 
+/* Folder-filter chips (task 397): a wrap row under the search bar. Muted at rest;
+   the active chip lights to the Surface0 selection fill (accent never encodes
+   selection). Token-only, no color-mix — identical on macOS/Windows/Linux. */
+.filterChips {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-16);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-2) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chrome-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-meta-xs);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.filterChip:hover {
+  color: var(--text-secondary);
+}
+
+.filterChipActive,
+.filterChipActive:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.filterDot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: var(--radius-dot);
+  opacity: 0.5;
+}
+
+.filterChipActive .filterDot {
+  opacity: 1;
+}
+
+.filterName {
+  overflow: hidden;
+  max-width: 140px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filterKbd {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+}
+
 .results {
   flex: 1;
   min-height: 0;
