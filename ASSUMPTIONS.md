@@ -3628,3 +3628,39 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Compact rail: reorder icons to Overview, Attention, Canvas (Canvas last) for consistency; de-emphasizing Canvas there is optional (28px icons).
 - Keyboard shortcuts unchanged: `⌘\` (Overview↔Canvas) and `⌘1–9` (canvas) are layout-independent and stay; no shortcuts.ts change for a pure visual tweak.
 - Set a dependency on Task 405: both edit ViewSwitch.tsx/.module.css; serializing avoids a merge conflict and lets 406 build on the badge-free Attention button.
+
+## Task 409
+
+- Chose modest radii as a tasteful middle (not the old 7/5px, not v2's 0): columns 6px via var(--radius-btn), cards 4px via var(--radius-micro); cards kept ≤ columns like the old UI.
+- Reused existing on-system radius tokens directly (--radius-btn/--radius-micro) rather than adding new tokens to tokens.css or panel-local custom properties — keeps it token-driven, covers the in-tree drag ghost, and avoids touching the global square-panel tokens.
+- Scoped the softening to the Kanban board module only; did NOT change global --radius-control/--radius-chip (v2 square-panel language stays intact elsewhere).
+- Restored the hover-lift with the old #234 values verbatim: translateY(-2px) + box-shadow 0 4px 12px rgba(0,0,0,0.28), added transform/box-shadow to the .card transition, plus a :global(body.reduce-motion) override zeroing it (required because global.css only clamps durations, not static hover transforms).
+- Kept the literal rgba black hover shadow (no card-hover shadow token exists; the --shadow-* floating-chrome tokens are too heavy for a 2px lift); renders identically across WebViews.
+- Left all Kanban input/composer/checkbox/code-block styling square and untouched to avoid overlap with Task 407 (new-card input border/focus); this task owns only outer column/card corners + the card hover-lift.
+
+## Task 411
+
+- Centralized the switch in the single shared `selectItem` action (store.ts), the #79 choke point every sidebar row uses, rather than per-call-site — the cleanest, on-pattern spot (mirrors the existing Canvas→Overview "not shown here → Overview" rule).
+- The switch is unconditional for any sidebar item click while in Attention (agent, file, diff, filetree, terminal, kanban, schedule, recurring) — matching the verbatim "clicking on an item" request, not only agents.
+- It also covers the collapsed-rail agent dots (they route through `selectItem` too) — consistent with the expanded rows.
+- Repo-header title / branch-line / rail-folder clicks are NOT touched: they already call setView("overview") + set the Overview filter, so they already switch.
+- Because the rule lives in shared `selectItem`, global-search item navigation performed while in Attention also lands in Overview — a consistent, intended side effect (Attention can only display idle queue members), not a regression.
+- Overview and Canvas sidebar-click behavior is left exactly as today (#79 no-auto-switch preserved).
+
+## Task 407
+
+- Kept the composer input's existing per-column accent border (--col-accent, matching the column dot) rather than switching it to the global --accent (Peach); the edge is already an accent color and the per-column tint is deliberate, so the only real change is removing the redundant focus ring.
+- Scoped the change to the new-card composer input (.composerInput) only; the card-edit textarea (.cardEditInput, the user's reference) and the column-rename input (.columnNameInput) are left unchanged.
+- Kept the composer border always accent-colored (no separate focused vs unfocused state) and removed the focus ring entirely, accepting the minor a11y trade-off since the composer auto-focuses and the accent border + caret still delineate the field — this matches the user's explicit "no focus" request.
+- Interpreted "text area input fields" (plural) as the single new-card creation textarea per the request body ("creation textfield"), not a board-wide focus-ring removal.
+
+## Task 410
+
+- State→membership mapping: a queue member is any non-busy agent — both fresh gray (never active) and settled yellow (awaiting) — while busy blue (actively working) is excluded. This drops the prior `sessionActive` precondition; interpreted "started" = fresh gray and "actively doing something" = busy.
+- Removal-on-active is driven by the existing `sessionBusy` flag (backend `session://state {busy}`); no store/`setBusy` change needed — the current busy filter already delivers "removed once working", and the busy→idle path re-queues it as awaiting.
+- FIFO ordering unchanged: fresh agents (no `idleSince`) sort by their `createdAt` spawn time, interleaved chronologically with awaiting agents' idle-edge times (oldest waiting first); a newly started agent goes to the back.
+- Visual differentiation: pass the real `hasBeenActive` to each QueueCard so fresh agents show the gray idle dot + a "NEW" tag while awaiting agents keep the yellow dot + "IDLE" tag (avoids a fresh agent misreading as "finished — needs input").
+- Header count wording changed from "N idle" to "N waiting" to cover both fresh and awaiting members.
+- Kept `sessionActive` in the `AttentionQueueInput` interface (no longer read for membership) to avoid churn/signature changes at the 4 call sites and in the test — only removed it from the function's destructure.
+- Boot-persisted never-active idle sessions now enter the queue after the reconnect window settles (deemed desirable; the existing `reconnecting` exclusion prevents a boot flood).
+- Seeded/scheduled agents surface only once finished (their startup paint reads busy); a possible sub-second fresh flicker before the first busy transition is acceptable and not special-cased.
