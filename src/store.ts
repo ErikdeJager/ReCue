@@ -3885,7 +3885,11 @@ export const useStore = create<AppState>()((set, get) => ({
           // spawn waiting behind `docker build` reads as progress, not a hang.
           ipc.subscribeContainerEvents({
             onBuilding: ({ message }) => {
-              if (IS_MAIN_WINDOW) {
+              // While the New Session modal is open it shows an inline "Building…"
+              // indicator instead (#416), so suppress the toast to avoid doubling
+              // up; a build that starts after the modal closed (the spawn path)
+              // still toasts.
+              if (IS_MAIN_WINDOW && !get().newSessionOpen) {
                 get().pushToast(
                   message || "Building the dev-container image (first run)…",
                 );

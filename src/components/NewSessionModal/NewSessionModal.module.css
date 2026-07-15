@@ -588,10 +588,20 @@
 .containerRow {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-6);
   margin-bottom: var(--space-12);
   color: var(--text-secondary);
   font-size: var(--fs-meta-sm);
+}
+
+/* Right-hand group of the toggle row (#416): the ⌘⇧C kbd hint + the info "i",
+   grouped opposite the checkbox (the row is justify-between). */
+.containerRowActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  flex-shrink: 0;
 }
 
 /* Anchor for the info popover (the ViewsPopover pattern: relative root, absolute
@@ -619,12 +629,11 @@
 }
 
 /* The can/cannot popover: menu-pop supplies the floating chrome; this only sizes
-   and anchors it. It opens UPWARD (the row sits at the modal's bottom edge). */
+   it. Portaled to <body> and positioned inline via getBoundingClientRect (#416) —
+   the modal is a 300px fixed popover with overflow-y:auto, which clipped an in-flow
+   absolute panel. z-index clears the modal (.popover is 101, .overlay 100). */
 .infoPop {
-  position: absolute;
-  bottom: calc(100% + var(--space-4));
-  left: 0;
-  z-index: 50;
+  z-index: 1000;
   width: 300px;
 }
 
@@ -651,13 +660,39 @@
   line-height: 1.4;
 }
 
-/* Docker-stopped hint beside the disabled toggle: same informational voice as the
+/* Docker-stopped hint, a full-width line under the toggle row (#416 — relocated out
+   of the row so the row can be justify-between): same informational voice as the
    destructive-checkout warning (secondary text, no status color). */
 .containerHint {
   display: inline-flex;
   align-items: center;
   gap: var(--space-4);
+  margin-bottom: var(--space-12);
   color: var(--text-muted);
   font-size: var(--fs-micro);
   line-height: 1.3;
+}
+
+/* Inline first-run build indicator (#416): while the one-time `docker build` runs
+   with the modal open, this replaces the (suppressed) toast — yellow caution text +
+   a spinner, sitting just left of the Start button. */
+.buildingHint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  color: var(--status-awaiting);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.3;
+}
+
+.buildingSpin {
+  color: var(--status-awaiting);
+  animation: spin 1s linear infinite;
+}
+
+/* Module-scoped so it can't collide with the identically named Canvas keyframe. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

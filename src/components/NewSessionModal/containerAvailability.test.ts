@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   containerToggleState,
   DOCKER_RECHECK_MS,
+  showBuildIndicator,
 } from "./containerAvailability";
 
 describe("containerToggleState (dev-container toggle gating)", () => {
@@ -25,5 +26,23 @@ describe("containerToggleState (dev-container toggle gating)", () => {
     // enables the toggle without reopening the modal.
     expect(DOCKER_RECHECK_MS).toBeGreaterThanOrEqual(2000);
     expect(DOCKER_RECHECK_MS).toBeLessThanOrEqual(10000);
+  });
+});
+
+describe("showBuildIndicator (inline first-run build feedback)", () => {
+  it("shows only when the toggle is on AND a build is in flight", () => {
+    expect(showBuildIndicator(true, true, false)).toBe(true);
+  });
+
+  it("hides when the toggle is off, even mid-build", () => {
+    expect(showBuildIndicator(false, true, false)).toBe(false);
+  });
+
+  it("hides when no build is running (image already exists → no flash)", () => {
+    expect(showBuildIndicator(true, false, false)).toBe(false);
+  });
+
+  it("hides when the toggle is blocked (docker stopped never reaches a build)", () => {
+    expect(showBuildIndicator(true, true, true)).toBe(false);
   });
 });

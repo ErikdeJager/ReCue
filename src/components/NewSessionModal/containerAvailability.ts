@@ -25,3 +25,15 @@ export function containerToggleState(
 /** How often the branch step re-probes while docker reads as stopped, so starting
  * Docker enables the toggle live (no modal reopen). Only polled in that one state. */
 export const DOCKER_RECHECK_MS = 3500;
+
+/** Whether to show the inline first-run build indicator beside the Start button
+ * (#416): only when the toggle is ON, a one-time image build is in flight, and the
+ * toggle isn't blocked (a blocked/stopped docker never reaches a build). Pure so the
+ * render site and its unit test can't diverge. */
+export function showBuildIndicator(
+  useContainer: boolean,
+  building: boolean,
+  blocked: boolean,
+): boolean {
+  return useContainer && building && !blocked;
+}
