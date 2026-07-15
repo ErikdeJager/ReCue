@@ -5812,3 +5812,186 @@ primitives, no Rust change — identical on macOS, Windows, and Linux.
 **Dependencies:** none. (Built on the merged/archived busy model #42/#112/#315, terminal pool +
 ownership #18/#84, `ItemContent`/`DetachedNote`, big mode #157, per-agent diff stat #335,
 `WaveBackground` #377, `ViewSwitch`/`SegmentedControl`, `kbdHint`.)
+
+### 402. [x] Default the wave "Pause when covered by panels" setting to OFF (opt-in)
+
+The Settings → Appearance toggle **"Pause when covered by panels"** (`pauseWaveWhenCovered`,
+introduced by task 384) now defaults **OFF**. On a fresh install the background wave keeps animating
+even when the Overview wall has cards or a Canvas tab has panels; pausing while covered is now an
+explicit opt-in rather than the default. No behavior of the pause mechanism itself changed — only its
+default value and the accompanying doc/comment/test copy.
+
+**What shipped** (branch `task-402-wave-pause-default-off`, PR
+[#154](https://github.com/ErikdeJager/ReCue/pull/154), merged 2026-07-15 into `ui-rework`):
+
+- **`src/store.ts`**: `DEFAULT_SETTINGS.pauseWaveWhenCovered` flipped `true` → `false`, with a
+  rewritten comment stating the new default and rationale. No migration code — the shallow
+  `mergeSettings(raw)` back-fill handles the upgrade exactly as it did when the setting was introduced
+  (just with the opposite default).
+- **`src/types/index.ts`**: the `pauseWaveWhenCovered` doc comment updated "Default true" →
+  "Default false (opt-in, task 402)", keeping the description of what pausing does.
+- **`src/store.test.ts`**: the default-value/back-fill unit test renamed and updated — asserts
+  `DEFAULT_SETTINGS.pauseWaveWhenCovered === false`, `mergeSettings({}).pauseWaveWhenCovered ===
+  false`, the delete-key back-fill to `false`, and a persisted-`true`-is-preserved override (replacing
+  the old persisted-`false` case, since `false` is now the default).
+- **`src/components/WaveBackground/WaveBackground.tsx`**: the pause-when-covered comment dropped the
+  "(default)" parenthetical ("only when this is on (opt-in since task 402)"). No logic change — the
+  reactive `useStore((s) => s.settings.pauseWaveWhenCovered)` read is unchanged.
+- **`CLAUDE.md`**: the Settings → Appearance note corrected from "default on" to "default off
+  (opt-in, task 402), disabled while the wave is off".
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 402)
+
+- "Default off" = flip the `DEFAULT_SETTINGS` value only; no migration code (the `mergeSettings`
+  back-fill mirrors how task 384 introduced the setting).
+- Existing users who saved settings since task 384 persist `pauseWaveWhenCovered: true` explicitly
+  (`saveSettings` writes the whole blob), so their pause stays **ON** — treated as acceptable (they
+  made a choice; this is a default flip, not a forced behavior change). Users who never saved get the
+  new **OFF** default.
+- Left the historical task-384 `TASK_ARCHIVE.md` entry unchanged (it correctly records that 384
+  shipped default ON); updated `CLAUDE.md` + TS/comment copy instead. `Settings.tsx` help text left
+  as-is (it states no default). Correcting the "(default on)" parenthetical in the
+  `TRAJECTORY_TO_*.md` logs was optional/low-priority (historical) and skipped.
+
+**Cross-platform:** a one-value default flip plus comment/test/doc copy — no runtime logic and no
+OS-specific code paths; identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Built on task 384, which introduced `pauseWaveWhenCovered` — already
+merged/archived.)
+
+### 399. [x] Let macOS Ctrl+⌘+F native fullscreen through — ⌘F opens search only on the plain search chord
+
+The global-search chord (⌘F on macOS / Ctrl+F on Windows & Linux) no longer swallows macOS's native
+**Ctrl+⌘+F** enter-fullscreen combo. The ⌘F handler now fires only when **exactly one** of Cmd/Ctrl is
+held; when **both** are held the handler does not `preventDefault`, so Ctrl+⌘+F falls through to the
+OS. Plain Ctrl+F still opens search on macOS (unchanged), and ⌘F/Ctrl+F search is otherwise identical.
+
+**What shipped** (branch `let-ctrl-cmd-f-fullscreen-through`, PR
+[#155](https://github.com/ErikdeJager/ReCue/pull/155), merged 2026-07-15 into `ui-rework`):
+
+- **NEW `src/searchChord.ts`**: a pure `isGlobalSearchChord(e)` predicate over a structural
+  `ChordEvent` slice (`metaKey`/`ctrlKey`/`shiftKey`/`altKey`/`key`) — true iff `(meta||ctrl) &&
+  !(meta&&ctrl) && !shift && !alt && key.toLowerCase()==="f"`. Platform-agnostic (no dependence on the
+  async `platform()` signal, so correct from the first frame), extracted for unit-testability per the
+  `pasteHandler.ts` / `hoverFocus.ts` convention.
+- **NEW `src/searchChord.test.ts`**: matches ⌘F and Ctrl+F; rejects Cmd+Ctrl+F (the fullscreen
+  carve-out), Cmd+Shift+F, Cmd+Alt+F, a non-F key with Cmd, and a bare F; case-insensitive on the F.
+- **`src/useKeyboardNav.ts`**: the inline `(e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey &&
+  e.key.toLowerCase()==="f"` check replaced by `isGlobalSearchChord(e)`, with an updated comment
+  documenting the exactly-one-of-Cmd/Ctrl carve-out. All other guards (main-window-only, modal-open)
+  unchanged.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 399)
+
+- Chose a platform-agnostic "exactly one of Cmd/Ctrl" guard over a `platform()`-signal-based
+  `metaKey && !ctrlKey` / `ctrlKey && !metaKey` split — equivalent for the canonical chords, needs no
+  async platform lookup (correct from the first frame), and keeps plain Ctrl+F opening search on macOS
+  unchanged.
+- Scoped the modifier carve-out to the ⌘F search block only; every other ⌘-shortcut
+  (⌘N/⌘B/⌘K/⌘T/⌘E/⌘D/⌘\/⌘1-9) left unchanged (none reported to collide with a native Cmd+Ctrl combo).
+- Extracted a pure predicate + node unit test rather than an inline one-liner (matching
+  `pasteHandler.ts`/`hoverFocus.ts`). No Settings → Shortcuts copy change (the ⌘F/Ctrl+F "Global
+  search" hint stays accurate, so `shortcuts.test.ts` is untouched).
+
+**Cross-platform:** pure TS + a `metaKey||ctrlKey`-based predicate; the carve-out only affects the
+macOS-native Cmd+Ctrl+F combo (a no-op on Windows/Linux, where Ctrl+F alone still matches). Identical
+search behavior on all three OSes.
+
+**Dependencies:** none. (Built on the merged/archived ⌘F global search #337/#353 and the
+`metaKey||ctrlKey` shortcut convention.)
+
+### 400. [x] Order folder pickers most-recently-used — count every panel open as a repo "use"
+
+The folder/repo pickers that create a panel or session (⌘K Create-panel, ⌘N/⌘⇧N New-session,
+"New tab from template…") already order their options by the persisted **`recents`** list
+(most-recently-used first) — but `recents` was only bumped when an **agent spawned**, so opening a
+file / diff / terminal / kanban / file-tree panel in a repo never marked it recently-used and the
+ordering went stale for panel-heavy workflows. Fix: `addOverviewPanel` (the single funnel for every
+non-agent panel) now bumps the repo to the front of `recents`, so every existing picker's ordering
+becomes accurate — no picker UI code changed.
+
+**What shipped** (branch `order-folder-pickers-mru-400`, PR
+[#156](https://github.com/ErikdeJager/ReCue/pull/156), merged 2026-07-15 into `ui-rework`):
+
+- **`src/store.ts`** — inside `addOverviewPanel`, **before** the dedup early-return (so a re-open /
+  "Already open" also counts as a use), resolve the effective recent path and bump it:
+  `recentPath = sessions.find(x => x.repoPath === repoPath)?.worktreeParent ?? repoPath`, then
+  `void ipc.addRecent(recentPath).catch(() => {})` + an optimistic
+  `set(s => ({ recents: [recentPath, ...s.recents.filter(r => r !== recentPath)] }))`. Mirrors the
+  existing `addFolder` two-step and the #331 worktree-parent resolution (a worktree sub-folder never
+  leaks into `recents` as a stray top-level entry). `createKanbanBoard` funnels through
+  `addOverviewPanel`, so it is covered automatically.
+- **`src/store.test.ts`** — two new tests: `addOverviewPanel` bumps the repo to `recents[0]` with no
+  duplicate (filter-before-prepend); and a worktree panel keyed by `/wt/feat` (session
+  `worktreeParent = /repo`) bumps `/repo` to the front and `recents` never contains `/wt/feat`.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 400)
+
+- Read the card as: the pickers ALREADY order by `recents` (verified in `CreatePanelModal`,
+  `NewSessionModal`, `TemplateUseModal` — none re-sort it), so the real gap is the recency **signal**,
+  not the ordering code — the fix is bumping `recents` in `addOverviewPanel`, no picker UI change.
+- Scoped to the three folder-list create pickers. Excluded ⌘F Global search (a jump-to-existing-item
+  search, keeps its active-first alphabetical grouping), CloneRepoModal (native parent-dir dialog, no
+  repo list), and per-repo Views menus (not folder-picking create entry points).
+- Bump the worktree PARENT via `worktreeParent`/`effectiveRepo` (mirrors #331), on every
+  `addOverviewPanel` call including dedup re-opens. No backend change (`touch_recent`/`add_recent`
+  already exist, de-duped/capped/persisted). The sidebar folder order (alphabetical `repoOrder` +
+  #211 manual drag) is deliberately untouched — it reads `recents` only as a set, never its order.
+- `void … .catch(() => {})` swallows a persist failure (e.g. outside Tauri / in tests) so the local
+  optimistic bump still applies; not gated on `IS_MAIN_WINDOW` (matches every other `recents` bump).
+
+**Cross-platform:** pure store/TS logic plus the already-cross-platform `add_recent` command — no
+path/shell primitives; identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Builds on the existing `recents`/`touch_recent` model and the #331
+worktree-parent recents convention.)
+
+### 401. [x] Soften UI v2 element borders and focus rings
+
+The UI v2 (tasks 372–383) neutral element borders read lighter and the keyboard focus ring is subtler
+— a purely token-driven, theme-aware CSS tuning with no behavior change. Because nearly every element
+border is already `1px` (the practical floor), the perceived heaviness was color weight, so the lever
+was lowering the border-token **alpha**, not the pixel width; the focus ring was formalized into new
+tokens and softened to ~70% accent (still clearly visible for accessibility).
+
+**What shipped** (branch `soften-borders-focus-rings`, PR
+[#157](https://github.com/ErikdeJager/ReCue/pull/157), merged 2026-07-15 into `ui-rework`):
+
+- **`src/styles/tokens.css`** — lowered both neutral border-token alphas in **both** theme blocks:
+  dark `:root` `--border-hairline` 0.08→0.06, `--border-strong` 0.15→0.11; light
+  `:root[data-theme="light"]` `--border-hairline` 0.1→0.08, `--border-strong` 0.18→0.13. Added focus
+  tokens: `--focus-ring-width: 1.5px` (was a hard 2px) and `--focus-ring: color-mix(in srgb,
+  var(--accent) 70%, transparent)` in both blocks (light re-declares the color; width inherits from
+  `:root`) — accent-derived so a custom accent recolors it live, like the `--accent-tint-*` tokens.
+- **`src/styles/global.css`** — the global `:focus-visible` now consumes the tokens with the
+  plain-fallback-first pattern: `outline: var(--focus-ring-width) solid var(--accent)` (fallback) +
+  `outline-color: var(--focus-ring)` (softened), keeping `outline-offset: 2px`.
+- **Eight component focus/outline overrides** rewired to the same fallback-then-`outline-color`
+  pattern (color softened; existing inset 1px width/offset geometry preserved where intentional):
+  `Checkbox.module.css`, `Slider.module.css` (webkit + moz thumb),
+  `Settings.module.css` (`.historyToggle`), `FileTree.module.css`,
+  `FileViewer.module.css` (`.copyCode`), `DiffInspector.module.css` (`.panel` + `.seenButton`).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 401)
+
+- "Too thick" borders = lower token alpha, not pixel width (1px is the floor; heaviness is color
+  weight) — softening `--border-hairline`/`--border-strong` in both themes is the correct lever.
+- "Softer focus" = softer color (accent @ ~70% via `color-mix`) plus a thinner ring (2px→1.5px), NOT
+  removing it — accessibility keeps it clearly visible. Focus stays on the accent (its established,
+  legitimate use per DESIGN-SPEC), formalized into a new `--focus-ring` token; the CLAUDE.md
+  "accent never encodes status/selection" rule was read as applying to fills, not the focus ring.
+- Introduced `--focus-ring` + `--focus-ring-width` (no dedicated focus token existed before); kept
+  custom-accent-live behavior via the color-mix pattern. (Consumers' plain `var(--accent)` outline
+  line serves as the pre-`color-mix` fallback — the shipped `--focus-ring` is the single color-mix
+  declaration, not a two-line rgba cascade.)
+- Left deliberate accent/identity/selection borders out of scope: the 3px blockquote accent border,
+  the Overview repo-color top band, the scrollbar transparent inset border, the Settings active-swatch
+  selection ring, and all `--accent-tint-*` borders. Kept the `.modal-pop`/toaster border declaration
+  text and the `--border-*` token names intact so `modal.test.ts`/`toaster.test.ts`/`theme.test.ts`
+  stay green (they assert declaration text, never alpha values).
+
+**Cross-platform:** CSS-token tuning only; the sole engine-sensitive primitive (`color-mix`) carries a
+plain `var(--accent)` fallback (the app's established rule) — no macOS-only effects. Identical on
+macOS, Windows, and Linux (all Chromium/WebKit).
+
+**Dependencies:** none. (Tuning of the UI v2 design tokens from tasks 372–383.)
