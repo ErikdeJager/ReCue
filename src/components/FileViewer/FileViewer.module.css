@@ -81,6 +81,85 @@
   font-size: var(--fs-meta-sm);
 }
 
+/* Line-cap reveal footer (#413) — a fixed bottom bar below the scrolling content that
+   shows how much of a large file is rendered and reveals more on demand. Mirrors
+   .notice/.toolbar chrome (flush base surface, hairline seam toward the content), but
+   at the BOTTOM so it uses border-top. `flex-shrink: 0` keeps it pinned while the
+   content above scrolls. Token-only → identical on macOS / Windows / Linux. */
+.moreBar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-6) var(--space-12);
+  border-top: 1px solid var(--border-hairline);
+  background: var(--bg-panel);
+}
+
+/* "Showing N of M lines" — pushed to the left so the reveal buttons sit on the right. */
+.moreCount {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-xs);
+}
+
+/* Primary reveal button — the accent look from .saveBtn (a compact 22px block). */
+.moreBtn {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.moreBtn:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.moreBtn:focus-visible {
+  outline: 1px solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
+  outline-offset: 1px;
+}
+
+/* Secondary "Show all" — a muted ghost/text button. */
+.moreLink {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-meta-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.moreLink:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.moreLink:focus-visible {
+  outline: 1px solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
+  outline-offset: 1px;
+}
+
 .message {
   display: flex;
   flex: 1;
