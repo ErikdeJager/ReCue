@@ -5430,3 +5430,79 @@ repo isn't buried, and a repo with many hits can't flood the list.
 `color-mix`) — identical on macOS, Windows, and Linux.
 
 **Dependencies:** none. (Soft file overlap with sibling Task 394 on the same modal.)
+
+### 396. [x] Style the "Dark mode is the recommended experience" Settings note as a yellow caution
+
+In Settings → Appearance, the note "Dark mode is the recommended experience." — previously plain
+muted grey, easy to miss — now renders as an on-system **yellow caution** matching the
+untested-agent caution elsewhere in the same modal, so the recommendation reads as a deliberate
+warning rather than a footnote.
+
+**What shipped** (branch `task-396-appearance-dark-caution`, PR
+[#146](https://github.com/ErikdeJager/ReCue/pull/146), merged 2026-07-15 into `ui-rework`):
+
+- **`Settings.tsx`** Appearance/Theme field: the muted `<p className={styles.helpText}>` is
+  replaced by a `<span className={styles.fieldWarn}>` with a leading
+  `<TriangleAlert size={13} strokeWidth={2} aria-hidden />` icon (the established caution pattern,
+  yellow `--status-awaiting`) — meaning carried by text + icon, not color alone.
+- The **Linux-only** informational sentence ("Native file dialogs adopt this theme the next time
+  ReCue starts.", #349) is split into its own `.helpText` `<p>` gated by `isLinux(platform)`, so it
+  stays plain/informational (not yellow); macOS/Windows behavior unchanged.
+- `Settings.module.css` — comment-only broadening of the `.fieldWarn` note; no rule change.
+  `TriangleAlert`/`isLinux`/`platform` were already in scope (no new imports).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 396)
+
+- Reuse the existing `.fieldWarn` pattern (yellow `--status-awaiting` + `TriangleAlert`) rather than
+  a new class — consistent with the untested-agent caution in the same modal; satisfies "not by
+  color alone".
+- `--status-awaiting` is the app's designated status yellow (`#f9e2af` dark / `#df8e1d` light),
+  correct in both themes (there is no separate `--warning` token); the note wording is unchanged.
+
+**Cross-platform:** pure CSS-Module/JSX copy-styling, no backend/dependency/platform primitive; the
+only OS conditional is the preserved `isLinux` gate on the informational sentence — identical on
+macOS, Windows, and Linux.
+
+**Dependencies:** none.
+
+### 390. [x] Configurable terminal background lightness (near-black → gray)
+
+A "Terminal background" slider in Settings → Appearance lets the user lighten the agent/shell
+terminal background from today's near-black (`#11111b`) toward a soft gray (`#3a3a45`). It applies
+**live** to every running terminal (no host dispose, no scrollback replay) and to any created
+later, persists across restart, and defaults to 0 — byte-for-byte today's look — while keeping the
+light terminal foreground readable (endpoint chosen for ≥7:1 contrast).
+
+**What shipped** (branch `task-390-terminal-bg-lightness`, PR
+[#148](https://github.com/ErikdeJager/ReCue/pull/148), merged 2026-07-15 into `ui-rework`):
+
+- **Pure ramp helper** `src/components/Terminal/terminalBackground.ts` (+ `.test.ts`):
+  `terminalBackgroundColor(lightness, base?)` linearly interpolates each RGB channel from
+  `TERMINAL_BG_DARKEST = "#11111b"` toward `TERMINAL_BG_LIGHTEST = "#3a3a45"`, clamped to [0,100],
+  always returning a valid `#rrggbb` (malformed base falls back to darkest).
+- **Persisted setting** `terminalBackgroundLightness: number` added to the `Settings` type and
+  `DEFAULT_SETTINGS` (0); `mergeSettings` back-fills older blobs to 0 (no migration flag).
+- **Pool wiring** (`terminalPool.ts`): `currentTerminalSettings.background`, a `resolveTerminalBg()`
+  reading the `--terminal-bg` base token defensively, `createHost` uses it for
+  `theme.background`/`cursorAccent`, and `applyTerminalSettings` reassigns the whole `theme` object
+  on every host in one synchronous pass (never `clearTextureAtlas()`, per #221) and publishes
+  `--terminal-bg-user` so the wrapper padding frame tracks.
+- **Wrapper CSS** (`Terminal.module.css`): `.wrapper` background → `var(--terminal-bg-user,
+  var(--terminal-bg))` (plain-var fallback; unset = pristine `#11111b`).
+- **Store** (`applySettingsEffects` passes `background: s.terminalBackgroundLightness`) + an
+  Appearance-section `Slider` (0–100 step 5, `%` label) in `Settings.tsx`.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 390)
+
+- Setting is 0–100, default 0 = today's `#11111b`; ramp = linear RGB interp toward gray `#3a3a45`
+  (tunable, kept ≥7:1 contrast with `--terminal-fg`).
+- Color computed in JS (not `color-mix`), applied to the xterm `ITheme.background` + `cursorAccent`;
+  wrapper padding via the new `--terminal-bg-user` var (plain fallback). The `--terminal-bg` token
+  itself is never overridden; no `clearTextureAtlas`; one synchronous `applyTerminalSettings` pass
+  across all pooled hosts (#221/#18).
+
+**Cross-platform:** pure JS RGB interpolation + a plain CSS-var fallback (no `color-mix`, no native
+code) — identical on macOS, Windows, and Linux, including detached canvas windows (#84, each runs
+its own `applyTerminalSettings`).
+
+**Dependencies:** none.
