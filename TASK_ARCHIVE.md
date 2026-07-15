@@ -6303,3 +6303,109 @@ macOS, Windows, and Linux.
 **Dependencies:** none. (Concurrent Attention tasks 410 — queue membership — and 412 — agent × /
 ⌘W — were kept out of scope; any `Attention.tsx` file overlap was avoided since this task edits only
 `store.ts`/`store.test.ts`.)
+
+### 407. [x] Kanban new-card composer input drops the redundant focus ring
+
+The Kanban board's **"+ Add card"** composer textarea no longer shows two concentric colored edges
+at once. It already carries a per-column accent-colored border at rest (`--col-accent`, matching the
+column's header dot), so the app's separate softened-Peach keyboard focus ring layered a redundant
+second edge on top — this drops that ring on the composer input only, leaving the accent border as
+the field's sole, always-present edge, matching how the card **edit** experience reads.
+
+**What shipped** (branch `kanban-composer-focus-ring`, PR
+[#167](https://github.com/ErikdeJager/ReCue/pull/167), merged 2026-07-15 into `dev`) — a single
+CSS-only file, 9 insertions in `src/components/Kanban/KanbanPanel.module.css`:
+
+- A dedicated rule beside the existing `.composerInput` styles:
+  `.composerInput:focus, .composerInput:focus-visible { outline: none; }`. The qualified
+  `:focus-visible` selector (specificity 0,2,0) reliably beats the global `global.css`
+  `:focus-visible` ring (0,1,0) regardless of stylesheet import order — a bare `outline: none` on
+  the base class would tie the global rule's specificity and be order-dependent — and the `:focus`
+  selector also covers any UA default outline on every engine. The `--col-accent` border was left
+  exactly as-is.
+
+No global `:focus-visible` change, no token changes, no TS/Rust — the ring is untouched everywhere
+else in the app.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 407)
+
+- Kept the composer input's existing per-column accent border (`--col-accent`, matching the column
+  dot) rather than switching it to the global `--accent` (Peach) — the edge is already an accent
+  color and the per-column tint is deliberate (#233/#239); the only real change is removing the
+  redundant focus ring.
+- Scoped strictly to the new-card composer input (`.composerInput`); the card-edit textarea
+  (`.cardEditInput`, the user's reference) and the column-rename input (`.columnNameInput`) are
+  left unchanged.
+- Kept the composer border always accent-colored (no separate focused vs unfocused state) and
+  removed the focus ring entirely, accepting the minor a11y trade-off since the composer
+  auto-focuses and the accent border + caret still delineate the field — matching the explicit
+  "no focus" request.
+- Interpreted "text area input fields" (plural) as the single new-card creation textarea per the
+  request body, not a board-wide focus-ring removal.
+
+**Cross-platform:** pure token-driven CSS, no platform branch — renders identically on WKWebView
+(macOS), WebView2/Chromium (Windows), and WebKitGTK (Linux).
+
+**Dependencies:** none. (Task 409 also edited `KanbanPanel.module.css` — card/column corners +
+hover-lift — but never touched `.composerInput`'s focus outline, so the two edits were disjoint
+within the file.)
+
+### 410. [x] Attention queue surfaces started agents until they start working
+
+The **Attention** triage view (#398) is now a control surface for *all* agents that currently need
+the user, not only agents that finished a turn. A freshly **started** agent (gray "never worked
+yet") appears in the queue so the user can drive it, and it drops out the moment it is **actively
+working** (blue/busy). When it finishes and needs input again it re-appears (yellow "awaiting"),
+exactly as before.
+
+**What shipped** (branch `task-410-attention-started-agents`, PR
+[#168](https://github.com/ErikdeJager/ReCue/pull/168), merged 2026-07-15 into `dev`) — 97 insertions
+/ 30 deletions across four files:
+
+- **`src/components/Attention/attentionQueue.ts`** — the pure membership function's predicate is
+  relaxed: the `if (!sessionActive[s.id]) return false` precondition is dropped, so an agent is a
+  member iff it is **not** a recurring child, not exited, not `reconnecting`, **not busy**, and not
+  dismissed — i.e. any non-busy agent, fresh **or** awaiting. `sessionActive` was removed from the
+  destructure (to avoid `no-unused-vars`) but **kept in the `AttentionQueueInput` interface** so
+  the four call sites + tests need no signature change; the `sortKey`
+  (`idleSince[id] ?? createdAt * 1000`) is unchanged — a fresh agent with no idle edge correctly
+  sorts by its spawn time.
+- **`src/components/Attention/Attention.tsx`** — `QueueCard` gains a real `hasBeenActive` prop
+  (passed `sessionActive[id] ?? false` at the `queue.map` call site) replacing the hardcoded
+  always-yellow indicator: a fresh agent shows the gray `--status-idle` dot + a distinct **"NEW"**
+  tag; a settled agent keeps the yellow dot + the **"IDLE"** tag. The header count wording changed
+  from "N idle" to "N waiting" to cover both.
+- **`src/components/Attention/Attention.module.css`** — a `.newTag` chip variant mirroring
+  `.idleTag` but tinted with the gray `--status-idle` token, so the fresh chip reads distinct from
+  the awaiting chip.
+- **`src/components/Attention/attentionQueue.test.ts`** — the "excludes a never-active agent" test
+  flipped to assert inclusion; added coverage for a fresh **busy** agent (excluded), a fresh
+  **dismissed** agent (excluded), and mixed fresh/awaiting FIFO ordering (the `createdAt`
+  seconds→ms fallback interleaves correctly).
+
+No `store.ts` / `useKeyboardNav.ts` logic changes — they call `attentionQueue()` and inherit the
+new membership automatically, so Shift+↑/↓ nav and dismiss / dismiss-all operate over the expanded
+set for free. No backend/Rust change.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 410)
+
+- State→membership mapping: a queue member is any non-busy agent — both fresh gray (never active)
+  and settled yellow (awaiting) — while busy blue (actively working) is excluded. Interpreted
+  "started" = fresh gray and "actively doing something" = busy; removal-on-active is driven by the
+  existing `sessionBusy` flag (no store/`setBusy` change needed).
+- FIFO ordering unchanged: fresh agents (no `idleSince`) sort by `createdAt`, interleaved
+  chronologically with awaiting agents' idle-edge times; a newly started agent goes to the back.
+- Pass the real `hasBeenActive` to each `QueueCard` (gray idle dot + "NEW" vs yellow dot + "IDLE")
+  so a fresh agent doesn't misread as "finished — needs input".
+- Kept `sessionActive` in the `AttentionQueueInput` interface (no longer read for membership) to
+  avoid churn at the 4 call sites + the test — only removed it from the function's destructure.
+- Boot-persisted never-active idle sessions enter the queue after the reconnect window settles
+  (desirable; the existing `reconnecting` exclusion prevents a boot flood). Seeded/scheduled agents
+  surface only once finished (their startup paint reads busy); a possible sub-second fresh flicker
+  before the first busy transition is acceptable and not special-cased.
+
+**Cross-platform:** pure WebView/TS (queue predicate + presentational tweaks + tests); no
+native/`#[cfg]`/path/shell code — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Concurrent Attention tasks 411 — click-to-switch — and 412 — agent × /
+⌘W — touch the same directory but are orthogonal and were kept out of scope here.)
