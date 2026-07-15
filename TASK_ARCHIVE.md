@@ -5506,3 +5506,154 @@ code) — identical on macOS, Windows, and Linux, including detached canvas wind
 its own `applyTerminalSettings`).
 
 **Dependencies:** none.
+
+### 392. [x] Unify creatable item/panel ordering across every menu (one canonical order)
+
+Every place that lists the creatable item/panel types now renders them in one canonical order —
+**Session, Terminal, File Tree, File Viewer, Diff Viewer, Kanban board** — derived from a single
+shared source of truth instead of each surface hard-coding its own order, so the ⌘K launcher, the
+repo/worktree Views menus, the header "open a view" popover, and the Canvas template palette all
+agree.
+
+**What shipped** (branch `unify-item-type-order`, PR
+[#147](https://github.com/ErikdeJager/ReCue/pull/147), merged 2026-07-15 into `ui-rework`):
+
+- **New `src/itemTypeOrder.ts`** (+ `itemTypeOrder.test.ts`): `ItemTypeKey`, the canonical
+  `ITEM_TYPE_ORDER = [session, terminal, filetree, file, diff, kanban]`, `itemTypeRank` (unknown →
+  last, never throws), and a stable `byItemTypeOrder(items, keyOf)` sorter.
+- **Three registries routed through it** — `CreatePanelModal/panelTypes.ts` (`PANEL_TYPES`, so the
+  digit hints and `panelTypeForDigit` / `⌘⌥1–6` now index the canonical order), `ViewsMenu.tsx`
+  (its 5 view items reordered; "New session here" kept at the bottom per task 375), and
+  `Canvas/templateBlocks.ts` (`BLOCK_REGISTRY`, `new-agent → session` the only non-identity map).
+- Unit tests (`panelTypes.test.ts`, `templateBlocks.test.ts`) updated to assert each registry's key
+  order equals the canonical order; no menu gains/loses an entry — only order changes.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 392)
+
+- One shared source of truth (`itemTypeOrder.ts`) consumed by the three registries.
+- ⌘F global-search `KIND_ORDER` left unchanged (a results grouping, already canonical for the
+  shared subset); "Session first" applies only where Session is co-listed.
+- Only order changes — labels/icons/entries/behavior preserved. (Soft overlap with sibling Task 391
+  on `panelTypes.ts`/`CreatePanelModal.tsx`; the merge merged `origin/ui-rework` into the branch to
+  reconcile — merge commit `b49c089` — keeping this task's canonical order.)
+
+**Cross-platform:** pure TS array/type reordering, no `#[cfg]`/path/shell/CSS — byte-identical on
+macOS, Windows, and Linux; existing menu/listbox/palette rendering reused unchanged.
+
+**Dependencies:** none. (Soft file overlap with Task 391.)
+
+### 394. [x] Improve ⌘F search across live agent terminal output (verify + fidelity hardening of #337/#353)
+
+The ⌘F terminal-output search (grep every live agent's in-memory scrollback → a "Terminal output"
+result group) already shipped as #337 and was moved off the main thread by #353, so this card was a
+**verify + small fidelity fix**, not a rebuild: `claude` lays out on-screen columns with
+non-erasing cursor-forward (CUF, `ESC[<n>C`) moves, which the ANSI stripper dropped — so a phrase
+the user saw with spaces (`A B`) failed to match the searched text (`AB`). Now a CUF expands to
+spaces, so visible phrases reliably match.
+
+**What shipped** (branch `task-394-search-cuf-fidelity`, PR
+[#149](https://github.com/ErikdeJager/ReCue/pull/149), merged 2026-07-15 into `ui-rework`):
+
+- **`src-tauri/src/pty.rs` `strip_ansi`** (the search path's **only** caller): a CUF final byte
+  (`C`) now emits `min(n, CURSOR_FORWARD_SPACE_CAP)` spaces (n defaults to 1 for an empty param,
+  clamped at 64 so a pathological `ESC[999999C` can't balloon the string); every other CSI final
+  still emits nothing. New Rust unit tests (`A\u{1b}[3CB` → `A   B`, empty param → `A B`, huge param
+  clamped, `ESC[2;5H` still fully removed, and an end-to-end `match_output_lines` phrase-match) plus
+  an updated doc comment.
+- **`GlobalSearch.tsx`** minor polish: the non-navigable `:line` badge is hidden for `output`-kind
+  rows (it's an internal scrollback-tail index, not a file line).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 394)
+
+- Recognized as a potential duplicate of #337/#353 — rescoped to verify the shipped feature + the
+  side-effect-free CUF→spaces improvement; backend-only, collision-free with siblings 392/393.
+- "Currently active" = every backend-registered session (running, busy AND idle); the frontend
+  already filters hits to store-known sessions, so exited/forgotten agents don't surface — kept.
+- The ≥2-char query gate, the 256 KB scrollback-tail bound, and activation-selects-without-scrolling
+  are all left as-is; ordering / 6-per-repo cap untouched (siblings 393/392), output flowing through
+  the shared source-agnostic `rankAndGroup`.
+
+**Cross-platform:** pure string work, no OS/path/shell primitive, no new `#[cfg]` arm; chords route
+through `kbdHint` — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none. (Soft `GlobalSearch.tsx` overlap with siblings 393/397.)
+
+### 395. [x] Sidebar repo header — active-agent count in the "+" slot, swapping to "+" on hover
+
+Each sidebar repo folder header now shows, at rest, the count of its **active (running) agents** in
+the same slot the "New session" **+** button occupies; hovering the header (or keyboard-focusing the
+"+") swaps the count out and reveals the clickable **+** with zero layout shift — an at-a-glance
+per-folder agent tally without an always-on chip, mirroring the agent-row's diff-count ↔ × slot swap.
+
+**What shipped** (branch `task-395-sidebar-repo-active-count`, PR
+[#150](https://github.com/ErikdeJager/ReCue/pull/150), merged 2026-07-15 into `ui-rework`):
+
+- **`Sidebar.tsx` `RepoGroup`**: derives `activeCount = repoSessions.filter(exitedCode ===
+  undefined).length` (the repo's own running agents — worktree + recurring-owned children already
+  excluded); removes the always-on total-sessions `chip-count` beside the name; wraps the "+" in a
+  `.newSlot` holding the count (in-flow) with the "+" overlaid, `.newSlotCounted` when a count is
+  present.
+- **`Sidebar.module.css`**: `.newSlot` (fixed 22px slot), `.agentCount` (neutral `--text-secondary`,
+  mono, tabular-nums, `--fs-micro` — never accent/status), and scoped `.newSlot .plus` overlay +
+  `.newSlotCounted` swap rules (`:focus-within` for the keyboard path, `visibility:hidden` on the
+  count so the slot width — and header layout — never shift). The shared `.plus`/`.plusCoral` rules
+  are untouched, so the WorktreeHeader "+" is unaffected.
+- Zero-count cases keep today's behavior (empty repo → always-visible accent "+"; non-empty but
+  none-running → "+" hidden at rest, revealed on hover/focus; no "0").
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 395)
+
+- "Active agent" = running/live session (`exitedCode === undefined`), matching `killAgentsInRepo` +
+  sibling Task 393; the repo's own running agents only (worktree sub-groups keep their own
+  `WorktreeHeader` count — no double-count).
+- Removed the always-on total-sessions chip, consolidating to the single count in the "+" slot;
+  neutral `--text-secondary` "line-changes" typographic treatment (not repo/status/accent color).
+- Scoped to the expanded `RepoGroup` header only (collapsed rail + WorktreeHeader "+" out of scope);
+  keyboard swap via `:focus-within` + `visibility:hidden` (not `:has()`) for cross-platform WebView
+  support + zero layout shift.
+
+**Cross-platform:** pure TS + React + tokenized CSS (`:focus-within`/`visibility`/
+`font-variant-numeric`), no paths/shell/OS primitives, no `color-mix` — identical on macOS, Windows,
+and Linux.
+
+**Dependencies:** none.
+
+### 397. [x] ⌘F search — per-folder filter chips (⌘-Number) with lifted per-repo cap
+
+The ⌘F global search modal now shows a row of **folder chips** under the search bar (muted at rest);
+pressing **⌘-Number** (⌘1/Ctrl+1, …) lights the Nth chip and narrows results to only that folder,
+and pressing it again / Escape / clicking clears the filter. While a folder filter is active, Task
+393's per-repo 6-item cap is **lifted** for that folder so all its matches show (no "… +N more").
+
+**What shipped** (branch `task-397-search-folder-filter-chips`, PR
+[#151](https://github.com/ErikdeJager/ReCue/pull/151), merged 2026-07-15 into `ui-rework`):
+
+- **`useKeyboardNav.ts`**: the global ⌘1–9 Canvas-jump is now inert while `globalSearchOpen`, so the
+  modal owns ⌘-Number.
+- **`GlobalSearch.tsx`**: transient `filterRepo` state; `chips = grouped.map(g => g.repo).slice(0,
+  9)` (derived from 393's unfiltered active-first `grouped`, so chip #N == the Nth result group);
+  `visibleGroups` re-runs `rankAndGroup(allResults.filter(r => r.repo === filterRepo), { activeRepos,
+  perRepoCap: Infinity })` to lift the cap; `flat`/render point at `visibleGroups`; the chip row
+  (shown when the query is non-empty and ≥2 folders match) with a color dot + name + `⌘N`/`Ctrl+N`
+  hint (`kbdHint`); ⌘-Number handled in `onInputKeyDown` (`/^Digit[1-9]$/` on `e.code` +
+  `metaKey||ctrlKey`), filter-aware Escape (peel filter, then close), stale-filter auto-clear, and a
+  highlight reset on filter change.
+- **`GlobalSearch.module.css`**: `.filterChips` / `.filterChip` / `.filterChipActive` (Surface0 lit
+  state — accent never encodes selection) / `.filterDot` / `.filterName` / `.filterKbd`, token-only.
+- **`search.test.ts`**: an uncapped (`perRepoCap: Infinity`) contract test — every item present,
+  `hiddenCount === 0`.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 397)
+
+- Reuses Task 393's `rankAndGroup(results, { activeRepos, perRepoCap })` — the cap-lift is just
+  `perRepoCap: Infinity`; **no `search.ts` logic change**. Chips derived from 393's active-first
+  `grouped` so ⌘N filters the Nth group.
+- Only the first 9 matching folders get chips + ⌘1–9; the chip row shows only when the query is
+  non-empty AND ≥2 folders match; the filter is transient local state (resets on modal close).
+- Active chip lights up with Surface0 fill + primary text + full-opacity dot (muted at rest); the
+  filter auto-clears if its folder stops matching; global ⌘1–9 guarded with `!globalSearchOpen`.
+
+**Cross-platform:** pure TS/React/tokenized CSS; keyboard via `metaKey||ctrlKey` + `kbdHint` labels
+(⌘-Number on macOS, Ctrl+Number on Windows/Linux) — identical on all three.
+
+**Dependencies:** Task 393. (Soft `GlobalSearch.tsx`/`search.test.ts` overlap with sibling 394.)
