@@ -17,7 +17,7 @@ are appended (as `## Task <N>` or `### N. [x]` entries) after the index.
 
 ## Project context
 
-**ReCue** — a **macOS and Windows** desktop app (**Rust + Tauri 2 + React/TypeScript**) for
+**ReCue** — a **macOS, Windows, and Linux** desktop app (**Rust + Tauri 2 + React/TypeScript**) for
 running and managing many live coding-agent CLI sessions at once (Claude by default; Codex and
 OpenCode are pluggable, #101/#141): an **Overview** "agent wall" of real terminals, a **Canvas**
 split-panel workspace (with file, **git-diff**, and terminal viewers), and a repo-grouped
