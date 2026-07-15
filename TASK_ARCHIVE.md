@@ -6409,3 +6409,67 @@ native/`#[cfg]`/path/shell code — identical on macOS, Windows, and Linux.
 
 **Dependencies:** none. (Concurrent Attention tasks 411 — click-to-switch — and 412 — agent × /
 ⌘W — touch the same directory but are orthogonal and were kept out of scope here.)
+
+### 408. [x] Branch picker type-to-filter with create-branch fallback
+
+In every in-repo branch picker, the user can now just start typing to filter the branch list (the
+best match auto-highlights, locals before remotes). When the typed text matches **no** existing
+branch, the picker jumps straight to the create-branch option pre-filled with that text and focused,
+so Enter creates a new branch (⌘/Ctrl+Enter as an isolated worktree) instead of forcing the user to
+click "+ add branch" / "Create new branch" and retype the name.
+
+**What shipped** (branch `branch-picker-type-to-filter-create`, PR
+[#169](https://github.com/ErikdeJager/ReCue/pull/169), merged 2026-07-15 into `dev`) — 162
+insertions / 9 deletions across four files:
+
+- **`src/branchFilter.ts`** (new, 41 lines) — a pure helper `matchBranchFilter(query,
+  filteredLocals, filteredRemotes)` returning a `BranchFilterMatch` discriminated union
+  (`{kind:"local"|"remote", value}` / `{kind:"create", name}` / `{kind:"none"}`): the top matching
+  local wins, else the top matching remote, else — when the trimmed query is non-empty — the
+  create-branch fallback carrying the trimmed query as the new name; a blank/whitespace-only query
+  with no matches is `"none"`. Sibling of `paths.ts`, mirroring the `folderNav.ts` precedent.
+- **`src/branchFilter.test.ts`** (new, 53 lines) — vitest coverage: top-local wins, top-remote when
+  no locals, create on non-empty no-match, `"none"` on blank query, whitespace-only → `"none"`, and
+  the query trimmed into the create name.
+- **`src/components/NewSessionModal/NewSessionModal.tsx`** — `onBranchQueryChange` now routes a
+  no-match query through `matchBranchFilter`: on `create` it converts the filter to the create
+  action (`setAddBranchActive(true)`, seeds `newBranchName` with the typed text case-preserved,
+  clears `branchQuery`, clears both selections + the error). The existing focus effect moves the
+  caret into the pre-filled name input, and the existing `onNewBranchKeyDown`/submit/worktree/
+  defer-mode wiring handles Enter, ⌘⏎, and schedule/recurring advance for free — no new key
+  handlers. Guarded by `!fetchingRemotes` so a query matching a still-fetching remote doesn't jump
+  to create prematurely.
+- **`src/components/Sidebar/Sidebar.tsx`** — the "Checkout branch…" picker's (#266) filter
+  `onChange` gets the same behavior: a non-empty no-match query (and `!checkoutLoading`) opens the
+  create input pre-filled + focused (its `autoFocus`) and clears the filter; its existing Enter
+  handler creates + checks out off the folder's current branch. Otherwise `setCheckoutFilter(value)`
+  as before.
+
+Backend untouched — reuses `validate_new_branch`, `createBranchSession`/`createBranchWorktreeSession`,
+`createFolderBranch`, `list_branches`. The DiffInspector compare-branches selector was left alone
+(create semantics are meaningless there); the `>4`-branch filter-visibility thresholds are unchanged.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 408)
+
+- In-scope pickers: the NewSessionModal branch step (new-session + schedule/recurring +
+  per-repo/worktree/remote) and the Sidebar "Checkout branch…" picker. Out of scope: the
+  DiffInspector compare (base/target) selector.
+- Matching stays case-insensitive substring, auto-highlighting the top match (locals before
+  remotes) — not switched to prefix matching.
+- No-match trigger fires the moment a trimmed non-empty query matches zero local **and** zero
+  remote branches — no minimum query length. On jump-to-create: seed the create-name with the typed
+  text (raw case), clear the filter, focus the create-name input; base defaults to the current
+  branch. Enter creates (⌘/Ctrl+Enter = worktree in the modal); schedule/recurring records the
+  new-branch intent; the checkout picker's Enter creates + checks out.
+- Kept the existing `>4`-branch filter-visibility thresholds (did not make the filter always
+  visible); the explicit "+ add branch" / "Create new branch" buttons remain for small repos.
+- Suppress the auto-jump-to-create while remotes are still fetching (`fetchingRemotes`), so a query
+  matching a not-yet-loaded remote doesn't prematurely convert.
+- Extracted the tested pure helper `matchBranchFilter` (mirroring the `folderNav.ts` + test
+  precedent), reused by both call sites.
+
+**Cross-platform:** no path/shell/OS assumptions; the only platform-sensitive bit (⌘ vs Ctrl) is
+already handled by the reused `metaKey || ctrlKey` handlers + `kbdHint` labels — identical on macOS,
+Windows, and Linux.
+
+**Dependencies:** none.
