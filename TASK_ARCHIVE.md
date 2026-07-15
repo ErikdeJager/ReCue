@@ -5657,3 +5657,84 @@ and pressing it again / Escape / clicking clears the filter. While a folder filt
 (⌘-Number on macOS, Ctrl+Number on Windows/Linux) — identical on all three.
 
 **Dependencies:** Task 393. (Soft `GlobalSearch.tsx`/`search.test.ts` overlap with sibling 394.)
+
+### 384. [x] Wave background optimization pass — off-main-thread rendering, frame governance, and a pause-when-covered setting
+
+The UI v2 wave background (task 377) no longer competes with the webview main thread for every
+frame. Rendering moves to a **Web Worker + OffscreenCanvas** where the platform supports it (the
+verbatim, sha256-pinned engine runs unmodified inside the worker via the same `?raw` + `new
+Function` loader), with today's main-thread loop as a byte-for-byte fallback. Frame cost is now
+governed — **paused entirely when panels tile over the stage** (the common working state costs zero
+frames), fps-capped 48→24 while any agent is busy, and adaptively downscaled on sustained overruns —
+and a new Appearance setting **`pauseWaveWhenCovered` (default ON)** exposes the covered-pause.
+
+**What shipped** (branch `task-384-wave-optimization`, PR
+[#152](https://github.com/ErikdeJager/ReCue/pull/152), merged 2026-07-15 into `ui-rework`):
+
+- **Pure gate — `waveTick.ts`/`.test.ts`**: `gateFrame` input gains `covered`/`busy`; `covered` is a
+  `document.hidden`-style skip (no `eng.frame`, timebase reset so resume never integrates the paused
+  span, `frames` counter left intact so reduced-motion settle/freeze is preserved); `BUSY_FPS_CAP =
+  24` applied when any session is busy (48 otherwise), dt-integrated so drift speed is unchanged.
+- **Pure covered predicate — `wavePresets.ts`/`.test.ts`**: `waveCovered({ view, overviewHasCards,
+  activeCanvasLayout, activeCanvasDetached })` — Overview covered iff `overviewClusters(...)` is
+  non-empty (filter-aware; a zero-match repo filter and the first-launch hero are NOT covered);
+  Canvas (main) covered iff the active tab is not detached AND `layout !== null`; detached window
+  covered iff its canvas `layout !== null`.
+- **Pure governor — NEW `waveGovernor.ts`/`.test.ts`**: a reducer fed each drawn frame's `eng.frame`
+  wall time; over rolling ~4s windows (≥30 drawn frames) an avg > ~8ms steps render scale
+  1 → 0.75 → 0.5 (CSS upscales; the engine's area-scaled `targetCount` compounds the win) and never
+  steps back up within a run; plus the stats aggregation (fps/avg/p95) for the probe.
+- **Pure mode resolver — NEW `waveMode.ts`/`.test.ts`**: `resolveWaveMode(override, detected)`
+  (`"main"` always honored; `"worker"` only when detected) + a thin `detectWorkerWave` probe
+  (`Worker` + `OffscreenCanvas` + `transferControlToOffscreen` + a throwaway 2d-context check).
+- **Lazy runtime — NEW `waveHost.ts`** (reached only via `import("./waveHost")` — the #356 boundary,
+  keeps the engine chunk out of first paint AND off the main thread in worker mode): `startWave`
+  owns both runtimes — `readColors`/recolor `MutationObserver`, the ~150ms trailing-debounced
+  `ResizeObserver` (one buffer reset per resize settle, fixing sidebar-drag thrash), the
+  `recue.waveStats` probe. Worker mode `transferControlToOffscreen()`s the element (try/catch →
+  `onFallback`), spawns the worker, and forwards recolors/presets/resizes/state as messages.
+- **Worker entry + protocol — NEW `waveWorker.ts` + `waveMessages.ts`**: the engine-in-worker rAF
+  loop (ctx-failure posts `{type:"fallback"}`) and the typed host↔worker message set.
+- **Component slimmed — `WaveBackground.tsx`**: props `{ preset, covered }`; reads
+  `pauseWaveWhenCovered` + an any-busy selector reactively (`effectiveCovered = pauseWhenCovered &&
+  covered`); `import("./waveHost")` + handle setters; an epoch/`forceMain` one-retry remount is the
+  only allowed remount (heals StrictMode's one-shot-transfer double-mount) — preset/pause/setting
+  changes never remount. `backgroundAnimation` OFF still unmounts the canvas and wins over all.
+- **Covered wiring**: `MainApp.tsx` computes `waveCovered(...)` from the exact `overviewClusters`
+  helper the wall renders from (new `activeCanvasId`/`overviewOrder`/`overviewRepoFilter` selectors);
+  `CanvasWindow.tsx` computes it per-document (canvases are broadcast, so a detached window's covered
+  state tracks live).
+- **Setting**: `pauseWaveWhenCovered: boolean` in the Appearance group (`types/index.ts`),
+  `DEFAULT_SETTINGS` `true` (`store.ts`), a "Pause when covered by panels" checkbox under "Background
+  animation" (disabled while it's off) in `Settings.tsx`; `store.test.ts` asserts the `mergeSettings`
+  back-fill (`mergeSettings({}).pauseWaveWhenCovered === true`) so old blobs upgrade with no migration.
+- **`vitest.config.ts`**, `TRAJECTORY_TO_LINUX.md`/`TRAJECTORY_TO_WINDOWS.md` (real-box worker/fallback
+  smoke notes), and a surgical `CLAUDE.md` note extending the wave/Appearance text.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 384)
+
+- The vendored engine is verifiably DOM-free (only Math/parseInt/String + the ctx passed to
+  `frame()`), so it runs unmodified in a worker; worker mode is feature-detected with the current
+  main-thread loop as fallback (WebKitGTK ≤2.38 / Ubuntu 22.04 floor simply falls back). The engine
+  file (`src/vendor/WaveEngine.js`) and its sha256 pin are untouched — all six optimizations are
+  strictly host-side and independently revertible.
+- Pause = a gate skip identical to `document.hidden` (rAF stays scheduled, timebase reset, frame
+  counter frozen so reduced-motion semantics survive); resume is instant, never a remount/reseed. The
+  one allowed remount is the init-failure retry (fresh, never-transferred canvas — also heals the
+  StrictMode dev double-mount).
+- `pauseWaveWhenCovered` consumed reactively via `useStore` (`applySettingsEffects` untouched — same
+  pattern as `backgroundAnimation`); the checkbox is disabled while `backgroundAnimation` is off.
+- Detached windows adopt the setting at next boot (settings aren't broadcast — recorded 373/377
+  behavior), but their covered state tracks live because `canvases` are broadcast. Busy = any store
+  `sessionBusy`; the 24fps cap applies in both modes. Dev overrides `recue.waveMode`
+  (`"main"`/`"worker"`) + `recue.waveStats`, following the `recue.theme` precedent. Governor constants
+  (8ms/4s/≥30-frame windows) are pinned by behavior tests (one-way, floor 0.5), not exact numbers.
+
+**Cross-platform:** all new logic is pure TS + React/store + Web Worker/OffscreenCanvas (Chromium/
+WebKitGTK/WebView2 all support it, with the feature-detected main-thread fallback); no paths, shell,
+or OS primitives; no Rust changes (`settings` is an opaque backend blob). Worker-mode wave on Arch
+WebKitGTK, clean fallback on stock Ubuntu 22.04, and a WebView2 smoke are logged for real-box
+verification in `TRAJECTORY_TO_LINUX.md`/`TRAJECTORY_TO_WINDOWS.md`.
+
+**Dependencies:** Task 381, Task 382, Task 383 (serialized after the full UI v2 epic; 372–380 already
+archived).
