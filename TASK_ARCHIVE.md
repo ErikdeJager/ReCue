@@ -6149,3 +6149,47 @@ Windows, and Linux.
 **Dependencies:** Task 405 (remove the Attention count badge). Both tasks edit
 `ViewSwitch.tsx`/`.module.css`; serializing avoided a merge conflict and let 406 build on the
 badge-free, icon-only Attention button.
+
+### 404. [x] Default focus-follows-mouse (auto-focus agents & panels on hover) ON + clarify the label
+
+"Auto-focus on hover" (#368/#371) is now the **default** — agents and panels are focused/selected
+when the mouse moves over them — instead of the prior opt-in/off default, and the Settings toggle is
+reworded to say that **agents and panels** (not just "panels") are auto-focused. The hover-focus
+**behavior** itself is unchanged; this is a default-value + copy change.
+
+**What shipped** (branch `default-auto-focus-on-hover`, PR
+[#162](https://github.com/ErikdeJager/ReCue/pull/162), merged 2026-07-15 into `iteration-1`) — 18
+insertions / 13 deletions across four files:
+
+- **`src/store.ts`** — `DEFAULT_SETTINGS.autoFocusOnHover` flipped `false → true`, with the comment
+  updated to on-by-default (opt-out): because `mergeSettings` back-fills a **missing** key from the
+  default, an existing install that never chose the setting gets hover-focus **on**, while a user who
+  explicitly persisted `false` keeps it off.
+- **`src/types/index.ts`** — the `autoFocusOnHover` doc comment changed from "Off by default (opt-in)"
+  to "On by default (opt-out)".
+- **`src/components/Settings/Settings.tsx`** — the Behavior `Checkbox` label reworded from "Focus
+  panels on hover" to **"Auto-focus agents and panels on hover"**; the help text (blur/text-field
+  behavior) kept accurate.
+- **`src/store.test.ts`** — the default/back-fill test retitled `defaults autoFocusOnHover to true and
+  back-fills it (#404)`: asserts `DEFAULT_SETTINGS.autoFocusOnHover === true`, a blob **missing** the
+  key back-fills to `true`, an explicit `true` stays `true`, and an explicit `false` stays `false`
+  (opt-out preserved).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 404)
+
+- "Default behaviour is hover focus turned on" = flip `DEFAULT_SETTINGS.autoFocusOnHover` false→true;
+  the #368/#371 feature behavior is untouched.
+- **No migration flag.** Relied on `mergeSettings` back-fill semantics (missing key → new default) so
+  everyone who hasn't opted out gets hover-focus, while an explicitly-saved `false` is preserved —
+  deliberately **not** migrating to protect a never-chosen off-state (contrast `terminalLineHeight`
+  #367, which did migrate), because the card wants on-by-default for all non-opted-out users.
+- "The default option should say that agents and panels are auto focussed on hover" = reword the
+  Settings label to name agents **and** panels and update the type + `DEFAULT_SETTINGS` comments from
+  "opt-in/off" to "on by default (opt-out)".
+
+**Cross-platform:** pure store/TS default + copy change; no path/shell/native primitives — identical
+on macOS, Windows, and Linux.
+
+**Dependencies:** Task 403 (the robust-activity-indicator fix). Turning hover-focus on by default
+amplifies the focus-report busy blink, so 403 landed first to keep the default-on experience
+flicker-free.
