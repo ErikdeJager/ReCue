@@ -4397,6 +4397,18 @@ export const useStore = create<AppState>()((set, get) => ({
   // also a sidebar row. Dedups so callers don't have to (one diff per repo; one
   // markdown panel per file); updates optimistically and persists the list.
   addOverviewPanel: async (repoPath, kind, file) => {
+    // Opening any panel counts as "using" this repo (#400) — bump it to the front of
+    // `recents` so the ⌘K / ⌘N / template folder pickers surface it first. Done before
+    // the dedup early-return below so a re-open ("Already open") also counts as a use.
+    // Track the worktree PARENT, never the worktree sub-folder (mirrors the #331 spawn
+    // nesting), so a worktree folder never leaks into `recents` as a stray top-level entry.
+    const recentPath =
+      get().sessions.find((x) => x.repoPath === repoPath)?.worktreeParent ??
+      repoPath;
+    void ipc.addRecent(recentPath).catch(() => {});
+    set((s) => ({
+      recents: [recentPath, ...s.recents.filter((r) => r !== recentPath)],
+    }));
     const current = get().overviewPanels[repoPath] ?? [];
     // Terminals are never deduped — multiple independent shells per repo (#72);
     // one diff per repo; one file tree per repo (#167); one markdown panel per file.
