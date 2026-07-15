@@ -33,10 +33,11 @@ import WaveBackground from "./components/WaveBackground/WaveBackground";
 import {
   overviewIsEmpty,
   selectWavePreset,
+  waveCovered,
 } from "./components/WaveBackground/wavePresets";
 import { useOsFileDrop } from "./osFileDrop";
 import { prefetchDeferredChunks } from "./prefetch";
-import { useStore } from "./store";
+import { overviewClusters, useStore } from "./store";
 import { useKeyboardNav } from "./useKeyboardNav";
 import { ownedHere } from "./windowContext";
 
@@ -64,9 +65,12 @@ function MainApp() {
   const sessions = useStore((s) => s.sessions);
   const overviewPanels = useStore((s) => s.overviewPanels);
   const canvases = useStore((s) => s.canvases);
+  const activeCanvasId = useStore((s) => s.activeCanvasId);
   const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
   const schedules = useStore((s) => s.schedules);
   const recurrings = useStore((s) => s.recurrings);
+  const overviewOrder = useStore((s) => s.overviewOrder);
+  const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
   const init = useStore((s) => s.init);
   const beginCanvasLift = useStore((s) => s.beginCanvasLift);
   const cancelCanvasLift = useStore((s) => s.cancelCanvasLift);
@@ -166,6 +170,25 @@ function MainApp() {
     view === "canvas" ? "canvas" : "overview",
     overviewIsEmpty({ sessions, overviewPanels, schedules, recurrings }),
   );
+  // Whether panels cover the stage right now, so the wave can pause (task 384):
+  // Overview ⇒ the (filter-aware) wall has cards; Canvas ⇒ the active tab is not
+  // detached and has a layout. Mirrors the actual render — Overview shows exactly
+  // `overviewClusters`, and a detached active tab renders a note, not panels.
+  const waveIsCovered = waveCovered({
+    view: view === "canvas" ? "canvas" : "overview",
+    overviewHasCards:
+      overviewClusters({
+        sessions,
+        overviewPanels,
+        overviewOrder,
+        schedules,
+        recurrings,
+        filter: overviewRepoFilter,
+      }).length > 0,
+    activeCanvasLayout:
+      canvases.find((c) => c.id === activeCanvasId)?.layout ?? null,
+    activeCanvasDetached: detachedCanvasIds.includes(activeCanvasId),
+  });
 
   return (
     <div className="app">
@@ -183,7 +206,7 @@ function MainApp() {
         <div className="app-body">
           <Sidebar />
           <main className="main">
-            <WaveBackground preset={wavePreset} />
+            <WaveBackground preset={wavePreset} covered={waveIsCovered} />
             <div className="main-content">
               {view === "overview" ? (
                 <Overview />

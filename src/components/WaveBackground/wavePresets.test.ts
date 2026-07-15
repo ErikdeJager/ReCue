@@ -5,6 +5,7 @@ import {
   selectWavePreset,
   WAVE_BASE,
   WAVE_PRESETS,
+  waveCovered,
 } from "./wavePresets";
 
 describe("WAVE_PRESETS", () => {
@@ -97,5 +98,72 @@ describe("overviewIsEmpty", () => {
     expect(overviewIsEmpty({ ...empty, recurrings: [{ id: "r1" }] })).toBe(
       false,
     );
+  });
+});
+
+describe("waveCovered (task 384)", () => {
+  it("Overview is covered iff the wall has cards (filter-aware, hero not covered)", () => {
+    const base = {
+      view: "overview" as const,
+      activeCanvasLayout: null,
+      activeCanvasDetached: false,
+    };
+    // Cards on the wall ⇒ covered.
+    expect(waveCovered({ ...base, overviewHasCards: true })).toBe(true);
+    // Empty / filtered-to-nothing wall (the hero or a no-match filter) ⇒ crust
+    // shows, so NOT covered — the wave keeps running.
+    expect(waveCovered({ ...base, overviewHasCards: false })).toBe(false);
+  });
+
+  it("Canvas (main) is covered iff the active tab has a layout and is not detached", () => {
+    const layout = { kind: "leaf", id: "a" };
+    // A tab with panels ⇒ covered.
+    expect(
+      waveCovered({
+        view: "canvas",
+        overviewHasCards: false,
+        activeCanvasLayout: layout,
+        activeCanvasDetached: false,
+      }),
+    ).toBe(true);
+    // An empty tab (layout === null) ⇒ crust, NOT covered.
+    expect(
+      waveCovered({
+        view: "canvas",
+        overviewHasCards: false,
+        activeCanvasLayout: null,
+        activeCanvasDetached: false,
+      }),
+    ).toBe(false);
+    // A detached active tab shows a DetachedCanvasNote (not panels) ⇒ NOT covered,
+    // even though its layout is non-null.
+    expect(
+      waveCovered({
+        view: "canvas",
+        overviewHasCards: false,
+        activeCanvasLayout: layout,
+        activeCanvasDetached: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("Detached window (view canvas, never detached-active) tracks its own layout", () => {
+    // A detached window calls with activeCanvasDetached:false and its own layout.
+    expect(
+      waveCovered({
+        view: "canvas",
+        overviewHasCards: false,
+        activeCanvasLayout: { kind: "leaf", id: "x" },
+        activeCanvasDetached: false,
+      }),
+    ).toBe(true);
+    expect(
+      waveCovered({
+        view: "canvas",
+        overviewHasCards: false,
+        activeCanvasLayout: null,
+        activeCanvasDetached: false,
+      }),
+    ).toBe(false);
   });
 });

@@ -1658,6 +1658,16 @@ DOM/WebGL renderer override).
       (`RECUE_DISABLE_DMABUF=1` on a box where that forces llvmpipe): the wave stays
       smooth (or at least never starves terminal input); Background animation OFF
       unmounts it cleanly.
+- [ ] **Wave worker-mode + fallback (task 384).** On WebKitGTK **≥ 2.40** (current
+      Arch) the wave should render in **worker mode** (OffscreenCanvas off the main
+      thread — set `localStorage["recue.waveStats"]="1"` and read `[wave] mode=worker …`
+      / `window.__waveStats`); on the **stock Ubuntu 22.04 floor (≤ 2.38, no
+      OffscreenCanvas)** it must cleanly **fall back to main mode** with the wave still
+      visible (never a blank stage). Force each with `localStorage["recue.waveMode"] =
+      "main" | "worker"` and reload; `"main"` always downgrades, `"worker"` still requires
+      detection. Also confirm the **pause-when-covered** setting (default on) stops the
+      wave when the Overview wall has cards / a Canvas tab has panels and resumes the
+      instant the stage clears, and that a busy agent halves the fps (24 vs 48).
 - [ ] **`color-mix()` on the oldest supported WebKitGTK** (the ubuntu-22.04 /
       webkit2gtk-4.1 floor): accent-tinted buttons/fills and the busy-dot rings render;
       where color-mix is unsupported the plain token fallbacks must appear (accent-dim /

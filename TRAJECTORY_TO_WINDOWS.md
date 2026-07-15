@@ -1158,6 +1158,13 @@ already in CI.
       ~6 agents with Background animation ON: the wave animates smoothly behind the cards
       with no visible input latency in a focused terminal; toggling it OFF in Settings →
       Appearance unmounts the canvas.
+- [ ] **Wave worker-mode smoke (task 384, WebView2/Chromium).** WebView2 supports
+      OffscreenCanvas, so the wave should render in **worker mode** off the main thread
+      (`localStorage["recue.waveStats"]="1"` → `[wave] mode=worker …` / `window.__waveStats`);
+      `localStorage["recue.waveMode"]="main"` must downgrade to the main-thread loop with
+      no visual change. Confirm the new **"Pause when covered by panels"** setting (default
+      on) pauses the wave when panels cover the stage and resumes when it clears, that a
+      recolor/theme flip still recolors both modes, and that a busy agent halves the fps.
 - [ ] **Dense-mode divider drag at gap 0.** ⌘D → Ctrl+D: Overview cards + Canvas splits
       tile edge-to-edge; every Canvas divider (both orientations) still drags via the
       invisible ±4px hit area; the confirm toast fires.
