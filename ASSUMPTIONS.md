@@ -3525,3 +3525,9 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - "Currently active" = every backend-registered session (running, busy AND idle); the frontend already filters hits to store-known sessions so exited/forgotten agents don't surface. Kept as-is.
 - Output search keeps the ≥2-char query gate; only the 256KB scrollback tail is searched; activation selects the agent without scrolling its xterm to the match (out of scope).
 - Ordering / 6-per-repo cap deliberately untouched (siblings 393/392); output flows through the shared source-agnostic rankAndGroup.
+
+## Task 396
+- Reuse the existing `.fieldWarn` caution pattern (yellow `--status-awaiting` + `TriangleAlert` icon) rather than a new class — consistent with the untested-agent caution already in the same Settings modal; satisfies "not by color alone" (icon + text).
+- Chose `--status-awaiting` (yellow `#f9e2af` dark / `#df8e1d` light) as the on-system warning-yellow: the app's designated status yellow, correct in both themes; there is no separate `--warning` token.
+- Split the Linux-only "Native file dialogs adopt this theme…" sentence out of the recolored note, keeping it plain muted `.helpText` (informational, not a warning); the `isLinux(platform)` gate preserved.
+- No wording change to the note text. Target string at `Settings.tsx:397`; `TriangleAlert`/`isLinux`/`platform` already in scope (no new imports/CSS/backend).
