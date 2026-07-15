@@ -1240,8 +1240,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // Settings → Appearance; applied as the `dense` class on <html> (the task-372
   // `:root.dense` hook zeroing the --stage-* vars).
   densePanels: false,
-  // True by default (UI v2 task 373, opt-out): cap Overview agent cards at a
-  // comfortable max width. The visual consumer lands with card 5's Overview reskin.
+  // True by default (UI v2 task 373, opt-out): cap Overview panels at a comfortable
+  // max width. Broadened by task 419 to every column type — agent, recurring, file,
+  // diff, terminal, kanban, filetree, and scheduled panels.
   capAgentWidth: true,
   overviewPanelMinWidth: 400,
   // 100% = normal (#366); cleared to a no-op `zoom` so a default install is unchanged.
