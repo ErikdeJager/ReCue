@@ -1,8 +1,8 @@
 name: CI
 
-# Pull-request gate for `main` (#345 follow-up). Runs on every PR targeting main and
-# must pass before code lands, so only linted, formatted, tested, and coverage-gated code
-# reaches main:
+# Pull-request gate for `main` and `dev` (#345 follow-up). Runs on every PR targeting main
+# or dev and must pass before code lands, so only linted, formatted, tested, and
+# coverage-gated code reaches either integration branch:
 #
 #   frontend  — ESLint + Prettier + type-check/build + Vitest with a ≥75% line-coverage
 #               gate over the pure-logic surface (UI/components/hooks/store-IPC-wiring are
@@ -18,11 +18,12 @@ name: CI
 # push to main — a `tauri build` per-OS on every PR is too expensive to run as a gate.
 #
 # NOTE: making these checks *required* to merge is a branch-protection setting on `main`
-# (repo Settings ▸ Branches, or `gh api`), not something a workflow file can enforce itself.
+# and `dev` (repo Settings ▸ Branches, or `gh api`), not something a workflow file can
+# enforce itself.
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 # One in-flight run per PR; a new push cancels the previous run.
 concurrency:
