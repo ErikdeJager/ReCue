@@ -3664,3 +3664,13 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Kept `sessionActive` in the `AttentionQueueInput` interface (no longer read for membership) to avoid churn/signature changes at the 4 call sites and in the test — only removed it from the function's destructure.
 - Boot-persisted never-active idle sessions now enter the queue after the reconnect window settles (deemed desirable; the existing `reconnecting` exclusion prevents a boot flood).
 - Seeded/scheduled agents surface only once finished (their startup paint reads busy); a possible sub-second fresh flicker before the first busy transition is acceptable and not special-cased.
+
+## Task 408
+
+- In-scope pickers: the NewSessionModal branch step (new-session + schedule/recurring + per-repo/worktree/remote) and the Sidebar "Checkout branch…" picker (#266). Out of scope: the DiffInspector compare-branches (base/target) selector — creating a branch is meaningless there.
+- Matching stays case-insensitive substring (existing `includes`), auto-highlighting the top match (locals before remotes) — not switched to prefix matching.
+- No-match trigger: the moment a trimmed, non-empty filter query matches zero local AND zero remote branches, jump to create — no minimum query length.
+- On jump-to-create: seed the create-branch name with the typed text (raw case), clear the filter, move focus into the create-name input; base defaults to the current branch (existing default). Enter creates (⌘/Ctrl+Enter = worktree in the modal); schedule/recurring records the new-branch intent; the checkout picker's Enter creates + checks out.
+- Keep the existing filter-visibility thresholds (>4 branches) — do not make the filter always visible. The explicit "+ add branch" / "Create new branch" buttons remain for small repos; the fast-path create lives within the existing filter.
+- Suppress the auto-jump-to-create while remotes are still fetching (`fetchingRemotes`), so a query matching a not-yet-loaded remote doesn't prematurely convert.
+- Extract a tested pure helper `src/branchFilter.ts` (`matchBranchFilter`) for the local/remote/create decision, mirroring the `folderNav.ts` + test precedent; reused by both call sites.
