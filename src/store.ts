@@ -1138,6 +1138,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // is one-time migrated down by `migrateTerminalLineHeight` (guarded by the flag below).
   terminalLineHeight: 1.0,
   terminalCursorBlink: true,
+  // 0 (#390) = near-black `#11111b`, today's terminal background byte-for-byte; the
+  // slider raises it toward gray. Default 0 needs no migration flag — a legacy blob
+  // back-fills to 0 via mergeSettings, preserving the original look.
+  terminalBackgroundLightness: 0,
   theme: "dark",
   accentColor: "",
   reduceMotion: false,
@@ -1318,6 +1322,7 @@ function applySettingsEffects(s: Settings): void {
     fontSize: s.terminalFontSize,
     lineHeight: s.terminalLineHeight,
     cursorBlink: s.terminalCursorBlink,
+    background: s.terminalBackgroundLightness,
   });
   // Terminal renderer override (#357, Linux only): converge every pooled xterm onto the
   // chosen WebGL/DOM renderer WITHOUT disposing a host (the #18 invariant). It reads the

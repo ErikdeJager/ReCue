@@ -64,6 +64,10 @@ import { terminalsToDispose } from "./poolReconcile";
 import { dedupeAgainstScrollback } from "./replayDedupe";
 import { createReplayQueue } from "./replayQueue";
 import styles from "./Terminal.module.css";
+import {
+  TERMINAL_BG_DARKEST,
+  terminalBackgroundColor,
+} from "./terminalBackground";
 import { webglFallback } from "./webglFallback";
 import {
   decideTerminalRenderer,
@@ -161,7 +165,22 @@ let currentTerminalSettings = {
   // before applyTerminalSettings runs.
   lineHeight: 1.0,
   cursorBlink: true,
+  // 0 (#390) = the near-black `--terminal-bg` base, unchanged. `resolveTerminalBg`
+  // interpolates from the live `--terminal-bg` toward gray by this slider value.
+  background: 0,
 };
+
+/** The concrete terminal background hex for the current lightness setting (#390),
+ * interpolated from the live `--terminal-bg` token (default near-black `#11111b`)
+ * toward the gray endpoint. Read fresh so a theme change to the base still flows
+ * through. Falls back to the darkest base outside a DOM (unit tests). */
+function resolveTerminalBg(): string {
+  const base =
+    typeof document !== "undefined"
+      ? cssToken("--terminal-bg", TERMINAL_BG_DARKEST)
+      : TERMINAL_BG_DARKEST;
+  return terminalBackgroundColor(currentTerminalSettings.background, base);
+}
 
 /** Whether reduced motion is in force right now (UI v2 §2.5, task 383): the app's
  * Settings toggle (read from the store — `set({ settings })` runs before
@@ -352,17 +371,35 @@ export function applyTerminalSettings(s: {
   fontSize: number;
   lineHeight: number;
   cursorBlink: boolean;
+  background: number;
 }): void {
   currentTerminalSettings = { ...s };
   // Effective blink (UI v2 §2.5, task 383): xterm's canvas cursor is out of reach
   // of the CSS reduced-motion killswitch, so gate it here — an options mutation on
   // the live xterm, never a host dispose (#18).
   const blink = effectiveCursorBlink(s.cursorBlink, reducedMotionNow());
+  // Terminal background lightness (#390): compute the concrete hex once and apply it
+  // to every live host in this same synchronous pass, so all pooled terminals converge
+  // together (not the #221 shared-atlas hazard). Reassign the whole `theme` object —
+  // mutating a nested field won't trigger xterm's update — and never clear the atlas.
+  const bg = resolveTerminalBg();
   for (const host of hosts.values()) {
     host.term.options.fontSize = s.fontSize;
     host.term.options.lineHeight = s.lineHeight;
     host.term.options.cursorBlink = blink;
+    host.term.options.theme = {
+      ...host.term.options.theme,
+      background: bg,
+      cursorAccent: bg,
+    };
     host.scheduleResize();
+  }
+  // Publish to the wrapper padding-frame CSS (#390): the wrapper reads
+  // `var(--terminal-bg-user, var(--terminal-bg))`, so setting it here keeps the frame
+  // in lockstep with the xterm canvas. Runs per-document on boot + Save, covering the
+  // main window and each detached canvas window (#84).
+  if (typeof document !== "undefined") {
+    document.documentElement.style.setProperty("--terminal-bg-user", bg);
   }
 }
 
@@ -431,6 +468,11 @@ function createHost(sessionId: string): TerminalHost {
   const { platform, windowsBuild } = useStore.getState();
   const windowsPty = windowsPtyOption(platform, windowsBuild);
 
+  // Configurable terminal background (#390): the same interpolated hex backs both the
+  // xterm canvas and its cursor-contrast color, so a terminal created after a Save
+  // opens at the chosen lightness.
+  const bg = resolveTerminalBg();
+
   const term = new XTerm({
     fontFamily: cssToken(
       "--mono",
@@ -446,10 +488,12 @@ function createHost(sessionId: string): TerminalHost {
     allowProposedApi: true,
     ...(windowsPty ? { windowsPty } : {}),
     theme: {
-      background: cssToken("--terminal-bg", "#11111b"),
+      // #390: both the canvas background and the cursor's contrast color follow the
+      // configurable terminal-background lightness (default 0 = `#11111b`, unchanged).
+      background: bg,
       foreground: cssToken("--terminal-fg", "#cdd6f4"),
       cursor: cssToken("--accent", "#fab387"),
-      cursorAccent: cssToken("--terminal-bg", "#11111b"),
+      cursorAccent: bg,
       selectionBackground: cssToken(
         "--terminal-selection",
         "rgba(88, 91, 112, 0.5)",
