@@ -1164,10 +1164,13 @@ export const DEFAULT_SETTINGS: Settings = {
   // is one-time migrated down by `migrateTerminalLineHeight` (guarded by the flag below).
   terminalLineHeight: 1.0,
   terminalCursorBlink: true,
-  // 0 (#390) = near-black `#11111b`, today's terminal background byte-for-byte; the
-  // slider raises it toward gray. Default 0 needs no migration flag — a legacy blob
-  // back-fills to 0 via mergeSettings, preserving the original look.
-  terminalBackgroundLightness: 0,
+  // 25 (#414, raised from the #390 default of 0) = a slightly brightened terminal
+  // background; 0 is the near-black `#11111b` (today's byte-for-byte look) and 100 a
+  // soft gray. New / never-saved installs get 25 straight from this default; an install
+  // that once saved an explicit legacy 0 is one-time migrated up to 25 by
+  // `migrateTerminalBackground` (guarded by the flag below). Users who prefer the old
+  // near-black look drag the slider back to 0.
+  terminalBackgroundLightness: 25,
   theme: "dark",
   accentColor: "",
   reduceMotion: false,
@@ -1240,6 +1243,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // once (bump an explicit legacy 1.2 → 1.0), then set true so it never re-triggers. Same
   // rationale as `onboarded: false`.
   terminalLineHeightMigrated: false,
+  // False by default (#414): opt-in one-time flag mirroring `terminalLineHeightMigrated`.
+  // An older blob lacks the key → mergeSettings back-fills false → the terminal
+  // background-lightness migration is eligible to run once (bump an explicit legacy 0 →
+  // 25), then set true so it never re-triggers. Same rationale as `onboarded: false`.
+  terminalBackgroundMigrated: false,
   // "Open in editor": no editor chosen yet — the first use opens the picker modal
   // (unchecking its "Remember my choice" keeps asking). Older blobs back-fill null.
   preferredEditor: null,
@@ -1302,6 +1310,43 @@ export function migrateTerminalLineHeight(s: Settings): {
       ...s,
       terminalLineHeight: wasLegacy ? 1.0 : s.terminalLineHeight,
       terminalLineHeightMigrated: true,
+    },
+    changed: wasLegacy,
+  };
+}
+
+/** The legacy default terminal background lightness (#414), migrated up to 25. */
+const LEGACY_TERMINAL_BACKGROUND_LIGHTNESS = 0;
+
+/**
+ * One-time migration (#414) of the terminal background lightness. New / never-saved
+ * installs get 25 from `DEFAULT_SETTINGS`, but an install that once saved settings has an
+ * explicit `terminalBackgroundLightness: 0` persisted (a stored value wins over the default
+ * in `mergeSettings`), so it needs an active bump to 25.
+ *
+ * Gated by the `terminalBackgroundMigrated` flag (mirrors `terminalLineHeightMigrated`):
+ * once set, the migration never runs again — so a user who *re-picks* 0 after the migration
+ * keeps it. Only a value that is **exactly** the old default 0 is bumped; any other
+ * deliberately chosen value (5/10/50/100/…) is left untouched. The migration target
+ * references `DEFAULT_SETTINGS.terminalBackgroundLightness` so it can't drift from the
+ * default. `changed` is true only when the value was actually bumped — it drives whether the
+ * migrated blob is persisted once — while the flag is stamped true regardless, so an install
+ * whose value wasn't legacy still records that the one-time check has run.
+ */
+export function migrateTerminalBackground(s: Settings): {
+  settings: Settings;
+  changed: boolean;
+} {
+  if (s.terminalBackgroundMigrated) return { settings: s, changed: false };
+  const wasLegacy =
+    s.terminalBackgroundLightness === LEGACY_TERMINAL_BACKGROUND_LIGHTNESS;
+  return {
+    settings: {
+      ...s,
+      terminalBackgroundLightness: wasLegacy
+        ? DEFAULT_SETTINGS.terminalBackgroundLightness
+        : s.terminalBackgroundLightness,
+      terminalBackgroundMigrated: true,
     },
     changed: wasLegacy,
   };
@@ -3846,11 +3891,15 @@ export const useStore = create<AppState>()((set, get) => ({
     // side-effects (theme / accent / reduce-motion / live terminal options) before the
     // first paint.
     const merged = mergeSettings(boot.settings);
-    // One-time #367 line-height migration: bump an explicit legacy 1.2 down to 1.0 (and
-    // stamp the flag) before the settings are applied / land in the store, so terminals
-    // render 1.0 from the first paint. `lineHeightMigrated` gates the one-off persist below.
-    const { settings, changed: lineHeightMigrated } =
-      migrateTerminalLineHeight(merged);
+    // One-time terminal migrations, chained before the settings are applied / land in the
+    // store so terminals render the migrated values from the first paint:
+    //  - #367: bump an explicit legacy line-height 1.2 down to 1.0.
+    //  - #414: bump an explicit legacy background-lightness 0 up to 25.
+    // `settingsMigrated` (either changed) gates the one-off persist below.
+    const lh = migrateTerminalLineHeight(merged);
+    const bg = migrateTerminalBackground(lh.settings);
+    const settings = bg.settings;
+    const settingsMigrated = lh.changed || bg.changed;
     applySettingsEffects(settings);
 
     // Persisted sessions are resumed on boot (claude --resume) — show them as
@@ -3970,10 +4019,11 @@ export const useStore = create<AppState>()((set, get) => ({
           .setCanvases({ canvases, activeId: activeCanvasId })
           .catch(() => {});
       }
-      // #367: persist the one-time line-height migration once (an explicit legacy 1.2 was
-      // bumped to 1.0) so the migrated value + the set flag become the source of truth and
-      // the bump never re-runs. Only fires when a value actually changed.
-      if (lineHeightMigrated) {
+      // #367/#414: persist the one-time terminal migrations once (an explicit legacy
+      // line-height 1.2 bumped to 1.0, and/or an explicit legacy background-lightness 0
+      // bumped to 25) so the migrated values + the set flags become the source of truth and
+      // the bumps never re-run. Only fires when a value actually changed.
+      if (settingsMigrated) {
         void ipc.setSettings(settings).catch(() => {});
       }
       // #110: the legacy per-repo `open_files` map (#45) is **no longer** folded

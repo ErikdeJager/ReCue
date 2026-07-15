@@ -18,6 +18,7 @@ import {
   mergeRepoOrder,
   mergeSettings,
   MIN_DISPLAY_SIZE,
+  migrateTerminalBackground,
   migrateTerminalLineHeight,
   moveResultMessage,
   overviewClusterKeys,
@@ -2608,6 +2609,41 @@ describe("mergeSettings (#100/#176)", () => {
     expect(merged.terminalLineHeightMigrated).toBe(true);
   });
 
+  it("defaults the terminal background lightness to 25 and the migration flag to false (#414)", () => {
+    expect(DEFAULT_SETTINGS.terminalBackgroundLightness).toBe(25);
+    expect(DEFAULT_SETTINGS.terminalBackgroundMigrated).toBe(false);
+  });
+
+  it("resolves the terminal background lightness to 25 for a brand-new / pre-#390 blob (#414)", () => {
+    // A brand-new install (empty blob) takes the 25 default.
+    expect(mergeSettings({}).terminalBackgroundLightness).toBe(25);
+    // A pre-#390 blob (no key at all) also back-fills to 25.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.terminalBackgroundLightness;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .terminalBackgroundLightness,
+    ).toBe(25);
+  });
+
+  it("back-fills terminalBackgroundMigrated to false for an older blob and preserves a stored value/flag (#414)", () => {
+    // A pre-#414 blob (no migration key) upgrades cleanly to false so it's still
+    // eligible for the one-time bump.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.terminalBackgroundMigrated;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .terminalBackgroundMigrated,
+    ).toBe(false);
+    // A persisted background value + set flag win over the defaults.
+    const merged = mergeSettings({
+      terminalBackgroundLightness: 50,
+      terminalBackgroundMigrated: true,
+    });
+    expect(merged.terminalBackgroundLightness).toBe(50);
+    expect(merged.terminalBackgroundMigrated).toBe(true);
+  });
+
   it("defaults the UI v2 settings (task 373): backgroundAnimation on, densePanels off, capAgentWidth on", () => {
     expect(DEFAULT_SETTINGS.backgroundAnimation).toBe(true);
     expect(DEFAULT_SETTINGS.densePanels).toBe(false);
@@ -2755,6 +2791,46 @@ describe("migrateTerminalLineHeight (#367)", () => {
     };
     const { settings, changed } = migrateTerminalLineHeight(before);
     expect(settings.terminalLineHeight).toBe(1.2 + 1e-3);
+    expect(changed).toBe(false);
+  });
+});
+
+describe("migrateTerminalBackground (#414)", () => {
+  it("bumps an explicit legacy 0 up to 25 and stamps the flag (changed)", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalBackgroundLightness: 0,
+      terminalBackgroundMigrated: false,
+    };
+    const { settings, changed } = migrateTerminalBackground(before);
+    expect(settings.terminalBackgroundLightness).toBe(25);
+    expect(settings.terminalBackgroundMigrated).toBe(true);
+    expect(changed).toBe(true);
+  });
+
+  it("leaves any other chosen value unchanged but still stamps the flag (not changed)", () => {
+    for (const value of [5, 10, 25, 50, 100]) {
+      const before = {
+        ...DEFAULT_SETTINGS,
+        terminalBackgroundLightness: value,
+        terminalBackgroundMigrated: false,
+      };
+      const { settings, changed } = migrateTerminalBackground(before);
+      expect(settings.terminalBackgroundLightness).toBe(value);
+      expect(settings.terminalBackgroundMigrated).toBe(true);
+      expect(changed).toBe(false);
+    }
+  });
+
+  it("never re-runs once the flag is set — a re-picked 0 is preserved", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalBackgroundLightness: 0,
+      terminalBackgroundMigrated: true,
+    };
+    const { settings, changed } = migrateTerminalBackground(before);
+    expect(settings).toBe(before); // untouched (same reference)
+    expect(settings.terminalBackgroundLightness).toBe(0);
     expect(changed).toBe(false);
   });
 });
