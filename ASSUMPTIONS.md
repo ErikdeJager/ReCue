@@ -3710,3 +3710,10 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Scoring tiers mirror the existing GlobalSearch `scoreFilename` model (exact > prefix > word-boundary > mid-substring > directory-only) for cross-surface consistency; GlobalSearch already ranks correctly and is left untouched (reference model, non-goal).
 - Empty query does not reorder (browse-all keeps backend walk order); tie-breakers are shorter full path, then alphabetical, then stable input order, so the root-level exact-named file wins.
 - Cap-boundary limitation accepted: ranking reorders only the returned (≤500 / ≤100) set; a pathological ultra-broad query that hits the cap ranks just the first-N-by-walk. Fine for real queries; documented, not fixed.
+
+## Task 417
+
+- Over-long tips truncate with an ellipsis (nowrap + overflow:hidden + text-overflow:ellipsis) rather than wrapping or overflowing — the "single line always" requirement takes precedence over showing the full text.
+- Widened the tip row from max-width:460px to max-width:min(92%,700px) so all curated (≤100-char) tips fit fully on one line while still capping to the container on narrow windows, where the ellipsis engages.
+- Added a native title tooltip (full rendered tip) on the tip text so truncated tips are still readable on hover.
+- Interpreted "tips underneath the new session button" as the EmptyState hero tip (src/components/EmptyState) fed by src/tips.json — the only such surface.
