@@ -3717,3 +3717,9 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Widened the tip row from max-width:460px to max-width:min(92%,700px) so all curated (≤100-char) tips fit fully on one line while still capping to the container on narrow windows, where the ellipsis engages.
 - Added a native title tooltip (full rendered tip) on the tip text so truncated tips are still readable on hover.
 - Interpreted "tips underneath the new session button" as the EmptyState hero tip (src/components/EmptyState) fed by src/tips.json — the only such surface.
+
+## Task 418
+
+- The card's before/after `…` is truncation shorthand, not literal copy: the real hint is "Open a view from a session, or start with an empty tab", so I replace only the leading clause and keep ", or start with an empty tab" (which describes the "New tab" button below) → final copy "Drag in a panel from the left, or start with an empty tab". Alternative the caller could pick: replace the whole line with a bare "Drag in a panel from the left…" ending in an ellipsis and dropping the tail clause.
+- "From the left" refers to the sidebar drag sources; verified the sidebar is always left-of-canvas on all platforms (layout is not OS-conditional), so the copy is accurate cross-platform.
+- Kept the existing single Unicode `…` convention irrelevant here since the final hint is a plain statement with no trailing ellipsis (matches the current no-ellipsis form).
