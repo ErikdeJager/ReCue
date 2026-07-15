@@ -229,6 +229,43 @@ export function formatResetCountdown(
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+/** Human-readable short duration for the usage popup's reset tooltip (#387) — the
+ * "5d 2h" form. Scales up from the compact countdown so a multi-day reset (the 7-day
+ * window) reads clearly instead of a raw hour count: "<1m" under a minute (incl.
+ * `ms <= 0`), "${m}m" under an hour, "${h}h ${m}m" under a day, and "${d}d ${h}h"
+ * (or "${d}d" when the hours remainder is 0) at ≥1 day. Pure + unit-tested. */
+export function formatDurationShort(ms: number): string {
+  const totalMin = Math.floor(ms / 60_000);
+  if (totalMin <= 0) return "<1m";
+  const d = Math.floor(totalMin / 1440);
+  const h = Math.floor((totalMin % 1440) / 60);
+  const m = totalMin % 60;
+  if (d >= 1) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (h >= 1) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+/** Reset label for the expandable "all usage" popup (#387). The raw hour countdown
+ * (`122h 0m`) is unreadable for the far-future 7-day window, so this scales the label
+ * to the distance:
+ *  - `< 24h` (incl. past-due): the existing compact countdown (`2h 14m` / `<1m`), so
+ *    the five-hour row is byte-for-byte unchanged;
+ *  - `24h ≤ delta < 7d`: a weekday abbreviation (`Mon`…`Sun`);
+ *  - `≥ 7d`: a compact short date (`Aug 12`).
+ * Locale-robust (the weekday/date come from `toLocaleDateString`, the same seam
+ * `formatFireTime` uses). Pure + `now`-injectable + unit-tested. */
+export function formatUsageReset(resetsAtMs: number, nowMs: number): string {
+  const delta = resetsAtMs - nowMs;
+  if (delta < 86_400_000) return formatResetCountdown(resetsAtMs, nowMs);
+  if (delta < 7 * 86_400_000) {
+    return new Date(resetsAtMs).toLocaleDateString([], { weekday: "short" });
+  }
+  return new Date(resetsAtMs).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
+}
+
 // --- Recurring session interval helpers (#294) ---
 
 /** A recurring session's repeat-interval unit. */
