@@ -1149,10 +1149,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // True by default (UI v2 task 373): animate the app background. The visual consumer
   // (the wave background) lands with card 3 — until then the flag persists inertly.
   backgroundAnimation: true,
-  // True by default (UI v2 task 384): pause the wave whenever panels cover the stage.
-  // A legacy blob lacking the key back-fills to true via mergeSettings (no migration
-  // code), so an existing install picks up the pause automatically.
-  pauseWaveWhenCovered: true,
+  // False by default (task 402): the wave keeps animating even when panels cover the
+  // stage; pausing is opt-in. A legacy blob lacking the key back-fills to false via
+  // mergeSettings (no migration code); a user who previously persisted true keeps it.
+  pauseWaveWhenCovered: false,
   // False by default (UI v2 §9, task 373): dense panels are opt-in — toggled by ⌘D or
   // Settings → Appearance; applied as the `dense` class on <html> (the task-372
   // `:root.dense` hook zeroing the --stage-* vars).

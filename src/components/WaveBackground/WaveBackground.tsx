@@ -58,8 +58,8 @@ function WaveCanvas({
   };
 
   // The pause-when-covered setting (task 384): panels tiling over the stage pause
-  // the wave only when this is on (default). backgroundAnimation OFF already
-  // unmounts the canvas entirely and wins over this.
+  // the wave only when this is on (opt-in since task 402). backgroundAnimation OFF
+  // already unmounts the canvas entirely and wins over this.
   const pauseWhenCovered = useStore((s) => s.settings.pauseWaveWhenCovered);
   const anyBusy = useStore((s) => Object.values(s.sessionBusy).some(Boolean));
   const effectiveCovered = pauseWhenCovered && covered;
