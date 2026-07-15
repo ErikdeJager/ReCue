@@ -651,7 +651,10 @@ full at the end of this file.)_
 - #389 Remove "Schedule session" from the global sidebar background context menu — dropped the redundant item (scheduling is already the "+ Schedule session" footer button and ⌘⇧N).
 - #390 Configurable terminal background lightness — a "Terminal background" slider in Settings → Appearance lightening the terminal from near-black (`#11111b`) toward gray (`#3a3a45`); applies **live** to every running terminal (no host dispose / scrollback replay), persists, defaults to 0 (today's look).
 - #391 ⌘K launcher — filter-as-you-type type picker — the ⌘K "Create panel" launcher's type step gained an auto-focused search input filtering panel types as you type, with ↑/↓/Enter selection; the 1–6 number keys still index the filtered list.
+- #392 Unify creatable item/panel ordering across every menu — every surface listing creatable item/panel types (⌘K launcher, repo/worktree Views menus, header "open a view" popover, Canvas template palette) now renders one canonical order (Session, Terminal, File Tree, File Viewer, Diff Viewer, Kanban board) from a single shared `itemTypeOrder.ts`; order-only, no entry gained or lost.
 - #393 ⌘F search — surface active-agent repos first & cap each repo to 6 results — repos with a live agent list **first** (not strictly alphabetical) and each repo group caps at **6** results with a "…" overflow, so a live agent isn't buried and a many-hit repo can't flood the list.
+- #394 Improve ⌘F search across live agent terminal output — verify + fidelity fix of the #337/#353 terminal-output search: the ANSI stripper (`pty.rs strip_ansi`, the search path's sole caller) now expands a non-erasing cursor-forward (CUF, `ESC[nC`) into spaces (clamped at 64) so a phrase the user saw spaced (`A B`) matches the searched text; the non-navigable `:line` badge is hidden for `output`-kind rows.
+- #395 Sidebar repo header — active-agent count in the "+" slot — each repo header shows its count of active (running) agents at rest in the same slot the New-session **+** occupies, swapping to the clickable **+** on hover / keyboard-focus with zero layout shift; the always-on total-sessions chip is removed (empty/none-running cases keep today's behavior, no "0").
 - #396 Style the "Dark mode is the recommended experience" Settings note as a yellow caution — restyled the #342 plain-grey note as an on-system **yellow caution** (matching the untested-agent caution elsewhere in the modal) so it reads as a deliberate warning.
 ---
 
@@ -708,120 +711,9 @@ below.
 
 > The tasks below are kept **written out in full** (Description / What shipped / Key files /
 > Dependencies). They are the 20 most recently archived, so they appear in **archive order**,
-> not strict numeric order: #392, #394, #395, #397, #384, #398, #402, #399, #400, #401, #405,
-> #403, #406, #404, #409, #411, #407, #410, #408, #412. Every earlier task is condensed in the
+> not strict numeric order: #397, #384, #398, #402, #399, #400, #401, #405, #403, #406,
+> #404, #409, #411, #407, #410, #408, #412, #414, #415, #413. Every earlier task is condensed in the
 > index above.
-
-### 392. [x] Unify creatable item/panel ordering across every menu (one canonical order)
-
-Every place that lists the creatable item/panel types now renders them in one canonical order —
-**Session, Terminal, File Tree, File Viewer, Diff Viewer, Kanban board** — derived from a single
-shared source of truth instead of each surface hard-coding its own order, so the ⌘K launcher, the
-repo/worktree Views menus, the header "open a view" popover, and the Canvas template palette all
-agree.
-
-**What shipped** (branch `unify-item-type-order`, PR
-[#147](https://github.com/ErikdeJager/ReCue/pull/147), merged 2026-07-15 into `ui-rework`):
-
-- **New `src/itemTypeOrder.ts`** (+ `itemTypeOrder.test.ts`): `ItemTypeKey`, the canonical
-  `ITEM_TYPE_ORDER = [session, terminal, filetree, file, diff, kanban]`, `itemTypeRank` (unknown →
-  last, never throws), and a stable `byItemTypeOrder(items, keyOf)` sorter.
-- **Three registries routed through it** — `CreatePanelModal/panelTypes.ts` (`PANEL_TYPES`, so the
-  digit hints and `panelTypeForDigit` / `⌘⌥1–6` now index the canonical order), `ViewsMenu.tsx`
-  (its 5 view items reordered; "New session here" kept at the bottom per task 375), and
-  `Canvas/templateBlocks.ts` (`BLOCK_REGISTRY`, `new-agent → session` the only non-identity map).
-- Unit tests (`panelTypes.test.ts`, `templateBlocks.test.ts`) updated to assert each registry's key
-  order equals the canonical order; no menu gains/loses an entry — only order changes.
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 392)
-
-- One shared source of truth (`itemTypeOrder.ts`) consumed by the three registries.
-- ⌘F global-search `KIND_ORDER` left unchanged (a results grouping, already canonical for the
-  shared subset); "Session first" applies only where Session is co-listed.
-- Only order changes — labels/icons/entries/behavior preserved. (Soft overlap with sibling Task 391
-  on `panelTypes.ts`/`CreatePanelModal.tsx`; the merge merged `origin/ui-rework` into the branch to
-  reconcile — merge commit `b49c089` — keeping this task's canonical order.)
-
-**Cross-platform:** pure TS array/type reordering, no `#[cfg]`/path/shell/CSS — byte-identical on
-macOS, Windows, and Linux; existing menu/listbox/palette rendering reused unchanged.
-
-**Dependencies:** none. (Soft file overlap with Task 391.)
-
-### 394. [x] Improve ⌘F search across live agent terminal output (verify + fidelity hardening of #337/#353)
-
-The ⌘F terminal-output search (grep every live agent's in-memory scrollback → a "Terminal output"
-result group) already shipped as #337 and was moved off the main thread by #353, so this card was a
-**verify + small fidelity fix**, not a rebuild: `claude` lays out on-screen columns with
-non-erasing cursor-forward (CUF, `ESC[<n>C`) moves, which the ANSI stripper dropped — so a phrase
-the user saw with spaces (`A B`) failed to match the searched text (`AB`). Now a CUF expands to
-spaces, so visible phrases reliably match.
-
-**What shipped** (branch `task-394-search-cuf-fidelity`, PR
-[#149](https://github.com/ErikdeJager/ReCue/pull/149), merged 2026-07-15 into `ui-rework`):
-
-- **`src-tauri/src/pty.rs` `strip_ansi`** (the search path's **only** caller): a CUF final byte
-  (`C`) now emits `min(n, CURSOR_FORWARD_SPACE_CAP)` spaces (n defaults to 1 for an empty param,
-  clamped at 64 so a pathological `ESC[999999C` can't balloon the string); every other CSI final
-  still emits nothing. New Rust unit tests (`A\u{1b}[3CB` → `A   B`, empty param → `A B`, huge param
-  clamped, `ESC[2;5H` still fully removed, and an end-to-end `match_output_lines` phrase-match) plus
-  an updated doc comment.
-- **`GlobalSearch.tsx`** minor polish: the non-navigable `:line` badge is hidden for `output`-kind
-  rows (it's an internal scrollback-tail index, not a file line).
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 394)
-
-- Recognized as a potential duplicate of #337/#353 — rescoped to verify the shipped feature + the
-  side-effect-free CUF→spaces improvement; backend-only, collision-free with siblings 392/393.
-- "Currently active" = every backend-registered session (running, busy AND idle); the frontend
-  already filters hits to store-known sessions, so exited/forgotten agents don't surface — kept.
-- The ≥2-char query gate, the 256 KB scrollback-tail bound, and activation-selects-without-scrolling
-  are all left as-is; ordering / 6-per-repo cap untouched (siblings 393/392), output flowing through
-  the shared source-agnostic `rankAndGroup`.
-
-**Cross-platform:** pure string work, no OS/path/shell primitive, no new `#[cfg]` arm; chords route
-through `kbdHint` — identical on macOS, Windows, and Linux.
-
-**Dependencies:** none. (Soft `GlobalSearch.tsx` overlap with siblings 393/397.)
-
-### 395. [x] Sidebar repo header — active-agent count in the "+" slot, swapping to "+" on hover
-
-Each sidebar repo folder header now shows, at rest, the count of its **active (running) agents** in
-the same slot the "New session" **+** button occupies; hovering the header (or keyboard-focusing the
-"+") swaps the count out and reveals the clickable **+** with zero layout shift — an at-a-glance
-per-folder agent tally without an always-on chip, mirroring the agent-row's diff-count ↔ × slot swap.
-
-**What shipped** (branch `task-395-sidebar-repo-active-count`, PR
-[#150](https://github.com/ErikdeJager/ReCue/pull/150), merged 2026-07-15 into `ui-rework`):
-
-- **`Sidebar.tsx` `RepoGroup`**: derives `activeCount = repoSessions.filter(exitedCode ===
-  undefined).length` (the repo's own running agents — worktree + recurring-owned children already
-  excluded); removes the always-on total-sessions `chip-count` beside the name; wraps the "+" in a
-  `.newSlot` holding the count (in-flow) with the "+" overlaid, `.newSlotCounted` when a count is
-  present.
-- **`Sidebar.module.css`**: `.newSlot` (fixed 22px slot), `.agentCount` (neutral `--text-secondary`,
-  mono, tabular-nums, `--fs-micro` — never accent/status), and scoped `.newSlot .plus` overlay +
-  `.newSlotCounted` swap rules (`:focus-within` for the keyboard path, `visibility:hidden` on the
-  count so the slot width — and header layout — never shift). The shared `.plus`/`.plusCoral` rules
-  are untouched, so the WorktreeHeader "+" is unaffected.
-- Zero-count cases keep today's behavior (empty repo → always-visible accent "+"; non-empty but
-  none-running → "+" hidden at rest, revealed on hover/focus; no "0").
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 395)
-
-- "Active agent" = running/live session (`exitedCode === undefined`), matching `killAgentsInRepo` +
-  sibling Task 393; the repo's own running agents only (worktree sub-groups keep their own
-  `WorktreeHeader` count — no double-count).
-- Removed the always-on total-sessions chip, consolidating to the single count in the "+" slot;
-  neutral `--text-secondary` "line-changes" typographic treatment (not repo/status/accent color).
-- Scoped to the expanded `RepoGroup` header only (collapsed rail + WorktreeHeader "+" out of scope);
-  keyboard swap via `:focus-within` + `visibility:hidden` (not `:has()`) for cross-platform WebView
-  support + zero layout shift.
-
-**Cross-platform:** pure TS + React + tokenized CSS (`:focus-within`/`visibility`/
-`font-variant-numeric`), no paths/shell/OS primitives, no `color-mix` — identical on macOS, Windows,
-and Linux.
-
-**Dependencies:** none.
 
 ### 397. [x] ⌘F search — per-folder filter chips (⌘-Number) with lifted per-repo cap
 
@@ -1740,3 +1632,150 @@ identical on all three platforms.
 **Dependencies:** none. (Overlapped the Attention directory with sibling tasks 410 — queue
 membership — and 411 — sidebar-click routing; the merge lane resolved the mechanical overlap by
 rebasing this PR onto `dev` after 410/411 landed.)
+
+### 414. [x] Default the terminal background lightness to 25% (brighten terminals a bit by default)
+
+Terminals now open a touch brighter out of the box: the existing "Terminal background" lightness
+setting (Settings → Appearance, added in #390) defaults to **25%** instead of 0%, landing the
+background at roughly `#1b1b26` — a subtle lift from near-black toward gray. Users who prefer the
+old near-black look drag the slider back to 0%. A one-time migration carries the new default to
+existing installs, not just fresh ones.
+
+**What shipped** (branch `default-terminal-bg-lightness-25`, PR
+[#173](https://github.com/ErikdeJager/ReCue/pull/173), merged 2026-07-15 into `dev`):
+
+- **`DEFAULT_SETTINGS.terminalBackgroundLightness` 0 → 25** (`src/store.ts`) — fresh /
+  never-saved installs get 25% straight from the default; a pre-#390 blob lacking the key
+  back-fills to 25 via `mergeSettings`.
+- **One-time migration mirroring the #367 line-height precedent** — a new
+  `terminalBackgroundMigrated: boolean` flag on the `Settings` interface (`src/types/index.ts`,
+  default `false`), and `migrateTerminalBackground(s)` (`src/store.ts`, guarded by
+  `LEGACY_TERMINAL_BACKGROUND_LIGHTNESS = 0`): a no-op once the flag is set, otherwise it bumps an
+  explicitly-stored legacy 0 → the new default 25 **once**, stamps the flag `true`, and reports
+  `changed`. Referenced against `DEFAULT_SETTINGS.terminalBackgroundLightness` so the default and
+  the migration target can't drift. This closes the gap where an install that saved settings after
+  #390 shipped had an explicit `terminalBackgroundLightness: 0` that would otherwise win over the
+  new default.
+- **Boot wiring** — chained after `migrateTerminalLineHeight`, combining both migrations' `changed`
+  flags into one one-off `ipc.setSettings(...)` persist (main window only), run before
+  `applySettingsEffects` so terminals paint the migrated value from the first frame.
+- **Reset to defaults preserves the flag** (`src/components/Settings/Settings.tsx`) — restores
+  `terminalBackgroundLightness` to 25 while keeping `terminalBackgroundMigrated`, so the one-time
+  migration never re-arms.
+- **Module-level fallback bumped** — `currentTerminalSettings.background` 0 → 25 in
+  `src/components/Terminal/terminalPool.ts` (tracks the new default, mirroring the `lineHeight`
+  fallback comment) for any xterm created before `applyTerminalSettings` runs.
+- Unit tests (`src/store.test.ts`): the new default is 25 + flag false; `mergeSettings` back-fill
+  of the flag; `migrateTerminalBackground` bumps legacy 0 → 25 once, leaves a non-zero value, and
+  no-ops when the flag is set.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 414)
+
+- "Terminal lighten" == the existing #390 `terminalBackgroundLightness` background slider, not a
+  new foreground/ANSI-palette brightening feature — so this is a re-default (0 → 25), not a new
+  control; the color math (`terminalBackground.ts`) and live-apply path (`applyTerminalSettings`,
+  the #18 no-remount/no-scrollback-replay invariant) are untouched.
+- The legacy default 0 is also the opt-out endpoint, so the one-time bump nudges a
+  deliberately-chosen 0 back to 25 the first boot after shipping; the flag makes it a one-shot
+  (re-set 0 and it sticks) — the same accepted tradeoff as the #367 line-height migration, and
+  nearly all stored 0s are the untouched old default.
+- Slider kept in the Appearance section where #390 placed it; no relocation, relabel, or help-text
+  change.
+
+**Cross-platform:** pure frontend / xterm / TS with zero OS branches — no `#[cfg]`, path, shell,
+or CSS divergence; macOS, Windows, and Linux (incl. detached canvas windows #84) behave
+identically.
+
+**Dependencies:** none.
+
+### 415. [x] Rank file-search dropdowns by relevance (filename matches above content/path-only matches)
+
+File-search dropdowns now order results **best-match first**: a file whose **name** matches the
+query (exact/prefix especially) sorts above files that match only in a directory segment or (in the
+FileTree) in file *contents*, instead of the previous roughly-alphabetical backend walk order.
+Non-matching-name results still appear, just lower — the same relevance model GlobalSearch (#337/#393)
+already used, now brought to the `FilePicker`-based dropdowns and the FileTree in-panel search for
+cross-surface consistency.
+
+**What shipped** (branch `rank-file-search-relevance`, PR
+[#174](https://github.com/ErikdeJager/ReCue/pull/174), merged 2026-07-15 into `dev`):
+
+- **New pure module `src/fileRank.ts`** (+ `src/fileRank.test.ts`) — React/store/Tauri-free,
+  mirroring `GlobalSearch/search.ts`'s style: `scoreFilePath(query, relPath)` scores a matched path
+  by basename tier (exact 100 / prefix 80 / word-boundary 60 / mid-substring 40 / directory-only 20;
+  empty query → 0), and `rankFileMatches(query, paths)` reorders by score desc, tie-broken by shorter
+  full path → alphabetical → stable input order. An **empty query returns input order unchanged**
+  (browse-all is not reordered); the transform never mutates its input.
+- **`src/components/FilePicker/FilePicker.tsx`** — `filtered` is now
+  `useMemo(rankFileMatches(query, matches ?? []))`, with the active-row reset effect keyed on
+  `[matches, query]` so the highlight returns to the top as the ranked order changes. This single
+  choke point covers the file-viewer switcher (#90), the Kanban/markdown open picker (#145/#151),
+  `CreatePanelModal`, and `TemplatePendingPanel`.
+- **`src/components/FileTree/FileTree.tsx`** — the **"Files"** group renders from a
+  `useMemo(rankFileMatches(debounced, fileHits))`; the **"In files"** content group is left below,
+  unchanged. `fileCount` / `fileCapped` and every result cap are untouched (ranking reorders, never
+  drops).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 415)
+
+- Scoring is a **frontend** pure helper over the already-capped backend result set — **no** backend /
+  IPC / cap change; `search_files` / `search_file_contents` stay exactly as they are.
+- Per surface: FilePicker doesn't search content, so "name > contents" there means basename-match
+  above directory-only-match; the FileTree already renders content matches in a separate group below
+  filename matches, so this task only ranks within the filename group and leaves content hits
+  untouched.
+- Tiers deliberately mirror GlobalSearch's `scoreFilename`; GlobalSearch is the reference model and is
+  left untouched (non-goal). Cap-boundary limitation accepted and documented (a pathological ultra-broad
+  query that hits the cap ranks only the first-N-by-walk).
+
+**Cross-platform:** pure string logic over POSIX (`/`) repo-relative paths — no separator, `$HOME`,
+or OS branch; identical on macOS, Windows, and Linux.
+
+**Dependencies:** none.
+
+### 413. [x] Line-cap large files in the file viewer with a "show more" reveal
+
+The universal FileViewer no longer janks (or freezes) opening a very large text/markdown file
+(e.g. `TASK_ARCHIVE.md`, ~1,742 lines): it renders only the first N lines and offers an in-viewer
+button to progressively reveal the rest, so the panel opens instantly and the whole file is still
+readable on demand. The cap is by **line count**, orthogonal to the existing 256 KB byte threshold —
+it fixes the rendered-markdown path (a large react-markdown AST + Prism highlighting) that the byte
+cap didn't help.
+
+**What shipped** (branch `line-cap-large-files`, PR
+[#175](https://github.com/ErikdeJager/ReCue/pull/175), merged 2026-07-15 into `dev`):
+
+- **New pure helper `src/components/FileViewer/lineCap.ts`** (+ `lineCap.test.ts`) —
+  `LINE_CAP = 500` (initial), `LINE_CHUNK = 1000` (per "show more"), `nextVisible(current, total,
+  chunk)` (clamps to total), and `lineTruncation(total, visible, chunk)` → `{ total, shown, remaining,
+  truncated, nextChunk }` (the pure logic the footer renders).
+- **`src/components/FileViewer/FileViewer.tsx`** — a `visibleLines` state (reset to `LINE_CAP` per
+  file alongside the Raw-mode reset), a memoized line split, and `displayText` (the first
+  `visibleLines` lines) fed to the three **read-only** sinks (rendered markdown / Prism `CodeBlock` /
+  read-only `<pre>`, including the >256 KB `tooLarge` path). The **editable auto-saving `<textarea>`**
+  stays on the **full** `text`, so a save (auto or ⌘S) always writes the complete file — never a
+  truncated buffer. While rendered markdown is truncated, its interactive #173 task-list checkboxes
+  render read-only (`interactive: !(renderMarkdown && truncated)`, `source: displayText`) so a toggle
+  can't persist a partial buffer. A pinned footer bar shows "Showing N of M lines" (`aria-live`
+  status) with native, keyboard-operable "Show K more lines" and "Show all" buttons; it disappears
+  once every line is shown.
+- **`src/components/FileViewer/FileViewer.module.css`** — `.moreBar` / `.moreCount` / `.moreBtn` /
+  `.moreLink` (tokens only).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 413)
+
+- The editable textarea is **never** line-capped (it always holds the full file → saves write the
+  complete file) — the deliberate "don't corrupt saves" choice; the cap applies only to read-only
+  render paths and is additive with the 256 KB `LARGE_BYTES` threshold.
+- Defaults `LINE_CAP = 500` / `LINE_CHUNK = 1000` plus a "Show all" (both chunked and all-at-once
+  reveal) — tunable single-source constants; the reveal control is a pinned footer bar, not inside
+  the scroll region.
+- Mermaid needs no code change (capping the source omits later fences; a split fence degrades to its
+  code block + error note until revealed). No backend change (`read_text_file` still reads the whole
+  file, 5 MB cap); scope limited to the universal FileViewer (KanbanPanel / PatchNotes / Settings out
+  of scope).
+
+**Cross-platform:** pure frontend / TS / CSS with no OS-specific primitive — identical on macOS,
+Windows, and Linux.
+
+**Dependencies:** none.
