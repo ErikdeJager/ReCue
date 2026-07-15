@@ -542,11 +542,11 @@ function SettingsModal() {
                   <Checkbox
                     checked={draft.capAgentWidth}
                     onChange={(v) => update("capAgentWidth", v)}
-                    label="Cap agent card width"
+                    label="Cap Overview panel width"
                     className={styles.checkRow}
                   />
                   <p className={styles.helpText}>
-                    Limit Overview agent cards to a comfortable maximum width.
+                    Limit Overview panels to a comfortable maximum width.
                   </p>
                 </div>
                 <Checkbox

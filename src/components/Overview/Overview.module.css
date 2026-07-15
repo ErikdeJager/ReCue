@@ -134,7 +134,8 @@
   overflow: hidden;
 }
 
-/* The 373 `capAgentWidth` consumer (task 379) — agent-conversation cards only;
+/* The 373 `capAgentWidth` consumer (task 379/419) — when ON, caps EVERY Overview
+   card at 900px (agent, recurring, file/diff/kanban/terminal, scheduled alike);
    900px > the 600px max of the #176 min-width slider, so the two settings can't
    conflict; OFF ⇒ class absent ⇒ cards cover the whole stage. */
 .cardCapped {

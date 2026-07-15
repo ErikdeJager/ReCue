@@ -409,8 +409,9 @@ export interface Settings {
    * class on <html> by applySettingsEffects (the task-372 `:root.dense` token hook);
    * toggled by ⌘D or Settings → Appearance. Default false. */
   densePanels: boolean;
-  /** Cap Overview agent cards at a comfortable max width (UI v2, card 5). Default
-   * true (opt-out); the visual consumer lands with the Overview reskin. */
+  /** Cap every Overview panel at a comfortable max width (UI v2, card 5; broadened
+   * task 419 to every column type — agent, recurring, file, diff, terminal, kanban,
+   * filetree, scheduled). Default true (opt-out). */
   capAgentWidth: boolean;
   /** Overview column minimum width in px (320–600); the floor before columns
    * scroll horizontally (#176). Applied as the `--overview-card-min` CSS var. */

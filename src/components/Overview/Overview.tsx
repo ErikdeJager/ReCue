@@ -121,9 +121,9 @@ interface PanelColumnProps {
   id: string;
   color: string;
   selected?: boolean;
-  /** Cap the card at 900px (task 379) — the 373 "cap agent card width" setting;
-   * agent-conversation cards only, so file/diff/kanban/scheduled panels stay
-   * uncapped. */
+  /** Cap the card at 900px (task 379) — the 373 "cap Overview panel width" setting
+   * (task 419): when on, every Overview column type caps at 900px (agent, recurring,
+   * file, diff, terminal, kanban/filetree, and scheduled panels alike). */
   capped?: boolean;
   title: ReactNode;
   /** Optional slot before the title (e.g. the agent activity indicator, #71). */
@@ -247,8 +247,9 @@ function SessionCard({
   const maximizeItem = useStore((s) => s.maximizeItem);
   const bigModeKey = useKeybindLabel("big-mode");
   const renameSession = useStore((s) => s.renameSession);
-  // Agent-conversation cards only (373's "cap agent card width" setting, default
-  // on); file/diff/kanban/scheduled panels stay uncapped.
+  // The "cap Overview panel width" setting (373/419, default on): when on, every
+  // Overview column caps at 900px — agent, recurring, file/diff/kanban/terminal, and
+  // scheduled panels alike.
   const capWidth = useStore((s) => s.settings.capAgentWidth);
   // Hover-select (#371): focus this agent's PTY only when THIS window renders it —
   // a session owned by a detached window (#84) shows a DetachedNote, so hovering it
@@ -462,6 +463,9 @@ function ExtraPanel({
   // (overviewPanelToContent) — focus it on hover when this window renders it.
   // File/diff/kanban/filetree panels have no terminal input ⇒ blur instead.
   const owners = useSessionOwners();
+  // The "cap Overview panel width" setting (373/419, default on) — caps this
+  // file/diff/terminal/kanban/filetree panel at 900px like the agent cards.
+  const capWidth = useStore((s) => s.settings.capAgentWidth);
   const content = overviewPanelToContent(panel, repoPath);
   const title = (
     <>
@@ -522,6 +526,7 @@ function ExtraPanel({
       id={panel.id}
       color={color}
       selected={selected}
+      capped={capWidth}
       title={title}
       leading={
         // The demo's 8px repo-colored square in the dot slot — non-agent cards'
@@ -571,6 +576,9 @@ function ScheduleCard({
 }: ScheduleCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
   const bigModeKey = useKeybindLabel("big-mode");
+  // The "cap Overview panel width" setting (373/419, default on) — caps this
+  // scheduled-session card at 900px like the agent cards.
+  const capWidth = useStore((s) => s.settings.capAgentWidth);
   // Disable "Start now" while the spawn is in flight (the card vanishes on success
   // via `schedule://fired`; on failure it stays and the button re-enables).
   const [starting, setStarting] = useState(false);
@@ -648,6 +656,7 @@ function ScheduleCard({
       id={schedule.id}
       color={color}
       selected={selected}
+      capped={capWidth}
       title={title}
       leading={
         <Clock
