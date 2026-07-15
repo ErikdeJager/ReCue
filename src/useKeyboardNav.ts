@@ -256,7 +256,9 @@ export function useKeyboardNav(): void {
       // ⌘1 … ⌘9 — jump to canvas N (main window, Canvas view only, #76). Safe over
       // a focused claude session: ⌘+number never reaches the PTY. Skipped while
       // the new-session modal is open so its own ⌘1–9 recents (#61/#66) aren't
-      // taken. If canvas N is detached (#84), raise its window instead of switching.
+      // taken, and while the global-search modal is open so it owns ⌘-Number for its
+      // folder-filter chips (task 397). If canvas N is detached (#84), raise its
+      // window instead of switching.
       if (
         (e.metaKey || e.ctrlKey) &&
         !e.shiftKey &&
@@ -267,7 +269,8 @@ export function useKeyboardNav(): void {
         if (
           !IS_MAIN_WINDOW ||
           state.view !== "canvas" ||
-          state.newSessionOpen
+          state.newSessionOpen ||
+          state.globalSearchOpen
         ) {
           return;
         }

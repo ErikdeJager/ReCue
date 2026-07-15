@@ -244,6 +244,24 @@ describe("rankAndGroup per-repo cap (task 393)", () => {
     expect(flatOrder(grouped)).toHaveLength(2);
     expect(grouped[0]!.hiddenCount).toBe(3);
   });
+
+  it("an infinite perRepoCap keeps every item and hides nothing (task 397)", () => {
+    // The folder-filter chip lifts the cap by passing POSITIVE_INFINITY, so a filtered
+    // repo shows all its matches with no "+N more" indicator.
+    const results = Array.from({ length: 9 }, (_, i) =>
+      result({
+        kind: "file",
+        repo: "/r/big",
+        title: `f${i}.ts`,
+        score: 100 - i,
+      }),
+    );
+    const grouped = rankAndGroup(results, {
+      perRepoCap: Number.POSITIVE_INFINITY,
+    });
+    expect(flatOrder(grouped)).toHaveLength(9);
+    expect(grouped[0]!.hiddenCount).toBe(0);
+  });
 });
 
 describe("splitHighlight (#337)", () => {
