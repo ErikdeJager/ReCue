@@ -3589,3 +3589,12 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Introduced new tokens --focus-ring + --focus-ring-width (no dedicated focus token existed); kept custom-accent-live behavior via the app's plain-fallback-first color-mix pattern.
 - Left deliberate accent/identity/selection borders out of scope: the 3px blockquote accent border, the Overview repo-color top band, the scrollbar transparent inset border, the Settings active-swatch selection ring, and all --accent-tint-* borders.
 - Concrete alpha values (dark strong 0.15->0.11, hairline 0.08->0.06; light strong 0.18->0.13, hairline 0.1->0.08) are a conservative "a bit smaller" starting point, tunable in one place.
+
+## Task 400 — Order folder pickers most-recently-used (count every panel open as a repo "use")
+
+- Read the card as: the ⌘K/⌘N/template folder pickers ALREADY order by the MRU `recents` list, but `recents` was only bumped on agent spawn — so the real gap is that opening a non-agent panel (file/diff/terminal/kanban/filetree) via `addOverviewPanel` never marked the repo recently-used. Fix bumps `recents` there; no picker UI code changes needed.
+- Scoped the "create panel or repo" entry points to the three folder-list pickers: ⌘K CreatePanelModal, ⌘N/⌘⇧N NewSessionModal, and TemplateUseModal — all already read `recents` in order (verified), so the fix is the recency signal, not the ordering code.
+- Excluded ⌘F GlobalSearch (a jump-to-existing-item search, keeps its active-repo-first alphabetical grouping), CloneRepoModal (native parent-dir dialog, no repo list), and per-repo Views menus — none are folder-picking create entry points.
+- Bump the worktree PARENT (via session.worktreeParent / effectiveRepo), never the worktree sub-folder, mirroring #331; bump on every addOverviewPanel call including dedup re-opens.
+- Deliberately leave the sidebar folder order (alphabetical `repoOrder` + #211 manual drag) untouched — `recents` order drives only the pickers, so manual drag order is preserved.
+- No new "last-used timestamp" model; the existing MRU-ordered, persisted, capped `recents` list is the recency signal. No backend change (touch_recent/add_recent already exist).
