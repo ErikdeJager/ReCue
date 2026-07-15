@@ -332,6 +332,11 @@ function SessionCard({
       </span>
       {/* A fork (#126) shares the source's auto-title, so a badge distinguishes them. */}
       {session.forkedFrom && <span className={styles.worktreeBadge}>fork</span>}
+      {/* A dev-container session runs inside docker — a static badge (the #213
+          worktree-badge pattern) marks it. */}
+      {session.containerImage && (
+        <span className={styles.worktreeBadge}>container</span>
+      )}
     </span>
   );
   // Folder · branch indicator for every agent (#226, replacing the #213 "worktree"

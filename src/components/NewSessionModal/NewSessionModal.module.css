@@ -580,3 +580,84 @@
     transform: scale(1);
   }
 }
+
+/* "Run in dev container" row (dev-container sessions): the opt-in Checkbox + the
+   info "i", sitting between the branch list and the action row. Same secondary
+   voice as the warning block; the toggle is the only interactive control, so the
+   row itself carries no border/fill. */
+.containerRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-bottom: var(--space-12);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-sm);
+}
+
+/* Anchor for the info popover (the ViewsPopover pattern: relative root, absolute
+   menu-pop panel). */
+.infoRoot {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.infoBtn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.infoBtn:hover {
+  color: var(--text-primary);
+}
+
+/* The can/cannot popover: menu-pop supplies the floating chrome; this only sizes
+   and anchors it. It opens UPWARD (the row sits at the modal's bottom edge). */
+.infoPop {
+  position: absolute;
+  bottom: calc(100% + var(--space-4));
+  left: 0;
+  z-index: 50;
+  width: 300px;
+}
+
+.infoText {
+  margin: 0 0 var(--space-6);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.45;
+}
+
+.infoText strong {
+  color: var(--text-primary);
+}
+
+.infoText code {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+}
+
+.infoMeta {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.4;
+}
+
+/* Docker-stopped hint beside the disabled toggle: same informational voice as the
+   destructive-checkout warning (secondary text, no status color). */
+.containerHint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.3;
+}

@@ -110,6 +110,12 @@ pub enum SessionError {
     /// CLI that would mis-handle our `--resume <id>`. `{0}` is the agent's id.
     #[error("the `{0}` agent can't resume or fork a session yet")]
     ResumeUnsupported(String),
+    /// A dev-container session can't be forked: its claude log lives in the
+    /// per-session container home, not the host's `~/.claude/projects`, so a fork's
+    /// `--resume <source>` in a FRESH container home would find nothing. Refused up
+    /// front (the UI already shows Fork unavailable — `forkable` never flips true).
+    #[error("a dev-container session can't be forked")]
+    ContainerUnsupported,
 }
 
 impl SessionError {
@@ -122,6 +128,7 @@ impl SessionError {
             Self::Git(_) => "Git",
             Self::NothingToFork => "NothingToFork",
             Self::ResumeUnsupported(_) => "ResumeUnsupported",
+            Self::ContainerUnsupported => "ContainerUnsupported",
         }
     }
 }
@@ -585,8 +592,9 @@ impl SessionManager {
         name: Option<String>,
         agent: &str,
         custom_command: Option<&str>,
+        container: Option<&crate::container::ContainerLaunch>,
     ) -> Result<SessionInfo, SessionError> {
-        self.spawn_session_with_prompt(cwd, name, None, agent, custom_command)
+        self.spawn_session_with_prompt(cwd, name, None, agent, custom_command, container)
     }
 
     /// Spawn a new session for `agent` (#101), optionally pre-seeded with an initial
@@ -600,6 +608,13 @@ impl SessionManager {
     /// parsed as an argv (NOT a shell line) by `parse_custom_command`. A non-blank prompt
     /// is appended as a trailing positional arg (best-effort seed); an unset / empty
     /// command is a clear `Spawn` error rather than a phantom `"custom"` binary spawn.
+    ///
+    /// A **dev-container session** passes `container` (composed in `commands.rs`): the
+    /// resolved `(program, args)` are rewritten to `docker run … <image> <program>
+    /// <args…>` right here — upstream of `spawn_with_id`, which stays generic (the PTY
+    /// child is the docker CLI, resolved on PATH like any binary). The session id is
+    /// then the launch's pre-minted UUID, so the container label == the record id ==
+    /// the per-session home-dir key. The `None` arm is byte-for-byte today's behavior.
     pub fn spawn_session_with_prompt(
         &self,
         cwd: impl AsRef<Path>,
@@ -607,15 +622,19 @@ impl SessionManager {
         prompt: Option<&str>,
         agent: &str,
         custom_command: Option<&str>,
+        container: Option<&crate::container::ContainerLaunch>,
     ) -> Result<SessionInfo, SessionError> {
-        let id = Uuid::new_v4().to_string();
+        let id = match container {
+            Some(launch) => launch.session_id.clone(),
+            None => Uuid::new_v4().to_string(),
+        };
         let spec = crate::agents::agent_spec(agent);
         // A non-blank initial prompt means the agent starts working immediately with
         // no keystrokes (#93), so it counts as "has work" for the busy heuristic
         // (#116) — otherwise it would be stuck gray (never blue/yellow).
         let trimmed_prompt = prompt.map(str::trim).filter(|p| !p.is_empty());
         let seeded = trimmed_prompt.is_some();
-        if spec.id == "custom" {
+        let (program, args, uses_claude_log) = if spec.id == "custom" {
             // Resolve the user's command → (program, args). Missing/blank → clear error.
             let command = custom_command
                 .ok_or_else(|| SessionError::Spawn("Custom agent command is not set".into()))?;
@@ -626,28 +645,35 @@ impl SessionManager {
             if let Some(p) = trimmed_prompt {
                 args.push(p.to_string());
             }
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            return self.spawn_with_id(
-                id.clone(),
-                &program,
-                &arg_refs,
-                cwd.as_ref(),
-                name,
-                seeded,
-                // Custom agents can't auto-name (no claude-style ai-title log, #325).
-                false,
-            );
-        }
-        let args = spec.spawn_args(&id, prompt);
+            // Custom agents can't auto-name (no claude-style ai-title log, #325).
+            (program, args, false)
+        } else {
+            (
+                spec.binary_name.to_string(),
+                spec.spawn_args(&id, prompt),
+                spec.supports_auto_name,
+            )
+        };
+        let (program, args) = match container {
+            Some(launch) => {
+                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                crate::container::docker_invocation(launch, &program, &arg_refs)
+            }
+            None => (program, args),
+        };
+        // A container session's claude log lives in its per-session container home,
+        // not the host's `~/.claude/projects` — the #97 title worker would glob
+        // nothing, so gate it off (the label falls back to the branch name).
+        let uses_claude_log = uses_claude_log && container.is_none();
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.spawn_with_id(
-            id.clone(),
-            spec.binary_name,
+            id,
+            &program,
             &arg_refs,
             cwd.as_ref(),
             name,
             seeded,
-            spec.supports_auto_name,
+            uses_claude_log,
         )
     }
 
@@ -663,21 +689,34 @@ impl SessionManager {
         cwd: impl AsRef<Path>,
         name: Option<String>,
         agent: &str,
+        container: Option<&crate::container::ContainerLaunch>,
     ) -> Result<SessionInfo, SessionError> {
         let spec = crate::agents::agent_spec(agent);
         let args = spec.resume_args(claude_session_id);
+        // A dev-container session resumes inside a fresh container with the SAME
+        // per-session home mounted, so `claude --resume <id>` finds its own log there
+        // (`commands.rs` composes the launch from the persisted record). Same wrap
+        // point as `spawn_session_with_prompt`; `None` is byte-for-byte unchanged.
+        let (program, args) = match container {
+            Some(launch) => {
+                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                crate::container::docker_invocation(launch, spec.binary_name, &arg_refs)
+            }
+            None => (spec.binary_name.to_string(), args),
+        };
+        let uses_claude_log = spec.supports_auto_name && container.is_none();
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         // A resume just reopens the conversation; it doesn't re-run a prompt, so it
         // has no autonomous work to do (#116) — `seeded` is false. A previously-active
         // session still shows yellow on boot via its persisted `has_been_active`.
         self.spawn_with_id(
             claude_session_id.to_string(),
-            spec.binary_name,
+            &program,
             &arg_refs,
             cwd.as_ref(),
             name,
             false,
-            spec.supports_auto_name,
+            uses_claude_log,
         )
     }
 
@@ -1805,7 +1844,7 @@ fn non_macos_unix_shell() -> String {
 /// only ever waits on a cache-miss boot. In debug builds and on Windows no probe arms,
 /// so it is exactly this process's own PATH, as before.
 #[cfg(unix)]
-fn find_on_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn find_on_path(program: &str) -> Option<PathBuf> {
     if program.contains('/') {
         let direct = PathBuf::from(program);
         return is_executable(&direct).then_some(direct);
@@ -1822,7 +1861,7 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
 /// extension is also tried against `PATHEXT` — critically, an npm-installed
 /// `claude` is usually **`claude.cmd`** (#140).
 #[cfg(windows)]
-fn find_on_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn find_on_path(program: &str) -> Option<PathBuf> {
     let resolve = |base: PathBuf| -> Option<PathBuf> {
         if is_executable(&base) {
             return Some(base);
@@ -2239,12 +2278,12 @@ mod tests {
         // phantom `"custom"` binary lookup (which would read as BinaryNotFound).
         let (mgr, _rx) = manager();
         let err = mgr
-            .spawn_session_with_prompt(tmp(), None, None, "custom", None)
+            .spawn_session_with_prompt(tmp(), None, None, "custom", None, None)
             .unwrap_err();
         assert!(matches!(err, SessionError::Spawn(_)));
         // An all-whitespace command tokenizes to nothing → also a Spawn error.
         let err = mgr
-            .spawn_session_with_prompt(tmp(), None, None, "custom", Some("   "))
+            .spawn_session_with_prompt(tmp(), None, None, "custom", Some("   "), None)
             .unwrap_err();
         assert!(matches!(err, SessionError::Spawn(_)));
     }
@@ -2263,6 +2302,7 @@ mod tests {
                 Some("do a thing"),
                 "custom",
                 Some("recue-nonexistent-custom-xyz --flag"),
+                None,
             )
             .unwrap_err();
         match err {

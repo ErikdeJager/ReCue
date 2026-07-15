@@ -94,6 +94,15 @@ pub struct PersistedSession {
     /// records (without the field) still deserialize and stay unwatched.
     #[serde(default)]
     pub watch: bool,
+    /// Dev-container session: the docker image it runs in. `Some` ⇒ spawn and resume
+    /// wrap the agent CLI in `docker run <image> …` (see `container.rs`); the
+    /// per-session home under `<data-dir>/container-homes/<id>` is what makes
+    /// `--resume` work across restarts. `None` (normal sessions + older records) ⇒ a
+    /// plain host PTY. Persisted on the record — not re-read from settings — so a
+    /// later image-setting change never breaks an existing session's resume. Mirrors
+    /// `worktree_parent`'s serde shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_image: Option<String>,
 }
 
 /// A user-added Overview panel (a non-agent column), persisted per repo (#38).
@@ -922,6 +931,7 @@ mod tests {
             forkable: true,
             auto_continue_disabled: false,
             watch: false,
+            container_image: None,
         }
     }
 
@@ -966,6 +976,34 @@ mod tests {
         let reloaded = Store::load(&path);
         assert_eq!(reloaded.sessions(), store.sessions());
         assert_eq!(reloaded.recents(), vec!["/repo/a".to_string()]);
+        let _ = fs::remove_file(&path);
+    }
+
+    /// Dev-container sessions: `container_image` round-trips, defaults to `None` on a
+    /// record written before the field existed, and `None` is skipped on write (the
+    /// `worktree_parent` serde shape) so old ReCue builds keep loading the file.
+    #[test]
+    fn container_image_round_trips_and_defaults_none() {
+        // A pre-container JSON record (no field) deserializes to None.
+        let legacy: PersistedSession = serde_json::from_str(
+            r#"{"id":"a","claude_session_id":"a","repo_path":"/r","name":null,"created_at":0}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.container_image, None);
+
+        // None is skipped on serialize; Some round-trips through disk.
+        let plain = serde_json::to_string(&record("a", "/repo/a")).unwrap();
+        assert!(!plain.contains("container_image"));
+        let mut containerized = record("c", "/repo/c");
+        containerized.container_image = Some("recue-agent:latest".into());
+        let path = temp_path("container-image");
+        let store = Store::load(&path);
+        store.add_session(containerized).unwrap();
+        let reloaded = Store::load(&path);
+        assert_eq!(
+            reloaded.session("c").unwrap().container_image.as_deref(),
+            Some("recue-agent:latest")
+        );
         let _ = fs::remove_file(&path);
     }
 

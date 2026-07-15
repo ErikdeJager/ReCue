@@ -367,12 +367,20 @@ export function chordLabel(chord: string, platform: string): string {
   return [...words, keyTokenLabel(key, false)].join("+");
 }
 
+/** The fixed contextual chord that toggles "Run in dev container" on the
+ * new-session branch step (matched with `eventChord` in the modal's form handler,
+ * labeled with `chordLabel` — ⌘⇧C on macOS, Ctrl+Shift+C on Windows/Linux). One
+ * source of truth for the modal kbd chip, the Settings reference row, and the
+ * reserved-chords set below. */
+export const CONTAINER_TOGGLE_CHORD = "mod+shift+c";
+
 /**
  * Chords the recorder refuses because something above the registry owns them:
- * hardcoded app handlers (⌘S manual save, ⌘⏎, the ⌘⌥1–6 launcher), OS/menu
- * accelerators that would preempt or shadow the binding (macOS Quit/Hide/Minimize,
- * the Edit-menu clipboard set, our ⇧⌘W Close Window), and core editing chords on
- * every platform (clipboard/undo — stealing those would break every input field).
+ * hardcoded app handlers (⌘S manual save, ⌘⏎, the ⌘⌥1–6 launcher, the ⌘⇧C
+ * dev-container toggle), OS/menu accelerators that would preempt or shadow the
+ * binding (macOS Quit/Hide/Minimize, the Edit-menu clipboard set, our ⇧⌘W Close
+ * Window), and core editing chords on every platform (clipboard/undo — stealing
+ * those would break every input field).
  */
 export function reservedChords(platform: string): Set<string> {
   const reserved = new Set<string>([
@@ -384,6 +392,7 @@ export function reservedChords(platform: string): Set<string> {
     "mod+a",
     "mod+z",
     "mod+shift+z",
+    CONTAINER_TOGGLE_CHORD,
     ...[1, 2, 3, 4, 5, 6].map((n) => `mod+alt+${n}`),
   ]);
   if (ctrlIsMod(platform)) {

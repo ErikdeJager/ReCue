@@ -10,6 +10,8 @@
 // Windows/Linux render the "Ctrl+…" form. For a chord identical on both platforms
 // (single letters / arrows) the two strings are the same.
 
+import { chordLabel, CONTAINER_TOGGLE_CHORD } from "../../keybinds";
+
 export interface Shortcut {
   /** The macOS glyph form (e.g. "⌘S"). */
   mac: string;
@@ -28,6 +30,18 @@ export interface ShortcutGroup {
 /** The grouped, cross-platform reference of **fixed** (non-rebindable) shortcuts
  * shown below the editable bindings in Settings → Shortcuts. */
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [
+  {
+    title: "New session",
+    shortcuts: [
+      {
+        // One source of truth with the modal's kbd chip + the reserved set:
+        // rendered from the fixed chord in keybinds.ts, never a drifting literal.
+        mac: chordLabel(CONTAINER_TOGGLE_CHORD, "macos"),
+        win: chordLabel(CONTAINER_TOGGLE_CHORD, "windows"),
+        description: "Toggle “Run in dev container” (branch step)",
+      },
+    ],
+  },
   {
     title: "Navigation",
     shortcuts: [

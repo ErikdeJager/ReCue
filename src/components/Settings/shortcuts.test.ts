@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { KEYBIND_ACTIONS } from "../../keybinds";
+import {
+  chordLabel,
+  CONTAINER_TOGGLE_CHORD,
+  KEYBIND_ACTIONS,
+} from "../../keybinds";
 import { SHORTCUT_GROUPS } from "./shortcuts";
 
 describe("SHORTCUT_GROUPS (fixed shortcuts, keybind rework)", () => {
@@ -33,6 +37,18 @@ describe("SHORTCUT_GROUPS (fixed shortcuts, keybind rework)", () => {
       expect(macs).toContain(chord);
     }
     expect(macs.some((m) => m.includes("⌘⌥1") && m.includes("⌘⌥6"))).toBe(true);
+  });
+
+  it("documents the dev-container toggle from the shared chord constant", () => {
+    // One source of truth: the row renders from CONTAINER_TOGGLE_CHORD via
+    // chordLabel, so the modal chip and this reference can never drift.
+    const row = SHORTCUT_GROUPS.flatMap((g) => g.shortcuts).find((s) =>
+      s.description.toLowerCase().includes("dev container"),
+    );
+    expect(row?.mac).toBe(chordLabel(CONTAINER_TOGGLE_CHORD, "macos"));
+    expect(row?.win).toBe(chordLabel(CONTAINER_TOGGLE_CHORD, "windows"));
+    expect(row?.mac).toBe("⌘⇧C");
+    expect(row?.win).toBe("Ctrl+Shift+C");
   });
 
   it("never duplicates a rebindable action (those render from the registry)", () => {

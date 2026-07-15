@@ -4,6 +4,7 @@ import {
   captureProblem,
   chordForAction,
   chordLabel,
+  CONTAINER_TOGGLE_CHORD,
   eventChord,
   eventKeyToken,
   isEditableTarget,
@@ -299,5 +300,46 @@ describe("isEditableTarget", () => {
     ).toBe(false);
     expect(isEditableTarget(fakeEl({ tag: "div" }))).toBe(false);
     expect(isEditableTarget(null)).toBe(false);
+  });
+});
+
+describe("CONTAINER_TOGGLE_CHORD (dev-container toggle, new-session modal)", () => {
+  it("matches ⌘⇧C on macOS and Ctrl+Shift+C on Windows/Linux via eventChord", () => {
+    // The modal's form handler compares eventChord(e, platform) to this constant.
+    expect(
+      eventChord(ev("KeyC", { meta: true, shift: true, key: "C" }), "macos"),
+    ).toBe(CONTAINER_TOGGLE_CHORD);
+    for (const platform of ["windows", "linux"]) {
+      expect(
+        eventChord(ev("KeyC", { ctrl: true, shift: true, key: "C" }), platform),
+      ).toBe(CONTAINER_TOGGLE_CHORD);
+    }
+  });
+
+  it("does not match near-miss chords", () => {
+    // No shift → plain copy; must never toggle.
+    expect(eventChord(ev("KeyC", { meta: true, key: "c" }), "macos")).not.toBe(
+      CONTAINER_TOGGLE_CHORD,
+    );
+    // Alt added → a different chord.
+    expect(
+      eventChord(ev("KeyC", { meta: true, shift: true, alt: true }), "macos"),
+    ).not.toBe(CONTAINER_TOGGLE_CHORD);
+    // On macOS a bare Ctrl+Shift+C is a terminal-bound ctrl-chord, not the toggle.
+    expect(
+      eventChord(ev("KeyC", { ctrl: true, shift: true }), "macos"),
+    ).not.toBe(CONTAINER_TOGGLE_CHORD);
+  });
+
+  it("is reserved on every platform so the recorder refuses to rebind onto it", () => {
+    for (const platform of ["macos", "windows", "linux", ""]) {
+      expect(reservedChords(platform).has(CONTAINER_TOGGLE_CHORD)).toBe(true);
+    }
+  });
+
+  it("labels as ⌘⇧C on macOS and Ctrl+Shift+C on Windows/Linux", () => {
+    expect(chordLabel(CONTAINER_TOGGLE_CHORD, "macos")).toBe("⌘⇧C");
+    expect(chordLabel(CONTAINER_TOGGLE_CHORD, "windows")).toBe("Ctrl+Shift+C");
+    expect(chordLabel(CONTAINER_TOGGLE_CHORD, "linux")).toBe("Ctrl+Shift+C");
   });
 });

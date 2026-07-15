@@ -370,6 +370,10 @@ function LeafPanel({
           {content.kind === "agent" && session?.forkedFrom && (
             <span className={styles.worktreeBadge}>fork</span>
           )}
+          {/* A dev-container session runs inside docker — a static badge. */}
+          {content.kind === "agent" && session?.containerImage && (
+            <span className={styles.worktreeBadge}>container</span>
+          )}
         </span>
         <span
           className={styles.panelActions}

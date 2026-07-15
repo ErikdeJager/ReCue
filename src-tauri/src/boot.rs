@@ -78,12 +78,21 @@ fn resume_one(app: &AppHandle, index: &ProjectLogIndex, record: &PersistedSessio
     // record persists; the user can relaunch it as a fresh session). Claude resumes exactly
     // as before.
     if plan.resume {
-        let _ = app.state::<SessionManager>().resume_session(
-            &record.claude_session_id,
-            &record.repo_path,
-            record.name.clone(),
-            &record.agent,
-        );
+        // A dev-container record resumes inside a fresh container over its persisted
+        // per-session home (`Ok(Some(launch))`); a plain record resumes as a host PTY
+        // (`Ok(None)`). When the docker launch can't be composed (docker missing, an
+        // unreadable worktree gitfile) — `Err(())` — the resume is SKIPPED entirely: a
+        // container record must never fall back to a host PTY (wrong credentials/home/
+        // git universe); the record stays with the normal failed-resume surface (#30/#63).
+        if let Ok(launch) = crate::commands::boot_container_launch(app, record) {
+            let _ = app.state::<SessionManager>().resume_session(
+                &record.claude_session_id,
+                &record.repo_path,
+                record.name.clone(),
+                &record.agent,
+                launch.as_ref(),
+            );
+        }
     }
     // Seed forkability once at boot (#138): read the on-disk log so a resumed session
     // **with** history shows Fork available immediately, rather than waiting for its first
