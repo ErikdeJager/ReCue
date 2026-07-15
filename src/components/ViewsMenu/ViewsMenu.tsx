@@ -3,11 +3,13 @@ import {
   FileDiff,
   FileText,
   FolderTree,
+  type LucideIcon,
   Plus,
   SquareKanban,
   Terminal as TerminalIcon,
 } from "lucide-react";
 
+import { byItemTypeOrder, type ItemTypeKey } from "../../itemTypeOrder";
 import { useStore } from "../../store";
 import FilePicker from "../FilePicker/FilePicker";
 
@@ -65,7 +67,16 @@ function ViewsMenu({
     );
   }
 
-  const items = [
+  // The addable non-agent views. Order is the shared canonical order (task 392,
+  // `itemTypeOrder.ts` — Terminal · File tree · File viewer · Diff viewer · Kanban
+  // board, the session-less subset); declaration order here is irrelevant since the
+  // render sorts by `byItemTypeOrder`.
+  const items: {
+    key: Exclude<ItemTypeKey, "session">;
+    label: string;
+    icon: LucideIcon;
+    run: () => void;
+  }[] = [
     {
       key: "file",
       label: "File viewer",
@@ -115,7 +126,7 @@ function ViewsMenu({
 
   return (
     <>
-      {items.map((v) => {
+      {byItemTypeOrder(items, (v) => v.key).map((v) => {
         const Icon = v.icon;
         return (
           <button
