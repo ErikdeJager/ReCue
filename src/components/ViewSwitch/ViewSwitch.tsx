@@ -23,9 +23,10 @@ const OPTIONS: { value: View; label: string; icon: typeof LayoutGrid }[] = [
  * shared `SegmentedControl` atom (UI v2 task 372, its rounded `chrome` look) followed by
  * a smaller standalone Canvas button in the same row; with `compact` (#168) it renders
  * as icon-only buttons stacked to fit the collapsed sidebar rail, in the same
- * Overview → Attention → Canvas order (Canvas subtly de-emphasized). The **Attention**
- * control (#398) is icon-only (the lucide `AlertTriangle`, accessible name "Attention")
- * with no queue-count badge (#405).
+ * Overview → Attention → Canvas order (Canvas subtly de-emphasized). In expanded mode
+ * **Overview** and **Attention** are equal-weight text segments; only the compact rail
+ * renders Attention as the lucide `AlertTriangle` icon (accessible name "Attention").
+ * Neither mode shows a queue-count badge (#405).
  */
 function ViewSwitch({ compact = false }: { compact?: boolean }) {
   const view = useStore((s) => s.view);
@@ -41,16 +42,7 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
     // instead (the intended "Canvas is a secondary mode" affordance).
     const mainOptions: SegmentedOption<View>[] = [
       { value: "overview", label: "Overview" },
-      {
-        value: "attention",
-        title: "Attention",
-        label: (
-          <span className={styles.attnLabel}>
-            <AlertTriangle size={14} strokeWidth={1.5} aria-hidden />
-            <span className={styles.srOnly}>Attention</span>
-          </span>
-        ),
-      },
+      { value: "attention", label: "Attention", title: "Attention" },
     ];
     const canvasActive = view === "canvas";
     return (
