@@ -3565,3 +3565,11 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Card × (kill) is confirm-gated per `settings.confirmDestructive` via a lightweight inline two-step (arm-then-confirm) on the ×, reusing `removeSession`; removal paths are patched to keep the user in the Attention view (not bounce to Overview) so a kill just advances to the next queued agent.
 - ViewSwitch Attention segment uses the `AlertTriangle` icon in both expanded (composed label: icon + visually-hidden "Attention" + count badge, `title="Attention"`) and compact-rail modes; count badge hidden at 0; live count via a store selector returning a primitive number.
 - Empty state is a small custom "All caught up" block (not the `EmptyState` hero wordmark). The Attention view reuses MainApp's single `WaveBackground` (transparent panes) rather than mounting its own; it inherits the existing "overview" wave preset (no `wavePresets.ts` change). Settings "Default view on launch" picker is left at Overview/Canvas only (launching into an empty triage surface is undesirable), though the `View` type permits "attention".
+
+## Task 402 — Default the wave "Pause when covered by panels" setting to OFF (opt-in)
+
+- "Default off" = flip DEFAULT_SETTINGS.pauseWaveWhenCovered from true to false; no migration code (shallow mergeSettings back-fill handles the upgrade, mirroring how the setting was introduced in task 384).
+- Existing users who already saved settings since task 384 persist pauseWaveWhenCovered:true explicitly (saveSettings writes the whole blob), so their pause stays ON — treated as acceptable (they made a choice; this is a default flip, not a forced behavior change). Users who never saved get the new OFF default.
+- Left the historical TASK_ARCHIVE.md task-384 entry unchanged (it correctly records 384 shipped default ON); updated CLAUDE.md + TS/comment copy instead.
+- Updated the existing store.test.ts default-value test to assert false and to keep an override assertion for a persisted true; Settings.tsx help text left as-is (states no default).
+- Correcting the "(default on)" parenthetical in TRAJECTORY_TO_LINUX/WINDOWS.md is marked optional/low-priority (historical logs); the smoke-verification steps still hold.
