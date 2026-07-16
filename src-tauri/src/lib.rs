@@ -30,6 +30,7 @@ mod store;
 mod terminal_views;
 mod title;
 mod usage;
+mod window_state;
 
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -217,6 +218,23 @@ pub fn run() {
                 let _ = window.set_background_color(Some(color));
             }
             commands::schedule_reveal_fallback(app.handle(), "main");
+
+            // Restore the open-window set (task 439): manage the live window
+            // registry + its debounced saver, apply the saved main-window bounds to
+            // the still-hidden main window (before any reveal — no flash, #348) and
+            // recreate each saved app-* window hidden-until-painted with its
+            // creation presets, clamped to the CURRENT monitor layout and capped
+            // defensively. Ordering matters: runs AFTER the Store is managed (the
+            // persisted set lives there), AFTER main's primary registration above
+            // (main stays the oldest full window → primary, task 433 — so a
+            // restored window never runs the once-per-app boot effects), and AFTER
+            // the main-window background block (main is re-themed before it moves;
+            // a restored app window inherits the themed background from
+            // create_app_window). Reverses #84's "detached windows are
+            // per-session". Wayland: set_position is compositor-refused — restore
+            // degrades to size-only there (documented in window_state.rs).
+            app.manage(window_state::init(app.handle()));
+            window_state::restore_windows(app.handle());
 
             // Login-shell PATH cache (#360). Publish the previous launch's probe result
             // immediately when it still applies (same `$SHELL`, same rc-file mtime
@@ -655,31 +673,47 @@ pub fn run() {
                 // drop, and the task-433 re-election below: no PTY is killed,
                 // sessions keep running in surviving windows, and with the LAST
                 // window closing Tauri's default run loop still exits the app,
-                // running the kill_all shutdown path as today.)
-                tauri::RunEvent::WindowEvent {
-                    label,
-                    event: tauri::WindowEvent::Destroyed,
-                    ..
-                } => {
-                    if let (Some(views), Some(manager)) = (
-                        handle.try_state::<terminal_views::TerminalViews>(),
-                        handle.try_state::<SessionManager>(),
-                    ) {
-                        views.purge_window(&manager, &label);
+                // running the kill_all shutdown path as today.) Task 439 widens the
+                // arm: Moved/Resized feed the window registry's debounced saver.
+                tauri::RunEvent::WindowEvent { label, event, .. } => match event {
+                    tauri::WindowEvent::Destroyed => {
+                        if let (Some(views), Some(manager)) = (
+                            handle.try_state::<terminal_views::TerminalViews>(),
+                            handle.try_state::<SessionManager>(),
+                        ) {
+                            views.purge_window(&manager, &label);
+                        }
+                        // Same-file edit guard (task 435): a closing window's soft claims
+                        // are dropped so its files never stay read-only in other windows.
+                        // try_state: teardown-safe, like the view purge above.
+                        if let Some(claims) = handle.try_state::<file_claims::FileClaims>() {
+                            claims.purge_window(handle, &label);
+                        }
+                        // Primary re-election (task 433): if the primary closed, the oldest
+                        // surviving full window is promoted and broadcast — the new primary's
+                        // frontend re-arms the once-per-app effects live (armPrimaryEffects).
+                        // try_state inside; a shutdown-teardown emit into dying webviews is a
+                        // `let _ =` no-op.
+                        primary::unregister_window(handle, &label);
+                        // Task 439: prune the closed window from the restorable set —
+                        // unless the app is exiting (the pure WindowSet keeps the at-quit
+                        // set; its would-empty rule catches the last-window-close exit,
+                        // where ExitRequested only fires after teardown).
+                        window_state::note_destroyed(handle, &label);
                     }
-                    // Same-file edit guard (task 435): a closing window's soft claims
-                    // are dropped so its files never stay read-only in other windows.
-                    // try_state: teardown-safe, like the view purge above.
-                    if let Some(claims) = handle.try_state::<file_claims::FileClaims>() {
-                        claims.purge_window(handle, &label);
+                    tauri::WindowEvent::Moved(pos) => {
+                        window_state::note_moved(handle, &label, pos.x, pos.y)
                     }
-                    // Primary re-election (task 433): if the primary closed, the oldest
-                    // surviving full window is promoted and broadcast — the new primary's
-                    // frontend re-arms the once-per-app effects live (armPrimaryEffects).
-                    // try_state inside; a shutdown-teardown emit into dying webviews is a
-                    // `let _ =` no-op.
-                    primary::unregister_window(handle, &label);
-                }
+                    tauri::WindowEvent::Resized(size) => {
+                        window_state::note_resized(handle, &label, size.width, size.height)
+                    }
+                    _ => {}
+                },
+                // Task 439: the ⌘Q / app.exit path — fires BEFORE window teardown, so
+                // flush the full at-quit window set now and suppress the per-window
+                // prunes that follow. Not prevented; teardown continues normally into
+                // RunEvent::Exit (the kill_all shutdown above).
+                tauri::RunEvent::ExitRequested { .. } => window_state::note_exit_requested(handle),
                 _ => {}
             }
         });

@@ -2074,8 +2074,11 @@ pub fn set_theme_background(app: AppHandle, theme: String) {
 /// Init presets for a full app window (task 434): passed as URL params so the new
 /// window's OWN store presets its local state at boot — `repo` filters its Overview
 /// to that repo; `canvas` boots it into the Canvas view on that tab (when the tab
-/// exists). Local UI only: nothing is persisted, no other window is touched. Grows
-/// in card 13/16 (window restore).
+/// exists). Local UI only for the live window; since task 439 (card 13/16) these
+/// creation-time presets are ALSO the window's persisted per-window preset
+/// (`store::PersistedWindow.repo/canvas`), so a restored window re-opens with the
+/// same URL params it was created with (never the live filter/tab the user
+/// switched to later).
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct AppWindowInit {
     pub repo: Option<String>,
@@ -2133,10 +2136,26 @@ pub fn app_window_url(id: &str, init: &AppWindowInit) -> String {
 /// killed on close (sessions keep running, mirrored in surviving windows).
 #[tauri::command]
 pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, SessionError> {
+    create_app_window(&app, init, None)
+}
+
+/// Create a full app window (task 434) — the ONE creation path, shared by the
+/// `open_app_window` command (`bounds: None` → the default 1280×832 placement)
+/// and the task-439 boot restore (`bounds: Some(clamped)` → applied while the
+/// window is still hidden, before any reveal, so a restored window never flashes
+/// at the default position). Registers the window for primary election (433) and
+/// in the window-state registry (439, with its creation presets — the same
+/// values the URL carries, so a restored window re-persists what it was created
+/// with).
+pub fn create_app_window(
+    app: &AppHandle,
+    init: AppWindowInit,
+    bounds: Option<(i32, i32, u32, u32)>,
+) -> Result<String, SessionError> {
     let id = uuid::Uuid::new_v4().to_string();
     let label = format!("app-{id}");
     let url = app_window_url(&id, &init);
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("ReCue")
         // The tauri.conf.json main-window geometry — an app window IS a full shell.
         .inner_size(1280.0, 832.0)
@@ -2147,12 +2166,22 @@ pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, Se
         .background_color(window_background(&app.state::<Store>()))
         .build()
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Task 439: apply restored bounds while the window is still hidden (no flash;
+    // the OS still enforces min_inner_size). Wayland refuses set_position
+    // (compositor-owned placement) — restore degrades to size-only there.
+    if let Some((x, y, width, height)) = bounds {
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        let _ = window.set_size(tauri::PhysicalSize::new(width, height));
+    }
     // Never leave the window invisible if its frontend fails to boot (#348).
-    schedule_reveal_fallback(&app, &label);
+    schedule_reveal_fallback(app, &label);
     // Task 433: every window-creation site routes through registration. An app
     // window is primary-eligible — if the original primary later closes, the
     // oldest surviving full window (possibly this one) takes over live.
-    crate::primary::register_window(&app, &label);
+    crate::primary::register_window(app, &label);
+    // Task 439: track the window (+ its creation presets) in the restorable set —
+    // `bounds` when the caller just applied clamped ones, else queried live.
+    crate::window_state::register(app, &label, init.repo, init.canvas, bounds);
     Ok(id)
 }
 

@@ -1799,6 +1799,28 @@ per-window context-loss latch, in every window.
       rendered in the first window (the 426 purge unclamps the grid); closing a canvas
       viewed by another window re-homes that window to another tab.
 
+## 2026-07-16 — Restore the open-window set on relaunch (multi-window 13/16, task 439)
+
+The saved window set (`main` + up to 8 `app-*` extras, dedicated `window_state` store key)
+is recreated at boot with clamped bounds applied while each window is still hidden (#348).
+All platform-neutral Tauri API — but placement is compositor-owned on Wayland:
+`set_position` is refused and `Moved` may never be delivered, so restore degrades to
+size-only with default placement there (documented in `window_state.rs`, not worked
+around).
+
+### Needs real-box verification (window restore, task 439)
+
+- [ ] **X11 full restore vs Wayland size-only degrade.** On X11 (and XWayland) windows
+      return at their saved positions AND sizes; on native Wayland (GNOME + KDE) confirm
+      the documented degrade — sizes restore, the compositor places the windows, no error.
+- [ ] **N restored windows on WebKitGTK.** Restore 3+ windows: each reveals themed
+      (no white flash), boot cost stays acceptable (the #351 lazy terminal mounts bound
+      the per-window cost), and exactly ONE window runs the once-per-app boot effects.
+- [ ] **`ExitRequested` ordering on GNOME/KDE quit paths.** Quit via the app menu, via
+      closing the last window, and via the DE's window-close on all windows in sequence:
+      relaunch restores the correct at-quit set in each case (worst acceptable outcome is
+      a stale-but-valid set, never an empty one after a multi-window quit).
+
 ## 2026-07-16 — Targeted PTY output delivery: session://output + session://size emit only to subscriber windows (multi-window 15/16, task 440)
 
 `session://output` / `session://size` now `emit_filter` to exactly the windows holding a

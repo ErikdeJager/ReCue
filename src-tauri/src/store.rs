@@ -230,6 +230,27 @@ pub struct RecurringSession {
     pub agent: String,
 }
 
+/// One restorable window (Multi-window task 439): a full app window (`main` or
+/// `app-<uuid>`) with its last-known bounds and the init presets it was created
+/// with (task 434's `AppWindowInit` → the `?repo=`/`?canvas=` URL params). `x`/`y`
+/// are the OUTER position and `width`/`height` the INNER (client-area) size, both
+/// in physical px — deliberately the pair tao's `Moved`/`Resized` events report and
+/// tauri's `set_position`/`set_size` setters accept, so a save→restore cycle never
+/// accretes the title-bar height. Presets are creation-time, not live UI state (a
+/// window opened plain and later filtered restores plain).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistedWindow {
+    pub label: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas: Option<String>,
+}
+
 /// The on-disk shape of the persistence file.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistedState {
@@ -333,6 +354,16 @@ pub struct PersistedState {
     /// release-build probe; `default` keeps old files loading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_cache: Option<PathCache>,
+    /// The restorable open-window set (Multi-window task 439). Kept as a dedicated
+    /// value (like `sidebar_width` / `path_cache`), separate from the Settings blob
+    /// so a Settings draft can't clobber it, and **not** exposed as a Tauri command
+    /// — it is backend-internal (Rust saves it debounced from window events and
+    /// restores it at boot; the frontend never sees it — the `path_cache`
+    /// precedent). This deliberately reverses the #84 "detached windows are
+    /// per-session" rule: full app windows now survive relaunch. Empty until first
+    /// written; `default` keeps old files loading.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub window_state: Vec<PersistedWindow>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -732,6 +763,20 @@ impl Store {
     /// boot, and only when the value actually changed.
     pub fn set_path_cache(&self, cache: PathCache) -> io::Result<()> {
         self.update(|state| state.path_cache = Some(cache))
+    }
+
+    /// The restorable open-window set (Multi-window task 439); empty until first
+    /// written. Backend-internal — read once at boot by
+    /// `window_state::restore_windows`, written by its debounced saver; never
+    /// exposed as a Tauri command (the `path_cache` precedent).
+    pub fn window_state(&self) -> Vec<PersistedWindow> {
+        self.with(|state| state.window_state.clone())
+    }
+
+    /// Replace + persist the restorable open-window set (task 439). Written by the
+    /// `window_state` saver only when the snapshot actually changed.
+    pub fn set_window_state(&self, windows: Vec<PersistedWindow>) -> io::Result<()> {
+        self.update(|state| state.window_state = windows)
     }
 
     /// The per-repo diff "seen" markers (#278) — opaque JSON; `null` until first
@@ -1307,6 +1352,48 @@ mod tests {
         let state: PersistedState =
             serde_json::from_str(r#"{"sessions":[],"recents":[]}"#).expect("legacy state loads");
         assert_eq!(state.path_cache, None);
+    }
+
+    #[test]
+    fn window_state_set_and_persist() {
+        let path = temp_path("windowstate");
+        let store = Store::load(&path);
+        // Unset until the window registry first writes (task 439). A pre-439 file
+        // (no `window_state` key) loads the same way.
+        assert!(store.window_state().is_empty());
+        let legacy: PersistedState =
+            serde_json::from_str(r#"{"sessions":[],"recents":[]}"#).expect("legacy state loads");
+        assert!(legacy.window_state.is_empty());
+
+        let windows = vec![
+            PersistedWindow {
+                label: "main".to_string(),
+                x: 40,
+                y: 60,
+                width: 1280,
+                height: 832,
+                repo: None,
+                canvas: None,
+            },
+            PersistedWindow {
+                label: "app-1".to_string(),
+                x: -1920, // a negative-origin second monitor is a legal position
+                y: 0,
+                width: 900,
+                height: 700,
+                repo: Some("/repo/a".to_string()),
+                canvas: Some("c1".to_string()),
+            },
+        ];
+        store.set_window_state(windows.clone()).unwrap();
+
+        let reloaded = Store::load(&path);
+        assert_eq!(reloaded.window_state(), windows);
+
+        // An empty set persists as empty (not serialized) and reloads empty.
+        store.set_window_state(vec![]).unwrap();
+        assert!(Store::load(&path).window_state().is_empty());
+        let _ = fs::remove_file(&path);
     }
 
     #[test]
