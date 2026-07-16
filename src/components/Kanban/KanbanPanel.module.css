@@ -2,6 +2,13 @@
    left-to-right and the strip scrolls horizontally on a narrow panel; each
    column scrolls its cards vertically. On-system tokens only. */
 
+/* Task 423: a board-scoped corner softening of the Kanban's interactive controls
+   (buttons + text inputs/areas), matching the Task 409 card radius so the composer/
+   edit controls visually belong to the rounded cards. Like Task 409 this is an
+   intentional LOCAL exception to the v2 square-panel language — it reuses the existing
+   `--radius-micro` (4px) token (= the card radius; no magic number, no token edit) and
+   is scoped to this module only, so the app-wide square corners are untouched. */
+
 .message {
   padding: var(--space-16);
   color: var(--text-muted);
@@ -52,7 +59,8 @@
   flex-shrink: 0;
   padding: var(--space-2) var(--space-12);
   border: 1px solid var(--accent);
-  border-radius: var(--radius-control);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   background: var(--accent);
   color: var(--accent-fg);
   font: inherit;
@@ -93,6 +101,8 @@
   margin: 10px;
   padding: 10px;
   border: 1px solid var(--border-hairline);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   outline: none;
   resize: none;
   overflow: auto;
@@ -161,7 +171,8 @@
   border: none;
   padding: var(--space-2) var(--space-4);
   margin-left: calc(-1 * var(--space-4));
-  border-radius: var(--radius-chip);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   text-align: left;
   cursor: text;
   font-size: var(--fs-meta);
@@ -189,7 +200,8 @@
   min-width: 0;
   background: var(--bg-panel);
   border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   padding: var(--space-2) var(--space-6);
   color: var(--text-primary);
   font-size: var(--fs-meta);
@@ -232,7 +244,8 @@
   background: none;
   border: none;
   padding: var(--space-2);
-  border-radius: var(--radius-chip);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   color: var(--text-muted);
   cursor: pointer;
   font-size: var(--fs-meta-xs);
@@ -284,7 +297,8 @@
   appearance: none;
   background: var(--accent-dim);
   border: 1px dashed var(--accent);
-  border-radius: var(--radius-chip);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   padding: var(--space-4) var(--space-8);
   color: var(--accent);
   font: inherit;
@@ -531,7 +545,8 @@
   background: none;
   border: none;
   padding: var(--space-2);
-  border-radius: var(--radius-chip);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   color: var(--text-muted);
   cursor: pointer;
 }
@@ -563,7 +578,8 @@
   resize: vertical;
   background: var(--content-bg);
   border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-chip);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   padding: var(--space-6);
   color: var(--text-primary);
   font-family: inherit;
@@ -723,7 +739,8 @@
   resize: vertical;
   background: var(--content-bg);
   border: 1px solid var(--col-accent, var(--border-hairline));
-  border-radius: var(--radius-chip);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   padding: var(--space-6);
   color: var(--text-primary);
   font-family: inherit;
@@ -751,14 +768,21 @@
   /* Lay the label + the ⏎ chip out inline (#245). */
   display: inline-flex;
   align-items: center;
+  /* Task 423: `flex: 1` + centered content makes Add/Cancel an exact equal split of the
+     action row regardless of label content (the ⏎ chip made Add intrinsically wider);
+     `justify-content: center` centers the label + ⏎ group once flex stretches the button. */
+  flex: 1;
+  justify-content: center;
   gap: var(--space-6);
   appearance: none;
   border: 1px solid var(--accent);
-  border-radius: var(--radius-chip);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   /* Padding (#240/#245): the old `--space-10` was an undefined token, which made the
      whole `padding` shorthand invalid and collapse to 0 — text sat flush to the edges.
      #245 thinned the vertical padding (6px → 4px) for a slimmer button, horizontal
-     unchanged. Shared with #238's inline-edit Save/Cancel buttons (kept size-matched). */
+     unchanged. Shared with #238's inline-edit Save/Cancel buttons (kept size-matched,
+     now an exact equal split via the Task 423 `flex: 1`). */
   padding: var(--space-4) var(--space-12);
   background: var(--accent);
   color: var(--accent-fg);
@@ -772,12 +796,18 @@
 .composerCancel {
   display: inline-flex;
   align-items: center;
+  /* Task 423: match .composerAdd — `flex: 1` + centered content so Add/Cancel are an
+     exact equal-width split with centered labels. */
+  flex: 1;
+  justify-content: center;
   gap: var(--space-6);
   appearance: none;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-chip);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   /* Match .composerAdd's padding (#240/#245 — 4px vertical, 12px horizontal) so the
-     two buttons stay the same size. No ⏎ chip here (Cancel doesn't submit on Enter). */
+     two buttons stay the same size (now an exact equal split via Task 423 `flex: 1`).
+     No ⏎ chip here (Cancel doesn't submit on Enter). */
   padding: var(--space-4) var(--space-12);
   background: transparent;
   color: var(--text-secondary);
@@ -812,7 +842,8 @@
   appearance: none;
   background: none;
   border: 1.5px dashed var(--border-strong);
-  border-radius: var(--radius-control);
+  /* Task 423: rounded to match the cards (see the header note). */
+  border-radius: var(--radius-micro);
   color: var(--text-muted);
   font-size: var(--fs-meta-sm);
   cursor: pointer;
