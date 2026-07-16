@@ -1291,6 +1291,9 @@ function WorktreeHeader({
   // Click-to-filter Overview to just this worktree (#197), mirroring the repo name.
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
+  // Keep the user in Attention when they filter from Attention (#445); only force
+  // Overview from the other views (so the narrowed wall becomes visible).
+  const view = useStore((s) => s.view);
   const isFiltered = useStore((s) => s.overviewRepoFilter?.path === path);
   const platform = useStore((s) => s.platform);
   // A worktree shares its parent repo's remote (#327), so read the parent's cached URL.
@@ -1359,7 +1362,7 @@ function WorktreeHeader({
             // A worktree click shows only that worktree (#197); mode is moot for a
             // worktree path (it has no sub-worktrees), so the default "all" is fine.
             setOverviewRepoFilter(path, "all");
-            setView("overview");
+            if (view !== "attention") setView("overview");
           }}
           title={`Filter Overview to ${branch}`}
           aria-pressed={isFiltered}
@@ -1634,6 +1637,8 @@ function RepoBranchLine({
   const platform = useStore((s) => s.platform);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
+  // Stay in Attention when filtering from it (#445); only force Overview otherwise.
+  const view = useStore((s) => s.view);
   const githubUrl = useStore((s) => s.githubUrls[repo]);
   const openInEditor = useStore((s) => s.openInEditor);
   const editorHint = useKeybindLabel("open-in-editor");
@@ -1674,7 +1679,7 @@ function RepoBranchLine({
           // The branch line filters to the repo's **own** directory agents only —
           // worktrees hidden (#247), distinct from the folder header's "all".
           setOverviewRepoFilter(repo, "own");
-          setView("overview");
+          if (view !== "attention") setView("overview");
         }}
         onContextMenu={openMenu}
         title={`Show only ${repoName(repo)}'s own branch (hide worktrees)`}
@@ -1982,6 +1987,8 @@ function RepoGroup({
   const cancelRecurring = useStore((s) => s.cancelRecurring);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
+  // Stay in Attention when filtering from it (#445); only force Overview otherwise.
+  const view = useStore((s) => s.view);
   const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
   const repoColors = useStore((s) => s.repoColors);
   const sessionBusy = useStore((s) => s.sessionBusy);
@@ -2132,7 +2139,7 @@ function RepoGroup({
           className={styles.repoTitle}
           onClick={() => {
             setOverviewRepoFilter(repo, "all");
-            setView("overview");
+            if (view !== "attention") setView("overview");
           }}
           title={`Filter Overview to ${repoName(repo)}`}
           aria-pressed={folderActive}
@@ -2481,6 +2488,8 @@ function Sidebar() {
   const killAllAgentsGlobal = useStore((s) => s.killAllAgentsGlobal);
   const closeAllItemsGlobal = useStore((s) => s.closeAllItemsGlobal);
   const setView = useStore((s) => s.setView);
+  // Stay in Attention when filtering from it (#445); only force Overview otherwise.
+  const view = useStore((s) => s.view);
   const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const repoColors = useStore((s) => s.repoColors);
@@ -3084,7 +3093,7 @@ function Sidebar() {
                 style={{ color: repoColor(repo, repoColors) }}
                 onClick={() => {
                   setOverviewRepoFilter(repo, "all");
-                  setView("overview");
+                  if (view !== "attention") setView("overview");
                 }}
                 onContextMenu={(event) => openRepoMenu(repo, event)}
                 title={folderTip}

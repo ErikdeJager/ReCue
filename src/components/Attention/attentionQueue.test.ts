@@ -150,6 +150,50 @@ describe("attentionQueue membership (#398)", () => {
   });
 });
 
+describe("attentionQueue repo/folder filter (#445)", () => {
+  const repoA = "/repo/a";
+  const repoB = "/repo/b";
+  // Three queue-eligible agents: repo-A own, repo-A worktree, repo-B own.
+  const sessions = [
+    sess("a-own", { repoPath: repoA }),
+    sess("a-wt", { repoPath: "/wt/a-x", worktreeParent: repoA }),
+    sess("b-own", { repoPath: repoB }),
+  ];
+  const base = {
+    ...emptyInput,
+    sessions,
+    eligible: { "a-own": true, "a-wt": true, "b-own": true },
+  };
+
+  it("no filter (undefined) leaves the queue unchanged", () => {
+    const q = attentionQueue(base);
+    expect(q.map((x) => x.id)).toEqual(["a-own", "a-wt", "b-own"]);
+  });
+
+  it("no filter (null) leaves the queue unchanged", () => {
+    const q = attentionQueue({ ...base, filter: null });
+    expect(q.map((x) => x.id)).toEqual(["a-own", "a-wt", "b-own"]);
+  });
+
+  it("mode:'all' narrows to the repo's own AND its worktree agents", () => {
+    const q = attentionQueue({ ...base, filter: { path: repoA, mode: "all" } });
+    expect(q.map((x) => x.id).sort()).toEqual(["a-own", "a-wt"]);
+  });
+
+  it("mode:'own' narrows to the repo's own non-worktree agents (worktree excluded)", () => {
+    const q = attentionQueue({ ...base, filter: { path: repoA, mode: "own" } });
+    expect(q.map((x) => x.id)).toEqual(["a-own"]);
+  });
+
+  it("a worktree-folder filter (mode:'all') narrows to just that worktree", () => {
+    const q = attentionQueue({
+      ...base,
+      filter: { path: "/wt/a-x", mode: "all" },
+    });
+    expect(q.map((x) => x.id)).toEqual(["a-wt"]);
+  });
+});
+
 describe("attentionQueue ordering — FIFO oldest idle first (#398)", () => {
   it("orders by idleSince ascending (oldest idle at the top)", () => {
     const q = attentionQueue({
