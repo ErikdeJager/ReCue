@@ -372,14 +372,16 @@ pub async fn spawn_session(
     agent: Option<String>,
     prompt: Option<String>,
     container: Option<bool>,
+    worktree_parent: Option<String>,
 ) -> Result<PersistedSession, SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
-        spawn_session_blocking(&app, cwd, name, agent, prompt, container)
+        spawn_session_blocking(&app, cwd, name, agent, prompt, container, worktree_parent)
     })
     .await
     .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_session_blocking(
     app: &AppHandle,
     cwd: String,
@@ -387,6 +389,7 @@ fn spawn_session_blocking(
     agent: Option<String>,
     prompt: Option<String>,
     container: Option<bool>,
+    worktree_parent: Option<String>,
 ) -> Result<PersistedSession, SessionError> {
     let manager = app.state::<SessionManager>();
     let store = app.state::<Store>();
@@ -399,13 +402,19 @@ fn spawn_session_blocking(
     // The custom agent's launch command lives in the (opaque) settings blob (#325);
     // resolve it only for `agent == "custom"`, else pass `None`.
     let custom = custom_command_for(&store, &agent);
-    // When `cwd` is an existing app-managed worktree (an agent already runs there with a
-    // recorded `worktree_parent`), nest the new session under that parent instead of
-    // registering the worktree folder as a stray top-level sidebar folder (#331). A plain
-    // folder resolves to `None`, so a normal spawn is unchanged. Covers every frontend
-    // entry point routing through `spawn_session` (OpenViewButton "New session here",
-    // NewSessionModal, CreatePanelModal, Canvas template `new-agent`, `createBranchSession`).
-    let worktree_parent = worktree_parent_for_cwd(&store.sessions(), &cwd);
+    // Nest the session under a worktree's parent repo instead of registering the
+    // worktree folder as a stray top-level sidebar folder (#331). An explicit
+    // `worktree_parent` wins — the detected-worktree header's "New session" spawns
+    // in-place into a worktree ReCue didn't create, where no prior session exists
+    // for the auto-derive to find. Otherwise fall back to the #331 auto-derive:
+    // `cwd` is an existing app-managed worktree when an agent already runs there
+    // with a recorded `worktree_parent`. A plain folder resolves to `None`, so a
+    // normal spawn is unchanged. Covers every frontend entry point routing through
+    // `spawn_session` (OpenViewButton "New session here", NewSessionModal,
+    // CreatePanelModal, Canvas template `new-agent`, `createBranchSession`).
+    let worktree_parent = worktree_parent
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| worktree_parent_for_cwd(&store.sessions(), &cwd));
     // Dev-container session (opt-in): mint the session UUID HERE so the container
     // label == the record id == the per-session home-dir key, then compose the docker
     // launch. When `cwd` is itself a worktree, lock it (best-effort) against an
@@ -679,11 +688,27 @@ fn spawn_worktree_agent_new_branch_blocking(
 /// error semantics and the typed `SessionError::Git` mapping are unchanged.
 #[tauri::command]
 pub async fn remove_worktree(
+    app: AppHandle,
     parent: String,
     dest: String,
     force: bool,
 ) -> Result<(), SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
+        // ReCue only ever deletes worktrees it created (#74 — under
+        // `<data-dir>/worktrees`). Worktree *detection* surfaces agent-created
+        // (EnterWorktree / hook / manual) worktrees in the same UI, and in-place
+        // spawns give them sessions whose teardown reaches this command — so the
+        // managed-root check is a hard invariant here, not caller courtesy: no
+        // code path may `git worktree remove` a checkout ReCue didn't create.
+        let store = app.state::<Store>();
+        let managed = managed_worktree_root(&store)
+            .map(|root| path_under_norm(&dest, &root))
+            .unwrap_or(false);
+        if !managed {
+            return Err(SessionError::Git(
+                "refusing to remove a worktree ReCue didn't create".to_string(),
+            ));
+        }
         // A dev-container session locked the worktree at spawn (the in-container
         // `git worktree prune` guard) and git refuses to remove a locked worktree —
         // unlock first, best-effort (a never-locked worktree fails harmlessly).
@@ -692,6 +717,85 @@ pub async fn remove_worktree(
     })
     .await
     .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+/// One worktree of a registered repo as reported by `git worktree list` — the
+/// detection read behind the sidebar's agent-created-worktree rows — stamped with
+/// what only the backend knows: whether the path is app-managed (under
+/// `<data-dir>/worktrees`, #74) and whether it exists on this host (a worktree
+/// created *inside* a dev container records container paths like `/work/…`,
+/// which the frontend must skip).
+#[derive(Debug, Clone, Serialize)]
+pub struct RepoWorktree {
+    pub path: String,
+    pub head: String,
+    pub branch: Option<String>,
+    /// First `git worktree list` entry = the repository's main checkout. A hint,
+    /// not "the registered folder": a registered ReCue folder may itself BE a
+    /// linked worktree, so the frontend also self-excludes by path equivalence.
+    pub is_main: bool,
+    pub managed: bool,
+    pub exists: bool,
+    pub locked: bool,
+    pub locked_reason: Option<String>,
+    pub prunable: bool,
+}
+
+/// Batched worktree listing for many repos in one round-trip (the
+/// `current_branches` shape): repo path → its `git worktree list` entries,
+/// stamped (`is_main` / `managed` / `exists`). **Fail-open per repo**: a
+/// non-git folder / git error OMITS that repo's key entirely — the frontend
+/// keeps its previous state for an omitted repo, while a present-but-empty
+/// list is an authoritative "no worktrees". Bare entries are dropped (never a
+/// folder the app can show). Async + `spawn_blocking` like every batch git
+/// read (#316/#330).
+#[tauri::command]
+pub async fn list_repo_worktrees(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> std::collections::HashMap<String, Vec<RepoWorktree>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = app.state::<Store>();
+        let managed_root = managed_worktree_root(&store);
+        paths
+            .into_iter()
+            .filter_map(|repo| {
+                let entries = git::list_worktrees(&repo)?;
+                let list = entries
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, e)| !e.bare)
+                    .map(|(i, e)| stamp_repo_worktree(i, e, managed_root.as_deref()))
+                    .collect();
+                Some((repo, list))
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Stamp one parsed `WorktreeEntry` with the backend-only facts. `index` is the
+/// entry's position in the ORIGINAL listing (git prints the main checkout
+/// first), so a bare-filtered list still marks the true main.
+fn stamp_repo_worktree(
+    index: usize,
+    e: git::WorktreeEntry,
+    managed_root: Option<&Path>,
+) -> RepoWorktree {
+    RepoWorktree {
+        is_main: index == 0,
+        managed: managed_root
+            .map(|root| path_under_norm(&e.path, root))
+            .unwrap_or(false),
+        exists: Path::new(&e.path).is_dir(),
+        path: e.path,
+        head: e.head,
+        branch: e.branch,
+        locked: e.locked,
+        locked_reason: e.locked_reason,
+        prunable: e.prunable,
+    }
 }
 
 /// Write keystrokes to a session's PTY.
@@ -2692,6 +2796,54 @@ fn worktree_path(store: &Store, repo: &str, branch: &str) -> Result<PathBuf, Ses
         .join(windows_safe_seg(sanitize_seg(branch))))
 }
 
+/// The root under which ALL app-managed worktrees live (`<data-dir>/worktrees`,
+/// #74). Anything outside it was created by an agent (`EnterWorktree`, a
+/// `WorktreeCreate` hook) or by the user — ReCue must never `git worktree
+/// remove` those (enforced in `remove_worktree`).
+fn managed_worktree_root(store: &Store) -> Option<PathBuf> {
+    store.data_dir().map(|d| d.join("worktrees"))
+}
+
+/// Normalize a path string into a comparison key: `\` → `/`, trailing
+/// separators trimmed, and case-folded on **Windows** (its filesystems are
+/// case-insensitive; unix keys stay case-sensitive). Purely lexical — pair with
+/// `Path::canonicalize` where symlink identity matters.
+fn norm_path_key(p: &str) -> String {
+    norm_path_key_inner(p, cfg!(windows))
+}
+
+/// The platform-independent core of `norm_path_key`, with the Windows case-fold
+/// as an explicit flag so the unix test host exercises both arms (the
+/// `windows_safe_seg` testing precedent).
+fn norm_path_key_inner(p: &str, fold_case: bool) -> String {
+    let mut s = p.replace('\\', "/");
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    if fold_case {
+        s.to_lowercase()
+    } else {
+        s
+    }
+}
+
+/// Whether `child` is `root` or lives under it. Both sides canonicalize when
+/// they exist (symlink-stable — on Windows both then carry the same `\\?\`
+/// form), falling back to the lexical key for paths that no longer exist; the
+/// comparison is component-boundary-safe (`/a/wt-evil` never matches a root of
+/// `/a/wt`) and case-insensitive on Windows via `norm_path_key`.
+fn path_under_norm(child: &str, root: &Path) -> bool {
+    let canon = |p: &Path| {
+        p.canonicalize()
+            .ok()
+            .map(|c| c.to_string_lossy().into_owned())
+    };
+    let child_key = norm_path_key(&canon(Path::new(child)).unwrap_or_else(|| child.to_string()));
+    let root_key =
+        norm_path_key(&canon(root).unwrap_or_else(|| root.to_string_lossy().into_owned()));
+    child_key == root_key || child_key.starts_with(&format!("{root_key}/"))
+}
+
 // --- Application settings (#100) ---
 
 /// The persisted application settings blob (#100) — opaque JSON; `null` until the
@@ -3753,6 +3905,94 @@ mod tests {
         // macOS preservation: the guard must not alter any segment off-Windows.
         assert_eq!(windows_safe_seg("con".to_string()), "con");
         assert_eq!(windows_safe_seg("feature.".to_string()), "feature.");
+    }
+
+    // --- Worktree detection: path identity + classification ---
+
+    #[test]
+    fn norm_path_key_normalizes_separators_trailing_and_windows_case() {
+        // Separators + trailing slashes, no fold (the unix arm).
+        assert_eq!(norm_path_key_inner("/a/b/", false), "/a/b");
+        assert_eq!(
+            norm_path_key_inner("C:\\Data\\Worktrees\\X", false),
+            "C:/Data/Worktrees/X"
+        );
+        // The Windows arm additionally case-folds (its filesystems do).
+        assert_eq!(
+            norm_path_key_inner("C:\\Data\\Worktrees\\X\\", true),
+            "c:/data/worktrees/x"
+        );
+        // A bare root keeps its one separator.
+        assert_eq!(norm_path_key_inner("/", false), "/");
+    }
+
+    #[test]
+    fn path_under_norm_is_component_boundary_safe() {
+        // Lexical fallback (paths don't exist): under, equal, sibling, prefix-trap.
+        let root = Path::new("/data/worktrees");
+        assert!(path_under_norm("/data/worktrees/repo-1/branch", root));
+        assert!(path_under_norm("/data/worktrees", root));
+        assert!(!path_under_norm("/data/worktrees-evil/x", root));
+        assert!(!path_under_norm("/data/elsewhere", root));
+        // Windows-style mixed separators + case, via the folded key core.
+        assert_eq!(
+            norm_path_key_inner("C:\\Data\\worktrees\\R\\B", true),
+            "c:/data/worktrees/r/b"
+        );
+        assert!(
+            norm_path_key_inner("C:\\Data\\worktrees\\R\\B", true).starts_with(&format!(
+                "{}/",
+                norm_path_key_inner("c:/data/WORKTREES", true)
+            ))
+        );
+    }
+
+    #[test]
+    fn path_under_norm_canonicalizes_real_paths() {
+        // Real dirs: canonicalization resolves both sides consistently (macOS
+        // /tmp is itself a symlink to /private/tmp — exactly the case this covers).
+        let mut root = std::env::temp_dir();
+        root.push(format!("recue-wtroot-{}", std::process::id()));
+        let child = root.join("repo-1").join("branch");
+        std::fs::create_dir_all(&child).unwrap();
+        assert!(path_under_norm(child.to_str().unwrap(), &root));
+        let mut outside = std::env::temp_dir();
+        outside.push(format!("recue-wtout-{}", std::process::id()));
+        std::fs::create_dir_all(&outside).unwrap();
+        assert!(!path_under_norm(outside.to_str().unwrap(), &root));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn stamp_repo_worktree_classifies_main_managed_and_missing() {
+        let mut managed_root = std::env::temp_dir();
+        managed_root.push(format!("recue-wtstamp-{}", std::process::id()));
+        let managed_wt = managed_root.join("repo-abc").join("feat");
+        std::fs::create_dir_all(&managed_wt).unwrap();
+
+        let entry = |path: &str| crate::git::WorktreeEntry {
+            path: path.to_string(),
+            head: "abc".into(),
+            branch: Some("feat".into()),
+            bare: false,
+            detached: false,
+            locked: false,
+            locked_reason: None,
+            prunable: false,
+        };
+
+        // Index 0 = the main checkout; an existing managed path stamps managed+exists.
+        let main = stamp_repo_worktree(0, entry("/repo"), Some(&managed_root));
+        assert!(main.is_main && !main.managed);
+        let managed =
+            stamp_repo_worktree(1, entry(managed_wt.to_str().unwrap()), Some(&managed_root));
+        assert!(!managed.is_main && managed.managed && managed.exists);
+        // A container-created worktree records a path that doesn't exist on the
+        // host (`/work/...`) — stamped exists:false so the frontend skips it.
+        let container = stamp_repo_worktree(2, entry("/work/wt"), Some(&managed_root));
+        assert!(!container.exists && !container.managed);
+        let _ = std::fs::remove_dir_all(&managed_root);
     }
 
     #[test]
