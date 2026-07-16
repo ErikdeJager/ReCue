@@ -2606,3 +2606,64 @@ handled/documented; **no frontend change** → WKWebView/WebView2/WebKitGTK iden
 **Dependencies:** Task 437, Task 438 (after 437 only full `main`/`app-*` windows exist — the exact set
 this persists; 438 is the repo-preset entry point; via 437 → 434 → 433's `create`-path + primary
 election this leans on, the whole planned chain landed first).
+
+### 441. [x] Multi-window 16/16 — Docs catch-up + real-box test matrix: rewrite CLAUDE.md's window model, sweep stale single-owner references, and write the manual verification checklists into both trajectory logs
+
+The Multi-window epic's one designated docs card — every earlier epic card (426–440) deliberately
+deferred CLAUDE.md edits to this one. Brings the project documentation up to the reality the epic
+shipped: CLAUDE.md's window/architecture sections describe N full app windows, every stale
+single-owner reference is swept, and both trajectory logs gain the consolidated real-box verification
+matrix for everything the epic couldn't CI-test. **This closes the Multi-window epic** (tasks 426–441).
+
+**What shipped** (branch `task-441-multiwindow-docs`, PR
+[#206](https://github.com/ErikdeJager/ReCue/pull/206), merged 2026-07-16 into `backend-decouple`,
+commit `fa9f767`; 3 files, +336/-106, **docs-only — no source changes**):
+
+- **`CLAUDE.md`** (+210 net) — the "Detached canvas windows (#84)" architecture bullet replaced by a
+  dense **Multi-window (tasks 426–440)** bullet (full app windows via `?win=<uuid>` /
+  `open_app_window`/`focus_app_window`; window-local view/selection/tab/filter; shared state via the
+  428 broadcasts + 429 patch merges; 426/427 mirroring + smallest-wins + tmux-interleave; 440 targeted
+  output; 433 primary election + the Rust-owned singletons 430/431/432; 435 edit guard; every entry
+  point 436/437/438; 439 window restore reversing #84; the deleted #84 machinery named; the `?canvas=`
+  compat route). The v1-scope multi-window bullet, the Window-chrome convention, the Exit-handling
+  (#63) convention, the Layout tree (deleted `ownership.ts`/`CanvasWindow`/`DetachedNote`, added
+  `fileClaims.ts`/`ClaimBanner` + the six Rust modules), and ~25 mechanical sweep anchors all updated;
+  the #356 bundle figures refreshed to the single-route reality.
+- **`TRAJECTORY_TO_WINDOWS.md` / `TRAJECTORY_TO_LINUX.md`** — the committed merge-conflict markers
+  resolved (both content blocks kept, six marker lines deleted), and each gained a dated
+  **"Multi-window epic (tasks 426–440)"** section: an as-landed summary + a `### Needs real-box
+  verification` checklist (Windows: ConPTY reflow under min-size arbitration, single-instance named
+  mutex, Ctrl+Alt+N vs AltGr, multi-monitor restore + minimize sentinels + unplugged-monitor re-place,
+  the Windows-path `?repo=` round-trip, per-window WebView2 memory, 440 targeting smoke, 435 guard
+  smoke, primary takeover; Linux: single-instance D-Bus per distro + FUSE cleanup, the Wayland focus
+  caveat, Wayland size-only vs X11 full restore, per-window WebKitGTK memory + DMA-BUF + the #364 latch,
+  AppImage second-launch routing, N-window restore boot cost, `ExitRequested` ordering, the
+  output-storm measurement), cross-referencing (not duplicating) the per-card items 434–440 already
+  appended.
+
+**Verification:** the doc-sweep greps return **zero** hits for `ownership.ts` / `computeSessionOwners`
+/ `ownedHere` / `DetachedNote` / `open_canvas_window` / `canvas://windows` / `detachedCanvasIds` /
+`IS_MAIN_WINDOW` / `evaluateAutoContinue` / `startUsagePolling` / `isCleanExit` / "canvas-only route" in
+CLAUDE.md, and no conflict markers remain in either trajectory file.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 441)
+
+- Docs describe the **as-landed code, not the plans** (430–440's `PLAN-*.md` are deleted at build
+  time); the fact base was built from `TASK_ARCHIVE.md` 426–440 + worktree greps, with "code wins" on
+  any divergence (flagged in the PR, never code-patched from this docs card).
+- Historical `(#N)` provenance citations stay (e.g. "reverses the #84 rule"); only text presenting
+  deleted behavior as current is rewritten (`CanvasWindow` only in deleted-machinery text, `?canvas=`
+  only as the one-release compat route).
+- CLAUDE.md's "Tasks" section (incl. the stale "next is #311" line) is **out of scope** (board
+  machinery; `TASK_ARCHIVE.md` is the numbering source of truth); `docs/macos-permissions.md` and
+  `docs/linux-packaging.md` untouched.
+- No macOS trajectory file exists, so macOS-only items (Dock Reopen, File → New Window, ⌘Q
+  `ExitRequested` ordering) stay PR-flagged (the #84/#105 precedent), noted in each matrix intro.
+- The #356 bundle figures refreshed from an actual `npm run bundle:report` (single route post-437), the
+  770 kB detached-canvas figure dropped.
+
+**Rollback-safe:** revert the one docs PR — no code, schema, or behavior touched.
+
+**Dependencies:** Task 439, Task 435, Task 440, Task 436 (the card's four named deps — 13/16, 14/16,
+15/16, 10/16; every other epic card 426–434/437–438 arrives transitively and landed first). **This card
+closes the Multi-window epic — tasks 426–441 are all archived.**
