@@ -1249,3 +1249,28 @@ precisely so Windows paths survive the URL: every byte outside `[A-Za-z0-9-_.~]`
 - [ ] **Second full window under ConPTY.** The same agent terminal renders live in
       both windows (letterboxed to the smallest attached view); closing the second
       window leaves the PTY running and rendered in the first.
+
+## 2026-07-16 — New Window entry points (multi-window 10/16, task 436)
+
+The single-instance plugin makes a second `ReCue` launch poke the running instance —
+a **named mutex + hidden message window** on Windows — to open a new full app window
+(task 434) and exit, closing the old two-processes-fight-over-`sessions.json`
+corruption. The `new-window` keybind is the platform-resolved `mod+alt+n`
+(**Ctrl+Alt+N** on Windows); Windows creates no app menu, so the keybind is the only
+chord entry point there (the File → New Window item is macOS-only).
+
+### Needs real-box verification (new-window entry points, task 436)
+
+- [ ] **Second launch pokes the first instance (installer).** With ReCue running
+      (NSIS/MSI install), launching it again from the Start menu exits the second
+      process and opens exactly one new `app-*` window in the first instance.
+- [ ] **Second launch pokes the first instance (portable exe).** The same behavior
+      from a directly-run `recue.exe` — the named mutex is keyed by the bundle
+      identity, not the binary's path.
+- [ ] **Named mutex across two Windows sessions.** With two users logged in (fast
+      user switching / RDP), each session runs its own instance — user B's launch
+      must not poke user A's instance.
+- [ ] **Ctrl+Alt+N vs AltGr layouts.** On an AltGr layout where Ctrl+Alt+N types a
+      glyph (e.g. Polish ń), confirm the documented accepted caveat: the chord opens
+      a window (swallowing the glyph), and rebinding/unbinding it in Settings →
+      Shortcuts restores glyph typing.
