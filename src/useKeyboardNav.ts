@@ -11,7 +11,7 @@
 //   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
 //   ⌘N / Ctrl+N        open the new-session flow from anywhere            (#26)
 //   ⌘⇧N / Ctrl+Shift+N open the schedule-session flow                     (#93)
-//   ⌘B / Ctrl+B        collapse / expand the sidebar (main window only)   (#168)
+//   ⌘B / Ctrl+B        collapse / expand the sidebar (full app windows)   (#168)
 //   ⌘K / Ctrl+K        open the Create-panel launcher (type step)         (#189)
 //   ⌘F / Ctrl+F        toggle the global search modal                     (#337)
 //   ⌘D / Ctrl+D        toggle dense panels (UI v2 §9)                     (#373)
@@ -62,7 +62,7 @@ import {
   ownedChildSessionIds,
   useStore,
 } from "./store";
-import { IS_MAIN_WINDOW } from "./windowContext";
+import { IS_DETACHED_CANVAS_WINDOW, IS_FULL_APP_WINDOW } from "./windowContext";
 
 /** The platform for chord resolution: the authoritative store signal once loaded,
  * else the synchronous UA sniff (#363's precedent) — so Ctrl reads as `mod` on
@@ -90,32 +90,37 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
     // ⌘N (#26): no-op when the flow is already open. Swallowed but inert in a
     // detached canvas window (#84) — it has no sidebar / new-session UI.
     case "new-session": {
-      if (IS_MAIN_WINDOW && !state.newSessionOpen) state.openNewSession();
+      if (IS_FULL_APP_WINDOW && !state.newSessionOpen) state.openNewSession();
       return "swallow";
     }
     // ⌘⇧N (#93): distinct from new-session; same window/modal guards.
     case "schedule-session": {
-      if (IS_MAIN_WINDOW && !state.newSessionOpen) state.openSchedule();
+      if (IS_FULL_APP_WINDOW && !state.newSessionOpen) state.openSchedule();
       return "swallow";
     }
-    // ⌘B (#168): main window only (a detached canvas window has no sidebar).
+    // ⌘B (#168): full app windows only (task 434 — a detached canvas window has
+    // no sidebar).
     case "toggle-sidebar": {
-      if (IS_MAIN_WINDOW) state.toggleSidebarCollapsed();
+      if (IS_FULL_APP_WINDOW) state.toggleSidebarCollapsed();
       return "swallow";
     }
-    // ⌘K (#189): main window only; inert while another modal is open.
+    // ⌘K (#189): full app windows only (task 434); inert while another modal is open.
     case "open-launcher": {
-      if (IS_MAIN_WINDOW && !state.createPanelOpen && !state.newSessionOpen) {
+      if (
+        IS_FULL_APP_WINDOW &&
+        !state.createPanelOpen &&
+        !state.newSessionOpen
+      ) {
         state.openCreatePanel();
       }
       return "swallow";
     }
     // ⌘F (#337): the same chord opens and closes; inert while the new-session or
-    // create-panel modal is open (mirrors ⌘K's guard). Main window only. The old
+    // create-panel modal is open (mirrors ⌘K's guard). Full app windows only. The old
     // #399 both-modifiers escape (macOS Ctrl+⌘+F native fullscreen) is now
     // structural: that combo serializes as "mod+ctrl+f", which matches nothing.
     case "global-search": {
-      if (IS_MAIN_WINDOW) {
+      if (IS_FULL_APP_WINDOW) {
         if (state.globalSearchOpen) state.closeGlobalSearch();
         else if (!state.createPanelOpen && !state.newSessionOpen) {
           state.openGlobalSearch();
@@ -130,10 +135,10 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
       state.toggleMaximizeSelected();
       return "swallow";
     }
-    // ⌘D (task 373): main window only; inert while the Settings modal is open so
+    // ⌘D (task 373): full app windows only; inert while the Settings modal is open so
     // its draft can't clobber the toggle on Save.
     case "dense-panels": {
-      if (IS_MAIN_WINDOW && !state.settingsOpen) state.toggleDensePanels();
+      if (IS_FULL_APP_WINDOW && !state.settingsOpen) state.toggleDensePanels();
       return "swallow";
     }
     // ⌘O: open the selected item's folder in the preferred editor (an agent's
@@ -184,10 +189,10 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
       return "swallow";
     }
     // ⌘, — the OS-conventional Settings chord. Open-only (Escape/Save close the
-    // modal); main window only (Settings lives in the main ModalHost).
+    // modal); full app windows only (task 434 — each full window has a ModalHost).
     case "open-settings": {
       if (
-        IS_MAIN_WINDOW &&
+        IS_FULL_APP_WINDOW &&
         !state.settingsOpen &&
         !state.newSessionOpen &&
         !state.createPanelOpen
@@ -204,7 +209,7 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
     case "view-attention":
     case "view-canvas": {
       if (
-        !IS_MAIN_WINDOW ||
+        IS_DETACHED_CANVAS_WINDOW ||
         state.newSessionOpen ||
         state.settingsOpen ||
         state.createPanelOpen ||
@@ -251,14 +256,14 @@ export function useKeyboardNav(): void {
 
       // ⌘⏎ / Ctrl+Enter — dismiss the selected agent in the Attention view (#398):
       // it leaves the queue (and the page) but stays alive, and selection advances
-      // to the next queued agent. Only in the Attention view of the main window,
+      // to the next queued agent. Only in the Attention view of a full app window,
       // and inert while a modal owns the keyboard — otherwise the combo passes
       // straight through (return WITHOUT preventing default) so ⌘⏎ still reaches a
       // focused terminal.
       if (chord === "mod+enter") {
         const state = useStore.getState();
         if (
-          !IS_MAIN_WINDOW ||
+          IS_DETACHED_CANVAS_WINDOW ||
           state.view !== "attention" ||
           state.newSessionOpen ||
           state.settingsOpen ||
@@ -274,11 +279,11 @@ export function useKeyboardNav(): void {
 
       // ⌘⌥1 … ⌘⌥6 — open the Create-panel launcher straight to the folder step for
       // type N (#189). Distinct from the rebindable ⌥1–⌥3 view chords (these carry
-      // `mod`). Main window only; inert while another modal is open.
+      // `mod`). Full app windows only; inert while another modal is open.
       if (chord && /^mod\+alt\+[1-6]$/.test(chord)) {
         e.preventDefault();
         e.stopPropagation();
-        if (IS_MAIN_WINDOW) {
+        if (IS_FULL_APP_WINDOW) {
           const { createPanelOpen, newSessionOpen, openCreatePanel } =
             useStore.getState();
           if (!createPanelOpen && !newSessionOpen) {
@@ -323,11 +328,12 @@ export function useKeyboardNav(): void {
       // Don't navigate while the new-session modal/popover is open (#27).
       if (state.newSessionOpen) return;
 
-      // Attention (#398): Shift+↑/↓ cycle the triage queue selection (prev/next). Main
-      // window only (the Attention view never renders in a detached canvas window).
+      // Attention (#398): Shift+↑/↓ cycle the triage queue selection (prev/next).
+      // Full app windows only (the Attention view never renders in a detached
+      // canvas window).
       // Shift+←/→ are inert here. Uses the SAME `attentionQueue` ordering the view
       // renders, so nav can never land on a non-queued agent.
-      if (state.view === "attention" && IS_MAIN_WINDOW) {
+      if (state.view === "attention" && IS_FULL_APP_WINDOW) {
         if (key === "ArrowUp" || key === "ArrowDown") {
           e.preventDefault();
           e.stopPropagation();
@@ -352,7 +358,7 @@ export function useKeyboardNav(): void {
 
       // Canvas: Shift+arrows move the keyboard-focused panel spatially (#76). A
       // detached canvas window (#84) is always canvas-spatial (it has no Overview).
-      if (state.view === "canvas" || !IS_MAIN_WINDOW) {
+      if (state.view === "canvas" || IS_DETACHED_CANVAS_WINDOW) {
         e.preventDefault();
         e.stopPropagation();
         const dir =

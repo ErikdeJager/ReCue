@@ -18,20 +18,24 @@ export interface ResolvedCanvases {
 }
 
 /**
- * Resolve the persisted Canvas tabs at boot (#58/#84/#352). Pure.
+ * Resolve the persisted Canvas tabs at boot (#58/#84/#352/task 434). Pure.
  *
  * - Persisted tabs (≥1) are used as-is; the active tab is `persisted.activeId` when it
  *   still exists, else the first tab (a stale id can't strand the window on a blank).
  * - Otherwise one tab is synthesized — carrying the legacy single `canvas_layout` (#46)
  *   when there is one — and `migrated` is set so the caller persists it once.
- * - A detached canvas window (#84) always shows **its own** canvas, whatever the
- *   persisted active tab says (that tracks the main window).
+ * - `pinCanvasId` (a detached canvas window, #84) ALWAYS wins: that window shows its
+ *   own canvas, whatever the persisted active tab says, even when the tab list has no
+ *   entry for it yet.
+ * - `presetCanvasId` (an app window's `?canvas=` init param, task 434) is SOFT: it is
+ *   applied only when that tab exists, so a stale id falls back to the persisted /
+ *   first tab instead of stranding the window on a blank. Pin beats preset.
  */
 export function resolveCanvases(
   persisted: PersistedCanvases | null,
   legacyLayout: CanvasNode | null,
-  isMainWindow: boolean,
-  detachedCanvasId: string | null,
+  pinCanvasId: string | null,
+  presetCanvasId: string | null,
   newId: () => string = () => crypto.randomUUID(),
 ): ResolvedCanvases {
   let canvases: CanvasTab[];
@@ -54,8 +58,10 @@ export function resolveCanvases(
     migrated = true;
   }
 
-  if (!isMainWindow && detachedCanvasId) {
-    activeCanvasId = detachedCanvasId;
+  if (pinCanvasId) {
+    activeCanvasId = pinCanvasId;
+  } else if (presetCanvasId && canvases.some((c) => c.id === presetCanvasId)) {
+    activeCanvasId = presetCanvasId;
   }
 
   return { canvases, activeCanvasId, migrated };

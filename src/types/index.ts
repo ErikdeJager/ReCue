@@ -694,6 +694,16 @@ export interface PersistedCanvasesPatch {
   activeId?: string;
 }
 
+/** Init presets for a full app window (task 434, mirrors `commands::AppWindowInit`).
+ * Passed to `open_app_window` and carried as URL params, so the new window's OWN
+ * store presets its local state at boot: `repo` filters its Overview to that repo;
+ * `canvas` boots it into the Canvas view on that tab (when the tab exists). Local
+ * UI only — nothing is persisted, no other window is touched. */
+export interface AppWindowInit {
+  repo?: string;
+  canvas?: string;
+}
+
 export type ToastTone = "info" | "error" | "success";
 
 export interface Toast {

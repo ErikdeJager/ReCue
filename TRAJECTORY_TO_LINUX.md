@@ -1726,3 +1726,24 @@ type-check it). Real-box checks:
       user's emulator) opens nvim in the folder; `{path}` substitution lands the right
       directory.
 >>>>>>> origin/dev
+
+## 2026-07-16 — Full app-window shell (multi-window 9/16, task 434)
+
+Additional full app windows (`open_app_window`, label `app-<uuid>`) reuse the #348
+hidden-until-painted creation (themed `background_color` + the 2 s reveal fallback) and
+the task-433 primary election; the WebGL gates were already scoped to
+`IS_DETACHED_CANVAS_WINDOW` (task 427), so an app window gets the WebGL addon (with the
+#346 software-rasterizer probe and #364 context-loss latch per window/document).
+
+### Needs real-box verification (app windows, task 434)
+
+- [ ] **Second-window reveal on WebKitGTK.** An app window opened via
+      `openAppWindow({})` (temporary dev wiring — no UI entry point until card 10/16)
+      appears with the themed background (no white flash), reveals on first paint, and
+      the 2 s Rust fallback never has to fire on a healthy boot.
+- [ ] **WebGL in an app window.** On a Mesa GPU the app window's terminals attach the
+      WebGL addon (its own document — the #364 latch and #346 probe are per-window);
+      on llvmpipe/a VM it falls back to the DOM renderer exactly like the main window.
+- [ ] **Non-last window close.** Closing the app window keeps every agent running and
+      rendered in the main window; closing the LAST window still exits the app and
+      kills the PTYs as today.

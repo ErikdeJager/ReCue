@@ -1229,3 +1229,23 @@ valid inside the (Linux) container. Windows-specific notes + real-box checks:
 - [ ] **Custom command with a quoted path.** `"C:\Program Files\X\x.exe" {path}` in
       Settings → Editor tokenizes (quoted program survives) and receives the folder.
 >>>>>>> origin/dev
+
+## 2026-07-16 — Full app-window shell (multi-window 9/16, task 434)
+
+`open_app_window(init)` creates additional FULL app windows (label `app-<uuid>`, route
+`index.html?win=<uuid>[&repo=..][&canvas=..]`). The new Rust is pure string/window
+plumbing (no paths, shells, or `#[cfg]`); the #348 hidden-until-painted background +
+reveal fallback are the existing platform-neutral machinery. `encode_query_value` exists
+precisely so Windows paths survive the URL: every byte outside `[A-Za-z0-9-_.~]` is
+`%XX`-encoded (space → `%20`, never `+`), and the frontend's `URLSearchParams` decode
+(`parseWindowIdentity`) restores `C:\Users\a b` byte-exact — unit-tested on both sides.
+
+### Needs real-box verification (app windows, task 434)
+
+- [ ] **`?repo=` encoding round-trip with a real Windows path.** Open an app window
+      via `openAppWindow({ repo: "C:\\Users\\<user>\\repos\\x y" })` (temporary dev
+      wiring — no UI entry point until card 10/16): the new window boots with its
+      Overview filtered to that repo (drive colon, backslashes, and spaces intact).
+- [ ] **Second full window under ConPTY.** The same agent terminal renders live in
+      both windows (letterboxed to the smallest attached view); closing the second
+      window leaves the PTY running and rendered in the first.

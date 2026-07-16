@@ -13,6 +13,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AgentInfo,
   AheadBehind,
+  AppWindowInit,
   BootState,
   BranchList,
   CanvasNode,
@@ -309,6 +310,19 @@ export const closeCanvasWindow = (id: string) =>
 /** Canvas ids that currently have a detached window (#84); fetched on startup
  * since a just-opened window may have missed the `canvas://windows` broadcast. */
 export const listCanvasWindows = () => invoke<string[]>("list_canvas_windows");
+
+/** Open an additional FULL app window (task 434) — label `app-<uuid>`, the
+ * complete shell with window-local view/selection/tab/filter state. The init
+ * presets ride the URL (`repo` → the Overview repo filter; `canvas` → boot into
+ * Canvas on that tab when it exists). Resolves to the new window's id. Ships
+ * callable but un-triggered: the UI entry points arrive in card 10/16. */
+export const openAppWindow = (init: AppWindowInit = {}) =>
+  invoke<string>("open_app_window", { init });
+
+/** Raise an existing full app window by id (task 434); false if none is open.
+ * Mirrors `focusCanvasWindow` — the UI entry points arrive in card 10/16. */
+export const focusAppWindow = (id: string) =>
+  invoke<boolean>("focus_app_window", { id });
 
 /** Show + focus THIS window once the frontend has painted its first themed frame
  * (#348). Windows are created hidden so the OS never paints a white / wrong-theme

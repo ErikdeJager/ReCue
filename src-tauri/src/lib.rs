@@ -148,7 +148,7 @@ pub fn run() {
 
             // Primary-window election (task 433): register the config-created window(s) —
             // today just "main". Windows created later register at their creation sites
-            // (open_canvas_window; the 9/16 full-window command must follow the pattern).
+            // (open_canvas_window; open_app_window, the task-434 full-window creator).
             // The emit fires before any webview listens — harmless; the frontend's
             // `primary_window` snapshot fetch covers boot.
             app.manage(primary::Primary::default());
@@ -447,6 +447,8 @@ pub fn run() {
             commands::focus_canvas_window,
             commands::close_canvas_window,
             commands::list_canvas_windows,
+            commands::open_app_window,
+            commands::focus_app_window,
             commands::reveal_window,
             commands::set_theme_background,
             commands::create_schedule,
@@ -544,11 +546,15 @@ pub fn run() {
                     ));
                 }
                 // Multi-window (task 426): a closing window (any kind — main,
-                // canvas-*, future app windows) drops ALL of its terminal views so
-                // its desired size can never clamp a PTY it no longer renders.
-                // `try_state`: never panic during teardown ordering. (The per-window
-                // `on_window_event` in `open_canvas_window` keeps its #84 re-dock
-                // broadcast; this global hook is additive and label-generic.)
+                // canvas-*, and the task-434 app-* full windows) drops ALL of its
+                // terminal views so its desired size can never clamp a PTY it no
+                // longer renders. `try_state`: never panic during teardown ordering.
+                // (The per-window `on_window_event` in `open_canvas_window` keeps its
+                // #84 re-dock broadcast; this global hook is additive and
+                // label-generic — it is the ONLY close handling an app window needs:
+                // no PTY is killed, sessions keep running in surviving windows, and
+                // with the LAST window closing Tauri's default run loop still exits
+                // the app, running the kill_all shutdown path as today.)
                 tauri::RunEvent::WindowEvent {
                     label,
                     event: tauri::WindowEvent::Destroyed,
