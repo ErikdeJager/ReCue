@@ -2297,3 +2297,110 @@ no `#[cfg]` arms, no shell-outs; identical on macOS/Windows/Linux.
 **Dependencies:** Task 433 (sequencing/conflict-avoidance — 433 edits the same `lib.rs` Destroyed arm
 and `store.ts` init subscribe wave this card extends; the card's other named dep "Multi-window 3/16" =
 Task 428 was already landed and dropped off).
+
+### 438. [x] Multi-window 12/16 — "Open in new window" on the sidebar repo context menu (open_app_window repo preset)
+
+Adds an **"Open in new window"** item to the sidebar's repo context menu that opens a new full app
+window (Task 434's `open_app_window`) preset to that repo as its Overview repo filter — the one-click
+"window A on repo X, window B on repo Y" multi-monitor workflow, and the first repo-scoped UI entry
+point onto 434's un-triggered `openAppWindow` wrapper.
+
+**What shipped** (branch `task-438-repo-menu-open-in-new-window`, PR
+[#200](https://github.com/ErikdeJager/ReCue/pull/200), merged 2026-07-16 into `backend-decouple`,
+commit `0e506c6`; 1 file, +28/-3):
+
+- **`src/components/Sidebar/Sidebar.tsx`** — the menu item at the top of the repo menu's
+  non-destructive utilities block (after the Views separator, before Reveal/Copy path), calling
+  `openAppWindow({ repo: menu.repo })` with a `.catch` → error toast; the returned window id is
+  unused (no dedupe/tracking). Because `openRepoMenu` is shared, it appears in both the expanded
+  header menu and the collapsed rail's folder-icon menu.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 438)
+
+- Copy is the platform-neutral "Open in new window" (matching the existing `CanvasTabs` pop-out
+  phrase), tooltip "Open a new window showing only this folder"; **always shown** (no git/branch
+  gating — the filter is path-based, works for non-git folders).
+- Worktree-parent semantics need **no new code**: `menu.repo` is already the top-level group path (the
+  worktree parent), and 434's `"all"`-mode preset + the existing `sessionInFilter` include worktree
+  agents (`effectiveRepo`, #96/#247). Scoped to the *repo* menu only (not the worktree-header menu).
+- No dedupe/focus-existing — every click opens a fresh window (presets are untracked local init
+  state); failure `.catch` → "Could not open a new window" error toast (unlike the bare `void
+  revealPath` siblings, because the wrapper's rejection would otherwise be unhandled).
+- No new tests (no new pure logic — worktree filter semantics already covered by `paths.test.ts`; no
+  Sidebar render-test harness exists); the current window's own filter/view/selection are untouched.
+
+**Rollback-safe:** revert the one-file PR; no schema/persistence/event/Rust change — the item is
+additive and self-contained.
+
+**Cross-platform:** pure TS/JSX; platform-neutral copy (no OS names / shortcut hints), no path
+construction here (Windows `?repo=` URL encoding is 434's already-tested `encode_query_value`) —
+identical on macOS/Windows/Linux.
+
+**Dependencies:** Task 434 (ships `open_app_window`, the `AppWindowInit` shape, the `openAppWindow` ipc
+wrapper, and the `?repo=` → Overview-filter preset this item triggers).
+
+### 436. [x] Multi-window 10/16 — New Window entry points: single-instance plugin, macOS Dock Reopen, rebindable ⌘⌥N keybind + File → New Window menu item
+
+Gives the full app windows Task 434 built their global entry points: launching ReCue a second time
+pokes the already-running instance to open a new full window instead of starting a second process
+(fixing the latent corruption bug where two processes resume the same session ids and fight over
+`sessions.json`), a macOS Dock click (Reopen) restores or opens a window when none is visible, a
+rebindable **New window** keybind (default ⌘⌥N / Ctrl+Alt+N) opens one from any window, and macOS gets
+a **File → New Window** menu item.
+
+**What shipped** (branch `task-436-new-window-entry-points`, PR
+[#201](https://github.com/ErikdeJager/ReCue/pull/201), merged 2026-07-16 into `backend-decouple`,
+commit `9dc103d`; 11 files, +309/-8):
+
+- **`src-tauri/Cargo.toml`** — `tauri-plugin-single-instance = "2"` (Rust-only, no JS commands → no
+  capability change).
+- **`src-tauri/src/lib.rs`** — registers the single-instance plugin **first** (its callback ignores
+  argv/cwd and opens one new full window via `open_app_window` wrapped in `run_on_main_thread`); adds
+  the `#[cfg(target_os = "macos")]` `RunEvent::Reopen` arm (does nothing when windows are visible; when
+  none visible restores an existing window via the pure chooser, or opens a fresh one when zero exist).
+- **`src-tauri/src/commands.rs`** — the pure `reopen_focus_target(labels)` (gated
+  `any(target_os = "macos", test)` so non-mac hosts still type-check/test it; prefers `"main"` → first
+  `app-*` → any, sorted) + unit tests.
+- **`src-tauri/src/menu.rs`** — a `NEW_WINDOW_ID` File → New Window item (+ separator) at the top of
+  the File submenu, **no accelerator** (an AppKit key-equivalent would preempt the webview and can't
+  track a rebind — the ⌘W lesson); `install` de-generified to the concrete runtime so its menu-event
+  closure can call the concrete `open_app_window`; the pure `is_file_menu_text` + tests (incl. that
+  `NEW_WINDOW_ID` can't be prefix-claimed by the close handler).
+- **Frontend** (`keybinds.ts`/`store.ts`/`useKeyboardNav.ts` + test) — a rebindable `"new-window"`
+  registry action (default `mod+alt+n`, appears in Settings → Shortcuts with no Settings change), an
+  `openNewWindow` store action (the `popOutCanvas` fire-and-forget pattern), and an **unconditional**
+  dispatch case (valid from every window kind).
+- **Both trajectory logs** got the real-box smoke items (second-launch per installer/AppImage/deb,
+  named-mutex/D-Bus behavior, X11-vs-Wayland focus, AltGr-layout Ctrl+Alt+N, Dock Reopen).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 436)
+
+- Default chord `mod+alt+n` (⌘N/⌘⇧N are taken; stays in the N-family; free against every default +
+  reserved set; follows the shipped ⌘⌥1–6 precedent); the AltGr-layout collision (e.g. Polish ń) is
+  accepted as the same class, mitigated by rebind/unbind, noted in-code + the Windows trajectory log.
+- The macOS menu item carries **no accelerator** (the webview keybind dispatcher exclusively owns the
+  chord); best-effort (missing File submenu → skip). The dispatch case is unconditional (`"swallow"`,
+  no window/modal guard).
+- Reopen: tao returns `has_visible_windows`, so with visible windows AppKit's default (bring forward)
+  runs and the handler does nothing; with none visible it restores an existing window (show +
+  unminimize + focus, `main > app-* > any`) and opens fresh only when zero windows exist (unreachable
+  today — future-proofing).
+- The single-instance callback ignores argv/cwd (no CLI-open semantics), always opens one new full
+  window via `run_on_main_thread` (uniform main-thread creation + can't race the `Store` managed in
+  `.setup()`). **Dev and release share `com.recue.app`**, so `tauri dev` beside a live ReCue now cleanly
+  pokes it and exits (strictly better than today's `sessions.json` fight) — documented in-code.
+- No capability change (the plugin exposes no JS commands, no npm package); `install` de-generified to
+  the concrete runtime so the closure can call the concrete `#[tauri::command]`.
+
+**Rollback-safe:** the plugin, Reopen arm, menu item, and keybind are all additive; no persisted-schema
+change (a saved `new-window` override is just ignored by older builds), no new events, no capability
+change.
+
+**Cross-platform:** the plugin's transport is internally per-OS (Windows named mutex / Linux D-Bus
+[unconfined session bus — Flatpak-only naming concern, ReCue ships AppImage/deb/AUR] / macOS unix
+socket); the Reopen arm is macOS-only by the event's own `cfg`; the menu item is macOS-only (only
+macOS has a menu) — Windows/Linux get the keybind via the platform-resolved `mod`;
+`reopen_focus_target` compiles/tests on every host.
+
+**Dependencies:** Task 434 (every entry point calls its `open_app_window` / `AppWindowInit` /
+`ipc.openAppWindow`; via 434 → 433 → 430/432 the whole planned chain landed first).

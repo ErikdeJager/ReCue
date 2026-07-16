@@ -115,6 +115,33 @@ pub fn run() {
     path_env::start_probe();
 
     tauri::Builder::default()
+        // One running instance (Multi-window 10/16). Registered FIRST so a second launch
+        // dies before any other plugin's setup runs in it. The second process's argv/cwd
+        // are ignored — ReCue has no CLI-open semantics; the poke's one meaning is "the
+        // user wants another window", so the surviving instance opens a fresh full app
+        // window (task 434). This also closes the latent corruption bug: a second ReCue
+        // process used to resume the same session ids and fight this one over
+        // sessions.json. Notes: the Linux transport is a D-Bus name derived from the
+        // bundle identifier — its naming convention only matters under Flatpak's bus
+        // policy, and ReCue ships AppImage/deb/AUR (unconfined session bus), so no
+        // rename is needed. On Wayland the new window's focus request (reveal_window →
+        // set_focus) may be silently refused by focus-stealing prevention — the window
+        // still opens, possibly unfocused. Dev builds share the com.recue.app identity,
+        // so `tauri dev` beside a live ReCue now pokes it and exits instead of
+        // corrupting shared state. run_on_main_thread keeps window creation on the main
+        // thread on every OS (the plugin's callback thread differs per transport) and,
+        // because queued main-thread tasks only run once the event loop pumps (after
+        // .setup() managed the Store), open_app_window can never race boot state.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Err(e) =
+                    commands::open_app_window(handle, commands::AppWindowInit::default())
+                {
+                    eprintln!("[recue] single-instance new window failed: {e}");
+                }
+            });
+        }))
         .plugin(tauri_plugin_dialog::init())
         // In-app auto-update skeleton (#190): the updater + process (relaunch)
         // plugins. Inert today — `tauri.conf.json` carries a placeholder pubkey and
@@ -548,6 +575,40 @@ pub fn run() {
                     let _ = sweep.recv_timeout(std::time::Duration::from_millis(
                         container::CONTAINER_SWEEP_BOUND_MS,
                     ));
+                }
+                // macOS Dock click (Multi-window 10/16): applicationShouldHandleReopen. tao
+                // returns `has_visible_windows` from the delegate, so with visible windows
+                // AppKit's default reopen (bring the app forward) already runs and there is
+                // nothing to do (the guard lets that case fall to the `_` arm) — but with
+                // NONE visible AppKit does nothing, so restore an existing window ourselves
+                // (show + unminimize + focus; main preferred, then app-*, then any — the
+                // pure reopen_focus_target), or open a fresh full window when no window
+                // exists at all (unreachable today — last-window close exits the app — but
+                // correct once later epic cards change that).
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen {
+                    has_visible_windows: false,
+                    ..
+                } => {
+                    let windows = handle.webview_windows();
+                    let labels: Vec<String> = windows.keys().cloned().collect();
+                    match commands::reopen_focus_target(&labels) {
+                        Some(label) => {
+                            if let Some(window) = windows.get(&label) {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        None => {
+                            if let Err(e) = commands::open_app_window(
+                                handle.clone(),
+                                commands::AppWindowInit::default(),
+                            ) {
+                                eprintln!("[recue] reopen new window failed: {e}");
+                            }
+                        }
+                    }
                 }
                 // Multi-window (task 426): a closing window (main or a task-434
                 // app-* full window) drops ALL of its terminal views so its desired

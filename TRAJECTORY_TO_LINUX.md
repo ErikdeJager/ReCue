@@ -1748,6 +1748,34 @@ the task-433 primary election; the WebGL gates were already scoped to
       rendered in the main window; closing the LAST window still exits the app and
       kills the PTYs as today.
 
+## 2026-07-16 — New Window entry points (multi-window 10/16, task 436)
+
+The single-instance plugin's Linux transport is a **D-Bus name** derived from the
+bundle identifier (`com.recue.app`) on the session bus; its naming convention only
+matters under Flatpak's bus policy, and ReCue ships AppImage/deb/AUR (unconfined
+session bus), so no rename is needed. The `new-window` keybind is **Ctrl+Alt+N**
+(platform-resolved `mod`); Linux creates no app menu, so the keybind is the only
+chord entry point. Wayland caveat (documented in-code at the plugin site): the new
+window's focus request (`reveal_window` → `set_focus`) may be silently refused by
+the compositor's focus-stealing prevention — the window still opens, possibly
+unfocused.
+
+### Needs real-box verification (new-window entry points, task 436)
+
+- [ ] **Second launch via the AppImage.** With ReCue running, launching the AppImage
+      again exits the second process and opens exactly one new `app-*` window in the
+      first instance (the D-Bus name is claimed on the session bus).
+- [ ] **Second launch via deb/AUR.** The same behavior for the system-packaged
+      binary — the same `com.recue.app` D-Bus identity, no Flatpak bus policy in
+      play; a mixed pair (AppImage running, deb launched) also pokes rather than
+      double-booting.
+- [ ] **X11 vs Wayland focus.** On X11 the poked-open window raises + focuses; on
+      Wayland (GNOME and KDE) confirm the documented caveat — the window opens even
+      when the compositor refuses the focus request.
+- [ ] **Ctrl+Alt+N under GNOME/KDE.** The chord opens a window and doesn't collide
+      with a DE/compositor binding; on AltGr layouts see the Windows note (rebind in
+      Settings → Shortcuts is the mitigation).
+
 ## 2026-07-16 — Canvas pop-out opens a full ReCue window; #84 ownership layer deleted (multi-window 11/16, task 437)
 
 Pop-out / tear-off now open a **full app window** (`open_app_window`, task 434) on that canvas;

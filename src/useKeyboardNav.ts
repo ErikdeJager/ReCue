@@ -17,6 +17,7 @@
 //   ⌘D / Ctrl+D        toggle dense panels (UI v2 §9)                     (#373)
 //   ⌘O / Ctrl+O        open the selected item's folder in your editor
 //   ⌘⇧O / Ctrl+Shift+O choose the editor "Open in editor" uses
+//   ⌘⌥N / Ctrl+Alt+N   open a new app window                           (10/16)
 //
 // **Fixed** (contextual, not rebindable — listed read-only in Settings):
 //
@@ -99,6 +100,13 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
     // ⌘B (#168): collapse / expand this window's sidebar.
     case "toggle-sidebar": {
       state.toggleSidebarCollapsed();
+      return "swallow";
+    }
+    // ⌘⌥N (Multi-window 10/16): open a new full app window. Unconditional — it is
+    // non-destructive and meaningful from every window kind (main and app-*: this
+    // hook mounts in all of them), and needs no modal guard.
+    case "new-window": {
+      state.openNewWindow();
       return "swallow";
     }
     // ⌘K (#189): inert while another modal is open.

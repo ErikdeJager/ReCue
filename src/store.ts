@@ -2436,6 +2436,9 @@ export interface AppState {
    * boots into Canvas on this tab; this window keeps the tab — both render it
    * (426/427 mirroring). Always opens a new window. */
   popOutCanvas: (id: string) => void;
+  /** Open a new FULL app window (Multi-window 10/16 → task 434's open_app_window).
+   * Fire-and-forget like popOutCanvas; valid from any window kind. */
+  openNewWindow: () => void;
   /** Apply a cross-window canvas-list update broadcast by the backend (#84). */
   applyCanvasSync: (canvases: CanvasTab[]) => void;
   /** Switch a Canvas file panel (the active tab's leaf) to another file (#90). */
@@ -5772,6 +5775,13 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!canvas) return;
     void ipc.openAppWindow({ canvas: id }).catch(() => {});
     get().pushToast("Canvas opened in window");
+  },
+
+  // Multi-window 10/16: open a new FULL app window (task 434's open_app_window).
+  // Fire-and-forget like popOutCanvas; valid from any window kind — the ⌘⌥N
+  // dispatch in useKeyboardNav is deliberately unconditional.
+  openNewWindow: () => {
+    void ipc.openAppWindow({}).catch(() => {});
   },
 
   // Apply a canvas-list update broadcast from another window (#84/task 428). Keep
