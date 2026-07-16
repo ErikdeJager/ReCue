@@ -3985,3 +3985,10 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - The #356 bundle figures in CLAUDE.md are refreshed from an actual `npm run bundle:report` run in the worktree (single route post-437) rather than left stale; the 770 kB detached-canvas figure is dropped.
 - docs/macos-permissions.md and docs/linux-packaging.md are untouched — the card names only CLAUDE.md and the two trajectory logs.
 - Task 430 and 431 landed during/before this planning pass (archive entries exist), so the epic context's "planned" status for them was already stale; the plan treats all of 426-431 as landed and 432-440 as landing before build.
+
+## Task 447
+
+- "The inbox icon" is the Lucide `Inbox` hero icon in the Attention empty ("All caught up") state (Attention.tsx:223), colored by the `.empty svg` CSS rule (Attention.module.css:246-248) — NOT the sidebar ViewSwitch rail `AlertTriangle`; chose the icon shown ON the Attention page itself.
+- Use full-strength `var(--accent)` (not `--accent-dim`/`--accent-tint-*`) so it clearly "matches the accent color"; the empty state already has a legibility text-shadow so a full-strength accent hero reads fine.
+- Use the `--accent` CSS variable (not a hardcoded hex) so a custom accent (Settings → Appearance, inline on `<html>`) recolors it live and it tracks Dark/Light themes; platform-neutral pure CSS.
+- Treating this decorative/branding icon with `--accent` does NOT violate CLAUDE.md's "accent never encodes status/selection" rule — that rule targets status semantics; this actually removes a minor smell (it currently borrows the `--status-awaiting` status token for a decorative icon).
