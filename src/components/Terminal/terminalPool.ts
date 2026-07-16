@@ -677,6 +677,12 @@ function createHost(sessionId: string): TerminalHost {
   );
 
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  // The cols/rows last successfully sent to the PTY — a same-size reparent (view
+  // switch into an identically-sized slot) skips the `resize_pty` IPC entirely. On
+  // unix the kernel already dedupes the SIGWINCH, but ConPTY can repaint on any
+  // resize call, and skipping also spares the IPC churn. Reset on a failed send so
+  // it retries; a Restart disposes + recreates the whole host, so no stale carry-over.
+  let lastPtySize: { cols: number; rows: number } | null = null;
   const applyResize = () => {
     resizeTimer = undefined;
     // Never resize a parked / unmeasurable terminal: bogus cols/rows would make
@@ -709,7 +715,13 @@ function createHost(sessionId: string): TerminalHost {
         }
       }
     }
-    void resizePty(sessionId, term.cols, term.rows).catch(() => {});
+    if (lastPtySize?.cols === term.cols && lastPtySize?.rows === term.rows) {
+      return; // the PTY already has this size — nothing to tell it
+    }
+    lastPtySize = { cols: term.cols, rows: term.rows };
+    void resizePty(sessionId, term.cols, term.rows).catch(() => {
+      lastPtySize = null; // retry on the next resize rather than believing a failed send
+    });
   };
   const scheduleResize = () => {
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);

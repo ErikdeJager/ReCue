@@ -59,7 +59,12 @@ describe("attentionQueue membership (#398)", () => {
     expect(q).toHaveLength(0);
   });
 
-  it("excludes a busy (blue) agent even when it has been active", () => {
+  it("includes a busy agent that is still eligible (eviction is store-debounced)", () => {
+    // Raw `sessionBusy` is deliberately not a membership test: the store revokes
+    // `eligible` only once its eviction debounce confirms the busy signal is
+    // sustained — so a sub-second spurious blip (a resize/focus repaint) can never
+    // blink a queued agent out or reset its FIFO position. A genuinely-working
+    // member leaves when the store confirms and revokes eligibility.
     const q = attentionQueue({
       ...emptyInput,
       sessions: [sess("a")],
@@ -67,16 +72,16 @@ describe("attentionQueue membership (#398)", () => {
       sessionBusy: { a: true },
       eligible: { a: true },
     });
-    expect(q).toHaveLength(0);
+    expect(q.map((x) => x.id)).toEqual(["a"]);
   });
 
-  it("excludes a fresh never-active agent while it is busy (task 410)", () => {
+  it("excludes a busy agent once the store's confirmed eviction revokes eligibility", () => {
     const q = attentionQueue({
       ...emptyInput,
       sessions: [sess("a")],
-      sessionActive: {},
+      sessionActive: { a: true },
       sessionBusy: { a: true },
-      eligible: { a: true },
+      eligible: {},
     });
     expect(q).toHaveLength(0);
   });

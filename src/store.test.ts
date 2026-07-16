@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { attentionQueue } from "./components/Attention/attentionQueue";
 import { collectLeaves } from "./components/Canvas/canvasTree";
 import {
   accentCompanions,
@@ -7,7 +8,7 @@ import {
   adjacentSessionId,
   anchorAgentForPanel,
   applyRecurringFire,
-  cancelAllAttentionGrace,
+  cancelAllAttentionTimers,
   contentForSelected,
   DEFAULT_SETTINGS,
   dedupeBranchLabels,
@@ -118,9 +119,9 @@ describe("accentCompanions (#107)", () => {
 
 beforeEach(() => {
   vi.useRealTimers();
-  // Drop any admission-grace timers a prior test armed (they're module-level; a
-  // leaked REAL 5s timer would otherwise fire into a later test's state, #398).
-  cancelAllAttentionGrace();
+  // Drop any admission-grace / eviction-debounce timers a prior test armed (they're
+  // module-level; a leaked REAL timer would otherwise fire into a later test, #398).
+  cancelAllAttentionTimers();
   useStore.setState({
     sessions: [],
     selectedId: null,
@@ -3743,11 +3744,17 @@ describe("attention admission grace (#398 flicker fix)", () => {
     expect(s().attentionEligible.s1).toBeUndefined();
   });
 
-  it("going busy revokes granted eligibility instantly", async () => {
+  it("going busy revokes granted eligibility once the eviction debounce confirms it", async () => {
     armIdle("s1");
     await vi.advanceTimersByTimeAsync(5_000);
     expect(s().attentionEligible.s1).toBe(true);
     s().setBusy("s1", true);
+    // Not instant: a member's eviction is debounced so a spurious blip can't
+    // blink it out of the queue — sustained busy confirms it.
+    expect(s().attentionEligible.s1).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(s().attentionEligible.s1).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
     expect(s().attentionEligible.s1).toBeUndefined();
   });
 
@@ -3826,5 +3833,133 @@ describe("attention admission grace (#398 flicker fix)", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(notifySpy).not.toHaveBeenCalled();
     notifySpy.mockRestore();
+  });
+});
+
+describe("attention eviction debounce (the blink fix)", () => {
+  const s = () => useStore.getState();
+
+  /** Confirm `id` as an eligible queue member: full cycle + the admission grace. */
+  async function confirmIdle(id: string) {
+    s().setBusy(id, true);
+    s().setBusy(id, false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible[id]).toBe(true);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useStore.setState({
+      sessions: [session("s1")],
+      refreshRepoGit: vi.fn().mockResolvedValue(undefined),
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a sub-confirm busy blip keeps membership AND the original FIFO stamp", async () => {
+    await confirmIdle("s1");
+    const stamp = s().sessionIdleSince.s1;
+    expect(stamp).toBeDefined();
+    // A spurious blip: busy for well under the confirm window, then idle again.
+    s().setBusy("s1", true);
+    expect(s().attentionEligible.s1).toBe(true); // never left the queue
+    expect(s().sessionIdleSince.s1).toBe(stamp); // position untouched
+    await vi.advanceTimersByTimeAsync(900);
+    s().setBusy("s1", false);
+    expect(s().attentionEligible.s1).toBe(true);
+    expect(s().sessionIdleSince.s1).toBe(stamp); // still the ORIGINAL stamp
+    // And nothing pending revokes it later.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(s().attentionEligible.s1).toBe(true);
+    expect(s().sessionIdleSince.s1).toBe(stamp);
+  });
+
+  it("a resolved blip does not re-fire the watched-agent notification (#336)", async () => {
+    const notifySpy = vi
+      .spyOn(notify, "notifyAgentReady")
+      .mockResolvedValue(undefined);
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, watchAllAgents: true },
+    });
+    await confirmIdle("s1");
+    expect(notifySpy).toHaveBeenCalledTimes(1); // the confirmed settle
+    s().setBusy("s1", true);
+    await vi.advanceTimersByTimeAsync(500);
+    s().setBusy("s1", false); // blip resolves — eligibility was never revoked
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(notifySpy).toHaveBeenCalledTimes(1); // no duplicate
+    notifySpy.mockRestore();
+  });
+
+  it("sustained busy evicts, clears the stamp, and a later settle re-queues at the back", async () => {
+    await confirmIdle("s1");
+    s().setBusy("s1", true);
+    await vi.advanceTimersByTimeAsync(1_500); // the debounce confirms a real turn
+    expect(s().attentionEligible.s1).toBeUndefined();
+    expect(s().sessionIdleSince.s1).toBeUndefined();
+    // The turn ends much later: a fresh settle stamps a fresh (later) FIFO key and
+    // re-runs the admission grace — the agent re-enters at the back of the queue.
+    await vi.advanceTimersByTimeAsync(10_000);
+    s().setBusy("s1", false);
+    expect(s().sessionIdleSince.s1).toBeDefined();
+    expect(s().attentionEligible.s1).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+  });
+
+  it("a dismissal survives a blip and is cleared only by a CONFIRMED busy", async () => {
+    await confirmIdle("s1");
+    s().dismissAttention("s1");
+    expect(s().dismissedAttention.s1).toBe(true);
+    // Blip: dismissed member goes busy briefly — the acknowledgement stands.
+    s().setBusy("s1", true);
+    await vi.advanceTimersByTimeAsync(800);
+    s().setBusy("s1", false);
+    expect(s().dismissedAttention.s1).toBe(true);
+    // Confirmed new work un-acknowledges it.
+    s().setBusy("s1", true);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(s().dismissedAttention.s1).toBeUndefined();
+  });
+
+  it("removal, exit, and restart cancel a pending eviction", async () => {
+    await confirmIdle("s1");
+    s().setBusy("s1", true); // eviction pending
+    s().dropSession("s1");
+    await vi.advanceTimersByTimeAsync(20_000); // a leaked timer would fire here
+    expect(s().attentionEligible.s1).toBeUndefined();
+
+    useStore.setState({ sessions: [session("s2")] });
+    await confirmIdle("s2");
+    s().setBusy("s2", true);
+    s().markExited("s2", 1); // exit clears busy + eligibility, cancels the timer
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(s().attentionEligible.s2).toBeUndefined();
+
+    useStore.setState({ sessions: [session("s3")] });
+    await confirmIdle("s3");
+    s().setBusy("s3", true); // eviction pending…
+    s().markExited("s3", 1); // …crashes while busy (clears the flag + timers)
+    s().markRunning("s3"); // Restart: fresh idle life, fresh grace (#63/#398)
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s3).toBe(true);
+  });
+
+  it("a busy-but-not-yet-evicted member is still admitted by attentionQueue", async () => {
+    await confirmIdle("s1");
+    s().setBusy("s1", true); // eviction pending — raw busy no longer excludes
+    const queue = attentionQueue({
+      sessions: s().sessions,
+      sessionBusy: s().sessionBusy,
+      sessionActive: s().sessionActive,
+      dismissed: s().dismissedAttention,
+      eligible: s().attentionEligible,
+      idleSince: s().sessionIdleSince,
+      recurringChildIds: new Set(),
+    });
+    expect(queue.map((x) => x.id)).toEqual(["s1"]);
   });
 });
