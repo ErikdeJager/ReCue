@@ -1957,3 +1957,74 @@ commit `717c5b4`; 14 files, +1449/-841):
 
 **Dependencies:** Task 429 (via 429 → 428 — reuses their broadcast/apply-sync conventions +
 `init` subscribe wave, and 429's reshaped `set_settings`/`saveSettings` which this card edits).
+
+### 431. [x] Multi-window 6/16 — Rust-owned clean-exit forget + ref-counted worktree cleanup: one decision per app, one "Agent exited" toast per exit
+
+Moves the #63 clean-exit decision (code 0 while running → kill + delete record + toast) and the
+ref-counted worktree removal to happen **exactly once per app, in Rust** — instead of in each
+window's `session://exited` handler, where the epic's N full windows would all double-delete records,
+double-toast, and race `remove_worktree`. Every window drops its local state via the task-428 roster
+broadcast plus a small `session://forgotten` event, and exactly ONE window shows the "Agent exited"
+toast. The non-clean exit path (overlay + Restart) stays frontend and byte-identical.
+
+**What shipped** (branch `task-431-rust-clean-exit-forget`, PR
+[#194](https://github.com/ErikdeJager/ReCue/pull/194), merged 2026-07-16 into `backend-decouple`,
+commit `e0b4467`; 7 files, +902/-263):
+
+- **`src-tauri/src/pty.rs`** — `ExitState.intentional: AtomicBool` set by `kill_session` **before any
+  signal** (the #354 `silent` pattern) and carried on `SessionEvent::Exited { …, intentional }` — so
+  a Remove/forget/rotation/cancel kill whose child traps SIGHUP and exits 0 can never be misread as a
+  clean exit. The `session://exited` wire payload is unchanged; the frontend's own `intentionalKills`
+  set stays for its unchanged non-clean paths.
+- **`src-tauri/src/commands.rs`** — the pure discriminator `is_clean_exit` + `classify_exit` →
+  `ExitAction` (full truth table, ported from the TS `isCleanExit`); `ForgottenPayload` /
+  `WorktreeKeptPayload` + a `toast_target` (first focused window → `"main"` → any); the ported pure
+  `worktree_has_items` (#199 battery) + a serialized `cleanup_worktree_if_empty` command
+  (`WorktreeCleanupLock` mutex, non-forced unlock+remove, outcomes `Removed`/`InUse`/`KeptDirty`,
+  idempotent on a missing dest); a `BootWindow(AtomicBool)` + `RECONNECT_BACKSTOP_MS`; and the
+  forwarder-side `handle_session_exit` (fail-open to today's emit on any guard failure) + the detached
+  `forget_cleanly_exited` task (reuses `kill_session_blocking` → the same dev-container teardown +
+  `store.remove_session` + `broadcast_sessions`, then emits `session://forgotten`, then runs the
+  worktree cleanup). Full Rust unit tests for the classifier + `worktree_has_items`.
+- **`src-tauri/src/lib.rs`** — manage `BootWindow` (true iff persisted records exist at setup) +
+  `WorktreeCleanupLock`; clear the boot window 4 s after the resume pass returns; gate the forwarder's
+  `Exited` arm through `handle_session_exit` (consumed → nothing emitted; else emit `session://exited`
+  as before); register `cleanup_worktree_if_empty`.
+- **Frontend** (`ipc.ts` / `store.ts` / `types/index.ts` / `store.test.ts`) — deleted `isCleanExit`,
+  `worktreeHasItems`, `forgetExitedSession`, and the `onExited` clean branch; added
+  `applySessionForgotten` (drops local state in every window, toasts only when `toast_window ===
+  WINDOW_LABEL`) + `applyWorktreeKept`; rewired `cleanupWorktreeIfEmpty` onto the authoritative Rust
+  command (mapping `keptDirty` → the error toast, `removed`/`inUse`/failure → silent). The
+  `isCleanExit`/`worktreeHasItems` test batteries moved to Rust.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 431)
+
+- Contrary to the card's premise, today's frontend clean-exit path did **not** run the worktree
+  cleanup — per the card's directive the Rust forget path now adds it, so a cleanly-exited last
+  worktree agent removes its clean worktree (dirty → kept + warned): a small deliberate improvement
+  matching "#63: forgotten like Remove".
+- Worktree ref-count/removal is centralized as **one serialized Rust command** the existing frontend
+  call sites delegate to (not each moving wholesale into Rust); the forced `remove_worktree`
+  (`forgetRepo`) stays as-is.
+- On a consumed clean exit Rust does **not** emit `session://exited` at all — so no window ever
+  flashes a transient exit overlay for a clean exit (detached windows previously briefly did).
+- Single-toast targeting: Rust picks the focused window's label (fallback `"main"`, then any),
+  carried in the payload; a targeted window closing mid-flight loses the toast rather than
+  duplicating it (accepted).
+- Recurring-owned children (`current_session_id` match) are excluded — their exits still emit
+  `session://exited` and the frontend's rotation branch handles them as today. The boot-window guard's
+  Rust equivalent (`BootWindow`, cleared 4 s after resume) is semantics-identical; exact wall-clock
+  equality with a frontend timer is impossible cross-process.
+- The non-clean "Session exited (code N)" toast stays main-window-gated as today (de-duplicating it
+  across N windows belongs to later cards); this card touches only the clean-exit branch.
+
+**Fail-safe:** every guard failure (missing state, boot window, recurring-owned, intentional) degrades
+to today's `session://exited` emit — worst case is the old behavior, never a lost record. #354
+silent-kill semantics stay byte-identical.
+
+**Cross-platform:** AtomicBools, global Tauri events, `git` via the existing `hidden_command`-backed
+helpers — no paths/shells/`#[cfg]` arms; identical on macOS, Windows, and Linux.
+
+**Dependencies:** Task 430 (sequencing — 429/430 reshape the same `store.ts` init/subscribe wave and
+`lib.rs` setup this card edits; via 430 → 429 → 428, whose broadcast/apply-sync conventions
+`session://forgotten` follows).
