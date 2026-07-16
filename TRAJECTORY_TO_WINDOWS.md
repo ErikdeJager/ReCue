@@ -1305,3 +1305,26 @@ window plumbing.
 - [ ] **Close the popped-out window.** The first window keeps rendering everything (the 426
       view purge unclamps the grid); closing a canvas viewed by another window re-homes
       that window to another tab (no self-close, no ghost).
+
+## 2026-07-16 — Restore the open-window set on relaunch (multi-window 13/16, task 439)
+
+Relaunching ReCue now restores the same set of full app windows (`main` + `app-*`), each at
+its saved outer-position/inner-size (physical px — the exact pair tao's `Moved`/`Resized`
+report and `set_position`/`set_size` accept) and with its creation-time repo/canvas preset,
+clamped to the current monitor layout and capped at 8 extras. Rust-only: a dedicated
+`window_state` store key, a pure `WindowSet` state machine fed from the global
+`WindowEvent` arm (debounced 500 ms saves), an `ExitRequested` flush for the ⌘Q path and a
+would-empty rule for the last-window-close path. The Windows minimize sentinels (`Moved`
+−32000/−32000, `Resized` 0×0) are ignored in the pure core (unit-tested on every host).
+
+### Needs real-box verification (window restore, task 439)
+
+- [ ] **Restore across two Windows sessions.** Open 2–3 windows, move/resize, quit (Alt+F4
+      the last window AND the app-exit path), relaunch: each window returns at its saved
+      bounds — positions in physical px under fractional scaling (125%/150%) must not
+      drift or accrete the title-bar height across repeated cycles.
+- [ ] **Minimize sentinels never persist.** Quit while a window is minimized: it restores
+      at its last real bounds, never at −32000/−32000 or 0×0.
+- [ ] **Unplugged second monitor.** Save bounds on a second monitor, unplug it, relaunch:
+      the window is re-placed fully inside the surviving monitor (≥ the 64 px visibility
+      floor), not lost off-screen.
