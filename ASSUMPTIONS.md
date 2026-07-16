@@ -3769,3 +3769,10 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - The tip renders identically to the welcome hero — same "tip" chip, rotating text, and click-to-shuffle behavior (via the existing `tips.ts` helpers).
 - Reuse (not duplicate) the tip UI by extracting a shared `TipRow` component used by both `EmptyState` and the Overview filtered branch; move the tip CSS rules into it.
 - The `!filter` fallback string "No agents yet." is left unchanged — the card targets the filtered folder/branch case only.
+
+## Task 423
+
+- Radius value: reuse `--radius-micro` (4px, the existing card radius) for all Kanban controls, so "slightly rounded to match [the cards]" is literal; referenced only from the Kanban module (no global token edit), matching Task 409's in-file pattern.
+- Which controls to round: all Kanban interactive buttons + text inputs/areas (composer input+buttons, card-edit input+Save/Cancel, column-rename input+hover affordance, .colBtn/.cardBtn icon buttons, toolbar .saveBtn, .undoRow, .addColumn, .rawEditor). Left rendered card-body markdown inline code/pre and the GFM task checkbox square (content, not composer controls).
+- Equal-size method: give .composerAdd and .composerCancel `flex: 1` + `justify-content: center` so they split their row 50/50 regardless of label content (a min-width could not guarantee equality). Also equalizes the reused card-edit Save/Cancel row.
+- Pure CSS-only fix (no KanbanPanel.tsx change); scoped to KanbanPanel.module.css; platform-neutral.
