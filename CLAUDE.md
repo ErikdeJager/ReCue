@@ -302,6 +302,38 @@ steady-state boot pays **zero** probe cost.
   **Delete** / **Rename** (#267/#291) backed by the path-validated `create_dir` / `delete_path`
   / `rename_path` writes (the 3rd–5th deliberate `files.rs` writes; confirm-gated delete), plus
   Reveal in Finder/Explorer and Copy absolute·relative path.
+- **Agent-created worktree detection:** ReCue auto-detects **every** git worktree of a
+  registered repo — Claude Code's `EnterWorktree`/`--worktree` (`<repo>/.claude/worktrees/*`),
+  `WorktreeCreate`-hook or hand-made ones anywhere — via the batched `list_repo_worktrees`
+  (`git worktree list --porcelain`, plain not `-z` (Ubuntu 22.04 ships git 2.34), pure
+  fail-open parser in `git.rs`, entries stamped `is_main`/`managed`/`exists` backend-side)
+  riding the #359 refresh volley as the **`"worktrees"` kind** (in `focusRefreshKinds`' cheap
+  set, so the sidebar's 15 s poll + busy→idle debounce + focus backstop all carry it).
+  Detected worktrees render **presence-driven** under their parent repo in the sidebar (live
+  full-strength; idle dimmed; ReCue's own dirty-kept orphans badge **`kept`** with a
+  confirm-gated force **Remove worktree…**; the `locked` attr — Claude Code locks a worktree
+  while an agent works in it — reads as a static "in use" hint); **external worktrees get no
+  delete — ReCue never `git worktree remove`s anything it didn't create** (`remove_worktree`
+  hard-refuses paths outside `<data-dir>/worktrees`, and `cleanupWorktreeIfEmpty`
+  short-circuits). Claude agents **relocate live**: the #97 title worker (now poked on BOTH
+  busy edges) also tails the session's newest-by-mtime JSONL for its `cwd`
+  (`SessionEvent::Cwd` → `session://cwd` → persisted `current_cwd`), and
+  `sessionActiveWorktree` (`src/worktrees.ts`, the pure decision core) moves the agent's
+  sidebar row under the worktree group and back — `effectiveRepo`/records stay authoritative
+  (grouping semantics unchanged; detection only adds rows/hints); non-claude agents get a
+  best-effort one-busy-session heuristic. The external/orphan header's **New session** spawns
+  **in place** (`spawn_session` with an explicit `worktree_parent`, never `git worktree add`).
+  Lifecycle: an authoritative listing losing a worktree (Claude's clean-exit auto-removal, a
+  manual remove) drops the row and auto-closes its panels with one toast; a failed git read
+  keeps prior state (fail-open). **Scope isolation:** worktree contents are excluded from the
+  parent repo's `search_files`/`search_file_contents` unconditionally (the walker guard is
+  `container::host_worktree_admin_name` over the `.git` pointer FILE — submodule gitfiles
+  (`.git/modules/…`) don't match, and the leaked `.git` gitfile no longer lists as a text
+  file), while the FileTree shows the worktree folder **in place** (muted + `worktree` chip)
+  behind a per-worktree **"Show worktree contents…"** gate — never keyed to a container
+  folder name. Path identity is lexical + canonicalize-first in Rust (`norm_path_key` /
+  `path_under_norm`) and platform-parameterized in TS (`normPathKey`), case-folded on
+  Windows only.
 - **OS files → file tree (#253):** dragging files/folders from Finder/Explorer onto a
   FileTree **folder row** (or the tree **root**) **moves** them into that directory.
   Tauri's webview drag-drop event is **window-global** (not DOM-bound), so `src/
@@ -1058,7 +1090,13 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   branch step starts an agent in an app-managed worktree
   (`<app-data>/worktrees/<repo-id>/<branch>`), shown nested under its parent repo in
   the sidebar; the worktree is removed (ref-counted) only when its last agent goes,
-  and a dirty worktree is kept rather than force-deleted; and (3) **branch creation**
+  and a dirty worktree is kept rather than force-deleted. **The remove is scoped to
+  what ReCue created**: `remove_worktree` hard-refuses any destination outside
+  `<data-dir>/worktrees` — worktree *detection* surfaces agent-created (EnterWorktree /
+  hook / manual) worktrees in the same UI and in-place spawns give them sessions, so
+  no teardown path may ever `git worktree remove` a checkout ReCue didn't create; the
+  read side (`git worktree list --porcelain`) stays read-only, and the only force-remove
+  is the user-confirmed orphan (`kept`) flow over ReCue's own leftovers; and (3) **branch creation**
   (#124, expanding the earlier "never creates branches" rule) — the branch step's
   **"+ add branch"** option creates + checks out a new branch (`git checkout -b
   <name> [<base>]`, base defaulting to the current branch/HEAD) and starts a normal

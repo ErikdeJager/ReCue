@@ -1229,3 +1229,9 @@ valid inside the (Linux) container. Windows-specific notes + real-box checks:
 - [ ] **Custom command with a quoted path.** `"C:\Program Files\X\x.exe" {path}` in
       Settings → Editor tokenizes (quoted program survives) and receives the folder.
 >>>>>>> origin/dev
+- [ ] **Detected-worktree path identity on a real Windows box.** The agent-created
+      worktree detection compares paths case-insensitively on Windows (`norm_path_key`
+      in Rust, `normPathKey` in TS) and classifies "managed" by canonicalized prefix
+      under `%APPDATA%\..\<data-dir>\worktrees`. Sanity-check with a `C:\`-drive repo:
+      a Claude `EnterWorktree` worktree appears under its repo, `remove_worktree`
+      refuses it, and a mixed-case duplicate path never renders a second row.
