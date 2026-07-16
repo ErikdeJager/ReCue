@@ -967,6 +967,87 @@ export async function subscribeRecurringEvents(
   };
 }
 
+/** Handlers for the cross-window state-sync broadcasts (task 428): the backend emits
+ * each "quiet" persisted slice's **full new value** after every successful persist
+ * (`commands.rs broadcast_*`, the `broadcast_schedules` pattern), plus the full
+ * session roster after add/remove/rename. The handlers must apply-only — never call
+ * back into any `set*` persist path — so the sender's own echo is a guarded no-op
+ * and no loop can form. */
+export interface StateSyncHandlers {
+  /** The persisted settings blob changed (`settings://changed`); `null` never-saved. */
+  onSettingsChanged: (settings: Partial<Settings> | null) => void;
+  /** The recents list changed (`recents://changed`). */
+  onRecentsChanged: (recents: string[]) => void;
+  /** The diff "seen" markers changed (`diff_seen://changed`); `null` never-written. */
+  onDiffSeenChanged: (seen: DiffSeenMap | null) => void;
+  /** The sidebar folder order changed (`repo_order://changed`). */
+  onRepoOrderChanged: (order: string[]) => void;
+  /** The repo-color map changed (`repo_colors://changed`). */
+  onRepoColorsChanged: (colors: Record<string, string>) => void;
+  /** The per-repo Overview panels changed (`overview_panels://changed`). */
+  onOverviewPanelsChanged: (panels: Record<string, OverviewPanel[]>) => void;
+  /** The per-repo Overview order changed (`overview_order://changed`). */
+  onOverviewOrderChanged: (order: Record<string, string[]>) => void;
+  /** The sidebar width changed (`sidebar_width://changed`); `null` never-set. */
+  onSidebarWidthChanged: (width: number | null) => void;
+  /** The sidebar collapsed flag changed (`sidebar_collapsed://changed`). */
+  onSidebarCollapsedChanged: (collapsed: boolean | null) => void;
+  /** The saved Canvas templates changed (`canvas_templates://changed`). */
+  onCanvasTemplatesChanged: (templates: CanvasTemplate[] | null) => void;
+  /** The persisted session roster changed (`sessions://changed`) — an agent was
+   * spawned, removed, or renamed in some window. The schedule/recurring fire paths
+   * deliberately don't emit it (`schedule://fired` / `recurring://fired` carry the
+   * record). */
+  onSessionsChanged: (sessions: SessionRecord[]) => void;
+}
+
+/** Subscribe to the eleven cross-window state-sync events (task 428). Mirrors
+ * `subscribeScheduleEvents`: each `listen()` is its own `invoke`, so they register
+ * as **one parallel wave** (#352). Returns an unlisten fn that drops all eleven. */
+export async function subscribeStateSyncEvents(
+  handlers: StateSyncHandlers,
+): Promise<UnlistenFn> {
+  const unlistens = await Promise.all([
+    listen<Partial<Settings> | null>("settings://changed", (event) =>
+      handlers.onSettingsChanged(event.payload),
+    ),
+    listen<string[]>("recents://changed", (event) =>
+      handlers.onRecentsChanged(event.payload),
+    ),
+    listen<DiffSeenMap | null>("diff_seen://changed", (event) =>
+      handlers.onDiffSeenChanged(event.payload),
+    ),
+    listen<string[]>("repo_order://changed", (event) =>
+      handlers.onRepoOrderChanged(event.payload),
+    ),
+    listen<Record<string, string>>("repo_colors://changed", (event) =>
+      handlers.onRepoColorsChanged(event.payload),
+    ),
+    listen<Record<string, OverviewPanel[]>>(
+      "overview_panels://changed",
+      (event) => handlers.onOverviewPanelsChanged(event.payload),
+    ),
+    listen<Record<string, string[]>>("overview_order://changed", (event) =>
+      handlers.onOverviewOrderChanged(event.payload),
+    ),
+    listen<number | null>("sidebar_width://changed", (event) =>
+      handlers.onSidebarWidthChanged(event.payload),
+    ),
+    listen<boolean | null>("sidebar_collapsed://changed", (event) =>
+      handlers.onSidebarCollapsedChanged(event.payload),
+    ),
+    listen<CanvasTemplate[] | null>("canvas_templates://changed", (event) =>
+      handlers.onCanvasTemplatesChanged(event.payload),
+    ),
+    listen<SessionRecord[]>("sessions://changed", (event) =>
+      handlers.onSessionsChanged(event.payload),
+    ),
+  ]);
+  return () => {
+    for (const unlisten of unlistens) unlisten();
+  };
+}
+
 /** Prefetch the default dev-container image (fired when the modal's "Run in dev
  * container" toggle switches ON) so the one-time `docker build` overlaps the user
  * finishing the modal. Best-effort: docker missing / a custom `containerImage`

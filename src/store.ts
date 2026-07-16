@@ -663,6 +663,56 @@ export function toSessionView(record: SessionRecord): SessionView {
   };
 }
 
+/** The reconcile plan for a `sessions://changed` roster broadcast (task 428). Pure +
+ * exported for unit tests.
+ *
+ * - `removed`: local ids absent from the roster (→ `dropSession`, which also clears
+ *   busy maps / selection / canvas leaves).
+ * - `added`: roster records with no local view (→ `upsertSession(toSessionView(r))`,
+ *   which arms the attention grace like any spawn path).
+ * - `merged`: the full next `sessions` array — the **surviving** local views in their
+ *   existing order, each with its record-derived fields refreshed from the roster
+ *   (rename!) while the view-only live fields (`reconnecting`, `exitedCode`) are
+ *   preserved — or `null` when no surviving view changed. A view that is JSON-equal
+ *   to its merge keeps its original object reference (no needless re-renders), so a
+ *   pure echo yields `{ removed: [], added: [], merged: null }` — a complete no-op.
+ *   `merged` deliberately excludes `removed`/`added` ids: the caller applies drops
+ *   and adds through the choke points above, then sets `merged` (survivors only). */
+export function diffSessionRoster(
+  local: SessionView[],
+  records: SessionRecord[],
+): {
+  removed: string[];
+  added: SessionRecord[];
+  merged: SessionView[] | null;
+} {
+  const recordById = new Map(records.map((r) => [r.id, r] as const));
+  const localIds = new Set(local.map((v) => v.id));
+  const removed = local.filter((v) => !recordById.has(v.id)).map((v) => v.id);
+  const added = records.filter((r) => !localIds.has(r.id));
+  let changed = false;
+  const merged: SessionView[] = [];
+  for (const v of local) {
+    const record = recordById.get(v.id);
+    if (!record) continue; // removed — handled via dropSession
+    // Record-derived fields come from the roster; the two view-only live fields are
+    // preserved. JSON equality (undefined keys drop out) keeps the original reference
+    // for an unchanged view.
+    const next: SessionView = {
+      ...toSessionView(record),
+      reconnecting: v.reconnecting,
+      exitedCode: v.exitedCode,
+    };
+    if (JSON.stringify(next) === JSON.stringify(v)) {
+      merged.push(v);
+    } else {
+      merged.push(next);
+      changed = true;
+    }
+  }
+  return { removed, added, merged: changed ? merged : null };
+}
+
 function isSessionError(
   value: unknown,
 ): value is { kind: string; message: string } {
@@ -2544,6 +2594,39 @@ export interface AppState {
    * `recurring://changed`) — keeps a detached canvas window's `recurrings` slice in
    * sync; a no-op when unchanged. */
   applyRecurringSync: (recurrings: RecurringSession[]) => void;
+  // --- Cross-window state sync (task 428): one apply-sync action per "quiet"
+  // persisted slice, modeled on `applyScheduleSync`. Each is JSON-equality-guarded
+  // (an identical value — above all the sender's own echo — is a no-op) and NEVER
+  // calls any `ipc.set*` / persist path, so no echo loop can form.
+  /** Apply a `settings://changed` broadcast: merge over defaults + re-apply the
+   * imperative side-effects (theme/accent/motion/terminal) when changed. */
+  applySettingsSync: (settings: Partial<Settings> | null) => void;
+  /** Apply a `recents://changed` broadcast. */
+  applyRecentsSync: (recents: string[]) => void;
+  /** Apply a `diff_seen://changed` broadcast (`null` → empty map). */
+  applyDiffSeenSync: (seen: DiffSeenMap | null) => void;
+  /** Apply a `repo_order://changed` broadcast (→ `folderOrder`). */
+  applyRepoOrderSync: (order: string[]) => void;
+  /** Apply a `repo_colors://changed` broadcast. */
+  applyRepoColorsSync: (colors: Record<string, string>) => void;
+  /** Apply an `overview_panels://changed` broadcast (wholesale map, like canvases). */
+  applyOverviewPanelsSync: (panels: Record<string, OverviewPanel[]>) => void;
+  /** Apply an `overview_order://changed` broadcast (wholesale map). */
+  applyOverviewOrderSync: (order: Record<string, string[]>) => void;
+  /** Apply a `sidebar_width://changed` broadcast — clamped, `null` → the default;
+   * deliberately NOT via `setSidebarWidth` (which persists). Width stays
+   * global-shared across windows by design. */
+  applySidebarWidthSync: (width: number | null) => void;
+  /** Apply a `sidebar_collapsed://changed` broadcast (`null` → expanded); NOT via
+   * `setSidebarCollapsed` (which persists). Global-shared by design. */
+  applySidebarCollapsedSync: (collapsed: boolean | null) => void;
+  /** Apply a `canvas_templates://changed` broadcast (`null` → none). */
+  applyCanvasTemplatesSync: (templates: CanvasTemplate[] | null) => void;
+  /** Apply a `sessions://changed` roster broadcast: reconcile (never replace) via
+   * `diffSessionRoster` — added ids `upsertSession`, removed ids `dropSession`,
+   * existing ids merge record-derived fields while preserving the view-only live
+   * fields (`reconnecting`, `exitedCode`). An identical roster is a complete no-op. */
+  applySessionsSync: (records: SessionRecord[]) => void;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
   /** Fast-forward `cwd`'s current branch to its upstream — `git pull --ff-only`
    * (#181, sidebar repo / worktree "Pull"). Toasts the result (summary or git
@@ -3634,7 +3717,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // promise rejection while we await the subscriptions.
     const bootPromise = ipc.bootState().catch(() => null);
 
-    // Wave 2: the 13 `listen` registrations (each its own invoke) as ONE parallel
+    // Wave 2: the 25 `listen` registrations (each its own invoke) as ONE parallel
     // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
@@ -3883,6 +3966,25 @@ export const useStore = create<AppState>()((set, get) => ({
               }
             },
             onChanged: (recurrings) => get().applyRecurringSync(recurrings),
+          }),
+          // Cross-window state sync (task 428): the backend broadcasts every "quiet"
+          // persisted slice's full new value after each successful persist, plus the
+          // session roster after add/remove/rename. Both window kinds subscribe (init
+          // is shared); the applies are equality-guarded, so the mutating window's
+          // own echo is free and no loop can form.
+          ipc.subscribeStateSyncEvents({
+            onSettingsChanged: (s) => get().applySettingsSync(s),
+            onRecentsChanged: (r) => get().applyRecentsSync(r),
+            onDiffSeenChanged: (s) => get().applyDiffSeenSync(s),
+            onRepoOrderChanged: (o) => get().applyRepoOrderSync(o),
+            onRepoColorsChanged: (c) => get().applyRepoColorsSync(c),
+            onOverviewPanelsChanged: (p) => get().applyOverviewPanelsSync(p),
+            onOverviewOrderChanged: (o) => get().applyOverviewOrderSync(o),
+            onSidebarWidthChanged: (w) => get().applySidebarWidthSync(w),
+            onSidebarCollapsedChanged: (c) =>
+              get().applySidebarCollapsedSync(c),
+            onCanvasTemplatesChanged: (t) => get().applyCanvasTemplatesSync(t),
+            onSessionsChanged: (records) => get().applySessionsSync(records),
           }),
           // Dev-container sessions: the one-time default-image build fires this so a
           // spawn waiting behind `docker build` reads as progress, not a hang.
@@ -6650,6 +6752,104 @@ export const useStore = create<AppState>()((set, get) => ({
     adoptPendingRecurringChildren(recurrings, (r) =>
       get().upsertSession(toSessionView(r)),
     );
+  },
+
+  // --- Cross-window state sync (task 428) ---
+  // One apply per "quiet" persisted slice, modeled on `applyScheduleSync`: the
+  // backend broadcasts the full new value after every successful persist
+  // (`commands.rs broadcast_*`), every window applies it here. Each apply is
+  // JSON-equality-guarded — the mutating window already holds the value, so its own
+  // echo is a no-op — and NEVER calls any `ipc.set*` / persist path (no echo loops).
+
+  applySettingsSync: (blob) => {
+    const merged = mergeSettings(blob);
+    if (JSON.stringify(get().settings) === JSON.stringify(merged)) return;
+    set({ settings: merged });
+    // Re-apply the imperative side-effects (theme / accent / reduce-motion / dense /
+    // live terminal options) so a change saved in another window reskins this one
+    // live. Deliberately NOT `saveSettings`' other side-effects: `setThemeBackground`
+    // is already pushed to every window by the saving window, and the usage-poll
+    // start/stop is main-window-gated — and the main window is the saver today
+    // (revisit in the full-app-windows card, 9/16).
+    applySettingsEffects(merged);
+  },
+
+  applyRecentsSync: (recents) => {
+    if (JSON.stringify(get().recents) === JSON.stringify(recents)) return;
+    set({ recents });
+  },
+
+  applyDiffSeenSync: (seen) => {
+    // `null` = never written. A pending local `persistDiffSeen` debounce is safe: it
+    // reads `useStore.getState().diffSeen` at fire time — i.e. this post-apply state —
+    // so it can't clobber the just-applied foreign map with a stale snapshot.
+    const next = seen ?? {};
+    if (JSON.stringify(get().diffSeen) === JSON.stringify(next)) return;
+    set({ diffSeen: next });
+  },
+
+  applyRepoOrderSync: (order) => {
+    if (JSON.stringify(get().folderOrder) === JSON.stringify(order)) return;
+    set({ folderOrder: order });
+  },
+
+  applyRepoColorsSync: (colors) => {
+    if (JSON.stringify(get().repoColors) === JSON.stringify(colors)) return;
+    set({ repoColors: colors });
+  },
+
+  applyOverviewPanelsSync: (panels) => {
+    // Wholesale last-write-wins map replace — the canvas/schedule semantics.
+    if (JSON.stringify(get().overviewPanels) === JSON.stringify(panels)) return;
+    set({ overviewPanels: panels });
+  },
+
+  applyOverviewOrderSync: (order) => {
+    if (JSON.stringify(get().overviewOrder) === JSON.stringify(order)) return;
+    set({ overviewOrder: order });
+  },
+
+  applySidebarWidthSync: (width) => {
+    // Clamp like the boot path; deliberately NOT via `setSidebarWidth` (it persists —
+    // an apply must never write back). Width stays global-shared across windows.
+    const w = clampSidebarWidth(width ?? SIDEBAR_WIDTH_DEFAULT);
+    if (w === get().sidebarWidth) return;
+    set({ sidebarWidth: w });
+  },
+
+  applySidebarCollapsedSync: (collapsed) => {
+    // NOT via `setSidebarCollapsed` (it persists). `null` = never set → expanded.
+    const next = collapsed ?? false;
+    if (next === get().sidebarCollapsed) return;
+    set({ sidebarCollapsed: next });
+  },
+
+  applyCanvasTemplatesSync: (templates) => {
+    const next = templates ?? [];
+    if (JSON.stringify(get().canvasTemplates) === JSON.stringify(next)) return;
+    set({ canvasTemplates: next });
+  },
+
+  applySessionsSync: (records) => {
+    // Reconcile, never replace (the pure `diffSessionRoster`): removed ids go through
+    // `dropSession` (busy maps, selection, canvas-leaf pruning), added ids through
+    // `upsertSession` (attention grace), surviving ids merge their record-derived
+    // fields (rename!) while keeping the view-only `reconnecting` / `exitedCode`.
+    // An identical roster is {[], [], null} — a complete no-op.
+    //
+    // Accepted transient: a roster broadcast can theoretically land in a window
+    // between a recurring fire's `add_session` and that window's `recurring://fired`
+    // / `recurring://changed`, briefly showing the child standalone — sub-second,
+    // self-healing, and rare because the fire paths themselves never emit the roster.
+    const { removed, added, merged } = diffSessionRoster(
+      get().sessions,
+      records,
+    );
+    for (const id of removed) get().dropSession(id);
+    // `merged` holds the survivors only (post-drop shape, pre-add), so set it before
+    // upserting the additions.
+    if (merged) set({ sessions: merged });
+    for (const r of added) get().upsertSession(toSessionView(r));
   },
 
   copyToClipboard: async (text, label) => {

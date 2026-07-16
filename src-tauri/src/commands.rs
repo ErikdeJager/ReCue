@@ -482,6 +482,9 @@ fn spawn_session_blocking(
     store
         .touch_recent(worktree_parent.as_deref().unwrap_or(&cwd))
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the roster + recents both changed.
+    broadcast_sessions(app, &store);
+    broadcast_recents(app, &store);
     Ok(record)
 }
 
@@ -591,6 +594,8 @@ fn spawn_worktree_agent_blocking(
     store
         .add_session(record.clone())
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the roster changed.
+    broadcast_sessions(app, &store);
     Ok(record)
 }
 
@@ -678,6 +683,8 @@ fn spawn_worktree_agent_new_branch_blocking(
     store
         .add_session(record.clone())
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the roster changed.
+    broadcast_sessions(app, &store);
     Ok(record)
 }
 
@@ -964,6 +971,9 @@ fn fork_session_blocking(
     store
         .touch_recent(&source.repo_path)
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the roster + recents both changed.
+    broadcast_sessions(app, &store);
+    broadcast_recents(app, &store);
     Ok(record)
 }
 
@@ -1008,12 +1018,21 @@ fn kill_session_blocking(app: &AppHandle, id: String) -> Result<(), SessionError
     }
     store
         .remove_session(&id)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): broadcast the roster only when a persisted record
+    // actually existed — a shell-terminal item kill (#72) has no record, so emitting
+    // there would be a gratuitous unchanged-roster echo.
+    if record.is_some() {
+        broadcast_sessions(app, &store);
+    }
+    Ok(())
 }
 
 /// Set (or clear, when blank) a session's custom display name and persist (#57).
+/// Broadcasts `sessions://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn rename_session(
+    app: AppHandle,
     store: State<'_, Store>,
     id: String,
     name: String,
@@ -1026,7 +1045,9 @@ pub fn rename_session(
     };
     store
         .rename_session(&id, name)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_sessions(&app, &store);
+    Ok(())
 }
 
 /// Set a session's per-agent auto-continue opt-out (#297) and persist. `disabled ==
@@ -1162,21 +1183,35 @@ pub fn list_recents(store: State<'_, Store>) -> Vec<String> {
 }
 
 /// Drop a folder from recents (the "Forget" action, #31) so it doesn't reappear.
+/// Broadcasts `recents://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn remove_recent(store: State<'_, Store>, path: String) -> Result<(), SessionError> {
+pub fn remove_recent(
+    app: AppHandle,
+    store: State<'_, Store>,
+    path: String,
+) -> Result<(), SessionError> {
     store
         .remove_recent(&path)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_recents(&app, &store);
+    Ok(())
 }
 
 /// Add a folder to recents without spawning an agent (#172 sidebar background menu →
 /// "New folder…"). Reuses `touch_recent` (deduped, capped, persisted) so the folder
 /// shows as an empty repo group immediately and survives restart.
+/// Broadcasts `recents://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn add_recent(store: State<'_, Store>, path: String) -> Result<(), SessionError> {
+pub fn add_recent(
+    app: AppHandle,
+    store: State<'_, Store>,
+    path: String,
+) -> Result<(), SessionError> {
     store
         .touch_recent(&path)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_recents(&app, &store);
+    Ok(())
 }
 
 /// Clone the git repo at `url` into `<parent>/<repo-name>` (#295), ensure it has a
@@ -1200,6 +1235,7 @@ pub fn add_recent(store: State<'_, Store>, path: String) -> Result<(), SessionEr
 /// runs after it resolves. Cross-platform (git via `hidden_command`; no raw `$HOME`).
 #[tauri::command]
 pub async fn clone_repo(
+    app: AppHandle,
     store: State<'_, Store>,
     url: String,
     parent: String,
@@ -1238,6 +1274,8 @@ pub async fn clone_repo(
     store
         .touch_recent(&dest_str)
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the cloned folder is a new recent.
+    broadcast_recents(&app, &store);
     Ok(dest_str)
 }
 
@@ -1248,8 +1286,10 @@ pub fn list_repo_colors(store: State<'_, Store>) -> std::collections::HashMap<St
 
 /// Assign a repo's color identity (#35). The color is validated as a hex string
 /// so an untrusted IPC value can't store arbitrary content.
+/// Broadcasts `repo_colors://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn set_repo_color(
+    app: AppHandle,
     store: State<'_, Store>,
     path: String,
     color: String,
@@ -1259,7 +1299,9 @@ pub fn set_repo_color(
     }
     store
         .set_repo_color(&path, &color)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_repo_colors(&app, &store);
+    Ok(())
 }
 
 /// Immediate children of one directory (`subdir`, repo-relative; empty = repo root)
@@ -1446,15 +1488,19 @@ pub fn list_overview_panels(
 }
 
 /// Replace a repo's Overview panel layout (#38) and persist.
+/// Broadcasts `overview_panels://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn set_overview_panels(
+    app: AppHandle,
     store: State<'_, Store>,
     path: String,
     panels: Vec<OverviewPanel>,
 ) -> Result<(), SessionError> {
     store
         .set_overview_panels(&path, panels)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_overview_panels(&app, &store);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1465,15 +1511,19 @@ pub fn list_overview_order(
 }
 
 /// Replace a repo's Overview drag-reorder order (#43) and persist.
+/// Broadcasts `overview_order://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn set_overview_order(
+    app: AppHandle,
     store: State<'_, Store>,
     path: String,
     order: Vec<String>,
 ) -> Result<(), SessionError> {
     store
         .set_overview_order(&path, order)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_overview_order(&app, &store);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1555,14 +1605,18 @@ pub fn get_canvas_templates(store: State<'_, Store>) -> serde_json::Value {
 
 /// Replace the saved Canvas templates and persist (#117). Kept separate from the
 /// `canvases` blob so a canvas write never clobbers templates.
+/// Broadcasts `canvas_templates://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn set_canvas_templates(
+    app: AppHandle,
     store: State<'_, Store>,
     templates: serde_json::Value,
 ) -> Result<(), SessionError> {
     store
         .set_canvas_templates(templates)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_canvas_templates(&app, &store);
+    Ok(())
 }
 
 /// The canvas ids that currently have a detached window (#84) — derived from the
@@ -1721,6 +1775,84 @@ pub fn list_canvas_windows(app: AppHandle) -> Vec<String> {
 /// macOS and Windows (no OS-specific path/shell/key code).
 fn broadcast_schedules(app: &AppHandle, store: &Store) {
     let _ = app.emit("schedule://changed", store.schedules());
+}
+
+// --- Cross-window state sync (task 428) ---
+//
+// Multi-window, task 428: Rust owns the persisted slices; every window subscribes.
+// Each helper mirrors `broadcast_schedules` — it emits the slice's **full new value**
+// (exactly what the slice's getter command returns, so the frontend reuses its
+// existing types) and is called only AFTER a successful persist, never on an `Err`.
+// The frontend applies (`apply*Sync` in `src/store.ts`) are JSON-equality-guarded and
+// never re-persist, so the sender's own echo is a no-op and no loop can form. Tauri
+// events are global to all windows on macOS, Windows, and Linux alike — no `#[cfg]`
+// arm is involved.
+
+/// Broadcast the settings blob (`settings://changed`) — see the task 428 block note.
+fn broadcast_settings(app: &AppHandle, store: &Store) {
+    let _ = app.emit("settings://changed", store.settings());
+}
+
+/// Broadcast the recents list (`recents://changed`) — see the task 428 block note.
+fn broadcast_recents(app: &AppHandle, store: &Store) {
+    let _ = app.emit("recents://changed", store.recents());
+}
+
+/// Broadcast the diff-seen markers (`diff_seen://changed`) — see the task 428 block note.
+fn broadcast_diff_seen(app: &AppHandle, store: &Store) {
+    let _ = app.emit("diff_seen://changed", store.diff_seen());
+}
+
+/// Broadcast the sidebar folder order (`repo_order://changed`) — see the task 428
+/// block note.
+fn broadcast_repo_order(app: &AppHandle, store: &Store) {
+    let _ = app.emit("repo_order://changed", store.repo_order());
+}
+
+/// Broadcast the full repo-color map (`repo_colors://changed`) — see the task 428
+/// block note.
+fn broadcast_repo_colors(app: &AppHandle, store: &Store) {
+    let _ = app.emit("repo_colors://changed", store.repo_colors());
+}
+
+/// Broadcast the full Overview panel map (`overview_panels://changed`) — see the
+/// task 428 block note.
+fn broadcast_overview_panels(app: &AppHandle, store: &Store) {
+    let _ = app.emit("overview_panels://changed", store.overview_panels());
+}
+
+/// Broadcast the full Overview order map (`overview_order://changed`) — see the
+/// task 428 block note.
+fn broadcast_overview_order(app: &AppHandle, store: &Store) {
+    let _ = app.emit("overview_order://changed", store.overview_order());
+}
+
+/// Broadcast the sidebar width (`sidebar_width://changed`; `Option<u32>` serializes
+/// as `number | null`) — see the task 428 block note.
+fn broadcast_sidebar_width(app: &AppHandle, store: &Store) {
+    let _ = app.emit("sidebar_width://changed", store.sidebar_width());
+}
+
+/// Broadcast the sidebar collapsed flag (`sidebar_collapsed://changed`; `Option<bool>`
+/// serializes as `boolean | null`) — see the task 428 block note.
+fn broadcast_sidebar_collapsed(app: &AppHandle, store: &Store) {
+    let _ = app.emit("sidebar_collapsed://changed", store.sidebar_collapsed());
+}
+
+/// Broadcast the saved Canvas templates (`canvas_templates://changed`) — see the
+/// task 428 block note.
+fn broadcast_canvas_templates(app: &AppHandle, store: &Store) {
+    let _ = app.emit("canvas_templates://changed", store.canvas_templates());
+}
+
+/// Broadcast the full persisted session roster (`sessions://changed`) after an
+/// add / remove / rename — see the task 428 block note. The schedule/recurring
+/// **fire** paths deliberately do NOT call this: their dedicated `schedule://fired`
+/// / `recurring://fired` events already carry the new record, and a roster emit
+/// there would race the recurring `current_session_id` rotation (#300
+/// unowned-child flash) — see the in-place notes at those sites.
+pub(crate) fn broadcast_sessions(app: &AppHandle, store: &Store) {
+    let _ = app.emit("sessions://changed", store.sessions());
 }
 
 /// Create a scheduled session (#93): persist a record that the poll loop fires at
@@ -2035,6 +2167,11 @@ fn fire_one_schedule(
     let _ = store.add_session(record.clone());
     // Touch the repo (not the worktree folder) as the recent.
     let _ = store.touch_recent(&sched.cwd);
+    // Cross-window sync (task 428): recents only. Deliberately NO `broadcast_sessions`
+    // here — `schedule://fired` below already carries the new record to every window,
+    // and a roster emit would race the recurring `current_session_id` rotation
+    // (#300 unowned-child flash) on the sibling fire path.
+    broadcast_recents(app, store);
     let _ = app.emit(
         "schedule://fired",
         ScheduleFiredPayload {
@@ -2268,6 +2405,9 @@ pub fn cancel_recurring(
         if let Some(child) = rec.current_session_id.as_deref() {
             let _ = manager.kill_session(child);
             let _ = store.remove_session(child);
+            // Cross-window sync (task 428): the child's record left the roster.
+            // Removal-only, so no #300 ownership race is possible here.
+            broadcast_sessions(&app, &store);
         }
     }
     store
@@ -2400,6 +2540,12 @@ fn fire_one_recurring(
     };
     let _ = store.add_session(record.clone());
     let _ = store.touch_recent(&rec.cwd);
+    // Cross-window sync (task 428): recents only. Deliberately NO `broadcast_sessions`
+    // here — `recurring://fired` below already carries the new record, and a roster
+    // emit would race the `current_session_id` rotation: a window could see the child
+    // in the roster before `mark_recurring_fired`'s ownership lands, flashing it as an
+    // unowned standalone card (#300).
+    broadcast_recents(app, store);
     let next_fire_at = now_secs() + rec.interval_secs;
     let _ = store.mark_recurring_fired(&rec.id, Some(record.id.clone()), next_fire_at);
     let _ = app.emit(
@@ -2780,14 +2926,18 @@ pub fn get_settings(store: State<'_, Store>) -> serde_json::Value {
 }
 
 /// Replace the application settings (#100) and persist.
+/// Broadcasts `settings://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn set_settings(
+    app: AppHandle,
     store: State<'_, Store>,
     settings: serde_json::Value,
 ) -> Result<(), SessionError> {
     store
         .set_settings(settings)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_settings(&app, &store);
+    Ok(())
 }
 
 /// The persisted sidebar width in px (#108); `None` until first set.
@@ -2797,11 +2947,18 @@ pub fn get_sidebar_width(store: State<'_, Store>) -> Option<u32> {
 }
 
 /// Persist the sidebar width (#108) — stored as-is; the frontend clamps.
+/// Broadcasts `sidebar_width://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn set_sidebar_width(store: State<'_, Store>, width: u32) -> Result<(), SessionError> {
+pub fn set_sidebar_width(
+    app: AppHandle,
+    store: State<'_, Store>,
+    width: u32,
+) -> Result<(), SessionError> {
     store
         .set_sidebar_width(width)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_sidebar_width(&app, &store);
+    Ok(())
 }
 
 /// Whether the sidebar is collapsed to the icon rail (#168); `None` until first set.
@@ -2811,11 +2968,18 @@ pub fn get_sidebar_collapsed(store: State<'_, Store>) -> Option<bool> {
 }
 
 /// Persist the sidebar collapsed flag (#168).
+/// Broadcasts `sidebar_collapsed://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn set_sidebar_collapsed(store: State<'_, Store>, collapsed: bool) -> Result<(), SessionError> {
+pub fn set_sidebar_collapsed(
+    app: AppHandle,
+    store: State<'_, Store>,
+    collapsed: bool,
+) -> Result<(), SessionError> {
     store
         .set_sidebar_collapsed(collapsed)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_sidebar_collapsed(&app, &store);
+    Ok(())
 }
 
 /// The persisted top-level sidebar folder order (#211); empty until first set.
@@ -2825,11 +2989,18 @@ pub fn get_repo_order(store: State<'_, Store>) -> Vec<String> {
 }
 
 /// Persist the sidebar folder order (#211) — the user's drag-reordered repo paths.
+/// Broadcasts `repo_order://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn set_repo_order(store: State<'_, Store>, order: Vec<String>) -> Result<(), SessionError> {
+pub fn set_repo_order(
+    app: AppHandle,
+    store: State<'_, Store>,
+    order: Vec<String>,
+) -> Result<(), SessionError> {
     store
         .set_repo_order(order)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_repo_order(&app, &store);
+    Ok(())
 }
 
 /// The per-repo diff "seen" review markers (#278); `null` until first written.
@@ -2841,11 +3012,18 @@ pub fn get_diff_seen(store: State<'_, Store>) -> serde_json::Value {
 /// Persist the per-repo diff "seen" markers (#278) — opaque JSON owned by the
 /// frontend (`{ repoPath: { filePath: digest } }`). Kept separate from the Settings
 /// blob so a Settings draft can't clobber it.
+/// Broadcasts `diff_seen://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn set_diff_seen(store: State<'_, Store>, seen: serde_json::Value) -> Result<(), SessionError> {
+pub fn set_diff_seen(
+    app: AppHandle,
+    store: State<'_, Store>,
+    seen: serde_json::Value,
+) -> Result<(), SessionError> {
     store
         .set_diff_seen(seen)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_diff_seen(&app, &store);
+    Ok(())
 }
 
 /// The app version observed on the previous run (#190); `None` on first launch.
@@ -2984,11 +3162,14 @@ pub async fn boot_state(
 
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
 /// untouched — only the recently-used folder list is emptied.
+/// Broadcasts `recents://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn clear_recents(store: State<'_, Store>) -> Result<(), SessionError> {
+pub fn clear_recents(app: AppHandle, store: State<'_, Store>) -> Result<(), SessionError> {
     store
         .clear_recents()
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_recents(&app, &store);
+    Ok(())
 }
 
 /// Open a folder with the OS's default file manager, **without a shell** (so there is no
