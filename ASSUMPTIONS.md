@@ -3776,3 +3776,10 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Which controls to round: all Kanban interactive buttons + text inputs/areas (composer input+buttons, card-edit input+Save/Cancel, column-rename input+hover affordance, .colBtn/.cardBtn icon buttons, toolbar .saveBtn, .undoRow, .addColumn, .rawEditor). Left rendered card-body markdown inline code/pre and the GFM task checkbox square (content, not composer controls).
 - Equal-size method: give .composerAdd and .composerCancel `flex: 1` + `justify-content: center` so they split their row 50/50 regardless of label content (a min-width could not guarantee equality). Also equalizes the reused card-edit Save/Cancel row.
 - Pure CSS-only fix (no KanbanPanel.tsx change); scoped to KanbanPanel.module.css; platform-neutral.
+
+## Task 425
+
+- A1 (confirm gate): ⌘W removes the agent via the SAME un-gated path as its ×/Remove — NOT routed through confirmDestructive. Rationale: every single-agent remove in the app is un-gated; confirmDestructive gates only bulk teardown; ⌘W reuses its × action so keyboard/mouse can't drift; "easily" argues against friction. (Caller suggested honoring the gate — deliberately declined; easy to add later.)
+- A2 (Canvas vs Overview): Canvas/detached-window ⌘W on an agent leaf stays "close the panel only" (removeLeaf; agent survives in the pool/Overview), matching the Canvas header ×. Only Overview ⌘W kills+forgets, matching Overview's × semantics.
+- A3 (scope completion): extended the Overview fix to also close a selected SCHEDULE (cancelSchedule) and RECURRING (cancelRecurring), not just agents — closing the whole "only non-agent panels are closed" gap and matching each card's × exactly.
+- A4 (focus advance): Overview ⌘W does NOT advance selection to a neighbor after removal — matching the existing non-agent Overview close; neighbor-advance stays Canvas-only. After removal selectedId clears/goes stale, so a repeat ⌘W is a safe no-op.
