@@ -592,8 +592,8 @@ function SettingsModal() {
                   onChange={(v) => update("terminalBackgroundLightness", v)}
                 />
                 <p className={styles.helpText}>
-                  Lighten the agent terminal background from near-black toward
-                  gray.
+                  Lighten the agent terminal background from the app&apos;s
+                  panel color toward gray.
                 </p>
               </>
             )}
@@ -1485,14 +1485,16 @@ function SettingsModal() {
               className={styles.resetButton}
               // Preserve the one-time flags across a reset so it doesn't re-trigger the
               // first-launch agent picker (`onboarded`), re-arm the #367 line-height
-              // migration (`terminalLineHeightMigrated`), or re-arm the #414 terminal
-              // background migration (`terminalBackgroundMigrated`) next launch.
+              // migration (`terminalLineHeightMigrated`), or re-arm the terminal
+              // background-match migration (`terminalBackgroundMatchMigrated`) next
+              // launch.
               onClick={() =>
                 setDraft({
                   ...DEFAULT_SETTINGS,
                   onboarded: saved.onboarded,
                   terminalLineHeightMigrated: saved.terminalLineHeightMigrated,
-                  terminalBackgroundMigrated: saved.terminalBackgroundMigrated,
+                  terminalBackgroundMatchMigrated:
+                    saved.terminalBackgroundMatchMigrated,
                 })
               }
             >

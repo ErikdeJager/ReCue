@@ -231,18 +231,18 @@ let currentTerminalSettings = {
   // before applyTerminalSettings runs.
   lineHeight: 1.0,
   cursorBlink: true,
-  // 25 (#414) = a slightly brightened background; tracks
+  // 0 = the `--terminal-bg` base (now the app's panel surface, `#1e1e2e`); tracks
   // DEFAULT_SETTINGS.terminalBackgroundLightness, used for any xterm created before
-  // applyTerminalSettings runs. 0 is the near-black `--terminal-bg` base.
+  // applyTerminalSettings runs.
   // `resolveTerminalBg` interpolates from the live `--terminal-bg` toward gray by this
   // slider value.
-  background: 25,
+  background: 0,
 };
 
 /** The concrete terminal background hex for the current lightness setting (#390),
- * interpolated from the live `--terminal-bg` token (default near-black `#11111b`)
- * toward the gray endpoint. Read fresh so a theme change to the base still flows
- * through. Falls back to the darkest base outside a DOM (unit tests). */
+ * interpolated from the live `--terminal-bg` token (default `#1e1e2e`, the app's
+ * panel surface) toward the gray endpoint. Read fresh so a theme change to the base
+ * still flows through. Falls back to the darkest base outside a DOM (unit tests). */
 function resolveTerminalBg(): string {
   const base =
     typeof document !== "undefined"
@@ -558,7 +558,8 @@ function createHost(sessionId: string): TerminalHost {
     ...(windowsPty ? { windowsPty } : {}),
     theme: {
       // #390: both the canvas background and the cursor's contrast color follow the
-      // configurable terminal-background lightness (default 0 = `#11111b`, unchanged).
+      // configurable terminal-background lightness (default 0 = `#1e1e2e`, the app's
+      // panel surface).
       background: bg,
       foreground: cssToken("--terminal-fg", "#cdd6f4"),
       cursor: cssToken("--accent", "#fab387"),

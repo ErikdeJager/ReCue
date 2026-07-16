@@ -19,7 +19,7 @@
 
 :root {
   /* --- Surface roles (UI v2 §2.1, Catppuccin Mocha) --- */
-  --surface-crust: #11111b; /* Crust — content stage, terminal + inset wells */
+  --surface-crust: #11111b; /* Crust — content stage + inset wells */
   --surface-mantle: #181825; /* Mantle — chrome: sidebar, rail, tab-strip zone */
   --surface-base: #1e1e2e; /* Base — panels, cards, menus, modals */
   --surface-0: #313244; /* Surface0 — selection/hover fills, thumbs, chips */
@@ -34,9 +34,12 @@
   --bg-hover: var(--surface-1);
   --content-bg: var(--surface-crust);
 
-  /* Terminal literals — deliberately NOT var(--surface-crust): the light block
-     overrides --surface-crust, and the terminal stays dark in both themes (#333). */
-  --terminal-bg: #11111b; /* Crust — deep bg so terminal content stands out */
+  /* Terminal literals — deliberately NOT var(--surface-base): the light block
+     overrides the surface tokens, and the terminal stays dark in both themes (#333).
+     #1e1e2e is Catppuccin Mocha Base, the canonical Catppuccin terminal background;
+     contrast with --terminal-fg #cdd6f4 ≈ 11.3:1. */
+  --terminal-bg: #1e1e2e; /* Base — matches --surface-base (panels/cards) so
+     terminals blend with the app */
   --terminal-fg: #cdd6f4; /* terminal text — stays light in both themes (#333) */
   --terminal-selection: rgba(88, 91, 112, 0.5); /* Surface2 — text selection */
   /* Terminal ANSI palette (UI v2 task 379 — xterm theme fed from tokens). Literals,

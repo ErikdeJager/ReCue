@@ -477,8 +477,9 @@ export interface Settings {
   terminalLineHeight: number;
   /** xterm cursor blink. */
   terminalCursorBlink: boolean;
-  /** Terminal background lightness (#390): 0 = near-black `#11111b` (default, today's
-   * look byte-for-byte), 100 = a soft gray. Lightens ONLY the agent/shell terminal
+  /** Terminal background lightness (#390): 0 = `#1e1e2e` (default — exactly the
+   * app's panel surface, `--surface-base` dark, so terminals blend with the app),
+   * 100 = a soft gray. Lightens ONLY the agent/shell terminal
    * background (xterm canvas + its padding frame); terminal-only and dark in both
    * themes, so it never touches the light/dark theme toggle or non-terminal surfaces. */
   terminalBackgroundLightness: number;
@@ -630,12 +631,15 @@ export interface Settings {
    *  (lacking the key) is eligible for the one-time bump; set true once so a user who
    *  later re-picks 1.2 is never re-migrated. Mirrors `onboarded`. */
   terminalLineHeightMigrated: boolean;
-  /** One-time #414 migration marker: whether the terminal background-lightness
-   *  default raise (0 → 25) has been applied for this install. Defaults false so an
-   *  older blob (lacking the key) is eligible for the one-time bump of an explicit
-   *  legacy 0; set true once so a user who later re-picks 0 is never re-migrated.
-   *  Mirrors `terminalLineHeightMigrated`. */
-  terminalBackgroundMigrated: boolean;
+  /** One-time migration marker: whether the terminal background-lightness default
+   *  drop (the #414-era 25 → 0, now that `--terminal-bg` matches the app's panel
+   *  surface) has been applied for this install. Defaults false so an older blob
+   *  (lacking the key) is eligible for the one-time bump of an explicit legacy 25;
+   *  set true once so a user who later re-picks 25 is never re-migrated. Deliberately
+   *  a NEW flag — #414-era installs already have the retired
+   *  `terminalBackgroundMigrated: true` stamped (the stale key rides along harmlessly
+   *  in persisted blobs). Mirrors `terminalLineHeightMigrated`. */
+  terminalBackgroundMatchMigrated: boolean;
   // Editor ("Open in editor")
   /** The editor "Open in editor" (⌘O, menus) launches: a catalog id from
    * `src/editors.ts` (`"vscode"`, `"idea"`, …), `"custom"` (→ `customEditorCommand`),

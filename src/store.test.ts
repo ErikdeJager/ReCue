@@ -2532,39 +2532,40 @@ describe("mergeSettings (#100/#176)", () => {
     expect(merged.terminalLineHeightMigrated).toBe(true);
   });
 
-  it("defaults the terminal background lightness to 25 and the migration flag to false (#414)", () => {
-    expect(DEFAULT_SETTINGS.terminalBackgroundLightness).toBe(25);
-    expect(DEFAULT_SETTINGS.terminalBackgroundMigrated).toBe(false);
+  it("defaults the terminal background lightness to 0 (match the app panel) and the migration flag to false", () => {
+    expect(DEFAULT_SETTINGS.terminalBackgroundLightness).toBe(0);
+    expect(DEFAULT_SETTINGS.terminalBackgroundMatchMigrated).toBe(false);
   });
 
-  it("resolves the terminal background lightness to 25 for a brand-new / pre-#390 blob (#414)", () => {
-    // A brand-new install (empty blob) takes the 25 default.
-    expect(mergeSettings({}).terminalBackgroundLightness).toBe(25);
-    // A pre-#390 blob (no key at all) also back-fills to 25.
+  it("resolves the terminal background lightness to 0 for a brand-new / pre-#390 blob", () => {
+    // A brand-new install (empty blob) takes the 0 default.
+    expect(mergeSettings({}).terminalBackgroundLightness).toBe(0);
+    // A pre-#390 blob (no key at all) also back-fills to 0.
     const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
     delete old.terminalBackgroundLightness;
     expect(
       mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
         .terminalBackgroundLightness,
-    ).toBe(25);
+    ).toBe(0);
   });
 
-  it("back-fills terminalBackgroundMigrated to false for an older blob and preserves a stored value/flag (#414)", () => {
-    // A pre-#414 blob (no migration key) upgrades cleanly to false so it's still
+  it("back-fills terminalBackgroundMatchMigrated to false for an older blob and preserves a stored value/flag", () => {
+    // An older blob (no migration key — incl. #414-era blobs, which carry only the
+    // retired `terminalBackgroundMigrated`) upgrades cleanly to false so it's still
     // eligible for the one-time bump.
     const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
-    delete old.terminalBackgroundMigrated;
+    delete old.terminalBackgroundMatchMigrated;
     expect(
       mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
-        .terminalBackgroundMigrated,
+        .terminalBackgroundMatchMigrated,
     ).toBe(false);
     // A persisted background value + set flag win over the defaults.
     const merged = mergeSettings({
       terminalBackgroundLightness: 50,
-      terminalBackgroundMigrated: true,
+      terminalBackgroundMatchMigrated: true,
     });
     expect(merged.terminalBackgroundLightness).toBe(50);
-    expect(merged.terminalBackgroundMigrated).toBe(true);
+    expect(merged.terminalBackgroundMatchMigrated).toBe(true);
   });
 
   it("defaults the UI v2 settings (task 373): backgroundAnimation on, densePanels off, capAgentWidth on", () => {
@@ -2718,42 +2719,42 @@ describe("migrateTerminalLineHeight (#367)", () => {
   });
 });
 
-describe("migrateTerminalBackground (#414)", () => {
-  it("bumps an explicit legacy 0 up to 25 and stamps the flag (changed)", () => {
+describe("migrateTerminalBackground (the inverse of #414's 0 → 25 bump)", () => {
+  it("bumps an explicit #414-era 25 down to 0 and stamps the flag (changed)", () => {
     const before = {
       ...DEFAULT_SETTINGS,
-      terminalBackgroundLightness: 0,
-      terminalBackgroundMigrated: false,
+      terminalBackgroundLightness: 25,
+      terminalBackgroundMatchMigrated: false,
     };
     const { settings, changed } = migrateTerminalBackground(before);
-    expect(settings.terminalBackgroundLightness).toBe(25);
-    expect(settings.terminalBackgroundMigrated).toBe(true);
+    expect(settings.terminalBackgroundLightness).toBe(0);
+    expect(settings.terminalBackgroundMatchMigrated).toBe(true);
     expect(changed).toBe(true);
   });
 
-  it("leaves any other chosen value unchanged but still stamps the flag (not changed)", () => {
-    for (const value of [5, 10, 25, 50, 100]) {
+  it("leaves 0 and any other chosen value unchanged but still stamps the flag (not changed)", () => {
+    for (const value of [0, 5, 10, 50, 100]) {
       const before = {
         ...DEFAULT_SETTINGS,
         terminalBackgroundLightness: value,
-        terminalBackgroundMigrated: false,
+        terminalBackgroundMatchMigrated: false,
       };
       const { settings, changed } = migrateTerminalBackground(before);
       expect(settings.terminalBackgroundLightness).toBe(value);
-      expect(settings.terminalBackgroundMigrated).toBe(true);
+      expect(settings.terminalBackgroundMatchMigrated).toBe(true);
       expect(changed).toBe(false);
     }
   });
 
-  it("never re-runs once the flag is set — a re-picked 0 is preserved", () => {
+  it("never re-runs once the flag is set — a re-picked 25 is preserved", () => {
     const before = {
       ...DEFAULT_SETTINGS,
-      terminalBackgroundLightness: 0,
-      terminalBackgroundMigrated: true,
+      terminalBackgroundLightness: 25,
+      terminalBackgroundMatchMigrated: true,
     };
     const { settings, changed } = migrateTerminalBackground(before);
     expect(settings).toBe(before); // untouched (same reference)
-    expect(settings.terminalBackgroundLightness).toBe(0);
+    expect(settings.terminalBackgroundLightness).toBe(25);
     expect(changed).toBe(false);
   });
 });
