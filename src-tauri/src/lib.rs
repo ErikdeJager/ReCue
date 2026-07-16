@@ -336,6 +336,12 @@ pub fn run() {
                 {
                     container::kill_all_recue_containers();
                 }
+                // Persisted shell terminals (#72) can't resume — respawn them ONCE per app, in
+                // Rust (task 432): the frontend no longer does this at boot, so N windows can
+                // never double-spawn (= kill+replace) the same panel ids. Before the agent
+                // resume pass: shell spawns are cheap, and shells were previously available the
+                // moment the main window booted. Idempotent — already-registered ids are skipped.
+                boot::respawn_shell_terminals(&resume);
                 boot::resume_persisted_sessions(resume.clone());
                 // Close the Rust #63 boot window (task 431) a fixed backstop after the
                 // resume pass returns — mirroring the frontend's `RECONNECT_BACKSTOP_MS`

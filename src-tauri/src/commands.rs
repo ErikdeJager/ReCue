@@ -508,8 +508,10 @@ fn spawn_session_blocking(
 /// Spawn a plain shell **terminal item** (#72) in `cwd` under the caller-chosen
 /// `id` (the Overview panel's id). Unlike `spawn_session` this is not a `claude`
 /// agent and is **not** persisted in `sessions.json` — the item lives in
-/// `overview_panels` (frontend) and a fresh shell is respawned on boot. Kill it
-/// with `kill_session` (the PTY registry is shared).
+/// `overview_panels` (frontend) and a fresh shell is respawned **by the Rust boot
+/// sequence** (`boot::respawn_shell_terminals`, task 432); this command remains
+/// the runtime create/Restart path. Kill it with `kill_session` (the PTY registry
+/// is shared).
 ///
 /// Async + off the main thread (#353) — same `spawn_with_id` cost as `spawn_session`.
 #[tauri::command]
