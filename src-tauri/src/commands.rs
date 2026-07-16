@@ -55,6 +55,23 @@ pub struct StatePayload {
     pub busy: bool,
 }
 
+/// Payload for `session://size` (task 426): the authoritative PTY grid after
+/// multi-window smallest-wins arbitration. Broadcast on change and on attach.
+#[derive(Clone, Serialize)]
+pub struct SizePayload {
+    pub id: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Return of `attach_terminal` (task 426): the effective grid the attaching
+/// host must render.
+#[derive(Clone, Serialize)]
+pub struct GridPayload {
+    pub cols: u16,
+    pub rows: u16,
+}
+
 /// Payload for the `session://name` event (#97): claude's latest auto-title for a
 /// session, applied as the display label when the user hasn't set a custom name.
 #[derive(Clone, Serialize)]
@@ -730,6 +747,67 @@ pub fn resize_pty(
     rows: u16,
 ) -> Result<(), SessionError> {
     manager.resize_pty(&id, cols, rows)
+}
+
+/// Attach a window's terminal view to a session (multi-window card 1/16, task
+/// 426) and return the effective grid the attaching host must render — the
+/// smallest-wins arbitration over every attached view (`terminal_views`). No
+/// frontend caller yet; later epic cards migrate the terminal pool onto it.
+///
+/// **Stays synchronous on purpose (#353)** — like `resize_pty`, racing async
+/// ops could apply sizes out of order, leaving the PTY on a stale grid.
+/// Infallible: the registry lock recovers from poisoning (the `kill_all`
+/// precedent) and a missing/exited session's resize is best-effort.
+/// `window_label` is an explicit parameter (not derived from the invoking
+/// `Window`) because later epic cards (15/16 targeted delivery) address views
+/// cross-window.
+#[tauri::command]
+pub fn attach_terminal(
+    manager: State<'_, SessionManager>,
+    views: State<'_, crate::terminal_views::TerminalViews>,
+    id: String,
+    window_label: String,
+    cols: u16,
+    rows: u16,
+) -> GridPayload {
+    let (cols, rows) = views.attach(&manager, &id, &window_label, cols, rows);
+    GridPayload { cols, rows }
+}
+
+/// Detach a window's terminal view from a session (multi-window card 1/16,
+/// task 426): its desired size stops clamping the PTY, which grows back to the
+/// remaining views' minimum. No frontend caller yet.
+///
+/// **Stays synchronous on purpose (#353)** and infallible — see
+/// `attach_terminal`; `window_label` is explicit for the same reason.
+#[tauri::command]
+pub fn detach_terminal(
+    manager: State<'_, SessionManager>,
+    views: State<'_, crate::terminal_views::TerminalViews>,
+    id: String,
+    window_label: String,
+) {
+    views.detach(&manager, &id, &window_label);
+}
+
+/// Update an **already-attached** view's desired grid (multi-window card 1/16,
+/// task 426) — the multi-window analogue of `resize_pty`'s ResizeObserver
+/// cadence. A proposal for a never-attached (or already-purged) view is a
+/// no-op, so a late resize racing a window close can't resurrect a zombie view
+/// that would clamp the PTY forever. No frontend caller yet.
+///
+/// **Stays synchronous on purpose (#353)** and infallible — see
+/// `attach_terminal`; `window_label` is explicit for the same reason.
+#[tauri::command]
+pub fn propose_terminal_size(
+    manager: State<'_, SessionManager>,
+    views: State<'_, crate::terminal_views::TerminalViews>,
+    id: String,
+    window_label: String,
+    cols: u16,
+    rows: u16,
+) {
+    views.propose(&manager, &id, &window_label, cols, rows);
 }
 
 /// Restart a persisted session under the same id (#63) — the exit overlay's Restart.

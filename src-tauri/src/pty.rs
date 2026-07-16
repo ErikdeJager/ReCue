@@ -189,6 +189,16 @@ pub enum SessionEvent {
         id: String,
         forkable: bool,
     },
+    /// The authoritative multi-window PTY grid (task 426): the effective
+    /// `(cols, rows)` after smallest-wins arbitration over every attached
+    /// terminal view (`terminal_views`). Emitted **only** by the terminal-view
+    /// arbiter via [`SessionManager::broadcast_size`] — never by the reader /
+    /// monitor threads — and forwarded as `session://size`.
+    Size {
+        id: String,
+        cols: u16,
+        rows: u16,
+    },
 }
 
 /// Cap on a single coalesced `Output` payload (#346): a run at/over this size is
@@ -1235,6 +1245,22 @@ impl SessionManager {
             .lock()
             .map(|guard| guard.clone())
             .map_err(|_| SessionError::Io("event sender lock poisoned".to_string()))
+    }
+
+    /// Broadcast the authoritative multi-window PTY grid for a session (task 426):
+    /// send one [`SessionEvent::Size`] on the event channel, forwarded to the
+    /// frontend as `session://size`. Called **only** by the terminal-view arbiter
+    /// (`terminal_views`) — never by the reader/monitor threads. Best-effort,
+    /// infallible, and non-blocking: a poisoned sender lock or a dropped forwarder
+    /// (shutdown) is silently ignored.
+    pub fn broadcast_size(&self, id: &str, cols: u16, rows: u16) {
+        if let Ok(tx) = self.events.lock() {
+            let _ = tx.send(SessionEvent::Size {
+                id: id.to_string(),
+                cols,
+                rows,
+            });
+        }
     }
 }
 
@@ -2496,6 +2522,7 @@ mod tests {
                 Ok(SessionEvent::State { .. }) => {}
                 Ok(SessionEvent::Name { .. }) => {}
                 Ok(SessionEvent::Forkable { .. }) => {}
+                Ok(SessionEvent::Size { .. }) => {}
                 Err(_) => panic!("timed out waiting for session events"),
             }
         };
@@ -3216,6 +3243,39 @@ mod tests {
     #[test]
     fn coalesce_empty_is_empty() {
         assert_eq!(coalesce_output_events(vec![]), vec![]);
+    }
+
+    #[test]
+    fn coalesce_passes_size_through_and_splits_an_output_run() {
+        // Task 426: `Size` rides the `other =>` arm like any non-Output event — it
+        // survives unmerged, in order, and splits a contiguous Output run (the two
+        // chunks around it would otherwise coalesce into one).
+        let size = SessionEvent::Size {
+            id: "a".into(),
+            cols: 80,
+            rows: 24,
+        };
+        let events = vec![out_ev("a", b"he", 2), size.clone(), out_ev("a", b"llo", 5)];
+        assert_eq!(coalesce_output_events(events.clone()), events);
+        // Sanity: without the Size in between, the same chunks DO merge.
+        let merged = coalesce_output_events(vec![out_ev("a", b"he", 2), out_ev("a", b"llo", 5)]);
+        assert_eq!(merged, vec![out_ev("a", b"hello", 5)]);
+    }
+
+    #[test]
+    fn broadcast_size_delivers_exactly_one_size_event() {
+        let (mgr, rx) = manager();
+        mgr.broadcast_size("s1", 120, 40);
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+            SessionEvent::Size {
+                id: "s1".into(),
+                cols: 120,
+                rows: 40,
+            }
+        );
+        // Exactly one: nothing else is queued.
+        assert!(rx.try_recv().is_err());
     }
 
     // --- Output hot-path throughput benchmark (#358) ---

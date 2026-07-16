@@ -24,6 +24,7 @@ mod path_env;
 mod pty;
 mod skills;
 mod store;
+mod terminal_views;
 mod title;
 mod usage;
 
@@ -130,6 +131,10 @@ pub fn run() {
             // those events to the frontend as Tauri events.
             let (tx, rx) = mpsc::channel::<SessionEvent>();
             app.manage(SessionManager::new(tx));
+            // Terminal-view registry (task 426): the multi-window smallest-wins PTY
+            // size arbiter. Starts empty and stays empty until a frontend caller
+            // attaches views (later epic cards), so it is inert on a normal run.
+            app.manage(terminal_views::TerminalViews::default());
 
             // Load persisted sessions + recents from the app-data dir.
             let store_path = app
@@ -267,6 +272,15 @@ pub fn run() {
                                     commands::ForkablePayload { id, forkable },
                                 )
                             }
+                            SessionEvent::Size { id, cols, rows } => {
+                                // The authoritative multi-window PTY grid (task 426),
+                                // emitted only by the terminal-view arbiter. No frontend
+                                // listener yet (later epic cards).
+                                handle.emit(
+                                    "session://size",
+                                    commands::SizePayload { id, cols, rows },
+                                )
+                            }
                         };
                     }
                 }
@@ -321,6 +335,9 @@ pub fn run() {
             commands::fork_session,
             commands::write_stdin,
             commands::resize_pty,
+            commands::attach_terminal,
+            commands::detach_terminal,
+            commands::propose_terminal_size,
             commands::kill_session,
             commands::rename_session,
             commands::set_session_auto_continue,
@@ -429,22 +446,43 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|handle, event| {
-            // Clean shutdown (#31): kill every child PTY when the app exits so no
-            // orphan `claude` processes are left behind.
-            if let tauri::RunEvent::Exit = event {
-                // Dev-container sweep: a PTY kill only reaches the docker *client*,
-                // so the containers themselves are killed via the docker CLI (by
-                // label), in parallel with kill_all — started FIRST so its
-                // `docker ps` round-trip overlaps kill_all's unix grace sleep. Safe
-                // w.r.t. the `silent` semantics: kill_all sets every session's
-                // silent flag in its first loop (microseconds) before any docker
-                // kill can land an exit. Bounded wait; resolves instantly when no
-                // container session ever ran (and the boot reap catches stragglers).
-                let sweep = container::spawn_kill_all_sweep();
-                handle.state::<SessionManager>().kill_all();
-                let _ = sweep.recv_timeout(std::time::Duration::from_millis(
-                    container::CONTAINER_SWEEP_BOUND_MS,
-                ));
+            match event {
+                // Clean shutdown (#31): kill every child PTY when the app exits so no
+                // orphan `claude` processes are left behind.
+                tauri::RunEvent::Exit => {
+                    // Dev-container sweep: a PTY kill only reaches the docker *client*,
+                    // so the containers themselves are killed via the docker CLI (by
+                    // label), in parallel with kill_all — started FIRST so its
+                    // `docker ps` round-trip overlaps kill_all's unix grace sleep. Safe
+                    // w.r.t. the `silent` semantics: kill_all sets every session's
+                    // silent flag in its first loop (microseconds) before any docker
+                    // kill can land an exit. Bounded wait; resolves instantly when no
+                    // container session ever ran (and the boot reap catches stragglers).
+                    let sweep = container::spawn_kill_all_sweep();
+                    handle.state::<SessionManager>().kill_all();
+                    let _ = sweep.recv_timeout(std::time::Duration::from_millis(
+                        container::CONTAINER_SWEEP_BOUND_MS,
+                    ));
+                }
+                // Multi-window (task 426): a closing window (any kind — main,
+                // canvas-*, future app windows) drops ALL of its terminal views so
+                // its desired size can never clamp a PTY it no longer renders.
+                // `try_state`: never panic during teardown ordering. (The per-window
+                // `on_window_event` in `open_canvas_window` keeps its #84 re-dock
+                // broadcast; this global hook is additive and label-generic.)
+                tauri::RunEvent::WindowEvent {
+                    label,
+                    event: tauri::WindowEvent::Destroyed,
+                    ..
+                } => {
+                    if let (Some(views), Some(manager)) = (
+                        handle.try_state::<terminal_views::TerminalViews>(),
+                        handle.try_state::<SessionManager>(),
+                    ) {
+                        views.purge_window(&manager, &label);
+                    }
+                }
+                _ => {}
             }
         });
 }
