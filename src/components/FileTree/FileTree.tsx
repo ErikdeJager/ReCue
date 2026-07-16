@@ -137,6 +137,13 @@ function FileTree({ repoPath }: { repoPath: string }) {
   // Children keyed by directory path ("" = repo root); a missing key = not yet loaded.
   const [children, setChildren] = useState<Record<string, DirEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Linked-worktree roots the user explicitly opened via "Show worktree
+  // contents…" — per worktree, per tree instance, ephemeral like `expanded`
+  // (reset on repo change / Refresh): a worktree is its own checkout, so its
+  // contents stay behind an explicit gate wherever it lives in this repo.
+  const [revealedWorktrees, setRevealedWorktrees] = useState<Set<string>>(
+    new Set(),
+  );
   const [menu, setMenu] = useState<FileMenu | null>(null);
   // The inline menu step + the New-folder name draft (#267); reset whenever the menu
   // opens or closes so a prior input never leaks into the next right-click.
@@ -182,6 +189,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
     inFlight.current = new Set();
     setChildren({});
     setExpanded(new Set());
+    setRevealedWorktrees(new Set());
     load("");
   }, [repoPath, nonce, load]);
 
@@ -328,14 +336,16 @@ function FileTree({ repoPath }: { repoPath: string }) {
     };
   }, [revealTarget, children, expanded]);
 
-  const toggle = (path: string) => {
+  const toggle = (path: string, gated = false) => {
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(path)) {
         next.delete(path);
       } else {
         next.add(path);
-        if (children[path] === undefined) load(path); // lazy first-open fetch
+        // Lazy first-open fetch — except a still-gated worktree root: its
+        // contents load only when "Show worktree contents…" is clicked.
+        if (!gated && children[path] === undefined) load(path);
       }
       return next;
     });
@@ -486,6 +496,12 @@ function FileTree({ repoPath }: { repoPath: string }) {
     const rows = entries.map((node) => {
       if (node.is_dir) {
         const isOpen = expanded.has(node.path);
+        // A linked-worktree root (its `.git` is a pointer file): the folder row
+        // renders in place — wherever the worktree lives — but its contents stay
+        // behind an explicit per-worktree "Show worktree contents…" gate (it is
+        // its own checkout; search/picker exclude it unconditionally backend-side).
+        const isGatedWorktree =
+          node.worktree === true && !revealedWorktrees.has(node.path);
         const Chevron = isOpen ? ChevronDown : ChevronRight;
         const FolderIcon = isOpen ? FolderOpen : Folder;
         // A folder is tinted in its highest-severity descendant's color (#252) — so a
@@ -499,15 +515,20 @@ function FileTree({ repoPath }: { repoPath: string }) {
         // OS-drop target (#253): a drop on this folder row lands inside it; highlight
         // it while the drag hovers here.
         const drop = dropTarget === node.path ? ` ${styles.dropTarget}` : "";
+        const wtDim = node.worktree ? ` ${styles.worktreeDim}` : "";
         return (
           <div key={node.path}>
             <button
               type="button"
-              className={`${styles.row}${cls ? ` ${cls}` : ""}${drop}`}
+              className={`${styles.row}${cls ? ` ${cls}` : ""}${drop}${wtDim}`}
               style={indent}
-              onClick={() => toggle(node.path)}
+              onClick={() => toggle(node.path, isGatedWorktree)}
               onContextMenu={(event) => openMenu(event, node.path, true)}
-              title={node.path}
+              title={
+                node.worktree
+                  ? `${node.path} — a git worktree (its own checkout)`
+                  : node.path
+              }
               data-filetree-droptarget={node.path}
             >
               <Chevron
@@ -523,8 +544,31 @@ function FileTree({ repoPath }: { repoPath: string }) {
                 aria-hidden
               />
               <span className={styles.name}>{node.name}</span>
+              {node.worktree && (
+                <span className={styles.worktreeChip}>worktree</span>
+              )}
             </button>
-            {isOpen ? renderLevel(node.path, depth + 1) : null}
+            {isOpen ? (
+              isGatedWorktree ? (
+                <button
+                  type="button"
+                  className={styles.gateRow}
+                  style={{ paddingLeft: `${8 + (depth + 1) * 14}px` }}
+                  onClick={() => {
+                    setRevealedWorktrees((prev) => {
+                      const next = new Set(prev);
+                      next.add(node.path);
+                      return next;
+                    });
+                    if (children[node.path] === undefined) load(node.path);
+                  }}
+                >
+                  Show worktree contents…
+                </button>
+              ) : (
+                renderLevel(node.path, depth + 1)
+              )
+            ) : null}
           </div>
         );
       }

@@ -140,8 +140,14 @@ describe("focusRefreshKinds (#359)", () => {
     expect(focusRefreshKinds(1_000_000, 0)).toEqual([...ALL_GIT_REFRESH_KINDS]);
   });
 
-  it("downgrades to the cheap branch+ahead/behind pair inside the throttle window", () => {
-    expect(focusRefreshKinds(1_000, 500)).toEqual(["branches", "aheadBehind"]);
+  it("downgrades to the cheap branch+ahead/behind+worktrees trio inside the throttle window", () => {
+    // `worktrees` rides the cheap set so an agent's mid-turn `git worktree add`
+    // surfaces within one 15 s poll tick, not the 30 s full backstop.
+    expect(focusRefreshKinds(1_000, 500)).toEqual([
+      "branches",
+      "aheadBehind",
+      "worktrees",
+    ]);
     // Exactly at the boundary the full volley is allowed again.
     expect(focusRefreshKinds(FOCUS_FULL_REFRESH_MIN_MS + 500, 500)).toEqual([
       ...ALL_GIT_REFRESH_KINDS,
@@ -149,6 +155,7 @@ describe("focusRefreshKinds (#359)", () => {
     expect(focusRefreshKinds(FOCUS_FULL_REFRESH_MIN_MS + 499, 500)).toEqual([
       "branches",
       "aheadBehind",
+      "worktrees",
     ]);
   });
 });

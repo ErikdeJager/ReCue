@@ -1208,6 +1208,29 @@
   font-size: var(--fs-micro);
 }
 
+/* `kept` variant: a ReCue-managed worktree kept for its uncommitted changes (the
+   dirty-kept orphan) — the awaiting (yellow) status token flags "there's un-merged
+   work in here", never the accent (statuses stay on --status-*). */
+.worktreeBadgeKept {
+  border-color: var(--status-awaiting);
+  color: var(--status-awaiting);
+}
+
+/* Idle (presence-driven) worktree group: exists on disk, nothing open in it —
+   dimmed like the FileTree's gitignored rows (#270), token-only. */
+.worktreeIdle {
+  opacity: 0.62;
+}
+
+/* Static "in use" hint: Claude Code holds a `git worktree lock` while an agent
+   actively works in the worktree. Non-interactive, running (blue) status token. */
+.lockedHint {
+  flex-shrink: 0;
+  color: var(--status-running);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+}
+
 .worktreeIcon {
   flex-shrink: 0;
 }

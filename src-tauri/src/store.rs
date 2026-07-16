@@ -103,6 +103,14 @@ pub struct PersistedSession {
     /// `worktree_parent`'s serde shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_image: Option<String>,
+    /// The directory the agent is CURRENTLY working in, per claude's own session
+    /// log (every JSONL line carries a `cwd`; `EnterWorktree` / `/cd` move it) —
+    /// the relocation signal that re-parents the sidebar row under a worktree.
+    /// Updated on the #97 title-worker cadence (claude-only), persisted so the
+    /// grouping is right immediately on boot; the next burst re-read refreshes
+    /// it. `None` for non-claude agents and older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_cwd: Option<String>,
 }
 
 /// A user-added Overview panel (a non-agent column), persisted per repo (#38).
@@ -447,6 +455,29 @@ impl Store {
         let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
             Some(session) if session.forkable != forkable => {
                 session.forkable = forkable;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.persist(&guard)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Set a session's current working directory (the agent-relocation signal) and
+    /// persist **only on change** — the title worker re-reads it on every burst
+    /// offset, so this avoids rewriting the file when the agent hasn't moved. A
+    /// no-op for an unknown id.
+    pub fn set_current_cwd(&self, id: &str, cwd: Option<String>) -> io::Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
+            Some(session) if session.current_cwd != cwd => {
+                session.current_cwd = cwd;
                 true
             }
             _ => false,
@@ -932,6 +963,7 @@ mod tests {
             auto_continue_disabled: false,
             watch: false,
             container_image: None,
+            current_cwd: None,
         }
     }
 
@@ -1004,6 +1036,35 @@ mod tests {
             reloaded.session("c").unwrap().container_image.as_deref(),
             Some("recue-agent:latest")
         );
+        let _ = fs::remove_file(&path);
+    }
+
+    /// The agent-relocation `current_cwd` shares the `container_image` serde shape:
+    /// absent on old records (→ `None`), skipped on write while unset, and
+    /// `set_current_cwd` persists on change only.
+    #[test]
+    fn current_cwd_defaults_none_and_persists_on_change() {
+        let legacy: PersistedSession = serde_json::from_str(
+            r#"{"id":"a","claude_session_id":"a","repo_path":"/r","name":null,"created_at":0}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.current_cwd, None);
+        let plain = serde_json::to_string(&record("a", "/repo/a")).unwrap();
+        assert!(!plain.contains("current_cwd"));
+
+        let path = temp_path("current-cwd");
+        let store = Store::load(&path);
+        store.add_session(record("a", "/repo/a")).unwrap();
+        store
+            .set_current_cwd("a", Some("/repo/a/.claude/worktrees/x".into()))
+            .unwrap();
+        let reloaded = Store::load(&path);
+        assert_eq!(
+            reloaded.session("a").unwrap().current_cwd.as_deref(),
+            Some("/repo/a/.claude/worktrees/x")
+        );
+        // Unknown id → no-op, no error.
+        store.set_current_cwd("ghost", Some("/x".into())).unwrap();
         let _ = fs::remove_file(&path);
     }
 
