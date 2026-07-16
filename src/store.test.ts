@@ -13,7 +13,6 @@ import {
   dedupeBranchLabels,
   displayZoom,
   isClaudeActive,
-  isCleanExit,
   kanbanColumnColor,
   MAX_DISPLAY_SIZE,
   mergeRepoOrder,
@@ -34,7 +33,6 @@ import {
   sidebarRepos,
   useStore,
   versionIncreased,
-  worktreeHasItems,
 } from "./store";
 import type {
   AgentInfo,
@@ -609,15 +607,17 @@ describe("app store", () => {
     expect(useStore.getState().sessions[0]?.exitedCode).toBeUndefined();
   });
 
-  it("forgetExitedSession drops a clean-exited agent + toasts 'Agent exited' (#63)", async () => {
+  it("applySessionForgotten drops the agent + toasts 'Agent exited' when targeted (task 431)", () => {
     useStore.setState({
       sessions: [session("s1"), session("s2")],
       selectedId: "s1",
       view: "canvas",
     });
-    // ipc.killSession rejects without a Tauri host and is caught; the local
-    // forget still runs (kill + forget locally regardless).
-    await useStore.getState().forgetExitedSession("s1");
+    // Rust already forgot the record (#63); the event just converges this window.
+    // The test env's WINDOW_LABEL is "main", so this payload targets us.
+    useStore
+      .getState()
+      .applySessionForgotten({ id: "s1", toast_window: "main" });
     expect(useStore.getState().sessions.map((s) => s.id)).toEqual(["s2"]);
     // The selected agent vanishing returns to Overview (#75).
     expect(useStore.getState().selectedId).toBeNull();
@@ -625,6 +625,45 @@ describe("app store", () => {
     expect(useStore.getState().toasts.map((t) => t.message)).toContain(
       "Agent exited",
     );
+  });
+
+  it("applySessionForgotten drops without toasting when another window is targeted", () => {
+    useStore.setState({ sessions: [session("s1")] });
+    useStore
+      .getState()
+      .applySessionForgotten({ id: "s1", toast_window: "canvas-abc" });
+    // State still converges in every window; only the targeted one toasts.
+    expect(useStore.getState().sessions).toHaveLength(0);
+    expect(useStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("applySessionForgotten is idempotent when the roster drop already removed the id", () => {
+    // The `sessions://changed` roster broadcast precedes `session://forgotten`
+    // (task 428/431) — dropSession on an unknown id is a filter no-op.
+    useStore.setState({ sessions: [session("s2")] });
+    useStore
+      .getState()
+      .applySessionForgotten({ id: "s1", toast_window: "main" });
+    expect(useStore.getState().sessions.map((s) => s.id)).toEqual(["s2"]);
+    // The targeted window still toasts once (the courtesy notification).
+    expect(useStore.getState().toasts.map((t) => t.message)).toContain(
+      "Agent exited",
+    );
+  });
+
+  it("applyWorktreeKept warns only in the targeted window (task 431/#74)", () => {
+    useStore
+      .getState()
+      .applyWorktreeKept({ dest: "/wt/feat", toast_window: "main" });
+    expect(useStore.getState().toasts.at(-1)).toMatchObject({
+      message: "Worktree kept — it has uncommitted changes",
+      tone: "error",
+    });
+    useStore.setState({ toasts: [] });
+    useStore
+      .getState()
+      .applyWorktreeKept({ dest: "/wt/feat", toast_window: "canvas-abc" });
+    expect(useStore.getState().toasts).toHaveLength(0);
   });
 
   it("restartSession resolves false (and toasts an error) when resume fails (#63)", async () => {
@@ -1662,156 +1701,52 @@ describe("applyRecurringFire (#300)", () => {
   });
 });
 
-describe("worktreeHasItems (#199)", () => {
+// The #199 `worktreeHasItems` and #63 `isCleanExit` batteries moved to Rust with
+// their implementations (task 431 — `commands.rs` unit tests): the ref-count check
+// and the clean-exit decision are backend-owned now, decided once per app.
+
+describe("cleanupWorktreeIfEmpty outcome mapping (task 431)", () => {
+  const parent = "/work/parent-repo";
   const dest = "/data/worktrees/repo-id/feat";
-  const empty = {
-    sessions: [],
-    overviewPanels: {},
-    schedules: [],
-    recurrings: [],
-  };
 
-  it("is false for a worktree with no items (→ safe to remove)", () => {
-    expect(worktreeHasItems(empty, dest)).toBe(false);
+  it("'keptDirty' → the #74 warning toast (acting window)", async () => {
+    const spy = vi
+      .spyOn(ipc, "cleanupWorktreeIfEmpty")
+      .mockResolvedValue("keptDirty");
+    await useStore.getState().cleanupWorktreeIfEmpty(parent, dest);
+    expect(spy).toHaveBeenCalledWith(parent, dest);
+    expect(useStore.getState().toasts.at(-1)).toMatchObject({
+      message: "Worktree kept — it has uncommitted changes",
+      tone: "error",
+    });
+    spy.mockRestore();
   });
 
-  it("counts an agent whose repoPath is the worktree (incl. an exited-but-shown one)", () => {
-    // The guard counts ANY session at this folder — including an exited agent still
-    // shown with a Restart overlay (the old guard only counted live agents).
-    expect(
-      worktreeHasItems({ ...empty, sessions: [{ repoPath: dest }] }, dest),
-    ).toBe(true);
+  it("'removed' → no toast (the quiet success path)", async () => {
+    const spy = vi
+      .spyOn(ipc, "cleanupWorktreeIfEmpty")
+      .mockResolvedValue("removed");
+    await useStore.getState().cleanupWorktreeIfEmpty(parent, dest);
+    expect(useStore.getState().toasts).toHaveLength(0);
+    spy.mockRestore();
   });
 
-  it("counts an overview panel keyed to the worktree folder", () => {
-    expect(
-      worktreeHasItems(
-        { ...empty, overviewPanels: { [dest]: [{ id: "p1" }] } },
-        dest,
-      ),
-    ).toBe(true);
-    // An empty panel list does not count.
-    expect(
-      worktreeHasItems({ ...empty, overviewPanels: { [dest]: [] } }, dest),
-    ).toBe(false);
+  it("'inUse' → silent keep, like the old has-items early return", async () => {
+    const spy = vi
+      .spyOn(ipc, "cleanupWorktreeIfEmpty")
+      .mockResolvedValue("inUse");
+    await useStore.getState().cleanupWorktreeIfEmpty(parent, dest);
+    expect(useStore.getState().toasts).toHaveLength(0);
+    spy.mockRestore();
   });
 
-  it("counts a scheduled session targeting the worktree folder", () => {
-    expect(
-      worktreeHasItems({ ...empty, schedules: [{ cwd: dest }] }, dest),
-    ).toBe(true);
-  });
-
-  it("counts a worktree schedule by its worktree_path (#259 — its cwd is the parent repo)", () => {
-    // A worktree schedule's `cwd` is the PARENT repo, not the worktree folder; its
-    // eagerly-created worktree (#259) lives at `worktree_path`. So matching only `cwd`
-    // would miss it and wrongly free a worktree another pending schedule still uses.
-    expect(
-      worktreeHasItems(
-        {
-          ...empty,
-          schedules: [{ cwd: "/work/parent-repo", worktree_path: dest }],
-        },
-        dest,
-      ),
-    ).toBe(true);
-    // A worktree schedule for a DIFFERENT folder does not count.
-    expect(
-      worktreeHasItems(
-        {
-          ...empty,
-          schedules: [
-            { cwd: "/work/parent-repo", worktree_path: "/data/other" },
-          ],
-        },
-        dest,
-      ),
-    ).toBe(false);
-  });
-
-  it("counts a recurring session targeting the worktree folder (#294)", () => {
-    // A recurring created inside the worktree (`cwd === dest`) …
-    expect(
-      worktreeHasItems({ ...empty, recurrings: [{ cwd: dest }] }, dest),
-    ).toBe(true);
-    // … or a worktree recurring whose eager worktree is `worktree_path`.
-    expect(
-      worktreeHasItems(
-        {
-          ...empty,
-          recurrings: [{ cwd: "/work/parent-repo", worktree_path: dest }],
-        },
-        dest,
-      ),
-    ).toBe(true);
-    // A recurring for a different folder does not count.
-    expect(
-      worktreeHasItems(
-        { ...empty, recurrings: [{ cwd: "/work/other" }] },
-        dest,
-      ),
-    ).toBe(false);
-  });
-
-  it("ignores items belonging to other folders", () => {
-    expect(
-      worktreeHasItems(
-        {
-          sessions: [{ repoPath: "/work/other" }],
-          overviewPanels: { "/work/other": [{ id: "p" }] },
-          schedules: [{ cwd: "/work/other" }],
-          recurrings: [{ cwd: "/work/other" }],
-        },
-        dest,
-      ),
-    ).toBe(false);
-  });
-
-  it("mixed items all count; only true emptiness (all types gone) is removable", () => {
-    const full = {
-      sessions: [{ repoPath: dest }],
-      overviewPanels: { [dest]: [{ id: "p" }] },
-      schedules: [{ cwd: dest }],
-      recurrings: [{ cwd: dest }],
-    };
-    expect(worktreeHasItems(full, dest)).toBe(true);
-    // Drop the agent → still has a panel + schedule + recurring.
-    expect(worktreeHasItems({ ...full, sessions: [] }, dest)).toBe(true);
-    // Drop the panel too → still has the schedule + recurring.
-    expect(
-      worktreeHasItems(
-        {
-          sessions: [],
-          overviewPanels: {},
-          schedules: [{ cwd: dest }],
-          recurrings: [{ cwd: dest }],
-        },
-        dest,
-      ),
-    ).toBe(true);
-    // Everything gone → empty → removable.
-    expect(worktreeHasItems(empty, dest)).toBe(false);
-  });
-});
-
-describe("isCleanExit (#63)", () => {
-  it("treats code 0 while running (not intentional) as a clean exit → forget", () => {
-    expect(isCleanExit(0, false, false)).toBe(true);
-  });
-
-  it("keeps non-zero / unknown exits as a recoverable overlay (not clean)", () => {
-    expect(isCleanExit(1, false, false)).toBe(false);
-    expect(isCleanExit(137, false, false)).toBe(false);
-    expect(isCleanExit(null, false, false)).toBe(false);
-  });
-
-  it("never auto-forgets during the boot resume window (#30)", () => {
-    // A code-0 exit while booting keeps the overlay + Restart instead of vanishing.
-    expect(isCleanExit(0, true, false)).toBe(false);
-  });
-
-  it("never auto-forgets an intentional kill (Remove/Forget toasts on its own)", () => {
-    expect(isCleanExit(0, false, true)).toBe(false);
+  it("an ipc failure → silent keep (never a spurious dirty warning)", async () => {
+    const spy = vi
+      .spyOn(ipc, "cleanupWorktreeIfEmpty")
+      .mockRejectedValue(new Error("no host"));
+    await useStore.getState().cleanupWorktreeIfEmpty(parent, dest);
+    expect(useStore.getState().toasts).toHaveLength(0);
+    spy.mockRestore();
   });
 });
 

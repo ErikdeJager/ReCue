@@ -67,7 +67,11 @@ import {
 import { storeTheme } from "./theme";
 import { formatInterval, parseResetsAt } from "./time";
 import * as updater from "./updater";
-import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
+import {
+  DETACHED_CANVAS_ID,
+  IS_MAIN_WINDOW,
+  WINDOW_LABEL,
+} from "./windowContext";
 import type {
   AgentInfo,
   AheadBehind,
@@ -84,6 +88,7 @@ import type {
   DiffSeenPatch,
   EditorInfo,
   FileStatusCode,
+  ForgottenPayload,
   OverviewPanel,
   RecurringSession,
   ScheduledSession,
@@ -93,6 +98,7 @@ import type {
   Toast,
   ToastTone,
   View,
+  WorktreeKeptPayload,
 } from "./types";
 
 const TOAST_TTL_MS = 3500;
@@ -167,37 +173,10 @@ function adoptPendingRecurringChildren(
 // lifecycle each run), like `intentionalKills`; cleared when the worktree is removed.
 const worktreeParents = new Map<string, string>();
 
-/**
- * Whether a worktree folder `dest` is still referenced by any item (#199): a session
- * (`repoPath === dest` — including an exited-but-still-shown agent with a Restart
- * overlay), an `overviewPanels[dest]` entry (file/diff/terminal/kanban/filetree, #164),
- * a scheduled session created **inside** it (`cwd === dest`, #198), or a worktree
- * schedule that **targets** it (`worktree_path === dest`, #259 — its `cwd` is the
- * parent repo, but its eagerly-created worktree folder is `worktree_path`). Pure — the
- * auto-delete guard keeps the worktree exactly as long as ANY item of ANY type points
- * at it, and removes it only once none remain.
- */
-export function worktreeHasItems(
-  state: {
-    sessions: readonly { repoPath: string }[];
-    overviewPanels: Record<string, readonly unknown[]>;
-    schedules: readonly { cwd: string; worktree_path?: string | null }[];
-    recurrings: readonly { cwd: string; worktree_path?: string | null }[];
-  },
-  dest: string,
-): boolean {
-  return (
-    state.sessions.some((s) => s.repoPath === dest) ||
-    (state.overviewPanels[dest]?.length ?? 0) > 0 ||
-    state.schedules.some(
-      (sc) => sc.cwd === dest || sc.worktree_path === dest,
-    ) ||
-    // A recurring created inside the worktree (`cwd === dest`) or a worktree
-    // recurring targeting it (`worktree_path === dest`, its `cwd` is the parent)
-    // still references it (#294) — keep the worktree until neither remains.
-    state.recurrings.some((r) => r.cwd === dest || r.worktree_path === dest)
-  );
-}
+// The #199 `worktreeHasItems` ref-count moved to Rust (task 431,
+// `commands::worktree_has_items`) — `cleanupWorktreeIfEmpty` now delegates to the
+// authoritative `cleanup_worktree_if_empty` command, serialized backend-side so N
+// windows can never double-run `git worktree remove`.
 
 /**
  * The set of session ids **owned** by a recurring session (#294) — its rotating child
@@ -809,22 +788,10 @@ const SAMPLE_UPDATE_NOTES = [
   "- Fixed a simulated bug that never really existed.",
 ].join("\n");
 
-/**
- * Classify a session exit (#63). A **clean** exit — `claude` exits **code 0**
- * while the app is running and the kill was not user-initiated (Remove/Forget) —
- * means the user ended the agent: it is forgotten everywhere (kill + forget),
- * never showing a "Process exited" overlay. Anything else — a non-zero/unknown
- * code (crash), the boot resume window (#30, where a failed resume exits and is
- * offered a Restart), or an intentional kill (which toasts on its own) — is
- * **not** a clean exit and keeps the existing path. Pure — unit-tested; the lone
- * discriminator behind the `onExited` branch. */
-export function isCleanExit(
-  code: number | null,
-  booting: boolean,
-  intentional: boolean,
-): boolean {
-  return code === 0 && !booting && !intentional;
-}
+// The #63 `isCleanExit` discriminator moved to Rust (task 431,
+// `commands::is_clean_exit` / `classify_exit`): the event forwarder consumes a clean
+// exit — deleting the record ONCE per app — and emits `session://forgotten` instead
+// of `session://exited`, so no window ever re-runs the decision.
 
 /**
  * The set of repositories shown in the sidebar: the union of persisted recents
@@ -2536,10 +2503,6 @@ export interface AppState {
     file: string,
     kind: "markdown" | "kanban",
   ) => Promise<void>;
-  /** Forget a cleanly-exited (code 0) agent (#63): drop it from the store and its
-   * persisted record (kill + forget, like Remove) so it vanishes from
-   * Focus/Overview/sidebar and won't return on next boot; shows a brief toast. */
-  forgetExitedSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   /** Set (or clear, when blank) a session's custom name; propagates everywhere (#57). */
   renameSession: (id: string, name: string) => Promise<void>;
@@ -2657,6 +2620,13 @@ export interface AppState {
    * existing ids merge record-derived fields while preserving the view-only live
    * fields (`reconnecting`, `exitedCode`). An identical roster is a complete no-op. */
   applySessionsSync: (records: SessionRecord[]) => void;
+  /** A clean #63 exit Rust already forgot (task 431): drop local state in every
+   *  window (idempotent with the `sessions://changed` roster drop that precedes it);
+   *  only the targeted window toasts, so N windows show ONE "Agent exited". */
+  applySessionForgotten: (p: ForgottenPayload) => void;
+  /** The Rust exit-driven worktree cleanup kept a dirty worktree (task 431/#74):
+   *  only the targeted window shows the warning toast. */
+  applyWorktreeKept: (p: WorktreeKeptPayload) => void;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
   /** Fast-forward `cwd`'s current branch to its upstream — `git pull --ff-only`
    * (#181, sidebar repo / worktree "Pull"). Toasts the result (summary or git
@@ -3206,7 +3176,8 @@ export const useStore = create<AppState>()((set, get) => ({
     }));
     // An agent removed from the left panel (Remove #57, or a clean exit #63) also
     // disappears from every Canvas tab showing it (#152). The PTY is killed by the
-    // caller (removeSession / forgetExitedSession); reconcile disposes the xterm.
+    // caller (removeSession, or Rust's clean-exit forget — task 431); reconcile
+    // disposes the xterm.
     pruneCanvasLeaves((c) => c.kind === "agent" && c.sessionId === id);
   },
 
@@ -3649,7 +3620,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // promise rejection while we await the subscriptions.
     const bootPromise = ipc.bootState().catch(() => null);
 
-    // Wave 2: the 27 `listen` registrations (each its own invoke) as ONE parallel
+    // Wave 2: the 29 `listen` registrations (each its own invoke) as ONE parallel
     // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
@@ -3739,13 +3710,8 @@ export const useStore = create<AppState>()((set, get) => ({
                 if (!intentional) get().markTerminalExited(id, code);
                 return;
               }
-              // Clean exit (code 0 while running): the user ended the agent — forget
-              // it like Remove so it vanishes everywhere and won't return on next
-              // boot, with a brief "Agent exited" toast and no overlay/Restart (#63).
-              if (isCleanExit(code, booting, intentional)) {
-                void get().forgetExitedSession(id);
-                return;
-              }
+              // Clean exits never arrive here — Rust consumes them (task 431) and
+              // emits `session://forgotten` instead (see `applySessionForgotten`).
               // Non-zero / crash exit (or a failed boot resume): keep the session
               // and its exit code so the Terminal shows the "Process exited" overlay
               // + Restart (#63/#30). The generic exit toast is suppressed for
@@ -3759,6 +3725,12 @@ export const useStore = create<AppState>()((set, get) => ({
                 );
               }
             },
+            // A clean #63 exit Rust already forgot (task 431) — every window drops
+            // local state; only the targeted window toasts.
+            onForgotten: (p) => get().applySessionForgotten(p),
+            // The exit-driven worktree cleanup kept a dirty worktree (task 431/#74)
+            // — only the targeted window warns.
+            onWorktreeKept: (p) => get().applyWorktreeKept(p),
           }),
           // Cross-window canvas sync (#84): a tab/layout edit in any window, and
           // the detached-window set changing, both flow through the backend.
@@ -6067,17 +6039,22 @@ export const useStore = create<AppState>()((set, get) => ({
     // Record the parent so a later panel/schedule close can resolve it once this
     // worktree's last agent is gone (#199).
     worktreeParents.set(dest, parent);
-    // Ref-counted (#74/#199): keep the worktree while ANY item — an agent (incl. an
-    // exited-but-shown one), a panel, or a scheduled session — still references it.
-    if (worktreeHasItems(get(), dest)) return;
-    try {
-      // Non-forced: git refuses a dirty worktree, which is our dirty guard.
-      await ipc.removeWorktree(parent, dest, false);
+    // Ref-count + removal are Rust-owned (task 431): the command checks the
+    // persisted items pointing at `dest` and runs the non-forced remove under one
+    // app-wide mutex, so N windows (and the Rust clean-exit path) can never
+    // double-run `git worktree remove` or mis-toast "kept dirty".
+    const outcome = await ipc
+      .cleanupWorktreeIfEmpty(parent, dest)
+      .catch(() => null);
+    if (outcome === "removed") {
       worktreeParents.delete(dest);
-    } catch {
-      // Keep a dirty worktree rather than force-deleting uncommitted work (#74).
+    } else if (outcome === "keptDirty") {
+      // Keep a dirty worktree rather than force-deleting uncommitted work (#74) —
+      // warned in the acting window only, like the old local catch.
       get().pushToast("Worktree kept — it has uncommitted changes", "error");
     }
+    // "inUse" / null (ipc failure) → keep silently, as the old has-items early
+    // return did.
   },
 
   restartSession: async (id) => {
@@ -6274,19 +6251,6 @@ export const useStore = create<AppState>()((set, get) => ({
         : { type: "leaf", id: leafId, content },
     );
     set({ activeLeafId: leafId, selectedId: panelId });
-  },
-
-  forgetExitedSession: async (id) => {
-    // Vanish from Focus/Overview/sidebar immediately; the session-list change
-    // disposes the now-orphaned pooled xterm via reconcileTerminals (App.tsx).
-    get().dropSession(id);
-    get().pushToast("Agent exited");
-    // Forget the persisted record so a cleanly-exited agent doesn't return on
-    // next boot. kill_session also clears the (already-dead) PTY from the
-    // manager; it's a no-op if the process is already gone (#63).
-    await ipc.killSession(id).catch(() => {
-      // Forget locally regardless of whether the backend call succeeded.
-    });
   },
 
   removeSession: async (id) => {
@@ -6830,6 +6794,24 @@ export const useStore = create<AppState>()((set, get) => ({
     // upserting the additions.
     if (merged) set({ sessions: merged });
     for (const r of added) get().upsertSession(toSessionView(r));
+  },
+
+  applySessionForgotten: (p) => {
+    // A clean #63 exit Rust already forgot (task 431): drop local state in every
+    // window — idempotent with the `sessions://changed` roster drop that precedes
+    // it (`dropSession` on an unknown id is a filter no-op) — and toast only in the
+    // targeted window, so N windows show ONE "Agent exited".
+    get().dropSession(p.id);
+    if (p.toast_window === WINDOW_LABEL) get().pushToast("Agent exited");
+  },
+
+  applyWorktreeKept: (p) => {
+    // The Rust exit-driven worktree cleanup found a dirty worktree and kept it
+    // (task 431/#74) — warn once, in the targeted window only. `p.dest` is unused
+    // beyond the payload shape: the toast text mirrors the #74 wording exactly.
+    if (p.toast_window === WINDOW_LABEL) {
+      get().pushToast("Worktree kept — it has uncommitted changes", "error");
+    }
   },
 
   copyToClipboard: async (text, label) => {

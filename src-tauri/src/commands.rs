@@ -1,6 +1,7 @@
 //! Tauri command surface — thin wrappers over `SessionManager` and `Store`,
 //! plus the event payloads emitted to the frontend.
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,6 +47,22 @@ pub fn encode_output(bytes: &[u8]) -> String {
 pub struct ExitPayload {
     pub id: String,
     pub code: Option<i32>,
+}
+
+/// Payload for `session://forgotten` (task 431): a clean #63 exit Rust already
+/// forgot — every window drops local state; only `toast_window` toasts.
+#[derive(Clone, Serialize)]
+pub struct ForgottenPayload {
+    pub id: String,
+    pub toast_window: String,
+}
+
+/// Payload for `worktree://kept` (task 431): the exit-driven cleanup found a
+/// dirty worktree and kept it (#74) — only `toast_window` warns.
+#[derive(Clone, Serialize)]
+pub struct WorktreeKeptPayload {
+    pub dest: String,
+    pub toast_window: String,
 }
 
 /// Payload for the `session://state` event — busy/idle (#42).
@@ -1026,6 +1043,268 @@ fn kill_session_blocking(app: &AppHandle, id: String) -> Result<(), SessionError
         broadcast_sessions(app, &store);
     }
     Ok(())
+}
+
+// --- Rust-owned clean-exit forget + ref-counted worktree cleanup (task 431) ---
+//
+// The #63 clean-exit decision (code 0 while running → kill + delete record + one
+// "Agent exited" toast) and the #74/#199 ref-counted worktree removal used to live in
+// each window's `session://exited` handler — with the epic's N full windows they would
+// all run it, double-deleting records, double-toasting, and racing `git worktree
+// remove`. They now run exactly ONCE per app, here: the event forwarder consumes a
+// clean exit (`handle_session_exit`), the forget task reuses `kill_session_blocking`
+// (container teardown + record removal + roster broadcast) and emits
+// `session://forgotten` + (for a kept-dirty worktree) `worktree://kept`, each carrying
+// the one window that should toast (`toast_target`). Non-clean exits still emit
+// `session://exited` byte-identically.
+
+/// Pure #63 discriminator (ported from store.ts `isCleanExit`, task 431). A **clean**
+/// exit — the agent exits **code 0** while the app is running and the kill was not
+/// app-initiated (Remove/forget/rotation/cancel) — means the user ended the agent: it
+/// is forgotten everywhere (kill + forget), never showing a "Process exited" overlay.
+/// Anything else — a non-zero/unknown code (crash), the boot resume window (#30, where
+/// a failed resume exits and is offered a Restart), or an intentional kill (which
+/// toasts on its own) — is **not** clean and keeps the existing path.
+pub fn is_clean_exit(code: Option<i32>, boot_window: bool, intentional: bool) -> bool {
+    code == Some(0) && !boot_window && !intentional
+}
+
+/// What the event forwarder does with a session's exit (task 431).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitAction {
+    /// Emit `session://exited` exactly as before — the frontend keeps the overlay /
+    /// Restart / toast-suppression logic (shell terminals, crashes, boot failures,
+    /// recurring children, intentional kills).
+    EmitExited,
+    /// Consume the exit: Rust forgets the record + emits `session://forgotten`.
+    ForgetClean,
+}
+
+/// Pure exit classifier for the forwarder (task 431): the Rust forget path runs only
+/// for a **tracked agent record** (`has_record` — a shell terminal #72 has none) that
+/// is **not** a recurring's rotating child (#294 — its exit drives the rotation UX,
+/// never a forget) and whose exit `is_clean_exit`. Every guard failure degrades to
+/// today's `session://exited` emit — the worst outcome is the old behavior.
+pub fn classify_exit(
+    has_record: bool,
+    recurring_owned: bool,
+    code: Option<i32>,
+    boot_window: bool,
+    intentional: bool,
+) -> ExitAction {
+    if has_record && !recurring_owned && is_clean_exit(code, boot_window, intentional) {
+        ExitAction::ForgetClean
+    } else {
+        ExitAction::EmitExited
+    }
+}
+
+/// The #63 boot-resume window, Rust-side (task 431; mirrors store.ts `booting`):
+/// true from setup (when persisted records exist) until [`RECONNECT_BACKSTOP_MS`]
+/// after the boot resume pass returns. A code-0 exit inside it keeps the record +
+/// overlay (a failed boot resume is offered Restart, never auto-forgotten, #30).
+pub struct BootWindow(pub std::sync::atomic::AtomicBool);
+
+/// How long after the boot resume pass returns the boot window stays open (task 431)
+/// — the mirror of store.ts `RECONNECT_BACKSTOP_MS` (~102), a fixed unconditional cap.
+pub const RECONNECT_BACKSTOP_MS: u64 = 4_000;
+
+/// The one window that should show a courtesy toast for an app-level event (task
+/// 431): the focused window's label, else `"main"` when present, else the
+/// lexicographically first label, else `"main"`. Labels are scanned in sorted order so
+/// the pick is deterministic. Thin/untested (the `broadcast_*` precedent) — delivery
+/// is best-effort; state convergence never depends on the toast.
+pub fn toast_target(app: &AppHandle) -> String {
+    let windows = app.webview_windows();
+    let mut labels: Vec<&String> = windows.keys().collect();
+    labels.sort();
+    for label in &labels {
+        if let Some(window) = windows.get(*label) {
+            if window.is_focused().unwrap_or(false) {
+                return (*label).clone();
+            }
+        }
+    }
+    if windows.contains_key("main") {
+        return "main".to_string();
+    }
+    labels
+        .first()
+        .map(|l| (*l).clone())
+        .unwrap_or_else(|| "main".to_string())
+}
+
+/// #74/#199 ref-count, ported from store.ts `worktreeHasItems` (task 431): keep the
+/// worktree while ANY item — a session record (incl. exited-but-kept), an overview
+/// panel of the worktree folder, or a schedule/recurring created inside it (`cwd`) or
+/// targeting it (`worktree_path`, #259 — its `cwd` is the parent repo, but its
+/// eagerly-created worktree folder is `worktree_path`) — still points at `dest`.
+pub fn worktree_has_items(
+    sessions: &[PersistedSession],
+    panels: &HashMap<String, Vec<OverviewPanel>>,
+    schedules: &[ScheduledSession],
+    recurrings: &[RecurringSession],
+    dest: &str,
+) -> bool {
+    sessions.iter().any(|s| s.repo_path == dest)
+        || panels.get(dest).is_some_and(|p| !p.is_empty())
+        || schedules
+            .iter()
+            .any(|sc| sc.cwd == dest || sc.worktree_path.as_deref() == Some(dest))
+        || recurrings
+            .iter()
+            .any(|r| r.cwd == dest || r.worktree_path.as_deref() == Some(dest))
+}
+
+/// Serializes every ref-count-check → git-remove pair (task 431): two windows (or a
+/// window and the Rust exit path) can no longer both see "empty" and double-run
+/// `git worktree remove` (check/check/remove/remove-fails → a spurious "kept dirty").
+#[derive(Default)]
+pub struct WorktreeCleanupLock(pub std::sync::Mutex<()>);
+
+/// Outcome of a ref-counted worktree cleanup (task 431).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorktreeCleanup {
+    /// The worktree was removed (or was already gone — idempotent).
+    Removed,
+    /// Some item (session/panel/schedule/recurring) still references it — kept.
+    InUse,
+    /// git refused the non-forced remove (uncommitted changes) — kept, warn (#74).
+    KeptDirty,
+}
+
+/// The shared blocking core behind [`cleanup_worktree_if_empty`] and the clean-exit
+/// forget path (task 431). Under the one [`WorktreeCleanupLock`]: snapshot the
+/// persisted Store state, keep the worktree while [`worktree_has_items`] holds
+/// (`InUse`); report an already-missing dest as `Removed` (idempotent — a concurrent
+/// earlier cleanup already won); else unlock (best-effort, the dev-container lock) and
+/// run the **non-forced** `git worktree remove` — git refusing a dirty tree IS the
+/// dirty guard (#74, never force) → `KeptDirty`.
+pub fn cleanup_worktree_blocking(app: &AppHandle, parent: &str, dest: &str) -> WorktreeCleanup {
+    let lock = app.state::<WorktreeCleanupLock>();
+    let _guard = lock
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let store = app.state::<Store>();
+    if worktree_has_items(
+        &store.sessions(),
+        &store.overview_panels(),
+        &store.schedules(),
+        &store.recurrings(),
+        dest,
+    ) {
+        return WorktreeCleanup::InUse;
+    }
+    if !Path::new(dest).is_dir() {
+        return WorktreeCleanup::Removed;
+    }
+    // A dev-container session locked the worktree at spawn (the in-container `git
+    // worktree prune` guard); unlock best-effort like `remove_worktree`.
+    let _ = git::worktree_unlock(parent, dest);
+    match git::worktree_remove(parent, dest, false) {
+        Ok(()) => WorktreeCleanup::Removed,
+        Err(_) => WorktreeCleanup::KeptDirty,
+    }
+}
+
+/// Ref-counted worktree auto-delete (task 431, replacing the frontend-side #74/#199
+/// check): remove the worktree at `dest` from `parent` only when no persisted item
+/// references it, serialized so N windows' concurrent calls can't double-run the git
+/// remove. The forced path (`remove_worktree`, forgetRepo) is untouched.
+///
+/// Async + off the main thread — the FS delete must never run on the webview thread
+/// (the #200 `remove_worktree` pattern).
+#[tauri::command]
+pub async fn cleanup_worktree_if_empty(
+    app: AppHandle,
+    parent: String,
+    dest: String,
+) -> Result<WorktreeCleanup, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || cleanup_worktree_blocking(&app, &parent, &dest))
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
+/// The forwarder-side exit gate (task 431): returns `true` when the exit was
+/// **consumed** (a clean #63 exit — Rust forgets the record and emits
+/// `session://forgotten` instead of `session://exited`). Fail-open: any missing state
+/// (teardown ordering) degrades to `false` — today's emit — and never panics the
+/// forwarder thread. The forget task runs on a detached thread (the kill-escalation
+/// precedent): the forwarder must never block on file IO or git.
+pub fn handle_session_exit(
+    app: &AppHandle,
+    id: &str,
+    code: Option<i32>,
+    intentional: bool,
+) -> bool {
+    let Some(store) = app.try_state::<Store>() else {
+        return false;
+    };
+    let record = store.session(id);
+    let recurring_owned = store
+        .recurrings()
+        .iter()
+        .any(|r| r.current_session_id.as_deref() == Some(id));
+    let boot_window = app
+        .try_state::<BootWindow>()
+        .map(|b| b.0.load(std::sync::atomic::Ordering::SeqCst))
+        .unwrap_or(false);
+    match classify_exit(
+        record.is_some(),
+        recurring_owned,
+        code,
+        boot_window,
+        intentional,
+    ) {
+        ExitAction::EmitExited => false,
+        ExitAction::ForgetClean => {
+            // `classify_exit` returns ForgetClean only when `record.is_some()`.
+            let Some(record) = record else { return false };
+            let app = app.clone();
+            std::thread::spawn(move || forget_cleanly_exited(app, record));
+            true
+        }
+    }
+}
+
+/// The Rust-owned #63 clean-exit forget (task 431), run at most once per exit (the
+/// exit waiter emits exactly one `Exited` per PTY generation, #354, and the forwarder
+/// consumes it once).
+fn forget_cleanly_exited(app: AppHandle, record: PersistedSession) {
+    // 1. Deliberate reuse of `kill_session_blocking` — exactly what the frontend's
+    //    `forgetExitedSession → ipc.killSession` did: frees the (already-dead) PTY
+    //    slot, runs the dev-container teardown, removes the persisted record, and
+    //    broadcasts `sessions://changed` so every window's roster converges (428).
+    //    Idempotent on a dead child (`kill_session` on a gone id is a no-op error).
+    let _ = kill_session_blocking(&app, record.id.clone());
+    // 2. Tell every window the exit was consumed — each drops local state
+    //    (idempotent with the roster drop above); only `toast_window` toasts, so N
+    //    windows show ONE "Agent exited".
+    let target = toast_target(&app);
+    let _ = app.emit(
+        "session://forgotten",
+        ForgottenPayload {
+            id: record.id.clone(),
+            toast_window: target.clone(),
+        },
+    );
+    // 3. A worktree agent's clean exit also cleans its worktree (ref-counted; a dirty
+    //    tree is kept + warned, #74). Ordered after the forgotten emit so every
+    //    window's UI drops instantly while the git delete continues behind.
+    if let Some(parent) = record.worktree_parent.as_deref() {
+        if cleanup_worktree_blocking(&app, parent, &record.repo_path) == WorktreeCleanup::KeptDirty
+        {
+            let _ = app.emit(
+                "worktree://kept",
+                WorktreeKeptPayload {
+                    dest: record.repo_path.clone(),
+                    toast_window: target,
+                },
+            );
+        }
+    }
 }
 
 /// Set (or clear, when blank) a session's custom display name and persist (#57).
@@ -3902,6 +4181,294 @@ mod tests {
         assert_eq!(value.as_object().map(|o| o.len()), Some(21));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    // --- Rust-owned clean-exit decision (task 431, ported from store.ts isCleanExit) ---
+
+    #[test]
+    fn is_clean_exit_treats_code_0_while_running_not_intentional_as_clean() {
+        assert!(is_clean_exit(Some(0), false, false));
+    }
+
+    #[test]
+    fn is_clean_exit_keeps_nonzero_and_unknown_exits_recoverable() {
+        // A crash / failed resume keeps the record + overlay + Restart, never a forget.
+        assert!(!is_clean_exit(Some(1), false, false));
+        assert!(!is_clean_exit(Some(137), false, false));
+        assert!(!is_clean_exit(None, false, false));
+    }
+
+    #[test]
+    fn is_clean_exit_never_forgets_during_the_boot_window() {
+        // A code-0 exit while booting keeps the overlay + Restart instead of vanishing (#30).
+        assert!(!is_clean_exit(Some(0), true, false));
+    }
+
+    #[test]
+    fn is_clean_exit_never_forgets_an_intentional_kill() {
+        // Remove/forget/rotation/cancel toast on their own — even a child that traps
+        // SIGHUP and exits 0 under the kill must not read as clean.
+        assert!(!is_clean_exit(Some(0), false, true));
+    }
+
+    #[test]
+    fn classify_exit_forgets_only_a_tracked_clean_exit() {
+        // The one ForgetClean cell: a tracked, non-recurring-owned, clean exit.
+        assert_eq!(
+            classify_exit(true, false, Some(0), false, false),
+            ExitAction::ForgetClean
+        );
+    }
+
+    #[test]
+    fn classify_exit_emits_for_every_guard_failure() {
+        // No record (a shell terminal #72) — even a clean code 0 emits.
+        assert_eq!(
+            classify_exit(false, false, Some(0), false, false),
+            ExitAction::EmitExited
+        );
+        // A recurring's rotating child (#294) — its exit drives the rotation UX.
+        assert_eq!(
+            classify_exit(true, true, Some(0), false, false),
+            ExitAction::EmitExited
+        );
+        // The boot resume window (#30).
+        assert_eq!(
+            classify_exit(true, false, Some(0), true, false),
+            ExitAction::EmitExited
+        );
+        // An app-initiated kill (Remove/forget/rotation/cancel).
+        assert_eq!(
+            classify_exit(true, false, Some(0), false, true),
+            ExitAction::EmitExited
+        );
+        // Non-zero / unknown codes (crash, failed resume) — overlay + Restart.
+        assert_eq!(
+            classify_exit(true, false, Some(1), false, false),
+            ExitAction::EmitExited
+        );
+        assert_eq!(
+            classify_exit(true, false, Some(137), false, false),
+            ExitAction::EmitExited
+        );
+        assert_eq!(
+            classify_exit(true, false, None, false, false),
+            ExitAction::EmitExited
+        );
+        // Stacked guards still emit (no record + booting + intentional).
+        assert_eq!(
+            classify_exit(false, true, Some(0), true, true),
+            ExitAction::EmitExited
+        );
+    }
+
+    // --- worktree_has_items (task 431, ported from the #199 store.test.ts battery) ---
+
+    /// Minimal schedule fixture — only `cwd` / `worktree_path` matter to the ref-count.
+    fn mk_schedule(cwd: &str, worktree_path: Option<&str>) -> ScheduledSession {
+        ScheduledSession {
+            id: "s".into(),
+            cwd: cwd.into(),
+            branch: None,
+            create_branch: false,
+            branch_base: None,
+            worktree: worktree_path.is_some(),
+            worktree_path: worktree_path.map(|s| s.to_string()),
+            name: None,
+            prompt: None,
+            fire_at: 0,
+            created_at: 0,
+            agent: "claude".into(),
+        }
+    }
+
+    /// Minimal recurring fixture — only `cwd` / `worktree_path` matter to the ref-count.
+    fn mk_recurring(cwd: &str, worktree_path: Option<&str>) -> RecurringSession {
+        RecurringSession {
+            id: "r".into(),
+            cwd: cwd.into(),
+            branch: None,
+            create_branch: false,
+            branch_base: None,
+            worktree: worktree_path.is_some(),
+            worktree_path: worktree_path.map(|s| s.to_string()),
+            name: None,
+            prompt: None,
+            interval_secs: 3600,
+            next_fire_at: 0,
+            current_session_id: None,
+            created_at: 0,
+            agent: "claude".into(),
+        }
+    }
+
+    /// Minimal overview-panel fixture.
+    fn mk_panel(id: &str) -> OverviewPanel {
+        OverviewPanel {
+            id: id.into(),
+            kind: "diff".into(),
+            file: None,
+            diff_source: None,
+            compare_base: None,
+            compare_target: None,
+            commit_sha: None,
+        }
+    }
+
+    const WT_DEST: &str = "/data/worktrees/repo-id/feat";
+
+    #[test]
+    fn worktree_has_items_is_false_for_a_worktree_with_no_items() {
+        assert!(!worktree_has_items(&[], &HashMap::new(), &[], &[], WT_DEST));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_an_agent_at_the_worktree_incl_exited_but_kept() {
+        // The guard counts ANY session record at this folder — including an exited
+        // agent still shown with a Restart overlay (the record survives a crash).
+        assert!(worktree_has_items(
+            &[mk_session(WT_DEST, Some("/repo"))],
+            &HashMap::new(),
+            &[],
+            &[],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_a_panel_but_not_an_empty_panel_list() {
+        let mut panels = HashMap::new();
+        panels.insert(WT_DEST.to_string(), vec![mk_panel("p1")]);
+        assert!(worktree_has_items(&[], &panels, &[], &[], WT_DEST));
+        // An empty panel list does not count.
+        let mut empty = HashMap::new();
+        empty.insert(WT_DEST.to_string(), Vec::new());
+        assert!(!worktree_has_items(&[], &empty, &[], &[], WT_DEST));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_a_schedule_created_inside_the_worktree() {
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[mk_schedule(WT_DEST, None)],
+            &[],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_a_worktree_schedule_by_its_worktree_path() {
+        // A worktree schedule's `cwd` is the PARENT repo, not the worktree folder; its
+        // eagerly-created worktree (#259) lives at `worktree_path`. Matching only `cwd`
+        // would miss it and wrongly free a worktree a pending schedule still uses.
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[mk_schedule("/work/parent-repo", Some(WT_DEST))],
+            &[],
+            WT_DEST
+        ));
+        // A worktree schedule for a DIFFERENT folder does not count.
+        assert!(!worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[mk_schedule("/work/parent-repo", Some("/data/other"))],
+            &[],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_a_recurring_in_both_forms() {
+        // A recurring created inside the worktree (`cwd == dest`) …
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[],
+            &[mk_recurring(WT_DEST, None)],
+            WT_DEST
+        ));
+        // … or a worktree recurring whose eager worktree is `worktree_path`.
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[],
+            &[mk_recurring("/work/parent-repo", Some(WT_DEST))],
+            WT_DEST
+        ));
+        // A recurring for a different folder does not count.
+        assert!(!worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[],
+            &[mk_recurring("/work/other", None)],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_ignores_items_of_other_folders() {
+        let mut panels = HashMap::new();
+        panels.insert("/work/other".to_string(), vec![mk_panel("p")]);
+        assert!(!worktree_has_items(
+            &[mk_session("/work/other", None)],
+            &panels,
+            &[mk_schedule("/work/other", None)],
+            &[mk_recurring("/work/other", None)],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_mixed_items_all_count_until_true_emptiness() {
+        let sessions = vec![mk_session(WT_DEST, Some("/repo"))];
+        let mut panels = HashMap::new();
+        panels.insert(WT_DEST.to_string(), vec![mk_panel("p")]);
+        let schedules = vec![mk_schedule(WT_DEST, None)];
+        let recurrings = vec![mk_recurring(WT_DEST, None)];
+        assert!(worktree_has_items(
+            &sessions,
+            &panels,
+            &schedules,
+            &recurrings,
+            WT_DEST
+        ));
+        // Drop the agent → still has a panel + schedule + recurring.
+        assert!(worktree_has_items(
+            &[],
+            &panels,
+            &schedules,
+            &recurrings,
+            WT_DEST
+        ));
+        // Drop the panel too → still has the schedule + recurring.
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &schedules,
+            &recurrings,
+            WT_DEST
+        ));
+        // Everything gone → empty → removable.
+        assert!(!worktree_has_items(&[], &HashMap::new(), &[], &[], WT_DEST));
+    }
+
+    /// The wire shape the frontend maps outcomes on (task 431): camelCase strings.
+    #[test]
+    fn worktree_cleanup_serializes_camel_case() {
+        assert_eq!(
+            serde_json::to_value(WorktreeCleanup::Removed).unwrap(),
+            serde_json::json!("removed")
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeCleanup::InUse).unwrap(),
+            serde_json::json!("inUse")
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeCleanup::KeptDirty).unwrap(),
+            serde_json::json!("keptDirty")
+        );
     }
 
     #[test]

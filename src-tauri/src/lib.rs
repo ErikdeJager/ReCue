@@ -145,6 +145,19 @@ pub fn run() {
                 .unwrap_or_else(|_| PathBuf::from("recue-sessions.json"));
             app.manage(Store::load(&store_path));
 
+            // Rust-owned clean-exit forget + worktree cleanup (task 431). The
+            // worktree-cleanup mutex serializes every ref-count-check → git-remove
+            // pair (N windows and/or the exit path can never double-run
+            // `git worktree remove`); the boot window mirrors the frontend's
+            // `booting` flag — open only when persisted records exist (matching
+            // `booting = boot.sessions.length > 0`), closed 4 s after the boot
+            // resume pass returns (below), so a failed boot resume's code-0 exit
+            // keeps its record + overlay instead of being auto-forgotten (#30/#63).
+            app.manage(commands::WorktreeCleanupLock::default());
+            app.manage(commands::BootWindow(std::sync::atomic::AtomicBool::new(
+                !app.state::<Store>().sessions().is_empty(),
+            )));
+
             // Startup flash (#348): the main window is created hidden (`visible: false`)
             // with a dark native background (tauri.conf.json). Re-color it to the persisted
             // theme *before* it is ever shown — so a light-theme user's window never flashes
@@ -240,8 +253,23 @@ pub fn run() {
                                     },
                                 )
                             }
-                            SessionEvent::Exited { id, code } => {
-                                handle.emit("session://exited", commands::ExitPayload { id, code })
+                            SessionEvent::Exited {
+                                id,
+                                code,
+                                intentional,
+                            } => {
+                                // #63 clean-exit ownership (task 431): decided ONCE, here
+                                // in Rust — a clean exit is consumed (record forgotten +
+                                // `session://forgotten`), everything else emits
+                                // `session://exited` exactly as before.
+                                if commands::handle_session_exit(&handle, &id, code, intentional) {
+                                    Ok(())
+                                } else {
+                                    handle.emit(
+                                        "session://exited",
+                                        commands::ExitPayload { id, code },
+                                    )
+                                }
                             }
                             SessionEvent::State { id, busy } => {
                                 // Record the first activity (#112): on the first busy=true
@@ -308,7 +336,20 @@ pub fn run() {
                 {
                     container::kill_all_recue_containers();
                 }
-                boot::resume_persisted_sessions(resume)
+                boot::resume_persisted_sessions(resume.clone());
+                // Close the Rust #63 boot window (task 431) a fixed backstop after the
+                // resume pass returns — mirroring the frontend's `RECONNECT_BACKSTOP_MS`
+                // cap — so a failed boot resume's code-0 exit is never auto-forgotten.
+                // Also runs when there were no records (clearing an already-false flag
+                // is a no-op). `try_state`: never panic on teardown ordering.
+                thread::sleep(std::time::Duration::from_millis(
+                    commands::RECONNECT_BACKSTOP_MS,
+                ));
+                if let Some(boot_window) = resume.try_state::<commands::BootWindow>() {
+                    boot_window
+                        .0
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                }
             });
 
             // Scheduled sessions (#93): a poll loop fires due schedules into live
@@ -345,6 +386,7 @@ pub fn run() {
             commands::spawn_terminal,
             commands::spawn_worktree_agent,
             commands::remove_worktree,
+            commands::cleanup_worktree_if_empty,
             commands::resume_session,
             commands::fork_session,
             commands::write_stdin,

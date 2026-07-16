@@ -27,6 +27,7 @@ import type {
   ExitPayload,
   FileDiff,
   FileStatusEntry,
+  ForgottenPayload,
   ForkablePayload,
   GridPayload,
   NamePayload,
@@ -48,6 +49,8 @@ import type {
   SkillInfo,
   StatePayload,
   WorkingDiff,
+  WorktreeCleanup,
+  WorktreeKeptPayload,
 } from "./types";
 import type { Theme } from "./theme";
 
@@ -137,9 +140,18 @@ export const spawnWorktreeAgent = (
   });
 
 /** Remove the worktree at `dest` from its `parent` repo (#74); `force` ignores a
- * dirty tree (a non-forced call fails on uncommitted changes — the dirty guard). */
+ * dirty tree (a non-forced call fails on uncommitted changes — the dirty guard).
+ * Still the **forced** path (`forgetRepo`); ref-counted auto-cleanup goes through
+ * `cleanupWorktreeIfEmpty` (task 431). */
 export const removeWorktree = (parent: string, dest: string, force: boolean) =>
   invoke<void>("remove_worktree", { parent, dest, force });
+
+/** Ref-counted worktree auto-delete (task 431): the backend checks the persisted
+ * items pointing at `dest` and removes it (non-forced — git refusing a dirty tree
+ * is the #74 guard) only when unreferenced, under one app-wide mutex so N windows
+ * (and the Rust clean-exit path) can never double-run `git worktree remove`. */
+export const cleanupWorktreeIfEmpty = (parent: string, dest: string) =>
+  invoke<WorktreeCleanup>("cleanup_worktree_if_empty", { parent, dest });
 
 export const resumeSession = (id: string) =>
   invoke<SessionRecord>("resume_session", { id });
@@ -881,11 +893,18 @@ export interface SessionEventHandlers {
   onName: (payload: NamePayload) => void;
   /** The session's forkability changed (#138) — gate the Fork affordance. */
   onForkable: (payload: ForkablePayload) => void;
+  /** A clean #63 exit Rust already forgot (task 431) — drop local state; the
+   * targeted window toasts. */
+  onForgotten: (payload: ForgottenPayload) => void;
+  /** The exit-driven worktree cleanup kept a dirty worktree (task 431/#74) — the
+   * targeted window warns. */
+  onWorktreeKept: (payload: WorktreeKeptPayload) => void;
 }
 
-/** Subscribe to the per-session output/exit/state/name/forkable events. Returns an
- * unlisten fn. Each `listen()` is its own `invoke` (`plugin:event|listen`), so they
- * register as **one parallel wave** rather than five sequential round-trips (#352). */
+/** Subscribe to the per-session output/exit/state/name/forkable/forgotten events.
+ * Returns an unlisten fn. Each `listen()` is its own `invoke` (`plugin:event|listen`),
+ * so they register as **one parallel wave** rather than seven sequential round-trips
+ * (#352). */
 export async function subscribeSessionEvents(
   handlers: SessionEventHandlers,
 ): Promise<UnlistenFn> {
@@ -895,6 +914,8 @@ export async function subscribeSessionEvents(
     unlistenState,
     unlistenName,
     unlistenForkable,
+    unlistenForgotten,
+    unlistenWorktreeKept,
   ] = await Promise.all([
     listen<OutputPayload>("session://output", (event) =>
       handlers.onOutput(event.payload),
@@ -911,6 +932,12 @@ export async function subscribeSessionEvents(
     listen<ForkablePayload>("session://forkable", (event) =>
       handlers.onForkable(event.payload),
     ),
+    listen<ForgottenPayload>("session://forgotten", (event) =>
+      handlers.onForgotten(event.payload),
+    ),
+    listen<WorktreeKeptPayload>("worktree://kept", (event) =>
+      handlers.onWorktreeKept(event.payload),
+    ),
   ]);
   return () => {
     unlistenOutput();
@@ -918,6 +945,8 @@ export async function subscribeSessionEvents(
     unlistenState();
     unlistenName();
     unlistenForkable();
+    unlistenForgotten();
+    unlistenWorktreeKept();
   };
 }
 
