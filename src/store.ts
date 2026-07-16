@@ -2442,6 +2442,9 @@ export interface AppState {
   /** Open (or focus) a Canvas tab in its own native window for multi-monitor use
    * (#84). */
   popOutCanvas: (id: string) => void;
+  /** Open a new FULL app window (Multi-window 10/16 → task 434's open_app_window).
+   * Fire-and-forget like popOutCanvas; valid from any window kind. */
+  openNewWindow: () => void;
   /** Raise the detached window for a canvas (#84) — ⌘-jump + detached-tab click. */
   focusCanvasWindow: (id: string) => void;
   /** Apply a cross-window canvas-list update broadcast by the backend (#84). */
@@ -5823,6 +5826,13 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!canvas) return;
     void ipc.openCanvasWindow(id, canvas.name).catch(() => {});
     get().pushToast("Canvas opened in window");
+  },
+
+  // Multi-window 10/16: open a new FULL app window (task 434's open_app_window).
+  // Fire-and-forget like popOutCanvas; valid from any window kind — the ⌘⌥N
+  // dispatch in useKeyboardNav is deliberately unconditional.
+  openNewWindow: () => {
+    void ipc.openAppWindow({}).catch(() => {});
   },
 
   focusCanvasWindow: (id) => {

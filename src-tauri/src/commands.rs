@@ -1980,6 +1980,26 @@ pub fn window_background(store: &Store) -> Color {
     background_for_theme(settings.get("theme").and_then(|v| v.as_str()))
 }
 
+/// Which window a macOS Dock Reopen should restore when none is visible
+/// (Multi-window 10/16): prefer the main window, else the oldest-sorted full app
+/// window, else any window (a canvas-only remainder — reachable when the main
+/// window was closed while a detached canvas survived). `None` = no window exists
+/// (the caller opens a fresh full window). Sorted internally so the HashMap's
+/// label order can't make the choice flappy. Pure. Compiled on non-mac hosts for
+/// tests only (the `explorer_select_arg` cfg precedent).
+#[cfg(any(target_os = "macos", test))]
+pub fn reopen_focus_target(labels: &[String]) -> Option<String> {
+    let mut sorted: Vec<&String> = labels.iter().collect();
+    sorted.sort();
+    if let Some(main) = sorted.iter().find(|l| l.as_str() == "main") {
+        return Some((*main).clone());
+    }
+    if let Some(app) = sorted.iter().find(|l| l.starts_with("app-")) {
+        return Some((*app).clone());
+    }
+    sorted.first().map(|l| (*l).clone())
+}
+
 /// How long Rust waits before showing a window the frontend never revealed (#348).
 const REVEAL_FALLBACK_MS: u64 = 2000;
 
@@ -4167,6 +4187,40 @@ mod tests {
         assert_eq!(background_for_theme(Some("dark")), dark);
         assert_eq!(background_for_theme(Some("bogus")), dark);
         assert_eq!(background_for_theme(Some("")), dark);
+    }
+
+    /// A Dock Reopen with no window at all opens a fresh one (Multi-window 10/16):
+    /// the chooser signals that with `None`.
+    #[test]
+    fn reopen_focus_target_returns_none_for_no_windows() {
+        assert_eq!(reopen_focus_target(&[]), None);
+    }
+
+    /// The main window is always the preferred restore target.
+    #[test]
+    fn reopen_focus_target_prefers_main() {
+        let labels = vec!["main".to_string(), "app-x".to_string()];
+        assert_eq!(reopen_focus_target(&labels), Some("main".to_string()));
+    }
+
+    /// Without a main window the first (sorted) full app window wins — deterministic
+    /// regardless of the HashMap's iteration order.
+    #[test]
+    fn reopen_focus_target_falls_back_to_the_first_app_window() {
+        let labels = vec![
+            "canvas-a".to_string(),
+            "app-z".to_string(),
+            "app-b".to_string(),
+        ];
+        assert_eq!(reopen_focus_target(&labels), Some("app-b".to_string()));
+    }
+
+    /// A canvas-only remainder (main closed, detached canvas survived) still restores
+    /// something rather than nothing.
+    #[test]
+    fn reopen_focus_target_takes_any_window_as_a_last_resort() {
+        let labels = vec!["canvas-a".to_string()];
+        assert_eq!(reopen_focus_target(&labels), Some("canvas-a".to_string()));
     }
 
     /// Light (#333) maps to the Catppuccin Latte Crust (UI v2 task 372) — the same

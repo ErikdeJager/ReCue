@@ -7,7 +7,9 @@
 // `keybindMapFor`; Settings → Shortcuts edits the overrides with `captureProblem`
 // guarding the recorder. Contextual chords (⌘S manual save, ⌘⏎, ⌘⌥1–6, Shift+arrows,
 // the diff-viewer keys) stay hardcoded and are listed read-only in
-// `components/Settings/shortcuts.ts`.
+// `components/Settings/shortcuts.ts`. `new-window` (default ⌘⌥N / Ctrl+Alt+N,
+// Multi-window 10/16) opens a new full app window and dispatches in every window
+// kind.
 //
 // Chord serialization: `"mod+alt+shift+<key>"` — modifiers in the canonical order
 // mod, ctrl, super, alt, shift; the key token last. **`mod` is platform-resolved**:
@@ -33,6 +35,7 @@ export type KeybindActionId =
   | "schedule-session"
   | "global-search"
   | "toggle-sidebar"
+  | "new-window"
   | "open-settings"
   | "open-in-editor"
   | "choose-editor";
@@ -116,6 +119,18 @@ export const KEYBIND_ACTIONS: readonly KeybindAction[] = [
     label: "Collapse / expand the sidebar",
     group: "App",
     defaultChord: "mod+b",
+  },
+  {
+    // Multi-window 10/16: open a new FULL app window (task 434). ⌘⌥N on macOS,
+    // Ctrl+Alt+N on Windows/Linux — the same mod+alt family as the fixed ⌘⌥1–6
+    // chords. Known, accepted caveat: on AltGr layouts Ctrl+Alt+N can be a typed
+    // glyph (e.g. Polish ń); the dispatcher deliberately doesn't editable-guard
+    // modifier chords, and the action is rebindable/unbindable in Settings —
+    // the same class as the shipped ⌘⌥digit chords.
+    id: "new-window",
+    label: "New window",
+    group: "App",
+    defaultChord: "mod+alt+n",
   },
   {
     id: "open-settings",
