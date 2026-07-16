@@ -1904,3 +1904,20 @@ WebGL probe/latch are in the task-434 entry. Still missing — new items:
       update check, no re-onboarding, the `schedule://fired` transition still lands; with
       N restored windows (439) exactly ONE "Updated to vX" toast / onboarding modal fires
       across the whole app.
+
+## 2026-07-16 — Themed window title bar (task 444)
+
+macOS-only Overlay title-bar strip; on Linux the `Titlebar` strip is `display:none`
+(revealed only via `data-platform="macos"`), so native CSD/server-side decorations are
+untouched. The one Linux-facing change is the best-effort **native theme sync** —
+`commands::theme_to_window_theme` → `window.set_theme(...)` (lib.rs setup +
+`create_app_window` before reveal, and `set_theme_background` on a runtime switch). Real-box
+checks (per DE / compositor):
+
+- [ ] **CSD theme follows ReCue's theme where honored.** On GNOME/Wayland (client-side
+      decorations) confirm the titlebar prefers-color-scheme flips with ReCue's dark/light
+      theme on boot and on a live toggle. Server-side-decoration DEs (KDE/X11) can't be
+      app-colored — `set_theme` is best-effort there and may no-op; that is the documented
+      partial-parity scope (full color parity = future custom decorations).
+- [ ] **No empty strip / layout shift.** The `Titlebar` strip renders nothing on Linux
+      (no 30px band); `.app-body` fills the window exactly as before.

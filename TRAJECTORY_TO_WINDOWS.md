@@ -1442,3 +1442,22 @@ two legs are ConPTY-flavored and want a real-box look:
       resize (unchanged effective grid) — on ConPTY (which can repaint on *any* resize
       call, even same-size) confirm no spurious busy dot on Overview↔Attention↔Canvas
       switches with unchanged panel sizes.
+
+## 2026-07-16 — Themed window title bar (task 444)
+
+macOS gets an integrated `--surface-mantle` `Titlebar` strip under the Overlay title bar
+(the native traffic lights float over it); Windows keeps native decorations, so the strip
+is `display:none` (revealed only via `data-platform="macos"`) and there is deliberately no
+custom caption. The one Windows-facing change is the **native theme sync**: the persisted
+ReCue light/dark theme is pushed to the window via `commands::theme_to_window_theme` →
+`window.set_theme(...)` (in `lib.rs` setup + `create_app_window` before reveal, and in
+`set_theme_background` on a runtime switch). Real-box checks:
+
+- [ ] **DWM caption follows the theme.** On Windows 10/11 confirm the native title-bar /
+      caption buttons render dark in ReCue's dark theme and light in light theme, on boot
+      (no flash — set before the hidden-until-painted reveal, #348) and on a live
+      Settings → Appearance theme toggle (via `set_theme_background`), for both the main
+      window and a second `app-*` window. Full caption **color** parity (beyond dark/light)
+      needs custom decorations — out of scope, future work.
+- [ ] **No empty strip / layout shift.** The `Titlebar` strip renders nothing on Windows
+      (no 30px band); `.app-body` fills the window exactly as before.

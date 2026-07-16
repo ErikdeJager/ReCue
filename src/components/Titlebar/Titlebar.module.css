@@ -1,0 +1,26 @@
+/* Themed window title-bar strip (task 444) — reverses #19's "native bar, no custom
+   chrome". On macOS the window uses `titleBarStyle: "Overlay"` (tauri.conf.json /
+   create_app_window), which extends the webview UNDER the native title bar so the native
+   traffic lights float over whatever the webview paints there — this slim strip. It reads
+   as part of ReCue: `--surface-mantle`, continuous with the sidebar chrome, following the
+   light/dark theme live.
+
+   Hidden by default and revealed ONLY on macOS via the `data-platform` seam (#363,
+   written synchronously on `<html>` before first paint), because only macOS has the
+   Overlay title-bar style: on Windows/Linux the native decorations own the caption region
+   (theme-synced natively, no custom strip), so the strip must render nothing — no empty
+   band. The whole strip is a `data-tauri-drag-region` (Titlebar.tsx), so it drags the
+   window and preserves double-click-zoom; `user-select: none` keeps a drag from selecting. */
+.titlebar {
+  display: none;
+}
+
+:global(:root[data-platform="macos"]) .titlebar {
+  display: block;
+  height: 30px;
+  flex-shrink: 0;
+  background: var(--surface-mantle);
+  border-bottom: 1px solid var(--border-hairline);
+  -webkit-user-select: none;
+  user-select: none;
+}
