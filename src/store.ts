@@ -73,6 +73,13 @@ import { storeTheme } from "./theme";
 import { formatInterval, parseResetsAt } from "./time";
 import * as updater from "./updater";
 import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
+import {
+  attributeNewWorktrees,
+  detectedWorktreeParents,
+  samePath,
+  vanishedWorktrees,
+  worktreeScopeRepos,
+} from "./worktrees";
 import type {
   AgentInfo,
   AheadBehind,
@@ -90,6 +97,7 @@ import type {
   FileStatusCode,
   OverviewPanel,
   RecurringSession,
+  RepoWorktree,
   ScheduledSession,
   SessionRecord,
   SessionView,
@@ -328,6 +336,9 @@ async function runGitRefresh(req: GitRefreshRequest): Promise<void> {
     }
     if (req.kinds.includes("aheadBehind")) {
       jobs.push(s.refreshBranchAheadBehind(repos));
+    }
+    if (req.kinds.includes("worktrees")) {
+      jobs.push(s.refreshWorktrees(repos));
     }
     if (req.kinds.includes("fileStatuses")) {
       // The ONLY consumer of `fileStatuses` is an open FileTree (#252) — so read `git
@@ -660,6 +671,9 @@ export function toSessionView(record: SessionRecord): SessionView {
     watch: record.watch ?? false,
     // Dev-container session: the docker image it runs in; null for a host PTY.
     containerImage: record.container_image ?? null,
+    // The agent-relocation signal: where the agent currently works per its own
+    // log; persisted so the worktree grouping is right immediately on boot.
+    currentCwd: record.current_cwd ?? null,
   };
 }
 
@@ -928,6 +942,10 @@ export function overviewClusters(input: {
   overviewOrder: Record<string, string[]>;
   schedules: ScheduledSession[];
   recurrings?: RecurringSession[];
+  /** Detected worktree path → parent repo (`detectedWorktreeParents`) — attributes
+   * panels keyed by a DETECTED worktree (no live session) to the parent cluster,
+   * so they never form a stray top-level column. */
+  worktreeParents?: Record<string, string>;
   filter: OverviewFilter;
 }): { repo: string; keys: string[] }[] {
   const {
@@ -935,6 +953,7 @@ export function overviewClusters(input: {
     overviewOrder,
     schedules,
     recurrings = [],
+    worktreeParents: detectedParents = {},
     filter,
   } = input;
   // Exclude recurring-owned child agents (#294): they render only inside the
@@ -945,8 +964,9 @@ export function overviewClusters(input: {
 
   // A worktree agent's panels are keyed by the worktree folder (#164) but cluster
   // under the worktree's **parent** repo (#96). Built first so the filter predicate
-  // can map a worktree folder to its parent.
-  const wtParent = new Map<string, string>();
+  // can map a worktree folder to its parent. Detected worktrees (no live session)
+  // contribute the same mapping, with a session-derived entry winning on overlap.
+  const wtParent = new Map<string, string>(Object.entries(detectedParents));
   for (const s of sessions) {
     if (s.worktreeParent) wtParent.set(s.repoPath, s.worktreeParent);
   }
@@ -1708,6 +1728,20 @@ export interface AppState {
    * `branches` (load / busy→idle edge / repo-set change / app-initiated fetch-pull-
    * checkout-create). */
   branchAheadBehind: Record<string, AheadBehind>;
+  /** Detected git worktrees per registered repo (agent-created-worktree detection):
+   * repo path → its raw `git worktree list` entries, stamped backend-side
+   * (`is_main` / `managed` / `exists`). Classification (external / orphan / record-
+   * backed dedupe) happens in selectors via `src/worktrees.ts`, so the slice stays
+   * the unfiltered truth. Refreshed as the `"worktrees"` kind of the #359 volley
+   * (busy→idle debounce + the sidebar 15 s poll + focus backstop); fail-open — a
+   * failed read keeps the previous entries. */
+  repoWorktrees: Record<string, RepoWorktree[]>;
+  /** Best-effort worktree attribution for agents with NO claude log (codex/opencode):
+   * session id → the external worktree path it (probably) created — set when a new
+   * external worktree appeared while exactly one such session in that repo was busy
+   * (`attributeNewWorktrees`). Transient (never persisted); pruned when the worktree
+   * vanishes or the session exits; superseded by the real `currentCwd` signal. */
+  heuristicWorktrees: Record<string, string>;
   /** The FileTree directory currently hovered by an OS file-drag (#253): the repo +
    * repo-relative dir (`""` = root) a drop would land in, or null when not over a
    * tree. Set by the window-global drag-drop listener; read by every FileTree to
@@ -1970,6 +2004,11 @@ export interface AppState {
   dismissAllAttention: () => void;
   /** Apply claude's auto-title (#97) to a session (no-op if unchanged). */
   setAutoName: (id: string, autoName: string | null) => void;
+  /** Apply a `session://cwd` event (the agent-relocation signal): update the session's
+   * `currentCwd` and, on an actual move, fire a scoped worktrees+branches refresh so a
+   * just-entered worktree shows within the debounce (not the 15 s poll) and clear any
+   * heuristic guess for the session (the real signal supersedes). */
+  setSessionCwd: (id: string, cwd: string) => void;
   /** Update a session's forkability (#138) — gates the Fork affordance (no-op if
    * the id isn't a tracked session, e.g. a shell terminal). */
   setForkable: (id: string, forkable: boolean) => void;
@@ -2149,6 +2188,14 @@ export interface AppState {
    * over the optional `repos` scope (#359). A folder that lost its upstream drops out of
    * the map (within the scope); fail-open (a backend miss leaves the map as-is). */
   refreshBranchAheadBehind: (repos?: readonly string[]) => Promise<void>;
+  /** Re-list each repo's git worktrees (the agent-created-worktree detection read),
+   * filling `repoWorktrees`. Runs as the `"worktrees"` kind of the #359 volley. The
+   * scope maps through `worktreeScopeRepos` (a busy→idle volley is scoped to the
+   * settling session's folder — for a worktree agent that's the worktree path, and
+   * the listing must run in its PARENT repo). Fail-open per repo (an omitted key in
+   * the reply keeps prior state); an authoritative removal auto-closes the vanished
+   * worktree's items with one toast and never touches the worktree itself. */
+  refreshWorktrees: (repos?: readonly string[]) => Promise<void>;
   /** Bump the FileTree re-list signal (#253/#264): one repo when `repo` is given, else
    * every repo with a mounted tree. Each mounted FileTree re-fetches its currently
    * loaded directory levels in place — surfacing files created/removed on disk —
@@ -2404,6 +2451,16 @@ export interface AppState {
     branch?: string,
     container?: boolean,
   ) => Promise<boolean>;
+  /** Start an agent IN PLACE inside a detected worktree ReCue didn't create (the
+   * external/orphan header's "New session"): a plain spawn at the worktree path
+   * with an explicit `worktree_parent` so the record nests under the parent repo
+   * (no prior session exists there for the #331 auto-derive). Never runs
+   * `git worktree add` — the checkout already exists. */
+  spawnSessionInWorktree: (path: string, parent: string) => Promise<boolean>;
+  /** Force-remove a ReCue-managed ORPHAN worktree (the dirty-kept leftover): close
+   * its items, `git worktree remove --force` (user-confirmed — ReCue owns it),
+   * re-detect. Refused backend-side for any path outside `<data-dir>/worktrees`. */
+  removeOrphanWorktree: (parent: string, dest: string) => Promise<void>;
   /** Start an agent in an isolated git worktree for an existing branch (#74). */
   spawnWorktreeSession: (
     repo: string,
@@ -2895,6 +2952,8 @@ export const useStore = create<AppState>()((set, get) => ({
   fileStatuses: {},
   diffLineCounts: {},
   branchAheadBehind: {},
+  repoWorktrees: {},
+  heuristicWorktrees: {},
   fileDropTarget: null,
   fileTreeRefresh: {},
   fileTreeMounts: {},
@@ -3233,6 +3292,29 @@ export const useStore = create<AppState>()((set, get) => ({
         sessions: s.sessions.map((x) => (x.id === id ? { ...x, forkable } : x)),
       };
     }),
+
+  setSessionCwd: (id, cwd) => {
+    const session = get().sessions.find((x) => x.id === id);
+    if (!session || (session.currentCwd ?? null) === cwd) return; // unchanged
+    set((s) => ({
+      sessions: s.sessions.map((x) =>
+        x.id === id ? { ...x, currentCwd: cwd } : x,
+      ),
+      // The real signal supersedes any heuristic guess for this session.
+      heuristicWorktrees: s.heuristicWorktrees[id]
+        ? Object.fromEntries(
+            Object.entries(s.heuristicWorktrees).filter(([k]) => k !== id),
+          )
+        : s.heuristicWorktrees,
+    }));
+    // The agent MOVED — a just-entered worktree may not be in the detection slice
+    // yet (EnterWorktree fires mid-turn), so fire a scoped worktrees+branches
+    // refresh through the debounced volley instead of waiting for the 15 s poll.
+    void get().refreshRepoGit({
+      repos: [effectiveRepo(session)],
+      kinds: ["worktrees", "branches"],
+    });
+  },
 
   markRunning: (id) => {
     reconnectingIds.delete(id); // no longer reconnecting (#261)
@@ -3672,7 +3754,24 @@ export const useStore = create<AppState>()((set, get) => ({
               // Forkability changed (#138) — gates the Fork affordance up front.
               get().setForkable(id, forkable);
             },
+            onCwd: ({ id, cwd }) => {
+              // The agent's working directory moved (EnterWorktree / /cd) — the
+              // relocation signal that re-parents its sidebar row under a
+              // detected worktree (and back when it leaves).
+              get().setSessionCwd(id, cwd);
+            },
             onExited: ({ id, code }) => {
+              // Drop any heuristic worktree guess for the exited session (transient
+              // bookkeeping — its row is leaving the tree anyway).
+              if (get().heuristicWorktrees[id]) {
+                set((s) => ({
+                  heuristicWorktrees: Object.fromEntries(
+                    Object.entries(s.heuristicWorktrees).filter(
+                      ([k]) => k !== id,
+                    ),
+                  ),
+                }));
+              }
               // Recurring child rotation/crash (#294): a session owned as a recurring's
               // *current* child that exits — killed on rotation, or crashed on its own —
               // must NOT surface a "Process exited" overlay or toast (it's an internal,
@@ -4306,6 +4405,75 @@ export const useStore = create<AppState>()((set, get) => ({
       });
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
+    }
+  },
+
+  refreshWorktrees: async (scope) => {
+    const st = get();
+    // A busy→idle volley is scoped to the settling session's FOLDER — for a worktree
+    // agent that's the worktree path, where the listing must run in the PARENT repo.
+    // Unknown paths fall back to every sidebar repo (null), fail-safe.
+    const sidebar = sidebarRepos(st.recents, st.sessions, st.recurrings);
+    const parentOf = (path: string) =>
+      st.sessions.find(
+        (s) => samePath(s.repoPath, path, st.platform) && !!s.worktreeParent,
+      )?.worktreeParent ??
+      detectedWorktreeParents(st.repoWorktrees, st.platform)[path];
+    const repos =
+      worktreeScopeRepos(scope ?? null, sidebar, parentOf, st.platform) ??
+      sidebar;
+    if (repos.length === 0) return;
+    let reply: Record<string, RepoWorktree[]>;
+    try {
+      reply = await ipc.listRepoWorktrees(repos);
+    } catch {
+      return; // backend unreachable — keep the slice as-is (fail-open)
+    }
+    const prev = get().repoWorktrees;
+    // Per-repo fail-open merge: a repo OMITTED from the reply failed its read →
+    // keep its previous entries; a present (even empty) list is authoritative.
+    const merged = { ...prev };
+    for (const repo of repos) {
+      const entries = reply[repo];
+      if (entries) merged[repo] = entries;
+    }
+    // Lifecycle: worktrees present before but gone from an authoritative new
+    // listing were removed (Claude's clean-exit auto-removal, a manual
+    // `git worktree remove`) — close their items with ONE toast each and prune
+    // any heuristic guesses pointing at them. Never touches the worktree itself.
+    const gone = vanishedWorktrees(prev, reply, repos, get().platform);
+    // Best-effort non-claude attribution: a NEW external worktree + exactly one
+    // busy log-less session in that repo → guess it created it.
+    const attributed = attributeNewWorktrees(
+      prev,
+      reply,
+      get().sessions,
+      get().sessionBusy,
+      (id) => {
+        const session = get().sessions.find((s) => s.id === id);
+        return !!session && !agentCaps(session.agent).supportsAutoName;
+      },
+      get().heuristicWorktrees,
+      get().platform,
+    );
+    set(() => {
+      const heuristicWorktrees = Object.fromEntries(
+        Object.entries(attributed).filter(
+          ([, path]) => !gone.some((g) => g.path === path),
+        ),
+      );
+      return { repoWorktrees: merged, heuristicWorktrees };
+    });
+    for (const wt of gone) {
+      // Auto-close + toast only when the user had something open there — an idle
+      // row disappearing (Claude's quiet cleanup of an untouched worktree) is
+      // self-explanatory, and a burst of subagent worktrees cleaning up must not
+      // produce a toast wall.
+      if (!worktreeHasItems(get(), wt.path)) continue;
+      await closeRepoItems(wt.path);
+      get().pushToast(
+        `Worktree ${wt.branch ?? repoName(wt.path)} was removed — closed its views`,
+      );
     }
   },
 
@@ -5920,6 +6088,62 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
+  spawnSessionInWorktree: async (path, parent) => {
+    try {
+      // In-place spawn into a detected worktree (external or orphan): the checkout
+      // already exists, so NEVER `git worktree add` (spawnWorktreeSession would
+      // compute the app-managed path and git refuses a branch already checked out
+      // elsewhere). The explicit parent nests the record under the parent repo —
+      // no prior session exists there for the #331 auto-derive to find.
+      const record = await ipc.spawnSession(
+        path,
+        undefined,
+        undefined,
+        get().settings.defaultAgent,
+        undefined,
+        parent,
+      );
+      get().upsertSession(toSessionView(record));
+      // Recents-touch the PARENT only — a worktree path must never become a
+      // top-level sidebar folder (#331).
+      set((s) => ({
+        recents: [parent, ...s.recents.filter((r) => r !== parent)],
+      }));
+      get().select(record.id);
+      get().pushToast(`Started agent in ${repoName(path)}`);
+      void get().refreshRepoGit({ repos: [parent] });
+      return true;
+    } catch (err) {
+      if (isSessionError(err) && err.kind === "BinaryNotFound") {
+        get().setClaudeMissing(true);
+      }
+      get().pushToast(
+        isSessionError(err) ? err.message : "Failed to start session",
+        "error",
+      );
+      return false;
+    }
+  },
+
+  removeOrphanWorktree: async (parent, dest) => {
+    // The dirty-kept ReCue-managed leftover: the USER confirmed a force-remove
+    // (the header's danger item is confirm-gated), and ReCue owns the folder —
+    // the backend still hard-refuses anything outside <data-dir>/worktrees.
+    try {
+      await closeRepoItems(dest);
+      await ipc.removeWorktree(parent, dest, true);
+      worktreeParents.delete(dest);
+      get().pushToast("Worktree removed");
+    } catch (err) {
+      get().pushToast(
+        isSessionError(err) ? err.message : "Could not remove worktree",
+        "error",
+      );
+    }
+    // Re-detect either way so the row reflects reality.
+    void get().refreshWorktrees([parent]);
+  },
+
   createBranchSession: async (cwd, name, base, container) => {
     // Branch-name validation errors (invalid / already-existing / unknown base) are
     // returned for inline display; the spawn itself reuses the normal flow.
@@ -5984,6 +6208,15 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   cleanupWorktreeIfEmpty: async (parent, dest) => {
+    // NEVER auto-remove a worktree ReCue didn't create: an in-place spawn into a
+    // DETECTED external worktree produces sessions whose teardown lands here, but
+    // the agent/user owns that checkout — closing the last item must not delete
+    // it. (The backend `remove_worktree` hard-refuses non-managed paths too; this
+    // short-circuit just avoids a pointless call + error toast.)
+    const detected = get().repoWorktrees[parent]?.find((e) =>
+      samePath(e.path, dest, get().platform),
+    );
+    if (detected && !detected.managed) return;
     // Record the parent so a later panel/schedule close can resolve it once this
     // worktree's last agent is gone (#199).
     worktreeParents.set(dest, parent);

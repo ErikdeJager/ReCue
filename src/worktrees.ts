@@ -123,7 +123,9 @@ export function worktreeSourceOf(
 /** Map every detected (non-main, existing) worktree path → its parent repo,
  * across the whole detection slice — the Overview/Canvas cluster-attribution
  * input, so panels opened inside a detected worktree group under the parent
- * repo's cluster instead of forming a stray top-level one. */
+ * repo's cluster instead of forming a stray top-level one. Keys are the RAW
+ * paths (exact-match, like the session-derived `wtParent` map it merges into —
+ * panel keys and detection paths both come from the same backend reads). */
 export function detectedWorktreeParents(
   repoWorktrees: Readonly<Record<string, RepoWorktree[]>>,
   platform: string,
@@ -132,7 +134,7 @@ export function detectedWorktreeParents(
   for (const [repo, entries] of Object.entries(repoWorktrees)) {
     for (const e of entries) {
       if (e.is_main || !e.exists || samePath(e.path, repo, platform)) continue;
-      parents[normPathKey(e.path, platform)] = repo;
+      parents[e.path] = repo;
     }
   }
   return parents;
