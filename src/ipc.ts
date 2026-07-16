@@ -143,6 +143,12 @@ export const spawnWorktreeAgent = (
 export const removeWorktree = (parent: string, dest: string, force: boolean) =>
   invoke<void>("remove_worktree", { parent, dest, force });
 
+/** Permanently delete the worktree folder at `dest` from disk — the explicit,
+ * always-confirmed user path (works on ANY listed worktree of `parent`, unlike
+ * the automation-guarded `removeWorktree`). The branch is kept. */
+export const deleteWorktree = (parent: string, dest: string) =>
+  invoke<void>("delete_worktree", { parent, dest });
+
 export const resumeSession = (id: string) =>
   invoke<SessionRecord>("resume_session", { id });
 

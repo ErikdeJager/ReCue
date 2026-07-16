@@ -327,6 +327,7 @@ pub fn run() {
             commands::spawn_terminal,
             commands::spawn_worktree_agent,
             commands::remove_worktree,
+            commands::delete_worktree,
             commands::list_repo_worktrees,
             commands::resume_session,
             commands::fork_session,

@@ -12,7 +12,8 @@
  *   registered folder itself, and anything a session record already renders —
  *   records stay authoritative, detection only adds).
  * - `worktreeSourceOf` — `record` / `orphan` (ReCue-managed, no records: the
- *   dirty-kept leftover) / `external` (agent / hook / manual — never deletable).
+ *   dirty-kept leftover) / `external` (agent / hook / manual — never removed
+ *   by AUTOMATION; the user's explicit Delete worktree… works on all three).
  * - `sessionActiveWorktree` — the relocation signal: which detected worktree a
  *   session is currently working in (claude's `currentCwd`, else the non-claude
  *   heuristic), re-parenting its sidebar row.
@@ -110,8 +111,9 @@ export function detectedWorktreesFor(
 
 /** The ownership class of a worktree sub-group: a record-backed path is
  * `record` (existing #74 flow, unchanged); a detected one is `orphan` when
- * ReCue-managed (the dirty-kept leftover — confirm-gated force-remove is
- * legitimate) else `external` (agent / hook / manual — ReCue NEVER deletes it). */
+ * ReCue-managed (the dirty-kept leftover) else `external` (agent / hook /
+ * manual — never removed by automation; the always-confirmed Delete worktree…
+ * is the one path that deletes any of the three). */
 export function worktreeSourceOf(
   detected: DetectedWorktree | undefined,
   isRecordBacked: boolean,
@@ -177,6 +179,35 @@ export function sessionActiveWorktree(
     return guessed;
   }
   return null;
+}
+
+/**
+ * The sessions doomed by permanently deleting the worktree at `dest` (the
+ * sidebar's **Delete worktree…**): every record LIVING there — running or
+ * exited, which covers record worktree agents (#74) and in-place spawns into a
+ * detected worktree alike (`repoPath` IS the worktree path for both) — plus
+ * every agent RELOCATED into it (`currentCwd` / the non-claude heuristic, the
+ * same signal that re-parents its sidebar row). Home sessions of the parent
+ * repo are untouched.
+ */
+export function worktreeDoomedSessionIds(
+  sessions: readonly {
+    id: string;
+    repoPath: string;
+    worktreeParent?: string | null;
+    currentCwd?: string | null;
+  }[],
+  dest: string,
+  heuristic: Readonly<Record<string, string>>,
+  platform: string,
+): string[] {
+  return sessions
+    .filter(
+      (s) =>
+        samePath(s.repoPath, dest, platform) ||
+        sessionActiveWorktree(s, [dest], heuristic, platform) !== null,
+    )
+    .map((s) => s.id);
 }
 
 /**

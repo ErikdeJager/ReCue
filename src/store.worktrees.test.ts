@@ -15,6 +15,8 @@ vi.mock("./ipc", () => ({
   listRepoWorktrees: vi.fn(),
   killSession: vi.fn(),
   removeWorktree: vi.fn(),
+  deleteWorktree: vi.fn(),
+  cancelSchedule: vi.fn(),
   setOverviewPanels: vi.fn(),
   spawnSession: vi.fn(),
   spawnTerminal: vi.fn(),
@@ -73,6 +75,8 @@ beforeEach(() => {
   m(ipc.listRepoWorktrees).mockResolvedValue({});
   m(ipc.killSession).mockResolvedValue(undefined);
   m(ipc.removeWorktree).mockResolvedValue(undefined);
+  m(ipc.deleteWorktree).mockResolvedValue(undefined);
+  m(ipc.cancelSchedule).mockResolvedValue(undefined);
   m(ipc.setOverviewPanels).mockResolvedValue(undefined);
   useStore.setState({
     sessions: [],
@@ -82,6 +86,7 @@ beforeEach(() => {
     heuristicWorktrees: {},
     overviewPanels: {},
     sessionBusy: {},
+    schedules: [],
     toasts: [],
     fileTreeMounts: {},
     resumeSettled: true,
@@ -237,15 +242,70 @@ describe("cleanupWorktreeIfEmpty — external short-circuit", () => {
   });
 });
 
-describe("removeOrphanWorktree", () => {
-  it("closes items, force-removes, and re-detects", async () => {
-    const orphan = "/data/worktrees/repo-1/old";
+describe("deleteWorktree (Delete worktree…)", () => {
+  it("kills the worktree's agents, closes its panels, deletes, and re-detects", async () => {
     useStore.setState({
-      overviewPanels: { [orphan]: [{ id: "p1", kind: "diff" }] },
+      sessions: [
+        // Lives in the worktree — killed + dropped.
+        session({ id: "wt-agent", repoPath: WT, worktreeParent: REPO }),
+        // Relocated into it via currentCwd — killed + dropped too.
+        session({ id: "moved", currentCwd: `${WT}/src` }),
+        // A home session of the parent repo — untouched.
+        session({ id: "home" }),
+      ],
+      repoWorktrees: { [REPO]: [mainEntry, entry({ path: WT })] },
+      overviewPanels: { [WT]: [{ id: "p1", kind: "diff" }] },
     });
-    await useStore.getState().removeOrphanWorktree(REPO, orphan);
-    expect(useStore.getState().overviewPanels[orphan]).toBeUndefined();
-    expect(ipc.removeWorktree).toHaveBeenCalledWith(REPO, orphan, true);
+    await useStore.getState().deleteWorktree(REPO, WT);
+
+    expect(ipc.killSession).toHaveBeenCalledWith("wt-agent");
+    expect(ipc.killSession).toHaveBeenCalledWith("moved");
+    expect(useStore.getState().sessions.map((s) => s.id)).toEqual(["home"]);
+    expect(useStore.getState().overviewPanels[WT]).toBeUndefined();
+    expect(ipc.deleteWorktree).toHaveBeenCalledWith(REPO, WT);
+    // The explicit delete owns the teardown — the ref-counted automation
+    // (`remove_worktree`) never fires mid-delete.
+    expect(ipc.removeWorktree).not.toHaveBeenCalled();
+    const toasts = useStore.getState().toasts.map((t) => t.message);
+    expect(toasts).toContain("Worktree deleted");
+    await vi.waitFor(() => {
+      expect(ipc.listRepoWorktrees).toHaveBeenCalled();
+    });
+  });
+
+  it("cancels schedules targeting the worktree without the 'kept' mis-toast", async () => {
+    useStore.setState({
+      schedules: [
+        {
+          id: "sch1",
+          cwd: REPO,
+          worktree: true,
+          worktree_path: WT,
+          fire_at: 99,
+          created_at: 1,
+        },
+      ],
+      repoWorktrees: { [REPO]: [mainEntry, entry({ path: WT })] },
+    });
+    await useStore.getState().deleteWorktree(REPO, WT);
+
+    expect(useStore.getState().schedules).toHaveLength(0);
+    expect(ipc.cancelSchedule).toHaveBeenCalledWith("sch1");
+    expect(ipc.deleteWorktree).toHaveBeenCalledWith(REPO, WT);
+    // cancelSchedule's own worktree cleanup is suppressed by the in-flight
+    // delete (the deletingWorktrees guard) — no non-forced remove, no
+    // "Worktree kept — it has uncommitted changes" toast.
+    expect(ipc.removeWorktree).not.toHaveBeenCalled();
+    const toasts = useStore.getState().toasts.map((t) => t.message);
+    expect(toasts).not.toContain("Worktree kept — it has uncommitted changes");
+    expect(toasts).toContain("Worktree deleted");
+  });
+
+  it("toasts the backend error and still re-detects", async () => {
+    m(ipc.deleteWorktree).mockRejectedValue(new Error("nope"));
+    await useStore.getState().deleteWorktree(REPO, WT);
+    const toasts = useStore.getState().toasts.map((t) => t.message);
+    expect(toasts).toContain("Could not delete worktree");
     await vi.waitFor(() => {
       expect(ipc.listRepoWorktrees).toHaveBeenCalled();
     });

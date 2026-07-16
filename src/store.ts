@@ -78,6 +78,7 @@ import {
   detectedWorktreeParents,
   samePath,
   vanishedWorktrees,
+  worktreeDoomedSessionIds,
   worktreeScopeRepos,
 } from "./worktrees";
 import type {
@@ -178,6 +179,12 @@ function adoptPendingRecurringChildren(
 // required to `git worktree remove`. Module-level + in-memory (rebuilt from the session
 // lifecycle each run), like `intentionalKills`; cleared when the worktree is removed.
 const worktreeParents = new Map<string, string>();
+
+// Worktree folders mid-`deleteWorktree`: killing the worktree's agents / cancelling
+// its schedules fires their teardowns' `cleanupWorktreeIfEmpty` calls, whose
+// non-forced `remove_worktree` would race the forced delete and mis-toast
+// "Worktree kept — it has uncommitted changes". The guard short-circuits them.
+const deletingWorktrees = new Set<string>();
 
 /**
  * Whether a worktree folder `dest` is still referenced by any item (#199): a session
@@ -2512,10 +2519,13 @@ export interface AppState {
    * (no prior session exists there for the #331 auto-derive). Never runs
    * `git worktree add` — the checkout already exists. */
   spawnSessionInWorktree: (path: string, parent: string) => Promise<boolean>;
-  /** Force-remove a ReCue-managed ORPHAN worktree (the dirty-kept leftover): close
-   * its items, `git worktree remove --force` (user-confirmed — ReCue owns it),
-   * re-detect. Refused backend-side for any path outside `<data-dir>/worktrees`. */
-  removeOrphanWorktree: (parent: string, dest: string) => Promise<void>;
+  /** Permanently delete the worktree at `dest` from disk (the sidebar's
+   * always-confirmed **Delete worktree…** — record, orphan, or external alike):
+   * kill + forget its agents (incl. relocated ones), cancel its schedules /
+   * recurrings, close its panels, then `delete_worktree` (validated backend-side
+   * against `git worktree list` — never the main checkout / the repo itself),
+   * and re-detect. The branch is kept; only the folder dies. */
+  deleteWorktree: (parent: string, dest: string) => Promise<void>;
   /** Start an agent in an isolated git worktree for an existing branch (#74). */
   spawnWorktreeSession: (
     repo: string,
@@ -6204,23 +6214,57 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  removeOrphanWorktree: async (parent, dest) => {
-    // The dirty-kept ReCue-managed leftover: the USER confirmed a force-remove
-    // (the header's danger item is confirm-gated), and ReCue owns the folder —
-    // the backend still hard-refuses anything outside <data-dir>/worktrees.
+  deleteWorktree: async (parent, dest) => {
+    // The USER confirmed a permanent delete (the header's Delete worktree… is
+    // ALWAYS confirm-gated — it ignores the confirmDestructive opt-out), so this
+    // is the one path that removes any listed worktree — ReCue-managed or not.
+    // The `deletingWorktrees` guard mutes the ref-counted auto-cleanup the
+    // teardowns below would otherwise fire mid-delete.
+    deletingWorktrees.add(dest);
     try {
+      // 1. Kill + forget every agent living in (or relocated into) the worktree.
+      const st = get();
+      const doomed = worktreeDoomedSessionIds(
+        st.sessions,
+        dest,
+        st.heuristicWorktrees,
+        st.platform,
+      );
+      for (const id of doomed) {
+        intentionalKills.add(id);
+        cancelAttentionGrace(id);
+        await ipc.killSession(id).catch(() => {});
+        get().dropSession(id);
+      }
+      // 2. Cancel schedules/recurrings created inside it or targeting it (the
+      //    `worktreeHasItems` matcher). Each emits its own small toast.
+      for (const sc of get().schedules.filter(
+        (x) => x.cwd === dest || x.worktree_path === dest,
+      )) {
+        await get().cancelSchedule(sc.id);
+      }
+      for (const r of get().recurrings.filter(
+        (x) => x.cwd === dest || x.worktree_path === dest,
+      )) {
+        await get().cancelRecurring(r.id);
+      }
+      // 3. Drop its panels (kills shell-terminal PTYs).
       await closeRepoItems(dest);
-      await ipc.removeWorktree(parent, dest, true);
+      // 4. Delete on disk (validated + forced + prune-fallback backend-side).
+      await ipc.deleteWorktree(parent, dest);
       worktreeParents.delete(dest);
-      get().pushToast("Worktree removed");
+      get().pushToast("Worktree deleted");
     } catch (err) {
       get().pushToast(
-        isSessionError(err) ? err.message : "Could not remove worktree",
+        isSessionError(err) ? err.message : "Could not delete worktree",
         "error",
       );
+    } finally {
+      deletingWorktrees.delete(dest);
     }
-    // Re-detect either way so the row reflects reality.
+    // Re-detect + re-read git either way so the row reflects reality.
     void get().refreshWorktrees([parent]);
+    void get().refreshRepoGit({ repos: [parent] });
   },
 
   createBranchSession: async (cwd, name, base, container) => {
@@ -6287,6 +6331,10 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   cleanupWorktreeIfEmpty: async (parent, dest) => {
+    // A `deleteWorktree` in flight owns this folder's teardown — the agent /
+    // schedule / panel removals it performs land here fire-and-forget, and a
+    // non-forced remove racing the forced delete would mis-toast "Worktree kept".
+    if (deletingWorktrees.has(dest)) return;
     // NEVER auto-remove a worktree ReCue didn't create: an in-place spawn into a
     // DETECTED external worktree produces sessions whose teardown lands here, but
     // the agent/user owns that checkout — closing the last item must not delete

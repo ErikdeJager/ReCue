@@ -1234,6 +1234,29 @@ pub fn worktree_unlock(repo: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result
     }
 }
 
+/// `git worktree prune` — drop stale administrative entries whose working
+/// directories no longer exist. The fallback for the user-initiated
+/// `delete_worktree` when the folder is already gone from disk but git still
+/// lists it (a stale/prunable entry `worktree remove` refuses to touch).
+pub fn worktree_prune(repo: impl AsRef<Path>) -> Result<(), String> {
+    let output = hidden_command("git")
+        .arg("-C")
+        .arg(repo.as_ref())
+        .args(["worktree", "prune"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "could not prune worktrees".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
 /// One entry of `git worktree list --porcelain`: a checkout (the main one or a
 /// linked worktree) of the repository, exactly as git records it in
 /// `.git/worktrees/<name>` — regardless of who created it (ReCue #74, an agent's

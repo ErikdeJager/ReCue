@@ -731,6 +731,42 @@ pub async fn remove_worktree(
     .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
+/// Permanently delete the worktree at `dest` from disk — the explicit,
+/// user-initiated path behind the sidebar's always-confirmed **Delete
+/// worktree…**. Where `remove_worktree`'s managed-root refusal guards
+/// *automation* (the ref-counted last-agent teardown must never touch a
+/// checkout ReCue didn't create), this command honors a deliberate user
+/// decision on ANY worktree — ReCue-managed, agent-created, or hand-made —
+/// and is instead bound to `git worktree list` membership: `dest` must be a
+/// listed, non-bare, non-main linked worktree of `parent`, and never the
+/// registered folder itself. Only the folder dies; the branch is kept.
+///
+/// Async + `spawn_blocking` for the same reason as `remove_worktree` (#200):
+/// the FS delete can span thousands of files.
+#[tauri::command]
+pub async fn delete_worktree(parent: String, dest: String) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entries = git::list_worktrees(&parent).ok_or_else(|| {
+            SessionError::Git("could not read this repository's worktrees".to_string())
+        })?;
+        validate_delete_target(&entries, &parent, &dest).map_err(SessionError::Git)?;
+        // git refuses to remove a locked worktree even with --force — unlock
+        // first, best-effort (a never-locked worktree fails harmlessly).
+        let _ = git::worktree_unlock(&parent, &dest);
+        match git::worktree_remove(&parent, &dest, true) {
+            Ok(()) => Ok(()),
+            // Folder already gone (a stale/prunable entry): drop the stale
+            // registration instead of failing the delete.
+            Err(_) if !Path::new(&dest).exists() => {
+                git::worktree_prune(&parent).map_err(SessionError::Git)
+            }
+            Err(e) => Err(SessionError::Git(e)),
+        }
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
 /// One worktree of a registered repo as reported by `git worktree list` — the
 /// detection read behind the sidebar's agent-created-worktree rows — stamped with
 /// what only the backend knows: whether the path is app-managed (under
@@ -2859,6 +2895,46 @@ fn path_under_norm(child: &str, root: &Path) -> bool {
     child_key == root_key || child_key.starts_with(&format!("{root_key}/"))
 }
 
+/// Path equality via the same canonicalize-or-lexical normalization as
+/// `path_under_norm`: both sides canonicalize when they exist (symlink-stable),
+/// fall back to the lexical `norm_path_key` otherwise — so a trailing slash,
+/// `\` separators, or Windows case never defeat the comparison.
+fn same_path_norm(a: &str, b: &str) -> bool {
+    let canon = |p: &str| {
+        Path::new(p)
+            .canonicalize()
+            .ok()
+            .map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.to_string())
+    };
+    norm_path_key(&canon(a)) == norm_path_key(&canon(b))
+}
+
+/// The `delete_worktree` guard, pure for unit tests: `dest` must be a listed,
+/// non-bare, **non-main** linked worktree of `parent` (entry 0 of the original
+/// listing is the main checkout — the `stamp_repo_worktree` convention), and
+/// never the registered folder itself (a registered folder may itself BE a
+/// linked worktree of some other main).
+fn validate_delete_target(
+    entries: &[git::WorktreeEntry],
+    parent: &str,
+    dest: &str,
+) -> Result<(), String> {
+    if same_path_norm(dest, parent) {
+        return Err("refusing to delete the repository folder itself".to_string());
+    }
+    match entries
+        .iter()
+        .enumerate()
+        .find(|(_, e)| same_path_norm(&e.path, dest))
+    {
+        None => Err("not a worktree of this repository".to_string()),
+        Some((0, _)) => Err("refusing to delete the repository's main checkout".to_string()),
+        Some((_, e)) if e.bare => Err("refusing to delete a bare entry".to_string()),
+        Some(_) => Ok(()),
+    }
+}
+
 // --- Application settings (#100) ---
 
 /// The persisted application settings blob (#100) — opaque JSON; `null` until the
@@ -4009,6 +4085,57 @@ mod tests {
         let container = stamp_repo_worktree(2, entry("/work/wt"), Some(&managed_root));
         assert!(!container.exists && !container.managed);
         let _ = std::fs::remove_dir_all(&managed_root);
+    }
+
+    #[test]
+    fn same_path_norm_survives_separator_trailing_and_lexical_variants() {
+        // Lexical fallback (paths don't exist): trailing slash + `\` separators.
+        assert!(same_path_norm("/a/b/c", "/a/b/c/"));
+        assert!(same_path_norm("/a\\b\\c", "/a/b/c"));
+        assert!(!same_path_norm("/a/b/c", "/a/b/c-evil"));
+        // Real dirs: canonicalization resolves both sides (macOS /tmp symlink).
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("recue-samepath-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let raw = dir.to_str().unwrap().to_string();
+        let canon = dir.canonicalize().unwrap();
+        assert!(same_path_norm(&raw, canon.to_str().unwrap()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_delete_target_guards_main_self_unlisted_and_bare() {
+        let entry = |path: &str, bare: bool| crate::git::WorktreeEntry {
+            path: path.to_string(),
+            head: "abc".into(),
+            branch: Some("feat".into()),
+            bare,
+            detached: false,
+            locked: false,
+            locked_reason: None,
+            prunable: false,
+        };
+        let entries = vec![
+            entry("/repo", false),         // index 0 = the main checkout
+            entry("/wt/feat-x", false),    // a linked worktree — deletable
+            entry("/wt/bare-entry", true), // bare — never a deletable folder
+        ];
+        // A listed linked worktree passes — including trailing-slash/`\` variance.
+        assert!(validate_delete_target(&entries, "/repo", "/wt/feat-x").is_ok());
+        assert!(validate_delete_target(&entries, "/repo", "/wt/feat-x/").is_ok());
+        assert!(validate_delete_target(&entries, "/repo", "\\wt\\feat-x").is_ok());
+        // The main checkout (entry 0) is refused.
+        let main = validate_delete_target(&entries, "/other-registered", "/repo");
+        assert!(main.unwrap_err().contains("main checkout"));
+        // The registered folder itself is refused even before list membership.
+        let this = validate_delete_target(&entries, "/repo", "/repo");
+        assert!(this.unwrap_err().contains("repository folder itself"));
+        // An unlisted path is refused (never `git worktree remove` a stranger).
+        let unlisted = validate_delete_target(&entries, "/repo", "/wt/not-listed");
+        assert!(unlisted.unwrap_err().contains("not a worktree"));
+        // A bare entry is refused.
+        let bare = validate_delete_target(&entries, "/repo", "/wt/bare-entry");
+        assert!(bare.unwrap_err().contains("bare"));
     }
 
     #[test]
