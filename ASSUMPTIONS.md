@@ -4028,3 +4028,12 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Re-clicking the currently-filtered row clears the filter — reused the existing `setOverviewRepoFilter` toggle unchanged, so Attention's toggle behavior is identical to Overview's.
 - Threaded an optional `filter` through the pure `attentionQueue` helper (default no-op, existing call sites/tests unchanged) so all five consumers — view, Shift+↑/↓ nav, ⌘W remove, Dismiss-all, dismiss-advance — operate on the visible/filtered queue consistently.
 - Did NOT restyle the inbox icon (task 447's scope); no backend/Rust and no ViewSwitch changes.
+
+## Task 446
+
+- Fix mechanism: portal the menu to document.body via React createPortal (matching the existing ContainerInfoPopover precedent) rather than a narrower CSS-only tweak — one change fixes BOTH the opacity-inheritance and the clipping, since a single root cause (the menu being a DOM descendant of the opacity:0.62 .worktreeIdle element) drives both symptoms.
+- Root cause: opacity < 1 on the .worktreeIdle ancestor both composites the descendant menu at 62% (transparency) AND captures the position:fixed menu into that stacking/opacity group, which .repos (overflow-y:auto)/.sidebar (overflow:hidden) then clips (the "opacity/transform ancestor breaks position:fixed" behavior) — not a separate transform/filter ancestor (none exists in the sidebar chain).
+- Keep the worktree-row dimming as-is (.worktreeIdle opacity:0.62 stays); do NOT refactor it to --text-muted. The portal makes the dimming safe, so the minimal fix leaves the designed presence-driven dimming untouched.
+- Scope: the load-bearing fix is the WorktreeHeader inline menu (the only dimmed-ancestor site). For consistency + future-proofing the identical fixed-position pattern, also portal the other four sidebar menu render sites (shared RowContextMenu, AgentContextMenu, RepoBranchLine inline, sidebar-background/rail inline) — zero downside since they already use position:fixed.
+- Both the menu-overlay (outside-click catcher) and the menu-pop are portaled together, so outside-clicks in the main content area still dismiss; anchoring keeps the existing viewport-clamped {x,y}; React portals preserve synthetic-event bubbling so Escape/outside-click/right-click dismissal and inline-confirm items keep working; menu z-index (200/201) unchanged.
+- No CSS/Rust changes; only src/components/Sidebar/Sidebar.tsx (add createPortal import + a MenuPortal wrapper). Pure WebView/TS work — identical on macOS/Windows/Linux, no OS branches, no new color-mix.
