@@ -2230,3 +2230,70 @@ WKWebView/WebView2/WebKitGTK). Real-box smoke logged in both trajectory files.
 **Dependencies:** Task 433 (builds on its `primary.rs` registration seam, `isPrimaryLabel`, and the
 null-default for non-`"main"` labels; Multi-window 1/16 = Task 426 already landed; via 433 → 430 → 432
 the whole planned chain landed first).
+
+### 435. [x] Multi-window 14/16 — Same-file edit guard: transient soft claims make one window's auto-save editor authoritative, other windows render read-only with take-over
+
+When two windows hold an editable auto-saving view of the **same file** (FileViewer raw/plain #148,
+Kanban board #141–#151), the first window to actually edit it soft-claims the file; every other
+window's editor renders **read-only** with a "Being edited in another window — Take over" affordance,
+so the two debounced write buffers can no longer silently fight. Advisory only — no on-disk locks; a
+stale claim degrades to last-writer-wins (today's behavior). With one window on the file, editing is
+byte-identical to today.
+
+**What shipped** (branch `task-435-same-file-edit-guard`, PR
+[#199](https://github.com/ErikdeJager/ReCue/pull/199), merged 2026-07-16 into `backend-decouple`,
+commit `13e5f3f`; 16 files, +1038/-84):
+
+- **`src-tauri/src/file_claims.rs`** — **new**. A pure `ClaimRegistry`
+  (`HashMap<(repo_path, file), window_label>`: `claim` last-wins/no-op on same-label, `release`
+  holder-guarded, `purge_window`, deterministically-sorted `snapshot`) inside a thin poison-recovering
+  `FileClaims` managed wrapper (the `terminal_views.rs` model: state mutated + snapshot taken **before**
+  the emit). Full pure-core unit tests.
+- **`src-tauri/src/commands.rs`** — `claim_file` / `release_file_claim` / the `file_claims` snapshot
+  (each emitting `file_claims://changed` with the full `Vec<FileClaim>` on change; `window_label`
+  explicit, the `attach_terminal` precedent).
+- **`src-tauri/src/lib.rs`** — `mod file_claims;`, manage `FileClaims`, the `Destroyed`-arm purge
+  (beside 426's `purge_window` + 433's `unregister_window`), command registration.
+- **`src/fileClaims.ts` (+ test)** — pure `claimKey`/`claimsToMap`/`heldElsewhere`/`claimIntent`
+  (the full claim-vs-release truth table), plus the `FileClaim` mirror type.
+- **`src/store.ts`** — a transient `fileClaims` slice + equality-guarded `applyFileClaimsSync` (never
+  persists), a dedicated `subscribeFileClaimEvents` in `init`'s wave + a post-boot `file_claims()`
+  snapshot fetch (subscribe-then-fetch, fail-soft).
+- **`src/useAutoSaveFile.ts`** — the claim lifecycle: claim on focus **or** dirty (covers the Kanban
+  drag path that never focuses), release once blurred+clean, purge on unmount/file-switch; a
+  `lockedBy`/`takeOver` surface with `setText`/`save` hard-gated (defense in depth); on losing the
+  claim it cancels the debounce and flushes once (auto mode) so ≤600 ms of typing isn't dropped.
+- **`ClaimBanner`** (new, modeled on `DetachedNote`) + **`FileViewer.tsx`** (readOnly textarea /
+  non-interactive checkboxes / disabled Save) + **`KanbanPanel.tsx`** (banner + panel-level mutation
+  gates + a `readOnly` prop threaded through `BoardColumn`/`SortableCard`, disabled drag sensors,
+  readOnly Raw textarea) — the hot-reload poll keeps a locked view live-following the other window's
+  saves.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 435)
+
+- Claim lifetime refined from the card's "cleared on blur/close" to "actively editing OR unsaved edits
+  pending" (claim on focus **or** dirty; release blurred+clean; manual-mode #162 keeps the claim past
+  blur until Save settles) — needed because Kanban drag mutations dirty the buffer without focusing.
+- Backend claim is unconditional last-claim-wins (take-over is the same `claim_file` command); release
+  is holder-label-guarded; purge on Destroyed. No per-panel refcounting — two same-window panels share
+  the label and may leave a microsecond unclaimed gap (accepted soft-claim semantics).
+- On losing the claim while dirty, the loser flushes **once** in auto mode (manual-mode keeps the
+  buffer in memory with Save disabled); any overlap is the documented last-writer-wins fallback.
+- Claims keyed by exact `{repoPath, file}` strings (no path normalization — panels replicate from the
+  shared persisted blobs, so spellings match; keys are never parsed as paths → Windows-safe).
+- A **dedicated** `file_claims://changed` event + snapshot command, NOT a twelfth `StateSyncHandlers`
+  entry — that interface documents *persisted* slices; claims are transient (the `canvas://windows`
+  precedent).
+- Read-only affordance is a shared `ClaimBanner` used by both consumers; no hook-rendering tests
+  (vitest is `environment: "node"`), so the card's "helpers pure + unit-tested" is satisfied by the
+  `claimIntent`/`heldElsewhere` + Rust `ClaimRegistry` batteries.
+
+**Rollback-safe:** nothing persisted (no schema change), events without listeners are inert, removing
+the UI gates restores today's behavior byte-for-byte.
+
+**Cross-platform:** opaque string keys (no path parsing), global Tauri events, pure TS/CSS tokens —
+no `#[cfg]` arms, no shell-outs; identical on macOS/Windows/Linux.
+
+**Dependencies:** Task 433 (sequencing/conflict-avoidance — 433 edits the same `lib.rs` Destroyed arm
+and `store.ts` init subscribe wave this card extends; the card's other named dep "Multi-window 3/16" =
+Task 428 was already landed and dropped off).
