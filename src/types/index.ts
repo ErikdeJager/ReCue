@@ -346,6 +346,22 @@ export interface StatePayload {
   busy: boolean;
 }
 
+/** Payload of the `session://size` broadcast (tasks 426/427): the authoritative,
+ * smallest-wins-arbitrated PTY grid. The ONLY thing that ever resizes a pooled
+ * xterm's grid (terminalPool applies it; nothing else calls term.resize). */
+export interface SizePayload {
+  id: string;
+  cols: number;
+  rows: number;
+}
+
+/** Return of `attach_terminal` (task 426): the effective grid the attaching host
+ * must adopt before replaying scrollback. */
+export interface GridPayload {
+  cols: number;
+  rows: number;
+}
+
 /** Payload of the `session://name` event (#97): claude's latest auto-title. */
 export interface NamePayload {
   id: string;
