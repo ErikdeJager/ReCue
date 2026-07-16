@@ -189,6 +189,15 @@ pub enum SessionEvent {
         id: String,
         forkable: bool,
     },
+    /// The directory the session is currently working in, per claude's own log
+    /// (`EnterWorktree` / `/cd` move it) — the agent-relocation signal for the
+    /// sidebar's worktree grouping. Emitted by the title worker on its burst
+    /// cadence when the log tail's `cwd` changes; claude-only (`uses_claude_log`).
+    /// The command layer persists + forwards it.
+    Cwd {
+        id: String,
+        cwd: String,
+    },
 }
 
 /// Cap on a single coalesced `Output` payload (#346): a run at/over this size is
@@ -1644,13 +1653,15 @@ fn monitor_loop(
                 {
                     return; // receiver dropped (app shutting down)
                 }
-                // On the *true* busy→idle settle (a turn ended — sticky bursts no longer
-                // flicker one per cycle) poke the title worker to re-read claude's freshly
-                // (re)written `ai-title` off the hot path (#97). Best-effort: a dead worker
-                // never stalls the monitor tick.
-                if !busy && prev {
-                    let _ = title_tx.send((id.clone(), *uses_claude_log));
-                }
+                // Poke the title worker on BOTH edges, off the hot path. The
+                // busy→idle settle re-reads claude's freshly (re)written `ai-title`
+                // (#97); the idle→busy onset arms the same ~30s re-read burst so a
+                // mid-turn `EnterWorktree` surfaces the session's new `cwd` (the
+                // relocation signal) while the agent is still working, not only at
+                // settle. Reads are per-id change-deduped, so the extra edge costs
+                // nothing when nothing changed. Best-effort: a dead worker never
+                // stalls the monitor tick.
+                let _ = title_tx.send((id.clone(), *uses_claude_log));
             }
         }
     }
@@ -1671,6 +1682,7 @@ fn monitor_loop(
 fn title_worker(title_rx: Receiver<(String, bool)>, events: Sender<SessionEvent>) {
     let mut last: HashMap<String, String> = HashMap::new();
     let mut last_forkable: HashMap<String, bool> = HashMap::new();
+    let mut last_cwd: HashMap<String, String> = HashMap::new();
     // Pending re-read deadlines (#169): one `(Instant, id, uses_claude_log)` per burst
     // offset. Drained as they fall due, so the set stays bounded to roughly one
     // window's worth.
@@ -1717,8 +1729,15 @@ fn title_worker(title_rx: Receiver<(String, bool)>, events: Sender<SessionEvent>
         due.sort();
         due.dedup();
         for (id, uses_claude_log) in due {
-            if read_and_emit_title(&id, uses_claude_log, &events, &mut last, &mut last_forkable)
-                .is_err()
+            if read_and_emit_title(
+                &id,
+                uses_claude_log,
+                &events,
+                &mut last,
+                &mut last_forkable,
+                &mut last_cwd,
+            )
+            .is_err()
             {
                 return; // receiver dropped (app shutting down)
             }
@@ -1748,6 +1767,7 @@ fn read_and_emit_title(
     events: &Sender<SessionEvent>,
     last: &mut HashMap<String, String>,
     last_forkable: &mut HashMap<String, bool>,
+    last_cwd: &mut HashMap<String, String>,
 ) -> Result<(), ()> {
     // Forkability (#138): for a claude session, computed every poke (independent of the
     // title, which may be absent) and emitted only when it flips — false→true the moment
@@ -1770,6 +1790,24 @@ fn read_and_emit_title(
     // that doesn't write one (Codex keeps the branch / first-prompt label).
     if !uses_claude_log {
         return Ok(());
+    }
+    // Current working directory (agent relocation): the log tail's `cwd` moves
+    // when the agent enters/leaves a worktree. Read BEFORE the title bail-out —
+    // a session may have a cwd (every line carries one) long before any
+    // `ai-title` materializes. Emitted on change only, like the title.
+    if let Some(cwd) = crate::title::read_session_cwd(id) {
+        if last_cwd.get(id) != Some(&cwd) {
+            last_cwd.insert(id.to_string(), cwd.clone());
+            if events
+                .send(SessionEvent::Cwd {
+                    id: id.to_string(),
+                    cwd,
+                })
+                .is_err()
+            {
+                return Err(());
+            }
+        }
     }
     let Some(title) = crate::title::read_session_title(id) else {
         return Ok(()); // no log / no title yet (e.g. a shell terminal item) — skip
@@ -2496,6 +2534,7 @@ mod tests {
                 Ok(SessionEvent::State { .. }) => {}
                 Ok(SessionEvent::Name { .. }) => {}
                 Ok(SessionEvent::Forkable { .. }) => {}
+                Ok(SessionEvent::Cwd { .. }) => {}
                 Err(_) => panic!("timed out waiting for session events"),
             }
         };

@@ -267,6 +267,16 @@ pub fn run() {
                                     commands::ForkablePayload { id, forkable },
                                 )
                             }
+                            SessionEvent::Cwd { id, cwd } => {
+                                // Persist the agent's current working directory (the
+                                // relocation signal; persist-on-change inside
+                                // set_current_cwd) so the sidebar's worktree grouping is
+                                // right immediately on boot, then notify the UI.
+                                let _ = handle
+                                    .state::<Store>()
+                                    .set_current_cwd(&id, Some(cwd.clone()));
+                                handle.emit("session://cwd", commands::CwdPayload { id, cwd })
+                            }
                         };
                     }
                 }

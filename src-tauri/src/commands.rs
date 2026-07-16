@@ -71,6 +71,15 @@ pub struct ForkablePayload {
     pub forkable: bool,
 }
 
+/// Payload for the `session://cwd` event: the directory a session is currently
+/// working in per claude's own log — the agent-relocation signal the sidebar
+/// uses to re-parent a row under a detected worktree (and back).
+#[derive(Clone, Serialize)]
+pub struct CwdPayload {
+    pub id: String,
+    pub cwd: String,
+}
+
 /// Payload for the `canvas://windows` event (#84): the canvas ids that currently
 /// have a detached window open. Every window listens so the main tab strip can
 /// mark detached tabs and each window can recompute terminal ownership.
@@ -465,6 +474,7 @@ fn spawn_session_blocking(
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
         container_image: launch.as_ref().map(|l| l.image.clone()),
+        current_cwd: None,
     };
     store
         .add_session(record.clone())
@@ -579,6 +589,7 @@ fn spawn_worktree_agent_blocking(
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
         container_image: launch.as_ref().map(|l| l.image.clone()),
+        current_cwd: None,
     };
     store
         .add_session(record.clone())
@@ -666,6 +677,7 @@ fn spawn_worktree_agent_new_branch_blocking(
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
         container_image: launch.as_ref().map(|l| l.image.clone()),
+        current_cwd: None,
     };
     store
         .add_session(record.clone())
@@ -983,6 +995,7 @@ fn fork_session_blocking(
         watch: false,
         // A dev-container source is refused above, so a fork is always a host PTY.
         container_image: None,
+        current_cwd: None,
     };
     store
         .add_session(record.clone())
@@ -2057,6 +2070,7 @@ fn fire_one_schedule(
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
         container_image: None,
+        current_cwd: None,
     };
     let _ = store.add_session(record.clone());
     // Touch the repo (not the worktree folder) as the recent.
@@ -2423,6 +2437,7 @@ fn fire_one_recurring(
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
         container_image: None,
+        current_cwd: None,
     };
     let _ = store.add_session(record.clone());
     let _ = store.touch_recent(&rec.cwd);
@@ -3656,6 +3671,7 @@ mod tests {
             auto_continue_disabled: false,
             watch: false,
             container_image: None,
+            current_cwd: None,
         }
     }
 
