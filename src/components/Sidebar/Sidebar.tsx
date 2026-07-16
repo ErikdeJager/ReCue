@@ -47,6 +47,7 @@ import { afterPaint } from "../../gitRefresh";
 import { noAutoCapitalize } from "../../inputProps";
 import {
   listBranches,
+  openAppWindow,
   openUrl,
   revealFileInFinder,
   revealPath,
@@ -2321,6 +2322,8 @@ function Sidebar() {
   const removeOverviewPanel = useStore((s) => s.removeOverviewPanel);
   const sessionBusy = useStore((s) => s.sessionBusy);
   const sessionActive = useStore((s) => s.sessionActive);
+  // Error surface for the repo menu's "Open in new window" (multi-window 12/16).
+  const pushToast = useStore((s) => s.pushToast);
 
   // Right-click repo context menu (#31/#35), anchored at the cursor. `menuMode`
   // switches between the item list, the destructive Forget confirm, and the
@@ -3502,10 +3505,32 @@ function Sidebar() {
                   onClose={closeMenu}
                   includeNewSession={false}
                 />
-                {/* Non-destructive folder utilities (#129): reveal in Finder /
-                    open in editor / copy the absolute path. Reuses the
-                    `open`-shell-out backend (#100/#109) and the store helpers. */}
+                {/* Non-destructive folder utilities (#129): open in new window /
+                    reveal in Finder / open in editor / copy the absolute path.
+                    Reuses the `open`-shell-out backend (#100/#109) and the store
+                    helpers. */}
                 <div className="menu-sep" role="separator" />
+                {/* Open in new window (multi-window 12/16): a second full app window (task 434)
+                    preset to this folder as its Overview repo filter — "window A on repo X,
+                    window B on repo Y". `menu.repo` is the top-level group path, i.e. the
+                    worktree PARENT for repos with worktrees, so the new window's "all"-mode
+                    filter includes its worktree agents (effectiveRepo grouping, #96/#247).
+                    The preset is the new window's local init state — nothing persists, and it
+                    clears like any filter. Always shown (path-based; works for non-git folders). */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  title="Open a new window showing only this folder"
+                  onClick={() => {
+                    void openAppWindow({ repo: menu.repo }).catch(() => {
+                      pushToast("Could not open a new window", "error");
+                    });
+                    closeMenu();
+                  }}
+                >
+                  Open in new window
+                </button>
                 <button
                   type="button"
                   role="menuitem"
