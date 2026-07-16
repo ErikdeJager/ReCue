@@ -1,8 +1,6 @@
-import { useState } from "react";
-import { Lightbulb, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 
-import { useStore } from "../../store";
-import { nextTipIndex, randomTipIndex, renderTip, TIPS } from "../../tips";
+import TipRow from "../TipRow/TipRow";
 import { useKeybindLabel } from "../../useKeybind";
 import styles from "./EmptyState.module.css";
 
@@ -13,16 +11,13 @@ interface EmptyStateProps {
 /**
  * First-launch hero (UI v2 §7, task 379) — sits directly on the boosted hero
  * wave (task 377): the "ReCue" wordmark, one compact accent "New session"
- * button, and a random startup tip from `src/tips.json` with a small "tip"
- * affordance that shuffles to a different tip. Reused by the Overview wall
- * (task #11) when the app is truly empty.
+ * button, and a random startup tip from `src/tips.json` (the shared `TipRow`,
+ * extracted in task 424) with a small "tip" affordance that shuffles to a
+ * different tip. Reused by the Overview wall (task #11) when the app is truly
+ * empty.
  */
 function EmptyState({ onNewSession }: EmptyStateProps) {
-  const platform = useStore((s) => s.platform);
   const newSessionKey = useKeybindLabel("new-session");
-  const [tipIdx, setTipIdx] = useState(() => randomTipIndex(TIPS.length));
-  const tip = TIPS[tipIdx];
-  const renderedTip = tip ? renderTip(platform, tip) : "";
   return (
     <div className={styles.empty}>
       <div className={styles.wordmark}>
@@ -37,23 +32,7 @@ function EmptyState({ onNewSession }: EmptyStateProps) {
           )}
         </button>
       )}
-      {tip && (
-        <div className={styles.tipRow}>
-          <button
-            type="button"
-            className={styles.tipButton}
-            onClick={() => setTipIdx((i) => nextTipIndex(i, TIPS.length))}
-            title="Show another tip"
-            aria-label="Show another tip"
-          >
-            <Lightbulb size={11} strokeWidth={1.8} aria-hidden />
-            tip
-          </button>
-          <span className={styles.tipText} title={renderedTip}>
-            {renderedTip}
-          </span>
-        </div>
-      )}
+      <TipRow />
     </div>
   );
 }

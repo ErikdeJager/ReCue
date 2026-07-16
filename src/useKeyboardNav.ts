@@ -160,14 +160,26 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
     }
     // ⌘W: close what the user is looking at (see store.closeFocusedPanel) — in
     // Attention it removes (kills + forgets) the focused agent, the view's primary
-    // close affordance. Inert while a modal owns the keyboard — and still swallowed
-    // there, so the chord can never fall through to a WebView "close window" default.
+    // close affordance. Inert while ANY modal owns the keyboard — every modal flag,
+    // not just the four keyboard-opened ones: since #425 the Overview fall-through
+    // is destructive (removeSession / cancelSchedule / cancelRecurring), so a chord
+    // aimed at dismissing a dialog must never reach the card behind it. Still
+    // swallowed there, so the chord can never fall through to a WebView "close
+    // window" default.
     case "close-panel": {
       const modalOpen =
         state.newSessionOpen ||
         state.settingsOpen ||
         state.globalSearchOpen ||
-        state.createPanelOpen;
+        state.createPanelOpen ||
+        state.templateEditorOpen ||
+        state.templateManagerOpen ||
+        state.templateUseOpen ||
+        state.cloneRepoOpen ||
+        state.onboardingOpen ||
+        state.editorPickerOpen ||
+        state.canvasClosePromptId !== null ||
+        state.update.confirming;
       if (!modalOpen) state.closeFocusedPanel();
       return "swallow";
     }

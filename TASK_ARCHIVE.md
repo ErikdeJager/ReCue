@@ -657,12 +657,17 @@ ships as v2.0.0 after card 12, no per-card version bump / patch notes).
 - #395 Sidebar repo header — active-agent count in the "+" slot — each repo header shows its count of active (running) agents at rest in the same slot the New-session **+** occupies, swapping to the clickable **+** on hover / keyboard-focus with zero layout shift; the always-on total-sessions chip is removed (empty/none-running cases keep today's behavior, no "0").
 - #396 Style the "Dark mode is the recommended experience" Settings note as a yellow caution — restyled the #342 plain-grey note as an on-system **yellow caution** (matching the untested-agent caution elsewhere in the modal) so it reads as a deliberate warning.
 
-**Continued polish (#397+).** _(#400+ are written out in full at the end of this file.)_
+**Continued polish (#397+).** _(#404+ are written out in full at the end of this file.)_
 
 - #397 ⌘F search — per-folder filter chips (⌘-Number) with lifted per-repo cap — a row of muted folder chips under the search bar; **⌘-Number** (Ctrl+N on Windows/Linux) lights the Nth chip and narrows results to that folder (again / Escape / click clears), and while a folder filter is active #393's per-repo 6-item cap is **lifted** so all its matches show. Reuses #393's `rankAndGroup` with `perRepoCap: Infinity` — no `search.ts` logic change; the global ⌘1–9 Canvas-jump is inert while the modal owns ⌘-Number.
 - #398 Attention view — a FIFO triage queue for idle agents needing input — a third top-level view that FIFO-queues agents gone idle (oldest-idle first) so the user triages them one at a time: the queue on the left, the selected agent's **real live terminal** on the right (via `ItemContent`, so a `DetachedNote` shows when another window owns the PTY), then dismiss (keep alive) or kill and advance. Pure derived state — no new Rust / git read / persistence; ⌘⏎ (Ctrl+Enter) dismisses, Shift+↑/↓ cycle the queue, and the ViewSwitch segment carries a live idle-count badge.
 - #399 Let macOS Ctrl+⌘+F native fullscreen through — the ⌘F/Ctrl+F global-search chord no longer swallows macOS's native **Ctrl+⌘+F** fullscreen combo: a pure `isGlobalSearchChord` predicate (+ unit test) fires the handler only when **exactly one** of Cmd/Ctrl is held, so Cmd+Ctrl+F falls through to the OS while plain Ctrl+F still opens search on macOS. A no-op on Windows/Linux (Ctrl+F alone still matches).
+- #400 Order folder pickers most-recently-used — count every panel open as a repo "use" — the folder/repo create-pickers (⌘K Create-panel, ⌘N/⌘⇧N New-session, "New tab from template…") already order by the persisted **`recents`** list, but it was bumped only on agent spawn; now `addOverviewPanel` (the single funnel for every non-agent panel) bumps the repo to the front of `recents` before its dedup early-return (resolving the worktree parent per #331), so opening a file/diff/terminal/kanban/file-tree panel counts as a repo use and every picker's ordering stays accurate — no picker UI changed.
+- #401 Soften UI v2 element borders and focus rings — a token-only, theme-aware CSS tuning (no behavior change): lowered the neutral border-token alphas (`--border-hairline`/`--border-strong`) in both the dark and light `tokens.css` blocks (heaviness was color weight, not the 1px floor), and formalized the keyboard focus ring into new `--focus-ring` (accent @ ~70% via `color-mix`, custom-accent-live) + `--focus-ring-width` (2px→1.5px) tokens, consumed with the plain-`var(--accent)`-fallback-first pattern in `global.css` + eight component overrides.
 - #402 Default the wave "Pause when covered by panels" setting to OFF (opt-in) — `pauseWaveWhenCovered` (#384) now defaults **off**, so a fresh install keeps the background wave animating even when the Overview wall has cards or a Canvas tab has panels; pausing-while-covered is now an explicit opt-in. A `DEFAULT_SETTINGS` value flip only — no migration (the `mergeSettings` back-fill handles the upgrade); a user who saved settings since #384 keeps their persisted `true`.
+- #403 Robust activity indicator — stop the busy dot flickering when a panel is focused — a **backend-only** `pty.rs` fix (platform-neutral): focusing an agent (hover/click) made xterm emit a DECSET-1004 focus-in report, claude repainted, and the busy monitor mis-read that one-shot repaint as work — blinking the dot blue, churning the Attention queue and even resurrecting dismissed cards. Added `last_report` to `ActivityState` (stamped by `write_stdin` on a non-input report), a `report_repaint` signal in `monitor_loop`, and a `suppress_on` param to `decide_busy` that gates only the **idle→busy** edge — an already-busy session and a real keystroke-started turn are untouched (#185 preserved). Fixing the source fixes every consumer at once.
+- #405 Remove the Attention queue-count badge from the ViewSwitch — Attention is an **optional** mode, so its ViewSwitch button no longer shows a live idle-count pill that made it read as required/urgent. Removed the `attentionCount` selector + the `.count` (expanded) and `.countCompact` (compact-rail) badges from both `ViewSwitch.tsx` renderings and their now-dead CSS; the button's icon, accessible name, and view-switch behavior — and the Attention view's own in-view "N idle" header — are untouched (kept minimal so #406 builds cleanly on top).
+- #406 Make Overview + Attention the main view buttons; Canvas a smaller secondary button — the sidebar view switcher now reads as a prominence hierarchy: Overview + Attention are an equal-weight two-segment shared `SegmentedControl`, and Canvas is a visibly smaller, de-emphasized `<button>` appended after it (with `view === "canvas"` leaving neither segment active and lighting the Canvas button instead); the compact rail reorders to Overview, Attention, Canvas with a Canvas de-emphasis. Layout/visual only — the shared `SegmentedControl` atom, the store, and all shortcuts are unchanged. Depends on #405.
 ---
 
 ## Design reference (dark theme only)
@@ -718,259 +723,9 @@ below.
 
 > The tasks below are kept **written out in full** (Description / What shipped / Key files /
 > Dependencies). They are the 20 most recently archived, so they appear in **archive order**,
-> not strict numeric order: #400, #401, #405, #403, #406, #404, #409, #411, #407, #410,
-> #408, #412, #414, #415, #413, #417, #418, #420, #419, #416. Every earlier task is condensed in the
+> not strict numeric order: #404, #409, #411, #407, #410,
+> #408, #412, #414, #415, #413, #417, #418, #420, #419, #416, #421, #422, #423, #424, #425. Every earlier task is condensed in the
 > index above.
-
-### 400. [x] Order folder pickers most-recently-used — count every panel open as a repo "use"
-
-The folder/repo pickers that create a panel or session (⌘K Create-panel, ⌘N/⌘⇧N New-session,
-"New tab from template…") already order their options by the persisted **`recents`** list
-(most-recently-used first) — but `recents` was only bumped when an **agent spawned**, so opening a
-file / diff / terminal / kanban / file-tree panel in a repo never marked it recently-used and the
-ordering went stale for panel-heavy workflows. Fix: `addOverviewPanel` (the single funnel for every
-non-agent panel) now bumps the repo to the front of `recents`, so every existing picker's ordering
-becomes accurate — no picker UI code changed.
-
-**What shipped** (branch `order-folder-pickers-mru-400`, PR
-[#156](https://github.com/ErikdeJager/ReCue/pull/156), merged 2026-07-15 into `ui-rework`):
-
-- **`src/store.ts`** — inside `addOverviewPanel`, **before** the dedup early-return (so a re-open /
-  "Already open" also counts as a use), resolve the effective recent path and bump it:
-  `recentPath = sessions.find(x => x.repoPath === repoPath)?.worktreeParent ?? repoPath`, then
-  `void ipc.addRecent(recentPath).catch(() => {})` + an optimistic
-  `set(s => ({ recents: [recentPath, ...s.recents.filter(r => r !== recentPath)] }))`. Mirrors the
-  existing `addFolder` two-step and the #331 worktree-parent resolution (a worktree sub-folder never
-  leaks into `recents` as a stray top-level entry). `createKanbanBoard` funnels through
-  `addOverviewPanel`, so it is covered automatically.
-- **`src/store.test.ts`** — two new tests: `addOverviewPanel` bumps the repo to `recents[0]` with no
-  duplicate (filter-before-prepend); and a worktree panel keyed by `/wt/feat` (session
-  `worktreeParent = /repo`) bumps `/repo` to the front and `recents` never contains `/wt/feat`.
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 400)
-
-- Read the card as: the pickers ALREADY order by `recents` (verified in `CreatePanelModal`,
-  `NewSessionModal`, `TemplateUseModal` — none re-sort it), so the real gap is the recency **signal**,
-  not the ordering code — the fix is bumping `recents` in `addOverviewPanel`, no picker UI change.
-- Scoped to the three folder-list create pickers. Excluded ⌘F Global search (a jump-to-existing-item
-  search, keeps its active-first alphabetical grouping), CloneRepoModal (native parent-dir dialog, no
-  repo list), and per-repo Views menus (not folder-picking create entry points).
-- Bump the worktree PARENT via `worktreeParent`/`effectiveRepo` (mirrors #331), on every
-  `addOverviewPanel` call including dedup re-opens. No backend change (`touch_recent`/`add_recent`
-  already exist, de-duped/capped/persisted). The sidebar folder order (alphabetical `repoOrder` +
-  #211 manual drag) is deliberately untouched — it reads `recents` only as a set, never its order.
-- `void … .catch(() => {})` swallows a persist failure (e.g. outside Tauri / in tests) so the local
-  optimistic bump still applies; not gated on `IS_MAIN_WINDOW` (matches every other `recents` bump).
-
-**Cross-platform:** pure store/TS logic plus the already-cross-platform `add_recent` command — no
-path/shell primitives; identical on macOS, Windows, and Linux.
-
-**Dependencies:** none. (Builds on the existing `recents`/`touch_recent` model and the #331
-worktree-parent recents convention.)
-
-### 401. [x] Soften UI v2 element borders and focus rings
-
-The UI v2 (tasks 372–383) neutral element borders read lighter and the keyboard focus ring is subtler
-— a purely token-driven, theme-aware CSS tuning with no behavior change. Because nearly every element
-border is already `1px` (the practical floor), the perceived heaviness was color weight, so the lever
-was lowering the border-token **alpha**, not the pixel width; the focus ring was formalized into new
-tokens and softened to ~70% accent (still clearly visible for accessibility).
-
-**What shipped** (branch `soften-borders-focus-rings`, PR
-[#157](https://github.com/ErikdeJager/ReCue/pull/157), merged 2026-07-15 into `ui-rework`):
-
-- **`src/styles/tokens.css`** — lowered both neutral border-token alphas in **both** theme blocks:
-  dark `:root` `--border-hairline` 0.08→0.06, `--border-strong` 0.15→0.11; light
-  `:root[data-theme="light"]` `--border-hairline` 0.1→0.08, `--border-strong` 0.18→0.13. Added focus
-  tokens: `--focus-ring-width: 1.5px` (was a hard 2px) and `--focus-ring: color-mix(in srgb,
-  var(--accent) 70%, transparent)` in both blocks (light re-declares the color; width inherits from
-  `:root`) — accent-derived so a custom accent recolors it live, like the `--accent-tint-*` tokens.
-- **`src/styles/global.css`** — the global `:focus-visible` now consumes the tokens with the
-  plain-fallback-first pattern: `outline: var(--focus-ring-width) solid var(--accent)` (fallback) +
-  `outline-color: var(--focus-ring)` (softened), keeping `outline-offset: 2px`.
-- **Eight component focus/outline overrides** rewired to the same fallback-then-`outline-color`
-  pattern (color softened; existing inset 1px width/offset geometry preserved where intentional):
-  `Checkbox.module.css`, `Slider.module.css` (webkit + moz thumb),
-  `Settings.module.css` (`.historyToggle`), `FileTree.module.css`,
-  `FileViewer.module.css` (`.copyCode`), `DiffInspector.module.css` (`.panel` + `.seenButton`).
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 401)
-
-- "Too thick" borders = lower token alpha, not pixel width (1px is the floor; heaviness is color
-  weight) — softening `--border-hairline`/`--border-strong` in both themes is the correct lever.
-- "Softer focus" = softer color (accent @ ~70% via `color-mix`) plus a thinner ring (2px→1.5px), NOT
-  removing it — accessibility keeps it clearly visible. Focus stays on the accent (its established,
-  legitimate use per DESIGN-SPEC), formalized into a new `--focus-ring` token; the CLAUDE.md
-  "accent never encodes status/selection" rule was read as applying to fills, not the focus ring.
-- Introduced `--focus-ring` + `--focus-ring-width` (no dedicated focus token existed before); kept
-  custom-accent-live behavior via the color-mix pattern. (Consumers' plain `var(--accent)` outline
-  line serves as the pre-`color-mix` fallback — the shipped `--focus-ring` is the single color-mix
-  declaration, not a two-line rgba cascade.)
-- Left deliberate accent/identity/selection borders out of scope: the 3px blockquote accent border,
-  the Overview repo-color top band, the scrollbar transparent inset border, the Settings active-swatch
-  selection ring, and all `--accent-tint-*` borders. Kept the `.modal-pop`/toaster border declaration
-  text and the `--border-*` token names intact so `modal.test.ts`/`toaster.test.ts`/`theme.test.ts`
-  stay green (they assert declaration text, never alpha values).
-
-**Cross-platform:** CSS-token tuning only; the sole engine-sensitive primitive (`color-mix`) carries a
-plain `var(--accent)` fallback (the app's established rule) — no macOS-only effects. Identical on
-macOS, Windows, and Linux (all Chromium/WebKit).
-
-**Dependencies:** none. (Tuning of the UI v2 design tokens from tasks 372–383.)
-
-### 405. [x] Remove the Attention queue-count badge from the ViewSwitch
-
-The **Attention** button in the sidebar view switcher no longer shows a number badge counting the
-idle agents awaiting input. Attention is meant to be an **optional** mode — like Overview and
-Canvas — and the live count pill made it read as required/urgent. The badge is removed from **both**
-ViewSwitch renderings; the Attention button itself (icon + accessible name + view-switch behavior)
-is untouched.
-
-**What shipped** (branch `remove-attention-count-badge`, PR
-[#159](https://github.com/ErikdeJager/ReCue/pull/159), merged 2026-07-15 into `iteration-1`):
-
-- **`src/components/ViewSwitch/ViewSwitch.tsx`** — removed the `attentionCount` `useStore` selector
-  block and the now-unused `attentionQueue` / `ownedChildSessionIds` imports. In the **expanded**
-  branch (via the shared `SegmentedControl`) the Attention segment keeps its `AlertTriangle` icon +
-  visually-hidden "Attention" name but drops the `{attentionCount > 0 && <span className={styles.count}>…}`
-  pill. In the **compact rail** branch, the `showCount` computation and the overlaid
-  `{showCount && <span className={styles.countCompact}>…}` badge are gone. Updated the component
-  doc-comment to note the button is icon-only with no queue-count badge (#405).
-- **`src/components/ViewSwitch/ViewSwitch.module.css`** — deleted the now-dead `.count` (expanded
-  accent pill) and `.countCompact` (compact-rail overlay) rules; kept `.attnLabel` / `.srOnly` (the
-  icon-only segment still needs a screen-reader name). Net: 6 insertions, 64 deletions across the two
-  files.
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 405)
-
-- Read "should NOT show number of items" as removing the count badge in **both** renderings (expanded
-  `.count` pill + compact-rail `.countCompact` badge) **and** the `attentionCount` store selector that
-  fed them — while keeping the Attention button (icon + accessible name) and its view-switch behavior.
-- Left the Attention **view's** own "N idle" header count intact (`Attention.tsx`) — the card is
-  specifically about the left-panel/view-switch button feeling required, not the in-view header. The
-  `attentionQueue` engine, store, and dismiss logic are untouched.
-- Kept `.attnLabel` / `.srOnly` (the icon-only segment still needs a screen-reader name); only
-  `.count` / `.countCompact` were removed.
-
-**Cross-platform:** pure React/TS + CSS-token cleanup in the ViewSwitch component; no path/shell/
-native primitives and on-system tokens only — identical on macOS, Windows, and Linux.
-
-**Dependencies:** none. (Deliberately kept minimal so **Task 406** — which reworks the same file's
-button placement/size — builds cleanly on top; 406 depends on this task, serializing the two
-ViewSwitch changes.)
-
-### 403. [x] Robust activity indicator — stop the busy dot flickering when a panel is focused
-
-Focusing an agent panel — by hover-focus (#368/#371) or by clicking — no longer flips its busy/
-activity dot from idle to "busy" for a moment. Previously `term.focus()` made xterm send a
-DECSET-1004 focus-in report (`ESC[I`) to the PTY, claude repainted in response, and the backend
-busy **monitor** read that one-shot repaint as work — blinking the dot blue for ~700 ms (or, if
-within the #315 5 s hysteresis window, sticky-blue ~5 s). In the new **Attention** triage view that
-blink removed-and-re-added the agent's card (the queue includes an agent iff `active && !busy &&
-!dismissed`) and even resurrected a previously **dismissed** card (the store's `setBusy` clears
-`dismissedAttention` on a going-busy edge). Fixing the busy **source** in the monitor fixes every
-consumer at once.
-
-**What shipped** (branch `robust-activity-indicator-403`, PR
-[#160](https://github.com/ErikdeJager/ReCue/pull/160), merged 2026-07-15 into `iteration-1`) — a
-**backend-only** change in `src-tauri/src/pty.rs`, platform-neutral (no `#[cfg]`):
-
-- **`last_report: AtomicU64`** added to `ActivityState` (`AtomicU64::new(0)` init) — the ms
-  timestamp of the last automatic terminal report.
-- **`write_stdin`** now stamps `last_report` (`now.max(1)`) when the data **is** an
-  `is_noninput_report` (focus/mouse report), while still (per #185) **not** stamping `last_input` for
-  it; the bytes are written to the PTY unchanged.
-- **`monitor_loop`** loads `rep = last_report` and computes a **`report_repaint`** signal — `rep != 0
-  && rep >= inp && out >= rep && out - rep <= REPORT_REPAINT_MS` (new `const REPORT_REPAINT_MS: u64 =
-  300`) — threaded through the per-session snapshot tuple.
-- **`decide_busy`** gained a `suppress_on: bool` param that gates the **idle→busy edge only**:
-  `let busy = if suppress_on && !st.emitted { false } else { busy };`. An already-busy session
-  (`emitted == true`) is untouched, so #185's protection (a *working* agent that gets focused is
-  never wrongly settled to idle) is preserved, and a real turn started with Enter (which stamps
-  `last_input`, making `rep >= inp` false) is never suppressed. `report_repaint` is passed as
-  `suppress_on`.
-- **Tests:** new `#[cfg(test)]` unit tests — a report-repaint on an idle session stays idle;
-  a report during ongoing work stays busy (#185); the same fresh tick with `suppress_on = false`
-  goes busy (normal work); a follow-up tick after the window elapses flips busy (a real turn wins);
-  and `focus_report_stamps_last_report_not_last_input`. Existing `decide_busy_*` call sites updated
-  for the new arg.
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 403)
-
-- Interpreted "activity indicator" as the **backend-derived** busy/idle dot (`session://state`,
-  the `pty.rs` monitor) — nothing on the frontend sets busy, so the fix belongs in the monitor.
-- Root cause diagnosed as a **focus-report repaint**, not a resize/SIGWINCH: hover-focus/click →
-  `focusTerminal` → `host.term.focus()` → xterm's DECSET-1004 `ESC[I` → claude repaints → the
-  monitor reads that one-shot output as work.
-- Read the user's "the debounce is already there in some conditions but should always be applied"
-  as: #185 already skips the `last_input` echo-stamp for reports; **extend that same report handling**
-  to also suppress the spurious idle→busy edge (the remaining gap), rather than inventing a new
-  mechanism.
-- Chose an **asymmetric, targeted** fix — gate only the idle→busy edge on `report_repaint` — over a
-  broad min-on debounce (rejected because `active_fast` stays true for the whole 700 ms window after
-  a one-shot burst, so it can't distinguish a repaint from sustained output). Never touches busy→idle,
-  so #185 holds; `rep >= inp` cancels suppression the moment a real keystroke follows a report.
-- **Backend-only** by design: deliberately did **not** add a frontend debounce to the Attention
-  queue or `BusyIndicator` — fixing the source makes the dot, queue membership, and the
-  `setBusy` un-dismiss-on-busy edge all robust automatically. `REPORT_REPAINT_MS = 300` (one echo
-  window) chosen as a conservative, single-point-tunable default.
-
-**Cross-platform:** platform-neutral Rust — the same busy monitor runs on macOS, Windows, and Linux;
-no `#[cfg]`, path, or shell primitives.
-
-**Dependencies:** none. (Task 404 — defaulting hover-focus **on** — depends on this landing first,
-since it increases focus events and so makes this fix more important.)
-
-### 406. [x] Make Overview + Attention the main view buttons; Canvas a smaller secondary button
-
-The sidebar view switcher now reads as a prominence hierarchy: **Overview** and **Attention** are
-the two equal-weight "main" buttons, and **Canvas** is a visibly smaller, de-emphasized secondary
-button after them — swapping Canvas and Attention (Attention rises to sit beside Overview, Canvas is
-demoted to the end at a smaller size). The intent is that Overview and Attention read as the primary
-daily views while Canvas is an optional/power-user view. Layout/visual only — no store or shortcut
-change.
-
-**What shipped** (branch `view-switch-main-buttons-406`, PR
-[#161](https://github.com/ErikdeJager/ReCue/pull/161), merged 2026-07-15 into `iteration-1`) — 120
-insertions / 35 deletions across the two ViewSwitch files:
-
-- **`src/components/ViewSwitch/ViewSwitch.tsx`** — in **expanded** mode, Overview + Attention render
-  as a **two-segment** shared `SegmentedControl` (`chrome stretch`), followed by a separate, smaller
-  Canvas `<button>` (`aria-label="Canvas"`, `title`, `aria-pressed={view === "canvas"}`,
-  `PanelsTopLeft` icon, `.canvasBtn` / `.canvasBtnActive`) inside a new `.expanded` flex row. With
-  only two segments in the control, `view === "canvas"` correctly leaves neither segment active and
-  the Canvas button shows the active state instead (the intended "Canvas is a secondary mode"
-  affordance). The `OPTIONS` array is reordered to `overview, attention, canvas`, so the **compact
-  rail** stacks the icons in that order with an `isCanvas` de-emphasis (`.iconCanvas`), keeping all
-  three as valid tap targets with roving arrow-key nav.
-- **`src/components/ViewSwitch/ViewSwitch.module.css`** — added the `.expanded` row container, the
-  `.canvasBtn` / `.canvasBtnActive` styles (chrome-radius tokens, Surface0 active fill matching the
-  segmented thumb, `--text-secondary`→`--text-primary` on hover/active), and the compact-rail
-  `.iconCanvas` de-emphasis. On-system tokens only.
-
-**Key decisions** (from `ASSUMPTIONS.md` Task 406)
-
-- Read "Overview and Attention should be the main buttons, the canvas should be a smaller button" +
-  "Canvas and attention should swap places" as a **two-item main control** (Overview + Attention,
-  equal weight) via the shared `SegmentedControl` **plus a separate, visibly smaller Canvas button**
-  appended after it — chosen over "three equal segments reordered" because the card explicitly asks
-  for a size/prominence hierarchy, not just a reorder.
-- **Did not** modify the shared `SegmentedControl` atom (used by other UI v2 toolbars) to get
-  per-segment sizing — the hierarchy is built **inside** ViewSwitch. (An acceptable fallback of
-  ViewSwitch rendering its own three buttons was on the table, but the atom is never touched.)
-- Compact rail reordered to Overview, Attention, Canvas (Canvas last) for consistency, with an
-  optional Canvas de-emphasis; kept the 28px icon tap targets + roving nav.
-- Keyboard shortcuts unchanged: `⌘\` (Overview↔Canvas) and `⌘1–9` (canvas) are layout-independent
-  and stay; no `shortcuts.ts` change for a pure visual tweak. Accessibility preserved via
-  `aria-pressed`/`aria-label` on the split-out Canvas button and the tablist's `aria-selected`.
-
-**Cross-platform:** pure React/TS + CSS-token layout in the ViewSwitch component; no path/shell/
-native primitives and on-system tokens only — identical (and theme-correct in dark/light) on macOS,
-Windows, and Linux.
-
-**Dependencies:** Task 405 (remove the Attention count badge). Both tasks edit
-`ViewSwitch.tsx`/`.module.css`; serializing avoided a merge conflict and let 406 build on the
-badge-free, icon-only Attention button.
 
 ### 404. [x] Default focus-follows-mouse (auto-focus agents & panels on hover) ON + clarify the label
 
@@ -1678,5 +1433,184 @@ icon grouped right).
 
 **Cross-platform:** pure frontend / CSS; the only OS-sensitive bit (the chord glyphs) already routes
 through `chordLabel` — identical on macOS, Windows, and Linux. No Rust / backend change.
+
+**Dependencies:** none.
+
+### 421. [x] Relocate the dev-container "Building…" indicator above the modal action buttons
+
+In the New Session modal, the first-run "Building the dev container (first run)…" status line +
+spinner is moved out from between the Cancel/Worktree/Start action buttons onto its own full-width
+line **above** the button row — in the gap below the "Run in dev container" checkbox row — so the
+build feedback reads as a clear status line instead of being wedged inline beside Start. Position
+only; when it shows is unchanged.
+
+**What shipped** (branch `task-421-container-building-indicator`, PR
+[#183](https://github.com/ErikdeJager/ReCue/pull/183), merged 2026-07-16 into `iteration-2`):
+
+- **`src/components/NewSessionModal/NewSessionModal.tsx`** — the `.buildingHint` JSX block (the
+  `{!deferMode && showBuildIndicator(...) && (<span className={styles.buildingHint} role="status">…
+  <Loader/>…</span>)}` expression) is cut out of `<div className={styles.actions}>` and re-inserted as
+  a **sibling of `.actions`**, after the dev-container opt-in IIFE block and before the action row. As
+  a `.popover` flex-column child it becomes its own row above the buttons; the guard, the
+  `showBuildIndicator(...)` call, the spinner, the copy, and `role="status"` are byte-for-byte
+  unchanged. The two now-stale "beside/left of Start" position comments were reworded.
+- **`src/components/NewSessionModal/NewSessionModal.module.css`** — `.buildingHint` gains
+  `margin-bottom: var(--space-12)` so it spaces evenly between the checkbox row (already
+  `margin-bottom: var(--space-12)`) and the button row; its descriptive comment updated. As a
+  flex-column child the `inline-flex` span blockifies full-width and left-aligns, matching the sibling
+  `.containerHint` docker-stopped line.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 421)
+
+- Kept the existing inline `.buildingHint` span (#416) rather than reintroducing a toast — the card
+  asks only to move the text; relocate it, don't re-implement it.
+- Kept the wording "Building the dev container (first run)…" verbatim, and the spinner, `role="status"`,
+  and `--status-awaiting` color unchanged — only position + one CSS margin changed.
+- Placed the line as its own full-width, left-aligned row (matching `.containerHint`) with
+  `margin-bottom: var(--space-12)`, mirroring the modal's existing rhythm.
+- `showBuildIndicator`'s logic (and its unit tests, which assert the pure helper, not DOM order) are
+  untouched, so the indicator still shows under exactly the same conditions.
+
+**Cross-platform:** pure frontend TSX/CSS over existing tokens (`--space-12`, `--status-awaiting`); no
+OS-conditional code — identical on macOS, Windows, and Linux (Chromium/WebKit WebView on all three).
+The real first-run docker-build smoke was flagged for interactive verification in the PR.
+
+**Dependencies:** none. (Builds on #416's inline build indicator.)
+
+### 422. [x] Give the top Kanban card room to lift on hover (stop it clipping under the column header)
+
+In the in-app Kanban board, the topmost card in each column was clipped by the column's top edge when
+its hover-lift animation (Task 409's `translateY(-2px)` + soft shadow) raised it — because the
+`.cards` list had `top` padding `0` and its `.column` ancestor has `overflow: hidden`. Fix: give the
+card list symmetric top padding so the lifted top card (and its shadow) stays fully visible.
+
+**What shipped** (branch `task-422-kanban-top-card-lift`, PR
+[#182](https://github.com/ErikdeJager/ReCue/pull/182), merged 2026-07-16 into `iteration-2`):
+
+- **`src/components/Kanban/KanbanPanel.module.css`** — the `.cards` rule's `padding` shorthand changed
+  from `0 var(--space-8) var(--space-8)` to `var(--space-8)` (top `0`→`8px`; right/bottom/left were
+  already 8px), with an explanatory Task 422 comment. The top card now rests 8px below the clip-region
+  top, so a 2px lift stays comfortably inside — reaching parity with the already-accepted 8px bottom
+  padding that absorbs the identical bottom-card lift.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 422)
+
+- Fix by adding top padding to `.cards` rather than shrinking the hover lift or altering `.column`'s
+  `overflow: hidden`/rounded corners — keeps Task 409's lift + rounding intact and just makes room.
+- 8px (`var(--space-8)`), making `.cards` padding symmetric — reads as even (not a lopsided gap) and
+  matches the bottom padding by construction. `.column`'s `overflow`, `.cards`' `overflow-y: auto`
+  scroll behavior, dragging, the DragOverlay preview, the placeholder, and the composer are all
+  untouched; reduced-motion already suppresses the lift (no clip to fix there).
+
+**Cross-platform:** a one-line CSS padding tweak over an existing token — no `#[cfg]`/platform CSS
+branch; identical on macOS (WKWebView), Windows (WebView2), and Linux (WebKitGTK).
+
+**Dependencies:** none. (Adjusts Task 409's Kanban hover-lift.)
+
+### 423. [x] Round the Kanban board's controls and equalize the Add/Cancel buttons
+
+Inside the in-app Kanban board only, the buttons and text inputs/areas now get the same slight corner
+rounding the cards already have (so the composer/edit controls visually belong to the rounded cards),
+and the add-card composer's "Add card" / "Cancel" buttons are made exactly the same size. The
+app-wide square corner language is unchanged — a board-scoped exception, like Task 409's card/column
+rounding.
+
+**What shipped** (branch `task-423-kanban-control-rounding`, PR
+[#184](https://github.com/ErikdeJager/ReCue/pull/184), merged 2026-07-16 into `iteration-2`) — a
+CSS-only change to **`src/components/Kanban/KanbanPanel.module.css`** (57 lines):
+
+- **Rounding:** every Kanban interactive control now references `--radius-micro` (4px, the existing
+  card radius) instead of the zeroed `--radius-chip`/`--radius-control` — the composer input + Add/
+  Cancel buttons, the card-edit input + Save/Cancel, the column-rename input + hover affordance, the
+  `.colBtn`/`.cardBtn` icon buttons, the toolbar `.saveBtn`, `.undoRow`, `.addColumn`, and the
+  `.rawEditor` (which had no radius). Rendered card-body markdown (inline code/pre, GFM task
+  checkboxes) is left square — that's content, not composer chrome.
+- **Equal size:** `.composerAdd` and `.composerCancel` gain `flex: 1` + `justify-content: center`, so
+  they split their row 50/50 regardless of label text (a min-width couldn't guarantee equality); the
+  reused card-edit Save/Cancel row is equalized by the same rule.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 423)
+
+- Reuse `--radius-micro` (4px) — "slightly rounded to match the cards" taken literally — referenced
+  only from the Kanban module (no global token edit), matching Task 409's in-file pattern.
+- Round all Kanban buttons + text inputs/areas (listed above); leave rendered-markdown code/pre and
+  the task checkbox square.
+- Equalize via `flex: 1` + centered content rather than a min-width, so the split is exact.
+- Pure CSS, no `KanbanPanel.tsx` change; platform-neutral.
+
+**Cross-platform:** CSS-token-only over an existing token — no `#[cfg]`/platform CSS branch; identical
+on macOS, Windows, and Linux.
+
+**Dependencies:** none. (A board-scoped rounding exception alongside Task 409; does not touch #422's
+`.cards` padding.)
+
+### 424. [x] Show a startup tip on the filtered-Overview empty state (drop the wave-companion copy)
+
+When the Overview wall is filtered to a folder/branch that has no sessions yet, the empty state no
+longer shows the "the wave keeps you company until then" line — it now shows a rotating **startup
+tip**, exactly like the welcome hero's tip (same "tip" chip, rotating text from `tips.ts`, and
+click-to-shuffle). The "No sessions in <repo> yet" title and the "New session" button above it stay.
+
+**What shipped** (branch `task-424-filtered-empty-tip`, PR
+[#185](https://github.com/ErikdeJager/ReCue/pull/185), merged 2026-07-16 into `iteration-2`):
+
+- **New `src/components/TipRow/` (`TipRow.tsx` + `TipRow.module.css`)** — a shared tip component
+  extracted from the welcome hero (the "tip" chip, rotating text via the existing `tips.ts` helpers,
+  click-to-shuffle), so `EmptyState` and the Overview filtered branch reuse one implementation instead
+  of duplicating it; the tip CSS moved into the new module.
+- **`src/components/EmptyState/EmptyState.tsx` / `.module.css`** — now render `<TipRow />` and drop
+  their inline tip markup + the moved CSS rules.
+- **`src/components/Overview/Overview.tsx` / `.module.css`** — the filtered-empty branch renders
+  `<TipRow />` in place of the removed "wave keeps you company" line.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 424)
+
+- Remove only the "the wave keeps you company until then" line; keep the "No sessions in <repo> yet"
+  title and the "New session" button.
+- The tip renders identically to the welcome hero (same chip, rotating text, click-to-shuffle) via the
+  existing `tips.ts` helpers.
+- **Reuse, not duplicate** — extract a shared `TipRow` used by both `EmptyState` and the Overview
+  filtered branch, moving the tip CSS into it.
+- Left the non-filtered `!filter` fallback string ("No agents yet.") unchanged — the card targets the
+  filtered folder/branch case only.
+
+**Cross-platform:** pure React/TS + CSS-token component extraction; no path/shell/native primitives —
+identical on macOS, Windows, and Linux.
+
+**Dependencies:** none.
+
+### 425. [x] ⌘W removes the selected agent (and schedule/recurring) on the Overview wall
+
+On the Overview wall, **⌘W / Ctrl+W** now removes the selected **agent** (previously it closed only
+non-agent panels, so agents felt un-closeable by keyboard), and the fix is extended to also close a
+selected **schedule** and **recurring** card — closing the whole "only non-agent panels are closed"
+gap so ⌘W matches each card's own × exactly.
+
+**What shipped** (branch `task-425-cmdw-remove-agent`, PR
+[#186](https://github.com/ErikdeJager/ReCue/pull/186), merged 2026-07-16 into `iteration-2`):
+
+- **`src/store.ts`** — `closeFocusedPanel`'s Overview branch now dispatches by the selected item's
+  kind: an agent via `removeSession`, a schedule via `cancelSchedule`, a recurring via
+  `cancelRecurring` (each the same un-gated action as that card's ×), in addition to the existing
+  `removeOverviewPanel` for file/diff/terminal/kanban panels. Doc-comment updated.
+- **`src/store.test.ts`** — new coverage for the agent / schedule / recurring ⌘W-close paths.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 425)
+
+- **Confirm gate:** ⌘W removes the agent via the **same un-gated path** as its ×/Remove — *not* routed
+  through `confirmDestructive` (which gates only bulk teardown); every single-agent remove in the app
+  is un-gated, and "easily" argues against friction. (The caller's suggestion to honor the gate was
+  deliberately declined; trivial to add later.)
+- **Canvas vs Overview:** Canvas / detached-window ⌘W on an agent leaf stays "close the panel only"
+  (`removeLeaf`; the agent survives in the pool/Overview), matching the Canvas header ×. Only
+  **Overview** ⌘W kills+forgets, matching Overview's × semantics.
+- **Scope completion:** also closes a selected schedule (`cancelSchedule`) and recurring
+  (`cancelRecurring`), not just agents — matching each card's × exactly.
+- **Focus advance:** Overview ⌘W does **not** advance selection to a neighbor after removal (matching
+  the existing non-agent Overview close); `selectedId` clears/goes stale, so a repeat ⌘W is a safe
+  no-op. Neighbor-advance stays Canvas-only.
+
+**Cross-platform:** pure store/TS logic; the shortcut already matches `metaKey || ctrlKey`, so ⌘W on
+macOS and Ctrl+W on Windows/Linux both fire — identical on all three.
 
 **Dependencies:** none.
