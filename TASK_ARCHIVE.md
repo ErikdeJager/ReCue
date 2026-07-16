@@ -2667,3 +2667,78 @@ CLAUDE.md, and no conflict markers remain in either trajectory file.
 **Dependencies:** Task 439, Task 435, Task 440, Task 436 (the card's four named deps — 13/16, 14/16,
 15/16, 10/16; every other epic card 426–434/437–438 arrives transitively and landed first). **This card
 closes the Multi-window epic — tasks 426–441 are all archived.**
+
+### 442. [x] Slow the background wave's morph/drift rate
+
+The animated UI-v2 wave background (task 377) re-shaped its direction/waveform over time faster than
+the user liked. This slows the whole wave simulation's temporal drift to a calmer, more gradual rate —
+**without** disabling the animation — so the "waves subtly change direction/form" more slowly.
+
+**What shipped** (branch `task-442-slow-wave-drift`, PR
+[#210](https://github.com/ErikdeJager/ReCue/pull/210); 2 files):
+
+- **`src/components/WaveBackground/waveTick.ts`** — a single named constant `WAVE_TIME_SCALE = 0.7`
+  (≈30% slower) added beside `FPS_CAP`/`BUSY_FPS_CAP`/`SETTLE_FRAMES`, and applied to the `dt` returned
+  by the pure reducer `gateFrame` **only on the drawing branch** (`dt: dt * WAVE_TIME_SCALE`). The
+  physical-delta burst-guard clamp `[0.001, 0.05]` still runs on the pre-scale delta, so a paused-tab
+  gap can never integrate one giant step (effective upper bound after scale = `0.035`); non-draw
+  branches keep their literal `dt: 0`.
+- **`src/components/WaveBackground/waveTick.test.ts`** — every drawn-frame `dt` expectation updated to
+  the scaled value, plus a focused test asserting the scale (`r.dt ≈ physical * WAVE_TIME_SCALE` and
+  strictly slower than real time).
+
+Because `waveHost.ts` (main-thread mode) and `waveWorker.ts` (OffscreenCanvas worker mode) both pass
+`gate.dt` straight into `eng.frame`, both render modes are slowed identically from the one edit. The
+morph rate (`fieldT`) and strand advection are scaled by the same proportion, so the wave stays
+coherent, just calmer.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 442)
+
+- "Reduce wave changes / a bit slower" = slow the temporal drift (WaveEngine's `fieldT` morph that
+  re-shapes direction/waveform) **without** disabling the animation.
+- Scaled the per-frame `dt` rather than the preset `speed`: the engine's morph rate is
+  `0.20 + 0.30*speed` with a constant 0.20 floor, so reducing `speed` slows advection far more than the
+  morph the user complained about; `dt`-scaling slows morph + flow uniformly and covers both render
+  modes from one edit. **`src/vendor/WaveEngine.js` is sha256-pinned and untouched** — `dt` is the only
+  external morph-rate lever, so no vendor exception was needed (`waveEngine.test.ts` pin still passes).
+- Factor `0.7` chosen as a clearly perceptible but non-drastic "a bit slower"; it is one constant,
+  trivially retunable (0.75 gentler / 0.6 stronger).
+- Kept a hardcoded constant, **not** a new Settings toggle (`backgroundAnimation` already covers
+  on/off; a wave-speed slider isn't warranted). The `pauseWaveWhenCovered` setting is untouched.
+- Minor noted side effect (inherent to "no vendor edit"): the engine's residue sweep and trail fade
+  are also `dt`-tied, so stale-trail cleanup runs ~43% slower — cosmetic, not a correctness bug.
+- Pure WebView/TS in a reducer consumed identically on macOS/Windows/Linux; no OS-specific branch.
+
+**Dependencies:** none.
+
+### 447. [x] Tint the Attention empty-state inbox icon with the app accent color
+
+On the Attention view's empty ("All caught up") state, the large inbox hero icon rendered in the yellow
+`--status-awaiting` status color. This recolors it to the application **accent** (Peach by default, or
+whatever custom accent the user picks in Settings → Appearance) so the branding hero matches the rest
+of the app's accent.
+
+**What shipped** (branch `task-447-attention-accent-icon`, PR
+[#209](https://github.com/ErikdeJager/ReCue/pull/209); 1 file, single-line CSS token swap):
+
+- **`src/components/Attention/Attention.module.css`** — the `.empty svg` rule's `color` changed from
+  `var(--status-awaiting)` to `var(--accent)`. No `.tsx` change: the Lucide `Inbox` glyph inherits
+  `color` via the uniquely-scoped `.empty svg` selector (lucide icons use `stroke="currentColor"`), so
+  a custom accent (written inline on `<html>`) recolors it **live** across every window, and it tracks
+  Dark/Light themes. No other icon (the dismiss-all `CheckCheck`, queue-card icons, agent-pane header
+  icons) is affected.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 447)
+
+- "The inbox icon" = the Lucide `Inbox` hero icon in the Attention empty state (`Attention.tsx:223`,
+  colored by `.empty svg`), **not** the sidebar `ViewSwitch` rail `AlertTriangle` — the icon shown ON
+  the Attention page itself.
+- Used full-strength `var(--accent)` (not `--accent-dim`/`--accent-tint-*`) so it clearly matches the
+  accent; the empty state already carries a legibility text-shadow, so a full-strength hero reads fine.
+- Used the `--accent` CSS **variable** (not a hardcoded hex) so a custom accent recolors it live and it
+  tracks Dark ↔ Light; platform-neutral pure CSS.
+- Tinting this **decorative/branding** icon with `--accent` does **not** violate CLAUDE.md's "accent
+  never encodes status/selection" rule (that targets status *semantics*) — it actually removes a minor
+  smell, since the icon was borrowing the `--status-awaiting` status token for a decorative purpose.
+
+**Dependencies:** none.
