@@ -17,9 +17,9 @@ function reveal(): void {
  * Show this native window once React has committed its first frame (#348).
  *
  * Windows are created **hidden** (`visible: false`) with a themed native background
- * (`tauri.conf.json` / `open_canvas_window`), so the user never sees the WebView's
+ * (`tauri.conf.json` / `open_app_window`), so the user never sees the WebView's
  * default white canvas while the bundle loads. Idempotent; called once from `App()`,
- * which is the root of BOTH the main window and a detached canvas window (#84).
+ * which is the root of every window (main + the task-434 app windows).
  *
  * Rust keeps a 2 s fallback (`schedule_reveal_fallback`) so a bundle that never boots
  * can't leave the app running-but-invisible.

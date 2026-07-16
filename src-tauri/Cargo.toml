@@ -42,6 +42,12 @@ tauri-plugin-clipboard-manager = "2.3.2"
 # watched agent finishes a turn / needs input. Cross-platform (macOS + Windows);
 # the frontend sends the notification, this exposes the plugin + capability.
 tauri-plugin-notification = "2"
+# One running instance (Multi-window 10/16): a second launch pokes the first instance
+# (Windows named mutex / Linux D-Bus / macOS unix socket) to open a new full app window
+# and exits — previously a second process re-resumed the SAME session uuids and fought
+# over sessions.json. Rust-only (no JS commands → no capability entry). Linux pulls
+# zbus transitively; macOS/Windows stay light.
+tauri-plugin-single-instance = "2"
 # Encode a clipboard image (raw RGBA) to a temp PNG for image paste (#220) — claude
 # attaches the file when its path is pasted. Pure-Rust, no system deps.
 png = "0.18.1"

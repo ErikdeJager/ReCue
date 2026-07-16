@@ -5,12 +5,7 @@
 import { create } from "zustand";
 
 import { agentCaps, SELECTABLE_AGENTS } from "./agents";
-import {
-  ARMED_POLL_MS,
-  evaluateAutoContinue,
-  IDLE_AUTO_CONTINUE,
-  type AutoContinueState,
-} from "./autoContinue";
+import { IDLE_AUTO_CONTINUE, type AutoContinueState } from "./autoContinue";
 import { resolveCanvases } from "./boot";
 import { attentionQueue } from "./components/Attention/attentionQueue";
 import { overviewPanelToContent } from "./components/Canvas/canvasDrop";
@@ -45,6 +40,7 @@ import {
   applyTerminalSettings,
 } from "./components/Terminal/terminalPool";
 import { decodeOutputB64 } from "./decodeOutput";
+import { claimsToMap } from "./fileClaims";
 import {
   ALL_GIT_REFRESH_KINDS,
   focusRefreshKinds,
@@ -72,7 +68,12 @@ import {
 import { storeTheme } from "./theme";
 import { formatInterval, parseResetsAt } from "./time";
 import * as updater from "./updater";
-import { DETACHED_CANVAS_ID, IS_MAIN_WINDOW } from "./windowContext";
+import {
+  INIT_CANVAS_ID,
+  INIT_REPO_PATH,
+  WINDOW_LABEL,
+  isPrimaryLabel,
+} from "./windowContext";
 import {
   attributeNewWorktrees,
   detectedWorktreeParents,
@@ -94,8 +95,11 @@ import type {
   CloningRepo,
   DiffLineCounts,
   DiffSeenMap,
+  DiffSeenPatch,
   EditorInfo,
+  FileClaim,
   FileStatusCode,
+  ForgottenPayload,
   OverviewPanel,
   RecurringSession,
   RepoWorktree,
@@ -106,6 +110,7 @@ import type {
   Toast,
   ToastTone,
   View,
+  WorktreeKeptPayload,
 } from "./types";
 
 const TOAST_TTL_MS = 3500;
@@ -180,6 +185,14 @@ function adoptPendingRecurringChildren(
 // lifecycle each run), like `intentionalKills`; cleared when the worktree is removed.
 const worktreeParents = new Map<string, string>();
 
+// The #199 `worktreeHasItems` ref-count for the Remove/teardown path moved to Rust
+// (task 431, `commands::worktree_has_items`) — `cleanupWorktreeIfEmpty` now delegates
+// to the authoritative `cleanup_worktree_if_empty` command, serialized backend-side so
+// N windows can never double-run `git worktree remove`. The pure `worktreeHasItems`
+// below stays for one frontend consumer: the worktree-VANISH sweep (agent-worktree
+// detection), which asks "did the user have anything open there?" before auto-closing
+// views + toasting.
+
 // Worktree folders mid-`deleteWorktree`: killing the worktree's agents / cancelling
 // its schedules fires their teardowns' `cleanupWorktreeIfEmpty` calls, whose
 // non-forced `remove_worktree` would race the forced delete and mis-toast
@@ -193,8 +206,8 @@ const deletingWorktrees = new Set<string>();
  * a scheduled session created **inside** it (`cwd === dest`, #198), or a worktree
  * schedule that **targets** it (`worktree_path === dest`, #259 — its `cwd` is the
  * parent repo, but its eagerly-created worktree folder is `worktree_path`). Pure — the
- * auto-delete guard keeps the worktree exactly as long as ANY item of ANY type points
- * at it, and removes it only once none remain.
+ * worktree-vanish sweep auto-closes a removed worktree's views (and toasts) only when
+ * ANY item of ANY type still points at it.
  */
 export function worktreeHasItems(
   state: {
@@ -287,15 +300,45 @@ const clampSidebarWidth = (w: number): number =>
 // Debounce the persist so a drag's many updates don't spam IPC (state updates live).
 let sidebarWidthPersistTimer: ReturnType<typeof setTimeout> | undefined;
 
-// Diff "seen" markers (#278): the live map updates immediately; the persist is
-// debounced so toggling several files in a row (button or `s` keybind) coalesces into
-// one write, like the sidebar-width persist above.
+// Diff "seen" markers (#278/task 429): the live map updates immediately; each
+// mark/clear also records a per-key DELTA into a module-level pending patch, and the
+// debounced persist flushes the accumulated *deltas* (never the whole map) so
+// toggling several files in a row (button or `s` keybind) still coalesces into one
+// write — which the backend merges per key under the Store mutex, so a foreign
+// window's concurrent marks survive our write. Accepted transient: a foreign
+// `diff_seen://changed` (task 428) landing before our flush briefly shows the
+// foreign map without our pending marks; the flush + its echo re-converge
+// sub-second.
 let diffSeenPersistTimer: ReturnType<typeof setTimeout> | undefined;
+let pendingDiffSeenPatch: DiffSeenPatch = {};
+
+/** Record one mark/clear delta into the pending diff-seen patch (task 429): a
+ * digest sets the entry, `null` tombstones it. The frontend never needs the
+ * `{repo: null}` whole-repo tombstone — the server prunes a repo object emptied by
+ * file tombstones. */
+function recordDiffSeenDelta(
+  repo: string,
+  file: string,
+  digestOrNull: string | null,
+): void {
+  const entry = pendingDiffSeenPatch[repo];
+  if (entry) {
+    entry[file] = digestOrNull;
+  } else {
+    pendingDiffSeenPatch[repo] = { [file]: digestOrNull };
+  }
+}
+
 function persistDiffSeen(): void {
   if (diffSeenPersistTimer) clearTimeout(diffSeenPersistTimer);
   diffSeenPersistTimer = setTimeout(() => {
     diffSeenPersistTimer = undefined;
-    void ipc.setDiffSeen(useStore.getState().diffSeen).catch(() => {});
+    // Swap the accumulator out before the async send, so a delta recorded after
+    // this flush lands in the next one — never in both, never lost.
+    const patch = pendingDiffSeenPatch;
+    pendingDiffSeenPatch = {};
+    if (Object.keys(patch).length === 0) return; // nothing pending — no write
+    void ipc.setDiffSeen(patch).catch(() => {});
   }, 300);
 }
 
@@ -425,14 +468,14 @@ function scheduleGitRefresh(folder?: string): void {
 /**
  * On an agent's busy→idle edge (#336), pop a native OS notification when the agent is
  * "effectively watched" — either its per-agent `watch` flag is on, or the global
- * `watchAllAgents` setting is on. Fired **only from the main window** (session events
- * are window-global — #84 — so a detached canvas window would otherwise double-fire)
+ * `watchAllAgents` setting is on. Fired **only from the primary window** (task 433 —
+ * session events are window-global, #84, so any other window would double-fire)
  * and **not during boot resume** (the initial replay would notify for every persisted
  * agent). Recurring-owned child sessions have no watch UI, so they're skipped. Best-effort
  * and fire-and-forget: it never awaits and swallows all delivery errors inside `notify.ts`.
  */
 function maybeNotifyWatched(id: string): void {
-  if (!IS_MAIN_WINDOW || booting) return;
+  if (!isPrimaryLabel(useStore.getState().primaryWindow) || booting) return;
   const state = useStore.getState();
   const session = state.sessions.find((x) => x.id === id);
   if (!session) return;
@@ -638,55 +681,12 @@ function scheduleOpenFileTreeRefresh(): void {
   }, FILE_TREE_REFRESH_DEBOUNCE_MS);
 }
 
-// 5-hour usage poll (#154): 180s — the OAuth usage endpoint aggressively 429s below
-// that even with the claude-code User-Agent. Module-scoped so the timer survives
-// <UsageBar/> unmounting (the bar returns null when usage is unavailable) and never
-// double-arms.
-const USAGE_POLL_MS = 180_000;
-let usagePollTimer: ReturnType<typeof setInterval> | undefined;
-
-// Auto-continue after limit reset (#296): while the machine is armed (limit hit,
-// waiting for the window to reset) the usage poll runs on the tighter ARMED_POLL_MS
-// cadence so the continue fires promptly after reset. Module-scoped alongside
-// `usagePollTimer`; main-window-only + idempotent, cleared on disarm / poll stop.
-let armedPollTimer: ReturnType<typeof setInterval> | undefined;
-
-/** Milliseconds between the three keystrokes of the auto-continue nudge (#296) — a
- * tiny gap so claude's TUI registers Enter, the typed text, and Enter as separate
- * events rather than a single paste. */
-const CONTINUE_KEY_DELAY_MS = 120;
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Send the auto-continue nudge to one session (#296): Enter → `continue` → Enter,
- * with a small gap between sends. Best-effort — a dead PTY / IPC error just means
- * that agent isn't nudged, never a surfaced error. The exact sequence is isolated
- * here so a real-CLI sanity check can adjust it in one place (e.g. drop the leading
- * Enter to `"continue\r"`). `writeStdin` is platform-neutral (same bytes on macOS
- * and Windows). */
-async function sendContinue(id: string): Promise<void> {
-  try {
-    await ipc.writeStdin(id, "\r");
-    await sleep(CONTINUE_KEY_DELAY_MS);
-    await ipc.writeStdin(id, "continue");
-    await sleep(CONTINUE_KEY_DELAY_MS);
-    await ipc.writeStdin(id, "\r");
-  } catch {
-    // Best-effort: swallow so one dead session never breaks the rest.
-  }
-}
-
-/** Start/stop the tighter armed-cadence usage poll (#296) to match the machine's
- * `armed` state. Main-window-only + idempotent, mirroring `startUsagePolling`. */
-function syncArmedPoll(armed: boolean, refresh: () => void): void {
-  if (!IS_MAIN_WINDOW) return;
-  if (armed && !armedPollTimer) {
-    armedPollTimer = setInterval(refresh, ARMED_POLL_MS);
-  } else if (!armed && armedPollTimer) {
-    clearInterval(armedPollTimer);
-    armedPollTimer = undefined;
-  }
-}
+// 5-hour usage poll + auto-continue nudge (#154/#296): since task 430 both live in
+// Rust (`src-tauri/src/autocontinue.rs`) — the ONE per-app poller/executor, so the
+// multi-window epic's N windows can never double-poll (the endpoint 429s below
+// ~180s) or double-nudge. The store's `usage` / `autoContinue` slices are event-fed
+// mirrors (`usage://changed` / `autocontinue://changed` → `applyUsageSync` /
+// `applyAutoContinueSync`), seeded once at boot via `ipc.autoContinueSnapshot()`.
 
 /** Copy of `map` without `key` — returns the same ref when `key` is absent so
  * callers don't trigger needless re-renders. */
@@ -736,6 +736,82 @@ export function toSessionView(record: SessionRecord): SessionView {
     // log; persisted so the worktree grouping is right immediately on boot.
     currentCwd: record.current_cwd ?? null,
   };
+}
+
+/** Map a Rust `UsageSnapshot` (or `null` = unavailable) into the store's `usage`
+ * slice — exactly the old `refreshUsage` mapping (task 430): the scalar + each
+ * bucket's raw `resetsAt` through `parseResetsAt`, `null` → the all-null /
+ * unavailable / empty-buckets hidden-bar shape. Pure + exported for unit tests. */
+export function usageFromSnapshot(
+  snap: ipc.UsageSnapshot | null,
+): AppState["usage"] {
+  return snap
+    ? {
+        usedPercent: snap.usedPercent,
+        resetsAtMs: parseResetsAt(snap.resetsAt),
+        available: true,
+        buckets: snap.buckets.map((b) => ({
+          key: b.key,
+          usedPercent: b.usedPercent,
+          resetsAtMs: parseResetsAt(b.resetsAt),
+        })),
+      }
+    : {
+        usedPercent: null,
+        resetsAtMs: null,
+        available: false,
+        buckets: [],
+      };
+}
+
+/** The reconcile plan for a `sessions://changed` roster broadcast (task 428). Pure +
+ * exported for unit tests.
+ *
+ * - `removed`: local ids absent from the roster (→ `dropSession`, which also clears
+ *   busy maps / selection / canvas leaves).
+ * - `added`: roster records with no local view (→ `upsertSession(toSessionView(r))`,
+ *   which arms the attention grace like any spawn path).
+ * - `merged`: the full next `sessions` array — the **surviving** local views in their
+ *   existing order, each with its record-derived fields refreshed from the roster
+ *   (rename!) while the view-only live fields (`reconnecting`, `exitedCode`) are
+ *   preserved — or `null` when no surviving view changed. A view that is JSON-equal
+ *   to its merge keeps its original object reference (no needless re-renders), so a
+ *   pure echo yields `{ removed: [], added: [], merged: null }` — a complete no-op.
+ *   `merged` deliberately excludes `removed`/`added` ids: the caller applies drops
+ *   and adds through the choke points above, then sets `merged` (survivors only). */
+export function diffSessionRoster(
+  local: SessionView[],
+  records: SessionRecord[],
+): {
+  removed: string[];
+  added: SessionRecord[];
+  merged: SessionView[] | null;
+} {
+  const recordById = new Map(records.map((r) => [r.id, r] as const));
+  const localIds = new Set(local.map((v) => v.id));
+  const removed = local.filter((v) => !recordById.has(v.id)).map((v) => v.id);
+  const added = records.filter((r) => !localIds.has(r.id));
+  let changed = false;
+  const merged: SessionView[] = [];
+  for (const v of local) {
+    const record = recordById.get(v.id);
+    if (!record) continue; // removed — handled via dropSession
+    // Record-derived fields come from the roster; the two view-only live fields are
+    // preserved. JSON equality (undefined keys drop out) keeps the original reference
+    // for an unchanged view.
+    const next: SessionView = {
+      ...toSessionView(record),
+      reconnecting: v.reconnecting,
+      exitedCode: v.exitedCode,
+    };
+    if (JSON.stringify(next) === JSON.stringify(v)) {
+      merged.push(v);
+    } else {
+      merged.push(next);
+      changed = true;
+    }
+  }
+  return { removed, added, merged: changed ? merged : null };
 }
 
 function isSessionError(
@@ -825,22 +901,10 @@ const SAMPLE_UPDATE_NOTES = [
   "- Fixed a simulated bug that never really existed.",
 ].join("\n");
 
-/**
- * Classify a session exit (#63). A **clean** exit — `claude` exits **code 0**
- * while the app is running and the kill was not user-initiated (Remove/Forget) —
- * means the user ended the agent: it is forgotten everywhere (kill + forget),
- * never showing a "Process exited" overlay. Anything else — a non-zero/unknown
- * code (crash), the boot resume window (#30, where a failed resume exits and is
- * offered a Restart), or an intentional kill (which toasts on its own) — is
- * **not** a clean exit and keeps the existing path. Pure — unit-tested; the lone
- * discriminator behind the `onExited` branch. */
-export function isCleanExit(
-  code: number | null,
-  booting: boolean,
-  intentional: boolean,
-): boolean {
-  return code === 0 && !booting && !intentional;
-}
+// The #63 `isCleanExit` discriminator moved to Rust (task 431,
+// `commands::is_clean_exit` / `classify_exit`): the event forwarder consumes a clean
+// exit — deleting the record ONCE per app — and emits `session://forgotten` instead
+// of `session://exited`, so no window ever re-runs the decision.
 
 /**
  * The set of repositories shown in the sidebar: the union of persisted recents
@@ -1269,6 +1333,50 @@ export function pickRepoColor(
 }
 
 /**
+ * #369: give each NEW folder a distinct default color — prefer an unused palette
+ * color before repeating one. Folders present when the subscription starts are
+ * grandfathered (they keep whatever color they already show). Runs only in the
+ * **primary** window (task 433): started from `init` in a window that boots
+ * primary, and re-armed by `armPrimaryEffects` on a live takeover. Started at
+ * most once per window (`folderColorSubStarted`), so both call sites — and
+ * StrictMode's double-invoke — are idempotent.
+ */
+function startFolderColorAssign(): void {
+  if (folderColorSubStarted) return;
+  folderColorSubStarted = true;
+  const s = useStore.getState();
+  let knownRepos = new Set(sidebarRepos(s.recents, s.sessions, s.recurrings));
+  useStore.subscribe((state, prev) => {
+    // Cheap reference-equality gate: only the three slices that feed the folder
+    // set can add a folder, so a color write (or any unrelated `set`) short-
+    // circuits here — including the synchronous re-entry from `setRepoColor`.
+    if (
+      state.recents === prev.recents &&
+      state.sessions === prev.sessions &&
+      state.recurrings === prev.recurrings
+    )
+      return;
+    const current = sidebarRepos(
+      state.recents,
+      state.sessions,
+      state.recurrings,
+    );
+    const additions = current.filter((r) => !knownRepos.has(r));
+    knownRepos = new Set(current);
+    if (additions.length === 0) return;
+    // Accumulate the picked colors so 2+ folders added in one batch each avoid
+    // the others' just-chosen colors, not just the pre-batch ones.
+    let colors = state.repoColors;
+    for (const repo of additions) {
+      if (colors[repo]) continue; // a user override / prior assignment always wins
+      const color = pickRepoColor(repo, colors, current);
+      colors = { ...colors, [repo]: color };
+      void useStore.getState().setRepoColor(repo, color);
+    }
+  });
+}
+
+/**
  * A Kanban column's color (#239): the configured color when the column name matches
  * a Settings entry (case-insensitive + trimmed), else a stable default derived by
  * hashing the name into the Catppuccin palette — exactly like `repoColor` hashes a
@@ -1400,6 +1508,23 @@ export function mergeSettings(
   raw: Partial<Settings> | null | undefined,
 ): Settings {
   return { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
+}
+
+/** The settings **write patch** (task 429): every top-level key of `next` whose
+ * JSON differs from `base` lands verbatim (an explicit `null` travels as `null`; a
+ * changed nested object like `keybinds` travels whole — the backend replaces it
+ * whole). Empty when nothing changed. Pure. */
+export function settingsPatch(
+  base: Settings,
+  next: Settings,
+): Partial<Settings> {
+  const patch: Partial<Settings> = {};
+  for (const key of Object.keys(next) as (keyof Settings)[]) {
+    if (JSON.stringify(next[key]) !== JSON.stringify(base[key])) {
+      Object.assign(patch, { [key]: next[key] });
+    }
+  }
+  return patch;
 }
 
 /** UI display-size bounds as integer percents (#366). */
@@ -1817,6 +1942,11 @@ export interface AppState {
    * disk-change visibility poll only re-lists/re-tints trees the user actually has open,
    * so background churn stays bounded. Per-window (each window has its own store). */
   fileTreeMounts: Record<string, number>;
+  /** Transient task-435 soft claims, `claimKey(repoPath, file)` → the claiming
+   * window's label — the event-fed mirror of the Rust `file_claims` registry,
+   * NEVER persisted. `useAutoSaveFile` reads it via `heldElsewhere` to render a
+   * foreign-claimed file read-only ("Being edited in another window"). */
+  fileClaims: Record<string, string>;
   /** Assigned per-repo colors, path → hex (#35); unassigned repos derive a default. */
   repoColors: Record<string, string>;
   /** Per-repo ordered list of extra (non-agent) Overview panels (#38). */
@@ -1826,12 +1956,8 @@ export interface AppState {
   overviewOrder: Record<string, string[]>;
   /** The Canvas tabs (#58) — each a named, independent BSP layout; always ≥1. */
   canvases: CanvasTab[];
-  /** Which Canvas tab is active (#58). In a detached canvas window (#84) this is
-   * fixed to that window's own canvas. */
+  /** Which Canvas tab is active (#58) — per-window state (task 434). */
   activeCanvasId: string;
-  /** Canvas ids currently open in a detached window (#84) — synced from the
-   * backend; drives terminal ownership + the "in window" tab marker. */
-  detachedCanvasIds: string[];
   /** Saved Canvas templates (#117) — reusable layouts of action blocks. */
   canvasTemplates: CanvasTemplate[];
   /** Whether the template editor surface is open (#117). */
@@ -1905,6 +2031,13 @@ export interface AppState {
    * pacman/AUR/.deb), or "" until loaded. A "system" install is owned by the package
    * manager, so the in-app updater is gated off for it (`selfUpdates`). */
   installKind: string;
+  /** The Rust-elected primary full-window label (task 433) — the oldest surviving
+   * window whose label is not `canvas-*` — or `null` when none survives. Seeded by
+   * the `primary_window` snapshot in `init` and kept live by `window://primary`
+   * (`applyPrimarySync`). Every exactly-once-per-app effect gates on
+   * `isPrimaryLabel(primaryWindow)` — never on the window kind, which every
+   * `app-*` window (task 434) shares. */
+  primaryWindow: string | null;
   /** Windows build number (e.g. 22631), read once at boot; `0` on non-Windows or
    * until loaded. Only consumed under an `isWindows` guard, to set xterm.js's
    * `windowsPty.buildNumber` for correct ConPTY handling. */
@@ -1973,10 +2106,12 @@ export interface AppState {
      * notes are readable before installing. `null` when none / up to date. */
     notes: string | null;
   };
-  /** 5-hour Claude session usage (#154). `available` false → the bar hides. Fed by a
-   * 180s poll; the OAuth token + HTTP live entirely in Rust. `buckets` (#370) carries
-   * every usage window the API reports for the expandable "all usage" viewer; empty
-   * when unavailable. The scalars keep the five-hour window unchanged. */
+  /** 5-hour Claude session usage (#154). `available` false → the bar hides. An
+   * event-fed mirror of the Rust engine's single per-app poll (task 430:
+   * `usage://changed` → `applyUsageSync`; the OAuth token + HTTP live entirely in
+   * Rust). `buckets` (#370) carries every usage window the API reports for the
+   * expandable "all usage" viewer; empty when unavailable. The scalars keep the
+   * five-hour window unchanged. */
   usage: {
     usedPercent: number | null;
     resetsAtMs: number | null;
@@ -1984,7 +2119,9 @@ export interface AppState {
     buckets: { key: string; usedPercent: number; resetsAtMs: number | null }[];
   };
   /** Transient auto-continue-after-limit-reset machine state (#296) — NOT persisted;
-   * only the `autoContinueAfterLimit` setting is. Fed by the usage poll. */
+   * only the `autoContinueAfterLimit` setting is. Since task 430 a read-only mirror
+   * of the Rust engine (`autocontinue://changed` → `applyAutoContinueSync`); no UI
+   * consumer today, kept for parity/observability. */
   autoContinue: AutoContinueState;
   /** Pending scheduled sessions (#93), newest-first; main window only. */
   schedules: ScheduledSession[];
@@ -2133,18 +2270,14 @@ export interface AppState {
   mockUpdate: (opts?: { version?: string; notes?: string | null }) => void;
   /** Dev mock (#193): clear the mock + reset the updater state to idle. */
   clearUpdate: () => void;
-  /** Fetch + store the 5-hour Claude usage (#154); fail-open to unavailable. Gated
-   * to Claude (no-op for a non-Claude agent). */
-  refreshUsage: () => Promise<void>;
-  /** Start the 180s usage poll (#154) — main window only, idempotent. */
-  startUsagePolling: () => void;
-  /** Stop the usage poll (#154). */
-  stopUsagePolling: () => void;
-  /** Run the auto-continue reducer (#296) against the current `usage` snapshot +
-   * settings + live Claude sessions: arm/wait/fire the machine, sync the tighter
-   * armed poll cadence, and send the continue nudge to any fired sessions. Called
-   * by `refreshUsage` after it sets `usage`; safe to call directly (used by tests). */
-  applyAutoContinue: () => void;
+  /** Apply a `usage://changed` broadcast / boot-snapshot value (task 430): map the
+   * Rust snapshot into the `usage` slice via `usageFromSnapshot`. Equality-guarded
+   * apply-only — never calls back into any ipc/persist path. */
+  applyUsageSync: (snap: ipc.UsageSnapshot | null) => void;
+  /** Apply an `autocontinue://changed` broadcast / boot-snapshot value (task 430):
+   * mirror the Rust engine's machine state. Equality-guarded apply-only — never
+   * calls back into any ipc/persist path. */
+  applyAutoContinueSync: (state: ipc.AutoContinueStatePayload) => void;
   /** Toggle the `autoContinueAfterLimit` setting (#296) — backs the ⋯-menu checkable
    * item + the Settings toggle. Persists via `saveSettings`. */
   toggleAutoContinue: () => void;
@@ -2306,8 +2439,12 @@ export interface AppState {
   addToGitignore: (repo: string, path: string) => Promise<void>;
   /** Assign a repo's color (optimistic + persisted) (#35). */
   setRepoColor: (path: string, color: string) => Promise<void>;
-  /** Apply + persist application settings (#100) and run their side-effects. */
-  saveSettings: (settings: Settings) => Promise<void>;
+  /** Apply + persist application settings (#100) and run their side-effects.
+   * Persists only the changed keys as a patch the backend merges server-side
+   * (task 429); `baseline` — when given (the Settings modal's draft seed) — is
+   * what the change is diffed against, so a foreign field changed while the
+   * modal was open is neither reverted nor written. */
+  saveSettings: (settings: Settings, baseline?: Settings) => Promise<void>;
   /** Flip the dense-panels setting (UI v2 §9, task 373) — backs the ⌘D shortcut.
    * Persists via `saveSettings` (which applies the `dense` root class) and toasts
    * "Dense panels on"/"Dense panels off". */
@@ -2410,8 +2547,8 @@ export interface AppState {
    * (`contentForSelected`) — a no-op when nothing maximizable is selected. */
   toggleMaximizeSelected: () => void;
   /** Close the focused panel — the ⌘W / Ctrl+W keybind (`close-panel`). Precedence:
-   * an open big-mode overlay closes first; in Canvas view (or a detached canvas
-   * window, #84) the focused leaf (`activeLeafId`) is removed exactly like its
+   * an open big-mode overlay closes first; in Canvas view the focused leaf
+   * (`activeLeafId`) is removed exactly like its
    * header × (non-destructive — the agent's PTY survives in the pool); in Overview
    * the selected card is closed via the exact action its × calls — a panel via
    * `removeOverviewPanel`, an agent via `removeSession`, a schedule via
@@ -2439,15 +2576,15 @@ export interface AppState {
   reorderCanvases: (orderedIds: string[]) => void;
   /** Switch the active Canvas tab (#58). */
   selectCanvas: (id: string) => void;
-  /** Open (or focus) a Canvas tab in its own native window for multi-monitor use
-   * (#84). */
+  /** Open this canvas in an additional FULL window (task 434/437). The new window
+   * boots into Canvas on this tab; this window keeps the tab — both render it
+   * (426/427 mirroring). Always opens a new window. */
   popOutCanvas: (id: string) => void;
-  /** Raise the detached window for a canvas (#84) — ⌘-jump + detached-tab click. */
-  focusCanvasWindow: (id: string) => void;
+  /** Open a new FULL app window (Multi-window 10/16 → task 434's open_app_window).
+   * Fire-and-forget like popOutCanvas; valid from any window kind. */
+  openNewWindow: () => void;
   /** Apply a cross-window canvas-list update broadcast by the backend (#84). */
   applyCanvasSync: (canvases: CanvasTab[]) => void;
-  /** Replace the set of detached canvas windows (#84, from `canvas://windows`). */
-  setDetachedCanvasIds: (ids: string[]) => void;
   /** Switch a Canvas file panel (the active tab's leaf) to another file (#90). */
   setLeafFile: (leafId: string, file: string) => void;
   /** Open an **out-of-repo** absolute file in a Canvas file panel (#163): set the
@@ -2559,16 +2696,16 @@ export interface AppState {
    * the source keeps running untouched. Resolves true on success. */
   forkSession: (sourceId: string) => Promise<boolean>;
   /** Open an agent in the Canvas view from its sidebar row menu (#153): reuse the
-   * agent's existing Canvas tab if it already has a panel there (focus that tab, or
-   * raise its detached window #84), else create a new "Canvas N" tab holding it.
+   * agent's existing Canvas tab if it already has a panel there (focus that tab),
+   * else create a new "Canvas N" tab holding it.
    * Switches to Canvas + focuses the panel; the agent is already a `sessions` item
    * so no `overviewPanels` registration is needed (#152). */
   openSessionInCanvas: (sessionId: string) => void;
   /** View-aware file open from the file tree (#175). In **Overview**: add (or, on a
    * dedup hit, jump to the already-open) Overview column and select it (the
-   * `selectedId` → `data-item-id` effect scrolls it into view). In **Canvas** (incl.
-   * a detached canvas window): focus the file's existing leaf across all tabs —
-   * switching to its tab or raising its detached window (#84) — else append it as a
+   * `selectedId` → `data-item-id` effect scrolls it into view). In **Canvas**:
+   * focus the file's existing leaf across all tabs — switching to its tab in THIS
+   * window (task 437) — else append it as a
    * panel to the active tab. Either way the file is registered in `overviewPanels`
    * (the #152 source of truth) so it also shows in the sidebar + Overview and its
    * removal cascades. `kind` is the panel kind: `"markdown"` (file viewer) or
@@ -2578,10 +2715,6 @@ export interface AppState {
     file: string,
     kind: "markdown" | "kanban",
   ) => Promise<void>;
-  /** Forget a cleanly-exited (code 0) agent (#63): drop it from the store and its
-   * persisted record (kill + forget, like Remove) so it vanishes from
-   * Focus/Overview/sidebar and won't return on next boot; shows a brief toast. */
-  forgetExitedSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   /** Set (or clear, when blank) a session's custom name; propagates everywhere (#57). */
   renameSession: (id: string, name: string) => Promise<void>;
@@ -2666,6 +2799,62 @@ export interface AppState {
    * `recurring://changed`) — keeps a detached canvas window's `recurrings` slice in
    * sync; a no-op when unchanged. */
   applyRecurringSync: (recurrings: RecurringSession[]) => void;
+  // --- Cross-window state sync (task 428): one apply-sync action per "quiet"
+  // persisted slice, modeled on `applyScheduleSync`. Each is JSON-equality-guarded
+  // (an identical value — above all the sender's own echo — is a no-op) and NEVER
+  // calls any `ipc.set*` / persist path, so no echo loop can form.
+  /** Apply a `settings://changed` broadcast: merge over defaults + re-apply the
+   * imperative side-effects (theme/accent/motion/terminal) when changed. */
+  applySettingsSync: (settings: Partial<Settings> | null) => void;
+  /** Apply a `recents://changed` broadcast. */
+  applyRecentsSync: (recents: string[]) => void;
+  /** Apply a `diff_seen://changed` broadcast (`null` → empty map). */
+  applyDiffSeenSync: (seen: DiffSeenMap | null) => void;
+  /** Apply a `repo_order://changed` broadcast (→ `folderOrder`). */
+  applyRepoOrderSync: (order: string[]) => void;
+  /** Apply a `repo_colors://changed` broadcast. */
+  applyRepoColorsSync: (colors: Record<string, string>) => void;
+  /** Apply an `overview_panels://changed` broadcast (wholesale map, like canvases). */
+  applyOverviewPanelsSync: (panels: Record<string, OverviewPanel[]>) => void;
+  /** Apply an `overview_order://changed` broadcast (wholesale map). */
+  applyOverviewOrderSync: (order: Record<string, string[]>) => void;
+  /** Apply a `sidebar_width://changed` broadcast — clamped, `null` → the default;
+   * deliberately NOT via `setSidebarWidth` (which persists). Width stays
+   * global-shared across windows by design. */
+  applySidebarWidthSync: (width: number | null) => void;
+  /** Apply a `sidebar_collapsed://changed` broadcast (`null` → expanded); NOT via
+   * `setSidebarCollapsed` (which persists). Global-shared by design. */
+  applySidebarCollapsedSync: (collapsed: boolean | null) => void;
+  /** Apply a `canvas_templates://changed` broadcast (`null` → none). */
+  applyCanvasTemplatesSync: (templates: CanvasTemplate[] | null) => void;
+  /** Apply a `sessions://changed` roster broadcast: reconcile (never replace) via
+   * `diffSessionRoster` — added ids `upsertSession`, removed ids `dropSession`,
+   * existing ids merge record-derived fields while preserving the view-only live
+   * fields (`reconnecting`, `exitedCode`). An identical roster is a complete no-op. */
+  applySessionsSync: (records: SessionRecord[]) => void;
+  /** A clean #63 exit Rust already forgot (task 431): drop local state in every
+   *  window (idempotent with the `sessions://changed` roster drop that precedes it);
+   *  only the targeted window toasts, so N windows show ONE "Agent exited". */
+  applySessionForgotten: (p: ForgottenPayload) => void;
+  /** The Rust exit-driven worktree cleanup kept a dirty worktree (task 431/#74):
+   *  only the targeted window shows the warning toast. */
+  applyWorktreeKept: (p: WorktreeKeptPayload) => void;
+  /** Apply a `window://primary` broadcast / boot-snapshot value (task 433).
+   * Equality-guarded apply-only (the 428 shape) — never persists. When THIS
+   * window transitions non-primary → primary after boot, it takes over the
+   * app-singleton effects live via `armPrimaryEffects` (monotonic: a surviving
+   * window is never demoted, so it fires at most once per window lifetime). */
+  applyPrimarySync: (primary: string | null) => void;
+  /** Re-arm the app-singleton effects a closed primary was carrying (task 433):
+   * the #369 folder-color auto-assign subscription (flag-guarded, idempotent)
+   * and a fresh `checkForUpdate` (the `update` slice is per-window). Boot
+   * one-shots (onboarding, folder pruning, migration persists, the
+   * updated-toast) are deliberately NOT re-run. */
+  armPrimaryEffects: () => void;
+  /** Apply a `file_claims://changed` broadcast / the boot snapshot (task 435):
+   * replace the transient `fileClaims` map wholesale. Equality-guarded apply-only
+   * (the 428 shape) — never calls any persist or claim IPC path. */
+  applyFileClaimsSync: (claims: FileClaim[]) => void;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
   /** Fast-forward `cwd`'s current branch to its upstream — `git pull --ff-only`
    * (#181, sidebar repo / worktree "Pull"). Toasts the result (summary or git
@@ -2975,12 +3164,14 @@ function registerOverviewPanel(repoPath: string, panel: OverviewPanel): void {
  * `dropSession`, a schedule via `cancelSchedule`) also removes it from every Canvas
  * panel that shows it. Each emptied split collapses (`removeLeaf`), a now-dangling
  * keyboard focus (#76) is cleared, and the result is persisted + broadcast
- * (`setCanvases` → `canvas://changed`) so detached windows (#84) stay in sync. The
+ * (`setCanvases` → `canvas://changed`) so detached windows (#84) stay in sync — as
+ * a canvases-only patch (task 429): this edits the tab layouts, never the active
+ * tab, so the stored `activeId` boot hint is left alone. The
  * item's PTY is killed by the caller as today; Overview needs no extra work (it
  * mirrors `overviewPanels`). No-op when nothing matches.
  */
 function pruneCanvasLeaves(match: (content: CanvasContent) => boolean): void {
-  const { canvases, activeCanvasId, activeLeafId } = useStore.getState();
+  const { canvases, activeLeafId } = useStore.getState();
   const removedLeafIds = new Set<string>();
   const next = canvases.map((c) => {
     if (!c.layout) return c;
@@ -3001,16 +3192,18 @@ function pruneCanvasLeaves(match: (content: CanvasContent) => boolean): void {
     activeLeafId:
       activeLeafId && removedLeafIds.has(activeLeafId) ? null : activeLeafId,
   });
-  void ipc
-    .setCanvases({ canvases: next, activeId: activeCanvasId })
-    .catch(() => {});
+  void ipc.setCanvases({ canvases: next }).catch(() => {});
 }
 
 export const useStore = create<AppState>()((set, get) => ({
   sessions: [],
   selectedId: null,
   view: "overview",
-  overviewRepoFilter: null,
+  // An app window opened for a repo (task 434 `?repo=` init preset) boots with
+  // its Overview filtered to it. Local UI only — never persisted, never synced.
+  overviewRepoFilter: INIT_REPO_PATH
+    ? { path: INIT_REPO_PATH, mode: "all" }
+    : null,
   recents: [],
   branches: {},
   githubUrls: {},
@@ -3022,16 +3215,17 @@ export const useStore = create<AppState>()((set, get) => ({
   fileDropTarget: null,
   fileTreeRefresh: {},
   fileTreeMounts: {},
+  fileClaims: {},
   repoColors: {},
   overviewPanels: {},
   overviewOrder: {},
   // One empty canvas until init loads/migrates the persisted tabs (#58) — keeps
   // the always-≥1 invariant even before the backend responds.
   canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
-  // A detached window (#84) fixes its active tab to its own canvas from the start
-  // so it renders the right layout before the persisted tabs load.
-  activeCanvasId: DETACHED_CANVAS_ID ?? "canvas-1",
-  detachedCanvasIds: [],
+  // A window's `?canvas=` init preset (task 434) seeds the active tab so it renders
+  // the right layout before the persisted tabs load (re-resolved — soft, only when
+  // the tab exists — by `resolveCanvases` once the persisted tabs arrive).
+  activeCanvasId: INIT_CANVAS_ID ?? "canvas-1",
   canvasClosePromptId: null,
   canvasTemplates: [],
   templateEditorOpen: false,
@@ -3055,6 +3249,14 @@ export const useStore = create<AppState>()((set, get) => ({
   claudeMissing: false,
   platform: "",
   installKind: "",
+  // Task 433: which window runs the once-per-app effects. Pre-sync default keeps
+  // today's semantics (the `installKind` "" precedent): the "main" window assumes
+  // primary until the backend snapshot/broadcast says otherwise — so vitest and a
+  // plain dev server behave exactly as before. A detached canvas is never primary.
+  // Task 434 (satisfying 433's 9/16 note): an `app-*` full window boots with null
+  // here — only the original "main" label may assume primary; every other window
+  // waits for the `primary_window` snapshot `init` resolves before the boot apply.
+  primaryWindow: WINDOW_LABEL === "main" ? "main" : null,
   windowsBuild: 0,
   booted: false,
   toasts: [],
@@ -3116,30 +3318,28 @@ export const useStore = create<AppState>()((set, get) => ({
   setSidebarCollapsed: (collapsed) => {
     if (collapsed === get().sidebarCollapsed) return;
     set({ sidebarCollapsed: collapsed });
-    // Persist only from the main window (a detached canvas has no sidebar); rare
-    // toggle, so no debounce.
-    if (IS_MAIN_WINDOW) {
-      void ipc.setSidebarCollapsed(collapsed).catch(() => {});
-    }
+    // Converges across windows via the 428 broadcast. Rare toggle, so no debounce.
+    void ipc.setSidebarCollapsed(collapsed).catch(() => {});
   },
   toggleSidebarCollapsed: () =>
     get().setSidebarCollapsed(!get().sidebarCollapsed),
   setPendingRenameSession: (id) => set({ pendingRenameSessionId: id }),
   // Persist the drag-reordered top-level folder order (#211): optimistic local set,
-  // then persist (main window only — a detached canvas has no sidebar). Mirrors
-  // `reorderOverview`; a persist failure (e.g. outside Tauri) keeps the local order.
+  // then persist. Mirrors `reorderOverview`; a persist failure (e.g. outside Tauri)
+  // keeps the local order.
   reorderRepos: async (ordered) => {
     set({ folderOrder: ordered });
-    if (!IS_MAIN_WINDOW) return;
     try {
       await ipc.setRepoOrder(ordered);
     } catch {
       // Persist failed; keep the local order for the session.
     }
   },
-  // Diff "seen" markers (#278): optimistic local set, then a debounced persist of the
-  // whole map (toggling a few files coalesces into one write). Persisted from any
-  // window — a diff panel lives in the main window AND a detached canvas (#84).
+  // Diff "seen" markers (#278/task 429): optimistic local set, then a debounced
+  // persist of the accumulated per-file DELTAS (toggling a few files coalesces into
+  // one patch write; the backend merges it per key, so another window's concurrent
+  // marks survive). Persisted from any window — a diff panel lives in the main
+  // window AND a detached canvas (#84).
   markDiffSeen: (repoPath, filePath, digest) => {
     set((s) => ({
       diffSeen: {
@@ -3147,22 +3347,26 @@ export const useStore = create<AppState>()((set, get) => ({
         [repoPath]: { ...s.diffSeen[repoPath], [filePath]: digest },
       },
     }));
+    recordDiffSeenDelta(repoPath, filePath, digest);
     persistDiffSeen();
   },
   clearDiffSeen: (repoPath, filePath) => {
-    set((s) => {
-      const repo = s.diffSeen[repoPath];
-      if (!repo || !(filePath in repo)) return {}; // nothing to clear
-      const rest = { ...repo };
-      delete rest[filePath];
-      const next = { ...s.diffSeen };
-      if (Object.keys(rest).length === 0) {
-        delete next[repoPath]; // drop the now-empty repo entry
-      } else {
-        next[repoPath] = rest;
-      }
-      return { diffSeen: next };
-    });
+    // The nothing-to-clear check is hoisted out of the set() updater (task 429):
+    // recording the tombstone delta is a side effect, and an updater may run more
+    // than once (StrictMode) — the early return also skips the persist entirely.
+    const current = get().diffSeen;
+    const repo = current[repoPath];
+    if (!repo || !(filePath in repo)) return; // nothing to clear
+    const rest = { ...repo };
+    delete rest[filePath];
+    const next = { ...current };
+    if (Object.keys(rest).length === 0) {
+      delete next[repoPath]; // drop the now-empty repo entry
+    } else {
+      next[repoPath] = rest;
+    }
+    set({ diffSeen: next });
+    recordDiffSeenDelta(repoPath, filePath, null);
     persistDiffSeen();
   },
   // Selection is decoupled from the view (#22): selecting only highlights. The
@@ -3208,10 +3412,16 @@ export const useStore = create<AppState>()((set, get) => ({
       sessionIdleSince: omitKey(s.sessionIdleSince, id),
       dismissedAttention: omitKey(s.dismissedAttention, id),
       attentionEligible: omitKey(s.attentionEligible, id),
+      // Drop any heuristic worktree guess keyed to the removed session — this is
+      // the one choke point every removal path funnels through (roster sync,
+      // Rust's clean-exit forget, explicit Remove, recurring rotation), where a
+      // clean exit BYPASSES onExited's own cleanup since task 431.
+      heuristicWorktrees: omitKey(s.heuristicWorktrees, id),
     }));
     // An agent removed from the left panel (Remove #57, or a clean exit #63) also
     // disappears from every Canvas tab showing it (#152). The PTY is killed by the
-    // caller (removeSession / forgetExitedSession); reconcile disposes the xterm.
+    // caller (removeSession, or Rust's clean-exit forget — task 431); reconcile
+    // disposes the xterm.
     pruneCanvasLeaves((c) => c.kind === "agent" && c.sessionId === id);
   },
 
@@ -3624,121 +3834,17 @@ export const useStore = create<AppState>()((set, get) => ({
     }));
   },
 
-  refreshUsage: async () => {
-    // Session-usage display disabled (#326): never call the usage IPC — so the Rust
-    // token read never runs — and keep the bar hidden. Still run the auto-continue
-    // reducer so it disarms (fail-open) with no usage data.
-    if (!get().settings.showSessionUsage) {
-      const u = get().usage;
-      if (u.available || u.usedPercent != null || u.resetsAtMs != null) {
-        set({
-          usage: {
-            usedPercent: null,
-            resetsAtMs: null,
-            available: false,
-            buckets: [],
-          },
-        });
-      }
-      get().applyAutoContinue();
-      return;
-    }
-    // Gate to Claude (forward-compatible). Non-Claude → hide, don't even call out.
-    if (!isClaudeActive(get())) {
-      set({
-        usage: {
-          usedPercent: null,
-          resetsAtMs: null,
-          available: false,
-          buckets: [],
-        },
-      });
-      // Still run the auto-continue reducer so it disarms (fail-open) when the
-      // usage feed goes unavailable, e.g. a non-Claude session becoming active.
-      get().applyAutoContinue();
-      return;
-    }
-    try {
-      const snap = await ipc.claudeSessionUsage();
-      set({
-        usage: snap
-          ? {
-              usedPercent: snap.usedPercent,
-              resetsAtMs: parseResetsAt(snap.resetsAt),
-              available: true,
-              buckets: snap.buckets.map((b) => ({
-                key: b.key,
-                usedPercent: b.usedPercent,
-                resetsAtMs: parseResetsAt(b.resetsAt),
-              })),
-            }
-          : {
-              usedPercent: null,
-              resetsAtMs: null,
-              available: false,
-              buckets: [],
-            },
-      });
-    } catch {
-      // Outside Tauri / command missing → hide; recover on the next tick.
-      set({
-        usage: {
-          usedPercent: null,
-          resetsAtMs: null,
-          available: false,
-          buckets: [],
-        },
-      });
-    }
-    // Drive the auto-continue machine off the fresh snapshot (#296).
-    get().applyAutoContinue();
+  // Usage + auto-continue mirrors (task 430): the poll, reducer, and nudge all run
+  // in the Rust engine (`src-tauri/src/autocontinue.rs`); these applies follow the
+  // task-428 conventions — JSON-equality-guarded, plain `set()`, ZERO ipc calls.
+  applyUsageSync: (snap) => {
+    const next = usageFromSnapshot(snap);
+    if (JSON.stringify(get().usage) === JSON.stringify(next)) return;
+    set({ usage: next });
   },
-  startUsagePolling: () => {
-    if (!IS_MAIN_WINDOW || usagePollTimer) return; // main-window only, idempotent
-    if (!get().settings.showSessionUsage) return; // #326: no poll, no token access
-    void get().refreshUsage();
-    usagePollTimer = setInterval(
-      () => void get().refreshUsage(),
-      USAGE_POLL_MS,
-    );
-  },
-  stopUsagePolling: () => {
-    if (usagePollTimer) {
-      clearInterval(usagePollTimer);
-      usagePollTimer = undefined;
-    }
-    // Tear down the tighter armed poll too (#296) so nothing keeps ticking.
-    syncArmedPoll(false, () => {});
-  },
-  applyAutoContinue: () => {
-    const state = get();
-    // Live Claude sessions = running (not exited, the #91 predicate) and running
-    // claude (a legacy null agent predates #101 and is claude). Per-agent opt-out
-    // (#297): an agent whose box is unchecked (`autoContinueDisabled`) is excluded
-    // here, so it never enters the captured arm-set nor the fire-set — the pure #296
-    // reducer stays agnostic while that one agent skips the continue nudge.
-    const liveClaudeIds = state.sessions
-      .filter(
-        (s) =>
-          s.exitedCode === undefined &&
-          (s.agent ?? "claude") === "claude" &&
-          !s.autoContinueDisabled,
-      )
-      .map((s) => s.id);
-    const { next, fireIds } = evaluateAutoContinue(
-      state.autoContinue,
-      state.usage,
-      Date.now(),
-      {
-        enabled: state.settings.autoContinueAfterLimit,
-        defaultAgent: state.settings.defaultAgent,
-      },
-      liveClaudeIds,
-    );
-    if (next !== state.autoContinue) set({ autoContinue: next });
-    // Match the poll cadence to the (new) armed state, then nudge fired sessions.
-    syncArmedPoll(next.armed, () => void get().refreshUsage());
-    for (const id of fireIds) void sendContinue(id);
+  applyAutoContinueSync: (state) => {
+    if (JSON.stringify(get().autoContinue) === JSON.stringify(state)) return;
+    set({ autoContinue: state });
   },
   toggleAutoContinue: () => {
     const settings = get().settings;
@@ -3758,7 +3864,7 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!session || (session.autoContinueDisabled ?? false) === disabled)
       return;
     // Optimistic local update so both agent surfaces reflect it immediately; the
-    // fire step (`applyAutoContinue`) reads this same flag on the next usage tick.
+    // Rust engine's fire step (task 430) reads the persisted flag on its next wake.
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, autoContinueDisabled: disabled } : x,
@@ -3804,7 +3910,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // promise rejection while we await the subscriptions.
     const bootPromise = ipc.bootState().catch(() => null);
 
-    // Wave 2: the 13 `listen` registrations (each its own invoke) as ONE parallel
+    // Wave 2: the 31 `listen` registrations (each its own invoke) as ONE parallel
     // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
@@ -3872,35 +3978,23 @@ export const useStore = create<AppState>()((set, get) => ({
               );
               if (owningRec) {
                 intentionalKills.delete(id);
-                if (IS_MAIN_WINDOW) {
-                  // Clear the pointer so the panel shows "next run in…" until the next
-                  // fire (a genuine crash); a rotation's `onFired` sets the fresh child.
-                  // Drop the dead child so its pooled xterm reconciles away.
-                  set((s) => ({
-                    recurrings: s.recurrings.map((r) =>
-                      r.id === owningRec.id
-                        ? { ...r, current_session_id: null }
-                        : r,
-                    ),
-                  }));
-                  get().dropSession(id);
-                }
+                // Clear the pointer so the panel shows "next run in…" until the next
+                // fire (a genuine crash); a rotation's `onFired` sets the fresh child.
+                // Drop the dead child so its pooled xterm reconciles away. Local,
+                // non-persisting mutations — every window (task 434) runs them on
+                // its own copy of the event.
+                set((s) => ({
+                  recurrings: s.recurrings.map((r) =>
+                    r.id === owningRec.id
+                      ? { ...r, current_session_id: null }
+                      : r,
+                  ),
+                }));
+                get().dropSession(id);
                 return;
               }
-              // Session lifecycle (forget / toast / kill) is owned by the **main**
-              // window (#84) — it's the source of truth for the session list. A
-              // detached canvas window is a renderer: it only reflects the exit
-              // locally so a terminal it shows gets the "Process exited" overlay,
-              // never forgetting/killing/toasting (which the main window does).
-              if (!IS_MAIN_WINDOW) {
-                if (get().sessions.some((s) => s.id === id)) {
-                  get().markExited(id, code);
-                } else {
-                  get().markTerminalExited(id, code);
-                }
-                return;
-              }
-              // One event per close. An intentional kill (Remove/Forget) already
+              // One event per close. (The non-clean exit toast can appear in each
+              // window — dedup is deferred to a later epic card.) An intentional kill (Remove/Forget) already
               // toasts and is never auto-forgotten or double-toasted here (#32).
               const intentional = intentionalKills.delete(id);
               // Terminal item (#72): a shell PTY, not a claude session (not in
@@ -3911,13 +4005,8 @@ export const useStore = create<AppState>()((set, get) => ({
                 if (!intentional) get().markTerminalExited(id, code);
                 return;
               }
-              // Clean exit (code 0 while running): the user ended the agent — forget
-              // it like Remove so it vanishes everywhere and won't return on next
-              // boot, with a brief "Agent exited" toast and no overlay/Restart (#63).
-              if (isCleanExit(code, booting, intentional)) {
-                void get().forgetExitedSession(id);
-                return;
-              }
+              // Clean exits never arrive here — Rust consumes them (task 431) and
+              // emits `session://forgotten` instead (see `applySessionForgotten`).
               // Non-zero / crash exit (or a failed boot resume): keep the session
               // and its exit code so the Terminal shows the "Process exited" overlay
               // + Restart (#63/#30). The generic exit toast is suppressed for
@@ -3931,28 +4020,33 @@ export const useStore = create<AppState>()((set, get) => ({
                 );
               }
             },
+            // A clean #63 exit Rust already forgot (task 431) — every window drops
+            // local state; only the targeted window toasts.
+            onForgotten: (p) => get().applySessionForgotten(p),
+            // The exit-driven worktree cleanup kept a dirty worktree (task 431/#74)
+            // — only the targeted window warns.
+            onWorktreeKept: (p) => get().applyWorktreeKept(p),
           }),
-          // Cross-window canvas sync (#84): a tab/layout edit in any window, and
-          // the detached-window set changing, both flow through the backend.
+          // Cross-window canvas sync (#84): a tab/layout edit in any window
+          // flows through the backend.
           ipc.subscribeCanvasEvents({
             onCanvasesChanged: ({ canvases }) =>
               get().applyCanvasSync(canvases),
-            onWindowsChanged: (ids) => get().setDetachedCanvasIds(ids),
           }),
           // Scheduled sessions (#93/#280): the backend engine fires schedules into live
-          // agents. The **main** window owns the scheduled→live transition; a **detached**
-          // canvas window (#84) also listens because it can hold a scheduled panel, so it
-          // must follow the same fire (and keep its own `schedules` slice in sync). Both
-          // subscribe; the per-window behavior is branched inside each handler. (Tauri
-          // events are global on macOS and Windows alike, so this path is identical.)
+          // agents. The **primary** window (task 433) owns the scheduled→live transition;
+          // every other window (e.g. a detached canvas #84 holding a scheduled panel)
+          // also listens, so it must follow the same fire (and keep its own `schedules`
+          // slice in sync). All subscribe; the per-window behavior is branched inside
+          // each handler. (Tauri events are global on macOS/Windows/Linux alike.)
           ipc.subscribeScheduleEvents({
             onFired: ({ id, session }) => {
               get().upsertSession(toSessionView(session));
-              if (!IS_MAIN_WINDOW) {
-                // Detached canvas (#280): reflect the fire locally so the rewritten
-                // agent leaf (arriving via `canvas://changed`) finds its session and
-                // renders the terminal instead of "Session closed." The main window
-                // owns the leaf rewrite, persistence, recents, and toast.
+              if (!isPrimaryLabel(get().primaryWindow)) {
+                // Non-primary window (#280/task 433): reflect the fire locally so the
+                // rewritten agent leaf (arriving via `canvas://changed`) finds its
+                // session and renders the terminal instead of "Session closed." The
+                // primary window owns the leaf rewrite, persistence, recents, and toast.
                 set((s) => ({
                   schedules: s.schedules.filter((x) => x.id !== id),
                 }));
@@ -3983,7 +4077,7 @@ export const useStore = create<AppState>()((set, get) => ({
                 sessionId: session.id,
                 repoPath: session.repo_path,
               };
-              const { canvases, activeCanvasId } = get();
+              const { canvases } = get();
               const nextCanvases = rewriteScheduledLeaves(
                 canvases,
                 id,
@@ -3991,11 +4085,10 @@ export const useStore = create<AppState>()((set, get) => ({
               );
               if (nextCanvases !== canvases) {
                 set({ canvases: nextCanvases });
+                // Canvases-only patch (task 429): a leaf rewrite never changes the
+                // active tab, so the stored `activeId` hint is left alone.
                 void ipc
-                  .setCanvases({
-                    canvases: nextCanvases,
-                    activeId: activeCanvasId,
-                  })
+                  .setCanvases({ canvases: nextCanvases })
                   .catch(() => {});
               }
               get().pushToast(
@@ -4006,8 +4099,9 @@ export const useStore = create<AppState>()((set, get) => ({
               set((s) => ({
                 schedules: s.schedules.filter((x) => x.id !== id),
               }));
-              // Only the main window toasts the failure (it owns the schedule surface).
-              if (IS_MAIN_WINDOW) {
+              // Only the primary window toasts the failure (task 433 — it owns the
+              // schedule surface).
+              if (isPrimaryLabel(get().primaryWindow)) {
                 get().pushToast(
                   message || "Scheduled agent failed to start",
                   "error",
@@ -4048,9 +4142,10 @@ export const useStore = create<AppState>()((set, get) => ({
                 intentionalKills.add(prev);
                 get().dropSession(prev);
               }
-              // Surface the (possibly new) folder in recents — main window only, and
-              // the *parent repo* for a worktree child (mirrors the backend).
-              if (IS_MAIN_WINDOW) {
+              // Surface the (possibly new) folder in recents — primary window only
+              // (task 433), and the *parent repo* for a worktree child (mirrors the
+              // backend).
+              if (isPrimaryLabel(get().primaryWindow)) {
                 const recentPath = session.worktree_parent ?? session.repo_path;
                 set((s) => ({
                   recents: [
@@ -4061,8 +4156,9 @@ export const useStore = create<AppState>()((set, get) => ({
               }
             },
             onError: ({ message }) => {
-              // The record is kept + re-armed backend-side; just toast (main window).
-              if (IS_MAIN_WINDOW) {
+              // The record is kept + re-armed backend-side; just toast (primary
+              // window, task 433).
+              if (isPrimaryLabel(get().primaryWindow)) {
                 get().pushToast(
                   message || "Recurring agent failed to start",
                   "error",
@@ -4071,6 +4167,33 @@ export const useStore = create<AppState>()((set, get) => ({
             },
             onChanged: (recurrings) => get().applyRecurringSync(recurrings),
           }),
+          // Cross-window state sync (task 428): the backend broadcasts every "quiet"
+          // persisted slice's full new value after each successful persist, plus the
+          // session roster after add/remove/rename. Both window kinds subscribe (init
+          // is shared); the applies are equality-guarded, so the mutating window's
+          // own echo is free and no loop can form.
+          ipc.subscribeStateSyncEvents({
+            onSettingsChanged: (s) => get().applySettingsSync(s),
+            onRecentsChanged: (r) => get().applyRecentsSync(r),
+            onDiffSeenChanged: (s) => get().applyDiffSeenSync(s),
+            onRepoOrderChanged: (o) => get().applyRepoOrderSync(o),
+            onRepoColorsChanged: (c) => get().applyRepoColorsSync(c),
+            onOverviewPanelsChanged: (p) => get().applyOverviewPanelsSync(p),
+            onOverviewOrderChanged: (o) => get().applyOverviewOrderSync(o),
+            onSidebarWidthChanged: (w) => get().applySidebarWidthSync(w),
+            onSidebarCollapsedChanged: (c) =>
+              get().applySidebarCollapsedSync(c),
+            onCanvasTemplatesChanged: (t) => get().applyCanvasTemplatesSync(t),
+            onSessionsChanged: (records) => get().applySessionsSync(records),
+          }),
+          // Usage + auto-continue mirrors (task 430): the Rust engine owns the one
+          // usage poll and the #296 machine; every window mirrors its state. Both
+          // applies are equality-guarded and never persist (the task-428 rule).
+          ipc.subscribeUsageEvents({
+            onUsageChanged: (snap) => get().applyUsageSync(snap),
+            onAutoContinueChanged: (state) =>
+              get().applyAutoContinueSync(state),
+          }),
           // Dev-container sessions: the one-time default-image build fires this so a
           // spawn waiting behind `docker build` reads as progress, not a hang.
           ipc.subscribeContainerEvents({
@@ -4078,19 +4201,41 @@ export const useStore = create<AppState>()((set, get) => ({
               // While the New Session modal is open it shows an inline "Building…"
               // indicator instead (#416), so suppress the toast to avoid doubling
               // up; a build that starts after the modal closed (the spawn path)
-              // still toasts.
-              if (IS_MAIN_WINDOW && !get().newSessionOpen) {
+              // still toasts. Primary window only (task 433) — one toast per app.
+              if (
+                isPrimaryLabel(get().primaryWindow) &&
+                !get().newSessionOpen
+              ) {
                 get().pushToast(
                   message || "Building the dev-container image (first run)…",
                 );
               }
             },
           }),
+          // Primary-window election (task 433): Rust broadcasts the oldest
+          // surviving full window's label on change; the equality-guarded apply
+          // re-arms the once-per-app effects on a live takeover.
+          ipc.subscribePrimaryEvents((p) => get().applyPrimarySync(p)),
+          // Same-file soft claims (task 435): the full sorted list on every
+          // registry change; the apply is equality-guarded and never persists.
+          ipc.subscribeFileClaimEvents((c) => get().applyFileClaimsSync(c)),
         ]);
       } catch {
         // Event subscription only works inside the Tauri webview.
         eventsSubscribed = false;
       }
+    }
+    // Primary election (task 433): resolve who's primary BEFORE the boot apply so
+    // the once-per-app boot effects gate correctly even in a window that boots
+    // already-primary (or never-primary). Fetched AFTER subscribing — Rust writes
+    // its state before each emit, so subscribe-then-fetch never regresses. Outside
+    // Tauri the fetch rejects/returns undefined and the pre-load default stands
+    // (main assumes primary).
+    try {
+      const primary = await ipc.primaryWindow();
+      if (primary !== undefined) get().applyPrimarySync(primary ?? null);
+    } catch {
+      /* keep the default */
     }
     // Apply the payload only AFTER the listeners exist: the *fetch* may race the
     // registration, the **apply** must not — a live `session://output` / `session://
@@ -4099,6 +4244,30 @@ export const useStore = create<AppState>()((set, get) => ({
     // persisted slice all arrive in this one payload, applied in a single `set()`
     // (which also re-applies the `data-platform` attribute, #363 — see `applyBootState`).
     get().applyBootState(await bootPromise);
+
+    // Usage + auto-continue boot seed (task 430): read the Rust engine's shared
+    // cache once, AFTER subscribing — the cache is written before each emit, so
+    // subscribe-then-fetch can never regress to a value older than a seen event.
+    // Every window (a detached canvas renders no UsageBar, so mirroring there is
+    // harmless — and correct for the epic's future full windows). Fire-and-forget;
+    // outside Tauri the catch leaves the hidden-bar defaults.
+    void ipc
+      .autoContinueSnapshot()
+      .then((snap) => {
+        get().applyUsageSync(snap.usage);
+        get().applyAutoContinueSync(snap.autoContinue);
+      })
+      .catch(() => {});
+
+    // Task 435: seed the transient same-file claim map (a window opened mid-edit
+    // must see the existing claim). Subscribed above, fetched after — Rust updates
+    // its registry before each emit, so subscribe-then-fetch never regresses.
+    // Outside Tauri the invoke rejects and the {} default stands.
+    try {
+      get().applyFileClaimsSync(await ipc.fileClaims());
+    } catch {
+      /* keep {} */
+    }
 
     // How this install is managed (#361) — read right after the boot payload and
     // therefore still *before* the boot `checkForUpdate()` further down in `init`, so a
@@ -4110,60 +4279,33 @@ export const useStore = create<AppState>()((set, get) => ({
       // Leave "" → self-updating.
     }
 
-    // Default view on launch (#103): apply the saved preference once at boot (main
-    // window only). `init` runs only on mount, so a mid-session view change is never
-    // overridden (unlike `refresh`, which can re-run).
-    if (IS_MAIN_WINDOW) {
-      get().setView(get().settings.defaultView);
+    // Default view on launch (#103): apply the saved preference once at boot
+    // (per-window UI) — or the `?canvas=` init preset (task 434): a window opened
+    // onto a canvas boots straight into it (`activeCanvasId` was preset by
+    // `resolveCanvases`). Local UI only; persists nothing. `init` runs only on
+    // mount, so a mid-session view change is never overridden (unlike `refresh`,
+    // which can re-run).
+    get().setView(INIT_CANVAS_ID ? "canvas" : get().settings.defaultView);
+    // Once-per-APP boot effects (task 433): only the primary window runs them —
+    // gated on the elected label (resolved above, before the boot apply), never on
+    // the window kind, which every `app-*` window (task 434) shares.
+    if (isPrimaryLabel(get().primaryWindow)) {
       // First-launch coding-agent picker: detect installed CLIs once and auto-pick /
-      // prompt as needed (main window only — a detached canvas has no onboarding).
+      // prompt as needed.
       void get().maybeOnboardAgent();
-      // Drop any sidebar folder deleted off-disk since last run (main window only —
-      // avoids a detached canvas racing the same destructive teardown). Fire-and-
+      // Drop any sidebar folder deleted off-disk since last run (primary only —
+      // avoids another window racing the same destructive teardown). Fire-and-
       // forget so a slow disk check never delays the rest of boot.
       void get().pruneMissingFolders();
-      // #369: give each NEW folder a distinct default color — prefer an unused palette
-      // color before repeating one. Folders present at boot are grandfathered (they
-      // keep whatever color they already show). Main window only; a detached canvas
-      // picks up the assignment on its next boot. Started once.
-      if (!folderColorSubStarted) {
-        folderColorSubStarted = true;
-        let knownRepos = new Set(
-          sidebarRepos(get().recents, get().sessions, get().recurrings),
-        );
-        useStore.subscribe((state, prev) => {
-          // Cheap reference-equality gate: only the three slices that feed the folder
-          // set can add a folder, so a color write (or any unrelated `set`) short-
-          // circuits here — including the synchronous re-entry from `setRepoColor`.
-          if (
-            state.recents === prev.recents &&
-            state.sessions === prev.sessions &&
-            state.recurrings === prev.recurrings
-          )
-            return;
-          const current = sidebarRepos(
-            state.recents,
-            state.sessions,
-            state.recurrings,
-          );
-          const additions = current.filter((r) => !knownRepos.has(r));
-          knownRepos = new Set(current);
-          if (additions.length === 0) return;
-          // Accumulate the picked colors so 2+ folders added in one batch each avoid
-          // the others' just-chosen colors, not just the pre-batch ones.
-          let colors = state.repoColors;
-          for (const repo of additions) {
-            if (colors[repo]) continue; // a user override / prior assignment always wins
-            const color = pickRepoColor(repo, colors, current);
-            colors = { ...colors, [repo]: color };
-            void get().setRepoColor(repo, color);
-          }
-        });
-      }
+      // #369: give each NEW folder a distinct default color (see
+      // `startFolderColorAssign`); a non-primary window picks the assignment up via
+      // the `repo_colors://changed` broadcast / its next boot. Started once —
+      // also re-armed by `armPrimaryEffects` on a live takeover.
+      startFolderColorAssign();
     }
-    // FileTree disk-change poll (#264): runs in *any* window that can show a tree (the
-    // main shell or a detached canvas), each refreshing only its own mounted trees, so
-    // files created/removed on disk surface within a few seconds. Idempotent.
+    // FileTree disk-change poll (#264): runs in *every* window, each refreshing only
+    // its own mounted trees, so files created/removed on disk surface within a few
+    // seconds. Idempotent.
     get().startFileTreePolling();
   },
 
@@ -4217,13 +4359,13 @@ export const useStore = create<AppState>()((set, get) => ({
     cancelAllAttentionTimers();
 
     // Multi-canvas (#58): the persisted tabs, else the one-shot migration of the old
-    // single `canvas_layout`, else one empty canvas — and a detached window (#84)
-    // always shows its own canvas. Pure (`boot.ts`), so it is unit-tested on its own.
+    // single `canvas_layout`, else one empty canvas — a window's `?canvas=` preset
+    // (task 434) selects that tab when it exists. Pure (`boot.ts`), unit-tested on
+    // its own.
     const { canvases, activeCanvasId, migrated } = resolveCanvases(
       boot.canvases,
       boot.canvas_layout,
-      IS_MAIN_WINDOW,
-      DETACHED_CANVAS_ID,
+      INIT_CANVAS_ID,
     );
 
     // ONE store update carries the whole payload. `platform` / `windowsBuild` are
@@ -4275,16 +4417,11 @@ export const useStore = create<AppState>()((set, get) => ({
       // the main window and a detached canvas alike).
       diffSeen: boot.diff_seen ?? {},
       // Scheduled (#93) + recurring (#294) sessions — the backend owns the timers, the
-      // frontend just lists the pending ones. Loaded in **every** window (#280): a
-      // detached canvas (#84) can hold a scheduled/recurring panel, which needs the
-      // record to render. Live mutations sync via `schedule://*` / `recurring://*`.
+      // frontend just lists the pending ones. Loaded in **every** window (#280): any
+      // window can hold a scheduled/recurring panel, which needs the record to
+      // render. Live mutations sync via `schedule://*` / `recurring://*`.
       schedules: boot.schedules,
       recurrings: boot.recurrings,
-      // The detached-window set (#84) — a just-opened window may have missed the
-      // `canvas://windows` broadcast that fired before it began listening. It rides in
-      // the same update as `sessions` + `canvases`, so PTY ownership
-      // (`computeSessionOwners`) is already right when the terminals first mount.
-      detachedCanvasIds: boot.detached_canvas_ids,
       // Nothing to resume ⇒ the boot decorations (#359) may run as soon as the first
       // paint is out; otherwise they wait for the backstop below.
       resumeSettled: views.length === 0,
@@ -4295,11 +4432,6 @@ export const useStore = create<AppState>()((set, get) => ({
     // practice, but it means the Linux --ui font override can never disagree with the
     // store's platform signal. It rides the same apply as the `platform` field itself.
     applyPlatformAttribute(boot.platform);
-    // Re-apply through the action so its guard still runs (#84): the main window never
-    // renders a detached canvas as its active tab — if the persisted active tab is
-    // already detached, switch to a still-docked one. A no-op on the (identical) ids.
-    get().setDetachedCanvasIds(boot.detached_canvas_ids);
-
     // End the boot window: stop suppressing exit toasts, and clear any flag
     // still set (e.g. a resumed session whose first output raced the listener —
     // its scrollback still replays the conversation).
@@ -4319,10 +4451,17 @@ export const useStore = create<AppState>()((set, get) => ({
       }
     }, RECONNECT_BACKSTOP_MS);
 
-    // --- Fire-and-forget side effects (main window only, exactly as before) ---
-    if (IS_MAIN_WINDOW) {
+    // --- Fire-and-forget side effects (primary window only, task 433) ---
+    // Once-per-APP persists + toasts, keyed on the elected primary label — `init`
+    // resolves the `primary_window` snapshot BEFORE applying the boot payload, and
+    // `refresh()` (the test entry) relies on the pre-load default / current slice
+    // value (main assumes primary until told otherwise).
+    if (isPrimaryLabel(get().primaryWindow)) {
       // Persist the migrated canvas shape once so the new field becomes the source of
-      // truth (#58); a detached renderer (#84) never writes it.
+      // truth (#58); primary-only, so N windows never race it. Deliberately both
+      // fields (task 429): this first write establishes the blob — as a patch it
+      // sets both fields to the values just resolved, equivalent to the old
+      // whole-blob write.
       if (migrated) {
         void ipc
           .setCanvases({ canvases, activeId: activeCanvasId })
@@ -4331,7 +4470,10 @@ export const useStore = create<AppState>()((set, get) => ({
       // #367/#414: persist the one-time terminal migrations once (an explicit legacy
       // line-height 1.2 bumped to 1.0, and/or an explicit legacy background-lightness 0
       // bumped to 25) so the migrated values + the set flags become the source of truth and
-      // the bumps never re-run. Only fires when a value actually changed.
+      // the bumps never re-run. Only fires when a value actually changed. Deliberately
+      // still the full merged blob: as a task-429 patch it writes every key with the
+      // values just loaded off disk — equivalent to the old whole-blob write, and the
+      // simplest way to also stamp the migration flags.
       if (settingsMigrated) {
         void ipc.setSettings(settings).catch(() => {});
       }
@@ -4347,17 +4489,10 @@ export const useStore = create<AppState>()((set, get) => ({
       for (const repo of Object.keys(boot.open_files)) {
         void ipc.setOpenFiles(repo, []).catch(() => {});
       }
-      // Terminal items can't resume (#72): respawn a fresh shell for each
-      // persisted terminal panel under its repo so the item is usable after a
-      // restart (previous output/history is gone, by design). A detached window (#84)
-      // must not re-spawn shells the main window owns.
-      for (const [repo, list] of Object.entries(boot.overview_panels)) {
-        for (const p of list) {
-          if (p.kind === "terminal") {
-            void ipc.spawnTerminal(repo, p.id).catch(() => {});
-          }
-        }
-      }
+      // Terminal items can't resume (#72) — and their boot respawn is RUST-owned now
+      // (task 432): the boot sequence respawns every persisted `kind:"terminal"` panel
+      // idempotently next to the agent resume pass, so N windows can never double-spawn
+      // the same panel ids. Every window (this one included) just renders the panels.
       // In-app updater (#190). (1) Post-update toast: if the running version is higher
       // than the one recorded last boot, the app just self-updated → toast it, then
       // record the running version. Both versions ride in the boot payload, so this
@@ -4372,10 +4507,9 @@ export const useStore = create<AppState>()((set, get) => ({
         void ipc.setLastVersion(boot.app_version).catch(() => {});
       }
       void get().checkForUpdate();
-      // 5-hour usage bar (#154): kick off the 180s poll, kept alive at module scope
-      // so it recovers (the bar unmounts when usage is unavailable). Gated to Claude
-      // inside refreshUsage; re-guards IS_MAIN_WINDOW so a detached window never polls.
-      get().startUsagePolling();
+      // 5-hour usage bar (#154): no poll to kick off any more — Rust owns the one
+      // per-app usage poll (task 430); this window mirrors it via `usage://changed`
+      // + the boot `autoContinueSnapshot` seed in `init`.
     }
   },
 
@@ -4552,6 +4686,12 @@ export const useStore = create<AppState>()((set, get) => ({
       );
       return { repoWorktrees: merged, heuristicWorktrees };
     });
+    // The mutating tail below is a once-per-app effect (task 433): every window
+    // runs this volley on its own cadence, so closing the SHARED panels + the
+    // toast belong to the primary window only — each non-primary window still
+    // keeps its slice mirrors fresh above, and the primary's own volley sees the
+    // same vanish against its own `prev`.
+    if (!isPrimaryLabel(get().primaryWindow)) return;
     for (const wt of gone) {
       // Auto-close + toast only when the user had something open there — an idle
       // row disappearing (Claude's quiet cleanup of an untouched worktree) is
@@ -4817,37 +4957,49 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  saveSettings: async (settings) => {
-    // Apply optimistically + run side-effects (live terminals, #100), then persist.
+  saveSettings: async (settings, baseline) => {
+    // Diff against the caller's `baseline` (what the user was actually LOOKING at —
+    // the Settings modal's draft seed) when given, else the live settings: only the
+    // actually-changed keys travel (task 429), so a foreign field changed while a
+    // draft was open is neither reverted locally nor included in the write. The
+    // spread-current one-field callers (toggles, onboarding, DiffInspector) need no
+    // baseline — diffing against the live settings yields exactly their one key.
     const prev = get().settings;
-    set({ settings });
-    applySettingsEffects(settings);
+    const patch = settingsPatch(baseline ?? prev, settings);
+    if (Object.keys(patch).length === 0) return; // nothing changed — no write
+    // Apply patch-over-current locally, mirroring the server's shallow merge
+    // exactly — so the task-428 echo broadcast (`settings://changed` with the
+    // merged blob) is an equality no-op here.
+    const merged = { ...prev, ...patch };
+    set({ settings: merged });
+    applySettingsEffects(merged);
     // Theme switched at runtime (#348/#333): push the new native window background to
     // every open window (main + detached canvases), so a resize/repaint gap can never
     // expose the previous theme's color behind the webview. Best-effort.
-    if (settings.theme !== prev.theme) {
-      void ipc.setThemeBackground(settings.theme).catch(() => {});
+    if (merged.theme !== prev.theme) {
+      void ipc.setThemeBackground(merged.theme).catch(() => {});
     }
-    // React to the session-usage toggle at runtime (#326): starting/stopping the poll
-    // is the load-bearing token-access gate, so it must fire immediately on Save.
-    if (settings.showSessionUsage !== prev.showSessionUsage) {
-      if (settings.showSessionUsage) {
-        get().startUsagePolling(); // resume — idempotent, main-window only
-      } else {
-        get().stopUsagePolling();
-        set({
-          usage: {
-            usedPercent: null,
-            resetsAtMs: null,
-            available: false,
-            buckets: [],
-          },
-        });
-        get().applyAutoContinue(); // disarm #296 immediately (no usage data)
-      }
+    // React to the session-usage toggle at runtime (#326/task 430): the
+    // load-bearing token-access gate now lives in the Rust engine's `poll_gate` —
+    // `set_settings` pokes the engine, so a toggle reacts within one ~5s wake (and
+    // toggle-off disarms #296 there, fail-open). Keep only an optimistic local
+    // clear on toggle-off so the bar hides instantly; Rust emits the authoritative
+    // `usage://changed: null` moments later (an equality no-op here).
+    if (!merged.showSessionUsage && prev.showSessionUsage) {
+      set({
+        usage: {
+          usedPercent: null,
+          resetsAtMs: null,
+          available: false,
+          buckets: [],
+        },
+      });
     }
     try {
-      await ipc.setSettings(settings);
+      // Persist ONLY the patch — the backend merges it over the persisted blob
+      // under the Store mutex (task 429), so a stale window can't clobber a
+      // concurrent foreign save.
+      await ipc.setSettings(patch);
     } catch {
       // Persist failed (e.g. outside Tauri); the change stays for the session.
     }
@@ -5211,17 +5363,17 @@ export const useStore = create<AppState>()((set, get) => ({
 
   // Canvas tabs (#58): the component computes each next layout tree via the pure
   // canvasTree helpers; these actions commit it to the active tab and persist the
-  // whole tab set. Persist failures (e.g. outside Tauri) are swallowed — the
-  // local state still drives the session.
+  // whole tab set — as a canvases-only patch (task 429): a layout edit never
+  // changes the active tab, so the stored `activeId` boot hint is left alone (a
+  // concurrent tab switch in another window survives). Persist failures (e.g.
+  // outside Tauri) are swallowed — the local state still drives the session.
   setActiveCanvasLayout: (tree) => {
     const { canvases, activeCanvasId } = get();
     const next = canvases.map((c) =>
       c.id === activeCanvasId ? { ...c, layout: tree } : c,
     );
     set({ canvases: next });
-    void ipc
-      .setCanvases({ canvases: next, activeId: activeCanvasId })
-      .catch(() => {});
+    void ipc.setCanvases({ canvases: next }).catch(() => {});
   },
 
   // Distribute the active tab's panels evenly (#186): equalize the whole layout
@@ -5344,12 +5496,12 @@ export const useStore = create<AppState>()((set, get) => ({
       s.closeMaximized();
       return;
     }
-    // 2. Canvas (or a detached canvas window, which is always canvas): remove the
-    // focused leaf, exactly like CanvasSurface's header ×. Hover-focus (#371) and
-    // Shift+arrows keep `activeLeafId` on the panel the user is on. Focus then
-    // advances to a spatial neighbor (else the first remaining leaf) so repeated
-    // ⌘W keeps closing panels instead of dangling after the first.
-    if (s.view === "canvas" || !IS_MAIN_WINDOW) {
+    // 2. Canvas: remove the focused leaf, exactly like CanvasSurface's header ×.
+    // Hover-focus (#371) and Shift+arrows keep `activeLeafId` on the panel the
+    // user is on. Focus then advances to a spatial neighbor (else the first
+    // remaining leaf) so repeated ⌘W keeps closing panels instead of dangling
+    // after the first.
+    if (s.view === "canvas") {
       const closingId = s.activeLeafId;
       const layout =
         s.canvases.find((c) => c.id === s.activeCanvasId)?.layout ?? null;
@@ -5650,16 +5802,15 @@ export const useStore = create<AppState>()((set, get) => ({
 
   resolveTemplateBlock: async (canvasId, leafId) => {
     // Update just this canvas's layout leaf + persist (the tab may not be active if
-    // the user switched away during async resolution).
+    // the user switched away during async resolution). Canvases-only patch
+    // (task 429): a leaf resolve never changes the active tab.
     const applyLeaf = (mut: (tree: CanvasNode) => CanvasNode) => {
-      const { canvases, activeCanvasId } = get();
+      const { canvases } = get();
       const next = canvases.map((c) =>
         c.id === canvasId && c.layout ? { ...c, layout: mut(c.layout) } : c,
       );
       set({ canvases: next });
-      void ipc
-        .setCanvases({ canvases: next, activeId: activeCanvasId })
-        .catch(() => {});
+      void ipc.setCanvases({ canvases: next }).catch(() => {});
     };
 
     const canvas = get().canvases.find((c) => c.id === canvasId);
@@ -5777,7 +5928,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // existing block kind (#154) — picking a file for an `open-kanban` block must
     // keep it kanban (it resolves back into a KanbanPanel), not silently degrade to
     // an `open-file` viewer. Default to `open-file` when the kind can't be read.
-    const { canvases, activeCanvasId } = get();
+    const { canvases } = get();
     const layout = canvases.find((c) => c.id === canvasId)?.layout;
     const kind =
       (layout
@@ -5795,9 +5946,8 @@ export const useStore = create<AppState>()((set, get) => ({
         : c,
     );
     set({ canvases: next });
-    void ipc
-      .setCanvases({ canvases: next, activeId: activeCanvasId })
-      .catch(() => {});
+    // Canvases-only patch (task 429): a block edit never changes the active tab.
+    void ipc.setCanvases({ canvases: next }).catch(() => {});
     void get().resolveTemplateBlock(canvasId, leafId);
   },
 
@@ -5834,12 +5984,16 @@ export const useStore = create<AppState>()((set, get) => ({
       active = next[Math.min(idx, next.length - 1)]?.id ?? next[0]?.id ?? "";
     }
     set({ canvases: next, activeCanvasId: active });
-    void ipc.setCanvases({ canvases: next, activeId: active }).catch(() => {});
-    // If this canvas had a detached window (#84), close it too (it would also
-    // self-close on the canvas-sync, but do it directly for immediacy).
-    if (get().detachedCanvasIds.includes(id)) {
-      void ipc.closeCanvasWindow(id).catch(() => {});
-    }
+    // Patch (task 429): the tab list always changed; the stored `activeId` boot
+    // hint travels only when the ACTIVE tab was closed (the re-home above) — a
+    // non-active close leaves it alone, so a concurrent tab switch in another
+    // window survives.
+    void ipc
+      .setCanvases({
+        canvases: next,
+        ...(id === activeCanvasId ? { activeId: active } : {}),
+      })
+      .catch(() => {});
     get().pushToast("Canvas closed");
   },
 
@@ -5877,7 +6031,7 @@ export const useStore = create<AppState>()((set, get) => ({
   renameCanvas: (id, name) => {
     const trimmed = name.trim();
     if (!trimmed) return; // blank keeps the current name (#58)
-    const { canvases, activeCanvasId } = get();
+    const { canvases } = get();
     const target = canvases.find((c) => c.id === id);
     // No-op rename (same name / missing tab): skip the write + toast (#83) so an
     // unchanged inline edit doesn't fire "Canvas renamed".
@@ -5886,14 +6040,13 @@ export const useStore = create<AppState>()((set, get) => ({
       c.id === id ? { ...c, name: trimmed } : c,
     );
     set({ canvases: next });
-    void ipc
-      .setCanvases({ canvases: next, activeId: activeCanvasId })
-      .catch(() => {});
+    // Canvases-only patch (task 429): a rename never changes the active tab.
+    void ipc.setCanvases({ canvases: next }).catch(() => {});
     get().pushToast("Canvas renamed");
   },
 
   reorderCanvases: (orderedIds) => {
-    const { canvases, activeCanvasId } = get();
+    const { canvases } = get();
     const byId = new Map(canvases.map((c) => [c.id, c]));
     const next = orderedIds
       .map((cid) => byId.get(cid))
@@ -5901,9 +6054,8 @@ export const useStore = create<AppState>()((set, get) => ({
     // Defensive: keep any tab missing from the order (no silent drops).
     for (const c of canvases) if (!orderedIds.includes(c.id)) next.push(c);
     set({ canvases: next });
-    void ipc
-      .setCanvases({ canvases: next, activeId: activeCanvasId })
-      .catch(() => {});
+    // Canvases-only patch (task 429): a reorder never changes the active tab.
+    void ipc.setCanvases({ canvases: next }).catch(() => {});
   },
 
   selectCanvas: (id) => {
@@ -5911,27 +6063,33 @@ export const useStore = create<AppState>()((set, get) => ({
     if (id === activeCanvasId || !canvases.some((c) => c.id === id)) return;
     // Clear the focused panel (#76) — the new tab has its own panels.
     set({ activeCanvasId: id, activeLeafId: null });
-    void ipc.setCanvases({ canvases, activeId: id }).catch(() => {});
+    // activeId-ONLY patch (task 429): a tab switch changes nothing about the tab
+    // array, so this window's (possibly stale) `canvases` copy must not travel — a
+    // concurrent layout edit in another window survives the switch.
+    void ipc.setCanvases({ activeId: id }).catch(() => {});
   },
 
-  // Multi-window (#84): open/focus a canvas in its own native window. The backend
-  // creates the `canvas-<id>` window (or focuses it if present) and broadcasts the
-  // new detached set, which lands back here via `setDetachedCanvasIds`.
+  // Open this canvas in an additional FULL window (task 434/437). The new window
+  // boots into Canvas on this tab; this window keeps the tab — both render it
+  // (426/427 mirroring). Always opens a new window (no dedupe/focus-existing —
+  // two windows on the same canvas is fine by design).
   popOutCanvas: (id) => {
     const canvas = get().canvases.find((c) => c.id === id);
     if (!canvas) return;
-    void ipc.openCanvasWindow(id, canvas.name).catch(() => {});
+    void ipc.openAppWindow({ canvas: id }).catch(() => {});
     get().pushToast("Canvas opened in window");
   },
 
-  focusCanvasWindow: (id) => {
-    void ipc.focusCanvasWindow(id).catch(() => {});
+  // Multi-window 10/16: open a new FULL app window (task 434's open_app_window).
+  // Fire-and-forget like popOutCanvas; valid from any window kind — the ⌘⌥N
+  // dispatch in useKeyboardNav is deliberately unconditional.
+  openNewWindow: () => {
+    void ipc.openAppWindow({}).catch(() => {});
   },
 
-  // Apply a canvas-list update broadcast from another window (#84). Keep our own
-  // active tab (the main window owns it; a detached window is pinned to its
-  // canvas); only re-home it if it vanished. A detached window whose canvas was
-  // closed elsewhere closes itself.
+  // Apply a canvas-list update broadcast from another window (#84/task 428). Keep
+  // our own active tab (per-window state); only re-home it if it vanished — this
+  // is what re-homes a window whose viewed canvas was closed elsewhere.
   applyCanvasSync: (canvases) => {
     if (JSON.stringify(get().canvases) === JSON.stringify(canvases)) return;
     set((s) => {
@@ -5940,27 +6098,6 @@ export const useStore = create<AppState>()((set, get) => ({
         : (canvases[0]?.id ?? s.activeCanvasId);
       return { canvases, activeCanvasId: active };
     });
-    if (
-      !IS_MAIN_WINDOW &&
-      DETACHED_CANVAS_ID &&
-      !canvases.some((c) => c.id === DETACHED_CANVAS_ID)
-    ) {
-      void ipc.closeCanvasWindow(DETACHED_CANVAS_ID).catch(() => {});
-    }
-  },
-
-  setDetachedCanvasIds: (ids) => {
-    set({ detachedCanvasIds: ids });
-    // The main window never renders a detached canvas as its active tab (its PTYs
-    // belong to the other window): if our active tab just detached, switch to a
-    // still-docked one (#84).
-    if (IS_MAIN_WINDOW) {
-      const s = get();
-      if (ids.includes(s.activeCanvasId)) {
-        const docked = s.canvases.find((c) => !ids.includes(c.id));
-        if (docked) set({ activeCanvasId: docked.id, activeLeafId: null });
-      }
-    }
   },
 
   setActiveLeaf: (id) => {
@@ -6338,8 +6475,9 @@ export const useStore = create<AppState>()((set, get) => ({
     // NEVER auto-remove a worktree ReCue didn't create: an in-place spawn into a
     // DETECTED external worktree produces sessions whose teardown lands here, but
     // the agent/user owns that checkout — closing the last item must not delete
-    // it. (The backend `remove_worktree` hard-refuses non-managed paths too; this
-    // short-circuit just avoids a pointless call + error toast.)
+    // it. (The Rust `cleanup_worktree_if_empty` enforces the same managed-root
+    // invariant itself — `notManaged` — so the Rust-internal clean-exit path is
+    // covered too; this short-circuit just avoids a pointless round-trip.)
     const detected = get().repoWorktrees[parent]?.find((e) =>
       samePath(e.path, dest, get().platform),
     );
@@ -6347,17 +6485,22 @@ export const useStore = create<AppState>()((set, get) => ({
     // Record the parent so a later panel/schedule close can resolve it once this
     // worktree's last agent is gone (#199).
     worktreeParents.set(dest, parent);
-    // Ref-counted (#74/#199): keep the worktree while ANY item — an agent (incl. an
-    // exited-but-shown one), a panel, or a scheduled session — still references it.
-    if (worktreeHasItems(get(), dest)) return;
-    try {
-      // Non-forced: git refuses a dirty worktree, which is our dirty guard.
-      await ipc.removeWorktree(parent, dest, false);
+    // Ref-count + removal are Rust-owned (task 431): the command checks the
+    // persisted items pointing at `dest` and runs the non-forced remove under one
+    // app-wide mutex, so N windows (and the Rust clean-exit path) can never
+    // double-run `git worktree remove` or mis-toast "kept dirty".
+    const outcome = await ipc
+      .cleanupWorktreeIfEmpty(parent, dest)
+      .catch(() => null);
+    if (outcome === "removed") {
       worktreeParents.delete(dest);
-    } catch {
-      // Keep a dirty worktree rather than force-deleting uncommitted work (#74).
+    } else if (outcome === "keptDirty") {
+      // Keep a dirty worktree rather than force-deleting uncommitted work (#74) —
+      // warned in the acting window only, like the old local catch.
       get().pushToast("Worktree kept — it has uncommitted changes", "error");
     }
+    // "inUse" / "notManaged" / null (ipc failure) → keep silently, as the old
+    // has-items early return did.
   },
 
   restartSession: async (id) => {
@@ -6424,31 +6567,26 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   openSessionInCanvas: (sessionId) => {
-    const { canvases, sessions, detachedCanvasIds } = get();
+    const { canvases, sessions } = get();
     const session = sessions.find((s) => s.id === sessionId);
     if (!session) return;
-    // Already shown in some tab? Reuse it — a single PTY's xterm renders in one
-    // slot at a time (#18/#84), so a second panel would fight over the terminal.
+    // Already shown in some tab? Reuse it — one panel per item per layout (#18),
+    // so a second panel would fight over this window's terminal slot.
     for (const c of canvases) {
       const leaf = collectLeaves(c.layout).find(
         (l) => l.content.kind === "agent" && l.content.sessionId === sessionId,
       );
       if (!leaf) continue;
-      if (detachedCanvasIds.includes(c.id)) {
-        // Its tab is a detached window (#84): raise that window (it can't render
-        // in the main view) and highlight the row, but don't switch the main view.
-        get().focusCanvasWindow(c.id);
-        set({ selectedId: sessionId });
-      } else {
-        // A main-window tab: switch to Canvas, make it active, focus the panel.
-        set({
-          view: "canvas",
-          activeCanvasId: c.id,
-          activeLeafId: leaf.id,
-          selectedId: sessionId,
-        });
-        void ipc.setCanvases({ canvases, activeId: c.id }).catch(() => {});
-      }
+      // Switch to Canvas, make its tab active, focus the panel — always locally
+      // (task 437: any window renders any canvas).
+      set({
+        view: "canvas",
+        activeCanvasId: c.id,
+        activeLeafId: leaf.id,
+        selectedId: sessionId,
+      });
+      // activeId-only patch (task 429): a focus-switch edits no tab.
+      void ipc.setCanvases({ activeId: c.id }).catch(() => {});
       return;
     }
     // Not in any canvas: create a new "Canvas N" tab (mirroring addCanvas's naming)
@@ -6481,10 +6619,9 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   openFileFromTree: async (repoPath, file, kind) => {
-    // "Present" is judged relative to the current view (#175): a detached canvas
-    // window is always Canvas; in the main window the mounted view decides which
-    // tree the user clicked.
-    const inCanvas = !IS_MAIN_WINDOW || get().view === "canvas";
+    // "Present" is judged relative to the current view (#175): the mounted view
+    // decides which tree the user clicked.
+    const inCanvas = get().view === "canvas";
     const content: CanvasContent =
       kind === "kanban"
         ? { kind: "kanban", repoPath, file }
@@ -6511,9 +6648,9 @@ export const useStore = create<AppState>()((set, get) => ({
       registerOverviewPanel(repoPath, { id: panelId, kind, file });
     }
 
-    // Already a leaf in some tab? Focus it (a single item renders in one slot at a
-    // time, #18/#84) — switching to its tab, or raising its detached window.
-    const { canvases, detachedCanvasIds, activeCanvasId } = get();
+    // Already a leaf in some tab? Focus it (one panel per item per layout, #18)
+    // — always by switching to its tab in THIS window (task 437).
+    const { canvases, activeCanvasId } = get();
     const item: SidebarItem = {
       id: "",
       kind: kind === "kanban" ? "kanban" : "file",
@@ -6525,24 +6662,19 @@ export const useStore = create<AppState>()((set, get) => ({
         matchesCanvasItem(l.content, item),
       );
       if (!leaf) continue;
-      if (detachedCanvasIds.includes(c.id)) {
-        get().focusCanvasWindow(c.id);
-        set({ selectedId: panelId });
-      } else {
-        set({
-          view: "canvas",
-          activeCanvasId: c.id,
-          activeLeafId: leaf.id,
-          selectedId: panelId,
-        });
-        void ipc.setCanvases({ canvases, activeId: c.id }).catch(() => {});
-      }
+      set({
+        view: "canvas",
+        activeCanvasId: c.id,
+        activeLeafId: leaf.id,
+        selectedId: panelId,
+      });
+      // activeId-only patch (task 429): a focus-switch edits no tab.
+      void ipc.setCanvases({ activeId: c.id }).catch(() => {});
       return;
     }
 
     // Not present in the canvas: append it to the active tab (mirror forkSession's
-    // append). setActiveCanvasLayout persists + broadcasts (#84) and targets the
-    // detached canvas in a detached window.
+    // append). setActiveCanvasLayout persists + broadcasts (#84/428).
     const layout =
       canvases.find((c) => c.id === activeCanvasId)?.layout ?? null;
     const leafId = crypto.randomUUID();
@@ -6552,19 +6684,6 @@ export const useStore = create<AppState>()((set, get) => ({
         : { type: "leaf", id: leafId, content },
     );
     set({ activeLeafId: leafId, selectedId: panelId });
-  },
-
-  forgetExitedSession: async (id) => {
-    // Vanish from Focus/Overview/sidebar immediately; the session-list change
-    // disposes the now-orphaned pooled xterm via reconcileTerminals (App.tsx).
-    get().dropSession(id);
-    get().pushToast("Agent exited");
-    // Forget the persisted record so a cleanly-exited agent doesn't return on
-    // next boot. kill_session also clears the (already-dead) PTY from the
-    // manager; it's a no-op if the process is already gone (#63).
-    await ipc.killSession(id).catch(() => {
-      // Forget locally regardless of whether the backend call succeeded.
-    });
   },
 
   removeSession: async (id) => {
@@ -7010,6 +7129,161 @@ export const useStore = create<AppState>()((set, get) => ({
     adoptPendingRecurringChildren(recurrings, (r) =>
       get().upsertSession(toSessionView(r)),
     );
+  },
+
+  // --- Cross-window state sync (task 428) ---
+  // One apply per "quiet" persisted slice, modeled on `applyScheduleSync`: the
+  // backend broadcasts the full new value after every successful persist
+  // (`commands.rs broadcast_*`), every window applies it here. Each apply is
+  // JSON-equality-guarded — the mutating window already holds the value, so its own
+  // echo is a no-op — and NEVER calls any `ipc.set*` / persist path (no echo loops).
+
+  applySettingsSync: (blob) => {
+    const merged = mergeSettings(blob);
+    if (JSON.stringify(get().settings) === JSON.stringify(merged)) return;
+    set({ settings: merged });
+    // Re-apply the imperative side-effects (theme / accent / reduce-motion / dense /
+    // live terminal options) so a change saved in another window reskins this one
+    // live. Deliberately NOT `saveSettings`' other side-effects: `setThemeBackground`
+    // is already pushed to every window by the saving window, and the usage/
+    // auto-continue reaction lives in the Rust engine (task 430), poked by
+    // `set_settings` — every window just mirrors its `usage://changed`.
+    applySettingsEffects(merged);
+  },
+
+  applyRecentsSync: (recents) => {
+    if (JSON.stringify(get().recents) === JSON.stringify(recents)) return;
+    set({ recents });
+  },
+
+  applyDiffSeenSync: (seen) => {
+    // `null` = never written. A pending local `persistDiffSeen` debounce is safe: it
+    // reads `useStore.getState().diffSeen` at fire time — i.e. this post-apply state —
+    // so it can't clobber the just-applied foreign map with a stale snapshot.
+    const next = seen ?? {};
+    if (JSON.stringify(get().diffSeen) === JSON.stringify(next)) return;
+    set({ diffSeen: next });
+  },
+
+  applyRepoOrderSync: (order) => {
+    if (JSON.stringify(get().folderOrder) === JSON.stringify(order)) return;
+    set({ folderOrder: order });
+  },
+
+  applyRepoColorsSync: (colors) => {
+    if (JSON.stringify(get().repoColors) === JSON.stringify(colors)) return;
+    set({ repoColors: colors });
+  },
+
+  applyOverviewPanelsSync: (panels) => {
+    // Wholesale last-write-wins map replace — the canvas/schedule semantics.
+    if (JSON.stringify(get().overviewPanels) === JSON.stringify(panels)) return;
+    set({ overviewPanels: panels });
+  },
+
+  applyOverviewOrderSync: (order) => {
+    if (JSON.stringify(get().overviewOrder) === JSON.stringify(order)) return;
+    set({ overviewOrder: order });
+  },
+
+  applySidebarWidthSync: (width) => {
+    // Clamp like the boot path; deliberately NOT via `setSidebarWidth` (it persists —
+    // an apply must never write back). Width stays global-shared across windows.
+    const w = clampSidebarWidth(width ?? SIDEBAR_WIDTH_DEFAULT);
+    if (w === get().sidebarWidth) return;
+    set({ sidebarWidth: w });
+  },
+
+  applySidebarCollapsedSync: (collapsed) => {
+    // NOT via `setSidebarCollapsed` (it persists). `null` = never set → expanded.
+    const next = collapsed ?? false;
+    if (next === get().sidebarCollapsed) return;
+    set({ sidebarCollapsed: next });
+  },
+
+  applyCanvasTemplatesSync: (templates) => {
+    const next = templates ?? [];
+    if (JSON.stringify(get().canvasTemplates) === JSON.stringify(next)) return;
+    set({ canvasTemplates: next });
+  },
+
+  applySessionsSync: (records) => {
+    // Reconcile, never replace (the pure `diffSessionRoster`): removed ids go through
+    // `dropSession` (busy maps, selection, canvas-leaf pruning), added ids through
+    // `upsertSession` (attention grace), surviving ids merge their record-derived
+    // fields (rename!) while keeping the view-only `reconnecting` / `exitedCode`.
+    // An identical roster is {[], [], null} — a complete no-op.
+    //
+    // Accepted transient: a roster broadcast can theoretically land in a window
+    // between a recurring fire's `add_session` and that window's `recurring://fired`
+    // / `recurring://changed`, briefly showing the child standalone — sub-second,
+    // self-healing, and rare because the fire paths themselves never emit the roster.
+    const { removed, added, merged } = diffSessionRoster(
+      get().sessions,
+      records,
+    );
+    for (const id of removed) get().dropSession(id);
+    // `merged` holds the survivors only (post-drop shape, pre-add), so set it before
+    // upserting the additions.
+    if (merged) set({ sessions: merged });
+    for (const r of added) get().upsertSession(toSessionView(r));
+  },
+
+  applySessionForgotten: (p) => {
+    // A clean #63 exit Rust already forgot (task 431): drop local state in every
+    // window — idempotent with the `sessions://changed` roster drop that precedes
+    // it (`dropSession` on an unknown id is a filter no-op) — and toast only in the
+    // targeted window, so N windows show ONE "Agent exited".
+    get().dropSession(p.id);
+    if (p.toast_window === WINDOW_LABEL) get().pushToast("Agent exited");
+  },
+
+  applyWorktreeKept: (p) => {
+    // The Rust exit-driven worktree cleanup found a dirty worktree and kept it
+    // (task 431/#74) — warn once, in the targeted window only. `p.dest` is unused
+    // beyond the payload shape: the toast text mirrors the #74 wording exactly.
+    if (p.toast_window === WINDOW_LABEL) {
+      get().pushToast("Worktree kept — it has uncommitted changes", "error");
+    }
+  },
+
+  applyPrimarySync: (primary) => {
+    const prev = get().primaryWindow;
+    if (prev === primary) return; // equality-guarded (428 shape); never persists
+    const wasPrimary = isPrimaryLabel(prev);
+    set({ primaryWindow: primary });
+    // Live takeover (task 433): monotonic — a surviving window is never demoted,
+    // so this fires at most once per window lifetime. Gated on `booted`: during
+    // boot, init/applyBootState read the slice directly and run the boot-time
+    // once-per-app effects themselves.
+    if (!wasPrimary && isPrimaryLabel(primary) && get().booted) {
+      get().armPrimaryEffects();
+    }
+  },
+
+  armPrimaryEffects: () => {
+    // Re-arm the app-singleton effects a closed primary was carrying (task 433).
+    // Usage polling + auto-continue are Rust-owned (task 430) and the boot
+    // one-shots (onboarding, folder pruning, migration persists, the
+    // updated-toast) already ran at the original primary's boot — deliberately
+    // NOT re-run here.
+    startFolderColorAssign();
+    void get().checkForUpdate(); // the update slice is per-window; idempotent
+    // Re-seed worktree detection: the vanish sweep's auto-close + toast are
+    // primary-gated and diff against THIS window's own per-window mirror — a
+    // freshly-promoted primary whose mirror never saw a since-vanished worktree
+    // would miss that one-shot, so refresh the whole slice on takeover.
+    void get().refreshWorktrees();
+  },
+
+  applyFileClaimsSync: (claims) => {
+    // Transient task-435 soft-claim mirror — apply-only, never persisted; the
+    // JSON-equality guard makes the mutating window's own echo a free no-op.
+    // Wholesale map replace (the full-value 428 shape); a missed edge
+    // self-corrects on the next broadcast.
+    const next = claimsToMap(claims);
+    if (JSON.stringify(get().fileClaims) === JSON.stringify(next)) return;
+    set({ fileClaims: next });
   },
 
   copyToClipboard: async (text, label) => {

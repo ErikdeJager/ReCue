@@ -87,11 +87,11 @@ already honors this.
 ## What this app is
 
 An **Overview** "agent wall" of real terminals, a **Canvas** split-panel workspace
-(with file, **git-diff**, and terminal viewers), and a repo-grouped **sidebar**. A
-Canvas tab can **pop out into its own native window** for multi-monitor use (#84).
-Each session is a **real PTY running `claude`** — ReCue provides the window
-chrome, navigation, persistence, and git-reading; the terminals come from the
-Claude Code CLI itself.
+(with file, **git-diff**, and terminal viewers), and a repo-grouped **sidebar**. Any
+number of **full app windows** can be open at once — each a complete ReCue, mirroring
+any session's terminal — for multi-monitor use (tasks 426–440). Each session is a
+**real PTY running `claude`** — ReCue provides the window chrome, navigation,
+persistence, and git-reading; the terminals come from the Claude Code CLI itself.
 
 `claude` is assumed to be installed and authenticated on `PATH` (the app surfaces a
 clear error if it is missing). Because a bundled `.app` launched from Finder/Dock
@@ -130,9 +130,10 @@ steady-state boot pays **zero** probe cost.
 - Dark (default) and Light themes (#333) — a Catppuccin **Latte** token override
   selected in Settings → Appearance (the terminal stays dark in both)
 - **Code-split bundle (#356).** The frontend is **not** one chunk: everything not needed to
-  paint the sidebar + terminals is behind a dynamic `import()`. Lazy boundaries — the two
-  **window routes** (`App.tsx` is a `Suspense` router over `src/MainApp.tsx` and
-  `CanvasWindow`, so a detached window #84 never downloads the sidebar/Overview/modals); the
+  paint the sidebar + terminals is behind a dynamic `import()`. Lazy boundaries — the one
+  **window route** (`App.tsx` is a `Suspense` router over the single lazy `src/MainApp.tsx`
+  — every window renders the full shell since task 437 deleted the #84 `CanvasWindow`
+  route — keeping the shell out of the thin Vite entry chunk); the
   four **content panels** in `ItemContent.tsx` (`FileViewer` / `KanbanPanel` /
   `DiffInspector` / `FileTree` — which is what carries the whole **react-markdown + Prism**
   stack out of the first-paint graph), each in its **own** per-branch `Suspense` (never one
@@ -149,9 +150,9 @@ steady-state boot pays **zero** probe cost.
   reachable module is parsed before first render whatever chunk it lands in, so
   `manualChunks` is deliberately **not** used; never static-import `react-markdown` /
   `prismjs` / `@xterm/addon-webgl` into the entry graph. Guarded by
-  `node scripts/bundle-report.mjs --check` (per-route first-paint closure from Vite's
-  `build.manifest`, with a budget): main window **854 kB raw / 246 kB gzip**, down from a
-  single 1,351 kB / 391 kB chunk; the detached canvas window is lighter still (770 kB).
+  `node scripts/bundle-report.mjs --check` (the one route's first-paint closure from Vite's
+  `build.manifest`, with a budget): main window **896 kB raw / 257 kB gzip**, down from a
+  single 1,351 kB / 391 kB chunk.
 
 ## Architecture (data flow)
 
@@ -202,7 +203,15 @@ steady-state boot pays **zero** probe cost.
   onboarding-seed key follows the verify-against-the-installed-CLI discipline (flagged
   in-code).
 - **Output:** `lib.rs` forwards the channel to the `session://output` /
-  `session://exited` / `session://state` Tauri events. The frontend `ipc.ts`
+  `session://exited` / `session://state` Tauri events. Since task 440 the
+  `session://output` + `session://size` emits are **targeted**: `emit_filter`ed only to
+  windows holding a **live terminal host** for that session (the task-426 registry's
+  `output_subs` — subscribed at host creation, unsubscribed at dispose; a
+  zero-subscriber session skips the base64 encode **and** the emit entirely), which is
+  why the two frontend listens are **label-scoped** (`{ target: WINDOW_LABEL }` — a
+  default-target listener would bypass `emit_filter`); a window that starts viewing
+  later back-fills loss-free via the subscribe-ack-gated `session_scrollback` + the
+  offset dedupe below, and every lifecycle event stays app-global. The frontend `ipc.ts`
   subscription routes output **bytes** to `outputBus.ts` (a pub/sub the xterm
   `Terminal` consumes — deliberately *not* React state) and lifecycle +
   busy/idle to the Zustand `store.ts`. Each `session://output` event **and**
@@ -251,8 +260,11 @@ steady-state boot pays **zero** probe cost.
   seeded into the store on load) so a previously-active agent shows yellow immediately
   on boot. Under reduced-motion the sweep is dropped, leaving a solid glowing blue dot
   (and a solid yellow settled dot) distinct from idle.
-- **Input / resize:** the `Terminal` sends keystrokes to `write_stdin` and a
-  `ResizeObserver` drives `resize_pty`.
+- **Input / resize:** the `Terminal` sends keystrokes to `write_stdin`; a
+  `ResizeObserver` **proposes** a size for its slot (`propose_terminal_size`, tasks
+  426/427) and the backend's smallest-wins arbiter (`terminal_views.rs`) applies the
+  effective grid + broadcasts `session://size` — the only path that resizes an xterm
+  after attach. See the Multi-window bullet.
 - **Persistence / resume:** records + recents survive restarts; on boot the
   manager best-effort `resume_session`s each via `claude --resume <id>`.
 - **Git:** `working_diff(cwd)` / `current_branch(cwd)` / `compare_branches(cwd, base,
@@ -338,7 +350,9 @@ steady-state boot pays **zero** probe cost.
   best-effort one-busy-session heuristic. The external/orphan header's **New session** spawns
   **in place** (`spawn_session` with an explicit `worktree_parent`, never `git worktree add`).
   Lifecycle: an authoritative listing losing a worktree (Claude's clean-exit auto-removal, a
-  manual remove) drops the row and auto-closes its panels with one toast; a failed git read
+  manual remove) drops the row and auto-closes its panels with one toast (the close +
+  toast run in the **primary window** only, task 433 — every window's volley keeps its
+  own detection mirrors fresh); a failed git read
   keeps prior state (fail-open). **Scope isolation:** worktree contents are excluded from the
   parent repo's `search_files`/`search_file_contents` unconditionally (the walker guard is
   `container::host_worktree_admin_name` over the `.git` pointer FILE — submodule gitfiles
@@ -351,8 +365,8 @@ steady-state boot pays **zero** probe cost.
 - **OS files → file tree (#253):** dragging files/folders from Finder/Explorer onto a
   FileTree **folder row** (or the tree **root**) **moves** them into that directory.
   Tauri's webview drag-drop event is **window-global** (not DOM-bound), so `src/
-  osFileDrop.ts` (`useOsFileDrop`, wired from both `App.tsx` and the detached
-  `CanvasWindow` — each its own webview) listens via `getCurrentWebview().
+  osFileDrop.ts` (`useOsFileDrop`, wired per window from `MainApp.tsx` — every window
+  is its own webview) listens via `getCurrentWebview().
   onDragDropEvent` and **hit-tests** the cursor: physical→CSS px via `devicePixelRatio`
   (Retina + Windows fractional scaling), `document.elementFromPoint` →
   `closest("[data-filetree-droptarget]")`/`[data-filetree-repo]` (pure
@@ -388,8 +402,10 @@ steady-state boot pays **zero** probe cost.
   pool** (`Terminal/terminalPool.ts`), created once and **reparented** into the
   active view's slot (parked off-screen otherwise) — so a view switch never
   disposes/recreates the terminal or replays scrollback (which would garble
-  `claude`'s width-specific TUI redraw). Scrollback replays once at creation;
-  resizes are debounced + applied only while visible. The pool's `createHost`
+  `claude`'s width-specific TUI redraw). Scrollback replays once at creation; each
+  host **attaches a per-window view and proposes** sizes (tasks 426/427 — debounced,
+  proposed only while visible) and renders the broadcast smallest-wins grid
+  **letterboxed** in its slot. The pool's `createHost`
   **linkifies `http`/`https` URLs** (a `WebLinksAddon`) so a **⌘-click** opens the
   default browser via the dependency-free Rust `open_url` (http/https only, so no
   shell-injection vector even where the opener is `cmd`) — for both agent and shell
@@ -405,7 +421,9 @@ steady-state boot pays **zero** probe cost.
   kanban panel via `removeOverviewPanel`, and since **#425** also an **agent**
   (`removeSession`, kill + forget), a **schedule** (`cancelSchedule`), or a **recurring**
   (`cancelRecurring`) — un-gated like each card's ×, while a Canvas agent leaf stays
-  "close the panel only"), **⌘,** opens Settings, plus the carried-over ⌘E big mode (#284) / ⌘N /
+  "close the panel only"), **⌘⌥N / Ctrl+Alt+N** opens a **new full app window** (436 —
+  see the Multi-window bullet; rebindable like the rest, with the documented AltGr-layout
+  caveat), **⌘,** opens Settings, plus the carried-over ⌘E big mode (#284) / ⌘N /
   ⌘⇧N / ⌘K / ⌘F / ⌘B / ⌘D and the Open-in-editor pair **⌘O/⌘⇧O** (see the Open-in-editor
   bullet). **Removed:** ⌘T (new tab #206), ⌘1–9 (canvas jump #76 — the
   modal-internal new-session-recents #61/#66 and global-search folder-chip #397 digits
@@ -422,8 +440,12 @@ steady-state boot pays **zero** probe cost.
   via `useKeybindLabel`, so a rebind never leaves a stale hint. On macOS the default
   Tauri menu's **⌘W Close Window accelerator would preempt the webview**, so
   `src-tauri/src/menu.rs` rebuilds `Menu::default` at setup with the predefined items
-  swapped for a custom **⇧⌘W** Close Window (Edit-menu clipboard items untouched —
-  WKWebView needs them; Windows/Linux create no default menu, so nothing to do there).
+  swapped for a custom **⇧⌘W** Close Window, and inserts a **File → New Window** item
+  (436) with deliberately **no accelerator** — an AppKit key-equivalent would preempt
+  the webview and can't track a rebind (the ⌘W lesson); the rebindable ⌘⌥N is
+  webview-dispatched (Edit-menu clipboard items untouched —
+  WKWebView needs them; Windows/Linux create no default menu, so the keybind is the
+  only chord entry point there).
 - **Open in editor:** launch the user's preferred external editor/IDE at a folder —
   from the agent header **⋯ menu** (`AgentHeaderMenu`, so it appears on Overview cards,
   Canvas panels, Big mode, and Attention), the sidebar **agent-row / repo / branch-line /
@@ -451,8 +473,9 @@ steady-state boot pays **zero** probe cost.
   `src/editors.ts` label mirror + "— detected" annotations). First use (or a
   `BinaryNotFound` launch — the self-heal) opens the **`EditorPickerModal`** (lazy, the
   Onboarding pattern) listing detected editors + the custom row, with **"Remember my
-  choice" checked by default**; it renders in the main ModalHost **and** detached canvas
-  windows (an exported `EditorPickerGate`).
+  choice" checked by default**; every window runs the full ModalHost (437), so the
+  picker exists per window (the `EditorPickerGate` named export is a #84-era remnant,
+  rendered by ModalHost itself).
 - **Lazy terminal mount (#351):** a pooled xterm is created on **first visibility**, not
   on React mount — `Terminal.tsx` gates `mountTerminal` on a **latching**
   `IntersectionObserver` (`Terminal/useVisibleOnce.ts`), so booting into an Overview wall
@@ -462,7 +485,7 @@ steady-state boot pays **zero** probe cost.
   **Overview** fills with its horizontally scrolling wall — IntersectionObserver clips a
   target against every intermediate scroll container *before* applying `rootMargin`, so a
   viewport-rooted observer could never pre-load a card scrolled out of the wall; everywhere
-  else (Canvas panels, big mode #157, detached windows #84) the context is `null` ⇒ the
+  else (Canvas panels, big mode #157, additional app windows) the context is `null` ⇒ the
   viewport root. The replays that do happen are **serialized** through a bounded FIFO queue
   (`Terminal/replayQueue.ts`, `MAX_CONCURRENT_REPLAYS = 1`, a macrotask yield between jobs),
   and the pre-replay live buffer is byte-capped (`Terminal/pendingOutput.ts`) only until the
@@ -518,6 +541,8 @@ steady-state boot pays **zero** probe cost.
   opens a `.md`-scoped `FilePicker` with an in-picker create-or-open flow #151),
   a **Checkout branch…** picker (#266 — local/remote branches + create-new inline,
   `checkoutFolderBranch` / `createFolderBranch` without spawning an agent),
+  an **Open in new window** item (438 — a new full app window preset to that repo as its
+  Overview filter, via `open_app_window`; also on the collapsed rail's folder-icon menu),
   non-destructive **Reveal in Finder** / **Copy path**
   utilities (#130 — `reveal_path` → `os_open`: macOS `open` / Windows `explorer.exe` /
   Linux `xdg-open`, #345, no shell) + **Pull**
@@ -540,7 +565,10 @@ steady-state boot pays **zero** probe cost.
   own recursive **BSP split-panel** layout (a binary tree `split{dir,a,b,sizes}` /
   `leaf{id,content}`; pure ops in `Canvas/canvasTree.ts`). The tabs (`canvases` =
   `{id,name,layout}[]` + `activeCanvasId`) persist as one opaque `canvases` JSON blob
-  (migrated once from the old single `canvas_layout`); the `CanvasTabs` strip adds
+  (migrated once from the old single `canvas_layout`; since 429 each write is a
+  `{canvases?, activeId?}` **patch** merged under the Store mutex and broadcast as
+  `canvas://changed` to every window — a tab can also open in a second full app
+  window, see the Multi-window bullet); the `CanvasTabs` strip adds
   (+), closes (always keeps ≥1), inline-renames, and drag-reorders tabs via a nested
   dnd-kit context. Panels host **real content** (#47): agent terminals (#18 pool),
   file viewers (#44), diff viewers (#39), shell terminals (#72), and **kanban boards**
@@ -616,31 +644,70 @@ steady-state boot pays **zero** probe cost.
   arbitrary file write). Opened from the repo **Views** menu's single "Kanban board" entry
   with an in-picker **create-or-open** flow (#151), a draggable sidebar row, an Overview
   column, and a Canvas panel.
-- **Detached canvas windows (#84):** a Canvas tab can open in its **own native
-  window** for multi-monitor use, via a **pop-out button** on the tab or a **drag
-  tear-off** (drag a tab out of the strip). The button/tear-off call Rust
-  `open_canvas_window(id,title)`, which creates a `WebviewWindow` labelled
-  `canvas-<id>` loading the **canvas-only route** `index.html?canvas=<id>`
-  (`windowContext.ts` reads the param → `IS_MAIN_WINDOW` / `WINDOW_LABEL`;
-  `CanvasWindow` renders the shared `Canvas/CanvasSurface` with no sidebar/Overview/
-  tabs). Each window is its **own document** — its own store, `outputBus`, and #18
-  terminal pool — and Tauri session events are **global**, so a detached window's
-  pool renders the same backend PTYs. **One PTY renders in one window at a time**
-  (the #18 width constraint): the pure `computeSessionOwners(canvases, detachedIds)`
-  assigns each session to exactly one window (a detached canvas claims its sessions,
-  else `"main"`); Overview cards + Canvas panels show a **`DetachedNote`** ("running
-  in a separate window" + Focus) instead of a terminal when another window owns it,
-  and each window's `reconcileTerminals` keeps only owned PTYs (dispose-in-one /
-  create-in-the-other, reversed on re-dock). **Cross-window sync:** `set_canvases`
-  persists then broadcasts `canvas://changed` (the **main** window is authoritative
-  for `activeId`; a detached window's write merges only the `canvases` array);
-  opening/closing a window broadcasts `canvas://windows` (the detached id set). The
-  main tab strip marks detached tabs ("in window"), a detached-tab
-  click **`focus_canvas_window`**s (raises) instead of switching (the #76 ⌘1–9
-  canvas-jump chord was removed by the keybind rework), and **closing a
-  detached window re-docks** its canvas (its `Destroyed` handler re-broadcasts the
-  set; the main window reclaims the PTYs). Detached windows are **per-session** — not
-  restored on relaunch (capability `canvas-*` in `capabilities/default.json`).
+- **Multi-window (tasks 426–440):** any number of **full app windows**. Rust
+  `open_app_window(AppWindowInit { repo, canvas }) -> uuid` creates a window labelled
+  `app-<uuid>` loading `index.html?win=<uuid>[&repo=…][&canvas=…]` (hidden-until-painted
+  #348; `capabilities/default.json` `"windows"` is `["main", "app-*"]`), and
+  `focus_app_window(id)` raises one. Every window is a **complete ReCue** — sidebar +
+  Overview/Attention/Canvas + ModalHost, its own document/store/`outputBus`/#18 terminal
+  pool — with **window-local** view/selection/tab/filter state; the init presets set
+  that local state once (repo → Overview repo filter, canvas → Canvas view on that tab
+  when it exists) and are persisted nowhere (a Windows path survives the URL via the
+  byte-exact `encode_query_value`, space → `%20` never `+`). **Entry points**
+  (436/437/438): a second app launch is routed by `tauri-plugin-single-instance`
+  (registered first; per-OS transports — Windows named mutex / Linux session-bus D-Bus /
+  macOS unix socket — the second process exits and the running one opens a window,
+  closing the old two-processes-resume-the-same-uuids `sessions.json` corruption; dev
+  shares `com.recue.app`, so `tauri dev` beside a live ReCue now pokes-and-exits); macOS
+  Dock **Reopen** restores a window when none is visible (`reopen_focus_target`: `main`
+  → first `app-*` → any); the rebindable **⌘⌥N / Ctrl+Alt+N** New-window keybind; macOS
+  **File → New Window** (`menu.rs`, no accelerator); the sidebar repo menu's **Open in
+  new window** (repo preset); and the Canvas tab **pop-out / drag tear-off** (canvas
+  preset — the originating window keeps the tab, both render it). **Mirroring**
+  (426/427): any window renders any session — a pooled host **attaches** a per-window
+  view and only **proposes** sizes (`terminal_views.rs`: session → window label →
+  desired cols/rows); the PTY grid is the component-wise **smallest-wins** minimum
+  (tmux `window-size=smallest`), broadcast as `session://size` (the only path that
+  resizes an xterm after attach); larger views **letterbox**; views purge on window
+  `Destroyed`; and **typing into one agent from two windows interleaves at the PTY like
+  two tmux clients — documented semantics, not a bug**. The #18 never-dispose and #351
+  visibility-gate invariants hold per window. **Targeted output** (440): see the Output
+  bullet — `session://output`/`session://size` reach only subscriber windows via
+  label-scoped listeners; lifecycle events + the 428 broadcasts stay app-global so every
+  window's sidebar / busy dots / Attention stay live. **Shared vs local state:** every
+  persisted slice converges through Rust post-persist `*://changed` broadcasts (428 —
+  settings, recents, diff-seen, repo order/colors, overview panels/order, sidebar
+  width/collapsed, canvas templates, plus a `sessions://changed` roster) applied by
+  equality-guarded, never-persisting sync actions; the clobber-prone blobs (settings /
+  canvases / diff-seen) persist as **patches merged under the Store mutex** (429,
+  `Store::update_with` + the `merge_*_patch` helpers). **Primary election** (433): Rust
+  elects the **oldest surviving full window** (`primary.rs` → `window://primary` + the
+  `primary_window` snapshot); only the primary runs the once-per-app frontend effects
+  (onboarding, folder pruning, the update check + "Updated to vX" toast, migration
+  persists, folder-color auto-assign, the `schedule://fired` transition, backend-event
+  toasts + watched-agent notifications), and a promoted window re-arms the idempotent
+  ones live (`armPrimaryEffects`). The remaining app singletons moved into Rust
+  outright: the one usage poll + auto-continue engine (430, `autocontinue.rs`), the #63
+  clean-exit forget + serialized worktree cleanup (431, `classify_exit` →
+  `session://forgotten`, focused-window toast), and the boot shell-terminal respawn
+  (432, idempotent in `boot.rs`). **Same-file edit guard** (435): the first window to
+  edit an auto-saved file (FileViewer raw #148 / Kanban) soft-claims it
+  (`file_claims.rs`, transient — `file_claims://changed`, purged on window close);
+  other windows' editors render **read-only** with a `ClaimBanner` ("Being edited in
+  another window — Take over"); with one window on a file behavior is unchanged
+  (fallback stays last-writer-wins). **Window restore** (439): the open-window set +
+  bounds + creation presets persist in the dedicated backend-internal `window_state`
+  store key (`PersistedWindow`; debounced saves off Moved/Resized, an `ExitRequested`
+  quit-time flush, monitor-safe `clamp_bounds`, cap main + 8 extras) and are recreated
+  at boot through the shared `create_app_window` path — deliberately **reversing #84's
+  "detached windows are per-session" rule** (Wayland restores size-only; compositors own
+  placement). **The #84 single-owner era is deleted** (437): the ownership map + hook,
+  the detached-note placeholder, the `CanvasWindow` route, the four canvas-window Rust
+  commands, their window-set broadcast event, and the store's detached-id slice are all
+  gone; `?canvas=<id>` survives one release as a **compat parse** (a full shell preset
+  to that canvas, keeping the real `canvas-<id>` Tauri label so the per-label view
+  purge/attach stay correct). Closing a non-last window never kills a PTY (agents run
+  backend-side); the last window closing still quits the app (`kill_all`).
 - **Scheduled sessions (#93/#94/#125):** an agent can be **scheduled to launch later**.
   The **"+ Schedule session"** sidebar button / **⌘⇧N** opens the new-session modal
   in **schedule mode** — folder → branch (incl. **"+ add branch"** to create a new
@@ -654,7 +721,8 @@ steady-state boot pays **zero** probe cost.
   (best-effort) **creates** the new branch (`git checkout -b`, #124/#125) or checks
   out the existing one, spawns `claude` **pre-seeded with the prompt** (the
   positional invocation, see Conventions), converts the record into a live session,
-  and emits **`schedule://fired`** (→ the main window moves it scheduled→live). On
+  and emits **`schedule://fired`** (→ the **primary** window (433) moves it
+  scheduled→live). On
   boot the first tick fires anything **missed while closed** (catch-up). One-shot
   only (local clock). **#94** makes a schedule a first-class **draggable item type**:
   a `CanvasContent` **`kind: "scheduled"`** (+ a `payloadToContent` case) renders the
@@ -664,8 +732,9 @@ steady-state boot pays **zero** probe cost.
   **Canvas panel** — each with a **Start now** button (#269, `fire_schedule_now`). A schedule
   targeting a **worktree** creates the worktree + branch **eagerly at schedule time** (#259),
   and schedules are **window-global** — a Rust `broadcast_schedules` → `schedule://changed`
-  keeps detached windows (#84) in sync, and on fire `rewriteScheduledLeaves` swaps the pending
-  Canvas leaf to the live agent (#280). Time helpers live in `src/time.ts`. The schedule **prompt** field
+  keeps every window in sync (the #84-era seam task 428 later generalized to all persisted
+  slices), and on fire `rewriteScheduledLeaves` swaps the pending
+  Canvas leaf to the live agent (#280, run by the primary window 433). Time helpers live in `src/time.ts`. The schedule **prompt** field
   (in both the `NewSessionModal` schedule step and the `ScheduledPanel`) is a shared
   **`SkillAutocomplete`** component (#114): typing `/` in command position opens a
   dropdown of the slash-invokable **skills** `claude` would offer, read best-effort by
@@ -747,7 +816,12 @@ steady-state boot pays **zero** probe cost.
   `accentCompanions` #107; reduce-motion toggles `body.reduce-motion`). Settings
   persist as an opaque `settings` blob (`get_settings` / `set_settings`) merged over
   TS-side `DEFAULT_SETTINGS`, so an older `sessions.json` upgrades cleanly (a blob lacking
-  `theme` upgrades to `"dark"`).
+  `theme` upgrades to `"dark"`). Since 429 `set_settings` takes a **patch** — the modal
+  diffs its draft against the seed baseline (`settingsPatch`) and Rust merges it over
+  the persisted blob **under the Store mutex** — and since 428 every successful persist
+  broadcasts `settings://changed` to every window, so one window's Save can no longer
+  clobber another's unrelated fields and a theme/accent change reskins every open
+  window live.
 - **Pluggable coding agent (#101):** an `AgentSpec` catalog
   (`src-tauri/src/agents.rs`) is the single source of truth for each agent's binary +
   how it spawns / resumes / seeds a session; the **`claude`** spec preserves today's
@@ -777,7 +851,7 @@ steady-state boot pays **zero** probe cost.
   CLI**); an interactive session is the bare TUI in cwd. The **five-hour usage bar**
   (#154) is Claude-only: `isClaudeActive` now hides it whenever **any** non-claude
   (codex *or* opencode) session is active.
-- **First-launch agent picker:** on boot (main window only) `maybeOnboardAgent` runs once
+- **First-launch agent picker:** on boot (primary window only, 433) `maybeOnboardAgent` runs once
   — gated by a new `onboarded` flag in the settings blob (defaults `false`, so an existing
   install also runs the one-time check on its next launch; preserved across "Reset to
   defaults"). It presence-checks each `SELECTABLE_AGENTS` CLI via `agent_info`
@@ -787,17 +861,24 @@ steady-state boot pays **zero** probe cost.
   `OnboardingModal` (`components/Onboarding`) to pick — Claude badged "Recommended",
   codex/opencode "Untested", Escape/scrim keeps the current default. Picking / dismissing
   sets `onboarded` so it never re-prompts.
-- **Five-hour usage bar + auto-continue (#154/#296/#297/#305/#309):** a sidebar-footer
-  **`UsageBar`** (`components/Usage`) shows Claude's rolling five-hour usage — the Rust
-  `claude_session_usage` (`usage.rs`) reads the OAuth token (`~/.claude/.credentials.json` via
+- **Five-hour usage bar + auto-continue (#154/#296/#297/#305/#309, engine in Rust since
+  430):** a sidebar-footer
+  **`UsageBar`** (`components/Usage`) shows Claude's rolling five-hour usage — `usage.rs`
+  reads the OAuth token (`~/.claude/.credentials.json` via
   the cross-platform `home_dir()`, with a macOS-Keychain fallback `#[cfg(target_os = "macos")]`
-  -gated) and fetches a snapshot; the bar turns **red at ≥90%** (#272), is **fail-open** (any
+  -gated) and fetches a snapshot for the **one app-wide Rust usage poll** (430,
+  `autocontinue.rs` — the endpoint 429s aggressively below ~180s, so N windows must
+  never each poll; the frontend `usage` slice is an event-fed mirror via
+  `usage://changed`); the bar turns **red at ≥90%** (#272), is **fail-open** (any
   miss hides it), and is **Claude-only** (`isClaudeActive` hides it when any codex/opencode
   session is live). **Auto-continue after limit reset** (#296 — opt-in setting
   `autoContinueAfterLimit`, default off) arms when usage hits ~100%, waits for the reset
   (confirmed by **both** clock time **and** percent < 90), then nudges each running **Claude**
-  agent (Enter→`continue`→Enter) — a pure reducer `evaluateAutoContinue` in `src/autoContinue.ts`
-  (armed poll ~45s). It's surfaced in the ⋯ menu + Settings → Sessions, with a **per-agent
+  agent (Enter→`continue`→Enter) — since 430 the whole arm/wait/fire machine is the
+  Rust engine in `autocontinue.rs` (a ~45s armed poll; state mirrored to the store via
+  `autocontinue://changed`), so it fires exactly once per app however many windows are
+  open; `src/autoContinue.ts` keeps only the pure UI helpers (`isLimitReached` + the
+  thresholds). It's surfaced in the ⋯ menu + Settings → Sessions, with a **per-agent
   opt-out** (`AutoContinueToggle`, persisted `auto_continue_disabled`, shown only at the limit
   #297/#305) and an **"Enable auto restart on limit reset"** prompt (`AutoContinuePrompt`) above
   the usage bar, shown only once the limit is reached (#309, shared `isLimitReached`).
@@ -813,13 +894,15 @@ steady-state boot pays **zero** probe cost.
 - **Big mode (#157/#284):** any Overview card / Canvas panel can **maximize** into a full-window
   modal (`BigModeModal`) via a header maximize icon or **⌘E / Ctrl+E** on the selected item
   (`toggleMaximizeSelected` + a transient `maximizedItem` store slice). A shared `ItemContent`
-  renderer is the single live-render site (carrying the #84 ownership guard), so a pooled
+  renderer is the single live-render site per window, so a pooled
   terminal / auto-save hook is never mounted twice.
 - **Resizable sidebar (#108):** a thin right-edge drag handle sets the sidebar width,
   clamped to **[180, 560]** (default **248** since UI v2 task 374 — was 260) and
   **persisted** via a dedicated Rust
   `sidebar_width` value (`get_sidebar_width` / `set_sidebar_width`), kept **separate**
-  from the Settings blob so the modal draft can't clobber a drag. Main-window only.
+  from the Settings blob so the modal draft can't clobber a drag. The handle exists in
+  every full window; the persisted width converges across windows via the 428
+  `sidebar_width://changed` broadcast.
 - **Reorderable folders (#211):** the top-level repo "folders" are **drag-reorderable**
   — there's **no separate handle**; the whole repo header is the grip (a `useSortable`
   whose `attributes`/`listeners` sit on the `repoHeader`), while the 4px pointer
@@ -834,7 +917,8 @@ steady-state boot pays **zero** probe cost.
   from the Settings blob like `sidebar_width`; the displayed order is `mergeRepoOrder(
   folderOrder, repoOrder(...))` so a spawned/added repo appends and a forgotten one
   drops without scrambling the rest. The collapsed rail renders the same persisted
-  order (no drag there — out of scope). Main-window only.
+  order (no drag there — out of scope). The drag exists in every full window; the
+  persisted order converges via the 428 `repo_order://changed` broadcast.
 
 ## Layout
 
@@ -843,31 +927,36 @@ steady-state boot pays **zero** probe cost.
 ├── index.html              # Vite entry
 ├── src/                    # Frontend (React + TS)
 │   ├── main.tsx            # React bootstrap (loads fonts + tokens + global CSS)
-│   ├── App.tsx             # Root: a Suspense router over the two LAZY window routes —
-│   │                       #   MainApp or the detached CanvasWindow (#84/#356)
-│   ├── MainApp.tsx         # Main-window route chunk: sidebar + Overview/Canvas + ModalHost (#356)
+│   ├── App.tsx             # Root: a Suspense router over the single LAZY MainApp route
+│   │                       #   (#356; task 437 deleted the #84 canvas route)
+│   ├── MainApp.tsx         # The one full-shell route chunk — every window renders it:
+│   │                       #   sidebar + Overview/Attention/Canvas + ModalHost (#356/#437)
 │   ├── prefetch.ts         # Idle warm-up of the deferred chunks (rIC → setTimeout) (#356)
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
 │   ├── paths.ts            # Shared path helpers (repoName, sessionLabel, effectiveRepo #96)
 │   ├── time.ts             # Schedule time helpers (toLocalInput, formatFireTime) (#93/#94)
-│   ├── windowContext.ts    # Window identity (#84): main vs canvas-<id>, ownership helpers
-│   ├── ownership.ts        # useSessionOwners hook — which window renders each PTY (#84)
+│   ├── windowContext.ts    # Window identity (#434/#437): the ?win= parse → WINDOW_KIND /
+│   │                       #   WINDOW_LABEL / APP_WINDOW_ID / INIT_REPO_PATH / INIT_CANVAS_ID
+│   │                       #   + isPrimaryLabel (#433)
+│   ├── fileClaims.ts       # Pure same-file edit-claim helpers (claimIntent/heldElsewhere, #435)
 │   ├── keybinds.ts         # Configurable-keybind registry + pure chord logic (keybind rework)
 │   ├── editors.ts          # Label mirror of the Rust editor catalog ("Open in editor")
 │   ├── useKeybind.ts       # useKeybindLabel — live hint labels off settings.keybinds
 │   ├── useKeyboardNav.ts   # Global keyboard dispatcher over the keybinds registry (#24/#76/#84)
 │   ├── useAutoSaveFile.ts  # Read + hot-reload + debounced-write hook (FileViewer raw + Kanban) (#148)
-│   ├── autoContinue.ts     # Pure auto-continue-after-limit reducer + isLimitReached (#296/#305)
+│   ├── autoContinue.ts     # Pure auto-continue UI helpers (isLimitReached, #296/#305) —
+│   │                       #   the engine is Rust (autocontinue.rs, #430)
 │   ├── tips.ts / tips.json # Startup tips — the empty-state hero (UI v2 #379) + the
 │   │                       #   Overview filtered-empty state, via the shared TipRow (#424)
 │   ├── updater.ts          # In-app auto-update: check / download+install / relaunch (#190)
 │   ├── components/         # React components (CSS Module alongside each):
 │   │                       #   Sidebar, Overview, Canvas (+ CanvasSurface),
-│   │                       #   CanvasWindow (#84), CanvasCloseModal (#137), BigMode (#157/#284),
+│   │                       #   CanvasCloseModal (#137), BigMode (#157/#284),
 │   │                       #   Terminal, FileViewer (+ MermaidBlock #254), FileTree (#167/#252),
-│   │                       #   FilePicker, FileSwitcher (#90), DiffInspector, DetachedNote (#84),
+│   │                       #   FilePicker, FileSwitcher (#90), DiffInspector,
+│   │                       #   ClaimBanner (the #435 "being edited in another window" banner),
 │   │                       #   Kanban (engine + KanbanPanel, #141–#151),
 │   │                       #   ScheduledPanel (#94), RecurringPanel (#294), Settings (#100),
 │   │                       #   BusyIndicator, Usage/UsageBar (#154),
@@ -891,24 +980,35 @@ steady-state boot pays **zero** probe cost.
 │   │                       #   + waveEngineLoader.ts (its lazy dynamic-import seam, #377)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
-│   ├── src/lib.rs          # App builder, state wiring, event forwarding, schedule + recurring poll loop (#93/#294)
+│   ├── src/lib.rs          # App builder, state wiring, the targeted event forwarder (#440),
+│   │                       #   schedule + recurring poll loop (#93/#294), auto-continue engine
+│   │                       #   thread (#430), window lifecycle (Destroyed purge/unregister,
+│   │                       #   ExitRequested flush, single-instance + Reopen entry points #436)
 │   ├── src/main.rs         # Binary entry point
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
+│   ├── src/terminal_views.rs # Terminal-view registry: smallest-wins grid arbitration (#426)
+│   │                       #   + the #440 output-subscriber dimension
+│   ├── src/primary.rs      # Primary-window election → window://primary (#433)
+│   ├── src/window_state.rs # Persisted window registry: debounced bounds saves + monitor-safe
+│   │                       #   clamped restore of the open-window set (#439)
+│   ├── src/file_claims.rs  # Transient same-file edit claims → file_claims://changed (#435)
+│   ├── src/autocontinue.rs # Rust auto-continue engine + the ONE app-wide usage poll (#430)
+│   ├── src/boot.rs         # Bounded-parallel boot resume (#355) + the idempotent shell-terminal
+│   │                       #   respawn pass (#432)
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
 │   ├── src/editors.rs      # "Open in editor": EditorSpec catalog + shared detect/launch resolver
-│   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
-│   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
 │   ├── src/path_env.rs     # Login-shell PATH: async probe + PathState cell + rc-mtime cache (#360; Finder/.desktop-launch fix, macOS+Linux)
+│   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
 │   ├── src/linux_desktop.rs # WM_CLASS/app_id pin for Linux desktop-entry matching (#362)
 │   ├── src/early_settings.rs # Shared PRE-GTK settings reader: sessions.json off disk before tauri::Builder (#357)
 │   ├── src/linux_webkit.rs # Linux DMA-BUF decision + Settings override + the boot RendererReport (#346/#347/#357)
 │   ├── src/linux_gtk.rs    # Linux GTK dialog theme from ReCue's own theme, before GTK init (#349)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
-│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen, path cache #360)
+│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen, path cache #360, window state #439) + the #429 merge_*_patch helpers
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + commits (#230) + per-file status (#252) + list (local+remote #180) + checkout + worktree (#74) + fetch (#180) + pull --ff-only (#181) + clone (#295/#308)
 │   ├── src/files.rs        # Repo file access (lazy list_dir tree + search_files picker + search_file_contents in-tree content search #202, read/write_text_file #141, move_into_repo OS-drop #253, create_dir/delete_path/rename_path #267/#291, path-validated)
-│   ├── src/usage.rs        # Best-effort read of Claude's five-hour usage snapshot for the usage bar (#154)
+│   ├── src/usage.rs        # Best-effort fetch of Claude's five-hour usage snapshot (#154) — polled only by the Rust engine (#430)
 │   ├── src/skills.rs        # Read-only scan of .claude skills/commands for prompt autocomplete (#114)
 │   ├── Info.plist          # Partial plist (mic + speech-recognition usage strings), merged into the bundle
 │   ├── tauri.conf.json     # Window, bundle, build config
@@ -1037,7 +1137,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > never remounted and no scrollback is replayed — then **latches** the window (the pure
 > `Terminal/webglFallback.ts`): no terminal in it re-attaches WebGL for the rest of the run, since
 > a driver that dropped one context drops the next one too. One `console.warn` per window; the
-> latch is per-document, so a detached canvas window (#84) latches independently. Platform-neutral
+> latch is per-document, so each window latches independently. Platform-neutral
 > code that merely *fires* most often on WebKitGTK. The addon is loaded lazily (#356), so the
 > handler is attached to the resolved addon instance and both the `disposed` flag and the latch
 > are re-checked after the `import()` settles — a host torn down (or a window latched by another
@@ -1199,11 +1299,15 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   Terminal / Sessions / Appearance / Behavior / Data & About sections (see the
   architecture note). A **Dark/Light theme** toggle lives in the Appearance section
   (#333, default Dark); no per-session config beyond these.
-- **Multi-window** is now supported for **Canvas tabs only** (#84 — reverses the v1
-  single-window rule): a canvas can open in its own native window (pop-out button +
-  drag tear-off) for multi-monitor use. Detached windows are **per-session** (not
-  restored on relaunch); Overview and individual panels do **not** pop out, and a
-  single PTY is never shown in two windows at once (see the architecture note).
+- **Multi-window** now means **N full app windows** (tasks 426–440 — the #84
+  canvas-only pop-outs were the first reversal of the v1 single-window rule; the epic
+  completed it and deleted them): any number of complete ReCue windows (Canvas pop-out /
+  tear-off, ⌘⌥N, File → New Window, the repo menu's Open in new window, a second app
+  launch), **restored on relaunch** (439 — reversing #84's "detached windows are
+  per-session" precedent), with a single PTY rendered in **any number of windows
+  simultaneously** (mirrored, smallest-wins grid, letterboxed — superseding #84's
+  one-window-at-a-time rule). Individual panels still do not pop out — a window is
+  always a full shell (see the architecture note).
 - **macOS code signing + Hardened Runtime + entitlements now exist — for permissions**
   (#292 — narrows the earlier "no code signing / notarization" rule, the way #74/#124
   narrowed the git rule and #84/#100/#126 reversed single-window/settings/fork). The old
@@ -1280,19 +1384,29 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   returns a typed `NothingToFork` error instead of spawning a doomed code-1 panel), and a
   persisted `forkable` flag (emitted on the #97 title-worker cadence) renders the Fork
   affordance **unavailable up front** at all three sites (#138).
-- **Exit handling (#63):** the discriminator is the exit code (`store.ts`
-  `onExited` / the pure `isCleanExit`). A **clean exit — `claude` exits code 0
-  while running** (the user ended the agent) is forgotten like _Remove_:
-  `forgetExitedSession` drops it from the store (its pooled xterm is disposed by
-  `reconcileTerminals`) **and** its persisted record (so it doesn't return on next
-  boot), with a brief "Agent exited" toast — no overlay, no Restart. **Any other
-  exit** (non-zero/crash, or a failed boot resume) keeps the session with its
+- **Exit handling (#63):** the discriminator is the exit code, and since task 431 the
+  clean-exit decision is **Rust-owned** — made exactly once per app in the forwarder,
+  never per window: `classify_exit` (`commands.rs`) consumes a **clean exit — `claude`
+  exits code 0 while running** (the user ended the agent) and forgets it like _Remove_ —
+  the detached forget task kills + deletes the persisted record, emits
+  **`session://forgotten`** (every window drops its local state; its pooled xterm is
+  disposed by `reconcileTerminals`; exactly one window — the focused, via the payload's
+  `toast_target` — shows the brief "Agent exited" toast), and runs the serialized
+  ref-counted worktree cleanup (`cleanup_worktree_if_empty`). No `session://exited` is
+  emitted for a consumed clean exit, so no window ever flashes an exit overlay for it;
+  an app-initiated kill can never be misread as clean because `kill_session` sets the
+  `intentional` flag carried on `Exited` **before any signal** (the #354 `silent`
+  pattern), and every guard failure fails open to the plain `session://exited` emit.
+  **Any other
+  exit** (non-zero/crash, or a failed boot resume) emits `session://exited` as before
+  and stays frontend-handled: the session keeps its
   `exitedCode`, so `Terminal.tsx` shows the "Process exited (code N)" overlay +
   Restart. **Restart** (`restartSession` → `resume_session`) spawns a fresh PTY
   under the same id; on success the Terminal calls `terminalPool.resetTerminal`
   to dispose + recreate the pooled xterm so the relaunched TUI repaints cleanly
   instead of appending onto the dead session's screen. The boot window is guarded
-  (`booting`): a code-0 exit there keeps the overlay rather than auto-forgetting,
+  (the Rust `BootWindow`, cleared ~4 s after the resume pass): a code-0 exit there
+  degrades to the overlay rather than auto-forgetting,
   and **app shutdown keeps records** (`kill_all` doesn't delete them) so they
   auto-resume on next boot (#30) — the only path that "offers to restart."
   **The `Exited` event is driven by the child, not the PTY (#354).** A per-session
@@ -1312,8 +1426,8 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   `kill_all` (shutdown) pays **one** shared grace for all sessions and **silences** the exit
   events (an `ExitState.silent` flag set **before any signal**) — a prompt `Exited` could now
   reach the still-live webview, and an agent that exits 0 on SIGHUP would read as a *clean*
-  exit, so `isCleanExit` would **delete the persisted record** and the session would not come
-  back (#30/#63). A signal death maps to exit code **1** (portable-pty), never 0, so a killed
+  exit, so the #63/431 forget path would **delete the persisted record** and the session
+  would not come back (#30/#63). A signal death maps to exit code **1** (portable-pty), never 0, so a killed
   agent can never be mistaken for a clean exit. **Windows is unchanged**: no job object — the
   kill is still `ChildKiller::kill()` → `TerminateProcess` on the direct child; it inherits
   only the platform-neutral child-wait-driven `Exited`.
@@ -1323,12 +1437,15 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   `trafficLightPosition`, and there is no custom `Titlebar` component or
   `data-tauri-drag-region` (the earlier overlay chrome from #3 was removed). The
   webview content area sits cleanly below the native bar, so the app shell starts
-  at the top of the content area (no reserved top strip). **Detached canvas windows
-  (#84)** use the same native chrome; they're created from Rust
-  (`open_canvas_window`) with the label `canvas-<id>` and a `?canvas=<id>` route, so
-  no JS window-create permission is needed — only the `canvas-*` capability so the
-  new window can invoke commands + listen to events.
-  **Hidden until painted (#348)** — every window (main + detached canvas) is created
+  at the top of the content area (no reserved top strip). **App windows (tasks
+  426–440)** use the same native chrome; they're created from Rust
+  (`open_app_window` → the shared `create_app_window`) with the label `app-<uuid>` and
+  an `index.html?win=<uuid>` route, so
+  no JS window-create permission is needed — only the `app-*` capability line
+  (`capabilities/default.json` is `["main", "app-*"]`) so a
+  new window can invoke commands + listen to events; the open-window set + bounds
+  persist in the backend-internal `window_state` key and are restored at the next
+  launch (439). **Hidden until painted (#348)** — every window (main + app windows) is created
   **`visible: false`** with a **themed native `backgroundColor`** (`tauri.conf.json`
   `app.windows[0]` / `WebviewWindowBuilder::background_color`, from the pure
   `commands::background_for_theme`; `lib.rs` `setup` re-colors the main window from the
@@ -1342,10 +1459,10 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   no `allow-show`, and widening it isn't needed since window ops are already Rust-owned),
   with `schedule_reveal_fallback` showing any still-hidden window after **2 s** so a dead
   bundle can't leave the app invisible; a runtime theme switch pushes the new native color
-  via `set_theme_background`. Because `App()` is a **`Suspense` router over two lazy route
-  chunks** (#356), the hook is called from a **`RevealOnPaint`** component rendered *inside*
+  via `set_theme_background`. Because `App()` is a **`Suspense` router over the one lazy
+  `MainApp` route chunk** (#356/437), the hook is called from a **`RevealOnPaint`** component rendered *inside*
   that boundary, as a sibling of the route — a pending boundary commits its **fallback**,
-  not its children, so the reveal fires only once `MainApp` / `CanvasWindow` has actually
+  not its children, so the reveal fires only once `MainApp` has actually
   mounted, never on the empty fallback frame (and a chunk that never loads can't deadlock
   the window shut: the 2 s Rust fallback still shows it).
   **Invariant:** the two pre-paint hexes (`#11111b` dark / `#dce0e8` light — the crust
@@ -1357,8 +1474,9 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   `set_background_color` is a no-op for the *webview* layer, but the document's inline
   `html` background paints over it before the window is ever revealed).
 - **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`,
-  Windows NSIS/MSI installers, or a Linux **AppImage** (#345, host-OS dependent); the
-  **updater artifacts are minisign-signed** on all three. Release builds use a tuned
+  Windows NSIS/MSI installers, or — on Linux — an **AppImage** *and* a **`.deb`** (#345/#361,
+  host-OS dependent); the **updater artifacts are minisign-signed** on all three. Release
+  builds use a tuned
   **`[profile.release]`** (#358 — fat `lto`, `codegen-units = 1`, `strip = true`, size
   `opt-level = "s"`) so the binary — and with it every bundle, above all the AppImage, whose
   squashfs is paged in on **every** cold start — is materially smaller; it deliberately keeps
@@ -1366,9 +1484,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   panic in a reader / monitor / title / forwarder / poll thread kills only that thread instead
   of the whole app and every live PTY session. The extra link time is paid only by
   `release.yml` (a version-bump push); the PR gate and `tauri dev` build with the dev/test
-  profiles. macOS
-  Windows NSIS/MSI installers, or — on Linux — an **AppImage** *and* a **`.deb`** (#345/#361,
-  host-OS dependent); the **updater artifacts are minisign-signed** on all three. On Linux
+  profiles. On Linux
   only the **AppImage** is an updater artifact (Tauri's Linux updater can only replace the
   file at `$APPIMAGE`), so `latest.json`'s `linux-x86_64` entry points at it and it
   **self-updates**; the `.deb` gets no `.sig` and exists to be **repacked by the in-repo AUR

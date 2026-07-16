@@ -179,36 +179,36 @@ pub enum SessionEvent {
     Exited {
         id: String,
         code: Option<i32>,
+        /// Whether this generation was killed by an app-initiated `kill_session`
+        /// (Remove / forget / recurring rotation / cancel) — see
+        /// [`ExitState::intentional`] (task 431). Lets the Rust exit handler
+        /// (`commands::handle_session_exit`) refuse to misread a trapped-SIGHUP
+        /// code-0 death as a #63 clean exit.
+        intentional: bool,
     },
     /// Busy/idle transition from the output-activity heuristic (#42); emitted
     /// only on change (debounced) by the monitor thread.
-    State {
-        id: String,
-        busy: bool,
-    },
+    State { id: String, busy: bool },
     /// claude's auto-generated session title changed (#97); emitted by the title
     /// worker after a busy→idle edge when the log's `ai-title` differs from what
     /// was last seen. The command layer persists it and notifies the UI.
-    Name {
-        id: String,
-        name: String,
-    },
+    Name { id: String, name: String },
     /// Whether the session has forkable conversation history (#138); emitted by the
     /// title worker on the same busy→idle cadence (#97) when it changes, so the Fork
     /// affordance can be gated up front. The command layer persists + forwards it.
-    Forkable {
-        id: String,
-        forkable: bool,
-    },
+    Forkable { id: String, forkable: bool },
+    /// The authoritative multi-window PTY grid (task 426): the effective
+    /// `(cols, rows)` after smallest-wins arbitration over every attached
+    /// terminal view (`terminal_views`). Emitted **only** by the terminal-view
+    /// arbiter via [`SessionManager::broadcast_size`] — never by the reader /
+    /// monitor threads — and forwarded as `session://size`.
+    Size { id: String, cols: u16, rows: u16 },
     /// The directory the session is currently working in, per claude's own log
     /// (`EnterWorktree` / `/cd` move it) — the agent-relocation signal for the
     /// sidebar's worktree grouping. Emitted by the title worker on its burst
     /// cadence when the log tail's `cwd` changes; claude-only (`uses_claude_log`).
     /// The command layer persists + forwards it.
-    Cwd {
-        id: String,
-        cwd: String,
-    },
+    Cwd { id: String, cwd: String },
 }
 
 /// Cap on a single coalesced `Output` payload (#346): a run at/over this size is
@@ -313,11 +313,18 @@ struct ExitState {
     reaped: AtomicBool,
     /// Suppress this generation's `Exited` event entirely. Set by (a) `kill_all` at app
     /// shutdown — now that the exit fires promptly it could reach a still-live webview, and
-    /// an agent that exits 0 on SIGHUP would read as a **clean exit**, so `isCleanExit` would
+    /// an agent that exits 0 on SIGHUP would read as a **clean exit**, so the #63 clean-exit
+    /// handler (`commands::is_clean_exit`, Rust-owned since task 431) would
     /// **delete the persisted record**, breaking the #30/#63 rule that a quit keeps sessions
     /// for the next boot; and (b) a same-id respawn (Restart), so a stale generation's late
     /// exit can never be attributed to the fresh session.
     silent: AtomicBool,
+    /// An app-initiated kill (Remove/forget/rotation/cancel) — set by `kill_session`
+    /// **before any signal**, like `silent`, so a child that traps SIGHUP and exits 0
+    /// can never be misread as a #63 clean exit by the Rust exit handler (task 431).
+    /// Unlike `silent` the `Exited` event still fires (the frontend's own
+    /// `intentionalKills` bookkeeping is unchanged); the flag just rides on it.
+    intentional: AtomicBool,
 }
 
 /// Per-session hysteresis state for the busy/idle decision (#315), owned solely by the
@@ -783,7 +790,8 @@ impl SessionManager {
     /// write/resize/kill) is identical to a session; only the program differs and
     /// there is no `--session-id`/`--resume`. The id is the Overview panel's id,
     /// so the frontend renders it with the same `<Terminal>` pool and persists the
-    /// item in `overview_panels` (a fresh shell is respawned on boot).
+    /// item in `overview_panels` (a fresh shell is respawned by the Rust boot
+    /// sequence — `boot::respawn_shell_terminals`, task 432).
     pub fn spawn_terminal(
         &self,
         id: String,
@@ -893,6 +901,12 @@ impl SessionManager {
         if let Ok(mut map) = self.activity.lock() {
             map.remove(id);
         }
+        // Flag the generation as an app-initiated kill BEFORE any signal (the `silent`
+        // pattern, task 431): a child that traps SIGHUP and exits 0 instantly could
+        // otherwise race the flag into the waiter's `Exited` and be misread as a #63
+        // clean exit (which would delete the record a Remove already deleted, or
+        // toast "Agent exited" for a rotation/cancel kill).
+        session.exit.intentional.store(true, Ordering::SeqCst);
         kill_now(&session);
         // `session` drops here, closing the master/writer.
         Ok(())
@@ -906,8 +920,9 @@ impl SessionManager {
     /// so no `Exited` event is emitted at all. Now that the exit fires promptly (off the
     /// child's `wait()`, not the reader's EOF) such an event could reach the still-live
     /// webview, and an agent that exits 0 on SIGHUP would look like a **clean exit** —
-    /// `isCleanExit` would then delete its persisted record and the session would NOT come
-    /// back on the next launch. A quit keeps sessions (#30/#63).
+    /// the #63 handler (`commands::is_clean_exit`, Rust-owned since task 431) would then
+    /// delete its persisted record and the session would NOT come back on the next
+    /// launch. A quit keeps sessions (#30/#63).
     ///
     /// **Bounded** (#354): two sweeps with **one** shared grace, rather than portable-pty's
     /// ~200ms-per-child serial kill (10 agents ⇒ a ~2s shutdown stall). Deliberately does not
@@ -1020,6 +1035,35 @@ impl SessionManager {
     #[cfg(all(test, unix))]
     pub fn session_count(&self) -> usize {
         self.lock_sessions().map(|s| s.len()).unwrap_or(0)
+    }
+
+    /// True while `id` is registered — a live PTY generation OR an exited-but-kept one
+    /// (a natural exit leaves the `Session` in the map for scrollback + Restart; only
+    /// `kill_session` removes it, and a same-id spawn REPLACES + kills it). The boot
+    /// respawn (task 432) skips any registered id for exactly that reason: spawning over
+    /// a present id would kill that generation, so "skip if present" is what makes the
+    /// respawn idempotent and safe to re-run.
+    pub fn has_session(&self, id: &str) -> bool {
+        self.lock_sessions()
+            .map(|sessions| sessions.contains_key(id))
+            .unwrap_or(false)
+    }
+
+    /// Ids of sessions with a **still-running** child (task 430: the auto-continue
+    /// engine's liveness source): in the registry ∧ not yet reaped by the exit
+    /// waiter (#354). A dead-but-kept entry (exit overlay, scrollback) and a
+    /// killed/removed one both read as not live. Fail-soft: a poisoned registry
+    /// lock reads as no live sessions.
+    pub fn live_session_ids(&self) -> Vec<String> {
+        self.lock_sessions()
+            .map(|sessions| {
+                sessions
+                    .iter()
+                    .filter(|(_, session)| !session.exit.reaped.load(Ordering::SeqCst))
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// A session's child pid — on unix also its **process-group id** (#354). Used only by the
@@ -1274,6 +1318,22 @@ impl SessionManager {
             .lock()
             .map(|guard| guard.clone())
             .map_err(|_| SessionError::Io("event sender lock poisoned".to_string()))
+    }
+
+    /// Broadcast the authoritative multi-window PTY grid for a session (task 426):
+    /// send one [`SessionEvent::Size`] on the event channel, forwarded to the
+    /// frontend as `session://size`. Called **only** by the terminal-view arbiter
+    /// (`terminal_views`) — never by the reader/monitor threads. Best-effort,
+    /// infallible, and non-blocking: a poisoned sender lock or a dropped forwarder
+    /// (shutdown) is silently ignored.
+    pub fn broadcast_size(&self, id: &str, cols: u16, rows: u16) {
+        if let Ok(tx) = self.events.lock() {
+            let _ = tx.send(SessionEvent::Size {
+                id: id.to_string(),
+                cols,
+                rows,
+            });
+        }
     }
 }
 
@@ -1533,7 +1593,14 @@ fn exit_waiter(
     if exit.silent.load(Ordering::SeqCst) {
         return;
     }
-    let _ = events.send(SessionEvent::Exited { id, code });
+    let _ = events.send(SessionEvent::Exited {
+        id,
+        code,
+        // Whether this generation was app-killed (`kill_session`, task 431) — set
+        // before any signal, so the Rust clean-exit handler can never misread a
+        // trapped-SIGHUP code-0 death under Remove/rotation/cancel as clean (#63).
+        intentional: exit.intentional.load(Ordering::SeqCst),
+    });
 }
 
 /// Pure busy/idle hysteresis (#315). `active_fast` = real output within `BUSY_WINDOW_MS`
@@ -2070,6 +2137,15 @@ mod tests {
     #[test]
     fn non_macos_unix_shell_is_never_empty() {
         assert!(!non_macos_unix_shell().is_empty());
+    }
+
+    // --- Registry presence check (task 432) ---
+    // An empty manager knows no id. Presence after a spawn (and the skip it drives) is
+    // covered by the boot.rs respawn test.
+    #[test]
+    fn has_session_is_false_for_unknown_id() {
+        let (mgr, _rx) = manager();
+        assert!(!mgr.has_session("no-such-id"));
     }
 
     // --- Global search: ANSI strip + output line matching (#337) ---
@@ -2630,6 +2706,7 @@ mod tests {
                 Ok(SessionEvent::State { .. }) => {}
                 Ok(SessionEvent::Name { .. }) => {}
                 Ok(SessionEvent::Forkable { .. }) => {}
+                Ok(SessionEvent::Size { .. }) => {}
                 Ok(SessionEvent::Cwd { .. }) => {}
                 Err(_) => panic!("timed out waiting for session events"),
             }
@@ -2778,8 +2855,9 @@ mod tests {
     /// **whole process group** — pre-#354 it SIGHUPed the direct pid only, so a
     /// [`STUBBORN_DESCENDANT`] survived as an orphan (#31). It emits **exactly one** `Exited`
     /// (the frontend consumes its `intentionalKills` flag once), whose code is **never**
-    /// `Some(0)`: portable-pty maps a signal death to 1, so `isCleanExit` can never auto-forget
-    /// a killed agent's record (#63).
+    /// `Some(0)`: portable-pty maps a signal death to 1, so the #63 clean-exit handler
+    /// (`commands::is_clean_exit`, Rust-owned since task 431) can never auto-forget
+    /// a killed agent's record.
     #[cfg(unix)]
     #[test]
     fn kill_session_is_prompt_and_kills_the_whole_group() {
@@ -2824,8 +2902,9 @@ mod tests {
 
     /// App shutdown (`kill_all`) must be **silent** (#354): now that the exit fires promptly, an
     /// `Exited` could reach the still-live webview, and an agent that exits 0 on SIGHUP would
-    /// read as a clean exit — `isCleanExit` would delete its persisted record and the session
-    /// would NOT come back on the next launch. A quit keeps sessions (#30/#63). It must still
+    /// read as a clean exit — the #63 handler (`commands::is_clean_exit`, Rust-owned since
+    /// task 431) would delete its persisted record and the session would NOT come back on
+    /// the next launch. A quit keeps sessions (#30/#63). It must still
     /// empty the registry and leave no orphaned process group (#31).
     #[cfg(unix)]
     #[test]
@@ -2856,6 +2935,54 @@ mod tests {
         while Instant::now() < deadline {
             if let Ok(SessionEvent::Exited { .. }) = rx.recv_timeout(Duration::from_millis(100)) {
                 panic!("kill_all must emit no Exited — the persisted records would be deleted");
+            }
+        }
+    }
+
+    /// The `Exited` event carries the kill intent (task 431): an app-initiated
+    /// `kill_session` flags its generation `intentional` **before any signal**, so even a
+    /// child that traps SIGHUP and exits 0 instantly rides `intentional == true` into the
+    /// Rust clean-exit handler — which then never misreads a Remove/rotation/cancel kill
+    /// as a #63 clean exit. A natural exit carries `intentional == false`.
+    #[cfg(unix)]
+    #[test]
+    fn exited_event_carries_the_intentional_kill_flag() {
+        // Natural exit → intentional == false.
+        let (mgr, rx) = manager();
+        mgr.spawn_program("sh", &["-c", "exit 0"], &tmp(), None)
+            .expect("spawn sh");
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(SessionEvent::Exited { intentional, .. }) => {
+                    assert!(!intentional, "a natural exit must not read as app-killed");
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => panic!("timed out waiting for the natural exit"),
+            }
+        }
+
+        // App-initiated kill → intentional == true, even for a child that traps the
+        // SIGHUP and exits 0 on its own (the misread-as-clean race this flag closes).
+        let (mgr, rx) = manager();
+        let info = mgr
+            .spawn_program(
+                "sh",
+                &["-c", r#"trap "exit 0" HUP; sleep 30"#],
+                &tmp(),
+                None,
+            )
+            .expect("spawn trapping sh");
+        std::thread::sleep(Duration::from_millis(300));
+        mgr.kill_session(&info.id).expect("kill");
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(SessionEvent::Exited { intentional, .. }) => {
+                    assert!(intentional, "an app kill must ride the Exited event");
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => panic!("timed out waiting for the killed exit"),
             }
         }
     }
@@ -2902,7 +3029,7 @@ mod tests {
                 Ok(SessionEvent::Output { id, bytes, .. }) => {
                     output.entry(id).or_default().extend(bytes);
                 }
-                Ok(SessionEvent::Exited { id, code }) => {
+                Ok(SessionEvent::Exited { id, code, .. }) => {
                     assert_eq!(code, Some(0), "clean exit for {id}");
                     assert!(exited.insert(id), "a session exited twice");
                 }
@@ -3416,6 +3543,7 @@ mod tests {
         let exited = SessionEvent::Exited {
             id: "a".into(),
             code: Some(0),
+            intentional: false,
         };
         let merged = coalesce_output_events(vec![
             out_ev("a", b"bye", 3),
@@ -3472,6 +3600,39 @@ mod tests {
     #[test]
     fn coalesce_empty_is_empty() {
         assert_eq!(coalesce_output_events(vec![]), vec![]);
+    }
+
+    #[test]
+    fn coalesce_passes_size_through_and_splits_an_output_run() {
+        // Task 426: `Size` rides the `other =>` arm like any non-Output event — it
+        // survives unmerged, in order, and splits a contiguous Output run (the two
+        // chunks around it would otherwise coalesce into one).
+        let size = SessionEvent::Size {
+            id: "a".into(),
+            cols: 80,
+            rows: 24,
+        };
+        let events = vec![out_ev("a", b"he", 2), size.clone(), out_ev("a", b"llo", 5)];
+        assert_eq!(coalesce_output_events(events.clone()), events);
+        // Sanity: without the Size in between, the same chunks DO merge.
+        let merged = coalesce_output_events(vec![out_ev("a", b"he", 2), out_ev("a", b"llo", 5)]);
+        assert_eq!(merged, vec![out_ev("a", b"hello", 5)]);
+    }
+
+    #[test]
+    fn broadcast_size_delivers_exactly_one_size_event() {
+        let (mgr, rx) = manager();
+        mgr.broadcast_size("s1", 120, 40);
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+            SessionEvent::Size {
+                id: "s1".into(),
+                cols: 120,
+                rows: 40,
+            }
+        );
+        // Exactly one: nothing else is queued.
+        assert!(rx.try_recv().is_err());
     }
 
     // --- Output hot-path throughput benchmark (#358) ---

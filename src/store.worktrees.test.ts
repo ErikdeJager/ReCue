@@ -15,6 +15,7 @@ vi.mock("./ipc", () => ({
   listRepoWorktrees: vi.fn(),
   killSession: vi.fn(),
   removeWorktree: vi.fn(),
+  cleanupWorktreeIfEmpty: vi.fn(),
   deleteWorktree: vi.fn(),
   cancelSchedule: vi.fn(),
   setOverviewPanels: vi.fn(),
@@ -222,23 +223,43 @@ describe("refreshWorktrees — non-claude heuristic", () => {
 });
 
 describe("cleanupWorktreeIfEmpty — external short-circuit", () => {
-  it("never calls remove_worktree for a detected EXTERNAL worktree", async () => {
+  it("never calls the Rust cleanup for a detected EXTERNAL worktree", async () => {
     useStore.setState({
       repoWorktrees: { [REPO]: [mainEntry, entry({ path: WT })] },
     });
     await useStore.getState().cleanupWorktreeIfEmpty(REPO, WT);
+    expect(ipc.cleanupWorktreeIfEmpty).not.toHaveBeenCalled();
     expect(ipc.removeWorktree).not.toHaveBeenCalled();
   });
 
-  it("still removes an empty app-managed worktree (the #74 flow, unchanged)", async () => {
+  it("still removes an empty app-managed worktree (#74 — ref-count + remove Rust-owned since task 431)", async () => {
     const managed = "/data/worktrees/repo-1/feat";
+    m(ipc.cleanupWorktreeIfEmpty).mockResolvedValue("removed");
     useStore.setState({
       repoWorktrees: {
         [REPO]: [mainEntry, entry({ path: managed, managed: true })],
       },
     });
     await useStore.getState().cleanupWorktreeIfEmpty(REPO, managed);
-    expect(ipc.removeWorktree).toHaveBeenCalledWith(REPO, managed, false);
+    expect(ipc.cleanupWorktreeIfEmpty).toHaveBeenCalledWith(REPO, managed);
+    // The non-forced `git worktree remove` happens inside the Rust command —
+    // never a direct frontend removeWorktree on this path.
+    expect(ipc.removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it("keeps silently when Rust refuses a non-managed dest (notManaged — no toast)", async () => {
+    // The frontend short-circuit needs the detection slice; the Rust guard does
+    // not (it protects the clean-exit path too). A dest NOT in the local slice
+    // (e.g. the listing hasn't loaded yet) reaches the Rust command, which
+    // refuses — the store must keep silently, exactly like "inUse".
+    m(ipc.cleanupWorktreeIfEmpty).mockResolvedValue("notManaged");
+    await useStore.getState().cleanupWorktreeIfEmpty(REPO, "/home/user/own-wt");
+    expect(ipc.cleanupWorktreeIfEmpty).toHaveBeenCalledWith(
+      REPO,
+      "/home/user/own-wt",
+    );
+    expect(ipc.removeWorktree).not.toHaveBeenCalled();
+    expect(useStore.getState().toasts).toEqual([]);
   });
 });
 

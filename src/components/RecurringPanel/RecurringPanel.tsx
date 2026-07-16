@@ -8,7 +8,6 @@ import {
 
 import { noAutoCapitalize } from "../../inputProps";
 import { listSkills } from "../../ipc";
-import { useSessionOwners } from "../../ownership";
 import { repoName } from "../../paths";
 import { useStore } from "../../store";
 import {
@@ -22,8 +21,6 @@ import {
   toLocalInput,
 } from "../../time";
 import type { SkillInfo } from "../../types";
-import { ownedHere } from "../../windowContext";
-import DetachedNote from "../DetachedNote/DetachedNote";
 import SkillAutocomplete from "../SkillAutocomplete/SkillAutocomplete";
 import Terminal from "../Terminal/Terminal";
 import styles from "./RecurringPanel.module.css";
@@ -51,7 +48,6 @@ function RecurringPanel({ recurringId }: { recurringId: string }) {
   );
   const sessions = useStore((s) => s.sessions);
   const updateRecurring = useStore((s) => s.updateRecurring);
-  const owners = useSessionOwners();
 
   const [editing, setEditing] = useState(false);
   // Local editing buffers, seeded from the record (re-seeded when the id changes /
@@ -255,12 +251,7 @@ function RecurringPanel({ recurringId }: { recurringId: string }) {
       </div>
     );
   } else if (child && childId) {
-    // One PTY renders in one window (#84): defer to the owning window otherwise.
-    body = ownedHere(owners, childId) ? (
-      <Terminal sessionId={childId} />
-    ) : (
-      <DetachedNote ownerLabel={owners[childId]} />
-    );
+    body = <Terminal sessionId={childId} />;
   } else {
     body = (
       <div className={styles.placeholder}>

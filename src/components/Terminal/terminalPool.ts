@@ -27,6 +27,23 @@
 // `Scrollback` replays them at creation (exactly the path a session not rendered in the
 // current view already took). Creation is deferred; a host is still NEVER disposed or
 // recycled on a scroll-out / view switch — that is the #18 invariant above.
+//
+// Task 427 (multi-window 2/16) moves SIZING off "my window owns the PTY size" onto the
+// task-426 attach/propose/broadcast protocol (tmux `window-size=smallest`): a host never
+// resizes its own xterm grid — on mount it ATTACHES its view (`attach_terminal`, adopting
+// the returned effective grid before any scrollback byte is written), the debounced
+// ResizeObserver path only PROPOSES (`propose_terminal_size` from a FitAddon measurement
+// + the #262 shave — never FitAddon's fit-and-apply / a local `term.resize`), the
+// pool-level `session://size` broadcast is the ONLY thing that resizes an xterm grid
+// after attach, and a park/dispose DETACHES the view so an invisible terminal never
+// clamps the arbitrated minimum. The painted grid is centered/letterboxed in the slot
+// (CSS). The legacy PTY-resize IPC is no longer called from the frontend. Single view
+// per session (today) ⇒ the broadcast grid equals this window's shaved proposal —
+// visually unchanged. Task 440 adds the DELIVERY rule on top: this window receives
+// `session://output` / `session://size` for a session only while it holds a live host
+// (subscribe at createHost, unsubscribe at dispose — parking never touches it), so a
+// zero-subscriber session costs no emit at all and a late host back-fills via
+// `session_scrollback` + the offset dedupe.
 
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -41,17 +58,22 @@ import "@xterm/xterm/css/xterm.css";
 
 import { decodeOutputB64 } from "../../decodeOutput";
 import {
+  attachTerminal,
   clipboardReadText,
+  detachTerminal,
   openUrl,
-  resizePty,
+  proposeTerminalSize,
   saveClipboardImage,
   sessionScrollback,
+  subscribeOutput,
+  subscribeSessionSize,
+  unsubscribeOutput,
   writeStdin,
 } from "../../ipc";
 import { onSessionOutput } from "../../outputBus";
 import { isLinux, isWindows } from "../../platform";
 import { useStore } from "../../store";
-import { IS_MAIN_WINDOW } from "../../windowContext";
+import { WINDOW_LABEL } from "../../windowContext";
 import { focusedTerminalElement } from "./hoverFocus";
 import { effectiveCursorBlink, reducedMotionActive } from "./motionPolicy";
 import { makePasteKeyHandler } from "./pasteHandler";
@@ -63,6 +85,11 @@ import {
 import { terminalsToDispose } from "./poolReconcile";
 import { dedupeAgainstScrollback } from "./replayDedupe";
 import { createReplayQueue } from "./replayQueue";
+import {
+  type GridSize,
+  sanitizeProposal,
+  shaveProposalRows,
+} from "./sizeProposal";
 import styles from "./Terminal.module.css";
 import {
   TERMINAL_BG_DARKEST,
@@ -77,9 +104,10 @@ import {
 import { windowsPtyOption } from "./windowsPty";
 
 // Coalesce the frames of a view re-tile / inspector slide / window drag into a
-// single resize after layout settles. Long enough to outlast a 200ms CSS slide
-// (the observer keeps firing during the animation, resetting the timer), short
-// enough to still feel instant.
+// single size PROPOSAL (task 427 — the grid itself only moves via the
+// `session://size` broadcast) after layout settles. Long enough to outlast a
+// 200ms CSS slide (the observer keeps firing during the animation, resetting
+// the timer), short enough to still feel instant.
 const RESIZE_DEBOUNCE_MS = 120;
 
 // Scrollback replays are SERIALIZED (#351). Hydrating a terminal is an IPC round-trip
@@ -132,9 +160,9 @@ interface TerminalHost {
   /** The slot currently displaying this terminal, or null when parked. */
   slot: HTMLElement | null;
   /** The attached WebGL addon, or undefined when this terminal renders via xterm's DOM
-   * renderer (a detached window #105, a software rasterizer #346, a Settings override
-   * #357, or a failed/lost GL context). Lives on the host — not a `createHost` closure
-   * local — so `applyTerminalRenderer` can add/remove it on the RUNNING xterm. */
+   * renderer (a software rasterizer #346, a Settings override #357, or a failed/lost
+   * GL context). Lives on the host — not a `createHost` closure local — so
+   * `applyTerminalRenderer` can add/remove it on the RUNNING xterm. */
   webgl?: WebglAddon;
   /** Attach the WebGL addon to the live xterm (lazy `import()`, #356). Idempotent and
    * best-effort: any failure leaves the DOM renderer, exactly as today. */
@@ -142,13 +170,51 @@ interface TerminalHost {
   /** Detach it → xterm reverts to its DOM renderer (the very path `onContextLoss`
    * already takes). Never disposes the host. */
   unloadWebgl: () => void;
-  /** Debounced fit + PTY resize; no-op while parked/unmeasurable. */
+  /** Register (or upsert) this window's view with the backend arbiter (task 427):
+   * sends the measured proposal and adopts the RETURNED effective grid, which is
+   * what opens the replay gate. Called on every mount and by the `applyResize`
+   * self-heal; no-op while parked. */
+  attachView: () => void;
+  /** Withdraw this window's view (task 427) so a parked/disposed terminal never
+   * holds the arbitrated minimum down. Best-effort. */
+  detachView: () => void;
+  /** Debounced size PROPOSAL (task 427): measures the slot (fit proposal + the
+   * #262 shave) and sends `propose_terminal_size` — never resizes the xterm
+   * locally; the grid only moves via the `session://size` broadcast. No-op while
+   * parked/unmeasurable. */
   scheduleResize: () => void;
   dispose: () => void;
 }
 
 const hosts = new Map<string, TerminalHost>();
 let parking: HTMLDivElement | null = null;
+
+// Pool-level `session://size` subscription (task 427): this handler is the ONLY
+// code that resizes an xterm grid after attach. Lazily registered once per
+// document (the `parkingLayer` pattern) from `ensureHost`, and never
+// unsubscribed — the pool lives for the window's lifetime. Since task 440 the
+// broadcast is TARGETED at the session's subscriber windows (the listen is
+// label-scoped in ipc.ts) rather than app-global; each subscriber window still
+// applies it only to its own host for that session — that IS the mirror
+// behavior — and `term.resize` early-returns on an unchanged grid, so redundant
+// broadcasts are free.
+let sizeSubscribed = false;
+function ensureSizeSubscription(): void {
+  if (sizeSubscribed) return;
+  sizeSubscribed = true;
+  void subscribeSessionSize(({ id, cols, rows }) => {
+    const host = hosts.get(id);
+    if (!host) return;
+    try {
+      host.term.resize(Math.max(1, cols), Math.max(1, rows));
+    } catch {
+      // disposing — nothing to resize
+    }
+  }).catch(() => {
+    // Tauri unavailable (unit tests) — reset the flag so the next host retries.
+    sizeSubscribed = false;
+  });
+}
 
 // The WebGL glyph atlas is SHARED by every pooled terminal of identical config (xterm's
 // addon-webgl caches one TextureAtlas per config), so it only needs clearing ONCE — the
@@ -205,8 +271,8 @@ function reducedMotionNow(): boolean {
 // is silently software-rasterized (llvmpipe/SwiftShader — e.g. NVIDIA driver or
 // DMA-BUF trouble), so the addon "works" but every terminal frame renders on the
 // CPU. Probe the renderer string ONCE per app and skip the WebGL addon when it names
-// a software rasterizer — xterm then uses its DOM renderer (the detached-window
-// fallback, #105), which is faster than software GL. macOS/Windows never construct
+// a software rasterizer — xterm then uses its DOM renderer, which is faster than
+// software GL. macOS/Windows never construct
 // the probe canvas and always keep WebGL, so their rendering is byte-for-byte
 // unchanged.
 //
@@ -296,8 +362,9 @@ function rendererDecision(): TerminalRendererDecision {
  *   2. The **#346/#357 decision** — the one-time software-rasterizer probe folded together
  *      with the persisted Settings mode (auto / force-webgl / force-dom).
  *
- * Callers add the third constraint, `IS_MAIN_WINDOW` (#105 — a detached canvas window
- * always renders through xterm's DOM renderer).
+ * This is the whole gate: the #105 canvas-window DOM-renderer rule died with the
+ * canvas windows (task 437) — WebGL is now governed solely by `rendererDecision()`
+ * plus the #364 latch in every window.
  */
 function webglPermitted(): boolean {
   return webglFallback.allowsWebgl() && rendererDecision().webgl;
@@ -313,12 +380,12 @@ function webglPermitted(): boolean {
  *
  * A converge-to-target loop: it only acts on a host whose addon state differs from the
  * target, so it is safe to call repeatedly (it runs on every Save, and on boot after the
- * settings blob loads). No-op off Linux and in a detached canvas window (#105 — those
- * always use the DOM renderer). The target is `webglPermitted()`, so a window latched to
- * DOM by a context loss (#364) stays there even if the user then forces "WebGL".
+ * settings blob loads). No-op off Linux. The target is `webglPermitted()`, so a window
+ * latched to DOM by a context loss (#364) stays there even if the user then forces
+ * "WebGL". (The old #105 canvas-window early-return died with the canvas windows,
+ * task 437.)
  */
 export function applyTerminalRenderer(): void {
-  if (!IS_MAIN_WINDOW) return;
   if (!isLinux(useStore.getState().platform)) return;
   const wantWebgl = webglPermitted();
   for (const host of hosts.values()) {
@@ -356,8 +423,7 @@ export function terminalRendererReport(): {
   const latched = decision.webgl && !webgl;
   return {
     mode: settings.linuxTerminalRenderer,
-    // A detached canvas window is always DOM (#105), whatever the decision says.
-    active: IS_MAIN_WINDOW && webgl ? "webgl" : "dom",
+    active: webgl ? "webgl" : "dom",
     renderer: isLinux(platform) ? probedRenderer() : null,
     reason: latched
       ? "WebGL context lost and not restored; DOM renderer for the rest of this run"
@@ -534,12 +600,62 @@ function createHost(sessionId: string): TerminalHost {
   // was torn down while their promise was in flight.
   let disposed = false;
 
-  const safeFit = () => {
-    try {
-      fit.fit();
-    } catch {
-      // container not measurable yet (e.g. mid-transition); ignore
-    }
+  // View-attachment state (task 427): whether this window's view of the session is
+  // registered backend-side. Set on a successful `attach_terminal`, cleared by
+  // `detachView`; while false, `applyResize` re-attaches instead of proposing (the
+  // backend drops proposals for never-attached views).
+  let attached = false;
+
+  // Targeted output delivery (task 440): this window receives session://output
+  // for a session only while it holds a live host. Register at CREATION (not
+  // mount) so a slotless host (resetTerminal's eager branch) and a parked host
+  // keep their byte stream — the pool never re-replays (#18/#351), so a delivery
+  // gap would be permanent. The replay job awaits this ack before fetching the
+  // scrollback snapshot: bytes before registration arrive via the snapshot,
+  // bytes after arrive live, and dedupeAgainstScrollback drops the overlap.
+  const outputSubscribed = subscribeOutput(sessionId, WINDOW_LABEL).catch(
+    () => {},
+  );
+
+  // The attach GATE: the scrollback replay must not write a byte until the first
+  // attach has adopted the arbitrated grid (see the replay job below). It needs a
+  // timeout because `replayQueue.pump()` starts the job synchronously on enqueue —
+  // before `mountTerminal` has assigned the slot — and a host created WITHOUT a slot
+  // (`resetTerminal`'s slotless branch) never attaches, which with
+  // MAX_CONCURRENT_REPLAYS = 1 would otherwise wedge every later terminal's replay
+  // (the WRITE_TIMEOUT_MS philosophy). Such a host replays at its current grid and
+  // adopts the arbitrated grid on its first real mount (claude repaints on the
+  // SIGWINCH, exactly like the pre-427 reset path).
+  const ATTACH_GATE_TIMEOUT_MS = 1000;
+  let gateSettled = false;
+  let settleGate: () => void = () => {};
+  const attachGate = new Promise<void>((resolve) => {
+    settleGate = () => {
+      if (!gateSettled) {
+        gateSettled = true;
+        clearTimeout(gateTimer);
+        resolve();
+      }
+    };
+  });
+  const gateTimer = setTimeout(() => settleGate(), ATTACH_GATE_TIMEOUT_MS);
+
+  // Shared measurement (task 427): one helper for both attach and propose so they
+  // can never disagree. A FitAddon proposal (never its fit-and-apply — nothing here
+  // resizes the local grid) sanitized, then the #262 bottom-clearance shave applied
+  // to the PROPOSED rows using the same rowHeightCss + padded-content-height math
+  // the old in-place shave used. Null when the container isn't measurable.
+  const measureProposal = (): GridSize | null => {
+    const p = sanitizeProposal(fit.proposeDimensions());
+    if (!p) return null;
+    const cellH = rowHeightCss(term);
+    const cs = getComputedStyle(container);
+    const padV =
+      (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    return {
+      cols: p.cols,
+      rows: shaveProposalRows(p.rows, cellH, container.clientHeight - padV),
+    };
   };
 
   // The host record is built up front (#357) so the WebGL addon can live ON it rather than
@@ -554,18 +670,49 @@ function createHost(sessionId: string): TerminalHost {
     webgl: undefined,
     loadWebgl: () => Promise.resolve(),
     unloadWebgl: () => {},
+    attachView: () => {},
+    detachView: () => {},
     scheduleResize: () => {},
     dispose: () => {},
   };
 
-  // Best-effort GPU renderer; fall back to the default DOM renderer. Skipped in a
-  // detached canvas window (#84/#105): a freshly-opened native window renders agent
-  // TUIs with doubled/ghosted glyphs and misaligned box-drawing — a known WebGL
-  // glyph-atlas / devicePixelRatio artifact in a secondary window — so detached
-  // windows use the DOM renderer (visually equivalent, no artifact). Also skipped on
+  // Attach / detach this window's view (task 427). Attach sends the measured
+  // proposal (falling back to the current grid when unmeasurable) and applies the
+  // RETURNED effective grid directly — not waiting for the broadcast is what
+  // guarantees grid-before-replay; the attach-triggered `session://size` then
+  // arrives as a no-op resize. Attach is an upsert backend-side, so calling it on
+  // every mount (a re-mount into a different-size slot) is correct — and because
+  // Tauri processes a webview's invokes in order and the 426 commands are
+  // synchronous (#353), a mount-attach always lands before a later unmount-detach.
+  host.attachView = () => {
+    if (disposed || host.slot === null) return;
+    const p = measureProposal() ?? { cols: term.cols, rows: term.rows };
+    void attachTerminal(sessionId, WINDOW_LABEL, p.cols, p.rows)
+      .then((grid) => {
+        attached = true;
+        if (disposed) return;
+        try {
+          term.resize(Math.max(1, grid.cols), Math.max(1, grid.rows));
+        } catch {
+          // disposing — nothing to resize
+        }
+      })
+      .catch(() => {
+        // best-effort; `applyResize` re-attaches while !attached
+      })
+      .finally(() => settleGate());
+  };
+  host.detachView = () => {
+    attached = false;
+    void detachTerminal(sessionId, WINDOW_LABEL).catch(() => {});
+  };
+
+  // Best-effort GPU renderer; fall back to the default DOM renderer. Skipped on
   // Linux when the one-time probe says WebGL is software-rasterized (#346) or the user
   // forced the DOM renderer in Settings → Rendering (#357) — see `rendererDecision`.
-  // The main window on macOS/Windows keeps WebGL, so its rendering is provably unchanged.
+  // Every window attaches WebGL where permitted (task 437 dropped the #105
+  // canvas-window DOM-renderer rule with the canvas windows themselves); the #364
+  // context-loss latch remains the per-window safety net.
   // And skipped once ANY terminal in this window has suffered an UNRECOVERED WebGL
   // context loss (#364): a GPU that dropped one context (OOM / driver reset / suspend,
   // likeliest on WebKitGTK) will drop the next one too, so re-attaching would be a
@@ -644,8 +791,9 @@ function createHost(sessionId: string): TerminalHost {
     host.webgl = undefined;
     webglFallback.noteRenderer(sessionId, "dom");
   };
-  const webglReady: Promise<void> =
-    IS_MAIN_WINDOW && webglPermitted() ? host.loadWebgl() : Promise.resolve();
+  const webglReady: Promise<void> = webglPermitted()
+    ? host.loadWebgl()
+    : Promise.resolve();
 
   // Clickable http/https links (#109). Hover underlines a URL; the custom activate
   // handler opens it only on a ⌘/Ctrl-click (`metaKey || ctrlKey`, #143 — Ctrl on
@@ -677,51 +825,30 @@ function createHost(sessionId: string): TerminalHost {
   );
 
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
-  // The cols/rows last successfully sent to the PTY — a same-size reparent (view
-  // switch into an identically-sized slot) skips the `resize_pty` IPC entirely. On
-  // unix the kernel already dedupes the SIGWINCH, but ConPTY can repaint on any
-  // resize call, and skipping also spares the IPC churn. Reset on a failed send so
-  // it retries; a Restart disposes + recreates the whole host, so no stale carry-over.
-  let lastPtySize: { cols: number; rows: number } | null = null;
   const applyResize = () => {
     resizeTimer = undefined;
     // Never resize a parked / unmeasurable terminal: bogus cols/rows would make
     // `claude` repaint at the wrong size. It is refitted when a slot shows it.
     if (host.slot === null) return;
     if (container.offsetWidth === 0 || container.offsetHeight === 0) return;
-    safeFit();
-    // Conservative bottom-clearance guard (#262). FitAddon picks
-    // rows = floor(contentHeight / cellHeight) from xterm's measured cell height,
-    // but the *painted* row can be a hair taller (sub-pixel rounding at certain
-    // font-size/line-height combos), so rows × cellHeight can exceed the padded
-    // content box and push the last row — claude's prompt / input line — below the
-    // panel's bottom edge (the reported "last line falls out of view" bug, which
-    // only a clear used to fix). When that would happen, tell the PTY one fewer row
-    // so the last line is always fully visible. Best-effort: a failed metrics read
-    // (`rowHeightCss` → undefined) or `term.resize` just keeps the FitAddon result,
-    // never throwing. Pure WebView measurement, identical on macOS / Windows.
-    const cellH = rowHeightCss(term);
-    if (cellH !== undefined && term.rows > 1) {
-      const cs = getComputedStyle(container);
-      const padV =
-        (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
-      const contentH = container.clientHeight - padV;
-      // Tolerate sub-pixel rounding; only shave when a full visible row is clipped.
-      if (contentH > 0 && term.rows * cellH > contentH + 1) {
-        try {
-          term.resize(term.cols, term.rows - 1);
-        } catch {
-          // keep the FitAddon result on any resize failure
-        }
-      }
+    // Late/failed attach self-heal (task 427): the backend drops proposals for
+    // never-attached views, so proposing here would be lost — re-attach instead
+    // (which sends the measured proposal and adopts the returned grid).
+    if (!attached) {
+      host.attachView();
+      return;
     }
-    if (lastPtySize?.cols === term.cols && lastPtySize?.rows === term.rows) {
-      return; // the PTY already has this size — nothing to tell it
-    }
-    lastPtySize = { cols: term.cols, rows: term.rows };
-    void resizePty(sessionId, term.cols, term.rows).catch(() => {
-      lastPtySize = null; // retry on the next resize rather than believing a failed send
-    });
+    // Propose, don't apply (task 427): the measurement carries the #262
+    // bottom-clearance shave (see `measureProposal` / `shaveProposalRows`) so
+    // claude's input line is never clipped, and the xterm grid itself only moves
+    // via the `session://size` broadcast — never a local `term.resize` here.
+    // (A same-size reparent costs one propose IPC; the backend arbiter dedupes
+    // the actual PTY resize + broadcast, so ConPTY never repaints for it.)
+    const p = measureProposal();
+    if (!p) return;
+    void proposeTerminalSize(sessionId, WINDOW_LABEL, p.cols, p.rows).catch(
+      () => {},
+    );
   };
   const scheduleResize = () => {
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
@@ -813,7 +940,25 @@ function createHost(sessionId: string): TerminalHost {
   // addon can bail out too); this job reads the same flag.
   replays.enqueue(sessionId, async () => {
     if (disposed) return;
-    trimmable = false; // from here on, keep every byte (see pendingOutput.ts)
+    // Task 427: adopt the arbitrated grid BEFORE any scrollback byte is written,
+    // so the replayed cursor-positioned paint matches the PTY's actual size (the
+    // #18 concern). Bounded — a slotless host (the `resetTerminal` branch) settles
+    // via the gate's timeout, so it can never wedge the serialized queue.
+    await attachGate;
+    if (disposed) return;
+    // Await the task-440 subscribe ack BEFORE the snapshot fetch: any byte
+    // emitted before this window was a delivery target is guaranteed to be in
+    // the snapshot (the reader rings before emitting), bytes after arrive
+    // live, and dedupeAgainstScrollback drops the overlap by offset. An invoke
+    // always settles — and the `.catch` at creation makes a Tauri-less
+    // unit-test environment resolve immediately — so the serialized queue can
+    // never wedge here (the WRITE_TIMEOUT_MS philosophy).
+    await outputSubscribed;
+    if (disposed) return;
+    // From here on, keep every byte (see pendingOutput.ts). Moved below the gate:
+    // the pending-buffer cap stays valid until the FETCH is dispatched (#351), and
+    // the fetch now happens after the gate.
+    trimmable = false;
     try {
       const reply = await sessionScrollback(sessionId);
       scrollbackEnd = reply.end;
@@ -871,8 +1016,9 @@ function createHost(sessionId: string): TerminalHost {
     // Re-applying fontFamily (via a transient that never paints — both writes are
     // synchronous within this frame) triggers xterm's char-size service to re-measure;
     // clearing the atlas makes the next render re-rasterize glyphs at the corrected
-    // metrics. `refresh` repaints every row; `safeFit` recomputes cols/rows for the
-    // possibly-changed cell size.
+    // metrics. `refresh` repaints every row; `scheduleResize` RE-PROPOSES cols/rows
+    // for the possibly-changed cell size (task 427 — the grid itself only moves via
+    // the `session://size` broadcast).
     //
     // The atlas is SHARED across every pooled terminal of identical config, so clear it only
     // the FIRST time the real font has loaded. Doing it on every spawn wiped the shared atlas
@@ -881,8 +1027,8 @@ function createHost(sessionId: string): TerminalHost {
     // "font jumble"). Every later terminal shares the already-corrected atlas; the fontFamily
     // re-measure below still repaints IT (a full model clear via the options-change handler),
     // so its glyphs are crisp without disturbing anyone else's. No-op with the DOM renderer
-    // (`host.webgl` undefined — a detached window #105, a software rasterizer #346, or the
-    // #357 Settings override), which has no shared GL atlas.
+    // (`host.webgl` undefined — a software rasterizer #346 or the #357 Settings
+    // override), which has no shared GL atlas.
     //
     // This is also why `applyTerminalRenderer` (#357) must NOT clear the atlas when it
     // attaches the addon to a running terminal: same shared-atlas hazard, and by then the
@@ -895,7 +1041,7 @@ function createHost(sessionId: string): TerminalHost {
     term.options.fontFamily = "monospace";
     term.options.fontFamily = family;
     term.refresh(0, term.rows - 1);
-    safeFit();
+    host.scheduleResize();
   })();
 
   host.dispose = () => {
@@ -904,6 +1050,18 @@ function createHost(sessionId: string): TerminalHost {
     // already-running one is left alone — the `disposed` flag makes its remaining steps
     // no-ops, and it still releases its queue slot.
     replays.cancel(sessionId);
+    // Withdraw this window's view (task 427) so a dead host never clamps the
+    // arbitrated grid, and settle the attach gate so a disposed host can't hold the
+    // serialized replay queue until the timeout.
+    host.detachView();
+    // End targeted delivery for this window (task 440) — the subscription
+    // follows host lifetime, so dispose is its one teardown site. Same-webview
+    // invokes are processed in order (the 427 rule), so a resetTerminal
+    // dispose→recreate lands this unsubscribe(old) strictly before the fresh
+    // host's subscribe(new) — the recreated host stays subscribed.
+    void unsubscribeOutput(sessionId, WINDOW_LABEL).catch(() => {});
+    clearTimeout(gateTimer);
+    settleGate();
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
     // Flush any buffered tail bytes (and cancel the pending frame) before the term
     // goes away, so a final burst isn't dropped on teardown (#261).
@@ -925,6 +1083,9 @@ function createHost(sessionId: string): TerminalHost {
 }
 
 function ensureHost(sessionId: string): TerminalHost {
+  // The size broadcast is the ONLY thing that resizes a pooled xterm after attach
+  // (task 427), so make sure this window listens before its first host exists.
+  ensureSizeSubscription();
   let host = hosts.get(sessionId);
   if (!host) {
     host = createHost(sessionId);
@@ -935,8 +1096,10 @@ function ensureHost(sessionId: string): TerminalHost {
 
 /**
  * Show the session's terminal in `slot`, creating it on first use. Reparents the
- * single live xterm node into the slot (no dispose/recreate) and refits it to
- * the slot's size so `claude` repaints once at the right dimensions.
+ * single live xterm node into the slot (no dispose/recreate) and attaches this
+ * window's view (task 427): the slot's measured proposal goes to the backend
+ * arbiter, whose returned grid the xterm adopts — so `claude` repaints once at
+ * the arbitrated dimensions.
  *
  * Since #351 the caller (`Terminal.tsx`) only calls this once the slot has become
  * visible, so "first use" is first visibility rather than React mount.
@@ -947,6 +1110,10 @@ export function mountTerminal(sessionId: string, slot: HTMLElement): void {
   if (host.container.parentElement !== slot) {
     slot.appendChild(host.container);
   }
+  // Attach immediately (task 427) — the DOM read in the measurement forces
+  // layout, so the proposal is current; the debounced propose below refines it
+  // once layout settles. Attach is an upsert, so a re-mount is correct.
+  host.attachView();
   host.scheduleResize();
   // Land a focus request that arrived before this host existed (#351).
   if (
@@ -968,6 +1135,11 @@ export function unmountTerminal(sessionId: string, slot: HTMLElement): void {
   if (!host || host.slot !== slot) return;
   host.slot = null;
   parkingLayer().appendChild(host.container);
+  // Withdraw this window's view (task 427): an invisible terminal must never
+  // hold the arbitrated minimum down. The task-440 output subscription is
+  // deliberately NOT touched — the parked host keeps consuming live bytes so
+  // its buffer stays current (there is no re-replay on re-mount, #18/#351).
+  host.detachView();
 }
 
 /**

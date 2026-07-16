@@ -18,7 +18,6 @@ vi.mock("./ipc", () => ({
   setCanvases: vi.fn(),
   setLastVersion: vi.fn(),
   spawnTerminal: vi.fn(),
-  claudeSessionUsage: vi.fn(),
 }));
 
 import * as ipc from "./ipc";
@@ -54,7 +53,6 @@ function makeBootState(over: Partial<BootState> = {}): BootState {
     app_version: "1.0.0",
     platform: "macos",
     windows_build: 0,
-    detached_canvas_ids: [],
     ...over,
   };
 }
@@ -75,7 +73,6 @@ beforeEach(() => {
   m(ipc.setCanvases).mockResolvedValue(undefined);
   m(ipc.setLastVersion).mockResolvedValue(undefined);
   m(ipc.spawnTerminal).mockResolvedValue(undefined);
-  m(ipc.claudeSessionUsage).mockResolvedValue(null);
   m(ipc.currentBranches).mockResolvedValue({});
   m(ipc.githubWebUrls).mockResolvedValue({});
   m(ipc.diffLineCounts).mockResolvedValue({});

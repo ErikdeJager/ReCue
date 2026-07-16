@@ -1,13 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// #296: exercise the store's auto-continue wiring (`applyAutoContinue`) against a
-// mocked IPC layer so we can assert the Enter → `continue` → Enter injection. Own
-// ./ipc mock, isolated per-file by Vitest (store.test.ts's real ipc is unaffected).
+// #296/task 430: the auto-continue engine (poll, reducer, nudge) lives in Rust —
+// the store keeps only an event-fed mirror (`applyAutoContinueSync`) plus the
+// persistence paths (the setting toggles + the per-agent flag). These tests pin
+// the task-428 apply rules (equality-guarded, ZERO ipc calls) and that the
+// persistence paths still write through `saveSettings` / `setSessionAutoContinue`.
+// Own ./ipc mock, isolated per-file by Vitest (store.test.ts's real ipc is
+// unaffected).
 vi.mock("./ipc", () => ({
   writeStdin: vi.fn().mockResolvedValue(undefined),
-  claudeSessionUsage: vi.fn().mockResolvedValue(null),
   setSettings: vi.fn().mockResolvedValue(undefined),
   setSessionAutoContinue: vi.fn().mockResolvedValue(undefined),
+  setThemeBackground: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { IDLE_AUTO_CONTINUE } from "./autoContinue";
@@ -28,168 +32,71 @@ function claudeSession(id: string): SessionView {
   };
 }
 
-/** A Claude agent with the #297 per-agent auto-continue opt-out set — excluded from
- * the fire step even though the global option is on. */
-function disabledClaudeSession(id: string): SessionView {
-  return { ...claudeSession(id), autoContinueDisabled: true };
-}
-
-/** Wait until `writeStdin` has been called `n` times (the nudge has small inter-key
- * delays), or fail after a bound. Uses real timers so the sequence resolves. */
-async function waitForCalls(n: number, timeoutMs = 1_000): Promise<void> {
-  const start = Date.now();
-  while (m(ipc.writeStdin).mock.calls.length < n) {
-    if (Date.now() - start > timeoutMs) break;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
-
 beforeEach(() => {
-  m(ipc.writeStdin).mockClear();
-  useStore.getState().stopUsagePolling();
+  vi.clearAllMocks();
   useStore.setState({
     autoContinue: IDLE_AUTO_CONTINUE,
-    settings: {
-      ...DEFAULT_SETTINGS,
+    sessions: [],
+    settings: { ...DEFAULT_SETTINGS },
+  });
+});
+
+describe("applyAutoContinueSync (task 430 mirror)", () => {
+  it("mirrors the Rust engine's state into the slice", () => {
+    const state = { armed: true, resetsAtMs: 10_000, sessionIds: ["s1", "s2"] };
+    useStore.getState().applyAutoContinueSync(state);
+    expect(useStore.getState().autoContinue).toEqual(state);
+  });
+
+  it("is an equality-guarded no-op (same state reference kept)", () => {
+    const state = { armed: true, resetsAtMs: 10_000, sessionIds: ["s1"] };
+    useStore.getState().applyAutoContinueSync(state);
+    const applied = useStore.getState().autoContinue;
+    // An equal echo (a fresh but deep-equal object) must not replace the slice.
+    useStore.getState().applyAutoContinueSync({ ...state, sessionIds: ["s1"] });
+    expect(useStore.getState().autoContinue).toBe(applied);
+  });
+
+  it("never calls any ipc setter (apply-only, the task-428 rule)", () => {
+    useStore.getState().applyAutoContinueSync({
+      armed: true,
+      resetsAtMs: 5_000,
+      sessionIds: ["s1"],
+    });
+    useStore.getState().applyAutoContinueSync(IDLE_AUTO_CONTINUE);
+    expect(m(ipc.setSettings)).not.toHaveBeenCalled();
+    expect(m(ipc.setSessionAutoContinue)).not.toHaveBeenCalled();
+    expect(m(ipc.writeStdin)).not.toHaveBeenCalled();
+  });
+});
+
+describe("the persistence paths (unchanged by task 430)", () => {
+  it("toggleAutoContinue persists via saveSettings as a one-field patch", async () => {
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, autoContinueAfterLimit: false },
+    });
+    useStore.getState().toggleAutoContinue();
+    expect(useStore.getState().settings.autoContinueAfterLimit).toBe(true);
+    await vi.waitFor(() => expect(m(ipc.setSettings)).toHaveBeenCalledTimes(1));
+    // 429's shape: only the changed key travels.
+    expect(m(ipc.setSettings)).toHaveBeenCalledWith({
       autoContinueAfterLimit: true,
-      defaultAgent: "claude",
-    },
-  });
-});
-
-afterEach(() => {
-  // Clear the armed poll interval `applyAutoContinue` may have started.
-  useStore.getState().stopUsagePolling();
-});
-
-describe("applyAutoContinue (store wiring)", () => {
-  it("arms (no injection) when the limit is reached with live Claude sessions", () => {
-    useStore.setState({
-      sessions: [claudeSession("s1"), claudeSession("s2")],
-      usage: {
-        usedPercent: 100,
-        resetsAtMs: 10_000,
-        available: true,
-        buckets: [],
-      },
     });
-    useStore.getState().applyAutoContinue();
-    const ac = useStore.getState().autoContinue;
-    expect(ac.armed).toBe(true);
-    expect(ac.sessionIds).toEqual(["s1", "s2"]);
-    expect(m(ipc.writeStdin)).not.toHaveBeenCalled();
   });
 
-  it("sends Enter → continue → Enter to each fired session on reset, then disarms", async () => {
+  it("enableAutoContinueAfterLimit turns the setting on (idempotent)", async () => {
     useStore.setState({
-      sessions: [claudeSession("s1")],
-      usage: {
-        usedPercent: 5,
-        resetsAtMs: 1_000,
-        available: true,
-        buckets: [],
-      },
-      autoContinue: { armed: true, resetsAtMs: 1_000, sessionIds: ["s1"] },
+      settings: { ...DEFAULT_SETTINGS, autoContinueAfterLimit: false },
     });
-    useStore.getState().applyAutoContinue();
-    // Disarms immediately; the injection completes asynchronously.
-    expect(useStore.getState().autoContinue.armed).toBe(false);
-    await waitForCalls(3);
-    const calls = m(ipc.writeStdin).mock.calls;
-    expect(calls).toEqual([
-      ["s1", "\r"],
-      ["s1", "continue"],
-      ["s1", "\r"],
-    ]);
-  });
-
-  it("does nothing when the feature is off", () => {
-    useStore.setState({
-      settings: {
-        ...DEFAULT_SETTINGS,
-        autoContinueAfterLimit: false,
-        defaultAgent: "claude",
-      },
-      sessions: [claudeSession("s1")],
-      usage: {
-        usedPercent: 100,
-        resetsAtMs: 10_000,
-        available: true,
-        buckets: [],
-      },
+    useStore.getState().enableAutoContinueAfterLimit();
+    expect(useStore.getState().settings.autoContinueAfterLimit).toBe(true);
+    await vi.waitFor(() => expect(m(ipc.setSettings)).toHaveBeenCalledTimes(1));
+    expect(m(ipc.setSettings)).toHaveBeenCalledWith({
+      autoContinueAfterLimit: true,
     });
-    useStore.getState().applyAutoContinue();
-    expect(useStore.getState().autoContinue.armed).toBe(false);
-    expect(m(ipc.writeStdin)).not.toHaveBeenCalled();
-  });
-
-  it("does nothing when the default agent is not Claude", () => {
-    useStore.setState({
-      settings: {
-        ...DEFAULT_SETTINGS,
-        autoContinueAfterLimit: true,
-        defaultAgent: "codex",
-      },
-      sessions: [claudeSession("s1")],
-      usage: {
-        usedPercent: 100,
-        resetsAtMs: 10_000,
-        available: true,
-        buckets: [],
-      },
-    });
-    useStore.getState().applyAutoContinue();
-    expect(useStore.getState().autoContinue.armed).toBe(false);
-    expect(m(ipc.writeStdin)).not.toHaveBeenCalled();
-  });
-
-  // #297: a per-agent opt-out (`autoContinueDisabled`) excludes that one Claude agent
-  // from the fire step, while the others still get nudged.
-  it("excludes an auto-continue-disabled agent from the captured arm-set", () => {
-    useStore.setState({
-      sessions: [claudeSession("s1"), disabledClaudeSession("s2")],
-      usage: {
-        usedPercent: 100,
-        resetsAtMs: 10_000,
-        available: true,
-        buckets: [],
-      },
-    });
-    useStore.getState().applyAutoContinue();
-    const ac = useStore.getState().autoContinue;
-    expect(ac.armed).toBe(true);
-    // s2 is disabled → never captured for the nudge; only s1 is.
-    expect(ac.sessionIds).toEqual(["s1"]);
-  });
-
-  it("on reset, nudges only the enabled agent (skips the disabled one)", async () => {
-    useStore.setState({
-      sessions: [claudeSession("s1"), disabledClaudeSession("s2")],
-      usage: {
-        usedPercent: 5,
-        resetsAtMs: 1_000,
-        available: true,
-        buckets: [],
-      },
-      // Both were captured at arm time (simulating an agent disabled *after* arming);
-      // the fire step still filters s2 out because it's disabled now.
-      autoContinue: {
-        armed: true,
-        resetsAtMs: 1_000,
-        sessionIds: ["s1", "s2"],
-      },
-    });
-    useStore.getState().applyAutoContinue();
-    expect(useStore.getState().autoContinue.armed).toBe(false);
-    await waitForCalls(3);
-    const calls = m(ipc.writeStdin).mock.calls;
-    // Only s1 receives Enter → continue → Enter; s2 is never written to.
-    expect(calls).toEqual([
-      ["s1", "\r"],
-      ["s1", "continue"],
-      ["s1", "\r"],
-    ]);
-    expect(calls.some(([id]) => id === "s2")).toBe(false);
+    // Already on → no second write.
+    useStore.getState().enableAutoContinueAfterLimit();
+    expect(m(ipc.setSettings)).toHaveBeenCalledTimes(1);
   });
 
   it("setAutoContinueDisabled optimistically flips the flag + persists", () => {

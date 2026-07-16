@@ -311,6 +311,17 @@ export interface WorkingDiff {
  * "NotSeen" when absent. Persisted opaquely (the frontend owns the digest shape). */
 export type DiffSeenMap = Record<string, Record<string, string>>;
 
+/** A diff-seen **write patch** (task 429): per-repo, per-file deltas the backend
+ * merges over the persisted map under the Store mutex, so a stale window's
+ * debounced write can't drop another window's concurrent marks. A string sets that
+ * file's digest; a `null` file tombstones (deletes) the entry; a `null` repo
+ * deletes the whole repo key (the server also prunes a repo object emptied by file
+ * tombstones, so the frontend never needs the repo tombstone). */
+export type DiffSeenPatch = Record<
+  string,
+  Record<string, string | null> | null
+>;
+
 /** One commit in a folder's history (#230, mirrors `git::CommitInfo`) — the diff
  * viewer's "Commits" source list. */
 export interface CommitInfo {
@@ -345,10 +356,59 @@ export interface ExitPayload {
   code: number | null;
 }
 
+/** Payload of the `session://forgotten` event (task 431): a clean #63 exit Rust
+ * already forgot — every window drops local state; only `toast_window` toasts. */
+export interface ForgottenPayload {
+  id: string;
+  toast_window: string;
+}
+
+/** Payload of the `worktree://kept` event (task 431): the exit-driven worktree
+ * cleanup found a dirty worktree and kept it (#74) — only `toast_window` warns. */
+export interface WorktreeKeptPayload {
+  dest: string;
+  toast_window: string;
+}
+
+/** Outcome of the Rust ref-counted worktree cleanup (task 431,
+ * `cleanup_worktree_if_empty`): removed (incl. already gone — idempotent), still
+ * referenced by some item, kept because git refused the non-forced remove, or
+ * refused because the path is not an app-managed worktree (automation never
+ * deletes what ReCue didn't create). */
+export type WorktreeCleanup = "removed" | "inUse" | "keptDirty" | "notManaged";
+
 /** Payload of the `session://state` event — busy/idle (#42). */
 export interface StatePayload {
   id: string;
   busy: boolean;
+}
+
+/** Payload of the `session://size` broadcast (tasks 426/427): the authoritative,
+ * smallest-wins-arbitrated PTY grid. The ONLY thing that ever resizes a pooled
+ * xterm's grid (terminalPool applies it; nothing else calls term.resize). */
+export interface SizePayload {
+  id: string;
+  cols: number;
+  rows: number;
+}
+
+/** Return of `attach_terminal` (task 426): the effective grid the attaching host
+ * must adopt before replaying scrollback. */
+export interface GridPayload {
+  cols: number;
+  rows: number;
+}
+
+/** One transient same-file soft claim (task 435), as snapshotted by `file_claims`
+ * and broadcast (full list) on `file_claims://changed`: window `window` is the
+ * authoritative auto-save editor of `{repo_path, file}`; every other window
+ * renders that file read-only. Backend snake_case (the `SessionRecord`
+ * convention). Advisory only — never persisted, never an on-disk lock. */
+export interface FileClaim {
+  repo_path: string;
+  file: string;
+  /** The claiming window's Tauri label — opaque, matched against `WINDOW_LABEL`. */
+  window: string;
 }
 
 /** Payload of the `session://name` event (#97): claude's latest auto-title. */
@@ -541,7 +601,7 @@ export interface Settings {
   autoContinueAfterLimit: boolean;
   /** Show the five-hour Claude usage bar above the sidebar footer (#154/#326). Default
    * true. When false the bar is hidden AND ReCue never reads the Claude OAuth token —
-   * the usage IPC (`claude_session_usage`) is not invoked at all. */
+   * the Rust engine's usage poll (`autocontinue.rs poll_gate`, task 430) never runs. */
   showSessionUsage: boolean;
   /** Whether to offer the "Enable auto restart on limit reset" prompt button above the
    * usage bar when the five-hour limit is reached and auto-continue is off (#309). Default
@@ -676,6 +736,26 @@ export interface PersistedCanvases {
   activeId: string;
 }
 
+/** A `set_canvases` **write patch** (task 429): send only the field(s) the action
+ * changed — the backend merges field-wise over the persisted blob under the Store
+ * mutex (a tab switch sends `activeId` only; a layout/rename/reorder edit sends
+ * `canvases` only), so a stale window's write can't clobber the other field.
+ * `PersistedCanvases` stays the read/boot shape. */
+export interface PersistedCanvasesPatch {
+  canvases?: CanvasTab[];
+  activeId?: string;
+}
+
+/** Init presets for a full app window (task 434, mirrors `commands::AppWindowInit`).
+ * Passed to `open_app_window` and carried as URL params, so the new window's OWN
+ * store presets its local state at boot: `repo` filters its Overview to that repo;
+ * `canvas` boots it into the Canvas view on that tab (when the tab exists). Local
+ * UI only — nothing is persisted, no other window is touched. */
+export interface AppWindowInit {
+  repo?: string;
+  canvas?: string;
+}
+
 export type ToastTone = "info" | "error" | "success";
 
 export interface Toast {
@@ -792,6 +872,4 @@ export interface BootState {
   platform: string;
   /** Windows build number, `0` elsewhere (#140). */
   windows_build: number;
-  /** Canvas ids with a detached window open (#84). */
-  detached_canvas_ids: string[];
 }

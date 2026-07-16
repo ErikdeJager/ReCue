@@ -26,8 +26,12 @@
 //! intentionally opaque blobs the frontend owns (`store.rs`), so ranking here would mean parsing
 //! a schema Rust must not know about — for a few hundred ms of reordering. (Frontend lazy-mount
 //! is the right place for visibility to matter.)
+//!
+//! Since task 432 this module also owns the **boot respawn of persisted shell terminal items**
+//! (#72) — [`respawn_shell_terminals`], one idempotent Rust-owned pass next to the agent resume
+//! loop, so the frontend (any number of windows) only renders the panels.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -35,7 +39,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::ForkablePayload;
 use crate::pty::SessionManager;
-use crate::store::{PersistedSession, Store};
+use crate::store::{OverviewPanel, PersistedSession, Store};
 use crate::title::ProjectLogIndex;
 
 /// How many persisted sessions are resumed at once. Each unit of work is a process spawn
@@ -127,6 +131,64 @@ fn plan_for(agent: &str) -> RecordPlan {
         resume: spec.supports_resume,
         reads_claude_log: spec.supports_auto_name,
     }
+}
+
+/// The persisted shell-terminal panels to respawn, as sorted `(repo, panel id)` pairs.
+///
+/// Rust DELIBERATELY reads the frontend-owned `overview_panels` map here (task 432) —
+/// everywhere else the backend only round-trips it for the frontend (get/set/broadcast,
+/// `store.rs`). This is the minimum possible surface: the `kind == "terminal"` literal
+/// (#72), the panel `id`, and the repo-path map key. If the frontend ever renames the
+/// terminal kind (`addOverviewPanel` / the template `new-terminal` block in
+/// `src/store.ts`), update this filter in lockstep. Sorted so the spawn order — and the
+/// tests — are deterministic (HashMap iteration is not).
+pub(crate) fn terminal_panel_ids(
+    panels: &HashMap<String, Vec<OverviewPanel>>,
+) -> Vec<(String, String)> {
+    let mut ids: Vec<(String, String)> = panels
+        .iter()
+        .flat_map(|(repo, list)| {
+            list.iter()
+                .filter(|p| p.kind == "terminal")
+                .map(move |p| (repo.clone(), p.id.clone()))
+        })
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Respawn every persisted terminal panel that does NOT already have a registered PTY
+/// (task 432). Idempotent: an id the manager already knows — live, or exited and kept
+/// for Restart — is skipped, never killed+replaced (`spawn_with_id`'s same-id
+/// semantics), so re-running this pass (or racing a just-created panel) is harmless.
+/// Best-effort per panel (`resume_one` discipline): a missing repo dir / failed spawn
+/// skips that panel silently — the panel renders dead in the UI exactly as a failed
+/// frontend spawn did (#72). Returns the ids actually spawned (for tests).
+pub(crate) fn respawn_missing_terminals(
+    manager: &SessionManager,
+    panels: &HashMap<String, Vec<OverviewPanel>>,
+) -> Vec<String> {
+    let mut spawned = Vec::new();
+    for (repo, id) in terminal_panel_ids(panels) {
+        if manager.has_session(&id) {
+            continue;
+        }
+        if manager.spawn_terminal(id.clone(), &repo).is_ok() {
+            spawned.push(id);
+        }
+    }
+    spawned
+}
+
+/// Boot entry point: shells can't resume (#72), so respawn one fresh `$SHELL` PTY per
+/// persisted terminal panel — ONCE per app, here in Rust, next to the agent resume
+/// pass. The frontend's `applyBootState` no longer does this (task 432): with N full
+/// windows all running the same boot code, a frontend respawn would double-spawn (and
+/// thereby kill) the same panel ids. Runs even when no agent records exist
+/// (`resume_persisted_sessions` early-returns; this must not).
+pub fn respawn_shell_terminals(app: &AppHandle) {
+    let panels = app.state::<Store>().overview_panels();
+    respawn_missing_terminals(&app.state::<SessionManager>(), &panels);
 }
 
 /// How many workers to start: never more than there is work, never more than the cap.
@@ -264,6 +326,115 @@ mod tests {
             });
         }
         assert_eq!(ran.load(Ordering::SeqCst), 0);
+    }
+
+    // --- Boot respawn of shell terminal items (#72, task 432) ---
+
+    /// `OverviewPanel` fixture (the `store.rs` test-literal shape): only `id` + `kind`
+    /// matter to the respawn filter, everything else `None`.
+    fn panel(id: &str, kind: &str) -> OverviewPanel {
+        OverviewPanel {
+            id: id.into(),
+            kind: kind.into(),
+            file: None,
+            diff_source: None,
+            compare_base: None,
+            compare_target: None,
+            commit_sha: None,
+        }
+    }
+
+    #[test]
+    fn terminal_panel_ids_filters_terminal_kinds_and_sorts() {
+        let mut panels: HashMap<String, Vec<OverviewPanel>> = HashMap::new();
+        panels.insert(
+            "/repo/b".into(),
+            vec![panel("t2", "terminal"), panel("k1", "kanban")],
+        );
+        panels.insert(
+            "/repo/a".into(),
+            vec![
+                panel("d1", "diff"),
+                panel("t9", "terminal"),
+                panel("m1", "markdown"),
+                panel("t1", "terminal"),
+            ],
+        );
+
+        assert_eq!(
+            terminal_panel_ids(&panels),
+            vec![
+                ("/repo/a".to_string(), "t1".to_string()),
+                ("/repo/a".to_string(), "t9".to_string()),
+                ("/repo/b".to_string(), "t2".to_string()),
+            ],
+            "only terminal kinds, deterministic (repo, id) order"
+        );
+
+        // Empty map / a map with no terminal panels → nothing to respawn.
+        assert!(terminal_panel_ids(&HashMap::new()).is_empty());
+        let mut none: HashMap<String, Vec<OverviewPanel>> = HashMap::new();
+        none.insert(
+            "/repo/a".into(),
+            vec![panel("d1", "diff"), panel("m1", "markdown")],
+        );
+        assert!(terminal_panel_ids(&none).is_empty());
+    }
+
+    /// The pty.rs `manager()` helper pattern, replicated locally (it's `mod tests`-private
+    /// there). The receiver is kept alive so PTY event sends never error.
+    #[cfg(unix)]
+    fn manager() -> (
+        SessionManager,
+        std::sync::mpsc::Receiver<crate::pty::SessionEvent>,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (SessionManager::new(tx), rx)
+    }
+
+    /// The idempotence contract (task 432): a pre-registered id is skipped — its PTY
+    /// generation (pid) untouched — only the missing terminal id is spawned, non-terminal
+    /// kinds spawn nothing, and an immediate re-run is a no-op.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_skips_registered_ids_and_spawns_missing() {
+        let (mgr, _rx) = manager();
+        let dir = std::env::temp_dir();
+
+        mgr.spawn_terminal("kept".to_string(), &dir)
+            .expect("spawn kept");
+        let kept_pid = mgr.session_pid("kept").expect("kept pid");
+
+        let mut panels: HashMap<String, Vec<OverviewPanel>> = HashMap::new();
+        panels.insert(
+            dir.display().to_string(),
+            vec![
+                panel("kept", "terminal"),
+                panel("fresh", "terminal"),
+                panel("d1", "diff"),
+            ],
+        );
+
+        assert_eq!(
+            respawn_missing_terminals(&mgr, &panels),
+            vec!["fresh".to_string()],
+            "only the missing terminal id is spawned"
+        );
+        assert_eq!(
+            mgr.session_pid("kept"),
+            Some(kept_pid),
+            "the pre-registered generation is never killed/replaced"
+        );
+        assert!(mgr.has_session("fresh"));
+
+        // Re-running the pass immediately is a no-op (idempotent).
+        assert_eq!(
+            respawn_missing_terminals(&mgr, &panels),
+            Vec::<String>::new()
+        );
+
+        mgr.kill_session("kept").expect("kill kept");
+        mgr.kill_session("fresh").expect("kill fresh");
     }
 
     /// Capability gating (#101/#141) survives the rewrite: only claude is resumed by id and

@@ -3783,3 +3783,205 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - A2 (Canvas vs Overview): Canvas/detached-window ⌘W on an agent leaf stays "close the panel only" (removeLeaf; agent survives in the pool/Overview), matching the Canvas header ×. Only Overview ⌘W kills+forgets, matching Overview's × semantics.
 - A3 (scope completion): extended the Overview fix to also close a selected SCHEDULE (cancelSchedule) and RECURRING (cancelRecurring), not just agents — closing the whole "only non-agent panels are closed" gap and matching each card's × exactly.
 - A4 (focus advance): Overview ⌘W does NOT advance selection to a neighbor after removal — matching the existing non-agent Overview close; neighbor-advance stays Canvas-only. After removal selectedId clears/goes stale, so a repeat ⌘W is a safe no-op.
+
+## Task 426
+
+- Purge-on-Destroyed is wired through the existing `.run()` closure's `RunEvent::WindowEvent { label, event: Destroyed }` (one seam, fires for every window kind incl. future app windows) rather than a per-window `on_window_event` like open_canvas_window's re-dock handler; `try_state` guards teardown ordering.
+- `propose_terminal_size` for a never-attached (or already-purged) `(id, window_label)` view is a no-op — NOT an implicit attach — so a late ResizeObserver racing a window close can't resurrect a zombie view that would clamp the PTY forever.
+- Attach is an upsert (re-attach replaces the view's desired size); detach of an unknown view is a no-op; detaching a session's last view drops its registry entries and neither resizes nor emits (the PTY keeps its last size).
+- `session://size` is emitted whenever the effective grid changed, plus ALWAYS on attach (even unchanged, per the card); detach/propose/purge emit only on change.
+- cols/rows are clamped to >=1 on the way into the registry (a 0-dimension PtySize would wedge the component-wise min).
+- "Call master.resize only when it changed" compares against a registry-tracked last-APPLIED effective size (not the PTY's actual size); the legacy resize_pty passthrough can therefore go stale vs the registry — accepted transitional state documented in-module, resolved by later epic cards.
+- Resize + broadcast run while holding the registry mutex (serializes arbitration, the same out-of-order argument as resize_pty's #353 sync rationale); safe since pty.rs never calls into terminal_views (lock-order rule documented).
+- The three new commands are synchronous and infallible (poison-recovering lock, best-effort resize swallowing SessionNotFound/Io); window_label is an explicit param (per the card), not derived from the invoking Window.
+- New seams in pty.rs limited to the SessionEvent::Size variant + a best-effort pub SessionManager::broadcast_size; registry entries for killed/exited sessions are left inert (no kill_session cleanup — out of scope for card 1).
+- No capabilities/default.json change (Tauri 2 custom commands aren't ACL-gated); no version bump / patch notes in this PR.
+
+## Task 427
+
+- "On mount" = attach on EVERY mountTerminal (backend upsert; a re-mount into a different slot re-measures); grid-before-replay is enforced by a per-host attach gate the replay job awaits, with a 1s safety timeout because replayQueue starts jobs synchronously on enqueue (before the slot is assigned) and a slotless resetTerminal host never attaches — MAX_CONCURRENT_REPLAYS=1 must never wedge.
+- Attach's desired size = the same measured proposal the propose path sends (fit proposeDimensions + #262 shave), falling back to the current term.cols/rows when unmeasurable; the RETURNED effective grid is applied via term.resize (not the broadcast) to guarantee ordering.
+- Removed the now-unused resizePty wrapper from src/ipc.ts entirely (single caller was the pool); the Rust resize_pty command stays untouched per PLAN-426.
+- WebGL gate revisit = a new IS_DETACHED_CANVAS_WINDOW constant in windowContext.ts replacing IS_MAIN_WINDOW at the three #105 sites — byte-identical behavior today (only main + canvas-* windows exist), future full app windows (9/16) get WebGL; detached canvas windows keep the DOM renderer and the #364 per-window latch is untouched.
+- If a measurable resize tick fires while the view isn't attached (failed/raced attach), applyResize re-attaches instead of proposing, since the 426 backend drops proposals for never-attached views (self-heal).
+- session://size is consumed by a lazy once-per-document pool-level listener (registered from ensureHost, never unsubscribed — the parkingLayer precedent), never store state.
+- Letterboxing = flex centering on the existing .terminal container + flex:0 0 auto on :global(.xterm); bands are the existing --terminal-bg-user/--terminal-bg wrapper token (no new tokens); the scrollbar-hugs-grid cosmetic nuance is a flagged smoke check with a fallback.
+- trimmable=false (the #351 pending-buffer cap release) moves to after the attach gate so the cap stays in force until the scrollback fetch is actually dispatched.
+- Fire-and-forget attach/detach ordering relies on Tauri's per-webview invoke FIFO + the synchronous (#353) backend commands; documented in-code as an accepted assumption.
+
+## Task 428
+
+- Broadcasts are emitted from the commands.rs command layer after a successful persist (never on Err), not from store.rs itself — store.rs stays Tauri-free like SessionManager; this is where broadcast_schedules already lives, so "Rust setters" is read as the setter commands.
+- Event names are snake_case per slice (settings://changed, recents://changed, diff_seen://changed, repo_order://changed, repo_colors://changed, overview_panels://changed, overview_order://changed, sidebar_width://changed, sidebar_collapsed://changed, canvas_templates://changed, sessions://changed); each payload is the full slice value exactly as its getter command returns it.
+- sessions://changed is emitted from the interactive roster mutations only (spawn_session, spawn_worktree_agent, spawn_worktree_agent_new_branch, fork_session, kill_session when a record existed, rename_session, cancel_recurring's child removal) — deliberately NOT from the schedule/recurring fire paths, whose dedicated schedule://fired / recurring://fired events already carry the record and where a roster emit would race the #300 recurring current_session_id rotation (unowned-child flash).
+- recents://changed is emitted from every persisted recents mutation, including clone_repo and the schedule/recurring fire paths' touch_recent (broader than the frontend-facing add/remove/clear commands).
+- applySessionsSync reconciles instead of replacing: removals via dropSession, additions via upsertSession (arming attention grace like any spawn), field merges from the record while preserving the view-only live fields reconnecting + exitedCode; backed by a pure exported diffSessionRoster helper for tests.
+- applySettingsSync runs mergeSettings + applySettingsEffects (live reskin in other windows) but leaves saveSettings-only side effects (setThemeBackground push, usage-poll start/stop) to the saving window; the poll toggle is single-main-window today and revisitable in card 9/16.
+- Per-session flags set_session_auto_continue / set_session_watch and the legacy/machine-local scalars (set_open_files, set_canvas_layout, set_last_version, path cache) do NOT broadcast — the card enumerates its slices and add/remove/rename explicitly.
+- Cross-window write conflicts stay last-write-wins per whole slice (the existing canvas/schedule semantics); stale debounced persists (sidebar drag, diff-seen) may briefly override a foreign change and self-heal on the next broadcast — accepted, documented.
+- No lib.rs changes at all (AppHandle params need no re-registration; no new commands or SessionEvent variants), minimizing the collision surface with Task 426.
+- No new Rust unit tests for the emit glue (needs a live AppHandle; the untested broadcast_schedules precedent) — correctness is pinned by the new frontend unit tests (equality guards, zero-persist spies, roster diff) plus manual two-window smoke.
+
+## Task 429
+
+- The card's "commands.rs ~1452-1464" had drifted (Task 426 landed); the actual set_canvases label branch is at ~1517-1548 — plan cites the real location.
+- Kept the existing command names + arg keys (set_settings/set_diff_seen/set_canvases) with new merge semantics instead of adding patch_* commands, so no lib.rs/generate_handler/capability changes (minimizes conflict with Task 428, which reshapes the same setters).
+- Merges execute inside a single mutex-held Store closure (new update_with helper returning the merged slice), not as read-then-write in commands.rs — "under the Store mutex" taken literally to close the two-lock interleave race.
+- Settings merge is shallow top-level; patch values are written verbatim (explicit null is a value — preferredEditor — never a delete; nested objects like keybinds travel/replace whole); non-object patches are defensive no-ops.
+- Settings patch is diffed against the Settings modal's draft-seeding snapshot (new optional baseline arg on saveSettings), so two simultaneously-open modals saving different fields don't clobber; local apply is patch-over-current, mirroring the server merge so the 428 echo is a no-op.
+- A patch-only persisted settings blob may lack never-changed keys — judged safe: mergeSettings fills TS defaults and the Rust boot readers (early_settings/linux_gtk/containerImage) already fail open to defaults.
+- diff_seen merge is two-level with null tombstones ({repo:{file:null}} deletes an entry, {repo:null} a repo, emptied repos pruned); frontend accumulates deltas in a module-level pending patch flushed by the existing 300ms debounce.
+- set_canvases becomes a field-wise patch ({canvases?, activeId?}); each call site sends only what it changed (selectCanvas sends activeId-only); the unused window: Window param is dropped; a stored activeId naming no tab re-homes to the first tab; the canvases array itself stays whole-array last-write-wins (per-tab merging out of scope).
+- Task 428's broadcast helpers are kept as the post-merge emitters (they re-read the store, so they carry the merged value); plan tells the implementer to re-verify 428's landed shape in the worktree before wiring.
+
+## Task 430
+
+- Rust owns the ONE app-wide usage poll: the frontend 180s/45s timers are deleted and the `usage` slice becomes an event-fed mirror (`usage://changed` + a boot `auto_continue_snapshot` getter). Two independent pollers (Rust engine + UsageBar) would double requests against an endpoint that aggressively 429s below 180s, and the frontend's IS_MAIN_WINDOW poll gate is itself broken by N full windows.
+- Preserved today's implicit coupling: `showSessionUsage` off ⇒ no fetch ⇒ auto-continue never arms (the #326 no-poll-no-token privacy gate outranks the feature), plus the isClaudeActive all-sessions-claude fetch gate — both ported to a pure Rust `poll_gate`.
+- No UI reads the armed machine state today; kept the store `autoContinue` slice anyway as a read-only mirror fed by `autocontinue://changed` (the card's "emit state events"), for parity/observability and future UI.
+- Rust "live Claude session" = persisted claude record with a currently-running PTY (new `SessionManager::live_session_ids()`, map entry not reaped) — slightly stricter than the frontend's `exitedCode === undefined`, which also counted still-reconnecting boot records; nudging is best-effort either way.
+- Ported `parseResetsAt` to Rust as a hand-rolled RFC3339-subset + numeric-epoch parser (honoring usage.rs's deliberate no-date-crate stance); JS keeps its own copy for countdown display.
+- Engine cadence: a 5s wake tick (`recv_timeout` on a poke channel, the SCHEDULE_POLL_SECS precedent) with fetches only when due (180s/45s armed, immediate on first run or the poll gate turning on); `set_settings` pokes the engine post-persist so settings toggles react ~immediately, matching today's on-save behavior. The reducer runs every wake against the cached snapshot (safe: firing needs a fresh <90% reading).
+- Removed the now-caller-less `claude_session_usage` command + ipc wrapper (replaced by `auto_continue_snapshot`); Rust dead code would otherwise trip clippy.
+- Every window (incl. detached canvas) now mirrors the usage slice via events — no visible change (detached windows render no UsageBar) and correct for the epic's full windows.
+- Nudge byte sequence and 120ms gaps kept identical (Enter, "continue", Enter via write_stdin); it runs inline on the engine thread, best-effort per session.
+- The full arm→reset→nudge path is not CI-testable (needs a real five-hour limit event) — flagged for interactive verification in the PR, the #296 precedent; the sequence is isolated in one Rust spot for real-CLI adjustment.
+
+## Task 431
+
+- Contrary to the card's premise, today's frontend clean-exit path (forgetExitedSession) does NOT run the ref-counted worktree cleanup (only Remove/panel-close/cancel paths do); per the card's explicit directive the Rust forget path adds it, so a cleanly-exited last worktree agent now removes its clean worktree (dirty → kept + warned) — a small deliberate behavior improvement matching "#63: forgotten like Remove".
+- Worktree ref-count/removal is centralized as ONE serialized Rust command (cleanup_worktree_if_empty: ported worktree_has_items check against persisted Store state + non-forced remove under a dedicated mutex); the existing frontend call sites (removeSession, panel close, cancelSchedule/Recurring, etc.) delegate to it rather than each moving wholesale into Rust; the forced remove_worktree (forgetRepo) stays as-is.
+- "Intentional kill" moves to Rust as an ExitState.intentional AtomicBool set by SessionManager::kill_session before any signal (the #354 silent pattern), carried on the internal SessionEvent::Exited — covering Remove/forget/rotation/cancel kills so a SIGHUP-trapping agent exiting 0 is never misread as clean; the session://exited wire payload is unchanged, and the frontend's own intentionalKills set stays for its unchanged non-clean paths.
+- The #63 boot-window guard's Rust equivalent is a managed BootWindow flag: true iff persisted records exist at setup, cleared 4s (a RECONNECT_BACKSTOP_MS mirror) after the boot resume pass returns — semantics-identical (code-0 during boot keeps record + overlay); exact wall-clock equality with each window's frontend timer is impossible cross-process.
+- On a consumed clean exit Rust does NOT emit session://exited at all (sessions://changed + the new session://forgotten replace it), so no window ever flashes a transient exit overlay for a clean exit (previously detached windows briefly did).
+- Single-toast targeting: Rust picks the first focused webview window's label (fallback "main", then any label) and carries it in the payload; each window toasts only when it matches its WINDOW_LABEL; a targeted window closing mid-flight loses the toast rather than duplicating it (accepted).
+- Recurring-owned children (current_session_id match) are excluded from the Rust clean-exit path — their exits still emit session://exited and the frontend's owningRec rotation branch handles them exactly as today.
+- The exit-driven "Worktree kept — it has uncommitted changes" warning surfaces via a small worktree://kept event with the same toast targeting; frontend command call sites keep toasting locally from the command's returned outcome.
+- The non-clean "Session exited (code N)" toast stays main-window-gated as today (de-duplicating it across N full windows belongs to later epic cards); this card touches only the clean-exit branch of onExited.
+- Dependency is Task 430 only (per the card's sequencing note); Tasks 426–428 are landed, and the plan tells the implementer to re-verify 429/430's landed shapes in the build worktree before wiring.
+
+## Task 432
+
+- The card calls overview_panels "otherwise-opaque", but it is already a typed Rust struct (store.rs OverviewPanel with a `kind` field) — no new parsing is needed; "minimal parse" = filter kind=="terminal" in one place, and the deliberate-read flag comment is still added at that one consumer site.
+- Idempotence guard = skip any panel id already REGISTERED in the PTY registry (present at all — live OR exited-but-kept), implemented ONLY in the boot respawn loop, NOT in the spawn_terminal command: restartTerminal legitimately respawns a same-id exited terminal via spawn_with_id's kill+replace semantics, so a command-level skip would break Restart.
+- The respawn runs on the existing lib.rs boot resume thread, after the dev-container reap and BEFORE resume_persisted_sessions (which early-returns on zero agent records and so cannot host it) — keeping shells available as early as the frontend previously made them, and leaving Task 431's planned post-resume boot-window tail undisturbed.
+- Spawn failures stay silent best-effort per panel (parity with the deleted .catch(() => {}) and boot.rs resume_one's let _ = discipline) — no new toasts or events.
+- The existing store.refresh.test.ts test "respawns each persisted terminal panel's shell (#72)" is inverted to assert zero boot-time ipc.spawnTerminal calls (panel still lands in overviewPanels).
+- Accepted edge: shells now spawn before any webview subscribes, so a shell that dies instantly (broken $SHELL) emits session://exited into the void and shows no exited overlay — rare, degrades to a dead-looking panel; scrollback still replays via replayDedupe.
+- Task 429 landed mid-planning (PR #191 merged into backend-decouple while exploring); plan anchors were re-verified post-429 but all line numbers are marked indicative — the implementer re-locates by content and re-verifies 430/431's landed shapes in the build worktree.
+- No CLAUDE.md / patch-notes / version changes (pipeline convention); only the directly-touched Rust doc comments are updated.
+
+## Task 433
+
+- "Full app window" (primary-eligible) = any window whose label does not start with "canvas-"; detached canvas windows (#84) are never primary. When only canvas windows survive (main closed), primary is null and NO window runs the once-per-app effects — matching today's IS_MAIN_WINDOW outcome.
+- Election is oldest-surviving by creation order; a live window is never demoted, so takeover is monotonic (fires at most once per window lifetime).
+- Pre-sync frontend default: the "main"-labelled window assumes primary (preserves today's semantics outside Tauri / in vitest / pre-snapshot); flagged in-code that card 9/16's secondary full windows must default to null instead.
+- Read the card's "everything currently keyed on IS_MAIN_WINDOW that must run once per APP" as covering effects beyond its explicit list: also re-gated the watched-agent native notification (#336), the schedule://error and recurring://error toasts, the recurring://fired recents-prepend, and the container://building toast — same double-fire hazard class.
+- The onExited handler's IS_MAIN_WINDOW branches (incl. the non-clean "Session exited" toast) are deliberately untouched — Task 431 owns exit reshaping and defers N-window exit-toast dedup to later epic cards; likewise 431's focused-window toast_target stays a separate mechanism.
+- Reconciled the card's "startUsagePolling" item against PLAN-430: the frontend poll is deleted there (Rust owns the one poll; the usage slice is an event-fed mirror seeded per-window), so nothing usage-related is re-gated or re-armed; implementer re-verifies in the worktree.
+- Live takeover (armPrimaryEffects) re-arms only the folder-color auto-assign subscription and re-runs checkForUpdate (per-window update slice); boot one-shots (onboarding, pruneMissingFolders, migration persists, updated-toast/setLastVersion) are NOT re-run on takeover.
+- setView(defaultView), the sidebar-collapse/repo-order persists of locally-initiated actions, and all canvas-window self-management stay on their existing per-window gates, per the card's per-window list.
+- open_canvas_window also routes through primary::register_window (a documented no-op for ineligible canvas labels) so every window-creation site inherits the registration seam for 9/16.
+- Event/command naming follows the landed 428/430 conventions: window://primary carries the full value { primary: string|null }, emitted on change only, state written before emit, with a primary_window snapshot command fetched after subscribing.
+
+## Task 435
+
+- Mapped the card's dependency line: "Multi-window 8/16" → Task 433; "Multi-window 3/16" is Task 428 (already landed) so it drops off the Dependencies line.
+- Claim lifetime refined from the card's "cleared on blur/close" to "actively editing OR unsaved edits pending": claim on focus OR dirty, release once blurred+clean (auto-mode blur-flush settling; manual-mode #162 dirty buffer keeps the claim past blur until Save settles) — needed because Kanban drag mutations dirty the buffer without ever focusing an editor.
+- Backend claim is an unconditional last-claim-wins set (take-over is the same claim_file command); release is holder-label-guarded; purge on window Destroyed. No per-panel refcounting: two same-window panels on one file share the label and may leave a microsecond unclaimed gap on one's release — accepted as soft-claim semantics.
+- On losing the claim (take-over) while dirty, the loser cancels its debounce and flushes ONCE in auto mode (rather than silently dropping ≤600ms of typing); a manual-mode dirty buffer is kept in memory with Save disabled. Any overlap is the card's documented last-writer-wins fallback.
+- Claims keyed by exact {repoPath, file} strings joined with NUL (no path normalization) — panels replicate across windows from shared persisted blobs, so spellings match; keys are never parsed as paths (Windows-safe).
+- Broadcast is a dedicated file_claims://changed event carrying the full Vec<FileClaim> + a file_claims snapshot command (subscribe-then-fetch), NOT a twelfth StateSyncHandlers entry — that interface documents persisted slices and claims are transient (the canvas://windows precedent).
+- Kanban read-only = banner + panel-level mutation gates + a readOnly prop threaded through BoardColumn/SortableCard (hide add/edit/delete/rename affordances, disable drag sensors) + readOnly Raw textarea; the hot-reload poll keeps running so the locked view live-follows the other window's saves.
+- Read-only affordance is a new shared ClaimBanner component (modeled on DetachedNote) used by both FileViewer and KanbanPanel; setText/save are also hard-gated inside the hook as defense in depth.
+- No hook-rendering tests (vitest is environment:"node"); the card's "claim-state helpers pure + unit-tested" is satisfied by the pure claimIntent/heldElsewhere/claimKey/claimsToMap battery plus the Rust ClaimRegistry tests.
+
+## Task 434
+
+- IS_MAIN_WINDOW is DELETED (not redefined): IS_FULL_APP_WINDOW (= !IS_DETACHED_CANVAS_WINDOW) replaces it everywhere, making the ~25-site consumer audit compile-enforced; the swaps are exact complements so today's two window kinds stay byte-identical.
+- ownedHere is widened so the default "main" owner means "every full app window" — main and app-* windows MIRROR the same PTY via the landed 426/427 attach/smallest-wins machinery (without this an app window would render only DetachedNotes, making the card pointless); canvas-owned sessions stay exclusive to their detached window until 11/16 deletes the layer.
+- ?canvas= on a ?win= URL is a soft LOCAL init preset (applied only when the tab exists, falls back to the persisted active tab), not a detached-window identity; ?win= takes precedence; empty param values read as absent; resolveCanvases is reworked to (persisted, legacy, pinCanvasId, presetCanvasId) dropping the isMainWindow boolean.
+- open_app_window takes a serde AppWindowInit { repo, canvas } struct and returns the new window's uuid (for 10/16+ focus/open); geometry mirrors the tauri.conf.json main window (1280x832, min 880x600), title "ReCue".
+- No per-window Destroyed handler is added: the card's "Destroyed handler" requirement is satisfied by the existing GLOBAL RunEvent Destroyed arm (426's purge_window + 433's primary unregister_window) — verified label-generic; the plan tells the implementer to verify both are present in the worktree.
+- No UI entry point ships in this card (10/16 owns them); ipc wrappers openAppWindow/focusAppWindow ship documented but un-triggered; manual smoke uses a temporary uncommitted trigger, flagged for interactive verification in the PR.
+- Query values are percent-encoded byte-exact in Rust (space->%20 never '+', '+'->%2B) so URLSearchParams round-trips Windows paths; pure encode/url helpers are unit-tested on both sides.
+- Last-window-quit needs NO code: Tauri's default all-windows-destroyed exit + the existing RunEvent::Exit kill_all already implement "closing non-last just closes, closing last quits" — verified by reading, pinned as an acceptance criterion only.
+- Accepted deferred rough edges (documented, per 433's precedent): non-clean exit toasts may appear in each full window; the persisted canvases activeId boot hint is last-write-wins across full windows (live active tab stays window-local); sidebar collapse/width converge via 428 broadcasts (the card's window-local list — view/selection/tab/filter — is treated as exhaustive).
+- Plan is written against the current tree plus PLAN-430..433 interfaces; step 0 instructs re-verifying every landed shape (primary.rs seam names, store.ts anchors) in the build worktree since 430-433 land first.
+
+## Task 438
+
+- Menu copy is "Open in new window" (matches the existing CanvasTabs pop-out phrase; platform-neutral), with tooltip "Open a new window showing only this folder".
+- Placement: FIRST item of the non-destructive utilities block (after the Views separator, before Reveal/Open in editor/Copy path), per the card's "sits with Reveal / Copy path".
+- The item is always shown — no git/branch gating — since the filter is path-based and works for non-git folders too.
+- Worktree-parent semantics need no new code: the repo menu's `menu.repo` is already the top-level group path (the worktree parent), and 434's preset mode "all" + existing `sessionInFilter` include worktree agents; scoped the item to the repo menu only (NOT the worktree header menu — a worktree folder isn't a "repo" group).
+- No dedupe/focus-existing: every click opens a fresh window (presets are untracked local init state); the returned window id is unused.
+- Failure handling: `.catch` → error toast ("Could not open a new window") — unlike the bare `void revealPath` siblings, because the wrapper's rejection would otherwise be unhandled.
+- The item automatically appears in the collapsed rail's folder-icon menu too (same shared menu, #168) — treated as desired, not suppressed.
+- No new tests: no new pure logic (worktree filter semantics already covered by paths.test.ts; no Sidebar render-test harness exists), full suite run for drift.
+
+## Task 436
+
+- Default chord for the rebindable "New window" action is `mod+alt+n` (⌘⌥N / Ctrl+Alt+N): ⌘N/⌘⇧N are taken, it stays in the N-family, is free against every default and every platform's reserved set, and follows the shipped ⌘⌥1–6 mod+alt precedent; the AltGr-layout collision (e.g. Polish ń) is accepted as the same class as those shipped chords, mitigated by rebind/unbind, and noted in-code + in the Windows trajectory log.
+- The macOS File → New Window menu item carries NO accelerator: an AppKit key-equivalent preempts the webview and cannot track a rebind (the module's own ⌘W lesson), so the webview keybind dispatcher exclusively owns the chord; the menu item is placed at the top of the File submenu with a separator, best-effort (missing File submenu → skip).
+- The keybind dispatch case is unconditional (no window/modal guard, "swallow"): non-destructive and meaningful from main, app-*, and detached canvas windows — useKeyboardNav mounts in all three.
+- Reopen semantics: tao returns has_visible_windows from applicationShouldHandleReopen, so with visible windows AppKit's default (bring forward) runs and the handler does nothing; with none visible it restores an EXISTING window (show+unminimize+set_focus; pure chooser: main > first app-* > any, sorted) and only opens a fresh window when zero windows exist (unreachable today since last-window close quits — future-proofing, documented).
+- The single-instance callback ignores argv/cwd (ReCue has no CLI-open semantics) and always opens ONE new full window via open_app_window, wrapped in run_on_main_thread (uniform main-thread window creation per OS + can't race Store management in setup).
+- Dev and release share the com.recue.app single-instance identity, so `tauri dev` beside a live ReCue now pokes it and exits — accepted as strictly better than today's sessions.json fight and consistent with the existing no-dev-beside-live rule; documented in-code rather than split with a dev-only identifier.
+- menu.rs `install` is de-generified to the concrete default runtime so its menu-event closure can call the concrete `#[tauri::command]` open_app_window; the only call site already passes the concrete App.
+- reopen_focus_target lives in commands.rs gated `#[cfg(any(target_os = "macos", test))]` (the explorer_select_arg precedent) so non-mac hosts type-check and unit-test it.
+- No capability change: tauri-plugin-single-instance exposes no JS commands; no npm package is added.
+- Dependency listed as Task 434 only (the card's "Depends on: Multi-window 9/16"); the 433→430/432 chain arrives transitively via 434.
+
+## Task 437
+
+- "Sessions VISIBLE in this window" = the reconcile keep-set becomes every live session/panel/canvas PTY id un-filtered by ownership; boundedness comes from the #351 lazy visibility gate (creation), never from disposal-on-scroll-out (which would break the #18 invariant).
+- The `?canvas=` compat URL parses as kind "app" but KEEPS the real `canvas-<id>` Tauri label (WindowKind loses "canvas"), so the task-426 per-label view purge and 427 attach stay correct; such a window is never primary-eligible (433's predicate) — acceptable for a one-release dead route, delete next release.
+- Deleted the now-degenerate IS_FULL_APP_WINDOW / IS_DETACHED_CANVAS_WINDOW constants too (not just the card's explicit list) and simplified every gate — compile-enforced audit, byte-identical single-window behavior; primary.rs's is_full_window predicate is deliberately left as-is (out of scope).
+- sessionIdsInLayout is NOT deleted — only its ownership consumer computeSessionOwners is; the helper stays as the reconcile keep-alive for template terminals (#118), with its doc reworded.
+- popOutCanvas always opens a NEW window (no focus-if-already-open dedupe, unlike old open_canvas_window) — matches "two windows on the same canvas is fine"; the originating window keeps the tab active/usable with no marker.
+- Dropped "canvas-*" from capabilities/default.json windows: nothing can create a canvas-labelled window post-upgrade (commands deleted; windows never restored across relaunch).
+- Also removed the three IS_DETACHED_CANVAS_WINDOW DOM-renderer gates in terminalPool (#105) — app windows get WebGL per rendererDecision + the #364 latch — and the activeCanvasDetached field from wavePresets' waveCovered; both are dead once canvas windows are gone.
+- bundle-report.mjs loses its "detached canvas window" ROUTES entry (the chunk no longer exists); budgets unchanged.
+- Tmux-style input interleaving is documented in the windowContext module doc, the MainApp reconcile comment, TRAJECTORY_TO_WINDOWS/LINUX smoke items, and the PR body — not in CLAUDE.md (following PLAN-434's no-CLAUDE.md-edits precedent).
+- Boot's resolveCanvases drops the pin parameter entirely; the ?canvas= compat maps to the soft INIT_CANVAS_ID preset (stale id → persisted active tab), satisfying "no persisted state format changes".
+- PLAN-435 (may land either side) contains no literal DetachedNote reference today, but the epic flags its banner as modeled on it — recorded as a reconcile-on-second-landing risk in the plan.
+
+## Task 439
+
+- This card deliberately reverses the #84 "detached windows are per-session, not restored on relaunch" precedent: full app windows (main + app-*) now persist and restore across relaunch (canvas-* windows no longer exist after Task 437 and are never restored).
+- The per-window "repo-focus preset and pinned canvas" are captured at window-creation time from Task 434's AppWindowInit (whose doc says "Grows in card 13/16") — NOT the live Overview filter / active tab; a window opened plain then filtered restores plain, and no frontend→Rust state reporting is added (the card's Rust-window-event-handlers phrasing implies Rust-side capture).
+- Persisted geometry is outer position + INNER (client-area) size in physical px — the exact pair tao's Moved/Resized events report and tauri's set_position/set_size accept — deviating from the card's literal "outer bounds" so a save→restore cycle never accretes the title-bar height.
+- The main window's saved bounds are restored too (applied to the config-created hidden window before reveal); the card's "recreate each saved extra window" covers creation only, but geometry restore naturally includes main.
+- Restored app-* windows mint fresh uuids/labels (labels are not preserved across relaunch — nothing consumes a stable label).
+- "Saved debounced on open/close/move/resize" is refined to: move/resize debounced (500ms), open/close/exit flushed promptly (singular events; a prune lost to an unflushed debounce would restore a closed window).
+- Quit-vs-close disambiguation: RunEvent::ExitRequested sets an exiting flag + synchronously flushes the at-quit set (the Cmd+Q path); a Destroyed that would empty the set (last-window-close exit, where ExitRequested fires only after teardown) keeps the entry, flushes, and sets the flag — so quitting never prunes, single closes always do.
+- The defensive restore cap is main + 8 extras (MAX_RESTORED_EXTRAS = 8, an arbitrary generous bound); unknown/duplicate labels and degenerate (sub-200px / zero) saved sizes are dropped to default placement.
+- Maximized/fullscreen state is NOT persisted (a maximized window restores as a normal frame at the maximized geometry) — v1 simplification, documented in-code.
+- Wayland degrade accepted: compositors refuse client positioning (set_position no-op, Moved not delivered), so restore is size-only with default placement there — documented + trajectory-logged, not a defect.
+- The window_state store key is backend-internal (the path_cache precedent): no get/set Tauri command and zero frontend changes — restore rides 434/437's existing ?win= route, presets, #348 reveal machinery, and the ["main", "app-*"] capability.
+- No "restore windows" settings toggle is added (always on) — the card asks for none.
+- Windows minimize sentinels (Resized 0x0, Moved -32000/-32000) are ignored in the pure state machine so a minimized-at-quit window restores at its real geometry.
+
+## Task 440
+
+- "Holding at least one attached view" is refined to "holding a live pooled host": task 427's landed unmountTerminal DETACHES on park while the parked xterm keeps consuming output with no later re-replay (#18/#351 replay-once), so keying delivery on attached views would leave permanent gaps in parked buffers on every view switch. The registry therefore gains a separate output-subscriber dimension registered at host creation and dropped only at host dispose / window purge; attach also upserts it as a self-heal.
+- Verified against tauri 2.11.3 sources: a default-target JS listen() (target Any) BYPASSES emit_filter (match_any_or_filter in event/listener.rs), so the session://output and session://size listeners must be re-registered label-scoped ({ target: WINDOW_LABEL }); scoped listeners still receive plain global emits, so there is no transition hazard and the other four session listens stay default.
+- Loss-free back-fill is guaranteed by gating the scrollback fetch on the subscribe ACK (the replay job awaits it after the existing attachGate): the reader pushes to Scrollback before emitting, so pre-registration bytes are always inside a post-ack snapshot; post-registration bytes arrive live; dedupeAgainstScrollback drops the offset overlap. Never-mounted (#351) sessions have zero subscribers, so the backend skips the base64 encode AND the emit entirely — also a single-window boot win.
+- session://size is targeted to the same subscriber set; the attach-time size case is already covered by attach_terminal's direct grid return (426/427), so targeting the broadcast cannot strand an attaching host, and parked hosts (still subscribers) keep tracking grid changes as today.
+- Lifecycle events (exited/state/name/forkable), the 428 sessions://changed roster, and all other broadcasts stay app-global per the card.
+- "note the measured effect for Linux in-code" interpreted as: an in-code #346-style comment in lib.rs quantifying the effect (one evaluate-JS per window per emit -> subscriber windows only; zero-subscriber sessions skip encode+emit), with the real-box numeric measurement logged as a TRAJECTORY_TO_LINUX.md item (the established can't-unit-test pattern).
+- New commands named subscribe_session_output / unsubscribe_session_output to avoid the #336 "watch" vocabulary collision (set_session_watch exists).
+- Dependency line "Multi-window 11/16" mapped to Task 437 per the epic; plan is content-anchored with a mandatory step-0 re-verify since tasks 430-437 land before this card and 437 rewrites parts of terminalPool.ts / ipc.ts / lib.rs.
+
+## Task 441
+
+- Both trajectory files contain COMMITTED merge-conflict markers (TRAJECTORY_TO_WINDOWS.md ~1184-1231, TRAJECTORY_TO_LINUX.md ~1688-1728, dev-container vs Open-in-editor entries); since this card edits those files, resolving them (keep both content blocks, delete the six marker lines) is included in scope as an incidental repair.
+- Docs must describe the AS-LANDED code, not the plans: PLAN-430..440 are deleted at build time, so the plan directs the implementer to build the fact base from TASK_ARCHIVE.md 426-440 + worktree greps, with "code wins" on any plan/landing divergence (divergences PR-flagged, never code-patched from this docs card).
+- Historical (#N) provenance citations stay (e.g. "reverses the #84 rule"); only text presenting deleted behavior as current is rewritten. Allowed-exception classes (CanvasWindow only in deleted-machinery text, ?canvas= only as one-release compat) are pinned in the acceptance criteria.
+- CLAUDE.md's Tasks section (including the stale "next is #311" line) is out of scope — board machinery, not multi-window; TASK_ARCHIVE.md is the numbering source of truth.
+- Trajectory dedupe policy: per-card real-box entries that tasks 434-440's implementers already appended stay as-is; the new consolidated epic matrix cross-references them instead of duplicating.
+- No macOS trajectory file exists, so macOS-only items (Dock Reopen, File -> New Window, Cmd+Q ExitRequested ordering) stay PR-flagged per the #84/#105 precedent, noted in each matrix intro.
+- The #356 bundle figures in CLAUDE.md are refreshed from an actual `npm run bundle:report` run in the worktree (single route post-437) rather than left stale; the 770 kB detached-canvas figure is dropped.
+- docs/macos-permissions.md and docs/linux-packaging.md are untouched — the card names only CLAUDE.md and the two trajectory logs.
+- Task 430 and 431 landed during/before this planning pass (archive entries exist), so the epic context's "planned" status for them was already stale; the plan treats all of 426-431 as landed and 432-440 as landing before build.
