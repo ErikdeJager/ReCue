@@ -20,6 +20,7 @@ import type {
   CanvasTemplate,
   CommitInfo,
   ContainerBuildingPayload,
+  CwdPayload,
   DiffLineCounts,
   DiffSeenMap,
   DiffSeenPatch,
@@ -41,6 +42,7 @@ import type {
   RecurringFiredPayload,
   RecurringSession,
   RendererReport,
+  RepoWorktree,
   ScheduledSession,
   ScheduleErrorPayload,
   ScheduleFiredPayload,
@@ -109,13 +111,16 @@ export async function saveFileDialog(
 /** Spawn a new `claude` session in `cwd`. An optional `prompt` pre-seeds it
  * (positional, like a scheduled session #93) — used by Canvas template `new-agent`
  * blocks (#118). `container` opts the session into a docker dev-container (the
- * modal toggle); omitted/false ⇒ a plain host PTY. */
+ * modal toggle); omitted/false ⇒ a plain host PTY. `worktreeParent` nests the
+ * session under that parent repo when spawning INTO a detected worktree ReCue
+ * didn't create (no prior session exists there for the #331 auto-derive). */
 export const spawnSession = (
   cwd: string,
   name?: string,
   prompt?: string,
   agent?: string,
   container?: boolean,
+  worktreeParent?: string,
 ) =>
   invoke<SessionRecord>("spawn_session", {
     cwd,
@@ -123,6 +128,7 @@ export const spawnSession = (
     agent: agent ?? null,
     prompt: prompt ?? null,
     container: container ?? null,
+    worktreeParent: worktreeParent ?? null,
   });
 
 /** Spawn a plain shell terminal item (#72) in `cwd` under `id` (the panel id). */
@@ -157,6 +163,12 @@ export const removeWorktree = (parent: string, dest: string, force: boolean) =>
  * (and the Rust clean-exit path) can never double-run `git worktree remove`. */
 export const cleanupWorktreeIfEmpty = (parent: string, dest: string) =>
   invoke<WorktreeCleanup>("cleanup_worktree_if_empty", { parent, dest });
+
+/** Permanently delete the worktree folder at `dest` from disk — the explicit,
+ * always-confirmed user path (works on ANY listed worktree of `parent`, unlike
+ * the automation-guarded `removeWorktree`). The branch is kept. */
+export const deleteWorktree = (parent: string, dest: string) =>
+  invoke<void>("delete_worktree", { parent, dest });
 
 export const resumeSession = (id: string) =>
   invoke<SessionRecord>("resume_session", { id });
@@ -343,6 +355,11 @@ export interface DirEntry {
   path: string;
   /** An expandable folder vs a viewable file. */
   is_dir: boolean;
+  /** The folder is a linked git worktree root (its `.git` is a pointer file into
+   * `.git/worktrees/`) — the FileTree renders it in place but gates its contents
+   * behind "Show worktree contents…". Absent (never `false`) for ordinary rows:
+   * the backend serde-skips the flag when unset. */
+  worktree?: boolean;
 }
 
 /** Immediate children of one directory (`subdir` repo-relative, empty = repo root)
@@ -515,6 +532,13 @@ export const diffLineCounts = (paths: string[]) =>
  * with an upstream are present in the map (no-upstream / non-git are omitted). */
 export const branchAheadBehind = (paths: string[]) =>
   invoke<Record<string, AheadBehind>>("branch_ahead_behind", { paths });
+
+/** Every checkout of each repo per `git worktree list` (the agent-created-worktree
+ * detection read), stamped backend-side (`is_main` / `managed` / `exists`). Mirrors
+ * `currentBranches`; **fail-open per repo**: a non-git / failed repo is OMITTED from
+ * the map (keep prior state), while a present-but-empty list is authoritative. */
+export const listRepoWorktrees = (paths: string[]) =>
+  invoke<Record<string, RepoWorktree[]>>("list_repo_worktrees", { paths });
 
 export const workingDiff = (cwd: string) =>
   invoke<WorkingDiff>("working_diff", { cwd });
@@ -914,12 +938,16 @@ export interface SessionEventHandlers {
   /** The exit-driven worktree cleanup kept a dirty worktree (task 431/#74) — the
    * targeted window warns. */
   onWorktreeKept: (payload: WorktreeKeptPayload) => void;
+  /** The session's working directory moved (EnterWorktree / /cd) — the
+   * agent-relocation signal for the sidebar's worktree grouping. Optional: a
+   * window that doesn't render the sidebar can ignore it. */
+  onCwd?: (payload: CwdPayload) => void;
 }
 
-/** Subscribe to the per-session output/exit/state/name/forkable/forgotten events.
- * Returns an unlisten fn. Each `listen()` is its own `invoke` (`plugin:event|listen`),
- * so they register as **one parallel wave** rather than seven sequential round-trips
- * (#352). */
+/** Subscribe to the per-session output/exit/state/name/forkable/forgotten/cwd
+ * events. Returns an unlisten fn. Each `listen()` is its own `invoke`
+ * (`plugin:event|listen`), so they register as **one parallel wave** rather than
+ * eight sequential round-trips (#352). */
 export async function subscribeSessionEvents(
   handlers: SessionEventHandlers,
 ): Promise<UnlistenFn> {
@@ -931,6 +959,7 @@ export async function subscribeSessionEvents(
     unlistenForkable,
     unlistenForgotten,
     unlistenWorktreeKept,
+    unlistenCwd,
   ] = await Promise.all([
     // Label-scoped (task 440): the backend emit_filters session://output to the
     // windows holding a live host for the session, but a listener registered
@@ -962,6 +991,9 @@ export async function subscribeSessionEvents(
     listen<WorktreeKeptPayload>("worktree://kept", (event) =>
       handlers.onWorktreeKept(event.payload),
     ),
+    listen<CwdPayload>("session://cwd", (event) =>
+      handlers.onCwd?.(event.payload),
+    ),
   ]);
   return () => {
     unlistenOutput();
@@ -971,6 +1003,7 @@ export async function subscribeSessionEvents(
     unlistenForkable();
     unlistenForgotten();
     unlistenWorktreeKept();
+    unlistenCwd();
   };
 }
 

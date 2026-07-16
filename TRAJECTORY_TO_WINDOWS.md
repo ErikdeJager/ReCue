@@ -1413,3 +1413,32 @@ task-437 entry. Still missing — new items:
       update check, no re-onboarding, the `schedule://fired` transition still lands; with
       N restored windows (439) exactly ONE "Updated to vX" toast / onboarding modal fires
       across the whole app.
+
+## 2026-07-16 — Agent-created worktree detection (sidebar worktrees + relocation)
+
+- [ ] **Detected-worktree path identity on a real Windows box.** The agent-created
+      worktree detection compares paths case-insensitively on Windows (`norm_path_key`
+      in Rust, `normPathKey` in TS) and classifies "managed" by canonicalized prefix
+      under `%APPDATA%\..\<data-dir>\worktrees`. Sanity-check with a `C:\`-drive repo:
+      a Claude `EnterWorktree` worktree appears under its repo, `remove_worktree`
+      refuses it, and a mixed-case duplicate path never renders a second row.
+
+## 2026-07-16 — Attention-queue blink fix (resize-repaint suppression + eviction debounce)
+
+The fix is platform-neutral by construction — the backend suppression is pure timestamp
+logic (`last_resize` + `RESIZE_REPAINT_MS`, no `#[cfg]`), the store's eviction debounce is
+plain TS timers, and the same-size PTY-resize dedupe lives in the task-426/427 Rust
+arbiter (`terminal_views` only resizes + broadcasts when the smallest-wins effective grid
+actually changed — superseding the branch's original frontend `lastPtySize` skip) — but
+two legs are ConPTY-flavored and want a real-box look:
+
+- [ ] **ConPTY resize-repaint suppression.** On Windows a `resize_pty` makes ConPTY
+      itself repaint the screen (no SIGWINCH, but the same output burst). Verify: an
+      idle agent that becomes the Attention queue head (its terminal mounts in the
+      agent pane at a new size) does **not** blink out of the queue, and its dot stays
+      yellow through the mount.
+- [ ] **Same-size resize dedupe.** A view switch that reparents a terminal into an
+      identically-sized slot re-proposes the same grid, and the arbiter skips the PTY
+      resize (unchanged effective grid) — on ConPTY (which can repaint on *any* resize
+      call, even same-size) confirm no spurious busy dot on Overview↔Attention↔Canvas
+      switches with unchanged panel sizes.

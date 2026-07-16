@@ -56,6 +56,17 @@ const INPUT_ECHO_MS: u64 = 300;
 /// output past it and legitimately goes busy. Kept ≤ `BUSY_WINDOW_MS` so a real turn's
 /// sustained output (which outlasts this window) is never suppressed.
 const REPORT_REPAINT_MS: u64 = 300;
+/// A repaint that lands within this long of a `resize_pty` is treated as *caused by*
+/// that resize, not by real work, so it must not flip an idle session's dot to busy.
+/// Reparenting a pooled terminal into a differently-sized slot (entering the Attention
+/// view's agent pane, a window drag, an Overview lazy-mount) delivers SIGWINCH and makes
+/// claude repaint its whole TUI — without this stamp that repaint read as fresh work and
+/// blinked a confirmed-idle agent out of the Attention queue the instant it surfaced.
+/// Wider than `REPORT_REPAINT_MS` because a full-size reflow repaint straggles across
+/// chunks (each chunk re-stamps `last_output`, so the check is last-chunk-vs-resize),
+/// but kept < `BUSY_WINDOW_MS` so a real turn's sustained output (which outlasts this
+/// window) is never suppressed.
+const RESIZE_REPAINT_MS: u64 = 500;
 /// Title re-read schedule (#169): after each poke (a busy→idle edge or a session
 /// spawn), the title worker re-reads claude's `ai-title` at these offsets (ms),
 /// spanning ~30s. `claude` writes the LLM-generated title **asynchronously**, a
@@ -192,6 +203,12 @@ pub enum SessionEvent {
     /// arbiter via [`SessionManager::broadcast_size`] — never by the reader /
     /// monitor threads — and forwarded as `session://size`.
     Size { id: String, cols: u16, rows: u16 },
+    /// The directory the session is currently working in, per claude's own log
+    /// (`EnterWorktree` / `/cd` move it) — the agent-relocation signal for the
+    /// sidebar's worktree grouping. Emitted by the title worker on its burst
+    /// cadence when the log tail's `cwd` changes; claude-only (`uses_claude_log`).
+    /// The command layer persists + forwards it.
+    Cwd { id: String, cwd: String },
 }
 
 /// Cap on a single coalesced `Output` payload (#346): a run at/over this size is
@@ -258,6 +275,14 @@ struct ActivityState {
     /// stamps into `last_output`. Without this stamp that lone repaint would read as fresh
     /// work and blink the dot blue for a tick when a panel is merely focused/hovered.
     last_report: AtomicU64,
+    /// ms timestamp of the last `resize_pty` for this session; used by the monitor to
+    /// suppress the spurious idle→busy edge from a resize-triggered repaint (the
+    /// SIGWINCH sibling of `last_report`'s #403). A resize is not input, yet it makes
+    /// claude repaint its whole TUI — which the reader stamps into `last_output`.
+    /// Without this stamp that repaint read as fresh work and blinked a confirmed-idle
+    /// agent out of the Attention queue whenever its terminal was reparented into a
+    /// differently-sized slot (the Attention agent pane, a window drag).
+    last_resize: AtomicU64,
     /// Whether the session booted with an initial prompt (#93/#116) — a scheduled /
     /// prompt-seeded agent works immediately with **no** `write_stdin`, so it has
     /// "work to do" from spawn even though `last_input` stays 0. An interactive
@@ -828,6 +853,16 @@ impl SessionManager {
 
     /// Resize a session's PTY to match the frontend terminal.
     pub fn resize_pty(&self, id: &str, cols: u16, rows: u16) -> Result<(), SessionError> {
+        // Stamp the resize time *before* the resize goes out (mirroring `write_stdin`'s
+        // stamp-before-write ordering), so the SIGWINCH-triggered repaint can never be
+        // read by the monitor ahead of its own attribution stamp. The repaint must not
+        // flip an idle session's dot to busy — the resize sibling of #403.
+        if let Ok(map) = self.activity.lock() {
+            if let Some(state) = map.get(id) {
+                let now = self.base.elapsed().as_millis() as u64;
+                state.last_resize.store(now.max(1), Ordering::Relaxed);
+            }
+        }
         // Clone the per-session master under the brief global lock, then drop it
         // (#260) so a slow `resize()` can't stall other sessions' operations.
         let master = {
@@ -1184,6 +1219,7 @@ impl SessionManager {
             last_output: AtomicU64::new(0),
             last_input: AtomicU64::new(0),
             last_report: AtomicU64::new(0),
+            last_resize: AtomicU64::new(0),
             seeded: AtomicBool::new(seeded),
             uses_claude_log,
         });
@@ -1583,11 +1619,22 @@ fn exit_waiter(
 /// longer than `BACKGROUND_HOLD_MS` (e.g. a long single tool call with no output) legitimately
 /// settles to idle — that is *not* the #315 flicker and is intentionally left to settle.
 ///
+/// Whether the most recent output is attributable to an automatic, non-work event that
+/// happened at `stamp` (a focus/mouse report #403, or a PTY resize): the event exists
+/// (`stamp != 0`), it came at/after the last real keystroke (`stamp >= inp`, so an event
+/// during a real turn's typing doesn't qualify), the output arrived at/after it
+/// (`out >= stamp`), and did so within the event's repaint window. Shared by the monitor's
+/// report- and resize-repaint attributions; pure so it's unit-testable.
+fn repaint_attributable(stamp: u64, inp: u64, out: u64, window_ms: u64) -> bool {
+    stamp != 0 && stamp >= inp && out >= stamp && out.saturating_sub(stamp) <= window_ms
+}
+
 /// `suppress_on` (#403) gates the **idle→busy edge only**: when it is set — the recent output is
-/// attributable to a focus/mouse-report repaint — a currently-idle session (`!emitted`) is held
-/// idle instead of flipping to busy for a tick when a panel is merely focused/hovered. An
-/// already-busy session is untouched, so #185's protection of a working agent is preserved, and
-/// once the report-repaint window elapses (output still flowing) a real turn wins on the next tick.
+/// attributable to a focus/mouse-report repaint or a resize-triggered repaint — a currently-idle
+/// session (`!emitted`) is held idle instead of flipping to busy for a tick when a panel is
+/// merely focused/hovered/reparented. An already-busy session is untouched, so #185's protection
+/// of a working agent is preserved, and once the repaint window elapses (output still flowing) a
+/// real turn wins on the next tick.
 fn decide_busy(
     st: &mut BusyDecision,
     now: u64,
@@ -1661,6 +1708,7 @@ fn monitor_loop(
                     let out = state.last_output.load(Ordering::Relaxed);
                     let inp = state.last_input.load(Ordering::Relaxed);
                     let rep = state.last_report.load(Ordering::Relaxed);
+                    let rz = state.last_resize.load(Ordering::Relaxed);
                     let seeded = state.seeded.load(Ordering::Relaxed);
                     // Busy requires the session to actually *have work to do* (#116):
                     // either the user has submitted input (`inp != 0`) or it booted
@@ -1677,21 +1725,18 @@ fn monitor_loop(
                     // `active_hold` = within the longer sticky window (#315). fast ⊂ hold.
                     let active_fast = recent && now.saturating_sub(out) < BUSY_WINDOW_MS;
                     let active_hold = recent && now.saturating_sub(out) < BACKGROUND_HOLD_MS;
-                    // The recent output is attributable to an automatic focus/mouse report's
-                    // repaint (#403): a report was sent (`rep != 0`) at/after the last
-                    // keystroke (`rep >= inp`, so a report during a real turn's typing doesn't
-                    // qualify), the output arrived at/after that report (`out >= rep`), and it
-                    // did so within the short repaint window. Used to gate the idle→busy edge
-                    // only (see `decide_busy`) — an already-busy session is untouched (#185).
-                    let report_repaint = rep != 0
-                        && rep >= inp
-                        && out >= rep
-                        && out.saturating_sub(rep) <= REPORT_REPAINT_MS;
+                    // The recent output is attributable to an automatic focus/mouse
+                    // report's repaint (#403) or to a resize-triggered repaint (the
+                    // SIGWINCH from reparenting a pooled terminal / a window drag).
+                    // Either suppresses the idle→busy edge only (see `decide_busy`) —
+                    // an already-busy session is untouched (#185).
+                    let report_repaint = repaint_attributable(rep, inp, out, REPORT_REPAINT_MS);
+                    let resize_repaint = repaint_attributable(rz, inp, out, RESIZE_REPAINT_MS);
                     (
                         id.clone(),
                         active_fast,
                         active_hold,
-                        report_repaint,
+                        report_repaint || resize_repaint,
                         state.uses_claude_log,
                     )
                 })
@@ -1700,10 +1745,10 @@ fn monitor_loop(
         // Forget sessions that are gone (killed/exited) so a reused id starts fresh.
         let live: HashSet<&str> = snapshot.iter().map(|(id, ..)| id.as_str()).collect();
         decisions.retain(|id, _| live.contains(id.as_str()));
-        for (id, active_fast, active_hold, report_repaint, uses_claude_log) in &snapshot {
+        for (id, active_fast, active_hold, repaint_suppress, uses_claude_log) in &snapshot {
             let st = decisions.entry(id.clone()).or_default();
             let prev = st.emitted;
-            let busy = decide_busy(st, now, *active_fast, *active_hold, *report_repaint);
+            let busy = decide_busy(st, now, *active_fast, *active_hold, *repaint_suppress);
             if prev != busy {
                 if events
                     .send(SessionEvent::State {
@@ -1714,13 +1759,15 @@ fn monitor_loop(
                 {
                     return; // receiver dropped (app shutting down)
                 }
-                // On the *true* busy→idle settle (a turn ended — sticky bursts no longer
-                // flicker one per cycle) poke the title worker to re-read claude's freshly
-                // (re)written `ai-title` off the hot path (#97). Best-effort: a dead worker
-                // never stalls the monitor tick.
-                if !busy && prev {
-                    let _ = title_tx.send((id.clone(), *uses_claude_log));
-                }
+                // Poke the title worker on BOTH edges, off the hot path. The
+                // busy→idle settle re-reads claude's freshly (re)written `ai-title`
+                // (#97); the idle→busy onset arms the same ~30s re-read burst so a
+                // mid-turn `EnterWorktree` surfaces the session's new `cwd` (the
+                // relocation signal) while the agent is still working, not only at
+                // settle. Reads are per-id change-deduped, so the extra edge costs
+                // nothing when nothing changed. Best-effort: a dead worker never
+                // stalls the monitor tick.
+                let _ = title_tx.send((id.clone(), *uses_claude_log));
             }
         }
     }
@@ -1741,6 +1788,7 @@ fn monitor_loop(
 fn title_worker(title_rx: Receiver<(String, bool)>, events: Sender<SessionEvent>) {
     let mut last: HashMap<String, String> = HashMap::new();
     let mut last_forkable: HashMap<String, bool> = HashMap::new();
+    let mut last_cwd: HashMap<String, String> = HashMap::new();
     // Pending re-read deadlines (#169): one `(Instant, id, uses_claude_log)` per burst
     // offset. Drained as they fall due, so the set stays bounded to roughly one
     // window's worth.
@@ -1787,8 +1835,15 @@ fn title_worker(title_rx: Receiver<(String, bool)>, events: Sender<SessionEvent>
         due.sort();
         due.dedup();
         for (id, uses_claude_log) in due {
-            if read_and_emit_title(&id, uses_claude_log, &events, &mut last, &mut last_forkable)
-                .is_err()
+            if read_and_emit_title(
+                &id,
+                uses_claude_log,
+                &events,
+                &mut last,
+                &mut last_forkable,
+                &mut last_cwd,
+            )
+            .is_err()
             {
                 return; // receiver dropped (app shutting down)
             }
@@ -1818,6 +1873,7 @@ fn read_and_emit_title(
     events: &Sender<SessionEvent>,
     last: &mut HashMap<String, String>,
     last_forkable: &mut HashMap<String, bool>,
+    last_cwd: &mut HashMap<String, String>,
 ) -> Result<(), ()> {
     // Forkability (#138): for a claude session, computed every poke (independent of the
     // title, which may be absent) and emitted only when it flips — false→true the moment
@@ -1840,6 +1896,24 @@ fn read_and_emit_title(
     // that doesn't write one (Codex keeps the branch / first-prompt label).
     if !uses_claude_log {
         return Ok(());
+    }
+    // Current working directory (agent relocation): the log tail's `cwd` moves
+    // when the agent enters/leaves a worktree. Read BEFORE the title bail-out —
+    // a session may have a cwd (every line carries one) long before any
+    // `ai-title` materializes. Emitted on change only, like the title.
+    if let Some(cwd) = crate::title::read_session_cwd(id) {
+        if last_cwd.get(id) != Some(&cwd) {
+            last_cwd.insert(id.to_string(), cwd.clone());
+            if events
+                .send(SessionEvent::Cwd {
+                    id: id.to_string(),
+                    cwd,
+                })
+                .is_err()
+            {
+                return Err(());
+            }
+        }
     }
     let Some(title) = crate::title::read_session_title(id) else {
         return Ok(()); // no log / no title yet (e.g. a shell terminal item) — skip
@@ -2317,6 +2391,63 @@ mod tests {
         assert!(st.emitted);
     }
 
+    // The shared repaint-attribution math (focus/mouse reports #403 + PTY resizes).
+    // Pure — drives `repaint_attributable` directly, no threads or real timing.
+
+    #[test]
+    fn repaint_attributable_requires_an_event() {
+        // No report/resize ever happened (stamp == 0, the sentinel) → output is never
+        // attributed to one, whatever the other timestamps say.
+        assert!(!repaint_attributable(0, 0, 1_000, RESIZE_REPAINT_MS));
+        assert!(!repaint_attributable(0, 500, 1_000, REPORT_REPAINT_MS));
+    }
+
+    #[test]
+    fn repaint_attributable_ignores_an_event_before_the_last_keystroke() {
+        // The event predates the last real keystroke (stamp < inp): the user typed
+        // *after* it, so the following output is a real turn, never event-attributed.
+        assert!(!repaint_attributable(
+            1_000,
+            1_500,
+            1_600,
+            RESIZE_REPAINT_MS
+        ));
+    }
+
+    #[test]
+    fn repaint_attributable_ignores_output_before_the_event() {
+        // The last output predates the event (out < stamp): nothing repainted yet, so
+        // there is nothing to attribute (and nothing to suppress).
+        assert!(!repaint_attributable(2_000, 0, 1_500, RESIZE_REPAINT_MS));
+    }
+
+    #[test]
+    fn repaint_attributable_within_the_window() {
+        // Output lands shortly after the event → attributed (suppressed on the idle edge).
+        assert!(repaint_attributable(1_000, 0, 1_400, RESIZE_REPAINT_MS));
+        // Boundary: exactly at the window edge still counts (<=).
+        assert!(repaint_attributable(
+            1_000,
+            0,
+            1_000 + RESIZE_REPAINT_MS,
+            RESIZE_REPAINT_MS
+        ));
+        // An event stamped at/after the keystroke qualifies too (stamp >= inp).
+        assert!(repaint_attributable(1_000, 1_000, 1_200, REPORT_REPAINT_MS));
+    }
+
+    #[test]
+    fn repaint_attributable_expires_past_the_window() {
+        // Output still flowing beyond the window is a genuine turn — attribution ends,
+        // so sustained real work always wins on the next monitor tick.
+        assert!(!repaint_attributable(
+            1_000,
+            0,
+            1_001 + RESIZE_REPAINT_MS,
+            RESIZE_REPAINT_MS
+        ));
+    }
+
     #[test]
     fn scrollback_is_bounded_and_keeps_the_tail() {
         let mut sb = Scrollback::new(8);
@@ -2576,6 +2707,7 @@ mod tests {
                 Ok(SessionEvent::Name { .. }) => {}
                 Ok(SessionEvent::Forkable { .. }) => {}
                 Ok(SessionEvent::Size { .. }) => {}
+                Ok(SessionEvent::Cwd { .. }) => {}
                 Err(_) => panic!("timed out waiting for session events"),
             }
         };
@@ -3181,6 +3313,127 @@ mod tests {
                 st.last_report.load(Ordering::Relaxed),
                 report_at,
                 "a real keystroke must not touch last_report"
+            );
+        }
+        let _ = mgr.kill_session(&info.id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resize_repaint_does_not_wake_an_idle_session() {
+        // The Attention-queue "blink": reparenting a pooled terminal into a
+        // differently-sized slot (entering the Attention agent pane, a window drag)
+        // fires `resize_pty` → SIGWINCH → the TUI repaints. That repaint used to read
+        // as fresh work and flip a confirmed-idle agent busy for a settle cycle —
+        // ejecting it from the Attention queue the instant it surfaced. It is now
+        // attributed to the resize (`last_resize` + `RESIZE_REPAINT_MS`) and must not
+        // produce an idle→busy edge.
+        let (mgr, rx) = manager();
+        // Seeded (#116) so the startup print reads as work; the trap then repaints on
+        // SIGWINCH the way a full-screen TUI does. The short-sleep loop lets sh run
+        // the trap promptly (traps run between commands).
+        let info = mgr
+            .spawn_program_seeded(
+                "sh",
+                &[
+                    "-c",
+                    "trap 'printf winch-repaint' WINCH; printf go; \
+                     i=0; while [ $i -lt 60 ]; do sleep 0.1; i=$((i+1)); done",
+                ],
+                &tmp(),
+            )
+            .expect("spawn sh");
+
+        // The seeded startup output reads busy, then settles idle (~BUSY_WINDOW_MS).
+        let mut saw_busy = false;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && !saw_busy {
+            if let Ok(SessionEvent::State { busy: true, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                saw_busy = true;
+            }
+        }
+        assert!(saw_busy, "seeded startup output should read as busy");
+        let mut saw_idle = false;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && !saw_idle {
+            if let Ok(SessionEvent::State { busy: false, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                saw_idle = true;
+            }
+        }
+        assert!(saw_idle, "the session should settle idle before the resize");
+
+        // Resize to a size different from the spawn size — the kernel delivers
+        // SIGWINCH only on an actual change.
+        mgr.resize_pty(&info.id, DEFAULT_COLS - 20, DEFAULT_ROWS - 5)
+            .expect("resize pty");
+
+        // The trap's repaint lands within `RESIZE_REPAINT_MS` of the stamp; watch well
+        // past both it and a monitor tick — no busy edge may appear.
+        let mut woke = false;
+        let watch = Instant::now() + Duration::from_millis(1_200);
+        while Instant::now() < watch {
+            if let Ok(SessionEvent::State { busy: true, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                woke = true;
+                break;
+            }
+        }
+        // Prove the repaint actually happened (the suppression was exercised rather
+        // than the signal never arriving): the trap's marker is in the scrollback.
+        let (bytes, _) = mgr.scrollback(&info.id).expect("scrollback");
+        let repainted = String::from_utf8_lossy(&bytes).contains("winch-repaint");
+        let _ = mgr.kill_session(&info.id);
+        assert!(repainted, "the SIGWINCH trap should have repainted");
+        assert!(
+            !woke,
+            "a resize-triggered repaint must not flip an idle session to busy"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resize_stamps_last_resize_not_last_input() {
+        // A `resize_pty` is recorded in `last_resize` (so the monitor can attribute the
+        // SIGWINCH repaint to it) but must never stamp `last_input` (it is not a
+        // keystroke — it must not create #116 "work to do" or an #55 echo window), and a
+        // real keystroke must leave `last_resize` untouched.
+        let (mgr, _rx) = manager();
+        let info = mgr
+            .spawn_program("sh", &["-c", "sleep 2"], &tmp(), None)
+            .expect("spawn sh");
+
+        mgr.resize_pty(&info.id, DEFAULT_COLS - 10, DEFAULT_ROWS)
+            .expect("resize pty");
+        let resize_at = {
+            let map = mgr.activity.lock().expect("activity lock");
+            let st = map.get(&info.id).expect("activity state");
+            assert_eq!(
+                st.last_input.load(Ordering::Relaxed),
+                0,
+                "a resize must NOT stamp last_input"
+            );
+            let at = st.last_resize.load(Ordering::Relaxed);
+            assert!(at > 0, "a resize must stamp last_resize");
+            at
+        };
+
+        mgr.write_stdin(&info.id, "x").expect("write keystroke");
+        {
+            let map = mgr.activity.lock().expect("activity lock");
+            let st = map.get(&info.id).expect("activity state");
+            assert!(
+                st.last_input.load(Ordering::Relaxed) > 0,
+                "a real keystroke must stamp last_input (#55)"
+            );
+            assert_eq!(
+                st.last_resize.load(Ordering::Relaxed),
+                resize_at,
+                "a real keystroke must not touch last_resize"
             );
         }
         let _ = mgr.kill_session(&info.id);

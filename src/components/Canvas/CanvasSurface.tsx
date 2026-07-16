@@ -21,6 +21,7 @@ import { effectiveRepo, repoName, sessionLabel } from "../../paths";
 import { repoColor, useStore } from "../../store";
 import { useKeybindLabel } from "../../useKeybind";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
+import { sessionActiveWorktree } from "../../worktrees";
 import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
@@ -184,6 +185,26 @@ function LeafPanel({
   // agent shares its parent's); absent (a folderless panel) ⇒ the plain accent
   // fallback in the CSS still frames it.
   const folderColor = metaRepo ? repoColor(metaRepo, repoColors) : undefined;
+  // Relocation hint (agents follow their work): the agent's own cwd (or the
+  // non-claude heuristic) currently sits inside a detected worktree — a static
+  // "worktree" badge beside fork/container. Record worktree agents resolve null
+  // here (their #226 meta line already reads "repo · branch").
+  const platform = useStore((s) => s.platform);
+  const repoWorktreeEntries = useStore((s) =>
+    session ? s.repoWorktrees[effectiveRepo(session)] : undefined,
+  );
+  const heuristicWorktrees = useStore((s) => s.heuristicWorktrees);
+  const activeWorktree =
+    content.kind === "agent" && session
+      ? sessionActiveWorktree(
+          session,
+          (repoWorktreeEntries ?? [])
+            .filter((e) => !e.is_main && e.exists)
+            .map((e) => e.path),
+          heuristicWorktrees,
+          platform,
+        )
+      : null;
 
   // Double-click the header to rename the agent inline (#188) — same state machine
   // as the sidebar rename (#57) and the tab rename (CanvasTabs): seed the current
@@ -361,6 +382,13 @@ function LeafPanel({
           {/* A dev-container session runs inside docker — a static badge. */}
           {content.kind === "agent" && session?.containerImage && (
             <span className={styles.worktreeBadge}>container</span>
+          )}
+          {/* The agent relocated itself into a worktree (EnterWorktree) — the same
+              static-badge pattern, worktree path as the tooltip. */}
+          {activeWorktree && (
+            <span className={styles.worktreeBadge} title={activeWorktree}>
+              worktree
+            </span>
           )}
         </span>
         <span

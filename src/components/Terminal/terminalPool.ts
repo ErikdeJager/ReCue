@@ -842,6 +842,8 @@ function createHost(sessionId: string): TerminalHost {
     // bottom-clearance shave (see `measureProposal` / `shaveProposalRows`) so
     // claude's input line is never clipped, and the xterm grid itself only moves
     // via the `session://size` broadcast — never a local `term.resize` here.
+    // (A same-size reparent costs one propose IPC; the backend arbiter dedupes
+    // the actual PTY resize + broadcast, so ConPTY never repaints for it.)
     const p = measureProposal();
     if (!p) return;
     void proposeTerminalSize(sessionId, WINDOW_LABEL, p.cols, p.rows).catch(

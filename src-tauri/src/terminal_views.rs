@@ -24,14 +24,12 @@
 //! `SessionManager` (its sessions / master / events locks), but `pty.rs` must
 //! never call into `terminal_views`, so no lock cycle is possible. Holding the
 //! lock across the whole mutation + resize + broadcast is deliberate — the same
-//! out-of-order-resize argument that keeps `resize_pty` synchronous (#353); these
-//! are UI-cadence calls, so contention is negligible.
+//! out-of-order-resize argument that keeps the attach/detach/propose commands
+//! synchronous (#353); these are UI-cadence calls, so contention is negligible.
 //!
-//! **Transitional note (card 1/16):** the legacy `resize_pty` passthrough
-//! (`terminalPool.ts` → the `resize_pty` command) bypasses this registry, so a
-//! legacy call can move the real PTY size without `applied` knowing. Accepted for
-//! this card — nothing attaches yet — and resolved when later epic cards migrate
-//! the frontend onto attach/propose.
+//! Since task 427 every size change flows through this registry — the terminal
+//! pool attaches/proposes, and the legacy direct `resize_pty` command is deleted
+//! with its last frontend caller — so `applied` always knows the real PTY size.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;

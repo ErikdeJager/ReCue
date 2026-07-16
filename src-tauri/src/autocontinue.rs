@@ -536,6 +536,7 @@ mod tests {
             auto_continue_disabled: false,
             watch: false,
             container_image: None,
+            current_cwd: None,
         }
     }
 

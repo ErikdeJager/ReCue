@@ -42,6 +42,11 @@ export interface SessionRecord {
    * agent CLI in `docker run <image> …`). Absent/null for a normal host-PTY
    * session and for older records. */
   container_image?: string | null;
+  /** The directory the agent is CURRENTLY working in per claude's own session log
+   * (`EnterWorktree` / `/cd` move it) — the relocation signal for the sidebar's
+   * worktree grouping. Updated on the #97 title-worker cadence (claude-only);
+   * absent for non-claude agents and older records. */
+  current_cwd?: string | null;
 }
 
 /** Payload of `container://building`: the default dev-container image is being
@@ -415,6 +420,39 @@ export interface NamePayload {
 export interface ForkablePayload {
   id: string;
   forkable: boolean;
+}
+
+/** Payload of the `session://cwd` event: the directory a session is currently
+ * working in per claude's own log — the agent-relocation signal that re-parents
+ * its sidebar row under a detected worktree (and back). */
+export interface CwdPayload {
+  id: string;
+  cwd: string;
+}
+
+/** One worktree of a registered repo per `git worktree list` (the detection read),
+ * stamped backend-side. Mirrors `commands::RepoWorktree` (snake_case fields). */
+export interface RepoWorktree {
+  /** Absolute checkout path (git prints `/`-separated on every OS). */
+  path: string;
+  /** The checked-out commit. */
+  head: string;
+  /** Short branch name (`refs/heads/` stripped); null when detached. */
+  branch: string | null;
+  /** First listing entry = the repository's main checkout (a hint — the frontend
+   * also self-excludes by path equivalence; a registered folder may itself BE a
+   * linked worktree). */
+  is_main: boolean;
+  /** Under `<data-dir>/worktrees` — created and owned by ReCue (#74). */
+  managed: boolean;
+  /** The path exists on this host (false for container-created `/work/…` paths). */
+  exists: boolean;
+  /** `git worktree lock` held — Claude Code locks while an agent actively works
+   * there, so this doubles as an "in use" hint. */
+  locked: boolean;
+  locked_reason: string | null;
+  /** git considers the entry prunable (its directory is gone/invalid). */
+  prunable: boolean;
 }
 
 // --- Frontend UI state ---
@@ -796,6 +834,11 @@ export interface SessionView {
   /** Dev-container session: the docker image it runs in; null/absent for a normal
    * host-PTY session. Drives the static "container" badge beside the fork badge. */
   containerImage?: string | null;
+  /** The directory the agent is CURRENTLY working in per claude's own session log —
+   * the relocation signal: when it lands inside a detected worktree of this
+   * session's repo, the sidebar re-parents the row under that worktree header
+   * (`sessionActiveWorktree`, src/worktrees.ts). Null/absent = at home. */
+  currentCwd?: string | null;
 }
 
 /** Everything the frontend needs at boot, in ONE IPC round-trip (#352 — mirrors

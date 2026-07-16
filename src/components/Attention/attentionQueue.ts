@@ -6,7 +6,12 @@ import type { SessionView } from "../../types";
 
 export interface AttentionQueueInput {
   sessions: readonly SessionView[];
-  /** Sessions currently working (#42) — busy agents are never in the queue. */
+  /** Sessions currently working (#42). **No longer a membership precondition** —
+   * membership rides `eligible` alone, and the store revokes eligibility only once
+   * a busy signal has been *sustained* past its eviction debounce, so a sub-second
+   * spurious blip (a resize/focus repaint) can't blink a queued agent out. Retained
+   * on the input for API stability (the `sessionActive` precedent); the view reads
+   * it separately for the live busy dot. */
   sessionBusy: Record<string, boolean>;
   /** Sessions that have been active at least once (#112). **No longer a membership
    * precondition** (task 410 — a fresh never-worked agent is now surfaced too);
@@ -36,32 +41,27 @@ export interface AttentionQueueInput {
  * agent) OR it finished a turn and is **awaiting** input (active-but-idle "IDLE", #112)
  * — in true **FIFO** order (oldest wait first).
  *
- * An agent is a member **iff** it is not busy (`!sessionBusy`), is **confirmed idle**
- * (`eligible` — the admission grace), AND has not been dismissed (`!dismissed`),
- * excluding recurring-owned children, exited sessions (`exitedCode != null`), and
- * boot-reconnecting ones. Being active is **no longer**
- * required (task 410) — a freshly spawned idle agent qualifies; it simply drops out the
- * moment it goes busy and re-appears when it settles again. The sort key is the
+ * An agent is a member **iff** it is **confirmed idle** (`eligible` — the admission
+ * grace) AND has not been dismissed (`!dismissed`), excluding recurring-owned
+ * children, exited sessions (`exitedCode != null`), and boot-reconnecting ones.
+ * Raw `sessionBusy` is deliberately NOT a membership test: eligibility is revoked
+ * by the store only after its eviction debounce confirms the busy signal is
+ * sustained, so a genuinely-working member leaves within ~1.5s (briefly showing its
+ * blue dot in the queue) while a spurious sub-second blip changes nothing. Being
+ * active is **no longer** required (task 410) — a freshly spawned idle agent
+ * qualifies. The sort key is the
  * busy→idle edge time `idleSince[id]`, falling back to the session's `createdAt` (unix
  * **seconds**, scaled to ms) for a fresh never-worked agent or a boot-persisted-awaiting
  * one with no recorded transition; ties break by ascending `createdAt` then `id` so the
  * order is stable and deterministic.
  */
 export function attentionQueue(input: AttentionQueueInput): SessionView[] {
-  const {
-    sessions,
-    sessionBusy,
-    dismissed,
-    eligible,
-    idleSince,
-    recurringChildIds,
-  } = input;
+  const { sessions, dismissed, eligible, idleSince, recurringChildIds } = input;
 
   const members = sessions.filter((s) => {
     if (recurringChildIds.has(s.id)) return false;
     if (s.exitedCode != null) return false;
     if (s.reconnecting) return false;
-    if (sessionBusy[s.id]) return false;
     if (!eligible[s.id]) return false;
     if (dismissed[s.id]) return false;
     return true;

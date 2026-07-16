@@ -74,6 +74,14 @@ import {
   WINDOW_LABEL,
   isPrimaryLabel,
 } from "./windowContext";
+import {
+  attributeNewWorktrees,
+  detectedWorktreeParents,
+  samePath,
+  vanishedWorktrees,
+  worktreeDoomedSessionIds,
+  worktreeScopeRepos,
+} from "./worktrees";
 import type {
   AgentInfo,
   AheadBehind,
@@ -94,6 +102,7 @@ import type {
   ForgottenPayload,
   OverviewPanel,
   RecurringSession,
+  RepoWorktree,
   ScheduledSession,
   SessionRecord,
   SessionView,
@@ -176,10 +185,51 @@ function adoptPendingRecurringChildren(
 // lifecycle each run), like `intentionalKills`; cleared when the worktree is removed.
 const worktreeParents = new Map<string, string>();
 
-// The #199 `worktreeHasItems` ref-count moved to Rust (task 431,
-// `commands::worktree_has_items`) — `cleanupWorktreeIfEmpty` now delegates to the
-// authoritative `cleanup_worktree_if_empty` command, serialized backend-side so N
-// windows can never double-run `git worktree remove`.
+// The #199 `worktreeHasItems` ref-count for the Remove/teardown path moved to Rust
+// (task 431, `commands::worktree_has_items`) — `cleanupWorktreeIfEmpty` now delegates
+// to the authoritative `cleanup_worktree_if_empty` command, serialized backend-side so
+// N windows can never double-run `git worktree remove`. The pure `worktreeHasItems`
+// below stays for one frontend consumer: the worktree-VANISH sweep (agent-worktree
+// detection), which asks "did the user have anything open there?" before auto-closing
+// views + toasting.
+
+// Worktree folders mid-`deleteWorktree`: killing the worktree's agents / cancelling
+// its schedules fires their teardowns' `cleanupWorktreeIfEmpty` calls, whose
+// non-forced `remove_worktree` would race the forced delete and mis-toast
+// "Worktree kept — it has uncommitted changes". The guard short-circuits them.
+const deletingWorktrees = new Set<string>();
+
+/**
+ * Whether a worktree folder `dest` is still referenced by any item (#199): a session
+ * (`repoPath === dest` — including an exited-but-still-shown agent with a Restart
+ * overlay), an `overviewPanels[dest]` entry (file/diff/terminal/kanban/filetree, #164),
+ * a scheduled session created **inside** it (`cwd === dest`, #198), or a worktree
+ * schedule that **targets** it (`worktree_path === dest`, #259 — its `cwd` is the
+ * parent repo, but its eagerly-created worktree folder is `worktree_path`). Pure — the
+ * worktree-vanish sweep auto-closes a removed worktree's views (and toasts) only when
+ * ANY item of ANY type still points at it.
+ */
+export function worktreeHasItems(
+  state: {
+    sessions: readonly { repoPath: string }[];
+    overviewPanels: Record<string, readonly unknown[]>;
+    schedules: readonly { cwd: string; worktree_path?: string | null }[];
+    recurrings: readonly { cwd: string; worktree_path?: string | null }[];
+  },
+  dest: string,
+): boolean {
+  return (
+    state.sessions.some((s) => s.repoPath === dest) ||
+    (state.overviewPanels[dest]?.length ?? 0) > 0 ||
+    state.schedules.some(
+      (sc) => sc.cwd === dest || sc.worktree_path === dest,
+    ) ||
+    // A recurring created inside the worktree (`cwd === dest`) or a worktree
+    // recurring targeting it (`worktree_path === dest`, its `cwd` is the parent)
+    // still references it (#294) — keep the worktree until neither remains.
+    state.recurrings.some((r) => r.cwd === dest || r.worktree_path === dest)
+  );
+}
 
 /**
  * The set of session ids **owned** by a recurring session (#294) — its rotating child
@@ -337,6 +387,9 @@ async function runGitRefresh(req: GitRefreshRequest): Promise<void> {
     if (req.kinds.includes("aheadBehind")) {
       jobs.push(s.refreshBranchAheadBehind(repos));
     }
+    if (req.kinds.includes("worktrees")) {
+      jobs.push(s.refreshWorktrees(repos));
+    }
     if (req.kinds.includes("fileStatuses")) {
       // The ONLY consumer of `fileStatuses` is an open FileTree (#252) — so read `git
       // status` (the heaviest of the five: it walks the whole working tree) for repos
@@ -465,11 +518,65 @@ function cancelAttentionGrace(id: string): void {
   }
 }
 
+/** Eviction debounce — the admission grace's mirror image. Once an agent is a
+ * confirmed-idle queue member, a busy signal must be *sustained* this long before it
+ * is evicted (eligibility revoked, FIFO stamp + dismissal cleared). A spurious blip's
+ * round trip is bounded by the backend's ~700ms settle + a 200ms monitor tick + IPC
+ * jitter (≈ ≤1s), so no sub-second blip — a resize/focus repaint that slips past the
+ * backend attribution, or any future regression — can blink a queued agent out or
+ * reset its queue position, while a genuinely-working agent still leaves promptly.
+ * The busy dot itself stays live (`sessionBusy` updates immediately); only the
+ * queue-membership consequences wait for the confirmation. */
+const ATTENTION_EVICT_CONFIRM_MS = 1_500;
+/** One pending eviction timer per session id — armed when an eligible member goes
+ * busy, canceled on the idle edge (the blip case) or removal/exit/restart. */
+const attentionEvictTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelAttentionEvict(id: string): void {
+  const timer = attentionEvictTimers.get(id);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    attentionEvictTimers.delete(id);
+  }
+}
+
+/** Cancel both of `id`'s pending attention timers (admission grace + eviction
+ * debounce) — the removal/exit/restart paths drop every timer at once. */
+function clearAttentionTimers(id: string): void {
+  cancelAttentionGrace(id);
+  cancelAttentionEvict(id);
+}
+
 /** Boot re-entrancy (`applyBootState` replaces the session set wholesale) + the test
- * suite's reset (a leaked real 5s timer would otherwise fire mid-suite). */
-export function cancelAllAttentionGrace(): void {
+ * suite's reset (a leaked real timer would otherwise fire mid-suite). */
+export function cancelAllAttentionTimers(): void {
   for (const timer of attentionGraceTimers.values()) clearTimeout(timer);
   attentionGraceTimers.clear();
+  for (const timer of attentionEvictTimers.values()) clearTimeout(timer);
+  attentionEvictTimers.clear();
+}
+
+/** Arm (or restart) `id`'s eviction debounce: if the session is still busy when it
+ * fires, the busy signal was sustained — a real turn, not a blip — so the queue
+ * consequences of going busy land now: eligibility revoked, the FIFO stamp cleared
+ * (the next settle re-stamps it — the agent re-enters at the back), and any
+ * dismissal cleared (new activity un-acknowledges the agent, #398). */
+function armAttentionEvict(id: string): void {
+  cancelAttentionEvict(id);
+  attentionEvictTimers.set(
+    id,
+    setTimeout(() => {
+      attentionEvictTimers.delete(id);
+      // Belt and braces — the idle edge, removal, exit, and restart all cancel this
+      // timer, so firing means the busy signal was sustained. Re-check anyway.
+      if (!useStore.getState().sessionBusy[id]) return;
+      useStore.setState((s) => ({
+        attentionEligible: omitKey(s.attentionEligible, id),
+        sessionIdleSince: omitKey(s.sessionIdleSince, id),
+        dismissedAttention: omitKey(s.dismissedAttention, id),
+      }));
+    }, ATTENTION_EVICT_CONFIRM_MS),
+  );
 }
 
 /** Arm (or restart) `id`'s admission grace: if the session is still present and still
@@ -625,6 +732,9 @@ export function toSessionView(record: SessionRecord): SessionView {
     watch: record.watch ?? false,
     // Dev-container session: the docker image it runs in; null for a host PTY.
     containerImage: record.container_image ?? null,
+    // The agent-relocation signal: where the agent currently works per its own
+    // log; persisted so the worktree grouping is right immediately on boot.
+    currentCwd: record.current_cwd ?? null,
   };
 }
 
@@ -957,6 +1067,10 @@ export function overviewClusters(input: {
   overviewOrder: Record<string, string[]>;
   schedules: ScheduledSession[];
   recurrings?: RecurringSession[];
+  /** Detected worktree path → parent repo (`detectedWorktreeParents`) — attributes
+   * panels keyed by a DETECTED worktree (no live session) to the parent cluster,
+   * so they never form a stray top-level column. */
+  worktreeParents?: Record<string, string>;
   filter: OverviewFilter;
 }): { repo: string; keys: string[] }[] {
   const {
@@ -964,6 +1078,7 @@ export function overviewClusters(input: {
     overviewOrder,
     schedules,
     recurrings = [],
+    worktreeParents: detectedParents = {},
     filter,
   } = input;
   // Exclude recurring-owned child agents (#294): they render only inside the
@@ -974,8 +1089,9 @@ export function overviewClusters(input: {
 
   // A worktree agent's panels are keyed by the worktree folder (#164) but cluster
   // under the worktree's **parent** repo (#96). Built first so the filter predicate
-  // can map a worktree folder to its parent.
-  const wtParent = new Map<string, string>();
+  // can map a worktree folder to its parent. Detected worktrees (no live session)
+  // contribute the same mapping, with a session-derived entry winning on overlap.
+  const wtParent = new Map<string, string>(Object.entries(detectedParents));
   for (const s of sessions) {
     if (s.worktreeParent) wtParent.set(s.repoPath, s.worktreeParent);
   }
@@ -1084,6 +1200,7 @@ export function overviewClusterKeys(input: {
   overviewOrder: Record<string, string[]>;
   schedules: ScheduledSession[];
   recurrings?: RecurringSession[];
+  worktreeParents?: Record<string, string>;
   filter: OverviewFilter;
 }): string[] {
   return overviewClusters(input).flatMap((c) => c.keys);
@@ -1798,6 +1915,20 @@ export interface AppState {
    * `branches` (load / busy→idle edge / repo-set change / app-initiated fetch-pull-
    * checkout-create). */
   branchAheadBehind: Record<string, AheadBehind>;
+  /** Detected git worktrees per registered repo (agent-created-worktree detection):
+   * repo path → its raw `git worktree list` entries, stamped backend-side
+   * (`is_main` / `managed` / `exists`). Classification (external / orphan / record-
+   * backed dedupe) happens in selectors via `src/worktrees.ts`, so the slice stays
+   * the unfiltered truth. Refreshed as the `"worktrees"` kind of the #359 volley
+   * (busy→idle debounce + the sidebar 15 s poll + focus backstop); fail-open — a
+   * failed read keeps the previous entries. */
+  repoWorktrees: Record<string, RepoWorktree[]>;
+  /** Best-effort worktree attribution for agents with NO claude log (codex/opencode):
+   * session id → the external worktree path it (probably) created — set when a new
+   * external worktree appeared while exactly one such session in that repo was busy
+   * (`attributeNewWorktrees`). Transient (never persisted); pruned when the worktree
+   * vanishes or the session exits; superseded by the real `currentCwd` signal. */
+  heuristicWorktrees: Record<string, string>;
   /** The FileTree directory currently hovered by an OS file-drag (#253): the repo +
    * repo-relative dir (`""` = root) a drop would land in, or null when not over a
    * tree. Set by the window-global drag-drop listener; read by every FileTree to
@@ -2072,6 +2203,11 @@ export interface AppState {
   dismissAllAttention: () => void;
   /** Apply claude's auto-title (#97) to a session (no-op if unchanged). */
   setAutoName: (id: string, autoName: string | null) => void;
+  /** Apply a `session://cwd` event (the agent-relocation signal): update the session's
+   * `currentCwd` and, on an actual move, fire a scoped worktrees+branches refresh so a
+   * just-entered worktree shows within the debounce (not the 15 s poll) and clear any
+   * heuristic guess for the session (the real signal supersedes). */
+  setSessionCwd: (id: string, cwd: string) => void;
   /** Update a session's forkability (#138) — gates the Fork affordance (no-op if
    * the id isn't a tracked session, e.g. a shell terminal). */
   setForkable: (id: string, forkable: boolean) => void;
@@ -2247,6 +2383,14 @@ export interface AppState {
    * over the optional `repos` scope (#359). A folder that lost its upstream drops out of
    * the map (within the scope); fail-open (a backend miss leaves the map as-is). */
   refreshBranchAheadBehind: (repos?: readonly string[]) => Promise<void>;
+  /** Re-list each repo's git worktrees (the agent-created-worktree detection read),
+   * filling `repoWorktrees`. Runs as the `"worktrees"` kind of the #359 volley. The
+   * scope maps through `worktreeScopeRepos` (a busy→idle volley is scoped to the
+   * settling session's folder — for a worktree agent that's the worktree path, and
+   * the listing must run in its PARENT repo). Fail-open per repo (an omitted key in
+   * the reply keeps prior state); an authoritative removal auto-closes the vanished
+   * worktree's items with one toast and never touches the worktree itself. */
+  refreshWorktrees: (repos?: readonly string[]) => Promise<void>;
   /** Bump the FileTree re-list signal (#253/#264): one repo when `repo` is given, else
    * every repo with a mounted tree. Each mounted FileTree re-fetches its currently
    * loaded directory levels in place — surfacing files created/removed on disk —
@@ -2506,6 +2650,19 @@ export interface AppState {
     branch?: string,
     container?: boolean,
   ) => Promise<boolean>;
+  /** Start an agent IN PLACE inside a detected worktree ReCue didn't create (the
+   * external/orphan header's "New session"): a plain spawn at the worktree path
+   * with an explicit `worktree_parent` so the record nests under the parent repo
+   * (no prior session exists there for the #331 auto-derive). Never runs
+   * `git worktree add` — the checkout already exists. */
+  spawnSessionInWorktree: (path: string, parent: string) => Promise<boolean>;
+  /** Permanently delete the worktree at `dest` from disk (the sidebar's
+   * always-confirmed **Delete worktree…** — record, orphan, or external alike):
+   * kill + forget its agents (incl. relocated ones), cancel its schedules /
+   * recurrings, close its panels, then `delete_worktree` (validated backend-side
+   * against `git worktree list` — never the main checkout / the repo itself),
+   * and re-detect. The branch is kept; only the folder dies. */
+  deleteWorktree: (parent: string, dest: string) => Promise<void>;
   /** Start an agent in an isolated git worktree for an existing branch (#74). */
   spawnWorktreeSession: (
     repo: string,
@@ -2751,7 +2908,7 @@ async function killAgentsInRepo(repoPath: string): Promise<number> {
     ),
   ];
   ids.forEach((id) => intentionalKills.add(id));
-  for (const id of ids) cancelAttentionGrace(id);
+  for (const id of ids) clearAttentionTimers(id);
   await Promise.all(ids.map((id) => ipc.killSession(id).catch(() => {})));
   useStore.setState((s) => {
     const clearSelection = s.selectedId != null && idSet.has(s.selectedId);
@@ -2890,7 +3047,7 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
   // Kill PTYs (intentional, so the exit doesn't toast / show Restart, #32).
   const killIds = [...agentIds, ...termPtyIds];
   killIds.forEach((id) => intentionalKills.add(id));
-  for (const id of killIds) cancelAttentionGrace(id);
+  for (const id of killIds) clearAttentionTimers(id);
   await Promise.all(killIds.map((id) => ipc.killSession(id).catch(() => {})));
   await Promise.all(
     [...scheduleIds].map((id) => ipc.cancelSchedule(id).catch(() => {})),
@@ -3053,6 +3210,8 @@ export const useStore = create<AppState>()((set, get) => ({
   fileStatuses: {},
   diffLineCounts: {},
   branchAheadBehind: {},
+  repoWorktrees: {},
+  heuristicWorktrees: {},
   fileDropTarget: null,
   fileTreeRefresh: {},
   fileTreeMounts: {},
@@ -3241,7 +3400,7 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   dropSession: (id) => {
-    cancelAttentionGrace(id);
+    clearAttentionTimers(id);
     set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
@@ -3263,7 +3422,7 @@ export const useStore = create<AppState>()((set, get) => ({
 
   markExited: (id, code) => {
     reconnectingIds.delete(id); // no longer reconnecting (#261)
-    cancelAttentionGrace(id); // an exited session can't be confirmed idle (#398)
+    clearAttentionTimers(id); // an exited session can't be confirmed idle (#398)
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, exitedCode: code, reconnecting: false } : x,
@@ -3278,9 +3437,22 @@ export const useStore = create<AppState>()((set, get) => ({
     const wasBusy = get().sessionBusy[id] ?? false;
     // Capture the transition time before `set` for the Attention FIFO stamp (#398).
     const now = Date.now();
-    // Going busy revokes the admission grace (and, in the reducer below, any granted
-    // eligibility) — the queue drops the agent instantly; the next idle edge re-arms.
+    // Going busy always cancels a pending admission grace (a mid-grace blip restarts
+    // the confirmation clock on the next idle edge). For an already-ELIGIBLE queue
+    // member the eviction is *debounced* rather than instant: the busy signal must be
+    // sustained (`armAttentionEvict`) before it costs the agent its membership, FIFO
+    // position, and dismissal — so a sub-second blip (a repaint that slipped past the
+    // backend's resize/report attribution, or any future spurious edge) can never
+    // blink a queued agent out. The busy dot itself still updates immediately below.
     if (busy) cancelAttentionGrace(id);
+    const deferEvict = busy && !wasBusy && !!get().attentionEligible[id];
+    if (deferEvict) armAttentionEvict(id);
+    // A busy→idle edge with the eviction still pending is a blip resolving: the agent
+    // never left the queue — keep its original FIFO stamp and its still-granted
+    // eligibility (and skip the grace re-arm below: re-firing the #336 notification
+    // for a wait the user is already watching would be a duplicate).
+    const evictPending = !busy && attentionEvictTimers.has(id);
+    if (evictPending) cancelAttentionEvict(id);
     set((s) => {
       if ((s.sessionBusy[id] ?? false) === busy) return {}; // no-op, skip re-render
       // First activity marks the session "has been active" (#112): it stays set
@@ -3292,19 +3464,27 @@ export const useStore = create<AppState>()((set, get) => ({
           ? { ...s.sessionActive, [id]: true }
           : s.sessionActive;
       // Attention triage bookkeeping (#398): a busy→idle edge stamps `idleSince[id]`
-      // (the FIFO sort key); a going-busy edge clears the stamp AND any dismissal, so
-      // the agent re-enters the queue at the back on its next idle edge.
+      // (the FIFO sort key) — unless a blip just resolved (`evictPending`), which
+      // keeps the original stamp so the agent holds its queue position. A going-busy
+      // edge clears the stamp and any dismissal immediately for a non-member; for an
+      // eligible member (`deferEvict`) those consequences wait for the eviction
+      // debounce to confirm the busy signal is sustained.
       const sessionIdleSince = busy
-        ? omitKey(s.sessionIdleSince, id)
-        : { ...s.sessionIdleSince, [id]: now };
+        ? deferEvict
+          ? s.sessionIdleSince
+          : omitKey(s.sessionIdleSince, id)
+        : evictPending
+          ? s.sessionIdleSince
+          : { ...s.sessionIdleSince, [id]: now };
       const dismissedAttention =
-        busy && s.dismissedAttention[id]
+        busy && !deferEvict && s.dismissedAttention[id]
           ? omitKey(s.dismissedAttention, id)
           : s.dismissedAttention;
-      // Going busy also revokes confirmed-idle eligibility (#398 flicker fix); the
-      // idle edge does NOT grant it — that's the admission grace timer's job.
+      // Going busy revokes confirmed-idle eligibility (#398 flicker fix) — instantly
+      // for a non-member, via the eviction debounce for a member. The idle edge does
+      // NOT grant it — that's the admission grace timer's job.
       const attentionEligible =
-        busy && s.attentionEligible[id]
+        busy && !deferEvict && s.attentionEligible[id]
           ? omitKey(s.attentionEligible, id)
           : s.attentionEligible;
       return {
@@ -3334,8 +3514,10 @@ export const useStore = create<AppState>()((set, get) => ({
       // edge — land only once the session has stayed idle for the whole grace.
       // `booting` is captured NOW, at arm time: the boot backstop (4s) is shorter
       // than the grace (5s), so a fire-time check alone would let a boot-window
-      // settle notify after `booting` flips false.
-      armAttentionGrace(id, !booting);
+      // settle notify after `booting` flips false. A resolved blip (`evictPending`)
+      // skips the re-arm: eligibility was never revoked, and re-arming would re-fire
+      // the notification for a wait the user is already watching.
+      if (!evictPending) armAttentionGrace(id, !booting);
     }
   },
 
@@ -3404,11 +3586,34 @@ export const useStore = create<AppState>()((set, get) => ({
       };
     }),
 
+  setSessionCwd: (id, cwd) => {
+    const session = get().sessions.find((x) => x.id === id);
+    if (!session || (session.currentCwd ?? null) === cwd) return; // unchanged
+    set((s) => ({
+      sessions: s.sessions.map((x) =>
+        x.id === id ? { ...x, currentCwd: cwd } : x,
+      ),
+      // The real signal supersedes any heuristic guess for this session.
+      heuristicWorktrees: s.heuristicWorktrees[id]
+        ? Object.fromEntries(
+            Object.entries(s.heuristicWorktrees).filter(([k]) => k !== id),
+          )
+        : s.heuristicWorktrees,
+    }));
+    // The agent MOVED — a just-entered worktree may not be in the detection slice
+    // yet (EnterWorktree fires mid-turn), so fire a scoped worktrees+branches
+    // refresh through the debounced volley instead of waiting for the 15 s poll.
+    void get().refreshRepoGit({
+      repos: [effectiveRepo(session)],
+      kinds: ["worktrees", "branches"],
+    });
+  },
+
   markRunning: (id) => {
     reconnectingIds.delete(id); // no longer reconnecting (#261)
     // A restart is a fresh idle life (#398): revoke stale eligibility and run a
     // fresh admission grace so the agent re-surfaces in the queue only after it.
-    cancelAttentionGrace(id);
+    clearAttentionTimers(id);
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, exitedCode: undefined, reconnecting: false } : x,
@@ -3738,7 +3943,24 @@ export const useStore = create<AppState>()((set, get) => ({
               // Forkability changed (#138) — gates the Fork affordance up front.
               get().setForkable(id, forkable);
             },
+            onCwd: ({ id, cwd }) => {
+              // The agent's working directory moved (EnterWorktree / /cd) — the
+              // relocation signal that re-parents its sidebar row under a
+              // detected worktree (and back when it leaves).
+              get().setSessionCwd(id, cwd);
+            },
             onExited: ({ id, code }) => {
+              // Drop any heuristic worktree guess for the exited session (transient
+              // bookkeeping — its row is leaving the tree anyway).
+              if (get().heuristicWorktrees[id]) {
+                set((s) => ({
+                  heuristicWorktrees: Object.fromEntries(
+                    Object.entries(s.heuristicWorktrees).filter(
+                      ([k]) => k !== id,
+                    ),
+                  ),
+                }));
+              }
               // Recurring child rotation/crash (#294): a session owned as a recurring's
               // *current* child that exits — killed on rotation, or crashed on its own —
               // must NOT surface a "Process exited" overlay or toast (it's an internal,
@@ -4129,7 +4351,7 @@ export const useStore = create<AppState>()((set, get) => ({
     for (const v of views) reconnectingIds.add(v.id);
     // Boot re-entrancy: the session set is replaced wholesale, so drop any pending
     // admission-grace timers from the previous set (#398).
-    cancelAllAttentionGrace();
+    cancelAllAttentionTimers();
 
     // Multi-canvas (#58): the persisted tabs, else the one-shot migration of the old
     // single `canvas_layout`, else one empty canvas — a window's `?canvas=` preset
@@ -4400,6 +4622,81 @@ export const useStore = create<AppState>()((set, get) => ({
       });
     } catch {
       // Backend unreachable; leave the map as-is (fail-open, like refreshBranches).
+    }
+  },
+
+  refreshWorktrees: async (scope) => {
+    const st = get();
+    // A busy→idle volley is scoped to the settling session's FOLDER — for a worktree
+    // agent that's the worktree path, where the listing must run in the PARENT repo.
+    // Unknown paths fall back to every sidebar repo (null), fail-safe.
+    const sidebar = sidebarRepos(st.recents, st.sessions, st.recurrings);
+    const parentOf = (path: string) =>
+      st.sessions.find(
+        (s) => samePath(s.repoPath, path, st.platform) && !!s.worktreeParent,
+      )?.worktreeParent ??
+      detectedWorktreeParents(st.repoWorktrees, st.platform)[path];
+    const repos =
+      worktreeScopeRepos(scope ?? null, sidebar, parentOf, st.platform) ??
+      sidebar;
+    if (repos.length === 0) return;
+    let reply: Record<string, RepoWorktree[]>;
+    try {
+      reply = await ipc.listRepoWorktrees(repos);
+    } catch {
+      return; // backend unreachable — keep the slice as-is (fail-open)
+    }
+    const prev = get().repoWorktrees;
+    // Per-repo fail-open merge: a repo OMITTED from the reply failed its read →
+    // keep its previous entries; a present (even empty) list is authoritative.
+    const merged = { ...prev };
+    for (const repo of repos) {
+      const entries = reply[repo];
+      if (entries) merged[repo] = entries;
+    }
+    // Lifecycle: worktrees present before but gone from an authoritative new
+    // listing were removed (Claude's clean-exit auto-removal, a manual
+    // `git worktree remove`) — close their items with ONE toast each and prune
+    // any heuristic guesses pointing at them. Never touches the worktree itself.
+    const gone = vanishedWorktrees(prev, reply, repos, get().platform);
+    // Best-effort non-claude attribution: a NEW external worktree + exactly one
+    // busy log-less session in that repo → guess it created it.
+    const attributed = attributeNewWorktrees(
+      prev,
+      reply,
+      get().sessions,
+      get().sessionBusy,
+      (id) => {
+        const session = get().sessions.find((s) => s.id === id);
+        return !!session && !agentCaps(session.agent).supportsAutoName;
+      },
+      get().heuristicWorktrees,
+      get().platform,
+    );
+    set(() => {
+      const heuristicWorktrees = Object.fromEntries(
+        Object.entries(attributed).filter(
+          ([, path]) => !gone.some((g) => g.path === path),
+        ),
+      );
+      return { repoWorktrees: merged, heuristicWorktrees };
+    });
+    // The mutating tail below is a once-per-app effect (task 433): every window
+    // runs this volley on its own cadence, so closing the SHARED panels + the
+    // toast belong to the primary window only — each non-primary window still
+    // keeps its slice mirrors fresh above, and the primary's own volley sees the
+    // same vanish against its own `prev`.
+    if (!isPrimaryLabel(get().primaryWindow)) return;
+    for (const wt of gone) {
+      // Auto-close + toast only when the user had something open there — an idle
+      // row disappearing (Claude's quiet cleanup of an untouched worktree) is
+      // self-explanatory, and a burst of subagent worktrees cleaning up must not
+      // produce a toast wall.
+      if (!worktreeHasItems(get(), wt.path)) continue;
+      await closeRepoItems(wt.path);
+      get().pushToast(
+        `Worktree ${wt.branch ?? repoName(wt.path)} was removed — closed its views`,
+      );
     }
   },
 
@@ -5245,6 +5542,7 @@ export const useStore = create<AppState>()((set, get) => ({
         overviewOrder: s.overviewOrder,
         schedules: s.schedules,
         recurrings: s.recurrings,
+        worktreeParents: detectedWorktreeParents(s.repoWorktrees, s.platform),
         filter: s.overviewRepoFilter,
       });
       if (!visibleKeys.includes(s.selectedId)) return;
@@ -6011,6 +6309,96 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
+  spawnSessionInWorktree: async (path, parent) => {
+    try {
+      // In-place spawn into a detected worktree (external or orphan): the checkout
+      // already exists, so NEVER `git worktree add` (spawnWorktreeSession would
+      // compute the app-managed path and git refuses a branch already checked out
+      // elsewhere). The explicit parent nests the record under the parent repo —
+      // no prior session exists there for the #331 auto-derive to find.
+      const record = await ipc.spawnSession(
+        path,
+        undefined,
+        undefined,
+        get().settings.defaultAgent,
+        undefined,
+        parent,
+      );
+      get().upsertSession(toSessionView(record));
+      // Recents-touch the PARENT only — a worktree path must never become a
+      // top-level sidebar folder (#331).
+      set((s) => ({
+        recents: [parent, ...s.recents.filter((r) => r !== parent)],
+      }));
+      get().select(record.id);
+      get().pushToast(`Started agent in ${repoName(path)}`);
+      void get().refreshRepoGit({ repos: [parent] });
+      return true;
+    } catch (err) {
+      if (isSessionError(err) && err.kind === "BinaryNotFound") {
+        get().setClaudeMissing(true);
+      }
+      get().pushToast(
+        isSessionError(err) ? err.message : "Failed to start session",
+        "error",
+      );
+      return false;
+    }
+  },
+
+  deleteWorktree: async (parent, dest) => {
+    // The USER confirmed a permanent delete (the header's Delete worktree… is
+    // ALWAYS confirm-gated — it ignores the confirmDestructive opt-out), so this
+    // is the one path that removes any listed worktree — ReCue-managed or not.
+    // The `deletingWorktrees` guard mutes the ref-counted auto-cleanup the
+    // teardowns below would otherwise fire mid-delete.
+    deletingWorktrees.add(dest);
+    try {
+      // 1. Kill + forget every agent living in (or relocated into) the worktree.
+      const st = get();
+      const doomed = worktreeDoomedSessionIds(
+        st.sessions,
+        dest,
+        st.heuristicWorktrees,
+        st.platform,
+      );
+      for (const id of doomed) {
+        intentionalKills.add(id);
+        cancelAttentionGrace(id);
+        await ipc.killSession(id).catch(() => {});
+        get().dropSession(id);
+      }
+      // 2. Cancel schedules/recurrings created inside it or targeting it (the
+      //    `worktreeHasItems` matcher). Each emits its own small toast.
+      for (const sc of get().schedules.filter(
+        (x) => x.cwd === dest || x.worktree_path === dest,
+      )) {
+        await get().cancelSchedule(sc.id);
+      }
+      for (const r of get().recurrings.filter(
+        (x) => x.cwd === dest || x.worktree_path === dest,
+      )) {
+        await get().cancelRecurring(r.id);
+      }
+      // 3. Drop its panels (kills shell-terminal PTYs).
+      await closeRepoItems(dest);
+      // 4. Delete on disk (validated + forced + prune-fallback backend-side).
+      await ipc.deleteWorktree(parent, dest);
+      worktreeParents.delete(dest);
+      get().pushToast("Worktree deleted");
+    } catch (err) {
+      get().pushToast(
+        isSessionError(err) ? err.message : "Could not delete worktree",
+        "error",
+      );
+    } finally {
+      deletingWorktrees.delete(dest);
+    }
+    // Re-detect + re-read git either way so the row reflects reality.
+    void get().refreshWorktrees([parent]);
+    void get().refreshRepoGit({ repos: [parent] });
+  },
+
   createBranchSession: async (cwd, name, base, container) => {
     // Branch-name validation errors (invalid / already-existing / unknown base) are
     // returned for inline display; the spawn itself reuses the normal flow.
@@ -6075,6 +6463,19 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   cleanupWorktreeIfEmpty: async (parent, dest) => {
+    // A `deleteWorktree` in flight owns this folder's teardown — the agent /
+    // schedule / panel removals it performs land here fire-and-forget, and a
+    // non-forced remove racing the forced delete would mis-toast "Worktree kept".
+    if (deletingWorktrees.has(dest)) return;
+    // NEVER auto-remove a worktree ReCue didn't create: an in-place spawn into a
+    // DETECTED external worktree produces sessions whose teardown lands here, but
+    // the agent/user owns that checkout — closing the last item must not delete
+    // it. (The backend `remove_worktree` hard-refuses non-managed paths too; this
+    // short-circuit just avoids a pointless call + error toast.)
+    const detected = get().repoWorktrees[parent]?.find((e) =>
+      samePath(e.path, dest, get().platform),
+    );
+    if (detected && !detected.managed) return;
     // Record the parent so a later panel/schedule close can resolve it once this
     // worktree's last agent is gone (#199).
     worktreeParents.set(dest, parent);
@@ -6361,7 +6762,7 @@ export const useStore = create<AppState>()((set, get) => ({
       recurringIds.map((id) => ipc.cancelRecurring(id).catch(() => {})),
     );
     const idSet = new Set(ids);
-    for (const id of ids) cancelAttentionGrace(id);
+    for (const id of ids) clearAttentionTimers(id);
     set((s) => {
       const clearSelection = s.selectedId != null && idSet.has(s.selectedId);
       return {

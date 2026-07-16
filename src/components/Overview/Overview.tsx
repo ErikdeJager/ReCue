@@ -48,6 +48,10 @@ import {
   sessionLabel,
 } from "../../paths";
 import { formatFireTime, formatInterval, formatNextRun } from "../../time";
+import {
+  detectedWorktreeParents,
+  sessionActiveWorktree,
+} from "../../worktrees";
 import type {
   OverviewPanel,
   RecurringSession,
@@ -259,6 +263,23 @@ function SessionCard({
   // The #100 "auto-name" setting gates claude's auto-title (#97): off → the label
   // skips the auto-name and falls straight to the branch.
   const autoNameOn = useStore((s) => s.settings.autoName);
+  // Relocation hint: the agent is currently working INSIDE a detected worktree
+  // (per its own cwd / the heuristic) — a static "worktree" chip beside fork/
+  // container. Record worktree agents (`worktreeParent`) return null here (their
+  // #226 meta line already tells the story).
+  const platform = useStore((s) => s.platform);
+  const repoWorktreeEntries = useStore(
+    (s) => s.repoWorktrees[effectiveRepo(session)],
+  );
+  const heuristicWorktrees = useStore((s) => s.heuristicWorktrees);
+  const activeWorktree = sessionActiveWorktree(
+    session,
+    (repoWorktreeEntries ?? [])
+      .filter((e) => !e.is_main && e.exists)
+      .map((e) => e.path),
+    heuristicWorktrees,
+    platform,
+  );
   const fallbackLabel = branch || repoName(session.repoPath);
   const { primary } = sessionLabel(
     session.name,
@@ -334,6 +355,14 @@ function SessionCard({
           worktree-badge pattern) marks it. */}
       {session.containerImage && (
         <span className={styles.worktreeBadge}>container</span>
+      )}
+      {/* The agent relocated itself into a worktree (EnterWorktree — its sidebar
+          row moved under that worktree's group); the same static-badge pattern
+          marks the card, with the worktree path as the tooltip. */}
+      {activeWorktree && (
+        <span className={styles.worktreeBadge} title={activeWorktree}>
+          worktree
+        </span>
       )}
     </span>
   );
@@ -797,6 +826,8 @@ type ColumnItem =
 function Overview() {
   const allSessions = useStore((s) => s.sessions);
   const branches = useStore((s) => s.branches);
+  const repoWorktrees = useStore((s) => s.repoWorktrees);
+  const platform = useStore((s) => s.platform);
   const selectedId = useStore((s) => s.selectedId);
   const select = useStore((s) => s.select);
   const removeSession = useStore((s) => s.removeSession);
@@ -889,8 +920,12 @@ function Overview() {
   // A worktree agent's panels are keyed by the worktree folder (#164), but must
   // cluster under the worktree's **parent** repo (where the worktree agent sits,
   // #96) — not as a stray group. Map worktree path → parent so a panel keyed by a
-  // worktree path is attributed to the parent cluster (and rendered with its own key).
-  const wtParent = new Map<string, string>();
+  // worktree path is attributed to the parent cluster (and rendered with its own
+  // key). DETECTED worktrees (agent-created — no live session) contribute the
+  // same mapping, so their panels never form a stray top-level cluster either;
+  // a session-derived entry wins on overlap.
+  const detectedParents = detectedWorktreeParents(repoWorktrees, platform);
+  const wtParent = new Map<string, string>(Object.entries(detectedParents));
   for (const s of sessions) {
     if (s.worktreeParent) wtParent.set(s.repoPath, s.worktreeParent);
   }
@@ -919,6 +954,7 @@ function Overview() {
     overviewOrder,
     schedules,
     recurrings,
+    worktreeParents: detectedParents,
     filter,
   }).map(({ repo, keys }) => {
     const agents = ordered.filter((s) => effectiveRepo(s) === repo);

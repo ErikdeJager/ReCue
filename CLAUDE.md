@@ -234,6 +234,12 @@ steady-state boot pays **zero** probe cost.
   second (#315 — a clean single turn still settles at ~700ms). So **keystroke echo doesn't
   read as busy** (#55), `write_stdin` stamps a per-session `last_input` time and the
   monitor marks busy only when output arrived ≥300ms *after* the last keystroke.
+  Likewise a **repaint never wakes an idle dot**: output attributable to an automatic
+  focus/mouse report (#403, `last_report`) **or to a `resize_pty`** (`last_resize` +
+  `RESIZE_REPAINT_MS`, the attention-blink fix — reparenting a pooled terminal into a
+  differently-sized slot SIGWINCHes claude into a full TUI repaint) is suppressed on the
+  idle→busy edge only (the shared `repaint_attributable`), so an already-busy session is
+  untouched and sustained real output past the window still wins.
   Busy also requires the session to have **work to do** (#116) — either the user has
   submitted input, or it booted **prompt-seeded** (#93, an `ActivityState.seeded`
   flag set by `spawn_session_with_prompt`) — so `claude`'s pre-input **startup paint
@@ -314,6 +320,48 @@ steady-state boot pays **zero** probe cost.
   **Delete** / **Rename** (#267/#291) backed by the path-validated `create_dir` / `delete_path`
   / `rename_path` writes (the 3rd–5th deliberate `files.rs` writes; confirm-gated delete), plus
   Reveal in Finder/Explorer and Copy absolute·relative path.
+- **Agent-created worktree detection:** ReCue auto-detects **every** git worktree of a
+  registered repo — Claude Code's `EnterWorktree`/`--worktree` (`<repo>/.claude/worktrees/*`),
+  `WorktreeCreate`-hook or hand-made ones anywhere — via the batched `list_repo_worktrees`
+  (`git worktree list --porcelain`, plain not `-z` (Ubuntu 22.04 ships git 2.34), pure
+  fail-open parser in `git.rs`, entries stamped `is_main`/`managed`/`exists` backend-side)
+  riding the #359 refresh volley as the **`"worktrees"` kind** (in `focusRefreshKinds`' cheap
+  set, so the sidebar's 15 s poll + busy→idle debounce + focus backstop all carry it).
+  Detected worktrees render **presence-driven** under their parent repo in the sidebar (live
+  full-strength; idle dimmed — the `locked` attr, Claude Code's while-working lock, only
+  feeds that dimming; there is **no text badge and no "in use" chip** — a small Lucide
+  `CornerDownRight` elbow before the branch glyph is the sole worktree cue, and worktree
+  child rows are NOT extra-indented). Every worktree row's menu has an always-confirm-gated
+  **Delete worktree…** (ignores the `confirmDestructive` opt-out): the store `deleteWorktree`
+  kills the worktree's agents (incl. relocated ones, `worktreeDoomedSessionIds`), cancels its
+  schedules/recurrings, closes its panels (a `deletingWorktrees` guard mutes the ref-counted
+  auto-cleanup mid-delete), then the `delete_worktree` command — validated against
+  `git worktree list` membership (never the main checkout / the registered folder / a bare
+  entry), unlock-first, `git worktree remove --force` with a `git worktree prune` fallback
+  for a stale entry; the **branch is kept**. **Automation still never deletes what ReCue
+  didn't create** (`remove_worktree` hard-refuses paths outside `<data-dir>/worktrees`, and
+  `cleanupWorktreeIfEmpty` short-circuits) — only the explicit, user-confirmed Delete may.
+  Claude agents **relocate live**: the #97 title worker (now poked on BOTH
+  busy edges) also tails the session's newest-by-mtime JSONL for its `cwd`
+  (`SessionEvent::Cwd` → `session://cwd` → persisted `current_cwd`), and
+  `sessionActiveWorktree` (`src/worktrees.ts`, the pure decision core) moves the agent's
+  sidebar row under the worktree group and back — `effectiveRepo`/records stay authoritative
+  (grouping semantics unchanged; detection only adds rows/hints); non-claude agents get a
+  best-effort one-busy-session heuristic. The external/orphan header's **New session** spawns
+  **in place** (`spawn_session` with an explicit `worktree_parent`, never `git worktree add`).
+  Lifecycle: an authoritative listing losing a worktree (Claude's clean-exit auto-removal, a
+  manual remove) drops the row and auto-closes its panels with one toast (the close +
+  toast run in the **primary window** only, task 433 — every window's volley keeps its
+  own detection mirrors fresh); a failed git read
+  keeps prior state (fail-open). **Scope isolation:** worktree contents are excluded from the
+  parent repo's `search_files`/`search_file_contents` unconditionally (the walker guard is
+  `container::host_worktree_admin_name` over the `.git` pointer FILE — submodule gitfiles
+  (`.git/modules/…`) don't match, and the leaked `.git` gitfile no longer lists as a text
+  file), while the FileTree shows the worktree folder **in place** (muted + `worktree` chip)
+  behind a per-worktree **"Show worktree contents…"** gate — never keyed to a container
+  folder name. Path identity is lexical + canonicalize-first in Rust (`norm_path_key` /
+  `path_under_norm`) and platform-parameterized in TS (`normPathKey`), case-folded on
+  Windows only.
 - **OS files → file tree (#253):** dragging files/folders from Finder/Explorer onto a
   FileTree **folder row** (or the tree **root**) **moves** them into that directory.
   Tauri's webview drag-drop event is **window-global** (not DOM-bound), so `src/
@@ -339,7 +387,12 @@ steady-state boot pays **zero** probe cost.
   busy-heuristic settle fires mid-turn on any output pause and #315's sticky hold only
   engages *after* a first flicker — so a working agent never blinks into the queue, a
   seeded spawn never flashes as "NEW", and the watched-agent notification #336 rides the
-  same confirmed settle; the queue pane also shows keybind tips while non-empty). The
+  same confirmed settle; symmetrically, **eviction is debounced** (`ATTENTION_EVICT_CONFIRM_MS`,
+  ~1.5s — the blink fix): a queued member leaves only once a busy signal is *sustained*,
+  so a sub-second spurious blip (e.g. a resize/focus repaint that slipped past the backend
+  attribution) can never eject it or reset its FIFO position, and `attentionQueue`
+  membership rides `attentionEligible` alone rather than raw `sessionBusy`;
+  the queue pane also shows keybind tips while non-empty). The
   sidebar **`ViewSwitch`** presents **Overview + Attention** as the two equal-weight
   *main* views and **Canvas** as a smaller, de-emphasized *secondary* button (#406),
   with no queue-count badge (#405); in expanded mode Overview/Attention are text
@@ -944,9 +997,8 @@ steady-state boot pays **zero** probe cost.
 │   │                       #   respawn pass (#432)
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
 │   ├── src/editors.rs      # "Open in editor": EditorSpec catalog + shared detect/launch resolver
-│   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
-│   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
 │   ├── src/path_env.rs     # Login-shell PATH: async probe + PathState cell + rc-mtime cache (#360; Finder/.desktop-launch fix, macOS+Linux)
+│   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
 │   ├── src/linux_desktop.rs # WM_CLASS/app_id pin for Linux desktop-entry matching (#362)
 │   ├── src/early_settings.rs # Shared PRE-GTK settings reader: sessions.json off disk before tauri::Builder (#357)
 │   ├── src/linux_webkit.rs # Linux DMA-BUF decision + Settings override + the boot RendererReport (#346/#347/#357)
@@ -1157,7 +1209,16 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   branch step starts an agent in an app-managed worktree
   (`<app-data>/worktrees/<repo-id>/<branch>`), shown nested under its parent repo in
   the sidebar; the worktree is removed (ref-counted) only when its last agent goes,
-  and a dirty worktree is kept rather than force-deleted; and (3) **branch creation**
+  and a dirty worktree is kept rather than force-deleted. **The automatic remove is
+  scoped to what ReCue created**: `remove_worktree` hard-refuses any destination outside
+  `<data-dir>/worktrees` — worktree *detection* surfaces agent-created (EnterWorktree /
+  hook / manual) worktrees in the same UI and in-place spawns give them sessions, so
+  no automated teardown path may ever `git worktree remove` a checkout ReCue didn't create;
+  the read side (`git worktree list --porcelain`) stays read-only, and the only force-remove
+  is the **user-confirmed Delete worktree…** flow (the separate `delete_worktree` command —
+  works on ANY listed linked worktree of the repo, validated to never be the main checkout /
+  the registered folder / a bare entry, unlock-first, with a `git worktree prune` fallback
+  for a stale entry; the branch is kept); and (3) **branch creation**
   (#124, expanding the earlier "never creates branches" rule) — the branch step's
   **"+ add branch"** option creates + checks out a new branch (`git checkout -b
   <name> [<base>]`, base defaulting to the current branch/HEAD) and starts a normal
@@ -1413,8 +1474,9 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   `set_background_color` is a no-op for the *webview* layer, but the document's inline
   `html` background paints over it before the window is ever revealed).
 - **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`,
-  Windows NSIS/MSI installers, or a Linux **AppImage** (#345, host-OS dependent); the
-  **updater artifacts are minisign-signed** on all three. Release builds use a tuned
+  Windows NSIS/MSI installers, or — on Linux — an **AppImage** *and* a **`.deb`** (#345/#361,
+  host-OS dependent); the **updater artifacts are minisign-signed** on all three. Release
+  builds use a tuned
   **`[profile.release]`** (#358 — fat `lto`, `codegen-units = 1`, `strip = true`, size
   `opt-level = "s"`) so the binary — and with it every bundle, above all the AppImage, whose
   squashfs is paged in on **every** cold start — is materially smaller; it deliberately keeps
@@ -1422,9 +1484,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   panic in a reader / monitor / title / forwarder / poll thread kills only that thread instead
   of the whole app and every live PTY session. The extra link time is paid only by
   `release.yml` (a version-bump push); the PR gate and `tauri dev` build with the dev/test
-  profiles. macOS
-  Windows NSIS/MSI installers, or — on Linux — an **AppImage** *and* a **`.deb`** (#345/#361,
-  host-OS dependent); the **updater artifacts are minisign-signed** on all three. On Linux
+  profiles. On Linux
   only the **AppImage** is an updater artifact (Tauri's Linux updater can only replace the
   file at `$APPIMAGE`), so `latest.json`'s `linux-x86_64` entry points at it and it
   **self-updates**; the `.deb` gets no `.sig` and exists to be **repacked by the in-repo AUR

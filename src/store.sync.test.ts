@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { claimKey } from "./fileClaims";
 import {
-  cancelAllAttentionGrace,
+  cancelAllAttentionTimers,
   DEFAULT_SETTINGS,
   diffSessionRoster,
   SIDEBAR_WIDTH_DEFAULT,
@@ -58,7 +58,7 @@ function spyPersistPaths() {
 beforeEach(() => {
   vi.useRealTimers();
   // Drop any admission-grace timers a prior test armed (module-level, #398).
-  cancelAllAttentionGrace();
+  cancelAllAttentionTimers();
   useStore.setState({
     sessions: [],
     selectedId: null,
@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cancelAllAttentionGrace();
+  cancelAllAttentionTimers();
   vi.restoreAllMocks();
 });
 

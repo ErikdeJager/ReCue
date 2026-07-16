@@ -212,6 +212,45 @@
   opacity: 1;
 }
 
+/* A linked-worktree root's folder row: shown IN PLACE (wherever the worktree
+   lives) but muted like a gitignored row (#270) — it's a separate checkout, not
+   part of this repo's own files. The trailing chip mirrors the sidebar's
+   worktree badge at the tree's micro scale. */
+.worktreeDim .name {
+  color: var(--text-muted);
+}
+
+.worktreeChip {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-micro);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+/* The per-worktree contents gate: rendered where the children would be, until
+   the user explicitly opens this checkout's files. A quiet, muted action row. */
+.gateRow {
+  display: block;
+  width: 100%;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+  text-align: left;
+  cursor: pointer;
+}
+
+.gateRow:hover {
+  color: var(--text-primary);
+  background: var(--surface-0);
+}
+
 /* Trailing right-aligned status letter (v2 task 382): `M`/`A` on tinted file
    rows, `D` on ghost rows — presentation-only (aria-hidden). */
 .statusLetter {

@@ -1234,6 +1234,121 @@ pub fn worktree_unlock(repo: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result
     }
 }
 
+/// `git worktree prune` — drop stale administrative entries whose working
+/// directories no longer exist. The fallback for the user-initiated
+/// `delete_worktree` when the folder is already gone from disk but git still
+/// lists it (a stale/prunable entry `worktree remove` refuses to touch).
+pub fn worktree_prune(repo: impl AsRef<Path>) -> Result<(), String> {
+    let output = hidden_command("git")
+        .arg("-C")
+        .arg(repo.as_ref())
+        .args(["worktree", "prune"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "could not prune worktrees".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
+/// One entry of `git worktree list --porcelain`: a checkout (the main one or a
+/// linked worktree) of the repository, exactly as git records it in
+/// `.git/worktrees/<name>` — regardless of who created it (ReCue #74, an agent's
+/// `EnterWorktree` / `--worktree`, a `WorktreeCreate` hook, or a hand-typed
+/// `git worktree add`). This is the detection ground truth for agent-created
+/// worktrees: any linked worktree, wherever it lives, appears here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorktreeEntry {
+    /// Absolute checkout path (git prints `/`-separated on every OS).
+    pub path: String,
+    /// The checked-out commit; empty only for a bare entry.
+    pub head: String,
+    /// Short branch name (`refs/heads/` stripped); `None` when detached or bare.
+    pub branch: Option<String>,
+    pub bare: bool,
+    pub detached: bool,
+    /// A `git worktree lock` is held. Claude Code locks a worktree while an agent
+    /// actively works in it, so this doubles as an "in use" hint.
+    pub locked: bool,
+    /// The lock reason, when git printed one on the `locked` line.
+    pub locked_reason: Option<String>,
+    /// git considers the entry prunable (its directory is gone or invalid).
+    pub prunable: bool,
+}
+
+/// Parse the plain `git worktree list --porcelain` output: stanzas separated by
+/// blank lines, each starting `worktree <path>` followed by attribute lines
+/// (`HEAD <sha>`, `branch <ref>`, `bare`, `detached`, `locked[ <reason>]`,
+/// `prunable[ <reason>]`). Unknown lines are ignored (forward-compatible).
+pub(crate) fn parse_worktree_list(out: &str) -> Vec<WorktreeEntry> {
+    let mut entries: Vec<WorktreeEntry> = Vec::new();
+    let mut cur: Option<WorktreeEntry> = None;
+    for line in out.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(done) = cur.take() {
+                entries.push(done);
+            }
+            cur = Some(WorktreeEntry {
+                path: path.to_string(),
+                head: String::new(),
+                branch: None,
+                bare: false,
+                detached: false,
+                locked: false,
+                locked_reason: None,
+                prunable: false,
+            });
+        } else if let Some(entry) = cur.as_mut() {
+            if let Some(head) = line.strip_prefix("HEAD ") {
+                entry.head = head.to_string();
+            } else if let Some(branch) = line.strip_prefix("branch ") {
+                entry.branch = Some(
+                    branch
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(branch)
+                        .to_string(),
+                );
+            } else if line == "bare" {
+                entry.bare = true;
+            } else if line == "detached" {
+                entry.detached = true;
+            } else if line == "locked" || line.starts_with("locked ") {
+                entry.locked = true;
+                let reason = line["locked".len()..].trim_start();
+                if !reason.is_empty() {
+                    entry.locked_reason = Some(reason.to_string());
+                }
+            } else if line == "prunable" || line.starts_with("prunable ") {
+                entry.prunable = true;
+            }
+        }
+    }
+    if let Some(done) = cur.take() {
+        entries.push(done);
+    }
+    entries
+}
+
+/// Every checkout (main + linked worktrees) of the repository containing `cwd`,
+/// via `git worktree list --porcelain`. The **plain** porcelain is deliberate —
+/// the NUL-terminated `-z` variant needs git ≥ 2.36 while Ubuntu 22.04 LTS (a
+/// fully-supported target and the CI build image) ships 2.34, and a silently
+/// dead listing would disable worktree detection there; the cost is only the
+/// pathological newline-in-path case. Fail-open: a non-git folder / missing git
+/// / spawn error yields `None` (callers keep prior state). Read-only, and
+/// `hidden_command` already sets `GIT_OPTIONAL_LOCKS=0` so this never contends
+/// with a committing agent.
+pub fn list_worktrees(cwd: impl AsRef<Path>) -> Option<Vec<WorktreeEntry>> {
+    let out = run_git_raw(cwd.as_ref(), &["worktree", "list", "--porcelain"])?;
+    Some(parse_worktree_list(&out))
+}
+
 /// Parse `git diff` unified output into structured per-file diffs.
 pub fn parse_unified_diff(diff: &str) -> Vec<FileDiff> {
     let mut files: Vec<FileDiff> = Vec::new();
@@ -1872,6 +1987,125 @@ index 0..1
         assert_eq!(parse_ahead_behind("garbage"), None);
         assert_eq!(parse_ahead_behind("2"), None);
         assert_eq!(parse_ahead_behind("a\tb"), None);
+    }
+
+    // --- Worktree list parser (agent-created worktree detection) ---
+
+    #[test]
+    fn worktree_parser_reads_main_and_linked_entries() {
+        let out = "\
+worktree /Users/x/repos/app
+HEAD ba1b06ea350b6acd92256956be9f41e0ddeb445a
+branch refs/heads/main
+
+worktree /Users/x/repos/app/.claude/worktrees/feat-a
+HEAD c3e9ca2fcc9e6c45c4b0ac970a2909f633d52132
+branch refs/heads/feat/a
+
+worktree /Users/x/tmp/side worktree with spaces
+HEAD 62d0957964760b56ee4b6bdcb638a71433f6c882
+branch refs/heads/wt-b
+";
+        let entries = parse_worktree_list(out);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].path, "/Users/x/repos/app");
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+        assert_eq!(entries[0].head, "ba1b06ea350b6acd92256956be9f41e0ddeb445a");
+        // `refs/heads/` is stripped, slashes inside the branch name survive.
+        assert_eq!(entries[1].branch.as_deref(), Some("feat/a"));
+        // Paths with spaces parse whole (plain porcelain is line-based).
+        assert_eq!(entries[2].path, "/Users/x/tmp/side worktree with spaces");
+        assert!(entries.iter().all(|e| !e.bare
+            && !e.detached
+            && !e.locked
+            && !e.prunable
+            && e.locked_reason.is_none()));
+    }
+
+    #[test]
+    fn worktree_parser_reads_detached_bare_locked_and_prunable() {
+        let out = "\
+worktree /repo
+HEAD abc
+branch refs/heads/main
+
+worktree /repo.bare
+bare
+
+worktree /wt/detached
+HEAD def
+detached
+
+worktree /wt/locked-plain
+HEAD 111
+branch refs/heads/x
+locked
+
+worktree /wt/locked-reason
+HEAD 222
+branch refs/heads/y
+locked working agent keeps this alive
+
+worktree /wt/prunable
+HEAD 333
+prunable gitdir file points to non-existent location
+";
+        let entries = parse_worktree_list(out);
+        assert_eq!(entries.len(), 6);
+        assert!(entries[1].bare);
+        assert!(entries[2].detached && entries[2].branch.is_none());
+        assert!(entries[3].locked && entries[3].locked_reason.is_none());
+        assert!(entries[4].locked);
+        assert_eq!(
+            entries[4].locked_reason.as_deref(),
+            Some("working agent keeps this alive")
+        );
+        assert!(entries[5].prunable);
+    }
+
+    #[test]
+    fn worktree_parser_tolerates_empty_and_malformed_input() {
+        assert!(parse_worktree_list("").is_empty());
+        // Attribute lines before any `worktree ` stanza are ignored, unknown
+        // attributes are skipped (forward-compatible), a trailing stanza without
+        // a blank line still flushes.
+        let out = "HEAD orphan\nnonsense\nworktree /a\nHEAD 1\nfutureattr x\nbranch refs/heads/b";
+        let entries = parse_worktree_list(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "/a");
+        assert_eq!(entries[0].branch.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn list_worktrees_enumerates_real_linked_worktrees_and_fails_open() {
+        // Non-git folder → None (fail-open).
+        let plain = unique_dir("wtl-plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(list_worktrees(&plain), None);
+        let _ = fs::remove_dir_all(&plain);
+
+        // Real repo + one linked worktree (nested, the EnterWorktree layout).
+        let Some(repo) = init_repo("wtl-repo") else {
+            return; // git unavailable — skip like the other integration tests
+        };
+        fs::write(repo.join("f.txt"), "x").unwrap();
+        if !commit_all(&repo, "init") {
+            let _ = fs::remove_dir_all(&repo);
+            return;
+        }
+        let nested = repo.join(".claude").join("worktrees").join("wt-a");
+        assert!(git_in(
+            &repo,
+            &["worktree", "add", "-b", "wt-a", nested.to_str().unwrap()]
+        ));
+        let entries = list_worktrees(&repo).expect("a git repo lists its worktrees");
+        assert_eq!(entries.len(), 2, "main checkout + one linked worktree");
+        assert_eq!(entries[1].branch.as_deref(), Some("wt-a"));
+        assert!(!entries[1].head.is_empty());
+        // The listing is identical when asked from inside the linked worktree.
+        let from_wt = list_worktrees(&nested).expect("a worktree lists the same set");
+        assert_eq!(from_wt.len(), 2);
+        let _ = fs::remove_dir_all(&repo);
     }
 
     // --- Integration tests (real `git`; skip if unavailable) ---
