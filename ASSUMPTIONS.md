@@ -3783,3 +3783,16 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - A2 (Canvas vs Overview): Canvas/detached-window ⌘W on an agent leaf stays "close the panel only" (removeLeaf; agent survives in the pool/Overview), matching the Canvas header ×. Only Overview ⌘W kills+forgets, matching Overview's × semantics.
 - A3 (scope completion): extended the Overview fix to also close a selected SCHEDULE (cancelSchedule) and RECURRING (cancelRecurring), not just agents — closing the whole "only non-agent panels are closed" gap and matching each card's × exactly.
 - A4 (focus advance): Overview ⌘W does NOT advance selection to a neighbor after removal — matching the existing non-agent Overview close; neighbor-advance stays Canvas-only. After removal selectedId clears/goes stale, so a repeat ⌘W is a safe no-op.
+
+## Task 426
+
+- Purge-on-Destroyed is wired through the existing `.run()` closure's `RunEvent::WindowEvent { label, event: Destroyed }` (one seam, fires for every window kind incl. future app windows) rather than a per-window `on_window_event` like open_canvas_window's re-dock handler; `try_state` guards teardown ordering.
+- `propose_terminal_size` for a never-attached (or already-purged) `(id, window_label)` view is a no-op — NOT an implicit attach — so a late ResizeObserver racing a window close can't resurrect a zombie view that would clamp the PTY forever.
+- Attach is an upsert (re-attach replaces the view's desired size); detach of an unknown view is a no-op; detaching a session's last view drops its registry entries and neither resizes nor emits (the PTY keeps its last size).
+- `session://size` is emitted whenever the effective grid changed, plus ALWAYS on attach (even unchanged, per the card); detach/propose/purge emit only on change.
+- cols/rows are clamped to >=1 on the way into the registry (a 0-dimension PtySize would wedge the component-wise min).
+- "Call master.resize only when it changed" compares against a registry-tracked last-APPLIED effective size (not the PTY's actual size); the legacy resize_pty passthrough can therefore go stale vs the registry — accepted transitional state documented in-module, resolved by later epic cards.
+- Resize + broadcast run while holding the registry mutex (serializes arbitration, the same out-of-order argument as resize_pty's #353 sync rationale); safe since pty.rs never calls into terminal_views (lock-order rule documented).
+- The three new commands are synchronous and infallible (poison-recovering lock, best-effort resize swallowing SessionNotFound/Io); window_label is an explicit param (per the card), not derived from the invoking Window.
+- New seams in pty.rs limited to the SessionEvent::Size variant + a best-effort pub SessionManager::broadcast_size; registry entries for killed/exited sessions are left inert (no kill_session cleanup — out of scope for card 1).
+- No capabilities/default.json change (Tauri 2 custom commands aren't ACL-gated); no version bump / patch notes in this PR.
