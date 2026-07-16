@@ -306,6 +306,17 @@ export interface WorkingDiff {
  * "NotSeen" when absent. Persisted opaquely (the frontend owns the digest shape). */
 export type DiffSeenMap = Record<string, Record<string, string>>;
 
+/** A diff-seen **write patch** (task 429): per-repo, per-file deltas the backend
+ * merges over the persisted map under the Store mutex, so a stale window's
+ * debounced write can't drop another window's concurrent marks. A string sets that
+ * file's digest; a `null` file tombstones (deletes) the entry; a `null` repo
+ * deletes the whole repo key (the server also prunes a repo object emptied by file
+ * tombstones, so the frontend never needs the repo tombstone). */
+export type DiffSeenPatch = Record<
+  string,
+  Record<string, string | null> | null
+>;
+
 /** One commit in a folder's history (#230, mirrors `git::CommitInfo`) — the diff
  * viewer's "Commits" source list. */
 export interface CommitInfo {
@@ -652,6 +663,16 @@ export interface CanvasTemplate {
 export interface PersistedCanvases {
   canvases: CanvasTab[];
   activeId: string;
+}
+
+/** A `set_canvases` **write patch** (task 429): send only the field(s) the action
+ * changed — the backend merges field-wise over the persisted blob under the Store
+ * mutex (a tab switch sends `activeId` only; a layout/rename/reorder edit sends
+ * `canvases` only), so a stale window's write can't clobber the other field.
+ * `PersistedCanvases` stays the read/boot shape. */
+export interface PersistedCanvasesPatch {
+  canvases?: CanvasTab[];
+  activeId?: string;
 }
 
 export type ToastTone = "info" | "error" | "success";

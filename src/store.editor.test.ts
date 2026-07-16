@@ -153,12 +153,15 @@ describe("chooseEditor", () => {
     await useStore.getState().chooseEditor("custom", false, "  zed {path}  ");
     expect(ipc.setSettings).toHaveBeenCalledTimes(1);
     const written = m(ipc.setSettings).mock.calls[0]?.[0] as {
-      preferredEditor: string | null;
+      preferredEditor?: string | null;
       customEditorCommand: string;
     };
-    // Remember was unchecked: the command is saved, the preference is not.
-    expect(written.preferredEditor).toBeNull();
+    // Remember was unchecked: the command is saved; the (unchanged) preference is
+    // absent from the write — saveSettings persists only a patch of the changed
+    // keys since task 429 — so it stays null in the store.
+    expect("preferredEditor" in written).toBe(false);
     expect(written.customEditorCommand).toBe("zed {path}");
+    expect(useStore.getState().settings.preferredEditor).toBeNull();
     expect(ipc.openInEditor).toHaveBeenCalledWith("/repo/a", "custom");
   });
 

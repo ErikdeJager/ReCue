@@ -208,6 +208,11 @@ function SettingsModal() {
   const canSelfUpdate = selfUpdates(installKind);
 
   const [draft, setDraft] = useState<SettingsType>(saved);
+  // The draft's seed, captured once at mount (task 429): Save diffs the draft
+  // against what the user was actually LOOKING at — not against the live settings —
+  // so a foreign change (another window's save, task 428) landing while the modal
+  // is open is neither reverted locally nor included in the persisted patch.
+  const baselineRef = useRef(saved);
   // Rendering is Linux-only (#357): drop it from the nav everywhere else, so macOS/Windows
   // render byte-for-byte as before.
   const visibleSections = SECTIONS.filter(
@@ -303,7 +308,7 @@ function SettingsModal() {
 
   const close = () => setOpen(false);
   const save = () => {
-    void saveSettings(draft);
+    void saveSettings(draft, baselineRef.current);
     setOpen(false);
   };
   function update<K extends keyof SettingsType>(
