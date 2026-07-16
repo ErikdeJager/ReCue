@@ -2303,9 +2303,11 @@ export interface AppState {
   /** Close the focused panel — the ⌘W / Ctrl+W keybind (`close-panel`). Precedence:
    * an open big-mode overlay closes first; in Canvas view (or a detached canvas
    * window, #84) the focused leaf (`activeLeafId`) is removed exactly like its
-   * header ×; in Overview the selected **non-agent** panel is removed exactly like
-   * its hover × (`removeOverviewPanel` — agents / schedules / recurrings are never
-   * closed by keyboard: Remove/Cancel are destructive). Anything else is a no-op. */
+   * header × (non-destructive — the agent's PTY survives in the pool); in Overview
+   * the selected card is closed via the exact action its × calls — a panel via
+   * `removeOverviewPanel`, an agent via `removeSession`, a schedule via
+   * `cancelSchedule`, a recurring via `cancelRecurring` (#425). Anything else is a
+   * no-op. */
   closeFocusedPanel: () => void;
   /** Add a new empty Canvas tab (default "Canvas N") and select it (#58). */
   addCanvas: () => void;
@@ -5115,15 +5117,36 @@ export const useStore = create<AppState>()((set, get) => ({
       });
       return;
     }
-    // 3. Overview: remove the selected non-agent panel (its hover-× action). An
-    // agent / schedule / recurring id resolves to no overviewPanels entry, so those
-    // stay — killing an agent by ⌘W would be destructive, not "close".
+    // 3. Overview: remove whatever card is selected, each via the exact action its
+    // hover-× calls, so keyboard and mouse can't drift — a non-agent panel via
+    // `removeOverviewPanel`, an agent via `removeSession` (kill + forget), a schedule
+    // via `cancelSchedule`, a recurring via `cancelRecurring`. Removing an agent/
+    // schedule/recurring is destructive, but that mirrors the card's × (and the
+    // already-destructive Attention ⌘W below) — an agent card can otherwise only be
+    // removed with the mouse.
     if (s.view === "overview" && s.selectedId) {
       for (const [repoKey, panels] of Object.entries(s.overviewPanels)) {
         if (panels.some((p) => p.id === s.selectedId)) {
           void s.removeOverviewPanel(repoKey, s.selectedId);
           return;
         }
+      }
+      const id = s.selectedId;
+      // An agent card → Remove (kill + forget), its × action. (An agent id never
+      // matches an overviewPanels entry, so the loop above skipped it.)
+      if (s.sessions.some((x) => x.id === id)) {
+        void s.removeSession(id);
+        return;
+      }
+      // A scheduled card → cancel it (its × / Cancel action).
+      if (s.schedules.some((x) => x.id === id)) {
+        void s.cancelSchedule(id);
+        return;
+      }
+      // A recurring card → cancel it (its × / Cancel action).
+      if (s.recurrings.some((x) => x.id === id)) {
+        void s.cancelRecurring(id);
+        return;
       }
     }
     // 4. Attention: ⌘W REMOVES the focused agent (kill + forget), exactly like the

@@ -3560,7 +3560,10 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
     expect(s().overviewPanels["/repo/x"]).toBeUndefined();
   });
 
-  it("never closes an agent / schedule / recurring by keyboard", () => {
+  it("removes the selected agent / schedule / recurring in Overview (its × action)", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    const cancelSchSpy = vi.spyOn(ipc, "cancelSchedule").mockResolvedValue();
+    const cancelRecSpy = vi.spyOn(ipc, "cancelRecurring").mockResolvedValue();
     const schedule: ScheduledSession = {
       id: "sch1",
       cwd: "/repo/x",
@@ -3570,18 +3573,61 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
       fireAtMs: 999,
       createdAt: 0,
     } as unknown as ScheduledSession;
+    const recurring: RecurringSession = {
+      id: "rec1",
+      cwd: "/repo/x",
+      interval_secs: 3600,
+      next_fire_at: 999,
+      created_at: 0,
+    } as unknown as RecurringSession;
     useStore.setState({
       view: "overview",
       sessions: [session("a1")],
       schedules: [schedule],
+      recurrings: [recurring],
       selectedId: "a1",
       overviewPanels: {},
     });
+    // Agent card: ⌘W removes it (kill + forget), exactly like the card's ×.
     s().closeFocusedPanel();
-    expect(s().sessions).toHaveLength(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("a1");
+    expect(s().sessions).toHaveLength(0);
+
+    // Schedule card: ⌘W cancels it (its × / Cancel action).
     useStore.setState({ selectedId: "sch1" });
     s().closeFocusedPanel();
-    expect(s().schedules).toHaveLength(1);
+    await Promise.resolve();
+    expect(s().schedules).toHaveLength(0);
+    expect(cancelSchSpy).toHaveBeenCalledWith("sch1");
+
+    // Recurring card: ⌘W cancels it (its × / Cancel action).
+    useStore.setState({ selectedId: "rec1" });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    expect(s().recurrings).toHaveLength(0);
+    expect(cancelRecSpy).toHaveBeenCalledWith("rec1");
+
+    killSpy.mockRestore();
+    cancelSchSpy.mockRestore();
+    cancelRecSpy.mockRestore();
+  });
+
+  it("no-ops in Overview when the selection points at a gone item", () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "overview",
+      sessions: [session("a1")],
+      schedules: [],
+      recurrings: [],
+      selectedId: "gone",
+      overviewPanels: {},
+    });
+    s().closeFocusedPanel();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+    killSpy.mockRestore();
   });
 
   it("removes the focused agent in the Attention view (kill + forget)", async () => {
