@@ -3908,3 +3908,14 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Last-window-quit needs NO code: Tauri's default all-windows-destroyed exit + the existing RunEvent::Exit kill_all already implement "closing non-last just closes, closing last quits" — verified by reading, pinned as an acceptance criterion only.
 - Accepted deferred rough edges (documented, per 433's precedent): non-clean exit toasts may appear in each full window; the persisted canvases activeId boot hint is last-write-wins across full windows (live active tab stays window-local); sidebar collapse/width converge via 428 broadcasts (the card's window-local list — view/selection/tab/filter — is treated as exhaustive).
 - Plan is written against the current tree plus PLAN-430..433 interfaces; step 0 instructs re-verifying every landed shape (primary.rs seam names, store.ts anchors) in the build worktree since 430-433 land first.
+
+## Task 438
+
+- Menu copy is "Open in new window" (matches the existing CanvasTabs pop-out phrase; platform-neutral), with tooltip "Open a new window showing only this folder".
+- Placement: FIRST item of the non-destructive utilities block (after the Views separator, before Reveal/Open in editor/Copy path), per the card's "sits with Reveal / Copy path".
+- The item is always shown — no git/branch gating — since the filter is path-based and works for non-git folders too.
+- Worktree-parent semantics need no new code: the repo menu's `menu.repo` is already the top-level group path (the worktree parent), and 434's preset mode "all" + existing `sessionInFilter` include worktree agents; scoped the item to the repo menu only (NOT the worktree header menu — a worktree folder isn't a "repo" group).
+- No dedupe/focus-existing: every click opens a fresh window (presets are untracked local init state); the returned window id is unused.
+- Failure handling: `.catch` → error toast ("Could not open a new window") — unlike the bare `void revealPath` siblings, because the wrapper's rejection would otherwise be unhandled.
+- The item automatically appears in the collapsed rail's folder-icon menu too (same shared menu, #168) — treated as desired, not suppressed.
+- No new tests: no new pure logic (worktree filter semantics already covered by paths.test.ts; no Sidebar render-test harness exists), full suite run for drift.
