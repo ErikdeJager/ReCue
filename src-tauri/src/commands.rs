@@ -2305,21 +2305,25 @@ pub fn app_window_url(id: &str, init: &AppWindowInit) -> String {
 /// killed on close (sessions keep running, mirrored in surviving windows).
 #[tauri::command]
 pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, SessionError> {
-    create_app_window(&app, init, None)
+    // A user-opened app window is never maximized by default (only a fresh-install
+    // `main`, or a restored previously-maximized window, is — task 443).
+    create_app_window(&app, init, None, false)
 }
 
 /// Create a full app window (task 434) — the ONE creation path, shared by the
-/// `open_app_window` command (`bounds: None` → the default 1280×832 placement)
-/// and the task-439 boot restore (`bounds: Some(clamped)` → applied while the
-/// window is still hidden, before any reveal, so a restored window never flashes
-/// at the default position). Registers the window for primary election (433) and
-/// in the window-state registry (439, with its creation presets — the same
-/// values the URL carries, so a restored window re-persists what it was created
-/// with).
+/// `open_app_window` command (`bounds: None`, `maximized: false` → the default
+/// 1280×832 placement) and the task-439 boot restore (`bounds: Some(clamped)` →
+/// applied while the window is still hidden, before any reveal, so a restored
+/// window never flashes at the default position; `maximized` re-maximizes a window
+/// that was left maximized — task 443). Registers the window for primary election
+/// (433) and in the window-state registry (439, with its creation presets — the
+/// same values the URL carries, so a restored window re-persists what it was
+/// created with).
 pub fn create_app_window(
     app: &AppHandle,
     init: AppWindowInit,
     bounds: Option<(i32, i32, u32, u32)>,
+    maximized: bool,
 ) -> Result<String, SessionError> {
     let id = uuid::Uuid::new_v4().to_string();
     let label = format!("app-{id}");
@@ -2342,6 +2346,12 @@ pub fn create_app_window(
         let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
         let _ = window.set_size(tauri::PhysicalSize::new(width, height));
     }
+    // Task 443: re-maximize a window restored maximized, AFTER applying bounds so
+    // the OS un-maximize target is the stored frame. Applied while still hidden
+    // (#348) → no flash; best-effort (Wayland honors maximize(), macOS zooms).
+    if maximized {
+        let _ = window.maximize();
+    }
     // Never leave the window invisible if its frontend fails to boot (#348).
     schedule_reveal_fallback(app, &label);
     // Task 433: every window-creation site routes through registration. An app
@@ -2349,8 +2359,10 @@ pub fn create_app_window(
     // oldest surviving full window (possibly this one) takes over live.
     crate::primary::register_window(app, &label);
     // Task 439: track the window (+ its creation presets) in the restorable set —
-    // `bounds` when the caller just applied clamped ones, else queried live.
-    crate::window_state::register(app, &label, init.repo, init.canvas, bounds);
+    // `bounds` when the caller just applied clamped ones, else queried live. Task
+    // 443: the maximized flag rides along so a restored maximized window re-persists
+    // as maximized.
+    crate::window_state::register(app, &label, init.repo, init.canvas, bounds, maximized);
     Ok(id)
 }
 
