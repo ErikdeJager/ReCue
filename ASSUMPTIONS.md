@@ -4008,3 +4008,23 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - While maximized, only the flag is updated; stored x/y/width/height stay the last NON-maximized geometry, so un-maximizing a restored window lands on a real size (the builder 1280x832 default on a first-ever maximize).
 - Only the MAIN window maximizes by default on a fresh launch; additional app windows (⌘⌥N / Open-in-new-window / Canvas pop-out) keep the 1280x832 default. The maximized-flag persist/restore applies to all restorable windows (main + app-*), so a formerly-maximized app window does re-maximize.
 - Cross-platform / Wayland: Wayland restores size-only for position (existing #439 degrade) but honors maximize; macOS zoom-while-hidden + is_maximized is the riskiest arm and is flagged for real-box verification in TRAJECTORY_TO_WINDOWS.md, with the geometry floor as the fallback. Backend-only change — the frontend has no window-sizing logic.
+
+## Task 444
+
+- macOS approach: use `titleBarStyle: "Overlay"` + `hiddenTitle` + `trafficLightPosition` with a themed `data-tauri-drag-region` strip (keep native traffic lights, app-color the bar) rather than fully custom-drawn controls — lowest-risk way to deliver an integrated bar and avoids #19's original drag/positioning complaint.
+- Windows/Linux approach: keep native decorations (no hand-drawn caption buttons); native caption bars are OS-drawn above the webview and cannot take ReCue's exact color without full custom decorations, which is out of scope. Best-effort match = sync the native window theme (dark/light) to ReCue's theme. Full custom-decoration parity is deferred/future work, logged in the trajectory docs.
+- The themed strip hosts nothing (no title text, no controls) — native title hidden; it is a pure drag region that just matches the chrome surface color and follows light/dark theme. It reserves ~30px on macOS only (macOS `trafficLightPosition.y` tuned live).
+- Strip visibility/space is gated by the synchronous `data-platform="macos"` CSS seam (set in main.tsx before first render) so it is correct on the first frame with no async-IPC pop-in; it is `display:none` on Windows/Linux so no redundant empty band appears.
+- Strip color = `--surface-mantle` (the sidebar/chrome surface) so it reads as continuous with the app chrome; composes with #348 (painted on first frame, window hidden until then → no launch flash). Native window-theme sync added on window-create and on the runtime theme toggle via `set_theme`.
+- This card deliberately reverses #19 (native-bar decision); the plan requires updating the CLAUDE.md "Window chrome" convention to record the reversal.
+- Rust divergence is `#[cfg(target_os = "macos")]`-gated on the app-window builder; a new pure `theme_to_window_theme` helper (with a unit test) drives the native theme sync. Assumed `core:default` already grants window dragging (per #19); flagged to add `core:window:allow-start-dragging` only if the drag region no-ops at runtime.
+
+## Task 445
+
+- Reuse the SAME shared store field `overviewRepoFilter` for Attention rather than an Attention-only filter, so one sidebar click filters whichever view is active — matches the card's "just like in overview mode". Kept the field name (no rename) to avoid churning ~20 references.
+- Granularity matches exactly what the sidebar already exposes: repo folder (mode:"all"), repo own-branch (branch-line, mode:"own"), and worktree folder — all covered "for free" by reusing `overviewRepoFilter` + `sessionInFilter`. Filtering by an arbitrary branch that is not a checked-out folder or worktree row is a documented non-goal / follow-up (Overview does not do it either).
+- The four sidebar filter-clicks force `setView("overview")` today; guard that so it only switches to Overview when NOT already in Attention (`if (view !== "attention")`), so a folder/branch/worktree click filters the inbox in place instead of yanking the user to Overview.
+- Added a filter indicator bar in the Attention queue pane ("Showing <repo> [· this branch]" + "Show all" clear button) mirroring Overview's `.filterBar`, and made the empty state filter-aware.
+- Re-clicking the currently-filtered row clears the filter — reused the existing `setOverviewRepoFilter` toggle unchanged, so Attention's toggle behavior is identical to Overview's.
+- Threaded an optional `filter` through the pure `attentionQueue` helper (default no-op, existing call sites/tests unchanged) so all five consumers — view, Shift+↑/↓ nav, ⌘W remove, Dismiss-all, dismiss-advance — operate on the visible/filtered queue consistently.
+- Did NOT restyle the inbox icon (task 447's scope); no backend/Rust and no ViewSwitch changes.
