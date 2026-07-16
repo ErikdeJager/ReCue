@@ -1685,3 +1685,74 @@ commit `f005576`; 4 files, +695/-16):
 are needed — identical on macOS, Windows, and Linux.
 
 **Dependencies:** none.
+
+### 427. [x] Multi-window 2/16 — Frontend mirror-capable terminal sizing: attach/propose views, broadcast-driven grid, letterboxed slots
+
+Moves the frontend terminal pool off the "my window owns the PTY size" model onto the task-426
+attach/propose/broadcast protocol: a terminal host **never resizes its own xterm grid** — it
+*proposes* a size for its slot and renders whatever grid the backend's smallest-wins arbiter
+broadcasts, centered/letterboxed in the slot. Every pooled terminal is now mirror-capable (tmux
+`window-size=smallest`), the foundation the rest of the epic builds on. With one owner per session
+today, behavior is **visually unchanged** (single view ⇒ the arbitrated grid *is* this window's
+shaved proposal).
+
+**What shipped** (branch `task-427-frontend-mirror-sizing`, PR
+[#189](https://github.com/ErikdeJager/ReCue/pull/189), merged 2026-07-16 into `backend-decouple`,
+commit `71bcdaf`; 8 frontend files, +417/-53, zero `src-tauri/` changes):
+
+- **`src/components/Terminal/terminalPool.ts`** — the core rework. A per-host `attachView` measures a
+  proposal (fit `proposeDimensions()` + the #262 bottom-clearance shave, falling back to current
+  `term.cols/rows` when unmeasurable), calls `attach_terminal` and applies the **returned** effective
+  grid via `term.resize` **before any scrollback byte is written** (a per-host **attach gate** the
+  replay job awaits, with a 1s safety timeout so a slotless `resetTerminal` host can never wedge the
+  `MAX_CONCURRENT_REPLAYS=1` replay queue). The debounced (still exactly `RESIZE_DEBOUNCE_MS=120`)
+  `ResizeObserver` path now **proposes only** (`propose_terminal_size`), never `fit.fit()`/local
+  `term.resize`; a resize tick while unattached re-attaches instead (self-heal, since the backend
+  drops proposals for never-attached views). A lazy once-per-document pool-level `session://size`
+  listener is **the only** code that resizes an xterm grid after attach. `unmountTerminal` + `dispose`
+  send `detach_terminal` so an invisible terminal never holds the min down. `#351`
+  `trimmable=false` moved to after the attach gate.
+- **`src/components/Terminal/sizeProposal.ts` (+ `.test.ts`)** — **new** pure DOM-free helpers:
+  `sanitizeProposal` (NaN/undefined/non-positive → null, else integers clamped ≥1) and
+  `shaveProposalRows` (the #262 shave applied to the *proposed* row count; no shave for rows ≤ 1 or
+  unreadable metrics).
+- **`src/ipc.ts`** — removed the now-unused `resizePty` wrapper (single caller was the pool; the Rust
+  `resize_pty` command stays untouched per 426); added `attachTerminal` → `GridPayload`,
+  `detachTerminal`, `proposeTerminalSize`, and a standalone `subscribeSessionSize` helper (feeds the
+  pool, not the store — the `outputBus` "geometry is terminal-plumbing, keep it out of React state"
+  philosophy).
+- **`src/types/index.ts`** — `SizePayload { id, cols, rows }` + `GridPayload { cols, rows }` mirrors.
+- **`src/windowContext.ts` (+ `.test.ts`)** — new `IS_DETACHED_CANVAS_WINDOW` constant replaces
+  `IS_MAIN_WINDOW` at the three #105 WebGL-gate sites, so the DOM-renderer fallback is scoped to
+  detached **canvas** windows specifically and a future full app window (card 9/16) gets WebGL by
+  default (byte-identical today — asserted equal to `!IS_MAIN_WINDOW`; the #364 per-window latch
+  untouched).
+- **`src/components/Terminal/Terminal.module.css`** — token-only letterbox: flex-centering on
+  `.terminal` + `flex:0 0 auto` on `:global(.xterm)`; bands show the existing
+  `--terminal-bg-user`/`--terminal-bg` wrapper token (no new colors). Grid == fit (today's single-view
+  case) is pixel-equivalent.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 427)
+
+- **Attach on every `mountTerminal`** (backend upsert; a re-mount into a different slot re-measures);
+  grid-before-replay enforced by the attach gate + 1s timeout (because `replayQueue` starts jobs
+  synchronously on enqueue, before the slot is assigned, and a slotless `resetTerminal` host never
+  attaches).
+- The **returned** effective grid is applied via `term.resize` (not the broadcast) to guarantee
+  ordering; the attach-triggered broadcast then arrives as a no-op resize.
+- `session://size` consumed by a **lazy once-per-document pool-level listener** (registered from
+  `ensureHost`, never unsubscribed — the `parkingLayer` precedent), never store state.
+- Fire-and-forget attach/detach/propose ordering leans on Tauri's per-webview invoke FIFO + the
+  synchronous (#353) backend commands + upsert/no-op semantics; the `!attached ⇒ attachView` self-heal
+  recovers any dropped attach.
+- The scrollbar-hugs-grid cosmetic nuance is a flagged smoke check with a `padding-right` fallback.
+
+**Out of scope (deferred):** ownership/reconcile policy (`computeSessionOwners`, `ownedHere`,
+`DetachedNote`, per-window `reconcileTerminals`) stays as-is — one window renders a session at a time,
+so the mirror path is exercised but single-view until card 11/16. No `src-tauri/` change.
+
+**Cross-platform:** WebView TS + CSS (identical WKWebView / WebView2 / WebKitGTK — flex centering and
+token vars are universal); the one platform-sensitive primitive (PTY resize) lives behind the 426
+backend seam.
+
+**Dependencies:** Task 426.
