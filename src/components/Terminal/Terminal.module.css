@@ -6,7 +6,8 @@
   height: 100%;
   /* #390: the configurable terminal-background lightness is published to
      --terminal-bg-user by the pool; the plain-var fallback keeps the frame at the
-     near-black --terminal-bg default until (and if) the user lightens it. */
+     --terminal-bg default (the app's panel surface) until (and if) the user
+     lightens it. */
   background: var(--terminal-bg-user, var(--terminal-bg));
   overflow: hidden;
 }

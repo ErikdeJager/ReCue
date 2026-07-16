@@ -1,10 +1,12 @@
 // Pure color math for the configurable terminal background (#390).
 //
-// The agent/shell terminal background is near-black by default (`--terminal-bg`
-// `#11111b`, deliberately kept dark in both themes, #333). A Settings → Appearance
+// The agent/shell terminal background matches the app's panel surface by default
+// (`--terminal-bg` `#1e1e2e` — `--surface-base` dark / Catppuccin Mocha Base,
+// deliberately kept dark in both themes, #333). A Settings → Appearance
 // slider lets the user lighten it toward a soft gray without touching the
 // `--terminal-bg` token itself: this helper linearly interpolates each RGB channel
-// from the base (`0` = today's near-black, byte-for-byte) to a gray-ish endpoint
+// from the base (`0` = the app's panel surface, byte-for-byte — the terminal blends
+// with the app) to a gray-ish endpoint
 // (`100`). Kept pure (no DOM / xterm imports) so it's unit-testable; the pool reads
 // the live base off `--terminal-bg` and publishes the result to a separate
 // `--terminal-bg-user` CSS var + the xterm theme.
@@ -12,9 +14,10 @@
 // Platform-neutral: plain JS color math, no `color-mix`, no OS-specific code — so it
 // behaves identically on macOS, Windows, and Linux (incl. detached canvas windows).
 
-/** Lightness 0 endpoint — today's terminal background (Crust). Interpolating from
- * this at `lightness === 0` reproduces `#11111b` exactly. */
-export const TERMINAL_BG_DARKEST = "#11111b";
+/** Lightness 0 endpoint — the app's panel surface (`--surface-base` dark / Mocha
+ * Base), so slider 0 = the terminal blends with the app. Interpolating from this at
+ * `lightness === 0` reproduces `#1e1e2e` exactly. */
+export const TERMINAL_BG_DARKEST = "#1e1e2e";
 
 /** Lightness 100 endpoint — a soft gray. Chosen to keep readable contrast with
  * `--terminal-fg` (`#cdd6f4`): the pair computes to ~7.75:1, above the WCAG AAA 7:1
@@ -57,7 +60,7 @@ function toHex([r, g, b]: [number, number, number]): string {
 /**
  * The terminal background color for a given slider `lightness` (0–100), linearly
  * interpolated per RGB channel from `base` (the `--terminal-bg` value, default
- * `#11111b`) toward {@link TERMINAL_BG_LIGHTEST}.
+ * `#1e1e2e` — the app's panel surface) toward {@link TERMINAL_BG_LIGHTEST}.
  *
  * - `0` → `base` exactly (so the default is byte-for-byte unchanged).
  * - `100` → {@link TERMINAL_BG_LIGHTEST}.

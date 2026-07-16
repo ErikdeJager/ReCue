@@ -1409,13 +1409,13 @@ export const DEFAULT_SETTINGS: Settings = {
   // is one-time migrated down by `migrateTerminalLineHeight` (guarded by the flag below).
   terminalLineHeight: 1.0,
   terminalCursorBlink: true,
-  // 25 (#414, raised from the #390 default of 0) = a slightly brightened terminal
-  // background; 0 is the near-black `#11111b` (today's byte-for-byte look) and 100 a
-  // soft gray. New / never-saved installs get 25 straight from this default; an install
-  // that once saved an explicit legacy 0 is one-time migrated up to 25 by
-  // `migrateTerminalBackground` (guarded by the flag below). Users who prefer the old
-  // near-black look drag the slider back to 0.
-  terminalBackgroundLightness: 25,
+  // 0 = the `--terminal-bg` base `#1e1e2e` — exactly the app's panel surface
+  // (`--surface-base` dark), so terminals blend with the app by default; the slider
+  // still lightens toward a soft gray (100). New / never-saved installs get 0 straight
+  // from this default; an install that once saved an explicit #414-era 25 is one-time
+  // migrated down to 0 by `migrateTerminalBackground` (guarded by the flag below).
+  // Users who prefer a brighter terminal drag the slider back up.
+  terminalBackgroundLightness: 0,
   theme: "dark",
   accentColor: "",
   reduceMotion: false,
@@ -1489,11 +1489,15 @@ export const DEFAULT_SETTINGS: Settings = {
   // once (bump an explicit legacy 1.2 → 1.0), then set true so it never re-triggers. Same
   // rationale as `onboarded: false`.
   terminalLineHeightMigrated: false,
-  // False by default (#414): opt-in one-time flag mirroring `terminalLineHeightMigrated`.
+  // False by default: opt-in one-time flag mirroring `terminalLineHeightMigrated`.
   // An older blob lacks the key → mergeSettings back-fills false → the terminal
-  // background-lightness migration is eligible to run once (bump an explicit legacy 0 →
-  // 25), then set true so it never re-triggers. Same rationale as `onboarded: false`.
-  terminalBackgroundMigrated: false,
+  // background-match migration is eligible to run once (bump an explicit #414-era 25 →
+  // 0, now that the `--terminal-bg` base matches the app's panel surface), then set
+  // true so it never re-triggers. Deliberately a NEW flag: #414-era installs already
+  // have the retired `terminalBackgroundMigrated: true` stamped (the stale key rides
+  // along harmlessly in persisted blobs), so reusing it would make this migration a
+  // permanent no-op. Same rationale as `onboarded: false`.
+  terminalBackgroundMatchMigrated: false,
   // "Open in editor": no editor chosen yet — the first use opens the picker modal
   // (unchecking its "Remember my choice" keeps asking). Older blobs back-fill null.
   preferredEditor: null,
@@ -1578,29 +1582,38 @@ export function migrateTerminalLineHeight(s: Settings): {
   };
 }
 
-/** The legacy default terminal background lightness (#414), migrated up to 25. */
-const LEGACY_TERMINAL_BACKGROUND_LIGHTNESS = 0;
+/** The legacy default terminal background lightness (the #414 default being retired),
+ * migrated back down to 0 now that the base itself matches the app's panel surface. */
+const LEGACY_TERMINAL_BACKGROUND_LIGHTNESS = 25;
 
 /**
- * One-time migration (#414) of the terminal background lightness. New / never-saved
- * installs get 25 from `DEFAULT_SETTINGS`, but an install that once saved settings has an
- * explicit `terminalBackgroundLightness: 0` persisted (a stored value wins over the default
- * in `mergeSettings`), so it needs an active bump to 25.
+ * One-time migration of the terminal background lightness — the inverse of #414's own
+ * 0 → 25 bump. `--terminal-bg` now IS the app's panel surface (`#1e1e2e`,
+ * `--surface-base` dark), so the default lightness returns to 0 and terminals blend
+ * with the app. New / never-saved installs get 0 from `DEFAULT_SETTINGS`, but a
+ * #414-era install has an explicit `terminalBackgroundLightness: 25` persisted (a
+ * stored value wins over the default in `mergeSettings`), so it needs an active bump
+ * down to 0.
  *
- * Gated by the `terminalBackgroundMigrated` flag (mirrors `terminalLineHeightMigrated`):
- * once set, the migration never runs again — so a user who *re-picks* 0 after the migration
- * keeps it. Only a value that is **exactly** the old default 0 is bumped; any other
- * deliberately chosen value (5/10/50/100/…) is left untouched. The migration target
+ * Gated by the NEW `terminalBackgroundMatchMigrated` flag (mirrors
+ * `terminalLineHeightMigrated`) — existing installs already have the retired #414
+ * `terminalBackgroundMigrated: true` stamped, so reusing that flag would make this
+ * migration a permanent no-op. Once set, the migration never runs again — so a user
+ * who *re-picks* 25 after the migration keeps it (the same accepted tradeoff as
+ * #414/#367: a deliberately-chosen 25 is nudged to 0 once, re-picking it afterwards
+ * sticks). Only a value that is **exactly** the old default 25 is bumped; any other
+ * deliberately chosen value (0/5/10/50/100/…) is left untouched. The migration target
  * references `DEFAULT_SETTINGS.terminalBackgroundLightness` so it can't drift from the
- * default. `changed` is true only when the value was actually bumped — it drives whether the
- * migrated blob is persisted once — while the flag is stamped true regardless, so an install
- * whose value wasn't legacy still records that the one-time check has run.
+ * default. `changed` is true only when the value was actually bumped — it drives
+ * whether the migrated blob is persisted once — while the flag is stamped true
+ * regardless, so an install whose value wasn't legacy still records that the one-time
+ * check has run.
  */
 export function migrateTerminalBackground(s: Settings): {
   settings: Settings;
   changed: boolean;
 } {
-  if (s.terminalBackgroundMigrated) return { settings: s, changed: false };
+  if (s.terminalBackgroundMatchMigrated) return { settings: s, changed: false };
   const wasLegacy =
     s.terminalBackgroundLightness === LEGACY_TERMINAL_BACKGROUND_LIGHTNESS;
   return {
@@ -1609,7 +1622,7 @@ export function migrateTerminalBackground(s: Settings): {
       terminalBackgroundLightness: wasLegacy
         ? DEFAULT_SETTINGS.terminalBackgroundLightness
         : s.terminalBackgroundLightness,
-      terminalBackgroundMigrated: true,
+      terminalBackgroundMatchMigrated: true,
     },
     changed: wasLegacy,
   };
@@ -4335,7 +4348,8 @@ export const useStore = create<AppState>()((set, get) => ({
     // One-time terminal migrations, chained before the settings are applied / land in the
     // store so terminals render the migrated values from the first paint:
     //  - #367: bump an explicit legacy line-height 1.2 down to 1.0.
-    //  - #414: bump an explicit legacy background-lightness 0 up to 25.
+    //  - bump an explicit #414-era background-lightness 25 down to 0 (the
+    //    `--terminal-bg` base now matches the app's panel surface).
     // `settingsMigrated` (either changed) gates the one-off persist below.
     const lh = migrateTerminalLineHeight(merged);
     const bg = migrateTerminalBackground(lh.settings);

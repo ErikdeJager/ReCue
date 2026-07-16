@@ -9,7 +9,7 @@ import {
 const HEX = /^#[0-9a-f]{6}$/i;
 
 describe("terminalBackgroundColor (#390)", () => {
-  it("returns the base (near-black) at lightness 0", () => {
+  it("returns the base (the app's panel surface) at lightness 0", () => {
     expect(terminalBackgroundColor(0)).toBe(TERMINAL_BG_DARKEST);
     expect(terminalBackgroundColor(0, "#202030")).toBe("#202030");
   });
@@ -19,11 +19,11 @@ describe("terminalBackgroundColor (#390)", () => {
   });
 
   it("interpolates the midpoint halfway between base and lightest", () => {
-    // #11111b -> #3a3a45, midpoint each channel:
-    // R (0x11..0x3a) = (17+58)/2 = 37.5 -> round 38 = 0x26
-    // G same as R = 0x26
-    // B (0x1b..0x45) = (27+69)/2 = 48 = 0x30
-    expect(terminalBackgroundColor(50)).toBe("#262630");
+    // #1e1e2e -> #3a3a45, midpoint each channel:
+    // R (0x1e..0x3a) = (30+58)/2 = 44 = 0x2c
+    // G same as R = 0x2c
+    // B (0x2e..0x45) = (46+69)/2 = 57.5 -> round 58 = 0x3a
+    expect(terminalBackgroundColor(50)).toBe("#2c2c3a");
   });
 
   it("clamps values below 0 to the base", () => {
