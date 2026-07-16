@@ -3870,3 +3870,16 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Accepted edge: shells now spawn before any webview subscribes, so a shell that dies instantly (broken $SHELL) emits session://exited into the void and shows no exited overlay — rare, degrades to a dead-looking panel; scrollback still replays via replayDedupe.
 - Task 429 landed mid-planning (PR #191 merged into backend-decouple while exploring); plan anchors were re-verified post-429 but all line numbers are marked indicative — the implementer re-locates by content and re-verifies 430/431's landed shapes in the build worktree.
 - No CLAUDE.md / patch-notes / version changes (pipeline convention); only the directly-touched Rust doc comments are updated.
+
+## Task 433
+
+- "Full app window" (primary-eligible) = any window whose label does not start with "canvas-"; detached canvas windows (#84) are never primary. When only canvas windows survive (main closed), primary is null and NO window runs the once-per-app effects — matching today's IS_MAIN_WINDOW outcome.
+- Election is oldest-surviving by creation order; a live window is never demoted, so takeover is monotonic (fires at most once per window lifetime).
+- Pre-sync frontend default: the "main"-labelled window assumes primary (preserves today's semantics outside Tauri / in vitest / pre-snapshot); flagged in-code that card 9/16's secondary full windows must default to null instead.
+- Read the card's "everything currently keyed on IS_MAIN_WINDOW that must run once per APP" as covering effects beyond its explicit list: also re-gated the watched-agent native notification (#336), the schedule://error and recurring://error toasts, the recurring://fired recents-prepend, and the container://building toast — same double-fire hazard class.
+- The onExited handler's IS_MAIN_WINDOW branches (incl. the non-clean "Session exited" toast) are deliberately untouched — Task 431 owns exit reshaping and defers N-window exit-toast dedup to later epic cards; likewise 431's focused-window toast_target stays a separate mechanism.
+- Reconciled the card's "startUsagePolling" item against PLAN-430: the frontend poll is deleted there (Rust owns the one poll; the usage slice is an event-fed mirror seeded per-window), so nothing usage-related is re-gated or re-armed; implementer re-verifies in the worktree.
+- Live takeover (armPrimaryEffects) re-arms only the folder-color auto-assign subscription and re-runs checkForUpdate (per-window update slice); boot one-shots (onboarding, pruneMissingFolders, migration persists, updated-toast/setLastVersion) are NOT re-run on takeover.
+- setView(defaultView), the sidebar-collapse/repo-order persists of locally-initiated actions, and all canvas-window self-management stay on their existing per-window gates, per the card's per-window list.
+- open_canvas_window also routes through primary::register_window (a documented no-op for ineligible canvas labels) so every window-creation site inherits the registration seam for 9/16.
+- Event/command naming follows the landed 428/430 conventions: window://primary carries the full value { primary: string|null }, emitted on change only, state written before emit, with a primary_window snapshot command fetched after subscribing.
