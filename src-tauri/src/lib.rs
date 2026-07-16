@@ -278,6 +278,10 @@ pub fn run() {
                 // thread — costliest on Linux/WebKitGTK — so under a TUI repaint storm
                 // this collapses hundreds of per-8KB emits/sec into a few, keeping
                 // keystroke echo responsive instead of queueing behind output events.
+                //
+                // The view registry (managed above) drives the task-440 targeted
+                // Output/Size delivery; the shared borrow coexists with `handle.emit`.
+                let views = handle.state::<terminal_views::TerminalViews>();
                 while let Ok(first) = rx.recv() {
                     let mut batch = vec![first];
                     while batch.len() < MAX_EVENT_DRAIN {
@@ -289,17 +293,36 @@ pub fn run() {
                     for event in pty::coalesce_output_events(batch) {
                         let _ = match event {
                             SessionEvent::Output { id, bytes, offset } => {
-                                // base64-encode here (off the per-session reader thread) so the
-                                // `session://output` payload is a compact string, not a multi-KB
-                                // JSON integer array the WebView main thread must JSON.parse (#261).
-                                handle.emit(
-                                    "session://output",
-                                    commands::OutputPayload {
-                                        id,
-                                        b64: commands::encode_output(&bytes),
-                                        offset,
-                                    },
-                                )
+                                // Targeted delivery (task 440): only windows holding a live
+                                // terminal host for this session receive the bytes. Each emit
+                                // is an evaluate-JS on each target webview's main thread —
+                                // costliest on Linux/WebKitGTK — and previously went to EVERY
+                                // window (N windows × a TUI storm's emit rate). With no
+                                // subscriber at all (e.g. a boot-resumed session never
+                                // scrolled into view, #351) we skip the base64 encode AND the
+                                // emit entirely; the backend Scrollback retains the bytes and
+                                // the first attaching host back-fills via session_scrollback
+                                // + the offset dedupe. Skips never reorder events, so Exited
+                                // still lands after the final delivered Output. Lifecycle
+                                // events (state/exited/name/forkable) stay app-global below
+                                // so every window's sidebar/busy dots/Attention stay live.
+                                let targets = views.output_targets(&id);
+                                if targets.is_empty() {
+                                    Ok(())
+                                } else {
+                                    // base64-encode here (off the per-session reader thread) so the
+                                    // `session://output` payload is a compact string, not a multi-KB
+                                    // JSON integer array the WebView main thread must JSON.parse (#261).
+                                    handle.emit_filter(
+                                        "session://output",
+                                        commands::OutputPayload {
+                                            id,
+                                            b64: commands::encode_output(&bytes),
+                                            offset,
+                                        },
+                                        move |t| commands::output_target_matches(&targets, t),
+                                    )
+                                }
                             }
                             SessionEvent::Exited {
                                 id,
@@ -351,12 +374,24 @@ pub fn run() {
                             }
                             SessionEvent::Size { id, cols, rows } => {
                                 // The authoritative multi-window PTY grid (task 426),
-                                // emitted only by the terminal-view arbiter. No frontend
-                                // listener yet (later epic cards).
-                                handle.emit(
-                                    "session://size",
-                                    commands::SizePayload { id, cols, rows },
-                                )
+                                // emitted only by the terminal-view arbiter and consumed
+                                // pool-level by `terminalPool.ensureSizeSubscription`
+                                // (task 427). Targeted like Output (task 440): only
+                                // subscriber windows receive it — an ATTACHING host is
+                                // never stranded by the targeting, because it adopts the
+                                // grid from `attach_terminal`'s direct return, and attach
+                                // upserts it as a subscriber before this broadcast fires.
+                                // A session with no live host anywhere gets no Size emit.
+                                let targets = views.output_targets(&id);
+                                if targets.is_empty() {
+                                    Ok(())
+                                } else {
+                                    handle.emit_filter(
+                                        "session://size",
+                                        commands::SizePayload { id, cols, rows },
+                                        move |t| commands::output_target_matches(&targets, t),
+                                    )
+                                }
                             }
                         };
                     }
@@ -448,6 +483,8 @@ pub fn run() {
             commands::attach_terminal,
             commands::detach_terminal,
             commands::propose_terminal_size,
+            commands::subscribe_session_output,
+            commands::unsubscribe_session_output,
             commands::claim_file,
             commands::release_file_claim,
             commands::file_claims,

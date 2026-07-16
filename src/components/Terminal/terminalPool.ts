@@ -39,7 +39,11 @@
 // clamps the arbitrated minimum. The painted grid is centered/letterboxed in the slot
 // (CSS). The legacy PTY-resize IPC is no longer called from the frontend. Single view
 // per session (today) ⇒ the broadcast grid equals this window's shaved proposal —
-// visually unchanged.
+// visually unchanged. Task 440 adds the DELIVERY rule on top: this window receives
+// `session://output` / `session://size` for a session only while it holds a live host
+// (subscribe at createHost, unsubscribe at dispose — parking never touches it), so a
+// zero-subscriber session costs no emit at all and a late host back-fills via
+// `session_scrollback` + the offset dedupe.
 
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -61,7 +65,9 @@ import {
   proposeTerminalSize,
   saveClipboardImage,
   sessionScrollback,
+  subscribeOutput,
   subscribeSessionSize,
+  unsubscribeOutput,
   writeStdin,
 } from "../../ipc";
 import { onSessionOutput } from "../../outputBus";
@@ -186,11 +192,12 @@ let parking: HTMLDivElement | null = null;
 // Pool-level `session://size` subscription (task 427): this handler is the ONLY
 // code that resizes an xterm grid after attach. Lazily registered once per
 // document (the `parkingLayer` pattern) from `ensureHost`, and never
-// unsubscribed — the pool lives for the window's lifetime. Tauri events are
-// global, so every window receives every broadcast; each window applies it only
-// to its own host for that session — that IS the mirror behavior — and
-// `term.resize` early-returns on an unchanged grid, so redundant broadcasts are
-// free.
+// unsubscribed — the pool lives for the window's lifetime. Since task 440 the
+// broadcast is TARGETED at the session's subscriber windows (the listen is
+// label-scoped in ipc.ts) rather than app-global; each subscriber window still
+// applies it only to its own host for that session — that IS the mirror
+// behavior — and `term.resize` early-returns on an unchanged grid, so redundant
+// broadcasts are free.
 let sizeSubscribed = false;
 function ensureSizeSubscription(): void {
   if (sizeSubscribed) return;
@@ -599,6 +606,17 @@ function createHost(sessionId: string): TerminalHost {
   // backend drops proposals for never-attached views).
   let attached = false;
 
+  // Targeted output delivery (task 440): this window receives session://output
+  // for a session only while it holds a live host. Register at CREATION (not
+  // mount) so a slotless host (resetTerminal's eager branch) and a parked host
+  // keep their byte stream — the pool never re-replays (#18/#351), so a delivery
+  // gap would be permanent. The replay job awaits this ack before fetching the
+  // scrollback snapshot: bytes before registration arrive via the snapshot,
+  // bytes after arrive live, and dedupeAgainstScrollback drops the overlap.
+  const outputSubscribed = subscribeOutput(sessionId, WINDOW_LABEL).catch(
+    () => {},
+  );
+
   // The attach GATE: the scrollback replay must not write a byte until the first
   // attach has adopted the arbitrated grid (see the replay job below). It needs a
   // timeout because `replayQueue.pump()` starts the job synchronously on enqueue —
@@ -926,6 +944,15 @@ function createHost(sessionId: string): TerminalHost {
     // via the gate's timeout, so it can never wedge the serialized queue.
     await attachGate;
     if (disposed) return;
+    // Await the task-440 subscribe ack BEFORE the snapshot fetch: any byte
+    // emitted before this window was a delivery target is guaranteed to be in
+    // the snapshot (the reader rings before emitting), bytes after arrive
+    // live, and dedupeAgainstScrollback drops the overlap by offset. An invoke
+    // always settles — and the `.catch` at creation makes a Tauri-less
+    // unit-test environment resolve immediately — so the serialized queue can
+    // never wedge here (the WRITE_TIMEOUT_MS philosophy).
+    await outputSubscribed;
+    if (disposed) return;
     // From here on, keep every byte (see pendingOutput.ts). Moved below the gate:
     // the pending-buffer cap stays valid until the FETCH is dispatched (#351), and
     // the fetch now happens after the gate.
@@ -1025,6 +1052,12 @@ function createHost(sessionId: string): TerminalHost {
     // arbitrated grid, and settle the attach gate so a disposed host can't hold the
     // serialized replay queue until the timeout.
     host.detachView();
+    // End targeted delivery for this window (task 440) — the subscription
+    // follows host lifetime, so dispose is its one teardown site. Same-webview
+    // invokes are processed in order (the 427 rule), so a resetTerminal
+    // dispose→recreate lands this unsubscribe(old) strictly before the fresh
+    // host's subscribe(new) — the recreated host stays subscribed.
+    void unsubscribeOutput(sessionId, WINDOW_LABEL).catch(() => {});
     clearTimeout(gateTimer);
     settleGate();
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
@@ -1101,7 +1134,9 @@ export function unmountTerminal(sessionId: string, slot: HTMLElement): void {
   host.slot = null;
   parkingLayer().appendChild(host.container);
   // Withdraw this window's view (task 427): an invisible terminal must never
-  // hold the arbitrated minimum down.
+  // hold the arbitrated minimum down. The task-440 output subscription is
+  // deliberately NOT touched — the parked host keeps consuming live bytes so
+  // its buffer stays current (there is no re-replay on re-mount, #18/#351).
   host.detachView();
 }
 
