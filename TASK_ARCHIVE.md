@@ -1820,3 +1820,72 @@ commit `ff06d6d`; 4 files, +836/-22, **no `lib.rs` change**):
 `#[cfg]` code added — platform-neutral by construction.
 
 **Dependencies:** Task 426.
+
+### 429. [x] Multi-window 4/16 — Server-side merges for the clobber-prone whole-blob writes (settings / canvases / diff-seen patches under the Store mutex)
+
+Kills the stale-window lost-update class for the three clobber-prone whole-blob persists: a window
+that saves **settings**, edits the **canvas tab set**, or toggles a **diff-seen** marker now sends
+only *what it changed* (a patch), and Rust merges that patch over the current persisted state **under
+the Store mutex** — so two windows writing different fields of the same slice can never silently
+revert each other. Task 428's broadcasts shrink the staleness window; these server-side merges close
+the residue a debounce/draft can always straddle.
+
+**What shipped** (branch `task-429-server-side-merges`, PR
+[#191](https://github.com/ErikdeJager/ReCue/pull/191), merged 2026-07-16 into `backend-decouple`,
+commit `4b7125c`; 8 files, +789/-116, **no `lib.rs` change**):
+
+- **`src-tauri/src/store.rs`** — a lock-once `update_with<R>(mutate)` (mutate + persist under a single
+  lock; `update` re-expressed through it), three pure unit-tested free helpers
+  (`merge_settings_patch` — shallow top-level, values written verbatim incl. explicit `null`, nested
+  objects like `keybinds` replace whole; `merge_diff_seen_patch` — two-level per-key merge with `null`
+  tombstones (`{repo:{file:null}}` deletes an entry, `{repo:null}` a repo, emptied repos pruned);
+  `merge_canvases_patch` — field-wise `{canvases?, activeId?}`, a stored `activeId` naming no tab
+  re-homes to the first, an activeId-only write against an empty/absent array is dropped), and the
+  three `Store::merge_*` methods returning the merged slice for the broadcast. Full merge-semantics
+  unit tests, including the two-stale-writer no-clobber regression cases.
+- **`src-tauri/src/commands.rs`** — `set_settings` / `set_diff_seen` swap to the merge methods
+  (keeping 428's post-persist broadcasts); **`set_canvases` drops the `window: Window` param and the
+  main-vs-detached label branch entirely**, merges the patch, and emits `canvas://changed` with the
+  merged blob — correct for ANY window.
+- **`src/types/index.ts`** — `DiffSeenPatch` (`Record<string, Record<string, string|null>|null>`) +
+  `PersistedCanvasesPatch` (`{ canvases?, activeId? }`).
+- **`src/ipc.ts`** — the three wrappers now take patches (`setSettings(Partial<Settings>)`,
+  `setDiffSeen(DiffSeenPatch)`, `setCanvases(PersistedCanvasesPatch)`).
+- **`src/store.ts`** — exported pure `settingsPatch(base, next)`; `saveSettings(settings, baseline?)`
+  diffs against the modal's draft-seeding snapshot and persists only the patch (local apply is
+  patch-over-current, mirroring the server merge so 428's echo is a no-op); a module-level
+  `pendingDiffSeenPatch` accumulator flushed/cleared by the existing 300 ms `persistDiffSeen`
+  debounce; every `setCanvases` call site sends only what it changed (`selectCanvas` → `activeId`
+  only, layout/rename/reorder → `canvases` only, `addCanvas` → both).
+- **`src/components/Settings/Settings.tsx`** — a `baselineRef` capturing the draft's seed, passed to
+  `saveSettings` on Save.
+- **`src/store.patch.test.ts`** (new) + `src/store.editor.test.ts` (aligned) — Vitest proving the
+  patch payloads (`settingsPatch` semantics, baseline-respecting saves, diff-seen tombstone flush,
+  `selectCanvas`/`renameCanvas`/`addCanvas` payload shapes).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 429)
+
+- Kept the existing command names + arg keys (new merge *semantics*, not new `patch_*` commands) so
+  there's **no `lib.rs`/`generate_handler`/capability churn** — minimizing conflict with Task 428,
+  which reshapes the same setters.
+- Merges execute inside a **single mutex-held Store closure** (`update_with` returning the merged
+  slice), not a read-then-write in `commands.rs` — "under the Store mutex" taken literally to close
+  the two-lock interleave race.
+- Settings patch is diffed against the **modal's draft-seed snapshot** (new optional `baseline` arg),
+  so two simultaneously-open modals saving different fields don't clobber. A patch-only persisted blob
+  may lack never-changed keys — safe: `mergeSettings` fills TS defaults and the Rust boot readers
+  (`early_settings`/`linux_gtk`/`containerImage`) already fail open to defaults.
+- The `canvases` array itself stays **whole-array last-write-wins** (per-tab merging out of scope);
+  concurrent same-key writes stay last-write-wins by design — the fix targets different-key clobbering.
+- 428's broadcast helpers are the post-merge emitters (they re-read the store, so carry the merged
+  value); the plan told the implementer to re-verify 428's landed shape in the worktree first (the
+  card's cited line `~1452-1464` had drifted to `~1517-1548` after Task 426 landed).
+
+**Rollback-safe:** `sessions.json` shapes are unchanged (a merge-path-written blob is a valid whole
+blob for the old code), so downgrade is safe; a full-blob payload degrades to "patch every key" —
+identical result.
+
+**Cross-platform:** pure JSON/state logic, no path/shell/key/`#[cfg]` code — platform-neutral by
+construction on macOS, Windows, and Linux.
+
+**Dependencies:** Task 428.
