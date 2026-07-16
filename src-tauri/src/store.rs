@@ -246,6 +246,11 @@ pub struct RecurringSession {
 /// tauri's `set_position`/`set_size` setters accept, so a save→restore cycle never
 /// accretes the title-bar height. Presets are creation-time, not live UI state (a
 /// window opened plain and later filtered restores plain).
+///
+/// `maximized` (task 443) records whether the window was left maximized; `x/y/width/
+/// height` then stay the last NON-maximized geometry (the un-maximize / restore
+/// target), and restore re-maximizes AFTER applying that geometry. Its `serde(default)`
+/// keeps a pre-443 file (no key) loading as `false`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistedWindow {
     pub label: String,
@@ -253,6 +258,8 @@ pub struct PersistedWindow {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    #[serde(default)]
+    pub maximized: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1426,6 +1433,13 @@ mod tests {
             serde_json::from_str(r#"{"sessions":[],"recents":[]}"#).expect("legacy state loads");
         assert!(legacy.window_state.is_empty());
 
+        // A pre-443 window entry (no `maximized` key) deserializes to `false` (task
+        // 443's serde-default backward compatibility).
+        let pre443: PersistedWindow =
+            serde_json::from_str(r#"{"label":"main","x":0,"y":0,"width":1280,"height":832}"#)
+                .expect("pre-443 window entry loads");
+        assert!(!pre443.maximized);
+
         let windows = vec![
             PersistedWindow {
                 label: "main".to_string(),
@@ -1433,6 +1447,7 @@ mod tests {
                 y: 60,
                 width: 1280,
                 height: 832,
+                maximized: true, // task 443: the maximized flag round-trips
                 repo: None,
                 canvas: None,
             },
@@ -1442,6 +1457,7 @@ mod tests {
                 y: 0,
                 width: 900,
                 height: 700,
+                maximized: false,
                 repo: Some("/repo/a".to_string()),
                 canvas: Some("c1".to_string()),
             },
@@ -1450,6 +1466,9 @@ mod tests {
 
         let reloaded = Store::load(&path);
         assert_eq!(reloaded.window_state(), windows);
+        // The maximized flag survives the save→load round-trip.
+        assert!(reloaded.window_state()[0].maximized);
+        assert!(!reloaded.window_state()[1].maximized);
 
         // An empty set persists as empty (not serialized) and reloads empty.
         store.set_window_state(vec![]).unwrap();
