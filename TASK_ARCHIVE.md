@@ -2086,3 +2086,69 @@ test runs on all OSes.
 
 **Dependencies:** Task 431 (sequencing — 431 edits the same `lib.rs` resume thread and `store.ts` boot
 surfaces; via 431 → 430 → 429).
+
+### 433. [x] Multi-window 8/16 — Primary-window election: Rust tracks full windows and broadcasts `window://primary`; the once-per-app frontend effects re-gate on `isPrimary` with live takeover
+
+Gives the app exactly ONE window that runs the remaining once-per-app frontend effects (onboarding,
+folder pruning, the update check + "Updated to vX" toast, the boot migration persists, the
+folder-color auto-assign, the `schedule://fired` transition, the once-per-app toasts/notifications) —
+elected in Rust as the **oldest surviving full window** and broadcast as `window://primary` — so when
+the epic's N full app windows exist (card 9/16) those effects never double-run, and when the primary
+closes the newly elected primary **takes over live**. Today (one main window + detached canvas-only
+windows) behavior is byte-identical: main is always primary.
+
+**What shipped** (branch `task-433-primary-window-election`, PR
+[#196](https://github.com/ErikdeJager/ReCue/pull/196), merged 2026-07-16 into `backend-decouple`,
+commit `473917b`; 8 files, +678/-74):
+
+- **`src-tauri/src/primary.rs`** — **new**. A pure `is_full_window(label)` (eligible = label doesn't
+  start with `canvas-`), a pure `Election` state machine (eligible labels in creation order; primary =
+  oldest survivor; `register`/`unregister` return whether the primary changed; monotonic — a survivor
+  is never demoted), the Tauri-managed `Primary(Mutex<Election>)` (state written **before** each emit,
+  the task-430 subscribe-then-fetch invariant), a `PrimaryPayload { primary: Option<String> }`,
+  `register_window`/`unregister_window` (try_state + poison-recovering lock, emit on change), and the
+  `primary_window` snapshot command. Full pure unit tests.
+- **`src-tauri/src/lib.rs`** — `mod primary;`, manage `Primary` + register the config-created
+  window(s) in `.setup()`, `unregister_window` in the `RunEvent::WindowEvent{Destroyed}` arm (next to
+  task 426's `purge_window`), register the command.
+- **`src-tauri/src/commands.rs`** — the one `primary::register_window(&app, &label)` in
+  `open_canvas_window` (a documented no-op seam for the ineligible canvas label, so the 9/16
+  full-window creator inherits registration).
+- **Frontend** (`windowContext.ts` / `ipc.ts` / `store.ts` + 2 test files) — a pure `isPrimaryLabel`
+  helper; `primaryWindow` snapshot + `subscribePrimaryEvents`; a `primaryWindow` store slice whose
+  **pre-sync default preserves today's semantics** (`"main"` in the main window, `null` elsewhere —
+  the `installKind ""` precedent), `applyPrimarySync` (equality-guarded, fires `armPrimaryEffects`
+  once on a non-primary→primary transition when `booted`), and `armPrimaryEffects` (re-arms only the
+  idempotent effects: the extracted `startFolderColorAssign` subscription + a re-run `checkForUpdate`).
+  `init` resolves the `primary_window` snapshot **before** `applyBootState`; the eight once-per-app
+  sites re-gate on `isPrimaryLabel(get().primaryWindow)` instead of `IS_MAIN_WINDOW`.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 433)
+
+- "Full app window" (primary-eligible) = any label not starting with `canvas-`; when only canvas
+  windows survive, primary is `null` and NO window runs the once-per-app effects (matching today's
+  `IS_MAIN_WINDOW` outcome). Election is oldest-surviving; takeover is monotonic (at most once per
+  window lifetime).
+- Read the card's "everything keyed on `IS_MAIN_WINDOW` that must run once per app" broadly — also
+  re-gated the #336 watched-agent native notification, the schedule/recurring `://error` toasts, the
+  `recurring://fired` recents-prepend, and the `container://building` toast (same double-fire class).
+- The `onExited` `IS_MAIN_WINDOW` branches (incl. the non-clean "Session exited" toast) are
+  deliberately **untouched** (Task 431 owns exit reshaping; N-window exit-toast dedup is a later card),
+  and 431's focused-window `toast_target` stays a separate mechanism.
+- Reconciled the card's "startUsagePolling" item against 430 (the frontend poll is deleted there;
+  nothing usage-related is re-gated); `armPrimaryEffects` re-runs neither the boot one-shots
+  (onboarding, `pruneMissingFolders`, migration persists, updated-toast/`setLastVersion`) nor anything
+  destructive/modal.
+- Pre-sync "main assumes primary" default is what keeps vitest/dev-server green; flagged in-code that
+  card 9/16's secondary full windows must default to `null`. `open_canvas_window` routes through
+  `register_window` (no-op for canvas labels) so every creation site inherits the seam.
+
+**Rollback-safe:** the election is transient (no persisted-schema change); events without listeners
+are inert; restoring the `IS_MAIN_WINDOW` gates restores the old behavior byte-for-byte.
+
+**Cross-platform:** Tauri window labels/events (global on all three OSes), a plain mutex, pure TS —
+no paths/shells/`#[cfg]` arms.
+
+**Dependencies:** Task 430, Task 432 (sequencing — 432 reshapes the same `applyBootState`/`store.ts`
+boot surfaces and `lib.rs` closures; 430's usage-poll restructuring resolves the card's
+"startUsagePolling" item; via 432 → 431 → 430 → 429 the whole chain lands first).
