@@ -351,6 +351,25 @@ export interface ExitPayload {
   code: number | null;
 }
 
+/** Payload of the `session://forgotten` event (task 431): a clean #63 exit Rust
+ * already forgot — every window drops local state; only `toast_window` toasts. */
+export interface ForgottenPayload {
+  id: string;
+  toast_window: string;
+}
+
+/** Payload of the `worktree://kept` event (task 431): the exit-driven worktree
+ * cleanup found a dirty worktree and kept it (#74) — only `toast_window` warns. */
+export interface WorktreeKeptPayload {
+  dest: string;
+  toast_window: string;
+}
+
+/** Outcome of the Rust ref-counted worktree cleanup (task 431,
+ * `cleanup_worktree_if_empty`): removed (incl. already gone — idempotent), still
+ * referenced by some item, or kept because git refused the non-forced remove. */
+export type WorktreeCleanup = "removed" | "inUse" | "keptDirty";
+
 /** Payload of the `session://state` event — busy/idle (#42). */
 export interface StatePayload {
   id: string;
