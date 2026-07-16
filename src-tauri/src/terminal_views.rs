@@ -1,12 +1,20 @@
 //! Terminal-view attachment registry + smallest-wins PTY size arbitration
 //! (multi-window card 1/16, task 426).
 //!
-//! The single authoritative answer to "who is viewing session X, and how big must
-//! its PTY grid be?". A **view** is one window's terminal host for a session,
-//! identified by `(session id, window label)` and carrying a desired
+//! The single authoritative answer to "who is viewing session X, how big must
+//! its PTY grid be, and which windows must receive its output". A **view** is
+//! one window's terminal host for a session, identified by
+//! `(session id, window label)` and carrying a desired
 //! `(cols, rows)`. The **effective grid** is the component-wise minimum over all
 //! attached views — tmux's `window-size=smallest` policy — so every window always
 //! sees the complete grid and larger views letterbox.
+//!
+//! **Targeted delivery rule (task 440):** the registry additionally tracks, per
+//! session, the window labels holding a **live terminal host** (`output_subs`),
+//! and the `lib.rs` forwarder `emit_filter`s `session://output` / `session://size`
+//! to exactly that set — skipping the encode + emit entirely when it is empty.
+//! Delivery keys on host *lifetime* (subscribe at host creation, unsubscribe at
+//! host dispose / window purge), NOT on attached views — see the field doc.
 //!
 //! Structure follows the `linux_webkit.rs` pattern: all policy lives in the pure,
 //! fully unit-tested [`ViewRegistry`] core (no Tauri, no locks), with the impure
@@ -25,7 +33,7 @@
 //! this card — nothing attaches yet — and resolved when later epic cards migrate
 //! the frontend onto attach/propose.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use crate::pty::SessionManager;
@@ -49,6 +57,12 @@ pub struct ViewRegistry {
     views: HashMap<String, HashMap<String, (u16, u16)>>,
     /// session id → last effective size the arbiter applied to the PTY.
     applied: HashMap<String, (u16, u16)>,
+    /// session id → window labels holding a LIVE terminal host for it (task 440).
+    /// Deliberately separate from `views`: a parked host detaches its sized view
+    /// (task 427) so it never clamps the grid, but its xterm keeps consuming
+    /// output — the pool never re-replays on re-mount (#18/#351), so output
+    /// delivery must follow host lifetime, not view attachment.
+    output_subs: HashMap<String, HashSet<String>>,
 }
 
 /// Clamp a desired dimension to at least 1 on the way in — a 0-dimension
@@ -72,7 +86,14 @@ impl ViewRegistry {
     /// `resized` is true when the effective grid differs from the last applied
     /// size (a session with no `applied` entry counts as changed); when set,
     /// the new applied size is recorded.
+    ///
+    /// Also upserts the label as an output subscriber (task 440) — a self-heal:
+    /// an attached view implies a live host, so even if a `subscribe_output`
+    /// was lost, delivery recovers on the next mount. Harmless when already
+    /// present. `detach` deliberately does NOT undo this (the park case — see
+    /// `output_subs`).
     pub fn attach(&mut self, id: &str, label: &str, cols: u16, rows: u16) -> SizeUpdate {
+        self.subscribe_output(id, label);
         self.views
             .entry(id.to_string())
             .or_default()
@@ -81,11 +102,47 @@ impl ViewRegistry {
             .expect("attach guarantees the session has at least one view")
     }
 
+    /// Register `label` as holding a live terminal host for `id` (task 440):
+    /// the forwarder delivers that session's `session://output` /
+    /// `session://size` to exactly these windows. Idempotent upsert.
+    pub fn subscribe_output(&mut self, id: &str, label: &str) {
+        self.output_subs
+            .entry(id.to_string())
+            .or_default()
+            .insert(label.to_string());
+    }
+
+    /// Remove `label` from `id`'s output subscribers (task 440 — the host was
+    /// disposed), dropping the session's entry when emptied (the no-leak rule
+    /// `detach` already follows). Unknown session/label is a no-op.
+    pub fn unsubscribe_output(&mut self, id: &str, label: &str) {
+        if let Some(labels) = self.output_subs.get_mut(id) {
+            labels.remove(label);
+            if labels.is_empty() {
+                self.output_subs.remove(id);
+            }
+        }
+    }
+
+    /// The window labels holding a live terminal host for `id` (task 440) — a
+    /// clone, so the forwarder can hold it past the registry lock. Empty for an
+    /// unknown session (⇒ the forwarder skips the encode + emit entirely).
+    pub fn output_targets(&self, id: &str) -> HashSet<String> {
+        self.output_subs.get(id).cloned().unwrap_or_default()
+    }
+
     /// Remove a view and recompute. `None` when the view was unknown (a no-op)
     /// or it was the session's last view — in which case both map entries are
     /// dropped (no leak; the PTY keeps its last size, nothing to resize or
     /// broadcast). Otherwise `Some(update)`, with `resized` as in [`Self::attach`]
     /// (false when the surviving views leave the effective grid unchanged).
+    ///
+    /// Deliberately does NOT touch `output_subs` (task 440): a detach is how a
+    /// *parked* host stops clamping the grid (task 427), but its xterm keeps
+    /// consuming live bytes — dropping delivery here would permanently starve
+    /// the buffer, since the pool never re-replays on re-mount (#18/#351). The
+    /// subscription ends only at host dispose (`unsubscribe_output`) or window
+    /// close (`purge_window`).
     pub fn detach(&mut self, id: &str, label: &str) -> Option<SizeUpdate> {
         let views = self.views.get_mut(id)?;
         views.remove(label)?;
@@ -112,7 +169,15 @@ impl ViewRegistry {
     /// its desired size must never clamp a PTY it no longer renders), dropping
     /// emptied sessions entirely. Returns exactly the sessions that still have
     /// views **and** whose effective grid changed.
+    ///
+    /// Also sweeps `label` from every session's output subscribers (task 440,
+    /// dropping emptied entries) — a closed window must never remain a delivery
+    /// target; its hosts died with the webview without a chance to unsubscribe.
     pub fn purge_window(&mut self, label: &str) -> Vec<(String, SizeUpdate)> {
+        self.output_subs.retain(|_, labels| {
+            labels.remove(label);
+            !labels.is_empty()
+        });
         let ids: Vec<String> = self
             .views
             .iter()
@@ -209,12 +274,30 @@ impl TerminalViews {
 
     /// Drop ALL of a closing window's views (any window kind), best-effort
     /// resizing + broadcasting each session whose effective grid changed.
+    /// Also sweeps the label from every session's output subscribers (task 440).
     pub fn purge_window(&self, manager: &SessionManager, label: &str) {
         let mut registry = self.lock();
         for (id, update) in registry.purge_window(label) {
             let _ = manager.resize_pty(&id, update.cols, update.rows);
             manager.broadcast_size(&id, update.cols, update.rows);
         }
+    }
+
+    /// Register `label` as an output subscriber for `id` (task 440). No
+    /// `SessionManager` needed — nothing to resize or broadcast.
+    pub fn subscribe_output(&self, id: &str, label: &str) {
+        self.lock().subscribe_output(id, label);
+    }
+
+    /// Remove `label` from `id`'s output subscribers (task 440).
+    pub fn unsubscribe_output(&self, id: &str, label: &str) {
+        self.lock().unsubscribe_output(id, label);
+    }
+
+    /// The window labels the forwarder must deliver `id`'s output/size events
+    /// to (task 440) — a clone held past the lock; empty when unknown.
+    pub fn output_targets(&self, id: &str) -> HashSet<String> {
+        self.lock().output_targets(id)
     }
 }
 
@@ -430,6 +513,79 @@ mod tests {
     fn effective_of_unknown_session_is_none() {
         let reg = ViewRegistry::default();
         assert_eq!(reg.effective("never-seen"), None);
+    }
+
+    // --- output-subscriber dimension (task 440) ---
+
+    #[test]
+    fn subscribe_output_makes_the_label_a_target() {
+        let mut reg = ViewRegistry::default();
+        reg.subscribe_output("s", "main");
+        reg.subscribe_output("s", "app-1");
+        let targets = reg.output_targets("s");
+        assert!(targets.contains("main"));
+        assert!(targets.contains("app-1"));
+        assert_eq!(targets.len(), 2);
+        // Idempotent upsert.
+        reg.subscribe_output("s", "main");
+        assert_eq!(reg.output_targets("s").len(), 2);
+    }
+
+    #[test]
+    fn unsubscribe_output_drops_the_label_and_empties_the_map_entry() {
+        let mut reg = ViewRegistry::default();
+        reg.subscribe_output("s", "main");
+        reg.subscribe_output("s", "app-1");
+        reg.unsubscribe_output("s", "app-1");
+        assert_eq!(reg.output_targets("s").len(), 1);
+        reg.unsubscribe_output("s", "main");
+        // No leak: the emptied session entry is dropped entirely.
+        assert!(!reg.output_subs.contains_key("s"));
+        assert!(reg.output_targets("s").is_empty());
+        // Unknown session/label: a no-op, never a panic.
+        reg.unsubscribe_output("nope", "main");
+    }
+
+    #[test]
+    fn attach_alone_implies_subscribed() {
+        let mut reg = ViewRegistry::default();
+        reg.attach("s", "main", 100, 30);
+        // The self-heal upsert: an attached view implies a live host.
+        assert!(reg.output_targets("s").contains("main"));
+    }
+
+    #[test]
+    fn attach_then_detach_keeps_the_subscription_the_park_case() {
+        let mut reg = ViewRegistry::default();
+        reg.attach("s", "main", 100, 30);
+        reg.detach("s", "main");
+        // The park case (task 427/440): a parked host detaches its sized view
+        // but its xterm keeps consuming output — the pool never re-replays on
+        // re-mount, so delivery must survive the detach.
+        assert!(reg.output_targets("s").contains("main"));
+    }
+
+    #[test]
+    fn purge_window_clears_the_label_from_every_sessions_subscribers() {
+        let mut reg = ViewRegistry::default();
+        reg.subscribe_output("s1", "main");
+        reg.subscribe_output("s1", "app-1");
+        reg.subscribe_output("s2", "app-1");
+        reg.purge_window("app-1");
+        // The purged label is gone everywhere; other labels survive.
+        assert_eq!(
+            reg.output_targets("s1"),
+            HashSet::from(["main".to_string()])
+        );
+        assert!(reg.output_targets("s2").is_empty());
+        // s2's emptied entry is dropped entirely (no leak).
+        assert!(!reg.output_subs.contains_key("s2"));
+    }
+
+    #[test]
+    fn output_targets_of_unknown_session_is_empty() {
+        let reg = ViewRegistry::default();
+        assert!(reg.output_targets("never-seen").is_empty());
     }
 
     // --- TerminalViews glue against a real (sessionless) SessionManager ---
