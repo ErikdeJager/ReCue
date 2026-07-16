@@ -2306,8 +2306,9 @@ export interface AppState {
    * header × (non-destructive — the agent's PTY survives in the pool); in Overview
    * the selected card is closed via the exact action its × calls — a panel via
    * `removeOverviewPanel`, an agent via `removeSession`, a schedule via
-   * `cancelSchedule`, a recurring via `cancelRecurring` (#425). Anything else is a
-   * no-op. */
+   * `cancelSchedule`, a recurring via `cancelRecurring` (#425) — but only when the
+   * card is actually rendered on the wall (`overviewClusterKeys`): a selection
+   * hidden by the repo filter (#34) is a no-op. Anything else is a no-op. */
   closeFocusedPanel: () => void;
   /** Add a new empty Canvas tab (default "Canvas N") and select it (#58). */
   addCanvas: () => void;
@@ -5076,8 +5077,10 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   // ⌘W / Ctrl+W (`close-panel` keybind): close what the user is looking at, most
-  // specific first, and never destructively — each branch reuses the exact action
-  // its × button calls, so keyboard and mouse can't drift.
+  // specific first — each branch reuses the exact action its × button calls, so
+  // keyboard and mouse can't drift. Since #425 that INCLUDES destructive closes:
+  // an Overview agent / schedule / recurring card (and the Attention agent) is
+  // removed exactly like its ×.
   closeFocusedPanel: () => {
     const s = get();
     // 1. Big mode is the topmost "open panel" — close the overlay.
@@ -5125,6 +5128,20 @@ export const useStore = create<AppState>()((set, get) => ({
     // already-destructive Attention ⌘W below) — an agent card can otherwise only be
     // removed with the mouse.
     if (s.view === "overview" && s.selectedId) {
+      // Act only on a card actually rendered on the wall — the wall's own
+      // visibility source of truth (`overviewClusterKeys`, what Shift+←/→ walks)
+      // — so a selection hidden by the repo filter (#34; `setOverviewRepoFilter`
+      // never clears `selectedId`) is never closed by keyboard: the mouse × this
+      // mirrors only exists on a visible card.
+      const visibleKeys = overviewClusterKeys({
+        sessions: s.sessions,
+        overviewPanels: s.overviewPanels,
+        overviewOrder: s.overviewOrder,
+        schedules: s.schedules,
+        recurrings: s.recurrings,
+        filter: s.overviewRepoFilter,
+      });
+      if (!visibleKeys.includes(s.selectedId)) return;
       for (const [repoKey, panels] of Object.entries(s.overviewPanels)) {
         if (panels.some((p) => p.id === s.selectedId)) {
           void s.removeOverviewPanel(repoKey, s.selectedId);
@@ -5150,8 +5167,8 @@ export const useStore = create<AppState>()((set, get) => ({
       }
     }
     // 4. Attention: ⌘W REMOVES the focused agent (kill + forget), exactly like the
-    // right-pane header ×. This is the deliberate exception to the "never destructive"
-    // rule above — in Attention the focused item is always an agent, and removing it is
+    // right-pane header × — destructive like the Overview card branch above (#425);
+    // in Attention the focused item is always an agent, and removing it is
     // the view's primary close affordance (⌘⏎ dismisses non-destructively). Resolve the
     // effective active id the same way the view does: the selected agent when it's a
     // current queue member, else the top of the queue. Selection advances on its own —

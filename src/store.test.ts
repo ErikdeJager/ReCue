@@ -3630,6 +3630,37 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
     killSpy.mockRestore();
   });
 
+  it("no-ops in Overview when the selected card is hidden by the repo filter (#34)", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "overview",
+      sessions: [session("a1")], // repoPath "/repo/a1"
+      schedules: [],
+      recurrings: [],
+      selectedId: "a1",
+      overviewPanels: {},
+      // Filter to another repo: a1's card is off the wall, so ⌘W must not act —
+      // the mouse × it mirrors only exists on a visible card.
+      overviewRepoFilter: { path: "/repo/other", mode: "all" },
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+
+    // With the filter matching the agent's repo the card is visible again — ⌘W
+    // removes it exactly like before.
+    useStore.setState({
+      overviewRepoFilter: { path: "/repo/a1", mode: "all" },
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("a1");
+    expect(s().sessions).toHaveLength(0);
+    killSpy.mockRestore();
+  });
+
   it("removes the focused agent in the Attention view (kill + forget)", async () => {
     const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
     useStore.setState({

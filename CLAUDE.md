@@ -350,8 +350,11 @@ steady-state boot pays **zero** probe cost.
   Overview/Attention/Canvas, **⌘W** closes the focused panel (`store.closeFocusedPanel`:
   an open big-mode overlay first; else the active Canvas leaf exactly like its header ×,
   with focus advancing to a spatial neighbor so repeated ⌘W keeps closing; else the
-  selected Overview panel's hover-× — never an agent/schedule/recurring, those are
-  destructive), **⌘,** opens Settings, plus the carried-over ⌘E big mode (#284) / ⌘N /
+  selected Overview card via the exact action its hover-× calls — a file/diff/terminal/
+  kanban panel via `removeOverviewPanel`, and since **#425** also an **agent**
+  (`removeSession`, kill + forget), a **schedule** (`cancelSchedule`), or a **recurring**
+  (`cancelRecurring`) — un-gated like each card's ×, while a Canvas agent leaf stays
+  "close the panel only"), **⌘,** opens Settings, plus the carried-over ⌘E big mode (#284) / ⌘N /
   ⌘⇧N / ⌘K / ⌘F / ⌘B / ⌘D and the Open-in-editor pair **⌘O/⌘⇧O** (see the Open-in-editor
   bullet). **Removed:** ⌘T (new tab #206), ⌘1–9 (canvas jump #76 — the
   modal-internal new-session-recents #61/#66 and global-search folder-chip #397 digits
@@ -806,7 +809,8 @@ steady-state boot pays **zero** probe cost.
 │   ├── useKeyboardNav.ts   # Global keyboard dispatcher over the keybinds registry (#24/#76/#84)
 │   ├── useAutoSaveFile.ts  # Read + hot-reload + debounced-write hook (FileViewer raw + Kanban) (#148)
 │   ├── autoContinue.ts     # Pure auto-continue-after-limit reducer + isLimitReached (#296/#305)
-│   ├── tips.ts / tips.json # Startup tips for the empty-state hero (UI v2 #379)
+│   ├── tips.ts / tips.json # Startup tips — the empty-state hero (UI v2 #379) + the
+│   │                       #   Overview filtered-empty state, via the shared TipRow (#424)
 │   ├── updater.ts          # In-app auto-update: check / download+install / relaunch (#190)
 │   ├── components/         # React components (CSS Module alongside each):
 │   │                       #   Sidebar, Overview, Canvas (+ CanvasSurface),
@@ -822,6 +826,7 @@ steady-state boot pays **zero** probe cost.
 │   │                       #   SkillAutocomplete (#114), PatchNotes (#192),
 │   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
 │   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState,
+│   │                       #   TipRow (the shared rotating-tip row: EmptyState hero + Overview filtered-empty, #424),
 │   │                       #   WaveBackground (UI v2 wave layer, task 377 — lazy src/vendor/WaveEngine.js;
 │   │                       #     lazy waveHost runs it on the main thread OR from an OffscreenCanvas
 │   │                       #     Web Worker + a governed/paused-when-covered loop, task 384)
