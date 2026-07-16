@@ -225,6 +225,12 @@ steady-state boot pays **zero** probe cost.
   second (#315 — a clean single turn still settles at ~700ms). So **keystroke echo doesn't
   read as busy** (#55), `write_stdin` stamps a per-session `last_input` time and the
   monitor marks busy only when output arrived ≥300ms *after* the last keystroke.
+  Likewise a **repaint never wakes an idle dot**: output attributable to an automatic
+  focus/mouse report (#403, `last_report`) **or to a `resize_pty`** (`last_resize` +
+  `RESIZE_REPAINT_MS`, the attention-blink fix — reparenting a pooled terminal into a
+  differently-sized slot SIGWINCHes claude into a full TUI repaint) is suppressed on the
+  idle→busy edge only (the shared `repaint_attributable`), so an already-busy session is
+  untouched and sustained real output past the window still wins.
   Busy also requires the session to have **work to do** (#116) — either the user has
   submitted input, or it booted **prompt-seeded** (#93, an `ActivityState.seeded`
   flag set by `spawn_session_with_prompt`) — so `claude`'s pre-input **startup paint
@@ -359,7 +365,12 @@ steady-state boot pays **zero** probe cost.
   busy-heuristic settle fires mid-turn on any output pause and #315's sticky hold only
   engages *after* a first flicker — so a working agent never blinks into the queue, a
   seeded spawn never flashes as "NEW", and the watched-agent notification #336 rides the
-  same confirmed settle; the queue pane also shows keybind tips while non-empty). The
+  same confirmed settle; symmetrically, **eviction is debounced** (`ATTENTION_EVICT_CONFIRM_MS`,
+  ~1.5s — the blink fix): a queued member leaves only once a busy signal is *sustained*,
+  so a sub-second spurious blip (e.g. a resize/focus repaint that slipped past the backend
+  attribution) can never eject it or reset its FIFO position, and `attentionQueue`
+  membership rides `attentionEligible` alone rather than raw `sessionBusy`;
+  the queue pane also shows keybind tips while non-empty). The
   sidebar **`ViewSwitch`** presents **Overview + Attention** as the two equal-weight
   *main* views and **Canvas** as a smaller, de-emphasized *secondary* button (#406),
   with no queue-count badge (#405); in expanded mode Overview/Attention are text

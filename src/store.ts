@@ -468,11 +468,65 @@ function cancelAttentionGrace(id: string): void {
   }
 }
 
+/** Eviction debounce — the admission grace's mirror image. Once an agent is a
+ * confirmed-idle queue member, a busy signal must be *sustained* this long before it
+ * is evicted (eligibility revoked, FIFO stamp + dismissal cleared). A spurious blip's
+ * round trip is bounded by the backend's ~700ms settle + a 200ms monitor tick + IPC
+ * jitter (≈ ≤1s), so no sub-second blip — a resize/focus repaint that slips past the
+ * backend attribution, or any future regression — can blink a queued agent out or
+ * reset its queue position, while a genuinely-working agent still leaves promptly.
+ * The busy dot itself stays live (`sessionBusy` updates immediately); only the
+ * queue-membership consequences wait for the confirmation. */
+const ATTENTION_EVICT_CONFIRM_MS = 1_500;
+/** One pending eviction timer per session id — armed when an eligible member goes
+ * busy, canceled on the idle edge (the blip case) or removal/exit/restart. */
+const attentionEvictTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelAttentionEvict(id: string): void {
+  const timer = attentionEvictTimers.get(id);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    attentionEvictTimers.delete(id);
+  }
+}
+
+/** Cancel both of `id`'s pending attention timers (admission grace + eviction
+ * debounce) — the removal/exit/restart paths drop every timer at once. */
+function clearAttentionTimers(id: string): void {
+  cancelAttentionGrace(id);
+  cancelAttentionEvict(id);
+}
+
 /** Boot re-entrancy (`applyBootState` replaces the session set wholesale) + the test
- * suite's reset (a leaked real 5s timer would otherwise fire mid-suite). */
-export function cancelAllAttentionGrace(): void {
+ * suite's reset (a leaked real timer would otherwise fire mid-suite). */
+export function cancelAllAttentionTimers(): void {
   for (const timer of attentionGraceTimers.values()) clearTimeout(timer);
   attentionGraceTimers.clear();
+  for (const timer of attentionEvictTimers.values()) clearTimeout(timer);
+  attentionEvictTimers.clear();
+}
+
+/** Arm (or restart) `id`'s eviction debounce: if the session is still busy when it
+ * fires, the busy signal was sustained — a real turn, not a blip — so the queue
+ * consequences of going busy land now: eligibility revoked, the FIFO stamp cleared
+ * (the next settle re-stamps it — the agent re-enters at the back), and any
+ * dismissal cleared (new activity un-acknowledges the agent, #398). */
+function armAttentionEvict(id: string): void {
+  cancelAttentionEvict(id);
+  attentionEvictTimers.set(
+    id,
+    setTimeout(() => {
+      attentionEvictTimers.delete(id);
+      // Belt and braces — the idle edge, removal, exit, and restart all cancel this
+      // timer, so firing means the busy signal was sustained. Re-check anyway.
+      if (!useStore.getState().sessionBusy[id]) return;
+      useStore.setState((s) => ({
+        attentionEligible: omitKey(s.attentionEligible, id),
+        sessionIdleSince: omitKey(s.sessionIdleSince, id),
+        dismissedAttention: omitKey(s.dismissedAttention, id),
+      }));
+    }, ATTENTION_EVICT_CONFIRM_MS),
+  );
 }
 
 /** Arm (or restart) `id`'s admission grace: if the session is still present and still
@@ -2655,7 +2709,7 @@ async function killAgentsInRepo(repoPath: string): Promise<number> {
     ),
   ];
   ids.forEach((id) => intentionalKills.add(id));
-  for (const id of ids) cancelAttentionGrace(id);
+  for (const id of ids) clearAttentionTimers(id);
   await Promise.all(ids.map((id) => ipc.killSession(id).catch(() => {})));
   useStore.setState((s) => {
     const clearSelection = s.selectedId != null && idSet.has(s.selectedId);
@@ -2794,7 +2848,7 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
   // Kill PTYs (intentional, so the exit doesn't toast / show Restart, #32).
   const killIds = [...agentIds, ...termPtyIds];
   killIds.forEach((id) => intentionalKills.add(id));
-  for (const id of killIds) cancelAttentionGrace(id);
+  for (const id of killIds) clearAttentionTimers(id);
   await Promise.all(killIds.map((id) => ipc.killSession(id).catch(() => {})));
   await Promise.all(
     [...scheduleIds].map((id) => ipc.cancelSchedule(id).catch(() => {})),
@@ -3132,7 +3186,7 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   dropSession: (id) => {
-    cancelAttentionGrace(id);
+    clearAttentionTimers(id);
     set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
@@ -3153,7 +3207,7 @@ export const useStore = create<AppState>()((set, get) => ({
 
   markExited: (id, code) => {
     reconnectingIds.delete(id); // no longer reconnecting (#261)
-    cancelAttentionGrace(id); // an exited session can't be confirmed idle (#398)
+    clearAttentionTimers(id); // an exited session can't be confirmed idle (#398)
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, exitedCode: code, reconnecting: false } : x,
@@ -3168,9 +3222,22 @@ export const useStore = create<AppState>()((set, get) => ({
     const wasBusy = get().sessionBusy[id] ?? false;
     // Capture the transition time before `set` for the Attention FIFO stamp (#398).
     const now = Date.now();
-    // Going busy revokes the admission grace (and, in the reducer below, any granted
-    // eligibility) — the queue drops the agent instantly; the next idle edge re-arms.
+    // Going busy always cancels a pending admission grace (a mid-grace blip restarts
+    // the confirmation clock on the next idle edge). For an already-ELIGIBLE queue
+    // member the eviction is *debounced* rather than instant: the busy signal must be
+    // sustained (`armAttentionEvict`) before it costs the agent its membership, FIFO
+    // position, and dismissal — so a sub-second blip (a repaint that slipped past the
+    // backend's resize/report attribution, or any future spurious edge) can never
+    // blink a queued agent out. The busy dot itself still updates immediately below.
     if (busy) cancelAttentionGrace(id);
+    const deferEvict = busy && !wasBusy && !!get().attentionEligible[id];
+    if (deferEvict) armAttentionEvict(id);
+    // A busy→idle edge with the eviction still pending is a blip resolving: the agent
+    // never left the queue — keep its original FIFO stamp and its still-granted
+    // eligibility (and skip the grace re-arm below: re-firing the #336 notification
+    // for a wait the user is already watching would be a duplicate).
+    const evictPending = !busy && attentionEvictTimers.has(id);
+    if (evictPending) cancelAttentionEvict(id);
     set((s) => {
       if ((s.sessionBusy[id] ?? false) === busy) return {}; // no-op, skip re-render
       // First activity marks the session "has been active" (#112): it stays set
@@ -3182,19 +3249,27 @@ export const useStore = create<AppState>()((set, get) => ({
           ? { ...s.sessionActive, [id]: true }
           : s.sessionActive;
       // Attention triage bookkeeping (#398): a busy→idle edge stamps `idleSince[id]`
-      // (the FIFO sort key); a going-busy edge clears the stamp AND any dismissal, so
-      // the agent re-enters the queue at the back on its next idle edge.
+      // (the FIFO sort key) — unless a blip just resolved (`evictPending`), which
+      // keeps the original stamp so the agent holds its queue position. A going-busy
+      // edge clears the stamp and any dismissal immediately for a non-member; for an
+      // eligible member (`deferEvict`) those consequences wait for the eviction
+      // debounce to confirm the busy signal is sustained.
       const sessionIdleSince = busy
-        ? omitKey(s.sessionIdleSince, id)
-        : { ...s.sessionIdleSince, [id]: now };
+        ? deferEvict
+          ? s.sessionIdleSince
+          : omitKey(s.sessionIdleSince, id)
+        : evictPending
+          ? s.sessionIdleSince
+          : { ...s.sessionIdleSince, [id]: now };
       const dismissedAttention =
-        busy && s.dismissedAttention[id]
+        busy && !deferEvict && s.dismissedAttention[id]
           ? omitKey(s.dismissedAttention, id)
           : s.dismissedAttention;
-      // Going busy also revokes confirmed-idle eligibility (#398 flicker fix); the
-      // idle edge does NOT grant it — that's the admission grace timer's job.
+      // Going busy revokes confirmed-idle eligibility (#398 flicker fix) — instantly
+      // for a non-member, via the eviction debounce for a member. The idle edge does
+      // NOT grant it — that's the admission grace timer's job.
       const attentionEligible =
-        busy && s.attentionEligible[id]
+        busy && !deferEvict && s.attentionEligible[id]
           ? omitKey(s.attentionEligible, id)
           : s.attentionEligible;
       return {
@@ -3224,8 +3299,10 @@ export const useStore = create<AppState>()((set, get) => ({
       // edge — land only once the session has stayed idle for the whole grace.
       // `booting` is captured NOW, at arm time: the boot backstop (4s) is shorter
       // than the grace (5s), so a fire-time check alone would let a boot-window
-      // settle notify after `booting` flips false.
-      armAttentionGrace(id, !booting);
+      // settle notify after `booting` flips false. A resolved blip (`evictPending`)
+      // skips the re-arm: eligibility was never revoked, and re-arming would re-fire
+      // the notification for a wait the user is already watching.
+      if (!evictPending) armAttentionGrace(id, !booting);
     }
   },
 
@@ -3321,7 +3398,7 @@ export const useStore = create<AppState>()((set, get) => ({
     reconnectingIds.delete(id); // no longer reconnecting (#261)
     // A restart is a fresh idle life (#398): revoke stale eligibility and run a
     // fresh admission grace so the agent re-surfaces in the queue only after it.
-    cancelAttentionGrace(id);
+    clearAttentionTimers(id);
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, exitedCode: undefined, reconnecting: false } : x,
@@ -4127,7 +4204,7 @@ export const useStore = create<AppState>()((set, get) => ({
     for (const v of views) reconnectingIds.add(v.id);
     // Boot re-entrancy: the session set is replaced wholesale, so drop any pending
     // admission-grace timers from the previous set (#398).
-    cancelAllAttentionGrace();
+    cancelAllAttentionTimers();
 
     // Multi-canvas (#58): the persisted tabs, else the one-shot migration of the old
     // single `canvas_layout`, else one empty canvas — and a detached window (#84)
@@ -6524,7 +6601,7 @@ export const useStore = create<AppState>()((set, get) => ({
       recurringIds.map((id) => ipc.cancelRecurring(id).catch(() => {})),
     );
     const idSet = new Set(ids);
-    for (const id of ids) cancelAttentionGrace(id);
+    for (const id of ids) clearAttentionTimers(id);
     set((s) => {
       const clearSelection = s.selectedId != null && idSet.has(s.selectedId);
       return {
