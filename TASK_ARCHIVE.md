@@ -2152,3 +2152,81 @@ no paths/shells/`#[cfg]` arms.
 **Dependencies:** Task 430, Task 432 (sequencing — 432 reshapes the same `applyBootState`/`store.ts`
 boot surfaces and `lib.rs` closures; 430's usage-poll restructuring resolves the card's
 "startUsagePolling" item; via 432 → 431 → 430 → 429 the whole chain lands first).
+
+### 434. [x] Multi-window 9/16 — Full app-window shell: `?win=` window identity, `open_app_window`/`focus_app_window`, `app-*` capability, per-window boot with local init presets
+
+Makes N **full app windows** real: any number of additional windows, each labelled `app-<uuid>`,
+each rendering the complete shell (sidebar + Overview/Attention/Canvas + modals) with its own
+window-local view/selection/tab/filter state, opened by a new Rust `open_app_window(init)` whose init
+params preset the new window's local state (repo → Overview repo filter, canvas → Canvas view on that
+tab). Closing a non-last window just closes it (agents keep running backend-side); closing the last
+window still quits the app as today. The keystone of the epic — everything before it was
+behavior-preserving groundwork; this card turns it on.
+
+**What shipped** (branch `task-434-app-window-shell`, PR
+[#198](https://github.com/ErikdeJager/ReCue/pull/198), merged 2026-07-16 into `backend-decouple`,
+commit `888ed67`; 17 files, +652/-142):
+
+- **`src/windowContext.ts` (+ test)** — a pure `parseWindowIdentity(search)` and derived constants
+  (`WINDOW_KIND` `main`/`app`/`canvas`, `WINDOW_LABEL`, `APP_WINDOW_ID`, `DETACHED_CANVAS_ID`,
+  `INIT_REPO_PATH`, `INIT_CANVAS_ID`, `IS_FULL_APP_WINDOW`, `IS_DETACHED_CANVAS_WINDOW`).
+  **`IS_MAIN_WINDOW` is DELETED** (not redefined) — making the ~25-site consumer audit
+  **compile-enforced**; `ownedHere` is widened so the default `"main"` owner means "every full app
+  window" (main + `app-*` **mirror** the same PTY via the landed 426/427 attach/smallest-wins
+  machinery), while a `canvas-<id>` owner stays exclusive to its detached window.
+- **`src-tauri/src/commands.rs`** — `AppWindowInit { repo, canvas }`, a pure byte-exact
+  `encode_query_value` (space→`%20` never `+`, so `URLSearchParams` round-trips Windows paths) +
+  `app_window_url`, `open_app_window(init)` (label `app-<uuid>`, `index.html?win=…`, main-window
+  geometry, hidden-until-painted #348 + themed background + reveal fallback, `primary::register_window`
+  the 433 seam, returns the new id), and `focus_app_window(id)`. Unit tests for both pure helpers
+  including a Windows-path round-trip.
+- **`src/App.tsx`** — routes `IS_DETACHED_CANVAS_WINDOW ? <CanvasWindow /> : <MainApp />` (an `app-*`
+  window gets the full shell; the `?canvas=` route survives one release, deleted by 11/16).
+- **`src/boot.ts` (+ test)** — `resolveCanvases` reworked to `(persisted, legacy, pinCanvasId,
+  presetCanvasId)`: a detached window **pins** its own canvas; an app-window `?canvas=` is a **soft
+  preset** applied only when the tab exists (else falls back to persisted/first).
+- **`src/store.ts`** — init presets (`overviewRepoFilter` from `INIT_REPO_PATH`, `activeCanvasId` from
+  `DETACHED_CANVAS_ID ?? INIT_CANVAS_ID`, `view: canvas` when preset); the whole `IS_MAIN_WINDOW →
+  IS_FULL_APP_WINDOW` / `!IS_MAIN_WINDOW → IS_DETACHED_CANVAS_WINDOW` audit.
+- **`src/useKeyboardNav.ts` / `CanvasSurface.tsx`** — the mechanical gate swaps so an app window gets
+  every full-shell shortcut + the correct detached-note gate.
+- **`src-tauri/src/lib.rs`** register the two commands (the global Destroyed arm already covers 426's
+  purge + 433's unregister, so **no per-window handler**); **`capabilities/default.json`** →
+  `["main", "canvas-*", "app-*"]`; **`ipc.ts`/`types`** `openAppWindow`/`focusAppWindow`/`AppWindowInit`
+  (documented that the UI entry points arrive in card 10/16); **both trajectory logs** got the real-box
+  smoke items (Windows `?repo=` encoding round-trip, Linux/WebKitGTK second-window reveal + WebGL).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 434)
+
+- `IS_MAIN_WINDOW` is **deleted**, not redefined — `IS_FULL_APP_WINDOW` (= `!IS_DETACHED_CANVAS_WINDOW`)
+  replaces it everywhere; the swaps are exact complements, so today's two window kinds stay
+  byte-identical.
+- `ownedHere` is widened so default-`"main"` sessions mirror across every full window (without this an
+  app window would render only DetachedNotes — the card would be pointless); canvas-owned sessions stay
+  exclusive until 11/16 deletes the layer.
+- `?canvas=` on a `?win=` URL is a **soft local preset** (`?win=` wins; empty values read as absent),
+  not a detached-window identity.
+- **No per-window Destroyed handler** — the global `RunEvent` Destroyed arm (426 purge + 433
+  unregister) is label-generic and covers it; **last-window-quit needs no code** (Tauri's default
+  all-windows-destroyed exit + `RunEvent::Exit` `kill_all` already implement it — pinned as an
+  acceptance criterion by reading).
+- Query values are percent-encoded **byte-exact in Rust** (space→`%20`, never `+`) so Windows paths
+  survive `URLSearchParams`; pure encode/url helpers unit-tested both sides.
+- **No UI entry point** ships here (10/16 owns them) — the ipc wrappers ship documented but
+  un-triggered; manual smoke used a temporary uncommitted trigger, flagged for interactive
+  verification.
+- Accepted deferred rough edges (per 433's precedent): non-clean exit toasts may appear in each full
+  window; the persisted canvases `activeId` boot hint is last-write-wins across full windows (the live
+  active tab stays window-local); sidebar collapse/width converge via 428 broadcasts.
+
+**Rollback-safe:** no persisted-schema change, no new events; the two commands are additive and
+un-triggered by UI until 10/16; the capability line is inert without `app-*` windows.
+
+**Cross-platform:** the new Rust is pure string/window plumbing (no paths/shells/`#[cfg]`);
+`encode_query_value` exists precisely so Windows `\`/`:`/space paths survive the URL; the pre-paint
+background + reveal are the #348 machinery; the frontend is pure TS over URL params (identical
+WKWebView/WebView2/WebKitGTK). Real-box smoke logged in both trajectory files.
+
+**Dependencies:** Task 433 (builds on its `primary.rs` registration seam, `isPrimaryLabel`, and the
+null-default for non-`"main"` labels; Multi-window 1/16 = Task 426 already landed; via 433 → 430 → 432
+the whole planned chain landed first).
