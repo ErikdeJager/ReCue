@@ -3796,3 +3796,15 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - The three new commands are synchronous and infallible (poison-recovering lock, best-effort resize swallowing SessionNotFound/Io); window_label is an explicit param (per the card), not derived from the invoking Window.
 - New seams in pty.rs limited to the SessionEvent::Size variant + a best-effort pub SessionManager::broadcast_size; registry entries for killed/exited sessions are left inert (no kill_session cleanup — out of scope for card 1).
 - No capabilities/default.json change (Tauri 2 custom commands aren't ACL-gated); no version bump / patch notes in this PR.
+
+## Task 427
+
+- "On mount" = attach on EVERY mountTerminal (backend upsert; a re-mount into a different slot re-measures); grid-before-replay is enforced by a per-host attach gate the replay job awaits, with a 1s safety timeout because replayQueue starts jobs synchronously on enqueue (before the slot is assigned) and a slotless resetTerminal host never attaches — MAX_CONCURRENT_REPLAYS=1 must never wedge.
+- Attach's desired size = the same measured proposal the propose path sends (fit proposeDimensions + #262 shave), falling back to the current term.cols/rows when unmeasurable; the RETURNED effective grid is applied via term.resize (not the broadcast) to guarantee ordering.
+- Removed the now-unused resizePty wrapper from src/ipc.ts entirely (single caller was the pool); the Rust resize_pty command stays untouched per PLAN-426.
+- WebGL gate revisit = a new IS_DETACHED_CANVAS_WINDOW constant in windowContext.ts replacing IS_MAIN_WINDOW at the three #105 sites — byte-identical behavior today (only main + canvas-* windows exist), future full app windows (9/16) get WebGL; detached canvas windows keep the DOM renderer and the #364 per-window latch is untouched.
+- If a measurable resize tick fires while the view isn't attached (failed/raced attach), applyResize re-attaches instead of proposing, since the 426 backend drops proposals for never-attached views (self-heal).
+- session://size is consumed by a lazy once-per-document pool-level listener (registered from ensureHost, never unsubscribed — the parkingLayer precedent), never store state.
+- Letterboxing = flex centering on the existing .terminal container + flex:0 0 auto on :global(.xterm); bands are the existing --terminal-bg-user/--terminal-bg wrapper token (no new tokens); the scrollbar-hugs-grid cosmetic nuance is a flagged smoke check with a fallback.
+- trimmable=false (the #351 pending-buffer cap release) moves to after the attach gate so the cap stays in force until the scrollback fetch is actually dispatched.
+- Fire-and-forget attach/detach ordering relies on Tauri's per-webview invoke FIFO + the synchronous (#353) backend commands; documented in-code as an accepted assumption.
