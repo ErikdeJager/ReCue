@@ -3821,3 +3821,15 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Cross-window write conflicts stay last-write-wins per whole slice (the existing canvas/schedule semantics); stale debounced persists (sidebar drag, diff-seen) may briefly override a foreign change and self-heal on the next broadcast — accepted, documented.
 - No lib.rs changes at all (AppHandle params need no re-registration; no new commands or SessionEvent variants), minimizing the collision surface with Task 426.
 - No new Rust unit tests for the emit glue (needs a live AppHandle; the untested broadcast_schedules precedent) — correctness is pinned by the new frontend unit tests (equality guards, zero-persist spies, roster diff) plus manual two-window smoke.
+
+## Task 429
+
+- The card's "commands.rs ~1452-1464" had drifted (Task 426 landed); the actual set_canvases label branch is at ~1517-1548 — plan cites the real location.
+- Kept the existing command names + arg keys (set_settings/set_diff_seen/set_canvases) with new merge semantics instead of adding patch_* commands, so no lib.rs/generate_handler/capability changes (minimizes conflict with Task 428, which reshapes the same setters).
+- Merges execute inside a single mutex-held Store closure (new update_with helper returning the merged slice), not as read-then-write in commands.rs — "under the Store mutex" taken literally to close the two-lock interleave race.
+- Settings merge is shallow top-level; patch values are written verbatim (explicit null is a value — preferredEditor — never a delete; nested objects like keybinds travel/replace whole); non-object patches are defensive no-ops.
+- Settings patch is diffed against the Settings modal's draft-seeding snapshot (new optional baseline arg on saveSettings), so two simultaneously-open modals saving different fields don't clobber; local apply is patch-over-current, mirroring the server merge so the 428 echo is a no-op.
+- A patch-only persisted settings blob may lack never-changed keys — judged safe: mergeSettings fills TS defaults and the Rust boot readers (early_settings/linux_gtk/containerImage) already fail open to defaults.
+- diff_seen merge is two-level with null tombstones ({repo:{file:null}} deletes an entry, {repo:null} a repo, emptied repos pruned); frontend accumulates deltas in a module-level pending patch flushed by the existing 300ms debounce.
+- set_canvases becomes a field-wise patch ({canvases?, activeId?}); each call site sends only what it changed (selectCanvas sends activeId-only); the unused window: Window param is dropped; a stored activeId naming no tab re-homes to the first tab; the canvases array itself stays whole-array last-write-wins (per-tab merging out of scope).
+- Task 428's broadcast helpers are kept as the post-merge emitters (they re-read the store, so they carry the merged value); plan tells the implementer to re-verify 428's landed shape in the worktree before wiring.
