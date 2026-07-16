@@ -3992,3 +3992,11 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Use full-strength `var(--accent)` (not `--accent-dim`/`--accent-tint-*`) so it clearly "matches the accent color"; the empty state already has a legibility text-shadow so a full-strength accent hero reads fine.
 - Use the `--accent` CSS variable (not a hardcoded hex) so a custom accent (Settings → Appearance, inline on `<html>`) recolors it live and it tracks Dark/Light themes; platform-neutral pure CSS.
 - Treating this decorative/branding icon with `--accent` does NOT violate CLAUDE.md's "accent never encodes status/selection" rule — that rule targets status semantics; this actually removes a minor smell (it currently borrows the `--status-awaiting` status token for a decorative icon).
+
+## Task 442
+
+- "Reduce wave changes / a bit slower" interpreted as: slow the wave's temporal drift (WaveEngine's fieldT morph that re-shapes direction/waveform) without disabling the animation.
+- Chose to scale the per-frame dt (via a WAVE_TIME_SCALE constant in waveTick.ts's gateFrame) rather than the preset `speed`: the engine's morph rate is `0.20 + 0.30*speed` with a 0.20 floor, so reducing speed slows advection more than the morph the user complained about; dt-scaling slows morph+flow uniformly and covers both main + worker render modes from one edit. WaveEngine.js is sha-pinned/untouched — dt is the only external morph-rate lever, so no vendor exception is needed.
+- Picked factor 0.7 (~30% slower) as a clearly perceptible but non-drastic "a bit slower"; it is one constant, trivially retunable (0.75 gentler / 0.6 stronger).
+- Kept it a hardcoded constant, not a new Settings toggle (card default; backgroundAnimation already covers on/off — a wave-speed slider isn't warranted).
+- Change is pure WebView/TS in a reducer consumed identically on macOS/Windows/Linux; no OS-specific behavior introduced.
