@@ -8,6 +8,7 @@
 //      invariant (spies assert zero calls).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { claimKey } from "./fileClaims";
 import {
   cancelAllAttentionGrace,
   DEFAULT_SETTINGS,
@@ -30,7 +31,8 @@ function record(id: string, name: string | null = null): SessionRecord {
   };
 }
 
-/** Spy every ipc persist path an apply-sync could conceivably echo into. */
+/** Spy every ipc persist path an apply-sync could conceivably echo into (plus the
+ * task-435 claim mutations — an apply must never claim/release either). */
 function spyPersistPaths() {
   return [
     vi.spyOn(ipc, "setSettings"),
@@ -48,6 +50,8 @@ function spyPersistPaths() {
     vi.spyOn(ipc, "clearRecents"),
     vi.spyOn(ipc, "renameSession"),
     vi.spyOn(ipc, "killSession"),
+    vi.spyOn(ipc, "claimFile"),
+    vi.spyOn(ipc, "releaseFileClaim"),
   ].map((spy) => spy.mockResolvedValue(undefined as never));
 }
 
@@ -71,6 +75,7 @@ beforeEach(() => {
     sidebarCollapsed: false,
     folderOrder: [],
     diffSeen: {},
+    fileClaims: {},
     sessionBusy: {},
     sessionActive: {},
     sessionIdleSince: {},
@@ -102,6 +107,9 @@ describe("apply-sync actions (task 428)", () => {
     s.applySidebarWidthSync(300);
     s.applySidebarCollapsedSync(true);
     s.applyCanvasTemplatesSync([{ id: "t1", name: "T", layout: null }]);
+    s.applyFileClaimsSync([
+      { repo_path: "/repo/x", file: "notes.md", window: "canvas-1" },
+    ]);
     useStore.getState().applySessionsSync([record("a")]);
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
@@ -208,6 +216,31 @@ describe("apply-sync actions (task 428)", () => {
       ...DEFAULT_SETTINGS,
       theme: "light",
     });
+  });
+
+  it("applyFileClaimsSync mirrors the claim list, no-ops on an echo, never persists or claims", () => {
+    const spies = spyPersistPaths();
+    useStore.getState().applyFileClaimsSync([
+      { repo_path: "/repo/x", file: "notes.md", window: "canvas-1" },
+      { repo_path: "/repo/x", file: "board.md", window: "main" },
+    ]);
+    // claimKey = repoPath + NUL + file (see fileClaims.ts).
+    expect(useStore.getState().fileClaims).toEqual({
+      [claimKey("/repo/x", "notes.md")]: "canvas-1",
+      [claimKey("/repo/x", "board.md")]: "main",
+    });
+    // The echo: an equal list (new array/object instances) must skip set().
+    const before = useStore.getState();
+    useStore.getState().applyFileClaimsSync([
+      { repo_path: "/repo/x", file: "notes.md", window: "canvas-1" },
+      { repo_path: "/repo/x", file: "board.md", window: "main" },
+    ]);
+    expect(useStore.getState()).toBe(before);
+    // An empty broadcast clears the transient map.
+    useStore.getState().applyFileClaimsSync([]);
+    expect(useStore.getState().fileClaims).toEqual({});
+    // Apply-only: no persist path AND no claim/release echo (the 428 invariant).
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 
   it("applySettingsSync is a no-op on an identical (merged) echo", () => {

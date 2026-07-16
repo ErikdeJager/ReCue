@@ -40,6 +40,7 @@ import {
   applyTerminalSettings,
 } from "./components/Terminal/terminalPool";
 import { decodeOutputB64 } from "./decodeOutput";
+import { claimsToMap } from "./fileClaims";
 import {
   ALL_GIT_REFRESH_KINDS,
   focusRefreshKinds,
@@ -88,6 +89,7 @@ import type {
   DiffSeenMap,
   DiffSeenPatch,
   EditorInfo,
+  FileClaim,
   FileStatusCode,
   ForgottenPayload,
   OverviewPanel,
@@ -1809,6 +1811,11 @@ export interface AppState {
    * disk-change visibility poll only re-lists/re-tints trees the user actually has open,
    * so background churn stays bounded. Per-window (each window has its own store). */
   fileTreeMounts: Record<string, number>;
+  /** Transient task-435 soft claims, `claimKey(repoPath, file)` → the claiming
+   * window's label — the event-fed mirror of the Rust `file_claims` registry,
+   * NEVER persisted. `useAutoSaveFile` reads it via `heldElsewhere` to render a
+   * foreign-claimed file read-only ("Being edited in another window"). */
+  fileClaims: Record<string, string>;
   /** Assigned per-repo colors, path → hex (#35); unassigned repos derive a default. */
   repoColors: Record<string, string>;
   /** Per-repo ordered list of extra (non-agent) Overview panels (#38). */
@@ -2691,6 +2698,10 @@ export interface AppState {
    * one-shots (onboarding, folder pruning, migration persists, the
    * updated-toast) are deliberately NOT re-run. */
   armPrimaryEffects: () => void;
+  /** Apply a `file_claims://changed` broadcast / the boot snapshot (task 435):
+   * replace the transient `fileClaims` map wholesale. Equality-guarded apply-only
+   * (the 428 shape) — never calls any persist or claim IPC path. */
+  applyFileClaimsSync: (claims: FileClaim[]) => void;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
   /** Fast-forward `cwd`'s current branch to its upstream — `git pull --ff-only`
    * (#181, sidebar repo / worktree "Pull"). Toasts the result (summary or git
@@ -3045,6 +3056,7 @@ export const useStore = create<AppState>()((set, get) => ({
   fileDropTarget: null,
   fileTreeRefresh: {},
   fileTreeMounts: {},
+  fileClaims: {},
   repoColors: {},
   overviewPanels: {},
   overviewOrder: {},
@@ -3691,7 +3703,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // promise rejection while we await the subscriptions.
     const bootPromise = ipc.bootState().catch(() => null);
 
-    // Wave 2: the 30 `listen` registrations (each its own invoke) as ONE parallel
+    // Wave 2: the 31 `listen` registrations (each its own invoke) as ONE parallel
     // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
@@ -3993,6 +4005,9 @@ export const useStore = create<AppState>()((set, get) => ({
           // surviving full window's label on change; the equality-guarded apply
           // re-arms the once-per-app effects on a live takeover.
           ipc.subscribePrimaryEvents((p) => get().applyPrimarySync(p)),
+          // Same-file soft claims (task 435): the full sorted list on every
+          // registry change; the apply is equality-guarded and never persists.
+          ipc.subscribeFileClaimEvents((c) => get().applyFileClaimsSync(c)),
         ]);
       } catch {
         // Event subscription only works inside the Tauri webview.
@@ -4032,6 +4047,16 @@ export const useStore = create<AppState>()((set, get) => ({
         get().applyAutoContinueSync(snap.autoContinue);
       })
       .catch(() => {});
+
+    // Task 435: seed the transient same-file claim map (a window opened mid-edit
+    // must see the existing claim). Subscribed above, fetched after — Rust updates
+    // its registry before each emit, so subscribe-then-fetch never regresses.
+    // Outside Tauri the invoke rejects and the {} default stands.
+    try {
+      get().applyFileClaimsSync(await ipc.fileClaims());
+    } catch {
+      /* keep {} */
+    }
 
     // How this install is managed (#361) — read right after the boot payload and
     // therefore still *before* the boot `checkForUpdate()` further down in `init`, so a
@@ -6899,6 +6924,16 @@ export const useStore = create<AppState>()((set, get) => ({
     // NOT re-run here.
     startFolderColorAssign();
     void get().checkForUpdate(); // the update slice is per-window; idempotent
+  },
+
+  applyFileClaimsSync: (claims) => {
+    // Transient task-435 soft-claim mirror — apply-only, never persisted; the
+    // JSON-equality guard makes the mutating window's own echo a free no-op.
+    // Wholesale map replace (the full-value 428 shape); a missed edge
+    // self-corrects on the next broadcast.
+    const next = claimsToMap(claims);
+    if (JSON.stringify(get().fileClaims) === JSON.stringify(next)) return;
+    set({ fileClaims: next });
   },
 
   copyToClipboard: async (text, label) => {

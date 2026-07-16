@@ -12,6 +12,7 @@ mod commands;
 mod container;
 mod early_settings;
 mod editors;
+mod file_claims;
 mod files;
 mod git;
 mod linux_desktop;
@@ -137,6 +138,10 @@ pub fn run() {
             // size arbiter. Starts empty and stays empty until a frontend caller
             // attaches views (later epic cards), so it is inert on a normal run.
             app.manage(terminal_views::TerminalViews::default());
+            // Same-file soft-claim registry (task 435): one window at a time is the
+            // authoritative auto-save editor of a file; others render read-only.
+            // Transient (never persisted), advisory only — starts and can stay empty.
+            app.manage(file_claims::FileClaims::default());
 
             // Load persisted sessions + recents from the app-data dir.
             let store_path = app
@@ -416,6 +421,9 @@ pub fn run() {
             commands::attach_terminal,
             commands::detach_terminal,
             commands::propose_terminal_size,
+            commands::claim_file,
+            commands::release_file_claim,
+            commands::file_claims,
             commands::kill_session,
             commands::rename_session,
             commands::set_session_auto_continue,
@@ -559,6 +567,12 @@ pub fn run() {
                         handle.try_state::<SessionManager>(),
                     ) {
                         views.purge_window(&manager, &label);
+                    }
+                    // Same-file edit guard (task 435): a closing window's soft claims
+                    // are dropped so its files never stay read-only in other windows.
+                    // try_state: teardown-safe, like the view purge above.
+                    if let Some(claims) = handle.try_state::<file_claims::FileClaims>() {
+                        claims.purge_window(handle, &label);
                     }
                     // Primary re-election (task 433): if the primary closed, the oldest
                     // surviving full window is promoted and broadcast — the new primary's

@@ -392,6 +392,18 @@ export interface GridPayload {
   rows: number;
 }
 
+/** One transient same-file soft claim (task 435), as snapshotted by `file_claims`
+ * and broadcast (full list) on `file_claims://changed`: window `window` is the
+ * authoritative auto-save editor of `{repo_path, file}`; every other window
+ * renders that file read-only. Backend snake_case (the `SessionRecord`
+ * convention). Advisory only — never persisted, never an on-disk lock. */
+export interface FileClaim {
+  repo_path: string;
+  file: string;
+  /** The claiming window's Tauri label — opaque, matched against `WINDOW_LABEL`. */
+  window: string;
+}
+
 /** Payload of the `session://name` event (#97): claude's latest auto-title. */
 export interface NamePayload {
   id: string;
