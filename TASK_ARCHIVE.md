@@ -2539,3 +2539,70 @@ behavior identical on all three.
 
 **Dependencies:** Task 437 (via 437 → 434 → 433 → 432/431/430 the whole chain landed first; the
 426–429 registry/broadcast machinery this builds directly on was already landed).
+
+### 439. [x] Multi-window 13/16 — Restore the open-window set on relaunch: a dedicated Rust-persisted window registry (debounced bounds saves, creation-time presets, monitor-safe clamped recreation)
+
+Relaunching ReCue brings back the **same set of full app windows** the user had open — each at its
+saved position/size (clamped to the current monitor layout) and with the repo-focus / pinned-canvas
+preset it was opened with — instead of always booting a single main window. Deliberately **reverses
+the #84 "detached windows are per-session" precedent**: full app windows now survive a relaunch.
+
+**What shipped** (branch `task-439-window-restore`, PR
+[#205](https://github.com/ErikdeJager/ReCue/pull/205), merged 2026-07-16 into `backend-decouple`,
+commit `487e6fc`; 6 files, +1027/-28, **no `src/` changes**; one merge-attempt — rebased after 440
+landed):
+
+- **`src-tauri/src/store.rs`** — a `PersistedWindow { label, x, y, width, height, repo?, canvas? }`
+  model (`x`/`y` = **outer** position, `width`/`height` = **inner** client-area size in physical px —
+  the exact pair tao's Moved/Resized report and `set_position`/`set_size` accept, so a save→restore
+  cycle never accretes the title-bar height) + a dedicated `#[serde(default, skip_serializing_if)]`
+  `window_state: Vec<PersistedWindow>` field (the `path_cache` precedent — **backend-internal**, no
+  Tauri command, never in the Settings blob) + `window_state()`/`set_window_state()` + a roundtrip test.
+- **`src-tauri/src/window_state.rs`** — **new** (804 lines). A pure `WindowSet` state machine returning
+  `SaveAction` (`None`/`Debounce`/`FlushNow`): `register`/`moved`/`resized`/`destroyed`/`exit_requested`
+  with the quit-vs-close disambiguation (⌘Q's `ExitRequested` sets an `exiting` flag + flushes; a
+  `Destroyed` that would empty the set keeps the entry + flushes; single closes prune) and the Windows
+  minimize sentinels ignored (0×0 resize, −32000/−32000 move). Pure `clamp_bounds` (shrink to largest
+  monitor, re-place a window that no longer overlaps by ≥`MIN_VISIBLE_PX`, `None` for degenerate sizes /
+  no monitors → default placement), `restorable` (split `main` from `app-*` extras, drop unknown/
+  duplicate labels, cap at `MAX_RESTORED_EXTRAS` = 8), and `is_restorable_label`. The managed `Registry`
+  + debounced saver thread (persist-on-change), the `note_*` entry points, and `restore_windows(app)`.
+  Full pure-part unit tests (incl. the ⌘Q and close-A-then-main sequences, negative-origin monitors, a
+  50-entry corrupt file → 8 extras).
+- **`src-tauri/src/commands.rs`** — factored `open_app_window` into a shared
+  `create_app_window(app, init, bounds)` (the command passes `None`; the boot restore passes clamped
+  bounds applied while hidden — no flash), registering each window in both primary election (433) and
+  the window registry with its creation presets.
+- **`src-tauri/src/lib.rs`** — `mod window_state;`, manage the `Registry` + saver, `restore_windows`
+  in `.setup()` **after** main's primary registration (so main stays oldest → primary → restored
+  windows run zero once-per-app boot effects), the widened `WindowEvent` arm (Moved/Resized/Destroyed),
+  and the `ExitRequested` arm.
+- **Both trajectory logs** got the real-box smoke (physical-px restore under fractional scaling,
+  minimize sentinels, unplugged-monitor re-place, X11-vs-Wayland size-only degrade, `ExitRequested`
+  ordering).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 439)
+
+- Reverses the #84 per-session-windows rule; only full `main`/`app-*` windows exist to restore (437
+  deleted canvas windows). Presets are captured at **window-creation** time from 434's `AppWindowInit`
+  (not the live filter / active tab — a window opened plain then filtered restores plain; no
+  frontend→Rust state reporting added). Restored `app-*` windows mint **fresh** uuids/labels.
+- Move/resize debounced (500 ms); open/close/exit flushed promptly (a prune lost to an unflushed
+  debounce would restore a closed window). Quit never prunes (the `exiting` flag + would-empty rule);
+  single closes always do.
+- Defensive cap main + 8 extras; unknown/duplicate labels and degenerate (sub-200px / zero) sizes drop
+  to default placement. Maximized/fullscreen state is **not** persisted (v1 simplification). Wayland
+  degrade accepted (compositors refuse client positioning → size-only + default placement, documented +
+  logged). No "restore windows" settings toggle (always on).
+
+**Rollback-safe:** the store field is `serde(default)` + not serialized when empty (clean up/downgrade);
+no new commands/events/capability lines; the `open_app_window` refactor is behavior-preserving for
+every existing caller (436's entry points call the unchanged command signature).
+
+**Cross-platform:** all new Rust is platform-neutral Tauri API (no paths/shells/`#[cfg]`); physical-px
+persistence matches every OS's monitor API; the Windows minimize sentinels + Wayland degrade are
+handled/documented; **no frontend change** → WKWebView/WebView2/WebKitGTK identical.
+
+**Dependencies:** Task 437, Task 438 (after 437 only full `main`/`app-*` windows exist — the exact set
+this persists; 438 is the repo-preset entry point; via 437 → 434 → 433's `create`-path + primary
+election this leans on, the whole planned chain landed first).
