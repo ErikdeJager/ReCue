@@ -1756,3 +1756,67 @@ token vars are universal); the one platform-sensitive primitive (PTY resize) liv
 backend seam.
 
 **Dependencies:** Task 426.
+
+### 428. [x] Multi-window 3/16 — Rust-owned change broadcasts for the quiet persisted slices + a `sessions://changed` roster event
+
+Generalizes the existing "Rust owns it, windows subscribe" pattern (`broadcast_schedules` →
+`schedule://changed` → `applyScheduleSync`) to every remaining "quiet" persisted slice, plus a new
+`sessions://changed` roster broadcast — so a session spawned/renamed/removed, or a setting / repo
+color / order / diff-seen / template change made in one window updates every other window **live,
+without a reboot**. Card 3/16 of the epic: N full app windows will converge on shared state
+exclusively through these Rust-emitted broadcasts.
+
+**What shipped** (branch `task-428-state-sync-broadcasts`, PR
+[#190](https://github.com/ErikdeJager/ReCue/pull/190), merged 2026-07-16 into `backend-decouple`,
+commit `ff06d6d`; 4 files, +836/-22, **no `lib.rs` change**):
+
+- **`src-tauri/src/commands.rs`** — eleven `broadcast_*` helpers next to `broadcast_schedules`
+  (`settings://changed`, `recents://changed`, `diff_seen://changed`, `repo_order://changed`,
+  `repo_colors://changed`, `overview_panels://changed`, `overview_order://changed`,
+  `sidebar_width://changed`, `sidebar_collapsed://changed`, `canvas_templates://changed`,
+  `sessions://changed`), each emitting the full slice value exactly as its getter returns it, **only
+  after a successful persist**. Wired into the thirteen quiet setters (an `app: AppHandle` param —
+  Tauri-injected, no `generate_handler!`/frontend change) and the roster/recents mutation sites
+  (`spawn_session`, both worktree spawns, `fork_session`, `kill_session` — roster only when a record
+  existed, `rename_session`, `cancel_recurring`'s child removal, `clone_repo`, and both fire paths
+  which broadcast **recents only**).
+- **`src/ipc.ts`** — `StateSyncHandlers` + `subscribeStateSyncEvents` (one parallel `listen` wave,
+  the #352 pattern), wired into `init`'s existing `Promise.all`.
+- **`src/store.ts`** — eleven JSON-equality-guarded apply-sync actions (`applySettingsSync` runs
+  `mergeSettings` + `applySettingsEffects` for a live theme/accent reskin; `applySidebarWidthSync`
+  clamps; `applySessionsSync` reconciles via the new pure exported **`diffSessionRoster`** helper —
+  added ids `upsertSession`, removed ids `dropSession`, existing ids merge record-derived fields
+  while preserving the view-only live fields `reconnecting`/`exitedCode`). **None calls any
+  `ipc.set*`/persist path** — no echo loops.
+- **`src/store.sync.test.ts`** — **new** unit tests: each apply-sync updates on a different value /
+  no-ops on an identical one / never calls an `ipc` setter spy; clamp + default; `diffSessionRoster`
+  add/remove/rename-merge + object-identity preservation + identical-roster `{[], [], null}`.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 428)
+
+- Broadcasts live in the **command layer** (where `broadcast_schedules` already is), never in
+  `store.rs` (which stays Tauri-free like `SessionManager`); emitted after a successful persist, never
+  on `Err`.
+- `sessions://changed` fires from **interactive roster mutations only** — deliberately NOT from the
+  schedule/recurring fire paths, whose `schedule://fired` / `recurring://fired` already carry the
+  record and where a roster emit would race the #300 recurring `current_session_id` rotation
+  (unowned-child flash). `recents://changed` fires from **every** persisted recents mutation
+  (including `clone_repo` + both fire paths — broader than the frontend-facing add/remove/clear).
+- `applySettingsSync` reskins live but leaves `saveSettings`-only side effects (theme-background push,
+  usage-poll start/stop) to the saving window (poll toggle is single-main-window today, revisit in
+  card 9/16).
+- Cross-window write conflicts stay **last-write-wins per whole slice**; a stale debounced persist
+  (sidebar drag, diff-seen) may briefly override a foreign change and self-heals on the next
+  broadcast — accepted, documented. Per-session flags (`set_session_auto_continue`/`_watch`) and
+  machine-local scalars (`set_open_files`/`set_canvas_layout`/`set_last_version`/path cache) do NOT
+  broadcast.
+- **No `lib.rs` changes at all** (`AppHandle` params need no re-registration; no new commands or
+  `SessionEvent` variants) — minimizes the collision surface with Task 426 (the dependency is purely
+  conflict-avoidance on the shared `commands.rs` surface, not logic).
+- No new Rust unit tests for the emit glue (needs a live `AppHandle`, the untested
+  `broadcast_schedules` precedent); correctness pinned by the frontend tests + two-window smoke.
+
+**Cross-platform:** Tauri events are global to all windows on macOS/Windows/Linux; no path/shell/key/
+`#[cfg]` code added — platform-neutral by construction.
+
+**Dependencies:** Task 426.
