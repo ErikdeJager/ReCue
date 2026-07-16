@@ -3919,3 +3919,16 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Failure handling: `.catch` → error toast ("Could not open a new window") — unlike the bare `void revealPath` siblings, because the wrapper's rejection would otherwise be unhandled.
 - The item automatically appears in the collapsed rail's folder-icon menu too (same shared menu, #168) — treated as desired, not suppressed.
 - No new tests: no new pure logic (worktree filter semantics already covered by paths.test.ts; no Sidebar render-test harness exists), full suite run for drift.
+
+## Task 436
+
+- Default chord for the rebindable "New window" action is `mod+alt+n` (⌘⌥N / Ctrl+Alt+N): ⌘N/⌘⇧N are taken, it stays in the N-family, is free against every default and every platform's reserved set, and follows the shipped ⌘⌥1–6 mod+alt precedent; the AltGr-layout collision (e.g. Polish ń) is accepted as the same class as those shipped chords, mitigated by rebind/unbind, and noted in-code + in the Windows trajectory log.
+- The macOS File → New Window menu item carries NO accelerator: an AppKit key-equivalent preempts the webview and cannot track a rebind (the module's own ⌘W lesson), so the webview keybind dispatcher exclusively owns the chord; the menu item is placed at the top of the File submenu with a separator, best-effort (missing File submenu → skip).
+- The keybind dispatch case is unconditional (no window/modal guard, "swallow"): non-destructive and meaningful from main, app-*, and detached canvas windows — useKeyboardNav mounts in all three.
+- Reopen semantics: tao returns has_visible_windows from applicationShouldHandleReopen, so with visible windows AppKit's default (bring forward) runs and the handler does nothing; with none visible it restores an EXISTING window (show+unminimize+set_focus; pure chooser: main > first app-* > any, sorted) and only opens a fresh window when zero windows exist (unreachable today since last-window close quits — future-proofing, documented).
+- The single-instance callback ignores argv/cwd (ReCue has no CLI-open semantics) and always opens ONE new full window via open_app_window, wrapped in run_on_main_thread (uniform main-thread window creation per OS + can't race Store management in setup).
+- Dev and release share the com.recue.app single-instance identity, so `tauri dev` beside a live ReCue now pokes it and exits — accepted as strictly better than today's sessions.json fight and consistent with the existing no-dev-beside-live rule; documented in-code rather than split with a dev-only identifier.
+- menu.rs `install` is de-generified to the concrete default runtime so its menu-event closure can call the concrete `#[tauri::command]` open_app_window; the only call site already passes the concrete App.
+- reopen_focus_target lives in commands.rs gated `#[cfg(any(target_os = "macos", test))]` (the explorer_select_arg precedent) so non-mac hosts type-check and unit-test it.
+- No capability change: tauri-plugin-single-instance exposes no JS commands; no npm package is added.
+- Dependency listed as Task 434 only (the card's "Depends on: Multi-window 9/16"); the 433→430/432 chain arrives transitively via 434.
