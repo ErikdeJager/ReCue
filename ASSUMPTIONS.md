@@ -3749,3 +3749,23 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Same 900px `.cardCapped` value for every panel type (agent/recurring/file/diff/terminal/kanban/filetree/scheduled) for visual consistency; no per-type cap values.
 - Cap is Overview-wall only; Big mode / Canvas / detached windows are untouched.
 - Update the Settings label ("Cap agent card width" -> "Cap Overview panel width") and help text as a copy-only tweak; key and store default (true) unchanged.
+
+## Task 421
+
+- Kept the existing inline element (a `.buildingHint` span, #416) rather than reintroducing a toast — the card asks only to move the text, and #416 already made it inline; relocate it, not re-implement it.
+- Kept the wording "Building the dev container (first run)…" verbatim (no copy change requested).
+- Placed the line as its own full-width, left-aligned row between the checkbox row and the action buttons (matching the sibling `.containerHint` docker-stopped line), rather than right-aligned as it was beside Start.
+- Used `margin-bottom: var(--space-12)` for the gap, mirroring the modal's existing `.containerRow`/`.containerHint` rhythm.
+- Left the spinner, `role="status"`, and `--status-awaiting` color unchanged; only position + one CSS margin change.
+
+## Task 422
+
+- Fix approach: add top padding to the `.cards` list container (rather than shrinking the hover lift or altering `.column`'s `overflow: hidden`/rounded corners) — keeps Task 409's lift/rounding intact and only makes room for it.
+- Amount of extra spacing: 8px (`var(--space-8)`), making `.cards` padding symmetric (top now matches the existing right/bottom/left 8px) — reads as even, not a lopsided gap, and reaches parity with the already-accepted bottom padding that absorbs the identical bottom-card lift.
+
+## Task 424
+
+- Only the "the wave keeps you company until then" line is removed; the "No sessions in <repo> yet" title and the "New session" button stay above the tip.
+- The tip renders identically to the welcome hero — same "tip" chip, rotating text, and click-to-shuffle behavior (via the existing `tips.ts` helpers).
+- Reuse (not duplicate) the tip UI by extracting a shared `TipRow` component used by both `EmptyState` and the Overview filtered branch; move the tip CSS rules into it.
+- The `!filter` fallback string "No agents yet." is left unchanged — the card targets the filtered folder/branch case only.
