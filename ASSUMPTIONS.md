@@ -4000,3 +4000,11 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Picked factor 0.7 (~30% slower) as a clearly perceptible but non-drastic "a bit slower"; it is one constant, trivially retunable (0.75 gentler / 0.6 stronger).
 - Kept it a hardcoded constant, not a new Settings toggle (card default; backgroundAnimation already covers on/off — a wave-speed slider isn't warranted).
 - Change is pure WebView/TS in a reducer consumed identically on macOS/Windows/Linux; no OS-specific behavior introduced.
+
+## Task 443
+
+- "Maximum size / full desktop" = call the OS maximize (Windows maximize / macOS AppKit zoom / X11 & Wayland compositor maximize), NOT a manual set_size to the raw monitor size — OS maximize respects the menu-bar/Dock/taskbar work area, which the Tauri Monitor API does not expose. Applied on the still-hidden window before reveal so there is no flash.
+- Persist a new maximized:bool on PersistedWindow (serde-default false, backward compatible) rather than geometry-only — the doc note in window_state.rs explicitly invites it, it makes "stays maximized unless the user resized" clean, and it restores correctly on Wayland (where set_position is compositor-refused but maximize is honored). Geometry restore remains the always-present floor, so the flag is a best-effort enhancement that degrades gracefully (esp. macOS zoom quirks).
+- While maximized, only the flag is updated; stored x/y/width/height stay the last NON-maximized geometry, so un-maximizing a restored window lands on a real size (the builder 1280x832 default on a first-ever maximize).
+- Only the MAIN window maximizes by default on a fresh launch; additional app windows (⌘⌥N / Open-in-new-window / Canvas pop-out) keep the 1280x832 default. The maximized-flag persist/restore applies to all restorable windows (main + app-*), so a formerly-maximized app window does re-maximize.
+- Cross-platform / Wayland: Wayland restores size-only for position (existing #439 degrade) but honors maximize; macOS zoom-while-hidden + is_maximized is the riskiest arm and is flagged for real-box verification in TRAJECTORY_TO_WINDOWS.md, with the geometry floor as the fallback. Backend-only change — the frontend has no window-sizing logic.
