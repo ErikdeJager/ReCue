@@ -7,6 +7,7 @@ import {
   initialGateState,
   rearmSettle,
   SETTLE_FRAMES,
+  WAVE_TIME_SCALE,
   type GateState,
 } from "./waveTick";
 
@@ -16,7 +17,7 @@ describe("gateFrame", () => {
   it("first frame draws with dt = 1/60 (no timebase yet)", () => {
     const r = gateFrame(initialGateState(), 1000, visible);
     expect(r.draw).toBe(true);
-    expect(r.dt).toBeCloseTo(1 / 60);
+    expect(r.dt).toBeCloseTo((1 / 60) * WAVE_TIME_SCALE);
     expect(r.next).toEqual({
       last: 1000,
       frames: 1,
@@ -32,7 +33,7 @@ describe("gateFrame", () => {
     // The return frame draws with the fresh-timebase dt, not a 60s jump.
     const back = gateFrame(r.next, 61016, visible);
     expect(back.draw).toBe(true);
-    expect(back.dt).toBeCloseTo(1 / 60);
+    expect(back.dt).toBeCloseTo((1 / 60) * WAVE_TIME_SCALE);
   });
 
   it("covered skips and resets the timebase, exactly like hidden (task 384)", () => {
@@ -45,7 +46,7 @@ describe("gateFrame", () => {
     // 1/60, not the whole covered span integrated as one giant step.
     const back = gateFrame(r.next, 90000, visible);
     expect(back.draw).toBe(true);
-    expect(back.dt).toBeCloseTo(1 / 60);
+    expect(back.dt).toBeCloseTo((1 / 60) * WAVE_TIME_SCALE);
   });
 
   it("covered does not advance the reduced-motion settle counter", () => {
@@ -97,12 +98,22 @@ describe("gateFrame", () => {
 
   it("clamps dt to [0.001, 0.05]", () => {
     const s: GateState = { last: 1000, frames: 1, freezeFloor: SETTLE_FRAMES };
-    // A huge gap (e.g. a paused debugger) clamps to 0.05.
-    expect(gateFrame(s, 9000, visible).dt).toBe(0.05);
-    // dt from `now - last` never goes below the 0.001 floor.
+    // A huge gap (e.g. a paused debugger) clamps to 0.05 (pre-scale), then scales.
+    expect(gateFrame(s, 9000, visible).dt).toBeCloseTo(0.05 * WAVE_TIME_SCALE);
+    // dt from `now - last` never goes below the 0.001 floor (pre-scale); the
+    // scaled value ((1/48)*0.7 ≈ 0.0146) is still above the floor.
     const tiny = gateFrame(s, 1000 + 1000 / FPS_CAP, visible);
     expect(tiny.dt).toBeGreaterThanOrEqual(0.001);
-    expect(tiny.dt).toBeCloseTo(1 / FPS_CAP, 3);
+    expect(tiny.dt).toBeCloseTo((1 / FPS_CAP) * WAVE_TIME_SCALE, 3);
+  });
+
+  it("scales the drawn dt by WAVE_TIME_SCALE (task 442 — slower wave drift)", () => {
+    const s: GateState = { last: 1000, frames: 1, freezeFloor: SETTLE_FRAMES };
+    const r = gateFrame(s, 1000 + 1000 / FPS_CAP, visible);
+    const physical = 1 / FPS_CAP;
+    expect(r.draw).toBe(true);
+    expect(r.dt).toBeCloseTo(physical * WAVE_TIME_SCALE, 4);
+    expect(r.dt).toBeLessThan(physical);
   });
 
   it("reduced motion settles for SETTLE_FRAMES frames, then freezes", () => {
