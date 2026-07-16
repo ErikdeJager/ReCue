@@ -671,33 +671,6 @@
   color: var(--text-primary);
 }
 
-/* A tab whose canvas is open in its own window: dimmed, with the pop-out (now
-   "focus window") button accented so it reads as the live affordance. */
-.tabDetached .tabLabel {
-  font-style: italic;
-  opacity: 0.8;
-}
-
-.tabDetached .tabPopOut {
-  color: var(--accent);
-}
-
-/* Note shown in a panel / canvas whose PTYs are rendered in another window. */
-.detachedNote {
-  display: flex;
-  height: 100%;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-8);
-}
-
-.detachedText {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--fs-meta);
-}
-
 /* The drag ghost that follows the cursor while a panel is lifted (#155): a compact
    header-like chip (grip + title) rendered in the dnd-kit <DragOverlay> since the
    real panel is removed from the layout during the drag. */

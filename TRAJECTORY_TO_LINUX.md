@@ -1747,3 +1747,26 @@ the task-433 primary election; the WebGL gates were already scoped to
 - [ ] **Non-last window close.** Closing the app window keeps every agent running and
       rendered in the main window; closing the LAST window still exits the app and
       kills the PTYs as today.
+
+## 2026-07-16 — Canvas pop-out opens a full ReCue window; #84 ownership layer deleted (multi-window 11/16, task 437)
+
+Pop-out / tear-off now open a **full app window** (`open_app_window`, task 434) on that canvas;
+the #84 detached-canvas windows, the ownership map, and the canvas-window commands are deleted.
+Two windows on one canvas mirror (426/427); typing from both interleaves like two tmux clients
+(expected). The #105 canvas-window DOM-renderer gates in `terminalPool.ts` died with the canvas
+windows — WebGL is now governed solely by the #346/#357 `rendererDecision()` plus the #364
+per-window context-loss latch, in every window.
+
+### Needs real-box verification (pop-out = full window, task 437)
+
+- [ ] **Pop-out button / tear-off on WebKitGTK.** A second full window opens on that canvas
+      (themed pre-paint #348, no white flash); both windows render the agent live,
+      letterboxed to the smallest view; input from both interleaves (expected).
+- [ ] **WebGL in the popped-out window.** On a Mesa GPU the new window's terminals attach
+      the WebGL addon (per-window #346 probe + #364 latch); on llvmpipe/a VM they fall back
+      to the DOM renderer exactly like the main window.
+- [ ] **`?canvas=` compat URL.** A legacy `index.html?canvas=<id>` load renders the full
+      shell booted into Canvas on that tab.
+- [ ] **Close/re-home.** Closing the popped-out window keeps every agent running and
+      rendered in the first window (the 426 purge unclamps the grid); closing a canvas
+      viewed by another window re-homes that window to another tab.

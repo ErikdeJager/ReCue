@@ -135,9 +135,9 @@ function OnboardingGate() {
   );
 }
 
-/** The "Open in editor" picker gate — exported because it also mounts in detached
- * canvas windows (#84): their agent headers carry the same ⋯ menu and the
- * open/choose-editor chords work there, so the picker must exist per window. */
+/** The "Open in editor" picker gate — the picker exists per window (every window
+ * hosts agent headers with the ⋯ menu and the open/choose-editor chords). Rendered
+ * by ModalHost below; kept as a named export from the #84 era. */
 export function EditorPickerGate() {
   const open = useStore((s) => s.editorPickerOpen);
   return (

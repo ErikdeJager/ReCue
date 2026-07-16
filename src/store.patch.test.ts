@@ -22,7 +22,6 @@ beforeEach(() => {
     canvases: [tab("c1"), tab("c2")],
     activeCanvasId: "c1",
     activeLeafId: null,
-    detachedCanvasIds: [],
     toasts: [],
   });
 });

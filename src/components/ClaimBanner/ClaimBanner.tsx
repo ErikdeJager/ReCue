@@ -2,7 +2,7 @@ import styles from "./ClaimBanner.module.css";
 
 /**
  * Slim read-only banner over an auto-save editor whose file another window has
- * soft-claimed (Multi-window task 435). Modeled on `DetachedNote` (#84) — the
+ * soft-claimed (Multi-window task 435). Modeled on the #84 detached-note pattern — the
  * "owned by another window" affordance — but a banner rather than a content
  * replacement: the read-only view below stays visible and live-follows the other
  * window's saves via the hot-reload poll. **Take over** transfers the claim to

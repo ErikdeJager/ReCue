@@ -7,8 +7,8 @@ import styles from "./MaximizedNote.module.css";
  * Shown in place of an item's content while it is open in **big mode** (#157). A
  * pooled terminal (#18) and the single auto-save hook (#148) may render in only one
  * DOM slot at a time, so while an item is maximized its source panel/column shows
- * this note instead of the live content (the same one-live-render-site principle as
- * the #84 `DetachedNote`). The button restores the item by closing big mode.
+ * this note instead of the live content (one live render site per window). The
+ * button restores the item by closing big mode.
  */
 function MaximizedNote() {
   const closeMaximized = useStore((s) => s.closeMaximized);

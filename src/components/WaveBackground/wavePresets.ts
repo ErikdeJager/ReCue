@@ -38,7 +38,7 @@ export function overviewIsEmpty(args: {
   );
 }
 
-/** Which preset the main window's wave runs (detached windows are always "canvas"). */
+/** Which preset a window's wave runs. */
 export function selectWavePreset(
   view: "overview" | "canvas",
   overviewEmpty: boolean,
@@ -49,23 +49,19 @@ export function selectWavePreset(
 
 /**
  * Whether panels currently tile over the stage, so the wave is fully occluded and
- * can pause (task 384 — the `pauseWaveWhenCovered` setting). Pure so both windows
- * share one definition of "covered":
+ * can pause (task 384 — the `pauseWaveWhenCovered` setting). Pure so every window
+ * shares one definition of "covered":
  *   - **Overview** ⇒ covered iff the wall has cards (filter-aware — a repo-filtered
  *     wall with zero matches shows crust, so NOT covered; the first-launch welcome
  *     hero is NOT covered).
- *   - **Canvas (main)** ⇒ covered iff the active tab is not detached AND has a
- *     layout (a detached tab renders a `DetachedCanvasNote`, not panels — crust
- *     shows through, so NOT covered).
- *   - **Detached window** ⇒ covered iff its canvas has a layout (call with
- *     `view: "canvas"`, `activeCanvasDetached: false`).
+ *   - **Canvas** ⇒ covered iff the active tab has a layout (an empty tab shows
+ *     crust, so NOT covered).
  */
 export function waveCovered(args: {
   view: "overview" | "canvas";
   overviewHasCards: boolean;
   activeCanvasLayout: unknown | null;
-  activeCanvasDetached: boolean;
 }): boolean {
   if (args.view === "overview") return args.overviewHasCards;
-  return !args.activeCanvasDetached && args.activeCanvasLayout !== null;
+  return args.activeCanvasLayout !== null;
 }

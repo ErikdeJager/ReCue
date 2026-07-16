@@ -1,6 +1,6 @@
 /* "Shown in big mode" placeholder (#157) — fills an item's slot while it is
    maximized in the big-mode modal, so the live content (pooled terminal / auto-save
-   hook) renders in exactly one place. Mirrors the #84 DetachedNote. */
+   hook) renders in exactly one place per window. */
 .note {
   display: flex;
   width: 100%;

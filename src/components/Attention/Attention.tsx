@@ -108,9 +108,8 @@ function QueueCard({
  * Two panes over the shared wave background (transparent, like Overview): a middle
  * **queue** of idle-agent cards and a right **agent** pane showing the selected agent's
  * real live pooled terminal — rendered ONLY through the shared {@link ItemContent} (#157),
- * so the #18 terminal pool + #84 ownership guard apply exactly as everywhere else (a
- * PTY owned by a detached window shows a DetachedNote automatically). There is no
- * reply/input box — the user types straight into the terminal.
+ * so the #18 terminal pool and its per-window guards apply exactly as everywhere
+ * else. There is no reply/input box — the user types straight into the terminal.
  *
  * Selection is the shared `selectedId`, so ⌘E (big mode), the sidebar highlight, and the
  * Shift+↑/↓ queue nav (`useKeyboardNav`) all cooperate. The right-pane header × — and the

@@ -827,6 +827,4 @@ export interface BootState {
   platform: string;
   /** Windows build number, `0` elsewhere (#140). */
   windows_build: number;
-  /** Canvas ids with a detached window open (#84). */
-  detached_canvas_ids: string[];
 }

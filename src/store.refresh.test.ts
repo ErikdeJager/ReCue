@@ -37,7 +37,6 @@ vi.mock("./ipc", () => ({
   appVersion: vi.fn(),
   getLastVersion: vi.fn(),
   setLastVersion: vi.fn(),
-  listCanvasWindows: vi.fn(),
   platform: vi.fn(),
   windowsBuild: vi.fn(),
   forkSession: vi.fn(),
@@ -107,7 +106,6 @@ function makeBootState(over: Partial<BootState> = {}): BootState {
     app_version: "1.0.0",
     platform: "macos",
     windows_build: 0,
-    detached_canvas_ids: [],
     ...over,
   };
 }
@@ -328,7 +326,6 @@ describe("boot is ONE batched round-trip (#352)", () => {
       ipc.listRecurrings,
       ipc.appVersion,
       ipc.getLastVersion,
-      ipc.listCanvasWindows,
       ipc.platform,
       ipc.windowsBuild,
     ]) {
@@ -799,8 +796,8 @@ describe("an app-* window's pre-sync primaryWindow default (task 434)", () => {
     // The store's initial slice is `WINDOW_LABEL === "main" ? "main" : null`,
     // evaluated at module load — so the live store in this (main-labelled) test
     // env can only exercise the "main" branch. Pin the expression's contract for
-    // the task-434 labels directly: an `app-<uuid>` full window (like a detached
-    // canvas) boots with null and waits for the `primary_window` snapshot that
+    // the task-434 labels directly: an `app-<uuid>` full window boots with null
+    // and waits for the `primary_window` snapshot that
     // `init` resolves before the boot apply, so it runs zero once-per-app effects
     // while an older full window lives.
     const defaultPrimaryFor = (label: string) =>

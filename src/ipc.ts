@@ -218,7 +218,7 @@ export const sessionScrollback = (id: string) =>
 /** Everything the boot needs, in **one** round-trip (#352) — sessions, recents, repo
  * colors, Overview panels/order, legacy open files, canvas layout/tabs/templates,
  * settings, sidebar width/collapsed, folder order, diff-seen, schedules, recurrings,
- * last + running app version, platform, Windows build, detached canvas ids. The
+ * last + running app version, platform, Windows build. The
  * individual commands below all remain (other call sites use them); this batches the
  * ~21 boot reads that used to run as ~22 sequential waves, each an evaluate-JS hop on
  * the webview main thread (costliest on Linux/WebKitGTK, #346). */
@@ -296,32 +296,15 @@ export const getCanvasTemplates = () =>
 export const setCanvasTemplates = (templates: CanvasTemplate[]) =>
   invoke<void>("set_canvas_templates", { templates });
 
-/** Open (or focus, if already open) a detached window for canvas `id` (#84). */
-export const openCanvasWindow = (id: string, title: string) =>
-  invoke<void>("open_canvas_window", { id, title });
-
-/** Raise the detached window for canvas `id` (#84); false if none is open. */
-export const focusCanvasWindow = (id: string) =>
-  invoke<boolean>("focus_canvas_window", { id });
-
-/** Close the detached window for canvas `id` (#84) — it re-docks on close. */
-export const closeCanvasWindow = (id: string) =>
-  invoke<void>("close_canvas_window", { id });
-
-/** Canvas ids that currently have a detached window (#84); fetched on startup
- * since a just-opened window may have missed the `canvas://windows` broadcast. */
-export const listCanvasWindows = () => invoke<string[]>("list_canvas_windows");
-
 /** Open an additional FULL app window (task 434) — label `app-<uuid>`, the
  * complete shell with window-local view/selection/tab/filter state. The init
  * presets ride the URL (`repo` → the Overview repo filter; `canvas` → boot into
- * Canvas on that tab when it exists). Resolves to the new window's id. Ships
- * callable but un-triggered: the UI entry points arrive in card 10/16. */
+ * Canvas on that tab when it exists). Resolves to the new window's id. Since
+ * task 437 this is also the Canvas pop-out / tear-off target (`{ canvas: id }`). */
 export const openAppWindow = (init: AppWindowInit = {}) =>
   invoke<string>("open_app_window", { init });
 
-/** Raise an existing full app window by id (task 434); false if none is open.
- * Mirrors `focusCanvasWindow` — the UI entry points arrive in card 10/16. */
+/** Raise an existing full app window by id (task 434); false if none is open. */
 export const focusAppWindow = (id: string) =>
   invoke<boolean>("focus_app_window", { id });
 
@@ -979,28 +962,17 @@ export async function subscribeSessionSize(
 export interface CanvasEventHandlers {
   /** The canvas tab set changed in some window (#84) — re-apply the new list. */
   onCanvasesChanged: (state: PersistedCanvases) => void;
-  /** The set of detached canvas windows changed (#84). */
-  onWindowsChanged: (detachedCanvasIds: string[]) => void;
 }
 
-/** Subscribe to cross-window canvas sync events (#84): `canvas://changed`
- * (tab/layout edits in any window) and `canvas://windows` (a detached window
- * opened/closed). Returns an unlisten fn. Registered as one wave (#352). */
+/** Subscribe to the cross-window canvas sync event (#84): `canvas://changed`
+ * (tab/layout edits in any window). Returns an unlisten fn. Registered as one
+ * wave (#352). */
 export async function subscribeCanvasEvents(
   handlers: CanvasEventHandlers,
 ): Promise<UnlistenFn> {
-  const [unlistenChanged, unlistenWindows] = await Promise.all([
-    listen<PersistedCanvases>("canvas://changed", (event) =>
-      handlers.onCanvasesChanged(event.payload),
-    ),
-    listen<{ detached: string[] }>("canvas://windows", (event) =>
-      handlers.onWindowsChanged(event.payload.detached),
-    ),
-  ]);
-  return () => {
-    unlistenChanged();
-    unlistenWindows();
-  };
+  return listen<PersistedCanvases>("canvas://changed", (event) =>
+    handlers.onCanvasesChanged(event.payload),
+  );
 }
 
 /** The current primary full-window label (task 433), or null when none survives.
@@ -1224,7 +1196,7 @@ export const fileClaims = () => invoke<FileClaim[]>("file_claims");
 /** Subscribe to `file_claims://changed` (task 435): the full sorted claim list,
  * emitted only on change. A dedicated subscription — deliberately NOT a
  * `StateSyncHandlers` entry (that interface documents the *persisted* slices;
- * claims are transient, like `canvas://windows`). */
+ * claims are transient). */
 export async function subscribeFileClaimEvents(
   onChanged: (claims: FileClaim[]) => void,
 ): Promise<UnlistenFn> {
