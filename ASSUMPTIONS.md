@@ -3973,3 +3973,15 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - "note the measured effect for Linux in-code" interpreted as: an in-code #346-style comment in lib.rs quantifying the effect (one evaluate-JS per window per emit -> subscriber windows only; zero-subscriber sessions skip encode+emit), with the real-box numeric measurement logged as a TRAJECTORY_TO_LINUX.md item (the established can't-unit-test pattern).
 - New commands named subscribe_session_output / unsubscribe_session_output to avoid the #336 "watch" vocabulary collision (set_session_watch exists).
 - Dependency line "Multi-window 11/16" mapped to Task 437 per the epic; plan is content-anchored with a mandatory step-0 re-verify since tasks 430-437 land before this card and 437 rewrites parts of terminalPool.ts / ipc.ts / lib.rs.
+
+## Task 441
+
+- Both trajectory files contain COMMITTED merge-conflict markers (TRAJECTORY_TO_WINDOWS.md ~1184-1231, TRAJECTORY_TO_LINUX.md ~1688-1728, dev-container vs Open-in-editor entries); since this card edits those files, resolving them (keep both content blocks, delete the six marker lines) is included in scope as an incidental repair.
+- Docs must describe the AS-LANDED code, not the plans: PLAN-430..440 are deleted at build time, so the plan directs the implementer to build the fact base from TASK_ARCHIVE.md 426-440 + worktree greps, with "code wins" on any plan/landing divergence (divergences PR-flagged, never code-patched from this docs card).
+- Historical (#N) provenance citations stay (e.g. "reverses the #84 rule"); only text presenting deleted behavior as current is rewritten. Allowed-exception classes (CanvasWindow only in deleted-machinery text, ?canvas= only as one-release compat) are pinned in the acceptance criteria.
+- CLAUDE.md's Tasks section (including the stale "next is #311" line) is out of scope — board machinery, not multi-window; TASK_ARCHIVE.md is the numbering source of truth.
+- Trajectory dedupe policy: per-card real-box entries that tasks 434-440's implementers already appended stay as-is; the new consolidated epic matrix cross-references them instead of duplicating.
+- No macOS trajectory file exists, so macOS-only items (Dock Reopen, File -> New Window, Cmd+Q ExitRequested ordering) stay PR-flagged per the #84/#105 precedent, noted in each matrix intro.
+- The #356 bundle figures in CLAUDE.md are refreshed from an actual `npm run bundle:report` run in the worktree (single route post-437) rather than left stale; the 770 kB detached-canvas figure is dropped.
+- docs/macos-permissions.md and docs/linux-packaging.md are untouched — the card names only CLAUDE.md and the two trajectory logs.
+- Task 430 and 431 landed during/before this planning pass (archive entries exist), so the epic context's "planned" status for them was already stale; the plan treats all of 426-431 as landed and 432-440 as landing before build.
