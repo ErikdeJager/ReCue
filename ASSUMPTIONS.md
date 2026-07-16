@@ -3932,3 +3932,17 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - reopen_focus_target lives in commands.rs gated `#[cfg(any(target_os = "macos", test))]` (the explorer_select_arg precedent) so non-mac hosts type-check and unit-test it.
 - No capability change: tauri-plugin-single-instance exposes no JS commands; no npm package is added.
 - Dependency listed as Task 434 only (the card's "Depends on: Multi-window 9/16"); the 433→430/432 chain arrives transitively via 434.
+
+## Task 437
+
+- "Sessions VISIBLE in this window" = the reconcile keep-set becomes every live session/panel/canvas PTY id un-filtered by ownership; boundedness comes from the #351 lazy visibility gate (creation), never from disposal-on-scroll-out (which would break the #18 invariant).
+- The `?canvas=` compat URL parses as kind "app" but KEEPS the real `canvas-<id>` Tauri label (WindowKind loses "canvas"), so the task-426 per-label view purge and 427 attach stay correct; such a window is never primary-eligible (433's predicate) — acceptable for a one-release dead route, delete next release.
+- Deleted the now-degenerate IS_FULL_APP_WINDOW / IS_DETACHED_CANVAS_WINDOW constants too (not just the card's explicit list) and simplified every gate — compile-enforced audit, byte-identical single-window behavior; primary.rs's is_full_window predicate is deliberately left as-is (out of scope).
+- sessionIdsInLayout is NOT deleted — only its ownership consumer computeSessionOwners is; the helper stays as the reconcile keep-alive for template terminals (#118), with its doc reworded.
+- popOutCanvas always opens a NEW window (no focus-if-already-open dedupe, unlike old open_canvas_window) — matches "two windows on the same canvas is fine"; the originating window keeps the tab active/usable with no marker.
+- Dropped "canvas-*" from capabilities/default.json windows: nothing can create a canvas-labelled window post-upgrade (commands deleted; windows never restored across relaunch).
+- Also removed the three IS_DETACHED_CANVAS_WINDOW DOM-renderer gates in terminalPool (#105) — app windows get WebGL per rendererDecision + the #364 latch — and the activeCanvasDetached field from wavePresets' waveCovered; both are dead once canvas windows are gone.
+- bundle-report.mjs loses its "detached canvas window" ROUTES entry (the chunk no longer exists); budgets unchanged.
+- Tmux-style input interleaving is documented in the windowContext module doc, the MainApp reconcile comment, TRAJECTORY_TO_WINDOWS/LINUX smoke items, and the PR body — not in CLAUDE.md (following PLAN-434's no-CLAUDE.md-edits precedent).
+- Boot's resolveCanvases drops the pin parameter entirely; the ?canvas= compat maps to the soft INIT_CANVAS_ID preset (stale id → persisted active tab), satisfying "no persisted state format changes".
+- PLAN-435 (may land either side) contains no literal DetachedNote reference today, but the epic flags its banner as modeled on it — recorded as a reconcile-on-second-landing risk in the plan.
