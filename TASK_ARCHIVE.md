@@ -1889,3 +1889,71 @@ identical result.
 construction on macOS, Windows, and Linux.
 
 **Dependencies:** Task 428.
+
+### 430. [x] Multi-window 5/16 — Rust-owned auto-continue engine: the one usage poll + arm/nudge executor moves to `autocontinue.rs`, state events feed the unchanged UI
+
+Moves the #296 auto-continue-after-limit machine (arm at ~100% usage → wait for the five-hour reset →
+nudge each captured Claude agent with Enter/`continue`/Enter) from the frontend into Rust, so it runs
+**exactly once per app** instead of N times once the epic's full windows exist (the double-nudge
+hazard). Rust becomes the **single** usage poller — critical because the usage endpoint aggressively
+429s below ~180s and the old frontend `IS_MAIN_WINDOW` poll gate is itself broken by N windows. The UI
+(AutoContinuePrompt, AutoContinueToggle, ⋯ menu, Settings → Sessions, UsageBar) renders exactly as
+today, now fed by Rust-emitted state events.
+
+**What shipped** (branch `task-430-rust-autocontinue`, PR
+[#193](https://github.com/ErikdeJager/ReCue/pull/193), merged 2026-07-16 into `backend-decouple`,
+commit `717c5b4`; 14 files, +1449/-841):
+
+- **`src-tauri/src/autocontinue.rs`** — **new** (1046 lines). A faithful port of the pure reducer
+  `evaluate(prev, usage, now_ms, config, live_claude_ids) -> EvalResult` with the exact #296 arm/wait/
+  fire semantics + constants (`ARM_THRESHOLD_PCT` 99.5, `RESET_CONFIRM_PCT` 90, `USAGE_POLL_MS`
+  180_000, `ARMED_POLL_MS` 45_000, `ENGINE_TICK_MS` 5_000, `CONTINUE_KEY_DELAY_MS` 120); a hand-rolled
+  RFC3339-subset + numeric-epoch `parse_resets_at` (honoring `usage.rs`'s no-date-crate stance); pure
+  `poll_gate` / `engine_config` / `live_claude_ids` / `fetch_due` helpers; the single engine thread
+  (`run` — a 5s `recv_timeout` poke tick, fetches only when due, reducer every wake against the cached
+  snapshot, inline best-effort nudge per fired id); a `Shared` cache written **before** each emit
+  (invariant: `auto_continue_snapshot` ≥ any event a subscriber saw) + a `Poke`/`poke` seam + the
+  `auto_continue_snapshot` command. Full Rust unit tests mirroring the old TS reducer suite.
+- **`src-tauri/src/pty.rs`** — `SessionManager::live_session_ids()` (map entries whose child isn't
+  reaped) as the engine's liveness source.
+- **`src-tauri/src/usage.rs`** — `usage_snapshot_blocking` → `pub(crate)`; deleted the now-caller-less
+  `claude_session_usage` command; `PartialEq` on `UsageSnapshot`/`UsageBucket` for the emit-on-change
+  guard.
+- **`src-tauri/src/lib.rs`** — `mod autocontinue;`, manage `Poke`+`Shared`, spawn the engine thread
+  next to the #93 scheduler, register `auto_continue_snapshot`, unregister `claude_session_usage`.
+- **`src-tauri/src/commands.rs`** — a one-line `autocontinue::poke(&app)` in `set_settings` (post-
+  persist) so a `showSessionUsage`/`autoContinueAfterLimit` toggle reacts within one wake.
+- **Frontend** (`ipc.ts` / `store.ts` / `autoContinue.ts` + 5 test files) — deleted the entire
+  firing path (`evaluateAutoContinue`, the 180s/45s timers, `sendContinue`, `refreshUsage`/
+  `startUsagePolling`/`stopUsagePolling`/`applyAutoContinue`, `claudeSessionUsage`); the `usage` /
+  `autoContinue` slices become **event-fed mirrors** (`subscribeUsageEvents` +
+  `applyUsageSync`/`applyAutoContinueSync`, both equality-guarded and zero-persist, plus a pure
+  exported `usageFromSnapshot` mapper and a boot `autoContinueSnapshot()` seed). `src/autoContinue.ts`
+  trimmed to the pure UI helpers (`isLimitReached` + thresholds + the mirrored `AutoContinueState`).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 430)
+
+- Rust owns the **one** app-wide usage poll; the frontend timers are gone and the `usage` slice is an
+  event-fed mirror — two independent 180s pollers would double requests against a 429-prone endpoint.
+- Preserved today's implicit coupling: `showSessionUsage` off ⇒ no fetch ⇒ auto-continue never arms
+  (the #326 no-poll-no-token privacy gate outranks the feature), plus the `isClaudeActive`
+  all-sessions-claude fetch gate — both in the pure Rust `poll_gate`.
+- No UI reads the armed machine state today; the store `autoContinue` slice is kept as a read-only
+  mirror (`autocontinue://changed`) for parity/observability + future UI. The machine stays transient
+  (never persisted).
+- Rust "live Claude session" = a persisted claude record with a currently-running PTY (slightly
+  stricter than the frontend's `exitedCode === undefined`, which also counted reconnecting boot
+  records; nudging is best-effort either way).
+- Engine cadence: 5s wake tick, fetches only when due (180s / 45s armed / immediate on first run or
+  gate-off→on); `set_settings` pokes post-persist; reducer runs every wake against the **cached**
+  snapshot (safe — firing needs a fresh <90% reading). Nudge byte sequence + 120ms gaps identical, run
+  inline on the engine thread.
+- The full arm→reset→nudge path is **not CI-testable** (needs a real five-hour limit event) — flagged
+  for interactive verification in the PR (the #296 precedent); the sequence is isolated in one Rust
+  spot for real-CLI adjustment.
+
+**Cross-platform:** platform-neutral by construction — a plain Rust thread, `ureq` HTTPS,
+`write_stdin` (same bytes on all three OSes), global Tauri events; no `#[cfg]`/paths/shells/keys.
+
+**Dependencies:** Task 429 (via 429 → 428 — reuses their broadcast/apply-sync conventions +
+`init` subscribe wave, and 429's reshaped `set_settings`/`saveSettings` which this card edits).
