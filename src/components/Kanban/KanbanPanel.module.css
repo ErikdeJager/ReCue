@@ -259,7 +259,11 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
-  padding: 0 var(--space-8) var(--space-8);
+  /* Task 422: symmetric 8px padding (was top:0) so the topmost card's hover lift
+     (`.card:hover` translateY(-2px) + shadow) isn't clipped by the column's
+     `overflow: hidden` / header. Matches the existing side/bottom padding — no
+     lopsided gap, and the vertical scroll region is unaffected. */
+  padding: var(--space-8);
   overflow-y: auto;
 }
 
