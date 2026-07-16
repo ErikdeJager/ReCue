@@ -3883,3 +3883,15 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - setView(defaultView), the sidebar-collapse/repo-order persists of locally-initiated actions, and all canvas-window self-management stay on their existing per-window gates, per the card's per-window list.
 - open_canvas_window also routes through primary::register_window (a documented no-op for ineligible canvas labels) so every window-creation site inherits the registration seam for 9/16.
 - Event/command naming follows the landed 428/430 conventions: window://primary carries the full value { primary: string|null }, emitted on change only, state written before emit, with a primary_window snapshot command fetched after subscribing.
+
+## Task 435
+
+- Mapped the card's dependency line: "Multi-window 8/16" → Task 433; "Multi-window 3/16" is Task 428 (already landed) so it drops off the Dependencies line.
+- Claim lifetime refined from the card's "cleared on blur/close" to "actively editing OR unsaved edits pending": claim on focus OR dirty, release once blurred+clean (auto-mode blur-flush settling; manual-mode #162 dirty buffer keeps the claim past blur until Save settles) — needed because Kanban drag mutations dirty the buffer without ever focusing an editor.
+- Backend claim is an unconditional last-claim-wins set (take-over is the same claim_file command); release is holder-label-guarded; purge on window Destroyed. No per-panel refcounting: two same-window panels on one file share the label and may leave a microsecond unclaimed gap on one's release — accepted as soft-claim semantics.
+- On losing the claim (take-over) while dirty, the loser cancels its debounce and flushes ONCE in auto mode (rather than silently dropping ≤600ms of typing); a manual-mode dirty buffer is kept in memory with Save disabled. Any overlap is the card's documented last-writer-wins fallback.
+- Claims keyed by exact {repoPath, file} strings joined with NUL (no path normalization) — panels replicate across windows from shared persisted blobs, so spellings match; keys are never parsed as paths (Windows-safe).
+- Broadcast is a dedicated file_claims://changed event carrying the full Vec<FileClaim> + a file_claims snapshot command (subscribe-then-fetch), NOT a twelfth StateSyncHandlers entry — that interface documents persisted slices and claims are transient (the canvas://windows precedent).
+- Kanban read-only = banner + panel-level mutation gates + a readOnly prop threaded through BoardColumn/SortableCard (hide add/edit/delete/rename affordances, disable drag sensors) + readOnly Raw textarea; the hot-reload poll keeps running so the locked view live-follows the other window's saves.
+- Read-only affordance is a new shared ClaimBanner component (modeled on DetachedNote) used by both FileViewer and KanbanPanel; setText/save are also hard-gated inside the hook as defense in depth.
+- No hook-rendering tests (vitest is environment:"node"); the card's "claim-state helpers pure + unit-tested" is satisfied by the pure claimIntent/heldElsewhere/claimKey/claimsToMap battery plus the Rust ClaimRegistry tests.
