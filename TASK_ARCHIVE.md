@@ -2742,3 +2742,54 @@ of the app's accent.
   smell, since the icon was borrowing the `--status-awaiting` status token for a decorative purpose.
 
 **Dependencies:** none.
+
+### 443. [x] Open maximized (full desktop) by default, persist the user's window size
+
+On a fresh install (no persisted window bounds) ReCue's main window now opens **maximized / filling the
+available desktop** instead of the fixed 1280×832 frame, and — extending the #439 window-restore epic
+card — the maximized state now **persists and round-trips**, so "big by default, then it stays how I
+left it" holds across quits on macOS, Windows, and Linux. Backend-only (the frontend has no
+window-sizing logic).
+
+**What shipped** (branch `task-443-maximize-default`, PR
+[#211](https://github.com/ErikdeJager/ReCue/pull/211); Rust only):
+
+- **`src-tauri/src/store.rs`** — `PersistedWindow` gains a `maximized: bool` field (`#[serde(default)]`,
+  so a pre-443 `sessions.json` without the key loads as `false` — backward compatible). While
+  maximized, only the flag is set; the stored `x/y/width/height` stay the last **non-maximized**
+  geometry (the un-maximize / restore target). Tests: a pre-443 blob deserializes `maximized: false`,
+  and a `true`/`false` pair round-trips through save→load.
+- **`src-tauri/src/window_state.rs`** — pure `WindowSet::set_maximized(label, bool) -> SaveAction`
+  (flag-only, idempotent `None` on unchanged, no-op while exiting / for an untracked label, **never
+  mutates geometry**) plus a `merge_action(a, b)` helper (`FlushNow > Debounce > None`) for the
+  un-maximize edge that both clears the flag and records new geometry. A `live_maximized(app, label)`
+  helper queries `is_maximized()` at the `Moved`/`Resized` event site (main-thread-safe): a maximizing
+  event records only the flag; an un-maximizing event clears it and records the restored normal
+  geometry. `restore_windows` default-maximizes the still-hidden `main` window on a fresh install
+  (builder 1280×832 becomes the un-maximize target) and re-maximizes any restored window whose
+  `maximized` flag is set — applied **before** the #348 reveal, so no flash. Module doc updated (the
+  old "maximized state is not persisted" note replaced), including the Wayland note that `maximize()`
+  (unlike `set_position`) is honored by the compositor.
+- **`src-tauri/src/commands.rs`** — `create_app_window` gains a `maximized: bool` param, applying
+  `window.maximize()` while hidden (after bounds) and threading the flag into
+  `window_state::register`. `open_app_window` passes `false` (a user-opened app window is never
+  maximized by default); the restore extras loop passes each entry's `maximized`.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 443)
+
+- "Maximum size / full desktop" = the OS **maximize** (Windows maximize / macOS AppKit zoom / X11 &
+  Wayland compositor maximize), **not** a manual `set_size` to the raw monitor size — OS maximize
+  respects the menu-bar/Dock/taskbar work area, which the Tauri Monitor API does not expose. Applied on
+  the still-hidden window before reveal → no flash.
+- Persisted a new `maximized: bool` on `PersistedWindow` (serde-default, backward compatible) rather
+  than geometry-only; the #439 doc note explicitly invited it, it makes "stays maximized unless the
+  user resized" clean, and it restores correctly on Wayland. Geometry restore stays the always-present
+  floor, so the flag is a best-effort enhancement that degrades gracefully (esp. macOS zoom quirks).
+- Only the **main** window maximizes by default on a fresh launch; additional app windows keep the
+  1280×832 default, though a formerly-maximized app window does re-maximize on restore.
+- macOS `zoom`-while-hidden + `is_maximized` is the riskiest arm — flagged for real-box verification in
+  `TRAJECTORY_TO_WINDOWS.md`, with the geometry floor as the fallback. Backend-only change.
+
+**Dependencies:** none (extends the already-archived #439 window-restore; no ordering dependency on any
+un-landed or sibling card — Task 444 also touches window chrome but is title-bar styling, no code
+overlap with sizing/persistence).
