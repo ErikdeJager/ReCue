@@ -1181,7 +1181,6 @@ already in CI.
       then freezes, dot pulse/menu/modal/toast entrances drop, and the terminal cursor
       stops blinking (#383) while the terminal itself keeps rendering.
 
-<<<<<<< HEAD
 ## 2026-07-15 — Dev-container agent sessions (docker-wrapped claude)
 
 Opt-in per-session docker containers (the New Session modal's "Run in dev container"
@@ -1206,7 +1205,6 @@ valid inside the (Linux) container. Windows-specific notes + real-box checks:
   Windows — the file is canonical, #140).
 - **No 0600 on Windows:** the per-session credentials seed relies on the app-data dir's
   ACL (unix gets `OpenOptionsExt::mode(0o600)`).
-=======
 ### Needs real-box verification (Open in editor)
 
 - [ ] **`code` on PATH launches without a console flash.** With VS Code's installer
@@ -1228,7 +1226,6 @@ valid inside the (Linux) container. Windows-specific notes + real-box checks:
       with two versions installed the newest dir wins.
 - [ ] **Custom command with a quoted path.** `"C:\Program Files\X\x.exe" {path}` in
       Settings → Editor tokenizes (quoted program survives) and receives the folder.
->>>>>>> origin/dev
 
 ## 2026-07-16 — Full app-window shell (multi-window 9/16, task 434)
 
@@ -1358,3 +1355,61 @@ listens are label-scoped (a default-target listener would bypass the filter).
 - [ ] **Single-window regression smoke.** Spawn, type, switch Overview↔Canvas during
       output, Restart (resetTerminal), scroll a never-viewed boot-resumed card into
       view — everything byte-identical to before.
+
+## 2026-07-16 — Multi-window epic wrap-up (tasks 426–440): the consolidated real-box matrix
+
+### Multi-window epic (tasks 426–440) — N full app windows
+
+The epic replaced the #84 one-main-window-plus-detached-canvas model with **N full app
+windows**: `open_app_window` / label `app-<uuid>` / route `?win=<uuid>` (434), every window
+the complete shell with window-local view state, shared state converging through the Rust
+`*://changed` broadcasts (428) and server-side patch merges (429), terminals **mirroring**
+in any number of windows under the smallest-wins grid arbiter (426/427), output emitted only
+to subscriber windows (440), a Rust-elected **primary** window gating the once-per-app
+effects (433), the app singletons moved into Rust (auto-continue + the one usage poll 430,
+the clean-exit forget 431, the boot shell respawn 432), a same-file edit guard (435), the
+single-instance / Dock-Reopen / Ctrl+Alt+N / File → New Window entry points (436),
+pop-out-as-full-window with the #84 machinery deleted (437), the repo-menu entry point
+(438), and window restore on relaunch (439). The Windows-sensitive seams: the
+single-instance **named mutex**, window placement under **fractional / per-monitor DPI**
+(and the −32000 / 0×0 minimize sentinels), **ConPTY** resize (`ResizePseudoConsole`) under
+the smallest-wins arbitration, and per-window **WebView2** cost. macOS-only items (Dock
+Reopen, File → New Window, ⌘Q `ExitRequested` ordering) remain PR-flagged per the #84/#105
+precedent — no macOS trajectory file exists.
+
+### Needs real-box verification (multi-window, tasks 426–440)
+
+The per-card checklists appended above already cover most of the matrix — cross-referenced
+here, not duplicated: **single-instance named-mutex** behavior (installed exe / portable
+copy / two logged-in Windows sessions) and **Ctrl+Alt+N vs AltGr layouts** are in the
+task-436 entry; **multi-monitor restore under fractional DPI**, the **minimize sentinels**,
+and the **unplugged-monitor re-place** are in the task-439 entry; the **targeted-delivery
+smoke** (late-attach back-fill, park, close-mid-storm, single-window regression) is in the
+task-440 entry; the dev-wired **`?repo=` encoding round-trip** and the first two-window
+ConPTY smoke are in the task-434 entry; **pop-out / tear-off**, mirroring + the tmux-style
+input interleaving, per-window WebGL, and the **`?canvas=` compat route** are in the
+task-437 entry. Still missing — new items:
+
+- [ ] **ConPTY reflow under live min-size arbitration (426/427/440).** One agent visible in
+      two windows with different slot sizes: the PTY grid is the component-wise minimum
+      (`ResizePseudoConsole`), claude's TUI reflows cleanly in both, the larger window
+      letterboxes; live-resizing the smaller window reflows both; closing it un-clamps and
+      reflows the survivor up; switching views (parking) in one window does NOT resize the
+      grid (the sized view detaches; the output subscription stays).
+- [ ] **`?repo=` round-trip through the real UI entry point (438).** "Open in new window"
+      on a repo at `C:\Users\a b\repo` → the new window's Overview filter shows exactly
+      that repo (drive colon, backslashes, and the space intact — the 434 encode path,
+      now through the shipped menu item instead of dev wiring).
+- [ ] **Per-window WebView2 memory (434).** Note the working-set growth per additional app
+      window (Task Manager, 2–4 windows); closing a window releases its share.
+- [ ] **Same-file edit guard smoke (435).** The same `.md` (FileViewer raw view) and the
+      same Kanban board open in two windows: editing in one claims it; the other renders
+      read-only with the "Being edited in another window — Take over" banner and
+      live-follows saves via the hot-reload poll; Take over flips the claim (the loser
+      flushes its buffer once in auto mode, then locks); closing the claiming window purges
+      the claim and the survivor unlocks.
+- [ ] **Primary takeover (433).** Close the primary (oldest) window while another full
+      window is open: the survivor re-arms the once-per-app effects live — exactly one
+      update check, no re-onboarding, the `schedule://fired` transition still lands; with
+      N restored windows (439) exactly ONE "Updated to vX" toast / onboarding modal fires
+      across the whole app.
