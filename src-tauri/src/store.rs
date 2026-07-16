@@ -607,9 +607,24 @@ impl Store {
         self.with(|state| state.canvases.clone())
     }
 
-    /// Replace the multi-canvas tab state and persist (#58).
+    /// Replace the multi-canvas tab state and persist (#58). The command surface
+    /// moved onto [`Self::merge_canvases`] (task 429); the wholesale replace stays
+    /// for tests/back-compat — hence the non-test dead-code allow (the
+    /// [`Self::perm_reprompt_done`] precedent).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_canvases(&self, canvases: serde_json::Value) -> io::Result<()> {
         self.update(|state| state.canvases = canvases)
+    }
+
+    /// Merge a canvases patch over the persisted blob and persist, both under the
+    /// store mutex so two concurrent patch commands cannot interleave a
+    /// read-modify-write — task 429. Returns the merged blob for the post-persist
+    /// `canvas://changed` broadcast. See [`merge_canvases_patch`] for the semantics.
+    pub fn merge_canvases(&self, patch: serde_json::Value) -> io::Result<serde_json::Value> {
+        self.update_with(|state| {
+            merge_canvases_patch(&mut state.canvases, patch);
+            state.canvases.clone()
+        })
     }
 
     /// Saved Canvas templates (#117) — opaque JSON; `null` until first written.
@@ -628,9 +643,23 @@ impl Store {
         self.with(|state| state.settings.clone())
     }
 
-    /// Replace the application settings and persist (#100).
+    /// Replace the application settings and persist (#100). The command surface
+    /// moved onto [`Self::merge_settings`] (task 429); the wholesale replace stays
+    /// for tests/back-compat — hence the non-test dead-code allow.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_settings(&self, settings: serde_json::Value) -> io::Result<()> {
         self.update(|state| state.settings = settings)
+    }
+
+    /// Merge a settings patch over the persisted blob and persist, both under the
+    /// store mutex so two concurrent patch commands cannot interleave a
+    /// read-modify-write — task 429. Returns the merged blob for the post-persist
+    /// `settings://changed` broadcast. See [`merge_settings_patch`] for the semantics.
+    pub fn merge_settings(&self, patch: serde_json::Value) -> io::Result<serde_json::Value> {
+        self.update_with(|state| {
+            merge_settings_patch(&mut state.settings, patch);
+            state.settings.clone()
+        })
     }
 
     /// The persisted sidebar width in px (#108); `None` until first set (the
@@ -711,9 +740,24 @@ impl Store {
         self.with(|state| state.diff_seen.clone())
     }
 
-    /// Replace the per-repo diff "seen" markers and persist (#278).
+    /// Replace the per-repo diff "seen" markers and persist (#278). The command
+    /// surface moved onto [`Self::merge_diff_seen`] (task 429); the wholesale
+    /// replace stays for tests/back-compat — hence the non-test dead-code allow.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_diff_seen(&self, diff_seen: serde_json::Value) -> io::Result<()> {
         self.update(|state| state.diff_seen = diff_seen)
+    }
+
+    /// Merge a diff-seen patch over the persisted map and persist, both under the
+    /// store mutex so two concurrent patch commands cannot interleave a
+    /// read-modify-write — task 429. Returns the merged map for the post-persist
+    /// `diff_seen://changed` broadcast. See [`merge_diff_seen_patch`] for the
+    /// tombstone semantics.
+    pub fn merge_diff_seen(&self, patch: serde_json::Value) -> io::Result<serde_json::Value> {
+        self.update_with(|state| {
+            merge_diff_seen_patch(&mut state.diff_seen, patch);
+            state.diff_seen.clone()
+        })
     }
 
     /// All pending scheduled sessions (#93).
@@ -870,12 +914,22 @@ impl Store {
     }
 
     fn update(&self, mutate: impl FnOnce(&mut PersistedState)) -> io::Result<()> {
+        self.update_with(mutate)
+    }
+
+    /// Mutate-then-persist under a **single** mutex hold, returning the mutator's
+    /// value — the primitive behind the task-429 patch merges (`merge_settings` /
+    /// `merge_diff_seen` / `merge_canvases`): because the read, the merge, and the
+    /// write all happen under one lock, two concurrent patch commands can never
+    /// interleave a read-modify-write and lose one side's fields.
+    fn update_with<R>(&self, mutate: impl FnOnce(&mut PersistedState) -> R) -> io::Result<R> {
         let mut guard = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        mutate(&mut guard);
-        self.persist(&guard)
+        let out = mutate(&mut guard);
+        self.persist(&guard)?;
+        Ok(out)
     }
 
     fn persist(&self, state: &PersistedState) -> io::Result<()> {
@@ -909,6 +963,131 @@ impl Store {
                 }
             }
         }
+    }
+}
+
+// --- Server-side patch merges (task 429) -----------------------------------------
+//
+// The settings / canvases / diff-seen slices used to be whole-blob replaces computed
+// from possibly-stale frontend state: window B saving its copy of a blob silently
+// reverted whatever window A had changed since B last read it (the lost-update
+// class). The frontend now sends only what it changed — a *patch* — and these pure
+// helpers merge it over the current persisted value; `Store::merge_*` runs each
+// merge + persist under ONE mutex hold (`update_with`), so writes to different keys
+// can never collide. Concurrent writes to the *same* key stay last-write-wins by
+// design. Pure JSON logic — platform-neutral on macOS, Windows, and Linux.
+
+/// Shallow top-level merge of a settings patch (task 429): every key present in the
+/// patch is written **verbatim** — an explicit `null` value is *stored* (e.g.
+/// `preferredEditor: null` is a legitimate value), never treated as a delete, and a
+/// nested object (like `keybinds`) travels whole and replaces whole. Keys absent
+/// from the patch are untouched — which also means a settings key can no longer be
+/// deleted; nothing deletes settings keys today, and the frontend's
+/// `mergeSettings`-over-defaults makes a stale key inert (accepted trade-off).
+/// A `null`/non-object current blob starts from `{}` (the first-ever save); a
+/// non-object patch is a defensive no-op.
+pub(crate) fn merge_settings_patch(current: &mut serde_json::Value, patch: serde_json::Value) {
+    let serde_json::Value::Object(patch) = patch else {
+        return;
+    };
+    if !current.is_object() {
+        *current = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let blob = current.as_object_mut().expect("ensured object above");
+    for (key, value) in patch {
+        blob.insert(key, value);
+    }
+}
+
+/// Two-level per-key merge of a diff-seen patch (task 429) with `null` tombstones:
+/// `{repo: {file: "digest"}}` sets one entry, `{repo: {file: null}}` deletes that
+/// entry, `{repo: null}` deletes the whole repo key, and a repo object left empty
+/// after deletes is pruned (mirroring the frontend's empty-repo drop). A
+/// `null`/non-object current map starts from `{}`; a non-object patch (or a repo
+/// value that is neither object nor `null`) is a defensive no-op.
+pub(crate) fn merge_diff_seen_patch(current: &mut serde_json::Value, patch: serde_json::Value) {
+    let serde_json::Value::Object(patch) = patch else {
+        return;
+    };
+    if !current.is_object() {
+        *current = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let map = current.as_object_mut().expect("ensured object above");
+    for (repo, value) in patch {
+        match value {
+            serde_json::Value::Null => {
+                map.remove(&repo);
+            }
+            serde_json::Value::Object(files) => {
+                let entry = map
+                    .entry(repo.clone())
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if !entry.is_object() {
+                    *entry = serde_json::Value::Object(serde_json::Map::new());
+                }
+                let repo_map = entry.as_object_mut().expect("ensured object above");
+                for (file, digest) in files {
+                    if digest.is_null() {
+                        repo_map.remove(&file);
+                    } else {
+                        repo_map.insert(file, digest);
+                    }
+                }
+                if repo_map.is_empty() {
+                    map.remove(&repo);
+                }
+            }
+            _ => {} // defensive: neither an object nor a tombstone — skip
+        }
+    }
+}
+
+/// Field-wise merge of a canvases patch (task 429), label-independent: `canvases`
+/// (the whole tab array — per-tab merging is deliberately out of scope, the #84
+/// last-write-wins semantics) and `activeId` (the boot hint) each replace the stored
+/// value only when present in the patch, so a tab switch (`{activeId}`) and a layout
+/// edit (`{canvases}`) from two windows can no longer clobber each other. Afterwards
+/// the blob is validated: with a missing/empty tab array the `activeId` hint is
+/// dropped (meaningless), and an `activeId` naming no tab re-homes to the first
+/// tab's id (the `applyCanvasSync` rule, applied to the persisted hint). A
+/// `null`/non-object current blob starts from `{}`; a non-object patch is a
+/// defensive no-op.
+pub(crate) fn merge_canvases_patch(current: &mut serde_json::Value, patch: serde_json::Value) {
+    let serde_json::Value::Object(mut patch) = patch else {
+        return;
+    };
+    if !current.is_object() {
+        *current = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let blob = current.as_object_mut().expect("ensured object above");
+    if let Some(canvases) = patch.remove("canvases") {
+        blob.insert("canvases".to_string(), canvases);
+    }
+    if let Some(active) = patch.remove("activeId") {
+        blob.insert("activeId".to_string(), active);
+    }
+    let ids: Vec<String> = blob
+        .get("canvases")
+        .and_then(|c| c.as_array())
+        .map(|tabs| {
+            tabs.iter()
+                .filter_map(|t| t.get("id").and_then(|i| i.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if ids.is_empty() {
+        blob.remove("activeId");
+        return;
+    }
+    let active_ok = blob
+        .get("activeId")
+        .and_then(|a| a.as_str())
+        .is_some_and(|a| ids.iter().any(|id| id == a));
+    if !active_ok {
+        blob.insert(
+            "activeId".to_string(),
+            serde_json::Value::String(ids[0].clone()),
+        );
     }
 }
 
@@ -1198,6 +1377,173 @@ mod tests {
         });
         store.set_canvases(tabs.clone()).unwrap();
         assert_eq!(Store::load(&path).canvases(), tabs);
+        let _ = fs::remove_file(&path);
+    }
+
+    // --- Server-side patch merges (task 429) ---
+
+    #[test]
+    fn merge_settings_two_stale_writers_both_survive() {
+        // The lost-update regression: two senders that each know nothing of the
+        // other's key patch sequentially — both keys land in the blob.
+        let path = temp_path("mergesettings");
+        let store = Store::load(&path);
+        assert!(store.settings().is_null()); // merge over the null first-write blob
+        store.merge_settings(serde_json::json!({ "a": 1 })).unwrap();
+        let merged = store.merge_settings(serde_json::json!({ "b": 2 })).unwrap();
+        assert_eq!(merged, serde_json::json!({ "a": 1, "b": 2 }));
+        // The merged result persists across a reload.
+        assert_eq!(
+            Store::load(&path).settings(),
+            serde_json::json!({ "a": 1, "b": 2 })
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn merge_settings_patch_semantics() {
+        // Explicit null is stored verbatim (a legitimate value, never a delete).
+        let mut current = serde_json::json!({ "preferredEditor": "zed", "theme": "dark" });
+        merge_settings_patch(&mut current, serde_json::json!({ "preferredEditor": null }));
+        assert_eq!(
+            current,
+            serde_json::json!({ "preferredEditor": null, "theme": "dark" })
+        );
+
+        // A nested object (keybinds) travels whole and replaces whole.
+        let mut current = serde_json::json!({ "keybinds": { "a": "Mod+1", "b": "Mod+2" } });
+        merge_settings_patch(
+            &mut current,
+            serde_json::json!({ "keybinds": { "c": "Mod+3" } }),
+        );
+        assert_eq!(current, serde_json::json!({ "keybinds": { "c": "Mod+3" } }));
+
+        // A non-object patch is a defensive no-op.
+        let mut current = serde_json::json!({ "theme": "dark" });
+        merge_settings_patch(&mut current, serde_json::Value::Null);
+        merge_settings_patch(&mut current, serde_json::json!([1, 2]));
+        assert_eq!(current, serde_json::json!({ "theme": "dark" }));
+    }
+
+    #[test]
+    fn merge_diff_seen_two_stale_writers_both_survive() {
+        let path = temp_path("mergediffseen");
+        let store = Store::load(&path);
+        store
+            .merge_diff_seen(serde_json::json!({ "r": { "x": "d1" } }))
+            .unwrap();
+        let merged = store
+            .merge_diff_seen(serde_json::json!({ "r": { "y": "d2" } }))
+            .unwrap();
+        assert_eq!(merged, serde_json::json!({ "r": { "x": "d1", "y": "d2" } }));
+        assert_eq!(
+            Store::load(&path).diff_seen(),
+            serde_json::json!({ "r": { "x": "d1", "y": "d2" } })
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn merge_diff_seen_patch_tombstones() {
+        // A file tombstone deletes that entry only.
+        let mut current = serde_json::json!({ "r": { "x": "d1", "y": "d2" } });
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": { "x": null } }));
+        assert_eq!(current, serde_json::json!({ "r": { "y": "d2" } }));
+
+        // A repo emptied by tombstones is pruned.
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": { "y": null } }));
+        assert_eq!(current, serde_json::json!({}));
+
+        // A repo-level tombstone removes the whole repo key.
+        let mut current = serde_json::json!({ "r": { "x": "d1" }, "s": { "z": "d3" } });
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": null }));
+        assert_eq!(current, serde_json::json!({ "s": { "z": "d3" } }));
+
+        // A non-object patch is a defensive no-op.
+        merge_diff_seen_patch(&mut current, serde_json::json!("nope"));
+        assert_eq!(current, serde_json::json!({ "s": { "z": "d3" } }));
+    }
+
+    #[test]
+    fn merge_canvases_field_wise() {
+        let tabs = serde_json::json!([
+            { "id": "c1", "name": "Canvas 1", "layout": null },
+            { "id": "c2", "name": "Canvas 2", "layout": null }
+        ]);
+
+        // A canvases-only patch keeps the stored activeId (the tab-switch survives).
+        let mut current = serde_json::json!({ "canvases": [{ "id": "c1" }], "activeId": "c1" });
+        merge_canvases_patch(
+            &mut current,
+            serde_json::json!({ "canvases": tabs.clone() }),
+        );
+        assert_eq!(
+            current,
+            serde_json::json!({ "canvases": tabs.clone(), "activeId": "c1" })
+        );
+
+        // An activeId-only patch keeps the stored tab array (the layout edit survives).
+        merge_canvases_patch(&mut current, serde_json::json!({ "activeId": "c2" }));
+        assert_eq!(
+            current,
+            serde_json::json!({ "canvases": tabs.clone(), "activeId": "c2" })
+        );
+
+        // An activeId naming a vanished tab re-homes to the first tab's id.
+        merge_canvases_patch(
+            &mut current,
+            serde_json::json!({ "canvases": [{ "id": "c3", "name": "Canvas 3", "layout": null }] }),
+        );
+        assert_eq!(
+            current,
+            serde_json::json!({
+                "canvases": [{ "id": "c3", "name": "Canvas 3", "layout": null }],
+                "activeId": "c3"
+            })
+        );
+    }
+
+    #[test]
+    fn merge_canvases_first_write_and_empty_guard() {
+        let path = temp_path("mergecanvases");
+        let store = Store::load(&path);
+        assert!(store.canvases().is_null());
+
+        // An activeId-only write against a blob with no tab array drops the hint
+        // (a boot hint with no tabs is meaningless).
+        let merged = store
+            .merge_canvases(serde_json::json!({ "activeId": "c1" }))
+            .unwrap();
+        assert_eq!(merged, serde_json::json!({}));
+
+        // First real write over the (now empty-object) blob with both fields.
+        let merged = store
+            .merge_canvases(serde_json::json!({
+                "canvases": [{ "id": "c1", "name": "Canvas 1", "layout": null }],
+                "activeId": "c1"
+            }))
+            .unwrap();
+        assert_eq!(
+            merged,
+            serde_json::json!({
+                "canvases": [{ "id": "c1", "name": "Canvas 1", "layout": null }],
+                "activeId": "c1"
+            })
+        );
+        assert_eq!(Store::load(&path).canvases(), merged);
+
+        // An empty tab array also drops the hint.
+        let mut current = serde_json::json!({ "canvases": [{ "id": "c1" }], "activeId": "c1" });
+        merge_canvases_patch(&mut current, serde_json::json!({ "canvases": [] }));
+        assert_eq!(current, serde_json::json!({ "canvases": [] }));
+
+        // A non-object patch is a defensive no-op.
+        let mut current = serde_json::json!({ "canvases": [{ "id": "c1" }], "activeId": "c1" });
+        merge_canvases_patch(&mut current, serde_json::Value::Null);
+        assert_eq!(
+            current,
+            serde_json::json!({ "canvases": [{ "id": "c1" }], "activeId": "c1" })
+        );
         let _ = fs::remove_file(&path);
     }
 

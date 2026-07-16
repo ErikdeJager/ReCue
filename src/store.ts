@@ -86,6 +86,7 @@ import type {
   CloningRepo,
   DiffLineCounts,
   DiffSeenMap,
+  DiffSeenPatch,
   EditorInfo,
   FileStatusCode,
   OverviewPanel,
@@ -272,15 +273,45 @@ const clampSidebarWidth = (w: number): number =>
 // Debounce the persist so a drag's many updates don't spam IPC (state updates live).
 let sidebarWidthPersistTimer: ReturnType<typeof setTimeout> | undefined;
 
-// Diff "seen" markers (#278): the live map updates immediately; the persist is
-// debounced so toggling several files in a row (button or `s` keybind) coalesces into
-// one write, like the sidebar-width persist above.
+// Diff "seen" markers (#278/task 429): the live map updates immediately; each
+// mark/clear also records a per-key DELTA into a module-level pending patch, and the
+// debounced persist flushes the accumulated *deltas* (never the whole map) so
+// toggling several files in a row (button or `s` keybind) still coalesces into one
+// write — which the backend merges per key under the Store mutex, so a foreign
+// window's concurrent marks survive our write. Accepted transient: a foreign
+// `diff_seen://changed` (task 428) landing before our flush briefly shows the
+// foreign map without our pending marks; the flush + its echo re-converge
+// sub-second.
 let diffSeenPersistTimer: ReturnType<typeof setTimeout> | undefined;
+let pendingDiffSeenPatch: DiffSeenPatch = {};
+
+/** Record one mark/clear delta into the pending diff-seen patch (task 429): a
+ * digest sets the entry, `null` tombstones it. The frontend never needs the
+ * `{repo: null}` whole-repo tombstone — the server prunes a repo object emptied by
+ * file tombstones. */
+function recordDiffSeenDelta(
+  repo: string,
+  file: string,
+  digestOrNull: string | null,
+): void {
+  const entry = pendingDiffSeenPatch[repo];
+  if (entry) {
+    entry[file] = digestOrNull;
+  } else {
+    pendingDiffSeenPatch[repo] = { [file]: digestOrNull };
+  }
+}
+
 function persistDiffSeen(): void {
   if (diffSeenPersistTimer) clearTimeout(diffSeenPersistTimer);
   diffSeenPersistTimer = setTimeout(() => {
     diffSeenPersistTimer = undefined;
-    void ipc.setDiffSeen(useStore.getState().diffSeen).catch(() => {});
+    // Swap the accumulator out before the async send, so a delta recorded after
+    // this flush lands in the next one — never in both, never lost.
+    const patch = pendingDiffSeenPatch;
+    pendingDiffSeenPatch = {};
+    if (Object.keys(patch).length === 0) return; // nothing pending — no write
+    void ipc.setDiffSeen(patch).catch(() => {});
   }, 300);
 }
 
@@ -1370,6 +1401,23 @@ export function mergeSettings(
   return { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
 }
 
+/** The settings **write patch** (task 429): every top-level key of `next` whose
+ * JSON differs from `base` lands verbatim (an explicit `null` travels as `null`; a
+ * changed nested object like `keybinds` travels whole — the backend replaces it
+ * whole). Empty when nothing changed. Pure. */
+export function settingsPatch(
+  base: Settings,
+  next: Settings,
+): Partial<Settings> {
+  const patch: Partial<Settings> = {};
+  for (const key of Object.keys(next) as (keyof Settings)[]) {
+    if (JSON.stringify(next[key]) !== JSON.stringify(base[key])) {
+      Object.assign(patch, { [key]: next[key] });
+    }
+  }
+  return patch;
+}
+
 /** UI display-size bounds as integer percents (#366). */
 export const MIN_DISPLAY_SIZE = 80;
 export const MAX_DISPLAY_SIZE = 150;
@@ -2247,8 +2295,12 @@ export interface AppState {
   addToGitignore: (repo: string, path: string) => Promise<void>;
   /** Assign a repo's color (optimistic + persisted) (#35). */
   setRepoColor: (path: string, color: string) => Promise<void>;
-  /** Apply + persist application settings (#100) and run their side-effects. */
-  saveSettings: (settings: Settings) => Promise<void>;
+  /** Apply + persist application settings (#100) and run their side-effects.
+   * Persists only the changed keys as a patch the backend merges server-side
+   * (task 429); `baseline` — when given (the Settings modal's draft seed) — is
+   * what the change is diffed against, so a foreign field changed while the
+   * modal was open is neither reverted nor written. */
+  saveSettings: (settings: Settings, baseline?: Settings) => Promise<void>;
   /** Flip the dense-panels setting (UI v2 §9, task 373) — backs the ⌘D shortcut.
    * Persists via `saveSettings` (which applies the `dense` root class) and toasts
    * "Dense panels on"/"Dense panels off". */
@@ -2936,12 +2988,14 @@ function registerOverviewPanel(repoPath: string, panel: OverviewPanel): void {
  * `dropSession`, a schedule via `cancelSchedule`) also removes it from every Canvas
  * panel that shows it. Each emptied split collapses (`removeLeaf`), a now-dangling
  * keyboard focus (#76) is cleared, and the result is persisted + broadcast
- * (`setCanvases` → `canvas://changed`) so detached windows (#84) stay in sync. The
+ * (`setCanvases` → `canvas://changed`) so detached windows (#84) stay in sync — as
+ * a canvases-only patch (task 429): this edits the tab layouts, never the active
+ * tab, so the stored `activeId` boot hint is left alone. The
  * item's PTY is killed by the caller as today; Overview needs no extra work (it
  * mirrors `overviewPanels`). No-op when nothing matches.
  */
 function pruneCanvasLeaves(match: (content: CanvasContent) => boolean): void {
-  const { canvases, activeCanvasId, activeLeafId } = useStore.getState();
+  const { canvases, activeLeafId } = useStore.getState();
   const removedLeafIds = new Set<string>();
   const next = canvases.map((c) => {
     if (!c.layout) return c;
@@ -2962,9 +3016,7 @@ function pruneCanvasLeaves(match: (content: CanvasContent) => boolean): void {
     activeLeafId:
       activeLeafId && removedLeafIds.has(activeLeafId) ? null : activeLeafId,
   });
-  void ipc
-    .setCanvases({ canvases: next, activeId: activeCanvasId })
-    .catch(() => {});
+  void ipc.setCanvases({ canvases: next }).catch(() => {});
 }
 
 export const useStore = create<AppState>()((set, get) => ({
@@ -3096,9 +3148,11 @@ export const useStore = create<AppState>()((set, get) => ({
       // Persist failed; keep the local order for the session.
     }
   },
-  // Diff "seen" markers (#278): optimistic local set, then a debounced persist of the
-  // whole map (toggling a few files coalesces into one write). Persisted from any
-  // window — a diff panel lives in the main window AND a detached canvas (#84).
+  // Diff "seen" markers (#278/task 429): optimistic local set, then a debounced
+  // persist of the accumulated per-file DELTAS (toggling a few files coalesces into
+  // one patch write; the backend merges it per key, so another window's concurrent
+  // marks survive). Persisted from any window — a diff panel lives in the main
+  // window AND a detached canvas (#84).
   markDiffSeen: (repoPath, filePath, digest) => {
     set((s) => ({
       diffSeen: {
@@ -3106,22 +3160,26 @@ export const useStore = create<AppState>()((set, get) => ({
         [repoPath]: { ...s.diffSeen[repoPath], [filePath]: digest },
       },
     }));
+    recordDiffSeenDelta(repoPath, filePath, digest);
     persistDiffSeen();
   },
   clearDiffSeen: (repoPath, filePath) => {
-    set((s) => {
-      const repo = s.diffSeen[repoPath];
-      if (!repo || !(filePath in repo)) return {}; // nothing to clear
-      const rest = { ...repo };
-      delete rest[filePath];
-      const next = { ...s.diffSeen };
-      if (Object.keys(rest).length === 0) {
-        delete next[repoPath]; // drop the now-empty repo entry
-      } else {
-        next[repoPath] = rest;
-      }
-      return { diffSeen: next };
-    });
+    // The nothing-to-clear check is hoisted out of the set() updater (task 429):
+    // recording the tombstone delta is a side effect, and an updater may run more
+    // than once (StrictMode) — the early return also skips the persist entirely.
+    const current = get().diffSeen;
+    const repo = current[repoPath];
+    if (!repo || !(filePath in repo)) return; // nothing to clear
+    const rest = { ...repo };
+    delete rest[filePath];
+    const next = { ...current };
+    if (Object.keys(rest).length === 0) {
+      delete next[repoPath]; // drop the now-empty repo entry
+    } else {
+      next[repoPath] = rest;
+    }
+    set({ diffSeen: next });
+    recordDiffSeenDelta(repoPath, filePath, null);
     persistDiffSeen();
   },
   // Selection is decoupled from the view (#22): selecting only highlights. The
@@ -3879,7 +3937,7 @@ export const useStore = create<AppState>()((set, get) => ({
                 sessionId: session.id,
                 repoPath: session.repo_path,
               };
-              const { canvases, activeCanvasId } = get();
+              const { canvases } = get();
               const nextCanvases = rewriteScheduledLeaves(
                 canvases,
                 id,
@@ -3887,11 +3945,10 @@ export const useStore = create<AppState>()((set, get) => ({
               );
               if (nextCanvases !== canvases) {
                 set({ canvases: nextCanvases });
+                // Canvases-only patch (task 429): a leaf rewrite never changes the
+                // active tab, so the stored `activeId` hint is left alone.
                 void ipc
-                  .setCanvases({
-                    canvases: nextCanvases,
-                    activeId: activeCanvasId,
-                  })
+                  .setCanvases({ canvases: nextCanvases })
                   .catch(() => {});
               }
               get().pushToast(
@@ -4237,7 +4294,10 @@ export const useStore = create<AppState>()((set, get) => ({
     // --- Fire-and-forget side effects (main window only, exactly as before) ---
     if (IS_MAIN_WINDOW) {
       // Persist the migrated canvas shape once so the new field becomes the source of
-      // truth (#58); a detached renderer (#84) never writes it.
+      // truth (#58); a detached renderer (#84) never writes it. Deliberately both
+      // fields (task 429): this first write establishes the blob — as a patch it
+      // sets both fields to the values just resolved, equivalent to the old
+      // whole-blob write.
       if (migrated) {
         void ipc
           .setCanvases({ canvases, activeId: activeCanvasId })
@@ -4246,7 +4306,10 @@ export const useStore = create<AppState>()((set, get) => ({
       // #367/#414: persist the one-time terminal migrations once (an explicit legacy
       // line-height 1.2 bumped to 1.0, and/or an explicit legacy background-lightness 0
       // bumped to 25) so the migrated values + the set flags become the source of truth and
-      // the bumps never re-run. Only fires when a value actually changed.
+      // the bumps never re-run. Only fires when a value actually changed. Deliberately
+      // still the full merged blob: as a task-429 patch it writes every key with the
+      // values just loaded off disk — equivalent to the old whole-blob write, and the
+      // simplest way to also stamp the migration flags.
       if (settingsMigrated) {
         void ipc.setSettings(settings).catch(() => {});
       }
@@ -4663,21 +4726,32 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
-  saveSettings: async (settings) => {
-    // Apply optimistically + run side-effects (live terminals, #100), then persist.
+  saveSettings: async (settings, baseline) => {
+    // Diff against the caller's `baseline` (what the user was actually LOOKING at —
+    // the Settings modal's draft seed) when given, else the live settings: only the
+    // actually-changed keys travel (task 429), so a foreign field changed while a
+    // draft was open is neither reverted locally nor included in the write. The
+    // spread-current one-field callers (toggles, onboarding, DiffInspector) need no
+    // baseline — diffing against the live settings yields exactly their one key.
     const prev = get().settings;
-    set({ settings });
-    applySettingsEffects(settings);
+    const patch = settingsPatch(baseline ?? prev, settings);
+    if (Object.keys(patch).length === 0) return; // nothing changed — no write
+    // Apply patch-over-current locally, mirroring the server's shallow merge
+    // exactly — so the task-428 echo broadcast (`settings://changed` with the
+    // merged blob) is an equality no-op here.
+    const merged = { ...prev, ...patch };
+    set({ settings: merged });
+    applySettingsEffects(merged);
     // Theme switched at runtime (#348/#333): push the new native window background to
     // every open window (main + detached canvases), so a resize/repaint gap can never
     // expose the previous theme's color behind the webview. Best-effort.
-    if (settings.theme !== prev.theme) {
-      void ipc.setThemeBackground(settings.theme).catch(() => {});
+    if (merged.theme !== prev.theme) {
+      void ipc.setThemeBackground(merged.theme).catch(() => {});
     }
     // React to the session-usage toggle at runtime (#326): starting/stopping the poll
     // is the load-bearing token-access gate, so it must fire immediately on Save.
-    if (settings.showSessionUsage !== prev.showSessionUsage) {
-      if (settings.showSessionUsage) {
+    if (merged.showSessionUsage !== prev.showSessionUsage) {
+      if (merged.showSessionUsage) {
         get().startUsagePolling(); // resume — idempotent, main-window only
       } else {
         get().stopUsagePolling();
@@ -4693,7 +4767,10 @@ export const useStore = create<AppState>()((set, get) => ({
       }
     }
     try {
-      await ipc.setSettings(settings);
+      // Persist ONLY the patch — the backend merges it over the persisted blob
+      // under the Store mutex (task 429), so a stale window can't clobber a
+      // concurrent foreign save.
+      await ipc.setSettings(patch);
     } catch {
       // Persist failed (e.g. outside Tauri); the change stays for the session.
     }
@@ -5057,17 +5134,17 @@ export const useStore = create<AppState>()((set, get) => ({
 
   // Canvas tabs (#58): the component computes each next layout tree via the pure
   // canvasTree helpers; these actions commit it to the active tab and persist the
-  // whole tab set. Persist failures (e.g. outside Tauri) are swallowed — the
-  // local state still drives the session.
+  // whole tab set — as a canvases-only patch (task 429): a layout edit never
+  // changes the active tab, so the stored `activeId` boot hint is left alone (a
+  // concurrent tab switch in another window survives). Persist failures (e.g.
+  // outside Tauri) are swallowed — the local state still drives the session.
   setActiveCanvasLayout: (tree) => {
     const { canvases, activeCanvasId } = get();
     const next = canvases.map((c) =>
       c.id === activeCanvasId ? { ...c, layout: tree } : c,
     );
     set({ canvases: next });
-    void ipc
-      .setCanvases({ canvases: next, activeId: activeCanvasId })
-      .catch(() => {});
+    void ipc.setCanvases({ canvases: next }).catch(() => {});
   },
 
   // Distribute the active tab's panels evenly (#186): equalize the whole layout
@@ -5495,16 +5572,15 @@ export const useStore = create<AppState>()((set, get) => ({
 
   resolveTemplateBlock: async (canvasId, leafId) => {
     // Update just this canvas's layout leaf + persist (the tab may not be active if
-    // the user switched away during async resolution).
+    // the user switched away during async resolution). Canvases-only patch
+    // (task 429): a leaf resolve never changes the active tab.
     const applyLeaf = (mut: (tree: CanvasNode) => CanvasNode) => {
-      const { canvases, activeCanvasId } = get();
+      const { canvases } = get();
       const next = canvases.map((c) =>
         c.id === canvasId && c.layout ? { ...c, layout: mut(c.layout) } : c,
       );
       set({ canvases: next });
-      void ipc
-        .setCanvases({ canvases: next, activeId: activeCanvasId })
-        .catch(() => {});
+      void ipc.setCanvases({ canvases: next }).catch(() => {});
     };
 
     const canvas = get().canvases.find((c) => c.id === canvasId);
@@ -5622,7 +5698,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // existing block kind (#154) — picking a file for an `open-kanban` block must
     // keep it kanban (it resolves back into a KanbanPanel), not silently degrade to
     // an `open-file` viewer. Default to `open-file` when the kind can't be read.
-    const { canvases, activeCanvasId } = get();
+    const { canvases } = get();
     const layout = canvases.find((c) => c.id === canvasId)?.layout;
     const kind =
       (layout
@@ -5640,9 +5716,8 @@ export const useStore = create<AppState>()((set, get) => ({
         : c,
     );
     set({ canvases: next });
-    void ipc
-      .setCanvases({ canvases: next, activeId: activeCanvasId })
-      .catch(() => {});
+    // Canvases-only patch (task 429): a block edit never changes the active tab.
+    void ipc.setCanvases({ canvases: next }).catch(() => {});
     void get().resolveTemplateBlock(canvasId, leafId);
   },
 
@@ -5679,7 +5754,16 @@ export const useStore = create<AppState>()((set, get) => ({
       active = next[Math.min(idx, next.length - 1)]?.id ?? next[0]?.id ?? "";
     }
     set({ canvases: next, activeCanvasId: active });
-    void ipc.setCanvases({ canvases: next, activeId: active }).catch(() => {});
+    // Patch (task 429): the tab list always changed; the stored `activeId` boot
+    // hint travels only when the ACTIVE tab was closed (the re-home above) — a
+    // non-active close leaves it alone, so a concurrent tab switch in another
+    // window survives.
+    void ipc
+      .setCanvases({
+        canvases: next,
+        ...(id === activeCanvasId ? { activeId: active } : {}),
+      })
+      .catch(() => {});
     // If this canvas had a detached window (#84), close it too (it would also
     // self-close on the canvas-sync, but do it directly for immediacy).
     if (get().detachedCanvasIds.includes(id)) {
@@ -5722,7 +5806,7 @@ export const useStore = create<AppState>()((set, get) => ({
   renameCanvas: (id, name) => {
     const trimmed = name.trim();
     if (!trimmed) return; // blank keeps the current name (#58)
-    const { canvases, activeCanvasId } = get();
+    const { canvases } = get();
     const target = canvases.find((c) => c.id === id);
     // No-op rename (same name / missing tab): skip the write + toast (#83) so an
     // unchanged inline edit doesn't fire "Canvas renamed".
@@ -5731,14 +5815,13 @@ export const useStore = create<AppState>()((set, get) => ({
       c.id === id ? { ...c, name: trimmed } : c,
     );
     set({ canvases: next });
-    void ipc
-      .setCanvases({ canvases: next, activeId: activeCanvasId })
-      .catch(() => {});
+    // Canvases-only patch (task 429): a rename never changes the active tab.
+    void ipc.setCanvases({ canvases: next }).catch(() => {});
     get().pushToast("Canvas renamed");
   },
 
   reorderCanvases: (orderedIds) => {
-    const { canvases, activeCanvasId } = get();
+    const { canvases } = get();
     const byId = new Map(canvases.map((c) => [c.id, c]));
     const next = orderedIds
       .map((cid) => byId.get(cid))
@@ -5746,9 +5829,8 @@ export const useStore = create<AppState>()((set, get) => ({
     // Defensive: keep any tab missing from the order (no silent drops).
     for (const c of canvases) if (!orderedIds.includes(c.id)) next.push(c);
     set({ canvases: next });
-    void ipc
-      .setCanvases({ canvases: next, activeId: activeCanvasId })
-      .catch(() => {});
+    // Canvases-only patch (task 429): a reorder never changes the active tab.
+    void ipc.setCanvases({ canvases: next }).catch(() => {});
   },
 
   selectCanvas: (id) => {
@@ -5756,7 +5838,10 @@ export const useStore = create<AppState>()((set, get) => ({
     if (id === activeCanvasId || !canvases.some((c) => c.id === id)) return;
     // Clear the focused panel (#76) — the new tab has its own panels.
     set({ activeCanvasId: id, activeLeafId: null });
-    void ipc.setCanvases({ canvases, activeId: id }).catch(() => {});
+    // activeId-ONLY patch (task 429): a tab switch changes nothing about the tab
+    // array, so this window's (possibly stale) `canvases` copy must not travel — a
+    // concurrent layout edit in another window survives the switch.
+    void ipc.setCanvases({ activeId: id }).catch(() => {});
   },
 
   // Multi-window (#84): open/focus a canvas in its own native window. The backend
@@ -6189,7 +6274,8 @@ export const useStore = create<AppState>()((set, get) => ({
           activeLeafId: leaf.id,
           selectedId: sessionId,
         });
-        void ipc.setCanvases({ canvases, activeId: c.id }).catch(() => {});
+        // activeId-only patch (task 429): a focus-switch edits no tab.
+        void ipc.setCanvases({ activeId: c.id }).catch(() => {});
       }
       return;
     }
@@ -6277,7 +6363,8 @@ export const useStore = create<AppState>()((set, get) => ({
           activeLeafId: leaf.id,
           selectedId: panelId,
         });
-        void ipc.setCanvases({ canvases, activeId: c.id }).catch(() => {});
+        // activeId-only patch (task 429): a focus-switch edits no tab.
+        void ipc.setCanvases({ activeId: c.id }).catch(() => {});
       }
       return;
     }

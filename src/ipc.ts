@@ -21,6 +21,7 @@ import type {
   ContainerBuildingPayload,
   DiffLineCounts,
   DiffSeenMap,
+  DiffSeenPatch,
   DockerStatus,
   EditorInfo,
   ExitPayload,
@@ -32,6 +33,7 @@ import type {
   OutputPayload,
   OverviewPanel,
   PersistedCanvases,
+  PersistedCanvasesPatch,
   RecurringErrorPayload,
   RecurringFiredPayload,
   RecurringSession,
@@ -263,9 +265,12 @@ export const getCanvasLayout = () =>
 export const getCanvases = () =>
   invoke<PersistedCanvases | null>("get_canvases");
 
-/** Persist the multi-canvas tab state (#58). The backend broadcasts
- * `canvas://changed` so other windows (#84) stay in sync. */
-export const setCanvases = (state: PersistedCanvases) =>
+/** Persist a multi-canvas patch (#58/task 429): send **only the field(s) the
+ * action changed** — the backend merges field-wise over the persisted blob under
+ * the Store mutex (a tab switch is `{activeId}` only, a layout edit `{canvases}`
+ * only) and broadcasts `canvas://changed` with the merged blob so other windows
+ * (#84) stay in sync. */
+export const setCanvases = (state: PersistedCanvasesPatch) =>
   invoke<void>("set_canvases", { state });
 
 /** Saved Canvas templates (#117); `null` before the first write. Persisted in its
@@ -671,10 +676,13 @@ export const updateRecurring = (
   });
 
 /** Application settings (#100): an opaque persisted blob the store merges with its
- * TS defaults (so an older file with no `settings` upgrades cleanly). */
+ * TS defaults (so an older file with no `settings` upgrades cleanly). The write is
+ * a **patch** (task 429): only the changed top-level keys travel, and the backend
+ * merges them shallowly over the persisted blob under the Store mutex — so a
+ * window holding a stale copy can't revert another window's save. */
 export const getSettings = () =>
   invoke<Partial<Settings> | null>("get_settings");
-export const setSettings = (settings: Settings) =>
+export const setSettings = (settings: Partial<Settings>) =>
   invoke<void>("set_settings", { settings });
 /** Sidebar width in px (#108), persisted separately from the Settings blob so the
  * modal's draft can't clobber a mid-session drag. `null` until first set. */
@@ -697,9 +705,11 @@ export const setRepoOrder = (order: string[]) =>
 /** Per-repo diff "seen" review markers (#278): a content digest per reviewed file,
  * `{ [repoPath]: { [filePath]: digest } }`, persisted separately from the Settings
  * blob (like the sidebar width / repo order) so a Settings draft can't clobber it.
- * `null` until first written. */
+ * `null` until first written. The write is a **patch** (task 429): per-file deltas
+ * with `null` tombstones, merged per key server-side under the Store mutex — the
+ * whole map is never sent, so a stale window can't drop foreign marks. */
 export const getDiffSeen = () => invoke<DiffSeenMap | null>("get_diff_seen");
-export const setDiffSeen = (seen: DiffSeenMap) =>
+export const setDiffSeen = (seen: DiffSeenPatch) =>
   invoke<void>("set_diff_seen", { seen });
 /** Last-seen app version (#190), persisted separately so boot can detect a
  * self-update and toast the new version. `null` on first launch. */

@@ -1564,36 +1564,26 @@ pub fn get_canvases(store: State<'_, Store>) -> serde_json::Value {
     store.canvases()
 }
 
-/// Replace the multi-canvas tab state (#58) and persist, then broadcast
-/// `canvas://changed` so every window (main + detached canvas windows, #84) stays
-/// in sync. The **main** window is authoritative for the active tab: a write from
-/// a detached window (which edits only its own canvas's layout) keeps the persisted
-/// `activeId` and replaces just the `canvases` array, so a detached layout edit
-/// can't hijack which tab the main window shows.
+/// Merge a canvases patch (#58) over the persisted blob under the Store mutex
+/// (task 429), then broadcast `canvas://changed` with the **merged** blob so every
+/// window (main + detached canvas windows, #84) stays in sync. The `state` payload
+/// is field-wise: `canvases` (the whole tab array) and/or `activeId` (the boot
+/// hint) — each replaces the stored value only when present, so a tab switch in one
+/// window and a layout edit in another can no longer clobber each other. The merge
+/// is correct for ANY window — the old main-vs-detached label branch is gone: each
+/// window keeps its own active tab locally (`applyCanvasSync`), the persisted
+/// `activeId` is only a boot hint written by the sites that actually change the
+/// active tab, and a detached window's layout edits are canvases-only patches.
 #[tauri::command]
 pub fn set_canvases(
     app: AppHandle,
-    window: Window,
     store: State<'_, Store>,
     state: serde_json::Value,
 ) -> Result<(), SessionError> {
-    let final_state = if window.label() == "main" {
-        state
-    } else {
-        let mut current = store.canvases();
-        match (current.as_object_mut(), state.get("canvases")) {
-            (Some(obj), Some(list)) => {
-                obj.insert("canvases".to_string(), list.clone());
-                current
-            }
-            // No prior object (shouldn't happen — main migrates first): fall back.
-            _ => state,
-        }
-    };
-    store
-        .set_canvases(final_state.clone())
+    let merged = store
+        .merge_canvases(state)
         .map_err(|e| SessionError::Io(e.to_string()))?;
-    let _ = app.emit("canvas://changed", final_state);
+    let _ = app.emit("canvas://changed", merged);
     Ok(())
 }
 
@@ -2925,8 +2915,12 @@ pub fn get_settings(store: State<'_, Store>) -> serde_json::Value {
     store.settings()
 }
 
-/// Replace the application settings (#100) and persist.
-/// Broadcasts `settings://changed` so every window converges — task 428.
+/// Merge a settings patch (#100) over the persisted blob under the Store mutex
+/// (task 429) — the frontend sends only the changed fields, so a window holding a
+/// stale copy can't revert another window's save. An explicit `null` value is
+/// stored verbatim (never a delete); nested objects (`keybinds`) replace whole.
+/// Broadcasts `settings://changed` (the merged blob) so every window converges —
+/// task 428.
 #[tauri::command]
 pub fn set_settings(
     app: AppHandle,
@@ -2934,7 +2928,7 @@ pub fn set_settings(
     settings: serde_json::Value,
 ) -> Result<(), SessionError> {
     store
-        .set_settings(settings)
+        .merge_settings(settings)
         .map_err(|e| SessionError::Io(e.to_string()))?;
     broadcast_settings(&app, &store);
     Ok(())
@@ -3009,10 +3003,14 @@ pub fn get_diff_seen(store: State<'_, Store>) -> serde_json::Value {
     store.diff_seen()
 }
 
-/// Persist the per-repo diff "seen" markers (#278) — opaque JSON owned by the
-/// frontend (`{ repoPath: { filePath: digest } }`). Kept separate from the Settings
-/// blob so a Settings draft can't clobber it.
-/// Broadcasts `diff_seen://changed` so every window converges — task 428.
+/// Merge a diff-seen patch (#278) over the persisted map under the Store mutex
+/// (task 429). The `seen` payload carries per-repo, per-file deltas with `null`
+/// tombstones — `{repo: {file: "digest"}}` sets an entry, `{repo: {file: null}}`
+/// deletes it, `{repo: null}` deletes the repo key (a repo emptied by tombstones is
+/// pruned) — so a stale window's debounced write can no longer drop another
+/// window's concurrent marks. Kept separate from the Settings blob so a Settings
+/// draft can't clobber it. Broadcasts `diff_seen://changed` (the merged map) so
+/// every window converges — task 428.
 #[tauri::command]
 pub fn set_diff_seen(
     app: AppHandle,
@@ -3020,7 +3018,7 @@ pub fn set_diff_seen(
     seen: serde_json::Value,
 ) -> Result<(), SessionError> {
     store
-        .set_diff_seen(seen)
+        .merge_diff_seen(seen)
         .map_err(|e| SessionError::Io(e.to_string()))?;
     broadcast_diff_seen(&app, &store);
     Ok(())
