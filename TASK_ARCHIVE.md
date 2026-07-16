@@ -2404,3 +2404,73 @@ macOS has a menu) — Windows/Linux get the keybind via the platform-resolved `m
 
 **Dependencies:** Task 434 (every entry point calls its `open_app_window` / `AppWindowInit` /
 `ipc.openAppWindow`; via 434 → 433 → 430/432 the whole planned chain landed first).
+
+### 437. [x] Multi-window 11/16 — Canvas pop-out opens a full ReCue window; delete the #84 single-owner machinery
+
+Popping a Canvas tab out (button or drag tear-off) now opens a **full ReCue window** with that tab
+active (`open_app_window({ canvas: id })`, task 434), and **any window can view any canvas** — two
+windows on the same canvas simply mirror (tasks 426/427, letterboxed to the smallest view). The entire
+#84 detached-canvas / single-owner era is **deleted**: the ownership map, `DetachedNote`, the
+`CanvasWindow` route, the `canvas://windows` event + `detachedCanvasIds` slice, and the
+`open/focus/close/list_canvas_window` Rust commands. Net −874 lines.
+
+**What shipped** (branch `task-437-popout-full-window`, PR
+[#203](https://github.com/ErikdeJager/ReCue/pull/203), merged 2026-07-16 into `backend-decouple`,
+commit `828faf6`; 43 files, +429/-1303; one merge-attempt — the PR was rebased onto `backend-decouple`
+after 436/438 landed):
+
+- **`popOutCanvas`** now calls `ipc.openAppWindow({ canvas: id })` — a full window boots into Canvas on
+  that tab; the originating window keeps the tab (no "in window" marker, no forced switch, both render
+  it live).
+- **`MainApp.tsx`** reconcile keep-set is no longer ownership-filtered — every live session/panel/
+  canvas-layout PTY id (boundedness comes from the #351 lazy visibility gate, never disposal-on-
+  scroll-out, preserving the #18 invariant).
+- **Deleted end-to-end** (grep-clean verified, zero hits): `src/ownership.ts`, `computeSessionOwners`,
+  `ownedHere`, `ownerCanvasId`, `useSessionOwners`, `DetachedNote/`, `CanvasWindow/`,
+  `DETACHED_CANVAS_ID`, `IS_DETACHED_CANVAS_WINDOW`, `IS_FULL_APP_WINDOW`, `detachedCanvasIds`,
+  `setDetachedCanvasIds`, `focusCanvasWindow`, `canvas://windows`, the four
+  `open/focus/close/list_canvas_window` commands, `detached_canvas_ids()`, `broadcast_canvas_windows`,
+  `CanvasWindowsPayload`, and `BootState.detached_canvas_ids` (Rust + TS mirror).
+- **`App.tsx`** renders `<MainApp />` unconditionally (still lazy under the #348/#356 `RevealOnPaint`
+  Suspense); `bundle-report.mjs` lost the canvas-route entry.
+- **`windowContext.ts`** collapsed to two window kinds (`main`/`app`); `parseWindowIdentity("?canvas=")`
+  is now a one-release compat route → a **full app window** identity keeping the real `canvas-<id>`
+  Tauri label (so 426's per-label view purge + 427's attach stay correct). The module doc documents the
+  tmux-interleave semantic (two windows typing into one agent interleave like two tmux clients —
+  expected).
+- **`resolveCanvases`** dropped the `pinCanvasId` parameter (the preset applies only when the tab
+  exists); the compile-enforced gate audit dropped every degenerate `IS_*_WINDOW` gate across
+  `useKeyboardNav.ts`/`store.ts`/`CanvasSurface.tsx`/`terminalPool.ts` (the #105 canvas-window
+  DOM-renderer gates died — app windows get WebGL per `rendererDecision()` + the #364 latch);
+  `capabilities/default.json` → `["main", "app-*"]`.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 437)
+
+- "Sessions VISIBLE in this window" = the un-filtered keep-set; boundedness from the #351 lazy
+  visibility gate, never disposal-on-scroll-out (#18).
+- The `?canvas=` compat URL parses as kind `"app"` but **keeps** the real `canvas-<id>` label; such a
+  window is never primary-eligible (`primary.rs`'s predicate left as-is, out of scope) — acceptable for
+  a one-release dead route, delete next release.
+- `popOutCanvas` always opens a **new** window (no focus-if-already-open dedupe, unlike the old
+  `open_canvas_window`); the originating window keeps the tab usable with no marker.
+- `sessionIdsInLayout` is **not** deleted — only its ownership consumer `computeSessionOwners` is; it
+  stays as the reconcile keep-alive for template terminals (#118).
+- Also removed the three `terminalPool` #105 DOM-renderer gates + `wavePresets`' `activeCanvasDetached`
+  (dead once canvas windows are gone); `bundle-report.mjs` lost its "detached canvas window" route.
+- Tmux-style input interleaving is documented in the `windowContext` module doc, the `MainApp`
+  reconcile comment, both trajectory logs, and the PR body (not CLAUDE.md — following 434's precedent).
+- 435 landed first: it contains no literal `DetachedNote` reference (a one-line `ClaimBanner.tsx` touch
+  reconciled the flagged risk).
+
+**Rollback-safe:** pure deletion + one rewired call; no persisted-schema change (the `canvases` blob
+and `sessions.json` are byte-identical), no new events/commands. Old `canvas-*` windows cannot exist
+post-upgrade (never restored across relaunch), so the removed capability/commands cannot strand a live
+window.
+
+**Cross-platform:** almost entirely deletion of platform-neutral TS/Rust; the one behavioral addition
+(pop-out → `open_app_window`) rides 434's already-cross-platform window plumbing; widening WebGL to all
+windows is governed by the existing #346/#357/#364 Linux gates, unchanged on macOS/Windows.
+
+**Dependencies:** Task 434 (supplies `open_app_window`/`openAppWindow`, the `parseWindowIdentity`
+shape, `INIT_CANVAS_ID`, and the `resolveCanvases` preset this card builds on; via 434 → 433 →
+432/431/430 the whole planned chain landed first).
