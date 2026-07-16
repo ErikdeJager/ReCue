@@ -3859,3 +3859,14 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - The exit-driven "Worktree kept — it has uncommitted changes" warning surfaces via a small worktree://kept event with the same toast targeting; frontend command call sites keep toasting locally from the command's returned outcome.
 - The non-clean "Session exited (code N)" toast stays main-window-gated as today (de-duplicating it across N full windows belongs to later epic cards); this card touches only the clean-exit branch of onExited.
 - Dependency is Task 430 only (per the card's sequencing note); Tasks 426–428 are landed, and the plan tells the implementer to re-verify 429/430's landed shapes in the build worktree before wiring.
+
+## Task 432
+
+- The card calls overview_panels "otherwise-opaque", but it is already a typed Rust struct (store.rs OverviewPanel with a `kind` field) — no new parsing is needed; "minimal parse" = filter kind=="terminal" in one place, and the deliberate-read flag comment is still added at that one consumer site.
+- Idempotence guard = skip any panel id already REGISTERED in the PTY registry (present at all — live OR exited-but-kept), implemented ONLY in the boot respawn loop, NOT in the spawn_terminal command: restartTerminal legitimately respawns a same-id exited terminal via spawn_with_id's kill+replace semantics, so a command-level skip would break Restart.
+- The respawn runs on the existing lib.rs boot resume thread, after the dev-container reap and BEFORE resume_persisted_sessions (which early-returns on zero agent records and so cannot host it) — keeping shells available as early as the frontend previously made them, and leaving Task 431's planned post-resume boot-window tail undisturbed.
+- Spawn failures stay silent best-effort per panel (parity with the deleted .catch(() => {}) and boot.rs resume_one's let _ = discipline) — no new toasts or events.
+- The existing store.refresh.test.ts test "respawns each persisted terminal panel's shell (#72)" is inverted to assert zero boot-time ipc.spawnTerminal calls (panel still lands in overviewPanels).
+- Accepted edge: shells now spawn before any webview subscribes, so a shell that dies instantly (broken $SHELL) emits session://exited into the void and shows no exited overlay — rare, degrades to a dead-looking panel; scrollback still replays via replayDedupe.
+- Task 429 landed mid-planning (PR #191 merged into backend-decouple while exploring); plan anchors were re-verified post-429 but all line numbers are marked indicative — the implementer re-locates by content and re-verifies 430/431's landed shapes in the build worktree.
+- No CLAUDE.md / patch-notes / version changes (pipeline convention); only the directly-touched Rust doc comments are updated.
