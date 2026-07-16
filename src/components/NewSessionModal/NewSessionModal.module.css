@@ -673,13 +673,17 @@
   line-height: 1.3;
 }
 
-/* Inline first-run build indicator (#416): while the one-time `docker build` runs
+/* First-run build indicator (#416/#421): while the one-time `docker build` runs
    with the modal open, this replaces the (suppressed) toast — yellow caution text +
-   a spinner, sitting just left of the Start button. */
+   a spinner, on its own line between the dev-container toggle row and the action
+   buttons. As a flex-column child the inline-flex span blockifies to full width;
+   the margin-bottom keeps its spacing even with the checkbox row above (which also
+   carries margin-bottom: var(--space-12)) and the action row below. */
 .buildingHint {
   display: inline-flex;
   align-items: center;
   gap: var(--space-6);
+  margin-bottom: var(--space-12);
   color: var(--status-awaiting);
   font-size: var(--fs-meta-sm);
   line-height: 1.3;

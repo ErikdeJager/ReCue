@@ -1569,6 +1569,27 @@ function NewSessionModal() {
                 );
               })()}
 
+            {/* First-run build feedback (#416/#421): its own line between the
+                dev-container toggle row and the action buttons, shown only while
+                the one-time default-image build runs with the modal open (the
+                store's toast is suppressed meanwhile). */}
+            {!deferMode &&
+              showBuildIndicator(
+                useContainer,
+                containerBuilding,
+                containerToggleState(dockerStatus) !== "ready",
+              ) && (
+                <span className={styles.buildingHint} role="status">
+                  <Loader
+                    size={12}
+                    strokeWidth={1.5}
+                    className={styles.buildingSpin}
+                    aria-hidden
+                  />
+                  Building the dev container (first run)…
+                </span>
+              )}
+
             <div className={styles.actions}>
               <button type="button" className={styles.cancel} onClick={close}>
                 Cancel <kbd className={styles.btnKbd}>esc</kbd>
@@ -1609,25 +1630,6 @@ function NewSessionModal() {
                   </kbd>
                 </button>
               )}
-              {/* Inline first-run build feedback (#416): shown only while the
-                  one-time default-image build runs with the modal open (the store's
-                  toast is suppressed meanwhile). */}
-              {!deferMode &&
-                showBuildIndicator(
-                  useContainer,
-                  containerBuilding,
-                  containerToggleState(dockerStatus) !== "ready",
-                ) && (
-                  <span className={styles.buildingHint} role="status">
-                    <Loader
-                      size={12}
-                      strokeWidth={1.5}
-                      className={styles.buildingSpin}
-                      aria-hidden
-                    />
-                    Building the dev container (first run)…
-                  </span>
-                )}
               <button
                 type="submit"
                 className={styles.create}
