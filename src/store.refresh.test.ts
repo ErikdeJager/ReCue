@@ -375,7 +375,7 @@ describe("boot is ONE batched round-trip (#352)", () => {
     expect(ipc.setCanvases).not.toHaveBeenCalled();
   });
 
-  it("respawns each persisted terminal panel's shell (#72)", async () => {
+  it("does not respawn terminal panels at boot — Rust owns it (task 432)", async () => {
     m(ipc.bootState).mockResolvedValue(
       makeBootState({
         overview_panels: {
@@ -389,8 +389,14 @@ describe("boot is ONE batched round-trip (#352)", () => {
 
     await useStore.getState().refresh();
 
-    expect(ipc.spawnTerminal).toHaveBeenCalledWith("/repo/a", "t1");
-    expect(m(ipc.spawnTerminal).mock.calls).toHaveLength(1);
+    // The Rust boot sequence (`boot::respawn_shell_terminals`) respawns persisted
+    // terminal panels next to the agent resume pass — the frontend never spawns at
+    // boot; it just renders the panels, which still land in the store.
+    expect(ipc.spawnTerminal).not.toHaveBeenCalled();
+    expect(useStore.getState().overviewPanels["/repo/a"]).toEqual([
+      { id: "t1", kind: "terminal" },
+      { id: "p1", kind: "diff" },
+    ]);
   });
 
   it("records the running version and toasts a self-update — with no extra reads (#190)", async () => {

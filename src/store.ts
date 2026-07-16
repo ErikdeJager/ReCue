@@ -4193,17 +4193,10 @@ export const useStore = create<AppState>()((set, get) => ({
       for (const repo of Object.keys(boot.open_files)) {
         void ipc.setOpenFiles(repo, []).catch(() => {});
       }
-      // Terminal items can't resume (#72): respawn a fresh shell for each
-      // persisted terminal panel under its repo so the item is usable after a
-      // restart (previous output/history is gone, by design). A detached window (#84)
-      // must not re-spawn shells the main window owns.
-      for (const [repo, list] of Object.entries(boot.overview_panels)) {
-        for (const p of list) {
-          if (p.kind === "terminal") {
-            void ipc.spawnTerminal(repo, p.id).catch(() => {});
-          }
-        }
-      }
+      // Terminal items can't resume (#72) — and their boot respawn is RUST-owned now
+      // (task 432): the boot sequence respawns every persisted `kind:"terminal"` panel
+      // idempotently next to the agent resume pass, so N windows can never double-spawn
+      // the same panel ids. Every window (this one included) just renders the panels.
       // In-app updater (#190). (1) Post-update toast: if the running version is higher
       // than the one recorded last boot, the app just self-updated → toast it, then
       // record the running version. Both versions ride in the boot payload, so this

@@ -765,7 +765,8 @@ impl SessionManager {
     /// write/resize/kill) is identical to a session; only the program differs and
     /// there is no `--session-id`/`--resume`. The id is the Overview panel's id,
     /// so the frontend renders it with the same `<Terminal>` pool and persists the
-    /// item in `overview_panels` (a fresh shell is respawned on boot).
+    /// item in `overview_panels` (a fresh shell is respawned by the Rust boot
+    /// sequence — `boot::respawn_shell_terminals`, task 432).
     pub fn spawn_terminal(
         &self,
         id: String,
@@ -999,6 +1000,18 @@ impl SessionManager {
     #[cfg(all(test, unix))]
     pub fn session_count(&self) -> usize {
         self.lock_sessions().map(|s| s.len()).unwrap_or(0)
+    }
+
+    /// True while `id` is registered — a live PTY generation OR an exited-but-kept one
+    /// (a natural exit leaves the `Session` in the map for scrollback + Restart; only
+    /// `kill_session` removes it, and a same-id spawn REPLACES + kills it). The boot
+    /// respawn (task 432) skips any registered id for exactly that reason: spawning over
+    /// a present id would kill that generation, so "skip if present" is what makes the
+    /// respawn idempotent and safe to re-run.
+    pub fn has_session(&self, id: &str) -> bool {
+        self.lock_sessions()
+            .map(|sessions| sessions.contains_key(id))
+            .unwrap_or(false)
     }
 
     /// Ids of sessions with a **still-running** child (task 430: the auto-continue
@@ -2050,6 +2063,15 @@ mod tests {
     #[test]
     fn non_macos_unix_shell_is_never_empty() {
         assert!(!non_macos_unix_shell().is_empty());
+    }
+
+    // --- Registry presence check (task 432) ---
+    // An empty manager knows no id. Presence after a spawn (and the skip it drives) is
+    // covered by the boot.rs respawn test.
+    #[test]
+    fn has_session_is_false_for_unknown_id() {
+        let (mgr, _rx) = manager();
+        assert!(!mgr.has_session("no-such-id"));
     }
 
     // --- Global search: ANSI strip + output line matching (#337) ---
