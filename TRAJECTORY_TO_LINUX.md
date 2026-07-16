@@ -1685,7 +1685,6 @@ DOM/WebGL renderer override).
       locally-installed JetBrains Mono variant; hinting/antialiasing keeps the 10–12px
       chrome type legible on a 1× (non-HiDPI) display.
 
-<<<<<<< HEAD
 ## 2026-07-15 — Dev-container agent sessions (docker-wrapped claude)
 
 The dev-container feature (New Session modal toggle) inherits the unix arms almost
@@ -1708,7 +1707,6 @@ type-check it). Real-box checks:
 - The daemon-stopped state (`systemctl --user stop docker` / no docker group): the
   toggle should show the "start Docker" hint, and enabling the service should flip it
   live on the ~3.5 s re-probe.
-=======
 ### Needs real-box verification (Open in editor)
 
 - [ ] **PATH CLIs under a `.desktop`/AppImage launch.** With ReCue launched from the
@@ -1725,7 +1723,6 @@ type-check it). Real-box checks:
 - [ ] **Terminal editor via custom command.** `alacritty -e nvim {path}` (or the
       user's emulator) opens nvim in the folder; `{path}` substitution lands the right
       directory.
->>>>>>> origin/dev
 
 ## 2026-07-16 — Full app-window shell (multi-window 9/16, task 434)
 
@@ -1845,3 +1842,65 @@ storm's emit rate for terminals they don't show.
       viewing — confirm main-thread responsiveness in the non-viewing windows and record
       the before/after (e.g. emit counts via a temporary debug counter or `WEBKIT_DEBUG`
       frame timing) next to the `lib.rs` forwarder comment.
+
+## 2026-07-16 — Multi-window epic wrap-up (tasks 426–440): the consolidated real-box matrix
+
+### Multi-window epic (tasks 426–440) — N full app windows
+
+The epic replaced the #84 one-main-window-plus-detached-canvas model with **N full app
+windows**: `open_app_window` / label `app-<uuid>` / route `?win=<uuid>` (434), every window
+the complete shell with window-local view state, shared state converging through the Rust
+`*://changed` broadcasts (428) and server-side patch merges (429), terminals **mirroring**
+in any number of windows under the smallest-wins grid arbiter (426/427), output emitted only
+to subscriber windows (440 — the epic's biggest WebKitGTK win), a Rust-elected **primary**
+window gating the once-per-app effects (433), the app singletons moved into Rust
+(auto-continue + the one usage poll 430, the clean-exit forget 431, the boot shell respawn
+432), a same-file edit guard (435), the single-instance / Dock-Reopen / Ctrl+Alt+N /
+File → New Window entry points (436), pop-out-as-full-window with the #84 machinery deleted
+(437), the repo-menu entry point (438), and window restore on relaunch (439). The
+Linux-sensitive seams: the single-instance **session-bus D-Bus name**, **Wayland**
+compositor-owned placement + focus-stealing prevention (vs X11's full restore/raise),
+**TIOCSWINSZ** resize under the smallest-wins arbitration, and per-window **WebKitGTK**
+cost plus the once-per-process DMA-BUF decision (#346/#357). macOS-only items (Dock Reopen,
+File → New Window, ⌘Q `ExitRequested` ordering) remain PR-flagged per the #84/#105
+precedent — no macOS trajectory file exists.
+
+### Needs real-box verification (multi-window, tasks 426–440)
+
+The per-card checklists appended above already cover most of the matrix — cross-referenced
+here, not duplicated: **second launch via AppImage / deb / AUR**, the **X11-vs-Wayland
+focus caveat**, and **Ctrl+Alt+N under GNOME/KDE** are in the task-436 entry; **X11 full
+restore vs Wayland size-only degrade**, the **N-window restore boot cost**, and the
+**`ExitRequested` ordering on GNOME/KDE quit paths** are in the task-439 entry; the
+**targeted-delivery smoke** and the **output-storm measurement** are in the task-440 entry;
+**pop-out mirroring + input interleaving**, per-window **WebGL**, and the **`?canvas=`
+compat route** are in the task-437 entry; the **second-window reveal** and per-window
+WebGL probe/latch are in the task-434 entry. Still missing — new items:
+
+- [ ] **Single-instance distro matrix (436).** Run the task-436 second-launch checks per
+      target — GNOME (Ubuntu), KDE, and a Mint/Cinnamon box, on X11 AND Wayland — and add
+      two AppImage cases: a *different-version* AppImage file (same `com.recue.app` D-Bus
+      name — must still route to the running instance, not double-boot), and confirm the
+      doomed second process's FUSE mount is cleaned up (no stray `/tmp/.mount_…` left
+      after it exits).
+- [ ] **Per-window WebKitGTK memory + the once-per-process DMA-BUF decision (434/439).**
+      RSS growth per additional window (2–4 windows), released on close; the boot-time
+      DMA-BUF decision (#346/#357 — the env is read once at GTK init) applies unchanged to
+      windows created later in the process (a later window never re-probes or diverges);
+      the #364 WebGL latch stays per-window (one window's context loss never demotes
+      another); the Settings → Rendering diagnostics readout is unchanged.
+- [ ] **Mirroring reflow under TIOCSWINSZ (426/427).** As the Windows ConPTY item, on a
+      WebKitGTK box: one agent in two windows with different slot sizes → the
+      component-wise-min grid, clean TUI reflow in both, letterboxing in the larger;
+      closing the smaller window un-clamps and reflows up; parking (view switch) does NOT
+      resize the grid.
+- [ ] **Same-file edit guard smoke (435).** The same `.md` (FileViewer raw view) and the
+      same Kanban board open in two windows: editing in one claims it; the other renders
+      read-only with the "Being edited in another window — Take over" banner and
+      live-follows saves; Take over flips the claim (the loser flushes once in auto mode);
+      closing the claiming window purges the claim and the survivor unlocks.
+- [ ] **Primary takeover (433).** Close the primary (oldest) window while another full
+      window is open: the survivor re-arms the once-per-app effects live — exactly one
+      update check, no re-onboarding, the `schedule://fired` transition still lands; with
+      N restored windows (439) exactly ONE "Updated to vX" toast / onboarding modal fires
+      across the whole app.
