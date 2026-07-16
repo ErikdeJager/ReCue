@@ -9,6 +9,7 @@ import {
   samePath,
   sessionActiveWorktree,
   vanishedWorktrees,
+  worktreeDoomedSessionIds,
   worktreeScopeRepos,
   worktreeSourceOf,
 } from "./worktrees";
@@ -176,6 +177,39 @@ describe("sessionActiveWorktree (relocation)", () => {
     expect(
       sessionActiveWorktree(base, ["/other"], { s1: "/side-wt" }, "macos"),
     ).toBeNull();
+  });
+});
+
+describe("worktreeDoomedSessionIds (Delete worktree…)", () => {
+  const dest = "/wt/feat-x";
+
+  it("matches sessions living in the worktree — record worktree agents included", () => {
+    const sessions = [
+      // A record worktree agent (#74): repoPath IS the worktree folder.
+      { id: "record", repoPath: dest, worktreeParent: "/repo" },
+      // An in-place spawn into a detected worktree: same shape, no parent link.
+      { id: "inplace", repoPath: "/wt/feat-x/" },
+      // A home session of the parent repo — untouched.
+      { id: "home", repoPath: "/repo" },
+    ];
+    expect(worktreeDoomedSessionIds(sessions, dest, {}, "macos")).toEqual([
+      "record",
+      "inplace",
+    ]);
+  });
+
+  it("follows currentCwd and the heuristic into the worktree", () => {
+    const sessions = [
+      // Relocated: cwd landed in a SUBdirectory of the doomed worktree.
+      { id: "moved", repoPath: "/repo", currentCwd: "/wt/feat-x/src/deep" },
+      // Heuristic-attributed (non-claude agent).
+      { id: "guessed", repoPath: "/repo" },
+      // At home; an unrelated cwd never matches.
+      { id: "away", repoPath: "/repo", currentCwd: "/elsewhere" },
+    ];
+    expect(
+      worktreeDoomedSessionIds(sessions, dest, { guessed: dest }, "macos"),
+    ).toEqual(["moved", "guessed"]);
   });
 });
 

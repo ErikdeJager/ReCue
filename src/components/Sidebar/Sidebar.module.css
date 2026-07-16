@@ -358,6 +358,27 @@
   text-align: left;
 }
 
+/* Empty-folder header variant: the name yields its grow so the inline
+   "/ branch" sits right beside it instead of at the far edge. */
+.repoNameWithBranch {
+  flex: 0 1 auto;
+}
+
+/* Empty-folder inline branch — "<name> / <branch>" on one line when the folder
+   has no content at all (with content the branch renders as the #236 line
+   below). Muted + mono at the meta size so the name stays primary; truncates,
+   part of the title's click-to-filter target. */
+.repoHeaderBranch {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* In-flight clone "phantom" folder (#299): a transient, inert repo-header-like row —
    dimmed vs a real folder, with a muted "Cloning…" hint and an indeterminate progress
    bar underneath. It carries no hover/active box (it isn't clickable), sits OUTSIDE the
@@ -1169,20 +1190,14 @@
 }
 
 /* --- Worktree sub-group (#74/#240): an isolated worktree under its parent repo,
-   its header flush at the repo's own level — a "worktree" badge on the header is
-   the sole worktree cue. Its child rows indent 24px (UI v2 §5, task 374); the 1px
-   row rhythm comes from the group's own gap. --- */
+   its header flush at the repo's own level — a small elbow before the branch
+   glyph is the sole worktree cue (no text badge). Child rows are NOT indented
+   (they align with the repo's own rows); the 1px row rhythm comes from the
+   group's own gap. --- */
 .worktreeGroup {
   display: flex;
   flex-direction: column;
   gap: 1px;
-}
-
-/* Worktree child rows indent 24px (UI v2 §5) — deeper than the repo's own 12px. */
-.worktreeGroup .row,
-.worktreeGroup .fileRow,
-.worktreeGroup .scheduleRow {
-  margin-left: 24px;
 }
 
 .worktreeHeader {
@@ -1195,40 +1210,17 @@
   color: var(--text-muted);
 }
 
-/* "worktree" marker (#240): mirrors the Overview/Canvas badge (#96) at the v2
-   micro size (task 374). Now that the worktree isn't indented, this chip is the cue
-   that distinguishes a worktree branch from the repo's own branch line. */
-.worktreeBadge {
-  flex-shrink: 0;
-  padding: 0 var(--space-4);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-micro);
-  color: var(--text-muted);
-  font-family: var(--mono);
-  font-size: var(--fs-micro);
-}
-
-/* `kept` variant: a ReCue-managed worktree kept for its uncommitted changes (the
-   dirty-kept orphan) — the awaiting (yellow) status token flags "there's un-merged
-   work in here", never the accent (statuses stay on --status-*). */
-.worktreeBadgeKept {
-  border-color: var(--status-awaiting);
-  color: var(--status-awaiting);
-}
-
 /* Idle (presence-driven) worktree group: exists on disk, nothing open in it —
    dimmed like the FileTree's gitignored rows (#270), token-only. */
 .worktreeIdle {
   opacity: 0.62;
 }
 
-/* Static "in use" hint: Claude Code holds a `git worktree lock` while an agent
-   actively works in the worktree. Non-interactive, running (blue) status token. */
-.lockedHint {
+/* The elbow marker before the branch glyph — the subtle "this branch is a
+   worktree" cue (replacing the removed "worktree"/"kept" badge and the child-row
+   indent). Non-interactive, inherits the header's muted color. */
+.worktreeElbow {
   flex-shrink: 0;
-  color: var(--status-running);
-  font-family: var(--mono);
-  font-size: var(--fs-micro);
 }
 
 .worktreeIcon {

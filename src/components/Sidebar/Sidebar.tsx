@@ -18,6 +18,7 @@ import {
   Bug,
   Check,
   Clock,
+  CornerDownRight,
   ExternalLink,
   Eye,
   EyeOff,
@@ -1223,26 +1224,32 @@ function BranchAheadBehind({ path }: { path: string }) {
 }
 
 /**
- * A worktree sub-group header (#74): the `GitBranch` icon + branch name + badge
- * for a worktree folder, with the worktree's absolute path as its tooltip.
+ * A worktree sub-group header (#74): a small elbow marker + the `GitBranch` icon
+ * + branch name for a worktree folder, with the worktree's absolute path as its
+ * tooltip. The elbow (a Lucide `CornerDownRight`) is the sole worktree cue —
+ * subtle, since the row sits under its parent repo anyway; there is no text
+ * badge and no "in use" chip (removed — the branch name owns the row).
  * Right-click opens a full action menu (#166) mirroring the repo menu (#82/#130)
  * but scoped to the worktree's own folder (`path`).
  *
- * Three ownership `source`s share the header, differing only in badge, spawn
- * route, and destructive tail:
+ * Three ownership `source`s share the header, differing only in spawn route and
+ * destructive tail:
  * - `"record"` — the #74 app-managed worktree with live records. New session
- *   reuses it via `spawnWorktreeSession` (ref-counted); the danger item is the
- *   original **Close worktree** (ref-counted `git worktree remove`, dirty kept).
+ *   reuses it via `spawnWorktreeSession` (ref-counted); the soft danger item is
+ *   the original **Close worktree** (ref-counted `git worktree remove`, dirty
+ *   kept).
  * - `"external"` — a DETECTED worktree ReCue didn't create (an agent's
  *   `EnterWorktree`, a hook, a manual `git worktree add`). New session spawns
- *   **in place** (`spawnSessionInWorktree`); the danger item is **Close items
- *   here** (only when items exist) — **ReCue never deletes it**.
+ *   **in place** (`spawnSessionInWorktree`); the soft danger item is **Close
+ *   items here** (only when items exist) — automation never deletes it.
  * - `"orphan"` — ReCue-managed but record-less: the dirty-kept leftover (#74's
- *   keep). Badge `kept`; the danger item is a confirm-gated **Remove worktree…**
- *   (force — the user owns the decision, ReCue owns the folder).
- * An idle group (`live` false — no agents/items and not locked) renders dimmed;
- * `locked` (Claude Code locks a worktree while an agent works in it) shows a
- * static "in use" hint.
+ *   keep). No extra soft item — Delete is its whole destructive story.
+ * ALL sources additionally get **Delete worktree…** — the explicit, ALWAYS
+ * confirm-gated permanent delete (`deleteWorktree`: kills the worktree's agents,
+ * cancels its schedules/recurrings, closes its panels, removes the folder from
+ * disk; the branch is kept). It deliberately ignores the `confirmDestructive`
+ * opt-out — a disk delete with potential uncommitted work always asks.
+ * An idle group (`live` false — no agents/items and not locked) renders dimmed.
  */
 function WorktreeHeader({
   path,
@@ -1253,8 +1260,6 @@ function WorktreeHeader({
   source = "record",
   live = true,
   hasItems = true,
-  locked = false,
-  lockedReason = null,
 }: {
   path: string;
   branch: string;
@@ -1264,7 +1269,7 @@ function WorktreeHeader({
   parent?: string;
   /** Agents in this worktree (#166) — for the destructive confirm label. */
   agentCount: number;
-  /** Collapsed-rail mode (#168): icon-only (just the branch glyph), no name/badge,
+  /** Collapsed-rail mode (#168): icon-only (just the branch glyph), no name,
    * the full right-click menu intact. */
   compact?: boolean;
   /** Ownership class — see the doc comment. */
@@ -1273,15 +1278,12 @@ function WorktreeHeader({
   live?: boolean;
   /** Any agents/panels/schedules reference the folder — gates "Close items here". */
   hasItems?: boolean;
-  /** `git worktree lock` held (Claude Code's while-working lock) — "in use". */
-  locked?: boolean;
-  lockedReason?: string | null;
 }) {
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const pullFolder = useStore((s) => s.pullFolder);
   const spawnWorktreeSession = useStore((s) => s.spawnWorktreeSession);
   const spawnSessionInWorktree = useStore((s) => s.spawnSessionInWorktree);
-  const removeOrphanWorktree = useStore((s) => s.removeOrphanWorktree);
+  const deleteWorktree = useStore((s) => s.deleteWorktree);
   const killAllAgents = useStore((s) => s.killAllAgents);
   const closeAllItems = useStore((s) => s.closeAllItems);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
@@ -1297,9 +1299,11 @@ function WorktreeHeader({
   const openInEditor = useStore((s) => s.openInEditor);
   const editorHint = useKeybindLabel("open-in-editor");
   const { menu, openMenu, closeMenu } = useRowMenu();
-  const [confirming, setConfirming] = useState(false);
+  // Two inline confirm modes (the repo menu's "Close all items" pattern): "close"
+  // is the soft kill-items step, "delete" the permanent disk delete.
+  const [confirming, setConfirming] = useState<null | "close" | "delete">(null);
   const close = () => {
-    setConfirming(false);
+    setConfirming(null);
     closeMenu();
   };
   const closeWorktree = () => {
@@ -1314,24 +1318,28 @@ function WorktreeHeader({
     if (source === "record") void spawnWorktreeSession(parent, branch);
     else void spawnSessionInWorktree(path, parent);
   };
-  const badgeLabel = source === "orphan" ? "kept" : "worktree";
-  const badgeTitle =
-    source === "orphan"
-      ? "ReCue-managed worktree kept for its uncommitted changes"
-      : source === "external"
-        ? "Worktree created outside ReCue (an agent, a hook, or you)"
-        : undefined;
   return (
     <div
       className={`${compact ? styles.railWorktree : styles.worktreeHeader} ${
         !compact && isFiltered ? styles.worktreeActive : ""
       } ${!compact && !live ? styles.worktreeIdle : ""}`}
-      title={compact ? `${branch} · ${badgeLabel}` : path}
+      title={compact ? `${branch} · ${path}` : path}
       onContextMenu={openMenu}
     >
-      {/* The branch glyph marks the row as a worktree (#196, replacing the literal
-          "worktree" word) — distinct from a repo's Folder icon (#128). Labelled so
-          the meaning survives without the text. */}
+      {/* The elbow marks the row as a worktree — the subtle nesting cue now that
+          there is no text badge and the child rows aren't extra-indented. Rail
+          mode stays icon-only (just the branch glyph). */}
+      {!compact && (
+        <CornerDownRight
+          size={12}
+          strokeWidth={1.5}
+          className={styles.worktreeElbow}
+          aria-hidden
+        />
+      )}
+      {/* The branch glyph marks the row as a branch checkout (#196) — distinct
+          from a repo's Folder icon (#128). Labelled so the meaning survives
+          without the text. */}
       <GitBranch
         size={12}
         strokeWidth={1.5}
@@ -1358,34 +1366,9 @@ function WorktreeHeader({
           {branch}
         </button>
       )}
-      {/* Ahead/behind vs upstream (#338): `↑A ↓B` next to the worktree branch name,
-          before the "worktree" badge. Rail mode stays icon-only (like the badge). */}
+      {/* Ahead/behind vs upstream (#338): `↑A ↓B` next to the worktree branch name.
+          Rail mode stays icon-only. */}
       {!compact && <BranchAheadBehind path={path} />}
-      {/* "in use" hint: Claude Code holds a `git worktree lock` while an agent
-          actively works in the worktree — a static, non-interactive marker. */}
-      {!compact && locked && (
-        <span
-          className={styles.lockedHint}
-          title={
-            lockedReason
-              ? `In use — ${lockedReason}`
-              : "In use — an agent is working in this worktree"
-          }
-        >
-          in use
-        </span>
-      )}
-      {/* Ownership badge (#240): `worktree` for record-backed/external groups,
-          `kept` for a ReCue-managed dirty-kept orphan. Right-aligned (the flex:1
-          name pushes it + the "+" to the right edge). Rail mode stays icon-only. */}
-      {!compact && (
-        <span
-          className={`${styles.worktreeBadge} ${source === "orphan" ? styles.worktreeBadgeKept : ""}`}
-          title={badgeTitle}
-        >
-          {badgeLabel}
-        </span>
-      )}
       {/* Inline "+" new session in this worktree (#196), mirroring the repo header's
           + (#127): record → reuse the app-managed worktree (ref-count++, #166);
           detected → spawn in place. The click is contained so it never opens the
@@ -1422,29 +1405,37 @@ function WorktreeHeader({
             style={{ left: menu.x, top: menu.y }}
             role="menu"
           >
-            {confirming ? (
+            {confirming === "delete" ? (
               <button
                 type="button"
                 role="menuitem"
                 className="menu-item-confirm"
                 onClick={() => {
-                  if (source === "orphan" && parent) {
-                    void removeOrphanWorktree(parent, path);
-                  } else {
-                    closeWorktree();
-                  }
+                  if (parent) void deleteWorktree(parent, path);
                   close();
                 }}
               >
-                {source === "orphan"
-                  ? "Force-remove worktree & its uncommitted changes?"
-                  : source === "external"
-                    ? agentCount > 0
-                      ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & close this worktree's items?`
-                      : "Close this worktree's items?"
-                    : agentCount > 0
-                      ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & close worktree?`
-                      : "Close worktree & remove its items?"}
+                {agentCount > 0
+                  ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & permanently delete this worktree?`
+                  : "Permanently delete this worktree & its uncommitted changes?"}
+              </button>
+            ) : confirming === "close" ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item-confirm"
+                onClick={() => {
+                  closeWorktree();
+                  close();
+                }}
+              >
+                {source === "external"
+                  ? agentCount > 0
+                    ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & close this worktree's items?`
+                    : "Close this worktree's items?"
+                  : agentCount > 0
+                    ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & close worktree?`
+                    : "Close worktree & remove its items?"}
               </button>
             ) : (
               <>
@@ -1548,40 +1539,52 @@ function WorktreeHeader({
                     View on GitHub
                   </button>
                 )}
-                {/* Destructive tail by ownership: record → the original Close
-                    worktree (ref-counted `git worktree remove`, dirty kept);
-                    orphan → an explicit force-remove (ReCue owns the folder, the
-                    user confirmed discarding its uncommitted changes); external →
-                    Close items here ONLY (shown only when items exist) — ReCue
-                    NEVER deletes a worktree it didn't create (the backend
-                    hard-refuses too). All confirm-gated per #103. */}
-                {(source !== "external" || hasItems) && (
-                  <>
-                    <div className="menu-sep" role="separator" />
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="menu-item-danger"
-                      onClick={() => {
-                        if (confirmDestructive) {
-                          setConfirming(true);
-                        } else if (source === "orphan" && parent) {
-                          void removeOrphanWorktree(parent, path);
-                          close();
-                        } else {
-                          closeWorktree();
-                          close();
-                        }
-                      }}
-                    >
-                      {source === "orphan"
-                        ? "Remove worktree…"
-                        : source === "external"
-                          ? "Close items here"
-                          : "Close worktree"}
-                    </button>
-                  </>
+                <div className="menu-sep" role="separator" />
+                {/* Soft destructive step by ownership: record → the original
+                    Close worktree (ref-counted `git worktree remove`, dirty
+                    kept); external → Close items here ONLY (shown only when
+                    items exist). Confirm-gated per #103. An orphan has no items
+                    to close — Delete below is its whole destructive story. */}
+                {(source === "record" ||
+                  (source === "external" && hasItems)) && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item-danger"
+                    onClick={() => {
+                      if (confirmDestructive) {
+                        setConfirming("close");
+                      } else {
+                        closeWorktree();
+                        close();
+                      }
+                    }}
+                  >
+                    {source === "external"
+                      ? "Close items here"
+                      : "Close worktree"}
+                  </button>
                 )}
+                {/* Delete worktree… — ALL sources (the user explicitly owns the
+                    decision, even for a worktree they hand-made), and ALWAYS
+                    confirm-gated: a permanent disk delete with potential
+                    uncommitted work ignores the confirmDestructive opt-out. */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item-danger"
+                  aria-disabled={!parent}
+                  title={
+                    parent
+                      ? "Permanently delete this worktree folder from disk (the branch is kept)"
+                      : "Worktree parent unknown"
+                  }
+                  onClick={() => {
+                    if (parent) setConfirming("delete");
+                  }}
+                >
+                  Delete worktree…
+                </button>
               </>
             )}
           </div>
@@ -2019,12 +2022,10 @@ function RepoGroup({
   const activeCount = repoSessions.filter(
     (s) => s.exitedCode === undefined,
   ).length;
-  // Branch-line gate (#250): show the repo's own branch line only when the folder
-  // has at least one of its *own* items opened — own sessions, own non-agent panels
-  // (files/diffs/terminals/kanban), or own-folder schedules. A worktree sub-group
-  // does NOT count (it keeps its own WorktreeHeader branch indicator), so a folder
-  // whose only content is a worktree hides the repo's own branch line. Broader than
-  // `isEmpty` (which counts only sessions and drives the greyed header), so it's a
+  // Own-items flag (an input to the branch display below, supersedes the #250
+  // own-items-only gate): own sessions, own non-agent panels (files/diffs/
+  // terminals/kanban), or own-folder schedules/recurrings. Broader than `isEmpty`
+  // (which counts only sessions and drives the greyed header), so it's a
   // separate flag.
   const hasOwnSchedules = schedules.some(
     (s) => s.cwd === repo && !scheduleNestsUnderWorktree(s),
@@ -2089,6 +2090,12 @@ function RepoGroup({
   const homeSessions = repoSessions.filter((s) => !activeWt(s));
   const rowLabels = dedupeBranchLabels(homeSessions.map(() => baseLabel));
   const allWorktreePaths = [...worktreePaths, ...detectedPaths];
+  // Any-content gate for the current-branch display: with ANY content — own items
+  // OR worktree sub-groups — the checked-out branch renders as the #236 branch
+  // line (now ALSO for a worktree-only folder, so the main checkout stays
+  // visible among its items); with none it collapses into the header itself as
+  // a one-line "name / branch".
+  const hasAnyContent = hasOwnItems || allWorktreePaths.length > 0;
 
   return (
     <div
@@ -2129,7 +2136,19 @@ function RepoGroup({
           title={`Filter Overview to ${repoName(repo)}`}
           aria-pressed={folderActive}
         >
-          <span className={styles.repoName}>{repoName(repo)}</span>
+          <span
+            className={`${styles.repoName} ${
+              !hasAnyContent && branches[repo] ? styles.repoNameWithBranch : ""
+            }`}
+          >
+            {repoName(repo)}
+          </span>
+          {/* Empty folder: fold the checked-out branch into the header itself as
+              a one-line "name / branch" (no items → no branch line below), muted
+              so the name stays primary. Non-git folders show just the name. */}
+          {!hasAnyContent && branches[repo] && (
+            <span className={styles.repoHeaderBranch}>/ {branches[repo]}</span>
+          )}
         </button>
         {/* New-session slot (#395): at rest it shows the count of the repo's own
         running agents; hovering the header (or focusing the "+") swaps the count out
@@ -2167,8 +2186,11 @@ function RepoGroup({
           a long branch never crowds the name / count / +. Same data + sync as #225
           (the `branches` map, kept current by the #212 edge + the focus/poll effect
           below); hidden for a non-git / unknown folder. Clicking it filters Overview to
-          the repo (toggle), exactly like clicking the repo name (#34). */}
-      {branches[repo] && hasOwnItems && (
+          the repo (toggle), exactly like clicking the repo name (#34). Shown whenever
+          the folder has ANY content — own items or worktree sub-groups — so the main
+          checkout stays visible among a worktree-only folder's items; an empty folder
+          folds the branch into the header line above instead. */}
+      {branches[repo] && hasAnyContent && (
         <RepoBranchLine
           repo={repo}
           branch={branches[repo]}
@@ -2292,8 +2314,6 @@ function RepoGroup({
               source={worktreeSourceOf(det, isRecordBacked)}
               live={hasItems || (det?.locked ?? false)}
               hasItems={hasItems}
-              locked={det?.locked ?? false}
-              lockedReason={det?.lockedReason ?? null}
             />
             {wtRows.map((session, i) => (
               <SessionRow
@@ -3098,8 +3118,6 @@ function Sidebar() {
                       source={worktreeSourceOf(det, det === undefined)}
                       live={wtRows.length > 0 || (det?.locked ?? false)}
                       hasItems={wtRows.length > 0}
-                      locked={det?.locked ?? false}
-                      lockedReason={det?.lockedReason ?? null}
                     />
                     {wtRows.length > 0 && (
                       <div className={styles.railDots}>

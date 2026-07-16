@@ -316,12 +316,20 @@ steady-state boot pays **zero** probe cost.
   riding the #359 refresh volley as the **`"worktrees"` kind** (in `focusRefreshKinds`' cheap
   set, so the sidebar's 15 s poll + busy→idle debounce + focus backstop all carry it).
   Detected worktrees render **presence-driven** under their parent repo in the sidebar (live
-  full-strength; idle dimmed; ReCue's own dirty-kept orphans badge **`kept`** with a
-  confirm-gated force **Remove worktree…**; the `locked` attr — Claude Code locks a worktree
-  while an agent works in it — reads as a static "in use" hint); **external worktrees get no
-  delete — ReCue never `git worktree remove`s anything it didn't create** (`remove_worktree`
-  hard-refuses paths outside `<data-dir>/worktrees`, and `cleanupWorktreeIfEmpty`
-  short-circuits). Claude agents **relocate live**: the #97 title worker (now poked on BOTH
+  full-strength; idle dimmed — the `locked` attr, Claude Code's while-working lock, only
+  feeds that dimming; there is **no text badge and no "in use" chip** — a small Lucide
+  `CornerDownRight` elbow before the branch glyph is the sole worktree cue, and worktree
+  child rows are NOT extra-indented). Every worktree row's menu has an always-confirm-gated
+  **Delete worktree…** (ignores the `confirmDestructive` opt-out): the store `deleteWorktree`
+  kills the worktree's agents (incl. relocated ones, `worktreeDoomedSessionIds`), cancels its
+  schedules/recurrings, closes its panels (a `deletingWorktrees` guard mutes the ref-counted
+  auto-cleanup mid-delete), then the `delete_worktree` command — validated against
+  `git worktree list` membership (never the main checkout / the registered folder / a bare
+  entry), unlock-first, `git worktree remove --force` with a `git worktree prune` fallback
+  for a stale entry; the **branch is kept**. **Automation still never deletes what ReCue
+  didn't create** (`remove_worktree` hard-refuses paths outside `<data-dir>/worktrees`, and
+  `cleanupWorktreeIfEmpty` short-circuits) — only the explicit, user-confirmed Delete may.
+  Claude agents **relocate live**: the #97 title worker (now poked on BOTH
   busy edges) also tails the session's newest-by-mtime JSONL for its `cwd`
   (`SessionEvent::Cwd` → `session://cwd` → persisted `current_cwd`), and
   `sessionActiveWorktree` (`src/worktrees.ts`, the pure decision core) moves the agent's
@@ -1101,13 +1109,16 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   branch step starts an agent in an app-managed worktree
   (`<app-data>/worktrees/<repo-id>/<branch>`), shown nested under its parent repo in
   the sidebar; the worktree is removed (ref-counted) only when its last agent goes,
-  and a dirty worktree is kept rather than force-deleted. **The remove is scoped to
-  what ReCue created**: `remove_worktree` hard-refuses any destination outside
+  and a dirty worktree is kept rather than force-deleted. **The automatic remove is
+  scoped to what ReCue created**: `remove_worktree` hard-refuses any destination outside
   `<data-dir>/worktrees` — worktree *detection* surfaces agent-created (EnterWorktree /
   hook / manual) worktrees in the same UI and in-place spawns give them sessions, so
-  no teardown path may ever `git worktree remove` a checkout ReCue didn't create; the
-  read side (`git worktree list --porcelain`) stays read-only, and the only force-remove
-  is the user-confirmed orphan (`kept`) flow over ReCue's own leftovers; and (3) **branch creation**
+  no automated teardown path may ever `git worktree remove` a checkout ReCue didn't create;
+  the read side (`git worktree list --porcelain`) stays read-only, and the only force-remove
+  is the **user-confirmed Delete worktree…** flow (the separate `delete_worktree` command —
+  works on ANY listed linked worktree of the repo, validated to never be the main checkout /
+  the registered folder / a bare entry, unlock-first, with a `git worktree prune` fallback
+  for a stale entry; the branch is kept); and (3) **branch creation**
   (#124, expanding the earlier "never creates branches" rule) — the branch step's
   **"+ add branch"** option creates + checks out a new branch (`git checkout -b
   <name> [<base>]`, base defaulting to the current branch/HEAD) and starts a normal
