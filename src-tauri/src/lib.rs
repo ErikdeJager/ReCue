@@ -22,6 +22,7 @@ mod linux_webkit;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod menu;
 mod path_env;
+mod primary;
 mod pty;
 mod skills;
 mod store;
@@ -144,6 +145,21 @@ pub fn run() {
                 .map(|dir| dir.join("sessions.json"))
                 .unwrap_or_else(|_| PathBuf::from("recue-sessions.json"));
             app.manage(Store::load(&store_path));
+
+            // Primary-window election (task 433): register the config-created window(s) —
+            // today just "main". Windows created later register at their creation sites
+            // (open_canvas_window; the 9/16 full-window command must follow the pattern).
+            // The emit fires before any webview listens — harmless; the frontend's
+            // `primary_window` snapshot fetch covers boot.
+            app.manage(primary::Primary::default());
+            {
+                let mut labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+                labels.sort(); // HashMap order; deterministic for the single config window
+                let handle = app.handle().clone();
+                for label in &labels {
+                    primary::register_window(&handle, label);
+                }
+            }
 
             // Rust-owned clean-exit forget + worktree cleanup (task 431). The
             // worktree-cleanup mutex serializes every ref-count-check → git-remove
@@ -504,6 +520,7 @@ pub fn run() {
             commands::windows_build,
             commands::renderer_diagnostics,
             autocontinue::auto_continue_snapshot,
+            primary::primary_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -543,6 +560,12 @@ pub fn run() {
                     ) {
                         views.purge_window(&manager, &label);
                     }
+                    // Primary re-election (task 433): if the primary closed, the oldest
+                    // surviving full window is promoted and broadcast — the new primary's
+                    // frontend re-arms the once-per-app effects live (armPrimaryEffects).
+                    // try_state inside; a shutdown-teardown emit into dying webviews is a
+                    // `let _ =` no-op.
+                    primary::unregister_window(handle, &label);
                 }
                 _ => {}
             }

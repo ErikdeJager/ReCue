@@ -1996,6 +1996,10 @@ pub fn open_canvas_window(app: AppHandle, id: String, title: String) -> Result<(
         .map_err(|e| SessionError::Io(e.to_string()))?;
     // Never leave a detached window invisible if its frontend fails to boot (#348).
     schedule_reveal_fallback(&app, &label);
+    // Task 433: every window-creation site routes through registration. A canvas
+    // window is never primary-eligible (filtered inside), so this is a documented
+    // no-op today — it exists so the 9/16 full-window creator inherits the seam.
+    crate::primary::register_window(&app, &label);
     // Re-dock on close: when this window is destroyed, re-broadcast the detached
     // set (excluding this label) so the main window reclaims the canvas + terminals.
     let on_close = app.clone();

@@ -53,6 +53,12 @@ vi.mock("./ipc", () => ({
   dirExists: vi.fn(),
   installKind: vi.fn(),
   autoContinueSnapshot: vi.fn(),
+  // Primary-window election (task 433): the snapshot + broadcast subscription.
+  primaryWindow: vi.fn(),
+  subscribePrimaryEvents: vi.fn(),
+  // The #369 folder-color auto-assign (primary-gated since task 433) persists
+  // through this — a benign mock keeps recents-driven tests quiet.
+  setRepoColor: vi.fn(),
 }));
 
 import * as ipc from "./ipc";
@@ -60,6 +66,14 @@ import { useStore } from "./store";
 import type { BootState, OverviewPanel, SessionRecord } from "./types";
 
 const m = vi.mocked;
+
+/** The `schedule://fired` / `schedule://error` handler object `init()` registers
+ * (task 433 tests drive `onFired` under both primary states). Captured once — the
+ * store subscribes exactly once per module lifetime (the `eventsSubscribed` flag),
+ * so only the FIRST `init()` in this file ever registers it; the mock
+ * implementation (re-primed each test) stashes it here where `clearAllMocks`
+ * can't reach. */
+let scheduleHandlers: ipc.ScheduleEventHandlers | null = null;
 
 /** A benign, fully-populated boot payload (#352) — one call now carries everything the
  * boot used to fetch in ~21 separate commands. Each test overrides just the fields its
@@ -101,11 +115,18 @@ function primeIpc(): void {
   m(ipc.bootState).mockResolvedValue(makeBootState());
   m(ipc.subscribeSessionEvents).mockResolvedValue(() => {});
   m(ipc.subscribeCanvasEvents).mockResolvedValue(() => {});
-  m(ipc.subscribeScheduleEvents).mockResolvedValue(() => {});
+  m(ipc.subscribeScheduleEvents).mockImplementation(async (handlers) => {
+    scheduleHandlers = handlers;
+    return () => {};
+  });
   m(ipc.subscribeRecurringEvents).mockResolvedValue(() => {});
   m(ipc.subscribeStateSyncEvents).mockResolvedValue(() => {});
   m(ipc.subscribeUsageEvents).mockResolvedValue(() => {});
   m(ipc.subscribeContainerEvents).mockResolvedValue(() => {});
+  m(ipc.subscribePrimaryEvents).mockResolvedValue(() => {});
+  // The task-433 boot snapshot: this window ("main" in the test env) is primary.
+  m(ipc.primaryWindow).mockResolvedValue("main");
+  m(ipc.setRepoColor).mockResolvedValue(undefined);
   m(ipc.setOpenFiles).mockResolvedValue(undefined);
   m(ipc.setOverviewPanels).mockResolvedValue(undefined);
   m(ipc.setCanvases).mockResolvedValue(undefined);
@@ -152,7 +173,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   primeIpc();
   // Reset the slices the boot payload owns (the store is a module singleton shared
-  // across the tests in this file).
+  // across the tests in this file). `primaryWindow` back to its pre-sync default
+  // ("main" assumes primary) — task-433 tests flip it per scenario.
   useStore.setState({
     overviewPanels: {},
     overviewOrder: {},
@@ -160,6 +182,7 @@ beforeEach(() => {
     platform: "",
     windowsBuild: 0,
     sessions: [],
+    primaryWindow: "main",
   });
 });
 
@@ -260,12 +283,12 @@ describe("refresh() — seeds the 'has been active' flag (#112)", () => {
 });
 
 describe("boot is ONE batched round-trip (#352)", () => {
-  it("init() issues only `boot_state` + the 7 subscribe waves — no per-slice reads", async () => {
+  it("init() issues only `boot_state` + the 8 subscribe waves — no per-slice reads", async () => {
     await useStore.getState().init();
 
     // The one data round-trip…
     expect(m(ipc.bootState).mock.calls).toHaveLength(1);
-    // …and the 27 `listen` registrations, batched into their 7 helpers.
+    // …and the 30 `listen` registrations, batched into their 8 helpers.
     expect(ipc.subscribeSessionEvents).toHaveBeenCalledTimes(1);
     expect(ipc.subscribeCanvasEvents).toHaveBeenCalledTimes(1);
     expect(ipc.subscribeScheduleEvents).toHaveBeenCalledTimes(1);
@@ -273,8 +296,11 @@ describe("boot is ONE batched round-trip (#352)", () => {
     expect(ipc.subscribeStateSyncEvents).toHaveBeenCalledTimes(1);
     expect(ipc.subscribeUsageEvents).toHaveBeenCalledTimes(1);
     expect(ipc.subscribeContainerEvents).toHaveBeenCalledTimes(1);
-    // …plus the one task-430 boot seed of the usage/auto-continue mirrors.
+    expect(ipc.subscribePrimaryEvents).toHaveBeenCalledTimes(1);
+    // …plus the one task-430 boot seed of the usage/auto-continue mirrors and the
+    // one task-433 primary-window snapshot (resolved before the boot apply).
     expect(ipc.autoContinueSnapshot).toHaveBeenCalledTimes(1);
+    expect(ipc.primaryWindow).toHaveBeenCalledTimes(1);
     // None of the individual boot reads it replaces are called any more (they all
     // still exist — other call sites use them — but the boot no longer waterfalls).
     for (const fn of [
@@ -425,6 +451,209 @@ describe("boot is ONE batched round-trip (#352)", () => {
     // …and nothing else was clobbered — the defaults stand.
     expect(s.sessions).toHaveLength(0);
     expect(s.platform).toBe("");
+  });
+});
+
+describe("a non-primary window skips the boot-time once-per-app effects (task 433)", () => {
+  it("runs zero persists/toasts, but the payload still lands", async () => {
+    useStore.setState({ primaryWindow: null, toasts: [] });
+    m(ipc.bootState).mockResolvedValue(
+      makeBootState({
+        // Every once-per-app trigger at once: a legacy open_files entry, an
+        // older last_version (the updated-toast + setLastVersion), and a null
+        // canvases blob (the #58 migration persist).
+        open_files: { "/repo/a": ["CLAUDE.md"] },
+        last_version: "1.0.0",
+        app_version: "1.1.0",
+        canvases: null,
+        canvas_layout: null,
+        overview_panels: { "/repo/a": [{ id: "p1", kind: "diff" }] },
+        sessions: [
+          {
+            id: "s1",
+            claude_session_id: "s1",
+            repo_path: "/repo/a",
+            name: null,
+            created_at: 0,
+          },
+        ],
+      }),
+    );
+
+    await useStore.getState().refresh();
+
+    // None of the once-per-app effects ran…
+    expect(ipc.setOpenFiles).not.toHaveBeenCalled();
+    expect(ipc.setLastVersion).not.toHaveBeenCalled();
+    expect(ipc.setCanvases).not.toHaveBeenCalled();
+    expect(
+      useStore.getState().toasts.some((t) => t.message.includes("Updated to")),
+    ).toBe(false);
+    // …but the payload still lands (every-window state).
+    const s = useStore.getState();
+    expect(s.overviewPanels["/repo/a"]).toEqual([{ id: "p1", kind: "diff" }]);
+    expect(s.sessions.map((x) => x.id)).toEqual(["s1"]);
+    expect(s.booted).toBe(true);
+  });
+});
+
+describe("init resolves the primary before the boot apply (task 433)", () => {
+  it("gates the boot effects on the snapshot value, not the pre-load default", async () => {
+    // The backend says another window is primary — even though this window's
+    // pre-load default is "main" (assume primary), the snapshot resolves BEFORE
+    // the boot payload is applied, so the once-per-app effects are skipped.
+    m(ipc.primaryWindow).mockResolvedValue("someone-else");
+    m(ipc.bootState).mockResolvedValue(
+      makeBootState({ open_files: { "/repo/a": ["CLAUDE.md"] } }),
+    );
+
+    await useStore.getState().init();
+
+    expect(useStore.getState().primaryWindow).toBe("someone-else");
+    expect(ipc.setOpenFiles).not.toHaveBeenCalled();
+
+    // Elected primary instead → the same boot payload runs the effects.
+    m(ipc.primaryWindow).mockResolvedValue("main");
+    await useStore.getState().init();
+
+    expect(useStore.getState().primaryWindow).toBe("main");
+    expect(ipc.setOpenFiles).toHaveBeenCalledWith("/repo/a", []);
+  });
+});
+
+describe("schedule://fired runs the transition only in the primary (task 433)", () => {
+  it("non-primary: upserts the session + drops the schedule locally — no toast, no persist", async () => {
+    // The handler object was captured from the file's one real subscribe wave
+    // (the store subscribes exactly once per module lifetime).
+    if (!scheduleHandlers) await useStore.getState().init();
+    expect(scheduleHandlers).not.toBeNull();
+
+    useStore.setState({
+      primaryWindow: null,
+      toasts: [],
+      recents: [],
+      sessions: [],
+      schedules: [{ id: "sch1", cwd: "/repo/s", fire_at: 0, created_at: 0 }],
+    });
+
+    scheduleHandlers!.onFired({
+      id: "sch1",
+      session: {
+        id: "live1",
+        claude_session_id: "live1",
+        repo_path: "/repo/s",
+        name: null,
+        created_at: 0,
+      },
+    });
+
+    const s = useStore.getState();
+    // The every-window parts still happen…
+    expect(s.sessions.map((x) => x.id)).toContain("live1");
+    expect(s.schedules).toHaveLength(0);
+    // …but the primary-only transition does not.
+    expect(s.toasts).toHaveLength(0);
+    expect(s.recents).toEqual([]);
+    expect(ipc.setCanvases).not.toHaveBeenCalled();
+  });
+
+  it("primary: additionally prepends recents and toasts", async () => {
+    if (!scheduleHandlers) await useStore.getState().init();
+    expect(scheduleHandlers).not.toBeNull();
+
+    useStore.setState({
+      primaryWindow: "main",
+      toasts: [],
+      recents: [],
+      sessions: [],
+      schedules: [{ id: "sch2", cwd: "/repo/s2", fire_at: 0, created_at: 0 }],
+    });
+
+    scheduleHandlers!.onFired({
+      id: "sch2",
+      session: {
+        id: "live2",
+        claude_session_id: "live2",
+        repo_path: "/repo/s2",
+        name: null,
+        created_at: 0,
+      },
+    });
+
+    const s = useStore.getState();
+    expect(s.sessions.map((x) => x.id)).toContain("live2");
+    expect(s.schedules).toHaveLength(0);
+    expect(s.recents[0]).toBe("/repo/s2");
+    expect(
+      s.toasts.some((t) => t.message.startsWith("Scheduled agent started")),
+    ).toBe(true);
+  });
+});
+
+describe("takeover arms the primary effects live (task 433)", () => {
+  it("arms exactly once on a booted non-primary → primary transition", () => {
+    const original = useStore.getState().checkForUpdate;
+    const spy = vi.fn().mockResolvedValue(undefined);
+    try {
+      useStore.setState({
+        booted: true,
+        primaryWindow: "other",
+        checkForUpdate: spy,
+      });
+
+      useStore.getState().applyPrimarySync("main");
+      expect(useStore.getState().primaryWindow).toBe("main");
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      // Equality guard: re-applying the same value never re-arms.
+      useStore.getState().applyPrimarySync("main");
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      useStore.setState({ checkForUpdate: original });
+    }
+  });
+
+  it("does not arm during boot — init/applyBootState own the boot-time effects", () => {
+    const original = useStore.getState().checkForUpdate;
+    const spy = vi.fn().mockResolvedValue(undefined);
+    try {
+      useStore.setState({
+        booted: false,
+        primaryWindow: "other",
+        checkForUpdate: spy,
+      });
+
+      useStore.getState().applyPrimarySync("main");
+      // The value still applies (the boot paths read it directly)…
+      expect(useStore.getState().primaryWindow).toBe("main");
+      // …but nothing is armed.
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      useStore.setState({ checkForUpdate: original });
+    }
+  });
+
+  it("never arms when already primary (or on a demotion to null)", () => {
+    const original = useStore.getState().checkForUpdate;
+    const spy = vi.fn().mockResolvedValue(undefined);
+    try {
+      useStore.setState({
+        booted: true,
+        primaryWindow: "main",
+        checkForUpdate: spy,
+      });
+
+      useStore.getState().applyPrimarySync("main"); // equality no-op
+      expect(spy).not.toHaveBeenCalled();
+
+      // A theoretical demotion (never happens today — the election is
+      // monotonic) applies the value without arming anything.
+      useStore.getState().applyPrimarySync(null);
+      expect(useStore.getState().primaryWindow).toBeNull();
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      useStore.setState({ checkForUpdate: original });
+    }
   });
 });
 

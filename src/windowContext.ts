@@ -7,7 +7,9 @@
 // These are derived once at module load (the URL never changes within a window),
 // so they're plain constants the rest of the app branches on. Terminal ownership
 // (computeSessionOwners) compares a session's owner label against WINDOW_LABEL to
-// decide whether THIS window renders that PTY.
+// decide whether THIS window renders that PTY. `isPrimaryLabel` (task 433) is the
+// live counterpart: it matches the Rust-elected primary full window's label against
+// WINDOW_LABEL to gate the exactly-once-per-app effects.
 
 /** The canvas id this window is detached for, or null in the main window. */
 export const DETACHED_CANVAS_ID: string | null = (() => {
@@ -49,4 +51,13 @@ export function ownedHere(
 export function ownerCanvasId(ownerLabel: string | undefined): string | null {
   if (!ownerLabel || !ownerLabel.startsWith("canvas-")) return null;
   return ownerLabel.slice("canvas-".length);
+}
+
+/** True when THIS window is the app's primary (task 433): the oldest surviving
+ * full window, elected by Rust and broadcast as `window://primary` (null = no
+ * full window survives, e.g. only detached canvases remain). Exactly-once-per-APP
+ * effects gate on this — never on IS_MAIN_WINDOW, which any future full app
+ * window (9/16) would also pass. */
+export function isPrimaryLabel(primary: string | null): boolean {
+  return primary !== null && primary === WINDOW_LABEL;
 }
