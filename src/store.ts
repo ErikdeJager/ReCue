@@ -69,7 +69,10 @@ import { formatInterval, parseResetsAt } from "./time";
 import * as updater from "./updater";
 import {
   DETACHED_CANVAS_ID,
-  IS_MAIN_WINDOW,
+  INIT_CANVAS_ID,
+  INIT_REPO_PATH,
+  IS_DETACHED_CANVAS_WINDOW,
+  IS_FULL_APP_WINDOW,
   WINDOW_LABEL,
   isPrimaryLabel,
 } from "./windowContext";
@@ -1901,8 +1904,8 @@ export interface AppState {
    * window whose label is not `canvas-*` — or `null` when none survives. Seeded by
    * the `primary_window` snapshot in `init` and kept live by `window://primary`
    * (`applyPrimarySync`). Every exactly-once-per-app effect gates on
-   * `isPrimaryLabel(primaryWindow)` instead of `IS_MAIN_WINDOW`, which the epic's
-   * future full app windows (9/16) would all pass. */
+   * `isPrimaryLabel(primaryWindow)` instead of `IS_FULL_APP_WINDOW`, which every
+   * `app-*` window (task 434) also passes. */
   primaryWindow: string | null;
   /** Windows build number (e.g. 22631), read once at boot; `0` on non-Windows or
    * until loaded. Only consumed under an `isWindows` guard, to set xterm.js's
@@ -3035,7 +3038,11 @@ export const useStore = create<AppState>()((set, get) => ({
   sessions: [],
   selectedId: null,
   view: "overview",
-  overviewRepoFilter: null,
+  // An app window opened for a repo (task 434 `?repo=` init preset) boots with
+  // its Overview filtered to it. Local UI only — never persisted, never synced.
+  overviewRepoFilter: INIT_REPO_PATH
+    ? { path: INIT_REPO_PATH, mode: "all" }
+    : null,
   recents: [],
   branches: {},
   githubUrls: {},
@@ -3052,8 +3059,10 @@ export const useStore = create<AppState>()((set, get) => ({
   // the always-≥1 invariant even before the backend responds.
   canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
   // A detached window (#84) fixes its active tab to its own canvas from the start
-  // so it renders the right layout before the persisted tabs load.
-  activeCanvasId: DETACHED_CANVAS_ID ?? "canvas-1",
+  // so it renders the right layout before the persisted tabs load; an app window's
+  // `?canvas=` init preset (task 434) seeds the same way (re-resolved — soft, only
+  // when the tab exists — by `resolveCanvases` once the persisted tabs arrive).
+  activeCanvasId: DETACHED_CANVAS_ID ?? INIT_CANVAS_ID ?? "canvas-1",
   detachedCanvasIds: [],
   canvasClosePromptId: null,
   canvasTemplates: [],
@@ -3082,8 +3091,9 @@ export const useStore = create<AppState>()((set, get) => ({
   // today's semantics (the `installKind` "" precedent): the "main" window assumes
   // primary until the backend snapshot/broadcast says otherwise — so vitest and a
   // plain dev server behave exactly as before. A detached canvas is never primary.
-  // 9/16 NOTE: a secondary FULL window must boot with null here (only the original
-  // "main" label may assume) — revisit when full windows gain their identity.
+  // Task 434 (satisfying 433's 9/16 note): an `app-*` full window boots with null
+  // here — only the original "main" label may assume primary; every other window
+  // waits for the `primary_window` snapshot `init` resolves before the boot apply.
   primaryWindow: WINDOW_LABEL === "main" ? "main" : null,
   windowsBuild: 0,
   booted: false,
@@ -3146,9 +3156,10 @@ export const useStore = create<AppState>()((set, get) => ({
   setSidebarCollapsed: (collapsed) => {
     if (collapsed === get().sidebarCollapsed) return;
     set({ sidebarCollapsed: collapsed });
-    // Persist only from the main window (a detached canvas has no sidebar); rare
-    // toggle, so no debounce.
-    if (IS_MAIN_WINDOW) {
+    // Persist only from a full app window (task 434 — a detached canvas has no
+    // sidebar); converges across full windows via the 428 broadcast. Rare toggle,
+    // so no debounce.
+    if (IS_FULL_APP_WINDOW) {
       void ipc.setSidebarCollapsed(collapsed).catch(() => {});
     }
   },
@@ -3156,11 +3167,12 @@ export const useStore = create<AppState>()((set, get) => ({
     get().setSidebarCollapsed(!get().sidebarCollapsed),
   setPendingRenameSession: (id) => set({ pendingRenameSessionId: id }),
   // Persist the drag-reordered top-level folder order (#211): optimistic local set,
-  // then persist (main window only — a detached canvas has no sidebar). Mirrors
-  // `reorderOverview`; a persist failure (e.g. outside Tauri) keeps the local order.
+  // then persist (full app windows only, task 434 — a detached canvas has no
+  // sidebar). Mirrors `reorderOverview`; a persist failure (e.g. outside Tauri)
+  // keeps the local order.
   reorderRepos: async (ordered) => {
     set({ folderOrder: ordered });
-    if (!IS_MAIN_WINDOW) return;
+    if (!IS_FULL_APP_WINDOW) return;
     try {
       await ipc.setRepoOrder(ordered);
     } catch {
@@ -3742,10 +3754,12 @@ export const useStore = create<AppState>()((set, get) => ({
               );
               if (owningRec) {
                 intentionalKills.delete(id);
-                if (IS_MAIN_WINDOW) {
+                if (IS_FULL_APP_WINDOW) {
                   // Clear the pointer so the panel shows "next run in…" until the next
                   // fire (a genuine crash); a rotation's `onFired` sets the fresh child.
-                  // Drop the dead child so its pooled xterm reconciles away.
+                  // Drop the dead child so its pooled xterm reconciles away. Local,
+                  // non-persisting mutations — every full app window (task 434) runs
+                  // them on its own copy of the event.
                   set((s) => ({
                     recurrings: s.recurrings.map((r) =>
                       r.id === owningRec.id
@@ -3757,12 +3771,13 @@ export const useStore = create<AppState>()((set, get) => ({
                 }
                 return;
               }
-              // Session lifecycle (forget / toast / kill) is owned by the **main**
-              // window (#84) — it's the source of truth for the session list. A
-              // detached canvas window is a renderer: it only reflects the exit
+              // Session lifecycle (forget / toast / kill) is owned by the full
+              // app windows (#84/task 434) — the session list's source of truth.
+              // A detached canvas window is a renderer: it only reflects the exit
               // locally so a terminal it shows gets the "Process exited" overlay,
-              // never forgetting/killing/toasting (which the main window does).
-              if (!IS_MAIN_WINDOW) {
+              // never forgetting/killing/toasting. (The non-clean exit toast can
+              // appear in each full window — dedup is deferred to a later epic card.)
+              if (IS_DETACHED_CANVAS_WINDOW) {
                 if (get().sessions.some((s) => s.id === id)) {
                   get().markExited(id, code);
                 } else {
@@ -4043,16 +4058,18 @@ export const useStore = create<AppState>()((set, get) => ({
       // Leave "" → self-updating.
     }
 
-    // Default view on launch (#103): apply the saved preference once at boot (main
-    // window only — per-window UI; a canvas window has no view switch). `init` runs
-    // only on mount, so a mid-session view change is never overridden (unlike
-    // `refresh`, which can re-run).
-    if (IS_MAIN_WINDOW) {
-      get().setView(get().settings.defaultView);
+    // Default view on launch (#103): apply the saved preference once at boot (full
+    // app windows only — per-window UI; a canvas window has no view switch) — or
+    // the `?canvas=` init preset (task 434): a window opened onto a canvas boots
+    // straight into it (`activeCanvasId` was preset by `resolveCanvases`). Local
+    // UI only; persists nothing. `init` runs only on mount, so a mid-session view
+    // change is never overridden (unlike `refresh`, which can re-run).
+    if (IS_FULL_APP_WINDOW) {
+      get().setView(INIT_CANVAS_ID ? "canvas" : get().settings.defaultView);
     }
     // Once-per-APP boot effects (task 433): only the primary window runs them —
     // gated on the elected label (resolved above, before the boot apply), never on
-    // IS_MAIN_WINDOW, which every future full app window (9/16) would also pass.
+    // IS_FULL_APP_WINDOW, which every `app-*` window (task 434) also passes.
     if (isPrimaryLabel(get().primaryWindow)) {
       // First-launch coding-agent picker: detect installed CLIs once and auto-pick /
       // prompt as needed.
@@ -4123,13 +4140,14 @@ export const useStore = create<AppState>()((set, get) => ({
     cancelAllAttentionGrace();
 
     // Multi-canvas (#58): the persisted tabs, else the one-shot migration of the old
-    // single `canvas_layout`, else one empty canvas — and a detached window (#84)
-    // always shows its own canvas. Pure (`boot.ts`), so it is unit-tested on its own.
+    // single `canvas_layout`, else one empty canvas — a detached window's pin (#84)
+    // always shows its own canvas, and an app window's `?canvas=` preset (task 434)
+    // selects that tab when it exists. Pure (`boot.ts`), unit-tested on its own.
     const { canvases, activeCanvasId, migrated } = resolveCanvases(
       boot.canvases,
       boot.canvas_layout,
-      IS_MAIN_WINDOW,
       DETACHED_CANVAS_ID,
+      INIT_CANVAS_ID,
     );
 
     // ONE store update carries the whole payload. `platform` / `windowsBuild` are
@@ -5200,7 +5218,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // Shift+arrows keep `activeLeafId` on the panel the user is on. Focus then
     // advances to a spatial neighbor (else the first remaining leaf) so repeated
     // ⌘W keeps closing panels instead of dangling after the first.
-    if (s.view === "canvas" || !IS_MAIN_WINDOW) {
+    if (s.view === "canvas" || IS_DETACHED_CANVAS_WINDOW) {
       const closingId = s.activeLeafId;
       const layout =
         s.canvases.find((c) => c.id === s.activeCanvasId)?.layout ?? null;
@@ -5799,7 +5817,7 @@ export const useStore = create<AppState>()((set, get) => ({
       return { canvases, activeCanvasId: active };
     });
     if (
-      !IS_MAIN_WINDOW &&
+      IS_DETACHED_CANVAS_WINDOW &&
       DETACHED_CANVAS_ID &&
       !canvases.some((c) => c.id === DETACHED_CANVAS_ID)
     ) {
@@ -5809,10 +5827,10 @@ export const useStore = create<AppState>()((set, get) => ({
 
   setDetachedCanvasIds: (ids) => {
     set({ detachedCanvasIds: ids });
-    // The main window never renders a detached canvas as its active tab (its PTYs
-    // belong to the other window): if our active tab just detached, switch to a
-    // still-docked one (#84).
-    if (IS_MAIN_WINDOW) {
+    // A full app window (task 434) never renders a detached canvas as its active
+    // tab (its PTYs belong to the other window): if our active tab just detached,
+    // switch to a still-docked one (#84).
+    if (IS_FULL_APP_WINDOW) {
       const s = get();
       if (ids.includes(s.activeCanvasId)) {
         const docked = s.canvases.find((c) => !ids.includes(c.id));
@@ -6243,9 +6261,9 @@ export const useStore = create<AppState>()((set, get) => ({
 
   openFileFromTree: async (repoPath, file, kind) => {
     // "Present" is judged relative to the current view (#175): a detached canvas
-    // window is always Canvas; in the main window the mounted view decides which
-    // tree the user clicked.
-    const inCanvas = !IS_MAIN_WINDOW || get().view === "canvas";
+    // window is always Canvas; in a full app window (task 434) the mounted view
+    // decides which tree the user clicked.
+    const inCanvas = IS_DETACHED_CANVAS_WINDOW || get().view === "canvas";
     const content: CanvasContent =
       kind === "kanban"
         ? { kind: "kanban", repoPath, file }

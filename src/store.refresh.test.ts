@@ -787,3 +787,20 @@ describe("branch labels refresh on busy→idle (#212/#359)", () => {
     expect(ipc.currentBranches).toHaveBeenCalledWith(["/repo/a", "/repo/b"]);
   });
 });
+
+describe("an app-* window's pre-sync primaryWindow default (task 434)", () => {
+  it('is null for any non-"main" label — a secondary full window never assumes primary', () => {
+    // The store's initial slice is `WINDOW_LABEL === "main" ? "main" : null`,
+    // evaluated at module load — so the live store in this (main-labelled) test
+    // env can only exercise the "main" branch. Pin the expression's contract for
+    // the task-434 labels directly: an `app-<uuid>` full window (like a detached
+    // canvas) boots with null and waits for the `primary_window` snapshot that
+    // `init` resolves before the boot apply, so it runs zero once-per-app effects
+    // while an older full window lives.
+    const defaultPrimaryFor = (label: string) =>
+      label === "main" ? "main" : null;
+    expect(defaultPrimaryFor("main")).toBe("main");
+    expect(defaultPrimaryFor("app-1f2e")).toBeNull();
+    expect(defaultPrimaryFor("canvas-c1")).toBeNull();
+  });
+});

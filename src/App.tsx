@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react";
 
 import { useRevealWindow } from "./useRevealWindow";
-import { IS_MAIN_WINDOW } from "./windowContext";
+import { IS_DETACHED_CANVAS_WINDOW } from "./windowContext";
 
 // The two window routes (#84) are the app's two lazy entry points (#356): the main shell
 // (sidebar + Overview/Canvas + modals) and the canvas-only detached window. Splitting them
@@ -35,10 +35,12 @@ function RevealOnPaint() {
 }
 
 /**
- * Root: the full app shell in the main window, or the canvas-only view in a
- * detached canvas window (#84). Window identity is fixed for a window's lifetime
- * (derived from its URL), so this branch is stable — hooks never run conditionally,
- * and exactly one of the two route chunks is ever fetched.
+ * Root: the full app shell in any FULL window — the main window or an `app-*`
+ * window (task 434) — or the canvas-only view in a detached canvas window (#84,
+ * the legacy route, kept working this release; card 11/16 deletes it). Window
+ * identity is fixed for a window's lifetime (derived from its URL), so this
+ * branch is stable — hooks never run conditionally, and exactly one of the two
+ * route chunks is ever fetched.
  *
  * The Suspense fallback is a bare `div.app` on purpose: it paints the app background
  * (no spinner, no layout) for the one frame before the route chunk executes. The window is
@@ -50,7 +52,7 @@ function App() {
   return (
     <Suspense fallback={<div className="app" />}>
       <RevealOnPaint />
-      {IS_MAIN_WINDOW ? <MainApp /> : <CanvasWindow />}
+      {IS_DETACHED_CANVAS_WINDOW ? <CanvasWindow /> : <MainApp />}
     </Suspense>
   );
 }

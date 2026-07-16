@@ -2043,6 +2043,105 @@ pub fn list_canvas_windows(app: AppHandle) -> Vec<String> {
     detached_canvas_ids(&app, None)
 }
 
+/// Init presets for a full app window (task 434): passed as URL params so the new
+/// window's OWN store presets its local state at boot — `repo` filters its Overview
+/// to that repo; `canvas` boots it into the Canvas view on that tab (when the tab
+/// exists). Local UI only: nothing is persisted, no other window is touched. Grows
+/// in card 13/16 (window restore).
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct AppWindowInit {
+    pub repo: Option<String>,
+    pub canvas: Option<String>,
+}
+
+/// Percent-encode a query VALUE so the frontend's `URLSearchParams` decodes it
+/// byte-exact: every byte outside the RFC 3986 unreserved set `[A-Za-z0-9-_.~]` is
+/// `%XX`-encoded — in particular space → `%20` (never `+`, which `URLSearchParams`
+/// would decode to a space) and `+` → `%2B`. Windows paths (`C:\Users\a b`) and
+/// unix paths with spaces round-trip exactly. Multi-byte UTF-8 encodes per byte.
+/// Pure.
+fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// The app-window route (task 434): `index.html?win=<id>[&repo=..][&canvas=..]`.
+/// The frontend's `parseWindowIdentity` reads `win` as the window identity and
+/// `repo`/`canvas` as its init presets (`?win=` beats `?canvas=`, so the canvas
+/// param here is a preset, never the #84 detached route). Pure.
+pub fn app_window_url(id: &str, init: &AppWindowInit) -> String {
+    let mut url = format!("index.html?win={}", encode_query_value(id));
+    if let Some(repo) = init.repo.as_deref() {
+        url.push_str("&repo=");
+        url.push_str(&encode_query_value(repo));
+    }
+    if let Some(canvas) = init.canvas.as_deref() {
+        url.push_str("&canvas=");
+        url.push_str(&encode_query_value(canvas));
+    }
+    url
+}
+
+/// Open an additional FULL app window (task 434) — label `app-<uuid>`, rendering
+/// the complete shell (sidebar + Overview/Attention/Canvas + modals) with its own
+/// window-local view/selection/tab/filter state. Mirrors `open_canvas_window`:
+/// hidden until painted (#348) with the themed background + the 2 s reveal
+/// fallback; registered for primary election (task 433 — an `app-*` label is
+/// eligible, unlike `canvas-*`). Returns the new window's id (the card-10/16+
+/// entry points focus/open by it).
+///
+/// Deliberately NO per-window `on_window_event` handler and no new broadcast: the
+/// global `Destroyed` arm in `lib.rs` already covers an app window's close (task
+/// 426's terminal-view purge + task 433's primary re-election), no PTY is killed
+/// on close (sessions keep running, mirrored in surviving windows), and
+/// `detached_canvas_ids` ignores `app-*` labels by construction (its
+/// `strip_prefix("canvas-")`), so the #84 canvas-window bookkeeping is untouched.
+#[tauri::command]
+pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, SessionError> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let label = format!("app-{id}");
+    let url = app_window_url(&id, &init);
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+        .title("ReCue")
+        // The tauri.conf.json main-window geometry — an app window IS a full shell.
+        .inner_size(1280.0, 832.0)
+        .min_inner_size(880.0, 600.0)
+        // Hidden until the frontend paints its first themed frame (#348) — the native
+        // background is the current theme's --bg-base, so it never flashes white.
+        .visible(false)
+        .background_color(window_background(&app.state::<Store>()))
+        .build()
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Never leave the window invisible if its frontend fails to boot (#348).
+    schedule_reveal_fallback(&app, &label);
+    // Task 433: every window-creation site routes through registration. An app
+    // window is primary-eligible — if the original primary later closes, the
+    // oldest surviving full window (possibly this one) takes over live.
+    crate::primary::register_window(&app, &label);
+    Ok(id)
+}
+
+/// Focus an existing full app window (task 434) — mirrors `focus_canvas_window`.
+/// Returns false if no such window exists.
+#[tauri::command]
+pub fn focus_app_window(app: AppHandle, id: String) -> bool {
+    match app.get_webview_window(&format!("app-{id}")) {
+        Some(window) => {
+            let _ = window.show(); // it may still be hidden pre-reveal (#348)
+            window.set_focus().is_ok()
+        }
+        None => false,
+    }
+}
+
 /// Broadcast the full pending-schedule list (#280) so **every** window — incl. a
 /// detached canvas window (#84) that can hold a scheduled panel but doesn't own
 /// schedule mutations — stays in sync after any create / update / cancel / fire.
@@ -4029,6 +4128,70 @@ mod tests {
         assert_eq!(
             background_for_theme(Some("light")),
             Color(0xdc, 0xe0, 0xe8, 0xff)
+        );
+    }
+
+    /// Unreserved bytes (RFC 3986: alnum + `-_.~`) pass through untouched (task 434).
+    #[test]
+    fn encode_query_value_passes_unreserved_through() {
+        assert_eq!(encode_query_value("abc-XYZ_0.9~"), "abc-XYZ_0.9~");
+        assert_eq!(encode_query_value(""), "");
+    }
+
+    /// Space encodes as `%20` — never `+`, which `URLSearchParams` would decode to a
+    /// space — and a literal `+` encodes so it survives the same decode (task 434).
+    #[test]
+    fn encode_query_value_escapes_space_and_plus() {
+        assert_eq!(encode_query_value("a b"), "a%20b");
+        assert_eq!(encode_query_value("a+b"), "a%2Bb");
+    }
+
+    /// The URL metacharacters that would split/terminate the query (`&`, `=`, `#`)
+    /// and the escape char itself (`%`) all encode (task 434).
+    #[test]
+    fn encode_query_value_escapes_url_metacharacters() {
+        assert_eq!(encode_query_value("a&b=c#d"), "a%26b%3Dc%23d");
+        assert_eq!(encode_query_value("100%"), "100%25");
+    }
+
+    /// A Windows repo path — drive colon, backslashes, a space — round-trips
+    /// byte-exact through `URLSearchParams` decoding (task 434; the frontend test
+    /// mirror decodes this exact string back to `C:\Users\a b`).
+    #[test]
+    fn encode_query_value_handles_a_windows_path() {
+        assert_eq!(encode_query_value("C:\\Users\\a b"), "C%3A%5CUsers%5Ca%20b");
+    }
+
+    /// Multi-byte UTF-8 encodes per byte (task 434) — e.g. `é` (U+00E9) is `%C3%A9`.
+    #[test]
+    fn encode_query_value_encodes_utf8_per_byte() {
+        assert_eq!(encode_query_value("é"), "%C3%A9");
+        assert_eq!(encode_query_value("日"), "%E6%97%A5");
+    }
+
+    /// The app-window route (task 434): bare, repo-only, and both-preset forms, with
+    /// the encoding applied to every value.
+    #[test]
+    fn app_window_url_composes_the_route() {
+        let none = AppWindowInit::default();
+        assert_eq!(app_window_url("u1", &none), "index.html?win=u1");
+
+        let repo = AppWindowInit {
+            repo: Some("/a/b c".into()),
+            canvas: None,
+        };
+        assert_eq!(
+            app_window_url("u1", &repo),
+            "index.html?win=u1&repo=%2Fa%2Fb%20c"
+        );
+
+        let both = AppWindowInit {
+            repo: Some("C:\\Users\\a b".into()),
+            canvas: Some("c2".into()),
+        };
+        assert_eq!(
+            app_window_url("u1", &both),
+            "index.html?win=u1&repo=C%3A%5CUsers%5Ca%20b&canvas=c2"
         );
     }
 

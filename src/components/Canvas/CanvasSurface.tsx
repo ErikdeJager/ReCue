@@ -29,7 +29,7 @@ import { effectiveRepo, repoName, sessionLabel } from "../../paths";
 import { repoColor, useStore } from "../../store";
 import { useKeybindLabel } from "../../useKeybind";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
-import { IS_MAIN_WINDOW, ownedHere } from "../../windowContext";
+import { IS_FULL_APP_WINDOW, ownedHere } from "../../windowContext";
 import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
@@ -577,12 +577,13 @@ export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
     rawLayout,
     liftedLeaf?.canvasId === activeCanvasId ? liftedLeaf.leafId : null,
   );
-  // In the main window, the active tab can (rarely) be a detached canvas — show a
-  // note instead of rendering its PTYs in two windows (#84). Gate on IS_MAIN_WINDOW
-  // (#98): the detached window forces activeCanvasId to its own (detached) id, so
-  // without this guard it would show the note instead of its own panels.
+  // In a full app window (task 434 — main or app-*), the active tab can (rarely)
+  // be a detached canvas — show a note instead of rendering its PTYs in two
+  // windows (#84). Gate on IS_FULL_APP_WINDOW (#98): the detached window itself is
+  // exempt exactly as before — it forces activeCanvasId to its own (detached) id,
+  // so without this guard it would show the note instead of its own panels.
   const activeDetached =
-    IS_MAIN_WINDOW && detachedCanvasIds.includes(activeCanvasId);
+    IS_FULL_APP_WINDOW && detachedCanvasIds.includes(activeCanvasId);
 
   // Resize/close fire after a render, so re-derive the active tab's *current*
   // layout from the store rather than closing over `layout`.

@@ -12,8 +12,9 @@
 //!
 //! **Why Rust owns the poll (task 430):** the OAuth usage endpoint aggressively 429s
 //! below ~180 s (see the `usage.rs` module doc), so the app must never grow two
-//! independent pollers — and the frontend's old `IS_MAIN_WINDOW` poll gate dies with
-//! the N-full-windows epic. Rust runs the one poll (180 s disarmed / 45 s armed),
+//! independent pollers — and the frontend's old main-window-only poll gate died
+//! with the N-full-windows epic (task 434). Rust runs the one poll (180 s
+//! disarmed / 45 s armed),
 //! emits each snapshot as `usage://changed` (`Option<UsageSnapshot>`, `null` =
 //! unavailable) and the machine state as `autocontinue://changed` — each only on
 //! change, the task-428 conventions — and serves late subscribers via the
