@@ -836,6 +836,55 @@ pub fn propose_terminal_size(
     views.propose(&manager, &id, &window_label, cols, rows);
 }
 
+/// Soft-claim `{repo_path, file}` for `window_label`'s auto-save editor (task 435):
+/// that window becomes the file's authoritative editor and every other window's
+/// editor renders read-only. Last claim wins — the "Take over" affordance is this
+/// same call. Advisory only: never an on-disk lock, `write_text_file` is untouched,
+/// and a stale/raced claim degrades to last-writer-wins. Emits
+/// `file_claims://changed` (the full sorted snapshot, task-428 shape) only when the
+/// registry actually changed (a same-label re-claim is silent).
+///
+/// **Stays synchronous on purpose** — cheap map ops (#353) and infallible (the
+/// registry lock recovers from poisoning). `window_label` is an explicit parameter
+/// (the `attach_terminal` precedent), never derived from the invoking `Window`.
+#[tauri::command]
+pub fn claim_file(
+    app: AppHandle,
+    claims: State<'_, crate::file_claims::FileClaims>,
+    repo_path: String,
+    file: String,
+    window_label: String,
+) {
+    claims.claim(&app, &repo_path, &file, &window_label);
+}
+
+/// Release `window_label`'s soft claim on `{repo_path, file}` (task 435) — the
+/// editor settled clean (blurred + saved) or unmounted. A stale release (another
+/// window already took the claim over) is a silent no-op that never clears the new
+/// holder. Sync + infallible like `claim_file`; emits `file_claims://changed` only
+/// on change.
+#[tauri::command]
+pub fn release_file_claim(
+    app: AppHandle,
+    claims: State<'_, crate::file_claims::FileClaims>,
+    repo_path: String,
+    file: String,
+    window_label: String,
+) {
+    claims.release(&app, &repo_path, &file, &window_label);
+}
+
+/// The full current soft-claim list (task 435) — the late-subscriber snapshot:
+/// call AFTER subscribing to `file_claims://changed` (the task-428/430
+/// subscribe-then-fetch discipline; the registry is updated before each emit, so
+/// this can never lag an event a subscriber already saw).
+#[tauri::command]
+pub fn file_claims(
+    claims: State<'_, crate::file_claims::FileClaims>,
+) -> Vec<crate::file_claims::FileClaim> {
+    claims.snapshot()
+}
+
 /// Restart a persisted session under the same id (#63) — the exit overlay's Restart.
 ///
 /// Async + off the main thread (#353) — the same `spawn_with_id` cost as `spawn_session`

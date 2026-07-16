@@ -26,6 +26,7 @@ import type {
   DockerStatus,
   EditorInfo,
   ExitPayload,
+  FileClaim,
   FileDiff,
   FileStatusEntry,
   ForgottenPayload,
@@ -1192,5 +1193,42 @@ export async function subscribeContainerEvents(
 ): Promise<UnlistenFn> {
   return listen<ContainerBuildingPayload>("container://building", (event) =>
     handlers.onBuilding(event.payload),
+  );
+}
+
+// --- Same-file soft claims (Multi-window task 435) ---
+
+/** Soft-claim `{repoPath, file}` for this window's auto-save editor (task 435):
+ * last claim wins (the Take-over path is this same call). Advisory only — never
+ * an on-disk lock; a stale claim degrades to last-writer-wins. `windowLabel` →
+ * Rust `window_label` (the `attachTerminal` precedent). */
+export const claimFile = (
+  repoPath: string,
+  file: string,
+  windowLabel: string,
+) => invoke<void>("claim_file", { repoPath, file, windowLabel });
+
+/** Release this window's soft claim (task 435) — the editor settled clean or
+ * unmounted. A stale release (another window took over) is a backend no-op. */
+export const releaseFileClaim = (
+  repoPath: string,
+  file: string,
+  windowLabel: string,
+) => invoke<void>("release_file_claim", { repoPath, file, windowLabel });
+
+/** The full current soft-claim list (task 435) — fetch AFTER subscribing to
+ * `file_claims://changed` (the task-428 subscribe-then-fetch discipline: the
+ * backend updates its registry before each emit, so this never regresses). */
+export const fileClaims = () => invoke<FileClaim[]>("file_claims");
+
+/** Subscribe to `file_claims://changed` (task 435): the full sorted claim list,
+ * emitted only on change. A dedicated subscription — deliberately NOT a
+ * `StateSyncHandlers` entry (that interface documents the *persisted* slices;
+ * claims are transient, like `canvas://windows`). */
+export async function subscribeFileClaimEvents(
+  onChanged: (claims: FileClaim[]) => void,
+): Promise<UnlistenFn> {
+  return listen<FileClaim[]>("file_claims://changed", (e) =>
+    onChanged(e.payload),
   );
 }

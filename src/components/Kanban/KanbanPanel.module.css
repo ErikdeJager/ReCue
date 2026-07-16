@@ -194,6 +194,15 @@
   background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
+/* Read-only column name while another window claims the board (task 435): the
+   .columnName typography without the click-to-rename cursor/hover cue. */
+.columnNameStatic,
+.columnNameStatic:hover {
+  cursor: default;
+  color: var(--text-secondary);
+  background: none;
+}
+
 /* A base input on a crust column (v2 task 382). */
 .columnNameInput {
   flex: 1;

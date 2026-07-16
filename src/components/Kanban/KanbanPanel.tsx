@@ -19,6 +19,8 @@ import {
   DragOverlay,
   type DragStartEvent,
   PointerSensor,
+  type SensorDescriptor,
+  type SensorOptions,
   useDroppable,
   useSensor,
   useSensors,
@@ -47,6 +49,7 @@ import { kbdHint } from "../../platform";
 import { kanbanColumnColor, useStore } from "../../store";
 import { useAutoSaveFile } from "../../useAutoSaveFile";
 import Checkbox from "../Checkbox/Checkbox";
+import ClaimBanner from "../ClaimBanner/ClaimBanner";
 import SegmentedControl from "../SegmentedControl/SegmentedControl";
 import {
   makeCheckboxComponents,
@@ -76,6 +79,10 @@ interface KanbanPanelProps {
   /** Only fetch/poll while shown. */
   active: boolean;
 }
+
+/** No drag sensors — swapped in while another window claims the board (task 435)
+ * so a pointer press can never start a card drag on the read-only view. */
+const NO_SENSORS: SensorDescriptor<SensorOptions>[] = [];
 
 const cardId = (col: number, idx: number) => `card:${col}:${idx}`;
 function parseCardId(id: string): [number, number] | null {
@@ -125,6 +132,9 @@ function handleSmartBulletKey(
 interface CardProps {
   id: string;
   card: Card;
+  /** Another window claims the board (task 435): hide the pencil/trash cluster,
+   * disable the checkbox + body checkbox toggles, and disable the sortable. */
+  readOnly: boolean;
   editing: boolean;
   /** The single-field edit text while this card is being edited (#238) — first line is
    * the title, the rest the body; held locally and committed once on confirm (Save /
@@ -149,6 +159,7 @@ interface CardProps {
 function SortableCard({
   id,
   card,
+  readOnly,
   editing,
   editText,
   onStartEdit,
@@ -166,21 +177,22 @@ function SortableCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id });
+  } = useSortable({ id, disabled: readOnly });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
   };
   // Clickable task-list checkboxes inside the rendered body (#173): a toggle flips
   // the marker in the de-indented `card.body` and commits via `onBodyToggle`.
+  // Non-interactive while the board is claimed elsewhere (task 435).
   const bodyComponents = useMemo(
     () =>
       makeCheckboxComponents({
         source: card.body,
-        interactive: true,
+        interactive: !readOnly,
         onToggle: onBodyToggle,
       }),
-    [card.body, onBodyToggle],
+    [card.body, onBodyToggle, readOnly],
   );
   // Commit-on-confirm (#160): while editing, the text binds to the local `editText`
   // (no per-keystroke write). The edit commits once when focus leaves the whole card
@@ -278,7 +290,8 @@ function SortableCard({
               <span {...noDrag} className={styles.cardCheck}>
                 <Checkbox
                   checked={card.checked}
-                  onChange={onToggle}
+                  onChange={readOnly ? () => {} : onToggle}
+                  disabled={readOnly}
                   ariaLabel="Card done"
                 />
               </span>
@@ -295,27 +308,29 @@ function SortableCard({
               the card's top-right (#195), out of the title's flex flow so the title
               gets the full row width. View mode only (#238 — edit uses the flow row
               above); revealed on `.card:hover`/`:focus-within` so keyboard users reach
-              them. */}
-          <span className={styles.cardActions} {...noDrag}>
-            <button
-              type="button"
-              className={styles.cardBtn}
-              onClick={onStartEdit}
-              title="Edit card"
-              aria-label="Edit card"
-            >
-              <Pencil size={12} strokeWidth={1.5} />
-            </button>
-            <button
-              type="button"
-              className={styles.cardBtn}
-              onClick={onDelete}
-              title="Delete card"
-              aria-label="Delete card"
-            >
-              <Trash2 size={12} strokeWidth={1.5} />
-            </button>
-          </span>
+              them. Hidden while the board is claimed elsewhere (task 435). */}
+          {!readOnly && (
+            <span className={styles.cardActions} {...noDrag}>
+              <button
+                type="button"
+                className={styles.cardBtn}
+                onClick={onStartEdit}
+                title="Edit card"
+                aria-label="Edit card"
+              >
+                <Pencil size={12} strokeWidth={1.5} />
+              </button>
+              <button
+                type="button"
+                className={styles.cardBtn}
+                onClick={onDelete}
+                title="Delete card"
+                aria-label="Delete card"
+              >
+                <Trash2 size={12} strokeWidth={1.5} />
+              </button>
+            </span>
+          )}
           {/* The body is part of the drag surface (#246): no `noDrag` here, so a
               press-drag on the grayed description moves the card (like the title).
               Body links + task-list checkboxes stay clickable — the 4px PointerSensor
@@ -398,6 +413,10 @@ interface ColumnProps {
   col: number;
   name: string;
   cards: Card[];
+  /** Another window claims the board (task 435): the name renders as a plain
+   * span (no rename), the column actions / add-card composer are hidden, and
+   * every card renders read-only. */
+  readOnly: boolean;
   renaming: boolean;
   /** The rename draft while this column is being renamed (#160) — bound to the
    * input, committed once on blur/Enter rather than per keystroke. */
@@ -491,6 +510,11 @@ function BoardColumn(props: ColumnProps) {
             }}
             aria-label="Column name"
           />
+        ) : props.readOnly ? (
+          // Plain display name while the board is claimed elsewhere (task 435).
+          <span className={`${styles.columnName} ${styles.columnNameStatic}`}>
+            {props.name.trim() || "Untitled"}
+          </span>
         ) : (
           <button
             type="button"
@@ -502,36 +526,40 @@ function BoardColumn(props: ColumnProps) {
           </button>
         )}
         <span className={styles.count}>{props.cards.length}</span>
-        <span className={styles.columnActions}>
-          {/* Move every card one column to the right (#283) — shown only when
-              there's a column to the right and this one has cards to move. */}
-          {props.canMoveRight && props.cards.length > 0 && (
+        {!props.readOnly && (
+          <span className={styles.columnActions}>
+            {/* Move every card one column to the right (#283) — shown only when
+                there's a column to the right and this one has cards to move. */}
+            {props.canMoveRight && props.cards.length > 0 && (
+              <button
+                type="button"
+                className={styles.colBtn}
+                onClick={props.onMoveAllRight}
+                title="Move all cards right"
+                aria-label="Move all cards to the next column"
+              >
+                <ChevronRight size={13} strokeWidth={1.5} />
+              </button>
+            )}
             <button
               type="button"
-              className={styles.colBtn}
-              onClick={props.onMoveAllRight}
-              title="Move all cards right"
-              aria-label="Move all cards to the next column"
+              className={`${styles.colBtn} ${props.confirmingDelete ? styles.colBtnDanger : ""}`}
+              onClick={props.onDelete}
+              title={
+                props.confirmingDelete
+                  ? "Click again to delete"
+                  : "Delete column"
+              }
+              aria-label="Delete column"
             >
-              <ChevronRight size={13} strokeWidth={1.5} />
+              {props.confirmingDelete ? (
+                "Delete?"
+              ) : (
+                <X size={13} strokeWidth={1.5} />
+              )}
             </button>
-          )}
-          <button
-            type="button"
-            className={`${styles.colBtn} ${props.confirmingDelete ? styles.colBtnDanger : ""}`}
-            onClick={props.onDelete}
-            title={
-              props.confirmingDelete ? "Click again to delete" : "Delete column"
-            }
-            aria-label="Delete column"
-          >
-            {props.confirmingDelete ? (
-              "Delete?"
-            ) : (
-              <X size={13} strokeWidth={1.5} />
-            )}
-          </button>
-        </span>
+          </span>
+        )}
       </header>
       <div
         ref={setNodeRef}
@@ -547,6 +575,7 @@ function BoardColumn(props: ColumnProps) {
               <SortableCard
                 id={cardId(props.col, idx)}
                 card={card}
+                readOnly={props.readOnly}
                 editing={props.editingCard === idx}
                 editText={props.editingCard === idx ? props.editText : null}
                 onStartEdit={() => props.onCardStartEdit(idx)}
@@ -569,7 +598,7 @@ function BoardColumn(props: ColumnProps) {
         {props.cards.length === 0 && !composing && props.undoIdx === null && (
           <p className={styles.emptyHint}>No cards yet</p>
         )}
-        {composing ? (
+        {props.readOnly ? null : composing ? (
           <div className={styles.composer}>
             <textarea
               ref={composerRef}
@@ -639,6 +668,11 @@ function BoardColumn(props: ColumnProps) {
  * #142 hot-reload poll is reconciled so the panel's own writes don't echo-reload
  * (compare against the last synced content) and unsaved local edits aren't
  * clobbered (skip reload while dirty). Works in the main + a detached window (#84).
+ * While **another window** soft-claims this file (task 435, `lockedBy`) the whole
+ * board renders read-only — banner + gated mutations + hidden affordances +
+ * disabled drag + readOnly Raw textarea — narrowing the old cross-window
+ * last-write-wins tradeoff; the hot-reload poll keeps the locked board
+ * live-following the other window's saves, and "Take over" transfers the claim.
  */
 function KanbanPanel({
   repoPath,
@@ -662,7 +696,11 @@ function KanbanPanel({
     onBlur,
     onCompositionStart,
     onCompositionEnd,
+    lockedBy,
+    takeOver,
   } = useAutoSaveFile(repoPath, file, active);
+  // Read-only mirror of the hook's hard setText/save gates (task 435).
+  const locked = lockedBy !== null;
 
   // Board ⟷ Raw view toggle (#147), local + reset per file; auto-defaults to Raw
   // on first load of a structure-less file.
@@ -698,8 +736,13 @@ function KanbanPanel({
     [text],
   );
   const mutate = useCallback(
-    (next: Board) => setText(serializeBoard(next)),
-    [setText],
+    (next: Board) => {
+      // Read-only while another window claims the file (task 435) — the hook's
+      // setText is hard-gated too; this keeps every board op an explicit no-op.
+      if (locked) return;
+      setText(serializeBoard(next));
+    },
+    [setText, locked],
   );
 
   // Reset per-file view state; apply the Raw/Board default once text first loads.
@@ -731,6 +774,19 @@ function KanbanPanel({
     if (editing !== null || renamingCol !== null) onFocus();
     else onBlur();
   }, [editing, renamingCol, onFocus, onBlur]);
+
+  // A take-over landing mid-edit (task 435): drop the in-flight drafts — the
+  // board is now read-only (`mutate` is gated, so a commit couldn't write) and
+  // clearing the edit state lets the effect above resume the hot-reload poll, so
+  // the locked board live-follows the other window's saves.
+  useEffect(() => {
+    if (!locked) return;
+    setEditing(null);
+    setEditText(null);
+    setRenamingCol(null);
+    setRenameDraft(null);
+    setConfirmDeleteCol(null);
+  }, [locked]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -789,6 +845,7 @@ function KanbanPanel({
   // Start editing a card: commit any in-flight draft first (commit-on-switch, so a
   // switch never loses typed edits), then seed this card's draft from the board.
   const startCardEdit = (col: number, idx: number) => {
+    if (locked) return; // read-only while claimed elsewhere (task 435)
     if (editing && (editing.col !== col || editing.idx !== idx))
       commitCardDraft();
     if (renamingCol !== null) commitRenameDraft();
@@ -813,12 +870,14 @@ function KanbanPanel({
   // Add a card from the inline composer (#233): first line → title, rest → body.
   // Unlike the old immediate-edit flow, the card is added complete (no edit mode).
   const addComposedCard = (col: number, title: string, body: string) => {
+    if (locked) return; // read-only while claimed elsewhere (task 435)
     commitCardDraft();
     if (renamingCol !== null) commitRenameDraft();
     mutate(addCard(board, col, { title, body, checked: false }));
   };
   // Start renaming a column: commit in-flight drafts first, then seed the name.
   const startColumnRename = (col: number) => {
+    if (locked) return; // read-only while claimed elsewhere (task 435)
     commitCardDraft();
     if (renamingCol !== null && renamingCol !== col) commitRenameDraft();
     setRenameDraft(board.columns[col]?.name ?? "");
@@ -834,6 +893,7 @@ function KanbanPanel({
   };
   // Add a column and immediately rename it (its draft starts as "New column").
   const addColumnAndRename = () => {
+    if (locked) return; // read-only while claimed elsewhere (task 435)
     commitCardDraft();
     if (renamingCol !== null) commitRenameDraft();
     const idx = board.columns.length;
@@ -845,6 +905,7 @@ function KanbanPanel({
   };
 
   const deleteColumnAt = (col: number) => {
+    if (locked) return; // read-only while claimed elsewhere (task 435)
     const hasCards = (board.columns[col]?.cards.length ?? 0) > 0;
     if (confirmDestructive && hasCards && confirmDeleteCol !== col) {
       setConfirmDeleteCol(col);
@@ -872,6 +933,8 @@ function KanbanPanel({
 
   return (
     <div className={styles.panel}>
+      {/* Another window is this file's authoritative editor (task 435). */}
+      {locked && <ClaimBanner onTakeOver={takeOver} />}
       {/* Board ⟷ Raw toggle (#147, mirroring the #73 FileViewer control) + the
           auto-save status (#148) — or a Save button in manual mode (#162). */}
       <div className={styles.toolbar}>
@@ -880,9 +943,13 @@ function KanbanPanel({
             type="button"
             className={styles.saveBtn}
             onClick={() => save()}
-            disabled={!dirty}
+            disabled={!dirty || locked}
             title={
-              dirty ? `Save (${kbdHint(platform, "⌘S", "Ctrl+S")})` : "Saved"
+              locked
+                ? "Read-only — being edited in another window"
+                : dirty
+                  ? `Save (${kbdHint(platform, "⌘S", "Ctrl+S")})`
+                  : "Saved"
             }
           >
             {dirty ? "Save" : "Saved"}
@@ -931,6 +998,7 @@ function KanbanPanel({
           className={styles.rawEditor}
           {...noAutoCapitalize}
           value={text ?? ""}
+          readOnly={locked}
           spellCheck={false}
           onChange={(event) => setText(event.currentTarget.value)}
           onFocus={onFocus}
@@ -941,7 +1009,8 @@ function KanbanPanel({
         />
       ) : (
         <DndContext
-          sensors={sensors}
+          // No sensors while claimed elsewhere (task 435): card drag disabled.
+          sensors={locked ? NO_SENSORS : sensors}
           collisionDetection={closestCorners}
           onDragStart={(event: DragStartEvent) => {
             // Commit any in-flight card/column edit before a drag (don't lose it).
@@ -960,6 +1029,7 @@ function KanbanPanel({
                 col={col}
                 name={column.name}
                 cards={column.cards}
+                readOnly={locked}
                 renaming={renamingCol === col}
                 renameValue={renameDraft ?? column.name}
                 confirmingDelete={confirmDeleteCol === col}
@@ -1009,13 +1079,16 @@ function KanbanPanel({
                 }}
               />
             ))}
-            <button
-              type="button"
-              className={styles.addColumn}
-              onClick={addColumnAndRename}
-            >
-              <Plus size={13} strokeWidth={1.5} /> Add column
-            </button>
+            {/* Hidden while claimed elsewhere (task 435) — a mutation affordance. */}
+            {!locked && (
+              <button
+                type="button"
+                className={styles.addColumn}
+                onClick={addColumnAndRename}
+              >
+                <Plus size={13} strokeWidth={1.5} /> Add column
+              </button>
+            )}
           </div>
           {/* Floating preview of the dragged card (#161). */}
           <DragOverlay dropAnimation={null}>

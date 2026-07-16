@@ -56,6 +56,9 @@ vi.mock("./ipc", () => ({
   // Primary-window election (task 433): the snapshot + broadcast subscription.
   primaryWindow: vi.fn(),
   subscribePrimaryEvents: vi.fn(),
+  // Same-file soft claims (task 435): the snapshot + broadcast subscription.
+  fileClaims: vi.fn(),
+  subscribeFileClaimEvents: vi.fn(),
   // The #369 folder-color auto-assign (primary-gated since task 433) persists
   // through this — a benign mock keeps recents-driven tests quiet.
   setRepoColor: vi.fn(),
@@ -126,6 +129,9 @@ function primeIpc(): void {
   m(ipc.subscribePrimaryEvents).mockResolvedValue(() => {});
   // The task-433 boot snapshot: this window ("main" in the test env) is primary.
   m(ipc.primaryWindow).mockResolvedValue("main");
+  // The task-435 boot snapshot: no files claimed.
+  m(ipc.subscribeFileClaimEvents).mockResolvedValue(() => {});
+  m(ipc.fileClaims).mockResolvedValue([]);
   m(ipc.setRepoColor).mockResolvedValue(undefined);
   m(ipc.setOpenFiles).mockResolvedValue(undefined);
   m(ipc.setOverviewPanels).mockResolvedValue(undefined);

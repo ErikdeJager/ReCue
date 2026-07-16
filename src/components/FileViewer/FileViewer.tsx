@@ -10,6 +10,7 @@ import { noAutoCapitalize } from "../../inputProps";
 import { kbdHint } from "../../platform";
 import { useStore } from "../../store";
 import { useAutoSaveFile } from "../../useAutoSaveFile";
+import ClaimBanner from "../ClaimBanner/ClaimBanner";
 import {
   makeCheckboxComponents,
   rehypeTaskListPositions,
@@ -188,7 +189,10 @@ function CodeBlockWithCopy({
  * file (and not too large), the raw view is an **editable** monospace textarea
  * that **auto-saves** debounced (#148, no save button); rendered markdown, the
  * Prism code view, and large files stay read-only. No `rehype-raw`, so untrusted
- * markdown can't inject HTML.
+ * markdown can't inject HTML. While **another window** soft-claims this file
+ * (task 435, `lockedBy`) the whole editor renders read-only — banner + readOnly
+ * textarea + non-interactive checkboxes + disabled Save — narrowing the old
+ * cross-window last-write-wins tradeoff; "Take over" transfers the claim.
  */
 function FileViewer({ repoPath, file, active }: FileViewerProps) {
   const {
@@ -203,7 +207,11 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
     onBlur,
     onCompositionStart,
     onCompositionEnd,
+    lockedBy,
+    takeOver,
   } = useAutoSaveFile(repoPath, file, active);
+  // Read-only mirror of the hook's hard setText/save gates (task 435).
+  const locked = lockedBy !== null;
   const platform = useStore((s) => s.platform);
   const [showRaw, setShowRaw] = useState(false);
   // Line-cap reveal state (#413): read-only render sinks show only the first
@@ -262,13 +270,15 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
     () => ({
       ...makeCheckboxComponents({
         source: renderMarkdown ? displayText : (text ?? ""),
-        interactive: !(renderMarkdown && truncated),
+        // Non-interactive while truncated (#413) OR claimed by another window
+        // (task 435 — setText is hard-gated anyway; this is the UX mirror).
+        interactive: !(renderMarkdown && truncated) && !locked,
         onToggle: setText,
       }),
       code: MermaidCode,
       pre: CodeBlockWithCopy,
     }),
-    [text, setText, displayText, renderMarkdown, truncated],
+    [text, setText, displayText, renderMarkdown, truncated, locked],
   );
 
   const lang = mode === "code" && !tooLarge ? prismLang(file) : undefined;
@@ -300,6 +310,8 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
 
   return (
     <div className={styles.viewer}>
+      {/* Another window is this file's authoritative editor (task 435). */}
+      {locked && <ClaimBanner onTakeOver={takeOver} />}
       {showToolbar && (
         <div className={styles.toolbar}>
           {/* Auto mode (#148): a subtle "Saving…/Saved" hint. Manual mode (#162):
@@ -310,9 +322,13 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
               type="button"
               className={styles.saveBtn}
               onClick={() => save()}
-              disabled={!dirty}
+              disabled={!dirty || locked}
               title={
-                dirty ? `Save (${kbdHint(platform, "⌘S", "Ctrl+S")})` : "Saved"
+                locked
+                  ? "Read-only — being edited in another window"
+                  : dirty
+                    ? `Save (${kbdHint(platform, "⌘S", "Ctrl+S")})`
+                    : "Saved"
               }
             >
               {dirty ? "Save" : "Saved"}
@@ -381,11 +397,13 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
       ) : lang ? (
         <CodeBlock code={displayText} lang={lang} markers={markers} />
       ) : editable ? (
-        // Editable raw text, auto-saving via the hook (#148). Always the FULL buffer.
+        // Editable raw text, auto-saving via the hook (#148). Always the FULL
+        // buffer. readOnly while another window claims the file (task 435).
         <textarea
           className={styles.editor}
           {...noAutoCapitalize}
           value={text}
+          readOnly={locked}
           spellCheck={false}
           onChange={(event) => setText(event.currentTarget.value)}
           onFocus={onFocus}
