@@ -2710,8 +2710,9 @@ function Sidebar() {
   // checkout` in a terminal of an idle repo (no busy→idle edge, #212) or in another
   // tool. The #212 edge refresh stays; this adds (a) a refresh when the window regains
   // focus / becomes visible ("changed it elsewhere, came back"), and (b) a modest poll
-  // while the window is visible, paused when hidden. Main-window only — the Sidebar
-  // mounts only there. The interval is tunable.
+  // while the window is visible, paused when hidden. Runs in every full window (each
+  // keeps its own git-read mirrors fresh — reads only, like the rest of the volley;
+  // the once-per-app side effects are primary-gated elsewhere). The interval is tunable.
   //
   // The **poll tick** stays the cheap pair — branch label + ahead/behind, batched into one
   // IPC each, ~2 `git` spawns per folder. The **focus / visibility** backstop asks for a

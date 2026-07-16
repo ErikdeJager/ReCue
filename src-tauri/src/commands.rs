@@ -779,8 +779,21 @@ pub async fn remove_worktree(
 /// Async + `spawn_blocking` for the same reason as `remove_worktree` (#200):
 /// the FS delete can span thousands of files.
 #[tauri::command]
-pub async fn delete_worktree(parent: String, dest: String) -> Result<(), SessionError> {
+pub async fn delete_worktree(
+    app: AppHandle,
+    parent: String,
+    dest: String,
+) -> Result<(), SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
+        // Serialize against the ref-counted auto-cleanup (task 431): without the
+        // lock, a clean-exit cleanup and this delete racing the same MANAGED
+        // folder could both run `git worktree remove` — the loser mis-toasting
+        // "kept dirty" (the exact spurious outcome the lock exists to prevent).
+        let lock = app.state::<WorktreeCleanupLock>();
+        let _guard = lock
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let entries = git::list_worktrees(&parent).ok_or_else(|| {
             SessionError::Git("could not read this repository's worktrees".to_string())
         })?;
@@ -1415,15 +1428,23 @@ pub enum WorktreeCleanup {
     InUse,
     /// git refused the non-forced remove (uncommitted changes) — kept, warn (#74).
     KeptDirty,
+    /// Not an app-managed worktree (outside `<data-dir>/worktrees`) — kept
+    /// silently. Automation never deletes what ReCue didn't create; only the
+    /// user-confirmed `delete_worktree` may.
+    NotManaged,
 }
 
 /// The shared blocking core behind [`cleanup_worktree_if_empty`] and the clean-exit
 /// forget path (task 431). Under the one [`WorktreeCleanupLock`]: snapshot the
 /// persisted Store state, keep the worktree while [`worktree_has_items`] holds
 /// (`InUse`); report an already-missing dest as `Removed` (idempotent — a concurrent
-/// earlier cleanup already won); else unlock (best-effort, the dev-container lock) and
-/// run the **non-forced** `git worktree remove` — git refusing a dirty tree IS the
-/// dirty guard (#74, never force) → `KeptDirty`.
+/// earlier cleanup already won); refuse a dest outside `<data-dir>/worktrees`
+/// (`NotManaged` — the same hard invariant as `remove_worktree`, enforced HERE so the
+/// Rust-internal clean-exit caller is covered too: an in-place spawn into a DETECTED
+/// external worktree records `worktree_parent`, and its clean exit lands here without
+/// ever passing the frontend's `!managed` short-circuit); else unlock (best-effort,
+/// the dev-container lock) and run the **non-forced** `git worktree remove` — git
+/// refusing a dirty tree IS the dirty guard (#74, never force) → `KeptDirty`.
 pub fn cleanup_worktree_blocking(app: &AppHandle, parent: &str, dest: &str) -> WorktreeCleanup {
     let lock = app.state::<WorktreeCleanupLock>();
     let _guard = lock
@@ -1442,6 +1463,15 @@ pub fn cleanup_worktree_blocking(app: &AppHandle, parent: &str, dest: &str) -> W
     }
     if !Path::new(dest).is_dir() {
         return WorktreeCleanup::Removed;
+    }
+    // NEVER auto-remove a worktree ReCue didn't create (#74's managed-root rule,
+    // mirrored from `remove_worktree`): protects both callers — above all the
+    // clean-exit forget, which no frontend guard can reach.
+    let managed = managed_worktree_root(&store)
+        .map(|root| path_under_norm(dest, &root))
+        .unwrap_or(false);
+    if !managed {
+        return WorktreeCleanup::NotManaged;
     }
     // A dev-container session locked the worktree at spawn (the in-container `git
     // worktree prune` guard); unlock best-effort like `remove_worktree`.
@@ -4994,6 +5024,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(WorktreeCleanup::KeptDirty).unwrap(),
             serde_json::json!("keptDirty")
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeCleanup::NotManaged).unwrap(),
+            serde_json::json!("notManaged")
         );
     }
 

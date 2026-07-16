@@ -3412,6 +3412,11 @@ export const useStore = create<AppState>()((set, get) => ({
       sessionIdleSince: omitKey(s.sessionIdleSince, id),
       dismissedAttention: omitKey(s.dismissedAttention, id),
       attentionEligible: omitKey(s.attentionEligible, id),
+      // Drop any heuristic worktree guess keyed to the removed session — this is
+      // the one choke point every removal path funnels through (roster sync,
+      // Rust's clean-exit forget, explicit Remove, recurring rotation), where a
+      // clean exit BYPASSES onExited's own cleanup since task 431.
+      heuristicWorktrees: omitKey(s.heuristicWorktrees, id),
     }));
     // An agent removed from the left panel (Remove #57, or a clean exit #63) also
     // disappears from every Canvas tab showing it (#152). The PTY is killed by the
@@ -6470,8 +6475,9 @@ export const useStore = create<AppState>()((set, get) => ({
     // NEVER auto-remove a worktree ReCue didn't create: an in-place spawn into a
     // DETECTED external worktree produces sessions whose teardown lands here, but
     // the agent/user owns that checkout — closing the last item must not delete
-    // it. (The backend `remove_worktree` hard-refuses non-managed paths too; this
-    // short-circuit just avoids a pointless call + error toast.)
+    // it. (The Rust `cleanup_worktree_if_empty` enforces the same managed-root
+    // invariant itself — `notManaged` — so the Rust-internal clean-exit path is
+    // covered too; this short-circuit just avoids a pointless round-trip.)
     const detected = get().repoWorktrees[parent]?.find((e) =>
       samePath(e.path, dest, get().platform),
     );
@@ -6493,8 +6499,8 @@ export const useStore = create<AppState>()((set, get) => ({
       // warned in the acting window only, like the old local catch.
       get().pushToast("Worktree kept — it has uncommitted changes", "error");
     }
-    // "inUse" / null (ipc failure) → keep silently, as the old has-items early
-    // return did.
+    // "inUse" / "notManaged" / null (ipc failure) → keep silently, as the old
+    // has-items early return did.
   },
 
   restartSession: async (id) => {
@@ -7263,6 +7269,11 @@ export const useStore = create<AppState>()((set, get) => ({
     // NOT re-run here.
     startFolderColorAssign();
     void get().checkForUpdate(); // the update slice is per-window; idempotent
+    // Re-seed worktree detection: the vanish sweep's auto-close + toast are
+    // primary-gated and diff against THIS window's own per-window mirror — a
+    // freshly-promoted primary whose mirror never saw a since-vanished worktree
+    // would miss that one-shot, so refresh the whole slice on takeover.
+    void get().refreshWorktrees();
   },
 
   applyFileClaimsSync: (claims) => {

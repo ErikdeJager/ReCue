@@ -246,6 +246,21 @@ describe("cleanupWorktreeIfEmpty — external short-circuit", () => {
     // never a direct frontend removeWorktree on this path.
     expect(ipc.removeWorktree).not.toHaveBeenCalled();
   });
+
+  it("keeps silently when Rust refuses a non-managed dest (notManaged — no toast)", async () => {
+    // The frontend short-circuit needs the detection slice; the Rust guard does
+    // not (it protects the clean-exit path too). A dest NOT in the local slice
+    // (e.g. the listing hasn't loaded yet) reaches the Rust command, which
+    // refuses — the store must keep silently, exactly like "inUse".
+    m(ipc.cleanupWorktreeIfEmpty).mockResolvedValue("notManaged");
+    await useStore.getState().cleanupWorktreeIfEmpty(REPO, "/home/user/own-wt");
+    expect(ipc.cleanupWorktreeIfEmpty).toHaveBeenCalledWith(
+      REPO,
+      "/home/user/own-wt",
+    );
+    expect(ipc.removeWorktree).not.toHaveBeenCalled();
+    expect(useStore.getState().toasts).toEqual([]);
+  });
 });
 
 describe("deleteWorktree (Delete worktree…)", () => {

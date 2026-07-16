@@ -372,8 +372,10 @@ export interface WorktreeKeptPayload {
 
 /** Outcome of the Rust ref-counted worktree cleanup (task 431,
  * `cleanup_worktree_if_empty`): removed (incl. already gone — idempotent), still
- * referenced by some item, or kept because git refused the non-forced remove. */
-export type WorktreeCleanup = "removed" | "inUse" | "keptDirty";
+ * referenced by some item, kept because git refused the non-forced remove, or
+ * refused because the path is not an app-managed worktree (automation never
+ * deletes what ReCue didn't create). */
+export type WorktreeCleanup = "removed" | "inUse" | "keptDirty" | "notManaged";
 
 /** Payload of the `session://state` event — busy/idle (#42). */
 export interface StatePayload {
