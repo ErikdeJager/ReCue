@@ -60,6 +60,7 @@ import { overviewPanelToContent } from "../Canvas/canvasDrop";
 import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import EmptyState from "../EmptyState/EmptyState";
+import TipRow from "../TipRow/TipRow";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 // The shared item renderer (#157) maps a content descriptor → the right live child
 // (terminal / file / kanban / diff / scheduled) with the #84 ownership guard and the
@@ -1013,9 +1014,7 @@ function Overview() {
                   <span className={styles.kbdChip}>{newSessionKey}</span>
                 )}
               </button>
-              <span className={styles.filterEmptyHint}>
-                the wave keeps you company until then
-              </span>
+              <TipRow />
             </>
           ) : (
             "No agents yet."

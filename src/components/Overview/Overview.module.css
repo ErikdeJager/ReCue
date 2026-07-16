@@ -90,11 +90,6 @@
   background: color-mix(in srgb, var(--accent-fg) 16%, transparent);
 }
 
-.filterEmptyHint {
-  color: var(--text-faint);
-  font-size: var(--fs-meta-sm);
-}
-
 /* Transparent (task 377): the stage's wave/crust shows through in the gaps —
    the opaque cards below cover it wherever there is content. Stays the #351
    IntersectionObserver root. */
