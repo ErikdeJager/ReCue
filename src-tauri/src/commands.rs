@@ -777,8 +777,9 @@ pub fn resize_pty(
 /// Infallible: the registry lock recovers from poisoning (the `kill_all`
 /// precedent) and a missing/exited session's resize is best-effort.
 /// `window_label` is an explicit parameter (not derived from the invoking
-/// `Window`) because later epic cards (15/16 targeted delivery) address views
-/// cross-window.
+/// `Window`) because targeted delivery (15/16, landed as task 440) addresses
+/// views cross-window. Attach also upserts the label as an output subscriber
+/// (the task-440 self-heal — see `terminal_views`).
 #[tauri::command]
 pub fn attach_terminal(
     manager: State<'_, SessionManager>,
@@ -826,6 +827,66 @@ pub fn propose_terminal_size(
     rows: u16,
 ) {
     views.propose(&manager, &id, &window_label, cols, rows);
+}
+
+/// Register this window as an output subscriber for a session (multi-window
+/// card 15/16, task 440): the forwarder then `emit_filter`s `session://output`
+/// / `session://size` to exactly the subscriber windows. Called at host
+/// **creation** — NOT at mount — so a slotless (`resetTerminal`) or parked host
+/// keeps its byte stream (`terminalPool.createHost`; the pool never re-replays
+/// on re-mount, #18/#351).
+///
+/// Sync + infallible like `detach_terminal` (poison-recovering registry lock);
+/// `window_label` is explicit for the same reason as `attach_terminal`.
+#[tauri::command]
+pub fn subscribe_session_output(
+    views: State<'_, crate::terminal_views::TerminalViews>,
+    id: String,
+    window_label: String,
+) {
+    views.subscribe_output(&id, &window_label);
+}
+
+/// Remove this window from a session's output subscribers (task 440). Called
+/// at host **disposal** — NOT at park/unmount (a parked host keeps consuming
+/// output); a closed window is swept by the `Destroyed` purge instead.
+///
+/// Sync + infallible like `detach_terminal`; an unknown session/label is a
+/// silent no-op.
+#[tauri::command]
+pub fn unsubscribe_session_output(
+    views: State<'_, crate::terminal_views::TerminalViews>,
+    id: String,
+    window_label: String,
+) {
+    views.unsubscribe_output(&id, &window_label);
+}
+
+/// Whether one registered listener target belongs to a window in `targets` —
+/// the `emit_filter` predicate for the task-440 targeted `session://output` /
+/// `session://size` emits (`lib.rs` forwarder).
+///
+/// **Verified Tauri semantics (tauri 2.11.3, `event/listener.rs`
+/// `match_any_or_filter`):** a listener registered with the default target
+/// (`EventTarget::Any`) **bypasses** every `emit_filter` predicate — it
+/// receives ALL targeted emits regardless of what this function returns. That
+/// is exactly why the frontend registers these two listens label-scoped
+/// (`listen(event, handler, { target: WINDOW_LABEL })` → `AnyLabel`); this
+/// predicate deliberately never matches `Any`/`App` itself, so an unscoped
+/// listener is never matched *into* delivery by us either.
+pub fn output_target_matches(
+    targets: &std::collections::HashSet<String>,
+    target: &tauri::EventTarget,
+) -> bool {
+    match target {
+        tauri::EventTarget::AnyLabel { label }
+        | tauri::EventTarget::Window { label }
+        | tauri::EventTarget::Webview { label }
+        | tauri::EventTarget::WebviewWindow { label } => targets.contains(label),
+        // `Any` is filter-bypassing tauri-side and `App` is not a webview; the
+        // enum is #[non_exhaustive], so unknown future targets stay unmatched.
+        _ => false,
+    }
 }
 
 /// Soft-claim `{repo_path, file}` for `window_label`'s auto-save editor (task 435):
@@ -4094,6 +4155,58 @@ pub async fn open_in_editor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every labeled `EventTarget` variant matches iff its label is in the
+    /// subscriber set (task 440).
+    #[test]
+    fn output_target_matches_labeled_variants_iff_label_subscribed() {
+        let targets: std::collections::HashSet<String> =
+            ["main".to_string(), "app-1".to_string()].into();
+        let labeled = |label: &str| {
+            vec![
+                tauri::EventTarget::AnyLabel {
+                    label: label.to_string(),
+                },
+                tauri::EventTarget::Window {
+                    label: label.to_string(),
+                },
+                tauri::EventTarget::Webview {
+                    label: label.to_string(),
+                },
+                tauri::EventTarget::WebviewWindow {
+                    label: label.to_string(),
+                },
+            ]
+        };
+        for target in labeled("main") {
+            assert!(output_target_matches(&targets, &target));
+        }
+        for target in labeled("app-1") {
+            assert!(output_target_matches(&targets, &target));
+        }
+        for target in labeled("app-closed") {
+            assert!(!output_target_matches(&targets, &target));
+        }
+    }
+
+    /// `Any` and `App` never match (task 440) — the safety property: an
+    /// unscoped listener is never matched *into* delivery by us (tauri itself
+    /// bypasses the filter for `Any`, which the frontend's label-scoped listen
+    /// neutralizes), and the app-handle target is not a webview.
+    #[test]
+    fn output_target_matches_never_matches_any_or_app() {
+        let targets: std::collections::HashSet<String> = ["main".to_string()].into();
+        assert!(!output_target_matches(&targets, &tauri::EventTarget::Any));
+        assert!(!output_target_matches(&targets, &tauri::EventTarget::App));
+        // And an empty set matches nothing at all.
+        let empty = std::collections::HashSet::new();
+        assert!(!output_target_matches(
+            &empty,
+            &tauri::EventTarget::AnyLabel {
+                label: "main".to_string()
+            }
+        ));
+    }
 
     /// The pre-paint background must match `--bg-base` (Catppuccin Mocha Crust, UI v2 task
     /// 372) for dark and every non-light / unknown / absent value (#348) — a fresh install

@@ -1820,3 +1820,28 @@ around).
       closing the last window, and via the DE's window-close on all windows in sequence:
       relaunch restores the correct at-quit set in each case (worst acceptable outcome is
       a stale-but-valid set, never an empty one after a multi-window quit).
+
+## 2026-07-16 — Targeted PTY output delivery: session://output + session://size emit only to subscriber windows (multi-window 15/16, task 440)
+
+`session://output` / `session://size` now `emit_filter` to exactly the windows holding a
+live terminal host for the session (subscribe at host creation, unsubscribe at dispose,
+swept on window close; parking never touches it). Zero-subscriber sessions skip the
+base64 encode and the emit entirely. Each emit is an evaluate-JS on each target
+webview's main thread — **costliest on WebKitGTK** — and previously went to EVERY
+window, so this is the epic's biggest Linux win: N windows no longer each pay a TUI
+storm's emit rate for terminals they don't show.
+
+### Needs real-box verification (targeted delivery, task 440)
+
+- [ ] **Two windows, agent visible in only one (WebKitGTK).** Output + typing render in
+      the viewing window; the other window's busy dot / Attention queue stay live.
+- [ ] **Late attach back-fills.** Scroll the agent into view in the second window later —
+      complete history back-fills then streams live, no gap, no doubled startup paint.
+- [ ] **Park keeps the stream.** Switch views in the only viewing window during output,
+      switch back — the buffer is complete.
+- [ ] **Close a window mid-storm.** No stall; the first window is unaffected (purge).
+- [ ] **Linux measurement (the "measured effect" note).** On a WebKitGTK box, drive an
+      output storm (a `yes`-style burst in a shell terminal) with 3 windows open, one
+      viewing — confirm main-thread responsiveness in the non-viewing windows and record
+      the before/after (e.g. emit counts via a temporary debug counter or `WEBKIT_DEBUG`
+      frame timing) next to the `lib.rs` forwarder comment.

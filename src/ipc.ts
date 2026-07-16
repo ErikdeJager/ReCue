@@ -55,6 +55,9 @@ import type {
   WorktreeKeptPayload,
 } from "./types";
 import type { Theme } from "./theme";
+// windowContext is import-free, so this creates no cycle. WINDOW_LABEL scopes
+// the two targeted listens below (task 440).
+import { WINDOW_LABEL } from "./windowContext";
 
 /** Native folder picker. Returns the chosen directory, or null if cancelled. */
 export async function pickDirectory(): Promise<string | null> {
@@ -195,6 +198,20 @@ export const proposeTerminalSize = (
   cols: number,
   rows: number,
 ) => invoke<void>("propose_terminal_size", { id, windowLabel, cols, rows });
+
+/** Register this window as an output subscriber for a session (task 440):
+ * `session://output` / `session://size` are delivered only to subscriber
+ * windows. Called at host CREATION (terminalPool.createHost), not at mount —
+ * a parked host keeps its byte stream. `windowLabel` → Rust `window_label`
+ * via Tauri's automatic case conversion (the `attachTerminal` precedent). */
+export const subscribeOutput = (id: string, windowLabel: string) =>
+  invoke<void>("subscribe_session_output", { id, windowLabel });
+
+/** Remove this window from a session's output subscribers (task 440). Called
+ * at host DISPOSAL (never at park/unmount); a closed window is swept by the
+ * backend's Destroyed purge instead. */
+export const unsubscribeOutput = (id: string, windowLabel: string) =>
+  invoke<void>("unsubscribe_session_output", { id, windowLabel });
 
 export const killSession = (id: string) => invoke<void>("kill_session", { id });
 
@@ -915,8 +932,17 @@ export async function subscribeSessionEvents(
     unlistenForgotten,
     unlistenWorktreeKept,
   ] = await Promise.all([
-    listen<OutputPayload>("session://output", (event) =>
-      handlers.onOutput(event.payload),
+    // Label-scoped (task 440): the backend emit_filters session://output to the
+    // windows holding a live host for the session, but a listener registered
+    // with the DEFAULT target (`Any`) BYPASSES emit_filter backend-side
+    // (tauri's match_any_or_filter) — so this scope is what makes the
+    // targeting effective. A scoped listener still receives plain global
+    // emits, so the other listens below stay default deliberately (their
+    // emits are app-global lifecycle broadcasts).
+    listen<OutputPayload>(
+      "session://output",
+      (event) => handlers.onOutput(event.payload),
+      { target: WINDOW_LABEL },
     ),
     listen<ExitPayload>("session://exited", (event) =>
       handlers.onExited(event.payload),
@@ -952,11 +978,16 @@ export async function subscribeSessionEvents(
  * terminalPool, never by the store: grid geometry is terminal-plumbing like
  * output bytes (the outputBus philosophy), and writing it to React state would
  * re-render per resize. Deliberately NOT part of `subscribeSessionEvents`,
- * which feeds the store. */
+ * which feeds the store. Label-scoped since task 440 (targeted like
+ * `session://output` — the default `Any` target would bypass the backend's
+ * emit_filter); an attaching host is never stranded, it adopts the grid from
+ * `attach_terminal`'s direct return. */
 export async function subscribeSessionSize(
   handler: (payload: SizePayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<SizePayload>("session://size", (e) => handler(e.payload));
+  return listen<SizePayload>("session://size", (e) => handler(e.payload), {
+    target: WINDOW_LABEL,
+  });
 }
 
 export interface CanvasEventHandlers {

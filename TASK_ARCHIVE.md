@@ -2474,3 +2474,68 @@ windows is governed by the existing #346/#357/#364 Linux gates, unchanged on mac
 **Dependencies:** Task 434 (supplies `open_app_window`/`openAppWindow`, the `parseWindowIdentity`
 shape, `INIT_CANVAS_ID`, and the `resolveCanvases` preset this card builds on; via 434 → 433 →
 432/431/430 the whole planned chain landed first).
+
+### 440. [x] Multi-window 15/16 — Targeted PTY output delivery: `session://output` + `session://size` emit only to windows holding a live view of the session
+
+Stops broadcasting every coalesced PTY byte batch to **every** window. Each `app.emit` of
+`session://output` is one evaluate-JS on **each** webview main thread (costliest on Linux/WebKitGTK),
+so with N full app windows the per-byte cost scaled with window count. Uses the task-426 attachment
+registry to `emit_filter` `session://output` (and `session://size`) only to windows that actually hold
+a live terminal host for that session, while every lifecycle event stays app-global. A window that
+starts viewing a session later back-fills via `session_scrollback` + the offset dedupe, so no byte is
+ever lost.
+
+**What shipped** (branch `task-440-targeted-output`, PR
+[#204](https://github.com/ErikdeJager/ReCue/pull/204), merged 2026-07-16 into `backend-decouple`,
+commit `a026628`; 7 files, +461/-34):
+
+- **`src-tauri/src/terminal_views.rs`** — a new **output-subscriber dimension** (`output_subs: session
+  id → HashSet<window label>`), **separate from the sized views**: `subscribe_output`/
+  `unsubscribe_output` (drop emptied entries) / `output_targets`; `attach` upserts the subscriber
+  (self-heal), `detach` deliberately does **not** (the park case), `purge_window` sweeps a closed
+  window's labels. Full pure-core tests including the park case.
+- **`src-tauri/src/commands.rs`** — `subscribe_session_output`/`unsubscribe_session_output` sync
+  commands (named to avoid the #336 "watch" vocabulary) + the pure `output_target_matches` helper
+  (matches labeled `EventTarget` variants iff subscribed; `Any`/`App` never match) + tests.
+- **`src-tauri/src/lib.rs`** — the forwarder's `Output` and `Size` arms switch to `emit_filter` over
+  `output_targets`, **skipping the emit (and, for Output, the base64 encode) entirely when there are
+  zero subscribers**; every lifecycle arm keeps plain `app.emit`; the two new commands registered.
+- **`src/ipc.ts`** — the `session://output` and `session://size` listens re-registered
+  **label-scoped** (`{ target: WINDOW_LABEL }`) — required because a default-target listener bypasses
+  `emit_filter` (verified against tauri 2.11.3 `match_any_or_filter`); + `subscribeOutput`/
+  `unsubscribeOutput` wrappers. The other four session listens stay default (global).
+- **`src/components/Terminal/terminalPool.ts`** — subscribe at host **creation**, unsubscribe at
+  **dispose** (parking leaves it intact — the buffer stays byte-complete with no re-replay); the
+  replay job awaits the subscribe **ack** before fetching the scrollback snapshot, so back-fill is
+  loss-free (pre-registration bytes in the snapshot, post arrive live, `dedupeAgainstScrollback` drops
+  the overlap).
+- **Both trajectory logs** got the real-box smoke + the Linux measurement item.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 440)
+
+- Delivery keys on "holding a **live pooled host**", not "holding an attached view" — because 427's
+  `unmountTerminal` detaches the sized view on park while the parked xterm keeps consuming output with
+  no later re-replay (#18/#351 replay-once), so view-keyed delivery would leave permanent gaps on every
+  view switch. Hence the separate subscriber dimension, registered at host creation / dropped at
+  dispose or window purge; `attach` upserts as self-heal.
+- Verified against tauri 2.11.3: a default-target `listen()` (target `Any`) **bypasses** `emit_filter`,
+  so both listeners must be label-scoped; scoped listeners still receive plain global emits (no
+  transition hazard), so the other four listens stay default.
+- Loss-free back-fill is guaranteed by gating the scrollback fetch on the subscribe **ack** (after the
+  existing `attachGate`); never-mounted (#351) sessions have zero subscribers, so the backend skips the
+  encode **and** the emit — also a single-window boot win.
+- `session://size` targeted to the same set; the attach-time grid is already returned directly by
+  `attach_terminal`, so targeting can't strand an attaching host; parked hosts (still subscribers) keep
+  tracking grid changes. Lifecycle events + the 428 roster stay app-global.
+- "note the measured effect for Linux in-code" = a #346-style `lib.rs` comment quantifying the effect,
+  with the real-box numeric measurement logged in `TRAJECTORY_TO_LINUX.md`.
+
+**Rollback-safe:** no persisted-schema/wire-shape change (`OutputPayload`/`SizePayload` identical), the
+two commands are additive; reverting restores global emits which scoped listeners still receive.
+
+**Cross-platform:** pure Rust event plumbing + TS IPC — no paths/shells/`#[cfg]`/CSS; the win is
+biggest on Linux/WebKitGTK (each skipped emit is a skipped evaluate-JS) and real on macOS/Windows;
+behavior identical on all three.
+
+**Dependencies:** Task 437 (via 437 → 434 → 433 → 432/431/430 the whole chain landed first; the
+426–429 registry/broadcast machinery this builds directly on was already landed).

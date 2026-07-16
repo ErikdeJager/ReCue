@@ -1328,3 +1328,33 @@ would-empty rule for the last-window-close path. The Windows minimize sentinels 
 - [ ] **Unplugged second monitor.** Save bounds on a second monitor, unplug it, relaunch:
       the window is re-placed fully inside the surviving monitor (≥ the 64 px visibility
       floor), not lost off-screen.
+
+## 2026-07-16 — Targeted PTY output delivery: session://output + session://size emit only to subscriber windows (multi-window 15/16, task 440)
+
+`session://output` and `session://size` are now `emit_filter`ed to exactly the windows
+holding a **live terminal host** for the session (the task-426 registry gains an
+`output_subs` dimension: subscribe at host creation, unsubscribe at host dispose, swept
+by the window-close purge — parking never touches it, so a parked host's buffer stays
+byte-complete). A session with no live host anywhere skips the base64 encode AND the
+emit entirely; a window that starts viewing later back-fills via `session_scrollback` +
+the offset dedupe. Lifecycle events (state/exited/name/forkable, the roster) stay
+app-global. Pure Rust event plumbing + TS IPC — platform-neutral; the two frontend
+listens are label-scoped (a default-target listener would bypass the filter).
+
+### Needs real-box verification (targeted delivery, task 440)
+
+- [ ] **Two windows, agent visible in only one.** Output + typing render in the viewing
+      window; the other window's busy dot, Attention queue, auto-name, and exit handling
+      stay live (lifecycle is still global).
+- [ ] **Late attach back-fills.** Scroll the agent into view in the second window later —
+      the complete retained history back-fills (scrollback) then streams live, with no
+      gap and no doubled startup paint (offset dedupe), incl. under ConPTY (the
+      replayDedupe stray-`C` class of bug).
+- [ ] **Park keeps the stream.** In the only viewing window, switch views (park the
+      terminal) while the agent produces output, then switch back — the buffer is
+      complete, no re-replay.
+- [ ] **Close a window mid-storm.** Close the second window during heavy output — no
+      stall, the first window is unaffected (the Destroyed purge sweeps the label).
+- [ ] **Single-window regression smoke.** Spawn, type, switch Overview↔Canvas during
+      output, Restart (resetTerminal), scroll a never-viewed boot-resumed card into
+      view — everything byte-identical to before.
