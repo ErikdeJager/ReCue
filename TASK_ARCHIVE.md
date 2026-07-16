@@ -2028,3 +2028,61 @@ helpers — no paths/shells/`#[cfg]` arms; identical on macOS, Windows, and Linu
 **Dependencies:** Task 430 (sequencing — 429/430 reshape the same `store.ts` init/subscribe wave and
 `lib.rs` setup this card edits; via 430 → 429 → 428, whose broadcast/apply-sync conventions
 `session://forgotten` follows).
+
+### 432. [x] Multi-window 7/16 — Boot shell-terminal respawn moves to Rust: one idempotent respawn pass next to the resume loop, the frontend just renders
+
+Respawning the persisted shell **terminal items** (#72) on boot becomes a Rust-owned, once-per-app
+step in the boot sequence (next to the agent resume pass) instead of a frontend side effect of the
+booting main window — so the epic's N full windows (each running the same frontend boot code) can
+never double-spawn the same panel ids, and a window opened/reloaded mid-session never kills+respawns a
+live shell (a real bug today: a dev webview reload re-running `applyBootState` killed every live shell
+via `spawn_with_id`'s same-id replace semantics). Panel ids stay stable; the frontend just renders.
+
+**What shipped** (branch `task-432-rust-boot-terminal-respawn`, PR
+[#195](https://github.com/ErikdeJager/ReCue/pull/195), merged 2026-07-16 into `backend-decouple`,
+commit `0ee76ca`; 6 files, +219/-19):
+
+- **`src-tauri/src/boot.rs`** — the pure `terminal_panel_ids` (filters `kind == "terminal"` across
+  repos → sorted `(repo, id)` pairs, deterministic; carries the flagged deliberate-read comment about
+  reading the frontend-owned `overview_panels` map at its one consumer site), the idempotent core
+  `respawn_missing_terminals` (skips any id already registered in the PTY registry — live *or*
+  exited-but-kept — so it never kills+replaces a generation, best-effort per panel like `resume_one`),
+  and the thin `respawn_shell_terminals(app)` AppHandle wrapper. Unit tests: the pure filter (all OSes)
+  + a unix PTY skip/spawn/idempotence test.
+- **`src-tauri/src/pty.rs`** — a public `SessionManager::has_session(id) -> bool` presence check (the
+  boot respawn's idempotence source; a same-id spawn would kill the existing generation, so "skip if
+  present" is what makes the pass safe to re-run) + a `has_session` unknown-id test.
+- **`src-tauri/src/lib.rs`** — calls `boot::respawn_shell_terminals(&resume)` on the existing resume
+  thread, after the dev-container reap and **before** `resume_persisted_sessions` (which early-returns
+  on zero agent records and so can't host it), leaving Task 431's post-resume boot-window tail intact.
+- **`src-tauri/src/commands.rs`** — `spawn_terminal` doc-comment only (now "respawned by the Rust boot
+  sequence"; the command remains the runtime create/Restart path).
+- **`src/store.ts`** — deleted the `applyBootState` boot respawn loop (replacement comment points at
+  the Rust owner); the runtime `ipc.spawnTerminal` call sites (`addOverviewPanel`, `restartTerminal`,
+  the template `new-terminal` resolution) are untouched.
+- **`src/store.refresh.test.ts`** — inverted the #72 boot test: booting with a terminal panel now
+  calls `ipc.spawnTerminal` **zero** times, while the panel still lands in `overviewPanels`.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 432)
+
+- `overview_panels` is already a typed Rust struct (`OverviewPanel` with a `kind` field) — no new
+  parsing; "minimal parse" = filter `kind == "terminal"` in one flagged place.
+- The idempotence guard is **skip any already-registered id** (present at all — live OR
+  exited-but-kept), implemented **only in the boot respawn loop, not the `spawn_terminal` command** —
+  because `restartTerminal` legitimately respawns a same-id exited terminal via the kill+replace
+  semantics, so a command-level skip would break Restart.
+- Spawn failures stay silent best-effort per panel (parity with the deleted `.catch(() => {})`).
+- Accepted edge: shells now spawn before any webview subscribes, so a shell that dies instantly (broken
+  `$SHELL`) emits `session://exited` into the void and shows no exited overlay until an app restart —
+  rare, degrades to a dead-looking panel; scrollback still replays via `replayDedupe`.
+
+**Rollback-safe:** no persisted-schema change, no new events/commands/capabilities; re-adding the
+frontend loop restores the old behavior byte-for-byte.
+
+**Cross-platform:** platform-neutral — `spawn_terminal` already has the per-OS shell resolution
+(PowerShell / `$SHELL`→`/bin/bash`→`/bin/sh` / `/bin/zsh`); this card only changes *which side calls
+it at boot*. The one PTY test is `cfg(all(test, unix))` like the existing pty tests; the pure filter
+test runs on all OSes.
+
+**Dependencies:** Task 431 (sequencing — 431 edits the same `lib.rs` resume thread and `store.ts` boot
+surfaces; via 431 → 430 → 429).
