@@ -2297,3 +2297,44 @@ no `#[cfg]` arms, no shell-outs; identical on macOS/Windows/Linux.
 **Dependencies:** Task 433 (sequencing/conflict-avoidance — 433 edits the same `lib.rs` Destroyed arm
 and `store.ts` init subscribe wave this card extends; the card's other named dep "Multi-window 3/16" =
 Task 428 was already landed and dropped off).
+
+### 438. [x] Multi-window 12/16 — "Open in new window" on the sidebar repo context menu (open_app_window repo preset)
+
+Adds an **"Open in new window"** item to the sidebar's repo context menu that opens a new full app
+window (Task 434's `open_app_window`) preset to that repo as its Overview repo filter — the one-click
+"window A on repo X, window B on repo Y" multi-monitor workflow, and the first repo-scoped UI entry
+point onto 434's un-triggered `openAppWindow` wrapper.
+
+**What shipped** (branch `task-438-repo-menu-open-in-new-window`, PR
+[#200](https://github.com/ErikdeJager/ReCue/pull/200), merged 2026-07-16 into `backend-decouple`,
+commit `0e506c6`; 1 file, +28/-3):
+
+- **`src/components/Sidebar/Sidebar.tsx`** — the menu item at the top of the repo menu's
+  non-destructive utilities block (after the Views separator, before Reveal/Copy path), calling
+  `openAppWindow({ repo: menu.repo })` with a `.catch` → error toast; the returned window id is
+  unused (no dedupe/tracking). Because `openRepoMenu` is shared, it appears in both the expanded
+  header menu and the collapsed rail's folder-icon menu.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 438)
+
+- Copy is the platform-neutral "Open in new window" (matching the existing `CanvasTabs` pop-out
+  phrase), tooltip "Open a new window showing only this folder"; **always shown** (no git/branch
+  gating — the filter is path-based, works for non-git folders).
+- Worktree-parent semantics need **no new code**: `menu.repo` is already the top-level group path (the
+  worktree parent), and 434's `"all"`-mode preset + the existing `sessionInFilter` include worktree
+  agents (`effectiveRepo`, #96/#247). Scoped to the *repo* menu only (not the worktree-header menu).
+- No dedupe/focus-existing — every click opens a fresh window (presets are untracked local init
+  state); failure `.catch` → "Could not open a new window" error toast (unlike the bare `void
+  revealPath` siblings, because the wrapper's rejection would otherwise be unhandled).
+- No new tests (no new pure logic — worktree filter semantics already covered by `paths.test.ts`; no
+  Sidebar render-test harness exists); the current window's own filter/view/selection are untouched.
+
+**Rollback-safe:** revert the one-file PR; no schema/persistence/event/Rust change — the item is
+additive and self-contained.
+
+**Cross-platform:** pure TS/JSX; platform-neutral copy (no OS names / shortcut hints), no path
+construction here (Windows `?repo=` URL encoding is 434's already-tested `encode_query_value`) —
+identical on macOS/Windows/Linux.
+
+**Dependencies:** Task 434 (ships `open_app_window`, the `AppWindowInit` shape, the `openAppWindow` ipc
+wrapper, and the `?repo=` → Overview-filter preset this item triggers).
