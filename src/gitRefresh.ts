@@ -15,13 +15,14 @@
  * WebKitGTK support isn't worth relying on.
  */
 
-/** The five git reads the sidebar drives, each a separate backend command. */
+/** The six git reads the sidebar drives, each a separate backend command. */
 export type GitRefreshKind =
   | "branches"
   | "githubUrls"
   | "fileStatuses"
   | "diffLineCounts"
-  | "aheadBehind";
+  | "aheadBehind"
+  | "worktrees";
 
 /** Every kind — the default (full) volley. */
 export const ALL_GIT_REFRESH_KINDS: readonly GitRefreshKind[] = [
@@ -30,6 +31,7 @@ export const ALL_GIT_REFRESH_KINDS: readonly GitRefreshKind[] = [
   "fileStatuses",
   "diffLineCounts",
   "aheadBehind",
+  "worktrees",
 ];
 
 /**
@@ -154,10 +156,12 @@ export const FOCUS_FULL_REFRESH_MIN_MS = 30_000;
 
 /**
  * The kinds a focus/visibility (or poll) refresh should run: the **full** set when the
- * last full volley is older than `FOCUS_FULL_REFRESH_MIN_MS`, else just the cheap pair
- * (branch label + ahead/behind — 2 `git` spawns per folder, no untracked-file reads).
- * Pure, so the throttle policy is unit-tested. A `lastFullAt` of 0 (never) always yields
- * the full set.
+ * last full volley is older than `FOCUS_FULL_REFRESH_MIN_MS`, else just the cheap trio
+ * (branch label + ahead/behind + the worktree listing — 3 `git` spawns per folder, no
+ * untracked-file reads; `git worktree list` only reads `.git/worktrees`, ~7 ms). Having
+ * `worktrees` in the cheap set is what makes an agent's mid-turn `git worktree add`
+ * surface within one 15 s poll tick rather than the 30 s full backstop. Pure, so the
+ * throttle policy is unit-tested. A `lastFullAt` of 0 (never) always yields the full set.
  */
 export function focusRefreshKinds(
   now: number,
@@ -166,5 +170,5 @@ export function focusRefreshKinds(
   if (now - lastFullAt >= FOCUS_FULL_REFRESH_MIN_MS) {
     return [...ALL_GIT_REFRESH_KINDS];
   }
-  return ["branches", "aheadBehind"];
+  return ["branches", "aheadBehind", "worktrees"];
 }
