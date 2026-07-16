@@ -1,68 +1,80 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// #326: exercise the store's session-usage gating (`refreshUsage`) against a mocked
-// IPC layer so we can assert that the usage IPC — and therefore the Rust Claude
-// OAuth token read — is never invoked when the "Show session usage" setting is off,
-// and is invoked (once) when it's on. Own ./ipc mock, isolated per-file by Vitest.
+// #326/task 430: the usage poll — and with it the "never read the OAuth token
+// while 'Show session usage' is off" guarantee — lives in Rust now (`poll_gate`
+// in `src-tauri/src/autocontinue.rs`, unit-tested there). Frontend-side the
+// `usage` slice is an event-fed mirror: these tests pin the pure
+// `usageFromSnapshot` mapping and the `applyUsageSync` apply rules (equality-
+// guarded, ZERO ipc calls — the task-428 conventions). Own ./ipc mock, isolated
+// per-file by Vitest.
 vi.mock("./ipc", () => ({
-  claudeSessionUsage: vi.fn().mockResolvedValue(null),
   writeStdin: vi.fn().mockResolvedValue(undefined),
   setSettings: vi.fn().mockResolvedValue(undefined),
   setSessionAutoContinue: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { IDLE_AUTO_CONTINUE } from "./autoContinue";
 import * as ipc from "./ipc";
-import { DEFAULT_SETTINGS, useStore } from "./store";
-import type { SessionView } from "./types";
+import { usageFromSnapshot, useStore } from "./store";
+import { parseResetsAt } from "./time";
 
 const m = vi.mocked;
 
-function claudeSession(id: string): SessionView {
-  return {
-    id,
-    claudeSessionId: id,
-    repoPath: `/repo/${id}`,
-    name: null,
-    createdAt: 0,
-    agent: "claude",
-  };
-}
+const SNAPSHOT: ipc.UsageSnapshot = {
+  usedPercent: 42,
+  resetsAt: "2026-04-11T07:00:00+00:00",
+  buckets: [
+    { key: "five_hour", usedPercent: 42, resetsAt: "1760166000" },
+    { key: "seven_day", usedPercent: 7, resetsAt: null },
+  ],
+};
 
 beforeEach(() => {
-  m(ipc.claudeSessionUsage).mockClear();
-  useStore.getState().stopUsagePolling();
+  vi.clearAllMocks();
   useStore.setState({
-    autoContinue: IDLE_AUTO_CONTINUE,
-    sessions: [claudeSession("s1")],
     usage: {
       usedPercent: null,
       resetsAtMs: null,
       available: false,
       buckets: [],
     },
-    settings: { ...DEFAULT_SETTINGS },
   });
 });
 
-afterEach(() => {
-  // Clear any armed poll interval `applyAutoContinue` may have started.
-  useStore.getState().stopUsagePolling();
-});
-
-describe("refreshUsage — showSessionUsage gate (#326)", () => {
-  it("never calls the usage IPC (no token read) when the setting is off", async () => {
-    useStore.setState({
-      settings: { ...DEFAULT_SETTINGS, showSessionUsage: false },
+describe("usageFromSnapshot (pure)", () => {
+  it("maps a snapshot: scalar + each bucket through parseResetsAt", () => {
+    expect(usageFromSnapshot(SNAPSHOT)).toEqual({
+      usedPercent: 42,
+      resetsAtMs: parseResetsAt("2026-04-11T07:00:00+00:00"),
+      available: true,
+      buckets: [
+        {
+          key: "five_hour",
+          usedPercent: 42,
+          resetsAtMs: parseResetsAt("1760166000"),
+        },
+        { key: "seven_day", usedPercent: 7, resetsAtMs: null },
+      ],
     });
-    await useStore.getState().refreshUsage();
-    expect(m(ipc.claudeSessionUsage)).not.toHaveBeenCalled();
-    expect(useStore.getState().usage.available).toBe(false);
   });
 
-  it("clears any stale usage data to unavailable when turned off", async () => {
+  it("maps null (unavailable) to the hidden-bar shape", () => {
+    expect(usageFromSnapshot(null)).toEqual({
+      usedPercent: null,
+      resetsAtMs: null,
+      available: false,
+      buckets: [],
+    });
+  });
+});
+
+describe("applyUsageSync (task 430 mirror)", () => {
+  it("mirrors a snapshot into the usage slice", () => {
+    useStore.getState().applyUsageSync(SNAPSHOT);
+    expect(useStore.getState().usage).toEqual(usageFromSnapshot(SNAPSHOT));
+  });
+
+  it("clears stale usage to unavailable on a null broadcast", () => {
     useStore.setState({
-      settings: { ...DEFAULT_SETTINGS, showSessionUsage: false },
       usage: {
         usedPercent: 42,
         resetsAtMs: 10_000,
@@ -70,8 +82,7 @@ describe("refreshUsage — showSessionUsage gate (#326)", () => {
         buckets: [],
       },
     });
-    await useStore.getState().refreshUsage();
-    expect(m(ipc.claudeSessionUsage)).not.toHaveBeenCalled();
+    useStore.getState().applyUsageSync(null);
     expect(useStore.getState().usage).toEqual({
       usedPercent: null,
       resetsAtMs: null,
@@ -80,11 +91,19 @@ describe("refreshUsage — showSessionUsage gate (#326)", () => {
     });
   });
 
-  it("calls the usage IPC once when the setting is on and Claude is active", async () => {
-    useStore.setState({
-      settings: { ...DEFAULT_SETTINGS, showSessionUsage: true },
-    });
-    await useStore.getState().refreshUsage();
-    expect(m(ipc.claudeSessionUsage)).toHaveBeenCalledTimes(1);
+  it("is an equality-guarded no-op (same slice reference kept)", () => {
+    useStore.getState().applyUsageSync(SNAPSHOT);
+    const applied = useStore.getState().usage;
+    // The same value again (a fresh but deep-equal payload) must not re-set.
+    useStore.getState().applyUsageSync({ ...SNAPSHOT });
+    expect(useStore.getState().usage).toBe(applied);
+  });
+
+  it("never calls any ipc setter (apply-only, the task-428 rule)", () => {
+    useStore.getState().applyUsageSync(SNAPSHOT);
+    useStore.getState().applyUsageSync(null);
+    expect(m(ipc.setSettings)).not.toHaveBeenCalled();
+    expect(m(ipc.setSessionAutoContinue)).not.toHaveBeenCalled();
+    expect(m(ipc.writeStdin)).not.toHaveBeenCalled();
   });
 });

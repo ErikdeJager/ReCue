@@ -46,7 +46,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 /// a new metric added by Anthropic appears with no code change. The `used_percent` /
 /// `resets_at` scalars keep the five-hour window verbatim for the existing bar, so
 /// nothing about the five-hour path changes; `buckets` is purely additive.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSnapshot {
     /// 0–100, clamped.
@@ -60,7 +60,7 @@ pub struct UsageSnapshot {
 /// One usage window (#370): a top-level object in the usage response that carries a
 /// percentage (`five_hour`, `seven_day`, …). Serialized camelCase like `UsageSnapshot`.
 /// `key` is the raw API key; the frontend humanizes + orders it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageBucket {
     /// Raw API key, e.g. `"five_hour"`.
@@ -89,28 +89,18 @@ impl OauthToken {
     }
 }
 
-/// Frontend-polled command (~180s cadence). Async + off the main thread (#328):
-/// a non-`async` Tauri command runs on the main (webview) thread, so the blocking
-/// credentials read, the up-to-8s `ureq` HTTPS GET, and the macOS `security`
-/// subprocess spawn all executed there and froze the whole native UI until the
-/// request returned. `spawn_blocking` moves the synchronous work onto the blocking
-/// pool (the #316 git-command pattern), keeping the window responsive. The return
-/// type is unchanged, so the frontend IPC contract (`src/ipc.ts`) is untouched.
-/// Fail-open: any failure → `None` → the bar hides; a `spawn_blocking` join error
-/// (task panic) also collapses to `None` via `.ok().flatten()`.
-#[tauri::command]
-pub async fn claude_session_usage() -> Option<UsageSnapshot> {
-    tauri::async_runtime::spawn_blocking(usage_snapshot_blocking)
-        .await
-        .ok()
-        .flatten()
-}
-
-/// The blocking usage work run off the main thread by `claude_session_usage`
-/// (#328): read the OAuth token, GET the usage endpoint, parse the snapshot. Every
-/// step is fail-open — a missing token, an HTTP error, or a shape mismatch each
-/// returns `None` (bar hides), with a token-free `usage_diag` breadcrumb.
-fn usage_snapshot_blocking() -> Option<UsageSnapshot> {
+/// The blocking usage fetch (~180s cadence, 45s while armed): read the OAuth
+/// token, GET the usage endpoint, parse the snapshot. Every step is fail-open — a
+/// missing token, an HTTP error, or a shape mismatch each returns `None` (bar
+/// hides), with a token-free `usage_diag` breadcrumb.
+///
+/// Runs on the **auto-continue engine thread** (task 430, `autocontinue::run`) —
+/// never the main thread (#328: the blocking credentials read, the up-to-8s `ureq`
+/// HTTPS GET, and the macOS `security` subprocess spawn would freeze the whole
+/// native UI until the request returned; the old frontend-polled
+/// `claude_session_usage` command wrapped this in `spawn_blocking` for the same
+/// reason, before Rust took over the poll).
+pub(crate) fn usage_snapshot_blocking() -> Option<UsageSnapshot> {
     let token = read_oauth_token()?.access_token; // token dropped right after fetch
     let Some(body) = fetch_usage(&token) else {
         usage_diag("http miss");

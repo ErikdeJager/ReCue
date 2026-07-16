@@ -5,12 +5,7 @@
 import { create } from "zustand";
 
 import { agentCaps, SELECTABLE_AGENTS } from "./agents";
-import {
-  ARMED_POLL_MS,
-  evaluateAutoContinue,
-  IDLE_AUTO_CONTINUE,
-  type AutoContinueState,
-} from "./autoContinue";
+import { IDLE_AUTO_CONTINUE, type AutoContinueState } from "./autoContinue";
 import { resolveCanvases } from "./boot";
 import { attentionQueue } from "./components/Attention/attentionQueue";
 import { overviewPanelToContent } from "./components/Canvas/canvasDrop";
@@ -597,55 +592,12 @@ function scheduleOpenFileTreeRefresh(): void {
   }, FILE_TREE_REFRESH_DEBOUNCE_MS);
 }
 
-// 5-hour usage poll (#154): 180s — the OAuth usage endpoint aggressively 429s below
-// that even with the claude-code User-Agent. Module-scoped so the timer survives
-// <UsageBar/> unmounting (the bar returns null when usage is unavailable) and never
-// double-arms.
-const USAGE_POLL_MS = 180_000;
-let usagePollTimer: ReturnType<typeof setInterval> | undefined;
-
-// Auto-continue after limit reset (#296): while the machine is armed (limit hit,
-// waiting for the window to reset) the usage poll runs on the tighter ARMED_POLL_MS
-// cadence so the continue fires promptly after reset. Module-scoped alongside
-// `usagePollTimer`; main-window-only + idempotent, cleared on disarm / poll stop.
-let armedPollTimer: ReturnType<typeof setInterval> | undefined;
-
-/** Milliseconds between the three keystrokes of the auto-continue nudge (#296) — a
- * tiny gap so claude's TUI registers Enter, the typed text, and Enter as separate
- * events rather than a single paste. */
-const CONTINUE_KEY_DELAY_MS = 120;
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Send the auto-continue nudge to one session (#296): Enter → `continue` → Enter,
- * with a small gap between sends. Best-effort — a dead PTY / IPC error just means
- * that agent isn't nudged, never a surfaced error. The exact sequence is isolated
- * here so a real-CLI sanity check can adjust it in one place (e.g. drop the leading
- * Enter to `"continue\r"`). `writeStdin` is platform-neutral (same bytes on macOS
- * and Windows). */
-async function sendContinue(id: string): Promise<void> {
-  try {
-    await ipc.writeStdin(id, "\r");
-    await sleep(CONTINUE_KEY_DELAY_MS);
-    await ipc.writeStdin(id, "continue");
-    await sleep(CONTINUE_KEY_DELAY_MS);
-    await ipc.writeStdin(id, "\r");
-  } catch {
-    // Best-effort: swallow so one dead session never breaks the rest.
-  }
-}
-
-/** Start/stop the tighter armed-cadence usage poll (#296) to match the machine's
- * `armed` state. Main-window-only + idempotent, mirroring `startUsagePolling`. */
-function syncArmedPoll(armed: boolean, refresh: () => void): void {
-  if (!IS_MAIN_WINDOW) return;
-  if (armed && !armedPollTimer) {
-    armedPollTimer = setInterval(refresh, ARMED_POLL_MS);
-  } else if (!armed && armedPollTimer) {
-    clearInterval(armedPollTimer);
-    armedPollTimer = undefined;
-  }
-}
+// 5-hour usage poll + auto-continue nudge (#154/#296): since task 430 both live in
+// Rust (`src-tauri/src/autocontinue.rs`) — the ONE per-app poller/executor, so the
+// multi-window epic's N windows can never double-poll (the endpoint 429s below
+// ~180s) or double-nudge. The store's `usage` / `autoContinue` slices are event-fed
+// mirrors (`usage://changed` / `autocontinue://changed` → `applyUsageSync` /
+// `applyAutoContinueSync`), seeded once at boot via `ipc.autoContinueSnapshot()`.
 
 /** Copy of `map` without `key` — returns the same ref when `key` is absent so
  * callers don't trigger needless re-renders. */
@@ -692,6 +644,32 @@ export function toSessionView(record: SessionRecord): SessionView {
     // Dev-container session: the docker image it runs in; null for a host PTY.
     containerImage: record.container_image ?? null,
   };
+}
+
+/** Map a Rust `UsageSnapshot` (or `null` = unavailable) into the store's `usage`
+ * slice — exactly the old `refreshUsage` mapping (task 430): the scalar + each
+ * bucket's raw `resetsAt` through `parseResetsAt`, `null` → the all-null /
+ * unavailable / empty-buckets hidden-bar shape. Pure + exported for unit tests. */
+export function usageFromSnapshot(
+  snap: ipc.UsageSnapshot | null,
+): AppState["usage"] {
+  return snap
+    ? {
+        usedPercent: snap.usedPercent,
+        resetsAtMs: parseResetsAt(snap.resetsAt),
+        available: true,
+        buckets: snap.buckets.map((b) => ({
+          key: b.key,
+          usedPercent: b.usedPercent,
+          resetsAtMs: parseResetsAt(b.resetsAt),
+        })),
+      }
+    : {
+        usedPercent: null,
+        resetsAtMs: null,
+        available: false,
+        buckets: [],
+      };
 }
 
 /** The reconcile plan for a `sessions://changed` roster broadcast (task 428). Pure +
@@ -1975,10 +1953,12 @@ export interface AppState {
      * notes are readable before installing. `null` when none / up to date. */
     notes: string | null;
   };
-  /** 5-hour Claude session usage (#154). `available` false → the bar hides. Fed by a
-   * 180s poll; the OAuth token + HTTP live entirely in Rust. `buckets` (#370) carries
-   * every usage window the API reports for the expandable "all usage" viewer; empty
-   * when unavailable. The scalars keep the five-hour window unchanged. */
+  /** 5-hour Claude session usage (#154). `available` false → the bar hides. An
+   * event-fed mirror of the Rust engine's single per-app poll (task 430:
+   * `usage://changed` → `applyUsageSync`; the OAuth token + HTTP live entirely in
+   * Rust). `buckets` (#370) carries every usage window the API reports for the
+   * expandable "all usage" viewer; empty when unavailable. The scalars keep the
+   * five-hour window unchanged. */
   usage: {
     usedPercent: number | null;
     resetsAtMs: number | null;
@@ -1986,7 +1966,9 @@ export interface AppState {
     buckets: { key: string; usedPercent: number; resetsAtMs: number | null }[];
   };
   /** Transient auto-continue-after-limit-reset machine state (#296) — NOT persisted;
-   * only the `autoContinueAfterLimit` setting is. Fed by the usage poll. */
+   * only the `autoContinueAfterLimit` setting is. Since task 430 a read-only mirror
+   * of the Rust engine (`autocontinue://changed` → `applyAutoContinueSync`); no UI
+   * consumer today, kept for parity/observability. */
   autoContinue: AutoContinueState;
   /** Pending scheduled sessions (#93), newest-first; main window only. */
   schedules: ScheduledSession[];
@@ -2130,18 +2112,14 @@ export interface AppState {
   mockUpdate: (opts?: { version?: string; notes?: string | null }) => void;
   /** Dev mock (#193): clear the mock + reset the updater state to idle. */
   clearUpdate: () => void;
-  /** Fetch + store the 5-hour Claude usage (#154); fail-open to unavailable. Gated
-   * to Claude (no-op for a non-Claude agent). */
-  refreshUsage: () => Promise<void>;
-  /** Start the 180s usage poll (#154) — main window only, idempotent. */
-  startUsagePolling: () => void;
-  /** Stop the usage poll (#154). */
-  stopUsagePolling: () => void;
-  /** Run the auto-continue reducer (#296) against the current `usage` snapshot +
-   * settings + live Claude sessions: arm/wait/fire the machine, sync the tighter
-   * armed poll cadence, and send the continue nudge to any fired sessions. Called
-   * by `refreshUsage` after it sets `usage`; safe to call directly (used by tests). */
-  applyAutoContinue: () => void;
+  /** Apply a `usage://changed` broadcast / boot-snapshot value (task 430): map the
+   * Rust snapshot into the `usage` slice via `usageFromSnapshot`. Equality-guarded
+   * apply-only — never calls back into any ipc/persist path. */
+  applyUsageSync: (snap: ipc.UsageSnapshot | null) => void;
+  /** Apply an `autocontinue://changed` broadcast / boot-snapshot value (task 430):
+   * mirror the Rust engine's machine state. Equality-guarded apply-only — never
+   * calls back into any ipc/persist path. */
+  applyAutoContinueSync: (state: ipc.AutoContinueStatePayload) => void;
   /** Toggle the `autoContinueAfterLimit` setting (#296) — backs the ⋯-menu checkable
    * item + the Settings toggle. Persists via `saveSettings`. */
   toggleAutoContinue: () => void;
@@ -3595,121 +3573,17 @@ export const useStore = create<AppState>()((set, get) => ({
     }));
   },
 
-  refreshUsage: async () => {
-    // Session-usage display disabled (#326): never call the usage IPC — so the Rust
-    // token read never runs — and keep the bar hidden. Still run the auto-continue
-    // reducer so it disarms (fail-open) with no usage data.
-    if (!get().settings.showSessionUsage) {
-      const u = get().usage;
-      if (u.available || u.usedPercent != null || u.resetsAtMs != null) {
-        set({
-          usage: {
-            usedPercent: null,
-            resetsAtMs: null,
-            available: false,
-            buckets: [],
-          },
-        });
-      }
-      get().applyAutoContinue();
-      return;
-    }
-    // Gate to Claude (forward-compatible). Non-Claude → hide, don't even call out.
-    if (!isClaudeActive(get())) {
-      set({
-        usage: {
-          usedPercent: null,
-          resetsAtMs: null,
-          available: false,
-          buckets: [],
-        },
-      });
-      // Still run the auto-continue reducer so it disarms (fail-open) when the
-      // usage feed goes unavailable, e.g. a non-Claude session becoming active.
-      get().applyAutoContinue();
-      return;
-    }
-    try {
-      const snap = await ipc.claudeSessionUsage();
-      set({
-        usage: snap
-          ? {
-              usedPercent: snap.usedPercent,
-              resetsAtMs: parseResetsAt(snap.resetsAt),
-              available: true,
-              buckets: snap.buckets.map((b) => ({
-                key: b.key,
-                usedPercent: b.usedPercent,
-                resetsAtMs: parseResetsAt(b.resetsAt),
-              })),
-            }
-          : {
-              usedPercent: null,
-              resetsAtMs: null,
-              available: false,
-              buckets: [],
-            },
-      });
-    } catch {
-      // Outside Tauri / command missing → hide; recover on the next tick.
-      set({
-        usage: {
-          usedPercent: null,
-          resetsAtMs: null,
-          available: false,
-          buckets: [],
-        },
-      });
-    }
-    // Drive the auto-continue machine off the fresh snapshot (#296).
-    get().applyAutoContinue();
+  // Usage + auto-continue mirrors (task 430): the poll, reducer, and nudge all run
+  // in the Rust engine (`src-tauri/src/autocontinue.rs`); these applies follow the
+  // task-428 conventions — JSON-equality-guarded, plain `set()`, ZERO ipc calls.
+  applyUsageSync: (snap) => {
+    const next = usageFromSnapshot(snap);
+    if (JSON.stringify(get().usage) === JSON.stringify(next)) return;
+    set({ usage: next });
   },
-  startUsagePolling: () => {
-    if (!IS_MAIN_WINDOW || usagePollTimer) return; // main-window only, idempotent
-    if (!get().settings.showSessionUsage) return; // #326: no poll, no token access
-    void get().refreshUsage();
-    usagePollTimer = setInterval(
-      () => void get().refreshUsage(),
-      USAGE_POLL_MS,
-    );
-  },
-  stopUsagePolling: () => {
-    if (usagePollTimer) {
-      clearInterval(usagePollTimer);
-      usagePollTimer = undefined;
-    }
-    // Tear down the tighter armed poll too (#296) so nothing keeps ticking.
-    syncArmedPoll(false, () => {});
-  },
-  applyAutoContinue: () => {
-    const state = get();
-    // Live Claude sessions = running (not exited, the #91 predicate) and running
-    // claude (a legacy null agent predates #101 and is claude). Per-agent opt-out
-    // (#297): an agent whose box is unchecked (`autoContinueDisabled`) is excluded
-    // here, so it never enters the captured arm-set nor the fire-set — the pure #296
-    // reducer stays agnostic while that one agent skips the continue nudge.
-    const liveClaudeIds = state.sessions
-      .filter(
-        (s) =>
-          s.exitedCode === undefined &&
-          (s.agent ?? "claude") === "claude" &&
-          !s.autoContinueDisabled,
-      )
-      .map((s) => s.id);
-    const { next, fireIds } = evaluateAutoContinue(
-      state.autoContinue,
-      state.usage,
-      Date.now(),
-      {
-        enabled: state.settings.autoContinueAfterLimit,
-        defaultAgent: state.settings.defaultAgent,
-      },
-      liveClaudeIds,
-    );
-    if (next !== state.autoContinue) set({ autoContinue: next });
-    // Match the poll cadence to the (new) armed state, then nudge fired sessions.
-    syncArmedPoll(next.armed, () => void get().refreshUsage());
-    for (const id of fireIds) void sendContinue(id);
+  applyAutoContinueSync: (state) => {
+    if (JSON.stringify(get().autoContinue) === JSON.stringify(state)) return;
+    set({ autoContinue: state });
   },
   toggleAutoContinue: () => {
     const settings = get().settings;
@@ -3729,7 +3603,7 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!session || (session.autoContinueDisabled ?? false) === disabled)
       return;
     // Optimistic local update so both agent surfaces reflect it immediately; the
-    // fire step (`applyAutoContinue`) reads this same flag on the next usage tick.
+    // Rust engine's fire step (task 430) reads the persisted flag on its next wake.
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, autoContinueDisabled: disabled } : x,
@@ -3775,7 +3649,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // promise rejection while we await the subscriptions.
     const bootPromise = ipc.bootState().catch(() => null);
 
-    // Wave 2: the 25 `listen` registrations (each its own invoke) as ONE parallel
+    // Wave 2: the 27 `listen` registrations (each its own invoke) as ONE parallel
     // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
@@ -4043,6 +3917,14 @@ export const useStore = create<AppState>()((set, get) => ({
             onCanvasTemplatesChanged: (t) => get().applyCanvasTemplatesSync(t),
             onSessionsChanged: (records) => get().applySessionsSync(records),
           }),
+          // Usage + auto-continue mirrors (task 430): the Rust engine owns the one
+          // usage poll and the #296 machine; every window mirrors its state. Both
+          // applies are equality-guarded and never persist (the task-428 rule).
+          ipc.subscribeUsageEvents({
+            onUsageChanged: (snap) => get().applyUsageSync(snap),
+            onAutoContinueChanged: (state) =>
+              get().applyAutoContinueSync(state),
+          }),
           // Dev-container sessions: the one-time default-image build fires this so a
           // spawn waiting behind `docker build` reads as progress, not a hang.
           ipc.subscribeContainerEvents({
@@ -4071,6 +3953,20 @@ export const useStore = create<AppState>()((set, get) => ({
     // persisted slice all arrive in this one payload, applied in a single `set()`
     // (which also re-applies the `data-platform` attribute, #363 — see `applyBootState`).
     get().applyBootState(await bootPromise);
+
+    // Usage + auto-continue boot seed (task 430): read the Rust engine's shared
+    // cache once, AFTER subscribing — the cache is written before each emit, so
+    // subscribe-then-fetch can never regress to a value older than a seen event.
+    // Every window (a detached canvas renders no UsageBar, so mirroring there is
+    // harmless — and correct for the epic's future full windows). Fire-and-forget;
+    // outside Tauri the catch leaves the hidden-bar defaults.
+    void ipc
+      .autoContinueSnapshot()
+      .then((snap) => {
+        get().applyUsageSync(snap.usage);
+        get().applyAutoContinueSync(snap.autoContinue);
+      })
+      .catch(() => {});
 
     // How this install is managed (#361) — read right after the boot payload and
     // therefore still *before* the boot `checkForUpdate()` further down in `init`, so a
@@ -4350,10 +4246,9 @@ export const useStore = create<AppState>()((set, get) => ({
         void ipc.setLastVersion(boot.app_version).catch(() => {});
       }
       void get().checkForUpdate();
-      // 5-hour usage bar (#154): kick off the 180s poll, kept alive at module scope
-      // so it recovers (the bar unmounts when usage is unavailable). Gated to Claude
-      // inside refreshUsage; re-guards IS_MAIN_WINDOW so a detached window never polls.
-      get().startUsagePolling();
+      // 5-hour usage bar (#154): no poll to kick off any more — Rust owns the one
+      // per-app usage poll (task 430); this window mirrors it via `usage://changed`
+      // + the boot `autoContinueSnapshot` seed in `init`.
     }
   },
 
@@ -4748,23 +4643,21 @@ export const useStore = create<AppState>()((set, get) => ({
     if (merged.theme !== prev.theme) {
       void ipc.setThemeBackground(merged.theme).catch(() => {});
     }
-    // React to the session-usage toggle at runtime (#326): starting/stopping the poll
-    // is the load-bearing token-access gate, so it must fire immediately on Save.
-    if (merged.showSessionUsage !== prev.showSessionUsage) {
-      if (merged.showSessionUsage) {
-        get().startUsagePolling(); // resume — idempotent, main-window only
-      } else {
-        get().stopUsagePolling();
-        set({
-          usage: {
-            usedPercent: null,
-            resetsAtMs: null,
-            available: false,
-            buckets: [],
-          },
-        });
-        get().applyAutoContinue(); // disarm #296 immediately (no usage data)
-      }
+    // React to the session-usage toggle at runtime (#326/task 430): the
+    // load-bearing token-access gate now lives in the Rust engine's `poll_gate` —
+    // `set_settings` pokes the engine, so a toggle reacts within one ~5s wake (and
+    // toggle-off disarms #296 there, fail-open). Keep only an optimistic local
+    // clear on toggle-off so the bar hides instantly; Rust emits the authoritative
+    // `usage://changed: null` moments later (an equality no-op here).
+    if (!merged.showSessionUsage && prev.showSessionUsage) {
+      set({
+        usage: {
+          usedPercent: null,
+          resetsAtMs: null,
+          available: false,
+          buckets: [],
+        },
+      });
     }
     try {
       // Persist ONLY the patch — the backend merges it over the persisted blob
@@ -6855,9 +6748,9 @@ export const useStore = create<AppState>()((set, get) => ({
     // Re-apply the imperative side-effects (theme / accent / reduce-motion / dense /
     // live terminal options) so a change saved in another window reskins this one
     // live. Deliberately NOT `saveSettings`' other side-effects: `setThemeBackground`
-    // is already pushed to every window by the saving window, and the usage-poll
-    // start/stop is main-window-gated — and the main window is the saver today
-    // (revisit in the full-app-windows card, 9/16).
+    // is already pushed to every window by the saving window, and the usage/
+    // auto-continue reaction lives in the Rust engine (task 430), poked by
+    // `set_settings` — every window just mirrors its `usage://changed`.
     applySettingsEffects(merged);
   },
 

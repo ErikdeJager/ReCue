@@ -10,6 +10,9 @@ vi.mock("./ipc", () => ({
   subscribeCanvasEvents: vi.fn(),
   subscribeScheduleEvents: vi.fn(),
   subscribeRecurringEvents: vi.fn(),
+  subscribeStateSyncEvents: vi.fn(),
+  subscribeUsageEvents: vi.fn(),
+  subscribeContainerEvents: vi.fn(),
   listSessions: vi.fn(),
   listRecents: vi.fn(),
   listRepoColors: vi.fn(),
@@ -48,7 +51,8 @@ vi.mock("./ipc", () => ({
   // Post-boot, off-the-critical-path probes `init()` fires and forgets.
   agentInfo: vi.fn(),
   dirExists: vi.fn(),
-  claudeSessionUsage: vi.fn(),
+  installKind: vi.fn(),
+  autoContinueSnapshot: vi.fn(),
 }));
 
 import * as ipc from "./ipc";
@@ -99,6 +103,9 @@ function primeIpc(): void {
   m(ipc.subscribeCanvasEvents).mockResolvedValue(() => {});
   m(ipc.subscribeScheduleEvents).mockResolvedValue(() => {});
   m(ipc.subscribeRecurringEvents).mockResolvedValue(() => {});
+  m(ipc.subscribeStateSyncEvents).mockResolvedValue(() => {});
+  m(ipc.subscribeUsageEvents).mockResolvedValue(() => {});
+  m(ipc.subscribeContainerEvents).mockResolvedValue(() => {});
   m(ipc.setOpenFiles).mockResolvedValue(undefined);
   m(ipc.setOverviewPanels).mockResolvedValue(undefined);
   m(ipc.setCanvases).mockResolvedValue(undefined);
@@ -130,7 +137,12 @@ function primeIpc(): void {
     version: null,
   });
   m(ipc.dirExists).mockResolvedValue(true);
-  m(ipc.claudeSessionUsage).mockResolvedValue(null);
+  m(ipc.installKind).mockResolvedValue("bundle");
+  // The task-430 boot seed: the Rust engine's cached usage + machine state.
+  m(ipc.autoContinueSnapshot).mockResolvedValue({
+    usage: null,
+    autoContinue: { armed: false, resetsAtMs: null, sessionIds: [] },
+  });
 }
 
 beforeEach(() => {
@@ -248,16 +260,21 @@ describe("refresh() — seeds the 'has been active' flag (#112)", () => {
 });
 
 describe("boot is ONE batched round-trip (#352)", () => {
-  it("init() issues only `boot_state` + the 4 subscribe waves — no per-slice reads", async () => {
+  it("init() issues only `boot_state` + the 7 subscribe waves — no per-slice reads", async () => {
     await useStore.getState().init();
 
     // The one data round-trip…
     expect(m(ipc.bootState).mock.calls).toHaveLength(1);
-    // …and the 13 `listen` registrations, batched into their 4 helpers.
+    // …and the 27 `listen` registrations, batched into their 7 helpers.
     expect(ipc.subscribeSessionEvents).toHaveBeenCalledTimes(1);
     expect(ipc.subscribeCanvasEvents).toHaveBeenCalledTimes(1);
     expect(ipc.subscribeScheduleEvents).toHaveBeenCalledTimes(1);
     expect(ipc.subscribeRecurringEvents).toHaveBeenCalledTimes(1);
+    expect(ipc.subscribeStateSyncEvents).toHaveBeenCalledTimes(1);
+    expect(ipc.subscribeUsageEvents).toHaveBeenCalledTimes(1);
+    expect(ipc.subscribeContainerEvents).toHaveBeenCalledTimes(1);
+    // …plus the one task-430 boot seed of the usage/auto-continue mirrors.
+    expect(ipc.autoContinueSnapshot).toHaveBeenCalledTimes(1);
     // None of the individual boot reads it replaces are called any more (they all
     // still exist — other call sites use them — but the boot no longer waterfalls).
     for (const fn of [

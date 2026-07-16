@@ -17,7 +17,6 @@ vi.mock("./ipc", () => ({
   setCanvases: vi.fn(),
   setLastVersion: vi.fn(),
   spawnTerminal: vi.fn(),
-  claudeSessionUsage: vi.fn(),
 }));
 
 import * as ipc from "./ipc";
@@ -74,7 +73,6 @@ beforeEach(() => {
   m(ipc.setCanvases).mockResolvedValue(undefined);
   m(ipc.setLastVersion).mockResolvedValue(undefined);
   m(ipc.spawnTerminal).mockResolvedValue(undefined);
-  m(ipc.claudeSessionUsage).mockResolvedValue(null);
   m(ipc.currentBranches).mockResolvedValue({});
   m(ipc.githubWebUrls).mockResolvedValue({});
   m(ipc.diffLineCounts).mockResolvedValue({});
