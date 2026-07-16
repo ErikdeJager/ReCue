@@ -3946,3 +3946,19 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Tmux-style input interleaving is documented in the windowContext module doc, the MainApp reconcile comment, TRAJECTORY_TO_WINDOWS/LINUX smoke items, and the PR body — not in CLAUDE.md (following PLAN-434's no-CLAUDE.md-edits precedent).
 - Boot's resolveCanvases drops the pin parameter entirely; the ?canvas= compat maps to the soft INIT_CANVAS_ID preset (stale id → persisted active tab), satisfying "no persisted state format changes".
 - PLAN-435 (may land either side) contains no literal DetachedNote reference today, but the epic flags its banner as modeled on it — recorded as a reconcile-on-second-landing risk in the plan.
+
+## Task 439
+
+- This card deliberately reverses the #84 "detached windows are per-session, not restored on relaunch" precedent: full app windows (main + app-*) now persist and restore across relaunch (canvas-* windows no longer exist after Task 437 and are never restored).
+- The per-window "repo-focus preset and pinned canvas" are captured at window-creation time from Task 434's AppWindowInit (whose doc says "Grows in card 13/16") — NOT the live Overview filter / active tab; a window opened plain then filtered restores plain, and no frontend→Rust state reporting is added (the card's Rust-window-event-handlers phrasing implies Rust-side capture).
+- Persisted geometry is outer position + INNER (client-area) size in physical px — the exact pair tao's Moved/Resized events report and tauri's set_position/set_size accept — deviating from the card's literal "outer bounds" so a save→restore cycle never accretes the title-bar height.
+- The main window's saved bounds are restored too (applied to the config-created hidden window before reveal); the card's "recreate each saved extra window" covers creation only, but geometry restore naturally includes main.
+- Restored app-* windows mint fresh uuids/labels (labels are not preserved across relaunch — nothing consumes a stable label).
+- "Saved debounced on open/close/move/resize" is refined to: move/resize debounced (500ms), open/close/exit flushed promptly (singular events; a prune lost to an unflushed debounce would restore a closed window).
+- Quit-vs-close disambiguation: RunEvent::ExitRequested sets an exiting flag + synchronously flushes the at-quit set (the Cmd+Q path); a Destroyed that would empty the set (last-window-close exit, where ExitRequested fires only after teardown) keeps the entry, flushes, and sets the flag — so quitting never prunes, single closes always do.
+- The defensive restore cap is main + 8 extras (MAX_RESTORED_EXTRAS = 8, an arbitrary generous bound); unknown/duplicate labels and degenerate (sub-200px / zero) saved sizes are dropped to default placement.
+- Maximized/fullscreen state is NOT persisted (a maximized window restores as a normal frame at the maximized geometry) — v1 simplification, documented in-code.
+- Wayland degrade accepted: compositors refuse client positioning (set_position no-op, Moved not delivered), so restore is size-only with default placement there — documented + trajectory-logged, not a defect.
+- The window_state store key is backend-internal (the path_cache precedent): no get/set Tauri command and zero frontend changes — restore rides 434/437's existing ?win= route, presets, #348 reveal machinery, and the ["main", "app-*"] capability.
+- No "restore windows" settings toggle is added (always on) — the card asks for none.
+- Windows minimize sentinels (Resized 0x0, Moved -32000/-32000) are ignored in the pure state machine so a minimized-at-quit window restores at its real geometry.
