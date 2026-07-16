@@ -994,6 +994,23 @@ impl SessionManager {
         self.lock_sessions().map(|s| s.len()).unwrap_or(0)
     }
 
+    /// Ids of sessions with a **still-running** child (task 430: the auto-continue
+    /// engine's liveness source): in the registry ∧ not yet reaped by the exit
+    /// waiter (#354). A dead-but-kept entry (exit overlay, scrollback) and a
+    /// killed/removed one both read as not live. Fail-soft: a poisoned registry
+    /// lock reads as no live sessions.
+    pub fn live_session_ids(&self) -> Vec<String> {
+        self.lock_sessions()
+            .map(|sessions| {
+                sessions
+                    .iter()
+                    .filter(|(_, session)| !session.exit.reaped.load(Ordering::SeqCst))
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// A session's child pid — on unix also its **process-group id** (#354). Used only by the
     /// unix PTY tests, to assert the whole group is gone after an exit / a kill.
     #[cfg(all(test, unix))]

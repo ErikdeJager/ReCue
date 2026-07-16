@@ -2931,6 +2931,10 @@ pub fn set_settings(
         .merge_settings(settings)
         .map_err(|e| SessionError::Io(e.to_string()))?;
     broadcast_settings(&app, &store);
+    // Wake the auto-continue engine so a `showSessionUsage` /
+    // `autoContinueAfterLimit` change reacts now, not at the next 180s fetch —
+    // task 430. Best-effort (fail-soft when unmanaged, e.g. tests).
+    crate::autocontinue::poke(&app);
     Ok(())
 }
 

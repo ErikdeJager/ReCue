@@ -5,6 +5,7 @@
 //! `store`; read-only git support is added by a later task.
 
 mod agents;
+mod autocontinue;
 mod boot;
 mod child_env;
 mod commands;
@@ -324,6 +325,19 @@ pub fn run() {
                 commands::fire_due_recurrings(&scheduler);
             });
 
+            // Auto-continue engine (task 430): the ONE usage poller + arm/nudge
+            // executor per app — Rust-owned so the epic's N windows can never
+            // double-nudge or double-poll (the usage endpoint 429s below ~180s).
+            // The `Shared` cache backs the `auto_continue_snapshot` boot fetch;
+            // the `Poke` channel lets `set_settings` wake it so a
+            // `showSessionUsage` / `autoContinueAfterLimit` change reacts within
+            // one wake instead of the next 180s fetch.
+            let (poke_tx, poke_rx) = mpsc::channel::<()>();
+            app.manage(autocontinue::Poke(std::sync::Mutex::new(poke_tx)));
+            app.manage(autocontinue::Shared::default());
+            let engine = app.handle().clone();
+            thread::spawn(move || autocontinue::run(engine, poke_rx));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -441,7 +455,7 @@ pub fn run() {
             commands::install_kind,
             commands::windows_build,
             commands::renderer_diagnostics,
-            usage::claude_session_usage,
+            autocontinue::auto_continue_snapshot,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

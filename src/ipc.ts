@@ -801,7 +801,10 @@ export const rendererDiagnostics = () =>
  * `resetsAt` is the raw `resets_at` (an ISO-8601 string or a stringified unix
  * timestamp). `null` when unavailable (no token, non-Pro/Max, endpoint error, or a
  * response-shape mismatch). The OAuth token is read + used entirely in Rust — it
- * never reaches JS. */
+ * never reaches JS. Since task 430 **Rust owns the single per-app usage poll**
+ * (the auto-continue engine; the endpoint 429s below ~180s, so there must never be
+ * two pollers): snapshots arrive via `usage://changed` + the boot
+ * `autoContinueSnapshot`, never a frontend fetch. */
 export interface UsageSnapshot {
   usedPercent: number;
   resetsAt: string | null;
@@ -817,8 +820,57 @@ export interface UsageBucket {
   usedPercent: number;
   resetsAt: string | null;
 }
-export const claudeSessionUsage = () =>
-  invoke<UsageSnapshot | null>("claude_session_usage");
+
+/** The auto-continue machine state (#296) mirrored from the Rust engine (task 430):
+ * `armed` = the limit was detected and the engine is waiting for the five-hour
+ * reset; `sessionIds` = the live Claude sessions captured at arm time (to be
+ * nudged on reset). Transient — never persisted; carried by
+ * `autocontinue://changed` + the boot `autoContinueSnapshot`. */
+export interface AutoContinueStatePayload {
+  armed: boolean;
+  resetsAtMs: number | null;
+  sessionIds: string[];
+}
+
+export interface UsageEventHandlers {
+  /** The Rust engine's usage snapshot changed (`usage://changed`); `null` =
+   * unavailable (gated off / fetch failed) — the bar hides. */
+  onUsageChanged: (snap: UsageSnapshot | null) => void;
+  /** The auto-continue machine state changed (`autocontinue://changed`). */
+  onAutoContinueChanged: (state: AutoContinueStatePayload) => void;
+}
+
+/** Subscribe to the Rust auto-continue engine's state events (task 430):
+ * `usage://changed` (the single per-app usage poll's snapshot) and
+ * `autocontinue://changed` (the #296 machine state). The task-428 rule applies —
+ * the store applies mirror only, never call back into a persist path. Returns an
+ * unlisten fn. Registered as one wave (#352). */
+export async function subscribeUsageEvents(
+  handlers: UsageEventHandlers,
+): Promise<UnlistenFn> {
+  const [unlistenUsage, unlistenAutoContinue] = await Promise.all([
+    listen<UsageSnapshot | null>("usage://changed", (event) =>
+      handlers.onUsageChanged(event.payload),
+    ),
+    listen<AutoContinueStatePayload>("autocontinue://changed", (event) =>
+      handlers.onAutoContinueChanged(event.payload),
+    ),
+  ]);
+  return () => {
+    unlistenUsage();
+    unlistenAutoContinue();
+  };
+}
+
+/** The boot-time seed for the usage / auto-continue mirrors (task 430): the Rust
+ * engine's shared cache, which is written BEFORE each emit — so a
+ * subscribe-then-fetch boot sequence can never regress to an older value than an
+ * event it already saw. */
+export const autoContinueSnapshot = () =>
+  invoke<{
+    usage: UsageSnapshot | null;
+    autoContinue: AutoContinueStatePayload;
+  }>("auto_continue_snapshot");
 
 export interface SessionEventHandlers {
   onOutput: (payload: OutputPayload) => void;

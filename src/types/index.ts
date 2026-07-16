@@ -530,7 +530,7 @@ export interface Settings {
   autoContinueAfterLimit: boolean;
   /** Show the five-hour Claude usage bar above the sidebar footer (#154/#326). Default
    * true. When false the bar is hidden AND ReCue never reads the Claude OAuth token —
-   * the usage IPC (`claude_session_usage`) is not invoked at all. */
+   * the Rust engine's usage poll (`autocontinue.rs poll_gate`, task 430) never runs. */
   showSessionUsage: boolean;
   /** Whether to offer the "Enable auto restart on limit reset" prompt button above the
    * usage bar when the five-hour limit is reached and auto-continue is off (#309). Default
