@@ -988,6 +988,21 @@ export async function subscribeCanvasEvents(
   };
 }
 
+/** The current primary full-window label (task 433), or null when none survives.
+ * Fetch AFTER subscribing to `window://primary` — Rust updates its state before
+ * each emit, so subscribe-then-fetch never regresses (the task-430 discipline). */
+export const primaryWindow = () => invoke<string | null>("primary_window");
+
+/** Subscribe to primary-window election changes (task 433). Full-value payload,
+ * emitted only on change; the frontend apply is equality-guarded, never persists. */
+export async function subscribePrimaryEvents(
+  onPrimaryChanged: (primary: string | null) => void,
+): Promise<UnlistenFn> {
+  return listen<{ primary: string | null }>("window://primary", (event) =>
+    onPrimaryChanged(event.payload.primary),
+  );
+}
+
 export interface ScheduleEventHandlers {
   /** A schedule fired into a live session (#93). */
   onFired: (payload: ScheduleFiredPayload) => void;

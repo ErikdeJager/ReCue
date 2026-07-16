@@ -5,6 +5,7 @@ import {
   IS_DETACHED_CANVAS_WINDOW,
   IS_MAIN_WINDOW,
   WINDOW_LABEL,
+  isPrimaryLabel,
   ownedHere,
   ownerCanvasId,
 } from "./windowContext";
@@ -38,6 +39,22 @@ describe("ownedHere (#84)", () => {
 
   it("does not own a session owned by a detached canvas window", () => {
     expect(ownedHere({ s1: "canvas-c1" }, "s1")).toBe(false);
+  });
+});
+
+describe("isPrimaryLabel (task 433)", () => {
+  it("is primary when the elected label matches this window's label", () => {
+    // The test env is the main window (no ?canvas= param), so WINDOW_LABEL is "main".
+    expect(isPrimaryLabel("main")).toBe(true);
+  });
+
+  it("is not primary for any other elected label", () => {
+    expect(isPrimaryLabel("canvas-x")).toBe(false);
+    expect(isPrimaryLabel("app-2")).toBe(false);
+  });
+
+  it("is not primary when no full window survives (null)", () => {
+    expect(isPrimaryLabel(null)).toBe(false);
   });
 });
 

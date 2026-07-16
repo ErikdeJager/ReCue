@@ -71,6 +71,7 @@ import {
   DETACHED_CANVAS_ID,
   IS_MAIN_WINDOW,
   WINDOW_LABEL,
+  isPrimaryLabel,
 } from "./windowContext";
 import type {
   AgentInfo,
@@ -412,14 +413,14 @@ function scheduleGitRefresh(folder?: string): void {
 /**
  * On an agent's busy→idle edge (#336), pop a native OS notification when the agent is
  * "effectively watched" — either its per-agent `watch` flag is on, or the global
- * `watchAllAgents` setting is on. Fired **only from the main window** (session events
- * are window-global — #84 — so a detached canvas window would otherwise double-fire)
+ * `watchAllAgents` setting is on. Fired **only from the primary window** (task 433 —
+ * session events are window-global, #84, so any other window would double-fire)
  * and **not during boot resume** (the initial replay would notify for every persisted
  * agent). Recurring-owned child sessions have no watch UI, so they're skipped. Best-effort
  * and fire-and-forget: it never awaits and swallows all delivery errors inside `notify.ts`.
  */
 function maybeNotifyWatched(id: string): void {
-  if (!IS_MAIN_WINDOW || booting) return;
+  if (!isPrimaryLabel(useStore.getState().primaryWindow) || booting) return;
   const state = useStore.getState();
   const session = state.sessions.find((x) => x.id === id);
   if (!session) return;
@@ -1213,6 +1214,50 @@ export function pickRepoColor(
 }
 
 /**
+ * #369: give each NEW folder a distinct default color — prefer an unused palette
+ * color before repeating one. Folders present when the subscription starts are
+ * grandfathered (they keep whatever color they already show). Runs only in the
+ * **primary** window (task 433): started from `init` in a window that boots
+ * primary, and re-armed by `armPrimaryEffects` on a live takeover. Started at
+ * most once per window (`folderColorSubStarted`), so both call sites — and
+ * StrictMode's double-invoke — are idempotent.
+ */
+function startFolderColorAssign(): void {
+  if (folderColorSubStarted) return;
+  folderColorSubStarted = true;
+  const s = useStore.getState();
+  let knownRepos = new Set(sidebarRepos(s.recents, s.sessions, s.recurrings));
+  useStore.subscribe((state, prev) => {
+    // Cheap reference-equality gate: only the three slices that feed the folder
+    // set can add a folder, so a color write (or any unrelated `set`) short-
+    // circuits here — including the synchronous re-entry from `setRepoColor`.
+    if (
+      state.recents === prev.recents &&
+      state.sessions === prev.sessions &&
+      state.recurrings === prev.recurrings
+    )
+      return;
+    const current = sidebarRepos(
+      state.recents,
+      state.sessions,
+      state.recurrings,
+    );
+    const additions = current.filter((r) => !knownRepos.has(r));
+    knownRepos = new Set(current);
+    if (additions.length === 0) return;
+    // Accumulate the picked colors so 2+ folders added in one batch each avoid
+    // the others' just-chosen colors, not just the pre-batch ones.
+    let colors = state.repoColors;
+    for (const repo of additions) {
+      if (colors[repo]) continue; // a user override / prior assignment always wins
+      const color = pickRepoColor(repo, colors, current);
+      colors = { ...colors, [repo]: color };
+      void useStore.getState().setRepoColor(repo, color);
+    }
+  });
+}
+
+/**
  * A Kanban column's color (#239): the configured color when the column name matches
  * a Settings entry (case-insensitive + trimmed), else a stable default derived by
  * hashing the name into the Catppuccin palette — exactly like `repoColor` hashes a
@@ -1852,6 +1897,13 @@ export interface AppState {
    * pacman/AUR/.deb), or "" until loaded. A "system" install is owned by the package
    * manager, so the in-app updater is gated off for it (`selfUpdates`). */
   installKind: string;
+  /** The Rust-elected primary full-window label (task 433) — the oldest surviving
+   * window whose label is not `canvas-*` — or `null` when none survives. Seeded by
+   * the `primary_window` snapshot in `init` and kept live by `window://primary`
+   * (`applyPrimarySync`). Every exactly-once-per-app effect gates on
+   * `isPrimaryLabel(primaryWindow)` instead of `IS_MAIN_WINDOW`, which the epic's
+   * future full app windows (9/16) would all pass. */
+  primaryWindow: string | null;
   /** Windows build number (e.g. 22631), read once at boot; `0` on non-Windows or
    * until loaded. Only consumed under an `isWindows` guard, to set xterm.js's
    * `windowsPty.buildNumber` for correct ConPTY handling. */
@@ -2627,6 +2679,18 @@ export interface AppState {
   /** The Rust exit-driven worktree cleanup kept a dirty worktree (task 431/#74):
    *  only the targeted window shows the warning toast. */
   applyWorktreeKept: (p: WorktreeKeptPayload) => void;
+  /** Apply a `window://primary` broadcast / boot-snapshot value (task 433).
+   * Equality-guarded apply-only (the 428 shape) — never persists. When THIS
+   * window transitions non-primary → primary after boot, it takes over the
+   * app-singleton effects live via `armPrimaryEffects` (monotonic: a surviving
+   * window is never demoted, so it fires at most once per window lifetime). */
+  applyPrimarySync: (primary: string | null) => void;
+  /** Re-arm the app-singleton effects a closed primary was carrying (task 433):
+   * the #369 folder-color auto-assign subscription (flag-guarded, idempotent)
+   * and a fresh `checkForUpdate` (the `update` slice is per-window). Boot
+   * one-shots (onboarding, folder pruning, migration persists, the
+   * updated-toast) are deliberately NOT re-run. */
+  armPrimaryEffects: () => void;
   copyToClipboard: (text: string, label?: string) => Promise<void>;
   /** Fast-forward `cwd`'s current branch to its upstream — `git pull --ff-only`
    * (#181, sidebar repo / worktree "Pull"). Toasts the result (summary or git
@@ -3014,6 +3078,13 @@ export const useStore = create<AppState>()((set, get) => ({
   claudeMissing: false,
   platform: "",
   installKind: "",
+  // Task 433: which window runs the once-per-app effects. Pre-sync default keeps
+  // today's semantics (the `installKind` "" precedent): the "main" window assumes
+  // primary until the backend snapshot/broadcast says otherwise — so vitest and a
+  // plain dev server behave exactly as before. A detached canvas is never primary.
+  // 9/16 NOTE: a secondary FULL window must boot with null here (only the original
+  // "main" label may assume) — revisit when full windows gain their identity.
+  primaryWindow: WINDOW_LABEL === "main" ? "main" : null,
   windowsBuild: 0,
   booted: false,
   toasts: [],
@@ -3620,7 +3691,7 @@ export const useStore = create<AppState>()((set, get) => ({
     // promise rejection while we await the subscriptions.
     const bootPromise = ipc.bootState().catch(() => null);
 
-    // Wave 2: the 29 `listen` registrations (each its own invoke) as ONE parallel
+    // Wave 2: the 30 `listen` registrations (each its own invoke) as ONE parallel
     // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
@@ -3740,19 +3811,19 @@ export const useStore = create<AppState>()((set, get) => ({
             onWindowsChanged: (ids) => get().setDetachedCanvasIds(ids),
           }),
           // Scheduled sessions (#93/#280): the backend engine fires schedules into live
-          // agents. The **main** window owns the scheduled→live transition; a **detached**
-          // canvas window (#84) also listens because it can hold a scheduled panel, so it
-          // must follow the same fire (and keep its own `schedules` slice in sync). Both
-          // subscribe; the per-window behavior is branched inside each handler. (Tauri
-          // events are global on macOS and Windows alike, so this path is identical.)
+          // agents. The **primary** window (task 433) owns the scheduled→live transition;
+          // every other window (e.g. a detached canvas #84 holding a scheduled panel)
+          // also listens, so it must follow the same fire (and keep its own `schedules`
+          // slice in sync). All subscribe; the per-window behavior is branched inside
+          // each handler. (Tauri events are global on macOS/Windows/Linux alike.)
           ipc.subscribeScheduleEvents({
             onFired: ({ id, session }) => {
               get().upsertSession(toSessionView(session));
-              if (!IS_MAIN_WINDOW) {
-                // Detached canvas (#280): reflect the fire locally so the rewritten
-                // agent leaf (arriving via `canvas://changed`) finds its session and
-                // renders the terminal instead of "Session closed." The main window
-                // owns the leaf rewrite, persistence, recents, and toast.
+              if (!isPrimaryLabel(get().primaryWindow)) {
+                // Non-primary window (#280/task 433): reflect the fire locally so the
+                // rewritten agent leaf (arriving via `canvas://changed`) finds its
+                // session and renders the terminal instead of "Session closed." The
+                // primary window owns the leaf rewrite, persistence, recents, and toast.
                 set((s) => ({
                   schedules: s.schedules.filter((x) => x.id !== id),
                 }));
@@ -3805,8 +3876,9 @@ export const useStore = create<AppState>()((set, get) => ({
               set((s) => ({
                 schedules: s.schedules.filter((x) => x.id !== id),
               }));
-              // Only the main window toasts the failure (it owns the schedule surface).
-              if (IS_MAIN_WINDOW) {
+              // Only the primary window toasts the failure (task 433 — it owns the
+              // schedule surface).
+              if (isPrimaryLabel(get().primaryWindow)) {
                 get().pushToast(
                   message || "Scheduled agent failed to start",
                   "error",
@@ -3847,9 +3919,10 @@ export const useStore = create<AppState>()((set, get) => ({
                 intentionalKills.add(prev);
                 get().dropSession(prev);
               }
-              // Surface the (possibly new) folder in recents — main window only, and
-              // the *parent repo* for a worktree child (mirrors the backend).
-              if (IS_MAIN_WINDOW) {
+              // Surface the (possibly new) folder in recents — primary window only
+              // (task 433), and the *parent repo* for a worktree child (mirrors the
+              // backend).
+              if (isPrimaryLabel(get().primaryWindow)) {
                 const recentPath = session.worktree_parent ?? session.repo_path;
                 set((s) => ({
                   recents: [
@@ -3860,8 +3933,9 @@ export const useStore = create<AppState>()((set, get) => ({
               }
             },
             onError: ({ message }) => {
-              // The record is kept + re-armed backend-side; just toast (main window).
-              if (IS_MAIN_WINDOW) {
+              // The record is kept + re-armed backend-side; just toast (primary
+              // window, task 433).
+              if (isPrimaryLabel(get().primaryWindow)) {
                 get().pushToast(
                   message || "Recurring agent failed to start",
                   "error",
@@ -3904,19 +3978,38 @@ export const useStore = create<AppState>()((set, get) => ({
               // While the New Session modal is open it shows an inline "Building…"
               // indicator instead (#416), so suppress the toast to avoid doubling
               // up; a build that starts after the modal closed (the spawn path)
-              // still toasts.
-              if (IS_MAIN_WINDOW && !get().newSessionOpen) {
+              // still toasts. Primary window only (task 433) — one toast per app.
+              if (
+                isPrimaryLabel(get().primaryWindow) &&
+                !get().newSessionOpen
+              ) {
                 get().pushToast(
                   message || "Building the dev-container image (first run)…",
                 );
               }
             },
           }),
+          // Primary-window election (task 433): Rust broadcasts the oldest
+          // surviving full window's label on change; the equality-guarded apply
+          // re-arms the once-per-app effects on a live takeover.
+          ipc.subscribePrimaryEvents((p) => get().applyPrimarySync(p)),
         ]);
       } catch {
         // Event subscription only works inside the Tauri webview.
         eventsSubscribed = false;
       }
+    }
+    // Primary election (task 433): resolve who's primary BEFORE the boot apply so
+    // the once-per-app boot effects gate correctly even in a window that boots
+    // already-primary (or never-primary). Fetched AFTER subscribing — Rust writes
+    // its state before each emit, so subscribe-then-fetch never regresses. Outside
+    // Tauri the fetch rejects/returns undefined and the pre-load default stands
+    // (main assumes primary).
+    try {
+      const primary = await ipc.primaryWindow();
+      if (primary !== undefined) get().applyPrimarySync(primary ?? null);
+    } catch {
+      /* keep the default */
     }
     // Apply the payload only AFTER the listeners exist: the *fetch* may race the
     // registration, the **apply** must not — a live `session://output` / `session://
@@ -3951,55 +4044,28 @@ export const useStore = create<AppState>()((set, get) => ({
     }
 
     // Default view on launch (#103): apply the saved preference once at boot (main
-    // window only). `init` runs only on mount, so a mid-session view change is never
-    // overridden (unlike `refresh`, which can re-run).
+    // window only — per-window UI; a canvas window has no view switch). `init` runs
+    // only on mount, so a mid-session view change is never overridden (unlike
+    // `refresh`, which can re-run).
     if (IS_MAIN_WINDOW) {
       get().setView(get().settings.defaultView);
+    }
+    // Once-per-APP boot effects (task 433): only the primary window runs them —
+    // gated on the elected label (resolved above, before the boot apply), never on
+    // IS_MAIN_WINDOW, which every future full app window (9/16) would also pass.
+    if (isPrimaryLabel(get().primaryWindow)) {
       // First-launch coding-agent picker: detect installed CLIs once and auto-pick /
-      // prompt as needed (main window only — a detached canvas has no onboarding).
+      // prompt as needed.
       void get().maybeOnboardAgent();
-      // Drop any sidebar folder deleted off-disk since last run (main window only —
-      // avoids a detached canvas racing the same destructive teardown). Fire-and-
+      // Drop any sidebar folder deleted off-disk since last run (primary only —
+      // avoids another window racing the same destructive teardown). Fire-and-
       // forget so a slow disk check never delays the rest of boot.
       void get().pruneMissingFolders();
-      // #369: give each NEW folder a distinct default color — prefer an unused palette
-      // color before repeating one. Folders present at boot are grandfathered (they
-      // keep whatever color they already show). Main window only; a detached canvas
-      // picks up the assignment on its next boot. Started once.
-      if (!folderColorSubStarted) {
-        folderColorSubStarted = true;
-        let knownRepos = new Set(
-          sidebarRepos(get().recents, get().sessions, get().recurrings),
-        );
-        useStore.subscribe((state, prev) => {
-          // Cheap reference-equality gate: only the three slices that feed the folder
-          // set can add a folder, so a color write (or any unrelated `set`) short-
-          // circuits here — including the synchronous re-entry from `setRepoColor`.
-          if (
-            state.recents === prev.recents &&
-            state.sessions === prev.sessions &&
-            state.recurrings === prev.recurrings
-          )
-            return;
-          const current = sidebarRepos(
-            state.recents,
-            state.sessions,
-            state.recurrings,
-          );
-          const additions = current.filter((r) => !knownRepos.has(r));
-          knownRepos = new Set(current);
-          if (additions.length === 0) return;
-          // Accumulate the picked colors so 2+ folders added in one batch each avoid
-          // the others' just-chosen colors, not just the pre-batch ones.
-          let colors = state.repoColors;
-          for (const repo of additions) {
-            if (colors[repo]) continue; // a user override / prior assignment always wins
-            const color = pickRepoColor(repo, colors, current);
-            colors = { ...colors, [repo]: color };
-            void get().setRepoColor(repo, color);
-          }
-        });
-      }
+      // #369: give each NEW folder a distinct default color (see
+      // `startFolderColorAssign`); a non-primary window picks the assignment up via
+      // the `repo_colors://changed` broadcast / its next boot. Started once —
+      // also re-armed by `armPrimaryEffects` on a live takeover.
+      startFolderColorAssign();
     }
     // FileTree disk-change poll (#264): runs in *any* window that can show a tree (the
     // main shell or a detached canvas), each refreshing only its own mounted trees, so
@@ -4159,8 +4225,12 @@ export const useStore = create<AppState>()((set, get) => ({
       }
     }, RECONNECT_BACKSTOP_MS);
 
-    // --- Fire-and-forget side effects (main window only, exactly as before) ---
-    if (IS_MAIN_WINDOW) {
+    // --- Fire-and-forget side effects (primary window only, task 433) ---
+    // Once-per-APP persists + toasts, keyed on the elected primary label — `init`
+    // resolves the `primary_window` snapshot BEFORE applying the boot payload, and
+    // `refresh()` (the test entry) relies on the pre-load default / current slice
+    // value (main assumes primary until told otherwise).
+    if (isPrimaryLabel(get().primaryWindow)) {
       // Persist the migrated canvas shape once so the new field becomes the source of
       // truth (#58); a detached renderer (#84) never writes it. Deliberately both
       // fields (task 429): this first write establishes the blob — as a patch it
@@ -6805,6 +6875,30 @@ export const useStore = create<AppState>()((set, get) => ({
     if (p.toast_window === WINDOW_LABEL) {
       get().pushToast("Worktree kept — it has uncommitted changes", "error");
     }
+  },
+
+  applyPrimarySync: (primary) => {
+    const prev = get().primaryWindow;
+    if (prev === primary) return; // equality-guarded (428 shape); never persists
+    const wasPrimary = isPrimaryLabel(prev);
+    set({ primaryWindow: primary });
+    // Live takeover (task 433): monotonic — a surviving window is never demoted,
+    // so this fires at most once per window lifetime. Gated on `booted`: during
+    // boot, init/applyBootState read the slice directly and run the boot-time
+    // once-per-app effects themselves.
+    if (!wasPrimary && isPrimaryLabel(primary) && get().booted) {
+      get().armPrimaryEffects();
+    }
+  },
+
+  armPrimaryEffects: () => {
+    // Re-arm the app-singleton effects a closed primary was carrying (task 433).
+    // Usage polling + auto-continue are Rust-owned (task 430) and the boot
+    // one-shots (onboarding, folder pruning, migration persists, the
+    // updated-toast) already ran at the original primary's boot — deliberately
+    // NOT re-run here.
+    startFolderColorAssign();
+    void get().checkForUpdate(); // the update slice is per-window; idempotent
   },
 
   copyToClipboard: async (text, label) => {
