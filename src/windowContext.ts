@@ -21,6 +21,13 @@ export const DETACHED_CANVAS_ID: string | null = (() => {
 /** True in the main (sidebar + Overview/Canvas) window; false in a detached one. */
 export const IS_MAIN_WINDOW = DETACHED_CANVAS_ID === null;
 
+/** True in a detached CANVAS window (#84). Distinct from !IS_MAIN_WINDOW on purpose
+ * (task 427): the #105 DOM-renderer fallback is a canvas-window glyph artifact, so
+ * WebGL gating keys on THIS — a future full app window (multi-window 9/16) is not a
+ * canvas window and gets WebGL. Identical values today (the only window kinds are
+ * main and canvas-<id>). */
+export const IS_DETACHED_CANVAS_WINDOW = DETACHED_CANVAS_ID !== null;
+
 /** This window's Tauri label — `"main"` or `canvas-<id>` — matched against the
  * session-ownership map so each window renders only the PTYs it owns (#84). */
 export const WINDOW_LABEL = IS_MAIN_WINDOW

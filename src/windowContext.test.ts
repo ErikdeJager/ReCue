@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DETACHED_CANVAS_ID,
+  IS_DETACHED_CANVAS_WINDOW,
   IS_MAIN_WINDOW,
   WINDOW_LABEL,
   ownedHere,
@@ -16,6 +17,13 @@ describe("window identity defaults (#84)", () => {
     expect(DETACHED_CANVAS_ID).toBeNull();
     expect(IS_MAIN_WINDOW).toBe(true);
     expect(WINDOW_LABEL).toBe("main");
+  });
+
+  it("is not a detached canvas window by default, and the predicate equals !IS_MAIN_WINDOW today (task 427)", () => {
+    expect(IS_DETACHED_CANVAS_WINDOW).toBe(false);
+    // Today the only window kinds are main and canvas-<id>, so the #105 WebGL
+    // gate's new constant is provably byte-identical to the old !IS_MAIN_WINDOW.
+    expect(IS_DETACHED_CANVAS_WINDOW).toBe(!IS_MAIN_WINDOW);
   });
 });
 

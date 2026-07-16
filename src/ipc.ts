@@ -27,6 +27,7 @@ import type {
   FileDiff,
   FileStatusEntry,
   ForkablePayload,
+  GridPayload,
   NamePayload,
   OutputPayload,
   OverviewPanel,
@@ -41,6 +42,7 @@ import type {
   ScrollbackReply,
   SessionRecord,
   Settings,
+  SizePayload,
   SkillInfo,
   StatePayload,
   WorkingDiff,
@@ -149,8 +151,34 @@ export const forkSession = (sourceId: string) =>
 export const writeStdin = (id: string, data: string) =>
   invoke<void>("write_stdin", { id, data });
 
-export const resizePty = (id: string, cols: number, rows: number) =>
-  invoke<void>("resize_pty", { id, cols, rows });
+/** Register (or upsert) this window's terminal view of a session (task 427),
+ * proposing the grid its slot could show. Returns the arbitrated effective grid
+ * — the component-wise min over all attached views — which the host must adopt
+ * BEFORE replaying scrollback. The backend runs this synchronously (#353), so
+ * call-order = apply-order. `windowLabel` → Rust `window_label` via Tauri's
+ * automatic case conversion (the `createBranch`/`firstFireAt` precedent). */
+export const attachTerminal = (
+  id: string,
+  windowLabel: string,
+  cols: number,
+  rows: number,
+) => invoke<GridPayload>("attach_terminal", { id, windowLabel, cols, rows });
+
+/** Remove this window's terminal view of a session (task 427): its proposal
+ * stops clamping the arbitrated PTY grid. Synchronous backend (#353); a detach
+ * of an absent view is a no-op. */
+export const detachTerminal = (id: string, windowLabel: string) =>
+  invoke<void>("detach_terminal", { id, windowLabel });
+
+/** Update an already-attached view's desired grid (task 427) — the multi-window
+ * analogue of the legacy PTY-resize ResizeObserver cadence. A proposal for a
+ * never-attached/purged view is a backend no-op. Synchronous backend (#353). */
+export const proposeTerminalSize = (
+  id: string,
+  windowLabel: string,
+  cols: number,
+  rows: number,
+) => invoke<void>("propose_terminal_size", { id, windowLabel, cols, rows });
 
 export const killSession = (id: string) => invoke<void>("kill_session", { id });
 
@@ -829,6 +857,17 @@ export async function subscribeSessionEvents(
     unlistenName();
     unlistenForkable();
   };
+}
+
+/** Subscribe to `session://size` (task 427) — consumed pool-level by
+ * terminalPool, never by the store: grid geometry is terminal-plumbing like
+ * output bytes (the outputBus philosophy), and writing it to React state would
+ * re-render per resize. Deliberately NOT part of `subscribeSessionEvents`,
+ * which feeds the store. */
+export async function subscribeSessionSize(
+  handler: (payload: SizePayload) => void,
+): Promise<UnlistenFn> {
+  return listen<SizePayload>("session://size", (e) => handler(e.payload));
 }
 
 export interface CanvasEventHandlers {
