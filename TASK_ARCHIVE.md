@@ -1614,3 +1614,74 @@ gap so ⌘W matches each card's own × exactly.
 macOS and Ctrl+W on Windows/Linux both fire — identical on all three.
 
 **Dependencies:** none.
+
+### 426. [x] Multi-window 1/16 — Terminal-view attachment registry + smallest-wins PTY size arbitration
+
+The backend foundation for the multi-window epic (cards 1–16): a single authoritative answer to
+"who is viewing session X, and how big must its PTY grid be?". Per session it tracks which windows
+view it and each view's desired `(cols, rows)`; the **effective grid** is the component-wise
+minimum over all attached views (tmux `window-size=smallest` — every window always sees the complete
+grid, larger views letterbox). This card lands as a **behavior-preserving no-op with ZERO frontend
+changes**: the new commands/events exist and are unit-tested, but nothing calls them yet — later
+cards (2/16 frontend mirror sizing, 3/16 change broadcasts, 9/16 full app windows, 15/16 targeted
+output) consume it.
+
+**What shipped** (branch `task-426-terminal-view-registry`, PR
+[#188](https://github.com/ErikdeJager/ReCue/pull/188), merged 2026-07-16 into `backend-decouple`,
+commit `f005576`; 4 files, +695/-16):
+
+- **`src-tauri/src/terminal_views.rs`** — **new** (503 lines), all policy in one place (the
+  `linux_webkit.rs` pattern: pure, unit-tested core + thin glue). A pure `ViewRegistry` (session id →
+  window label → desired `(cols, rows)`, plus a per-session last-**applied** effective size) with a
+  `SizeUpdate { cols, rows, resized }` result: `effective` (component-wise min, `None` when no
+  views), `attach` (upsert), `detach` (drop the view; drop the session entry when it was the last
+  one), `propose` (updates desired size **only if the view is already attached** — a never-attached
+  or purged view is a no-op, so a late `ResizeObserver` racing a window close can't resurrect a
+  zombie view that clamps the PTY forever), and `purge_window` (drop a label's views across every
+  session, return the sessions whose effective grid changed). All dims clamped to `>=1`. A thin
+  `TerminalViews` Tauri-managed wrapper (poison-recovering `Mutex`, `kill_all` precedent) holds the
+  lock across mutate + best-effort `resize_pty` + `broadcast_size`. Full unit tests (pure registry
+  bulk + glue tests driving a real sessionless `SessionManager` and asserting the `SessionEvent::Size`
+  sequence).
+- **`src-tauri/src/pty.rs`** — new `SessionEvent::Size { id, cols, rows }` variant (doc-commented as
+  the authoritative multi-window grid, emitted only by the arbiter, never by reader/monitor threads)
+  + a best-effort `SessionManager::broadcast_size`. Two tests added (`coalesce_output_events` passes
+  `Size` through unmerged / splits an Output run; `broadcast_size` delivers exactly one event).
+  `resize_pty` (command + manager method) **byte-for-byte untouched**.
+- **`src-tauri/src/commands.rs`** — `SizePayload { id, cols, rows }` (for `session://size`) +
+  `GridPayload { cols, rows }` (attach return) + three thin **synchronous, infallible** commands:
+  `attach_terminal(id, window_label, cols, rows) -> GridPayload`, `detach_terminal`,
+  `propose_terminal_size` (synchronous for the same #353 out-of-order-resize reason as `resize_pty`;
+  `window_label` is an explicit param, not derived from the invoking `Window`, for later cross-window
+  cards).
+- **`src-tauri/src/lib.rs`** — `mod terminal_views;`; `app.manage(TerminalViews::default())`; the
+  `session://size` forwarder arm; registered the three commands; restructured the `.run(...)` closure
+  from `if let RunEvent::Exit` to a `match` with the **Exit body kept byte-identical** (the
+  container sweep + `kill_all` ordering is load-bearing, #354) plus a **global**
+  `WindowEvent::Destroyed` arm that purges ALL views of the closing window label (any window kind —
+  `main`, `canvas-*`, future app windows) via `try_state` (never panics during teardown).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 426)
+
+- **One global Destroyed seam**, not a per-window `on_window_event` — fires for every window kind
+  incl. future app windows; `try_state` guards teardown ordering. The `open_canvas_window` per-window
+  re-dock handler stays as-is (additive, label-generic).
+- **`propose` on a never-attached/purged view is a no-op, NOT an implicit attach** — prevents a late
+  `ResizeObserver` racing a window close from resurrecting a zombie view.
+- **`session://size` is emitted on every effective-grid change PLUS always on attach** (even
+  unchanged, so a new host learns the grid); detach/propose/purge emit only on change.
+- **"Resize only when changed" compares against the registry's last-APPLIED size, not the PTY's
+  actual size** — so the legacy `resize_pty` passthrough can go stale vs the registry; accepted
+  transitional state (documented in-module), resolved when later cards migrate the frontend onto
+  attach/propose. Registry entries for killed/exited sessions are left inert (no `kill_session`
+  cleanup — out of scope for card 1).
+- **Lock-order rule:** the registry mutex may be held while calling into `SessionManager`, but
+  `pty.rs` never calls into `terminal_views`, so no cycle is possible (documented in module docs).
+- No `capabilities/default.json` change (Tauri 2 custom commands aren't ACL-gated); no version bump /
+  patch notes (releases are batched by the maintainer).
+
+**Cross-platform:** pure Rust over `HashMap`/`Mutex`/`mpsc` plus the already-abstracted
+`SessionManager::resize_pty` (portable-pty's `TIOCSWINSZ`/`ResizePseudoConsole`), so no `#[cfg]` arms
+are needed — identical on macOS, Windows, and Linux.
+
+**Dependencies:** none.
