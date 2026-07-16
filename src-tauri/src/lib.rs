@@ -179,8 +179,8 @@ pub fn run() {
             app.manage(Store::load(&store_path));
 
             // Primary-window election (task 433): register the config-created window(s) —
-            // today just "main". Windows created later register at their creation sites
-            // (open_canvas_window; open_app_window, the task-434 full-window creator).
+            // today just "main". Windows created later register at their creation site
+            // (open_app_window, the task-434 full-window creator).
             // The emit fires before any webview listens — harmless; the frontend's
             // `primary_window` snapshot fetch covers boot.
             app.manage(primary::Primary::default());
@@ -478,10 +478,6 @@ pub fn run() {
             commands::set_canvases,
             commands::get_canvas_templates,
             commands::set_canvas_templates,
-            commands::open_canvas_window,
-            commands::focus_canvas_window,
-            commands::close_canvas_window,
-            commands::list_canvas_windows,
             commands::open_app_window,
             commands::focus_app_window,
             commands::reveal_window,
@@ -614,16 +610,15 @@ pub fn run() {
                         }
                     }
                 }
-                // Multi-window (task 426): a closing window (any kind — main,
-                // canvas-*, and the task-434 app-* full windows) drops ALL of its
-                // terminal views so its desired size can never clamp a PTY it no
-                // longer renders. `try_state`: never panic during teardown ordering.
-                // (The per-window `on_window_event` in `open_canvas_window` keeps its
-                // #84 re-dock broadcast; this global hook is additive and
-                // label-generic — it is the ONLY close handling an app window needs:
-                // no PTY is killed, sessions keep running in surviving windows, and
-                // with the LAST window closing Tauri's default run loop still exits
-                // the app, running the kill_all shutdown path as today.)
+                // Multi-window (task 426): a closing window (main or a task-434
+                // app-* full window) drops ALL of its terminal views so its desired
+                // size can never clamp a PTY it no longer renders. `try_state`:
+                // never panic during teardown ordering. (This global arm is the
+                // ONLY per-window teardown — the 426 view purge, the task-435 claim
+                // drop, and the task-433 re-election below: no PTY is killed,
+                // sessions keep running in surviving windows, and with the LAST
+                // window closing Tauri's default run loop still exits the app,
+                // running the kill_all shutdown path as today.)
                 tauri::RunEvent::WindowEvent {
                     label,
                     event: tauri::WindowEvent::Destroyed,

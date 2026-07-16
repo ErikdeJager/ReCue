@@ -67,7 +67,7 @@ import {
 import { onSessionOutput } from "../../outputBus";
 import { isLinux, isWindows } from "../../platform";
 import { useStore } from "../../store";
-import { IS_DETACHED_CANVAS_WINDOW, WINDOW_LABEL } from "../../windowContext";
+import { WINDOW_LABEL } from "../../windowContext";
 import { focusedTerminalElement } from "./hoverFocus";
 import { effectiveCursorBlink, reducedMotionActive } from "./motionPolicy";
 import { makePasteKeyHandler } from "./pasteHandler";
@@ -154,9 +154,9 @@ interface TerminalHost {
   /** The slot currently displaying this terminal, or null when parked. */
   slot: HTMLElement | null;
   /** The attached WebGL addon, or undefined when this terminal renders via xterm's DOM
-   * renderer (a detached window #105, a software rasterizer #346, a Settings override
-   * #357, or a failed/lost GL context). Lives on the host — not a `createHost` closure
-   * local — so `applyTerminalRenderer` can add/remove it on the RUNNING xterm. */
+   * renderer (a software rasterizer #346, a Settings override #357, or a failed/lost
+   * GL context). Lives on the host — not a `createHost` closure local — so
+   * `applyTerminalRenderer` can add/remove it on the RUNNING xterm. */
   webgl?: WebglAddon;
   /** Attach the WebGL addon to the live xterm (lazy `import()`, #356). Idempotent and
    * best-effort: any failure leaves the DOM renderer, exactly as today. */
@@ -264,8 +264,8 @@ function reducedMotionNow(): boolean {
 // is silently software-rasterized (llvmpipe/SwiftShader — e.g. NVIDIA driver or
 // DMA-BUF trouble), so the addon "works" but every terminal frame renders on the
 // CPU. Probe the renderer string ONCE per app and skip the WebGL addon when it names
-// a software rasterizer — xterm then uses its DOM renderer (the detached-window
-// fallback, #105), which is faster than software GL. macOS/Windows never construct
+// a software rasterizer — xterm then uses its DOM renderer, which is faster than
+// software GL. macOS/Windows never construct
 // the probe canvas and always keep WebGL, so their rendering is byte-for-byte
 // unchanged.
 //
@@ -355,9 +355,9 @@ function rendererDecision(): TerminalRendererDecision {
  *   2. The **#346/#357 decision** — the one-time software-rasterizer probe folded together
  *      with the persisted Settings mode (auto / force-webgl / force-dom).
  *
- * Callers add the third constraint, `!IS_DETACHED_CANVAS_WINDOW` (#105 — a detached
- * canvas window always renders through xterm's DOM renderer; task 427 keys the gate on
- * the canvas-window predicate specifically, so a future full app window gets WebGL).
+ * This is the whole gate: the #105 canvas-window DOM-renderer rule died with the
+ * canvas windows (task 437) — WebGL is now governed solely by `rendererDecision()`
+ * plus the #364 latch in every window.
  */
 function webglPermitted(): boolean {
   return webglFallback.allowsWebgl() && rendererDecision().webgl;
@@ -373,12 +373,12 @@ function webglPermitted(): boolean {
  *
  * A converge-to-target loop: it only acts on a host whose addon state differs from the
  * target, so it is safe to call repeatedly (it runs on every Save, and on boot after the
- * settings blob loads). No-op off Linux and in a detached canvas window (#105 — those
- * always use the DOM renderer). The target is `webglPermitted()`, so a window latched to
- * DOM by a context loss (#364) stays there even if the user then forces "WebGL".
+ * settings blob loads). No-op off Linux. The target is `webglPermitted()`, so a window
+ * latched to DOM by a context loss (#364) stays there even if the user then forces
+ * "WebGL". (The old #105 canvas-window early-return died with the canvas windows,
+ * task 437.)
  */
 export function applyTerminalRenderer(): void {
-  if (IS_DETACHED_CANVAS_WINDOW) return;
   if (!isLinux(useStore.getState().platform)) return;
   const wantWebgl = webglPermitted();
   for (const host of hosts.values()) {
@@ -416,8 +416,7 @@ export function terminalRendererReport(): {
   const latched = decision.webgl && !webgl;
   return {
     mode: settings.linuxTerminalRenderer,
-    // A detached canvas window is always DOM (#105), whatever the decision says.
-    active: !IS_DETACHED_CANVAS_WINDOW && webgl ? "webgl" : "dom",
+    active: webgl ? "webgl" : "dom",
     renderer: isLinux(platform) ? probedRenderer() : null,
     reason: latched
       ? "WebGL context lost and not restored; DOM renderer for the rest of this run"
@@ -690,14 +689,12 @@ function createHost(sessionId: string): TerminalHost {
     void detachTerminal(sessionId, WINDOW_LABEL).catch(() => {});
   };
 
-  // Best-effort GPU renderer; fall back to the default DOM renderer. Skipped in a
-  // detached canvas window (#84/#105): a freshly-opened native window renders agent
-  // TUIs with doubled/ghosted glyphs and misaligned box-drawing — a known WebGL
-  // glyph-atlas / devicePixelRatio artifact in a secondary window — so detached
-  // windows use the DOM renderer (visually equivalent, no artifact). Also skipped on
+  // Best-effort GPU renderer; fall back to the default DOM renderer. Skipped on
   // Linux when the one-time probe says WebGL is software-rasterized (#346) or the user
   // forced the DOM renderer in Settings → Rendering (#357) — see `rendererDecision`.
-  // The main window on macOS/Windows keeps WebGL, so its rendering is provably unchanged.
+  // Every window attaches WebGL where permitted (task 437 dropped the #105
+  // canvas-window DOM-renderer rule with the canvas windows themselves); the #364
+  // context-loss latch remains the per-window safety net.
   // And skipped once ANY terminal in this window has suffered an UNRECOVERED WebGL
   // context loss (#364): a GPU that dropped one context (OOM / driver reset / suspend,
   // likeliest on WebKitGTK) will drop the next one too, so re-attaching would be a
@@ -776,10 +773,9 @@ function createHost(sessionId: string): TerminalHost {
     host.webgl = undefined;
     webglFallback.noteRenderer(sessionId, "dom");
   };
-  const webglReady: Promise<void> =
-    !IS_DETACHED_CANVAS_WINDOW && webglPermitted()
-      ? host.loadWebgl()
-      : Promise.resolve();
+  const webglReady: Promise<void> = webglPermitted()
+    ? host.loadWebgl()
+    : Promise.resolve();
 
   // Clickable http/https links (#109). Hover underlines a URL; the custom activate
   // handler opens it only on a ⌘/Ctrl-click (`metaKey || ctrlKey`, #143 — Ctrl on
@@ -1002,8 +998,8 @@ function createHost(sessionId: string): TerminalHost {
     // "font jumble"). Every later terminal shares the already-corrected atlas; the fontFamily
     // re-measure below still repaints IT (a full model clear via the options-change handler),
     // so its glyphs are crisp without disturbing anyone else's. No-op with the DOM renderer
-    // (`host.webgl` undefined — a detached window #105, a software rasterizer #346, or the
-    // #357 Settings override), which has no shared GL atlas.
+    // (`host.webgl` undefined — a software rasterizer #346 or the #357 Settings
+    // override), which has no shared GL atlas.
     //
     // This is also why `applyTerminalRenderer` (#357) must NOT clear the atlas when it
     // attaches the addon to a running terminal: same shared-atlas hazard, and by then the

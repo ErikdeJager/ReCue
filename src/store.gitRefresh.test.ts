@@ -52,7 +52,6 @@ function makeBootState(over: Partial<BootState> = {}): BootState {
     app_version: "1.0.0",
     platform: "macos",
     windows_build: 0,
-    detached_canvas_ids: [],
     ...over,
   };
 }

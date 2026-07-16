@@ -105,14 +105,6 @@ pub struct ForkablePayload {
     pub forkable: bool,
 }
 
-/// Payload for the `canvas://windows` event (#84): the canvas ids that currently
-/// have a detached window open. Every window listens so the main tab strip can
-/// mark detached tabs and each window can recompute terminal ownership.
-#[derive(Clone, Serialize)]
-pub struct CanvasWindowsPayload {
-    pub detached: Vec<String>,
-}
-
 /// Payload for `schedule://fired` (#93): a schedule launched into a live session.
 #[derive(Clone, Serialize)]
 pub struct ScheduleFiredPayload {
@@ -1939,27 +1931,6 @@ pub fn set_canvas_templates(
     Ok(())
 }
 
-/// The canvas ids that currently have a detached window (#84) — derived from the
-/// live window labels (`canvas-<id>`), optionally excluding one label (used when a
-/// window is closing and may still appear in the registry).
-fn detached_canvas_ids(app: &AppHandle, exclude: Option<&str>) -> Vec<String> {
-    app.webview_windows()
-        .keys()
-        .filter(|label| Some(label.as_str()) != exclude)
-        .filter_map(|label| label.strip_prefix("canvas-").map(str::to_string))
-        .collect()
-}
-
-/// Tell every window which canvases are detached (#84).
-fn broadcast_canvas_windows(app: &AppHandle, exclude: Option<&str>) {
-    let _ = app.emit(
-        "canvas://windows",
-        CanvasWindowsPayload {
-            detached: detached_canvas_ids(app, exclude),
-        },
-    );
-}
-
 /// Pre-paint window background per theme (#348) — the OS paints this native color while
 /// the WebView boots. MUST equal `--bg-base` in `src/styles/tokens.css` (and `THEME_BG` in
 /// `src/theme.ts` / the inline `<style>` in `index.html` / `"backgroundColor"` in
@@ -2039,79 +2010,6 @@ pub fn set_theme_background(app: AppHandle, theme: String) {
     }
 }
 
-/// Open (or focus, if already open) a detached window showing one canvas (#84).
-/// The window loads a canvas-only route (`index.html?canvas=<id>`) under the label
-/// `canvas-<id>`; closing it re-docks the canvas by re-broadcasting the (now
-/// smaller) detached set. Created from Rust, so no JS window-create permission is
-/// needed — only the `canvas-*` capability that lets the new window talk back.
-#[tauri::command]
-pub fn open_canvas_window(app: AppHandle, id: String, title: String) -> Result<(), SessionError> {
-    let label = format!("canvas-{id}");
-    if let Some(existing) = app.get_webview_window(&label) {
-        let _ = existing.show(); // it may still be hidden pre-reveal (#348)
-        let _ = existing.set_focus();
-        return Ok(());
-    }
-    let url = format!("index.html?canvas={id}");
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
-        .title(title)
-        .inner_size(1000.0, 760.0)
-        .min_inner_size(640.0, 480.0)
-        // Hidden until the frontend paints its first themed frame (#348) — the native
-        // background is the current theme's --bg-base, so a pop-out never flashes white.
-        .visible(false)
-        .background_color(window_background(&app.state::<Store>()))
-        .build()
-        .map_err(|e| SessionError::Io(e.to_string()))?;
-    // Never leave a detached window invisible if its frontend fails to boot (#348).
-    schedule_reveal_fallback(&app, &label);
-    // Task 433: every window-creation site routes through registration. A canvas
-    // window is never primary-eligible (filtered inside), so this is a documented
-    // no-op today — it exists so the 9/16 full-window creator inherits the seam.
-    crate::primary::register_window(&app, &label);
-    // Re-dock on close: when this window is destroyed, re-broadcast the detached
-    // set (excluding this label) so the main window reclaims the canvas + terminals.
-    let on_close = app.clone();
-    let closing = label.clone();
-    window.on_window_event(move |event| {
-        if matches!(event, tauri::WindowEvent::Destroyed) {
-            broadcast_canvas_windows(&on_close, Some(&closing));
-        }
-    });
-    broadcast_canvas_windows(&app, None);
-    Ok(())
-}
-
-/// Focus an already-detached canvas window (#84) — used by ⌘-jump (#76) and a
-/// click on a detached tab. Returns false if no such window exists.
-#[tauri::command]
-pub fn focus_canvas_window(app: AppHandle, id: String) -> bool {
-    match app.get_webview_window(&format!("canvas-{id}")) {
-        Some(window) => {
-            let _ = window.show(); // it may still be hidden pre-reveal (#348)
-            window.set_focus().is_ok()
-        }
-        None => false,
-    }
-}
-
-/// Close a detached canvas window (#84) — used when its canvas tab is closed in
-/// the main window, so the window self-closes (its `Destroyed` handler re-docks).
-#[tauri::command]
-pub fn close_canvas_window(app: AppHandle, id: String) {
-    if let Some(window) = app.get_webview_window(&format!("canvas-{id}")) {
-        let _ = window.close();
-    }
-}
-
-/// The currently-detached canvas ids (#84). A window fetches this on startup since
-/// it may have missed the `canvas://windows` broadcast that fired before it began
-/// listening.
-#[tauri::command]
-pub fn list_canvas_windows(app: AppHandle) -> Vec<String> {
-    detached_canvas_ids(&app, None)
-}
-
 /// Init presets for a full app window (task 434): passed as URL params so the new
 /// window's OWN store presets its local state at boot — `repo` filters its Overview
 /// to that repo; `canvas` boots it into the Canvas view on that tab (when the tab
@@ -2145,7 +2043,7 @@ fn encode_query_value(value: &str) -> String {
 /// The app-window route (task 434): `index.html?win=<id>[&repo=..][&canvas=..]`.
 /// The frontend's `parseWindowIdentity` reads `win` as the window identity and
 /// `repo`/`canvas` as its init presets (`?win=` beats `?canvas=`, so the canvas
-/// param here is a preset, never the #84 detached route). Pure.
+/// param here is a preset, never the legacy #84 compat route). Pure.
 pub fn app_window_url(id: &str, init: &AppWindowInit) -> String {
     let mut url = format!("index.html?win={}", encode_query_value(id));
     if let Some(repo) = init.repo.as_deref() {
@@ -2161,18 +2059,17 @@ pub fn app_window_url(id: &str, init: &AppWindowInit) -> String {
 
 /// Open an additional FULL app window (task 434) — label `app-<uuid>`, rendering
 /// the complete shell (sidebar + Overview/Attention/Canvas + modals) with its own
-/// window-local view/selection/tab/filter state. Mirrors `open_canvas_window`:
-/// hidden until painted (#348) with the themed background + the 2 s reveal
-/// fallback; registered for primary election (task 433 — an `app-*` label is
-/// eligible, unlike `canvas-*`). Returns the new window's id (the card-10/16+
-/// entry points focus/open by it).
+/// window-local view/selection/tab/filter state. Hidden until painted (#348) with
+/// the themed background + the 2 s reveal fallback; registered for primary
+/// election (task 433 — an `app-*` label is eligible). Returns the new window's
+/// id (the card-10/16+ entry points focus/open by it). Since task 437 this is
+/// also the Canvas pop-out target (`init.canvas`); canvas-only windows no longer
+/// exist.
 ///
 /// Deliberately NO per-window `on_window_event` handler and no new broadcast: the
 /// global `Destroyed` arm in `lib.rs` already covers an app window's close (task
-/// 426's terminal-view purge + task 433's primary re-election), no PTY is killed
-/// on close (sessions keep running, mirrored in surviving windows), and
-/// `detached_canvas_ids` ignores `app-*` labels by construction (its
-/// `strip_prefix("canvas-")`), so the #84 canvas-window bookkeeping is untouched.
+/// 426's terminal-view purge + task 433's primary re-election), and no PTY is
+/// killed on close (sessions keep running, mirrored in surviving windows).
 #[tauri::command]
 pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, SessionError> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -2198,7 +2095,7 @@ pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, Se
     Ok(id)
 }
 
-/// Focus an existing full app window (task 434) — mirrors `focus_canvas_window`.
+/// Focus an existing full app window (task 434) by id.
 /// Returns false if no such window exists.
 #[tauri::command]
 pub fn focus_app_window(app: AppHandle, id: String) -> bool {
@@ -2211,11 +2108,11 @@ pub fn focus_app_window(app: AppHandle, id: String) -> bool {
     }
 }
 
-/// Broadcast the full pending-schedule list (#280) so **every** window — incl. a
-/// detached canvas window (#84) that can hold a scheduled panel but doesn't own
-/// schedule mutations — stays in sync after any create / update / cancel / fire.
-/// Mirrors `canvas://changed`. Tauri events are global, so this is identical on
-/// macOS and Windows (no OS-specific path/shell/key code).
+/// Broadcast the full pending-schedule list (#280) so **every** window — any of
+/// them can hold a scheduled panel without owning schedule mutations — stays in
+/// sync after any create / update / cancel / fire. Mirrors `canvas://changed`.
+/// Tauri events are global, so this is identical on macOS and Windows (no
+/// OS-specific path/shell/key code).
 fn broadcast_schedules(app: &AppHandle, store: &Store) {
     let _ = app.emit("schedule://changed", store.schedules());
 }
@@ -3551,8 +3448,6 @@ pub struct BootState {
     pub platform: String,
     /// `windows_build` (`0` on non-Windows)
     pub windows_build: u32,
-    /// `list_canvas_windows` (#84)
-    pub detached_canvas_ids: Vec<String>,
 }
 
 /// Assemble the boot payload from the persisted store — the **pure** half of `boot_state`
@@ -3562,7 +3457,6 @@ pub fn boot_state_from(
     platform: String,
     windows_build: u32,
     app_version: String,
-    detached_canvas_ids: Vec<String>,
 ) -> BootState {
     BootState {
         sessions: store.sessions(),
@@ -3585,17 +3479,13 @@ pub fn boot_state_from(
         app_version,
         platform,
         windows_build,
-        detached_canvas_ids,
     }
 }
 
 /// The one boot read (#352): everything the frontend needs, in a single round-trip.
 /// Purely additive — every individual command it batches stays registered and works.
 #[tauri::command]
-pub async fn boot_state(
-    app: AppHandle,
-    store: State<'_, Store>,
-) -> Result<BootState, SessionError> {
+pub async fn boot_state(store: State<'_, Store>) -> Result<BootState, SessionError> {
     // The one non-trivial read: the Windows `cmd /C ver` probe (#143 `windows_build`).
     // Run it on the blocking pool (the #330 `current_branches` pattern) so it can't stall
     // an async worker — and await it FIRST, so no store lock is ever live across an await.
@@ -3611,7 +3501,6 @@ pub async fn boot_state(
         platform(),
         win_build,
         app_version(),
-        detached_canvas_ids(&app, None),
     ))
 }
 
@@ -4415,13 +4304,7 @@ mod tests {
             })
             .unwrap();
 
-        let boot = boot_state_from(
-            &store,
-            "linux".to_string(),
-            0,
-            "1.2.3".to_string(),
-            vec!["c1".to_string()],
-        );
+        let boot = boot_state_from(&store, "linux".to_string(), 0, "1.2.3".to_string());
 
         // Every store-backed field equals what its individual command would return.
         assert_eq!(boot.sessions, store.sessions());
@@ -4441,16 +4324,15 @@ mod tests {
         assert_eq!(boot.schedules, store.schedules());
         assert_eq!(boot.recurrings, store.recurrings());
         assert_eq!(boot.last_version, store.last_version());
-        // …and the four scalars are passed through untouched.
+        // …and the three scalars are passed through untouched.
         assert_eq!(boot.platform, "linux");
         assert_eq!(boot.windows_build, 0);
         assert_eq!(boot.app_version, "1.2.3");
-        assert_eq!(boot.detached_canvas_ids, vec!["c1".to_string()]);
 
-        // Nothing was invented: the payload is a plain JSON object of the 21 fields.
+        // Nothing was invented: the payload is a plain JSON object of the 20 fields.
         let value = serde_json::to_value(&boot).expect("serialize");
         assert!(value.get("sessions").is_some());
-        assert_eq!(value.as_object().map(|o| o.len()), Some(21));
+        assert_eq!(value.as_object().map(|o| o.len()), Some(20));
 
         let _ = std::fs::remove_file(&path);
     }

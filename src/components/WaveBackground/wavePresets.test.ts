@@ -106,7 +106,6 @@ describe("waveCovered (task 384)", () => {
     const base = {
       view: "overview" as const,
       activeCanvasLayout: null,
-      activeCanvasDetached: false,
     };
     // Cards on the wall ⇒ covered.
     expect(waveCovered({ ...base, overviewHasCards: true })).toBe(true);
@@ -115,7 +114,7 @@ describe("waveCovered (task 384)", () => {
     expect(waveCovered({ ...base, overviewHasCards: false })).toBe(false);
   });
 
-  it("Canvas (main) is covered iff the active tab has a layout and is not detached", () => {
+  it("Canvas is covered iff the active tab has a layout", () => {
     const layout = { kind: "leaf", id: "a" };
     // A tab with panels ⇒ covered.
     expect(
@@ -123,7 +122,6 @@ describe("waveCovered (task 384)", () => {
         view: "canvas",
         overviewHasCards: false,
         activeCanvasLayout: layout,
-        activeCanvasDetached: false,
       }),
     ).toBe(true);
     // An empty tab (layout === null) ⇒ crust, NOT covered.
@@ -132,37 +130,6 @@ describe("waveCovered (task 384)", () => {
         view: "canvas",
         overviewHasCards: false,
         activeCanvasLayout: null,
-        activeCanvasDetached: false,
-      }),
-    ).toBe(false);
-    // A detached active tab shows a DetachedCanvasNote (not panels) ⇒ NOT covered,
-    // even though its layout is non-null.
-    expect(
-      waveCovered({
-        view: "canvas",
-        overviewHasCards: false,
-        activeCanvasLayout: layout,
-        activeCanvasDetached: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("Detached window (view canvas, never detached-active) tracks its own layout", () => {
-    // A detached window calls with activeCanvasDetached:false and its own layout.
-    expect(
-      waveCovered({
-        view: "canvas",
-        overviewHasCards: false,
-        activeCanvasLayout: { kind: "leaf", id: "x" },
-        activeCanvasDetached: false,
-      }),
-    ).toBe(true);
-    expect(
-      waveCovered({
-        view: "canvas",
-        overviewHasCards: false,
-        activeCanvasLayout: null,
-        activeCanvasDetached: false,
       }),
     ).toBe(false);
   });

@@ -7,14 +7,7 @@ import {
   useState,
 } from "react";
 import { DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
-import {
-  ExternalLink,
-  GripVertical,
-  Maximize2,
-  PanelsTopLeft,
-  Plus,
-  X,
-} from "lucide-react";
+import { GripVertical, Maximize2, PanelsTopLeft, Plus, X } from "lucide-react";
 import {
   Group,
   type GroupImperativeHandle,
@@ -24,12 +17,10 @@ import {
 } from "react-resizable-panels";
 
 import { noAutoCapitalize } from "../../inputProps";
-import { useSessionOwners } from "../../ownership";
 import { effectiveRepo, repoName, sessionLabel } from "../../paths";
 import { repoColor, useStore } from "../../store";
 import { useKeybindLabel } from "../../useKeybind";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
-import { IS_FULL_APP_WINDOW, ownedHere } from "../../windowContext";
 import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
@@ -60,7 +51,7 @@ function CenterDrop() {
   // The copy waits for the boot payload (#352): until it lands the canvas is empty
   // simply because the persisted tabs haven't loaded, so it would flash right
   // before the panels appear. The droppable itself stays mounted — drop targets are
-  // unaffected. (A detached canvas window #84 has its own store, so its own `booted`.)
+  // unaffected. (Each window has its own store, so its own `booted` — task 434.)
   const booted = useStore((s) => s.booted);
   const addCanvas = useStore((s) => s.addCanvas);
   return (
@@ -126,7 +117,7 @@ function LeafPanel({
   // listeners (#144, mirroring Overview #70) — the FileSwitcher (#90) + fork/copy/
   // close buttons stop pointerdown so they stay clickable. The 4px PointerSensor
   // activation constraint keeps a click (select) from dragging. At drag start the
-  // panel is **lifted out** of the layout (#155, App/CanvasWindow `onDragStart` →
+  // panel is **lifted out** of the layout (#155, MainApp `onDragStart` →
   // `beginCanvasLift`): the surface renders a derived layout without this leaf so
   // the others reflow and a `<DragOverlay>` ghost follows the cursor; a drop commits
   // it to the target edge, while Esc / a drop on nothing restores it in place.
@@ -228,7 +219,6 @@ function LeafPanel({
 
   // When this panel becomes the keyboard-focused one (#76), focus its terminal so
   // subsequent keystrokes go there; non-terminal panels just take the highlight.
-  // No-op when the PTY is owned by another window (#84).
   useEffect(() => {
     if (
       isActive &&
@@ -240,15 +230,13 @@ function LeafPanel({
   }, [isActive, content.kind, content.sessionId]);
 
   // Hover-select (#371, extending #368): with "Focus panels on hover" on, entering a
-  // panel moves the active-leaf highlight here — focusing its terminal when this
-  // window renders one (locally-owned agent/shell PTY, #84), otherwise blurring the
-  // previously focused xterm so keystrokes never silently keep flowing to it.
+  // panel moves the active-leaf highlight here — focusing its terminal when the
+  // panel has one (agent/shell PTY), otherwise blurring the previously focused
+  // xterm so keystrokes never silently keep flowing to it.
   const autoFocusOnHover = useStore((s) => s.settings.autoFocusOnHover);
-  const owners = useSessionOwners();
   const ptyId =
     (content.kind === "agent" || content.kind === "terminal") &&
-    content.sessionId &&
-    ownedHere(owners, content.sessionId)
+    content.sessionId
       ? content.sessionId
       : undefined;
   const handleHoverEnter = (e: ReactMouseEvent) => {
@@ -488,7 +476,7 @@ function PanelDragGhost({ leafId }: { leafId: string }) {
 
 /** The Canvas drag overlay (#155): renders the {@link PanelDragGhost} while a panel
  * is lifted, nothing otherwise (sidebar→Canvas content drags keep their default
- * behavior). Placed inside each window's `DndContext` (main + detached, #84). */
+ * behavior). Placed inside each window's `DndContext` (task 434). */
 export function CanvasDragOverlay() {
   const liftedLeaf = useStore((s) => s.liftedLeaf);
   return (
@@ -498,39 +486,18 @@ export function CanvasDragOverlay() {
   );
 }
 
-/** Shown in the **main** window when its active tab is one that's been popped out
- * to its own window (#84) — the main window never renders a detached canvas's
- * PTYs, so it offers to raise / bring back that window instead. */
-function DetachedCanvasNote({ canvasId }: { canvasId: string }) {
-  const focusCanvasWindow = useStore((s) => s.focusCanvasWindow);
-  return (
-    <div className={styles.detachedNote}>
-      <p className={styles.detachedText}>
-        This canvas is open in its own window.
-      </p>
-      <button
-        type="button"
-        className="btn btn-neutral"
-        onClick={() => focusCanvasWindow(canvasId)}
-      >
-        <ExternalLink size={14} strokeWidth={1.5} /> Focus window
-      </button>
-    </div>
-  );
-}
-
 /**
- * The Canvas BSP layout surface (#46/#47/#84): renders the active tab's recursive
+ * The Canvas BSP layout surface (#46/#47): renders the active tab's recursive
  * split-panel tree of real content — agent terminals (#18 pool), file viewers
- * (#44), diff viewers (#39), shell terminals (#72). Shared by the main Canvas view
- * (under the tab strip) and a detached canvas window (#84), which both drive it via
- * the store's `activeCanvasId`. Splitting/closing use the pure `canvasTree` ops and
- * resizing uses react-resizable-panels. `dragActive` toggles the edge split-zones.
+ * (#44), diff viewers (#39), shell terminals (#72). Shared by every full window's
+ * Canvas view (task 434/437 — each window drives it via its own `activeCanvasId`;
+ * two windows on the same canvas simply mirror, 426/427). Splitting/closing use
+ * the pure `canvasTree` ops and resizing uses react-resizable-panels. `dragActive`
+ * toggles the edge split-zones.
  */
 export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
   const canvases = useStore((s) => s.canvases);
   const activeCanvasId = useStore((s) => s.activeCanvasId);
-  const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
   const setActiveCanvasLayout = useStore((s) => s.setActiveCanvasLayout);
   const equalizeCanvas = useStore((s) => s.equalizeCanvas);
   const liftedLeaf = useStore((s) => s.liftedLeaf);
@@ -577,14 +544,6 @@ export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
     rawLayout,
     liftedLeaf?.canvasId === activeCanvasId ? liftedLeaf.leafId : null,
   );
-  // In a full app window (task 434 — main or app-*), the active tab can (rarely)
-  // be a detached canvas — show a note instead of rendering its PTYs in two
-  // windows (#84). Gate on IS_FULL_APP_WINDOW (#98): the detached window itself is
-  // exempt exactly as before — it forces activeCanvasId to its own (detached) id,
-  // so without this guard it would show the note instead of its own panels.
-  const activeDetached =
-    IS_FULL_APP_WINDOW && detachedCanvasIds.includes(activeCanvasId);
-
   // Resize/close fire after a render, so re-derive the active tab's *current*
   // layout from the store rather than closing over `layout`.
   const activeLayout = (): CanvasNode | null => {
@@ -662,13 +621,7 @@ export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
 
   return (
     <div className={styles.area}>
-      {activeDetached ? (
-        <DetachedCanvasNote canvasId={activeCanvasId} />
-      ) : layout ? (
-        renderNode(layout)
-      ) : (
-        <CenterDrop />
-      )}
+      {layout ? renderNode(layout) : <CenterDrop />}
     </div>
   );
 }

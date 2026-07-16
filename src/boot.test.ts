@@ -11,14 +11,14 @@ const ids = (...values: string[]) => {
   return () => values[i++] ?? "extra";
 };
 
-describe("resolveCanvases (#58/#84/#352/task 434)", () => {
+describe("resolveCanvases (#58/#352/task 434/437)", () => {
   it("keeps the persisted tabs and their active id", () => {
     const persisted = {
       canvases: [tab("c1"), tab("c2")],
       activeId: "c2",
     };
 
-    const r = resolveCanvases(persisted, null, null, null, ids("new"));
+    const r = resolveCanvases(persisted, null, null, ids("new"));
 
     expect(r.canvases).toEqual(persisted.canvases);
     expect(r.activeCanvasId).toBe("c2");
@@ -31,7 +31,7 @@ describe("resolveCanvases (#58/#84/#352/task 434)", () => {
       activeId: "gone",
     };
 
-    const r = resolveCanvases(persisted, null, null, null, ids("new"));
+    const r = resolveCanvases(persisted, null, null, ids("new"));
 
     expect(r.activeCanvasId).toBe("c1");
     expect(r.migrated).toBe(false);
@@ -44,7 +44,7 @@ describe("resolveCanvases (#58/#84/#352/task 434)", () => {
       content: { kind: "terminal", sessionId: "t1", repoPath: "/repo/a" },
     };
 
-    const r = resolveCanvases(null, legacy, null, null, ids("fresh"));
+    const r = resolveCanvases(null, legacy, null, ids("fresh"));
 
     expect(r.canvases).toEqual([
       { id: "fresh", name: "Canvas 1", layout: legacy },
@@ -55,7 +55,7 @@ describe("resolveCanvases (#58/#84/#352/task 434)", () => {
   });
 
   it("starts with one empty canvas when nothing is persisted at all", () => {
-    const r = resolveCanvases(null, null, null, null, ids("fresh"));
+    const r = resolveCanvases(null, null, null, ids("fresh"));
 
     expect(r.canvases).toEqual([
       { id: "fresh", name: "Canvas 1", layout: null },
@@ -69,7 +69,6 @@ describe("resolveCanvases (#58/#84/#352/task 434)", () => {
       { canvases: [], activeId: "" },
       null,
       null,
-      null,
       ids("fresh"),
     );
 
@@ -77,38 +76,13 @@ describe("resolveCanvases (#58/#84/#352/task 434)", () => {
     expect(r.migrated).toBe(true);
   });
 
-  it("a detached window's pin always shows its own canvas (#84)", () => {
+  it("a window's ?canvas= preset selects the tab when it exists (task 434)", () => {
     const persisted = {
       canvases: [tab("c1"), tab("c2")],
       activeId: "c1",
     };
 
-    const r = resolveCanvases(persisted, null, "c2", null, ids("new"));
-
-    // The tabs are untouched; only the active tab is forced to this window's canvas.
-    expect(r.canvases).toEqual(persisted.canvases);
-    expect(r.activeCanvasId).toBe("c2");
-    expect(r.migrated).toBe(false);
-  });
-
-  it("the pin wins even when the pinned canvas is not in the tab list (#84)", () => {
-    const persisted = {
-      canvases: [tab("c1")],
-      activeId: "c1",
-    };
-
-    const r = resolveCanvases(persisted, null, "ghost", null, ids("new"));
-
-    expect(r.activeCanvasId).toBe("ghost");
-  });
-
-  it("an app window's ?canvas= preset selects the tab when it exists (task 434)", () => {
-    const persisted = {
-      canvases: [tab("c1"), tab("c2")],
-      activeId: "c1",
-    };
-
-    const r = resolveCanvases(persisted, null, null, "c2", ids("new"));
+    const r = resolveCanvases(persisted, null, "c2", ids("new"));
 
     expect(r.canvases).toEqual(persisted.canvases);
     expect(r.activeCanvasId).toBe("c2");
@@ -121,19 +95,8 @@ describe("resolveCanvases (#58/#84/#352/task 434)", () => {
       activeId: "c2",
     };
 
-    const r = resolveCanvases(persisted, null, null, "gone", ids("new"));
+    const r = resolveCanvases(persisted, null, "gone", ids("new"));
 
     expect(r.activeCanvasId).toBe("c2");
-  });
-
-  it("the detached pin beats the app-window preset (task 434)", () => {
-    const persisted = {
-      canvases: [tab("c1"), tab("c2")],
-      activeId: "c1",
-    };
-
-    const r = resolveCanvases(persisted, null, "c1", "c2", ids("new"));
-
-    expect(r.activeCanvasId).toBe("c1");
   });
 });

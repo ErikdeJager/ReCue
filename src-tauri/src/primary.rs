@@ -68,10 +68,10 @@ pub struct PrimaryPayload {
 }
 
 /// Register a window at its creation site. Every window-creation site routes
-/// through here (setup for the config-created window(s), `open_canvas_window`,
-/// and the future 9/16 full-window creator) — ineligible labels are filtered
-/// inside, so a canvas-window call is a documented no-op. Emits
-/// `window://primary` only when the primary changed, AFTER updating the state.
+/// through here (setup for the config-created window(s), and `open_app_window`,
+/// the task-434 full-window creator) — ineligible labels are filtered inside.
+/// Emits `window://primary` only when the primary changed, AFTER updating the
+/// state.
 pub fn register_window(app: &AppHandle, label: &str) {
     // `try_state`: never panic on teardown/setup ordering — no state, no election.
     let Some(state) = app.try_state::<Primary>() else {

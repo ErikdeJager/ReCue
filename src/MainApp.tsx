@@ -18,10 +18,7 @@ import {
   payloadToContent,
 } from "./components/Canvas/canvasDrop";
 import { CanvasDragOverlay } from "./components/Canvas/CanvasSurface";
-import {
-  computeSessionOwners,
-  sessionIdsInLayout,
-} from "./components/Canvas/canvasTree";
+import { sessionIdsInLayout } from "./components/Canvas/canvasTree";
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
 import ModalHost from "./components/ModalHost";
 import Overview from "./components/Overview/Overview";
@@ -39,7 +36,6 @@ import { useOsFileDrop } from "./osFileDrop";
 import { prefetchDeferredChunks } from "./prefetch";
 import { overviewClusters, useStore } from "./store";
 import { useKeyboardNav } from "./useKeyboardNav";
-import { ownedHere } from "./windowContext";
 
 // The Attention triage view (#398) is a lazy chunk — kept off the first-paint graph
 // (#356) and warmed on idle by `src/prefetch.ts`. Its own per-branch Suspense (below)
@@ -58,8 +54,8 @@ const Attention = lazy(() => import("./components/Attention/Attention"));
  * tree into the workspace. The Overview wall keeps its own nested sortable
  * context (#43); the two never both have live targets (one view mounts at a time).
  *
- * This is the **main-window route chunk** (#356) — `App.tsx` lazy-loads it, so a
- * detached canvas window (#84) never downloads the sidebar / Overview / modals.
+ * This is the **app-shell route chunk** (#356) — `App.tsx` lazy-loads it in every
+ * window (task 437 deleted the #84 canvas-only route), keeping it out of the entry.
  * The eleven lazy modals live behind `<ModalHost />`; `Toaster`, `BigModeModal`,
  * `UpdateModal` and `ClaudeMissing` stay static (first-paint or safety-critical —
  * the update install overlay must never be a chunk away).
@@ -71,7 +67,6 @@ function MainApp() {
   const overviewPanels = useStore((s) => s.overviewPanels);
   const canvases = useStore((s) => s.canvases);
   const activeCanvasId = useStore((s) => s.activeCanvasId);
-  const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
   const schedules = useStore((s) => s.schedules);
   const recurrings = useStore((s) => s.recurrings);
   const overviewOrder = useStore((s) => s.overviewOrder);
@@ -109,20 +104,22 @@ function MainApp() {
       .flat()
       .filter((p) => p.kind === "terminal")
       .map((p) => p.id);
-    // A PTY rendered in a detached canvas window (#84) is owned by that window —
-    // drop it from this window's pool so it isn't rendered/resized in two places.
-    const owners = computeSessionOwners(canvases, detachedCanvasIds);
     // Template-created (#118) terminals live only in a Canvas layout — not in
     // `overviewPanels` — so collect terminal/agent PTY ids referenced by any canvas
     // too, else reconcile would dispose them. (Agent ids dedupe with `sessions`.)
     const canvasPtyIds = canvases.flatMap((c) => sessionIdsInLayout(c.layout));
+    // Keep-set = every live PTY (agents, shell panels #72, canvas-layout terminals #118).
+    // No ownership filter (task 437): any window may render any session — the #351
+    // visibility gate means an xterm is only built for what THIS window actually shows,
+    // and 426/427 mirror-size the shared PTY. Two windows typing into one agent
+    // interleave like two tmux clients — expected.
     const active = [
       ...sessions.map((s) => s.id),
       ...terminalIds,
       ...canvasPtyIds,
-    ].filter((id) => ownedHere(owners, id));
+    ];
     reconcileTerminals(active);
-  }, [sessions, overviewPanels, canvases, detachedCanvasIds]);
+  }, [sessions, overviewPanels, canvases]);
 
   // Lift an existing panel out of the layout at drag start (#155) so the rest
   // reflow and a ghost follows the cursor; sidebar→Canvas content drags are unaffected.
@@ -176,9 +173,8 @@ function MainApp() {
     overviewIsEmpty({ sessions, overviewPanels, schedules, recurrings }),
   );
   // Whether panels cover the stage right now, so the wave can pause (task 384):
-  // Overview ⇒ the (filter-aware) wall has cards; Canvas ⇒ the active tab is not
-  // detached and has a layout. Mirrors the actual render — Overview shows exactly
-  // `overviewClusters`, and a detached active tab renders a note, not panels.
+  // Overview ⇒ the (filter-aware) wall has cards; Canvas ⇒ the active tab has a
+  // layout. Mirrors the actual render — Overview shows exactly `overviewClusters`.
   const waveIsCovered = waveCovered({
     view: view === "canvas" ? "canvas" : "overview",
     overviewHasCards:
@@ -192,7 +188,6 @@ function MainApp() {
       }).length > 0,
     activeCanvasLayout:
       canvases.find((c) => c.id === activeCanvasId)?.layout ?? null,
-    activeCanvasDetached: detachedCanvasIds.includes(activeCanvasId),
   });
 
   return (

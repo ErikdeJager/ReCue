@@ -1274,3 +1274,34 @@ chord entry point there (the File → New Window item is macOS-only).
       glyph (e.g. Polish ń), confirm the documented accepted caveat: the chord opens
       a window (swallowing the glyph), and rebinding/unbinding it in Settings →
       Shortcuts restores glyph typing.
+
+## 2026-07-16 — Canvas pop-out opens a full ReCue window; #84 ownership layer deleted (multi-window 11/16, task 437)
+
+The Canvas tab pop-out button and the drag tear-off now call `open_app_window({ canvas: id })`
+(task 434) — a full ReCue window (sidebar + views) booted into Canvas on that tab — and the
+whole #84 detached-canvas / single-owner era is deleted (ownership map, `DetachedNote`, the
+`CanvasWindow` route, the `canvas://windows` event, the four canvas-window Rust commands, the
+`canvas-*` capability). Any window now views any canvas: two windows on the same canvas mirror
+(426/427, smallest-wins grid, letterboxed), and **typing into one agent from two windows
+interleaves at the PTY like two tmux clients — expected, not a bug**. Pure deletion of
+platform-neutral TS/Rust; the one behavioral addition rides 434's already-cross-platform
+window plumbing.
+
+### Needs real-box verification (pop-out = full window, task 437)
+
+- [ ] **Pop-out button / tear-off on Windows.** Both open a second full window on that
+      canvas; the first window keeps the tab (no "in window" marker) and both render its
+      terminal live.
+- [ ] **Two windows, one agent, under ConPTY.** Typing from both windows interleaves
+      (expected); the grid tracks the smallest attached view; no crash, no stray repaints
+      beyond the interleaving.
+- [ ] **WebGL in the popped-out window.** The #105 canvas-window DOM-renderer rule is gone —
+      the second window's terminals attach the WebGL addon; watch for the old #105
+      doubled/ghosted-glyph artifact (if it reproduces there, it reproduces in the main
+      window too — same code path, separate bug).
+- [ ] **`?canvas=` compat URL.** A legacy `index.html?canvas=<id>` load renders the full
+      shell booted into Canvas on that tab (one-release compat; nothing creates such
+      windows anymore).
+- [ ] **Close the popped-out window.** The first window keeps rendering everything (the 426
+      view purge unclamps the grid); closing a canvas viewed by another window re-homes
+      that window to another tab (no self-close, no ghost).

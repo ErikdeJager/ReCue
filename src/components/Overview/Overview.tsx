@@ -41,14 +41,12 @@ import {
   repoColor,
   useStore,
 } from "../../store";
-import { useSessionOwners } from "../../ownership";
 import {
   effectiveRepo,
   repoName,
   sessionInFilter,
   sessionLabel,
 } from "../../paths";
-import { ownedHere } from "../../windowContext";
 import { formatFireTime, formatInterval, formatNextRun } from "../../time";
 import type {
   OverviewPanel,
@@ -63,8 +61,8 @@ import EmptyState from "../EmptyState/EmptyState";
 import TipRow from "../TipRow/TipRow";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 // The shared item renderer (#157) maps a content descriptor → the right live child
-// (terminal / file / kanban / diff / scheduled) with the #84 ownership guard and the
-// big-mode placeholder — one source of truth shared with Canvas + the modal.
+// (terminal / file / kanban / diff / scheduled) with the big-mode placeholder —
+// one source of truth shared with Canvas + the modal.
 import ItemContent from "../ItemContent/ItemContent";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
@@ -252,10 +250,8 @@ function SessionCard({
   // Overview column caps at 900px — agent, recurring, file/diff/kanban/terminal, and
   // scheduled panels alike.
   const capWidth = useStore((s) => s.settings.capAgentWidth);
-  // Hover-select (#371): focus this agent's PTY only when THIS window renders it —
-  // a session owned by a detached window (#84) shows a DetachedNote, so hovering it
-  // must blur instead of queueing a focus for the other window's terminal.
-  const owners = useSessionOwners();
+  // Hover-select (#371): hovering the card focuses this window's own live mirror
+  // of the agent's terminal (task 437 — every window renders its sessions locally).
   // Agent label (#95): a single line showing only the primary — the custom name if
   // set, else the branch (folder name when non-git). No subtitle, no repo dot; repo
   // color reads from the card's top band (#36). `sessionLabel` still computes the
@@ -402,8 +398,8 @@ function SessionCard({
   );
   return (
     // Clicking the card body selects it (highlight in place). The shared ItemContent
-    // (#157) renders the live terminal — or a DetachedNote (#84) / MaximizedNote
-    // (#157) placeholder — with the same one-live-render-site guards as Canvas.
+    // (#157) renders the live terminal — or a MaximizedNote (#157) placeholder —
+    // with the same per-window one-live-render-site guard as Canvas.
     <PanelColumn
       id={session.id}
       color={color}
@@ -414,7 +410,7 @@ function SessionCard({
       actions={actions}
       subheader={<AutoContinueToggle session={session} />}
       onClickBody={onSelect}
-      ptyFocusId={ownedHere(owners, session.id) ? session.id : undefined}
+      ptyFocusId={session.id}
     >
       <ItemContent
         content={{
@@ -461,9 +457,8 @@ function ExtraPanel({
   const maximizeItem = useStore((s) => s.maximizeItem);
   const bigModeKey = useKeybindLabel("big-mode");
   // Hover-select (#371): a shell terminal panel's PTY session id IS the panel id
-  // (overviewPanelToContent) — focus it on hover when this window renders it.
+  // (overviewPanelToContent) — hovering focuses this window's own live mirror.
   // File/diff/kanban/filetree panels have no terminal input ⇒ blur instead.
-  const owners = useSessionOwners();
   // The "cap Overview panel width" setting (373/419, default on) — caps this
   // file/diff/terminal/kanban/filetree panel at 900px like the agent cards.
   const capWidth = useStore((s) => s.settings.capAgentWidth);
@@ -540,11 +535,7 @@ function ExtraPanel({
       }
       actions={actions}
       onClickBody={onSelect}
-      ptyFocusId={
-        panel.kind === "terminal" && ownedHere(owners, panel.id)
-          ? panel.id
-          : undefined
-      }
+      ptyFocusId={panel.kind === "terminal" ? panel.id : undefined}
     >
       {/* The shared renderer (#157) maps diff/terminal/kanban/file → the live child
           (the same components Canvas uses), with the big-mode placeholder guard. */}
@@ -831,8 +822,6 @@ function Overview() {
   const cancelRecurring = useStore((s) => s.cancelRecurring);
   // The boot payload has landed (#352) — gates the empty state (see below).
   const booted = useStore((s) => s.booted);
-  // PTY ownership across windows (#84) is resolved inside the shared ItemContent
-  // (#157) now — an agent owned by a detached canvas window shows a note there.
 
   // Recurring-owned child agents (#294) render only inside the recurring card, never
   // as their own column — exclude them from the session lists that drive the wall.

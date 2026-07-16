@@ -2379,7 +2379,6 @@ describe("openSessionInCanvas (#153)", () => {
       canvases: [{ id: "c1", name: "Canvas 1", layout: null }],
       activeCanvasId: "c1",
       view: "overview",
-      detachedCanvasIds: [],
     });
     s().openSessionInCanvas("a1");
     const st = s();
@@ -2407,7 +2406,6 @@ describe("openSessionInCanvas (#153)", () => {
       ],
       activeCanvasId: "c1",
       view: "overview",
-      detachedCanvasIds: [],
     });
     s().openSessionInCanvas("a1");
     const st = s();
@@ -2416,25 +2414,6 @@ describe("openSessionInCanvas (#153)", () => {
     expect(st.activeLeafId).toBe("L");
     expect(st.view).toBe("canvas");
     expect(st.selectedId).toBe("a1");
-  });
-
-  it("raises a detached window without switching the main view (#84)", () => {
-    useStore.setState({
-      sessions: [session("a1")],
-      canvases: [
-        { id: "c1", name: "Canvas 1", layout: null },
-        { id: "c2", name: "Canvas 2", layout: agentLeaf("L", "a1") },
-      ],
-      activeCanvasId: "c1",
-      view: "overview",
-      detachedCanvasIds: ["c2"],
-    });
-    s().openSessionInCanvas("a1");
-    const st = s();
-    expect(st.canvases).toHaveLength(2); // no new tab
-    expect(st.view).toBe("overview"); // main view unchanged
-    expect(st.activeCanvasId).toBe("c1"); // unchanged
-    expect(st.selectedId).toBe("a1"); // row still highlighted
   });
 });
 
@@ -2824,7 +2803,6 @@ describe("openFileFromTree (#175)", () => {
       canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
       activeCanvasId: "canvas-1",
       overviewPanels: {},
-      detachedCanvasIds: [],
       selectedId: null,
       activeLeafId: null,
     });
@@ -2860,7 +2838,6 @@ describe("openFileFromTree (#175)", () => {
       overviewPanels: {
         "/repo/a": [{ id: "p1", kind: "markdown", file: "notes.md" }],
       },
-      detachedCanvasIds: [],
       selectedId: null,
       activeLeafId: null,
     });
@@ -2871,36 +2848,6 @@ describe("openFileFromTree (#175)", () => {
     expect(st.overviewPanels["/repo/a"]).toHaveLength(1); // no duplicate panel
     expect(st.activeLeafId).toBe("L");
     expect(st.selectedId).toBe("p1");
-  });
-
-  it("Canvas, leaf lives in a detached tab: raises that window, no main-view switch (#84)", async () => {
-    useStore.setState({
-      view: "canvas",
-      canvases: [
-        { id: "canvas-1", name: "Canvas 1", layout: null },
-        {
-          id: "c2",
-          name: "Canvas 2",
-          layout: fileLeaf("L", "/repo/a", "notes.md"),
-        },
-      ],
-      activeCanvasId: "canvas-1",
-      overviewPanels: {
-        "/repo/a": [{ id: "p1", kind: "markdown", file: "notes.md" }],
-      },
-      detachedCanvasIds: ["c2"],
-      selectedId: null,
-      activeLeafId: null,
-    });
-    const focusSpy = vi.spyOn(s(), "focusCanvasWindow");
-    await s().openFileFromTree("/repo/a", "notes.md", "markdown");
-    const st = s();
-    expect(focusSpy).toHaveBeenCalledWith("c2");
-    expect(st.activeCanvasId).toBe("canvas-1"); // main view's active tab unchanged
-    expect(st.selectedId).toBe("p1");
-    // Nothing appended to the main tab.
-    expect(collectLeaves(st.canvases[0]?.layout ?? null)).toHaveLength(0);
-    focusSpy.mockRestore();
   });
 
   it("addOverviewPanel returns the new id on add and the existing id on a dedup hit", async () => {

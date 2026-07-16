@@ -1,16 +1,12 @@
 import { lazy, Suspense } from "react";
 
 import { useRevealWindow } from "./useRevealWindow";
-import { IS_DETACHED_CANVAS_WINDOW } from "./windowContext";
 
-// The two window routes (#84) are the app's two lazy entry points (#356): the main shell
-// (sidebar + Overview/Canvas + modals) and the canvas-only detached window. Splitting them
-// means a detached window never downloads the sidebar, the Overview wall, or a single modal,
-// and the main window's own code lands in its own chunk instead of the Vite entry.
+// The one window route: every ReCue window is a full app shell (task 437 deleted
+// the #84 detached canvas-only route). Keeping it lazy (#356) still keeps the
+// shell's code — the sidebar, Overview wall, and modals — out of the Vite entry
+// chunk, so the entry stays a thin bootstrap.
 const MainApp = lazy(() => import("./MainApp"));
-const CanvasWindow = lazy(
-  () => import("./components/CanvasWindow/CanvasWindow"),
-);
 
 /**
  * Reveal trigger — where #348 (hidden-until-painted) meets #356 (lazy route chunks).
@@ -35,12 +31,11 @@ function RevealOnPaint() {
 }
 
 /**
- * Root: the full app shell in any FULL window — the main window or an `app-*`
- * window (task 434) — or the canvas-only view in a detached canvas window (#84,
- * the legacy route, kept working this release; card 11/16 deletes it). Window
- * identity is fixed for a window's lifetime (derived from its URL), so this
- * branch is stable — hooks never run conditionally, and exactly one of the two
- * route chunks is ever fetched.
+ * Root: the full app shell — the same in every window (the main window and every
+ * `app-*` window, task 434/437; the detached canvas-only route was deleted by
+ * task 437). Window identity is fixed for a window's lifetime (derived from its
+ * URL), so the per-window presets are plain constants and the route never
+ * branches.
  *
  * The Suspense fallback is a bare `div.app` on purpose: it paints the app background
  * (no spinner, no layout) for the one frame before the route chunk executes. The window is
@@ -52,7 +47,7 @@ function App() {
   return (
     <Suspense fallback={<div className="app" />}>
       <RevealOnPaint />
-      {IS_DETACHED_CANVAS_WINDOW ? <CanvasWindow /> : <MainApp />}
+      <MainApp />
     </Suspense>
   );
 }
