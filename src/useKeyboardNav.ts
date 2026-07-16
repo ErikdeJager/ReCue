@@ -55,6 +55,7 @@ import {
 } from "./keybinds";
 import { detectPlatform } from "./platform";
 import { saveFocused } from "./saverRegistry";
+import { detectedWorktreeParents } from "./worktrees";
 import {
   adjacentId,
   contentForSelected,
@@ -383,6 +384,10 @@ export function useKeyboardNav(): void {
           overviewOrder: state.overviewOrder,
           schedules: state.schedules,
           recurrings: state.recurrings,
+          worktreeParents: detectedWorktreeParents(
+            state.repoWorktrees,
+            state.platform,
+          ),
           filter: state.overviewRepoFilter,
         });
         const id = adjacentId(

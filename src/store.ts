@@ -1075,6 +1075,7 @@ export function overviewClusterKeys(input: {
   overviewOrder: Record<string, string[]>;
   schedules: ScheduledSession[];
   recurrings?: RecurringSession[];
+  worktreeParents?: Record<string, string>;
   filter: OverviewFilter;
 }): string[] {
   return overviewClusters(input).flatMap((c) => c.keys);
@@ -5307,6 +5308,7 @@ export const useStore = create<AppState>()((set, get) => ({
         overviewOrder: s.overviewOrder,
         schedules: s.schedules,
         recurrings: s.recurrings,
+        worktreeParents: detectedWorktreeParents(s.repoWorktrees, s.platform),
         filter: s.overviewRepoFilter,
       });
       if (!visibleKeys.includes(s.selectedId)) return;
