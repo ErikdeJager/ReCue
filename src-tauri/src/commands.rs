@@ -2377,7 +2377,7 @@ pub fn create_app_window(
         builder = builder
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true)
-            .traffic_light_position(tauri::LogicalPosition::new(16.0, 10.0));
+            .traffic_light_position(tauri::LogicalPosition::new(16.0, 17.0));
     }
     let window = builder
         .build()
