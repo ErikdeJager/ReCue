@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ComponentPropsWithoutRef } from "react";
-import { Code2, Copy, Eye } from "lucide-react";
+import { Copy, Eye, Terminal as TerminalIcon } from "lucide-react";
 import type { Element, ElementContent } from "hast";
 import ReactMarkdown from "react-markdown";
 import type { ExtraProps } from "react-markdown";
@@ -10,12 +10,15 @@ import { noAutoCapitalize } from "../../inputProps";
 import { kbdHint } from "../../platform";
 import { useStore } from "../../store";
 import { useAutoSaveFile } from "../../useAutoSaveFile";
+import ClaimBanner from "../ClaimBanner/ClaimBanner";
 import {
   makeCheckboxComponents,
   rehypeTaskListPositions,
 } from "../markdownCheckboxes";
+import SegmentedControl from "../SegmentedControl/SegmentedControl";
 import { detectMode, prismLang } from "./fileType";
 import { EOF_DELETION, type GutterMarkers } from "./gutter";
+import { LINE_CAP, lineTruncation, nextVisible } from "./lineCap";
 import { MermaidCode } from "./MermaidBlock";
 import { highlightToHtml } from "./prism";
 import { useFileDiffGutter } from "./useFileDiffGutter";
@@ -24,6 +27,9 @@ import styles from "./FileViewer.module.css";
 // Above this, skip render/highlight and show plain raw text so a big file can't
 // jank — and keep it read-only (no editing), for perf (#148).
 const LARGE_BYTES = 256 * 1024;
+
+// Stable empty-lines fallback so the `lines` memo doesn't allocate while text is null.
+const EMPTY: string[] = [];
 
 interface FileViewerProps {
   repoPath: string;
@@ -183,7 +189,10 @@ function CodeBlockWithCopy({
  * file (and not too large), the raw view is an **editable** monospace textarea
  * that **auto-saves** debounced (#148, no save button); rendered markdown, the
  * Prism code view, and large files stay read-only. No `rehype-raw`, so untrusted
- * markdown can't inject HTML.
+ * markdown can't inject HTML. While **another window** soft-claims this file
+ * (task 435, `lockedBy`) the whole editor renders read-only — banner + readOnly
+ * textarea + non-interactive checkboxes + disabled Save — narrowing the old
+ * cross-window last-write-wins tradeoff; "Take over" transfers the claim.
  */
 function FileViewer({ repoPath, file, active }: FileViewerProps) {
   const {
@@ -198,18 +207,61 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
     onBlur,
     onCompositionStart,
     onCompositionEnd,
+    lockedBy,
+    takeOver,
   } = useAutoSaveFile(repoPath, file, active);
+  // Read-only mirror of the hook's hard setText/save gates (task 435).
+  const locked = lockedBy !== null;
   const platform = useStore((s) => s.platform);
   const [showRaw, setShowRaw] = useState(false);
+  // Line-cap reveal state (#413): read-only render sinks show only the first
+  // `visibleLines` lines until the user reveals more.
+  const [visibleLines, setVisibleLines] = useState(LINE_CAP);
 
   const mode = detectMode(file);
 
-  // Reset the raw toggle per file.
-  useEffect(() => setShowRaw(false), [file]);
+  // Reset the raw toggle + the line-cap reveal per file.
+  useEffect(() => {
+    setShowRaw(false);
+    setVisibleLines(LINE_CAP);
+  }, [file]);
+
+  // Split into lines once so the line-cap (#413) can slice the read-only render sinks.
+  // Computed before the early returns (rules of hooks) — `text` may be null, in which
+  // case there are no lines and nothing is truncated.
+  const lines = useMemo(
+    () => (text === null ? EMPTY : text.split("\n")),
+    [text],
+  );
+
+  // Derived view flags — computed before the early returns so the memo/gutter hooks
+  // (which must run unconditionally, rules of hooks) can key off them. `text` may be
+  // null here; the guards below tolerate it and the null return still short-circuits
+  // render.
+  const tooLarge = text !== null && text.length > LARGE_BYTES;
+  const renderMarkdown = mode === "markdown" && !showRaw && !tooLarge;
+  // Editable raw text (#148): markdown in Raw mode or a plain-text file, not too
+  // large. Rendered markdown, the Prism code view, and large files stay read-only.
+  const editable =
+    !tooLarge && ((mode === "markdown" && showRaw) || mode === "text");
+
+  // Line-cap (#413): the read-only render sinks (rendered markdown, Prism code,
+  // read-only raw <pre> — everything but the editable textarea) show only the first
+  // `visibleLines` lines until the user reveals more. The editable textarea always
+  // holds the full buffer so an auto-save / ⌘S never writes a truncated file.
+  const capActive = !editable;
+  const trunc = lineTruncation(lines.length, visibleLines);
+  const truncated = capActive && trunc.truncated;
+  const displayText = truncated
+    ? lines.slice(0, visibleLines).join("\n")
+    : (text ?? "");
 
   // Clickable task-list checkboxes in the rendered markdown (#173): a toggle flips
   // the source marker and routes through `setText` (so the #162 save mode applies).
   // Memoized on the buffer so the map isn't rebuilt every render. `setText` is stable.
+  // While a rendered-markdown file is truncated (#413) the checkboxes are read-only and
+  // the source is the truncated string (offsets must match the exact rendered text), so
+  // a toggle can never write a partial buffer back to disk.
   // Mermaid diagrams in rendered markdown (#254): merge the opt-in `code` override
   // (a ` ```mermaid ` block → an SVG diagram; every other code fence unchanged) — wired
   // only here, so Kanban / PatchNotes / Settings markdown stay unaffected. The `pre`
@@ -217,20 +269,18 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
   const markdownComponents = useMemo(
     () => ({
       ...makeCheckboxComponents({
-        source: text ?? "",
-        interactive: true,
+        source: renderMarkdown ? displayText : (text ?? ""),
+        // Non-interactive while truncated (#413) OR claimed by another window
+        // (task 435 — setText is hard-gated anyway; this is the UX mirror).
+        interactive: !(renderMarkdown && truncated) && !locked,
         onToggle: setText,
       }),
       code: MermaidCode,
       pre: CodeBlockWithCopy,
     }),
-    [text, setText],
+    [text, setText, displayText, renderMarkdown, truncated, locked],
   );
 
-  // Derived view flags — computed before the early returns so the gutter hook (which
-  // must run unconditionally, rules of hooks) can key off them. `text` may be null
-  // here; the guards below tolerate it and the null return still short-circuits render.
-  const tooLarge = text !== null && text.length > LARGE_BYTES;
   const lang = mode === "code" && !tooLarge ? prismLang(file) : undefined;
   // Git-diff gutter (#324): enabled only for the read-only Prism **code** view — a
   // curated, not-too-large code file (small files never reach the read-only <pre>, so
@@ -252,11 +302,6 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
     return <div className={styles.message}>Loading…</div>;
   }
 
-  const renderMarkdown = mode === "markdown" && !showRaw && !tooLarge;
-  // Editable raw text (#148): markdown in Raw mode or a plain-text file, not too
-  // large. Rendered markdown, the Prism code view, and large files stay read-only.
-  const editable =
-    !tooLarge && ((mode === "markdown" && showRaw) || mode === "text");
   // Rendered markdown is now writable too (#173, clickable checkboxes), so the
   // toolbar's save/status surfaces for any non-large markdown/text file — not just
   // the raw/text textarea (`editable`). The textarea itself stays gated by `editable`.
@@ -265,6 +310,8 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
 
   return (
     <div className={styles.viewer}>
+      {/* Another window is this file's authoritative editor (task 435). */}
+      {locked && <ClaimBanner onTakeOver={takeOver} />}
       {showToolbar && (
         <div className={styles.toolbar}>
           {/* Auto mode (#148): a subtle "Saving…/Saved" hint. Manual mode (#162):
@@ -275,9 +322,13 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
               type="button"
               className={styles.saveBtn}
               onClick={() => save()}
-              disabled={!dirty}
+              disabled={!dirty || locked}
               title={
-                dirty ? `Save (${kbdHint(platform, "⌘S", "Ctrl+S")})` : "Saved"
+                locked
+                  ? "Read-only — being edited in another window"
+                  : dirty
+                    ? `Save (${kbdHint(platform, "⌘S", "Ctrl+S")})`
+                    : "Saved"
               }
             >
               {dirty ? "Save" : "Saved"}
@@ -294,39 +345,45 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
               </span>
             )
           )}
-          {/* The eye/code toggle is markdown-only (rendered ↔ raw source). Two
-              segments always shown with the active highlighted (#73). */}
+          {/* The Rendered/Raw toggle is markdown-only (rendered ↔ raw source) —
+              the shared SegmentedControl atom (UI v2 §8; two segments always shown
+              with the active highlighted, #73). */}
           {mode === "markdown" && !tooLarge && (
-            <div
-              className={styles.segmented}
-              role="group"
-              aria-label="View mode"
-            >
-              <button
-                type="button"
-                className={`${styles.segment} ${!showRaw ? styles.segmentActive : ""}`}
-                onClick={() => setShowRaw(false)}
-                aria-pressed={!showRaw}
-              >
-                <Eye size={13} strokeWidth={1.5} />
-                Rendered
-              </button>
-              <button
-                type="button"
-                className={`${styles.segment} ${showRaw ? styles.segmentActive : ""}`}
-                onClick={() => setShowRaw(true)}
-                aria-pressed={showRaw}
-              >
-                <Code2 size={13} strokeWidth={1.5} />
-                Raw
-              </button>
-            </div>
+            <SegmentedControl<"rendered" | "raw">
+              ariaLabel="View mode"
+              value={showRaw ? "raw" : "rendered"}
+              onChange={(v) => setShowRaw(v === "raw")}
+              options={[
+                {
+                  value: "rendered",
+                  label: (
+                    <>
+                      <Eye size={12} strokeWidth={1.5} aria-hidden /> Rendered
+                    </>
+                  ),
+                  title: "Rendered markdown",
+                },
+                {
+                  value: "raw",
+                  label: (
+                    <>
+                      <TerminalIcon size={12} strokeWidth={1.5} aria-hidden />{" "}
+                      Raw
+                    </>
+                  ),
+                  title: "Raw source (editable)",
+                },
+              ]}
+            />
           )}
         </div>
       )}
       {tooLarge && (
         <div className={styles.notice}>Large file — showing raw text.</div>
       )}
+      {/* The read-only render sinks are fed `displayText` (the first `visibleLines`
+          lines while truncated, #413) so a huge file paints instantly; the editable
+          textarea keeps the full `text` so a save never writes a partial buffer. */}
       {renderMarkdown ? (
         <div className={styles.markdown}>
           <ReactMarkdown
@@ -334,17 +391,19 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
             rehypePlugins={[rehypeTaskListPositions]}
             components={markdownComponents}
           >
-            {text}
+            {displayText}
           </ReactMarkdown>
         </div>
       ) : lang ? (
-        <CodeBlock code={text} lang={lang} markers={markers} />
+        <CodeBlock code={displayText} lang={lang} markers={markers} />
       ) : editable ? (
-        // Editable raw text, auto-saving via the hook (#148).
+        // Editable raw text, auto-saving via the hook (#148). Always the FULL
+        // buffer. readOnly while another window claims the file (task 435).
         <textarea
           className={styles.editor}
           {...noAutoCapitalize}
           value={text}
+          readOnly={locked}
           spellCheck={false}
           onChange={(event) => setText(event.currentTarget.value)}
           onFocus={onFocus}
@@ -354,7 +413,36 @@ function FileViewer({ repoPath, file, active }: FileViewerProps) {
           aria-label={`Edit ${file}`}
         />
       ) : (
-        <pre className={styles.raw}>{text}</pre>
+        <pre className={styles.raw}>{displayText}</pre>
+      )}
+      {/* Reveal footer (#413) — a fixed bottom bar below the scrolling content. Shows
+          how much of the file is rendered and reveals more on demand. The live status
+          is announced; both reveals are real focusable buttons. */}
+      {truncated && (
+        <div
+          className={styles.moreBar}
+          role="group"
+          aria-label="Reveal more lines"
+        >
+          <span className={styles.moreCount} role="status" aria-live="polite">
+            Showing {trunc.shown.toLocaleString()} of{" "}
+            {trunc.total.toLocaleString()} lines
+          </span>
+          <button
+            type="button"
+            className={styles.moreBtn}
+            onClick={() => setVisibleLines((v) => nextVisible(v, trunc.total))}
+          >
+            Show {trunc.nextChunk.toLocaleString()} more lines
+          </button>
+          <button
+            type="button"
+            className={styles.moreLink}
+            onClick={() => setVisibleLines(trunc.total)}
+          >
+            Show all
+          </button>
+        </div>
       )}
     </div>
   );

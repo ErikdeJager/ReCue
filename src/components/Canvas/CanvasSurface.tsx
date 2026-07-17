@@ -1,6 +1,13 @@
-import { type ReactElement, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { DragOverlay, useDraggable, useDroppable } from "@dnd-kit/core";
-import { ExternalLink, GripVertical, Maximize2, X } from "lucide-react";
+import { GripVertical, Maximize2, PanelsTopLeft, Plus, X } from "lucide-react";
 import {
   Group,
   type GroupImperativeHandle,
@@ -11,17 +18,19 @@ import {
 
 import { noAutoCapitalize } from "../../inputProps";
 import { effectiveRepo, repoName, sessionLabel } from "../../paths";
-import { kbdHint } from "../../platform";
 import { repoColor, useStore } from "../../store";
+import { useKeybindLabel } from "../../useKeybind";
 import type { CanvasEdge, CanvasLeaf, CanvasNode } from "../../types";
-import { IS_MAIN_WINDOW } from "../../windowContext";
+import { sessionActiveWorktree } from "../../worktrees";
 import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
+import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 import ItemContent from "../ItemContent/ItemContent";
 import { itemTitle, panelTitle } from "../ItemContent/itemTitle";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
-import { focusTerminal } from "../Terminal/terminalPool";
+import { shouldHoverSelect } from "../Terminal/hoverFocus";
+import { blurTerminals, focusTerminal } from "../Terminal/terminalPool";
 import {
   collectLeaves,
   collectSplits,
@@ -33,23 +42,39 @@ import styles from "./Canvas.module.css";
 
 const EDGES: CanvasEdge[] = ["top", "right", "bottom", "left"];
 
-/** Empty-canvas center target — the first drop creates the first panel. */
+/** Empty-canvas center target — the first drop creates the first panel. The UI v2
+ * empty state (§8): a centered stack on the wave — icon, "No panels yet", hint,
+ * and a ghost "New tab" button (its ⌘T chord was removed by the keybind rework).
+ * The droppable node still fills the area, so dropping a sidebar item here still
+ * creates the first panel. */
 function CenterDrop() {
   const { setNodeRef, isOver } = useDroppable({ id: "canvas-center" });
-  // The hint waits for the boot payload (#352): until it lands the canvas is empty
-  // simply because the persisted tabs haven't loaded, so the hint would flash right
+  // The copy waits for the boot payload (#352): until it lands the canvas is empty
+  // simply because the persisted tabs haven't loaded, so it would flash right
   // before the panels appear. The droppable itself stays mounted — drop targets are
-  // unaffected. (A detached canvas window #84 has its own store, so its own `booted`.)
+  // unaffected. (Each window has its own store, so its own `booted` — task 434.)
   const booted = useStore((s) => s.booted);
+  const addCanvas = useStore((s) => s.addCanvas);
   return (
     <div
       ref={setNodeRef}
       className={`${styles.center} ${isOver ? styles.centerOver : ""}`}
     >
       {booted && (
-        <p className={styles.centerHint}>
-          Drag an agent or file from the sidebar here
-        </p>
+        <>
+          <PanelsTopLeft size={22} strokeWidth={1.5} aria-hidden />
+          <p className={styles.centerTitle}>No panels yet</p>
+          <p className={styles.centerHint}>
+            Drag in a panel from the left, or start with an empty tab
+          </p>
+          <button
+            type="button"
+            className="btn btn-neutral btn-chrome"
+            onClick={() => addCanvas()}
+          >
+            <Plus size={12} strokeWidth={1.5} /> New tab
+          </button>
+        </>
       )}
     </div>
   );
@@ -85,7 +110,7 @@ function LeafPanel({
   const setLeafFile = useStore((s) => s.setLeafFile);
   const setLeafFileAbsolute = useStore((s) => s.setLeafFileAbsolute);
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
   const renameSession = useStore((s) => s.renameSession);
   const isActive = leaf.id === activeLeafId;
 
@@ -93,7 +118,7 @@ function LeafPanel({
   // listeners (#144, mirroring Overview #70) — the FileSwitcher (#90) + fork/copy/
   // close buttons stop pointerdown so they stay clickable. The 4px PointerSensor
   // activation constraint keeps a click (select) from dragging. At drag start the
-  // panel is **lifted out** of the layout (#155, App/CanvasWindow `onDragStart` →
+  // panel is **lifted out** of the layout (#155, MainApp `onDragStart` →
   // `beginCanvasLift`): the surface renders a derived layout without this leaf so
   // the others reflow and a `<DragOverlay>` ghost follows the cursor; a drop commits
   // it to the target edge, while Esc / a drop on nothing restores it in place.
@@ -113,6 +138,23 @@ function LeafPanel({
       : undefined;
   const repoPath = content.repoPath ?? session?.repoPath ?? "";
   const branch = branches[repoPath] ?? "";
+  // Live status for the agent header dot (UI v2 §8, mirroring Overview): pulsing
+  // blue while busy, settled yellow once it has worked, gray when fresh (#112).
+  // Unconditional hook calls keep the hook order stable across content kinds.
+  const busy = useStore(
+    (s) =>
+      (content.kind === "agent" &&
+        content.sessionId &&
+        s.sessionBusy[content.sessionId]) ||
+      false,
+  );
+  const hasBeenActive = useStore(
+    (s) =>
+      (content.kind === "agent" &&
+        content.sessionId &&
+        s.sessionActive[content.sessionId]) ||
+      false,
+  );
   // Agent panels (#95) render only their primary label (name if set, else branch) —
   // a single line, no subtitle and no repo dot (see below). File/diff/terminal panels
   // keep their filename/"Diff" title + repo·branch context + dot.
@@ -136,6 +178,33 @@ function LeafPanel({
   const metaText = metaRepo
     ? `${repoName(metaRepo)}${branch ? ` · ${branch}` : ""}`
     : null;
+  // Folder-color panel border/focus frame (task 386): the resting tint + the
+  // #76 keyboard-focus frame resolve `--repo-color` off the owning folder's color
+  // instead of the app accent (UI v2 §7 — the accent never encodes selection). An
+  // agent uses its parent repo's color (`metaRepo` = `effectiveRepo`, so a worktree
+  // agent shares its parent's); absent (a folderless panel) ⇒ the plain accent
+  // fallback in the CSS still frames it.
+  const folderColor = metaRepo ? repoColor(metaRepo, repoColors) : undefined;
+  // Relocation hint (agents follow their work): the agent's own cwd (or the
+  // non-claude heuristic) currently sits inside a detected worktree — a static
+  // "worktree" badge beside fork/container. Record worktree agents resolve null
+  // here (their #226 meta line already reads "repo · branch").
+  const platform = useStore((s) => s.platform);
+  const repoWorktreeEntries = useStore((s) =>
+    session ? s.repoWorktrees[effectiveRepo(session)] : undefined,
+  );
+  const heuristicWorktrees = useStore((s) => s.heuristicWorktrees);
+  const activeWorktree =
+    content.kind === "agent" && session
+      ? sessionActiveWorktree(
+          session,
+          (repoWorktreeEntries ?? [])
+            .filter((e) => !e.is_main && e.exists)
+            .map((e) => e.path),
+          heuristicWorktrees,
+          platform,
+        )
+      : null;
 
   // Double-click the header to rename the agent inline (#188) — same state machine
   // as the sidebar rename (#57) and the tab rename (CanvasTabs): seed the current
@@ -171,7 +240,6 @@ function LeafPanel({
 
   // When this panel becomes the keyboard-focused one (#76), focus its terminal so
   // subsequent keystrokes go there; non-terminal panels just take the highlight.
-  // No-op when the PTY is owned by another window (#84).
   useEffect(() => {
     if (
       isActive &&
@@ -182,10 +250,35 @@ function LeafPanel({
     }
   }, [isActive, content.kind, content.sessionId]);
 
+  // Hover-select (#371, extending #368): with "Focus panels on hover" on, entering a
+  // panel moves the active-leaf highlight here — focusing its terminal when the
+  // panel has one (agent/shell PTY), otherwise blurring the previously focused
+  // xterm so keystrokes never silently keep flowing to it.
+  const autoFocusOnHover = useStore((s) => s.settings.autoFocusOnHover);
+  const ptyId =
+    (content.kind === "agent" || content.kind === "terminal") &&
+    content.sessionId
+      ? content.sessionId
+      : undefined;
+  const handleHoverEnter = (e: ReactMouseEvent) => {
+    if (dragActive) return; // canvas drag in progress — edge zones own the pointer
+    if (!shouldHoverSelect(autoFocusOnHover, e.buttons, document.activeElement))
+      return;
+    if (ptyId) focusTerminal(ptyId);
+    else blurTerminals();
+    if (!isActive) setActiveLeaf(leaf.id);
+  };
+
   return (
     <div
       className={`${styles.panel} ${isActive ? styles.panelActive : ""}`}
+      style={
+        folderColor
+          ? ({ "--repo-color": folderColor } as CSSProperties)
+          : undefined
+      }
       onPointerDown={() => setActiveLeaf(leaf.id)}
+      onMouseEnter={handleHoverEnter}
     >
       {/* The whole header bar is the drag handle (#144, mirroring Overview #70):
           the dnd-kit move listeners live on the <header>, so grabbing anywhere on
@@ -205,8 +298,13 @@ function LeafPanel({
             aria-hidden
             title="Drag to move panel"
           >
-            <GripVertical size={14} strokeWidth={1.5} />
+            <GripVertical size={13} strokeWidth={1.5} />
           </span>
+          {/* Agent panels: the live busy/settled/fresh status dot (UI v2 §8),
+              replacing the repo dot #95 dropped. */}
+          {content.kind === "agent" && session && (
+            <BusyIndicator busy={busy} hasBeenActive={hasBeenActive} />
+          )}
           {/* Agent panels drop the repo dot (#95); non-agent panels keep it. */}
           {repoPath && content.kind !== "agent" && (
             <span
@@ -281,6 +379,17 @@ function LeafPanel({
           {content.kind === "agent" && session?.forkedFrom && (
             <span className={styles.worktreeBadge}>fork</span>
           )}
+          {/* A dev-container session runs inside docker — a static badge. */}
+          {content.kind === "agent" && session?.containerImage && (
+            <span className={styles.worktreeBadge}>container</span>
+          )}
+          {/* The agent relocated itself into a worktree (EnterWorktree) — the same
+              static-badge pattern, worktree path as the tooltip. */}
+          {activeWorktree && (
+            <span className={styles.worktreeBadge} title={activeWorktree}>
+              worktree
+            </span>
+          )}
         </span>
         <span
           className={styles.panelActions}
@@ -290,7 +399,11 @@ function LeafPanel({
               for worktree agents too (`repoPath` is the worktree folder, so views
               open there); "worktree" is a static badge in the title instead. */}
           {content.kind === "agent" && session && (
-            <OpenViewButton repoPath={repoPath} className={styles.panelClose} />
+            <OpenViewButton
+              repoPath={repoPath}
+              className={styles.panelClose}
+              iconSize={13}
+            />
           )}
           {/* Secondary agent actions — Fork (#126) / Copy resume (#28) / Watch (#336)
               — folded into one shared "…" dropdown (#340); all gating (#138/#142 fork,
@@ -299,7 +412,7 @@ function LeafPanel({
             <AgentHeaderMenu
               session={session}
               className={styles.panelClose}
-              iconSize={14}
+              iconSize={13}
             />
           )}
           {/* "Open view or start a session" in a non-agent panel's folder (#177)
@@ -314,6 +427,7 @@ function LeafPanel({
               <OpenViewButton
                 repoPath={repoPath}
                 className={styles.panelClose}
+                iconSize={13}
               />
             )}
           {/* Maximize into big mode (#157) — every item except a pending template
@@ -323,20 +437,24 @@ function LeafPanel({
               type="button"
               className={styles.panelClose}
               onClick={() => maximizeItem(content)}
-              title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+              title={
+                bigModeKey
+                  ? `Open in big mode (${bigModeKey})`
+                  : "Open in big mode"
+              }
               aria-label="Open in big mode"
             >
-              <Maximize2 size={14} strokeWidth={1.5} />
+              <Maximize2 size={13} strokeWidth={1.5} />
             </button>
           )}
           <button
             type="button"
-            className={styles.panelClose}
+            className={`${styles.panelClose} ${styles.panelCloseDanger}`}
             onClick={onClose}
             title="Close panel"
             aria-label="Close panel"
           >
-            <X size={14} strokeWidth={1.5} />
+            <X size={13} strokeWidth={1.5} />
           </button>
         </span>
       </header>
@@ -386,7 +504,7 @@ function PanelDragGhost({ leafId }: { leafId: string }) {
 
 /** The Canvas drag overlay (#155): renders the {@link PanelDragGhost} while a panel
  * is lifted, nothing otherwise (sidebar→Canvas content drags keep their default
- * behavior). Placed inside each window's `DndContext` (main + detached, #84). */
+ * behavior). Placed inside each window's `DndContext` (task 434). */
 export function CanvasDragOverlay() {
   const liftedLeaf = useStore((s) => s.liftedLeaf);
   return (
@@ -396,39 +514,18 @@ export function CanvasDragOverlay() {
   );
 }
 
-/** Shown in the **main** window when its active tab is one that's been popped out
- * to its own window (#84) — the main window never renders a detached canvas's
- * PTYs, so it offers to raise / bring back that window instead. */
-function DetachedCanvasNote({ canvasId }: { canvasId: string }) {
-  const focusCanvasWindow = useStore((s) => s.focusCanvasWindow);
-  return (
-    <div className={styles.detachedNote}>
-      <p className={styles.detachedText}>
-        This canvas is open in its own window.
-      </p>
-      <button
-        type="button"
-        className={styles.detachedBtn}
-        onClick={() => focusCanvasWindow(canvasId)}
-      >
-        <ExternalLink size={14} strokeWidth={1.5} /> Focus window
-      </button>
-    </div>
-  );
-}
-
 /**
- * The Canvas BSP layout surface (#46/#47/#84): renders the active tab's recursive
+ * The Canvas BSP layout surface (#46/#47): renders the active tab's recursive
  * split-panel tree of real content — agent terminals (#18 pool), file viewers
- * (#44), diff viewers (#39), shell terminals (#72). Shared by the main Canvas view
- * (under the tab strip) and a detached canvas window (#84), which both drive it via
- * the store's `activeCanvasId`. Splitting/closing use the pure `canvasTree` ops and
- * resizing uses react-resizable-panels. `dragActive` toggles the edge split-zones.
+ * (#44), diff viewers (#39), shell terminals (#72). Shared by every full window's
+ * Canvas view (task 434/437 — each window drives it via its own `activeCanvasId`;
+ * two windows on the same canvas simply mirror, 426/427). Splitting/closing use
+ * the pure `canvasTree` ops and resizing uses react-resizable-panels. `dragActive`
+ * toggles the edge split-zones.
  */
 export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
   const canvases = useStore((s) => s.canvases);
   const activeCanvasId = useStore((s) => s.activeCanvasId);
-  const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
   const setActiveCanvasLayout = useStore((s) => s.setActiveCanvasLayout);
   const equalizeCanvas = useStore((s) => s.equalizeCanvas);
   const liftedLeaf = useStore((s) => s.liftedLeaf);
@@ -475,13 +572,6 @@ export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
     rawLayout,
     liftedLeaf?.canvasId === activeCanvasId ? liftedLeaf.leafId : null,
   );
-  // In the main window, the active tab can (rarely) be a detached canvas — show a
-  // note instead of rendering its PTYs in two windows (#84). Gate on IS_MAIN_WINDOW
-  // (#98): the detached window forces activeCanvasId to its own (detached) id, so
-  // without this guard it would show the note instead of its own panels.
-  const activeDetached =
-    IS_MAIN_WINDOW && detachedCanvasIds.includes(activeCanvasId);
-
   // Resize/close fire after a render, so re-derive the active tab's *current*
   // layout from the store rather than closing over `layout`.
   const activeLayout = (): CanvasNode | null => {
@@ -559,13 +649,7 @@ export function CanvasSurface({ dragActive }: { dragActive: boolean }) {
 
   return (
     <div className={styles.area}>
-      {activeDetached ? (
-        <DetachedCanvasNote canvasId={activeCanvasId} />
-      ) : layout ? (
-        renderNode(layout)
-      ) : (
-        <CenterDrop />
-      )}
+      {layout ? renderNode(layout) : <CenterDrop />}
     </div>
   );
 }

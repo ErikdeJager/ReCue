@@ -48,40 +48,40 @@
   appearance: none;
 }
 
-/* --- Track --- */
+/* --- Track (UI v2 §10, task 373): 4px, crust unfilled, accent fill --- */
 /* WebKit has no separate "progress" pseudo, so the fill is a gradient split at
    `--fill`; Firefox gets a real progress element below. */
 .input::-webkit-slider-runnable-track {
-  height: 6px;
+  height: 4px;
   border-radius: var(--radius-dot);
   background: linear-gradient(
     to right,
     var(--accent) 0 var(--fill, 0%),
-    var(--border-strong) var(--fill, 0%) 100%
+    var(--content-bg) var(--fill, 0%) 100%
   );
 }
 
 .input::-moz-range-track {
-  height: 6px;
+  height: 4px;
   border-radius: var(--radius-dot);
-  background: var(--border-strong);
+  background: var(--content-bg);
 }
 
 .input::-moz-range-progress {
-  height: 6px;
+  height: 4px;
   border-radius: var(--radius-dot);
   background: var(--accent);
 }
 
-/* --- Thumb --- */
+/* --- Thumb: a 12px round accent dot (UI v2 §10) --- */
 .input::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 16px;
-  height: 16px;
-  /* Center the 16px thumb on the 6px track: (16 - 6) / 2 = 5px. */
-  margin-top: -5px;
-  border: 2px solid var(--bg-panel);
+  width: 12px;
+  height: 12px;
+  /* Center the 12px thumb on the 4px track: (12 - 4) / 2 = 4px. */
+  margin-top: -4px;
+  border: 0;
   border-radius: var(--radius-dot);
   background: var(--accent);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
@@ -91,9 +91,9 @@
 }
 
 .input::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--bg-panel);
+  width: 12px;
+  height: 12px;
+  border: 0;
   border-radius: var(--radius-dot);
   background: var(--accent);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
@@ -123,11 +123,13 @@
   outline: none;
 }
 .input:focus-visible::-webkit-slider-thumb {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-ring-width) solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
   outline-offset: 2px;
 }
 .input:focus-visible::-moz-range-thumb {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-ring-width) solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
   outline-offset: 2px;
 }
 

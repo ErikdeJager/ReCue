@@ -49,6 +49,24 @@ const MONITOR_TICK_MS: u64 = 200;
 /// #55) unless it arrives at least this long after the last keystroke. Tuned so
 /// keystroke echo never reads as busy, while sustained autonomous output does.
 const INPUT_ECHO_MS: u64 = 300;
+/// A repaint that lands within this long of an automatic focus/mouse report is treated
+/// as *caused by* that report, not by real work (#403), so it must not flip an idle
+/// session's dot to busy. Focusing/hovering a terminal makes claude repaint once; that
+/// one-shot paint clears well within this window, while a genuine turn keeps producing
+/// output past it and legitimately goes busy. Kept ≤ `BUSY_WINDOW_MS` so a real turn's
+/// sustained output (which outlasts this window) is never suppressed.
+const REPORT_REPAINT_MS: u64 = 300;
+/// A repaint that lands within this long of a `resize_pty` is treated as *caused by*
+/// that resize, not by real work, so it must not flip an idle session's dot to busy.
+/// Reparenting a pooled terminal into a differently-sized slot (entering the Attention
+/// view's agent pane, a window drag, an Overview lazy-mount) delivers SIGWINCH and makes
+/// claude repaint its whole TUI — without this stamp that repaint read as fresh work and
+/// blinked a confirmed-idle agent out of the Attention queue the instant it surfaced.
+/// Wider than `REPORT_REPAINT_MS` because a full-size reflow repaint straggles across
+/// chunks (each chunk re-stamps `last_output`, so the check is last-chunk-vs-resize),
+/// but kept < `BUSY_WINDOW_MS` so a real turn's sustained output (which outlasts this
+/// window) is never suppressed.
+const RESIZE_REPAINT_MS: u64 = 500;
 /// Title re-read schedule (#169): after each poke (a busy→idle edge or a session
 /// spawn), the title worker re-reads claude's `ai-title` at these offsets (ms),
 /// spanning ~30s. `claude` writes the LLM-generated title **asynchronously**, a
@@ -103,6 +121,12 @@ pub enum SessionError {
     /// CLI that would mis-handle our `--resume <id>`. `{0}` is the agent's id.
     #[error("the `{0}` agent can't resume or fork a session yet")]
     ResumeUnsupported(String),
+    /// A dev-container session can't be forked: its claude log lives in the
+    /// per-session container home, not the host's `~/.claude/projects`, so a fork's
+    /// `--resume <source>` in a FRESH container home would find nothing. Refused up
+    /// front (the UI already shows Fork unavailable — `forkable` never flips true).
+    #[error("a dev-container session can't be forked")]
+    ContainerUnsupported,
 }
 
 impl SessionError {
@@ -115,6 +139,7 @@ impl SessionError {
             Self::Git(_) => "Git",
             Self::NothingToFork => "NothingToFork",
             Self::ResumeUnsupported(_) => "ResumeUnsupported",
+            Self::ContainerUnsupported => "ContainerUnsupported",
         }
     }
 }
@@ -154,27 +179,36 @@ pub enum SessionEvent {
     Exited {
         id: String,
         code: Option<i32>,
+        /// Whether this generation was killed by an app-initiated `kill_session`
+        /// (Remove / forget / recurring rotation / cancel) — see
+        /// [`ExitState::intentional`] (task 431). Lets the Rust exit handler
+        /// (`commands::handle_session_exit`) refuse to misread a trapped-SIGHUP
+        /// code-0 death as a #63 clean exit.
+        intentional: bool,
     },
     /// Busy/idle transition from the output-activity heuristic (#42); emitted
     /// only on change (debounced) by the monitor thread.
-    State {
-        id: String,
-        busy: bool,
-    },
+    State { id: String, busy: bool },
     /// claude's auto-generated session title changed (#97); emitted by the title
     /// worker after a busy→idle edge when the log's `ai-title` differs from what
     /// was last seen. The command layer persists it and notifies the UI.
-    Name {
-        id: String,
-        name: String,
-    },
+    Name { id: String, name: String },
     /// Whether the session has forkable conversation history (#138); emitted by the
     /// title worker on the same busy→idle cadence (#97) when it changes, so the Fork
     /// affordance can be gated up front. The command layer persists + forwards it.
-    Forkable {
-        id: String,
-        forkable: bool,
-    },
+    Forkable { id: String, forkable: bool },
+    /// The authoritative multi-window PTY grid (task 426): the effective
+    /// `(cols, rows)` after smallest-wins arbitration over every attached
+    /// terminal view (`terminal_views`). Emitted **only** by the terminal-view
+    /// arbiter via [`SessionManager::broadcast_size`] — never by the reader /
+    /// monitor threads — and forwarded as `session://size`.
+    Size { id: String, cols: u16, rows: u16 },
+    /// The directory the session is currently working in, per claude's own log
+    /// (`EnterWorktree` / `/cd` move it) — the agent-relocation signal for the
+    /// sidebar's worktree grouping. Emitted by the title worker on its burst
+    /// cadence when the log tail's `cwd` changes; claude-only (`uses_claude_log`).
+    /// The command layer persists + forwards it.
+    Cwd { id: String, cwd: String },
 }
 
 /// Cap on a single coalesced `Output` payload (#346): a run at/over this size is
@@ -234,6 +268,21 @@ pub fn coalesce_output_events(events: Vec<SessionEvent>) -> Vec<SessionEvent> {
 struct ActivityState {
     last_output: AtomicU64,
     last_input: AtomicU64,
+    /// ms timestamp of the last automatic terminal report (focus/mouse) written via
+    /// `write_stdin`; used by the monitor to suppress the spurious idle→busy edge from a
+    /// focus-triggered repaint (#403). A focus/mouse report is *not* a keystroke (it does
+    /// not stamp `last_input`, #185), yet it can make claude repaint — which the reader
+    /// stamps into `last_output`. Without this stamp that lone repaint would read as fresh
+    /// work and blink the dot blue for a tick when a panel is merely focused/hovered.
+    last_report: AtomicU64,
+    /// ms timestamp of the last `resize_pty` for this session; used by the monitor to
+    /// suppress the spurious idle→busy edge from a resize-triggered repaint (the
+    /// SIGWINCH sibling of `last_report`'s #403). A resize is not input, yet it makes
+    /// claude repaint its whole TUI — which the reader stamps into `last_output`.
+    /// Without this stamp that repaint read as fresh work and blinked a confirmed-idle
+    /// agent out of the Attention queue whenever its terminal was reparented into a
+    /// differently-sized slot (the Attention agent pane, a window drag).
+    last_resize: AtomicU64,
     /// Whether the session booted with an initial prompt (#93/#116) — a scheduled /
     /// prompt-seeded agent works immediately with **no** `write_stdin`, so it has
     /// "work to do" from spawn even though `last_input` stays 0. An interactive
@@ -264,11 +313,18 @@ struct ExitState {
     reaped: AtomicBool,
     /// Suppress this generation's `Exited` event entirely. Set by (a) `kill_all` at app
     /// shutdown — now that the exit fires promptly it could reach a still-live webview, and
-    /// an agent that exits 0 on SIGHUP would read as a **clean exit**, so `isCleanExit` would
+    /// an agent that exits 0 on SIGHUP would read as a **clean exit**, so the #63 clean-exit
+    /// handler (`commands::is_clean_exit`, Rust-owned since task 431) would
     /// **delete the persisted record**, breaking the #30/#63 rule that a quit keeps sessions
     /// for the next boot; and (b) a same-id respawn (Restart), so a stale generation's late
     /// exit can never be attributed to the fresh session.
     silent: AtomicBool,
+    /// An app-initiated kill (Remove/forget/rotation/cancel) — set by `kill_session`
+    /// **before any signal**, like `silent`, so a child that traps SIGHUP and exits 0
+    /// can never be misread as a #63 clean exit by the Rust exit handler (task 431).
+    /// Unlike `silent` the `Exited` event still fires (the frontend's own
+    /// `intentionalKills` bookkeeping is unchanged); the flag just rides on it.
+    intentional: AtomicBool,
 }
 
 /// Per-session hysteresis state for the busy/idle decision (#315), owned solely by the
@@ -328,12 +384,24 @@ impl Scrollback {
 const OUTPUT_SNIPPET_MAX_CHARS: usize = 200;
 /// Characters of leading context kept before the match when a long line is windowed.
 const OUTPUT_SNIPPET_CONTEXT_CHARS: usize = 40;
+/// Upper bound on the spaces a single cursor-forward (CUF, `ESC[<n>C`) run emits when
+/// `strip_ansi` approximates the visible layout (#337): `claude` spaces columns with
+/// non-erasing CUF moves, so search-fidelity needs them rendered as spaces — but a
+/// pathological `ESC[999999C` must not balloon the stripped string.
+const CURSOR_FORWARD_SPACE_CAP: usize = 64;
 
 /// Strip ANSI / terminal control sequences from `s`, best-effort, leaving readable text
 /// (#337). Terminal scrollback is full of CSI color/cursor codes, OSC title sets, and
 /// lone escapes; searching them raw would both miss matches split by escapes and surface
 /// garbage snippets. Handles:
-///   - **CSI** — `ESC [` … a final byte in `@`..=`~` (colors, cursor moves).
+///   - **CSI** — `ESC [` … a final byte in `@`..=`~` (colors, cursor moves). A
+///     **cursor-forward** move (CUF, final byte `C`) is the one exception that emits
+///     text: `claude` spaces columns with non-erasing `ESC[<n>C` moves, so `A\u{1b}[3CB`
+///     is visually `A   B`; dropping the sequence wholesale would collapse it to `AB` and
+///     a user searching the phrase they *see* (`A B`) would miss it. So a CUF becomes
+///     `n` spaces (default `1` when the parameter is empty/unparseable), clamped to
+///     [`CURSOR_FORWARD_SPACE_CAP`]. This is a **search-only, best-effort approximation of
+///     the visible layout** — every other CSI final byte still emits nothing.
 ///   - **OSC** — `ESC ]` … terminated by `BEL` (0x07) or `ST` (`ESC \`).
 ///   - **Other** `ESC`-prefixed escapes — the `ESC` plus its single following byte.
 ///
@@ -349,11 +417,25 @@ pub fn strip_ansi(s: &str) -> String {
                 Some('[') => {
                     // CSI: parameter/intermediate bytes until a final byte @..=~.
                     chars.next();
+                    let mut params = String::new();
                     while let Some(&p) = chars.peek() {
                         chars.next();
                         if ('@'..='~').contains(&p) {
+                            // A cursor-forward (CUF) move approximates visible spacing: emit
+                            // its parameter count of spaces, clamped. Every other final byte
+                            // still emits nothing.
+                            if p == 'C' {
+                                let n = params
+                                    .parse::<usize>()
+                                    .unwrap_or(1)
+                                    .clamp(1, CURSOR_FORWARD_SPACE_CAP);
+                                for _ in 0..n {
+                                    out.push(' ');
+                                }
+                            }
                             break;
                         }
+                        params.push(p);
                     }
                 }
                 Some(']') => {
@@ -545,8 +627,9 @@ impl SessionManager {
         name: Option<String>,
         agent: &str,
         custom_command: Option<&str>,
+        container: Option<&crate::container::ContainerLaunch>,
     ) -> Result<SessionInfo, SessionError> {
-        self.spawn_session_with_prompt(cwd, name, None, agent, custom_command)
+        self.spawn_session_with_prompt(cwd, name, None, agent, custom_command, container)
     }
 
     /// Spawn a new session for `agent` (#101), optionally pre-seeded with an initial
@@ -560,6 +643,13 @@ impl SessionManager {
     /// parsed as an argv (NOT a shell line) by `parse_custom_command`. A non-blank prompt
     /// is appended as a trailing positional arg (best-effort seed); an unset / empty
     /// command is a clear `Spawn` error rather than a phantom `"custom"` binary spawn.
+    ///
+    /// A **dev-container session** passes `container` (composed in `commands.rs`): the
+    /// resolved `(program, args)` are rewritten to `docker run … <image> <program>
+    /// <args…>` right here — upstream of `spawn_with_id`, which stays generic (the PTY
+    /// child is the docker CLI, resolved on PATH like any binary). The session id is
+    /// then the launch's pre-minted UUID, so the container label == the record id ==
+    /// the per-session home-dir key. The `None` arm is byte-for-byte today's behavior.
     pub fn spawn_session_with_prompt(
         &self,
         cwd: impl AsRef<Path>,
@@ -567,15 +657,19 @@ impl SessionManager {
         prompt: Option<&str>,
         agent: &str,
         custom_command: Option<&str>,
+        container: Option<&crate::container::ContainerLaunch>,
     ) -> Result<SessionInfo, SessionError> {
-        let id = Uuid::new_v4().to_string();
+        let id = match container {
+            Some(launch) => launch.session_id.clone(),
+            None => Uuid::new_v4().to_string(),
+        };
         let spec = crate::agents::agent_spec(agent);
         // A non-blank initial prompt means the agent starts working immediately with
         // no keystrokes (#93), so it counts as "has work" for the busy heuristic
         // (#116) — otherwise it would be stuck gray (never blue/yellow).
         let trimmed_prompt = prompt.map(str::trim).filter(|p| !p.is_empty());
         let seeded = trimmed_prompt.is_some();
-        if spec.id == "custom" {
+        let (program, args, uses_claude_log) = if spec.id == "custom" {
             // Resolve the user's command → (program, args). Missing/blank → clear error.
             let command = custom_command
                 .ok_or_else(|| SessionError::Spawn("Custom agent command is not set".into()))?;
@@ -586,28 +680,35 @@ impl SessionManager {
             if let Some(p) = trimmed_prompt {
                 args.push(p.to_string());
             }
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            return self.spawn_with_id(
-                id.clone(),
-                &program,
-                &arg_refs,
-                cwd.as_ref(),
-                name,
-                seeded,
-                // Custom agents can't auto-name (no claude-style ai-title log, #325).
-                false,
-            );
-        }
-        let args = spec.spawn_args(&id, prompt);
+            // Custom agents can't auto-name (no claude-style ai-title log, #325).
+            (program, args, false)
+        } else {
+            (
+                spec.binary_name.to_string(),
+                spec.spawn_args(&id, prompt),
+                spec.supports_auto_name,
+            )
+        };
+        let (program, args) = match container {
+            Some(launch) => {
+                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                crate::container::docker_invocation(launch, &program, &arg_refs)
+            }
+            None => (program, args),
+        };
+        // A container session's claude log lives in its per-session container home,
+        // not the host's `~/.claude/projects` — the #97 title worker would glob
+        // nothing, so gate it off (the label falls back to the branch name).
+        let uses_claude_log = uses_claude_log && container.is_none();
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.spawn_with_id(
-            id.clone(),
-            spec.binary_name,
+            id,
+            &program,
             &arg_refs,
             cwd.as_ref(),
             name,
             seeded,
-            spec.supports_auto_name,
+            uses_claude_log,
         )
     }
 
@@ -623,21 +724,34 @@ impl SessionManager {
         cwd: impl AsRef<Path>,
         name: Option<String>,
         agent: &str,
+        container: Option<&crate::container::ContainerLaunch>,
     ) -> Result<SessionInfo, SessionError> {
         let spec = crate::agents::agent_spec(agent);
         let args = spec.resume_args(claude_session_id);
+        // A dev-container session resumes inside a fresh container with the SAME
+        // per-session home mounted, so `claude --resume <id>` finds its own log there
+        // (`commands.rs` composes the launch from the persisted record). Same wrap
+        // point as `spawn_session_with_prompt`; `None` is byte-for-byte unchanged.
+        let (program, args) = match container {
+            Some(launch) => {
+                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                crate::container::docker_invocation(launch, spec.binary_name, &arg_refs)
+            }
+            None => (spec.binary_name.to_string(), args),
+        };
+        let uses_claude_log = spec.supports_auto_name && container.is_none();
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         // A resume just reopens the conversation; it doesn't re-run a prompt, so it
         // has no autonomous work to do (#116) — `seeded` is false. A previously-active
         // session still shows yellow on boot via its persisted `has_been_active`.
         self.spawn_with_id(
             claude_session_id.to_string(),
-            spec.binary_name,
+            &program,
             &arg_refs,
             cwd.as_ref(),
             name,
             false,
-            spec.supports_auto_name,
+            uses_claude_log,
         )
     }
 
@@ -676,7 +790,8 @@ impl SessionManager {
     /// write/resize/kill) is identical to a session; only the program differs and
     /// there is no `--session-id`/`--resume`. The id is the Overview panel's id,
     /// so the frontend renders it with the same `<Terminal>` pool and persists the
-    /// item in `overview_panels` (a fresh shell is respawned on boot).
+    /// item in `overview_panels` (a fresh shell is respawned by the Rust boot
+    /// sequence — `boot::respawn_shell_terminals`, task 432).
     pub fn spawn_terminal(
         &self,
         id: String,
@@ -703,6 +818,17 @@ impl SessionManager {
                     state.last_input.store(now.max(1), Ordering::Relaxed);
                 }
             }
+        } else {
+            // An automatic focus/mouse report (not a keystroke, #185). Record *when* it was
+            // sent so the monitor can tell a focus-triggered repaint from real work and not
+            // flip the idle→busy edge just because a panel was focused/hovered (#403). We
+            // still don't stamp `last_input` — the bytes are written to the PTY unchanged.
+            if let Ok(map) = self.activity.lock() {
+                if let Some(state) = map.get(id) {
+                    let now = self.base.elapsed().as_millis() as u64;
+                    state.last_report.store(now.max(1), Ordering::Relaxed);
+                }
+            }
         }
         // Hold the global map lock only long enough to clone the per-session writer
         // handle, then drop it (#260). The blocking `write_all`/`flush` — which can
@@ -727,6 +853,16 @@ impl SessionManager {
 
     /// Resize a session's PTY to match the frontend terminal.
     pub fn resize_pty(&self, id: &str, cols: u16, rows: u16) -> Result<(), SessionError> {
+        // Stamp the resize time *before* the resize goes out (mirroring `write_stdin`'s
+        // stamp-before-write ordering), so the SIGWINCH-triggered repaint can never be
+        // read by the monitor ahead of its own attribution stamp. The repaint must not
+        // flip an idle session's dot to busy — the resize sibling of #403.
+        if let Ok(map) = self.activity.lock() {
+            if let Some(state) = map.get(id) {
+                let now = self.base.elapsed().as_millis() as u64;
+                state.last_resize.store(now.max(1), Ordering::Relaxed);
+            }
+        }
         // Clone the per-session master under the brief global lock, then drop it
         // (#260) so a slow `resize()` can't stall other sessions' operations.
         let master = {
@@ -765,6 +901,12 @@ impl SessionManager {
         if let Ok(mut map) = self.activity.lock() {
             map.remove(id);
         }
+        // Flag the generation as an app-initiated kill BEFORE any signal (the `silent`
+        // pattern, task 431): a child that traps SIGHUP and exits 0 instantly could
+        // otherwise race the flag into the waiter's `Exited` and be misread as a #63
+        // clean exit (which would delete the record a Remove already deleted, or
+        // toast "Agent exited" for a rotation/cancel kill).
+        session.exit.intentional.store(true, Ordering::SeqCst);
         kill_now(&session);
         // `session` drops here, closing the master/writer.
         Ok(())
@@ -778,8 +920,9 @@ impl SessionManager {
     /// so no `Exited` event is emitted at all. Now that the exit fires promptly (off the
     /// child's `wait()`, not the reader's EOF) such an event could reach the still-live
     /// webview, and an agent that exits 0 on SIGHUP would look like a **clean exit** —
-    /// `isCleanExit` would then delete its persisted record and the session would NOT come
-    /// back on the next launch. A quit keeps sessions (#30/#63).
+    /// the #63 handler (`commands::is_clean_exit`, Rust-owned since task 431) would then
+    /// delete its persisted record and the session would NOT come back on the next
+    /// launch. A quit keeps sessions (#30/#63).
     ///
     /// **Bounded** (#354): two sweeps with **one** shared grace, rather than portable-pty's
     /// ~200ms-per-child serial kill (10 agents ⇒ a ~2s shutdown stall). Deliberately does not
@@ -892,6 +1035,35 @@ impl SessionManager {
     #[cfg(all(test, unix))]
     pub fn session_count(&self) -> usize {
         self.lock_sessions().map(|s| s.len()).unwrap_or(0)
+    }
+
+    /// True while `id` is registered — a live PTY generation OR an exited-but-kept one
+    /// (a natural exit leaves the `Session` in the map for scrollback + Restart; only
+    /// `kill_session` removes it, and a same-id spawn REPLACES + kills it). The boot
+    /// respawn (task 432) skips any registered id for exactly that reason: spawning over
+    /// a present id would kill that generation, so "skip if present" is what makes the
+    /// respawn idempotent and safe to re-run.
+    pub fn has_session(&self, id: &str) -> bool {
+        self.lock_sessions()
+            .map(|sessions| sessions.contains_key(id))
+            .unwrap_or(false)
+    }
+
+    /// Ids of sessions with a **still-running** child (task 430: the auto-continue
+    /// engine's liveness source): in the registry ∧ not yet reaped by the exit
+    /// waiter (#354). A dead-but-kept entry (exit overlay, scrollback) and a
+    /// killed/removed one both read as not live. Fail-soft: a poisoned registry
+    /// lock reads as no live sessions.
+    pub fn live_session_ids(&self) -> Vec<String> {
+        self.lock_sessions()
+            .map(|sessions| {
+                sessions
+                    .iter()
+                    .filter(|(_, session)| !session.exit.reaped.load(Ordering::SeqCst))
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// A session's child pid — on unix also its **process-group id** (#354). Used only by the
@@ -1046,6 +1218,8 @@ impl SessionManager {
         let activity_state = Arc::new(ActivityState {
             last_output: AtomicU64::new(0),
             last_input: AtomicU64::new(0),
+            last_report: AtomicU64::new(0),
+            last_resize: AtomicU64::new(0),
             seeded: AtomicBool::new(seeded),
             uses_claude_log,
         });
@@ -1144,6 +1318,22 @@ impl SessionManager {
             .lock()
             .map(|guard| guard.clone())
             .map_err(|_| SessionError::Io("event sender lock poisoned".to_string()))
+    }
+
+    /// Broadcast the authoritative multi-window PTY grid for a session (task 426):
+    /// send one [`SessionEvent::Size`] on the event channel, forwarded to the
+    /// frontend as `session://size`. Called **only** by the terminal-view arbiter
+    /// (`terminal_views`) — never by the reader/monitor threads. Best-effort,
+    /// infallible, and non-blocking: a poisoned sender lock or a dropped forwarder
+    /// (shutdown) is silently ignored.
+    pub fn broadcast_size(&self, id: &str, cols: u16, rows: u16) {
+        if let Ok(tx) = self.events.lock() {
+            let _ = tx.send(SessionEvent::Size {
+                id: id.to_string(),
+                cols,
+                rows,
+            });
+        }
     }
 }
 
@@ -1403,7 +1593,14 @@ fn exit_waiter(
     if exit.silent.load(Ordering::SeqCst) {
         return;
     }
-    let _ = events.send(SessionEvent::Exited { id, code });
+    let _ = events.send(SessionEvent::Exited {
+        id,
+        code,
+        // Whether this generation was app-killed (`kill_session`, task 431) — set
+        // before any signal, so the Rust clean-exit handler can never misread a
+        // trapped-SIGHUP code-0 death under Remove/rotation/cancel as clean (#63).
+        intentional: exit.intentional.load(Ordering::SeqCst),
+    });
 }
 
 /// Pure busy/idle hysteresis (#315). `active_fast` = real output within `BUSY_WINDOW_MS`
@@ -1421,9 +1618,40 @@ fn exit_waiter(
 /// re-activation and then holding on `active_hold` is consistent. A genuinely quiet stretch
 /// longer than `BACKGROUND_HOLD_MS` (e.g. a long single tool call with no output) legitimately
 /// settles to idle — that is *not* the #315 flicker and is intentionally left to settle.
-fn decide_busy(st: &mut BusyDecision, now: u64, active_fast: bool, active_hold: bool) -> bool {
+///
+/// Whether the most recent output is attributable to an automatic, non-work event that
+/// happened at `stamp` (a focus/mouse report #403, or a PTY resize): the event exists
+/// (`stamp != 0`), it came at/after the last real keystroke (`stamp >= inp`, so an event
+/// during a real turn's typing doesn't qualify), the output arrived at/after it
+/// (`out >= stamp`), and did so within the event's repaint window. Shared by the monitor's
+/// report- and resize-repaint attributions; pure so it's unit-testable.
+fn repaint_attributable(stamp: u64, inp: u64, out: u64, window_ms: u64) -> bool {
+    stamp != 0 && stamp >= inp && out >= stamp && out.saturating_sub(stamp) <= window_ms
+}
+
+/// `suppress_on` (#403) gates the **idle→busy edge only**: when it is set — the recent output is
+/// attributable to a focus/mouse-report repaint or a resize-triggered repaint — a currently-idle
+/// session (`!emitted`) is held idle instead of flipping to busy for a tick when a panel is
+/// merely focused/hovered/reparented. An already-busy session is untouched, so #185's protection
+/// of a working agent is preserved, and once the repaint window elapses (output still flowing) a
+/// real turn wins on the next tick.
+fn decide_busy(
+    st: &mut BusyDecision,
+    now: u64,
+    active_fast: bool,
+    active_hold: bool,
+    suppress_on: bool,
+) -> bool {
     let prev = st.emitted;
     let busy = if st.sticky { active_hold } else { active_fast };
+    // A currently-idle session whose only recent output is a focus/mouse-report repaint
+    // must NOT flip to busy (#403). Gates the idle→busy edge only: an already-busy
+    // session (prev == true) is untouched, so #185's protection is preserved.
+    let busy = if suppress_on && !st.emitted {
+        false
+    } else {
+        busy
+    };
 
     // Flicker detection: a re-activation soon after a settle → sticky (background/paused turn).
     if !prev
@@ -1470,7 +1698,7 @@ fn monitor_loop(
         // Snapshot the two raw guarded activity signals per session under the lock, then
         // release it before sending. Both read the same atomics; `active_fast` gates the
         // clean-turn settle, `active_hold` the sticky background hold (#315).
-        let snapshot: Vec<(String, bool, bool, bool)> = {
+        let snapshot: Vec<(String, bool, bool, bool, bool)> = {
             let map = match activity.lock() {
                 Ok(map) => map,
                 Err(poisoned) => poisoned.into_inner(),
@@ -1479,6 +1707,8 @@ fn monitor_loop(
                 .map(|(id, state)| {
                     let out = state.last_output.load(Ordering::Relaxed);
                     let inp = state.last_input.load(Ordering::Relaxed);
+                    let rep = state.last_report.load(Ordering::Relaxed);
+                    let rz = state.last_resize.load(Ordering::Relaxed);
                     let seeded = state.seeded.load(Ordering::Relaxed);
                     // Busy requires the session to actually *have work to do* (#116):
                     // either the user has submitted input (`inp != 0`) or it booted
@@ -1495,17 +1725,30 @@ fn monitor_loop(
                     // `active_hold` = within the longer sticky window (#315). fast ⊂ hold.
                     let active_fast = recent && now.saturating_sub(out) < BUSY_WINDOW_MS;
                     let active_hold = recent && now.saturating_sub(out) < BACKGROUND_HOLD_MS;
-                    (id.clone(), active_fast, active_hold, state.uses_claude_log)
+                    // The recent output is attributable to an automatic focus/mouse
+                    // report's repaint (#403) or to a resize-triggered repaint (the
+                    // SIGWINCH from reparenting a pooled terminal / a window drag).
+                    // Either suppresses the idle→busy edge only (see `decide_busy`) —
+                    // an already-busy session is untouched (#185).
+                    let report_repaint = repaint_attributable(rep, inp, out, REPORT_REPAINT_MS);
+                    let resize_repaint = repaint_attributable(rz, inp, out, RESIZE_REPAINT_MS);
+                    (
+                        id.clone(),
+                        active_fast,
+                        active_hold,
+                        report_repaint || resize_repaint,
+                        state.uses_claude_log,
+                    )
                 })
                 .collect()
         };
         // Forget sessions that are gone (killed/exited) so a reused id starts fresh.
         let live: HashSet<&str> = snapshot.iter().map(|(id, ..)| id.as_str()).collect();
         decisions.retain(|id, _| live.contains(id.as_str()));
-        for (id, active_fast, active_hold, uses_claude_log) in &snapshot {
+        for (id, active_fast, active_hold, repaint_suppress, uses_claude_log) in &snapshot {
             let st = decisions.entry(id.clone()).or_default();
             let prev = st.emitted;
-            let busy = decide_busy(st, now, *active_fast, *active_hold);
+            let busy = decide_busy(st, now, *active_fast, *active_hold, *repaint_suppress);
             if prev != busy {
                 if events
                     .send(SessionEvent::State {
@@ -1516,13 +1759,15 @@ fn monitor_loop(
                 {
                     return; // receiver dropped (app shutting down)
                 }
-                // On the *true* busy→idle settle (a turn ended — sticky bursts no longer
-                // flicker one per cycle) poke the title worker to re-read claude's freshly
-                // (re)written `ai-title` off the hot path (#97). Best-effort: a dead worker
-                // never stalls the monitor tick.
-                if !busy && prev {
-                    let _ = title_tx.send((id.clone(), *uses_claude_log));
-                }
+                // Poke the title worker on BOTH edges, off the hot path. The
+                // busy→idle settle re-reads claude's freshly (re)written `ai-title`
+                // (#97); the idle→busy onset arms the same ~30s re-read burst so a
+                // mid-turn `EnterWorktree` surfaces the session's new `cwd` (the
+                // relocation signal) while the agent is still working, not only at
+                // settle. Reads are per-id change-deduped, so the extra edge costs
+                // nothing when nothing changed. Best-effort: a dead worker never
+                // stalls the monitor tick.
+                let _ = title_tx.send((id.clone(), *uses_claude_log));
             }
         }
     }
@@ -1543,6 +1788,7 @@ fn monitor_loop(
 fn title_worker(title_rx: Receiver<(String, bool)>, events: Sender<SessionEvent>) {
     let mut last: HashMap<String, String> = HashMap::new();
     let mut last_forkable: HashMap<String, bool> = HashMap::new();
+    let mut last_cwd: HashMap<String, String> = HashMap::new();
     // Pending re-read deadlines (#169): one `(Instant, id, uses_claude_log)` per burst
     // offset. Drained as they fall due, so the set stays bounded to roughly one
     // window's worth.
@@ -1589,8 +1835,15 @@ fn title_worker(title_rx: Receiver<(String, bool)>, events: Sender<SessionEvent>
         due.sort();
         due.dedup();
         for (id, uses_claude_log) in due {
-            if read_and_emit_title(&id, uses_claude_log, &events, &mut last, &mut last_forkable)
-                .is_err()
+            if read_and_emit_title(
+                &id,
+                uses_claude_log,
+                &events,
+                &mut last,
+                &mut last_forkable,
+                &mut last_cwd,
+            )
+            .is_err()
             {
                 return; // receiver dropped (app shutting down)
             }
@@ -1620,6 +1873,7 @@ fn read_and_emit_title(
     events: &Sender<SessionEvent>,
     last: &mut HashMap<String, String>,
     last_forkable: &mut HashMap<String, bool>,
+    last_cwd: &mut HashMap<String, String>,
 ) -> Result<(), ()> {
     // Forkability (#138): for a claude session, computed every poke (independent of the
     // title, which may be absent) and emitted only when it flips — false→true the moment
@@ -1642,6 +1896,24 @@ fn read_and_emit_title(
     // that doesn't write one (Codex keeps the branch / first-prompt label).
     if !uses_claude_log {
         return Ok(());
+    }
+    // Current working directory (agent relocation): the log tail's `cwd` moves
+    // when the agent enters/leaves a worktree. Read BEFORE the title bail-out —
+    // a session may have a cwd (every line carries one) long before any
+    // `ai-title` materializes. Emitted on change only, like the title.
+    if let Some(cwd) = crate::title::read_session_cwd(id) {
+        if last_cwd.get(id) != Some(&cwd) {
+            last_cwd.insert(id.to_string(), cwd.clone());
+            if events
+                .send(SessionEvent::Cwd {
+                    id: id.to_string(),
+                    cwd,
+                })
+                .is_err()
+            {
+                return Err(());
+            }
+        }
     }
     let Some(title) = crate::title::read_session_title(id) else {
         return Ok(()); // no log / no title yet (e.g. a shell terminal item) — skip
@@ -1716,7 +1988,7 @@ fn non_macos_unix_shell() -> String {
 /// only ever waits on a cache-miss boot. In debug builds and on Windows no probe arms,
 /// so it is exactly this process's own PATH, as before.
 #[cfg(unix)]
-fn find_on_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn find_on_path(program: &str) -> Option<PathBuf> {
     if program.contains('/') {
         let direct = PathBuf::from(program);
         return is_executable(&direct).then_some(direct);
@@ -1733,7 +2005,7 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
 /// extension is also tried against `PATHEXT` — critically, an npm-installed
 /// `claude` is usually **`claude.cmd`** (#140).
 #[cfg(windows)]
-fn find_on_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn find_on_path(program: &str) -> Option<PathBuf> {
     let resolve = |base: PathBuf| -> Option<PathBuf> {
         if is_executable(&base) {
             return Some(base);
@@ -1867,6 +2139,15 @@ mod tests {
         assert!(!non_macos_unix_shell().is_empty());
     }
 
+    // --- Registry presence check (task 432) ---
+    // An empty manager knows no id. Presence after a spawn (and the skip it drives) is
+    // covered by the boot.rs respawn test.
+    #[test]
+    fn has_session_is_false_for_unknown_id() {
+        let (mgr, _rx) = manager();
+        assert!(!mgr.has_session("no-such-id"));
+    }
+
     // --- Global search: ANSI strip + output line matching (#337) ---
 
     #[test]
@@ -1883,6 +2164,35 @@ mod tests {
         assert_eq!(strip_ansi("a\tb\nc"), "a\tb\nc");
         // A lone C0 control (e.g. BEL) is dropped, not emitted.
         assert_eq!(strip_ansi("x\u{07}y"), "xy");
+    }
+
+    #[test]
+    fn strip_ansi_cursor_forward_becomes_spaces() {
+        // A cursor-forward move (CUF, final byte `C`) approximates claude's column spacing:
+        // `A\u{1b}[3CB` is visually `A   B`, so it emits 3 spaces instead of collapsing to `AB`.
+        assert_eq!(strip_ansi("A\u{1b}[3CB"), "A   B");
+        // An empty parameter defaults to 1 space.
+        assert_eq!(strip_ansi("A\u{1b}[CB"), "A B");
+        // A pathological parameter clamps to CURSOR_FORWARD_SPACE_CAP (never balloons).
+        let huge = strip_ansi("A\u{1b}[999999CB");
+        assert_eq!(huge, format!("A{}B", " ".repeat(CURSOR_FORWARD_SPACE_CAP)));
+        // Every OTHER CSI final byte still emits nothing — a cursor-position move stays fully
+        // removed (guards against over-eager parameter parsing spilling spaces).
+        assert_eq!(strip_ansi("\u{1b}[2;5Hfoo"), "foo");
+    }
+
+    #[test]
+    fn strip_ansi_cursor_forward_enables_phrase_match() {
+        // End-to-end fidelity win: claude spaces words with a non-erasing single CUF
+        // (`ESC[1C`), so `A\u{1b}[1CB` is visually `A B`. After CUF→spaces the user's typed
+        // phrase (`a b`) matches, where the old wholesale-drop collapsed it to `AB` and
+        // missed. (A wider `ESC[3C` gap emits the literal `A   B` — searchable at that exact
+        // spacing — this asserts the common single-space case a user would actually type.)
+        let stripped = strip_ansi("A\u{1b}[1CB");
+        assert_eq!(stripped, "A B");
+        let hits = match_output_lines(&stripped, "a b", 5, OUTPUT_SNIPPET_MAX_CHARS);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, 1);
     }
 
     #[test]
@@ -1948,12 +2258,12 @@ mod tests {
         // settles the instant `active_fast` drops (~BUSY_WINDOW_MS), and never goes sticky.
         let mut st = BusyDecision::default();
         // Output flowing → busy (fast window active; hold is a superset, also active).
-        assert!(decide_busy(&mut st, 1_000, true, true));
+        assert!(decide_busy(&mut st, 1_000, true, true, false));
         assert!(st.emitted);
         assert!(!st.sticky);
         // Quiet past the fast window but within the hold window, and NO prior settle to
         // re-activate against → settles to idle immediately, staying in normal mode.
-        assert!(!decide_busy(&mut st, 1_800, false, true));
+        assert!(!decide_busy(&mut st, 1_800, false, true, false));
         assert!(!st.emitted);
         assert!(!st.sticky, "a clean single turn must not go sticky");
         assert_eq!(st.settled_at, 1_800);
@@ -1963,12 +2273,12 @@ mod tests {
     fn decide_busy_holds_blue_through_background_bursts() {
         let mut st = BusyDecision::default();
         // First turn goes busy, then settles once (records settled_at).
-        assert!(decide_busy(&mut st, 1_000, true, true));
-        assert!(!decide_busy(&mut st, 1_800, false, true));
+        assert!(decide_busy(&mut st, 1_000, true, true, false));
+        assert!(!decide_busy(&mut st, 1_800, false, true, false));
         assert_eq!(st.settled_at, 1_800);
         assert!(!st.sticky);
         // A quick re-activation within BACKGROUND_HOLD_MS of that settle → flicker → sticky.
-        assert!(decide_busy(&mut st, 2_400, true, true));
+        assert!(decide_busy(&mut st, 2_400, true, true, false));
         assert!(st.sticky, "a quick re-activation must arm sticky mode");
         assert!(st.emitted);
         // Now background bursts arrive >BUSY_WINDOW_MS apart: each tick is quiet on the fast
@@ -1976,14 +2286,14 @@ mod tests {
         // blue→yellow→blue flicker.
         for now in [3_400_u64, 4_400, 5_400, 6_400] {
             assert!(
-                decide_busy(&mut st, now, false, true),
+                decide_busy(&mut st, now, false, true, false),
                 "sticky must hold blue through burst gaps (now={now})"
             );
             assert!(st.emitted);
             assert!(st.sticky);
         }
         // Finally fully quiet past the hold window → emits false exactly once, sticky cleared.
-        assert!(!decide_busy(&mut st, 12_000, false, false));
+        assert!(!decide_busy(&mut st, 12_000, false, false, false));
         assert!(!st.emitted);
         assert!(!st.sticky, "settling clears sticky mode");
         assert_eq!(st.settled_at, 12_000);
@@ -1995,7 +2305,7 @@ mod tests {
         // enter NORMAL mode, never be mis-read as flicker.
         let mut st = BusyDecision::default();
         assert_eq!(st.settled_at, 0);
-        assert!(decide_busy(&mut st, 500, true, true));
+        assert!(decide_busy(&mut st, 500, true, true, false));
         assert!(st.emitted);
         assert!(!st.sticky, "the first activation must not be sticky");
     }
@@ -2004,19 +2314,138 @@ mod tests {
     fn decide_busy_fresh_turn_after_long_idle_is_not_sticky() {
         let mut st = BusyDecision::default();
         // A turn runs and settles at t.
-        assert!(decide_busy(&mut st, 1_000, true, true));
-        assert!(!decide_busy(&mut st, 1_800, false, true));
+        assert!(decide_busy(&mut st, 1_000, true, true, false));
+        assert!(!decide_busy(&mut st, 1_800, false, true, false));
         let settled = st.settled_at;
         assert_eq!(settled, 1_800);
         // A brand-new turn starts well beyond BACKGROUND_HOLD_MS later → NOT flicker, so it
         // stays in normal mode and settles fast on the next quiet tick.
         let later = settled + BACKGROUND_HOLD_MS + 1;
-        assert!(decide_busy(&mut st, later, true, true));
+        assert!(decide_busy(&mut st, later, true, true, false));
         assert!(!st.sticky, "a fresh turn after a long idle is not flicker");
         // Next quiet on the fast window → settles immediately (snappy), still not sticky.
-        assert!(!decide_busy(&mut st, later + 800, false, true));
+        assert!(!decide_busy(&mut st, later + 800, false, true, false));
         assert!(!st.emitted);
         assert!(!st.sticky);
+    }
+
+    #[test]
+    fn decide_busy_report_repaint_does_not_wake_an_idle_session() {
+        // An IDLE agent (dot yellow) is focused/hovered: claude repaints once in response
+        // to the focus report, so `active_fast` reads true for a tick — but the output is
+        // attributable to the report (`suppress_on = true`). The dot must stay idle (#403):
+        // no idle→busy edge, so the Attention queue never removes-and-re-adds the card.
+        let mut st = BusyDecision::default();
+        assert!(
+            !decide_busy(&mut st, 1_000, true, true, true),
+            "a focus-report repaint must not flip an idle session to busy"
+        );
+        assert!(!st.emitted);
+        assert!(!st.sticky);
+        assert_eq!(st.settled_at, 0, "no phantom settle was recorded");
+    }
+
+    #[test]
+    fn decide_busy_report_repaint_leaves_a_working_session_busy() {
+        // A BUSY agent (continuous output) is focused. The focus report fires while it is
+        // already working, so even though `suppress_on = true` this tick, an already-busy
+        // session must stay busy — #185's protection of a working agent is preserved. The
+        // suppression gates the idle→busy edge only, never a busy→busy hold.
+        let mut st = BusyDecision::default();
+        assert!(decide_busy(&mut st, 1_000, true, true, false)); // real work → busy
+        assert!(st.emitted);
+        assert!(
+            decide_busy(&mut st, 1_100, true, true, true),
+            "a report during ongoing work must keep the dot blue"
+        );
+        assert!(st.emitted);
+    }
+
+    #[test]
+    fn decide_busy_without_suppression_still_goes_busy() {
+        // Sanity contrast: the very same fresh `active_fast` tick with `suppress_on = false`
+        // (no report attribution) still turns the dot blue — genuine work is never suppressed.
+        let mut st = BusyDecision::default();
+        assert!(decide_busy(&mut st, 1_000, true, true, false));
+        assert!(st.emitted);
+    }
+
+    #[test]
+    fn decide_busy_real_turn_wins_after_report_window_elapses() {
+        // A real turn that *starts* with a focus report (e.g. the user clicks in, then the
+        // agent works): the first tick is suppressed (report-attributed), but once the
+        // report-repaint window elapses the output keeps flowing and `suppress_on` turns
+        // false — the next tick must flip to busy. Genuine sustained work always wins.
+        let mut st = BusyDecision::default();
+        assert!(
+            !decide_busy(&mut st, 1_000, true, true, true),
+            "the report-attributed first tick is suppressed"
+        );
+        assert!(!st.emitted);
+        // Output is still flowing a beat later, now beyond the report-repaint window, so the
+        // monitor no longer attributes it to the report (`suppress_on = false`).
+        assert!(
+            decide_busy(&mut st, 1_400, true, true, false),
+            "a sustained burst past the report window must go busy"
+        );
+        assert!(st.emitted);
+    }
+
+    // The shared repaint-attribution math (focus/mouse reports #403 + PTY resizes).
+    // Pure — drives `repaint_attributable` directly, no threads or real timing.
+
+    #[test]
+    fn repaint_attributable_requires_an_event() {
+        // No report/resize ever happened (stamp == 0, the sentinel) → output is never
+        // attributed to one, whatever the other timestamps say.
+        assert!(!repaint_attributable(0, 0, 1_000, RESIZE_REPAINT_MS));
+        assert!(!repaint_attributable(0, 500, 1_000, REPORT_REPAINT_MS));
+    }
+
+    #[test]
+    fn repaint_attributable_ignores_an_event_before_the_last_keystroke() {
+        // The event predates the last real keystroke (stamp < inp): the user typed
+        // *after* it, so the following output is a real turn, never event-attributed.
+        assert!(!repaint_attributable(
+            1_000,
+            1_500,
+            1_600,
+            RESIZE_REPAINT_MS
+        ));
+    }
+
+    #[test]
+    fn repaint_attributable_ignores_output_before_the_event() {
+        // The last output predates the event (out < stamp): nothing repainted yet, so
+        // there is nothing to attribute (and nothing to suppress).
+        assert!(!repaint_attributable(2_000, 0, 1_500, RESIZE_REPAINT_MS));
+    }
+
+    #[test]
+    fn repaint_attributable_within_the_window() {
+        // Output lands shortly after the event → attributed (suppressed on the idle edge).
+        assert!(repaint_attributable(1_000, 0, 1_400, RESIZE_REPAINT_MS));
+        // Boundary: exactly at the window edge still counts (<=).
+        assert!(repaint_attributable(
+            1_000,
+            0,
+            1_000 + RESIZE_REPAINT_MS,
+            RESIZE_REPAINT_MS
+        ));
+        // An event stamped at/after the keystroke qualifies too (stamp >= inp).
+        assert!(repaint_attributable(1_000, 1_000, 1_200, REPORT_REPAINT_MS));
+    }
+
+    #[test]
+    fn repaint_attributable_expires_past_the_window() {
+        // Output still flowing beyond the window is a genuine turn — attribution ends,
+        // so sustained real work always wins on the next monitor tick.
+        assert!(!repaint_attributable(
+            1_000,
+            0,
+            1_001 + RESIZE_REPAINT_MS,
+            RESIZE_REPAINT_MS
+        ));
     }
 
     #[test]
@@ -2059,12 +2488,12 @@ mod tests {
         // phantom `"custom"` binary lookup (which would read as BinaryNotFound).
         let (mgr, _rx) = manager();
         let err = mgr
-            .spawn_session_with_prompt(tmp(), None, None, "custom", None)
+            .spawn_session_with_prompt(tmp(), None, None, "custom", None, None)
             .unwrap_err();
         assert!(matches!(err, SessionError::Spawn(_)));
         // An all-whitespace command tokenizes to nothing → also a Spawn error.
         let err = mgr
-            .spawn_session_with_prompt(tmp(), None, None, "custom", Some("   "))
+            .spawn_session_with_prompt(tmp(), None, None, "custom", Some("   "), None)
             .unwrap_err();
         assert!(matches!(err, SessionError::Spawn(_)));
     }
@@ -2083,6 +2512,7 @@ mod tests {
                 Some("do a thing"),
                 "custom",
                 Some("recue-nonexistent-custom-xyz --flag"),
+                None,
             )
             .unwrap_err();
         match err {
@@ -2276,6 +2706,8 @@ mod tests {
                 Ok(SessionEvent::State { .. }) => {}
                 Ok(SessionEvent::Name { .. }) => {}
                 Ok(SessionEvent::Forkable { .. }) => {}
+                Ok(SessionEvent::Size { .. }) => {}
+                Ok(SessionEvent::Cwd { .. }) => {}
                 Err(_) => panic!("timed out waiting for session events"),
             }
         };
@@ -2423,8 +2855,9 @@ mod tests {
     /// **whole process group** — pre-#354 it SIGHUPed the direct pid only, so a
     /// [`STUBBORN_DESCENDANT`] survived as an orphan (#31). It emits **exactly one** `Exited`
     /// (the frontend consumes its `intentionalKills` flag once), whose code is **never**
-    /// `Some(0)`: portable-pty maps a signal death to 1, so `isCleanExit` can never auto-forget
-    /// a killed agent's record (#63).
+    /// `Some(0)`: portable-pty maps a signal death to 1, so the #63 clean-exit handler
+    /// (`commands::is_clean_exit`, Rust-owned since task 431) can never auto-forget
+    /// a killed agent's record.
     #[cfg(unix)]
     #[test]
     fn kill_session_is_prompt_and_kills_the_whole_group() {
@@ -2469,8 +2902,9 @@ mod tests {
 
     /// App shutdown (`kill_all`) must be **silent** (#354): now that the exit fires promptly, an
     /// `Exited` could reach the still-live webview, and an agent that exits 0 on SIGHUP would
-    /// read as a clean exit — `isCleanExit` would delete its persisted record and the session
-    /// would NOT come back on the next launch. A quit keeps sessions (#30/#63). It must still
+    /// read as a clean exit — the #63 handler (`commands::is_clean_exit`, Rust-owned since
+    /// task 431) would delete its persisted record and the session would NOT come back on
+    /// the next launch. A quit keeps sessions (#30/#63). It must still
     /// empty the registry and leave no orphaned process group (#31).
     #[cfg(unix)]
     #[test]
@@ -2501,6 +2935,54 @@ mod tests {
         while Instant::now() < deadline {
             if let Ok(SessionEvent::Exited { .. }) = rx.recv_timeout(Duration::from_millis(100)) {
                 panic!("kill_all must emit no Exited — the persisted records would be deleted");
+            }
+        }
+    }
+
+    /// The `Exited` event carries the kill intent (task 431): an app-initiated
+    /// `kill_session` flags its generation `intentional` **before any signal**, so even a
+    /// child that traps SIGHUP and exits 0 instantly rides `intentional == true` into the
+    /// Rust clean-exit handler — which then never misreads a Remove/rotation/cancel kill
+    /// as a #63 clean exit. A natural exit carries `intentional == false`.
+    #[cfg(unix)]
+    #[test]
+    fn exited_event_carries_the_intentional_kill_flag() {
+        // Natural exit → intentional == false.
+        let (mgr, rx) = manager();
+        mgr.spawn_program("sh", &["-c", "exit 0"], &tmp(), None)
+            .expect("spawn sh");
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(SessionEvent::Exited { intentional, .. }) => {
+                    assert!(!intentional, "a natural exit must not read as app-killed");
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => panic!("timed out waiting for the natural exit"),
+            }
+        }
+
+        // App-initiated kill → intentional == true, even for a child that traps the
+        // SIGHUP and exits 0 on its own (the misread-as-clean race this flag closes).
+        let (mgr, rx) = manager();
+        let info = mgr
+            .spawn_program(
+                "sh",
+                &["-c", r#"trap "exit 0" HUP; sleep 30"#],
+                &tmp(),
+                None,
+            )
+            .expect("spawn trapping sh");
+        std::thread::sleep(Duration::from_millis(300));
+        mgr.kill_session(&info.id).expect("kill");
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(SessionEvent::Exited { intentional, .. }) => {
+                    assert!(intentional, "an app kill must ride the Exited event");
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => panic!("timed out waiting for the killed exit"),
             }
         }
     }
@@ -2547,7 +3029,7 @@ mod tests {
                 Ok(SessionEvent::Output { id, bytes, .. }) => {
                     output.entry(id).or_default().extend(bytes);
                 }
-                Ok(SessionEvent::Exited { id, code }) => {
+                Ok(SessionEvent::Exited { id, code, .. }) => {
                     assert_eq!(code, Some(0), "clean exit for {id}");
                     assert!(exited.insert(id), "a session exited twice");
                 }
@@ -2784,6 +3266,179 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn focus_report_stamps_last_report_not_last_input() {
+        // #403: an automatic focus/mouse report is recorded in `last_report` (so the
+        // monitor can attribute a focus-triggered repaint to it) but must NOT stamp
+        // `last_input` (#185 preserved). A real keystroke does the opposite.
+        let (mgr, _rx) = manager();
+        let info = mgr
+            .spawn_program("sh", &["-c", "sleep 2"], &tmp(), None)
+            .expect("spawn sh");
+
+        mgr.write_stdin(&info.id, "\x1b[I")
+            .expect("write focus report");
+        {
+            let map = mgr.activity.lock().expect("activity lock");
+            let st = map.get(&info.id).expect("activity state");
+            assert!(
+                st.last_report.load(Ordering::Relaxed) > 0,
+                "a focus report must stamp last_report (#403)"
+            );
+            assert_eq!(
+                st.last_input.load(Ordering::Relaxed),
+                0,
+                "a focus report must NOT stamp last_input (#185)"
+            );
+        }
+
+        // A real keystroke stamps last_input and leaves last_report as it was.
+        let report_at = {
+            let map = mgr.activity.lock().expect("activity lock");
+            map.get(&info.id)
+                .unwrap()
+                .last_report
+                .load(Ordering::Relaxed)
+        };
+        mgr.write_stdin(&info.id, "x").expect("write keystroke");
+        {
+            let map = mgr.activity.lock().expect("activity lock");
+            let st = map.get(&info.id).expect("activity state");
+            assert!(
+                st.last_input.load(Ordering::Relaxed) > 0,
+                "a real keystroke must stamp last_input (#55)"
+            );
+            assert_eq!(
+                st.last_report.load(Ordering::Relaxed),
+                report_at,
+                "a real keystroke must not touch last_report"
+            );
+        }
+        let _ = mgr.kill_session(&info.id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resize_repaint_does_not_wake_an_idle_session() {
+        // The Attention-queue "blink": reparenting a pooled terminal into a
+        // differently-sized slot (entering the Attention agent pane, a window drag)
+        // fires `resize_pty` → SIGWINCH → the TUI repaints. That repaint used to read
+        // as fresh work and flip a confirmed-idle agent busy for a settle cycle —
+        // ejecting it from the Attention queue the instant it surfaced. It is now
+        // attributed to the resize (`last_resize` + `RESIZE_REPAINT_MS`) and must not
+        // produce an idle→busy edge.
+        let (mgr, rx) = manager();
+        // Seeded (#116) so the startup print reads as work; the trap then repaints on
+        // SIGWINCH the way a full-screen TUI does. The short-sleep loop lets sh run
+        // the trap promptly (traps run between commands).
+        let info = mgr
+            .spawn_program_seeded(
+                "sh",
+                &[
+                    "-c",
+                    "trap 'printf winch-repaint' WINCH; printf go; \
+                     i=0; while [ $i -lt 60 ]; do sleep 0.1; i=$((i+1)); done",
+                ],
+                &tmp(),
+            )
+            .expect("spawn sh");
+
+        // The seeded startup output reads busy, then settles idle (~BUSY_WINDOW_MS).
+        let mut saw_busy = false;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && !saw_busy {
+            if let Ok(SessionEvent::State { busy: true, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                saw_busy = true;
+            }
+        }
+        assert!(saw_busy, "seeded startup output should read as busy");
+        let mut saw_idle = false;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && !saw_idle {
+            if let Ok(SessionEvent::State { busy: false, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                saw_idle = true;
+            }
+        }
+        assert!(saw_idle, "the session should settle idle before the resize");
+
+        // Resize to a size different from the spawn size — the kernel delivers
+        // SIGWINCH only on an actual change.
+        mgr.resize_pty(&info.id, DEFAULT_COLS - 20, DEFAULT_ROWS - 5)
+            .expect("resize pty");
+
+        // The trap's repaint lands within `RESIZE_REPAINT_MS` of the stamp; watch well
+        // past both it and a monitor tick — no busy edge may appear.
+        let mut woke = false;
+        let watch = Instant::now() + Duration::from_millis(1_200);
+        while Instant::now() < watch {
+            if let Ok(SessionEvent::State { busy: true, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                woke = true;
+                break;
+            }
+        }
+        // Prove the repaint actually happened (the suppression was exercised rather
+        // than the signal never arriving): the trap's marker is in the scrollback.
+        let (bytes, _) = mgr.scrollback(&info.id).expect("scrollback");
+        let repainted = String::from_utf8_lossy(&bytes).contains("winch-repaint");
+        let _ = mgr.kill_session(&info.id);
+        assert!(repainted, "the SIGWINCH trap should have repainted");
+        assert!(
+            !woke,
+            "a resize-triggered repaint must not flip an idle session to busy"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resize_stamps_last_resize_not_last_input() {
+        // A `resize_pty` is recorded in `last_resize` (so the monitor can attribute the
+        // SIGWINCH repaint to it) but must never stamp `last_input` (it is not a
+        // keystroke — it must not create #116 "work to do" or an #55 echo window), and a
+        // real keystroke must leave `last_resize` untouched.
+        let (mgr, _rx) = manager();
+        let info = mgr
+            .spawn_program("sh", &["-c", "sleep 2"], &tmp(), None)
+            .expect("spawn sh");
+
+        mgr.resize_pty(&info.id, DEFAULT_COLS - 10, DEFAULT_ROWS)
+            .expect("resize pty");
+        let resize_at = {
+            let map = mgr.activity.lock().expect("activity lock");
+            let st = map.get(&info.id).expect("activity state");
+            assert_eq!(
+                st.last_input.load(Ordering::Relaxed),
+                0,
+                "a resize must NOT stamp last_input"
+            );
+            let at = st.last_resize.load(Ordering::Relaxed);
+            assert!(at > 0, "a resize must stamp last_resize");
+            at
+        };
+
+        mgr.write_stdin(&info.id, "x").expect("write keystroke");
+        {
+            let map = mgr.activity.lock().expect("activity lock");
+            let st = map.get(&info.id).expect("activity state");
+            assert!(
+                st.last_input.load(Ordering::Relaxed) > 0,
+                "a real keystroke must stamp last_input (#55)"
+            );
+            assert_eq!(
+                st.last_resize.load(Ordering::Relaxed),
+                resize_at,
+                "a real keystroke must not touch last_resize"
+            );
+        }
+        let _ = mgr.kill_session(&info.id);
+    }
+
     #[test]
     fn real_keystroke_still_suppresses_echo_after_fix() {
         // Contrast to #185: a *real* keystroke still stamps last_input, so the echo
@@ -2888,6 +3543,7 @@ mod tests {
         let exited = SessionEvent::Exited {
             id: "a".into(),
             code: Some(0),
+            intentional: false,
         };
         let merged = coalesce_output_events(vec![
             out_ev("a", b"bye", 3),
@@ -2944,6 +3600,39 @@ mod tests {
     #[test]
     fn coalesce_empty_is_empty() {
         assert_eq!(coalesce_output_events(vec![]), vec![]);
+    }
+
+    #[test]
+    fn coalesce_passes_size_through_and_splits_an_output_run() {
+        // Task 426: `Size` rides the `other =>` arm like any non-Output event — it
+        // survives unmerged, in order, and splits a contiguous Output run (the two
+        // chunks around it would otherwise coalesce into one).
+        let size = SessionEvent::Size {
+            id: "a".into(),
+            cols: 80,
+            rows: 24,
+        };
+        let events = vec![out_ev("a", b"he", 2), size.clone(), out_ev("a", b"llo", 5)];
+        assert_eq!(coalesce_output_events(events.clone()), events);
+        // Sanity: without the Size in between, the same chunks DO merge.
+        let merged = coalesce_output_events(vec![out_ev("a", b"he", 2), out_ev("a", b"llo", 5)]);
+        assert_eq!(merged, vec![out_ev("a", b"hello", 5)]);
+    }
+
+    #[test]
+    fn broadcast_size_delivers_exactly_one_size_event() {
+        let (mgr, rx) = manager();
+        mgr.broadcast_size("s1", 120, 40);
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+            SessionEvent::Size {
+                id: "s1".into(),
+                cols: 120,
+                rows: 40,
+            }
+        );
+        // Exactly one: nothing else is queued.
+        assert!(rx.try_recv().is_err());
     }
 
     // --- Output hot-path throughput benchmark (#358) ---

@@ -26,14 +26,14 @@ import {
 } from "lucide-react";
 
 import { noAutoCapitalize } from "../../inputProps";
-import { kbdHint } from "../../platform";
 import { useStore } from "../../store";
 import type { CanvasTab } from "../../types";
 import styles from "./Canvas.module.css";
 
 // How far a tab must be dragged out of the strip (vertically) to tear off into
-// its own window (#84). True cross-window drag isn't native to the webview
-// (wry#648), so this is a pragmatic gesture: pull a tab down/away and release.
+// its own FULL app window (task 434/437). True cross-window drag isn't native to
+// the webview (wry#648), so this is a pragmatic gesture: pull a tab down/away and
+// release.
 const TEAROFF_THRESHOLD_PX = 50;
 
 /**
@@ -41,16 +41,15 @@ const TEAROFF_THRESHOLD_PX = 50;
  * commits, Escape cancels, blur commits), × to close. The tab is a dnd-kit
  * sortable item so the strip reorders by dragging — reusing the #43 pattern. A
  * small activation distance keeps the click (select) working. A pop-out button
- * opens the canvas in its own window (#84); when detached, the tab is marked and
- * its label/pop-out button raise that window instead.
+ * opens the canvas in an additional FULL app window (task 434/437's
+ * `open_app_window`); the tab remains fully usable here — both windows render
+ * the canvas (426/427 mirroring).
  */
 function Tab({ tab, active }: { tab: CanvasTab; active: boolean }) {
   const selectCanvas = useStore((s) => s.selectCanvas);
   const requestCloseCanvas = useStore((s) => s.requestCloseCanvas);
   const renameCanvas = useStore((s) => s.renameCanvas);
   const popOutCanvas = useStore((s) => s.popOutCanvas);
-  const focusCanvasWindow = useStore((s) => s.focusCanvasWindow);
-  const detached = useStore((s) => s.detachedCanvasIds.includes(tab.id));
 
   const [editing, setEditing] = useState(false);
   const {
@@ -69,7 +68,7 @@ function Tab({ tab, active }: { tab: CanvasTab; active: boolean }) {
   return (
     <div
       ref={setNodeRef}
-      className={`${styles.tab} ${active ? styles.tabActive : ""} ${detached ? styles.tabDetached : ""} ${isDragging ? styles.tabDragging : ""}`}
+      className={`${styles.tab} ${active ? styles.tabActive : ""} ${isDragging ? styles.tabDragging : ""}`}
       style={style}
       role="tab"
       aria-selected={active}
@@ -101,13 +100,9 @@ function Tab({ tab, active }: { tab: CanvasTab; active: boolean }) {
         <button
           type="button"
           className={styles.tabLabel}
-          // A detached tab's PTYs live in its window (#84): clicking raises that
-          // window rather than selecting it as the (non-rendered) active tab.
-          onClick={() =>
-            detached ? focusCanvasWindow(tab.id) : selectCanvas(tab.id)
-          }
+          onClick={() => selectCanvas(tab.id)}
           onDoubleClick={() => setEditing(true)}
-          title={detached ? `${tab.name} (in window)` : tab.name}
+          title={tab.name}
           {...attributes}
           {...listeners}
         >
@@ -117,13 +112,11 @@ function Tab({ tab, active }: { tab: CanvasTab; active: boolean }) {
       <button
         type="button"
         className={styles.tabPopOut}
-        onClick={() =>
-          detached ? focusCanvasWindow(tab.id) : popOutCanvas(tab.id)
-        }
-        title={detached ? "Focus window" : "Open in new window"}
-        aria-label={detached ? "Focus canvas window" : "Open canvas in window"}
+        onClick={() => popOutCanvas(tab.id)}
+        title="Open in new window"
+        aria-label="Open canvas in new window"
       >
-        <ExternalLink size={13} strokeWidth={1.5} />
+        <ExternalLink size={12} strokeWidth={1.5} />
       </button>
       <button
         type="button"
@@ -132,7 +125,7 @@ function Tab({ tab, active }: { tab: CanvasTab; active: boolean }) {
         title="Close canvas"
         aria-label={`Close ${tab.name}`}
       >
-        <X size={14} strokeWidth={1.5} />
+        <X size={13} strokeWidth={1.5} />
       </button>
     </div>
   );
@@ -189,12 +182,12 @@ function useDropdownMenu() {
  * an empty canvas, drag-to-reorder. Its own nested DndContext (like the Overview
  * sortable #43) so tab drags don't clash with the app-level drag-into-canvas
  * context; only the Canvas view mounts at a time, so targets never overlap.
- * Dragging a tab out of the strip tears it off into its own window (#84).
+ * Dragging a tab out of the strip opens it in an additional FULL app window
+ * (task 434/437) — the tab stays here too, fully usable.
  */
 function CanvasTabs() {
   const canvases = useStore((s) => s.canvases);
   const activeCanvasId = useStore((s) => s.activeCanvasId);
-  const platform = useStore((s) => s.platform);
   const addCanvas = useStore((s) => s.addCanvas);
   const reorderCanvases = useStore((s) => s.reorderCanvases);
   const popOutCanvas = useStore((s) => s.popOutCanvas);
@@ -229,9 +222,10 @@ function CanvasTabs() {
 
   const onDragEnd = (event: DragEndEvent) => {
     const { active, over, delta } = event;
-    // Tear-off (#84): a tab dropped outside the strip (no reorder target) and
-    // pulled away vertically pops out into its own window. The vertical threshold
-    // keeps a horizontal reorder that snapped back from triggering it.
+    // Tear-off (task 437): a tab dropped outside the strip (no reorder target) and
+    // pulled away vertically opens a FULL app window on this canvas (task 434's
+    // `open_app_window`); the tab remains here. The vertical threshold keeps a
+    // horizontal reorder that snapped back from triggering it.
     if (!over || over.id === active.id) {
       if (Math.abs(delta.y) > TEAROFF_THRESHOLD_PX) {
         popOutCanvas(String(active.id));
@@ -263,19 +257,20 @@ function CanvasTabs() {
       </DndContext>
       {/* "+" → create a new empty canvas tab in one click (#222, reverting the #205
           dropdown). The "from template" entry point lives in the Templates ▾ menu
-          below. ⌘T/Ctrl+T (#206) also creates a tab; its hint stays on this tooltip. */}
+          below. The ⌘T chord (#206) was removed by the keybind rework — this
+          button is the way to add a tab. */}
       <button
         type="button"
         className={styles.tabAdd}
         onClick={() => addCanvas()}
-        title={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
-        aria-label={`New tab (${kbdHint(platform, "⌘T", "Ctrl+T")})`}
+        title="New tab"
+        aria-label="New tab"
       >
-        {/* #273: the Plus glyph is a sparse cross, so at size 14/1.5 it reads
+        {/* #273: the Plus glyph is a sparse cross, so at 1.5 stroke it reads
             visually smaller than the denser LayoutTemplate/Grid2x2 neighbors. A
-            larger 16px glyph + heavier 2px stroke gives it comparable mass while
-            the 20px button box (hit-area/hover/disabled) stays unchanged. */}
-        <Plus size={16} strokeWidth={2} />
+            larger 15px glyph + heavier 2px stroke gives it comparable mass while
+            the 22px button box (hit-area/hover/disabled) stays unchanged. */}
+        <Plus size={15} strokeWidth={2} />
       </button>
       {/* Templates ▾ menu (#117/#205/#222): "New tab from template…" (the primary "use"
           action) plus template management (New / Save current / Manage). */}
@@ -290,12 +285,12 @@ function CanvasTabs() {
           aria-haspopup="menu"
           aria-expanded={templatesMenu.open}
         >
-          <LayoutTemplate size={14} strokeWidth={1.5} />
-          <ChevronDown size={11} strokeWidth={1.5} />
+          <LayoutTemplate size={13} strokeWidth={1.5} />
+          <ChevronDown size={10} strokeWidth={1.5} />
         </button>
         {templatesMenu.open && templatesMenu.menuPos && (
           <div
-            className={styles.menu}
+            className={`menu-pop ${styles.menuPos}`}
             role="menu"
             style={{
               top: templatesMenu.menuPos.top,
@@ -304,7 +299,7 @@ function CanvasTabs() {
           >
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               disabled={!hasTemplates}
               onClick={() => {
@@ -316,7 +311,7 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               onClick={() => {
                 templatesMenu.close();
@@ -327,7 +322,7 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               disabled={!canSaveAsTemplate}
               onClick={() => {
@@ -339,7 +334,7 @@ function CanvasTabs() {
             </button>
             <button
               type="button"
-              className={styles.menuItem}
+              className="menu-item"
               role="menuitem"
               onClick={() => {
                 templatesMenu.close();
@@ -351,18 +346,18 @@ function CanvasTabs() {
           </div>
         )}
       </div>
-      {/* "Distribute evenly" (#186): moved to the right edge of the strip (#205)
-          via .tabDistribute's margin-left:auto. Rebalances the active canvas's
-          panels; disabled when there's nothing to even (<2 panels). */}
+      {/* "Distribute evenly" (#186): inline after Templates (UI v2 §8 — the #205
+          far-right auto-margin is gone). Rebalances the active canvas's panels;
+          disabled when there's nothing to even (<2 panels). */}
       <button
         type="button"
-        className={`${styles.tabAdd} ${styles.tabDistribute}`}
+        className={styles.tabAdd}
         onClick={() => equalizeCanvas()}
         disabled={!canEqualize}
         title="Distribute panels evenly"
         aria-label="Distribute panels evenly"
       >
-        <Grid2x2 size={14} strokeWidth={1.5} />
+        <Grid2x2 size={13} strokeWidth={1.5} />
       </button>
     </div>
   );

@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { useDraggable } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -18,11 +19,14 @@ import {
   Bug,
   Check,
   Clock,
+  CornerDownRight,
+  ExternalLink,
   Eye,
   EyeOff,
   FileDiff,
   FileText,
   Folder,
+  FolderOpen,
   FolderTree,
   GitBranch,
   GitFork,
@@ -40,10 +44,12 @@ import {
 } from "lucide-react";
 
 import { agentSupportsResume } from "../../agents";
+import { matchBranchFilter } from "../../branchFilter";
 import { afterPaint } from "../../gitRefresh";
 import { noAutoCapitalize } from "../../inputProps";
 import {
   listBranches,
+  openAppWindow,
   openUrl,
   revealFileInFinder,
   revealPath,
@@ -57,8 +63,15 @@ import {
   sessionLabel,
   worktreeGroupPaths,
 } from "../../paths";
-import { joinPath, kbdHint, revealLabel } from "../../platform";
+import { joinPath, revealLabel } from "../../platform";
+import { useKeybindLabel } from "../../useKeybind";
 import { formatFireTime, formatNextRun } from "../../time";
+import {
+  detectedWorktreesFor,
+  sessionActiveWorktree,
+  worktreeSourceOf,
+  type WorktreeSource,
+} from "../../worktrees";
 import {
   dedupeBranchLabels,
   mergeRepoOrder,
@@ -66,6 +79,7 @@ import {
   REPO_PALETTE,
   repoColor,
   repoOrder,
+  SIDEBAR_WIDTH_DEFAULT,
   useStore,
 } from "../../store";
 import type {
@@ -82,6 +96,7 @@ import ViewSwitch from "../ViewSwitch/ViewSwitch";
 import ViewsMenu from "../ViewsMenu/ViewsMenu";
 import { aheadBehindBadge } from "./branchStatus";
 import { diffCountBadge } from "./diffCounts";
+import { railDotState } from "./railDotState";
 import styles from "./Sidebar.module.css";
 
 /** Fixed width of the collapsed sidebar icon rail (#168/#214). Snug around its
@@ -130,17 +145,26 @@ function useRowMenu() {
   const openMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
+    // Clamp for the shared menu primitive's 200px min-width (task 375).
     setMenu({
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 160)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 96)),
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 208)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 120)),
     });
   };
   return { menu, openMenu, closeMenu: () => setMenu(null) };
 }
 
+/** Portal a floating sidebar context menu to <body> (#446) so it escapes any dimmed
+ * (opacity < 1) / overflow-clipping ancestor — an idle worktree row's opacity was both
+ * bleeding through the menu and capturing its position:fixed layer into the sidebar's
+ * clip. The menu keeps its own `position: fixed` + z-index (menuPos/menuOverlay). */
+function MenuPortal({ children }: { children: ReactNode }) {
+  return createPortal(children, document.body);
+}
+
 /** One entry in a `RowContextMenu` (#132/#133). `danger` paints it red
- * (`menuItemDanger`) for destructive actions (Remove / Cancel); otherwise it
- * uses the neutral `menuItem` style (the worktree header's Reveal / Copy, #133).
+ * (`menu-item-danger`) for destructive actions (Remove / Cancel); otherwise it
+ * uses the neutral `menu-item` style (the worktree header's Reveal / Copy, #133).
  * `confirmLabel` (#293) opts a row into an inline two-step confirm — the first
  * click swaps the row into a danger button showing `confirmLabel` (the menu stays
  * open), a second click runs it — honoring the #103 destructive-confirm setting
@@ -160,7 +184,7 @@ type RowMenuItem = {
  * (#132/#133): renders one or more `items`, each calling its `onActivate` and
  * closing the menu. The non-agent rows show a single red Remove (or Cancel)
  * item; the worktree header (#133) shows two neutral items (Reveal in Finder,
- * Copy absolute path). Reuses the `.menuOverlay` / `.menu` classes. An item with
+ * Copy absolute path). Reuses the shared menu.css primitive (task 375). An item with
  * a `confirmLabel` gets a backward-compatible inline confirm (#293/#103): the
  * first click arms it (danger label, menu stays open), a second click runs it;
  * clicking any other item or dismissing resets. */
@@ -181,57 +205,61 @@ function RowContextMenu({
   }, [menu]);
   if (!menu) return null;
   return (
-    <>
-      <div
-        className={styles.menuOverlay}
-        onClick={onClose}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          onClose();
-        }}
-      />
-      <div
-        className={styles.menu}
-        style={{ left: menu.x, top: menu.y }}
-        role="menu"
-      >
-        {items.map((item, i) => {
-          const confirming = pending === i && item.confirmLabel != null;
-          return (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              className={
-                confirming || item.danger
-                  ? styles.menuItemDanger
-                  : styles.menuItem
-              }
-              onClick={() => {
-                // A confirm-gated item's first click arms it in place (#293) —
-                // keep the menu open; the second click (below) runs it.
-                if (item.confirmLabel != null && !confirming) {
-                  setPending(i);
-                  return;
+    <MenuPortal>
+      <>
+        <div
+          className={`menu-overlay ${styles.menuOverlay}`}
+          onClick={onClose}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            onClose();
+          }}
+        />
+        <div
+          className={`menu-pop ${styles.menuPos}`}
+          style={{ left: menu.x, top: menu.y }}
+          role="menu"
+        >
+          {items.map((item, i) => {
+            const confirming = pending === i && item.confirmLabel != null;
+            return (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                className={
+                  confirming
+                    ? "menu-item-confirm"
+                    : item.danger
+                      ? "menu-item-danger"
+                      : "menu-item"
                 }
-                onClose();
-                item.onActivate();
-              }}
-            >
-              {/* Checkable row (#296/#302): the label reads first, then a trailing
+                onClick={() => {
+                  // A confirm-gated item's first click arms it in place (#293) —
+                  // keep the menu open; the second click (below) runs it.
+                  if (item.confirmLabel != null && !confirming) {
+                    setPending(i);
+                    return;
+                  }
+                  onClose();
+                  item.onActivate();
+                }}
+              >
+                {/* Checkable row (#296/#302): the label reads first, then a trailing
               fixed-width slot holds the check glyph (shown only when the toggle is on),
               so the checkmark sits after the label rather than in front of it. */}
-              {confirming ? item.confirmLabel : item.label}
-              {item.checked != null && (
-                <span className={styles.menuCheck} aria-hidden>
-                  {item.checked && <Check size={13} strokeWidth={2} />}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </>
+                {confirming ? item.confirmLabel : item.label}
+                {item.checked != null && (
+                  <span className="menu-check" aria-hidden>
+                    {item.checked && <Check size={13} strokeWidth={2} />}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </>
+    </MenuPortal>
   );
 }
 
@@ -464,7 +492,8 @@ interface SessionRowProps {
  * The agent right-click menu (#228), shared by the expanded `SessionRow` and the
  * collapsed-rail dots so the two never diverge: **Rename**, **Fork conversation**
  * (gated #138/#142), **Copy session ID** (resume-only #142), **Open in canvas**
- * (#153), and **Remove**. Renders a full-window dismiss overlay + the positioned menu;
+ * (#153), **Open in editor** (the agent's working folder in the preferred editor),
+ * and **Remove**. Renders a full-window dismiss overlay + the positioned menu;
  * Escape also closes. The caller pre-clamps `{x, y}` to the viewport.
  */
 function AgentContextMenu({
@@ -487,6 +516,8 @@ function AgentContextMenu({
   const forkSession = useStore((s) => s.forkSession);
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const openSessionInCanvas = useStore((s) => s.openSessionInCanvas);
+  const openInEditor = useStore((s) => s.openInEditor);
+  const editorHint = useKeybindLabel("open-in-editor");
   // Per-agent "watch" toggle (#336) — the same store flag as the Overview/Canvas
   // header WatchButton, so the menu item stays in sync with those buttons.
   const toggleWatch = useStore((s) => s.toggleWatch);
@@ -508,121 +539,139 @@ function AgentContextMenu({
   }, [onClose]);
 
   return (
-    <>
-      <div
-        className={styles.menuOverlay}
-        onClick={onClose}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          onClose();
-        }}
-      />
-      <div className={styles.menu} style={{ left: x, top: y }} role="menu">
-        <button
-          type="button"
-          role="menuitem"
-          className={styles.menuItem}
-          onClick={() => {
+    <MenuPortal>
+      <>
+        <div
+          className={`menu-overlay ${styles.menuOverlay}`}
+          onClick={onClose}
+          onContextMenu={(event) => {
+            event.preventDefault();
             onClose();
-            onRename();
           }}
+        />
+        <div
+          className={`menu-pop ${styles.menuPos}`}
+          style={{ left: x, top: y }}
+          role="menu"
         >
-          Rename
-        </button>
-        {/* Fork the agent's conversation (#131) — reuses the #126 action, same as the
-            Overview/Canvas header fork buttons. */}
-        <button
-          type="button"
-          role="menuitem"
-          className={`${styles.menuItem} ${styles.menuItemView}`}
-          aria-disabled={!canFork}
-          title={forkReason ?? undefined}
-          onClick={() => {
-            if (!canFork) return;
-            onClose();
-            void forkSession(session.id);
-          }}
-        >
-          <GitFork size={14} strokeWidth={1.5} className={styles.menuIcon} />
-          Fork conversation
-        </button>
-        {/* Copy the claude session UUID (#131) — usable with `claude --resume`. Hidden
-            for non-resumable agents (Codex, #142). */}
-        {canResume && (
           <button
             type="button"
             role="menuitem"
-            className={styles.menuItem}
+            className="menu-item"
             onClick={() => {
               onClose();
-              void copyToClipboard(session.claudeSessionId, "session ID");
+              onRename();
             }}
           >
-            Copy session ID
+            Rename
           </button>
-        )}
-        {/* Open the agent in the Canvas view (#153): reuse its tab/detached window, else
-            a new "Canvas N" tab. */}
-        <button
-          type="button"
-          role="menuitem"
-          className={`${styles.menuItem} ${styles.menuItemView}`}
-          onClick={() => {
-            onClose();
-            openSessionInCanvas(session.id);
-          }}
-        >
-          <PanelsTopLeft
-            size={14}
-            strokeWidth={1.5}
-            className={styles.menuIcon}
-          />
-          Open in canvas
-        </button>
-        {/* Per-agent "watch" toggle (#336): pop a native notification when this agent
-            finishes a turn / needs input. Same flag as the header WatchButton. */}
-        <button
-          type="button"
-          role="menuitem"
-          className={`${styles.menuItem} ${styles.menuItemView}`}
-          aria-pressed={watched}
-          onClick={() => {
-            onClose();
-            toggleWatch(session.id);
-            // Ensure notification permission when turning watch on (no-op off).
-            if (!watched) void ensureNotificationPermission();
-          }}
-        >
-          {watched ? (
-            <Eye size={14} strokeWidth={1.5} className={styles.menuIcon} />
-          ) : (
-            <EyeOff size={14} strokeWidth={1.5} className={styles.menuIcon} />
+          {/* Fork the agent's conversation (#131) — reuses the #126 action, same as the
+            Overview/Canvas header fork buttons. */}
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            aria-disabled={!canFork}
+            title={forkReason ?? undefined}
+            onClick={() => {
+              if (!canFork) return;
+              onClose();
+              void forkSession(session.id);
+            }}
+          >
+            <GitFork size={13} strokeWidth={1.5} className="menu-icon" />
+            Fork conversation
+          </button>
+          {/* Copy the claude session UUID (#131) — usable with `claude --resume`. Hidden
+            for non-resumable agents (Codex, #142). */}
+          {canResume && (
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              onClick={() => {
+                onClose();
+                void copyToClipboard(session.claudeSessionId, "session ID");
+              }}
+            >
+              Copy session ID
+            </button>
           )}
-          {watched ? "Stop watching" : "Watch"}
-        </button>
-        <div className={styles.menuSeparator} role="separator" />
-        <button
-          type="button"
-          role="menuitem"
-          className={styles.menuItemDanger}
-          onClick={() => {
-            onClose();
-            onRemove();
-          }}
-        >
-          Remove
-        </button>
-      </div>
-    </>
+          {/* Open the agent in the Canvas view (#153): reuse its tab/detached window, else
+            a new "Canvas N" tab. */}
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              openSessionInCanvas(session.id);
+            }}
+          >
+            <PanelsTopLeft size={13} strokeWidth={1.5} className="menu-icon" />
+            Open in canvas
+          </button>
+          {/* Launch the preferred editor at the agent's working folder (its worktree
+            for worktree agents); first use opens the picker. */}
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            title={`Open ${session.repoPath} in your editor${editorHint ? ` (${editorHint})` : ""}`}
+            onClick={() => {
+              onClose();
+              void openInEditor(session.repoPath);
+            }}
+          >
+            <ExternalLink size={13} strokeWidth={1.5} className="menu-icon" />
+            Open in editor
+          </button>
+          {/* Per-agent "watch" toggle (#336): pop a native notification when this agent
+            finishes a turn / needs input. Same flag as the header WatchButton. */}
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            aria-pressed={watched}
+            onClick={() => {
+              onClose();
+              toggleWatch(session.id);
+              // Ensure notification permission when turning watch on (no-op off).
+              if (!watched) void ensureNotificationPermission();
+            }}
+          >
+            {watched ? (
+              <Eye size={13} strokeWidth={1.5} className="menu-icon" />
+            ) : (
+              <EyeOff size={13} strokeWidth={1.5} className="menu-icon" />
+            )}
+            {watched ? "Stop watching" : "Watch"}
+          </button>
+          <div className="menu-sep" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item-danger"
+            onClick={() => {
+              onClose();
+              onRemove();
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      </>
+    </MenuPortal>
   );
 }
 
 /** Clamp a right-click position so the agent menu never overflows the viewport
  * (#131/#153/#336 — up to 6 items + a separator). Shared by the row + rail menu (#228). */
 function clampAgentMenuPos(clientX: number, clientY: number) {
+  // Clamp for the shared menu primitive's 200px min-width (task 375).
   return {
-    x: Math.max(8, Math.min(clientX, window.innerWidth - 160)),
-    y: Math.max(8, Math.min(clientY, window.innerHeight - 240)),
+    x: Math.max(8, Math.min(clientX, window.innerWidth - 208)),
+    y: Math.max(8, Math.min(clientY, window.innerHeight - 260)),
   };
 }
 
@@ -1189,15 +1238,32 @@ function BranchAheadBehind({ path }: { path: string }) {
 }
 
 /**
- * A worktree sub-group header (#74): the `GitBranch` icon + branch name +
- * "worktree" badge for an isolated worktree folder, with the worktree's absolute
- * path as its tooltip. Right-click opens a full action menu (#166) mirroring the
- * repo menu (#82/#130) but scoped to the worktree's own folder (`path`): **New
- * session** (reuses the worktree via `spawnWorktreeSession(parent, branch)`,
- * ref-counted), the shared **Views** add-view set (#164's `ViewsMenu`), **Reveal in
- * Finder** / **Copy absolute path**, and a destructive **Close worktree** that kills
- * the worktree's agents (ref-counted `git worktree remove`, dirty kept) + its items
- * — confirm-gated per `confirmDestructive` (#103).
+ * A worktree sub-group header (#74): a small elbow marker + the `GitBranch` icon
+ * + branch name for a worktree folder, with the worktree's absolute path as its
+ * tooltip. The elbow (a Lucide `CornerDownRight`) is the sole worktree cue —
+ * subtle, since the row sits under its parent repo anyway; there is no text
+ * badge and no "in use" chip (removed — the branch name owns the row).
+ * Right-click opens a full action menu (#166) mirroring the repo menu (#82/#130)
+ * but scoped to the worktree's own folder (`path`).
+ *
+ * Three ownership `source`s share the header, differing only in spawn route and
+ * destructive tail:
+ * - `"record"` — the #74 app-managed worktree with live records. New session
+ *   reuses it via `spawnWorktreeSession` (ref-counted); the soft danger item is
+ *   the original **Close worktree** (ref-counted `git worktree remove`, dirty
+ *   kept).
+ * - `"external"` — a DETECTED worktree ReCue didn't create (an agent's
+ *   `EnterWorktree`, a hook, a manual `git worktree add`). New session spawns
+ *   **in place** (`spawnSessionInWorktree`); the soft danger item is **Close
+ *   items here** (only when items exist) — automation never deletes it.
+ * - `"orphan"` — ReCue-managed but record-less: the dirty-kept leftover (#74's
+ *   keep). No extra soft item — Delete is its whole destructive story.
+ * ALL sources additionally get **Delete worktree…** — the explicit, ALWAYS
+ * confirm-gated permanent delete (`deleteWorktree`: kills the worktree's agents,
+ * cancels its schedules/recurrings, closes its panels, removes the folder from
+ * disk; the branch is kept). It deliberately ignores the `confirmDestructive`
+ * opt-out — a disk delete with potential uncommitted work always asks.
+ * An idle group (`live` false — no agents/items and not locked) renders dimmed.
  */
 function WorktreeHeader({
   path,
@@ -1205,56 +1271,94 @@ function WorktreeHeader({
   parent,
   agentCount,
   compact = false,
+  source = "record",
+  live = true,
+  hasItems = true,
 }: {
   path: string;
   branch: string;
   /** The worktree's parent repo (#166) — needed to start a new worktree session;
-   * undefined disables "New session". */
+   * undefined disables "New session". Always known for a detected group (the
+   * enclosing repo). */
   parent?: string;
-  /** Agents in this worktree (#166) — for the Close-worktree confirm label. */
+  /** Agents in this worktree (#166) — for the destructive confirm label. */
   agentCount: number;
-  /** Collapsed-rail mode (#168): icon-only (just the branch glyph), no name/badge,
+  /** Collapsed-rail mode (#168): icon-only (just the branch glyph), no name,
    * the full right-click menu intact. */
   compact?: boolean;
+  /** Ownership class — see the doc comment. */
+  source?: WorktreeSource;
+  /** Full-strength vs dimmed-idle row (presence-driven display). */
+  live?: boolean;
+  /** Any agents/panels/schedules reference the folder — gates "Close items here". */
+  hasItems?: boolean;
 }) {
   const copyToClipboard = useStore((s) => s.copyToClipboard);
   const pullFolder = useStore((s) => s.pullFolder);
   const spawnWorktreeSession = useStore((s) => s.spawnWorktreeSession);
+  const spawnSessionInWorktree = useStore((s) => s.spawnSessionInWorktree);
+  const deleteWorktree = useStore((s) => s.deleteWorktree);
   const killAllAgents = useStore((s) => s.killAllAgents);
   const closeAllItems = useStore((s) => s.closeAllItems);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   // Click-to-filter Overview to just this worktree (#197), mirroring the repo name.
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
+  // Keep the user in Attention when they filter from Attention (#445); only force
+  // Overview from the other views (so the narrowed wall becomes visible).
+  const view = useStore((s) => s.view);
   const isFiltered = useStore((s) => s.overviewRepoFilter?.path === path);
   const platform = useStore((s) => s.platform);
   // A worktree shares its parent repo's remote (#327), so read the parent's cached URL.
   const githubUrl = useStore((s) =>
     parent ? s.githubUrls[parent] : undefined,
   );
+  const openInEditor = useStore((s) => s.openInEditor);
+  const editorHint = useKeybindLabel("open-in-editor");
   const { menu, openMenu, closeMenu } = useRowMenu();
-  const [confirming, setConfirming] = useState(false);
+  // Two inline confirm modes (the repo menu's "Close all items" pattern): "close"
+  // is the soft kill-items step, "delete" the permanent disk delete.
+  const [confirming, setConfirming] = useState<null | "close" | "delete">(null);
   const close = () => {
-    setConfirming(false);
+    setConfirming(null);
     closeMenu();
   };
   const closeWorktree = () => {
     void killAllAgents(path);
     void closeAllItems(path);
   };
+  // New-session route per source: a record worktree reuses the app-managed folder
+  // (ref-count++); a detected one already IS a checkout, so spawn IN PLACE with
+  // the explicit parent (never `git worktree add` — the branch is checked out).
+  const startSessionHere = () => {
+    if (!parent) return;
+    if (source === "record") void spawnWorktreeSession(parent, branch);
+    else void spawnSessionInWorktree(path, parent);
+  };
   return (
     <div
       className={`${compact ? styles.railWorktree : styles.worktreeHeader} ${
         !compact && isFiltered ? styles.worktreeActive : ""
-      }`}
-      title={compact ? `${branch} · worktree` : path}
+      } ${!compact && !live ? styles.worktreeIdle : ""}`}
+      title={compact ? `${branch} · ${path}` : path}
       onContextMenu={openMenu}
     >
-      {/* The branch glyph marks the row as a worktree (#196, replacing the literal
-          "worktree" word) — distinct from a repo's Folder icon (#128). Labelled so
-          the meaning survives without the text. */}
+      {/* The elbow marks the row as a worktree — the subtle nesting cue now that
+          there is no text badge and the child rows aren't extra-indented. Rail
+          mode stays icon-only (just the branch glyph). */}
+      {!compact && (
+        <CornerDownRight
+          size={12}
+          strokeWidth={1.5}
+          className={styles.worktreeElbow}
+          aria-hidden
+        />
+      )}
+      {/* The branch glyph marks the row as a branch checkout (#196) — distinct
+          from a repo's Folder icon (#128). Labelled so the meaning survives
+          without the text. */}
       <GitBranch
-        size={compact ? 16 : 12}
+        size={12}
         strokeWidth={1.5}
         className={styles.worktreeIcon}
         role="img"
@@ -1271,7 +1375,7 @@ function WorktreeHeader({
             // A worktree click shows only that worktree (#197); mode is moot for a
             // worktree path (it has no sub-worktrees), so the default "all" is fine.
             setOverviewRepoFilter(path, "all");
-            setView("overview");
+            if (view !== "attention") setView("overview");
           }}
           title={`Filter Overview to ${branch}`}
           aria-pressed={isFiltered}
@@ -1279,25 +1383,20 @@ function WorktreeHeader({
           {branch}
         </button>
       )}
-      {/* Ahead/behind vs upstream (#338): `↑A ↓B` next to the worktree branch name,
-          before the "worktree" badge. Rail mode stays icon-only (like the badge). */}
+      {/* Ahead/behind vs upstream (#338): `↑A ↓B` next to the worktree branch name.
+          Rail mode stays icon-only. */}
       {!compact && <BranchAheadBehind path={path} />}
-      {/* "worktree" badge (#240): now that the sub-group isn't indented, this chip is
-          what distinguishes a worktree branch from the repo's own branch line — mirrors
-          the Overview/Canvas badge. Right-aligned (the flex:1 name pushes it + the "+"
-          to the right edge). Rail mode stays icon-only. */}
-      {!compact && <span className={styles.worktreeBadge}>worktree</span>}
       {/* Inline "+" new session in this worktree (#196), mirroring the repo header's
-          + (#127): reuses the app-managed worktree folder (ref-count++, #166). The
-          click is contained so it never opens the row's context menu. Disabled when
-          the parent repo is unknown (like the menu's "New session", #166). */}
+          + (#127): record → reuse the app-managed worktree (ref-count++, #166);
+          detected → spawn in place. The click is contained so it never opens the
+          row's context menu. Disabled when the parent repo is unknown. */}
       {!compact && (
         <button
           type="button"
           className={styles.plus}
           onClick={(event) => {
             event.stopPropagation();
-            if (parent) void spawnWorktreeSession(parent, branch);
+            startSessionHere();
           }}
           disabled={!parent}
           title={
@@ -1309,143 +1408,206 @@ function WorktreeHeader({
         </button>
       )}
       {menu && (
-        <>
-          <div
-            className={styles.menuOverlay}
-            onClick={close}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              close();
-            }}
-          />
-          <div
-            className={styles.menu}
-            style={{ left: menu.x, top: menu.y }}
-            role="menu"
-          >
-            {confirming ? (
-              <button
-                type="button"
-                role="menuitem"
-                className={styles.menuDanger}
-                onClick={() => {
-                  closeWorktree();
-                  close();
-                }}
-              >
-                {agentCount > 0
-                  ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & close worktree?`
-                  : "Close worktree & remove its items?"}
-              </button>
-            ) : (
-              <>
-                {/* New session in this worktree (#166): create-or-reuse the
-                    app-managed worktree (ref-count++), nesting another agent here. */}
+        <MenuPortal>
+          <>
+            <div
+              className={`menu-overlay ${styles.menuOverlay}`}
+              onClick={close}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                close();
+              }}
+            />
+            <div
+              className={`menu-pop ${styles.menuPos}`}
+              style={{ left: menu.x, top: menu.y }}
+              role="menu"
+            >
+              {confirming === "delete" ? (
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
-                  aria-disabled={!parent}
-                  title={parent ? undefined : "Worktree parent unknown"}
+                  className="menu-item-confirm"
                   onClick={() => {
-                    if (!parent) return;
-                    void spawnWorktreeSession(parent, branch);
+                    if (parent) void deleteWorktree(parent, path);
                     close();
                   }}
                 >
-                  New session
+                  {agentCount > 0
+                    ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & permanently delete this worktree?`
+                    : "Permanently delete this worktree & its uncommitted changes?"}
                 </button>
-                <div className={styles.menuSeparator} role="separator" />
-                {/* Open a view scoped to the worktree folder — the shared #164
+              ) : confirming === "close" ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item-confirm"
+                  onClick={() => {
+                    closeWorktree();
+                    close();
+                  }}
+                >
+                  {source === "external"
+                    ? agentCount > 0
+                      ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & close this worktree's items?`
+                      : "Close this worktree's items?"
+                    : agentCount > 0
+                      ? `Kill ${agentCount} agent${agentCount === 1 ? "" : "s"} & close worktree?`
+                      : "Close worktree & remove its items?"}
+                </button>
+              ) : (
+                <>
+                  {/* New session in this worktree (#166): record → create-or-reuse
+                    the app-managed worktree (ref-count++); detected → spawn in
+                    place with the explicit parent. */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    aria-disabled={!parent}
+                    title={parent ? undefined : "Worktree parent unknown"}
+                    onClick={() => {
+                      if (!parent) return;
+                      startSessionHere();
+                      close();
+                    }}
+                  >
+                    New session
+                  </button>
+                  <div className="menu-sep" role="separator" />
+                  {/* Open a view scoped to the worktree folder — the shared #164
                     ViewsMenu (file/diff/terminal/kanban), so the action set never
                     diverges from the repo menu and the badge popover. */}
-                <div className={styles.menuSection}>Views</div>
-                {/* No "New session here" — this menu already has its own top-level
+                  <div className="menu-section">Views</div>
+                  {/* No "New session here" — this menu already has its own top-level
                     "New session" above (#201). */}
-                <ViewsMenu
-                  repoPath={path}
-                  onClose={close}
-                  includeNewSession={false}
-                />
-                <div className={styles.menuSeparator} role="separator" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => {
-                    void revealPath(path);
-                    close();
-                  }}
-                >
-                  {revealLabel(platform)}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => {
-                    void copyToClipboard(path, "path");
-                    close();
-                  }}
-                >
-                  Copy absolute path
-                </button>
-                {/* Pull (#181): fast-forward this worktree's current branch
+                  <ViewsMenu
+                    repoPath={path}
+                    onClose={close}
+                    includeNewSession={false}
+                  />
+                  <div className="menu-sep" role="separator" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      void revealPath(path);
+                      close();
+                    }}
+                  >
+                    {revealLabel(platform)}
+                  </button>
+                  {/* Launch the preferred editor at the worktree folder; first use
+                    opens the picker. */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title={`Open ${path} in your editor${editorHint ? ` (${editorHint})` : ""}`}
+                    onClick={() => {
+                      void openInEditor(path);
+                      close();
+                    }}
+                  >
+                    Open in editor
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      void copyToClipboard(path, "path");
+                      close();
+                    }}
+                  >
+                    Copy absolute path
+                  </button>
+                  {/* Pull (#181): fast-forward this worktree's current branch
                     (`git pull --ff-only`); result is toasted. A worktree always has
                     a checked-out branch, so it's always shown here. */}
-                {branch && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={styles.menuItem}
-                    title="git pull --ff-only"
-                    onClick={() => {
-                      void pullFolder(path);
-                      close();
-                    }}
-                  >
-                    Pull
-                  </button>
-                )}
-                {/* View on GitHub (#327): open the parent repo's github.com page in the
+                  {branch && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      title="git pull --ff-only"
+                      onClick={() => {
+                        void pullFolder(path);
+                        close();
+                      }}
+                    >
+                      Pull
+                    </button>
+                  )}
+                  {/* View on GitHub (#327): open the parent repo's github.com page in the
                     default browser (http/https-only `openUrl`). Shown only when the
                     parent's remote resolves to a GitHub URL (cached — no git on open). */}
-                {githubUrl && (
+                  {githubUrl && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      title="Open this repository on GitHub"
+                      onClick={() => {
+                        void openUrl(githubUrl);
+                        close();
+                      }}
+                    >
+                      View on GitHub
+                    </button>
+                  )}
+                  <div className="menu-sep" role="separator" />
+                  {/* Soft destructive step by ownership: record → the original
+                    Close worktree (ref-counted `git worktree remove`, dirty
+                    kept); external → Close items here ONLY (shown only when
+                    items exist). Confirm-gated per #103. An orphan has no items
+                    to close — Delete below is its whole destructive story. */}
+                  {(source === "record" ||
+                    (source === "external" && hasItems)) && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item-danger"
+                      onClick={() => {
+                        if (confirmDestructive) {
+                          setConfirming("close");
+                        } else {
+                          closeWorktree();
+                          close();
+                        }
+                      }}
+                    >
+                      {source === "external"
+                        ? "Close items here"
+                        : "Close worktree"}
+                    </button>
+                  )}
+                  {/* Delete worktree… — ALL sources (the user explicitly owns the
+                    decision, even for a worktree they hand-made), and ALWAYS
+                    confirm-gated: a permanent disk delete with potential
+                    uncommitted work ignores the confirmDestructive opt-out. */}
                   <button
                     type="button"
                     role="menuitem"
-                    className={styles.menuItem}
-                    title="Open this repository on GitHub"
+                    className="menu-item-danger"
+                    aria-disabled={!parent}
+                    title={
+                      parent
+                        ? "Permanently delete this worktree folder from disk (the branch is kept)"
+                        : "Worktree parent unknown"
+                    }
                     onClick={() => {
-                      void openUrl(githubUrl);
-                      close();
+                      if (parent) setConfirming("delete");
                     }}
                   >
-                    View on GitHub
+                    Delete worktree…
                   </button>
-                )}
-                <div className={styles.menuSeparator} role="separator" />
-                {/* Close the worktree entirely (#166): kill its agents (ref-counted
-                    `git worktree remove`, dirty kept) + close its items. Confirm-gated. */}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItemDanger}
-                  onClick={() => {
-                    if (confirmDestructive) {
-                      setConfirming(true);
-                    } else {
-                      closeWorktree();
-                      close();
-                    }
-                  }}
-                >
-                  Close worktree
-                </button>
-              </>
-            )}
-          </div>
-        </>
+                </>
+              )}
+            </div>
+          </>
+        </MenuPortal>
       )}
     </div>
   );
@@ -1490,7 +1652,11 @@ function RepoBranchLine({
   const platform = useStore((s) => s.platform);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
+  // Stay in Attention when filtering from it (#445); only force Overview otherwise.
+  const view = useStore((s) => s.view);
   const githubUrl = useStore((s) => s.githubUrls[repo]);
+  const openInEditor = useStore((s) => s.openInEditor);
+  const editorHint = useKeybindLabel("open-in-editor");
   const { menu, openMenu, closeMenu } = useRowMenu();
   // Mirrors the header menu's `menuMode` minus its `confirm` (forget) mode — this
   // menu never forgets the folder.
@@ -1528,14 +1694,14 @@ function RepoBranchLine({
           // The branch line filters to the repo's **own** directory agents only —
           // worktrees hidden (#247), distinct from the folder header's "all".
           setOverviewRepoFilter(repo, "own");
-          setView("overview");
+          if (view !== "attention") setView("overview");
         }}
         onContextMenu={openMenu}
         title={`Show only ${repoName(repo)}'s own branch (hide worktrees)`}
         aria-pressed={isFiltered}
       >
         <GitBranch
-          size={12}
+          size={11}
           strokeWidth={1.5}
           className={styles.repoBranchIcon}
           aria-hidden
@@ -1548,237 +1714,253 @@ function RepoBranchLine({
         <BranchAheadBehind path={repo} />
       </button>
       {menu && (
-        <>
-          <div
-            className={styles.menuOverlay}
-            onClick={close}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              close();
-            }}
-          />
-          <div
-            className={styles.menu}
-            style={{ left: menu.x, top: menu.y }}
-            role="menu"
-          >
-            {mode === "color" ? (
-              <div className={styles.colorPicker}>
-                <div className={styles.swatches}>
-                  {REPO_PALETTE.map((hex) => {
-                    const isCurrent = repoColor(repo, repoColors) === hex;
-                    return (
-                      <button
-                        key={hex}
-                        type="button"
-                        className={`${styles.swatch} ${isCurrent ? styles.swatchActive : ""}`}
-                        style={{ background: hex }}
-                        onClick={() => {
-                          void setRepoColor(repo, hex);
-                          close();
-                        }}
-                        title={hex}
-                        aria-pressed={isCurrent}
-                        aria-label={`Set color ${hex}${isCurrent ? " (current)" : ""}`}
-                      />
-                    );
-                  })}
+        <MenuPortal>
+          <>
+            <div
+              className={`menu-overlay ${styles.menuOverlay}`}
+              onClick={close}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                close();
+              }}
+            />
+            <div
+              className={`menu-pop ${styles.menuPos}`}
+              style={{ left: menu.x, top: menu.y }}
+              role="menu"
+            >
+              {mode === "color" ? (
+                <div className={styles.colorPicker}>
+                  <div className={styles.swatches}>
+                    {REPO_PALETTE.map((hex) => {
+                      const isCurrent = repoColor(repo, repoColors) === hex;
+                      return (
+                        <button
+                          key={hex}
+                          type="button"
+                          className={`${styles.swatch} ${isCurrent ? styles.swatchActive : ""}`}
+                          style={{ background: hex }}
+                          onClick={() => {
+                            void setRepoColor(repo, hex);
+                            close();
+                          }}
+                          title={hex}
+                          aria-pressed={isCurrent}
+                          aria-label={`Set color ${hex}${isCurrent ? " (current)" : ""}`}
+                        />
+                      );
+                    })}
+                  </div>
+                  <label className={styles.customColor}>
+                    <span>Custom</span>
+                    <input
+                      type="color"
+                      value={repoColor(repo, repoColors)}
+                      onChange={(event) =>
+                        void setRepoColor(repo, event.currentTarget.value)
+                      }
+                    />
+                  </label>
                 </div>
-                <label className={styles.customColor}>
-                  <span>Custom</span>
-                  <input
-                    type="color"
-                    value={repoColor(repo, repoColors)}
-                    onChange={(event) =>
-                      void setRepoColor(repo, event.currentTarget.value)
-                    }
-                  />
-                </label>
-              </div>
-            ) : mode === "confirm-kill" ? (
-              <button
-                type="button"
-                role="menuitem"
-                className={styles.menuDanger}
-                onClick={() => {
-                  void killAllAgents(repo);
-                  close();
-                }}
-              >
-                Kill {runningAll} agent{runningAll === 1 ? "" : "s"}?
-              </button>
-            ) : mode === "confirm-close" ? (
-              <button
-                type="button"
-                role="menuitem"
-                className={styles.menuDanger}
-                onClick={() => {
-                  void closeAllItems(repo);
-                  close();
-                }}
-              >
-                Close all items
-                {runningAll > 0
-                  ? ` (kill ${runningAll} agent${runningAll === 1 ? "" : "s"})`
-                  : ""}
-                ?
-              </button>
-            ) : (
-              <>
-                {/* New session (#243): mirrors the header `+` and header menu. */}
+              ) : mode === "confirm-kill" ? (
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item-confirm"
                   onClick={() => {
-                    void startRepoSession(repo);
+                    void killAllAgents(repo);
                     close();
                   }}
                 >
-                  New session
+                  Kill {runningAll} agent{runningAll === 1 ? "" : "s"}?
                 </button>
-                <div className={styles.menuSeparator} role="separator" />
-                {/* The shared #164 add-view set (file/diff/terminal/kanban), so the
-                    action set never diverges from the header / worktree menus. */}
-                <div className={styles.menuSection}>Views</div>
-                <ViewsMenu
-                  repoPath={repo}
-                  onClose={close}
-                  includeNewSession={false}
-                />
-                <div className={styles.menuSeparator} role="separator" />
+              ) : mode === "confirm-close" ? (
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item-confirm"
                   onClick={() => {
-                    void revealPath(repo);
+                    void closeAllItems(repo);
                     close();
                   }}
                 >
-                  {revealLabel(platform)}
+                  Close all items
+                  {runningAll > 0
+                    ? ` (kill ${runningAll} agent${runningAll === 1 ? "" : "s"})`
+                    : ""}
+                  ?
                 </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => {
-                    void copyToClipboard(repo, "path");
-                    close();
-                  }}
-                >
-                  Copy path
-                </button>
-                {/* Copy branch name (#243): new vs the header menu — the branch line
-                    is the natural place to grab the current branch. */}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => {
-                    void copyToClipboard(branch, "branch name");
-                    close();
-                  }}
-                >
-                  Copy branch name
-                </button>
-                {/* Pull (#181): fast-forward the folder's current branch. The branch
-                    line only renders with a known branch, so it's always shown. */}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  title="git pull --ff-only"
-                  onClick={() => {
-                    void pullFolder(repo);
-                    close();
-                  }}
-                >
-                  Pull
-                </button>
-                {/* Fetch (#243): new vs the header menu — `git fetch --prune`, reusing
-                    the #180 backend; refreshes branch labels on success. */}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  title="git fetch --prune"
-                  onClick={() => {
-                    void fetchFolder(repo);
-                    close();
-                  }}
-                >
-                  Fetch
-                </button>
-                {/* View on GitHub (#327): open the folder's github.com page in the
-                    default browser. Shown only when the cached remote is a GitHub URL. */}
-                {githubUrl && (
+              ) : (
+                <>
+                  {/* New session (#243): mirrors the header `+` and header menu. */}
                   <button
                     type="button"
                     role="menuitem"
-                    className={styles.menuItem}
-                    title="Open this repository on GitHub"
+                    className="menu-item"
                     onClick={() => {
-                      void openUrl(githubUrl);
+                      void startRepoSession(repo);
                       close();
                     }}
                   >
-                    View on GitHub
+                    New session
                   </button>
-                )}
-                <div className={styles.menuSeparator} role="separator" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => setMode("color")}
-                >
-                  Change color…
-                </button>
-                {/* Destructive actions (#243): only ever operate on the folder's
+                  <div className="menu-sep" role="separator" />
+                  {/* The shared #164 add-view set (file/diff/terminal/kanban), so the
+                    action set never diverges from the header / worktree menus. */}
+                  <div className="menu-section">Views</div>
+                  <ViewsMenu
+                    repoPath={repo}
+                    onClose={close}
+                    includeNewSession={false}
+                  />
+                  <div className="menu-sep" role="separator" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      void revealPath(repo);
+                      close();
+                    }}
+                  >
+                    {revealLabel(platform)}
+                  </button>
+                  {/* Launch the preferred editor at this folder; first use opens
+                    the picker. */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title={`Open ${repo} in your editor${editorHint ? ` (${editorHint})` : ""}`}
+                    onClick={() => {
+                      void openInEditor(repo);
+                      close();
+                    }}
+                  >
+                    Open in editor
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      void copyToClipboard(repo, "path");
+                      close();
+                    }}
+                  >
+                    Copy path
+                  </button>
+                  {/* Copy branch name (#243): new vs the header menu — the branch line
+                    is the natural place to grab the current branch. */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      void copyToClipboard(branch, "branch name");
+                      close();
+                    }}
+                  >
+                    Copy branch name
+                  </button>
+                  {/* Pull (#181): fast-forward the folder's current branch. The branch
+                    line only renders with a known branch, so it's always shown. */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title="git pull --ff-only"
+                    onClick={() => {
+                      void pullFolder(repo);
+                      close();
+                    }}
+                  >
+                    Pull
+                  </button>
+                  {/* Fetch (#243): new vs the header menu — `git fetch --prune`, reusing
+                    the #180 backend; refreshes branch labels on success. */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title="git fetch --prune"
+                    onClick={() => {
+                      void fetchFolder(repo);
+                      close();
+                    }}
+                  >
+                    Fetch
+                  </button>
+                  {/* View on GitHub (#327): open the folder's github.com page in the
+                    default browser. Shown only when the cached remote is a GitHub URL. */}
+                  {githubUrl && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      title="Open this repository on GitHub"
+                      onClick={() => {
+                        void openUrl(githubUrl);
+                        close();
+                      }}
+                    >
+                      View on GitHub
+                    </button>
+                  )}
+                  <div className="menu-sep" role="separator" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => setMode("color")}
+                  >
+                    Change color…
+                  </button>
+                  {/* Destructive actions (#243): only ever operate on the folder's
                     *contents* — there is intentionally NO "Forget folder" /
                     worktree-style remove here (the header menu keeps Forget). */}
-                {(runningAll > 0 || agentCount > 0 || panelCount > 0) && (
-                  <div className={styles.menuSeparator} role="separator" />
-                )}
-                {runningAll > 0 && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={styles.menuItemDanger}
-                    onClick={() => {
-                      if (confirmDestructive) setMode("confirm-kill");
-                      else {
-                        void killAllAgents(repo);
-                        close();
-                      }
-                    }}
-                  >
-                    Kill all agents
-                  </button>
-                )}
-                {(agentCount > 0 || panelCount > 0) && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={styles.menuItemDanger}
-                    onClick={() => {
-                      // Confirm only when agents are running and confirms are on.
-                      if (confirmDestructive && runningAll > 0)
-                        setMode("confirm-close");
-                      else {
-                        void closeAllItems(repo);
-                        close();
-                      }
-                    }}
-                  >
-                    Close all items
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        </>
+                  {(runningAll > 0 || agentCount > 0 || panelCount > 0) && (
+                    <div className="menu-sep" role="separator" />
+                  )}
+                  {runningAll > 0 && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item-danger"
+                      onClick={() => {
+                        if (confirmDestructive) setMode("confirm-kill");
+                        else {
+                          void killAllAgents(repo);
+                          close();
+                        }
+                      }}
+                    >
+                      Kill all agents
+                    </button>
+                  )}
+                  {(agentCount > 0 || panelCount > 0) && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item-danger"
+                      onClick={() => {
+                        // Confirm only when agents are running and confirms are on.
+                        if (confirmDestructive && runningAll > 0)
+                          setMode("confirm-close");
+                        else {
+                          void closeAllItems(repo);
+                          close();
+                        }
+                      }}
+                    >
+                      Close all items
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          </>
+        </MenuPortal>
       )}
     </>
   );
@@ -1822,6 +2004,8 @@ function RepoGroup({
   const cancelRecurring = useStore((s) => s.cancelRecurring);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const setView = useStore((s) => s.setView);
+  // Stay in Attention when filtering from it (#445); only force Overview otherwise.
+  const view = useStore((s) => s.view);
   const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
   const repoColors = useStore((s) => s.repoColors);
   const sessionBusy = useStore((s) => s.sessionBusy);
@@ -1829,6 +2013,9 @@ function RepoGroup({
   const schedules = useStore((s) => s.schedules);
   const recurrings = useStore((s) => s.recurrings);
   const overviewPanels = useStore((s) => s.overviewPanels);
+  const repoWorktreeEntries = useStore((s) => s.repoWorktrees[repo]);
+  const heuristicWorktrees = useStore((s) => s.heuristicWorktrees);
+  const platform = useStore((s) => s.platform);
   // Recurring-owned child agents (#294) render only inside the recurring surfaces,
   // never as their own sidebar row — filter them out of the session lists below.
   const ownedChildIds = ownedChildSessionIds(recurrings);
@@ -1853,12 +2040,17 @@ function RepoGroup({
     (s) => s.repoPath === repo && !s.worktreeParent && !ownedChildIds.has(s.id),
   );
   const isEmpty = repoSessions.length === 0;
-  // Branch-line gate (#250): show the repo's own branch line only when the folder
-  // has at least one of its *own* items opened — own sessions, own non-agent panels
-  // (files/diffs/terminals/kanban), or own-folder schedules. A worktree sub-group
-  // does NOT count (it keeps its own WorktreeHeader branch indicator), so a folder
-  // whose only content is a worktree hides the repo's own branch line. Broader than
-  // `isEmpty` (which counts only sessions and drives the greyed header), so it's a
+  // Active (running) agent count for the header's new-session slot (#395): shown at
+  // rest where the "+" appears on hover. "Active" = not exited (`exitedCode` unset),
+  // the codebase-wide convention; worktree/recurring-owned children are already
+  // excluded from `repoSessions`.
+  const activeCount = repoSessions.filter(
+    (s) => s.exitedCode === undefined,
+  ).length;
+  // Own-items flag (an input to the branch display below, supersedes the #250
+  // own-items-only gate): own sessions, own non-agent panels (files/diffs/
+  // terminals/kanban), or own-folder schedules/recurrings. Broader than `isEmpty`
+  // (which counts only sessions and drives the greyed header), so it's a
   // separate flag.
   const hasOwnSchedules = schedules.some(
     (s) => s.cwd === repo && !scheduleNestsUnderWorktree(s),
@@ -1880,7 +2072,6 @@ function RepoGroup({
   // Primary label = the repo's branch, or the folder name when non-git / not yet
   // known. All sessions in a group share it, so index duplicates.
   const baseLabel = (branches[repo] ?? "") || repoName(repo);
-  const rowLabels = dedupeBranchLabels(repoSessions.map(() => baseLabel));
   // Worktree agents (#74) of this repo, grouped by their worktree folder — rendered
   // as indented sub-groups below the repo's own sessions/items.
   const worktreeAgents = sessions.filter(
@@ -1902,6 +2093,34 @@ function RepoGroup({
     worktreeSchedules,
     worktreeRecurrings,
   );
+  // DETECTED worktrees (presence-driven): every checkout of this repo that exists
+  // on disk beyond the record-backed set — agent-created (`EnterWorktree`, hooks,
+  // manual `git worktree add`) AND ReCue's own dirty-kept orphans. Records stay
+  // authoritative: `detectedWorktreesFor` dedupes anything `worktreePaths` already
+  // renders and self-excludes the registered folder by path equivalence.
+  const detected = detectedWorktreesFor(
+    repo,
+    repoWorktreeEntries,
+    worktreePaths,
+    platform,
+  );
+  const detectedByPath = new Map(detected.map((d) => [d.path, d]));
+  const detectedPaths = detected.map((d) => d.path);
+  // Relocation (agents follow their work): a session whose own cwd (claude's log,
+  // `session://cwd`) or heuristic guess lands inside a detected worktree renders
+  // under THAT worktree group — and returns here when it leaves or the worktree
+  // vanishes. The record's `repoPath` never changes; only row placement moves.
+  const activeWt = (s: (typeof sessions)[number]) =>
+    sessionActiveWorktree(s, detectedPaths, heuristicWorktrees, platform);
+  const homeSessions = repoSessions.filter((s) => !activeWt(s));
+  const rowLabels = dedupeBranchLabels(homeSessions.map(() => baseLabel));
+  const allWorktreePaths = [...worktreePaths, ...detectedPaths];
+  // Any-content gate for the current-branch display: with ANY content — own items
+  // OR worktree sub-groups — the checked-out branch renders as the #236 branch
+  // line (now ALSO for a worktree-only folder, so the main checkout stays
+  // visible among its items); with none it collapses into the header itself as
+  // a one-line "name / branch".
+  const hasAnyContent = hasOwnItems || allWorktreePaths.length > 0;
 
   return (
     <div
@@ -1937,26 +2156,53 @@ function RepoGroup({
           className={styles.repoTitle}
           onClick={() => {
             setOverviewRepoFilter(repo, "all");
-            setView("overview");
+            if (view !== "attention") setView("overview");
           }}
           title={`Filter Overview to ${repoName(repo)}`}
           aria-pressed={folderActive}
         >
-          <span className={styles.repoName}>{repoName(repo)}</span>
-          {!isEmpty && (
-            <span className={styles.count}>{repoSessions.length}</span>
+          <span
+            className={`${styles.repoName} ${
+              !hasAnyContent && branches[repo] ? styles.repoNameWithBranch : ""
+            }`}
+          >
+            {repoName(repo)}
+          </span>
+          {/* Empty folder: fold the checked-out branch into the header itself as
+              a one-line "name / branch" (no items → no branch line below), muted
+              so the name stays primary. Non-git folders show just the name. */}
+          {!hasAnyContent && branches[repo] && (
+            <span className={styles.repoHeaderBranch}>/ {branches[repo]}</span>
           )}
         </button>
-        <button
-          type="button"
-          className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
-          onClick={() => void startRepoSession(repo)}
-          onPointerDown={(event) => event.stopPropagation()}
-          title="New session in this repo"
-          aria-label="New session in this repo"
+        {/* New-session slot (#395): at rest it shows the count of the repo's own
+        running agents; hovering the header (or focusing the "+") swaps the count out
+        for the clickable "+", mirroring the agent row's diff `+/- ↔ ×` slot-swap. The
+        count and the "+" share the same fixed-width slot, so the swap shifts nothing.
+        A repo with no running agents falls through to the untouched `.repoHeader .plus`
+        hover-reveal (or the always-visible accent `.plusCoral` when empty). */}
+        <span
+          className={`${styles.newSlot} ${activeCount > 0 ? styles.newSlotCounted : ""}`}
         >
-          <Plus size={14} strokeWidth={1.5} />
-        </button>
+          {activeCount > 0 && (
+            <span
+              className={styles.agentCount}
+              aria-label={`${activeCount} active agent${activeCount === 1 ? "" : "s"}`}
+            >
+              {activeCount}
+            </span>
+          )}
+          <button
+            type="button"
+            className={`${styles.plus} ${isEmpty ? styles.plusCoral : ""}`}
+            onClick={() => void startRepoSession(repo)}
+            onPointerDown={(event) => event.stopPropagation()}
+            title="New session in this repo"
+            aria-label="New session in this repo"
+          >
+            <Plus size={14} strokeWidth={1.5} />
+          </button>
+        </span>
       </div>
 
       {/* Current branch on its own line below the header (#236, supersedes the #225
@@ -1965,8 +2211,11 @@ function RepoGroup({
           a long branch never crowds the name / count / +. Same data + sync as #225
           (the `branches` map, kept current by the #212 edge + the focus/poll effect
           below); hidden for a non-git / unknown folder. Clicking it filters Overview to
-          the repo (toggle), exactly like clicking the repo name (#34). */}
-      {branches[repo] && hasOwnItems && (
+          the repo (toggle), exactly like clicking the repo name (#34). Shown whenever
+          the folder has ANY content — own items or worktree sub-groups — so the main
+          checkout stays visible among a worktree-only folder's items; an empty folder
+          folds the branch into the header line above instead. */}
+      {branches[repo] && hasAnyContent && (
         <RepoBranchLine
           repo={repo}
           branch={branches[repo]}
@@ -1975,8 +2224,10 @@ function RepoGroup({
       )}
 
       {/* Child rows (#59/#74/#93): sessions, non-agent items, schedules, and nested
-      worktree agents — always rendered (#115 removed the #113 collapse gate). */}
-      {repoSessions.map((session, i) => (
+      worktree agents — always rendered (#115 removed the #113 collapse gate).
+      Sessions currently working INSIDE a detected worktree (relocation) render
+      under that worktree's sub-group below instead of here. */}
+      {homeSessions.map((session, i) => (
         <SessionRow
           key={session.id}
           session={session}
@@ -2038,37 +2289,58 @@ function RepoGroup({
           />
         ))}
 
-      {/* Isolated worktrees (#74/#240), rendered flush at this repo's own level (no
-      indent): each worktree folder is a sub-group — a branch header with a "worktree"
-      badge — and its agent(s). Their repo_path is the worktree, not this repo. */}
-      {worktreePaths.map((wt) => {
+      {/* Worktrees, rendered flush at this repo's own level (no indent): each
+      worktree folder is a sub-group — a branch header with a badge — and its
+      agent(s). Record-backed groups (#74/#240, agents whose repo_path IS the
+      worktree) come first, then DETECTED ones (agent-created / hook / manual /
+      ReCue's dirty-kept orphans) — presence-driven, shown even with no items.
+      Relocated agents (working inside a detected worktree per their own cwd)
+      nest under their worktree's group. */}
+      {allWorktreePaths.map((wt) => {
+        const det = detectedByPath.get(wt);
+        const isRecordBacked = det === undefined;
         const wtAgents = worktreeAgents.filter((s) => s.repoPath === wt);
+        // Relocated agents: record repoPath stays the parent repo; only the row
+        // placement follows their current worktree.
+        const wtRelocated = repoSessions.filter((s) => activeWt(s) === wt);
+        const wtRows = [...wtAgents, ...wtRelocated];
         const wtSchedules = worktreeSchedules.filter(
           (s) => s.worktree_path === wt,
         );
         const wtRecurrings = worktreeRecurrings.filter(
           (r) => r.worktree_path === wt,
         );
-        // Prefer the live checked-out branch; for a worktree with only a pending
-        // schedule / recurring (no live agent) fall back to its intended branch so the
-        // header reads the real branch, not the sanitized folder basename.
+        // Prefer the live checked-out branch; a detected worktree carries its
+        // branch straight from the `git worktree list` read (its path is never in
+        // the `branches` refresh scope), with a short-sha fallback for a detached
+        // HEAD; a schedule/recurring-only worktree falls back to its intended
+        // branch — never the sanitized folder basename unless nothing else knows.
         const wtBranch =
           (branches[wt] ?? "") ||
+          (det?.branch ?? (det ? det.head.slice(0, 7) : "")) ||
           (wtSchedules[0]?.branch ?? "") ||
           (wtRecurrings[0]?.branch ?? "") ||
           repoName(wt);
-        const wtLabels = dedupeBranchLabels(wtAgents.map(() => wtBranch));
+        const wtLabels = dedupeBranchLabels(wtRows.map(() => wtBranch));
+        const hasItems =
+          wtRows.length > 0 ||
+          wtSchedules.length > 0 ||
+          wtRecurrings.length > 0 ||
+          (overviewPanels[wt]?.length ?? 0) > 0;
         return (
           <div key={wt} className={styles.worktreeGroup}>
             <WorktreeHeader
               path={wt}
               branch={wtBranch}
               parent={
-                wtAgents[0]?.worktreeParent ?? wtSchedules[0]?.cwd ?? undefined
+                wtAgents[0]?.worktreeParent ?? wtSchedules[0]?.cwd ?? repo
               }
-              agentCount={wtAgents.length}
+              agentCount={wtRows.length}
+              source={worktreeSourceOf(det, isRecordBacked)}
+              live={hasItems || (det?.locked ?? false)}
+              hasItems={hasItems}
             />
-            {wtAgents.map((session, i) => (
+            {wtRows.map((session, i) => (
               <SessionRow
                 key={session.id}
                 session={session}
@@ -2173,6 +2445,8 @@ function Sidebar() {
   const recents = useStore((s) => s.recents);
   const branches = useStore((s) => s.branches);
   const githubUrls = useStore((s) => s.githubUrls);
+  const repoWorktrees = useStore((s) => s.repoWorktrees);
+  const heuristicWorktrees = useStore((s) => s.heuristicWorktrees);
   const selectedId = useStore((s) => s.selectedId);
   const selectItem = useStore((s) => s.selectItem);
   // Rail agent dots (#228): select/jump + a shared right-click menu (Remove kills the
@@ -2191,6 +2465,14 @@ function Sidebar() {
   const openCloneRepo = useStore((s) => s.openCloneRepo);
   const addFolder = useStore((s) => s.addFolder);
   const platform = useStore((s) => s.platform);
+  // Live keybind labels (keybind rework): rebindable hints read the effective
+  // chord so a rebound shortcut never shows a stale hint; "" (unbound) hides it.
+  const newSessionKey = useKeybindLabel("new-session");
+  const scheduleKey = useKeybindLabel("schedule-session");
+  const sidebarKey = useKeybindLabel("toggle-sidebar");
+  const settingsKey = useKeybindLabel("open-settings");
+  const editorKey = useKeybindLabel("open-in-editor");
+  const openInEditor = useStore((s) => s.openInEditor);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
@@ -2223,6 +2505,8 @@ function Sidebar() {
   const killAllAgentsGlobal = useStore((s) => s.killAllAgentsGlobal);
   const closeAllItemsGlobal = useStore((s) => s.closeAllItemsGlobal);
   const setView = useStore((s) => s.setView);
+  // Stay in Attention when filtering from it (#445); only force Overview otherwise.
+  const view = useStore((s) => s.view);
   const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const repoColors = useStore((s) => s.repoColors);
@@ -2231,6 +2515,8 @@ function Sidebar() {
   const removeOverviewPanel = useStore((s) => s.removeOverviewPanel);
   const sessionBusy = useStore((s) => s.sessionBusy);
   const sessionActive = useStore((s) => s.sessionActive);
+  // Error surface for the repo menu's "Open in new window" (multi-window 12/16).
+  const pushToast = useStore((s) => s.pushToast);
 
   // Right-click repo context menu (#31/#35), anchored at the cursor. `menuMode`
   // switches between the item list, the destructive Forget confirm, and the
@@ -2337,6 +2623,8 @@ function Sidebar() {
       : null;
   const dotsMenuItems: RowMenuItem[] = [
     { label: "Recurring session…", onActivate: () => openRecurring() },
+    { label: "New folder…", onActivate: () => void addFolder() },
+    { label: "Clone Repo…", onActivate: () => openCloneRepo() },
     ...(autoContinueItem ? [autoContinueItem] : []),
   ];
   // App-wide bulk-action counts (#293) — every running agent (the #91 `exitedCode
@@ -2351,7 +2639,6 @@ function Sidebar() {
   const bgMenuItems: RowMenuItem[] = [
     { label: "New folder…", onActivate: () => void addFolder() },
     { label: "Clone Repo…", onActivate: () => openCloneRepo() },
-    { label: "Schedule session", onActivate: () => openSchedule() },
     {
       label: sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar",
       onActivate: () => toggleSidebarCollapsed(),
@@ -2416,6 +2703,12 @@ function Sidebar() {
   );
   const reposKey = repos.join("\n");
 
+  // First-launch empty state (UI v2 §5, task 374): no folders, no in-flight clones,
+  // and boot settled (#352 — before that the empty tree just hasn't loaded yet).
+  // Shows the centered "No folders yet" block and hides the footer extras
+  // (update pill / auto-continue prompt / usage meter).
+  const firstLaunch = booted && repos.length === 0 && cloningRepos.length === 0;
+
   // Tier 1 (#359) — the branch label is the sidebar's primary text (`sessionLabel` falls
   // back to it), so read it as soon as the folder set is known: **one** `git rev-parse`
   // per folder, and the only git work on the boot critical path. Keyed on the repo set
@@ -2443,8 +2736,9 @@ function Sidebar() {
   // checkout` in a terminal of an idle repo (no busy→idle edge, #212) or in another
   // tool. The #212 edge refresh stays; this adds (a) a refresh when the window regains
   // focus / becomes visible ("changed it elsewhere, came back"), and (b) a modest poll
-  // while the window is visible, paused when hidden. Main-window only — the Sidebar
-  // mounts only there. The interval is tunable.
+  // while the window is visible, paused when hidden. Runs in every full window (each
+  // keeps its own git-read mirrors fresh — reads only, like the rest of the volley;
+  // the once-per-app side effects are primary-gated elsewhere). The interval is tunable.
   //
   // The **poll tick** stays the cheap pair — branch label + ahead/behind, batched into one
   // IPC each, ~2 `git` spawns per folder. The **focus / visibility** backstop asks for a
@@ -2457,7 +2751,7 @@ function Sidebar() {
     const BRANCH_POLL_MS = 15_000;
     let timer: ReturnType<typeof setInterval> | undefined;
     const pollBranchState = () => {
-      void refreshRepoGit({ kinds: ["branches", "aheadBehind"] });
+      void refreshRepoGit({ kinds: ["branches", "aheadBehind", "worktrees"] });
     };
     const fullRefresh = () => {
       void refreshRepoGit({ throttleFull: true });
@@ -2569,6 +2863,36 @@ function Sidebar() {
       )
     : [];
 
+  // Type-to-filter with a create-branch fallback (#408): when the typed value
+  // matches no local/remote branch, jump straight to the create-branch input
+  // pre-filled with that text (original case, focused) instead of forcing a click
+  // on "Create new branch" and a retype. Enter there creates + checks out off the
+  // folder's current branch, exactly like the explicit toggle.
+  const onCheckoutFilterChange = (value: string) => {
+    const q = value.trim().toLowerCase();
+    const nlLocal = checkoutList
+      ? sortCheckoutBranches(checkoutList.all).filter(
+          (b) => !q || b.toLowerCase().includes(q),
+        )
+      : [];
+    const nlRemote = checkoutList
+      ? (checkoutList.remote ?? []).filter(
+          (r) => !q || r.toLowerCase().includes(q),
+        )
+      : [];
+    if (
+      !checkoutLoading &&
+      matchBranchFilter(value, nlLocal, nlRemote).kind === "create"
+    ) {
+      setCheckoutCreating(true);
+      setCheckoutNewName(value.trim());
+      setCheckoutFilter("");
+      setCheckoutError(null);
+      return;
+    }
+    setCheckoutFilter(value);
+  };
+
   // Drag-to-resize the sidebar (#108): a right-edge handle with pointer capture so
   // the drag tracks even when the pointer leaves the thin handle. The store clamps
   // to [180, 560] + persists (debounced); double-click resets to the default.
@@ -2668,25 +2992,21 @@ function Sidebar() {
   // footer) and each WorktreeHeader's own menu sit over the rail unchanged.
   const rail = (
     <div className={styles.rail} onContextMenu={openBgMenu}>
+      {/* Accent-tinted New session block (UI v2 §6, task 374). The rail's Schedule
+          button is gone (§6) — scheduling stays reachable collapsed via its
+          schedule-session keybind. */}
       <button
         type="button"
-        className={styles.railButton}
+        className={styles.railNew}
         onClick={() => openNewSession()}
-        title={`New session ${kbdHint(platform, "⌘N", "Ctrl+N")}`}
+        title={newSessionKey ? `New session ${newSessionKey}` : "New session"}
         aria-label="New session"
       >
-        <Plus size={18} strokeWidth={1.5} />
+        <Plus size={14} strokeWidth={2.2} />
       </button>
-      <button
-        type="button"
-        className={styles.railButton}
-        onClick={() => openSchedule()}
-        title={`Schedule session ${kbdHint(platform, "⌘⇧N", "Ctrl+Shift+N")}`}
-        aria-label="Schedule session"
-      >
-        <Clock size={16} strokeWidth={1.5} />
-      </button>
+      <div className={styles.railDivider} aria-hidden />
       <ViewSwitch compact />
+      <div className={styles.railDivider} aria-hidden />
       <div className={styles.railRepos} onContextMenu={openBgMenu}>
         {/* In-flight clones in the collapsed rail (#299): a minimal, inert dimmed +
         pulsing folder icon per phantom (no branch line / dots fit the narrow rail), so
@@ -2698,7 +3018,7 @@ function Sidebar() {
             title={`Cloning ${clone.name}…`}
             aria-label={`Cloning ${clone.name}`}
           >
-            <Folder size={18} strokeWidth={2} />
+            <Folder size={14} strokeWidth={2} />
           </div>
         ))}
         {repos.map((repo) => {
@@ -2717,15 +3037,39 @@ function Sidebar() {
           const worktreePaths = [
             ...new Set(worktreeAgents.map((s) => s.repoPath)),
           ];
+          // Detected worktrees + relocation, mirroring the expanded RepoGroup
+          // (presence-driven rows; a session working inside a detected worktree
+          // renders its dot under that group).
+          const detected = detectedWorktreesFor(
+            repo,
+            repoWorktrees[repo],
+            worktreePaths,
+            platform,
+          );
+          const detectedByPath = new Map(detected.map((d) => [d.path, d]));
+          const detectedPaths = detected.map((d) => d.path);
+          const activeWt = (s: SessionView) =>
+            sessionActiveWorktree(
+              s,
+              detectedPaths,
+              heuristicWorktrees,
+              platform,
+            );
+          const homeSessions = repoSessions.filter((s) => !activeWt(s));
+          const allWorktreePaths = [...worktreePaths, ...detectedPaths];
           // Rail agent dot (#228): now a clickable, selectable target — left-click
           // selects/jumps; right-click opens the shared agent menu (stopPropagation so
-          // it isn't the rail's background/repo menu). The BusyIndicator is the dot.
+          // it isn't the rail's background/repo menu). The BusyIndicator is the dot;
+          // the tooltip appends the dot's state (UI v2 §6, task 374).
           const dot = (s: SessionView, base: string) => {
             const dotLabel = sessionLabel(
               s.name,
               autoNameOn ? s.autoName : null,
               base,
             ).primary;
+            const busy = sessionBusy[s.id] ?? false;
+            const active = sessionActive[s.id] ?? false;
+            const dotTip = `${dotLabel} — ${railDotState(busy, active)}`;
             return (
               <button
                 key={s.id}
@@ -2744,16 +3088,20 @@ function Sidebar() {
                   const pos = clampAgentMenuPos(event.clientX, event.clientY);
                   setRailMenu({ session: s, x: pos.x, y: pos.y });
                 }}
-                title={dotLabel}
-                aria-label={dotLabel}
+                title={dotTip}
+                aria-label={dotTip}
               >
-                <BusyIndicator
-                  busy={sessionBusy[s.id] ?? false}
-                  hasBeenActive={sessionActive[s.id] ?? false}
-                />
+                <BusyIndicator busy={busy} hasBeenActive={active} />
               </button>
             );
           };
+          // Folder tooltip (UI v2 §6, task 374): "<repo> — N session(s)" counting the
+          // repo's own + worktree agents; "empty" when it has none.
+          const sessionCount = repoSessions.length + worktreeAgents.length;
+          const folderTip =
+            sessionCount === 0
+              ? `${repoName(repo)} — empty`
+              : `${repoName(repo)} — ${sessionCount} session${sessionCount === 1 ? "" : "s"}`;
           return (
             <div key={repo} className={styles.railRepo}>
               <button
@@ -2762,37 +3110,48 @@ function Sidebar() {
                 style={{ color: repoColor(repo, repoColors) }}
                 onClick={() => {
                   setOverviewRepoFilter(repo, "all");
-                  setView("overview");
+                  if (view !== "attention") setView("overview");
                 }}
                 onContextMenu={(event) => openRepoMenu(repo, event)}
-                title={repoName(repo)}
-                aria-label={repoName(repo)}
+                title={folderTip}
+                aria-label={folderTip}
                 aria-pressed={isFiltered}
               >
-                <Folder size={18} strokeWidth={2} />
+                <Folder size={14} strokeWidth={2} />
               </button>
-              {repoSessions.length > 0 && (
+              {homeSessions.length > 0 && (
                 <div className={styles.railDots}>
-                  {repoSessions.map((s) => dot(s, baseLabel))}
+                  {homeSessions.map((s) => dot(s, baseLabel))}
                 </div>
               )}
-              {worktreePaths.map((wt) => {
+              {allWorktreePaths.map((wt) => {
+                const det = detectedByPath.get(wt);
                 const wtAgents = worktreeAgents.filter(
                   (s) => s.repoPath === wt,
                 );
-                const wtBranch = (branches[wt] ?? "") || repoName(wt);
+                const wtRelocated = repoSessions.filter(
+                  (s) => activeWt(s) === wt,
+                );
+                const wtRows = [...wtAgents, ...wtRelocated];
+                const wtBranch =
+                  (branches[wt] ?? "") ||
+                  (det?.branch ?? (det ? det.head.slice(0, 7) : "")) ||
+                  repoName(wt);
                 return (
                   <div key={wt} className={styles.railWorktreeGroup}>
                     <WorktreeHeader
                       compact
                       path={wt}
                       branch={wtBranch}
-                      parent={wtAgents[0]?.worktreeParent ?? undefined}
-                      agentCount={wtAgents.length}
+                      parent={wtAgents[0]?.worktreeParent ?? repo}
+                      agentCount={wtRows.length}
+                      source={worktreeSourceOf(det, det === undefined)}
+                      live={wtRows.length > 0 || (det?.locked ?? false)}
+                      hasItems={wtRows.length > 0}
                     />
-                    {wtAgents.length > 0 && (
+                    {wtRows.length > 0 && (
                       <div className={styles.railDots}>
-                        {wtAgents.map((s) => dot(s, wtBranch))}
+                        {wtRows.map((s) => dot(s, wtBranch))}
                       </div>
                     )}
                   </div>
@@ -2840,7 +3199,7 @@ function Sidebar() {
           onPointerDown={onResizeDown}
           onPointerMove={onResizeMove}
           onPointerUp={onResizeUp}
-          onDoubleClick={() => setSidebarWidth(260)}
+          onDoubleClick={() => setSidebarWidth(SIDEBAR_WIDTH_DEFAULT)}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar (double-click to reset)"
@@ -2853,14 +3212,14 @@ function Sidebar() {
         <>
           <button
             type="button"
-            className={styles.newButton}
+            className={`btn btn-accent btn-chrome ${styles.newButton}`}
             onClick={() => openNewSession()}
           >
-            <Plus size={16} strokeWidth={1.5} className={styles.newIcon} />
+            <Plus size={12} strokeWidth={2.4} className={styles.newIcon} />
             <span className={styles.newLabel}>New session</span>
-            <kbd className={styles.kbd}>
-              {kbdHint(platform, "⌘N", "Ctrl+N")}
-            </kbd>
+            {newSessionKey && (
+              <kbd className="kbd-hint kbd-hint-onfill">{newSessionKey}</kbd>
+            )}
           </button>
 
           {/* Schedule a session to launch later (#93) — same flow, plus a time step.
@@ -2869,28 +3228,26 @@ function Sidebar() {
           <div className={styles.scheduleActionRow}>
             <button
               type="button"
-              className={styles.scheduleButton}
+              className={`btn btn-neutral btn-chrome ${styles.scheduleButton}`}
               onClick={() => openSchedule()}
             >
               <Clock
-                size={15}
+                size={12}
                 strokeWidth={1.5}
                 className={styles.scheduleIcon}
               />
               <span className={styles.scheduleLabel}>Schedule session</span>
-              <kbd className={styles.kbd}>
-                {kbdHint(platform, "⌘⇧N", "Ctrl+Shift+N")}
-              </kbd>
+              {scheduleKey && <kbd className="kbd-hint">{scheduleKey}</kbd>}
             </button>
             <button
               type="button"
-              className={styles.dotsButton}
+              className={`btn btn-neutral btn-chrome btn-icon ${styles.dotsButton}`}
               onClick={dotsMenu.openMenu}
               title="More session options"
               aria-label="More session options"
               aria-haspopup="menu"
             >
-              <MoreHorizontal size={16} strokeWidth={1.5} />
+              <MoreHorizontal size={13} strokeWidth={1.5} />
             </button>
           </div>
           <RowContextMenu
@@ -2904,13 +3261,41 @@ function Sidebar() {
           </div>
 
           <div className={styles.repos} onContextMenu={openBgMenu}>
-            {/* Only once the boot payload has landed (#352): before that the repo list
-            is empty simply because nothing has loaded yet, and the hint would flash the
-            wrong state for a round-trip right before the folders pop in. */}
-            {booted && repos.length === 0 && cloningRepos.length === 0 && (
-              <p className={styles.emptyHint} onContextMenu={bgMenu.openMenu}>
-                No repositories yet.
-              </p>
+            {/* First-launch empty block (UI v2 §5, task 374 — supersedes the plain
+            "No repositories yet." hint): a centered column with the two entry-point
+            actions. Only once the boot payload has landed (#352): before that the
+            repo list is empty simply because nothing has loaded yet, and the block
+            would flash the wrong state right before the folders pop in. The
+            background context menu (#172) still opens on it. */}
+            {firstLaunch && (
+              <div
+                className={styles.emptyBlock}
+                onContextMenu={bgMenu.openMenu}
+              >
+                <FolderOpen size={20} strokeWidth={1.5} aria-hidden />
+                <span className={styles.emptyTitle}>No folders yet</span>
+                <span className={styles.emptyExplainer}>
+                  Sessions group by the
+                  <br />
+                  folder they run in
+                </span>
+                <button
+                  type="button"
+                  className={`btn btn-neutral btn-chrome ${styles.emptyAction}`}
+                  onClick={() => void addFolder()}
+                >
+                  <FolderOpen size={12} strokeWidth={1.5} aria-hidden />
+                  Open a folder…
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-neutral btn-chrome ${styles.emptyAction}`}
+                  onClick={() => openCloneRepo()}
+                >
+                  <GitBranch size={12} strokeWidth={1.5} aria-hidden />
+                  Clone a repo…
+                </button>
+              </div>
             )}
 
             {/* In-flight clones (#299): rendered at the top and OUTSIDE the sortable
@@ -2944,18 +3329,19 @@ function Sidebar() {
       )}
 
       {/* In-app update box (#190): directly above the footer/Settings gear, hidden
-          unless an update is available/failed; collapses to its icon in the rail. */}
-      <UpdateIndicator />
+          unless an update is available/failed; collapses to its icon in the rail.
+          Hidden with the usage meter on first launch (UI v2 §5, task 374). */}
+      {!firstLaunch && <UpdateIndicator />}
 
       {/* Auto-restart prompt (#309): directly above the usage bar — offers to enable
           "auto continue after limit reset" when the Claude 5-hour limit is reached and
           the setting is off; hidden otherwise / when suppressed in Settings. */}
-      <AutoContinuePrompt />
+      {!firstLaunch && <AutoContinuePrompt />}
 
       {/* 5-hour Claude usage (#154): the thin separator above the footer — a plain
           hairline with no usage data, the thin usage fill (+ reset countdown + %)
-          once data arrives. */}
-      <UsageBar />
+          once data arrives. Hidden on first launch (UI v2 §5, task 374). */}
+      {!firstLaunch && <UsageBar />}
 
       {/* Footer (#100): a thin bottom bar pinned below the scrolling repo list,
           holding the Settings gear and (#168) the collapse/expand chevron. When
@@ -2967,26 +3353,29 @@ function Sidebar() {
           type="button"
           className={styles.footerButton}
           onClick={() => setSettingsOpen(true)}
-          title="Settings"
+          title={settingsKey ? `Settings ${settingsKey}` : "Settings"}
           aria-label="Settings"
         >
           <SettingsIcon size={16} strokeWidth={1.5} />
         </button>
         {/* Feedback (#210): opens the bug-report / feature-request Google Form in
-            the default browser. Stacks with the others in the collapsed rail.
-            Hovering/focusing it dismisses the #241 nudge. */}
-        <button
-          ref={feedbackBtnRef}
-          type="button"
-          className={styles.footerButton}
-          onClick={() => void openUrl(FEEDBACK_FORM_URL)}
-          onMouseEnter={() => setFeedbackNudgeDismissed(true)}
-          onFocus={() => setFeedbackNudgeDismissed(true)}
-          title="Send feedback"
-          aria-label="Send feedback"
-        >
-          <Bug size={16} strokeWidth={1.5} />
-        </button>
+            the default browser. Expanded-only since UI v2 §6 (task 374) — the rail
+            drops it (still reachable by expanding); hovering/focusing it dismisses
+            the #241 nudge. */}
+        {!sidebarCollapsed && (
+          <button
+            ref={feedbackBtnRef}
+            type="button"
+            className={styles.footerButton}
+            onClick={() => void openUrl(FEEDBACK_FORM_URL)}
+            onMouseEnter={() => setFeedbackNudgeDismissed(true)}
+            onFocus={() => setFeedbackNudgeDismissed(true)}
+            title="Send feedback"
+            aria-label="Send feedback"
+          >
+            <Bug size={16} strokeWidth={1.5} />
+          </button>
+        )}
         {/* Attention nudge (#241): a glowing pill to the right of the feedback button,
             position:fixed (anchored to the button's measured rect) so it escapes the
             sidebar's overflow clip and shows its full text at any width.
@@ -3013,11 +3402,9 @@ function Sidebar() {
           type="button"
           className={`${styles.footerButton} ${styles.footerCollapseToggle}`}
           onClick={() => toggleSidebarCollapsed()}
-          title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar ${kbdHint(
-            platform,
-            "⌘B",
-            "Ctrl+B",
-          )}`}
+          title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar${
+            sidebarKey ? ` ${sidebarKey}` : ""
+          }`}
           aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           {sidebarCollapsed ? (
@@ -3037,455 +3424,495 @@ function Sidebar() {
       />
 
       {menu && (
-        <>
-          <div
-            className={styles.menuOverlay}
-            onClick={closeMenu}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              closeMenu();
-            }}
-          />
-          <div
-            className={styles.menu}
-            style={{ left: menu.x, top: menu.y }}
-            role="menu"
-          >
-            {menuMode === "checkout" ? (
-              <div className={styles.checkout}>
-                {/* Destructive-checkout advisory (#266, mirrors the new-session modal):
+        <MenuPortal>
+          <>
+            <div
+              className={`menu-overlay ${styles.menuOverlay}`}
+              onClick={closeMenu}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                closeMenu();
+              }}
+            />
+            <div
+              className={`menu-pop ${styles.menuPos}`}
+              style={{ left: menu.x, top: menu.y }}
+              role="menu"
+            >
+              {menuMode === "checkout" ? (
+                <div className={styles.checkout}>
+                  {/* Destructive-checkout advisory (#266, mirrors the new-session modal):
                     non-blocking, but visible — a checkout rewrites the working tree of
                     any agents running in this folder. */}
-                {menuRunning > 0 && (
-                  <div className={styles.checkoutWarning} role="alert">
-                    <AlertTriangle
-                      size={13}
-                      strokeWidth={1.5}
-                      className={styles.checkoutWarnIcon}
-                    />
-                    <span>
-                      {menuRunning} agent{menuRunning === 1 ? "" : "s"} running
-                      here — checkout changes their working tree.
-                    </span>
-                  </div>
-                )}
-                {checkoutLoading ? (
-                  <p className={styles.checkoutEmpty}>Loading branches…</p>
-                ) : (
-                  <>
-                    {(checkoutList?.all.length ?? 0) >
-                      CHECKOUT_FILTER_THRESHOLD && (
-                      <input
-                        className={styles.checkoutFilter}
-                        {...noAutoCapitalize}
-                        type="text"
-                        value={checkoutFilter}
-                        placeholder="Filter branches…"
-                        onChange={(event) =>
-                          setCheckoutFilter(event.currentTarget.value)
-                        }
-                        aria-label="Filter branches"
-                        autoFocus={!checkoutCreating}
+                  {menuRunning > 0 && (
+                    <div className={styles.checkoutWarning} role="alert">
+                      <AlertTriangle
+                        size={13}
+                        strokeWidth={1.5}
+                        className={styles.checkoutWarnIcon}
                       />
-                    )}
-                    <div
-                      className={styles.checkoutList}
-                      role="listbox"
-                      aria-label="Branch"
-                    >
-                      {checkoutLocals.length === 0 &&
-                      checkoutRemotes.length === 0 ? (
-                        <p className={styles.checkoutEmpty}>
-                          No matching branches.
-                        </p>
-                      ) : (
-                        <>
-                          {checkoutLocals.map((b) => {
-                            const isCurrent = b === checkoutList?.current;
-                            return (
-                              <button
-                                key={b}
-                                type="button"
-                                role="option"
-                                aria-selected={isCurrent}
-                                aria-disabled={isCurrent || checkoutBusy}
-                                className={`${styles.checkoutBranch} ${isCurrent ? styles.checkoutBranchCurrent : ""}`}
-                                onClick={() => {
-                                  if (isCurrent || checkoutBusy) return;
-                                  void checkoutFolderBranch(menu.repo, b);
-                                  closeMenu();
-                                }}
-                                title={b}
-                              >
-                                <GitBranch
-                                  size={13}
-                                  strokeWidth={1.5}
-                                  className={styles.menuIcon}
-                                />
-                                <span className={styles.checkoutBranchName}>
-                                  {b}
-                                </span>
-                                {isCurrent && (
-                                  <span className={styles.checkoutCurrent}>
-                                    current
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                          {checkoutRemotes.length > 0 && (
-                            <>
-                              <p className={styles.checkoutRemoteHeader}>
-                                Remote branches
-                              </p>
-                              {checkoutRemotes.map((r) => (
-                                <button
-                                  key={r}
-                                  type="button"
-                                  role="option"
-                                  aria-disabled={checkoutBusy}
-                                  className={styles.checkoutBranch}
-                                  onClick={() => {
-                                    if (checkoutBusy) return;
-                                    setCheckoutBusy(true);
-                                    setCheckoutError(null);
-                                    void createFolderBranch(
-                                      menu.repo,
-                                      checkoutRemoteShort(r),
-                                      r,
-                                    ).then((res) => {
-                                      if (res === true) closeMenu();
-                                      else {
-                                        setCheckoutError(res);
-                                        setCheckoutBusy(false);
-                                      }
-                                    });
-                                  }}
-                                  title={`${r} — check out as a local branch`}
-                                >
-                                  <GitBranch
-                                    size={13}
-                                    strokeWidth={1.5}
-                                    className={styles.menuIcon}
-                                  />
-                                  <span className={styles.checkoutBranchName}>
-                                    {r}
-                                  </span>
-                                </button>
-                              ))}
-                            </>
-                          )}
-                        </>
-                      )}
+                      <span>
+                        {menuRunning} agent{menuRunning === 1 ? "" : "s"}{" "}
+                        running here — checkout changes their working tree.
+                      </span>
                     </div>
-                    {/* Create + check out a new branch off the current one (#266). */}
-                    {checkoutCreating ? (
-                      <div className={styles.checkoutCreate}>
+                  )}
+                  {checkoutLoading ? (
+                    <p className={styles.checkoutEmpty}>Loading branches…</p>
+                  ) : (
+                    <>
+                      {(checkoutList?.all.length ?? 0) >
+                        CHECKOUT_FILTER_THRESHOLD && (
                         <input
                           className={styles.checkoutFilter}
                           {...noAutoCapitalize}
                           type="text"
-                          value={checkoutNewName}
-                          placeholder="New branch name…"
-                          onChange={(event) => {
-                            setCheckoutNewName(event.currentTarget.value);
+                          value={checkoutFilter}
+                          placeholder="Filter branches…"
+                          onChange={(event) =>
+                            onCheckoutFilterChange(event.currentTarget.value)
+                          }
+                          aria-label="Filter branches"
+                          autoFocus={!checkoutCreating}
+                        />
+                      )}
+                      <div
+                        className={styles.checkoutList}
+                        role="listbox"
+                        aria-label="Branch"
+                      >
+                        {checkoutLocals.length === 0 &&
+                        checkoutRemotes.length === 0 ? (
+                          <p className={styles.checkoutEmpty}>
+                            No matching branches.
+                          </p>
+                        ) : (
+                          <>
+                            {checkoutLocals.map((b) => {
+                              const isCurrent = b === checkoutList?.current;
+                              return (
+                                <button
+                                  key={b}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={isCurrent}
+                                  aria-disabled={isCurrent || checkoutBusy}
+                                  className={`${styles.checkoutBranch} ${isCurrent ? styles.checkoutBranchCurrent : ""}`}
+                                  onClick={() => {
+                                    if (isCurrent || checkoutBusy) return;
+                                    void checkoutFolderBranch(menu.repo, b);
+                                    closeMenu();
+                                  }}
+                                  title={b}
+                                >
+                                  <GitBranch
+                                    size={13}
+                                    strokeWidth={1.5}
+                                    className="menu-icon"
+                                  />
+                                  <span className={styles.checkoutBranchName}>
+                                    {b}
+                                  </span>
+                                  {isCurrent && (
+                                    <span className={styles.checkoutCurrent}>
+                                      current
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                            {checkoutRemotes.length > 0 && (
+                              <>
+                                <p className={styles.checkoutRemoteHeader}>
+                                  Remote branches
+                                </p>
+                                {checkoutRemotes.map((r) => (
+                                  <button
+                                    key={r}
+                                    type="button"
+                                    role="option"
+                                    aria-disabled={checkoutBusy}
+                                    className={styles.checkoutBranch}
+                                    onClick={() => {
+                                      if (checkoutBusy) return;
+                                      setCheckoutBusy(true);
+                                      setCheckoutError(null);
+                                      void createFolderBranch(
+                                        menu.repo,
+                                        checkoutRemoteShort(r),
+                                        r,
+                                      ).then((res) => {
+                                        if (res === true) closeMenu();
+                                        else {
+                                          setCheckoutError(res);
+                                          setCheckoutBusy(false);
+                                        }
+                                      });
+                                    }}
+                                    title={`${r} — check out as a local branch`}
+                                  >
+                                    <GitBranch
+                                      size={13}
+                                      strokeWidth={1.5}
+                                      className="menu-icon"
+                                    />
+                                    <span className={styles.checkoutBranchName}>
+                                      {r}
+                                    </span>
+                                  </button>
+                                ))}
+                              </>
+                            )}
+                          </>
+                        )}
+                      </div>
+                      {/* Create + check out a new branch off the current one (#266). */}
+                      {checkoutCreating ? (
+                        <div className={styles.checkoutCreate}>
+                          <input
+                            className={styles.checkoutFilter}
+                            {...noAutoCapitalize}
+                            type="text"
+                            value={checkoutNewName}
+                            placeholder="New branch name…"
+                            onChange={(event) => {
+                              setCheckoutNewName(event.currentTarget.value);
+                              setCheckoutError(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                const name = checkoutNewName.trim();
+                                if (!name || checkoutBusy) return;
+                                setCheckoutBusy(true);
+                                setCheckoutError(null);
+                                void createFolderBranch(
+                                  menu.repo,
+                                  name,
+                                  branches[menu.repo] ?? "",
+                                ).then((res) => {
+                                  if (res === true) closeMenu();
+                                  else {
+                                    setCheckoutError(res);
+                                    setCheckoutBusy(false);
+                                  }
+                                });
+                              }
+                            }}
+                            aria-label="New branch name"
+                            autoFocus
+                          />
+                          <span className={styles.checkoutCreateBase}>
+                            from {branches[menu.repo] || "HEAD"} — ↵ to create
+                          </span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className={`menu-item ${styles.checkoutCreateToggle}`}
+                          onClick={() => {
+                            setCheckoutCreating(true);
                             setCheckoutError(null);
                           }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              const name = checkoutNewName.trim();
-                              if (!name || checkoutBusy) return;
-                              setCheckoutBusy(true);
-                              setCheckoutError(null);
-                              void createFolderBranch(
-                                menu.repo,
-                                name,
-                                branches[menu.repo] ?? "",
-                              ).then((res) => {
-                                if (res === true) closeMenu();
-                                else {
-                                  setCheckoutError(res);
-                                  setCheckoutBusy(false);
-                                }
-                              });
-                            }
-                          }}
-                          aria-label="New branch name"
-                          autoFocus
-                        />
-                        <span className={styles.checkoutCreateBase}>
-                          from {branches[menu.repo] || "HEAD"} — ↵ to create
-                        </span>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        className={`${styles.menuItem} ${styles.checkoutCreateToggle}`}
-                        onClick={() => {
-                          setCheckoutCreating(true);
-                          setCheckoutError(null);
-                        }}
-                      >
-                        <Plus
-                          size={13}
-                          strokeWidth={1.5}
-                          className={styles.menuIcon}
-                        />
-                        Create new branch
-                      </button>
-                    )}
-                    {checkoutError && (
-                      <p className={styles.checkoutError} role="alert">
-                        {checkoutError}
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
-            ) : menuMode === "color" ? (
-              <div className={styles.colorPicker}>
-                <div className={styles.swatches}>
-                  {REPO_PALETTE.map((hex) => {
-                    const isCurrent = repoColor(menu.repo, repoColors) === hex;
-                    return (
-                      <button
-                        key={hex}
-                        type="button"
-                        className={`${styles.swatch} ${isCurrent ? styles.swatchActive : ""}`}
-                        style={{ background: hex }}
-                        onClick={() => {
-                          void setRepoColor(menu.repo, hex);
-                          closeMenu();
-                        }}
-                        title={hex}
-                        aria-pressed={isCurrent}
-                        aria-label={`Set color ${hex}${isCurrent ? " (current)" : ""}`}
-                      />
-                    );
-                  })}
+                        >
+                          <Plus
+                            size={13}
+                            strokeWidth={1.5}
+                            className="menu-icon"
+                          />
+                          Create new branch
+                        </button>
+                      )}
+                      {checkoutError && (
+                        <p className={styles.checkoutError} role="alert">
+                          {checkoutError}
+                        </p>
+                      )}
+                    </>
+                  )}
                 </div>
-                <label className={styles.customColor}>
-                  <span>Custom</span>
-                  <input
-                    type="color"
-                    value={repoColor(menu.repo, repoColors)}
-                    onChange={(event) =>
-                      void setRepoColor(menu.repo, event.currentTarget.value)
-                    }
-                  />
-                </label>
-              </div>
-            ) : menuMode === "confirm" ? (
-              <button
-                type="button"
-                role="menuitem"
-                className={styles.menuDanger}
-                onClick={() => {
-                  void forgetRepo(menu.repo);
-                  closeMenu();
-                }}
-              >
-                Kill {menuRunning} agent{menuRunning === 1 ? "" : "s"} & forget?
-              </button>
-            ) : menuMode === "confirm-kill" ? (
-              <button
-                type="button"
-                role="menuitem"
-                className={styles.menuDanger}
-                onClick={() => {
-                  void killAllAgents(menu.repo);
-                  closeMenu();
-                }}
-              >
-                Kill {menuRunningAll} agent{menuRunningAll === 1 ? "" : "s"}?
-              </button>
-            ) : menuMode === "confirm-close" ? (
-              <button
-                type="button"
-                role="menuitem"
-                className={styles.menuDanger}
-                onClick={() => {
-                  void closeAllItems(menu.repo);
-                  closeMenu();
-                }}
-              >
-                Close all items
-                {menuRunningAll > 0
-                  ? ` (kill ${menuRunningAll} agent${menuRunningAll === 1 ? "" : "s"})`
-                  : ""}
-                ?
-              </button>
-            ) : (
-              <>
-                {/* New session (#54): first item; mirrors the inline + button. */}
+              ) : menuMode === "color" ? (
+                <div className={styles.colorPicker}>
+                  <div className={styles.swatches}>
+                    {REPO_PALETTE.map((hex) => {
+                      const isCurrent =
+                        repoColor(menu.repo, repoColors) === hex;
+                      return (
+                        <button
+                          key={hex}
+                          type="button"
+                          className={`${styles.swatch} ${isCurrent ? styles.swatchActive : ""}`}
+                          style={{ background: hex }}
+                          onClick={() => {
+                            void setRepoColor(menu.repo, hex);
+                            closeMenu();
+                          }}
+                          title={hex}
+                          aria-pressed={isCurrent}
+                          aria-label={`Set color ${hex}${isCurrent ? " (current)" : ""}`}
+                        />
+                      );
+                    })}
+                  </div>
+                  <label className={styles.customColor}>
+                    <span>Custom</span>
+                    <input
+                      type="color"
+                      value={repoColor(menu.repo, repoColors)}
+                      onChange={(event) =>
+                        void setRepoColor(menu.repo, event.currentTarget.value)
+                      }
+                    />
+                  </label>
+                </div>
+              ) : menuMode === "confirm" ? (
                 <button
                   type="button"
                   role="menuitem"
-                  className={styles.menuItem}
+                  className="menu-item-confirm"
                   onClick={() => {
-                    void startRepoSession(menu.repo);
+                    void forgetRepo(menu.repo);
                     closeMenu();
                   }}
                 >
-                  New session
+                  Kill {menuRunning} agent{menuRunning === 1 ? "" : "s"} &
+                  forget?
                 </button>
-                <div className={styles.menuSeparator} role="separator" />
-                {/* Views (#82): the addable non-agent views, now from the shared
+              ) : menuMode === "confirm-kill" ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item-confirm"
+                  onClick={() => {
+                    void killAllAgents(menu.repo);
+                    closeMenu();
+                  }}
+                >
+                  Kill {menuRunningAll} agent{menuRunningAll === 1 ? "" : "s"}?
+                </button>
+              ) : menuMode === "confirm-close" ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item-confirm"
+                  onClick={() => {
+                    void closeAllItems(menu.repo);
+                    closeMenu();
+                  }}
+                >
+                  Close all items
+                  {menuRunningAll > 0
+                    ? ` (kill ${menuRunningAll} agent${menuRunningAll === 1 ? "" : "s"})`
+                    : ""}
+                  ?
+                </button>
+              ) : (
+                <>
+                  {/* New session (#54): first item; mirrors the inline + button. */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      void startRepoSession(menu.repo);
+                      closeMenu();
+                    }}
+                  >
+                    New session
+                  </button>
+                  <div className="menu-sep" role="separator" />
+                  {/* Views (#82): the addable non-agent views, now from the shared
                     `ViewsMenu` (#164) so the repo menu and the worktree-badge
                     popover render one action set. File viewer / Kanban open a
                     picker inline; adding a view doesn't switch the main view (#79). */}
-                <div className={styles.menuSection}>Views</div>
-                {/* No "New session here" — this menu already has its own top-level
+                  <div className="menu-section">Views</div>
+                  {/* No "New session here" — this menu already has its own top-level
                     "New session" above (#201). */}
-                <ViewsMenu
-                  repoPath={menu.repo}
-                  onClose={closeMenu}
-                  includeNewSession={false}
-                />
-                {/* Non-destructive folder utilities (#129): reveal in Finder /
-                    copy the absolute path. Reuses the `open`-shell-out backend
-                    (#100/#109) and the store clipboard helper. */}
-                <div className={styles.menuSeparator} role="separator" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => {
-                    void revealPath(menu.repo);
-                    closeMenu();
-                  }}
-                >
-                  {revealLabel(platform)}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => {
-                    void copyToClipboard(menu.repo, "path");
-                    closeMenu();
-                  }}
-                >
-                  Copy path
-                </button>
-                {/* Pull (#181): fast-forward this folder's current branch
+                  <ViewsMenu
+                    repoPath={menu.repo}
+                    onClose={closeMenu}
+                    includeNewSession={false}
+                  />
+                  {/* Non-destructive folder utilities (#129): open in new window /
+                    reveal in Finder / open in editor / copy the absolute path.
+                    Reuses the `open`-shell-out backend (#100/#109) and the store
+                    helpers. */}
+                  <div className="menu-sep" role="separator" />
+                  {/* Open in new window (multi-window 12/16): a second full app window (task 434)
+                    preset to this folder as its Overview repo filter — "window A on repo X,
+                    window B on repo Y". `menu.repo` is the top-level group path, i.e. the
+                    worktree PARENT for repos with worktrees, so the new window's "all"-mode
+                    filter includes its worktree agents (effectiveRepo grouping, #96/#247).
+                    The preset is the new window's local init state — nothing persists, and it
+                    clears like any filter. Always shown (path-based; works for non-git folders). */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title="Open a new window showing only this folder"
+                    onClick={() => {
+                      void openAppWindow({ repo: menu.repo }).catch(() => {
+                        pushToast("Could not open a new window", "error");
+                      });
+                      closeMenu();
+                    }}
+                  >
+                    Open in new window
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      void revealPath(menu.repo);
+                      closeMenu();
+                    }}
+                  >
+                    {revealLabel(platform)}
+                  </button>
+                  {/* Launch the preferred editor at this folder; first use opens
+                    the picker. */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title={`Open ${menu.repo} in your editor${editorKey ? ` (${editorKey})` : ""}`}
+                    onClick={() => {
+                      void openInEditor(menu.repo);
+                      closeMenu();
+                    }}
+                  >
+                    Open in editor
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      void copyToClipboard(menu.repo, "path");
+                      closeMenu();
+                    }}
+                  >
+                    Copy path
+                  </button>
+                  {/* Pull (#181): fast-forward this folder's current branch
                     (`git pull --ff-only`); result is toasted. Shown only when a
                     current branch is known (hidden for non-git folders). */}
-                {branches[menu.repo] && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={styles.menuItem}
-                    title="git pull --ff-only"
-                    onClick={() => {
-                      void pullFolder(menu.repo);
-                      closeMenu();
-                    }}
-                  >
-                    Pull
-                  </button>
-                )}
-                {/* View on GitHub (#327): open this folder's github.com page in the
+                  {branches[menu.repo] && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      title="git pull --ff-only"
+                      onClick={() => {
+                        void pullFolder(menu.repo);
+                        closeMenu();
+                      }}
+                    >
+                      Pull
+                    </button>
+                  )}
+                  {/* View on GitHub (#327): open this folder's github.com page in the
                     default browser (http/https-only `openUrl`). Shown only when the
                     cached remote resolves to a GitHub URL — no git on menu open. */}
-                {githubUrls[menu.repo] && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={styles.menuItem}
-                    title="Open this repository on GitHub"
-                    onClick={() => {
-                      void openUrl(githubUrls[menu.repo]!);
-                      closeMenu();
-                    }}
-                  >
-                    View on GitHub
-                  </button>
-                )}
-                {/* Checkout branch… (#266): pick an existing local/remote branch or
+                  {githubUrls[menu.repo] && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      title="Open this repository on GitHub"
+                      onClick={() => {
+                        void openUrl(githubUrls[menu.repo]!);
+                        closeMenu();
+                      }}
+                    >
+                      View on GitHub
+                    </button>
+                  )}
+                  {/* Checkout branch… (#266): pick an existing local/remote branch or
                     create a new one and `git checkout` it in this folder (no agent
                     spawn). Gated like Pull on a known current branch (git folder). */}
-                {branches[menu.repo] && (
+                  {branches[menu.repo] && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      onClick={() => setMenuMode("checkout")}
+                    >
+                      Checkout branch…
+                    </button>
+                  )}
+                  <div className="menu-sep" role="separator" />
                   <button
                     type="button"
                     role="menuitem"
-                    className={styles.menuItem}
-                    onClick={() => setMenuMode("checkout")}
+                    className="menu-item"
+                    onClick={() => setMenuMode("color")}
                   >
-                    Checkout branch…
+                    Change color…
                   </button>
-                )}
-                <div className={styles.menuSeparator} role="separator" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItem}
-                  onClick={() => setMenuMode("color")}
-                >
-                  Change color…
-                </button>
-                {/* Destructive actions (#54): set apart and styled red. */}
-                <div className={styles.menuSeparator} role="separator" />
-                {/* Bulk actions (#91): kill the folder's running agents, or clear
+                  {/* Destructive actions (#54): set apart and styled red. */}
+                  <div className="menu-sep" role="separator" />
+                  {/* Bulk actions (#91): kill the folder's running agents, or clear
                     its whole workspace (agents + views) while keeping the folder. */}
-                {menuRunningAll > 0 && (
+                  {menuRunningAll > 0 && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item-danger"
+                      onClick={() => {
+                        // Confirm first unless the user turned confirms off (#103).
+                        if (confirmDestructive) setMenuMode("confirm-kill");
+                        else {
+                          void killAllAgents(menu.repo);
+                          closeMenu();
+                        }
+                      }}
+                    >
+                      Kill all agents
+                    </button>
+                  )}
+                  {(menuAgentCount > 0 || menuPanelCount > 0) && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item-danger"
+                      onClick={() => {
+                        // Confirm only when agents are running and confirms are on
+                        // (#103); else clear directly.
+                        if (confirmDestructive && menuRunningAll > 0)
+                          setMenuMode("confirm-close");
+                        else {
+                          void closeAllItems(menu.repo);
+                          closeMenu();
+                        }
+                      }}
+                    >
+                      Close all items
+                    </button>
+                  )}
                   <button
                     type="button"
                     role="menuitem"
-                    className={styles.menuItemDanger}
+                    className="menu-item-danger"
                     onClick={() => {
-                      // Confirm first unless the user turned confirms off (#103).
-                      if (confirmDestructive) setMenuMode("confirm-kill");
+                      // Confirm first only when agents are running in this folder and
+                      // confirms are on (#103).
+                      if (confirmDestructive && menuRunning > 0)
+                        setMenuMode("confirm");
                       else {
-                        void killAllAgents(menu.repo);
+                        void forgetRepo(menu.repo);
                         closeMenu();
                       }
                     }}
                   >
-                    Kill all agents
+                    Forget folder
                   </button>
-                )}
-                {(menuAgentCount > 0 || menuPanelCount > 0) && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={styles.menuItemDanger}
-                    onClick={() => {
-                      // Confirm only when agents are running and confirms are on
-                      // (#103); else clear directly.
-                      if (confirmDestructive && menuRunningAll > 0)
-                        setMenuMode("confirm-close");
-                      else {
-                        void closeAllItems(menu.repo);
-                        closeMenu();
-                      }
-                    }}
-                  >
-                    Close all items
-                  </button>
-                )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={styles.menuItemDanger}
-                  onClick={() => {
-                    // Confirm first only when agents are running in this folder and
-                    // confirms are on (#103).
-                    if (confirmDestructive && menuRunning > 0)
-                      setMenuMode("confirm");
-                    else {
-                      void forgetRepo(menu.repo);
-                      closeMenu();
-                    }
-                  }}
-                >
-                  Forget folder
-                </button>
-              </>
-            )}
-          </div>
-        </>
+                </>
+              )}
+            </div>
+          </>
+        </MenuPortal>
       )}
     </aside>
   );

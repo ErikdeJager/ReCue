@@ -1,0 +1,199 @@
+/* "Open in editor" picker: the shared modal-scrim/modal-pop chrome over the
+   Onboarding-style 470px dialog — stacked crust choice rows (detected editors +
+   the expandable custom-command row), a Remember-my-choice checkbox footer. */
+.overlay {
+  z-index: 220;
+}
+
+.dialog {
+  display: flex;
+  width: 470px;
+  max-height: calc(100vh - var(--space-32));
+  flex-direction: column;
+  padding: var(--space-20);
+}
+
+.header {
+  margin-bottom: var(--space-16);
+}
+
+.title {
+  margin: 0 0 var(--space-6);
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  overflow-y: auto;
+}
+
+.note {
+  margin: 0;
+  padding: var(--space-4) 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+
+/* Crust choice row (the Onboarding card, single-line). */
+.choice {
+  display: flex;
+  flex-direction: column;
+  padding: 9px 12px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 9px;
+  background: var(--content-bg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.choice:hover {
+  border-color: var(--border-strong); /* plain fallback (383) */
+  border-color: color-mix(in srgb, var(--text-primary) 25%, transparent);
+}
+
+.choice:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* The currently-remembered editor leads with an accent-tint border. */
+.choiceCurrent {
+  border-color: var(--accent-dim); /* plain fallback */
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.choiceCurrent:hover {
+  border-color: var(--accent);
+}
+
+.choiceOpen {
+  border-color: var(--border-strong);
+}
+
+.choiceRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.choiceName {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Provenance / "Current" micro chip (the Onboarding badge slot). */
+.badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-micro);
+  background: var(--border-hairline);
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+}
+
+.choiceCurrent .badge {
+  background: var(--accent-dim); /* plain fallback */
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+.customBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: 0 var(--space-2);
+}
+
+.customRow {
+  display: flex;
+  gap: var(--space-8);
+}
+
+.commandInput {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome-sm);
+  background: var(--content-bg);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+}
+
+.commandInput:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.customConfirm {
+  flex-shrink: 0;
+  padding: var(--space-6) var(--space-12);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-chrome-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.customConfirm:disabled {
+  border-color: var(--border-hairline);
+  background: var(--border-hairline);
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.help {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
+  line-height: 1.5;
+}
+
+.help code {
+  font-family: var(--mono);
+  font-size: var(--fs-meta-sm);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--space-16);
+}
+
+/* "Cancel" — the Onboarding "Decide later" text ghost. */
+.cancel {
+  padding: var(--space-4);
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.cancel:hover {
+  color: var(--text-primary);
+}

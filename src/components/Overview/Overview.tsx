@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
   useEffect,
@@ -11,6 +12,7 @@ import {
   GripVertical,
   Maximize2,
   Play,
+  Plus,
   RefreshCw,
   X,
 } from "lucide-react";
@@ -45,8 +47,11 @@ import {
   sessionInFilter,
   sessionLabel,
 } from "../../paths";
-import { kbdHint } from "../../platform";
 import { formatFireTime, formatInterval, formatNextRun } from "../../time";
+import {
+  detectedWorktreeParents,
+  sessionActiveWorktree,
+} from "../../worktrees";
 import type {
   OverviewPanel,
   RecurringSession,
@@ -57,15 +62,26 @@ import { overviewPanelToContent } from "../Canvas/canvasDrop";
 import AutoContinueToggle from "../AutoContinueToggle/AutoContinueToggle";
 import BusyIndicator from "../BusyIndicator/BusyIndicator";
 import EmptyState from "../EmptyState/EmptyState";
+import TipRow from "../TipRow/TipRow";
 import FileSwitcher from "../FileSwitcher/FileSwitcher";
 // The shared item renderer (#157) maps a content descriptor → the right live child
-// (terminal / file / kanban / diff / scheduled) with the #84 ownership guard and the
-// big-mode placeholder — one source of truth shared with Canvas + the modal.
+// (terminal / file / kanban / diff / scheduled) with the big-mode placeholder —
+// one source of truth shared with Canvas + the modal.
 import ItemContent from "../ItemContent/ItemContent";
 import OpenViewButton from "../OpenViewButton/OpenViewButton";
 import AgentHeaderMenu from "../AgentHeaderMenu/AgentHeaderMenu";
+import { useKeybindLabel } from "../../useKeybind";
+import { shouldHoverSelect } from "../Terminal/hoverFocus";
+import { blurTerminals, focusTerminal } from "../Terminal/terminalPool";
 import { TerminalScrollRootContext } from "../Terminal/useVisibleOnce";
+import { overviewIsEmpty } from "../WaveBackground/wavePresets";
 import styles from "./Overview.module.css";
+
+// A hover-driven select (#371) must not scroll the wall: scrollIntoView would move
+// the cards under the stationary cursor, hover-entering a different card — a
+// select/scroll feedback cascade. Set right before a hover select, consumed by the
+// selection scroll effect that select() triggers.
+let hoverSelecting = false;
 
 /**
  * The horizontally scrolling agent wall — and the observer root for the #351 terminal
@@ -107,8 +123,11 @@ function Wall({
 interface PanelColumnProps {
   id: string;
   color: string;
-  groupStart: boolean;
   selected?: boolean;
+  /** Cap the card at 900px (task 379) — the 373 "cap Overview panel width" setting
+   * (task 419): when on, every Overview column type caps at 900px (agent, recurring,
+   * file, diff, terminal, kanban/filetree, and scheduled panels alike). */
+  capped?: boolean;
   title: ReactNode;
   /** Optional slot before the title (e.g. the agent activity indicator, #71). */
   leading?: ReactNode;
@@ -118,19 +137,24 @@ interface PanelColumnProps {
    * nothing (`null`) no empty bar appears. Not part of the drag handle. */
   subheader?: ReactNode;
   onClickBody?: () => void;
+  /** Hover-select (#371): the PTY session this window renders for the card, focused
+   * when the pointer enters it; `undefined` ⇒ the card has no local terminal input,
+   * so entering it blurs the previously focused xterm instead. */
+  ptyFocusId?: string;
   children: ReactNode;
 }
 
 function PanelColumn({
   id,
   color,
-  groupStart,
   selected = false,
+  capped = false,
   title,
   leading,
   actions,
   subheader,
   onClickBody,
+  ptyFocusId,
   children,
 }: PanelColumnProps) {
   const {
@@ -141,20 +165,40 @@ function PanelColumn({
     transition,
     isDragging,
   } = useSortable({ id });
-  // `--card-color` drives the repo-colored selection frame (#50) — a pseudo-
-  // element can't read an inline style, so expose the dynamic color as a var.
   const style = {
     borderTopColor: color,
+    // Folder-color border/selection ring (task 386): the resting tint + selection
+    // ring resolve `--repo-color` off this per-repo color instead of the app accent,
+    // so selection never rides the accent (UI v2 §7). A worktree agent shares its
+    // parent repo's color (its cluster's `color` already comes via `effectiveRepo`).
+    "--repo-color": color,
     transform: CSS.Transform.toString(transform),
     transition,
-    "--card-color": color,
   } as CSSProperties;
+  // Hover-select (#371, extending #368): entering the card moves the selection ring
+  // here (same path as a body click) — focusing its terminal when this window renders
+  // one, otherwise blurring the previously focused xterm so keystrokes never silently
+  // keep flowing to it. The `hoverSelecting` flag keeps the wall from auto-scrolling
+  // under the stationary cursor; it is raised only when the selection actually
+  // changes, so it can never linger and swallow a later explicit scroll.
+  const autoFocusOnHover = useStore((s) => s.settings.autoFocusOnHover);
+  const handleHoverEnter = (e: ReactMouseEvent) => {
+    if (!shouldHoverSelect(autoFocusOnHover, e.buttons, document.activeElement))
+      return;
+    if (ptyFocusId) focusTerminal(ptyFocusId);
+    else blurTerminals();
+    if (!selected && onClickBody) {
+      hoverSelecting = true;
+      onClickBody(); // the card's select action — same as a body click
+    }
+  };
   return (
     <div
       ref={setNodeRef}
       data-item-id={id}
-      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${groupStart ? styles.cardGroupStart : ""} ${isDragging ? styles.cardDragging : ""}`}
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${capped ? styles.cardCapped : ""} ${isDragging ? styles.cardDragging : ""}`}
       style={style}
+      onMouseEnter={handleHoverEnter}
     >
       {/* The whole title bar is the drag handle (#70): dnd-kit attributes make it
           focusable for keyboard + screen-reader drag; the grip is just a visual
@@ -162,7 +206,7 @@ function PanelColumn({
           and never start a drag. The body (a sibling) stays separately clickable. */}
       <header className={styles.header} {...attributes} {...listeners}>
         <span className={styles.dragHandle} title="Drag to reorder" aria-hidden>
-          <GripVertical size={14} strokeWidth={1.5} />
+          <GripVertical size={13} strokeWidth={1.5} />
         </span>
         {leading}
         <div className={styles.titleBlock}>{title}</div>
@@ -185,7 +229,6 @@ interface SessionCardProps {
   session: SessionView;
   branch: string;
   color: string;
-  groupStart: boolean;
   selected: boolean;
   busy: boolean;
   /** The session has been active at least once (#112) → yellow when idle. */
@@ -198,7 +241,6 @@ function SessionCard({
   session,
   branch,
   color,
-  groupStart,
   selected,
   busy,
   hasBeenActive,
@@ -206,8 +248,14 @@ function SessionCard({
   onRemove,
 }: SessionCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
   const renameSession = useStore((s) => s.renameSession);
+  // The "cap Overview panel width" setting (373/419, default on): when on, every
+  // Overview column caps at 900px — agent, recurring, file/diff/kanban/terminal, and
+  // scheduled panels alike.
+  const capWidth = useStore((s) => s.settings.capAgentWidth);
+  // Hover-select (#371): hovering the card focuses this window's own live mirror
+  // of the agent's terminal (task 437 — every window renders its sessions locally).
   // Agent label (#95): a single line showing only the primary — the custom name if
   // set, else the branch (folder name when non-git). No subtitle, no repo dot; repo
   // color reads from the card's top band (#36). `sessionLabel` still computes the
@@ -215,6 +263,23 @@ function SessionCard({
   // The #100 "auto-name" setting gates claude's auto-title (#97): off → the label
   // skips the auto-name and falls straight to the branch.
   const autoNameOn = useStore((s) => s.settings.autoName);
+  // Relocation hint: the agent is currently working INSIDE a detected worktree
+  // (per its own cwd / the heuristic) — a static "worktree" chip beside fork/
+  // container. Record worktree agents (`worktreeParent`) return null here (their
+  // #226 meta line already tells the story).
+  const platform = useStore((s) => s.platform);
+  const repoWorktreeEntries = useStore(
+    (s) => s.repoWorktrees[effectiveRepo(session)],
+  );
+  const heuristicWorktrees = useStore((s) => s.heuristicWorktrees);
+  const activeWorktree = sessionActiveWorktree(
+    session,
+    (repoWorktreeEntries ?? [])
+      .filter((e) => !e.is_main && e.exists)
+      .map((e) => e.path),
+    heuristicWorktrees,
+    platform,
+  );
   const fallbackLabel = branch || repoName(session.repoPath);
   const { primary } = sessionLabel(
     session.name,
@@ -286,6 +351,19 @@ function SessionCard({
       </span>
       {/* A fork (#126) shares the source's auto-title, so a badge distinguishes them. */}
       {session.forkedFrom && <span className={styles.worktreeBadge}>fork</span>}
+      {/* A dev-container session runs inside docker — a static badge (the #213
+          worktree-badge pattern) marks it. */}
+      {session.containerImage && (
+        <span className={styles.worktreeBadge}>container</span>
+      )}
+      {/* The agent relocated itself into a worktree (EnterWorktree — its sidebar
+          row moved under that worktree's group); the same static-badge pattern
+          marks the card, with the worktree path as the tooltip. */}
+      {activeWorktree && (
+        <span className={styles.worktreeBadge} title={activeWorktree}>
+          worktree
+        </span>
+      )}
     </span>
   );
   // Folder · branch indicator for every agent (#226, replacing the #213 "worktree"
@@ -309,18 +387,14 @@ function SessionCard({
           worktree agents too: `session.repoPath` is the worktree folder, so views
           open against the worktree (the old clickable "worktree" badge is now a
           static indicator in the title). */}
-      <OpenViewButton
-        repoPath={session.repoPath}
-        className={styles.action}
-        iconSize={15}
-      />
+      <OpenViewButton repoPath={session.repoPath} className={styles.action} />
       {/* Secondary actions — Fork (#126) / Copy resume (#28) / Watch (#336) — folded
           into one "…" dropdown (#340) so the header stays uncluttered; all gating
           (#138/#142 fork, #142 resume) lives inside the shared menu. */}
       <AgentHeaderMenu
         session={session}
         className={styles.action}
-        iconSize={15}
+        iconSize={14}
       />
       {/* Maximize into big mode (#157). */}
       <button
@@ -333,36 +407,39 @@ function SessionCard({
             repoPath: session.repoPath,
           })
         }
-        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+        title={
+          bigModeKey ? `Open in big mode (${bigModeKey})` : "Open in big mode"
+        }
         aria-label="Open in big mode"
       >
-        <Maximize2 size={15} strokeWidth={1.5} />
+        <Maximize2 size={14} strokeWidth={1.5} />
       </button>
       <button
         type="button"
-        className={styles.action}
+        className={`${styles.action} ${styles.actionDanger}`}
         onClick={onRemove}
         title="Remove (kill + forget)"
         aria-label="Remove session"
       >
-        <X size={15} strokeWidth={1.5} />
+        <X size={14} strokeWidth={1.5} />
       </button>
     </>
   );
   return (
     // Clicking the card body selects it (highlight in place). The shared ItemContent
-    // (#157) renders the live terminal — or a DetachedNote (#84) / MaximizedNote
-    // (#157) placeholder — with the same one-live-render-site guards as Canvas.
+    // (#157) renders the live terminal — or a MaximizedNote (#157) placeholder —
+    // with the same per-window one-live-render-site guard as Canvas.
     <PanelColumn
       id={session.id}
       color={color}
-      groupStart={groupStart}
       selected={selected}
+      capped={capWidth}
       title={title}
       leading={<BusyIndicator busy={busy} hasBeenActive={hasBeenActive} />}
       actions={actions}
       subheader={<AutoContinueToggle session={session} />}
       onClickBody={onSelect}
+      ptyFocusId={session.id}
     >
       <ItemContent
         content={{
@@ -390,7 +467,6 @@ interface ExtraPanelProps {
   repoPath: string;
   branch: string;
   color: string;
-  groupStart: boolean;
   selected: boolean;
   onSelect: () => void;
   onClose: () => void;
@@ -401,7 +477,6 @@ function ExtraPanel({
   repoPath,
   branch,
   color,
-  groupStart,
   selected,
   onSelect,
   onClose,
@@ -409,7 +484,13 @@ function ExtraPanel({
   const setOverviewPanelFile = useStore((s) => s.setOverviewPanelFile);
   const moveOverviewPanelToFile = useStore((s) => s.moveOverviewPanelToFile);
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
+  // Hover-select (#371): a shell terminal panel's PTY session id IS the panel id
+  // (overviewPanelToContent) — hovering focuses this window's own live mirror.
+  // File/diff/kanban/filetree panels have no terminal input ⇒ blur instead.
+  // The "cap Overview panel width" setting (373/419, default on) — caps this
+  // file/diff/terminal/kanban/filetree panel at 900px like the agent cards.
+  const capWidth = useStore((s) => s.settings.capAgentWidth);
   const content = overviewPanelToContent(panel, repoPath);
   const title = (
     <>
@@ -447,19 +528,21 @@ function ExtraPanel({
         type="button"
         className={styles.action}
         onClick={() => maximizeItem(content)}
-        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+        title={
+          bigModeKey ? `Open in big mode (${bigModeKey})` : "Open in big mode"
+        }
         aria-label="Open in big mode"
       >
-        <Maximize2 size={15} strokeWidth={1.5} />
+        <Maximize2 size={14} strokeWidth={1.5} />
       </button>
       <button
         type="button"
-        className={styles.action}
+        className={`${styles.action} ${styles.actionDanger}`}
         onClick={onClose}
         title="Close panel"
         aria-label="Close panel"
       >
-        <X size={15} strokeWidth={1.5} />
+        <X size={14} strokeWidth={1.5} />
       </button>
     </>
   );
@@ -467,11 +550,21 @@ function ExtraPanel({
     <PanelColumn
       id={panel.id}
       color={color}
-      groupStart={groupStart}
       selected={selected}
+      capped={capWidth}
       title={title}
+      leading={
+        // The demo's 8px repo-colored square in the dot slot — non-agent cards'
+        // repo cue (UI v2 §7, task 379).
+        <span
+          className={styles.repoLead}
+          style={{ background: color }}
+          aria-hidden
+        />
+      }
       actions={actions}
       onClickBody={onSelect}
+      ptyFocusId={panel.kind === "terminal" ? panel.id : undefined}
     >
       {/* The shared renderer (#157) maps diff/terminal/kanban/file → the live child
           (the same components Canvas uses), with the big-mode placeholder guard. */}
@@ -484,7 +577,6 @@ interface ScheduleCardProps {
   schedule: ScheduledSession;
   branch: string;
   color: string;
-  groupStart: boolean;
   selected: boolean;
   onSelect: () => void;
   onCancel: () => void;
@@ -498,14 +590,16 @@ function ScheduleCard({
   schedule,
   branch,
   color,
-  groupStart,
   selected,
   onSelect,
   onCancel,
   onStartNow,
 }: ScheduleCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
+  // The "cap Overview panel width" setting (373/419, default on) — caps this
+  // scheduled-session card at 900px like the agent cards.
+  const capWidth = useStore((s) => s.settings.capAgentWidth);
   // Disable "Start now" while the spawn is in flight (the card vanishes on success
   // via `schedule://fired`; on failure it stays and the button re-enables).
   const [starting, setStarting] = useState(false);
@@ -547,7 +641,7 @@ function ScheduleCard({
         title="Start now"
         aria-label="Start now"
       >
-        <Play size={15} strokeWidth={1.5} />
+        <Play size={14} strokeWidth={1.5} />
       </button>
       {/* Maximize into big mode (#157). */}
       <button
@@ -560,19 +654,21 @@ function ScheduleCard({
             repoPath: schedule.cwd,
           })
         }
-        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+        title={
+          bigModeKey ? `Open in big mode (${bigModeKey})` : "Open in big mode"
+        }
         aria-label="Open in big mode"
       >
-        <Maximize2 size={15} strokeWidth={1.5} />
+        <Maximize2 size={14} strokeWidth={1.5} />
       </button>
       <button
         type="button"
-        className={styles.action}
+        className={`${styles.action} ${styles.actionDanger}`}
         onClick={onCancel}
         title="Cancel schedule"
         aria-label="Cancel schedule"
       >
-        <X size={15} strokeWidth={1.5} />
+        <X size={14} strokeWidth={1.5} />
       </button>
     </>
   );
@@ -580,8 +676,8 @@ function ScheduleCard({
     <PanelColumn
       id={schedule.id}
       color={color}
-      groupStart={groupStart}
       selected={selected}
+      capped={capWidth}
       title={title}
       leading={
         <Clock
@@ -610,7 +706,6 @@ interface RecurringCardProps {
   recurring: RecurringSession;
   branch: string;
   color: string;
-  groupStart: boolean;
   selected: boolean;
   onSelect: () => void;
   onCancel: () => void;
@@ -623,13 +718,14 @@ function RecurringCard({
   recurring,
   branch,
   color,
-  groupStart,
   selected,
   onSelect,
   onCancel,
 }: RecurringCardProps) {
   const maximizeItem = useStore((s) => s.maximizeItem);
-  const platform = useStore((s) => s.platform);
+  const bigModeKey = useKeybindLabel("big-mode");
+  // A recurring card hosts an agent conversation, so it honors the 373 cap too.
+  const capWidth = useStore((s) => s.settings.capAgentWidth);
   const title = (
     <>
       <span className={styles.agentTitle}>
@@ -662,19 +758,21 @@ function RecurringCard({
             repoPath: recurring.cwd,
           })
         }
-        title={`Open in big mode (${kbdHint(platform, "⌘E", "Ctrl+E")})`}
+        title={
+          bigModeKey ? `Open in big mode (${bigModeKey})` : "Open in big mode"
+        }
         aria-label="Open in big mode"
       >
-        <Maximize2 size={15} strokeWidth={1.5} />
+        <Maximize2 size={14} strokeWidth={1.5} />
       </button>
       <button
         type="button"
-        className={styles.action}
+        className={`${styles.action} ${styles.actionDanger}`}
         onClick={onCancel}
         title="Cancel recurring session"
         aria-label="Cancel recurring session"
       >
-        <X size={15} strokeWidth={1.5} />
+        <X size={14} strokeWidth={1.5} />
       </button>
     </>
   );
@@ -682,8 +780,8 @@ function RecurringCard({
     <PanelColumn
       id={recurring.id}
       color={color}
-      groupStart={groupStart}
       selected={selected}
+      capped={capWidth}
       title={title}
       leading={
         <RefreshCw
@@ -728,10 +826,17 @@ type ColumnItem =
 function Overview() {
   const allSessions = useStore((s) => s.sessions);
   const branches = useStore((s) => s.branches);
+  const repoWorktrees = useStore((s) => s.repoWorktrees);
+  const platform = useStore((s) => s.platform);
   const selectedId = useStore((s) => s.selectedId);
   const select = useStore((s) => s.select);
   const removeSession = useStore((s) => s.removeSession);
   const openNewSession = useStore((s) => s.openNewSession);
+  // Empty-repo state (task 379): "New session" scoped to the filtered folder —
+  // startRepoSession (#127) skips the folder step (a git folder opens straight at
+  // the branch step); ⌘N itself still opens the global flow.
+  const startRepoSession = useStore((s) => s.startRepoSession);
+  const newSessionKey = useKeybindLabel("new-session");
   const filter = useStore((s) => s.overviewRepoFilter);
   const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const repoColors = useStore((s) => s.repoColors);
@@ -748,8 +853,6 @@ function Overview() {
   const cancelRecurring = useStore((s) => s.cancelRecurring);
   // The boot payload has landed (#352) — gates the empty state (see below).
   const booted = useStore((s) => s.booted);
-  // PTY ownership across windows (#84) is resolved inside the shared ItemContent
-  // (#157) now — an agent owned by a detached canvas window shows a note there.
 
   // Recurring-owned child agents (#294) render only inside the recurring card, never
   // as their own column — exclude them from the session lists that drive the wall.
@@ -772,6 +875,10 @@ function Overview() {
   const wallRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!selectedId) return;
+    if (hoverSelecting) {
+      hoverSelecting = false; // hover put the border here; don't move the wall (#371)
+      return;
+    }
     wallRef.current
       ?.querySelector(`[data-item-id="${selectedId}"]`)
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -782,15 +889,9 @@ function Overview() {
   // — and only once the boot payload has landed (#352): before that everything is
   // empty simply because nothing has loaded yet, and showing "No active sessions"
   // for that round-trip would flash the wrong state right before the content pops in.
-  const anyPanels = Object.values(overviewPanels).some(
-    (list) => list.length > 0,
-  );
-  if (
-    sessions.length === 0 &&
-    !anyPanels &&
-    schedules.length === 0 &&
-    recurrings.length === 0
-  ) {
+  // The gate is the shared `overviewIsEmpty` (task 377) so the wave background's
+  // hero preset can never drift from this render.
+  if (overviewIsEmpty({ sessions, overviewPanels, schedules, recurrings })) {
     return booted ? <EmptyState onNewSession={() => openNewSession()} /> : null;
   }
 
@@ -819,8 +920,12 @@ function Overview() {
   // A worktree agent's panels are keyed by the worktree folder (#164), but must
   // cluster under the worktree's **parent** repo (where the worktree agent sits,
   // #96) — not as a stray group. Map worktree path → parent so a panel keyed by a
-  // worktree path is attributed to the parent cluster (and rendered with its own key).
-  const wtParent = new Map<string, string>();
+  // worktree path is attributed to the parent cluster (and rendered with its own
+  // key). DETECTED worktrees (agent-created — no live session) contribute the
+  // same mapping, so their panels never form a stray top-level cluster either;
+  // a session-derived entry wins on overlap.
+  const detectedParents = detectedWorktreeParents(repoWorktrees, platform);
+  const wtParent = new Map<string, string>(Object.entries(detectedParents));
   for (const s of sessions) {
     if (s.worktreeParent) wtParent.set(s.repoPath, s.worktreeParent);
   }
@@ -849,6 +954,7 @@ function Overview() {
     overviewOrder,
     schedules,
     recurrings,
+    worktreeParents: detectedParents,
     filter,
   }).map(({ repo, keys }) => {
     const agents = ordered.filter((s) => effectiveRepo(s) === repo);
@@ -917,7 +1023,27 @@ function Overview() {
       )}
       {clusters.length === 0 ? (
         <div className={styles.filterEmpty}>
-          {filter ? "Nothing to show for this repo." : "No agents yet."}
+          {filter ? (
+            <>
+              <span className={styles.filterEmptyTitle}>
+                No sessions in <strong>{repoName(filter.path)}</strong> yet
+              </span>
+              <button
+                type="button"
+                className={styles.newSessionBtn}
+                onClick={() => startRepoSession(filter.path)}
+              >
+                <Plus size={14} strokeWidth={2.2} />
+                New session
+                {newSessionKey && (
+                  <span className={styles.kbdChip}>{newSessionKey}</span>
+                )}
+              </button>
+              <TipRow />
+            </>
+          ) : (
+            "No agents yet."
+          )}
         </div>
       ) : (
         <DndContext
@@ -926,15 +1052,13 @@ function Overview() {
           onDragEnd={onDragEnd}
         >
           <Wall wallRef={wallRef}>
-            {clusters.map((cluster, clusterIdx) => (
+            {clusters.map((cluster) => (
               <SortableContext
                 key={cluster.repo}
                 items={cluster.keys}
                 strategy={horizontalListSortingStrategy}
               >
-                {cluster.items.map((item, itemIdx) => {
-                  // Divider before every cluster except the first rendered one.
-                  const groupStart = clusterIdx > 0 && itemIdx === 0;
+                {cluster.items.map((item) => {
                   const color = repoColor(cluster.repo, repoColors);
                   const branch = branches[cluster.repo] ?? "";
                   if (item.kind === "agent") {
@@ -945,7 +1069,6 @@ function Overview() {
                         session={session}
                         branch={branches[session.repoPath] ?? ""}
                         color={color}
-                        groupStart={groupStart}
                         selected={session.id === selectedId}
                         busy={sessionBusy[session.id] ?? false}
                         hasBeenActive={sessionActive[session.id] ?? false}
@@ -961,7 +1084,6 @@ function Overview() {
                         schedule={item.schedule}
                         branch={branch}
                         color={color}
-                        groupStart={groupStart}
                         selected={item.schedule.id === selectedId}
                         onSelect={() => select(item.schedule.id)}
                         onCancel={() => void cancelSchedule(item.schedule.id)}
@@ -976,7 +1098,6 @@ function Overview() {
                         recurring={item.recurring}
                         branch={branch}
                         color={color}
-                        groupStart={groupStart}
                         selected={item.recurring.id === selectedId}
                         onSelect={() => select(item.recurring.id)}
                         onCancel={() => void cancelRecurring(item.recurring.id)}
@@ -992,7 +1113,6 @@ function Overview() {
                       repoPath={item.repoKey}
                       branch={branches[item.repoKey] ?? branch}
                       color={color}
-                      groupStart={groupStart}
                       selected={item.panel.id === selectedId}
                       onSelect={() => select(item.panel.id)}
                       onClose={() =>

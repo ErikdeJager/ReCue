@@ -1,17 +1,20 @@
-/* Sidebar-footer update box (#190, restyled #203): a quiet, inset single-line
-   hint above the Settings gear — hairline border, transparent fill, accent
-   reserved to the icon. Hidden unless an update is available / failed. */
+/* Sidebar-footer update box (#190, restyled #203, v2 pill task 374): a quiet,
+   inset 28px single-line pill above the Settings gear — hairline border,
+   transparent fill, accent reserved to the icon. Hidden unless an update is
+   available / failed. */
 .indicator {
   display: flex;
   align-items: center;
-  gap: var(--space-6);
-  /* Tighter inset (#215) — a small gutter still ties it to the footer below. */
-  margin: 0 var(--space-4) var(--space-4);
-  padding: var(--space-4) var(--space-8);
+  gap: 7px;
+  height: 28px;
+  flex-shrink: 0;
+  /* The 10px side inset matches the sidebar's v2 frame padding (task 374). */
+  margin: 0 10px var(--space-4);
+  padding: 0 var(--space-8);
   border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-chrome);
   background: transparent;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -20,17 +23,21 @@
     border-color var(--dur-fast) var(--ease-out);
 }
 
-/* Hover light-up (#215): an accent-tinted border + faint accent fill so the quiet
-   #203 chip reads as clearly interactive (the icon is already accent). */
+/* Hover light-up (#215, v2: a Base fill per the demo): an accent-tinted border +
+   faint fill so the quiet #203 chip reads as clearly interactive (the icon is
+   already accent). */
 .indicator:hover {
   border-color: var(--accent);
-  background: var(--accent-dim);
+  background: var(--bg-panel);
   color: var(--text-primary);
 }
 
-/* Collapsed rail: icon-only, centered in the inset chip (#203). */
+/* Collapsed rail: icon-only, centered in the inset chip (#203). The narrow rail
+   keeps the pre-374 tighter inset so the 28px pill still fits the 44px rail. */
 .indicatorCollapsed {
   justify-content: center;
+  margin: 0 var(--space-4) var(--space-4);
+  padding: 0;
 }
 
 .indicatorError {
@@ -95,6 +102,7 @@
 
 .indicatorText {
   display: flex;
+  flex: 1;
   min-width: 0;
   align-items: baseline;
   gap: var(--space-4);
@@ -102,42 +110,34 @@
 
 .indicatorTitle {
   overflow: hidden;
-  font-size: var(--fs-meta-sm);
-  font-weight: 500;
+  font-size: var(--fs-meta);
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Version pushed to the pill's right edge, muted at 10px (v2 demo, task 374). */
 .indicatorVersion {
   flex-shrink: 0;
-  color: var(--text-secondary);
+  margin-left: auto;
+  color: var(--text-muted);
   font-family: var(--mono);
   font-size: var(--fs-meta-xs);
   white-space: nowrap;
 }
 
-/* Confirm dialog + install overlay scrim (#190): full-window dim, centered. The
-   install phase has no dismiss handler, so it blocks all input until relaunch. */
+/* Confirm dialog + install overlay (#190): the shared modal-scrim/modal-pop
+   chrome (modal.css, task 378). The install phase has no dismiss handler, so it
+   blocks all input until relaunch. This module keeps only z-index + layout. */
 .overlay {
-  position: fixed;
-  inset: 0;
   z-index: 200;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--scrim);
 }
 
 .dialog {
   display: flex;
   width: 340px;
-  max-width: calc(100vw - var(--space-24));
   flex-direction: column;
   padding: var(--space-16);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-window);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
 }
 
 .title {
@@ -167,52 +167,13 @@
   gap: var(--space-8);
 }
 
-.cancel,
-.confirm {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-6) var(--space-12);
-  border-radius: var(--radius-control);
-  font: inherit;
-  font-size: var(--fs-meta);
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.cancel {
-  border: 1px solid var(--border-strong);
-  background: transparent;
-  color: var(--text-primary);
-}
-
-.cancel:hover {
-  background: var(--bg-hover);
-}
-
-.confirm {
-  border: 0;
-  background: var(--accent);
-  color: var(--accent-fg);
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.confirm:hover {
-  background: var(--accent-hover);
-}
-
 /* Install phase — centered card with a determinate progress bar. */
 .installBox {
   display: flex;
   width: 340px;
-  max-width: calc(100vw - var(--space-24));
   flex-direction: column;
   gap: var(--space-12);
   padding: var(--space-24);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-window);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
   text-align: center;
 }
 
@@ -223,17 +184,18 @@
   font-weight: 600;
 }
 
+/* Crust rounded track + accent bar (the v2 inset-track idiom, task 378). */
 .progressTrack {
   width: 100%;
   height: 6px;
   overflow: hidden;
-  border-radius: var(--radius-chip);
-  background: var(--bg-base);
+  border-radius: var(--radius-dot);
+  background: var(--content-bg);
 }
 
 .progressBar {
   height: 100%;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-dot);
   background: var(--accent);
   transition: width var(--dur-fast) var(--ease-out);
 }

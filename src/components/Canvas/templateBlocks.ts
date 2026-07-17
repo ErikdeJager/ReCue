@@ -16,6 +16,7 @@ import {
   TerminalSquare,
 } from "lucide-react";
 
+import { byItemTypeOrder, type ItemTypeKey } from "../../itemTypeOrder";
 import type { CanvasContent } from "../../types";
 
 /** The block kinds a template leaf can hold (#117). Distinct from the live Canvas
@@ -46,12 +47,9 @@ export interface BlockDescriptor {
   liveKind: string;
 }
 
-/**
- * The v1 block registry (#117). To add a block for a future Canvas content kind,
- * append one entry here — the palette, the editor placeholder, and the (#118)
- * instantiation all read from this list.
- */
-export const BLOCK_REGISTRY: BlockDescriptor[] = [
+/** The block descriptors (labels/icons/config/liveKind unchanged). Declaration order
+ * is irrelevant — `BLOCK_REGISTRY` sorts them into the shared canonical order. */
+const BLOCK_ENTRIES: BlockDescriptor[] = [
   {
     kind: "new-agent",
     label: "Start session",
@@ -95,6 +93,26 @@ export const BLOCK_REGISTRY: BlockDescriptor[] = [
     liveKind: "filetree",
   },
 ];
+
+/** A block's canonical item-type key (task 392). Every `liveKind` is already an
+ * `ItemTypeKey` except `agent`, which maps to `session`. */
+function blockItemTypeKey(block: BlockDescriptor): ItemTypeKey {
+  return block.liveKind === "agent"
+    ? "session"
+    : (block.liveKind as ItemTypeKey);
+}
+
+/**
+ * The v1 block registry (#117), ordered by the **one canonical creatable-type order**
+ * (task 392, `itemTypeOrder.ts`): Start session · Open terminal · Open file tree ·
+ * Open file · Open diff · Open Kanban board. To add a block for a future Canvas
+ * content kind, append one entry to `BLOCK_ENTRIES` — the palette, the editor
+ * placeholder, and the (#118) instantiation all read from this list.
+ */
+export const BLOCK_REGISTRY: BlockDescriptor[] = byItemTypeOrder(
+  BLOCK_ENTRIES,
+  blockItemTypeKey,
+);
 
 /** The set of block kinds, for quick membership checks. */
 const BLOCK_KINDS = new Set<string>(BLOCK_REGISTRY.map((b) => b.kind));

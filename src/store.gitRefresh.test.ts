@@ -12,12 +12,12 @@ vi.mock("./ipc", () => ({
   diffLineCounts: vi.fn(),
   branchAheadBehind: vi.fn(),
   fileStatuses: vi.fn(),
+  listRepoWorktrees: vi.fn(),
   // Fire-and-forget writes/probes `applyBootState` may kick off after the payload lands.
   setOpenFiles: vi.fn(),
   setCanvases: vi.fn(),
   setLastVersion: vi.fn(),
   spawnTerminal: vi.fn(),
-  claudeSessionUsage: vi.fn(),
 }));
 
 import * as ipc from "./ipc";
@@ -53,7 +53,6 @@ function makeBootState(over: Partial<BootState> = {}): BootState {
     app_version: "1.0.0",
     platform: "macos",
     windows_build: 0,
-    detached_canvas_ids: [],
     ...over,
   };
 }
@@ -74,12 +73,12 @@ beforeEach(() => {
   m(ipc.setCanvases).mockResolvedValue(undefined);
   m(ipc.setLastVersion).mockResolvedValue(undefined);
   m(ipc.spawnTerminal).mockResolvedValue(undefined);
-  m(ipc.claudeSessionUsage).mockResolvedValue(null);
   m(ipc.currentBranches).mockResolvedValue({});
   m(ipc.githubWebUrls).mockResolvedValue({});
   m(ipc.diffLineCounts).mockResolvedValue({});
   m(ipc.branchAheadBehind).mockResolvedValue({});
   m(ipc.fileStatuses).mockResolvedValue([]);
+  m(ipc.listRepoWorktrees).mockResolvedValue({});
   useStore.setState({
     sessions: [],
     recents: ["/repo/a", "/repo/b"],
@@ -118,6 +117,7 @@ describe("refreshRepoGit — kinds (#359)", () => {
     expect(ipc.githubWebUrls).toHaveBeenCalledTimes(1);
     expect(ipc.diffLineCounts).toHaveBeenCalledTimes(1);
     expect(ipc.branchAheadBehind).toHaveBeenCalledTimes(1);
+    expect(ipc.listRepoWorktrees).toHaveBeenCalledTimes(1);
   });
 });
 

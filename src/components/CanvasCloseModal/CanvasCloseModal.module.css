@@ -1,27 +1,17 @@
-/* Close-a-Canvas-tab prompt (#137): scrim + centered dialog with Kill / Keep /
-   Cancel, each with a single-key accelerator. On-system tokens + the shared popover
-   shadow, mirroring TemplateUseModal. */
+/* Close-a-Canvas-tab prompt (#137): the shared modal-scrim/modal-pop chrome
+   (modal.css, task 378) with Kill / Keep / Cancel modal-btn actions, each with a
+   single-key accelerator. This module keeps only layout: z-index, the demo-exact
+   440px width + 18px padding, and the header/body type. */
 .overlay {
-  position: fixed;
-  inset: 0;
   z-index: 210;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--scrim);
 }
 
 .dialog {
   display: flex;
-  width: 420px;
-  max-width: calc(100vw - var(--space-32));
+  width: 440px;
   max-height: calc(100vh - var(--space-32));
   flex-direction: column;
-  padding: var(--space-16);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-window);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
+  padding: 18px;
 }
 
 .header {
@@ -40,8 +30,8 @@
   margin: 0;
   overflow: hidden;
   color: var(--text-primary);
-  font-size: var(--fs-ui);
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -50,7 +40,7 @@
   margin: 0 0 var(--space-16);
   color: var(--text-secondary);
   font-size: var(--fs-meta);
-  line-height: 1.5;
+  line-height: 1.65;
 }
 
 .body strong {
@@ -63,66 +53,4 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-8);
-}
-
-.cancel,
-.danger,
-.primary {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  font: inherit;
-  font-size: var(--fs-meta);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-
-.cancel {
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-.cancel:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-
-/* Kill & close — destructive, so a red-tinted button (mirrors the sidebar #54 danger). */
-.danger {
-  border-color: color-mix(in srgb, var(--status-error) 50%, transparent);
-  background: color-mix(in srgb, var(--status-error) 14%, transparent);
-  color: var(--status-error);
-}
-
-.danger:hover {
-  background: color-mix(in srgb, var(--status-error) 22%, transparent);
-}
-
-/* Keep & close — the safe default (accent), autofocused. */
-.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-fg);
-}
-
-.primary:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-}
-
-/* Single-key accelerator hint inside each button. */
-.kbd {
-  padding: 0 var(--space-4);
-  border: 1px solid currentcolor;
-  border-radius: var(--radius-chip);
-  font-family: var(--mono);
-  font-size: var(--fs-meta-xs);
-  line-height: 1.4;
-  opacity: 0.6;
 }

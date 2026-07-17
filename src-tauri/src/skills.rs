@@ -303,4 +303,92 @@ mod tests {
         assert!(collect_skills(Some(Path::new("/no/such/dir/.claude")), None).is_empty());
         let _ = fs::remove_dir_all(&proj);
     }
+
+    /// `list_skills` = project `<cwd>/.claude` merged (via `collect_skills`) with
+    /// the user `~/.claude`. Differential over the REAL home (read-only — absent
+    /// on CI ⇒ the user side is simply empty), anchored by a uniquely-named
+    /// project skill that must surface with project scope.
+    #[test]
+    fn list_skills_merges_the_cwd_claude_dir_with_the_user_home() {
+        let cwd = tmp("list-cwd");
+        let unique = format!("recue-skills-cov-{}", std::process::id());
+        write_skill(
+            &cwd.join(".claude"),
+            &unique,
+            &format!("---\nname: {unique}\ndescription: from the project\n---\n"),
+        );
+        let skills = list_skills(&cwd);
+        let hit = skills
+            .iter()
+            .find(|s| s.name == unique)
+            .expect("the project skill must be listed");
+        assert_eq!(hit.source, "project");
+        assert_eq!(hit.description, "from the project");
+        // The whole listing equals the two-root merge over the same dirs.
+        let expected = collect_skills(
+            Some(cwd.join(".claude").as_path()),
+            home_claude_dir().as_deref(),
+        );
+        assert_eq!(skills, expected);
+        let _ = fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn skills_scan_skips_stray_files_and_dirs_without_skill_md() {
+        let proj = tmp("scan-edges");
+        // A stray FILE directly under skills/ is not a skill…
+        let skills_dir = proj.join("skills");
+        fs::create_dir_all(&skills_dir).unwrap();
+        fs::write(skills_dir.join("README.md"), "not a skill dir").unwrap();
+        // …nor is a subdirectory without a SKILL.md…
+        fs::create_dir_all(skills_dir.join("no-skill-md")).unwrap();
+        // …while a real one beside them still lists.
+        write_skill(&proj, "real", "---\nname: real\n---\n");
+        let found = collect_skills(Some(&proj), None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "real");
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn commands_skip_non_md_files_and_respect_the_depth_cap() {
+        let proj = tmp("cmd-edges");
+        write_command(&proj, "top.md", "");
+        // A non-markdown file is not a command.
+        fs::write(proj.join("commands").join("notes.txt"), "not a command").unwrap();
+        // 8 levels of nesting still list; a 9th (past MAX_DEPTH) is cut off.
+        write_command(&proj, "a/b/c/d/e/f/g/h/ok.md", "");
+        write_command(&proj, "a/b/c/d/e/f/g/h/i/deep.md", "");
+        let names: Vec<String> = collect_skills(Some(&proj), None)
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert!(names.contains(&"top".to_string()), "names: {names:?}");
+        assert!(
+            names.contains(&"a:b:c:d:e:f:g:h:ok".to_string()),
+            "names: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("deep")),
+            "a command nested past MAX_DEPTH must be cut off: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("notes")),
+            "names: {names:?}"
+        );
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn frontmatter_tolerates_junk_lines_and_unknown_keys() {
+        let (name, desc) = parse_frontmatter(
+            "---\nnot a key-value line\nname:\nauthor: someone\nname: 'the-name'\ndescription: \"desc here\"\n---\nbody",
+        );
+        // The colon-less line, the empty `name:` value, and the unknown key are
+        // all skipped; quoted values are unquoted (single AND double).
+        assert_eq!(name.as_deref(), Some("the-name"));
+        assert_eq!(desc.as_deref(), Some("desc here"));
+        // No leading frontmatter fence at all → nothing extracted.
+        assert_eq!(parse_frontmatter("name: nope"), (None, None));
+    }
 }

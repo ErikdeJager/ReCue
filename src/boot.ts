@@ -1,6 +1,6 @@
 // Pure boot helpers (#352). Kept out of `store.ts` so the one non-trivial derivation
 // in the boot payload — resolving the persisted Canvas tabs (incl. the one-shot #58
-// legacy migration and the #84 detached-window override) — is unit-testable on its own.
+// legacy migration and the task-434 `?canvas=` preset) — is unit-testable on its own.
 // Imports only `./types`, so there is no cycle with the store.
 
 import type { CanvasNode, CanvasTab, PersistedCanvases } from "./types";
@@ -12,26 +12,27 @@ export interface ResolvedCanvases {
   /** The tab this window shows. */
   activeCanvasId: string;
   /** True when the tabs were **synthesized** (from the legacy single `canvas_layout`,
-   * or from nothing) rather than loaded — the caller persists the new shape once,
-   * **main window only** (#84: a detached renderer never writes it). */
+   * or from nothing) rather than loaded — the caller persists the new shape once. */
   migrated: boolean;
 }
 
 /**
- * Resolve the persisted Canvas tabs at boot (#58/#84/#352). Pure.
+ * Resolve the persisted Canvas tabs at boot (#58/#352/task 434/437). Pure.
  *
  * - Persisted tabs (≥1) are used as-is; the active tab is `persisted.activeId` when it
  *   still exists, else the first tab (a stale id can't strand the window on a blank).
  * - Otherwise one tab is synthesized — carrying the legacy single `canvas_layout` (#46)
  *   when there is one — and `migrated` is set so the caller persists it once.
- * - A detached canvas window (#84) always shows **its own** canvas, whatever the
- *   persisted active tab says (that tracks the main window).
+ * - `presetCanvasId` (a window's `?canvas=` init param, task 434 — incl. the 9/16
+ *   legacy compat URL) is SOFT: it is applied only when that tab exists, so a stale
+ *   id falls back to the persisted / first tab instead of stranding the window on a
+ *   blank. (The #84 detached-window `pinCanvasId` died with detached windows,
+ *   task 437.)
  */
 export function resolveCanvases(
   persisted: PersistedCanvases | null,
   legacyLayout: CanvasNode | null,
-  isMainWindow: boolean,
-  detachedCanvasId: string | null,
+  presetCanvasId: string | null,
   newId: () => string = () => crypto.randomUUID(),
 ): ResolvedCanvases {
   let canvases: CanvasTab[];
@@ -54,8 +55,8 @@ export function resolveCanvases(
     migrated = true;
   }
 
-  if (!isMainWindow && detachedCanvasId) {
-    activeCanvasId = detachedCanvasId;
+  if (presetCanvasId && canvases.some((c) => c.id === presetCanvasId)) {
+    activeCanvasId = presetCanvasId;
   }
 
   return { canvases, activeCanvasId, migrated };

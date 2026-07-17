@@ -1,6 +1,7 @@
 //! Tauri command surface — thin wrappers over `SessionManager` and `Store`,
 //! plus the event payloads emitted to the frontend.
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -48,11 +49,44 @@ pub struct ExitPayload {
     pub code: Option<i32>,
 }
 
+/// Payload for `session://forgotten` (task 431): a clean #63 exit Rust already
+/// forgot — every window drops local state; only `toast_window` toasts.
+#[derive(Clone, Serialize)]
+pub struct ForgottenPayload {
+    pub id: String,
+    pub toast_window: String,
+}
+
+/// Payload for `worktree://kept` (task 431): the exit-driven cleanup found a
+/// dirty worktree and kept it (#74) — only `toast_window` warns.
+#[derive(Clone, Serialize)]
+pub struct WorktreeKeptPayload {
+    pub dest: String,
+    pub toast_window: String,
+}
+
 /// Payload for the `session://state` event — busy/idle (#42).
 #[derive(Clone, Serialize)]
 pub struct StatePayload {
     pub id: String,
     pub busy: bool,
+}
+
+/// Payload for `session://size` (task 426): the authoritative PTY grid after
+/// multi-window smallest-wins arbitration. Broadcast on change and on attach.
+#[derive(Clone, Serialize)]
+pub struct SizePayload {
+    pub id: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Return of `attach_terminal` (task 426): the effective grid the attaching
+/// host must render.
+#[derive(Clone, Serialize)]
+pub struct GridPayload {
+    pub cols: u16,
+    pub rows: u16,
 }
 
 /// Payload for the `session://name` event (#97): claude's latest auto-title for a
@@ -71,12 +105,13 @@ pub struct ForkablePayload {
     pub forkable: bool,
 }
 
-/// Payload for the `canvas://windows` event (#84): the canvas ids that currently
-/// have a detached window open. Every window listens so the main tab strip can
-/// mark detached tabs and each window can recompute terminal ownership.
+/// Payload for the `session://cwd` event: the directory a session is currently
+/// working in per claude's own log — the agent-relocation signal the sidebar
+/// uses to re-parent a row under a detected worktree (and back).
 #[derive(Clone, Serialize)]
-pub struct CanvasWindowsPayload {
-    pub detached: Vec<String>,
+pub struct CwdPayload {
+    pub id: String,
+    pub cwd: String,
 }
 
 /// Payload for `schedule://fired` (#93): a schedule launched into a live session.
@@ -112,6 +147,15 @@ pub struct RecurringErrorPayload {
     pub message: String,
 }
 
+/// Payload for `container://building`: the default dev-container image is being built
+/// (first run — one-time, minutes). The frontend toasts it so a container spawn that
+/// sits behind the build reads as progress, not a hang. Mirrors the
+/// `recurring://error` message shape.
+#[derive(Clone, Serialize)]
+pub struct ContainerBuildingPayload {
+    pub message: String,
+}
+
 /// The launch command for a **custom** coding agent (#325). The custom agent's real
 /// program + args aren't in a static `AgentSpec` — they come from the user's
 /// `customAgentCommand` in the (opaque) settings blob, read here at spawn time. Returns
@@ -143,6 +187,206 @@ fn worktree_parent_for_cwd(sessions: &[PersistedSession], cwd: &str) -> Option<S
         .and_then(|s| s.worktree_parent.clone())
 }
 
+/// Pre-flight for a dev-container spawn: resolve the image and gate the request.
+/// Claude-only (the embedded image ships only the claude CLI — a codex/opencode/custom
+/// container would fail confusingly inside the terminal); docker must be on PATH
+/// (**deliberately a `Spawn` error, not `BinaryNotFound`** — the frontend maps that
+/// kind to the full-screen ClaudeMissing surface, which would be wrong here); a
+/// `containerImage` settings override is trusted as-is, else the default image is
+/// built on demand (deduped — see `container::ensure_image`), emitting
+/// `container://building` when a build actually starts.
+fn prepare_container_spawn(app: &AppHandle, agent: &str) -> Result<String, SessionError> {
+    if agent != crate::agents::DEFAULT_AGENT_ID {
+        return Err(SessionError::Spawn(
+            "Dev-container sessions currently support the Claude Code agent only".into(),
+        ));
+    }
+    if crate::pty::find_on_path("docker").is_none() {
+        return Err(SessionError::Spawn(
+            "Docker is required for dev-container sessions — install and start Docker Desktop (or the docker CLI) and try again".into(),
+        ));
+    }
+    let store = app.state::<Store>();
+    if let Some(custom) = crate::container::read_container_image(&store.settings()) {
+        return Ok(custom);
+    }
+    let emitter = app.clone();
+    crate::container::ensure_image(crate::container::DEFAULT_CONTAINER_IMAGE, &move || {
+        let _ = emitter.emit(
+            "container://building",
+            ContainerBuildingPayload {
+                message: "Building the dev-container image (first run, a few minutes)…".into(),
+            },
+        );
+    })
+    .map_err(|e| SessionError::Spawn(format!("container image build failed: {e}")))?;
+    Ok(crate::container::DEFAULT_CONTAINER_IMAGE.to_string())
+}
+
+/// Compose the data-only `ContainerLaunch` for a session — spawn AND resume share it.
+/// All the side effects live here (the shell): ensure + seed the per-session home,
+/// generate the worktree `.git` overlay, read the host git identity, fill the Linux
+/// uid/gid arm; `container.rs` stays pure. `worktree_parent` decides the git shape:
+/// `Some` ⇒ the single-file overlay (mount the parent's `.git` + shadow `/work/.git`),
+/// `None` ⇒ the repo root rides in with its own `.git` directory, no overlay.
+fn container_launch_for(
+    store: &Store,
+    session_id: &str,
+    cwd: &str,
+    worktree_parent: Option<&str>,
+    image: String,
+) -> Result<crate::container::ContainerLaunch, SessionError> {
+    let data_dir = store
+        .data_dir()
+        .ok_or_else(|| SessionError::Io("no app data directory".to_string()))?
+        .to_path_buf();
+    let home = crate::container::container_home_dir(&data_dir, session_id);
+    crate::container::seed_home(&home, crate::usage::read_raw_credentials().as_deref())
+        .map_err(|e| SessionError::Spawn(format!("could not prepare the container home: {e}")))?;
+    let git_overlay = match worktree_parent {
+        Some(parent) => {
+            // The worktree's admin name comes from its own `.git` pointer file — never
+            // guessed from the folder name (git may have suffixed it on collision).
+            let admin = crate::container::host_worktree_admin_name(Path::new(cwd))
+                .ok_or_else(|| SessionError::Spawn(
+                    "could not prepare the container git overlay for this worktree — its .git file was not readable".into(),
+                ))?;
+            let gitfile = crate::container::prepare_gitfile(
+                &crate::container::container_git_dir(&data_dir, session_id),
+                &admin,
+            )
+            .map_err(|e| {
+                SessionError::Spawn(format!("could not write the container gitfile: {e}"))
+            })?;
+            Some(crate::container::GitOverlay {
+                repo_git_dir_host: Path::new(parent).join(".git"),
+                gitfile_host: gitfile,
+            })
+        }
+        None => None,
+    };
+    // docker's `--mount` CSV syntax can't escape a comma; refuse up front with a
+    // clear error instead of a garbled docker parse failure in the terminal.
+    let mut sources: Vec<&Path> = vec![Path::new(cwd), &home];
+    if let Some(overlay) = &git_overlay {
+        sources.push(&overlay.repo_git_dir_host);
+        sources.push(&overlay.gitfile_host);
+    }
+    if let Some(bad) = sources
+        .into_iter()
+        .find(|p| !crate::container::path_mountable(p))
+    {
+        return Err(SessionError::Spawn(format!(
+            "this folder's path contains a `,`, which docker --mount cannot express: {}",
+            bad.display()
+        )));
+    }
+    let (user_name, user_email) = crate::container::host_git_identity(Path::new(cwd));
+    // `--user` only on Linux: native docker would otherwise create root-owned files
+    // in the mounted worktree (breaking host-side edits + worktree removal). Docker
+    // Desktop on macOS/Windows maps ownership itself, so those arms pass None.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let user = crate::container::current_uid_gid();
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    let user = None;
+    crate::container::mark_active();
+    Ok(crate::container::ContainerLaunch {
+        image,
+        session_id: session_id.to_string(),
+        workdir_host: PathBuf::from(cwd),
+        git_overlay,
+        home_host: home,
+        env: crate::container::git_env_config(&user_name, &user_email),
+        user,
+    })
+}
+
+/// Boot-resume variant (called from `boot.rs`, best-effort): `Ok(None)` for a plain
+/// host record, `Ok(Some(launch))` for a container record whose home/overlay composed,
+/// `Err(())` when it couldn't — a container record must then **skip** the resume
+/// entirely (never fall back to a host PTY: the credentials/home/git universe would
+/// be wrong), keeping the normal failed-resume surface (#30/#63). The deduped
+/// `ensure_image` means N container records at boot pay for at most one build.
+pub(crate) fn boot_container_launch(
+    app: &AppHandle,
+    record: &PersistedSession,
+) -> Result<Option<crate::container::ContainerLaunch>, ()> {
+    let Some(image) = record.container_image.clone() else {
+        return Ok(None);
+    };
+    if crate::pty::find_on_path("docker").is_none() {
+        return Err(());
+    }
+    if image == crate::container::DEFAULT_CONTAINER_IMAGE {
+        let emitter = app.clone();
+        if crate::container::ensure_image(&image, &move || {
+            let _ = emitter.emit(
+                "container://building",
+                ContainerBuildingPayload {
+                    message: "Building the dev-container image (first run, a few minutes)…".into(),
+                },
+            );
+        })
+        .is_err()
+        {
+            return Err(());
+        }
+    }
+    let store = app.state::<Store>();
+    container_launch_for(
+        &store,
+        &record.id,
+        &record.repo_path,
+        record.worktree_parent.as_deref(),
+        image,
+    )
+    .map(Some)
+    .map_err(|_| ())
+}
+
+/// The docker runtime state driving the New Session modal's container toggle:
+/// `"absent"` (no docker CLI — the toggle is hidden), `"stopped"` (installed but
+/// the daemon is unreachable — the toggle shows disabled with a "start Docker"
+/// hint), `"running"`. Async + `spawn_blocking`: the probe spawns the docker CLI,
+/// which waits on a daemon connect when stopped.
+#[tauri::command]
+pub async fn container_runtime_status() -> Result<String, SessionError> {
+    tauri::async_runtime::spawn_blocking(|| crate::container::runtime_status().to_string())
+        .await
+        .map_err(|e| SessionError::Io(e.to_string()))
+}
+
+/// Background prefetch fired when the user switches the modal's "Run in dev
+/// container" toggle ON, so the one-time image build overlaps the user finishing the
+/// modal instead of stalling the spawn. Best-effort by design: docker missing or a
+/// custom `containerImage` override → quiet no-op (the spawn path is the
+/// authoritative error surface). Async + `spawn_blocking` — a first build takes minutes.
+#[tauri::command]
+pub async fn ensure_container_image(app: AppHandle) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if crate::pty::find_on_path("docker").is_none() {
+            return;
+        }
+        let store = app.state::<Store>();
+        if crate::container::read_container_image(&store.settings()).is_some() {
+            return;
+        }
+        let emitter = app.clone();
+        let _ =
+            crate::container::ensure_image(crate::container::DEFAULT_CONTAINER_IMAGE, &move || {
+                let _ = emitter.emit(
+                    "container://building",
+                    ContainerBuildingPayload {
+                        message: "Building the dev-container image (first run, a few minutes)…"
+                            .into(),
+                    },
+                );
+            });
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))
+}
+
 /// Spawn a new agent session in `cwd`.
 ///
 /// **Async + off the main thread (#353):** a `pub fn` Tauri command runs on the webview
@@ -162,20 +406,25 @@ pub async fn spawn_session(
     name: Option<String>,
     agent: Option<String>,
     prompt: Option<String>,
+    container: Option<bool>,
+    worktree_parent: Option<String>,
 ) -> Result<PersistedSession, SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
-        spawn_session_blocking(&app, cwd, name, agent, prompt)
+        spawn_session_blocking(&app, cwd, name, agent, prompt, container, worktree_parent)
     })
     .await
     .map_err(|e| SessionError::Io(e.to_string()))?
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_session_blocking(
     app: &AppHandle,
     cwd: String,
     name: Option<String>,
     agent: Option<String>,
     prompt: Option<String>,
+    container: Option<bool>,
+    worktree_parent: Option<String>,
 ) -> Result<PersistedSession, SessionError> {
     let manager = app.state::<SessionManager>();
     let store = app.state::<Store>();
@@ -188,19 +437,47 @@ fn spawn_session_blocking(
     // The custom agent's launch command lives in the (opaque) settings blob (#325);
     // resolve it only for `agent == "custom"`, else pass `None`.
     let custom = custom_command_for(&store, &agent);
-    // When `cwd` is an existing app-managed worktree (an agent already runs there with a
-    // recorded `worktree_parent`), nest the new session under that parent instead of
-    // registering the worktree folder as a stray top-level sidebar folder (#331). A plain
-    // folder resolves to `None`, so a normal spawn is unchanged. Covers every frontend
-    // entry point routing through `spawn_session` (OpenViewButton "New session here",
-    // NewSessionModal, CreatePanelModal, Canvas template `new-agent`, `createBranchSession`).
-    let worktree_parent = worktree_parent_for_cwd(&store.sessions(), &cwd);
+    // Nest the session under a worktree's parent repo instead of registering the
+    // worktree folder as a stray top-level sidebar folder (#331). An explicit
+    // `worktree_parent` wins — the detected-worktree header's "New session" spawns
+    // in-place into a worktree ReCue didn't create, where no prior session exists
+    // for the auto-derive to find. Otherwise fall back to the #331 auto-derive:
+    // `cwd` is an existing app-managed worktree when an agent already runs there
+    // with a recorded `worktree_parent`. A plain folder resolves to `None`, so a
+    // normal spawn is unchanged. Covers every frontend entry point routing through
+    // `spawn_session` (OpenViewButton "New session here", NewSessionModal,
+    // CreatePanelModal, Canvas template `new-agent`, `createBranchSession`).
+    let worktree_parent = worktree_parent
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| worktree_parent_for_cwd(&store.sessions(), &cwd));
+    // Dev-container session (opt-in): mint the session UUID HERE so the container
+    // label == the record id == the per-session home-dir key, then compose the docker
+    // launch. When `cwd` is itself a worktree, lock it (best-effort) against an
+    // in-container `git worktree prune` before the container gets the `.git` mount.
+    let launch = match container {
+        Some(true) => {
+            let image = prepare_container_spawn(app, &agent)?;
+            let session_id = Uuid::new_v4().to_string();
+            if let Some(parent) = &worktree_parent {
+                let _ = git::worktree_lock(parent, &cwd, "ReCue dev-container session");
+            }
+            Some(container_launch_for(
+                &store,
+                &session_id,
+                &cwd,
+                worktree_parent.as_deref(),
+                image,
+            )?)
+        }
+        _ => None,
+    };
     let info = manager.spawn_session_with_prompt(
         cwd.as_str(),
         name.clone(),
         prompt.as_deref(),
         &agent,
         custom.as_deref(),
+        launch.as_ref(),
     )?;
     let record = PersistedSession {
         id: info.id.clone(),
@@ -214,12 +491,16 @@ fn spawn_session_blocking(
         agent,
         forked_from: None,
         // A freshly spawned session has no log yet → not forkable until its first
-        // real turn materializes one (#138); the title worker flips it then.
+        // real turn materializes one (#138); the title worker flips it then. A
+        // dev-container session stays unforkable for good (its log lives in the
+        // container home, so the title worker never runs for it).
         forkable: false,
         // Per-agent auto-continue opt-out (#297) — inherit the global behavior.
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: launch.as_ref().map(|l| l.image.clone()),
+        current_cwd: None,
     };
     store
         .add_session(record.clone())
@@ -229,14 +510,19 @@ fn spawn_session_blocking(
     store
         .touch_recent(worktree_parent.as_deref().unwrap_or(&cwd))
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the roster + recents both changed.
+    broadcast_sessions(app, &store);
+    broadcast_recents(app, &store);
     Ok(record)
 }
 
 /// Spawn a plain shell **terminal item** (#72) in `cwd` under the caller-chosen
 /// `id` (the Overview panel's id). Unlike `spawn_session` this is not a `claude`
 /// agent and is **not** persisted in `sessions.json` — the item lives in
-/// `overview_panels` (frontend) and a fresh shell is respawned on boot. Kill it
-/// with `kill_session` (the PTY registry is shared).
+/// `overview_panels` (frontend) and a fresh shell is respawned **by the Rust boot
+/// sequence** (`boot::respawn_shell_terminals`, task 432); this command remains
+/// the runtime create/Restart path. Kill it with `kill_session` (the PTY registry
+/// is shared).
 ///
 /// Async + off the main thread (#353) — same `spawn_with_id` cost as `spawn_session`.
 #[tauri::command]
@@ -264,9 +550,10 @@ pub async fn spawn_worktree_agent(
     repo: String,
     branch: String,
     agent: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
-        spawn_worktree_agent_blocking(&app, repo, branch, agent)
+        spawn_worktree_agent_blocking(&app, repo, branch, agent, container)
     })
     .await
     .map_err(|e| SessionError::Io(e.to_string()))?
@@ -277,6 +564,7 @@ fn spawn_worktree_agent_blocking(
     repo: String,
     branch: String,
     agent: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     let manager = app.state::<SessionManager>();
     let store = app.state::<Store>();
@@ -289,7 +577,30 @@ fn spawn_worktree_agent_blocking(
     }
     let dest_str = dest.to_string_lossy().to_string();
     let custom = custom_command_for(&store, &agent);
-    let info = manager.spawn_session(dest_str.as_str(), None, &agent, custom.as_deref())?;
+    // Dev-container variant: lock the worktree (best-effort, prune guard) and compose
+    // the docker launch — the worktree mounts at /work with the `.git` overlay.
+    let launch = match container {
+        Some(true) => {
+            let image = prepare_container_spawn(app, &agent)?;
+            let session_id = Uuid::new_v4().to_string();
+            let _ = git::worktree_lock(&repo, &dest, "ReCue dev-container session");
+            Some(container_launch_for(
+                &store,
+                &session_id,
+                &dest_str,
+                Some(&repo),
+                image,
+            )?)
+        }
+        _ => None,
+    };
+    let info = manager.spawn_session(
+        dest_str.as_str(),
+        None,
+        &agent,
+        custom.as_deref(),
+        launch.as_ref(),
+    )?;
     let record = PersistedSession {
         id: info.id.clone(),
         claude_session_id: info.id,
@@ -308,10 +619,14 @@ fn spawn_worktree_agent_blocking(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: launch.as_ref().map(|l| l.image.clone()),
+        current_cwd: None,
     };
     store
         .add_session(record.clone())
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the roster changed.
+    broadcast_sessions(app, &store);
     Ok(record)
 }
 
@@ -329,9 +644,10 @@ pub async fn spawn_worktree_agent_new_branch(
     name: String,
     base: String,
     agent: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
-        spawn_worktree_agent_new_branch_blocking(&app, repo, name, base, agent)
+        spawn_worktree_agent_new_branch_blocking(&app, repo, name, base, agent, container)
     })
     .await
     .map_err(|e| SessionError::Io(e.to_string()))?
@@ -343,6 +659,7 @@ fn spawn_worktree_agent_new_branch_blocking(
     name: String,
     base: String,
     agent: Option<String>,
+    container: Option<bool>,
 ) -> Result<PersistedSession, SessionError> {
     let manager = app.state::<SessionManager>();
     let store = app.state::<Store>();
@@ -351,7 +668,29 @@ fn spawn_worktree_agent_new_branch_blocking(
     git::worktree_add_new_branch(&repo, &name, &base, &dest).map_err(SessionError::Git)?;
     let dest_str = dest.to_string_lossy().to_string();
     let custom = custom_command_for(&store, &agent);
-    let info = manager.spawn_session(dest_str.as_str(), None, &agent, custom.as_deref())?;
+    // Dev-container variant — same shape as `spawn_worktree_agent_blocking`.
+    let launch = match container {
+        Some(true) => {
+            let image = prepare_container_spawn(app, &agent)?;
+            let session_id = Uuid::new_v4().to_string();
+            let _ = git::worktree_lock(&repo, &dest, "ReCue dev-container session");
+            Some(container_launch_for(
+                &store,
+                &session_id,
+                &dest_str,
+                Some(&repo),
+                image,
+            )?)
+        }
+        _ => None,
+    };
+    let info = manager.spawn_session(
+        dest_str.as_str(),
+        None,
+        &agent,
+        custom.as_deref(),
+        launch.as_ref(),
+    )?;
     let record = PersistedSession {
         id: info.id.clone(),
         claude_session_id: info.id,
@@ -370,10 +709,14 @@ fn spawn_worktree_agent_new_branch_blocking(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: launch.as_ref().map(|l| l.image.clone()),
+        current_cwd: None,
     };
     store
         .add_session(record.clone())
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the roster changed.
+    broadcast_sessions(app, &store);
     Ok(record)
 }
 
@@ -392,15 +735,163 @@ fn spawn_worktree_agent_new_branch_blocking(
 /// error semantics and the typed `SessionError::Git` mapping are unchanged.
 #[tauri::command]
 pub async fn remove_worktree(
+    app: AppHandle,
     parent: String,
     dest: String,
     force: bool,
 ) -> Result<(), SessionError> {
     tauri::async_runtime::spawn_blocking(move || {
+        // ReCue only ever deletes worktrees it created (#74 — under
+        // `<data-dir>/worktrees`). Worktree *detection* surfaces agent-created
+        // (EnterWorktree / hook / manual) worktrees in the same UI, and in-place
+        // spawns give them sessions whose teardown reaches this command — so the
+        // managed-root check is a hard invariant here, not caller courtesy: no
+        // code path may `git worktree remove` a checkout ReCue didn't create.
+        let store = app.state::<Store>();
+        let managed = managed_worktree_root(&store)
+            .map(|root| path_under_norm(&dest, &root))
+            .unwrap_or(false);
+        if !managed {
+            return Err(SessionError::Git(
+                "refusing to remove a worktree ReCue didn't create".to_string(),
+            ));
+        }
+        // A dev-container session locked the worktree at spawn (the in-container
+        // `git worktree prune` guard) and git refuses to remove a locked worktree —
+        // unlock first, best-effort (a never-locked worktree fails harmlessly).
+        let _ = git::worktree_unlock(&parent, &dest);
         git::worktree_remove(&parent, &dest, force).map_err(SessionError::Git)
     })
     .await
     .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+/// Permanently delete the worktree at `dest` from disk — the explicit,
+/// user-initiated path behind the sidebar's always-confirmed **Delete
+/// worktree…**. Where `remove_worktree`'s managed-root refusal guards
+/// *automation* (the ref-counted last-agent teardown must never touch a
+/// checkout ReCue didn't create), this command honors a deliberate user
+/// decision on ANY worktree — ReCue-managed, agent-created, or hand-made —
+/// and is instead bound to `git worktree list` membership: `dest` must be a
+/// listed, non-bare, non-main linked worktree of `parent`, and never the
+/// registered folder itself. Only the folder dies; the branch is kept.
+///
+/// Async + `spawn_blocking` for the same reason as `remove_worktree` (#200):
+/// the FS delete can span thousands of files.
+#[tauri::command]
+pub async fn delete_worktree(
+    app: AppHandle,
+    parent: String,
+    dest: String,
+) -> Result<(), SessionError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // Serialize against the ref-counted auto-cleanup (task 431): without the
+        // lock, a clean-exit cleanup and this delete racing the same MANAGED
+        // folder could both run `git worktree remove` — the loser mis-toasting
+        // "kept dirty" (the exact spurious outcome the lock exists to prevent).
+        let lock = app.state::<WorktreeCleanupLock>();
+        let _guard = lock
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entries = git::list_worktrees(&parent).ok_or_else(|| {
+            SessionError::Git("could not read this repository's worktrees".to_string())
+        })?;
+        validate_delete_target(&entries, &parent, &dest).map_err(SessionError::Git)?;
+        // git refuses to remove a locked worktree even with --force — unlock
+        // first, best-effort (a never-locked worktree fails harmlessly).
+        let _ = git::worktree_unlock(&parent, &dest);
+        match git::worktree_remove(&parent, &dest, true) {
+            Ok(()) => Ok(()),
+            // Folder already gone (a stale/prunable entry): drop the stale
+            // registration instead of failing the delete.
+            Err(_) if !Path::new(&dest).exists() => {
+                git::worktree_prune(&parent).map_err(SessionError::Git)
+            }
+            Err(e) => Err(SessionError::Git(e)),
+        }
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
+/// One worktree of a registered repo as reported by `git worktree list` — the
+/// detection read behind the sidebar's agent-created-worktree rows — stamped with
+/// what only the backend knows: whether the path is app-managed (under
+/// `<data-dir>/worktrees`, #74) and whether it exists on this host (a worktree
+/// created *inside* a dev container records container paths like `/work/…`,
+/// which the frontend must skip).
+#[derive(Debug, Clone, Serialize)]
+pub struct RepoWorktree {
+    pub path: String,
+    pub head: String,
+    pub branch: Option<String>,
+    /// First `git worktree list` entry = the repository's main checkout. A hint,
+    /// not "the registered folder": a registered ReCue folder may itself BE a
+    /// linked worktree, so the frontend also self-excludes by path equivalence.
+    pub is_main: bool,
+    pub managed: bool,
+    pub exists: bool,
+    pub locked: bool,
+    pub locked_reason: Option<String>,
+    pub prunable: bool,
+}
+
+/// Batched worktree listing for many repos in one round-trip (the
+/// `current_branches` shape): repo path → its `git worktree list` entries,
+/// stamped (`is_main` / `managed` / `exists`). **Fail-open per repo**: a
+/// non-git folder / git error OMITS that repo's key entirely — the frontend
+/// keeps its previous state for an omitted repo, while a present-but-empty
+/// list is an authoritative "no worktrees". Bare entries are dropped (never a
+/// folder the app can show). Async + `spawn_blocking` like every batch git
+/// read (#316/#330).
+#[tauri::command]
+pub async fn list_repo_worktrees(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> std::collections::HashMap<String, Vec<RepoWorktree>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = app.state::<Store>();
+        let managed_root = managed_worktree_root(&store);
+        paths
+            .into_iter()
+            .filter_map(|repo| {
+                let entries = git::list_worktrees(&repo)?;
+                let list = entries
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, e)| !e.bare)
+                    .map(|(i, e)| stamp_repo_worktree(i, e, managed_root.as_deref()))
+                    .collect();
+                Some((repo, list))
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Stamp one parsed `WorktreeEntry` with the backend-only facts. `index` is the
+/// entry's position in the ORIGINAL listing (git prints the main checkout
+/// first), so a bare-filtered list still marks the true main.
+fn stamp_repo_worktree(
+    index: usize,
+    e: git::WorktreeEntry,
+    managed_root: Option<&Path>,
+) -> RepoWorktree {
+    RepoWorktree {
+        is_main: index == 0,
+        managed: managed_root
+            .map(|root| path_under_norm(&e.path, root))
+            .unwrap_or(false),
+        exists: Path::new(&e.path).is_dir(),
+        path: e.path,
+        head: e.head,
+        branch: e.branch,
+        locked: e.locked,
+        locked_reason: e.locked_reason,
+        prunable: e.prunable,
+    }
 }
 
 /// Write keystrokes to a session's PTY.
@@ -424,21 +915,178 @@ pub fn write_stdin(
     manager.write_stdin(&id, &data)
 }
 
-/// Resize a session's PTY to `cols` × `rows`.
+/// Attach a window's terminal view to a session (multi-window card 1/16, task
+/// 426) and return the effective grid the attaching host must render — the
+/// smallest-wins arbitration over every attached view (`terminal_views`). The
+/// terminal pool attaches every host on creation/reparent (task 427); the
+/// pre-multi-window direct `resize_pty` command is gone with its last caller.
 ///
-/// **Stays synchronous on purpose (#353)** — a cheap ioctl (`TIOCSWINSZ` on unix,
-/// `ResizePseudoConsole` on Windows), and like `write_stdin` it is fired-and-forgotten
-/// (from a `ResizeObserver` in `terminalPool.ts`). Racing async resizes could land **out
-/// of order**, leaving the PTY on a stale size while xterm believes otherwise (a garbled
-/// TUI until the next resize) — a real regression for no measurable win.
+/// **Stays synchronous on purpose (#353)** — racing async ops could apply
+/// sizes out of order, leaving the PTY on a stale grid (a garbled TUI until
+/// the next resize).
+/// Infallible: the registry lock recovers from poisoning (the `kill_all`
+/// precedent) and a missing/exited session's resize is best-effort.
+/// `window_label` is an explicit parameter (not derived from the invoking
+/// `Window`) because targeted delivery (15/16, landed as task 440) addresses
+/// views cross-window. Attach also upserts the label as an output subscriber
+/// (the task-440 self-heal — see `terminal_views`).
 #[tauri::command]
-pub fn resize_pty(
+pub fn attach_terminal(
     manager: State<'_, SessionManager>,
+    views: State<'_, crate::terminal_views::TerminalViews>,
     id: String,
+    window_label: String,
     cols: u16,
     rows: u16,
-) -> Result<(), SessionError> {
-    manager.resize_pty(&id, cols, rows)
+) -> GridPayload {
+    let (cols, rows) = views.attach(&manager, &id, &window_label, cols, rows);
+    GridPayload { cols, rows }
+}
+
+/// Detach a window's terminal view from a session (multi-window card 1/16,
+/// task 426): its desired size stops clamping the PTY, which grows back to the
+/// remaining views' minimum. Called by the terminal pool on host dispose
+/// (task 427); a closed window's views are swept by the `Destroyed` purge.
+///
+/// **Stays synchronous on purpose (#353)** and infallible — see
+/// `attach_terminal`; `window_label` is explicit for the same reason.
+#[tauri::command]
+pub fn detach_terminal(
+    manager: State<'_, SessionManager>,
+    views: State<'_, crate::terminal_views::TerminalViews>,
+    id: String,
+    window_label: String,
+) {
+    views.detach(&manager, &id, &window_label);
+}
+
+/// Update an **already-attached** view's desired grid (multi-window card 1/16,
+/// task 426) — the ResizeObserver-cadence path since task 427 (the successor of
+/// the deleted direct `resize_pty` command). A proposal for a never-attached
+/// (or already-purged) view is a no-op, so a late resize racing a window close
+/// can't resurrect a zombie view that would clamp the PTY forever.
+///
+/// **Stays synchronous on purpose (#353)** and infallible — see
+/// `attach_terminal`; `window_label` is explicit for the same reason.
+#[tauri::command]
+pub fn propose_terminal_size(
+    manager: State<'_, SessionManager>,
+    views: State<'_, crate::terminal_views::TerminalViews>,
+    id: String,
+    window_label: String,
+    cols: u16,
+    rows: u16,
+) {
+    views.propose(&manager, &id, &window_label, cols, rows);
+}
+
+/// Register this window as an output subscriber for a session (multi-window
+/// card 15/16, task 440): the forwarder then `emit_filter`s `session://output`
+/// / `session://size` to exactly the subscriber windows. Called at host
+/// **creation** — NOT at mount — so a slotless (`resetTerminal`) or parked host
+/// keeps its byte stream (`terminalPool.createHost`; the pool never re-replays
+/// on re-mount, #18/#351).
+///
+/// Sync + infallible like `detach_terminal` (poison-recovering registry lock);
+/// `window_label` is explicit for the same reason as `attach_terminal`.
+#[tauri::command]
+pub fn subscribe_session_output(
+    views: State<'_, crate::terminal_views::TerminalViews>,
+    id: String,
+    window_label: String,
+) {
+    views.subscribe_output(&id, &window_label);
+}
+
+/// Remove this window from a session's output subscribers (task 440). Called
+/// at host **disposal** — NOT at park/unmount (a parked host keeps consuming
+/// output); a closed window is swept by the `Destroyed` purge instead.
+///
+/// Sync + infallible like `detach_terminal`; an unknown session/label is a
+/// silent no-op.
+#[tauri::command]
+pub fn unsubscribe_session_output(
+    views: State<'_, crate::terminal_views::TerminalViews>,
+    id: String,
+    window_label: String,
+) {
+    views.unsubscribe_output(&id, &window_label);
+}
+
+/// Whether one registered listener target belongs to a window in `targets` —
+/// the `emit_filter` predicate for the task-440 targeted `session://output` /
+/// `session://size` emits (`lib.rs` forwarder).
+///
+/// **Verified Tauri semantics (tauri 2.11.3, `event/listener.rs`
+/// `match_any_or_filter`):** a listener registered with the default target
+/// (`EventTarget::Any`) **bypasses** every `emit_filter` predicate — it
+/// receives ALL targeted emits regardless of what this function returns. That
+/// is exactly why the frontend registers these two listens label-scoped
+/// (`listen(event, handler, { target: WINDOW_LABEL })` → `AnyLabel`); this
+/// predicate deliberately never matches `Any`/`App` itself, so an unscoped
+/// listener is never matched *into* delivery by us either.
+pub fn output_target_matches(
+    targets: &std::collections::HashSet<String>,
+    target: &tauri::EventTarget,
+) -> bool {
+    match target {
+        tauri::EventTarget::AnyLabel { label }
+        | tauri::EventTarget::Window { label }
+        | tauri::EventTarget::Webview { label }
+        | tauri::EventTarget::WebviewWindow { label } => targets.contains(label),
+        // `Any` is filter-bypassing tauri-side and `App` is not a webview; the
+        // enum is #[non_exhaustive], so unknown future targets stay unmatched.
+        _ => false,
+    }
+}
+
+/// Soft-claim `{repo_path, file}` for `window_label`'s auto-save editor (task 435):
+/// that window becomes the file's authoritative editor and every other window's
+/// editor renders read-only. Last claim wins — the "Take over" affordance is this
+/// same call. Advisory only: never an on-disk lock, `write_text_file` is untouched,
+/// and a stale/raced claim degrades to last-writer-wins. Emits
+/// `file_claims://changed` (the full sorted snapshot, task-428 shape) only when the
+/// registry actually changed (a same-label re-claim is silent).
+///
+/// **Stays synchronous on purpose** — cheap map ops (#353) and infallible (the
+/// registry lock recovers from poisoning). `window_label` is an explicit parameter
+/// (the `attach_terminal` precedent), never derived from the invoking `Window`.
+#[tauri::command]
+pub fn claim_file(
+    app: AppHandle,
+    claims: State<'_, crate::file_claims::FileClaims>,
+    repo_path: String,
+    file: String,
+    window_label: String,
+) {
+    claims.claim(&app, &repo_path, &file, &window_label);
+}
+
+/// Release `window_label`'s soft claim on `{repo_path, file}` (task 435) — the
+/// editor settled clean (blurred + saved) or unmounted. A stale release (another
+/// window already took the claim over) is a silent no-op that never clears the new
+/// holder. Sync + infallible like `claim_file`; emits `file_claims://changed` only
+/// on change.
+#[tauri::command]
+pub fn release_file_claim(
+    app: AppHandle,
+    claims: State<'_, crate::file_claims::FileClaims>,
+    repo_path: String,
+    file: String,
+    window_label: String,
+) {
+    claims.release(&app, &repo_path, &file, &window_label);
+}
+
+/// The full current soft-claim list (task 435) — the late-subscriber snapshot:
+/// call AFTER subscribing to `file_claims://changed` (the task-428/430
+/// subscribe-then-fetch discipline; the registry is updated before each emit, so
+/// this can never lag an event a subscriber already saw).
+#[tauri::command]
+pub fn file_claims(
+    claims: State<'_, crate::file_claims::FileClaims>,
+) -> Vec<crate::file_claims::FileClaim> {
+    claims.snapshot()
 }
 
 /// Restart a persisted session under the same id (#63) — the exit overlay's Restart.
@@ -464,11 +1112,50 @@ fn resume_session_blocking(app: &AppHandle, id: String) -> Result<PersistedSessi
     if !crate::agents::agent_spec(&record.agent).supports_resume {
         return Err(SessionError::ResumeUnsupported(record.agent));
     }
+    // Dev-container session: rebuild the docker launch from the PERSISTED record
+    // (never the settings — a later image change must not break an old session's
+    // resume). The image is ensured only for the app-built default (a custom
+    // override is trusted as-is); `seed_home` is idempotent, and the persisted
+    // per-session home is exactly what makes `claude --resume <id>` find its log.
+    // Any still-labeled container from a previous generation is killed first so
+    // the label can never match two containers at once.
+    let launch = match record.container_image.clone() {
+        Some(image) => {
+            if crate::pty::find_on_path("docker").is_none() {
+                return Err(SessionError::Spawn(
+                    "Docker is required to restart this dev-container session — install and start Docker Desktop (or the docker CLI) and try again".into(),
+                ));
+            }
+            if image == crate::container::DEFAULT_CONTAINER_IMAGE {
+                let emitter = app.clone();
+                crate::container::ensure_image(&image, &move || {
+                    let _ = emitter.emit(
+                        "container://building",
+                        ContainerBuildingPayload {
+                            message: "Building the dev-container image (first run, a few minutes)…"
+                                .into(),
+                        },
+                    );
+                })
+                .map_err(|e| SessionError::Spawn(format!("container image build failed: {e}")))?;
+            }
+            crate::container::kill_session_containers(&record.id);
+            Some(container_launch_for(
+                &store,
+                &record.id,
+                &record.repo_path,
+                record.worktree_parent.as_deref(),
+                image,
+            )?)
+        }
+        None => None,
+    };
     manager.resume_session(
         &record.claude_session_id,
         &record.repo_path,
         record.name.clone(),
         &record.agent,
+        launch.as_ref(),
     )?;
     Ok(record)
 }
@@ -508,6 +1195,13 @@ fn fork_session_blocking(
     if !crate::agents::agent_spec(&source.agent).supports_resume {
         return Err(SessionError::ResumeUnsupported(source.agent));
     }
+    // A dev-container source can't be forked: its conversation log lives in the
+    // per-session container home, so a fork's `--resume <source>` in a FRESH home
+    // would find nothing. Belt-and-braces — the UI already shows Fork unavailable
+    // (a container session's `forkable` never flips true).
+    if source.container_image.is_some() {
+        return Err(SessionError::ContainerUnsupported);
+    }
     // Guard (#134): forking needs the source's on-disk conversation log to exist with
     // ≥1 real turn. A brand-new / never-interacted source — including a just-created
     // fork whose log isn't materialized yet (#116 keeps it gray) — would otherwise
@@ -540,6 +1234,9 @@ fn fork_session_blocking(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        // A dev-container source is refused above, so a fork is always a host PTY.
+        container_image: None,
+        current_cwd: None,
     };
     store
         .add_session(record.clone())
@@ -547,6 +1244,9 @@ fn fork_session_blocking(
     store
         .touch_recent(&source.repo_path)
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the roster + recents both changed.
+    broadcast_sessions(app, &store);
+    broadcast_recents(app, &store);
     Ok(record)
 }
 
@@ -565,17 +1265,326 @@ pub async fn kill_session(app: AppHandle, id: String) -> Result<(), SessionError
 fn kill_session_blocking(app: &AppHandle, id: String) -> Result<(), SessionError> {
     let manager = app.state::<SessionManager>();
     let store = app.state::<Store>();
+    // Capture the record BEFORE removal — the container teardown below needs its
+    // `container_image` + the per-session dir paths.
+    let record = store.session(&id);
     // The session may not be live (e.g. it failed to resume on boot); forget it
     // from the store either way so Remove = kill + forget and it never reappears.
     let _ = manager.kill_session(&id);
+    // Dev-container session: the PTY-side hangup above reached only the docker
+    // *client* — kill the container itself (by label, detached — mirroring
+    // `kill_now`'s non-blocking shape) and then delete the per-session home +
+    // gitfile dirs. This one path serves Remove AND the clean-exit forget (both
+    // arrive via this command), so the dirs never outlive the record.
+    if record.as_ref().is_some_and(|r| r.container_image.is_some()) {
+        let dirs = store.data_dir().map(|data| {
+            (
+                crate::container::container_home_dir(data, &id),
+                crate::container::container_git_dir(data, &id),
+            )
+        });
+        let (home, gitdir) = match dirs {
+            Some((home, gitdir)) => (Some(home), Some(gitdir)),
+            None => (None, None),
+        };
+        crate::container::kill_session_container_detached(id.clone(), home, gitdir);
+    }
     store
         .remove_session(&id)
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): broadcast the roster only when a persisted record
+    // actually existed — a shell-terminal item kill (#72) has no record, so emitting
+    // there would be a gratuitous unchanged-roster echo.
+    if record.is_some() {
+        broadcast_sessions(app, &store);
+    }
+    Ok(())
+}
+
+// --- Rust-owned clean-exit forget + ref-counted worktree cleanup (task 431) ---
+//
+// The #63 clean-exit decision (code 0 while running → kill + delete record + one
+// "Agent exited" toast) and the #74/#199 ref-counted worktree removal used to live in
+// each window's `session://exited` handler — with the epic's N full windows they would
+// all run it, double-deleting records, double-toasting, and racing `git worktree
+// remove`. They now run exactly ONCE per app, here: the event forwarder consumes a
+// clean exit (`handle_session_exit`), the forget task reuses `kill_session_blocking`
+// (container teardown + record removal + roster broadcast) and emits
+// `session://forgotten` + (for a kept-dirty worktree) `worktree://kept`, each carrying
+// the one window that should toast (`toast_target`). Non-clean exits still emit
+// `session://exited` byte-identically.
+
+/// Pure #63 discriminator (ported from store.ts `isCleanExit`, task 431). A **clean**
+/// exit — the agent exits **code 0** while the app is running and the kill was not
+/// app-initiated (Remove/forget/rotation/cancel) — means the user ended the agent: it
+/// is forgotten everywhere (kill + forget), never showing a "Process exited" overlay.
+/// Anything else — a non-zero/unknown code (crash), the boot resume window (#30, where
+/// a failed resume exits and is offered a Restart), or an intentional kill (which
+/// toasts on its own) — is **not** clean and keeps the existing path.
+pub fn is_clean_exit(code: Option<i32>, boot_window: bool, intentional: bool) -> bool {
+    code == Some(0) && !boot_window && !intentional
+}
+
+/// What the event forwarder does with a session's exit (task 431).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitAction {
+    /// Emit `session://exited` exactly as before — the frontend keeps the overlay /
+    /// Restart / toast-suppression logic (shell terminals, crashes, boot failures,
+    /// recurring children, intentional kills).
+    EmitExited,
+    /// Consume the exit: Rust forgets the record + emits `session://forgotten`.
+    ForgetClean,
+}
+
+/// Pure exit classifier for the forwarder (task 431): the Rust forget path runs only
+/// for a **tracked agent record** (`has_record` — a shell terminal #72 has none) that
+/// is **not** a recurring's rotating child (#294 — its exit drives the rotation UX,
+/// never a forget) and whose exit `is_clean_exit`. Every guard failure degrades to
+/// today's `session://exited` emit — the worst outcome is the old behavior.
+pub fn classify_exit(
+    has_record: bool,
+    recurring_owned: bool,
+    code: Option<i32>,
+    boot_window: bool,
+    intentional: bool,
+) -> ExitAction {
+    if has_record && !recurring_owned && is_clean_exit(code, boot_window, intentional) {
+        ExitAction::ForgetClean
+    } else {
+        ExitAction::EmitExited
+    }
+}
+
+/// The #63 boot-resume window, Rust-side (task 431; mirrors store.ts `booting`):
+/// true from setup (when persisted records exist) until [`RECONNECT_BACKSTOP_MS`]
+/// after the boot resume pass returns. A code-0 exit inside it keeps the record +
+/// overlay (a failed boot resume is offered Restart, never auto-forgotten, #30).
+pub struct BootWindow(pub std::sync::atomic::AtomicBool);
+
+/// How long after the boot resume pass returns the boot window stays open (task 431)
+/// — the mirror of store.ts `RECONNECT_BACKSTOP_MS` (~102), a fixed unconditional cap.
+pub const RECONNECT_BACKSTOP_MS: u64 = 4_000;
+
+/// The one window that should show a courtesy toast for an app-level event (task
+/// 431): the focused window's label, else `"main"` when present, else the
+/// lexicographically first label, else `"main"`. Labels are scanned in sorted order so
+/// the pick is deterministic. Thin/untested (the `broadcast_*` precedent) — delivery
+/// is best-effort; state convergence never depends on the toast.
+pub fn toast_target(app: &AppHandle) -> String {
+    let windows = app.webview_windows();
+    let mut labels: Vec<&String> = windows.keys().collect();
+    labels.sort();
+    for label in &labels {
+        if let Some(window) = windows.get(*label) {
+            if window.is_focused().unwrap_or(false) {
+                return (*label).clone();
+            }
+        }
+    }
+    if windows.contains_key("main") {
+        return "main".to_string();
+    }
+    labels
+        .first()
+        .map(|l| (*l).clone())
+        .unwrap_or_else(|| "main".to_string())
+}
+
+/// #74/#199 ref-count, ported from store.ts `worktreeHasItems` (task 431): keep the
+/// worktree while ANY item — a session record (incl. exited-but-kept), an overview
+/// panel of the worktree folder, or a schedule/recurring created inside it (`cwd`) or
+/// targeting it (`worktree_path`, #259 — its `cwd` is the parent repo, but its
+/// eagerly-created worktree folder is `worktree_path`) — still points at `dest`.
+pub fn worktree_has_items(
+    sessions: &[PersistedSession],
+    panels: &HashMap<String, Vec<OverviewPanel>>,
+    schedules: &[ScheduledSession],
+    recurrings: &[RecurringSession],
+    dest: &str,
+) -> bool {
+    sessions.iter().any(|s| s.repo_path == dest)
+        || panels.get(dest).is_some_and(|p| !p.is_empty())
+        || schedules
+            .iter()
+            .any(|sc| sc.cwd == dest || sc.worktree_path.as_deref() == Some(dest))
+        || recurrings
+            .iter()
+            .any(|r| r.cwd == dest || r.worktree_path.as_deref() == Some(dest))
+}
+
+/// Serializes every ref-count-check → git-remove pair (task 431): two windows (or a
+/// window and the Rust exit path) can no longer both see "empty" and double-run
+/// `git worktree remove` (check/check/remove/remove-fails → a spurious "kept dirty").
+#[derive(Default)]
+pub struct WorktreeCleanupLock(pub std::sync::Mutex<()>);
+
+/// Outcome of a ref-counted worktree cleanup (task 431).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorktreeCleanup {
+    /// The worktree was removed (or was already gone — idempotent).
+    Removed,
+    /// Some item (session/panel/schedule/recurring) still references it — kept.
+    InUse,
+    /// git refused the non-forced remove (uncommitted changes) — kept, warn (#74).
+    KeptDirty,
+    /// Not an app-managed worktree (outside `<data-dir>/worktrees`) — kept
+    /// silently. Automation never deletes what ReCue didn't create; only the
+    /// user-confirmed `delete_worktree` may.
+    NotManaged,
+}
+
+/// The shared blocking core behind [`cleanup_worktree_if_empty`] and the clean-exit
+/// forget path (task 431). Under the one [`WorktreeCleanupLock`]: snapshot the
+/// persisted Store state, keep the worktree while [`worktree_has_items`] holds
+/// (`InUse`); report an already-missing dest as `Removed` (idempotent — a concurrent
+/// earlier cleanup already won); refuse a dest outside `<data-dir>/worktrees`
+/// (`NotManaged` — the same hard invariant as `remove_worktree`, enforced HERE so the
+/// Rust-internal clean-exit caller is covered too: an in-place spawn into a DETECTED
+/// external worktree records `worktree_parent`, and its clean exit lands here without
+/// ever passing the frontend's `!managed` short-circuit); else unlock (best-effort,
+/// the dev-container lock) and run the **non-forced** `git worktree remove` — git
+/// refusing a dirty tree IS the dirty guard (#74, never force) → `KeptDirty`.
+pub fn cleanup_worktree_blocking(app: &AppHandle, parent: &str, dest: &str) -> WorktreeCleanup {
+    let lock = app.state::<WorktreeCleanupLock>();
+    let _guard = lock
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let store = app.state::<Store>();
+    if worktree_has_items(
+        &store.sessions(),
+        &store.overview_panels(),
+        &store.schedules(),
+        &store.recurrings(),
+        dest,
+    ) {
+        return WorktreeCleanup::InUse;
+    }
+    if !Path::new(dest).is_dir() {
+        return WorktreeCleanup::Removed;
+    }
+    // NEVER auto-remove a worktree ReCue didn't create (#74's managed-root rule,
+    // mirrored from `remove_worktree`): protects both callers — above all the
+    // clean-exit forget, which no frontend guard can reach.
+    let managed = managed_worktree_root(&store)
+        .map(|root| path_under_norm(dest, &root))
+        .unwrap_or(false);
+    if !managed {
+        return WorktreeCleanup::NotManaged;
+    }
+    // A dev-container session locked the worktree at spawn (the in-container `git
+    // worktree prune` guard); unlock best-effort like `remove_worktree`.
+    let _ = git::worktree_unlock(parent, dest);
+    match git::worktree_remove(parent, dest, false) {
+        Ok(()) => WorktreeCleanup::Removed,
+        Err(_) => WorktreeCleanup::KeptDirty,
+    }
+}
+
+/// Ref-counted worktree auto-delete (task 431, replacing the frontend-side #74/#199
+/// check): remove the worktree at `dest` from `parent` only when no persisted item
+/// references it, serialized so N windows' concurrent calls can't double-run the git
+/// remove. The forced path (`remove_worktree`, forgetRepo) is untouched.
+///
+/// Async + off the main thread — the FS delete must never run on the webview thread
+/// (the #200 `remove_worktree` pattern).
+#[tauri::command]
+pub async fn cleanup_worktree_if_empty(
+    app: AppHandle,
+    parent: String,
+    dest: String,
+) -> Result<WorktreeCleanup, SessionError> {
+    tauri::async_runtime::spawn_blocking(move || cleanup_worktree_blocking(&app, &parent, &dest))
+        .await
         .map_err(|e| SessionError::Io(e.to_string()))
 }
 
+/// The forwarder-side exit gate (task 431): returns `true` when the exit was
+/// **consumed** (a clean #63 exit — Rust forgets the record and emits
+/// `session://forgotten` instead of `session://exited`). Fail-open: any missing state
+/// (teardown ordering) degrades to `false` — today's emit — and never panics the
+/// forwarder thread. The forget task runs on a detached thread (the kill-escalation
+/// precedent): the forwarder must never block on file IO or git.
+pub fn handle_session_exit(
+    app: &AppHandle,
+    id: &str,
+    code: Option<i32>,
+    intentional: bool,
+) -> bool {
+    let Some(store) = app.try_state::<Store>() else {
+        return false;
+    };
+    let record = store.session(id);
+    let recurring_owned = store
+        .recurrings()
+        .iter()
+        .any(|r| r.current_session_id.as_deref() == Some(id));
+    let boot_window = app
+        .try_state::<BootWindow>()
+        .map(|b| b.0.load(std::sync::atomic::Ordering::SeqCst))
+        .unwrap_or(false);
+    match classify_exit(
+        record.is_some(),
+        recurring_owned,
+        code,
+        boot_window,
+        intentional,
+    ) {
+        ExitAction::EmitExited => false,
+        ExitAction::ForgetClean => {
+            // `classify_exit` returns ForgetClean only when `record.is_some()`.
+            let Some(record) = record else { return false };
+            let app = app.clone();
+            std::thread::spawn(move || forget_cleanly_exited(app, record));
+            true
+        }
+    }
+}
+
+/// The Rust-owned #63 clean-exit forget (task 431), run at most once per exit (the
+/// exit waiter emits exactly one `Exited` per PTY generation, #354, and the forwarder
+/// consumes it once).
+fn forget_cleanly_exited(app: AppHandle, record: PersistedSession) {
+    // 1. Deliberate reuse of `kill_session_blocking` — exactly what the frontend's
+    //    `forgetExitedSession → ipc.killSession` did: frees the (already-dead) PTY
+    //    slot, runs the dev-container teardown, removes the persisted record, and
+    //    broadcasts `sessions://changed` so every window's roster converges (428).
+    //    Idempotent on a dead child (`kill_session` on a gone id is a no-op error).
+    let _ = kill_session_blocking(&app, record.id.clone());
+    // 2. Tell every window the exit was consumed — each drops local state
+    //    (idempotent with the roster drop above); only `toast_window` toasts, so N
+    //    windows show ONE "Agent exited".
+    let target = toast_target(&app);
+    let _ = app.emit(
+        "session://forgotten",
+        ForgottenPayload {
+            id: record.id.clone(),
+            toast_window: target.clone(),
+        },
+    );
+    // 3. A worktree agent's clean exit also cleans its worktree (ref-counted; a dirty
+    //    tree is kept + warned, #74). Ordered after the forgotten emit so every
+    //    window's UI drops instantly while the git delete continues behind.
+    if let Some(parent) = record.worktree_parent.as_deref() {
+        if cleanup_worktree_blocking(&app, parent, &record.repo_path) == WorktreeCleanup::KeptDirty
+        {
+            let _ = app.emit(
+                "worktree://kept",
+                WorktreeKeptPayload {
+                    dest: record.repo_path.clone(),
+                    toast_window: target,
+                },
+            );
+        }
+    }
+}
+
 /// Set (or clear, when blank) a session's custom display name and persist (#57).
+/// Broadcasts `sessions://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn rename_session(
+    app: AppHandle,
     store: State<'_, Store>,
     id: String,
     name: String,
@@ -588,7 +1597,9 @@ pub fn rename_session(
     };
     store
         .rename_session(&id, name)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_sessions(&app, &store);
+    Ok(())
 }
 
 /// Set a session's per-agent auto-continue opt-out (#297) and persist. `disabled ==
@@ -724,21 +1735,35 @@ pub fn list_recents(store: State<'_, Store>) -> Vec<String> {
 }
 
 /// Drop a folder from recents (the "Forget" action, #31) so it doesn't reappear.
+/// Broadcasts `recents://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn remove_recent(store: State<'_, Store>, path: String) -> Result<(), SessionError> {
+pub fn remove_recent(
+    app: AppHandle,
+    store: State<'_, Store>,
+    path: String,
+) -> Result<(), SessionError> {
     store
         .remove_recent(&path)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_recents(&app, &store);
+    Ok(())
 }
 
 /// Add a folder to recents without spawning an agent (#172 sidebar background menu →
 /// "New folder…"). Reuses `touch_recent` (deduped, capped, persisted) so the folder
 /// shows as an empty repo group immediately and survives restart.
+/// Broadcasts `recents://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn add_recent(store: State<'_, Store>, path: String) -> Result<(), SessionError> {
+pub fn add_recent(
+    app: AppHandle,
+    store: State<'_, Store>,
+    path: String,
+) -> Result<(), SessionError> {
     store
         .touch_recent(&path)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_recents(&app, &store);
+    Ok(())
 }
 
 /// Clone the git repo at `url` into `<parent>/<repo-name>` (#295), ensure it has a
@@ -762,6 +1787,7 @@ pub fn add_recent(store: State<'_, Store>, path: String) -> Result<(), SessionEr
 /// runs after it resolves. Cross-platform (git via `hidden_command`; no raw `$HOME`).
 #[tauri::command]
 pub async fn clone_repo(
+    app: AppHandle,
     store: State<'_, Store>,
     url: String,
     parent: String,
@@ -800,6 +1826,8 @@ pub async fn clone_repo(
     store
         .touch_recent(&dest_str)
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Cross-window sync (task 428): the cloned folder is a new recent.
+    broadcast_recents(&app, &store);
     Ok(dest_str)
 }
 
@@ -810,8 +1838,10 @@ pub fn list_repo_colors(store: State<'_, Store>) -> std::collections::HashMap<St
 
 /// Assign a repo's color identity (#35). The color is validated as a hex string
 /// so an untrusted IPC value can't store arbitrary content.
+/// Broadcasts `repo_colors://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn set_repo_color(
+    app: AppHandle,
     store: State<'_, Store>,
     path: String,
     color: String,
@@ -821,7 +1851,9 @@ pub fn set_repo_color(
     }
     store
         .set_repo_color(&path, &color)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_repo_colors(&app, &store);
+    Ok(())
 }
 
 /// Immediate children of one directory (`subdir`, repo-relative; empty = repo root)
@@ -1008,15 +2040,19 @@ pub fn list_overview_panels(
 }
 
 /// Replace a repo's Overview panel layout (#38) and persist.
+/// Broadcasts `overview_panels://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn set_overview_panels(
+    app: AppHandle,
     store: State<'_, Store>,
     path: String,
     panels: Vec<OverviewPanel>,
 ) -> Result<(), SessionError> {
     store
         .set_overview_panels(&path, panels)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_overview_panels(&app, &store);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1027,15 +2063,19 @@ pub fn list_overview_order(
 }
 
 /// Replace a repo's Overview drag-reorder order (#43) and persist.
+/// Broadcasts `overview_order://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn set_overview_order(
+    app: AppHandle,
     store: State<'_, Store>,
     path: String,
     order: Vec<String>,
 ) -> Result<(), SessionError> {
     store
         .set_overview_order(&path, order)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_overview_order(&app, &store);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1076,36 +2116,26 @@ pub fn get_canvases(store: State<'_, Store>) -> serde_json::Value {
     store.canvases()
 }
 
-/// Replace the multi-canvas tab state (#58) and persist, then broadcast
-/// `canvas://changed` so every window (main + detached canvas windows, #84) stays
-/// in sync. The **main** window is authoritative for the active tab: a write from
-/// a detached window (which edits only its own canvas's layout) keeps the persisted
-/// `activeId` and replaces just the `canvases` array, so a detached layout edit
-/// can't hijack which tab the main window shows.
+/// Merge a canvases patch (#58) over the persisted blob under the Store mutex
+/// (task 429), then broadcast `canvas://changed` with the **merged** blob so every
+/// window (main + detached canvas windows, #84) stays in sync. The `state` payload
+/// is field-wise: `canvases` (the whole tab array) and/or `activeId` (the boot
+/// hint) — each replaces the stored value only when present, so a tab switch in one
+/// window and a layout edit in another can no longer clobber each other. The merge
+/// is correct for ANY window — the old main-vs-detached label branch is gone: each
+/// window keeps its own active tab locally (`applyCanvasSync`), the persisted
+/// `activeId` is only a boot hint written by the sites that actually change the
+/// active tab, and a detached window's layout edits are canvases-only patches.
 #[tauri::command]
 pub fn set_canvases(
     app: AppHandle,
-    window: Window,
     store: State<'_, Store>,
     state: serde_json::Value,
 ) -> Result<(), SessionError> {
-    let final_state = if window.label() == "main" {
-        state
-    } else {
-        let mut current = store.canvases();
-        match (current.as_object_mut(), state.get("canvases")) {
-            (Some(obj), Some(list)) => {
-                obj.insert("canvases".to_string(), list.clone());
-                current
-            }
-            // No prior object (shouldn't happen — main migrates first): fall back.
-            _ => state,
-        }
-    };
-    store
-        .set_canvases(final_state.clone())
+    let merged = store
+        .merge_canvases(state)
         .map_err(|e| SessionError::Io(e.to_string()))?;
-    let _ = app.emit("canvas://changed", final_state);
+    let _ = app.emit("canvas://changed", merged);
     Ok(())
 }
 
@@ -1117,46 +2147,30 @@ pub fn get_canvas_templates(store: State<'_, Store>) -> serde_json::Value {
 
 /// Replace the saved Canvas templates and persist (#117). Kept separate from the
 /// `canvases` blob so a canvas write never clobbers templates.
+/// Broadcasts `canvas_templates://changed` so every window converges — task 428.
 #[tauri::command]
 pub fn set_canvas_templates(
+    app: AppHandle,
     store: State<'_, Store>,
     templates: serde_json::Value,
 ) -> Result<(), SessionError> {
     store
         .set_canvas_templates(templates)
-        .map_err(|e| SessionError::Io(e.to_string()))
-}
-
-/// The canvas ids that currently have a detached window (#84) — derived from the
-/// live window labels (`canvas-<id>`), optionally excluding one label (used when a
-/// window is closing and may still appear in the registry).
-fn detached_canvas_ids(app: &AppHandle, exclude: Option<&str>) -> Vec<String> {
-    app.webview_windows()
-        .keys()
-        .filter(|label| Some(label.as_str()) != exclude)
-        .filter_map(|label| label.strip_prefix("canvas-").map(str::to_string))
-        .collect()
-}
-
-/// Tell every window which canvases are detached (#84).
-fn broadcast_canvas_windows(app: &AppHandle, exclude: Option<&str>) {
-    let _ = app.emit(
-        "canvas://windows",
-        CanvasWindowsPayload {
-            detached: detached_canvas_ids(app, exclude),
-        },
-    );
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_canvas_templates(&app, &store);
+    Ok(())
 }
 
 /// Pre-paint window background per theme (#348) — the OS paints this native color while
 /// the WebView boots. MUST equal `--bg-base` in `src/styles/tokens.css` (and `THEME_BG` in
-/// `src/theme.ts` / the inline `<style>` in `index.html`): Catppuccin Mocha Base for dark,
-/// Latte Base for light (#333). Pure — an unknown/absent theme means the dark default.
-/// Platform-neutral: the same color is applied on macOS, Windows and Linux.
+/// `src/theme.ts` / the inline `<style>` in `index.html` / `"backgroundColor"` in
+/// `src-tauri/tauri.conf.json`): Catppuccin Mocha Crust for dark, Latte Crust for light
+/// (UI v2 task 372 — the stage is crust). Pure — an unknown/absent theme means the dark
+/// default. Platform-neutral: the same color is applied on macOS, Windows and Linux.
 pub fn background_for_theme(theme: Option<&str>) -> Color {
     match theme {
-        Some("light") => Color(0xef, 0xf1, 0xf5, 0xff),
-        _ => Color(0x1e, 0x1e, 0x2e, 0xff),
+        Some("light") => Color(0xdc, 0xe0, 0xe8, 0xff),
+        _ => Color(0x11, 0x11, 0x1b, 0xff),
     }
 }
 
@@ -1165,6 +2179,46 @@ pub fn background_for_theme(theme: Option<&str>) -> Color {
 pub fn window_background(store: &Store) -> Color {
     let settings = store.settings();
     background_for_theme(settings.get("theme").and_then(|v| v.as_str()))
+}
+
+/// Map ReCue's own light/dark theme (#333 — the `data-theme` attribute) to the NATIVE
+/// window theme (task 444) so the OS window chrome follows the app: on macOS the
+/// traffic-light rendering over the themed title-bar strip, on Windows the DWM caption,
+/// best-effort on Linux (CSD/server-side decorations can't be app-colored). `Some("light")`
+/// → Light; dark / unknown / absent → Dark (mirroring `background_for_theme`'s default so a
+/// fresh install with no `theme` key reads dark). Pure. Platform-neutral: `tauri::Theme` and
+/// `set_theme` are portable, so no `#[cfg]` arm is needed.
+pub fn theme_to_window_theme(theme: Option<&str>) -> tauri::Theme {
+    match theme {
+        Some("light") => tauri::Theme::Light,
+        _ => tauri::Theme::Dark,
+    }
+}
+
+/// The persisted theme's native window theme (task 444), mirroring `window_background`.
+pub fn window_theme(store: &Store) -> tauri::Theme {
+    let settings = store.settings();
+    theme_to_window_theme(settings.get("theme").and_then(|v| v.as_str()))
+}
+
+/// Which window a macOS Dock Reopen should restore when none is visible
+/// (Multi-window 10/16): prefer the main window, else the oldest-sorted full app
+/// window, else any window (a canvas-only remainder — reachable when the main
+/// window was closed while a detached canvas survived). `None` = no window exists
+/// (the caller opens a fresh full window). Sorted internally so the HashMap's
+/// label order can't make the choice flappy. Pure. Compiled on non-mac hosts for
+/// tests only (the `explorer_select_arg` cfg precedent).
+#[cfg(any(target_os = "macos", test))]
+pub fn reopen_focus_target(labels: &[String]) -> Option<String> {
+    let mut sorted: Vec<&String> = labels.iter().collect();
+    sorted.sort();
+    if let Some(main) = sorted.iter().find(|l| l.as_str() == "main") {
+        return Some((*main).clone());
+    }
+    if let Some(app) = sorted.iter().find(|l| l.starts_with("app-")) {
+        return Some((*app).clone());
+    }
+    sorted.first().map(|l| (*l).clone())
 }
 
 /// How long Rust waits before showing a window the frontend never revealed (#348).
@@ -1201,55 +2255,169 @@ pub fn schedule_reveal_fallback(app: &AppHandle, label: &str) {
 #[tauri::command]
 pub fn set_theme_background(app: AppHandle, theme: String) {
     let color = background_for_theme(Some(theme.as_str()));
+    // Task 444: the native window theme also follows the runtime theme switch, so the
+    // OS chrome (macOS traffic-light rendering over the themed strip, the Windows DWM
+    // caption, best-effort Linux CSD) flips light↔dark with the app. Platform-neutral.
+    let window_theme = theme_to_window_theme(Some(theme.as_str()));
     for window in app.webview_windows().into_values() {
         let _ = window.set_background_color(Some(color));
+        let _ = window.set_theme(Some(window_theme));
     }
 }
 
-/// Open (or focus, if already open) a detached window showing one canvas (#84).
-/// The window loads a canvas-only route (`index.html?canvas=<id>`) under the label
-/// `canvas-<id>`; closing it re-docks the canvas by re-broadcasting the (now
-/// smaller) detached set. Created from Rust, so no JS window-create permission is
-/// needed — only the `canvas-*` capability that lets the new window talk back.
-#[tauri::command]
-pub fn open_canvas_window(app: AppHandle, id: String, title: String) -> Result<(), SessionError> {
-    let label = format!("canvas-{id}");
-    if let Some(existing) = app.get_webview_window(&label) {
-        let _ = existing.show(); // it may still be hidden pre-reveal (#348)
-        let _ = existing.set_focus();
-        return Ok(());
+/// Init presets for a full app window (task 434): passed as URL params so the new
+/// window's OWN store presets its local state at boot — `repo` filters its Overview
+/// to that repo; `canvas` boots it into the Canvas view on that tab (when the tab
+/// exists). Local UI only for the live window; since task 439 (card 13/16) these
+/// creation-time presets are ALSO the window's persisted per-window preset
+/// (`store::PersistedWindow.repo/canvas`), so a restored window re-opens with the
+/// same URL params it was created with (never the live filter/tab the user
+/// switched to later).
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct AppWindowInit {
+    pub repo: Option<String>,
+    pub canvas: Option<String>,
+}
+
+/// Percent-encode a query VALUE so the frontend's `URLSearchParams` decodes it
+/// byte-exact: every byte outside the RFC 3986 unreserved set `[A-Za-z0-9-_.~]` is
+/// `%XX`-encoded — in particular space → `%20` (never `+`, which `URLSearchParams`
+/// would decode to a space) and `+` → `%2B`. Windows paths (`C:\Users\a b`) and
+/// unix paths with spaces round-trip exactly. Multi-byte UTF-8 encodes per byte.
+/// Pure.
+fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
     }
-    let url = format!("index.html?canvas={id}");
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
-        .title(title)
-        .inner_size(1000.0, 760.0)
-        .min_inner_size(640.0, 480.0)
+    out
+}
+
+/// The app-window route (task 434): `index.html?win=<id>[&repo=..][&canvas=..]`.
+/// The frontend's `parseWindowIdentity` reads `win` as the window identity and
+/// `repo`/`canvas` as its init presets (`?win=` beats `?canvas=`, so the canvas
+/// param here is a preset, never the legacy #84 compat route). Pure.
+pub fn app_window_url(id: &str, init: &AppWindowInit) -> String {
+    let mut url = format!("index.html?win={}", encode_query_value(id));
+    if let Some(repo) = init.repo.as_deref() {
+        url.push_str("&repo=");
+        url.push_str(&encode_query_value(repo));
+    }
+    if let Some(canvas) = init.canvas.as_deref() {
+        url.push_str("&canvas=");
+        url.push_str(&encode_query_value(canvas));
+    }
+    url
+}
+
+/// Open an additional FULL app window (task 434) — label `app-<uuid>`, rendering
+/// the complete shell (sidebar + Overview/Attention/Canvas + modals) with its own
+/// window-local view/selection/tab/filter state. Hidden until painted (#348) with
+/// the themed background + the 2 s reveal fallback; registered for primary
+/// election (task 433 — an `app-*` label is eligible). Returns the new window's
+/// id (the card-10/16+ entry points focus/open by it). Since task 437 this is
+/// also the Canvas pop-out target (`init.canvas`); canvas-only windows no longer
+/// exist.
+///
+/// Deliberately NO per-window `on_window_event` handler and no new broadcast: the
+/// global `Destroyed` arm in `lib.rs` already covers an app window's close (task
+/// 426's terminal-view purge + task 433's primary re-election), and no PTY is
+/// killed on close (sessions keep running, mirrored in surviving windows).
+#[tauri::command]
+pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, SessionError> {
+    // A user-opened app window is never maximized by default (only a fresh-install
+    // `main`, or a restored previously-maximized window, is — task 443).
+    create_app_window(&app, init, None, false)
+}
+
+/// Create a full app window (task 434) — the ONE creation path, shared by the
+/// `open_app_window` command (`bounds: None`, `maximized: false` → the default
+/// 1280×832 placement) and the task-439 boot restore (`bounds: Some(clamped)` →
+/// applied while the window is still hidden, before any reveal, so a restored
+/// window never flashes at the default position; `maximized` re-maximizes a window
+/// that was left maximized — task 443). Registers the window for primary election
+/// (433) and in the window-state registry (439, with its creation presets — the
+/// same values the URL carries, so a restored window re-persists what it was
+/// created with).
+pub fn create_app_window(
+    app: &AppHandle,
+    init: AppWindowInit,
+    bounds: Option<(i32, i32, u32, u32)>,
+    maximized: bool,
+) -> Result<String, SessionError> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let label = format!("app-{id}");
+    let url = app_window_url(&id, &init);
+    // `mut` is used only by the macOS title-bar block below; on Windows/Linux that block is
+    // `#[cfg]`-stripped, so the binding is never reassigned there — allow `unused_mut` off
+    // macOS to keep `clippy -D warnings` green on every OS.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        .title("ReCue")
+        // The tauri.conf.json main-window geometry — an app window IS a full shell.
+        .inner_size(1280.0, 832.0)
+        .min_inner_size(880.0, 600.0)
         // Hidden until the frontend paints its first themed frame (#348) — the native
-        // background is the current theme's --bg-base, so a pop-out never flashes white.
+        // background is the current theme's --bg-base, so it never flashes white.
         .visible(false)
-        .background_color(window_background(&app.state::<Store>()))
+        .background_color(window_background(&app.state::<Store>()));
+    // Task 444: mirror the main window's integrated themed title bar (tauri.conf.json's
+    // titleBarStyle/hiddenTitle/trafficLightPosition) — the native traffic lights float
+    // over the slim ReCue-themed strip the frontend paints (Titlebar), with the native
+    // title hidden. macOS-only: these three builder methods are `#[cfg(target_os =
+    // "macos")]` in Tauri 2 (Windows/Linux keep native decorations, native theme synced
+    // below), so the whole block is gated to keep every OS compiling.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(16.0, 10.0));
+    }
+    let window = builder
         .build()
         .map_err(|e| SessionError::Io(e.to_string()))?;
-    // Never leave a detached window invisible if its frontend fails to boot (#348).
-    schedule_reveal_fallback(&app, &label);
-    // Re-dock on close: when this window is destroyed, re-broadcast the detached
-    // set (excluding this label) so the main window reclaims the canvas + terminals.
-    let on_close = app.clone();
-    let closing = label.clone();
-    window.on_window_event(move |event| {
-        if matches!(event, tauri::WindowEvent::Destroyed) {
-            broadcast_canvas_windows(&on_close, Some(&closing));
-        }
-    });
-    broadcast_canvas_windows(&app, None);
-    Ok(())
+    // Task 444: sync the native window theme to the persisted ReCue theme before the
+    // window is ever revealed (#348 — no flash), mirroring the main window in lib.rs
+    // setup. Platform-neutral (`set_theme` is portable).
+    let _ = window.set_theme(Some(window_theme(&app.state::<Store>())));
+    // Task 439: apply restored bounds while the window is still hidden (no flash;
+    // the OS still enforces min_inner_size). Wayland refuses set_position
+    // (compositor-owned placement) — restore degrades to size-only there.
+    if let Some((x, y, width, height)) = bounds {
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        let _ = window.set_size(tauri::PhysicalSize::new(width, height));
+    }
+    // Task 443: re-maximize a window restored maximized, AFTER applying bounds so
+    // the OS un-maximize target is the stored frame. Applied while still hidden
+    // (#348) → no flash; best-effort (Wayland honors maximize(), macOS zooms).
+    if maximized {
+        let _ = window.maximize();
+    }
+    // Never leave the window invisible if its frontend fails to boot (#348).
+    schedule_reveal_fallback(app, &label);
+    // Task 433: every window-creation site routes through registration. An app
+    // window is primary-eligible — if the original primary later closes, the
+    // oldest surviving full window (possibly this one) takes over live.
+    crate::primary::register_window(app, &label);
+    // Task 439: track the window (+ its creation presets) in the restorable set —
+    // `bounds` when the caller just applied clamped ones, else queried live. Task
+    // 443: the maximized flag rides along so a restored maximized window re-persists
+    // as maximized.
+    crate::window_state::register(app, &label, init.repo, init.canvas, bounds, maximized);
+    Ok(id)
 }
 
-/// Focus an already-detached canvas window (#84) — used by ⌘-jump (#76) and a
-/// click on a detached tab. Returns false if no such window exists.
+/// Focus an existing full app window (task 434) by id.
+/// Returns false if no such window exists.
 #[tauri::command]
-pub fn focus_canvas_window(app: AppHandle, id: String) -> bool {
-    match app.get_webview_window(&format!("canvas-{id}")) {
+pub fn focus_app_window(app: AppHandle, id: String) -> bool {
+    match app.get_webview_window(&format!("app-{id}")) {
         Some(window) => {
             let _ = window.show(); // it may still be hidden pre-reveal (#348)
             window.set_focus().is_ok()
@@ -1258,30 +2426,91 @@ pub fn focus_canvas_window(app: AppHandle, id: String) -> bool {
     }
 }
 
-/// Close a detached canvas window (#84) — used when its canvas tab is closed in
-/// the main window, so the window self-closes (its `Destroyed` handler re-docks).
-#[tauri::command]
-pub fn close_canvas_window(app: AppHandle, id: String) {
-    if let Some(window) = app.get_webview_window(&format!("canvas-{id}")) {
-        let _ = window.close();
-    }
-}
-
-/// The currently-detached canvas ids (#84). A window fetches this on startup since
-/// it may have missed the `canvas://windows` broadcast that fired before it began
-/// listening.
-#[tauri::command]
-pub fn list_canvas_windows(app: AppHandle) -> Vec<String> {
-    detached_canvas_ids(&app, None)
-}
-
-/// Broadcast the full pending-schedule list (#280) so **every** window — incl. a
-/// detached canvas window (#84) that can hold a scheduled panel but doesn't own
-/// schedule mutations — stays in sync after any create / update / cancel / fire.
-/// Mirrors `canvas://changed`. Tauri events are global, so this is identical on
-/// macOS and Windows (no OS-specific path/shell/key code).
+/// Broadcast the full pending-schedule list (#280) so **every** window — any of
+/// them can hold a scheduled panel without owning schedule mutations — stays in
+/// sync after any create / update / cancel / fire. Mirrors `canvas://changed`.
+/// Tauri events are global, so this is identical on macOS and Windows (no
+/// OS-specific path/shell/key code).
 fn broadcast_schedules(app: &AppHandle, store: &Store) {
     let _ = app.emit("schedule://changed", store.schedules());
+}
+
+// --- Cross-window state sync (task 428) ---
+//
+// Multi-window, task 428: Rust owns the persisted slices; every window subscribes.
+// Each helper mirrors `broadcast_schedules` — it emits the slice's **full new value**
+// (exactly what the slice's getter command returns, so the frontend reuses its
+// existing types) and is called only AFTER a successful persist, never on an `Err`.
+// The frontend applies (`apply*Sync` in `src/store.ts`) are JSON-equality-guarded and
+// never re-persist, so the sender's own echo is a no-op and no loop can form. Tauri
+// events are global to all windows on macOS, Windows, and Linux alike — no `#[cfg]`
+// arm is involved.
+
+/// Broadcast the settings blob (`settings://changed`) — see the task 428 block note.
+fn broadcast_settings(app: &AppHandle, store: &Store) {
+    let _ = app.emit("settings://changed", store.settings());
+}
+
+/// Broadcast the recents list (`recents://changed`) — see the task 428 block note.
+fn broadcast_recents(app: &AppHandle, store: &Store) {
+    let _ = app.emit("recents://changed", store.recents());
+}
+
+/// Broadcast the diff-seen markers (`diff_seen://changed`) — see the task 428 block note.
+fn broadcast_diff_seen(app: &AppHandle, store: &Store) {
+    let _ = app.emit("diff_seen://changed", store.diff_seen());
+}
+
+/// Broadcast the sidebar folder order (`repo_order://changed`) — see the task 428
+/// block note.
+fn broadcast_repo_order(app: &AppHandle, store: &Store) {
+    let _ = app.emit("repo_order://changed", store.repo_order());
+}
+
+/// Broadcast the full repo-color map (`repo_colors://changed`) — see the task 428
+/// block note.
+fn broadcast_repo_colors(app: &AppHandle, store: &Store) {
+    let _ = app.emit("repo_colors://changed", store.repo_colors());
+}
+
+/// Broadcast the full Overview panel map (`overview_panels://changed`) — see the
+/// task 428 block note.
+fn broadcast_overview_panels(app: &AppHandle, store: &Store) {
+    let _ = app.emit("overview_panels://changed", store.overview_panels());
+}
+
+/// Broadcast the full Overview order map (`overview_order://changed`) — see the
+/// task 428 block note.
+fn broadcast_overview_order(app: &AppHandle, store: &Store) {
+    let _ = app.emit("overview_order://changed", store.overview_order());
+}
+
+/// Broadcast the sidebar width (`sidebar_width://changed`; `Option<u32>` serializes
+/// as `number | null`) — see the task 428 block note.
+fn broadcast_sidebar_width(app: &AppHandle, store: &Store) {
+    let _ = app.emit("sidebar_width://changed", store.sidebar_width());
+}
+
+/// Broadcast the sidebar collapsed flag (`sidebar_collapsed://changed`; `Option<bool>`
+/// serializes as `boolean | null`) — see the task 428 block note.
+fn broadcast_sidebar_collapsed(app: &AppHandle, store: &Store) {
+    let _ = app.emit("sidebar_collapsed://changed", store.sidebar_collapsed());
+}
+
+/// Broadcast the saved Canvas templates (`canvas_templates://changed`) — see the
+/// task 428 block note.
+fn broadcast_canvas_templates(app: &AppHandle, store: &Store) {
+    let _ = app.emit("canvas_templates://changed", store.canvas_templates());
+}
+
+/// Broadcast the full persisted session roster (`sessions://changed`) after an
+/// add / remove / rename — see the task 428 block note. The schedule/recurring
+/// **fire** paths deliberately do NOT call this: their dedicated `schedule://fired`
+/// / `recurring://fired` events already carry the new record, and a roster emit
+/// there would race the recurring `current_session_id` rotation (#300
+/// unowned-child flash) — see the in-place notes at those sites.
+pub(crate) fn broadcast_sessions(app: &AppHandle, store: &Store) {
+    let _ = app.emit("sessions://changed", store.sessions());
 }
 
 /// Create a scheduled session (#93): persist a record that the poll loop fires at
@@ -1570,6 +2799,8 @@ fn fire_one_schedule(
             sched.prompt.as_deref(),
             &sched.agent,
             custom.as_deref(),
+            // Schedules don't carry a dev-container flag (v1 scope) — host PTY.
+            None,
         )
         .map_err(|e| e.to_string())?;
     let record = PersistedSession {
@@ -1589,10 +2820,17 @@ fn fire_one_schedule(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: None,
+        current_cwd: None,
     };
     let _ = store.add_session(record.clone());
     // Touch the repo (not the worktree folder) as the recent.
     let _ = store.touch_recent(&sched.cwd);
+    // Cross-window sync (task 428): recents only. Deliberately NO `broadcast_sessions`
+    // here — `schedule://fired` below already carries the new record to every window,
+    // and a roster emit would race the recurring `current_session_id` rotation
+    // (#300 unowned-child flash) on the sibling fire path.
+    broadcast_recents(app, store);
     let _ = app.emit(
         "schedule://fired",
         ScheduleFiredPayload {
@@ -1826,6 +3064,9 @@ pub fn cancel_recurring(
         if let Some(child) = rec.current_session_id.as_deref() {
             let _ = manager.kill_session(child);
             let _ = store.remove_session(child);
+            // Cross-window sync (task 428): the child's record left the roster.
+            // Removal-only, so no #300 ownership race is possible here.
+            broadcast_sessions(&app, &store);
         }
     }
     store
@@ -1934,6 +3175,8 @@ fn fire_one_recurring(
             rec.prompt.as_deref(),
             &rec.agent,
             custom.as_deref(),
+            // Recurrings don't carry a dev-container flag (v1 scope) — host PTY.
+            None,
         )
         .map_err(|e| e.to_string())?;
     let record = PersistedSession {
@@ -1952,9 +3195,17 @@ fn fire_one_recurring(
         auto_continue_disabled: false,
         // Per-agent watch (#336) — off (opt-in); the global switch can force it on.
         watch: false,
+        container_image: None,
+        current_cwd: None,
     };
     let _ = store.add_session(record.clone());
     let _ = store.touch_recent(&rec.cwd);
+    // Cross-window sync (task 428): recents only. Deliberately NO `broadcast_sessions`
+    // here — `recurring://fired` below already carries the new record, and a roster
+    // emit would race the `current_session_id` rotation: a window could see the child
+    // in the roster before `mark_recurring_fired`'s ownership lands, flashing it as an
+    // unowned standalone card (#300).
+    broadcast_recents(app, store);
     let next_fire_at = now_secs() + rec.interval_secs;
     let _ = store.mark_recurring_fired(&rec.id, Some(record.id.clone()), next_fire_at);
     let _ = app.emit(
@@ -2325,6 +3576,94 @@ fn worktree_path(store: &Store, repo: &str, branch: &str) -> Result<PathBuf, Ses
         .join(windows_safe_seg(sanitize_seg(branch))))
 }
 
+/// The root under which ALL app-managed worktrees live (`<data-dir>/worktrees`,
+/// #74). Anything outside it was created by an agent (`EnterWorktree`, a
+/// `WorktreeCreate` hook) or by the user — ReCue must never `git worktree
+/// remove` those (enforced in `remove_worktree`).
+fn managed_worktree_root(store: &Store) -> Option<PathBuf> {
+    store.data_dir().map(|d| d.join("worktrees"))
+}
+
+/// Normalize a path string into a comparison key: `\` → `/`, trailing
+/// separators trimmed, and case-folded on **Windows** (its filesystems are
+/// case-insensitive; unix keys stay case-sensitive). Purely lexical — pair with
+/// `Path::canonicalize` where symlink identity matters.
+fn norm_path_key(p: &str) -> String {
+    norm_path_key_inner(p, cfg!(windows))
+}
+
+/// The platform-independent core of `norm_path_key`, with the Windows case-fold
+/// as an explicit flag so the unix test host exercises both arms (the
+/// `windows_safe_seg` testing precedent).
+fn norm_path_key_inner(p: &str, fold_case: bool) -> String {
+    let mut s = p.replace('\\', "/");
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    if fold_case {
+        s.to_lowercase()
+    } else {
+        s
+    }
+}
+
+/// Whether `child` is `root` or lives under it. Both sides canonicalize when
+/// they exist (symlink-stable — on Windows both then carry the same `\\?\`
+/// form), falling back to the lexical key for paths that no longer exist; the
+/// comparison is component-boundary-safe (`/a/wt-evil` never matches a root of
+/// `/a/wt`) and case-insensitive on Windows via `norm_path_key`.
+fn path_under_norm(child: &str, root: &Path) -> bool {
+    let canon = |p: &Path| {
+        p.canonicalize()
+            .ok()
+            .map(|c| c.to_string_lossy().into_owned())
+    };
+    let child_key = norm_path_key(&canon(Path::new(child)).unwrap_or_else(|| child.to_string()));
+    let root_key =
+        norm_path_key(&canon(root).unwrap_or_else(|| root.to_string_lossy().into_owned()));
+    child_key == root_key || child_key.starts_with(&format!("{root_key}/"))
+}
+
+/// Path equality via the same canonicalize-or-lexical normalization as
+/// `path_under_norm`: both sides canonicalize when they exist (symlink-stable),
+/// fall back to the lexical `norm_path_key` otherwise — so a trailing slash,
+/// `\` separators, or Windows case never defeat the comparison.
+fn same_path_norm(a: &str, b: &str) -> bool {
+    let canon = |p: &str| {
+        Path::new(p)
+            .canonicalize()
+            .ok()
+            .map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.to_string())
+    };
+    norm_path_key(&canon(a)) == norm_path_key(&canon(b))
+}
+
+/// The `delete_worktree` guard, pure for unit tests: `dest` must be a listed,
+/// non-bare, **non-main** linked worktree of `parent` (entry 0 of the original
+/// listing is the main checkout — the `stamp_repo_worktree` convention), and
+/// never the registered folder itself (a registered folder may itself BE a
+/// linked worktree of some other main).
+fn validate_delete_target(
+    entries: &[git::WorktreeEntry],
+    parent: &str,
+    dest: &str,
+) -> Result<(), String> {
+    if same_path_norm(dest, parent) {
+        return Err("refusing to delete the repository folder itself".to_string());
+    }
+    match entries
+        .iter()
+        .enumerate()
+        .find(|(_, e)| same_path_norm(&e.path, dest))
+    {
+        None => Err("not a worktree of this repository".to_string()),
+        Some((0, _)) => Err("refusing to delete the repository's main checkout".to_string()),
+        Some((_, e)) if e.bare => Err("refusing to delete a bare entry".to_string()),
+        Some(_) => Ok(()),
+    }
+}
+
 // --- Application settings (#100) ---
 
 /// The persisted application settings blob (#100) — opaque JSON; `null` until the
@@ -2334,15 +3673,27 @@ pub fn get_settings(store: State<'_, Store>) -> serde_json::Value {
     store.settings()
 }
 
-/// Replace the application settings (#100) and persist.
+/// Merge a settings patch (#100) over the persisted blob under the Store mutex
+/// (task 429) — the frontend sends only the changed fields, so a window holding a
+/// stale copy can't revert another window's save. An explicit `null` value is
+/// stored verbatim (never a delete); nested objects (`keybinds`) replace whole.
+/// Broadcasts `settings://changed` (the merged blob) so every window converges —
+/// task 428.
 #[tauri::command]
 pub fn set_settings(
+    app: AppHandle,
     store: State<'_, Store>,
     settings: serde_json::Value,
 ) -> Result<(), SessionError> {
     store
-        .set_settings(settings)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .merge_settings(settings)
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_settings(&app, &store);
+    // Wake the auto-continue engine so a `showSessionUsage` /
+    // `autoContinueAfterLimit` change reacts now, not at the next 180s fetch —
+    // task 430. Best-effort (fail-soft when unmanaged, e.g. tests).
+    crate::autocontinue::poke(&app);
+    Ok(())
 }
 
 /// The persisted sidebar width in px (#108); `None` until first set.
@@ -2352,11 +3703,18 @@ pub fn get_sidebar_width(store: State<'_, Store>) -> Option<u32> {
 }
 
 /// Persist the sidebar width (#108) — stored as-is; the frontend clamps.
+/// Broadcasts `sidebar_width://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn set_sidebar_width(store: State<'_, Store>, width: u32) -> Result<(), SessionError> {
+pub fn set_sidebar_width(
+    app: AppHandle,
+    store: State<'_, Store>,
+    width: u32,
+) -> Result<(), SessionError> {
     store
         .set_sidebar_width(width)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_sidebar_width(&app, &store);
+    Ok(())
 }
 
 /// Whether the sidebar is collapsed to the icon rail (#168); `None` until first set.
@@ -2366,11 +3724,18 @@ pub fn get_sidebar_collapsed(store: State<'_, Store>) -> Option<bool> {
 }
 
 /// Persist the sidebar collapsed flag (#168).
+/// Broadcasts `sidebar_collapsed://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn set_sidebar_collapsed(store: State<'_, Store>, collapsed: bool) -> Result<(), SessionError> {
+pub fn set_sidebar_collapsed(
+    app: AppHandle,
+    store: State<'_, Store>,
+    collapsed: bool,
+) -> Result<(), SessionError> {
     store
         .set_sidebar_collapsed(collapsed)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_sidebar_collapsed(&app, &store);
+    Ok(())
 }
 
 /// The persisted top-level sidebar folder order (#211); empty until first set.
@@ -2380,11 +3745,18 @@ pub fn get_repo_order(store: State<'_, Store>) -> Vec<String> {
 }
 
 /// Persist the sidebar folder order (#211) — the user's drag-reordered repo paths.
+/// Broadcasts `repo_order://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn set_repo_order(store: State<'_, Store>, order: Vec<String>) -> Result<(), SessionError> {
+pub fn set_repo_order(
+    app: AppHandle,
+    store: State<'_, Store>,
+    order: Vec<String>,
+) -> Result<(), SessionError> {
     store
         .set_repo_order(order)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_repo_order(&app, &store);
+    Ok(())
 }
 
 /// The per-repo diff "seen" review markers (#278); `null` until first written.
@@ -2393,14 +3765,25 @@ pub fn get_diff_seen(store: State<'_, Store>) -> serde_json::Value {
     store.diff_seen()
 }
 
-/// Persist the per-repo diff "seen" markers (#278) — opaque JSON owned by the
-/// frontend (`{ repoPath: { filePath: digest } }`). Kept separate from the Settings
-/// blob so a Settings draft can't clobber it.
+/// Merge a diff-seen patch (#278) over the persisted map under the Store mutex
+/// (task 429). The `seen` payload carries per-repo, per-file deltas with `null`
+/// tombstones — `{repo: {file: "digest"}}` sets an entry, `{repo: {file: null}}`
+/// deletes it, `{repo: null}` deletes the repo key (a repo emptied by tombstones is
+/// pruned) — so a stale window's debounced write can no longer drop another
+/// window's concurrent marks. Kept separate from the Settings blob so a Settings
+/// draft can't clobber it. Broadcasts `diff_seen://changed` (the merged map) so
+/// every window converges — task 428.
 #[tauri::command]
-pub fn set_diff_seen(store: State<'_, Store>, seen: serde_json::Value) -> Result<(), SessionError> {
+pub fn set_diff_seen(
+    app: AppHandle,
+    store: State<'_, Store>,
+    seen: serde_json::Value,
+) -> Result<(), SessionError> {
     store
-        .set_diff_seen(seen)
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .merge_diff_seen(seen)
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_diff_seen(&app, &store);
+    Ok(())
 }
 
 /// The app version observed on the previous run (#190); `None` on first launch.
@@ -2473,8 +3856,6 @@ pub struct BootState {
     pub platform: String,
     /// `windows_build` (`0` on non-Windows)
     pub windows_build: u32,
-    /// `list_canvas_windows` (#84)
-    pub detached_canvas_ids: Vec<String>,
 }
 
 /// Assemble the boot payload from the persisted store — the **pure** half of `boot_state`
@@ -2484,7 +3865,6 @@ pub fn boot_state_from(
     platform: String,
     windows_build: u32,
     app_version: String,
-    detached_canvas_ids: Vec<String>,
 ) -> BootState {
     BootState {
         sessions: store.sessions(),
@@ -2507,17 +3887,13 @@ pub fn boot_state_from(
         app_version,
         platform,
         windows_build,
-        detached_canvas_ids,
     }
 }
 
 /// The one boot read (#352): everything the frontend needs, in a single round-trip.
 /// Purely additive — every individual command it batches stays registered and works.
 #[tauri::command]
-pub async fn boot_state(
-    app: AppHandle,
-    store: State<'_, Store>,
-) -> Result<BootState, SessionError> {
+pub async fn boot_state(store: State<'_, Store>) -> Result<BootState, SessionError> {
     // The one non-trivial read: the Windows `cmd /C ver` probe (#143 `windows_build`).
     // Run it on the blocking pool (the #330 `current_branches` pattern) so it can't stall
     // an async worker — and await it FIRST, so no store lock is ever live across an await.
@@ -2533,17 +3909,19 @@ pub async fn boot_state(
         platform(),
         win_build,
         app_version(),
-        detached_canvas_ids(&app, None),
     ))
 }
 
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
 /// untouched — only the recently-used folder list is emptied.
+/// Broadcasts `recents://changed` so every window converges — task 428.
 #[tauri::command]
-pub fn clear_recents(store: State<'_, Store>) -> Result<(), SessionError> {
+pub fn clear_recents(app: AppHandle, store: State<'_, Store>) -> Result<(), SessionError> {
     store
         .clear_recents()
-        .map_err(|e| SessionError::Io(e.to_string()))
+        .map_err(|e| SessionError::Io(e.to_string()))?;
+    broadcast_recents(&app, &store);
+    Ok(())
 }
 
 /// Open a folder with the OS's default file manager, **without a shell** (so there is no
@@ -3053,28 +4431,231 @@ pub async fn agent_info(app: AppHandle, agent: String) -> AgentInfo {
     }
 }
 
+/// Detect which catalog editors are installed ("Open in editor") — powers the
+/// first-use picker + the Settings → Editor "detected" annotations. Existence-based
+/// only (a stat / PATH resolution, never `--version` — JetBrains launchers boot a
+/// JVM), but the PATH arm still **blocks** on the login-shell probe the first time
+/// (`effective_path`, bounded ~5s), so like `claude_version` (#353) the whole sweep
+/// runs on the blocking pool; a join error flattens to the empty list (fail-open —
+/// the picker then offers the custom command).
+#[tauri::command]
+pub async fn detect_editors() -> Vec<crate::editors::EditorInfo> {
+    tauri::async_runtime::spawn_blocking(crate::editors::detect_all)
+        .await
+        .unwrap_or_default()
+}
+
+/// Open the folder `path` in `editor` (a catalog id, or `"custom"` → the user's
+/// `customEditorCommand`), detached. The settings blob is read up front — a cheap
+/// in-memory clone, in its own statement so the `State` temporary drops before the
+/// `.await` (the `agent_info` pattern) — and only the resolve+spawn crosses onto the
+/// blocking pool (the PATH arm can wait on the login-shell probe, #360). Errors are
+/// typed `SessionError`s: `BinaryNotFound` tells the frontend to reopen the picker.
+#[tauri::command]
+pub async fn open_in_editor(
+    app: AppHandle,
+    path: String,
+    editor: String,
+) -> Result<(), SessionError> {
+    let custom = if editor == "custom" {
+        let settings = app.state::<Store>().settings();
+        crate::editors::read_custom_editor_command(&settings)
+    } else {
+        None
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::editors::open_in_editor(&path, &editor, custom.as_deref())
+    })
+    .await
+    .map_err(|e| SessionError::Io(e.to_string()))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The pre-paint background must match `--bg-base` (Catppuccin Mocha Base) for dark and
-    /// every non-light / unknown / absent value (#348) — a fresh install has no `theme` key.
+    /// Every labeled `EventTarget` variant matches iff its label is in the
+    /// subscriber set (task 440).
+    #[test]
+    fn output_target_matches_labeled_variants_iff_label_subscribed() {
+        let targets: std::collections::HashSet<String> =
+            ["main".to_string(), "app-1".to_string()].into();
+        let labeled = |label: &str| {
+            vec![
+                tauri::EventTarget::AnyLabel {
+                    label: label.to_string(),
+                },
+                tauri::EventTarget::Window {
+                    label: label.to_string(),
+                },
+                tauri::EventTarget::Webview {
+                    label: label.to_string(),
+                },
+                tauri::EventTarget::WebviewWindow {
+                    label: label.to_string(),
+                },
+            ]
+        };
+        for target in labeled("main") {
+            assert!(output_target_matches(&targets, &target));
+        }
+        for target in labeled("app-1") {
+            assert!(output_target_matches(&targets, &target));
+        }
+        for target in labeled("app-closed") {
+            assert!(!output_target_matches(&targets, &target));
+        }
+    }
+
+    /// `Any` and `App` never match (task 440) — the safety property: an
+    /// unscoped listener is never matched *into* delivery by us (tauri itself
+    /// bypasses the filter for `Any`, which the frontend's label-scoped listen
+    /// neutralizes), and the app-handle target is not a webview.
+    #[test]
+    fn output_target_matches_never_matches_any_or_app() {
+        let targets: std::collections::HashSet<String> = ["main".to_string()].into();
+        assert!(!output_target_matches(&targets, &tauri::EventTarget::Any));
+        assert!(!output_target_matches(&targets, &tauri::EventTarget::App));
+        // And an empty set matches nothing at all.
+        let empty = std::collections::HashSet::new();
+        assert!(!output_target_matches(
+            &empty,
+            &tauri::EventTarget::AnyLabel {
+                label: "main".to_string()
+            }
+        ));
+    }
+
+    /// The pre-paint background must match `--bg-base` (Catppuccin Mocha Crust, UI v2 task
+    /// 372) for dark and every non-light / unknown / absent value (#348) — a fresh install
+    /// has no `theme` key.
     #[test]
     fn background_for_theme_defaults_to_the_dark_base() {
-        let dark = Color(0x1e, 0x1e, 0x2e, 0xff);
+        let dark = Color(0x11, 0x11, 0x1b, 0xff);
         assert_eq!(background_for_theme(None), dark);
         assert_eq!(background_for_theme(Some("dark")), dark);
         assert_eq!(background_for_theme(Some("bogus")), dark);
         assert_eq!(background_for_theme(Some("")), dark);
     }
 
-    /// Light (#333) maps to the Catppuccin Latte Base — the same `--bg-base` the light token
-    /// block, `THEME_BG` in `src/theme.ts` and the `index.html` inline style carry.
+    /// A Dock Reopen with no window at all opens a fresh one (Multi-window 10/16):
+    /// the chooser signals that with `None`.
+    #[test]
+    fn reopen_focus_target_returns_none_for_no_windows() {
+        assert_eq!(reopen_focus_target(&[]), None);
+    }
+
+    /// The main window is always the preferred restore target.
+    #[test]
+    fn reopen_focus_target_prefers_main() {
+        let labels = vec!["main".to_string(), "app-x".to_string()];
+        assert_eq!(reopen_focus_target(&labels), Some("main".to_string()));
+    }
+
+    /// Without a main window the first (sorted) full app window wins — deterministic
+    /// regardless of the HashMap's iteration order.
+    #[test]
+    fn reopen_focus_target_falls_back_to_the_first_app_window() {
+        let labels = vec![
+            "canvas-a".to_string(),
+            "app-z".to_string(),
+            "app-b".to_string(),
+        ];
+        assert_eq!(reopen_focus_target(&labels), Some("app-b".to_string()));
+    }
+
+    /// A canvas-only remainder (main closed, detached canvas survived) still restores
+    /// something rather than nothing.
+    #[test]
+    fn reopen_focus_target_takes_any_window_as_a_last_resort() {
+        let labels = vec!["canvas-a".to_string()];
+        assert_eq!(reopen_focus_target(&labels), Some("canvas-a".to_string()));
+    }
+
+    /// Light (#333) maps to the Catppuccin Latte Crust (UI v2 task 372) — the same
+    /// `--bg-base` the light token block, `THEME_BG` in `src/theme.ts` and the
+    /// `index.html` inline style carry.
     #[test]
     fn background_for_theme_maps_light_to_the_latte_base() {
         assert_eq!(
             background_for_theme(Some("light")),
-            Color(0xef, 0xf1, 0xf5, 0xff)
+            Color(0xdc, 0xe0, 0xe8, 0xff)
+        );
+    }
+
+    /// The NATIVE window theme (task 444) follows ReCue's own theme: only `"light"`
+    /// maps to Light; dark / unknown / absent all default to Dark — mirroring
+    /// `background_for_theme`, so a fresh install with no `theme` key reads dark.
+    #[test]
+    fn theme_to_window_theme_maps_light_else_dark() {
+        assert_eq!(theme_to_window_theme(Some("light")), tauri::Theme::Light);
+        assert_eq!(theme_to_window_theme(Some("dark")), tauri::Theme::Dark);
+        assert_eq!(theme_to_window_theme(None), tauri::Theme::Dark);
+        assert_eq!(theme_to_window_theme(Some("bogus")), tauri::Theme::Dark);
+        assert_eq!(theme_to_window_theme(Some("")), tauri::Theme::Dark);
+    }
+
+    /// Unreserved bytes (RFC 3986: alnum + `-_.~`) pass through untouched (task 434).
+    #[test]
+    fn encode_query_value_passes_unreserved_through() {
+        assert_eq!(encode_query_value("abc-XYZ_0.9~"), "abc-XYZ_0.9~");
+        assert_eq!(encode_query_value(""), "");
+    }
+
+    /// Space encodes as `%20` — never `+`, which `URLSearchParams` would decode to a
+    /// space — and a literal `+` encodes so it survives the same decode (task 434).
+    #[test]
+    fn encode_query_value_escapes_space_and_plus() {
+        assert_eq!(encode_query_value("a b"), "a%20b");
+        assert_eq!(encode_query_value("a+b"), "a%2Bb");
+    }
+
+    /// The URL metacharacters that would split/terminate the query (`&`, `=`, `#`)
+    /// and the escape char itself (`%`) all encode (task 434).
+    #[test]
+    fn encode_query_value_escapes_url_metacharacters() {
+        assert_eq!(encode_query_value("a&b=c#d"), "a%26b%3Dc%23d");
+        assert_eq!(encode_query_value("100%"), "100%25");
+    }
+
+    /// A Windows repo path — drive colon, backslashes, a space — round-trips
+    /// byte-exact through `URLSearchParams` decoding (task 434; the frontend test
+    /// mirror decodes this exact string back to `C:\Users\a b`).
+    #[test]
+    fn encode_query_value_handles_a_windows_path() {
+        assert_eq!(encode_query_value("C:\\Users\\a b"), "C%3A%5CUsers%5Ca%20b");
+    }
+
+    /// Multi-byte UTF-8 encodes per byte (task 434) — e.g. `é` (U+00E9) is `%C3%A9`.
+    #[test]
+    fn encode_query_value_encodes_utf8_per_byte() {
+        assert_eq!(encode_query_value("é"), "%C3%A9");
+        assert_eq!(encode_query_value("日"), "%E6%97%A5");
+    }
+
+    /// The app-window route (task 434): bare, repo-only, and both-preset forms, with
+    /// the encoding applied to every value.
+    #[test]
+    fn app_window_url_composes_the_route() {
+        let none = AppWindowInit::default();
+        assert_eq!(app_window_url("u1", &none), "index.html?win=u1");
+
+        let repo = AppWindowInit {
+            repo: Some("/a/b c".into()),
+            canvas: None,
+        };
+        assert_eq!(
+            app_window_url("u1", &repo),
+            "index.html?win=u1&repo=%2Fa%2Fb%20c"
+        );
+
+        let both = AppWindowInit {
+            repo: Some("C:\\Users\\a b".into()),
+            canvas: Some("c2".into()),
+        };
+        assert_eq!(
+            app_window_url("u1", &both),
+            "index.html?win=u1&repo=C%3A%5CUsers%5Ca%20b&canvas=c2"
         );
     }
 
@@ -3095,6 +4676,8 @@ mod tests {
             forkable: false,
             auto_continue_disabled: false,
             watch: false,
+            container_image: None,
+            current_cwd: None,
         }
     }
 
@@ -3194,13 +4777,7 @@ mod tests {
             })
             .unwrap();
 
-        let boot = boot_state_from(
-            &store,
-            "linux".to_string(),
-            0,
-            "1.2.3".to_string(),
-            vec!["c1".to_string()],
-        );
+        let boot = boot_state_from(&store, "linux".to_string(), 0, "1.2.3".to_string());
 
         // Every store-backed field equals what its individual command would return.
         assert_eq!(boot.sessions, store.sessions());
@@ -3220,18 +4797,309 @@ mod tests {
         assert_eq!(boot.schedules, store.schedules());
         assert_eq!(boot.recurrings, store.recurrings());
         assert_eq!(boot.last_version, store.last_version());
-        // …and the four scalars are passed through untouched.
+        // …and the three scalars are passed through untouched.
         assert_eq!(boot.platform, "linux");
         assert_eq!(boot.windows_build, 0);
         assert_eq!(boot.app_version, "1.2.3");
-        assert_eq!(boot.detached_canvas_ids, vec!["c1".to_string()]);
 
-        // Nothing was invented: the payload is a plain JSON object of the 21 fields.
+        // Nothing was invented: the payload is a plain JSON object of the 20 fields.
         let value = serde_json::to_value(&boot).expect("serialize");
         assert!(value.get("sessions").is_some());
-        assert_eq!(value.as_object().map(|o| o.len()), Some(21));
+        assert_eq!(value.as_object().map(|o| o.len()), Some(20));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    // --- Rust-owned clean-exit decision (task 431, ported from store.ts isCleanExit) ---
+
+    #[test]
+    fn is_clean_exit_treats_code_0_while_running_not_intentional_as_clean() {
+        assert!(is_clean_exit(Some(0), false, false));
+    }
+
+    #[test]
+    fn is_clean_exit_keeps_nonzero_and_unknown_exits_recoverable() {
+        // A crash / failed resume keeps the record + overlay + Restart, never a forget.
+        assert!(!is_clean_exit(Some(1), false, false));
+        assert!(!is_clean_exit(Some(137), false, false));
+        assert!(!is_clean_exit(None, false, false));
+    }
+
+    #[test]
+    fn is_clean_exit_never_forgets_during_the_boot_window() {
+        // A code-0 exit while booting keeps the overlay + Restart instead of vanishing (#30).
+        assert!(!is_clean_exit(Some(0), true, false));
+    }
+
+    #[test]
+    fn is_clean_exit_never_forgets_an_intentional_kill() {
+        // Remove/forget/rotation/cancel toast on their own — even a child that traps
+        // SIGHUP and exits 0 under the kill must not read as clean.
+        assert!(!is_clean_exit(Some(0), false, true));
+    }
+
+    #[test]
+    fn classify_exit_forgets_only_a_tracked_clean_exit() {
+        // The one ForgetClean cell: a tracked, non-recurring-owned, clean exit.
+        assert_eq!(
+            classify_exit(true, false, Some(0), false, false),
+            ExitAction::ForgetClean
+        );
+    }
+
+    #[test]
+    fn classify_exit_emits_for_every_guard_failure() {
+        // No record (a shell terminal #72) — even a clean code 0 emits.
+        assert_eq!(
+            classify_exit(false, false, Some(0), false, false),
+            ExitAction::EmitExited
+        );
+        // A recurring's rotating child (#294) — its exit drives the rotation UX.
+        assert_eq!(
+            classify_exit(true, true, Some(0), false, false),
+            ExitAction::EmitExited
+        );
+        // The boot resume window (#30).
+        assert_eq!(
+            classify_exit(true, false, Some(0), true, false),
+            ExitAction::EmitExited
+        );
+        // An app-initiated kill (Remove/forget/rotation/cancel).
+        assert_eq!(
+            classify_exit(true, false, Some(0), false, true),
+            ExitAction::EmitExited
+        );
+        // Non-zero / unknown codes (crash, failed resume) — overlay + Restart.
+        assert_eq!(
+            classify_exit(true, false, Some(1), false, false),
+            ExitAction::EmitExited
+        );
+        assert_eq!(
+            classify_exit(true, false, Some(137), false, false),
+            ExitAction::EmitExited
+        );
+        assert_eq!(
+            classify_exit(true, false, None, false, false),
+            ExitAction::EmitExited
+        );
+        // Stacked guards still emit (no record + booting + intentional).
+        assert_eq!(
+            classify_exit(false, true, Some(0), true, true),
+            ExitAction::EmitExited
+        );
+    }
+
+    // --- worktree_has_items (task 431, ported from the #199 store.test.ts battery) ---
+
+    /// Minimal schedule fixture — only `cwd` / `worktree_path` matter to the ref-count.
+    fn mk_schedule(cwd: &str, worktree_path: Option<&str>) -> ScheduledSession {
+        ScheduledSession {
+            id: "s".into(),
+            cwd: cwd.into(),
+            branch: None,
+            create_branch: false,
+            branch_base: None,
+            worktree: worktree_path.is_some(),
+            worktree_path: worktree_path.map(|s| s.to_string()),
+            name: None,
+            prompt: None,
+            fire_at: 0,
+            created_at: 0,
+            agent: "claude".into(),
+        }
+    }
+
+    /// Minimal recurring fixture — only `cwd` / `worktree_path` matter to the ref-count.
+    fn mk_recurring(cwd: &str, worktree_path: Option<&str>) -> RecurringSession {
+        RecurringSession {
+            id: "r".into(),
+            cwd: cwd.into(),
+            branch: None,
+            create_branch: false,
+            branch_base: None,
+            worktree: worktree_path.is_some(),
+            worktree_path: worktree_path.map(|s| s.to_string()),
+            name: None,
+            prompt: None,
+            interval_secs: 3600,
+            next_fire_at: 0,
+            current_session_id: None,
+            created_at: 0,
+            agent: "claude".into(),
+        }
+    }
+
+    /// Minimal overview-panel fixture.
+    fn mk_panel(id: &str) -> OverviewPanel {
+        OverviewPanel {
+            id: id.into(),
+            kind: "diff".into(),
+            file: None,
+            diff_source: None,
+            compare_base: None,
+            compare_target: None,
+            commit_sha: None,
+        }
+    }
+
+    const WT_DEST: &str = "/data/worktrees/repo-id/feat";
+
+    #[test]
+    fn worktree_has_items_is_false_for_a_worktree_with_no_items() {
+        assert!(!worktree_has_items(&[], &HashMap::new(), &[], &[], WT_DEST));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_an_agent_at_the_worktree_incl_exited_but_kept() {
+        // The guard counts ANY session record at this folder — including an exited
+        // agent still shown with a Restart overlay (the record survives a crash).
+        assert!(worktree_has_items(
+            &[mk_session(WT_DEST, Some("/repo"))],
+            &HashMap::new(),
+            &[],
+            &[],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_a_panel_but_not_an_empty_panel_list() {
+        let mut panels = HashMap::new();
+        panels.insert(WT_DEST.to_string(), vec![mk_panel("p1")]);
+        assert!(worktree_has_items(&[], &panels, &[], &[], WT_DEST));
+        // An empty panel list does not count.
+        let mut empty = HashMap::new();
+        empty.insert(WT_DEST.to_string(), Vec::new());
+        assert!(!worktree_has_items(&[], &empty, &[], &[], WT_DEST));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_a_schedule_created_inside_the_worktree() {
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[mk_schedule(WT_DEST, None)],
+            &[],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_a_worktree_schedule_by_its_worktree_path() {
+        // A worktree schedule's `cwd` is the PARENT repo, not the worktree folder; its
+        // eagerly-created worktree (#259) lives at `worktree_path`. Matching only `cwd`
+        // would miss it and wrongly free a worktree a pending schedule still uses.
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[mk_schedule("/work/parent-repo", Some(WT_DEST))],
+            &[],
+            WT_DEST
+        ));
+        // A worktree schedule for a DIFFERENT folder does not count.
+        assert!(!worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[mk_schedule("/work/parent-repo", Some("/data/other"))],
+            &[],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_counts_a_recurring_in_both_forms() {
+        // A recurring created inside the worktree (`cwd == dest`) …
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[],
+            &[mk_recurring(WT_DEST, None)],
+            WT_DEST
+        ));
+        // … or a worktree recurring whose eager worktree is `worktree_path`.
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[],
+            &[mk_recurring("/work/parent-repo", Some(WT_DEST))],
+            WT_DEST
+        ));
+        // A recurring for a different folder does not count.
+        assert!(!worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &[],
+            &[mk_recurring("/work/other", None)],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_ignores_items_of_other_folders() {
+        let mut panels = HashMap::new();
+        panels.insert("/work/other".to_string(), vec![mk_panel("p")]);
+        assert!(!worktree_has_items(
+            &[mk_session("/work/other", None)],
+            &panels,
+            &[mk_schedule("/work/other", None)],
+            &[mk_recurring("/work/other", None)],
+            WT_DEST
+        ));
+    }
+
+    #[test]
+    fn worktree_has_items_mixed_items_all_count_until_true_emptiness() {
+        let sessions = vec![mk_session(WT_DEST, Some("/repo"))];
+        let mut panels = HashMap::new();
+        panels.insert(WT_DEST.to_string(), vec![mk_panel("p")]);
+        let schedules = vec![mk_schedule(WT_DEST, None)];
+        let recurrings = vec![mk_recurring(WT_DEST, None)];
+        assert!(worktree_has_items(
+            &sessions,
+            &panels,
+            &schedules,
+            &recurrings,
+            WT_DEST
+        ));
+        // Drop the agent → still has a panel + schedule + recurring.
+        assert!(worktree_has_items(
+            &[],
+            &panels,
+            &schedules,
+            &recurrings,
+            WT_DEST
+        ));
+        // Drop the panel too → still has the schedule + recurring.
+        assert!(worktree_has_items(
+            &[],
+            &HashMap::new(),
+            &schedules,
+            &recurrings,
+            WT_DEST
+        ));
+        // Everything gone → empty → removable.
+        assert!(!worktree_has_items(&[], &HashMap::new(), &[], &[], WT_DEST));
+    }
+
+    /// The wire shape the frontend maps outcomes on (task 431): camelCase strings.
+    #[test]
+    fn worktree_cleanup_serializes_camel_case() {
+        assert_eq!(
+            serde_json::to_value(WorktreeCleanup::Removed).unwrap(),
+            serde_json::json!("removed")
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeCleanup::InUse).unwrap(),
+            serde_json::json!("inUse")
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeCleanup::KeptDirty).unwrap(),
+            serde_json::json!("keptDirty")
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeCleanup::NotManaged).unwrap(),
+            serde_json::json!("notManaged")
+        );
     }
 
     #[test]
@@ -3344,6 +5212,145 @@ mod tests {
         // macOS preservation: the guard must not alter any segment off-Windows.
         assert_eq!(windows_safe_seg("con".to_string()), "con");
         assert_eq!(windows_safe_seg("feature.".to_string()), "feature.");
+    }
+
+    // --- Worktree detection: path identity + classification ---
+
+    #[test]
+    fn norm_path_key_normalizes_separators_trailing_and_windows_case() {
+        // Separators + trailing slashes, no fold (the unix arm).
+        assert_eq!(norm_path_key_inner("/a/b/", false), "/a/b");
+        assert_eq!(
+            norm_path_key_inner("C:\\Data\\Worktrees\\X", false),
+            "C:/Data/Worktrees/X"
+        );
+        // The Windows arm additionally case-folds (its filesystems do).
+        assert_eq!(
+            norm_path_key_inner("C:\\Data\\Worktrees\\X\\", true),
+            "c:/data/worktrees/x"
+        );
+        // A bare root keeps its one separator.
+        assert_eq!(norm_path_key_inner("/", false), "/");
+    }
+
+    #[test]
+    fn path_under_norm_is_component_boundary_safe() {
+        // Lexical fallback (paths don't exist): under, equal, sibling, prefix-trap.
+        let root = Path::new("/data/worktrees");
+        assert!(path_under_norm("/data/worktrees/repo-1/branch", root));
+        assert!(path_under_norm("/data/worktrees", root));
+        assert!(!path_under_norm("/data/worktrees-evil/x", root));
+        assert!(!path_under_norm("/data/elsewhere", root));
+        // Windows-style mixed separators + case, via the folded key core.
+        assert_eq!(
+            norm_path_key_inner("C:\\Data\\worktrees\\R\\B", true),
+            "c:/data/worktrees/r/b"
+        );
+        assert!(
+            norm_path_key_inner("C:\\Data\\worktrees\\R\\B", true).starts_with(&format!(
+                "{}/",
+                norm_path_key_inner("c:/data/WORKTREES", true)
+            ))
+        );
+    }
+
+    #[test]
+    fn path_under_norm_canonicalizes_real_paths() {
+        // Real dirs: canonicalization resolves both sides consistently (macOS
+        // /tmp is itself a symlink to /private/tmp — exactly the case this covers).
+        let mut root = std::env::temp_dir();
+        root.push(format!("recue-wtroot-{}", std::process::id()));
+        let child = root.join("repo-1").join("branch");
+        std::fs::create_dir_all(&child).unwrap();
+        assert!(path_under_norm(child.to_str().unwrap(), &root));
+        let mut outside = std::env::temp_dir();
+        outside.push(format!("recue-wtout-{}", std::process::id()));
+        std::fs::create_dir_all(&outside).unwrap();
+        assert!(!path_under_norm(outside.to_str().unwrap(), &root));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn stamp_repo_worktree_classifies_main_managed_and_missing() {
+        let mut managed_root = std::env::temp_dir();
+        managed_root.push(format!("recue-wtstamp-{}", std::process::id()));
+        let managed_wt = managed_root.join("repo-abc").join("feat");
+        std::fs::create_dir_all(&managed_wt).unwrap();
+
+        let entry = |path: &str| crate::git::WorktreeEntry {
+            path: path.to_string(),
+            head: "abc".into(),
+            branch: Some("feat".into()),
+            bare: false,
+            detached: false,
+            locked: false,
+            locked_reason: None,
+            prunable: false,
+        };
+
+        // Index 0 = the main checkout; an existing managed path stamps managed+exists.
+        let main = stamp_repo_worktree(0, entry("/repo"), Some(&managed_root));
+        assert!(main.is_main && !main.managed);
+        let managed =
+            stamp_repo_worktree(1, entry(managed_wt.to_str().unwrap()), Some(&managed_root));
+        assert!(!managed.is_main && managed.managed && managed.exists);
+        // A container-created worktree records a path that doesn't exist on the
+        // host (`/work/...`) — stamped exists:false so the frontend skips it.
+        let container = stamp_repo_worktree(2, entry("/work/wt"), Some(&managed_root));
+        assert!(!container.exists && !container.managed);
+        let _ = std::fs::remove_dir_all(&managed_root);
+    }
+
+    #[test]
+    fn same_path_norm_survives_separator_trailing_and_lexical_variants() {
+        // Lexical fallback (paths don't exist): trailing slash + `\` separators.
+        assert!(same_path_norm("/a/b/c", "/a/b/c/"));
+        assert!(same_path_norm("/a\\b\\c", "/a/b/c"));
+        assert!(!same_path_norm("/a/b/c", "/a/b/c-evil"));
+        // Real dirs: canonicalization resolves both sides (macOS /tmp symlink).
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("recue-samepath-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let raw = dir.to_str().unwrap().to_string();
+        let canon = dir.canonicalize().unwrap();
+        assert!(same_path_norm(&raw, canon.to_str().unwrap()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_delete_target_guards_main_self_unlisted_and_bare() {
+        let entry = |path: &str, bare: bool| crate::git::WorktreeEntry {
+            path: path.to_string(),
+            head: "abc".into(),
+            branch: Some("feat".into()),
+            bare,
+            detached: false,
+            locked: false,
+            locked_reason: None,
+            prunable: false,
+        };
+        let entries = vec![
+            entry("/repo", false),         // index 0 = the main checkout
+            entry("/wt/feat-x", false),    // a linked worktree — deletable
+            entry("/wt/bare-entry", true), // bare — never a deletable folder
+        ];
+        // A listed linked worktree passes — including trailing-slash/`\` variance.
+        assert!(validate_delete_target(&entries, "/repo", "/wt/feat-x").is_ok());
+        assert!(validate_delete_target(&entries, "/repo", "/wt/feat-x/").is_ok());
+        assert!(validate_delete_target(&entries, "/repo", "\\wt\\feat-x").is_ok());
+        // The main checkout (entry 0) is refused.
+        let main = validate_delete_target(&entries, "/other-registered", "/repo");
+        assert!(main.unwrap_err().contains("main checkout"));
+        // The registered folder itself is refused even before list membership.
+        let this = validate_delete_target(&entries, "/repo", "/repo");
+        assert!(this.unwrap_err().contains("repository folder itself"));
+        // An unlisted path is refused (never `git worktree remove` a stranger).
+        let unlisted = validate_delete_target(&entries, "/repo", "/wt/not-listed");
+        assert!(unlisted.unwrap_err().contains("not a worktree"));
+        // A bare entry is refused.
+        let bare = validate_delete_target(&entries, "/repo", "/wt/bare-entry");
+        assert!(bare.unwrap_err().contains("bare"));
     }
 
     #[test]

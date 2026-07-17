@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { ITEM_TYPE_ORDER } from "../../itemTypeOrder";
 import type { CanvasContent } from "../../types";
 import {
   BLOCK_REGISTRY,
@@ -10,15 +11,15 @@ import {
 } from "./templateBlocks";
 
 describe("templateBlocks registry (#117)", () => {
-  it("exposes the v1 block kinds, each mapped to a live content kind", () => {
+  it("exposes the v1 block kinds in canonical order (task 392), each mapped to a live content kind", () => {
     const kinds = BLOCK_REGISTRY.map((b) => b.kind);
     expect(kinds).toEqual([
       "new-agent",
       "new-terminal",
+      "open-filetree",
       "open-file",
       "open-diff",
       "open-kanban",
-      "open-filetree",
     ]);
     expect(blockDescriptor("new-agent")?.liveKind).toBe("agent");
     expect(blockDescriptor("open-file")?.liveKind).toBe("file");
@@ -29,6 +30,14 @@ describe("templateBlocks registry (#117)", () => {
     // The file-tree block (#167) is config-less and maps to live `filetree`.
     expect(blockDescriptor("open-filetree")?.liveKind).toBe("filetree");
     expect(blockDescriptor("open-filetree")?.config).toBe("none");
+  });
+
+  it("orders each block by the shared canonical item-type order (task 392)", () => {
+    // `agent` maps to `session`; every other `liveKind` is already an item-type key.
+    const asItemTypeKeys = BLOCK_REGISTRY.map((b) =>
+      b.liveKind === "agent" ? "session" : b.liveKind,
+    );
+    expect(asItemTypeKeys).toEqual([...ITEM_TYPE_ORDER]);
   });
 
   it("blockDescriptor returns undefined for a non-block kind", () => {

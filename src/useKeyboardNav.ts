@@ -1,45 +1,250 @@
-// Global keyboard shortcuts.
+// Global keyboard shortcuts — the dispatcher for the configurable keybind system
+// (`src/keybinds.ts`).
 //
-//   Shift+← / Shift+→  select prev/next column in Overview (any kind)     (#24/#174)
-//   Shift+arrows       move the focused panel spatially in Canvas         (#76)
-//   ⌘1 … ⌘9            jump to canvas N (Canvas view only)                (#76)
-//   ⌘\                 toggle the main view (Overview ↔ Canvas)           (#77)
+// **Rebindable** actions resolve through the registry + the user's
+// `settings.keybinds` overrides (Settings → Shortcuts). The defaults:
+//
+//   ⌥1 / ⌥2 / ⌥3       switch to Overview / Attention / Canvas
+//   ⌘W / Ctrl+W        close the focused panel (big mode → Canvas leaf → Overview × →
+//                      remove the focused Attention agent)
+//   ⌘, / Ctrl+,        open Settings
+//   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
 //   ⌘N / Ctrl+N        open the new-session flow from anywhere            (#26)
 //   ⌘⇧N / Ctrl+Shift+N open the schedule-session flow                     (#93)
-//   ⌘B / Ctrl+B        collapse / expand the sidebar (main window only)   (#168)
+//   ⌘B / Ctrl+B        collapse / expand the sidebar                      (#168)
 //   ⌘K / Ctrl+K        open the Create-panel launcher (type step)         (#189)
+//   ⌘F / Ctrl+F        toggle the global search modal                     (#337)
+//   ⌘D / Ctrl+D        toggle dense panels (UI v2 §9)                     (#373)
+//   ⌘O / Ctrl+O        open the selected item's folder in your editor
+//   ⌘⇧O / Ctrl+Shift+O choose the editor "Open in editor" uses
+//   ⌘⌥N / Ctrl+Alt+N   open a new app window                           (10/16)
+//
+// **Fixed** (contextual, not rebindable — listed read-only in Settings):
+//
+//   ⌘S / Ctrl+S        flush the focused editor (manual-save mode only)   (#162)
+//   ⌘⏎ / Ctrl+Enter    dismiss the selected agent in Attention            (#398)
 //   ⌘⌥1 … ⌘⌥6          Create-panel launcher straight to the folder step  (#189)
-//                      for type N (session/file/diff/terminal/kanban/tree)
-//   ⌘T / Ctrl+T        new Canvas tab (switches to Canvas view)           (#206)
-//   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
+//   Shift+← / Shift+→  select prev/next column in Overview (any kind)     (#24/#174)
+//   Shift+↑ / Shift+↓  select prev/next agent in the Attention queue      (#398)
+//   Shift+arrows       move the focused panel spatially in Canvas         (#76)
+//
+// Removed by the keybind rework: ⌘T (new Canvas tab, #206), ⌘1–⌘9 (canvas jump,
+// #76), ⌘\ (Overview ↔ Canvas toggle, #77). The modal-internal digit chords they
+// deferred to (new-session recents #61/#66, global-search folder chips task 397)
+// are unaffected — those handlers live in the modals.
 //
 // xterm forwards keystrokes to the PTY when a terminal is focused, so the
 // listener runs in the **capture phase on window** — it fires before xterm's
 // textarea handler, and `stopPropagation()` keeps the focused terminal from ever
-// seeing these combos. Only the handled combos are intercepted; every other key
-// (normal typing, Shift+letters, Shift+Tab, other Cmd/Ctrl/Alt combos) passes
-// straight through.
+// seeing the handled combos. Matching is platform-resolved (`eventChord`): `mod`
+// is ⌘ on macOS and Ctrl on Windows/Linux, so a **bare ⌃-chord on macOS now
+// passes through to the terminal's readline** (⌃E end-of-line, ⌃N history, …)
+// instead of triggering the app action — the old `metaKey || ctrlKey` matching
+// swallowed those. Every other key (normal typing, Shift+letters, other combos)
+// passes straight through.
 
 import { useEffect } from "react";
 
+import { attentionQueue } from "./components/Attention/attentionQueue";
 import { panelTypeForDigit } from "./components/CreatePanelModal/panelTypes";
+import {
+  eventChord,
+  isEditableTarget,
+  keybindCaptureActive,
+  keybindMapFor,
+  type KeybindActionId,
+} from "./keybinds";
+import { detectPlatform } from "./platform";
 import { saveFocused } from "./saverRegistry";
-import { adjacentId, overviewClusterKeys, useStore } from "./store";
-import { IS_MAIN_WINDOW } from "./windowContext";
+import { detectedWorktreeParents } from "./worktrees";
+import {
+  adjacentId,
+  contentForSelected,
+  overviewClusterKeys,
+  ownedChildSessionIds,
+  useStore,
+} from "./store";
+
+/** The platform for chord resolution: the authoritative store signal once loaded,
+ * else the synchronous UA sniff (#363's precedent) — so Ctrl reads as `mod` on
+ * Windows/Linux from the very first keydown, before the async `platform()` IPC. */
+function effectivePlatform(): string {
+  const fromStore = useStore.getState().platform;
+  if (fromStore) return fromStore;
+  if (typeof navigator !== "undefined") {
+    return detectPlatform(navigator.userAgent, navigator.platform ?? "");
+  }
+  return "";
+}
+
+/** What dispatching an action does to the event: `swallow` = preventDefault +
+ * stopPropagation even when the action was inert (the established semantics of
+ * ⌘N/⌘B/⌘K); `pass` = leave the event alone so it reaches the focused element /
+ * modal (the old ⌘\ guard behavior). */
+type Dispatch = "swallow" | "pass";
+
+/** Every modal that can own the keyboard — the full #425 list. Guards any chord
+ * whose action could otherwise land on the card/panel BEHIND a dialog (or yank
+ * the view out from under one); new modal flags must be added here. */
+function anyModalOpen(state: ReturnType<typeof useStore.getState>): boolean {
+  return (
+    state.newSessionOpen ||
+    state.settingsOpen ||
+    state.globalSearchOpen ||
+    state.createPanelOpen ||
+    state.templateEditorOpen ||
+    state.templateManagerOpen ||
+    state.templateUseOpen ||
+    state.cloneRepoOpen ||
+    state.onboardingOpen ||
+    state.editorPickerOpen ||
+    state.canvasClosePromptId !== null ||
+    state.update.confirming
+  );
+}
+
+/** Run a rebindable action with its window/modal guards. Each case preserves the
+ * exact guard semantics its hardcoded predecessor had. */
+function runKeybindAction(action: KeybindActionId): Dispatch {
+  const state = useStore.getState();
+  switch (action) {
+    // ⌘N (#26): no-op when the flow is already open.
+    case "new-session": {
+      if (!state.newSessionOpen) state.openNewSession();
+      return "swallow";
+    }
+    // ⌘⇧N (#93): distinct from new-session; same modal guard.
+    case "schedule-session": {
+      if (!state.newSessionOpen) state.openSchedule();
+      return "swallow";
+    }
+    // ⌘B (#168): collapse / expand this window's sidebar.
+    case "toggle-sidebar": {
+      state.toggleSidebarCollapsed();
+      return "swallow";
+    }
+    // ⌘⌥N (Multi-window 10/16): open a new full app window. Unconditional — it is
+    // non-destructive and meaningful from every window kind (main and app-*: this
+    // hook mounts in all of them), and needs no modal guard.
+    case "new-window": {
+      state.openNewWindow();
+      return "swallow";
+    }
+    // ⌘K (#189): inert while another modal is open.
+    case "open-launcher": {
+      if (!state.createPanelOpen && !state.newSessionOpen) {
+        state.openCreatePanel();
+      }
+      return "swallow";
+    }
+    // ⌘F (#337): the same chord opens and closes; inert while the new-session or
+    // create-panel modal is open (mirrors ⌘K's guard). The old #399 both-modifiers
+    // escape (macOS Ctrl+⌘+F native fullscreen) is now structural: that combo
+    // serializes as "mod+ctrl+f", which matches nothing.
+    case "global-search": {
+      if (state.globalSearchOpen) state.closeGlobalSearch();
+      else if (!state.createPanelOpen && !state.newSessionOpen) {
+        state.openGlobalSearch();
+      }
+      return "swallow";
+    }
+    // ⌘E (#157/#284): same chord opens (the selected item — hover-focus #371 keeps
+    // the selection on the hovered panel, so the panel under the cursor is what
+    // maximizes) and closes. Big mode is per-window.
+    case "big-mode": {
+      state.toggleMaximizeSelected();
+      return "swallow";
+    }
+    // ⌘D (task 373): inert while the Settings modal is open so its draft can't
+    // clobber the toggle on Save.
+    case "dense-panels": {
+      if (!state.settingsOpen) state.toggleDensePanels();
+      return "swallow";
+    }
+    // ⌘O: open the selected item's folder in the preferred editor (an agent's
+    // `repoPath` is already its worktree for worktree agents); first use opens the
+    // picker modal. Inert while the Settings modal is open —
+    // the picker's remember-write must not clobber the draft (the ⌘D guard) — and
+    // while the picker itself is already up. No selection = safe no-op.
+    case "open-in-editor": {
+      if (!state.settingsOpen && !state.editorPickerOpen) {
+        const content = contentForSelected(state);
+        if (content?.repoPath) void state.openInEditor(content.repoPath);
+      }
+      return "swallow";
+    }
+    // ⌘⇧O: always re-open the editor picker for the selected item's folder (change
+    // the remembered choice without visiting Settings). Same guards as ⌘O.
+    case "choose-editor": {
+      if (!state.settingsOpen && !state.editorPickerOpen) {
+        const content = contentForSelected(state);
+        if (content?.repoPath) state.openEditorPicker(content.repoPath);
+      }
+      return "swallow";
+    }
+    // ⌘W: close what the user is looking at (see store.closeFocusedPanel) — in
+    // Attention it removes (kills + forgets) the focused agent, the view's primary
+    // close affordance. Inert while ANY modal owns the keyboard — every modal flag,
+    // not just the four keyboard-opened ones: since #425 the Overview fall-through
+    // is destructive (removeSession / cancelSchedule / cancelRecurring), so a chord
+    // aimed at dismissing a dialog must never reach the card behind it. Still
+    // swallowed there, so the chord can never fall through to a WebView "close
+    // window" default.
+    case "close-panel": {
+      if (!anyModalOpen(state)) state.closeFocusedPanel();
+      return "swallow";
+    }
+    // ⌘, — the OS-conventional Settings chord. Open-only (Escape/Save close the
+    // modal); each window has its own ModalHost (task 434).
+    case "open-settings": {
+      if (
+        !state.settingsOpen &&
+        !state.newSessionOpen &&
+        !state.createPanelOpen
+      ) {
+        state.setSettingsOpen(true);
+      }
+      return "swallow";
+    }
+    // ⌥1/⌥2/⌥3 — direct view switching (replaces the removed ⌘\ cycle). Like the
+    // old ⌘\ guard, the event **passes through** when a modal owns the keyboard —
+    // EVERY modal, so ⌥-glyph typing (⌥2 = @ on Nordic layouts) in any modal
+    // input still types instead of flipping the view under the dialog.
+    case "view-overview":
+    case "view-attention":
+    case "view-canvas": {
+      if (anyModalOpen(state)) {
+        return "pass";
+      }
+      state.setView(
+        action === "view-overview"
+          ? "overview"
+          : action === "view-attention"
+            ? "attention"
+            : "canvas",
+      );
+      return "swallow";
+    }
+  }
+}
 
 export function useKeyboardNav(): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // Settings → Shortcuts is recording a chord: the recorder owns the next
+      // keydown outright — dispatch nothing, swallow nothing.
+      if (keybindCaptureActive()) return;
+
+      const platform = effectivePlatform();
+      const chord = eventChord(e, platform);
+
+      // --- Fixed contextual chords (not rebindable) ---
+
       // ⌘S / Ctrl+S — in manual-save mode (#162), flush the focused file editor
       // (or all dirty buffers if none is focused) instead of the browser default.
-      // In auto mode, leave the keystroke alone (nothing to hijack). Works in the
-      // main and detached canvas windows (both can host file/kanban editors).
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "s"
-      ) {
+      // In auto mode, leave the keystroke alone (nothing to hijack). Works in
+      // every window (each can host file/kanban editors).
+      if (chord === "mod+s") {
         if (!useStore.getState().settings.autoSave) {
           e.preventDefault();
           e.stopPropagation();
@@ -48,223 +253,54 @@ export function useKeyboardNav(): void {
         return;
       }
 
-      // ⌘N / Ctrl+N — open the new-session flow from anywhere (#26). Intercept
-      // before the webview's default (new window) and before xterm; no-op when
-      // the flow is already open. Swallowed but inert in a detached canvas window
-      // (#84) — it has no sidebar / new-session UI.
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "n"
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (IS_MAIN_WINDOW) {
-          const { newSessionOpen, openNewSession } = useStore.getState();
-          if (!newSessionOpen) openNewSession();
-        }
-        return;
-      }
-
-      // ⌘⇧N / Ctrl+Shift+N — open the schedule-session flow (#93). Distinct from
-      // ⌘N (new session, which requires !shiftKey). Swallowed but inert in a
-      // detached canvas window (#84 — no sidebar/launcher).
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "n"
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (IS_MAIN_WINDOW) {
-          const { newSessionOpen, openSchedule } = useStore.getState();
-          if (!newSessionOpen) openSchedule();
-        }
-        return;
-      }
-
-      // ⌘B / Ctrl+B — collapse / expand the sidebar to the icon rail (#168).
-      // ⌘-based, so it never reaches a focused claude/terminal; main window only
-      // (a detached canvas window has no sidebar — swallowed but inert).
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "b"
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (IS_MAIN_WINDOW) {
-          useStore.getState().toggleSidebarCollapsed();
-        }
-        return;
-      }
-
-      // ⌘K / Ctrl+K — open the Create-panel launcher at the type step (#189).
-      // ⌘-based, so it never reaches a focused claude/terminal; main window only
-      // (it adds to the sidebar/Overview); inert while another modal is open.
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "k"
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (IS_MAIN_WINDOW) {
-          const { createPanelOpen, newSessionOpen, openCreatePanel } =
-            useStore.getState();
-          if (!createPanelOpen && !newSessionOpen) openCreatePanel();
-        }
-        return;
-      }
-
-      // ⌘F / Ctrl+F — toggle the global search modal (#337): a keyboard-first search
-      // across every open folder's agents, terminals, viewers, files (name + content),
-      // and live terminal output. ⌘/Ctrl-based + capture `stopPropagation`, so the `f`
-      // never reaches a focused claude/terminal (which would otherwise trigger its own
-      // find/forward). The same chord opens and closes. Main window only — swallowed but
-      // inert in a detached canvas window (#84); inert while the new-session or
-      // create-panel modal is open (mirrors ⌘K's guard).
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "f"
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (IS_MAIN_WINDOW) {
-          const {
-            globalSearchOpen,
-            createPanelOpen,
-            newSessionOpen,
-            openGlobalSearch,
-            closeGlobalSearch,
-          } = useStore.getState();
-          if (globalSearchOpen) closeGlobalSearch();
-          else if (!createPanelOpen && !newSessionOpen) openGlobalSearch();
-        }
-        return;
-      }
-
-      // ⌘T / Ctrl+T — create a new Canvas tab from anywhere (#206). A *create*
-      // action like ⌘N/⌘K: switch to Canvas so the new (active) tab is visible,
-      // then addCanvas(). ⌘-based, so it never reaches a focused claude/terminal;
-      // main window only (tab creation belongs to the main strip — swallowed but
-      // inert in a detached canvas window, #84); inert while the new-session or
-      // create-panel modal is open (mirrors ⌘K's guard).
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "t"
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (IS_MAIN_WINDOW) {
-          const { createPanelOpen, newSessionOpen, setView, addCanvas } =
-            useStore.getState();
-          if (!createPanelOpen && !newSessionOpen) {
-            setView("canvas");
-            addCanvas();
-          }
-        }
-        return;
-      }
-
-      // ⌘E / Ctrl+E — toggle big mode (#157) for the selected item (#284). Same chord
-      // opens (the selected item) and closes. Works in both windows (big mode is a
-      // per-window overlay), so NOT gated on IS_MAIN_WINDOW. ⌘/Ctrl-based + capture
-      // `stopPropagation`, so it never reaches a focused claude/terminal; matched on
-      // `e.code` (physical key, like the digit shortcuts) for layout robustness.
-      // Opening with nothing selected is a safe no-op.
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.code === "KeyE"
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        useStore.getState().toggleMaximizeSelected();
-        return;
-      }
-
-      // ⌘⌥1 … ⌘⌥6 — open the Create-panel launcher straight to the folder step for
-      // type N (#189). Distinct from the ⌘1–9 canvas-jump (which requires !altKey),
-      // so no collision. Option+digit composes a glyph in `e.key`, so match `e.code`
-      // (Digit1…Digit6). Main window only; inert while another modal is open.
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.altKey &&
-        !e.shiftKey &&
-        /^Digit[1-6]$/.test(e.code)
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (IS_MAIN_WINDOW) {
-          const { createPanelOpen, newSessionOpen, openCreatePanel } =
-            useStore.getState();
-          if (!createPanelOpen && !newSessionOpen) {
-            const type = panelTypeForDigit(Number(e.code.slice(5)));
-            if (type) openCreatePanel(type);
-          }
-        }
-        return;
-      }
-
-      // ⌘\ — toggle the main view between Overview and Canvas (#77). ⌘-based, so
-      // it never reaches a focused claude/terminal; inert while the new-session
-      // modal is open, and in a detached canvas window (#84 — no Overview).
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key === "\\"
-      ) {
+      // ⌘⏎ / Ctrl+Enter — dismiss the selected agent in the Attention view (#398):
+      // it leaves the queue (and the page) but stays alive, and selection advances
+      // to the next queued agent. Only in the Attention view, and inert while ANY
+      // modal owns the keyboard (the close-panel rule: a chord aimed at a dialog
+      // must never act on the card behind it) — otherwise the combo passes straight
+      // through (return WITHOUT preventing default) so ⌘⏎ still reaches the modal
+      // or a focused terminal.
+      if (chord === "mod+enter") {
         const state = useStore.getState();
-        if (!IS_MAIN_WINDOW || state.newSessionOpen) return;
-        e.preventDefault();
-        e.stopPropagation();
-        state.setView(state.view === "overview" ? "canvas" : "overview");
-        return;
-      }
-
-      // ⌘1 … ⌘9 — jump to canvas N (main window, Canvas view only, #76). Safe over
-      // a focused claude session: ⌘+number never reaches the PTY. Skipped while
-      // the new-session modal is open so its own ⌘1–9 recents (#61/#66) aren't
-      // taken. If canvas N is detached (#84), raise its window instead of switching.
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        /^[1-9]$/.test(e.key)
-      ) {
-        const state = useStore.getState();
-        if (
-          !IS_MAIN_WINDOW ||
-          state.view !== "canvas" ||
-          state.newSessionOpen
-        ) {
+        if (state.view !== "attention" || anyModalOpen(state)) {
           return;
         }
         e.preventDefault();
         e.stopPropagation();
-        const canvas = state.canvases[Number(e.key) - 1];
-        if (canvas) {
-          if (state.detachedCanvasIds.includes(canvas.id)) {
-            state.focusCanvasWindow(canvas.id);
-          } else {
-            state.selectCanvas(canvas.id);
-          }
+        if (state.selectedId) state.dismissAttention(state.selectedId);
+        return;
+      }
+
+      // ⌘⌥1 … ⌘⌥6 — open the Create-panel launcher straight to the folder step for
+      // type N (#189). Distinct from the rebindable ⌥1–⌥3 view chords (these carry
+      // `mod`). Inert while another modal is open.
+      if (chord && /^mod\+alt\+[1-6]$/.test(chord)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const { createPanelOpen, newSessionOpen, openCreatePanel } =
+          useStore.getState();
+        if (!createPanelOpen && !newSessionOpen) {
+          const type = panelTypeForDigit(Number(chord.slice(-1)));
+          if (type) openCreatePanel(type);
         }
         return;
       }
 
-      // Plain Shift + Arrow — context-sensitive (#24/#76). Leave Cmd/Ctrl/Alt
+      // --- Rebindable actions (the keybinds registry + user overrides) ---
+      if (chord) {
+        const action = keybindMapFor(useStore.getState().settings.keybinds).get(
+          chord,
+        );
+        if (action) {
+          if (runKeybindAction(action) === "swallow") {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+          return;
+        }
+      }
+
+      // --- Plain Shift + Arrow — context-sensitive (#24/#76). Leave Cmd/Ctrl/Alt
       // combos (and claude's own Shift usage) untouched.
       if (!e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key;
@@ -275,13 +311,46 @@ export function useKeyboardNav(): void {
         key === "ArrowDown";
       if (!isArrow) return;
 
+      // Never hijack Shift+arrows from a real text field — that's selection.
+      // xterm's helper textarea is exempt (inside `.xterm`): intercepting ahead of
+      // the PTY is exactly the intent there.
+      if (isEditableTarget(e.target)) return;
+
       const state = useStore.getState();
       // Don't navigate while the new-session modal/popover is open (#27).
       if (state.newSessionOpen) return;
 
-      // Canvas: Shift+arrows move the keyboard-focused panel spatially (#76). A
-      // detached canvas window (#84) is always canvas-spatial (it has no Overview).
-      if (state.view === "canvas" || !IS_MAIN_WINDOW) {
+      // Attention (#398): Shift+↑/↓ cycle the triage queue selection (prev/next).
+      // Shift+←/→ are inert here. Uses the SAME `attentionQueue` ordering the view
+      // renders, so nav can never land on a non-queued agent.
+      if (state.view === "attention") {
+        if (key === "ArrowUp" || key === "ArrowDown") {
+          e.preventDefault();
+          e.stopPropagation();
+          const ids = attentionQueue({
+            sessions: state.sessions,
+            sessionBusy: state.sessionBusy,
+            sessionActive: state.sessionActive,
+            dismissed: state.dismissedAttention,
+            eligible: state.attentionEligible,
+            idleSince: state.sessionIdleSince,
+            recurringChildIds: ownedChildSessionIds(state.recurrings),
+            // Cycle only the visible (filtered) queue (#445) so nav never lands on a
+            // hidden agent.
+            filter: state.overviewRepoFilter,
+          }).map((q) => q.id);
+          const id = adjacentId(
+            ids,
+            state.selectedId,
+            key === "ArrowDown" ? 1 : -1,
+          );
+          if (id) state.select(id);
+        }
+        return;
+      }
+
+      // Canvas: Shift+arrows move the keyboard-focused panel spatially (#76).
+      if (state.view === "canvas") {
         e.preventDefault();
         e.stopPropagation();
         const dir =
@@ -312,6 +381,10 @@ export function useKeyboardNav(): void {
           overviewOrder: state.overviewOrder,
           schedules: state.schedules,
           recurrings: state.recurrings,
+          worktreeParents: detectedWorktreeParents(
+            state.repoWorktrees,
+            state.platform,
+          ),
           filter: state.overviewRepoFilter,
         });
         const id = adjacentId(

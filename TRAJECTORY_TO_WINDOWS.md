@@ -1133,3 +1133,353 @@ unchanged). No `#[cfg]` arms; `zoom` is supported by WebView2/Chromium on Window
       file from Explorer onto a FileTree folder still hits the correct row while zoomed (the
       physical→CSS px math combines `devicePixelRatio` with the new `zoom`). Left unchanged pending
       this check.
+
+## 2026-07-15
+
+### UI v2 reskin sweep (#372–#383)
+
+The twelve-card "UI v2" epic is a pure WebView CSS/TS reskin — no new native code, no new
+`#[cfg]` arms, no shell-outs. Everything platform-sensitive rides the established seams:
+JetBrains Mono is now the `--ui` face on every OS (#372 — Segoe UI no longer renders the
+chrome), every shortcut hint routes through `kbdHint` (⌘→**Ctrl** on Windows; incl. the
+new ⌘D dense toggle, ⌘K/⌘F modals, the Shortcuts pane, and the tips.json chords via
+`renderTip`), all keyboard handling stays `metaKey || ctrlKey`, `color-mix()` fills carry
+plain token fallbacks (WebView2/Chromium supports color-mix, so the fallbacks are
+belt-and-braces), scrollbars stay on the global `::-webkit-scrollbar` styling, and there
+is no backdrop-filter/vibrancy anywhere. The wave background (#377) is a vendored canvas
+engine behind the stage (one per window, lazy chunk); the terminal cursor blink is now
+gated off under reduced motion in the pool (#383, an xterm options mutation — no host
+dispose). Nothing here can be exercised by unit tests beyond the token/pure-helper guards
+already in CI.
+
+### Needs real-box verification (UI v2, #372–#383)
+
+- [ ] **Wave-canvas performance on the wall (WebView2).** Boot into an Overview wall of
+      ~6 agents with Background animation ON: the wave animates smoothly behind the cards
+      with no visible input latency in a focused terminal; toggling it OFF in Settings →
+      Appearance unmounts the canvas.
+- [ ] **Wave worker-mode smoke (task 384, WebView2/Chromium).** WebView2 supports
+      OffscreenCanvas, so the wave should render in **worker mode** off the main thread
+      (`localStorage["recue.waveStats"]="1"` → `[wave] mode=worker …` / `window.__waveStats`);
+      `localStorage["recue.waveMode"]="main"` must downgrade to the main-thread loop with
+      no visual change. Confirm the new **"Pause when covered by panels"** setting (default
+      on) pauses the wave when panels cover the stage and resumes when it clears, that a
+      recolor/theme flip still recolors both modes, and that a busy agent halves the fps.
+- [ ] **Dense-mode divider drag at gap 0.** ⌘D → Ctrl+D: Overview cards + Canvas splits
+      tile edge-to-edge; every Canvas divider (both orientations) still drags via the
+      invisible ±4px hit area; the confirm toast fires.
+- [ ] **JetBrains Mono UI legibility at 125%/150% fractional scaling.** The mono UI face
+      (11–12px chrome type) stays crisp/legible under Windows fractional DPI — sidebar
+      rows, menu items, Settings nav, kbd chips.
+- [ ] **Kbd hints read `Ctrl+…` everywhere.** New session / Schedule buttons, the ⌘K/⌘F
+      modal hints, Canvas "New tab", big-mode tooltips, the Settings → Shortcuts pane,
+      and the empty-state tips all show `Ctrl+…` (no ⌘ glyph reaches Windows).
+- [ ] **Scrollbar styling on the new v2 surfaces.** The wall, Canvas panes, menu/modal
+      bodies, kanban columns, and the Settings content pane all show the themed
+      `::-webkit-scrollbar` bars (never a native gray bar).
+- [ ] **Reduced motion on Windows** (OS setting *and* the app toggle): the wave settles
+      then freezes, dot pulse/menu/modal/toast entrances drop, and the terminal cursor
+      stops blinking (#383) while the terminal itself keeps rendering.
+
+## 2026-07-15 — Dev-container agent sessions (docker-wrapped claude)
+
+Opt-in per-session docker containers (the New Session modal's "Run in dev container"
+toggle) landed cross-platform by design: the docker CLI is the PTY child (ConPTY drives
+it like any console app), every one-shot docker call (`version`/`image inspect`/`build`/
+`ps`/`kill`) goes through `git::hidden_command` (CREATE_NO_WINDOW — no console flash),
+mounts use `--mount type=bind,…` (CSV keys, so a `C:\…` drive-colon source parses; `-v`'s
+`:`-split would break), and the worktree `.git` overlay never relies on host paths being
+valid inside the (Linux) container. Windows-specific notes + real-box checks:
+
+- **The docker-label kill is the ONLY effective kill on Windows.** `hangup_group` is a
+  no-op there and `ChildKiller::kill` terminates just the docker *client*; the container
+  is killed via `docker kill` on the `recue.session=<id>` label (Remove/quit sweep/boot
+  reap). Verify on a real box: Remove a container session → `docker ps -a --filter
+  label=recue.session` is empty; quit ReCue → containers gone ≤ ~2.5 s.
+- **Real-box checks:** Docker Desktop (WSL2) bind-mount of `C:\Users\…` sources incl. the
+  app-data `worktrees`/`container-homes` dirs; ConPTY resize → docker CLI → in-container
+  TTY reflow of claude's TUI; `docker.exe` resolution via `find_on_path` (a plain .exe —
+  no PATHEXT/cmd shim needed); the daemon-stopped probe (`docker version --format`)
+  returning promptly (the toggle's "stopped" state) rather than hanging on the named pipe;
+  credentials seeding from `%USERPROFILE%\.claude\.credentials.json` (no Keychain on
+  Windows — the file is canonical, #140).
+- **No 0600 on Windows:** the per-session credentials seed relies on the app-data dir's
+  ACL (unix gets `OpenOptionsExt::mode(0o600)`).
+### Needs real-box verification (Open in editor)
+
+- [ ] **`code` on PATH launches without a console flash.** With VS Code's installer
+      "Add to PATH" set, ⌘O→Ctrl+O / a menu "Open in editor" resolves `code` (PATHEXT →
+      `code.cmd`) and launches through `cmd /C` under `CREATE_NO_WINDOW` — VS Code opens
+      the folder, no transient conhost window.
+- [ ] **`%LOCALAPPDATA%` / `%ProgramFiles%` probes hit.** With nothing on PATH, the
+      picker still detects a user-install VS Code (`%LOCALAPPDATA%\Programs\Microsoft VS
+      Code\Code.exe`), Cursor, and Notepad++ (`%ProgramFiles%\Notepad++`), and launching
+      opens the right app (via "Program Files").
+- [ ] **Notepad++ opens the folder as a workspace.** The `-openFoldersAsWorkspace` flag
+      lands the folder in the Folder-as-Workspace panel instead of trying to open its
+      files.
+- [ ] **JetBrains Toolbox `.cmd` scripts.** With a Toolbox-installed IDE and scripts
+      enabled, detection reports "Toolbox" (`%LOCALAPPDATA%\JetBrains\Toolbox\scripts\
+      idea.cmd`) and launch opens the IDE at the folder (again no console flash).
+- [ ] **Standalone JetBrains versioned dir.** A non-Toolbox install under
+      `%ProgramFiles%\JetBrains\IntelliJ IDEA <ver>\bin\idea64.exe` detects and launches;
+      with two versions installed the newest dir wins.
+- [ ] **Custom command with a quoted path.** `"C:\Program Files\X\x.exe" {path}` in
+      Settings → Editor tokenizes (quoted program survives) and receives the folder.
+
+## 2026-07-16 — Full app-window shell (multi-window 9/16, task 434)
+
+`open_app_window(init)` creates additional FULL app windows (label `app-<uuid>`, route
+`index.html?win=<uuid>[&repo=..][&canvas=..]`). The new Rust is pure string/window
+plumbing (no paths, shells, or `#[cfg]`); the #348 hidden-until-painted background +
+reveal fallback are the existing platform-neutral machinery. `encode_query_value` exists
+precisely so Windows paths survive the URL: every byte outside `[A-Za-z0-9-_.~]` is
+`%XX`-encoded (space → `%20`, never `+`), and the frontend's `URLSearchParams` decode
+(`parseWindowIdentity`) restores `C:\Users\a b` byte-exact — unit-tested on both sides.
+
+### Needs real-box verification (app windows, task 434)
+
+- [ ] **`?repo=` encoding round-trip with a real Windows path.** Open an app window
+      via `openAppWindow({ repo: "C:\\Users\\<user>\\repos\\x y" })` (temporary dev
+      wiring — no UI entry point until card 10/16): the new window boots with its
+      Overview filtered to that repo (drive colon, backslashes, and spaces intact).
+- [ ] **Second full window under ConPTY.** The same agent terminal renders live in
+      both windows (letterboxed to the smallest attached view); closing the second
+      window leaves the PTY running and rendered in the first.
+
+## 2026-07-16 — New Window entry points (multi-window 10/16, task 436)
+
+The single-instance plugin makes a second `ReCue` launch poke the running instance —
+a **named mutex + hidden message window** on Windows — to open a new full app window
+(task 434) and exit, closing the old two-processes-fight-over-`sessions.json`
+corruption. The `new-window` keybind is the platform-resolved `mod+alt+n`
+(**Ctrl+Alt+N** on Windows); Windows creates no app menu, so the keybind is the only
+chord entry point there (the File → New Window item is macOS-only).
+
+### Needs real-box verification (new-window entry points, task 436)
+
+- [ ] **Second launch pokes the first instance (installer).** With ReCue running
+      (NSIS/MSI install), launching it again from the Start menu exits the second
+      process and opens exactly one new `app-*` window in the first instance.
+- [ ] **Second launch pokes the first instance (portable exe).** The same behavior
+      from a directly-run `recue.exe` — the named mutex is keyed by the bundle
+      identity, not the binary's path.
+- [ ] **Named mutex across two Windows sessions.** With two users logged in (fast
+      user switching / RDP), each session runs its own instance — user B's launch
+      must not poke user A's instance.
+- [ ] **Ctrl+Alt+N vs AltGr layouts.** On an AltGr layout where Ctrl+Alt+N types a
+      glyph (e.g. Polish ń), confirm the documented accepted caveat: the chord opens
+      a window (swallowing the glyph), and rebinding/unbinding it in Settings →
+      Shortcuts restores glyph typing.
+
+## 2026-07-16 — Canvas pop-out opens a full ReCue window; #84 ownership layer deleted (multi-window 11/16, task 437)
+
+The Canvas tab pop-out button and the drag tear-off now call `open_app_window({ canvas: id })`
+(task 434) — a full ReCue window (sidebar + views) booted into Canvas on that tab — and the
+whole #84 detached-canvas / single-owner era is deleted (ownership map, `DetachedNote`, the
+`CanvasWindow` route, the `canvas://windows` event, the four canvas-window Rust commands, the
+`canvas-*` capability). Any window now views any canvas: two windows on the same canvas mirror
+(426/427, smallest-wins grid, letterboxed), and **typing into one agent from two windows
+interleaves at the PTY like two tmux clients — expected, not a bug**. Pure deletion of
+platform-neutral TS/Rust; the one behavioral addition rides 434's already-cross-platform
+window plumbing.
+
+### Needs real-box verification (pop-out = full window, task 437)
+
+- [ ] **Pop-out button / tear-off on Windows.** Both open a second full window on that
+      canvas; the first window keeps the tab (no "in window" marker) and both render its
+      terminal live.
+- [ ] **Two windows, one agent, under ConPTY.** Typing from both windows interleaves
+      (expected); the grid tracks the smallest attached view; no crash, no stray repaints
+      beyond the interleaving.
+- [ ] **WebGL in the popped-out window.** The #105 canvas-window DOM-renderer rule is gone —
+      the second window's terminals attach the WebGL addon; watch for the old #105
+      doubled/ghosted-glyph artifact (if it reproduces there, it reproduces in the main
+      window too — same code path, separate bug).
+- [ ] **`?canvas=` compat URL.** A legacy `index.html?canvas=<id>` load renders the full
+      shell booted into Canvas on that tab (one-release compat; nothing creates such
+      windows anymore).
+- [ ] **Close the popped-out window.** The first window keeps rendering everything (the 426
+      view purge unclamps the grid); closing a canvas viewed by another window re-homes
+      that window to another tab (no self-close, no ghost).
+
+## 2026-07-16 — Restore the open-window set on relaunch (multi-window 13/16, task 439)
+
+Relaunching ReCue now restores the same set of full app windows (`main` + `app-*`), each at
+its saved outer-position/inner-size (physical px — the exact pair tao's `Moved`/`Resized`
+report and `set_position`/`set_size` accept) and with its creation-time repo/canvas preset,
+clamped to the current monitor layout and capped at 8 extras. Rust-only: a dedicated
+`window_state` store key, a pure `WindowSet` state machine fed from the global
+`WindowEvent` arm (debounced 500 ms saves), an `ExitRequested` flush for the ⌘Q path and a
+would-empty rule for the last-window-close path. The Windows minimize sentinels (`Moved`
+−32000/−32000, `Resized` 0×0) are ignored in the pure core (unit-tested on every host).
+
+### Needs real-box verification (window restore, task 439)
+
+- [ ] **Restore across two Windows sessions.** Open 2–3 windows, move/resize, quit (Alt+F4
+      the last window AND the app-exit path), relaunch: each window returns at its saved
+      bounds — positions in physical px under fractional scaling (125%/150%) must not
+      drift or accrete the title-bar height across repeated cycles.
+- [ ] **Minimize sentinels never persist.** Quit while a window is minimized: it restores
+      at its last real bounds, never at −32000/−32000 or 0×0.
+- [ ] **Unplugged second monitor.** Save bounds on a second monitor, unplug it, relaunch:
+      the window is re-placed fully inside the surviving monitor (≥ the 64 px visibility
+      floor), not lost off-screen.
+
+## 2026-07-16 — Targeted PTY output delivery: session://output + session://size emit only to subscriber windows (multi-window 15/16, task 440)
+
+`session://output` and `session://size` are now `emit_filter`ed to exactly the windows
+holding a **live terminal host** for the session (the task-426 registry gains an
+`output_subs` dimension: subscribe at host creation, unsubscribe at host dispose, swept
+by the window-close purge — parking never touches it, so a parked host's buffer stays
+byte-complete). A session with no live host anywhere skips the base64 encode AND the
+emit entirely; a window that starts viewing later back-fills via `session_scrollback` +
+the offset dedupe. Lifecycle events (state/exited/name/forkable, the roster) stay
+app-global. Pure Rust event plumbing + TS IPC — platform-neutral; the two frontend
+listens are label-scoped (a default-target listener would bypass the filter).
+
+### Needs real-box verification (targeted delivery, task 440)
+
+- [ ] **Two windows, agent visible in only one.** Output + typing render in the viewing
+      window; the other window's busy dot, Attention queue, auto-name, and exit handling
+      stay live (lifecycle is still global).
+- [ ] **Late attach back-fills.** Scroll the agent into view in the second window later —
+      the complete retained history back-fills (scrollback) then streams live, with no
+      gap and no doubled startup paint (offset dedupe), incl. under ConPTY (the
+      replayDedupe stray-`C` class of bug).
+- [ ] **Park keeps the stream.** In the only viewing window, switch views (park the
+      terminal) while the agent produces output, then switch back — the buffer is
+      complete, no re-replay.
+- [ ] **Close a window mid-storm.** Close the second window during heavy output — no
+      stall, the first window is unaffected (the Destroyed purge sweeps the label).
+- [ ] **Single-window regression smoke.** Spawn, type, switch Overview↔Canvas during
+      output, Restart (resetTerminal), scroll a never-viewed boot-resumed card into
+      view — everything byte-identical to before.
+
+## 2026-07-16 — Multi-window epic wrap-up (tasks 426–440): the consolidated real-box matrix
+
+### Multi-window epic (tasks 426–440) — N full app windows
+
+The epic replaced the #84 one-main-window-plus-detached-canvas model with **N full app
+windows**: `open_app_window` / label `app-<uuid>` / route `?win=<uuid>` (434), every window
+the complete shell with window-local view state, shared state converging through the Rust
+`*://changed` broadcasts (428) and server-side patch merges (429), terminals **mirroring**
+in any number of windows under the smallest-wins grid arbiter (426/427), output emitted only
+to subscriber windows (440), a Rust-elected **primary** window gating the once-per-app
+effects (433), the app singletons moved into Rust (auto-continue + the one usage poll 430,
+the clean-exit forget 431, the boot shell respawn 432), a same-file edit guard (435), the
+single-instance / Dock-Reopen / Ctrl+Alt+N / File → New Window entry points (436),
+pop-out-as-full-window with the #84 machinery deleted (437), the repo-menu entry point
+(438), and window restore on relaunch (439). The Windows-sensitive seams: the
+single-instance **named mutex**, window placement under **fractional / per-monitor DPI**
+(and the −32000 / 0×0 minimize sentinels), **ConPTY** resize (`ResizePseudoConsole`) under
+the smallest-wins arbitration, and per-window **WebView2** cost. macOS-only items (Dock
+Reopen, File → New Window, ⌘Q `ExitRequested` ordering) remain PR-flagged per the #84/#105
+precedent — no macOS trajectory file exists.
+
+### Needs real-box verification (multi-window, tasks 426–440)
+
+The per-card checklists appended above already cover most of the matrix — cross-referenced
+here, not duplicated: **single-instance named-mutex** behavior (installed exe / portable
+copy / two logged-in Windows sessions) and **Ctrl+Alt+N vs AltGr layouts** are in the
+task-436 entry; **multi-monitor restore under fractional DPI**, the **minimize sentinels**,
+and the **unplugged-monitor re-place** are in the task-439 entry; the **targeted-delivery
+smoke** (late-attach back-fill, park, close-mid-storm, single-window regression) is in the
+task-440 entry; the dev-wired **`?repo=` encoding round-trip** and the first two-window
+ConPTY smoke are in the task-434 entry; **pop-out / tear-off**, mirroring + the tmux-style
+input interleaving, per-window WebGL, and the **`?canvas=` compat route** are in the
+task-437 entry. Still missing — new items:
+
+- [ ] **ConPTY reflow under live min-size arbitration (426/427/440).** One agent visible in
+      two windows with different slot sizes: the PTY grid is the component-wise minimum
+      (`ResizePseudoConsole`), claude's TUI reflows cleanly in both, the larger window
+      letterboxes; live-resizing the smaller window reflows both; closing it un-clamps and
+      reflows the survivor up; switching views (parking) in one window does NOT resize the
+      grid (the sized view detaches; the output subscription stays).
+- [ ] **`?repo=` round-trip through the real UI entry point (438).** "Open in new window"
+      on a repo at `C:\Users\a b\repo` → the new window's Overview filter shows exactly
+      that repo (drive colon, backslashes, and the space intact — the 434 encode path,
+      now through the shipped menu item instead of dev wiring).
+- [ ] **Per-window WebView2 memory (434).** Note the working-set growth per additional app
+      window (Task Manager, 2–4 windows); closing a window releases its share.
+- [ ] **Same-file edit guard smoke (435).** The same `.md` (FileViewer raw view) and the
+      same Kanban board open in two windows: editing in one claims it; the other renders
+      read-only with the "Being edited in another window — Take over" banner and
+      live-follows saves via the hot-reload poll; Take over flips the claim (the loser
+      flushes its buffer once in auto mode, then locks); closing the claiming window purges
+      the claim and the survivor unlocks.
+- [ ] **Primary takeover (433).** Close the primary (oldest) window while another full
+      window is open: the survivor re-arms the once-per-app effects live — exactly one
+      update check, no re-onboarding, the `schedule://fired` transition still lands; with
+      N restored windows (439) exactly ONE "Updated to vX" toast / onboarding modal fires
+      across the whole app.
+
+## 2026-07-16 — Agent-created worktree detection (sidebar worktrees + relocation)
+
+- [ ] **Detected-worktree path identity on a real Windows box.** The agent-created
+      worktree detection compares paths case-insensitively on Windows (`norm_path_key`
+      in Rust, `normPathKey` in TS) and classifies "managed" by canonicalized prefix
+      under `%APPDATA%\..\<data-dir>\worktrees`. Sanity-check with a `C:\`-drive repo:
+      a Claude `EnterWorktree` worktree appears under its repo, `remove_worktree`
+      refuses it, and a mixed-case duplicate path never renders a second row.
+
+## 2026-07-16 — Attention-queue blink fix (resize-repaint suppression + eviction debounce)
+
+The fix is platform-neutral by construction — the backend suppression is pure timestamp
+logic (`last_resize` + `RESIZE_REPAINT_MS`, no `#[cfg]`), the store's eviction debounce is
+plain TS timers, and the same-size PTY-resize dedupe lives in the task-426/427 Rust
+arbiter (`terminal_views` only resizes + broadcasts when the smallest-wins effective grid
+actually changed — superseding the branch's original frontend `lastPtySize` skip) — but
+two legs are ConPTY-flavored and want a real-box look:
+
+- [ ] **ConPTY resize-repaint suppression.** On Windows a `resize_pty` makes ConPTY
+      itself repaint the screen (no SIGWINCH, but the same output burst). Verify: an
+      idle agent that becomes the Attention queue head (its terminal mounts in the
+      agent pane at a new size) does **not** blink out of the queue, and its dot stays
+      yellow through the mount.
+- [ ] **Same-size resize dedupe.** A view switch that reparents a terminal into an
+      identically-sized slot re-proposes the same grid, and the arbiter skips the PTY
+      resize (unchanged effective grid) — on ConPTY (which can repaint on *any* resize
+      call, even same-size) confirm no spurious busy dot on Overview↔Attention↔Canvas
+      switches with unchanged panel sizes.
+
+## 2026-07-16 — Maximized-by-default + persisted window size (task 443)
+
+Backend-only, platform-neutral by construction — the flag lives in the pure `WindowSet`
+state machine (`set_maximized` / `merge_action`, unit-tested) and the persisted
+`PersistedWindow { maximized }`; only the boot `maximize()` call and the live
+`is_maximized()` query at the `Moved`/`Resized` site are impure. On Windows `maximize()`
+is a **true** maximize (fills the work area, excludes the taskbar). It is applied while
+the window is still hidden (#348), so no flash. Real-box checks:
+
+- [ ] **Fresh-install default maximize.** With no persisted `window_state` (or one with no
+      `main` entry), the main window opens **maximized** filling the desktop, no flash, no
+      1280×832 frame flicker before it.
+- [ ] **Maximized round-trips a quit.** Leave the window maximized, quit (⌘/Alt+F4 or last-
+      window close), relaunch → it reopens maximized.
+- [ ] **A user-chosen non-maximized size restores.** Un-maximize, resize/move to a custom
+      frame, quit, relaunch → it restores at that exact frame (existing #439 behavior), and
+      the stored `x/y/width/height` while maximized stayed the last non-maximized geometry
+      (the un-maximize target snaps back to it, not to a first-ever 1280×832).
+- [ ] **Extra app windows are NOT maximized by default** (⌘⌥N / File → New Window / repo
+      "Open in new window") — they open at 1280×832 — but a previously-maximized `app-*`
+      window re-maximizes on restore.
+
+## 2026-07-16 — Themed window title bar (task 444)
+
+macOS gets an integrated `--surface-mantle` `Titlebar` strip under the Overlay title bar
+(the native traffic lights float over it); Windows keeps native decorations, so the strip
+is `display:none` (revealed only via `data-platform="macos"`) and there is deliberately no
+custom caption. The one Windows-facing change is the **native theme sync**: the persisted
+ReCue light/dark theme is pushed to the window via `commands::theme_to_window_theme` →
+`window.set_theme(...)` (in `lib.rs` setup + `create_app_window` before reveal, and in
+`set_theme_background` on a runtime switch). Real-box checks:
+
+- [ ] **DWM caption follows the theme.** On Windows 10/11 confirm the native title-bar /
+      caption buttons render dark in ReCue's dark theme and light in light theme, on boot
+      (no flash — set before the hidden-until-painted reveal, #348) and on a live
+      Settings → Appearance theme toggle (via `set_theme_background`), for both the main
+      window and a second `app-*` window. Full caption **color** parity (beyond dark/light)
+      needs custom decorations — out of scope, future work.
+- [ ] **No empty strip / layout shift.** The `Titlebar` strip renders nothing on Windows
+      (no 30px band); `.app-body` fills the window exactly as before.

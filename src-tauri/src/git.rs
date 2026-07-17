@@ -52,6 +52,16 @@ pub(crate) fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     }
     crate::path_env::apply_path(&mut cmd);
     crate::child_env::scrub_command(&mut cmd);
+    // ReCue's git reads must never contend with a concurrent writer in the same
+    // repo — a user running git inside a shell/agent terminal, or a dev-container
+    // agent committing while the DiffInspector / FileTree pollers run. Without this,
+    // `git status`/`git diff` opportunistically take `index.lock` to refresh the stat
+    // cache, so they could both *fail on* and *collide with* a writer's lock.
+    // `GIT_OPTIONAL_LOCKS=0` (the env form of `--no-optional-locks`) makes every
+    // read skip those optional locks; required locks (checkout, worktree add/remove,
+    // commit) are unaffected, and the var is inert for the non-git helpers
+    // (`docker`, `<cli> --version`) that share this seam.
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
     cmd
 }
 
@@ -1171,6 +1181,174 @@ pub fn worktree_remove(
     }
 }
 
+/// Lock the worktree at `dest` (dev-container sessions): a locked worktree is
+/// skipped by `git worktree prune` and refused by `git worktree remove` — the guard
+/// against an **in-container** `git worktree prune`, which would see every OTHER
+/// worktree's host path as missing (they don't exist inside the container) and
+/// delete their shared admin dirs. Best-effort at call sites (`let _ =`): locking
+/// an already-locked worktree fails harmlessly. Returns git's stderr on failure.
+pub fn worktree_lock(
+    repo: impl AsRef<Path>,
+    dest: impl AsRef<Path>,
+    reason: &str,
+) -> Result<(), String> {
+    let output = hidden_command("git")
+        .arg("-C")
+        .arg(repo.as_ref())
+        .args(["worktree", "lock", "--reason", reason])
+        .arg(dest.as_ref())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "could not lock worktree".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
+/// Unlock the worktree at `dest` — the counterpart `remove_worktree` runs before
+/// ReCue's own ref-counted removal (git refuses to remove a locked worktree, even
+/// with `--force`). Best-effort: unlocking a never-locked worktree fails harmlessly.
+pub fn worktree_unlock(repo: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<(), String> {
+    let output = hidden_command("git")
+        .arg("-C")
+        .arg(repo.as_ref())
+        .args(["worktree", "unlock"])
+        .arg(dest.as_ref())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "could not unlock worktree".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
+/// `git worktree prune` — drop stale administrative entries whose working
+/// directories no longer exist. The fallback for the user-initiated
+/// `delete_worktree` when the folder is already gone from disk but git still
+/// lists it (a stale/prunable entry `worktree remove` refuses to touch).
+pub fn worktree_prune(repo: impl AsRef<Path>) -> Result<(), String> {
+    let output = hidden_command("git")
+        .arg("-C")
+        .arg(repo.as_ref())
+        .args(["worktree", "prune"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "could not prune worktrees".to_string()
+        } else {
+            stderr
+        })
+    }
+}
+
+/// One entry of `git worktree list --porcelain`: a checkout (the main one or a
+/// linked worktree) of the repository, exactly as git records it in
+/// `.git/worktrees/<name>` — regardless of who created it (ReCue #74, an agent's
+/// `EnterWorktree` / `--worktree`, a `WorktreeCreate` hook, or a hand-typed
+/// `git worktree add`). This is the detection ground truth for agent-created
+/// worktrees: any linked worktree, wherever it lives, appears here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorktreeEntry {
+    /// Absolute checkout path (git prints `/`-separated on every OS).
+    pub path: String,
+    /// The checked-out commit; empty only for a bare entry.
+    pub head: String,
+    /// Short branch name (`refs/heads/` stripped); `None` when detached or bare.
+    pub branch: Option<String>,
+    pub bare: bool,
+    pub detached: bool,
+    /// A `git worktree lock` is held. Claude Code locks a worktree while an agent
+    /// actively works in it, so this doubles as an "in use" hint.
+    pub locked: bool,
+    /// The lock reason, when git printed one on the `locked` line.
+    pub locked_reason: Option<String>,
+    /// git considers the entry prunable (its directory is gone or invalid).
+    pub prunable: bool,
+}
+
+/// Parse the plain `git worktree list --porcelain` output: stanzas separated by
+/// blank lines, each starting `worktree <path>` followed by attribute lines
+/// (`HEAD <sha>`, `branch <ref>`, `bare`, `detached`, `locked[ <reason>]`,
+/// `prunable[ <reason>]`). Unknown lines are ignored (forward-compatible).
+pub(crate) fn parse_worktree_list(out: &str) -> Vec<WorktreeEntry> {
+    let mut entries: Vec<WorktreeEntry> = Vec::new();
+    let mut cur: Option<WorktreeEntry> = None;
+    for line in out.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(done) = cur.take() {
+                entries.push(done);
+            }
+            cur = Some(WorktreeEntry {
+                path: path.to_string(),
+                head: String::new(),
+                branch: None,
+                bare: false,
+                detached: false,
+                locked: false,
+                locked_reason: None,
+                prunable: false,
+            });
+        } else if let Some(entry) = cur.as_mut() {
+            if let Some(head) = line.strip_prefix("HEAD ") {
+                entry.head = head.to_string();
+            } else if let Some(branch) = line.strip_prefix("branch ") {
+                entry.branch = Some(
+                    branch
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(branch)
+                        .to_string(),
+                );
+            } else if line == "bare" {
+                entry.bare = true;
+            } else if line == "detached" {
+                entry.detached = true;
+            } else if line == "locked" || line.starts_with("locked ") {
+                entry.locked = true;
+                let reason = line["locked".len()..].trim_start();
+                if !reason.is_empty() {
+                    entry.locked_reason = Some(reason.to_string());
+                }
+            } else if line == "prunable" || line.starts_with("prunable ") {
+                entry.prunable = true;
+            }
+        }
+    }
+    if let Some(done) = cur.take() {
+        entries.push(done);
+    }
+    entries
+}
+
+/// Every checkout (main + linked worktrees) of the repository containing `cwd`,
+/// via `git worktree list --porcelain`. The **plain** porcelain is deliberate —
+/// the NUL-terminated `-z` variant needs git ≥ 2.36 while Ubuntu 22.04 LTS (a
+/// fully-supported target and the CI build image) ships 2.34, and a silently
+/// dead listing would disable worktree detection there; the cost is only the
+/// pathological newline-in-path case. Fail-open: a non-git folder / missing git
+/// / spawn error yields `None` (callers keep prior state). Read-only, and
+/// `hidden_command` already sets `GIT_OPTIONAL_LOCKS=0` so this never contends
+/// with a committing agent.
+pub fn list_worktrees(cwd: impl AsRef<Path>) -> Option<Vec<WorktreeEntry>> {
+    let out = run_git_raw(cwd.as_ref(), &["worktree", "list", "--porcelain"])?;
+    Some(parse_worktree_list(&out))
+}
+
 /// Parse `git diff` unified output into structured per-file diffs.
 pub fn parse_unified_diff(diff: &str) -> Vec<FileDiff> {
     let mut files: Vec<FileDiff> = Vec::new();
@@ -1809,6 +1987,125 @@ index 0..1
         assert_eq!(parse_ahead_behind("garbage"), None);
         assert_eq!(parse_ahead_behind("2"), None);
         assert_eq!(parse_ahead_behind("a\tb"), None);
+    }
+
+    // --- Worktree list parser (agent-created worktree detection) ---
+
+    #[test]
+    fn worktree_parser_reads_main_and_linked_entries() {
+        let out = "\
+worktree /Users/x/repos/app
+HEAD ba1b06ea350b6acd92256956be9f41e0ddeb445a
+branch refs/heads/main
+
+worktree /Users/x/repos/app/.claude/worktrees/feat-a
+HEAD c3e9ca2fcc9e6c45c4b0ac970a2909f633d52132
+branch refs/heads/feat/a
+
+worktree /Users/x/tmp/side worktree with spaces
+HEAD 62d0957964760b56ee4b6bdcb638a71433f6c882
+branch refs/heads/wt-b
+";
+        let entries = parse_worktree_list(out);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].path, "/Users/x/repos/app");
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+        assert_eq!(entries[0].head, "ba1b06ea350b6acd92256956be9f41e0ddeb445a");
+        // `refs/heads/` is stripped, slashes inside the branch name survive.
+        assert_eq!(entries[1].branch.as_deref(), Some("feat/a"));
+        // Paths with spaces parse whole (plain porcelain is line-based).
+        assert_eq!(entries[2].path, "/Users/x/tmp/side worktree with spaces");
+        assert!(entries.iter().all(|e| !e.bare
+            && !e.detached
+            && !e.locked
+            && !e.prunable
+            && e.locked_reason.is_none()));
+    }
+
+    #[test]
+    fn worktree_parser_reads_detached_bare_locked_and_prunable() {
+        let out = "\
+worktree /repo
+HEAD abc
+branch refs/heads/main
+
+worktree /repo.bare
+bare
+
+worktree /wt/detached
+HEAD def
+detached
+
+worktree /wt/locked-plain
+HEAD 111
+branch refs/heads/x
+locked
+
+worktree /wt/locked-reason
+HEAD 222
+branch refs/heads/y
+locked working agent keeps this alive
+
+worktree /wt/prunable
+HEAD 333
+prunable gitdir file points to non-existent location
+";
+        let entries = parse_worktree_list(out);
+        assert_eq!(entries.len(), 6);
+        assert!(entries[1].bare);
+        assert!(entries[2].detached && entries[2].branch.is_none());
+        assert!(entries[3].locked && entries[3].locked_reason.is_none());
+        assert!(entries[4].locked);
+        assert_eq!(
+            entries[4].locked_reason.as_deref(),
+            Some("working agent keeps this alive")
+        );
+        assert!(entries[5].prunable);
+    }
+
+    #[test]
+    fn worktree_parser_tolerates_empty_and_malformed_input() {
+        assert!(parse_worktree_list("").is_empty());
+        // Attribute lines before any `worktree ` stanza are ignored, unknown
+        // attributes are skipped (forward-compatible), a trailing stanza without
+        // a blank line still flushes.
+        let out = "HEAD orphan\nnonsense\nworktree /a\nHEAD 1\nfutureattr x\nbranch refs/heads/b";
+        let entries = parse_worktree_list(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "/a");
+        assert_eq!(entries[0].branch.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn list_worktrees_enumerates_real_linked_worktrees_and_fails_open() {
+        // Non-git folder → None (fail-open).
+        let plain = unique_dir("wtl-plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(list_worktrees(&plain), None);
+        let _ = fs::remove_dir_all(&plain);
+
+        // Real repo + one linked worktree (nested, the EnterWorktree layout).
+        let Some(repo) = init_repo("wtl-repo") else {
+            return; // git unavailable — skip like the other integration tests
+        };
+        fs::write(repo.join("f.txt"), "x").unwrap();
+        if !commit_all(&repo, "init") {
+            let _ = fs::remove_dir_all(&repo);
+            return;
+        }
+        let nested = repo.join(".claude").join("worktrees").join("wt-a");
+        assert!(git_in(
+            &repo,
+            &["worktree", "add", "-b", "wt-a", nested.to_str().unwrap()]
+        ));
+        let entries = list_worktrees(&repo).expect("a git repo lists its worktrees");
+        assert_eq!(entries.len(), 2, "main checkout + one linked worktree");
+        assert_eq!(entries[1].branch.as_deref(), Some("wt-a"));
+        assert!(!entries[1].head.is_empty());
+        // The listing is identical when asked from inside the linked worktree.
+        let from_wt = list_worktrees(&nested).expect("a worktree lists the same set");
+        assert_eq!(from_wt.len(), 2);
+        let _ = fs::remove_dir_all(&repo);
     }
 
     // --- Integration tests (real `git`; skip if unavailable) ---
@@ -2588,6 +2885,50 @@ index 0..1
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Every helper built on `hidden_command` reads with optional locks disabled, so
+    /// a host `git status`/`diff` can never take (or trip over) `index.lock` against a
+    /// concurrently committing writer — e.g. a dev-container agent in the same worktree.
+    #[test]
+    fn hidden_command_disables_optional_locks() {
+        let cmd = hidden_command("git");
+        let has = cmd.get_envs().any(|(k, v)| {
+            k == std::ffi::OsStr::new("GIT_OPTIONAL_LOCKS") && v == Some(std::ffi::OsStr::new("0"))
+        });
+        assert!(has, "hidden_command must set GIT_OPTIONAL_LOCKS=0");
+    }
+
+    /// The dev-container prune guard: a locked worktree refuses removal (even our own)
+    /// until unlocked — which is why `remove_worktree` unlocks first, and why an
+    /// in-container `git worktree prune` can't take the locked worktree's admin dir.
+    #[test]
+    fn worktree_lock_blocks_remove_until_unlock() {
+        let Some(dir) = init_repo("wt-lock") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        assert!(git_in(&dir, &["branch", "feat"]));
+
+        let dest = unique_dir("wt-lock-dest");
+        assert!(worktree_add(&dir, "feat", &dest).is_ok());
+        assert!(worktree_lock(&dir, &dest, "ReCue dev-container session").is_ok());
+        // Locking twice fails (best-effort at call sites), and a locked worktree
+        // refuses removal — with and without --force.
+        assert!(worktree_lock(&dir, &dest, "again").is_err());
+        assert!(worktree_remove(&dir, &dest, false).is_err());
+        assert!(worktree_remove(&dir, &dest, true).is_err());
+        assert!(dest.is_dir());
+
+        assert!(worktree_unlock(&dir, &dest).is_ok());
+        // Unlocking a no-longer-locked worktree fails harmlessly (best-effort).
+        assert!(worktree_unlock(&dir, &dest).is_err());
+        assert!(worktree_remove(&dir, &dest, false).is_ok());
+        assert!(!dest.is_dir());
+
+        let _ = fs::remove_dir_all(&dest);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn list_branches_includes_remotes_excludes_head_and_dedups() {
         let Some(dir) = init_repo("remote-branches") else {
@@ -2746,5 +3087,465 @@ index 0..1
         fs::create_dir_all(&plain).unwrap();
         assert!(list_commits(&plain, 10).is_empty());
         let _ = fs::remove_dir_all(&plain);
+    }
+
+    #[test]
+    fn current_branch_reports_detached_head_as_short_sha() {
+        let Some(dir) = init_repo("detached") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        assert!(git_in(&dir, &["checkout", "-q", "--detach"]));
+
+        // Detached HEAD → "@<short sha>" instead of a branch name.
+        let short = run_git(&dir, &["rev-parse", "--short", "HEAD"]).unwrap();
+        assert!(!short.is_empty());
+        assert_eq!(current_branch(&dir), format!("@{short}"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ahead_behind_counts_vs_upstream_and_fails_open() {
+        let Some(origin) = init_repo("ab-origin") else {
+            return;
+        };
+        fs::write(origin.join("a.txt"), "1\n").unwrap();
+        assert!(commit_all(&origin, "init"));
+        let Some(clone) = clone_repo(&origin, "ab-clone") else {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        };
+
+        // Freshly cloned: in sync with its upstream (0/0 — the frontend hides it).
+        assert_eq!(
+            ahead_behind(&clone),
+            Some(AheadBehind {
+                ahead: 0,
+                behind: 0
+            })
+        );
+
+        // A local commit not on the upstream → ahead 1.
+        fs::write(clone.join("local.txt"), "l\n").unwrap();
+        assert!(commit_all(&clone, "local"));
+        assert_eq!(
+            ahead_behind(&clone),
+            Some(AheadBehind {
+                ahead: 1,
+                behind: 0
+            })
+        );
+
+        // The origin advances; after a fetch the clone reads behind 1 too — the
+        // counts are "as of the last fetch" (vs the local remote-tracking ref).
+        fs::write(origin.join("remote.txt"), "r\n").unwrap();
+        assert!(commit_all(&origin, "remote"));
+        assert!(git_in(&clone, &["fetch", "-q", "origin"]));
+        assert_eq!(
+            ahead_behind(&clone),
+            Some(AheadBehind {
+                ahead: 1,
+                behind: 1
+            })
+        );
+
+        // No upstream (the origin itself) and a non-git folder → None (fail-open).
+        assert_eq!(ahead_behind(&origin), None);
+        let plain = unique_dir("ab-plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(ahead_behind(&plain), None);
+
+        // The batched map contains exactly the paths that resolve to a count.
+        let clone_key = clone.to_string_lossy().into_owned();
+        let map = ahead_behind_many(&[
+            clone_key.clone(),
+            origin.to_string_lossy().into_owned(),
+            plain.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.get(&clone_key),
+            Some(&AheadBehind {
+                ahead: 1,
+                behind: 1
+            })
+        );
+
+        let _ = fs::remove_dir_all(&plain);
+        let _ = fs::remove_dir_all(&clone);
+        let _ = fs::remove_dir_all(&origin);
+    }
+
+    #[test]
+    fn compare_branches_diffs_base_to_target_and_rejects_unknown() {
+        let Some(dir) = init_repo("compare") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "one\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let base = current_branch(&dir);
+
+        // A feature branch that edits a.txt and adds b.txt.
+        assert!(create_branch(&dir, "cmp-feature", "").is_ok());
+        fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        fs::write(dir.join("b.txt"), "new\n").unwrap();
+        assert!(commit_all(&dir, "feature work"));
+
+        let diff = compare_branches(&dir, &base, "cmp-feature").unwrap();
+        assert_eq!(diff.summary.branch, format!("{base} → cmp-feature"));
+        assert_eq!(diff.summary.files_changed, 2);
+        assert_eq!(diff.summary.adds, 2);
+        assert_eq!(diff.summary.dels, 0);
+        let by_path = |p: &str| diff.files.iter().find(|f| f.path == p);
+        let a = by_path("a.txt").expect("edited file listed");
+        assert_eq!(a.status, FileStatus::Modified);
+        assert_eq!((a.add, a.del), (1, 0));
+        let b = by_path("b.txt").expect("new file listed");
+        assert_eq!(b.status, FileStatus::Added);
+
+        // Reversed orientation: the added file reads as a deletion.
+        let rev = compare_branches(&dir, "cmp-feature", &base).unwrap();
+        let b_rev = rev.files.iter().find(|f| f.path == "b.txt").unwrap();
+        assert_eq!(b_rev.status, FileStatus::Deleted);
+
+        // Identical endpoints → an empty diff, not an error.
+        let same = compare_branches(&dir, &base, &base).unwrap();
+        assert!(same.files.is_empty());
+        assert_eq!(same.summary.files_changed, 0);
+
+        // Unknown base / target are rejected before any git diff runs.
+        assert_eq!(
+            compare_branches(&dir, "nope", "cmp-feature").unwrap_err(),
+            "unknown branch `nope`"
+        );
+        assert_eq!(
+            compare_branches(&dir, &base, "nada").unwrap_err(),
+            "unknown branch `nada`"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fetch_remotes_refreshes_and_prunes_remote_tracking_refs() {
+        let Some(origin) = init_repo("fetch-origin") else {
+            return;
+        };
+        fs::write(origin.join("a.txt"), "1\n").unwrap();
+        assert!(commit_all(&origin, "init"));
+        let Some(clone) = clone_repo(&origin, "fetch-clone") else {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        };
+
+        // A branch created on the origin appears as a remote-tracking ref on fetch.
+        assert!(git_in(&origin, &["branch", "remote-only"]));
+        assert!(!list_branches(&clone)
+            .remote
+            .iter()
+            .any(|r| r == "origin/remote-only"));
+        assert!(fetch_remotes(&clone).is_ok());
+        assert!(list_branches(&clone)
+            .remote
+            .iter()
+            .any(|r| r == "origin/remote-only"));
+
+        // Deleting it on the origin prunes the stale ref (`--prune`).
+        assert!(git_in(&origin, &["branch", "-D", "remote-only"]));
+        assert!(fetch_remotes(&clone).is_ok());
+        assert!(!list_branches(&clone)
+            .remote
+            .iter()
+            .any(|r| r == "origin/remote-only"));
+
+        let _ = fs::remove_dir_all(&clone);
+        let _ = fs::remove_dir_all(&origin);
+    }
+
+    #[test]
+    fn fetch_remotes_errors_on_a_missing_remote_and_a_non_git_folder() {
+        // An origin URL pointing at a nonexistent local path fails fast, offline.
+        let Some(dir) = init_repo("fetch-bad") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let missing = unique_dir("fetch-bad-remote"); // never created on disk
+        assert!(git_in(
+            &dir,
+            &["remote", "add", "origin", missing.to_str().unwrap()]
+        ));
+        let err = fetch_remotes(&dir).unwrap_err();
+        assert!(!err.is_empty());
+
+        // A non-git folder errors too (fatal: not a git repository).
+        let plain = unique_dir("fetch-plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert!(fetch_remotes(&plain).is_err());
+
+        let _ = fs::remove_dir_all(&plain);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clone_repo_reports_gits_error_for_a_missing_source() {
+        // Cloning a nonexistent local path fails offline with git's stderr; no
+        // repository is left behind at the destination.
+        let missing = unique_dir("clone-fail-origin"); // never created on disk
+        let dest = unique_dir("clone-fail-dest");
+        let err = super::clone_repo(missing.to_str().unwrap(), &dest).unwrap_err();
+        assert!(!err.is_empty());
+        assert!(!dest.join(".git").exists());
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn checkout_branch_surfaces_gits_error_on_a_conflicting_dirty_tree() {
+        let Some(dir) = init_repo("checkout-dirty") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "base\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let start = current_branch(&dir);
+        // A branch whose a.txt differs from the start branch's.
+        assert!(create_branch(&dir, "co-other", "").is_ok());
+        fs::write(dir.join("a.txt"), "other\n").unwrap();
+        assert!(commit_all(&dir, "other change"));
+        assert!(checkout_branch(&dir, &start).is_ok());
+
+        // An uncommitted conflicting edit makes git refuse the checkout; its stderr
+        // comes back as the error and the tree stays put on the start branch.
+        fs::write(dir.join("a.txt"), "dirty local edit\n").unwrap();
+        let err = checkout_branch(&dir, "co-other").unwrap_err();
+        assert!(!err.is_empty());
+        assert_eq!(current_branch(&dir), start);
+        assert_eq!(
+            fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "dirty local edit\n"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_branch_requires_a_name_and_surfaces_a_ref_lock_conflict() {
+        let Some(dir) = init_repo("create-branch-reflock") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let start = current_branch(&dir);
+
+        // An empty (or all-whitespace) name is rejected before any git call.
+        assert_eq!(
+            create_branch(&dir, "", "").unwrap_err(),
+            "branch name is required"
+        );
+        assert_eq!(
+            create_branch(&dir, "   ", "").unwrap_err(),
+            "branch name is required"
+        );
+
+        // `blocker` exists, so `blocker/child` passes validation (a valid, unused
+        // name) but fails inside git on the ref directory/file conflict — git's
+        // stderr comes back as the error and nothing was created or checked out.
+        assert!(git_in(&dir, &["branch", "blocker"]));
+        let err = create_branch(&dir, "blocker/child", "").unwrap_err();
+        assert!(!err.is_empty());
+        assert!(!list_branches(&dir).all.iter().any(|b| b == "blocker/child"));
+        assert_eq!(current_branch(&dir), start);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worktree_add_rejects_unknown_branch_and_new_branch_takes_a_base() {
+        let Some(dir) = init_repo("wt-more") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let base = current_branch(&dir);
+
+        // An unknown branch is rejected before any worktree is created.
+        let dest0 = unique_dir("wt-more-dest0");
+        assert_eq!(
+            worktree_add(&dir, "missing-branch", &dest0).unwrap_err(),
+            "unknown branch `missing-branch`"
+        );
+        assert!(!dest0.exists());
+
+        // An empty new-branch name is rejected by the shared validation.
+        assert_eq!(
+            worktree_add_new_branch(&dir, "", "", &dest0).unwrap_err(),
+            "branch name is required"
+        );
+
+        // A new branch from an explicit base lands checked out in the worktree,
+        // leaving the main checkout untouched.
+        let dest1 = unique_dir("wt-more-dest1");
+        assert!(worktree_add_new_branch(&dir, "wt-from-base", &base, &dest1).is_ok());
+        assert_eq!(current_branch(&dest1), "wt-from-base");
+        assert_eq!(current_branch(&dir), base);
+
+        // A name colliding with an existing branch's ref directory passes
+        // validation but fails inside git; the stderr comes back as the error.
+        let dest2 = unique_dir("wt-more-dest2");
+        let err = worktree_add_new_branch(&dir, "wt-from-base/sub", "", &dest2).unwrap_err();
+        assert!(!err.is_empty());
+        assert!(!list_branches(&dir)
+            .all
+            .iter()
+            .any(|b| b == "wt-from-base/sub"));
+
+        assert!(worktree_remove(&dir, &dest1, false).is_ok());
+        let _ = fs::remove_dir_all(&dest2);
+        let _ = fs::remove_dir_all(&dest1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worktree_prune_drops_a_stale_entry_and_errors_outside_a_repo() {
+        let Some(dir) = init_repo("wt-prune") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        assert!(git_in(&dir, &["branch", "feat"]));
+        let dest = unique_dir("wt-prune-dest");
+        assert!(worktree_add(&dir, "feat", &dest).is_ok());
+        assert_eq!(list_worktrees(&dir).map(|e| e.len()), Some(2));
+
+        // The worktree folder vanishes off-disk — git still lists the stale entry
+        // until a prune drops it from the administrative list.
+        fs::remove_dir_all(&dest).unwrap();
+        assert_eq!(list_worktrees(&dir).map(|e| e.len()), Some(2));
+        assert!(worktree_prune(&dir).is_ok());
+        assert_eq!(list_worktrees(&dir).map(|e| e.len()), Some(1));
+
+        // Outside a repo, prune surfaces git's error.
+        let plain = unique_dir("wt-prune-plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert!(worktree_prune(&plain).is_err());
+
+        let _ = fs::remove_dir_all(&plain);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_diff_is_none_for_out_of_repo_and_missing_paths() {
+        let Some(dir) = init_repo("filediff-edges") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        // A path outside the repo makes the tracked diff fail (fail-open → None).
+        assert!(file_diff(&dir, "../outside.txt").is_none());
+        // A nonexistent path: no tracked diff, and the untracked `--no-index`
+        // probe errors (exit ≥ 2) → None, never a synthesized diff.
+        assert!(file_diff(&dir, "no-such-file.txt").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_git_raw_allow_diff_is_none_on_a_real_git_error() {
+        // `git -C <missing dir>` exits ≥ 2 — a real error, not "differences found".
+        let missing = unique_dir("raw-allow-missing"); // never created on disk
+        assert_eq!(
+            run_git_raw_allow_diff(&missing, &["diff", "--no-index", "--", "a", "b"]),
+            None
+        );
+    }
+
+    #[test]
+    fn untracked_added_lines_skips_a_file_over_the_per_file_cap() {
+        let dir = unique_dir("untracked-overcap");
+        fs::create_dir_all(&dir).unwrap();
+        // One file just over the per-file byte gate and one small file: only the
+        // small one counts, and the oversized one spends no budget.
+        let big = vec![b'x'; (MAX_UNTRACKED_BYTES + 1) as usize];
+        fs::write(dir.join("big.txt"), big).unwrap();
+        fs::write(dir.join("small.txt"), "a\nb\n").unwrap();
+        let files = vec!["big.txt".to_string(), "small.txt".to_string()];
+        assert_eq!(untracked_added_lines(&dir, &files, 10, u64::MAX), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diff_lines_before_any_file_header_are_ignored() {
+        // Hunk/body lines with no preceding `diff --git` header have no file to
+        // attach to and are skipped (defensive against truncated diff output).
+        let diff = "index abc..def 100644\n+++ b/x.txt\n@@ -1 +1 @@\n+x\n context\n";
+        assert!(parse_unified_diff(diff).is_empty());
+    }
+
+    #[test]
+    fn no_newline_marker_is_an_unnumbered_context_row() {
+        let diff = "\
+diff --git a/x.txt b/x.txt
+index 1..2 100644
+--- a/x.txt
++++ b/x.txt
+@@ -1 +1 @@
+-old
++new
+\\ No newline at end of file
+";
+        let files = parse_unified_diff(diff);
+        assert_eq!(files.len(), 1);
+        let marker = files[0].hunks.last().unwrap();
+        assert_eq!(marker.kind, HunkLineType::Context);
+        assert_eq!(marker.old_no, None);
+        assert_eq!(marker.new_no, None);
+        assert_eq!(marker.text, "\\ No newline at end of file");
+        // The marker is not a counted line.
+        assert_eq!((files[0].add, files[0].del), (1, 1));
+    }
+
+    #[test]
+    fn quoted_diff_headers_unquote_and_markerless_git_lines_fall_back_raw() {
+        // `core.quotepath` quoting: the `diff --git` line carries no usable ` b/`
+        // split (the quote precedes `b/`), so the raw rest is kept until the
+        // quoted `+++` header assigns the unquoted path.
+        let diff = "\
+diff --git \"a/we ird.txt\" \"b/we ird.txt\"
+index 1..2 100644
+--- \"a/we ird.txt\"
++++ \"b/we ird.txt\"
+@@ -1 +1 @@
+-o
++n
+";
+        let files = parse_unified_diff(diff);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "b/we ird.txt");
+
+        // The helpers directly: no ` b/` marker → the raw rest; quotes strip.
+        assert_eq!(path_from_diff_git("nomarker"), "nomarker");
+        assert_eq!(unquote("\"spaced name\""), "spaced name");
+        assert_eq!(unquote("plain"), "plain");
+    }
+
+    #[test]
+    fn porcelain_rename_missing_or_empty_original_keeps_the_new_path_only() {
+        // A rename record truncated at the end of the stream (no original field).
+        let entries = parse_porcelain_z("R  new.txt");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "new.txt");
+        assert_eq!(entries[0].status, FileStatus::Added);
+        // An empty original field is skipped rather than emitted as a "" delete.
+        let entries = parse_porcelain_z("R  moved.txt\u{0}\u{0}");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "moved.txt");
+        assert_eq!(entries[0].status, FileStatus::Added);
+    }
+
+    #[test]
+    fn github_web_url_rejects_a_bare_host_without_a_path() {
+        // A scheme URL with no `/` after the host has no owner/repo segments.
+        assert_eq!(github_web_url("https://github.com"), None);
+        assert_eq!(github_web_url("ssh://git@github.com"), None);
     }
 }

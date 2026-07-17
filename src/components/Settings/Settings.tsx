@@ -8,6 +8,7 @@ import {
 import {
   Bot,
   ChevronDown,
+  Code,
   Copy,
   Database,
   Download,
@@ -30,6 +31,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { agentCaps, agentIsUntested, SETTINGS_AGENTS } from "../../agents";
+import { EDITORS } from "../../editors";
 import * as ipc from "../../ipc";
 import { ensureNotificationPermission } from "../../notify";
 import {
@@ -50,15 +52,17 @@ import Checkbox from "../Checkbox/Checkbox";
 import { markdownLinkComponents } from "../markdownCheckboxes";
 import PatchNotes from "../PatchNotes/PatchNotes";
 import Slider from "../Slider/Slider";
+import { chordForAction, chordLabel } from "../../keybinds";
 import { terminalRendererReport } from "../Terminal/terminalPool";
 import styles from "./Settings.module.css";
-import { SHORTCUT_GROUPS } from "./shortcuts";
+import ShortcutsPane from "./ShortcutsPane";
 
 type Section =
   | "terminal"
   | "appearance"
   | "rendering"
   | "behavior"
+  | "editor"
   | "sessions"
   | "kanban"
   | "updates"
@@ -137,6 +141,11 @@ const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
     icon: <MousePointerClick size={15} strokeWidth={1.5} />,
   },
   {
+    id: "editor",
+    label: "Editor",
+    icon: <Code size={15} strokeWidth={1.5} />,
+  },
+  {
     id: "sessions",
     label: "Sessions",
     icon: <Bot size={15} strokeWidth={1.5} />,
@@ -199,6 +208,11 @@ function SettingsModal() {
   const canSelfUpdate = selfUpdates(installKind);
 
   const [draft, setDraft] = useState<SettingsType>(saved);
+  // The draft's seed, captured once at mount (task 429): Save diffs the draft
+  // against what the user was actually LOOKING at — not against the live settings —
+  // so a foreign change (another window's save, task 428) landing while the modal
+  // is open is neither reverted locally nor included in the persisted patch.
+  const baselineRef = useRef(saved);
   // Rendering is Linux-only (#357): drop it from the nav everywhere else, so macOS/Windows
   // render byte-for-byte as before.
   const visibleSections = SECTIONS.filter(
@@ -232,6 +246,31 @@ function SettingsModal() {
   // the WebGL probe on demand — so the readout works with zero terminals open.
   const [report, setReport] = useState<RendererReport | null>(null);
   const [termInfo, setTermInfo] = useState<TerminalRendererInfo | null>(null);
+
+  // Which editors the "Open in editor" detection found (ids), fetched once on the
+  // Editor section's first visit — it only annotates the select ("— detected"), so
+  // every catalog option renders immediately and a failure just drops the suffix.
+  const [detectedEditors, setDetectedEditors] = useState<Set<string> | null>(
+    null,
+  );
+  useEffect(() => {
+    if (section !== "editor" || detectedEditors !== null) return;
+    let cancelled = false;
+    void ipc
+      .detectEditors()
+      .then((infos) => {
+        if (cancelled) return;
+        setDetectedEditors(
+          new Set(infos.filter((i) => i.found).map((i) => i.id)),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setDetectedEditors(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section, detectedEditors]);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -269,7 +308,7 @@ function SettingsModal() {
 
   const close = () => setOpen(false);
   const save = () => {
-    void saveSettings(draft);
+    void saveSettings(draft, baselineRef.current);
     setOpen(false);
   };
   function update<K extends keyof SettingsType>(
@@ -288,7 +327,7 @@ function SettingsModal() {
     }
     if (event.key !== "Tab" || !dialogRef.current) return;
     const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
     );
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -393,13 +432,18 @@ function SettingsModal() {
                       </button>
                     ))}
                   </div>
-                  <p className={styles.helpText}>
+                  <span className={styles.fieldWarn}>
+                    <TriangleAlert size={13} strokeWidth={2} aria-hidden />
                     Dark mode is the recommended experience.
-                    {/* #349: GTK reads GTK_THEME at init, so the native dialogs
-                        adopt a changed theme only on the next launch. */}
-                    {isLinux(platform) &&
-                      " Native file dialogs adopt this theme the next time ReCue starts."}
-                  </p>
+                  </span>
+                  {/* #349: GTK reads GTK_THEME at init, so the native dialogs
+                      adopt a changed theme only on the next launch. */}
+                  {isLinux(platform) && (
+                    <p className={styles.helpText}>
+                      Native file dialogs adopt this theme the next time ReCue
+                      starts.
+                    </p>
+                  )}
                 </div>
                 <div className={styles.field}>
                   <span className={styles.fieldLabel}>Accent color</span>
@@ -407,6 +451,8 @@ function SettingsModal() {
                     {REPO_PALETTE.map((color) => {
                       // Peach is the default → store "" so the --accent token
                       // stands; any other swatch overrides --accent with its hex.
+                      // A "random" draft never equals a palette hex, so no palette
+                      // swatch reads active alongside the "?" swatch below.
                       const isDefault = color === DEFAULT_ACCENT;
                       const active =
                         (draft.accentColor || DEFAULT_ACCENT) === color;
@@ -415,7 +461,9 @@ function SettingsModal() {
                           key={color}
                           type="button"
                           className={`${styles.swatch} ${active ? styles.swatchActive : ""}`}
-                          style={{ background: color }}
+                          // `color` too: the active ring is the swatch's own color
+                          // via currentColor (UI v2 §10).
+                          style={{ background: color, color }}
                           onClick={() =>
                             update("accentColor", isDefault ? "" : color)
                           }
@@ -425,6 +473,22 @@ function SettingsModal() {
                         />
                       );
                     })}
+                    {/* "?" random accent (UI v2 task 373): persists the literal
+                        "random", resolved to a random palette member each launch. */}
+                    <button
+                      type="button"
+                      className={`${styles.swatch} ${styles.swatchRandom} ${
+                        draft.accentColor === "random"
+                          ? styles.swatchActive
+                          : ""
+                      }`}
+                      onClick={() => update("accentColor", "random")}
+                      title="Random accent — a new palette color each launch"
+                      aria-label="Random accent"
+                      aria-pressed={draft.accentColor === "random"}
+                    >
+                      ?
+                    </button>
                   </div>
                 </div>
                 <Checkbox
@@ -433,6 +497,63 @@ function SettingsModal() {
                   label="Reduce motion"
                   className={styles.checkRow}
                 />
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.densePanels}
+                    onChange={(v) => update("densePanels", v)}
+                    label="Dense panels"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Tile panels edge-to-edge with no gaps
+                    {(() => {
+                      // The live (draft) binding, so a rebind in this same modal
+                      // session reads back correctly here.
+                      const chord = chordForAction(
+                        "dense-panels",
+                        draft.keybinds,
+                      );
+                      const label = chordLabel(chord, platform);
+                      return label ? ` (${label})` : "";
+                    })()}
+                    .
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.backgroundAnimation}
+                    onChange={(v) => update("backgroundAnimation", v)}
+                    label="Background animation"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Animate the app background. Off keeps it static.
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.pauseWaveWhenCovered}
+                    onChange={(v) => update("pauseWaveWhenCovered", v)}
+                    disabled={!draft.backgroundAnimation}
+                    label="Pause when covered by panels"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Pauses the background animation while panels tile over it.
+                    It resumes the moment the stage is clear.
+                  </p>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
+                    checked={draft.capAgentWidth}
+                    onChange={(v) => update("capAgentWidth", v)}
+                    label="Cap Overview panel width"
+                    className={styles.checkRow}
+                  />
+                  <p className={styles.helpText}>
+                    Limit Overview panels to a comfortable maximum width.
+                  </p>
+                </div>
                 <Checkbox
                   checked={draft.showDiffLineCounts}
                   onChange={(v) => update("showDiffLineCounts", v)}
@@ -460,6 +581,19 @@ function SettingsModal() {
                 <p className={styles.helpText}>
                   Scales the entire interface. The terminal font size is set
                   separately under Terminal.
+                </p>
+                <Slider
+                  label="Terminal background"
+                  valueLabel={`${draft.terminalBackgroundLightness}%`}
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={draft.terminalBackgroundLightness}
+                  onChange={(v) => update("terminalBackgroundLightness", v)}
+                />
+                <p className={styles.helpText}>
+                  Lighten the agent terminal background from the app&apos;s
+                  panel color toward gray.
                 </p>
               </>
             )}
@@ -623,12 +757,15 @@ function SettingsModal() {
                   <Checkbox
                     checked={draft.autoFocusOnHover}
                     onChange={(v) => update("autoFocusOnHover", v)}
-                    label="Focus panels on hover"
+                    label="Auto-focus agents and panels on hover"
                     className={styles.checkRow}
                   />
                   <p className={styles.helpText}>
-                    When on, moving the mouse over an agent or terminal panel
-                    focuses it so you can type immediately without clicking.
+                    When on, moving the mouse over an agent or panel selects it
+                    (the highlight border follows the pointer) and an agent or
+                    terminal panel is focused so you can type immediately.
+                    Hovering a panel without terminal input unfocuses the
+                    previous terminal, so keystrokes never keep going to it.
                     Text fields you are editing are never interrupted.
                   </p>
                 </div>
@@ -726,6 +863,75 @@ function SettingsModal() {
                   </p>
                 </div>
               </>
+            )}
+
+            {section === "editor" && (
+              <div className={styles.field}>
+                <span className={styles.fieldLabel}>Open in editor</span>
+                <select
+                  className={styles.editorSelect}
+                  value={draft.preferredEditor ?? ""}
+                  onChange={(e) =>
+                    update(
+                      "preferredEditor",
+                      e.currentTarget.value === ""
+                        ? null
+                        : e.currentTarget.value,
+                    )
+                  }
+                  aria-label="Preferred editor"
+                >
+                  <option value="">Ask every time</option>
+                  {EDITORS.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.label}
+                      {detectedEditors?.has(e.id) ? " — detected" : ""}
+                    </option>
+                  ))}
+                  <option value="custom">Custom command…</option>
+                </select>
+                <span className={styles.fieldHelp}>
+                  The editor {"“Open in editor”"} launches — from the agent{" "}
+                  {"⋯"} menu, a folder's right-click menu, or{" "}
+                  {chordLabel(
+                    chordForAction("open-in-editor", draft.keybinds),
+                    platform,
+                  ) || "its shortcut"}
+                  . {"“Ask every time”"} opens the picker on each use.
+                </span>
+                {draft.preferredEditor === "custom" && (
+                  <>
+                    <input
+                      type="text"
+                      className={styles.commandInput}
+                      value={draft.customEditorCommand}
+                      onChange={(e) =>
+                        update("customEditorCommand", e.currentTarget.value)
+                      }
+                      placeholder="alacritty -e nvim {path}"
+                      spellCheck={false}
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      aria-label="Custom editor command"
+                    />
+                    <span className={styles.fieldHelp}>
+                      A program and its arguments, as you'd type it in a
+                      terminal (split on spaces; quote to group) — not a shell
+                      line. Every {"{path}"} is replaced with the folder;
+                      without it the folder is appended as the last argument.
+                      Terminal editors go through their emulator, e.g.{" "}
+                      <code>alacritty -e nvim {"{path}"}</code>.
+                    </span>
+                    {draft.customEditorCommand.trim() === "" && (
+                      <span className={styles.fieldWarn}>
+                        <TriangleAlert size={13} strokeWidth={2} aria-hidden />
+                        Enter a command — opening a folder with none set will
+                        fail.
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
             )}
 
             {section === "sessions" && (
@@ -932,7 +1138,9 @@ function SettingsModal() {
                               key={color}
                               type="button"
                               className={`${styles.swatch} ${row.color === color ? styles.swatchActive : ""}`}
-                              style={{ background: color }}
+                              // `color` too: the active ring is the swatch's own
+                              // color via currentColor (UI v2 §10).
+                              style={{ background: color, color }}
                               onClick={() => setRow({ color })}
                               title={color}
                               aria-label={`Color ${color}`}
@@ -947,7 +1155,7 @@ function SettingsModal() {
                             className={`${styles.swatch} ${styles.swatchCustom} ${customActive ? styles.swatchActive : ""}`}
                             style={
                               customActive
-                                ? { background: row.color }
+                                ? { background: row.color, color: row.color }
                                 : undefined
                             }
                             title="Custom color"
@@ -1217,33 +1425,15 @@ function SettingsModal() {
             )}
 
             {section === "shortcuts" && (
-              // Read-only keyboard-shortcut reference (#318): grouped, cross-platform
-              // via `kbdHint`. No inputs — nothing here mutates the draft.
-              <div className={styles.shortcutsSection}>
-                <p className={styles.helpText}>
-                  Reference only — shortcuts can&rsquo;t be changed here.
-                </p>
-                {SHORTCUT_GROUPS.map((group) => (
-                  <div key={group.title} className={styles.shortcutGroup}>
-                    <span className={styles.fieldLabel}>{group.title}</span>
-                    <ul className={styles.shortcutList}>
-                      {group.shortcuts.map((shortcut) => (
-                        <li
-                          key={shortcut.description}
-                          className={styles.shortcutRow}
-                        >
-                          <kbd className={styles.shortcutKey}>
-                            {kbdHint(platform, shortcut.mac, shortcut.win)}
-                          </kbd>
-                          <span className={styles.shortcutDesc}>
-                            {shortcut.description}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
+              // Editable keybinds (the keybind rework, superseding the #318
+              // read-only reference): rebindable actions stage into the draft
+              // like every other section; the fixed contextual chords render
+              // read-only below.
+              <ShortcutsPane
+                platform={platform}
+                keybinds={draft.keybinds}
+                onChange={(next) => update("keybinds", next)}
+              />
             )}
 
             {section === "data" && (
@@ -1294,13 +1484,17 @@ function SettingsModal() {
               type="button"
               className={styles.resetButton}
               // Preserve the one-time flags across a reset so it doesn't re-trigger the
-              // first-launch agent picker (`onboarded`) or re-arm the #367 line-height
-              // migration (`terminalLineHeightMigrated`) next launch.
+              // first-launch agent picker (`onboarded`), re-arm the #367 line-height
+              // migration (`terminalLineHeightMigrated`), or re-arm the terminal
+              // background-match migration (`terminalBackgroundMatchMigrated`) next
+              // launch.
               onClick={() =>
                 setDraft({
                   ...DEFAULT_SETTINGS,
                   onboarded: saved.onboarded,
                   terminalLineHeightMigrated: saved.terminalLineHeightMigrated,
+                  terminalBackgroundMatchMigrated:
+                    saved.terminalBackgroundMatchMigrated,
                 })
               }
             >

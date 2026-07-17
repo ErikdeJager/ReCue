@@ -23,7 +23,6 @@ import {
   listCommits,
   workingDiff,
 } from "../../ipc";
-import { repoName } from "../../paths";
 import { useStore } from "../../store";
 import type {
   BranchList,
@@ -35,6 +34,7 @@ import type {
 
 import { prismLang } from "../FileViewer/fileType";
 import { highlightToHtml } from "../FileViewer/prism";
+import SegmentedControl from "../SegmentedControl/SegmentedControl";
 import { type SeenState, fileDigest, seenState } from "./diffSeen";
 import { type DisplayMode, diffNavDelta } from "./diffNav";
 import { type DiffSortOrder, reconcileOccurrence, sortFiles } from "./diffSort";
@@ -565,16 +565,6 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
     orderedFiles[0] ??
     null;
 
-  const selectedCommit = commits.find((c) => c.sha === commitSha);
-  // Header label: the selected commit (short sha · subject) in Commits mode, else the
-  // diff summary's branch / "base → target".
-  const summaryLabel =
-    source === "commits" && selectedCommit
-      ? `${selectedCommit.short_sha} · ${selectedCommit.subject}`
-      : diff?.summary.branch || "—";
-  // Panel header (#231): "repo · branch" (the wireframe's "ReCue · main").
-  const headerLabel = `${repoName(repoPath)} · ${summaryLabel}`;
-
   // Focused-mode navigation (#231): cycle through the changed files (wraps).
   const activeIndex = activeFile
     ? orderedFiles.findIndex((f) => f.path === activeFile.path)
@@ -610,9 +600,12 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
   const onPanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
       return;
+    // Also ignore events from a segmented control ([role=tablist]) — the atom's
+    // roving arrow-key nav doesn't stop propagation, and a segment-focused arrow
+    // press must change only that control, never also step the file (#255).
     if (
       (event.target as HTMLElement).closest(
-        "input, textarea, select, [contenteditable], [role=listbox], [role=combobox]",
+        "input, textarea, select, [contenteditable], [role=listbox], [role=combobox], [role=tablist]",
       )
     ) {
       return;
@@ -661,124 +654,53 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
     // when this panel has focus, so other diff panels / terminals are unaffected.
     <div className={styles.panel} tabIndex={0} onKeyDown={onPanelKeyDown}>
       <div className={styles.summary}>
-        <div className={styles.summaryRow}>
-          <span className={styles.branch} title={headerLabel}>
-            {headerLabel}
+        {/* Row 1 (UI v2 §8): the "N file(s) +a −d" meta + Focused|Accordion. The
+            "repo · branch" context now rides in the panel/card header (Task 380). */}
+        <div className={styles.toolbar}>
+          <span className={styles.meta}>
+            {diff ? (
+              <>
+                {diff.summary.files_changed} file
+                {diff.summary.files_changed === 1 ? "" : "s"}{" "}
+                <span className={styles.add}>+{diff.summary.adds}</span>{" "}
+                <span className={styles.del}>−{diff.summary.dels}</span>
+              </>
+            ) : (
+              "—"
+            )}
           </span>
-          <div className={styles.summaryActions}>
-            {/* Display mode (#231): focused single-file vs accordion cards. */}
-            <div className={styles.modeToggle}>
-              <button
-                type="button"
-                className={
-                  displayMode === "focused" ? styles.modeActive : styles.mode
-                }
-                aria-pressed={displayMode === "focused"}
-                onClick={() => chooseDisplayMode("focused")}
-                title="Focused single file"
-              >
-                Focused
-              </button>
-              <button
-                type="button"
-                className={
-                  displayMode === "accordion" ? styles.modeActive : styles.mode
-                }
-                aria-pressed={displayMode === "accordion"}
-                onClick={() => chooseDisplayMode("accordion")}
-                title="Accordion files"
-              >
-                Accordion
-              </button>
-            </div>
-            {/* File ordering (#258): occurrence (newest-changed at the bottom) vs A–Z. */}
-            <div className={styles.modeToggle}>
-              <button
-                type="button"
-                className={
-                  sortOrder === "occurrence" ? styles.modeActive : styles.mode
-                }
-                aria-pressed={sortOrder === "occurrence"}
-                onClick={() => chooseSortOrder("occurrence")}
-                title="Order by when each file first changed (newest at the bottom)"
-              >
-                Recent
-              </button>
-              <button
-                type="button"
-                className={
-                  sortOrder === "alphabetical" ? styles.modeActive : styles.mode
-                }
-                aria-pressed={sortOrder === "alphabetical"}
-                onClick={() => chooseSortOrder("alphabetical")}
-                title="Order alphabetically (A–Z)"
-              >
-                A–Z
-              </button>
-            </div>
-            <div className={styles.modeToggle}>
-              <button
-                type="button"
-                className={mode === "unified" ? styles.modeActive : styles.mode}
-                aria-pressed={mode === "unified"}
-                onClick={() => chooseLineMode("unified")}
-              >
-                Unified
-              </button>
-              <button
-                type="button"
-                className={mode === "split" ? styles.modeActive : styles.mode}
-                aria-pressed={mode === "split"}
-                onClick={() => chooseLineMode("split")}
-              >
-                Split
-              </button>
-            </div>
-            <button
-              type="button"
-              className={styles.refresh}
-              onClick={() => void load()}
-              title="Refresh diff"
-              aria-label="Refresh diff"
-            >
-              <RefreshCw
-                size={14}
-                strokeWidth={1.5}
-                className={loading ? styles.spinning : ""}
-              />
-            </button>
-          </div>
+          {/* Display mode (#231): focused single-file vs accordion cards. */}
+          <SegmentedControl<DisplayMode>
+            ariaLabel="Display mode"
+            value={displayMode}
+            onChange={chooseDisplayMode}
+            options={[
+              {
+                value: "focused",
+                label: "Focused",
+                title: "Focused single file",
+              },
+              {
+                value: "accordion",
+                label: "Accordion",
+                title: "Accordion files",
+              },
+            ]}
+          />
         </div>
 
-        {/* Source toggle (#81/#230): working tree vs HEAD, a two-branch compare, or a
-            single commit's diff. */}
+        {/* Row 2: source toggle (#81/#230) + pickers + sort/line toggles + refresh. */}
         <div className={styles.sourceRow}>
-          <div className={styles.modeToggle}>
-            <button
-              type="button"
-              className={source === "working" ? styles.modeActive : styles.mode}
-              aria-pressed={source === "working"}
-              onClick={() => setSource("working")}
-            >
-              Working tree
-            </button>
-            <button
-              type="button"
-              className={source === "compare" ? styles.modeActive : styles.mode}
-              aria-pressed={source === "compare"}
-              onClick={() => setSource("compare")}
-            >
-              Compare
-            </button>
-            <button
-              type="button"
-              className={source === "commits" ? styles.modeActive : styles.mode}
-              aria-pressed={source === "commits"}
-              onClick={() => setSource("commits")}
-            >
-              Commits
-            </button>
-          </div>
+          <SegmentedControl<DiffSource>
+            ariaLabel="Diff source"
+            value={source}
+            onChange={setSource}
+            options={[
+              { value: "working", label: "Working tree" },
+              { value: "compare", label: "Compare" },
+              { value: "commits", label: "Commits" },
+            ]}
+          />
           {/* Commit picker (#230): the bounded recent-commit list; selecting one shows
               its diff in the body. The cap is surfaced so a long history reads bounded. */}
           {source === "commits" && (
@@ -831,18 +753,48 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
               </select>
             </div>
           )}
-        </div>
-
-        <div className={styles.counts}>
-          {diff
-            ? `${diff.summary.files_changed} file${diff.summary.files_changed === 1 ? "" : "s"} changed `
-            : "— "}
-          {diff && (
-            <>
-              <span className={styles.add}>+{diff.summary.adds}</span>{" "}
-              <span className={styles.del}>−{diff.summary.dels}</span>
-            </>
-          )}
+          <span className={styles.spacer} aria-hidden="true" />
+          {/* File ordering (#258): occurrence (newest-changed at the bottom) vs A–Z. */}
+          <SegmentedControl<DiffSortOrder>
+            ariaLabel="File order"
+            value={sortOrder}
+            onChange={chooseSortOrder}
+            options={[
+              {
+                value: "occurrence",
+                label: "Recent",
+                title:
+                  "Order by when each file first changed (newest at the bottom)",
+              },
+              {
+                value: "alphabetical",
+                label: "A–Z",
+                title: "Order alphabetically (A–Z)",
+              },
+            ]}
+          />
+          <SegmentedControl<DiffMode>
+            ariaLabel="Line layout"
+            value={mode}
+            onChange={chooseLineMode}
+            options={[
+              { value: "unified", label: "Unified" },
+              { value: "split", label: "Split" },
+            ]}
+          />
+          <button
+            type="button"
+            className={styles.refresh}
+            onClick={() => void load()}
+            title="Refresh diff"
+            aria-label="Refresh diff"
+          >
+            <RefreshCw
+              size={14}
+              strokeWidth={1.5}
+              className={loading ? styles.spinning : ""}
+            />
+          </button>
         </div>
       </div>
 
@@ -904,7 +856,7 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
               aria-label="Previous file"
               aria-keyshortcuts="ArrowLeft"
             >
-              <ChevronLeft size={16} strokeWidth={1.5} />
+              <ChevronLeft size={14} strokeWidth={1.5} />
             </button>
             <div className={styles.pickerWrap}>
               <button
@@ -919,10 +871,13 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
                 <span className={styles.pickerName}>
                   {activeFile ? (activeFile.path.split("/").pop() ?? "—") : "—"}
                 </span>
+                {activeFile && (
+                  <CountsPair add={activeFile.add} del={activeFile.del} />
+                )}
                 <span className={styles.pickerIndex}>
                   {activeIndex + 1}/{orderedFiles.length}
                 </span>
-                <ChevronDown size={14} strokeWidth={1.5} />
+                <ChevronDown size={12} strokeWidth={1.5} />
               </button>
               {pickerOpen && (
                 <>
@@ -965,20 +920,16 @@ function DiffInspector({ repoPath, active }: DiffInspectorProps) {
               aria-label="Next file"
               aria-keyshortcuts="ArrowRight"
             >
-              <ChevronRight size={16} strokeWidth={1.5} />
+              <ChevronRight size={14} strokeWidth={1.5} />
             </button>
-          </div>
-          {activeFile && (
-            <div className={styles.focusSubheader}>
-              <span className={styles.focusPath}>{activeFile.path}</span>
-              <CountsPair add={activeFile.add} del={activeFile.del} />
+            {activeFile && (
               <SeenToggle
                 state={seenFor(activeFile)}
                 onToggle={() => toggleSeen(activeFile)}
                 showHint
               />
-            </div>
-          )}
+            )}
+          </div>
           <div className={styles.body}>
             {activeFile && <DiffFile file={activeFile} mode={mode} />}
           </div>

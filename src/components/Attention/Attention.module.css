@@ -1,0 +1,390 @@
+/* Attention view (#398): a two-pane triage surface filling `.main-content`. Both panes
+   sit over the shared wave background (task 377) — the queue pane is transparent so the
+   wave shows through in the gaps; the agent pane is an opaque panel like a Canvas panel.
+   UI v2 corner language: square panels, Surface0 selection fill, tokens only. */
+.attention {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  gap: var(--stage-gap);
+  padding: var(--stage-pad-overview);
+}
+
+/* --- Middle queue pane (transparent, scrollable) --- */
+.queuePane {
+  display: flex;
+  width: 360px;
+  flex-shrink: 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.queueHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  height: 28px;
+  margin-bottom: var(--space-8);
+  padding: 0 var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+}
+
+.queueTitle {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.queueDot {
+  color: var(--text-faint);
+}
+
+/* Dismiss-all ✓ — a ghost icon button on the stage. */
+.dismissAll {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.dismissAll:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* --- Repo/folder/branch filter indicator (#445) — mirrors Overview's `.filterBar`.
+   Chrome-less row on the stage, between the header and the queue list / empty block,
+   only rendered when a filter (shared with Overview) is set. --- */
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-shrink: 0;
+  margin-bottom: var(--space-8);
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+
+.filterLabel strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Accent text-link "Show all" — sits right after the label, gap-separated. */
+.showAll {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.showAll:hover {
+  text-decoration: underline;
+}
+
+.queueList {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  overflow-y: auto;
+  /* Room for the scrollbar so cards never sit under it. */
+  padding-right: var(--space-2);
+}
+
+/* --- Queue card --- */
+/* Entrance: cards are keyed by session id, so a DOM insertion IS a genuine queue
+   entry (the admission grace has confirmed the idle). The global reduced-motion
+   killswitch (global.css) zeroes the animation automatically. */
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+  flex-shrink: 0;
+  padding: var(--space-8) 10px;
+  border: 1px solid var(--border-hairline);
+  background: var(--bg-panel);
+  cursor: pointer;
+  text-align: left;
+  animation: card-enter 140ms var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.card:hover {
+  background: var(--bg-hover);
+}
+
+/* Inset keyboard-focus ring: the global :focus-visible rule's +2px outline-offset
+   would clip against .queueList's scrollport (only 2px padding-right). */
+.card:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Selection = Surface0 fill (UI v2 §7 — the accent never encodes selection). */
+.cardActive,
+.cardActive:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+}
+
+.cardInfo {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cardName {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardMeta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardFooter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-top: var(--space-1);
+}
+
+/* The IDLE marker — a small hairline chip, mirroring the "worktree"/"fork" badge. */
+.idleTag {
+  padding: 1px 4px;
+  border: 1px solid var(--status-awaiting);
+  border-radius: var(--radius-micro);
+  color: var(--status-awaiting);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+/* The NEW marker (task 410) — a fresh, never-worked agent. Mirrors .idleTag but uses
+   the gray idle token so it reads distinct from awaiting and matches its gray dot. */
+.newTag {
+  padding: 1px 4px;
+  border: 1px solid var(--status-idle);
+  border-radius: var(--radius-micro);
+  color: var(--status-idle);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+.idleAge {
+  color: var(--text-faint);
+  font-size: var(--fs-meta-xs);
+}
+
+/* --- Keybind-tips footer — rendered only while the queue is non-empty. Pinned
+   under the flex:1 scrolling .queueList; over the transparent wave stage, so it
+   carries the same legibility text-shadow as .empty. --- */
+.queueFooter {
+  display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-4) var(--space-8);
+  margin-top: var(--space-8);
+  padding: 0 var(--space-4);
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+  text-shadow: 0 1px 6px rgba(17, 17, 27, 0.65);
+}
+
+.footerItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  white-space: nowrap;
+}
+
+.footerItem kbd {
+  color: var(--text-muted);
+}
+
+/* --- Diff +/- stat (#335) — mirrors the sidebar tokens. --- */
+.diffStat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.diffAdd {
+  color: var(--status-done);
+}
+
+.diffDel {
+  color: var(--status-error);
+}
+
+/* --- Empty state (transparent, over the wave) --- */
+.empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  text-shadow: 0 1px 6px rgba(17, 17, 27, 0.65);
+}
+
+.empty svg {
+  color: var(--accent);
+}
+
+.emptyTitle {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.emptyHint {
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+
+/* --- Right agent pane (opaque panel) --- */
+.agentPane {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  border: 1px solid var(--border-hairline);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.agentHeader {
+  display: flex;
+  height: 36px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.agentTitleBlock {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.agentName {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--fs-meta-xs);
+}
+
+.agentActions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.action {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.action:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* The relocated Remove × — red on hover (the destructive header action, matching
+   Overview's SessionCard .actionDanger; #103 confirm-gating deliberately dropped). */
+.actionDanger:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: var(--status-error);
+  background: var(--bg-elevated);
+}
+
+.agentBody {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The live terminal fills the body and can shrink below its intrinsic width. */
+.agentBody > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}

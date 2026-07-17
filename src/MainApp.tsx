@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   DndContext,
   type DragEndEvent,
@@ -18,22 +18,30 @@ import {
   payloadToContent,
 } from "./components/Canvas/canvasDrop";
 import { CanvasDragOverlay } from "./components/Canvas/CanvasSurface";
-import {
-  computeSessionOwners,
-  sessionIdsInLayout,
-} from "./components/Canvas/canvasTree";
+import { sessionIdsInLayout } from "./components/Canvas/canvasTree";
 import ClaudeMissing from "./components/ClaudeMissing/ClaudeMissing";
 import ModalHost from "./components/ModalHost";
 import Overview from "./components/Overview/Overview";
 import Sidebar from "./components/Sidebar/Sidebar";
 import { reconcileTerminals } from "./components/Terminal/terminalPool";
+import Titlebar from "./components/Titlebar/Titlebar";
 import Toaster from "./components/Toaster/Toaster";
 import UpdateModal from "./components/Update/UpdateModal";
+import WaveBackground from "./components/WaveBackground/WaveBackground";
+import {
+  overviewIsEmpty,
+  selectWavePreset,
+  waveCovered,
+} from "./components/WaveBackground/wavePresets";
 import { useOsFileDrop } from "./osFileDrop";
 import { prefetchDeferredChunks } from "./prefetch";
-import { useStore } from "./store";
+import { overviewClusters, useStore } from "./store";
 import { useKeyboardNav } from "./useKeyboardNav";
-import { ownedHere } from "./windowContext";
+
+// The Attention triage view (#398) is a lazy chunk — kept off the first-paint graph
+// (#356) and warmed on idle by `src/prefetch.ts`. Its own per-branch Suspense (below)
+// never wraps a live terminal, honoring the #18 pool invariant.
+const Attention = lazy(() => import("./components/Attention/Attention"));
 
 /**
  * Application shell: a sidebar region (#9) and the main content area, which
@@ -47,9 +55,9 @@ import { ownedHere } from "./windowContext";
  * tree into the workspace. The Overview wall keeps its own nested sortable
  * context (#43); the two never both have live targets (one view mounts at a time).
  *
- * This is the **main-window route chunk** (#356) — `App.tsx` lazy-loads it, so a
- * detached canvas window (#84) never downloads the sidebar / Overview / modals.
- * The ten lazy modals live behind `<ModalHost />`; `Toaster`, `BigModeModal`,
+ * This is the **app-shell route chunk** (#356) — `App.tsx` lazy-loads it in every
+ * window (task 437 deleted the #84 canvas-only route), keeping it out of the entry.
+ * The eleven lazy modals live behind `<ModalHost />`; `Toaster`, `BigModeModal`,
  * `UpdateModal` and `ClaudeMissing` stay static (first-paint or safety-critical —
  * the update install overlay must never be a chunk away).
  */
@@ -59,7 +67,11 @@ function MainApp() {
   const sessions = useStore((s) => s.sessions);
   const overviewPanels = useStore((s) => s.overviewPanels);
   const canvases = useStore((s) => s.canvases);
-  const detachedCanvasIds = useStore((s) => s.detachedCanvasIds);
+  const activeCanvasId = useStore((s) => s.activeCanvasId);
+  const schedules = useStore((s) => s.schedules);
+  const recurrings = useStore((s) => s.recurrings);
+  const overviewOrder = useStore((s) => s.overviewOrder);
+  const overviewRepoFilter = useStore((s) => s.overviewRepoFilter);
   const init = useStore((s) => s.init);
   const beginCanvasLift = useStore((s) => s.beginCanvasLift);
   const cancelCanvasLift = useStore((s) => s.cancelCanvasLift);
@@ -93,20 +105,22 @@ function MainApp() {
       .flat()
       .filter((p) => p.kind === "terminal")
       .map((p) => p.id);
-    // A PTY rendered in a detached canvas window (#84) is owned by that window —
-    // drop it from this window's pool so it isn't rendered/resized in two places.
-    const owners = computeSessionOwners(canvases, detachedCanvasIds);
     // Template-created (#118) terminals live only in a Canvas layout — not in
     // `overviewPanels` — so collect terminal/agent PTY ids referenced by any canvas
     // too, else reconcile would dispose them. (Agent ids dedupe with `sessions`.)
     const canvasPtyIds = canvases.flatMap((c) => sessionIdsInLayout(c.layout));
+    // Keep-set = every live PTY (agents, shell panels #72, canvas-layout terminals #118).
+    // No ownership filter (task 437): any window may render any session — the #351
+    // visibility gate means an xterm is only built for what THIS window actually shows,
+    // and 426/427 mirror-size the shared PTY. Two windows typing into one agent
+    // interleave like two tmux clients — expected.
     const active = [
       ...sessions.map((s) => s.id),
       ...terminalIds,
       ...canvasPtyIds,
-    ].filter((id) => ownedHere(owners, id));
+    ];
     reconcileTerminals(active);
-  }, [sessions, overviewPanels, canvases, detachedCanvasIds]);
+  }, [sessions, overviewPanels, canvases]);
 
   // Lift an existing panel out of the layout at drag start (#155) so the rest
   // reflow and a ghost follows the cursor; sidebar→Canvas content drags are unaffected.
@@ -152,8 +166,38 @@ function MainApp() {
     if (content) applyCanvasDrop(String(over.id), content);
   };
 
+  // The wave background preset (UI v2 §3, task 377): one canvas spans the whole
+  // stage — behind Overview AND behind the Canvas strip + panes — and a view
+  // switch is a live config mutation on the same engine (never a remount).
+  const wavePreset = selectWavePreset(
+    view === "canvas" ? "canvas" : "overview",
+    overviewIsEmpty({ sessions, overviewPanels, schedules, recurrings }),
+  );
+  // Whether panels cover the stage right now, so the wave can pause (task 384):
+  // Overview ⇒ the (filter-aware) wall has cards; Canvas ⇒ the active tab has a
+  // layout. Mirrors the actual render — Overview shows exactly `overviewClusters`.
+  const waveIsCovered = waveCovered({
+    view: view === "canvas" ? "canvas" : "overview",
+    overviewHasCards:
+      overviewClusters({
+        sessions,
+        overviewPanels,
+        overviewOrder,
+        schedules,
+        recurrings,
+        filter: overviewRepoFilter,
+      }).length > 0,
+    activeCanvasLayout:
+      canvases.find((c) => c.id === activeCanvasId)?.layout ?? null,
+  });
+
   return (
     <div className="app">
+      {/* Themed window title-bar strip (task 444): a slim `--surface-mantle` strip the
+          native macOS traffic lights float over (Overlay title bar); `display: none` off
+          macOS. `.app` is `flex-direction: column`, so on macOS it reserves 30px above
+          `.app-body`; elsewhere it renders nothing and `.app-body` fills the window. */}
+      <Titlebar />
       {claudeMissing && <ClaudeMissing />}
       <DndContext
         sensors={sensors}
@@ -168,9 +212,14 @@ function MainApp() {
         <div className="app-body">
           <Sidebar />
           <main className="main">
+            <WaveBackground preset={wavePreset} covered={waveIsCovered} />
             <div className="main-content">
               {view === "overview" ? (
                 <Overview />
+              ) : view === "attention" ? (
+                <Suspense fallback={<div className="main-content-loading" />}>
+                  <Attention />
+                </Suspense>
               ) : (
                 <Canvas dragActive={dragActive} />
               )}

@@ -1,28 +1,95 @@
-import { LayoutGrid, PanelsTopLeft } from "lucide-react";
+import { AlertTriangle, LayoutGrid, PanelsTopLeft } from "lucide-react";
 
 import { useStore } from "../../store";
 import type { View } from "../../types";
+import { useKeybindLabel } from "../../useKeybind";
+import SegmentedControl, {
+  type SegmentedOption,
+} from "../SegmentedControl/SegmentedControl";
 import styles from "./ViewSwitch.module.css";
 
+// Order shared by the compact rail (Overview → Attention → Canvas, #406). Expanded
+// mode builds its own two-segment array + a standalone Canvas button below.
 const OPTIONS: { value: View; label: string; icon: typeof LayoutGrid }[] = [
   { value: "overview", label: "Overview", icon: LayoutGrid },
+  { value: "attention", label: "Attention", icon: AlertTriangle },
   { value: "canvas", label: "Canvas", icon: PanelsTopLeft },
 ];
 
 /**
- * Segmented Overview / Canvas control (#25, #46, #75). Lives in the sidebar,
- * under the New session button, so it's always visible. With `compact` (#168) it
- * renders as icon-only buttons stacked to fit the collapsed sidebar rail.
+ * View switcher (#25, #46, #75, #398, #405, #406). Lives in the sidebar, under the New
+ * session button, so it's always visible. **Overview** and **Attention** are the two
+ * prominent, equal-weight *main* views; **Canvas** is a visually smaller, de-emphasized
+ * *secondary* view (#406). The expanded mode renders the two main views through the
+ * shared `SegmentedControl` atom (UI v2 task 372, its rounded `chrome` look) followed by
+ * a smaller standalone Canvas button in the same row; with `compact` (#168) it renders
+ * as icon-only buttons stacked to fit the collapsed sidebar rail, in the same
+ * Overview → Attention → Canvas order (Canvas subtly de-emphasized). In expanded mode
+ * **Overview** and **Attention** are equal-weight text segments; only the compact rail
+ * renders Attention as the lucide `AlertTriangle` icon (accessible name "Attention").
+ * Neither mode shows a queue-count badge (#405).
  */
 function ViewSwitch({ compact = false }: { compact?: boolean }) {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
+  // Live view keybinds (⌥1/⌥2/⌥3 by default, rebindable) surfaced as tooltips.
+  const viewKeys: Record<View, string> = {
+    overview: useKeybindLabel("view-overview"),
+    attention: useKeybindLabel("view-attention"),
+    canvas: useKeybindLabel("view-canvas"),
+  };
+  const withKey = (label: string, v: View) =>
+    viewKeys[v] ? `${label} (${viewKeys[v]})` : label;
 
   const go = (value: View) => setView(value);
 
+  if (!compact) {
+    // Overview + Attention are the two equal-weight main segments; Canvas is a
+    // separate, visibly smaller secondary button appended after the control (#406).
+    // With only two segments in the control, `view === "canvas"` leaves neither
+    // segment active here — the standalone Canvas button carries the active state
+    // instead (the intended "Canvas is a secondary mode" affordance).
+    const mainOptions: SegmentedOption<View>[] = [
+      {
+        value: "overview",
+        label: "Overview",
+        title: withKey("Overview", "overview"),
+      },
+      {
+        value: "attention",
+        label: "Attention",
+        title: withKey("Attention", "attention"),
+      },
+    ];
+    const canvasActive = view === "canvas";
+    return (
+      <div className={styles.expanded}>
+        <SegmentedControl
+          options={mainOptions}
+          value={view}
+          onChange={go}
+          ariaLabel="View"
+          chrome
+          stretch
+          className={styles.mainControl}
+        />
+        <button
+          type="button"
+          className={canvasActive ? styles.canvasBtnActive : styles.canvasBtn}
+          aria-label="Canvas"
+          title={withKey("Canvas", "canvas")}
+          aria-pressed={canvasActive}
+          onClick={() => go("canvas")}
+        >
+          <PanelsTopLeft size={14} strokeWidth={1.5} aria-hidden />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
-      className={compact ? styles.groupCompact : styles.group}
+      className={styles.groupCompact}
       role="tablist"
       aria-label="View"
       onKeyDown={(event) => {
@@ -48,31 +115,25 @@ function ViewSwitch({ compact = false }: { compact?: boolean }) {
       {OPTIONS.map((option) => {
         const selected = view === option.value;
         const Icon = option.icon;
+        const isCanvas = option.value === "canvas";
         return (
           <button
             key={option.value}
             type="button"
             role="tab"
             aria-selected={selected}
-            aria-label={compact ? option.label : undefined}
-            title={compact ? option.label : undefined}
+            aria-label={option.label}
+            title={withKey(option.label, option.value)}
             tabIndex={selected ? 0 : -1}
-            className={
-              compact
-                ? selected
-                  ? styles.iconActive
-                  : styles.iconOption
-                : selected
-                  ? styles.active
-                  : styles.option
-            }
+            className={[
+              selected ? styles.iconActive : styles.iconOption,
+              isCanvas ? styles.iconCanvas : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
             onClick={() => go(option.value)}
           >
-            {compact ? (
-              <Icon size={16} strokeWidth={1.5} aria-hidden />
-            ) : (
-              option.label
-            )}
+            <Icon size={14} strokeWidth={1.5} aria-hidden />
           </button>
         );
       })}

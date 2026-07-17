@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "date": "2026-07-17",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "**A redesigned interface.** A new surface palette and spacing in dark and light, a live animated wave backdrop behind your panels (tune it or turn it off in Settings → Appearance), a themed title bar on macOS, crisper square panels, and a dense mode (⌘D / Ctrl+D) that trims the padding when you want more on screen.",
+        "**Attention inbox** — a new main view (⌥2) that queues agents that finished and are waiting on your input, oldest first. Step through and answer them from the keyboard, dismiss what you've handled, and narrow the queue to one folder, branch, or worktree from the sidebar.",
+        "**Multi-window.** Open any number of full ReCue windows — ⌘⌥N / Ctrl+Alt+N, File → New Window, a repo's \"Open in new window\", or tear a Canvas tab off. Every window is the complete app, the same terminal can be shown in several windows at once, and your window layout — positions, sizes, maximized state — is restored on relaunch.",
+        "**Dev containers.** Flip \"Run in dev container\" (⌘⇧C / Ctrl+Shift+C) when starting a Claude session to run the agent inside Docker: your repo or worktree is mounted in, sign-in is seeded per session, branches and commits work as normal — and pushes are refused by design. The default image builds itself on first use.",
+        "**Worktrees, detected everywhere.** ReCue now recognizes every git worktree of your repos — created by an agent, a hook, or by hand — shows it under its parent repo, follows a Claude agent live when it relocates into one, and adds a confirm-gated \"Delete worktree…\" action.",
+        "**Rebindable shortcuts.** Every global shortcut can be re-recorded in Settings → Shortcuts, with hints across the app updating live. New defaults: ⌥1 / ⌥2 / ⌥3 switch Overview / Attention / Canvas, and ⌘W / Ctrl+W closes or dismisses whatever is selected."
+      ]
+    },
+    {
+      "category": "improvement",
+      "items": [
+        "ReCue opens maximized on a fresh install and remembers your window size and position from then on.",
+        "Launching ReCue while it's already running now opens a new window in the running app instead of starting a second instance.",
+        "Editing the same file in two windows is guarded: the later window opens it read-only with a one-click \"Take over\".",
+        "On macOS, control-key chords (⌃E, ⌃W, …) now reach the terminal's command line instead of being swallowed as app shortcuts.",
+        "The terminal background now matches the app's panel surface exactly."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "A short busy blip no longer bounces an agent out of the Attention queue (or resets its place in line), and a still-working agent can't blink into it early.",
+        "Sidebar right-click menus no longer render clipped or see-through inside the scrolled tree.",
+        "On Windows, a stray character no longer appears in a fresh session's input line."
+      ]
+    }
+  ]
+}

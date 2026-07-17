@@ -1,0 +1,138 @@
+/*
+ * Shared UI atoms (UI v2 task 372, DESIGN-SPEC.md §2) — global button / chip /
+ * kbd-hint classes consumed by the UI v2 cards 2–11. Token-driven only: every
+ * color comes from tokens.css (never off-system values), and every accent tint
+ * derives from the single var(--accent) via the --accent-tint-* tokens so a
+ * custom accent (#102/#107) recolors the atoms live. Each color-mix-bearing
+ * fill declares a plain fallback first (older WebViews, per CLAUDE.md).
+ * Imported once in src/main.tsx, after global.css.
+ */
+
+/* --- Block buttons (26px) — square by default (in-panel); chrome surfaces
+   (sidebar) add .btn-chrome for the 6px radius. --- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 0;
+  font-family: var(--ui);
+  font-size: var(--fs-meta);
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.btn-chrome {
+  border-radius: var(--radius-btn);
+}
+
+/* Accent block button: 10% accent fill, 35% accent border, accent text. */
+.btn-accent {
+  background: var(--accent-dim); /* plain fallback */
+  background: var(--accent-tint-fill);
+  border-color: var(--accent-tint-border);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.btn-accent:hover {
+  background: var(--accent-dim); /* plain fallback */
+  background: var(--accent-tint-hover);
+}
+
+/* Neutral block button: Base fill, hairline border, secondary text. */
+.btn-neutral {
+  background: var(--bg-panel);
+  border-color: var(--border-hairline);
+  color: var(--text-secondary);
+}
+
+.btn-neutral:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* Primary (filled) button: accent bg, accent-fg text. */
+.btn-primary {
+  background: var(--accent);
+  border: 0;
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+/* Ghost button: no bg/border, muted; hover brightens + fills. */
+.btn-ghost {
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+}
+
+.btn-ghost:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* Icon button sizing (compose with .btn / .btn-ghost): 22–28px square. */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.btn-icon-sm {
+  width: 22px;
+  height: 22px;
+}
+
+.btn-icon-lg {
+  width: 28px;
+  height: 28px;
+}
+
+/* --- Count chip — Surface0 pill (the demo wins over the "crust pill" prose). --- */
+.chip-count {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  padding: 0 5px;
+  border-radius: var(--radius-dot);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: var(--fs-micro);
+  line-height: 1;
+}
+
+/* --- Kbd hints (strings come from kbdHint() in src/platform.ts — per-OS). --- */
+.kbd-hint {
+  margin-left: auto;
+  color: var(--text-muted);
+  /* Explicit face: a <kbd> element's UA default is the system monospace, not
+     the bundled JetBrains Mono (task 374). */
+  font-family: var(--ui);
+  font-size: var(--fs-micro);
+  font-weight: 400;
+}
+
+/* On a filled/tinted control the hint inherits the control's color, dimmed. */
+.kbd-hint-onfill {
+  color: inherit;
+  opacity: 0.55;
+}
+
+/* Chip form — a subtle hairline-filled key cap. */
+.kbd-chip {
+  padding: 1px 6px;
+  border-radius: var(--radius-micro);
+  background: var(--border-hairline);
+  color: inherit;
+  font-size: var(--fs-meta-xs);
+}

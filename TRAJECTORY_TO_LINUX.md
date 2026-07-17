@@ -1632,3 +1632,314 @@ window (#84) applies it on its own boot.
       file from the file manager onto a FileTree folder still hits the correct row while zoomed
       (the physical→CSS px math combines `devicePixelRatio` with the new `zoom`). Left unchanged
       pending this check.
+
+## 2026-07-15
+
+### UI v2 reskin sweep (#372–#383)
+
+The twelve-card "UI v2" epic is a pure WebView CSS/TS reskin — no new native code, no new
+`#[cfg]` arms, and no change to the Linux-specific seams (#346/#347/#350/#357/#362 all
+untouched). Platform-sensitive pieces ride the established abstractions: JetBrains Mono
+is now the `--ui` face on every OS (#372 — the #363 Linux-only bundled Inter and its
+`@fontsource-variable/inter` dependency are retired; `data-platform` stays as the
+platform-CSS seam with currently zero CSS consumers), every hint routes through `kbdHint`
+(**Ctrl** on Linux), `color-mix()` fills declare plain token fallbacks *first* (the one
+genuinely Linux-relevant rule: an older WebKitGTK that lacks color-mix must fall back to
+the token, never to a missing fill), and the wave (#377) is a lazy vendored canvas engine
+— one per window — whose cost lands on the WebKitGTK main thread like the #351 terminal
+work did. The terminal cursor blink is now gated off under reduced motion in the pool
+(#383, an xterm options mutation — never a host dispose #18, composable with the #357
+DOM/WebGL renderer override).
+
+### Needs real-box verification (UI v2, #372–#383)
+
+- [ ] **Wave performance under each renderer mode.** With DMA-BUF auto/on/off
+      (Settings → Rendering) and again under the software-rasterizer DOM fallback
+      (`RECUE_DISABLE_DMABUF=1` on a box where that forces llvmpipe): the wave stays
+      smooth (or at least never starves terminal input); Background animation OFF
+      unmounts it cleanly.
+- [ ] **Wave worker-mode + fallback (task 384).** On WebKitGTK **≥ 2.40** (current
+      Arch) the wave should render in **worker mode** (OffscreenCanvas off the main
+      thread — set `localStorage["recue.waveStats"]="1"` and read `[wave] mode=worker …`
+      / `window.__waveStats`); on the **stock Ubuntu 22.04 floor (≤ 2.38, no
+      OffscreenCanvas)** it must cleanly **fall back to main mode** with the wave still
+      visible (never a blank stage). Force each with `localStorage["recue.waveMode"] =
+      "main" | "worker"` and reload; `"main"` always downgrades, `"worker"` still requires
+      detection. Also confirm the **pause-when-covered** setting (default on) stops the
+      wave when the Overview wall has cards / a Canvas tab has panels and resumes the
+      instant the stage clears, and that a busy agent halves the fps (24 vs 48).
+- [ ] **`color-mix()` on the oldest supported WebKitGTK** (the ubuntu-22.04 /
+      webkit2gtk-4.1 floor): accent-tinted buttons/fills and the busy-dot rings render;
+      where color-mix is unsupported the plain token fallbacks must appear (accent-dim /
+      `--status-*-dim` fills), never a missing/transparent fill.
+- [ ] **Reduced-motion freeze.** OS reduce-motion (GTK `gtk-enable-animations=0` →
+      `prefers-reduced-motion`) *and* the app toggle: the wave settles then freezes on a
+      frame, menu/modal/toast entrances drop, the busy dot goes solid, and the terminal
+      cursor stops blinking (#383).
+- [ ] **Focus-visible rings under GTK themes.** Tabbing through the sidebar cluster,
+      segmented controls, checkboxes, sliders, and modal action rows shows the 2px accent
+      ring on every stop (no GTK/WebKitGTK default outline replacing it).
+- [ ] **Dense-mode divider drag at gap 0** (WebKitGTK hit-testing): every Canvas divider
+      still drags via the ±4px `::after` hit area with `--stage-gap: 0`.
+- [ ] **JetBrains Mono UI rendering under fontconfig.** The bundled woff2 wins over any
+      locally-installed JetBrains Mono variant; hinting/antialiasing keeps the 10–12px
+      chrome type legible on a 1× (non-HiDPI) display.
+
+## 2026-07-15 — Dev-container agent sessions (docker-wrapped claude)
+
+The dev-container feature (New Session modal toggle) inherits the unix arms almost
+everywhere; the Linux-specific piece is **`--user uid:gid`**: native docker runs the
+container as root by default, which would leave root-owned files in the bind-mounted
+worktree (breaking host-side edits + `git worktree remove`), so the launch composer fills
+`ContainerLaunch.user` from `libc::getuid()/getgid()` on Linux only (macOS/Windows Docker
+Desktop map ownership themselves; the cfg is widened with `, test)` so other hosts still
+type-check it). Real-box checks:
+
+- `--user` ownership: files the agent creates in `/work` and `/home/agent` are owned by
+  the desktop user; `git commit` inside the container works with the injected
+  `GIT_CONFIG_*` identity + `safe.directory=*`.
+- Rootless docker / the `podman-docker` shim: do labels, `docker ps --filter label=…`,
+  `docker kill`, and `docker build -` (Dockerfile on stdin, empty context) behave the
+  same? (podman is best-effort — not a supported target yet.)
+- AppImage: every docker CLI call runs through `git::hidden_command` →
+  `child_env::scrub_command`, so the client must not inherit `/tmp/.mount_…` library
+  paths; verify a container spawn from the AppImage.
+- The daemon-stopped state (`systemctl --user stop docker` / no docker group): the
+  toggle should show the "start Docker" hint, and enabling the service should flip it
+  live on the ~3.5 s re-probe.
+### Needs real-box verification (Open in editor)
+
+- [ ] **PATH CLIs under a `.desktop`/AppImage launch.** With ReCue launched from the
+      desktop entry (minimal env), ⌘O→Ctrl+O still finds `code`/`zed` via the
+      login-shell PATH probe (#360) and the editor opens the folder.
+- [ ] **`zeditor` fallback.** On a distro whose Zed package ships the binary as
+      `zeditor` (no `zed` alias), detection still reports Zed via PATH and launches.
+- [ ] **JetBrains Toolbox scripts dir.** With Toolbox shell scripts enabled
+      (`~/.local/share/JetBrains/Toolbox/scripts`), a Toolbox-only IDE (nothing on PATH)
+      detects as "Toolbox" and launches at the folder.
+- [ ] **AppImage child-env scrub.** From the AppImage, launching a system editor must
+      not inherit `LD_LIBRARY_PATH`/`GTK_THEME` junk (#350 `child_env` seam) — the
+      editor starts with its normal system libraries/theme.
+- [ ] **Terminal editor via custom command.** `alacritty -e nvim {path}` (or the
+      user's emulator) opens nvim in the folder; `{path}` substitution lands the right
+      directory.
+
+## 2026-07-16 — Full app-window shell (multi-window 9/16, task 434)
+
+Additional full app windows (`open_app_window`, label `app-<uuid>`) reuse the #348
+hidden-until-painted creation (themed `background_color` + the 2 s reveal fallback) and
+the task-433 primary election; the WebGL gates were already scoped to
+`IS_DETACHED_CANVAS_WINDOW` (task 427), so an app window gets the WebGL addon (with the
+#346 software-rasterizer probe and #364 context-loss latch per window/document).
+
+### Needs real-box verification (app windows, task 434)
+
+- [ ] **Second-window reveal on WebKitGTK.** An app window opened via
+      `openAppWindow({})` (temporary dev wiring — no UI entry point until card 10/16)
+      appears with the themed background (no white flash), reveals on first paint, and
+      the 2 s Rust fallback never has to fire on a healthy boot.
+- [ ] **WebGL in an app window.** On a Mesa GPU the app window's terminals attach the
+      WebGL addon (its own document — the #364 latch and #346 probe are per-window);
+      on llvmpipe/a VM it falls back to the DOM renderer exactly like the main window.
+- [ ] **Non-last window close.** Closing the app window keeps every agent running and
+      rendered in the main window; closing the LAST window still exits the app and
+      kills the PTYs as today.
+
+## 2026-07-16 — New Window entry points (multi-window 10/16, task 436)
+
+The single-instance plugin's Linux transport is a **D-Bus name** derived from the
+bundle identifier (`com.recue.app`) on the session bus; its naming convention only
+matters under Flatpak's bus policy, and ReCue ships AppImage/deb/AUR (unconfined
+session bus), so no rename is needed. The `new-window` keybind is **Ctrl+Alt+N**
+(platform-resolved `mod`); Linux creates no app menu, so the keybind is the only
+chord entry point. Wayland caveat (documented in-code at the plugin site): the new
+window's focus request (`reveal_window` → `set_focus`) may be silently refused by
+the compositor's focus-stealing prevention — the window still opens, possibly
+unfocused.
+
+### Needs real-box verification (new-window entry points, task 436)
+
+- [ ] **Second launch via the AppImage.** With ReCue running, launching the AppImage
+      again exits the second process and opens exactly one new `app-*` window in the
+      first instance (the D-Bus name is claimed on the session bus).
+- [ ] **Second launch via deb/AUR.** The same behavior for the system-packaged
+      binary — the same `com.recue.app` D-Bus identity, no Flatpak bus policy in
+      play; a mixed pair (AppImage running, deb launched) also pokes rather than
+      double-booting.
+- [ ] **X11 vs Wayland focus.** On X11 the poked-open window raises + focuses; on
+      Wayland (GNOME and KDE) confirm the documented caveat — the window opens even
+      when the compositor refuses the focus request.
+- [ ] **Ctrl+Alt+N under GNOME/KDE.** The chord opens a window and doesn't collide
+      with a DE/compositor binding; on AltGr layouts see the Windows note (rebind in
+      Settings → Shortcuts is the mitigation).
+
+## 2026-07-16 — Canvas pop-out opens a full ReCue window; #84 ownership layer deleted (multi-window 11/16, task 437)
+
+Pop-out / tear-off now open a **full app window** (`open_app_window`, task 434) on that canvas;
+the #84 detached-canvas windows, the ownership map, and the canvas-window commands are deleted.
+Two windows on one canvas mirror (426/427); typing from both interleaves like two tmux clients
+(expected). The #105 canvas-window DOM-renderer gates in `terminalPool.ts` died with the canvas
+windows — WebGL is now governed solely by the #346/#357 `rendererDecision()` plus the #364
+per-window context-loss latch, in every window.
+
+### Needs real-box verification (pop-out = full window, task 437)
+
+- [ ] **Pop-out button / tear-off on WebKitGTK.** A second full window opens on that canvas
+      (themed pre-paint #348, no white flash); both windows render the agent live,
+      letterboxed to the smallest view; input from both interleaves (expected).
+- [ ] **WebGL in the popped-out window.** On a Mesa GPU the new window's terminals attach
+      the WebGL addon (per-window #346 probe + #364 latch); on llvmpipe/a VM they fall back
+      to the DOM renderer exactly like the main window.
+- [ ] **`?canvas=` compat URL.** A legacy `index.html?canvas=<id>` load renders the full
+      shell booted into Canvas on that tab.
+- [ ] **Close/re-home.** Closing the popped-out window keeps every agent running and
+      rendered in the first window (the 426 purge unclamps the grid); closing a canvas
+      viewed by another window re-homes that window to another tab.
+
+## 2026-07-16 — Restore the open-window set on relaunch (multi-window 13/16, task 439)
+
+The saved window set (`main` + up to 8 `app-*` extras, dedicated `window_state` store key)
+is recreated at boot with clamped bounds applied while each window is still hidden (#348).
+All platform-neutral Tauri API — but placement is compositor-owned on Wayland:
+`set_position` is refused and `Moved` may never be delivered, so restore degrades to
+size-only with default placement there (documented in `window_state.rs`, not worked
+around).
+
+### Needs real-box verification (window restore, task 439)
+
+- [ ] **X11 full restore vs Wayland size-only degrade.** On X11 (and XWayland) windows
+      return at their saved positions AND sizes; on native Wayland (GNOME + KDE) confirm
+      the documented degrade — sizes restore, the compositor places the windows, no error.
+- [ ] **N restored windows on WebKitGTK.** Restore 3+ windows: each reveals themed
+      (no white flash), boot cost stays acceptable (the #351 lazy terminal mounts bound
+      the per-window cost), and exactly ONE window runs the once-per-app boot effects.
+- [ ] **`ExitRequested` ordering on GNOME/KDE quit paths.** Quit via the app menu, via
+      closing the last window, and via the DE's window-close on all windows in sequence:
+      relaunch restores the correct at-quit set in each case (worst acceptable outcome is
+      a stale-but-valid set, never an empty one after a multi-window quit).
+
+## 2026-07-16 — Targeted PTY output delivery: session://output + session://size emit only to subscriber windows (multi-window 15/16, task 440)
+
+`session://output` / `session://size` now `emit_filter` to exactly the windows holding a
+live terminal host for the session (subscribe at host creation, unsubscribe at dispose,
+swept on window close; parking never touches it). Zero-subscriber sessions skip the
+base64 encode and the emit entirely. Each emit is an evaluate-JS on each target
+webview's main thread — **costliest on WebKitGTK** — and previously went to EVERY
+window, so this is the epic's biggest Linux win: N windows no longer each pay a TUI
+storm's emit rate for terminals they don't show.
+
+### Needs real-box verification (targeted delivery, task 440)
+
+- [ ] **Two windows, agent visible in only one (WebKitGTK).** Output + typing render in
+      the viewing window; the other window's busy dot / Attention queue stay live.
+- [ ] **Late attach back-fills.** Scroll the agent into view in the second window later —
+      complete history back-fills then streams live, no gap, no doubled startup paint.
+- [ ] **Park keeps the stream.** Switch views in the only viewing window during output,
+      switch back — the buffer is complete.
+- [ ] **Close a window mid-storm.** No stall; the first window is unaffected (purge).
+- [ ] **Linux measurement (the "measured effect" note).** On a WebKitGTK box, drive an
+      output storm (a `yes`-style burst in a shell terminal) with 3 windows open, one
+      viewing — confirm main-thread responsiveness in the non-viewing windows and record
+      the before/after (e.g. emit counts via a temporary debug counter or `WEBKIT_DEBUG`
+      frame timing) next to the `lib.rs` forwarder comment.
+
+## 2026-07-16 — Multi-window epic wrap-up (tasks 426–440): the consolidated real-box matrix
+
+### Multi-window epic (tasks 426–440) — N full app windows
+
+The epic replaced the #84 one-main-window-plus-detached-canvas model with **N full app
+windows**: `open_app_window` / label `app-<uuid>` / route `?win=<uuid>` (434), every window
+the complete shell with window-local view state, shared state converging through the Rust
+`*://changed` broadcasts (428) and server-side patch merges (429), terminals **mirroring**
+in any number of windows under the smallest-wins grid arbiter (426/427), output emitted only
+to subscriber windows (440 — the epic's biggest WebKitGTK win), a Rust-elected **primary**
+window gating the once-per-app effects (433), the app singletons moved into Rust
+(auto-continue + the one usage poll 430, the clean-exit forget 431, the boot shell respawn
+432), a same-file edit guard (435), the single-instance / Dock-Reopen / Ctrl+Alt+N /
+File → New Window entry points (436), pop-out-as-full-window with the #84 machinery deleted
+(437), the repo-menu entry point (438), and window restore on relaunch (439). The
+Linux-sensitive seams: the single-instance **session-bus D-Bus name**, **Wayland**
+compositor-owned placement + focus-stealing prevention (vs X11's full restore/raise),
+**TIOCSWINSZ** resize under the smallest-wins arbitration, and per-window **WebKitGTK**
+cost plus the once-per-process DMA-BUF decision (#346/#357). macOS-only items (Dock Reopen,
+File → New Window, ⌘Q `ExitRequested` ordering) remain PR-flagged per the #84/#105
+precedent — no macOS trajectory file exists.
+
+### Needs real-box verification (multi-window, tasks 426–440)
+
+The per-card checklists appended above already cover most of the matrix — cross-referenced
+here, not duplicated: **second launch via AppImage / deb / AUR**, the **X11-vs-Wayland
+focus caveat**, and **Ctrl+Alt+N under GNOME/KDE** are in the task-436 entry; **X11 full
+restore vs Wayland size-only degrade**, the **N-window restore boot cost**, and the
+**`ExitRequested` ordering on GNOME/KDE quit paths** are in the task-439 entry; the
+**targeted-delivery smoke** and the **output-storm measurement** are in the task-440 entry;
+**pop-out mirroring + input interleaving**, per-window **WebGL**, and the **`?canvas=`
+compat route** are in the task-437 entry; the **second-window reveal** and per-window
+WebGL probe/latch are in the task-434 entry. Still missing — new items:
+
+- [ ] **Single-instance distro matrix (436).** Run the task-436 second-launch checks per
+      target — GNOME (Ubuntu), KDE, and a Mint/Cinnamon box, on X11 AND Wayland — and add
+      two AppImage cases: a *different-version* AppImage file (same `com.recue.app` D-Bus
+      name — must still route to the running instance, not double-boot), and confirm the
+      doomed second process's FUSE mount is cleaned up (no stray `/tmp/.mount_…` left
+      after it exits).
+- [ ] **Per-window WebKitGTK memory + the once-per-process DMA-BUF decision (434/439).**
+      RSS growth per additional window (2–4 windows), released on close; the boot-time
+      DMA-BUF decision (#346/#357 — the env is read once at GTK init) applies unchanged to
+      windows created later in the process (a later window never re-probes or diverges);
+      the #364 WebGL latch stays per-window (one window's context loss never demotes
+      another); the Settings → Rendering diagnostics readout is unchanged.
+- [ ] **Mirroring reflow under TIOCSWINSZ (426/427).** As the Windows ConPTY item, on a
+      WebKitGTK box: one agent in two windows with different slot sizes → the
+      component-wise-min grid, clean TUI reflow in both, letterboxing in the larger;
+      closing the smaller window un-clamps and reflows up; parking (view switch) does NOT
+      resize the grid.
+- [ ] **Same-file edit guard smoke (435).** The same `.md` (FileViewer raw view) and the
+      same Kanban board open in two windows: editing in one claims it; the other renders
+      read-only with the "Being edited in another window — Take over" banner and
+      live-follows saves; Take over flips the claim (the loser flushes once in auto mode);
+      closing the claiming window purges the claim and the survivor unlocks.
+- [ ] **Primary takeover (433).** Close the primary (oldest) window while another full
+      window is open: the survivor re-arms the once-per-app effects live — exactly one
+      update check, no re-onboarding, the `schedule://fired` transition still lands; with
+      N restored windows (439) exactly ONE "Updated to vX" toast / onboarding modal fires
+      across the whole app.
+
+## 2026-07-16 — Maximized-by-default + persisted window size (task 443)
+
+Backend-only, platform-neutral core — the pure `WindowSet` state machine
+(`set_maximized` / `merge_action`, unit-tested) and the persisted
+`PersistedWindow { maximized }`; only the boot `maximize()` and the live `is_maximized()`
+query at the `Moved`/`Resized` site are impure. The key Linux nuance: unlike
+`set_position` (compositor-refused on **Wayland**, so #439 restore degrades to size-only
+there), `maximize()` **is** honored by Wayland compositors — so the maximized default and
+restore actually work on Wayland. On X11 it is a true maximize. Applied while the window
+is hidden (#348), so no flash. Real-box checks:
+
+- [ ] **Fresh-install default maximize (X11 + Wayland).** No persisted `window_state` →
+      the main window opens maximized filling the work area, no flash. Verify on both a
+      Wayland session and an X11 session (Arch/Ubuntu/Mint).
+- [ ] **Wayland re-maximize on restore.** Quit maximized, relaunch under Wayland → the
+      compositor re-maximizes (even though it ignored the saved `x/y` position); the
+      un-maximize target is a sensible frame.
+- [ ] **Non-maximized size restores.** Un-maximize, resize, quit, relaunch → restores at
+      that size (size-only under Wayland's compositor-owned placement, as #439).
+- [ ] **Extra app windows** open at 1280×832 (not maximized) unless a previously-maximized
+      `app-*` window is being restored.
+
+## 2026-07-16 — Themed window title bar (task 444)
+
+macOS-only Overlay title-bar strip; on Linux the `Titlebar` strip is `display:none`
+(revealed only via `data-platform="macos"`), so native CSD/server-side decorations are
+untouched. The one Linux-facing change is the best-effort **native theme sync** —
+`commands::theme_to_window_theme` → `window.set_theme(...)` (lib.rs setup +
+`create_app_window` before reveal, and `set_theme_background` on a runtime switch). Real-box
+checks (per DE / compositor):
+
+- [ ] **CSD theme follows ReCue's theme where honored.** On GNOME/Wayland (client-side
+      decorations) confirm the titlebar prefers-color-scheme flips with ReCue's dark/light
+      theme on boot and on a live toggle. Server-side-decoration DEs (KDE/X11) can't be
+      app-colored — `set_theme` is best-effort there and may no-op; that is the documented
+      partial-parity scope (full color parity = future custom decorations).
+- [ ] **No empty strip / layout shift.** The `Titlebar` strip renders nothing on Linux
+      (no 30px band); `.app-body` fills the window exactly as before.

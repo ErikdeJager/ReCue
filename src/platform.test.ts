@@ -105,25 +105,18 @@ describe("detectPlatform — synchronous OS family from the WebView (#363)", () 
   });
 });
 
-// --- The --ui regression guard (#363) -------------------------------------------------
-// The acceptance criterion "macOS and Windows render byte-for-byte identically" enforced
-// mechanically: the shared :root --ui stack must never be edited, the Linux override must
-// exist and lead with the BUNDLED family, and that family must actually be bundled.
-// Vitest runs in node, so the CSS is read off disk rather than through the DOM.
-
-/** The UI stack as it has always been — the macOS (-apple-system → San Francisco) and
- * Windows (system-ui → Segoe UI) resolution. Must never change. */
-const ORIGINAL_UI =
-  '-apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif';
+// --- The --ui regression guard (UI v2 task 372) ----------------------------------------
+// One typeface on every OS (DESIGN-SPEC.md §2.3): the bundled JetBrains Mono is the UI
+// face everywhere, identical to --mono. This supersedes the #363 Linux-only Inter seam —
+// src/styles/fonts.css is deleted and tokens.css carries no data-platform selector (the
+// data-platform attribute machinery in platform.ts stays as the platform-CSS seam; it
+// just has no --ui consumer anymore). Vitest runs in node, so the CSS is read off disk.
 
 const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 const norm = (v: string) => v.replace(/\s+/g, " ").trim();
 
 const tokensCss = stripComments(
   readFileSync(new URL("./styles/tokens.css", import.meta.url), "utf8"),
-);
-const fontsCss = stripComments(
-  readFileSync(new URL("./styles/fonts.css", import.meta.url), "utf8"),
 );
 
 /** The families of a `--ui:` declaration, in order. */
@@ -133,42 +126,25 @@ function uiFamilies(value: string): string[] {
     .map((f) => f.trim());
 }
 
-describe("UI font tokens (#363)", () => {
-  it("leaves the shared :root --ui stack exactly as it was (macOS + Windows unchanged)", () => {
-    // The first --ui declaration in the file is the :root one (Prettier may wrap the
-    // value across lines, so whitespace is normalized before comparing).
+describe("v2 UI font (task 372)", () => {
+  it("declares exactly one --ui stack — no per-platform override anywhere", () => {
+    const decls = tokensCss.match(/--ui:\s*[^;]+;/g);
+    expect(decls).toHaveLength(1);
+  });
+
+  it("leads with the bundled JetBrains Mono and ends in a generic monospace", () => {
     const match = /--ui:\s*([^;]+);/.exec(tokensCss);
     expect(match).not.toBeNull();
-    expect(norm(match![1])).toBe(ORIGINAL_UI);
+    const families = uiFamilies(match![1]);
+    // The bundled face is first, so every OS is deterministic (offline, never a CDN) …
+    expect(families[0]).toBe('"JetBrains Mono"');
+    // … and the tail ends in a generic, so codepoints outside the bundled subsets
+    // fall through to a system mono face — no tofu.
+    expect(families[families.length - 1]).toBe("monospace");
   });
 
-  it("declares a Linux-only --ui override that leads with the bundled Inter", () => {
-    const block = /:root\[data-platform="linux"\]\s*\{([^}]*)\}/.exec(
-      tokensCss,
-    );
-    expect(block).not.toBeNull();
-
-    const decl = /--ui:\s*([^;]+);/.exec(block![1]);
-    expect(decl).not.toBeNull();
-
-    const families = uiFamilies(decl![1]);
-    // The bundled face is first, so Linux is deterministic on every distro …
-    expect(families[0]).toBe('"Inter Variable"');
-    // … and the tail still ends in a generic, so non-latin codepoints (outside the
-    // bundled subset's unicode-range) fall through to a system face — no tofu.
-    expect(families[families.length - 1]).toBe("sans-serif");
-    expect(norm(decl![1])).not.toBe(ORIGINAL_UI);
-  });
-
-  it("bundles the family the Linux override names — offline, never a CDN", () => {
-    expect(fontsCss).toMatch(/font-family:\s*"Inter Variable"/);
-    expect(fontsCss).toMatch(/inter-latin-wght-normal\.woff2/);
-    // Only the latin subset ships (one 48,256 B file instead of all seven subsets).
-    expect(fontsCss.match(/@font-face/g)).toHaveLength(1);
-    expect(fontsCss).toMatch(/unicode-range:/);
-    // The src resolves inside the bundle (a bare package specifier Vite emits as an
-    // asset) — never an http(s) URL.
-    expect(fontsCss).not.toMatch(/url\(\s*["']?https?:/);
+  it("carries no data-platform selector — the #363 Linux --ui override is retired", () => {
+    expect(tokensCss).not.toContain("data-platform");
   });
 });
 

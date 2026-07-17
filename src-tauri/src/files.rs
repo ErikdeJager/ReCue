@@ -110,6 +110,26 @@ pub struct DirEntryInfo {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
+    /// The folder is the root of a **linked git worktree** (its `.git` is a
+    /// pointer FILE into `<repo>/.git/worktrees/`). The FileTree renders such a
+    /// row in place but gates its contents behind "Show worktree contents…".
+    /// Skipped from the JSON when false so the payload for ordinary listings is
+    /// byte-identical to before.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub worktree: bool,
+}
+
+/// Whether `dir` is the root of a **linked git worktree**: it carries a `.git`
+/// FILE (not a dir) whose `gitdir:` pointer targets `<repo>/.git/worktrees/<n>`.
+/// The search walkers skip such subtrees — a worktree is its own checkout,
+/// reachable through its own sidebar row/panels — so its duplicate files never
+/// flood the parent repo's picker or content search, wherever the worktree
+/// lives (`.claude/worktrees/`, a user's `.worktrees/`, anywhere). A
+/// submodule's gitfile points at `.git/modules/…` and deliberately does NOT
+/// match (submodule listing behavior is unchanged). Cheap for ordinary dirs:
+/// one failed read of a `.git` that isn't there / is a directory.
+fn is_linked_worktree_root(dir: &Path) -> bool {
+    crate::container::host_worktree_admin_name(dir).is_some()
 }
 
 /// Resolve `rel` against `repo`, confining the result inside the repo: the canonical
@@ -157,15 +177,19 @@ pub fn list_dir(repo: impl AsRef<Path>, subdir: &str) -> Result<Vec<DirEntryInfo
                 continue;
             }
             dirs.push(DirEntryInfo {
+                worktree: is_linked_worktree_root(&path),
                 name,
                 path: rel,
                 is_dir: true,
             });
-        } else if is_listable(&path) {
+        } else if name != ".git" && is_listable(&path) {
+            // `.git` as a FILE is a linked worktree's pointer (SKIP_DIRS only
+            // hides the directory form) — never a viewable text file.
             files.push(DirEntryInfo {
                 name,
                 path: rel,
                 is_dir: false,
+                worktree: false,
             });
         }
     }
@@ -229,8 +253,16 @@ fn search_collect(
             if SKIP_DIRS.contains(&name.as_ref()) {
                 continue;
             }
+            // A linked worktree is its own checkout — its (duplicate) files
+            // must not surface in the parent repo's picker. Unconditional and
+            // per-worktree-root, never keyed to a container folder name; the
+            // walk ROOT is exempt by construction (only children are guarded),
+            // so a picker scoped to the worktree itself still works.
+            if is_linked_worktree_root(&path) {
+                continue;
+            }
             search_collect(root, &path, needle, ext, limit, out, depth + 1);
-        } else if is_listable(&path) {
+        } else if name != ".git" && is_listable(&path) {
             if let Ok(rel) = path.strip_prefix(root) {
                 let rel = rel.to_string_lossy().replace('\\', "/");
                 let lower = rel.to_lowercase();
@@ -303,8 +335,13 @@ fn content_search_collect(
             if SKIP_DIRS.contains(&name.as_ref()) {
                 continue;
             }
+            // Same rule as `search_collect`: a linked worktree's contents are
+            // searched from ITS panels, never from the parent repo's.
+            if is_linked_worktree_root(&path) {
+                continue;
+            }
             content_search_collect(root, &path, needle, limit, result, depth + 1);
-        } else if is_listable(&path) {
+        } else if name != ".git" && is_listable(&path) {
             // Skip oversized files — reading + scanning them would stall the live walk.
             let too_big = fs::metadata(&path)
                 .map(|m| m.len() > MAX_CONTENT_SEARCH_BYTES)
@@ -751,6 +788,11 @@ mod tests {
         let names: Vec<&str> = root.iter().map(|e| e.name.as_str()).collect();
         // Folders come first (`.claude`, `src`), then files (`LICENSE`, `README.md`).
         assert_eq!(names, vec![".claude", "src", "LICENSE", "README.md"]);
+        // No worktrees here → no entry is flagged, and (serde skip) the flag is
+        // absent from the wire so ordinary listings are byte-identical.
+        assert!(root.iter().all(|e| !e.worktree));
+        let json = serde_json::to_string(&root).unwrap();
+        assert!(!json.contains("worktree"));
         // `.git`, `node_modules`, and the binary are excluded; `src` is a folder.
         assert!(!names.contains(&".git"));
         assert!(!names.contains(&"node_modules"));
@@ -765,6 +807,89 @@ mod tests {
 
         // Traversal escapes are rejected.
         assert!(list_dir(&dir, "../..").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Build a fake linked-worktree root: a dir whose `.git` is a pointer FILE
+    /// into `<repo>/.git/worktrees/<name>` — exactly what `git worktree add`
+    /// writes, wherever the worktree lives.
+    fn fake_worktree(parent: &Path, name: &str) -> PathBuf {
+        let wt = parent.join(name);
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(
+            wt.join(".git"),
+            format!("gitdir: /somewhere/repo/.git/worktrees/{name}\n"),
+        )
+        .unwrap();
+        wt
+    }
+
+    #[test]
+    fn list_dir_flags_worktree_roots_and_hides_gitfile_rows() {
+        let dir = tmp("wtflag");
+        // A worktree nested the EnterWorktree way + a plain sibling folder.
+        fs::create_dir_all(dir.join(".claude/worktrees")).unwrap();
+        let wt = fake_worktree(&dir.join(".claude/worktrees"), "feat-x");
+        fs::write(wt.join("inner.md"), "content").unwrap();
+        fs::create_dir_all(dir.join("plain")).unwrap();
+
+        let level = list_dir(&dir, ".claude/worktrees").unwrap();
+        assert_eq!(level.len(), 1);
+        assert!(level[0].worktree && level[0].is_dir);
+        assert_eq!(level[0].path, ".claude/worktrees/feat-x");
+        let json = serde_json::to_string(&level).unwrap();
+        assert!(json.contains("\"worktree\":true"));
+
+        // Listing the worktree ITSELF works (the guard is per-child, the root is
+        // exempt) — its files appear, but the `.git` pointer file row does not.
+        let inside = list_dir(&dir, ".claude/worktrees/feat-x").unwrap();
+        let names: Vec<&str> = inside.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["inner.md"]);
+
+        // A submodule-style gitfile (gitdir → .git/modules/…) is NOT a worktree.
+        let sub = dir.join("plain/submod");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join(".git"), "gitdir: ../../.git/modules/submod\n").unwrap();
+        let plain_level = list_dir(&dir, "plain").unwrap();
+        assert_eq!(plain_level.len(), 1);
+        assert!(!plain_level[0].worktree);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn searches_skip_worktree_subtrees_but_not_submodules() {
+        let dir = tmp("wtsearch");
+        fs::write(dir.join("target-root.md"), "needle here").unwrap();
+        // Worktree with a duplicate-named file — must NOT surface.
+        let wt = fake_worktree(&dir, "wt-a");
+        fs::write(wt.join("target-root.md"), "needle here").unwrap();
+        fs::write(wt.join("target-wt.md"), "needle here").unwrap();
+        // Submodule with a match — still surfaces (behavior unchanged).
+        let sub = dir.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join(".git"), "gitdir: ../.git/modules/sub\n").unwrap();
+        fs::write(sub.join("target-sub.md"), "needle here").unwrap();
+
+        // Filename search: exactly one hit for the duplicated name, the
+        // worktree-only file never appears, the submodule file does.
+        let by_name = search_files(&dir, "target", None, 50);
+        assert_eq!(
+            by_name,
+            vec!["sub/target-sub.md", "target-root.md"],
+            "worktree copies must not flood the picker"
+        );
+
+        // Content search: same exclusion set.
+        let by_content = search_file_contents(&dir, "needle", 50);
+        let paths: Vec<&str> = by_content.matches.iter().map(|m| m.path.as_str()).collect();
+        assert_eq!(paths, vec!["sub/target-sub.md", "target-root.md"]);
+
+        // Searching FROM the worktree still finds its own files (the walk root
+        // is exempt) and never lists its `.git` pointer file.
+        let from_wt = search_files(&wt, "target", None, 50);
+        assert_eq!(from_wt, vec!["target-root.md", "target-wt.md"]);
+        let from_wt_content = search_file_contents(&wt, "needle", 50);
+        assert_eq!(from_wt_content.matches.len(), 2);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1250,5 +1375,215 @@ mod tests {
         assert!(outside.join("precious.txt").exists());
         let _ = fs::remove_dir_all(&repo);
         let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn search_files_zero_limit_and_missing_root_return_empty() {
+        let dir = tmp("search-limits");
+        fs::write(dir.join("hit.md"), "x").unwrap();
+        // A zero limit collects nothing (the walk stops immediately).
+        assert!(search_files(&dir, "hit", None, 0).is_empty());
+        // A root that doesn't exist walks nothing (fail-open, no error).
+        let missing = dir.join("never-created");
+        assert!(search_files(&missing, "hit", None, 10).is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_exists_is_false_when_the_repo_root_is_missing() {
+        // The repo root itself failing to canonicalize (it doesn't exist) reads
+        // as "not present" rather than erroring.
+        let dir = tmp("exists-missing-root");
+        let missing = dir.join("never-created");
+        assert!(!file_exists(&missing, "anything.md"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_walkers_stop_beyond_the_max_depth() {
+        let dir = tmp("search-depth");
+        // A file buried past MAX_SEARCH_DEPTH levels is unreachable by both
+        // walkers (the symlink-loop backstop), while a shallow file still hits.
+        let mut deep = dir.clone();
+        for _ in 0..(MAX_SEARCH_DEPTH + 4) {
+            deep.push("d");
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("buried-needle.txt"), "needle content\n").unwrap();
+        fs::write(dir.join("shallow-needle.txt"), "needle content\n").unwrap();
+
+        let by_name = search_files(&dir, "needle", None, 100);
+        assert_eq!(by_name, vec!["shallow-needle.txt".to_string()]);
+        let by_content = search_file_contents(&dir, "needle content", 100);
+        let paths: Vec<&str> = by_content.matches.iter().map(|m| m.path.as_str()).collect();
+        assert_eq!(paths, vec!["shallow-needle.txt"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_file_contents_zero_limit_missing_root_and_cross_file_cap() {
+        let dir = tmp("content-limits");
+        fs::write(dir.join("a.txt"), "needle a\n").unwrap();
+        fs::write(dir.join("b.txt"), "needle b\n").unwrap();
+
+        // limit 0 → nothing collected, flagged truncated (the cap tripped at once).
+        let zero = search_file_contents(&dir, "needle", 0);
+        assert!(zero.matches.is_empty());
+        assert!(zero.truncated);
+
+        // A missing root yields the empty default (no matches, NOT truncated).
+        let missing = search_file_contents(dir.join("never-created"), "needle", 10);
+        assert!(missing.matches.is_empty());
+        assert!(!missing.truncated);
+
+        // limit 1 with one hit per file: the cap trips *between* files (a.txt
+        // fills it; b.txt is cut off) and the result is flagged truncated.
+        let limited = search_file_contents(&dir, "needle", 1);
+        assert_eq!(limited.matches.len(), 1);
+        assert_eq!(limited.matches[0].path, "a.txt");
+        assert!(limited.truncated);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_file_contents_skips_non_utf8_files() {
+        let dir = tmp("content-nonutf8");
+        // Invalid UTF-8 under a listable extension: unreadable as text → skipped.
+        fs::write(
+            dir.join("bin.txt"),
+            [0xFFu8, 0xFE, b'n', b'e', b'e', b'd', b'l', b'e'],
+        )
+        .unwrap();
+        fs::write(dir.join("good.txt"), "needle\n").unwrap();
+        let res = search_file_contents(&dir, "needle", 10);
+        assert_eq!(res.matches.len(), 1);
+        assert_eq!(res.matches[0].path, "good.txt");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_and_write_reject_files_over_the_size_cap() {
+        let dir = tmp("size-caps");
+        // Reading a file over MAX_FILE_BYTES is refused with the size error…
+        let big = vec![b'a'; (MAX_FILE_BYTES + 1) as usize];
+        fs::write(dir.join("big.txt"), big).unwrap();
+        assert_eq!(
+            read_text_file(&dir, "big.txt").unwrap_err(),
+            "file is too large to display"
+        );
+        // …and writing content over the cap is refused before touching disk.
+        let huge = "a".repeat((MAX_FILE_BYTES + 1) as usize);
+        assert_eq!(
+            write_text_file(&dir, "huge.txt", &huge).unwrap_err(),
+            "file is too large to write"
+        );
+        assert!(!dir.join("huge.txt").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_rejects_an_existing_target_that_resolves_outside_the_repo() {
+        // `repo/../victim.md` canonicalizes to an EXISTING file outside the repo —
+        // the existing-file branch of the containment check must reject it.
+        let parent = tmp("write-outside");
+        let repo = parent.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(parent.join("victim.md"), "untouched").unwrap();
+        assert_eq!(
+            write_text_file(&repo, "../victim.md", "clobbered").unwrap_err(),
+            "path is outside the repository"
+        );
+        assert_eq!(
+            fs::read_to_string(parent.join("victim.md")).unwrap(),
+            "untouched"
+        );
+        let _ = fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn is_cross_device_matches_only_the_cross_volume_error_code() {
+        // EXDEV (unix) / ERROR_NOT_SAME_DEVICE (Windows) → true.
+        let code = if cfg!(windows) { 17 } else { 18 };
+        assert!(is_cross_device(&std::io::Error::from_raw_os_error(code)));
+        // Any other OS error (here: file-not-found) → false.
+        assert!(!is_cross_device(&std::io::Error::from_raw_os_error(2)));
+        // An error carrying no OS code at all → false.
+        assert!(!is_cross_device(&std::io::Error::other("synthetic")));
+    }
+
+    #[test]
+    fn copy_recursive_copies_files_and_directory_trees() {
+        let dir = tmp("copyrec");
+        // A single file.
+        fs::write(dir.join("src.txt"), "content").unwrap();
+        copy_recursive(&dir.join("src.txt"), &dir.join("dst.txt")).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("dst.txt")).unwrap(), "content");
+        assert!(
+            dir.join("src.txt").exists(),
+            "copy leaves the source intact"
+        );
+
+        // A nested tree.
+        fs::create_dir_all(dir.join("tree/nested")).unwrap();
+        fs::write(dir.join("tree/a.txt"), "a").unwrap();
+        fs::write(dir.join("tree/nested/b.txt"), "b").unwrap();
+        copy_recursive(&dir.join("tree"), &dir.join("copy")).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("copy/a.txt")).unwrap(), "a");
+        assert_eq!(
+            fs::read_to_string(dir.join("copy/nested/b.txt")).unwrap(),
+            "b"
+        );
+
+        // A destination that already exists fails cleanly (`fs::create_dir` refuses).
+        assert!(copy_recursive(&dir.join("tree"), &dir.join("copy")).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn move_rejects_a_file_destination_and_an_impossible_rename() {
+        let outer = tmp("move-fail");
+        let repo = outer.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("afile.txt"), "x").unwrap();
+        let ext = outer.join("ext");
+        fs::create_dir_all(&ext).unwrap();
+        fs::write(ext.join("item.txt"), "y").unwrap();
+
+        // A dest_subdir naming a FILE is refused (destination must be a directory).
+        assert_eq!(
+            move_into_repo(&repo, "afile.txt", ext.join("item.txt").to_str().unwrap()).unwrap_err(),
+            "destination is not a directory"
+        );
+        assert!(ext.join("item.txt").exists());
+
+        // Moving a directory into its own subdirectory can never succeed —
+        // fs::rename's error surfaces (the non-cross-device error arm) and both
+        // trees stay intact.
+        assert!(move_into_repo(&repo, "", outer.to_str().unwrap()).is_err());
+        assert!(outer.exists());
+        assert!(repo.join("afile.txt").exists());
+        let _ = fs::remove_dir_all(&outer);
+    }
+
+    #[test]
+    fn add_to_gitignore_rejects_the_root_and_an_unreadable_gitignore() {
+        let dir = tmp("gitignore-root");
+        fs::write(dir.join("a.txt"), "x").unwrap();
+        // The repo root itself can't be gitignored.
+        assert_eq!(
+            add_to_gitignore(&dir, "").unwrap_err(),
+            "refusing to gitignore the repository root"
+        );
+        assert!(!dir.join(".gitignore").exists());
+
+        // A `.gitignore` that exists but can't be read as a file (here: it's a
+        // directory) surfaces the IO error instead of silently clobbering it.
+        fs::create_dir_all(dir.join(".gitignore")).unwrap();
+        assert!(add_to_gitignore(&dir, "a.txt").is_err());
+        assert!(
+            dir.join(".gitignore").is_dir(),
+            "the directory is untouched"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

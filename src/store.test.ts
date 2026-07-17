@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { attentionQueue } from "./components/Attention/attentionQueue";
 import { collectLeaves } from "./components/Canvas/canvasTree";
 import {
   accentCompanions,
@@ -7,30 +8,32 @@ import {
   adjacentSessionId,
   anchorAgentForPanel,
   applyRecurringFire,
+  cancelAllAttentionTimers,
   contentForSelected,
   DEFAULT_SETTINGS,
   dedupeBranchLabels,
   displayZoom,
   isClaudeActive,
-  isCleanExit,
   kanbanColumnColor,
   MAX_DISPLAY_SIZE,
   mergeRepoOrder,
   mergeSettings,
   MIN_DISPLAY_SIZE,
+  migrateTerminalBackground,
   migrateTerminalLineHeight,
   moveResultMessage,
   overviewClusterKeys,
   ownedChildSessionIds,
   pickRepoColor,
   placeAfterAnchor,
+  randomPaletteAccent,
   REPO_PALETTE,
   repoColor,
   repoOrder,
+  resolvedRandomAccent,
   sidebarRepos,
   useStore,
   versionIncreased,
-  worktreeHasItems,
 } from "./store";
 import type {
   AgentInfo,
@@ -43,6 +46,7 @@ import type {
 } from "./types";
 import { effectiveRepo } from "./paths";
 import * as ipc from "./ipc";
+import * as notify from "./notify";
 import { isMockUpdate } from "./updater";
 
 function session(id: string): SessionView {
@@ -113,6 +117,9 @@ describe("accentCompanions (#107)", () => {
 
 beforeEach(() => {
   vi.useRealTimers();
+  // Drop any admission-grace / eviction-debounce timers a prior test armed (they're
+  // module-level; a leaked REAL timer would otherwise fire into a later test, #398).
+  cancelAllAttentionTimers();
   useStore.setState({
     sessions: [],
     selectedId: null,
@@ -130,6 +137,9 @@ beforeEach(() => {
     canvasTemplates: [],
     sessionBusy: {},
     sessionActive: {},
+    sessionIdleSince: {},
+    dismissedAttention: {},
+    attentionEligible: {},
     claudeMissing: false,
     toasts: [],
     cloningRepos: [],
@@ -504,6 +514,58 @@ describe("app store", () => {
     });
   });
 
+  it("selectItem in Attention switches to Overview and selects the agent (#411)", () => {
+    useStore.setState({
+      view: "attention",
+      sessions: [{ ...session("a"), repoPath: "/repo/a" }],
+      overviewRepoFilter: null,
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "a", repoPath: "/repo/a" });
+    expect(useStore.getState().view).toBe("overview");
+    expect(useStore.getState().selectedId).toBe("a");
+  });
+
+  it("selectItem in Attention switches a non-agent item to Overview too (#411)", () => {
+    useStore.setState({ view: "attention", overviewRepoFilter: null });
+    useStore
+      .getState()
+      .selectItem({ kind: "diff", id: "p1", repoPath: "/repo/b" });
+    expect(useStore.getState().view).toBe("overview");
+    expect(useStore.getState().selectedId).toBe("p1");
+  });
+
+  it("selectItem in Overview keeps the view (regression guard for #411)", () => {
+    useStore.setState({
+      view: "overview",
+      sessions: [{ ...session("a"), repoPath: "/repo/a" }],
+      overviewRepoFilter: null,
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "a", repoPath: "/repo/a" });
+    expect(useStore.getState().view).toBe("overview");
+    expect(useStore.getState().selectedId).toBe("a");
+  });
+
+  it("selectItem in Attention switches an agent to Overview AND clears a mismatched filter (#334 + #411)", () => {
+    useStore.setState({
+      view: "attention",
+      sessions: [
+        { ...session("a"), repoPath: "/repo/a" },
+        { ...session("b"), repoPath: "/repo/b" },
+      ],
+      overviewRepoFilter: { path: "/repo/a", mode: "all" },
+    });
+    useStore
+      .getState()
+      .selectItem({ kind: "agent", id: "b", repoPath: "/repo/b" });
+    expect(useStore.getState().view).toBe("overview");
+    expect(useStore.getState().selectedId).toBe("b");
+    expect(useStore.getState().overviewRepoFilter).toBeNull();
+  });
+
   it("forgetRepo drops the repo's sessions + recent, selection, and filter (#31/#34)", async () => {
     useStore.setState({
       sessions: [
@@ -546,15 +608,17 @@ describe("app store", () => {
     expect(useStore.getState().sessions[0]?.exitedCode).toBeUndefined();
   });
 
-  it("forgetExitedSession drops a clean-exited agent + toasts 'Agent exited' (#63)", async () => {
+  it("applySessionForgotten drops the agent + toasts 'Agent exited' when targeted (task 431)", () => {
     useStore.setState({
       sessions: [session("s1"), session("s2")],
       selectedId: "s1",
       view: "canvas",
     });
-    // ipc.killSession rejects without a Tauri host and is caught; the local
-    // forget still runs (kill + forget locally regardless).
-    await useStore.getState().forgetExitedSession("s1");
+    // Rust already forgot the record (#63); the event just converges this window.
+    // The test env's WINDOW_LABEL is "main", so this payload targets us.
+    useStore
+      .getState()
+      .applySessionForgotten({ id: "s1", toast_window: "main" });
     expect(useStore.getState().sessions.map((s) => s.id)).toEqual(["s2"]);
     // The selected agent vanishing returns to Overview (#75).
     expect(useStore.getState().selectedId).toBeNull();
@@ -562,6 +626,45 @@ describe("app store", () => {
     expect(useStore.getState().toasts.map((t) => t.message)).toContain(
       "Agent exited",
     );
+  });
+
+  it("applySessionForgotten drops without toasting when another window is targeted", () => {
+    useStore.setState({ sessions: [session("s1")] });
+    useStore
+      .getState()
+      .applySessionForgotten({ id: "s1", toast_window: "canvas-abc" });
+    // State still converges in every window; only the targeted one toasts.
+    expect(useStore.getState().sessions).toHaveLength(0);
+    expect(useStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("applySessionForgotten is idempotent when the roster drop already removed the id", () => {
+    // The `sessions://changed` roster broadcast precedes `session://forgotten`
+    // (task 428/431) — dropSession on an unknown id is a filter no-op.
+    useStore.setState({ sessions: [session("s2")] });
+    useStore
+      .getState()
+      .applySessionForgotten({ id: "s1", toast_window: "main" });
+    expect(useStore.getState().sessions.map((s) => s.id)).toEqual(["s2"]);
+    // The targeted window still toasts once (the courtesy notification).
+    expect(useStore.getState().toasts.map((t) => t.message)).toContain(
+      "Agent exited",
+    );
+  });
+
+  it("applyWorktreeKept warns only in the targeted window (task 431/#74)", () => {
+    useStore
+      .getState()
+      .applyWorktreeKept({ dest: "/wt/feat", toast_window: "main" });
+    expect(useStore.getState().toasts.at(-1)).toMatchObject({
+      message: "Worktree kept — it has uncommitted changes",
+      tone: "error",
+    });
+    useStore.setState({ toasts: [] });
+    useStore
+      .getState()
+      .applyWorktreeKept({ dest: "/wt/feat", toast_window: "canvas-abc" });
+    expect(useStore.getState().toasts).toHaveLength(0);
   });
 
   it("restartSession resolves false (and toasts an error) when resume fails (#63)", async () => {
@@ -912,6 +1015,30 @@ describe("repo items — overviewPanels as the single source (#59)", () => {
     const id = useStore.getState().overviewPanels["/repo/a"]?.[0]?.id ?? "";
     await useStore.getState().removeOverviewPanel("/repo/a", id);
     expect(useStore.getState().overviewPanels["/repo/a"]).toBeUndefined();
+  });
+
+  it("addOverviewPanel bumps the repo to the front of recents (#400)", async () => {
+    // Opening any non-agent panel counts as "using" the repo, so it rises to the top
+    // of `recents` (the signal the ⌘K / ⌘N / template folder pickers order by).
+    useStore.setState({ recents: ["/repo/a", "/repo/b"] });
+    await useStore.getState().addOverviewPanel("/repo/b", "diff");
+    const { recents } = useStore.getState();
+    expect(recents[0]).toBe("/repo/b");
+    // No duplicate — the filter-before-prepend keeps the list deduped.
+    expect(recents.filter((r) => r === "/repo/b")).toHaveLength(1);
+  });
+
+  it("addOverviewPanel bumps the worktree PARENT, not the worktree folder (#400/#331)", async () => {
+    // A panel keyed by a worktree sub-folder must bump its parent repo, so the worktree
+    // dir never leaks into `recents` as a stray top-level entry (mirrors the #331 spawn).
+    useStore.setState({
+      sessions: [ovSession("wt-agent", "/wt/feat", 0, "/repo")],
+      recents: ["/other"],
+    });
+    await useStore.getState().addOverviewPanel("/wt/feat", "diff");
+    const { recents } = useStore.getState();
+    expect(recents[0]).toBe("/repo");
+    expect(recents).not.toContain("/wt/feat");
   });
 });
 
@@ -1575,156 +1702,52 @@ describe("applyRecurringFire (#300)", () => {
   });
 });
 
-describe("worktreeHasItems (#199)", () => {
+// The #199 `worktreeHasItems` and #63 `isCleanExit` batteries moved to Rust with
+// their implementations (task 431 — `commands.rs` unit tests): the ref-count check
+// and the clean-exit decision are backend-owned now, decided once per app.
+
+describe("cleanupWorktreeIfEmpty outcome mapping (task 431)", () => {
+  const parent = "/work/parent-repo";
   const dest = "/data/worktrees/repo-id/feat";
-  const empty = {
-    sessions: [],
-    overviewPanels: {},
-    schedules: [],
-    recurrings: [],
-  };
 
-  it("is false for a worktree with no items (→ safe to remove)", () => {
-    expect(worktreeHasItems(empty, dest)).toBe(false);
+  it("'keptDirty' → the #74 warning toast (acting window)", async () => {
+    const spy = vi
+      .spyOn(ipc, "cleanupWorktreeIfEmpty")
+      .mockResolvedValue("keptDirty");
+    await useStore.getState().cleanupWorktreeIfEmpty(parent, dest);
+    expect(spy).toHaveBeenCalledWith(parent, dest);
+    expect(useStore.getState().toasts.at(-1)).toMatchObject({
+      message: "Worktree kept — it has uncommitted changes",
+      tone: "error",
+    });
+    spy.mockRestore();
   });
 
-  it("counts an agent whose repoPath is the worktree (incl. an exited-but-shown one)", () => {
-    // The guard counts ANY session at this folder — including an exited agent still
-    // shown with a Restart overlay (the old guard only counted live agents).
-    expect(
-      worktreeHasItems({ ...empty, sessions: [{ repoPath: dest }] }, dest),
-    ).toBe(true);
+  it("'removed' → no toast (the quiet success path)", async () => {
+    const spy = vi
+      .spyOn(ipc, "cleanupWorktreeIfEmpty")
+      .mockResolvedValue("removed");
+    await useStore.getState().cleanupWorktreeIfEmpty(parent, dest);
+    expect(useStore.getState().toasts).toHaveLength(0);
+    spy.mockRestore();
   });
 
-  it("counts an overview panel keyed to the worktree folder", () => {
-    expect(
-      worktreeHasItems(
-        { ...empty, overviewPanels: { [dest]: [{ id: "p1" }] } },
-        dest,
-      ),
-    ).toBe(true);
-    // An empty panel list does not count.
-    expect(
-      worktreeHasItems({ ...empty, overviewPanels: { [dest]: [] } }, dest),
-    ).toBe(false);
+  it("'inUse' → silent keep, like the old has-items early return", async () => {
+    const spy = vi
+      .spyOn(ipc, "cleanupWorktreeIfEmpty")
+      .mockResolvedValue("inUse");
+    await useStore.getState().cleanupWorktreeIfEmpty(parent, dest);
+    expect(useStore.getState().toasts).toHaveLength(0);
+    spy.mockRestore();
   });
 
-  it("counts a scheduled session targeting the worktree folder", () => {
-    expect(
-      worktreeHasItems({ ...empty, schedules: [{ cwd: dest }] }, dest),
-    ).toBe(true);
-  });
-
-  it("counts a worktree schedule by its worktree_path (#259 — its cwd is the parent repo)", () => {
-    // A worktree schedule's `cwd` is the PARENT repo, not the worktree folder; its
-    // eagerly-created worktree (#259) lives at `worktree_path`. So matching only `cwd`
-    // would miss it and wrongly free a worktree another pending schedule still uses.
-    expect(
-      worktreeHasItems(
-        {
-          ...empty,
-          schedules: [{ cwd: "/work/parent-repo", worktree_path: dest }],
-        },
-        dest,
-      ),
-    ).toBe(true);
-    // A worktree schedule for a DIFFERENT folder does not count.
-    expect(
-      worktreeHasItems(
-        {
-          ...empty,
-          schedules: [
-            { cwd: "/work/parent-repo", worktree_path: "/data/other" },
-          ],
-        },
-        dest,
-      ),
-    ).toBe(false);
-  });
-
-  it("counts a recurring session targeting the worktree folder (#294)", () => {
-    // A recurring created inside the worktree (`cwd === dest`) …
-    expect(
-      worktreeHasItems({ ...empty, recurrings: [{ cwd: dest }] }, dest),
-    ).toBe(true);
-    // … or a worktree recurring whose eager worktree is `worktree_path`.
-    expect(
-      worktreeHasItems(
-        {
-          ...empty,
-          recurrings: [{ cwd: "/work/parent-repo", worktree_path: dest }],
-        },
-        dest,
-      ),
-    ).toBe(true);
-    // A recurring for a different folder does not count.
-    expect(
-      worktreeHasItems(
-        { ...empty, recurrings: [{ cwd: "/work/other" }] },
-        dest,
-      ),
-    ).toBe(false);
-  });
-
-  it("ignores items belonging to other folders", () => {
-    expect(
-      worktreeHasItems(
-        {
-          sessions: [{ repoPath: "/work/other" }],
-          overviewPanels: { "/work/other": [{ id: "p" }] },
-          schedules: [{ cwd: "/work/other" }],
-          recurrings: [{ cwd: "/work/other" }],
-        },
-        dest,
-      ),
-    ).toBe(false);
-  });
-
-  it("mixed items all count; only true emptiness (all types gone) is removable", () => {
-    const full = {
-      sessions: [{ repoPath: dest }],
-      overviewPanels: { [dest]: [{ id: "p" }] },
-      schedules: [{ cwd: dest }],
-      recurrings: [{ cwd: dest }],
-    };
-    expect(worktreeHasItems(full, dest)).toBe(true);
-    // Drop the agent → still has a panel + schedule + recurring.
-    expect(worktreeHasItems({ ...full, sessions: [] }, dest)).toBe(true);
-    // Drop the panel too → still has the schedule + recurring.
-    expect(
-      worktreeHasItems(
-        {
-          sessions: [],
-          overviewPanels: {},
-          schedules: [{ cwd: dest }],
-          recurrings: [{ cwd: dest }],
-        },
-        dest,
-      ),
-    ).toBe(true);
-    // Everything gone → empty → removable.
-    expect(worktreeHasItems(empty, dest)).toBe(false);
-  });
-});
-
-describe("isCleanExit (#63)", () => {
-  it("treats code 0 while running (not intentional) as a clean exit → forget", () => {
-    expect(isCleanExit(0, false, false)).toBe(true);
-  });
-
-  it("keeps non-zero / unknown exits as a recoverable overlay (not clean)", () => {
-    expect(isCleanExit(1, false, false)).toBe(false);
-    expect(isCleanExit(137, false, false)).toBe(false);
-    expect(isCleanExit(null, false, false)).toBe(false);
-  });
-
-  it("never auto-forgets during the boot resume window (#30)", () => {
-    // A code-0 exit while booting keeps the overlay + Restart instead of vanishing.
-    expect(isCleanExit(0, true, false)).toBe(false);
-  });
-
-  it("never auto-forgets an intentional kill (Remove/Forget toasts on its own)", () => {
-    expect(isCleanExit(0, false, true)).toBe(false);
+  it("an ipc failure → silent keep (never a spurious dirty warning)", async () => {
+    const spy = vi
+      .spyOn(ipc, "cleanupWorktreeIfEmpty")
+      .mockRejectedValue(new Error("no host"));
+    await useStore.getState().cleanupWorktreeIfEmpty(parent, dest);
+    expect(useStore.getState().toasts).toHaveLength(0);
+    spy.mockRestore();
   });
 });
 
@@ -2357,7 +2380,6 @@ describe("openSessionInCanvas (#153)", () => {
       canvases: [{ id: "c1", name: "Canvas 1", layout: null }],
       activeCanvasId: "c1",
       view: "overview",
-      detachedCanvasIds: [],
     });
     s().openSessionInCanvas("a1");
     const st = s();
@@ -2385,7 +2407,6 @@ describe("openSessionInCanvas (#153)", () => {
       ],
       activeCanvasId: "c1",
       view: "overview",
-      detachedCanvasIds: [],
     });
     s().openSessionInCanvas("a1");
     const st = s();
@@ -2394,25 +2415,6 @@ describe("openSessionInCanvas (#153)", () => {
     expect(st.activeLeafId).toBe("L");
     expect(st.view).toBe("canvas");
     expect(st.selectedId).toBe("a1");
-  });
-
-  it("raises a detached window without switching the main view (#84)", () => {
-    useStore.setState({
-      sessions: [session("a1")],
-      canvases: [
-        { id: "c1", name: "Canvas 1", layout: null },
-        { id: "c2", name: "Canvas 2", layout: agentLeaf("L", "a1") },
-      ],
-      activeCanvasId: "c1",
-      view: "overview",
-      detachedCanvasIds: ["c2"],
-    });
-    s().openSessionInCanvas("a1");
-    const st = s();
-    expect(st.canvases).toHaveLength(2); // no new tab
-    expect(st.view).toBe("overview"); // main view unchanged
-    expect(st.activeCanvasId).toBe("c1"); // unchanged
-    expect(st.selectedId).toBe("a1"); // row still highlighted
   });
 });
 
@@ -2445,17 +2447,37 @@ describe("mergeSettings (#100/#176)", () => {
     expect(mergeSettings({ theme: "light" }).theme).toBe("light");
   });
 
-  it("defaults autoFocusOnHover to false and back-fills it (#368)", () => {
-    expect(DEFAULT_SETTINGS.autoFocusOnHover).toBe(false);
-    // A pre-#368 blob (no key) merges to the opt-in default (off).
+  it("defaults pauseWaveWhenCovered to false and back-fills it (task 402)", () => {
+    expect(DEFAULT_SETTINGS.pauseWaveWhenCovered).toBe(false);
+    // An old blob without the key back-fills to false via mergeSettings (no migration).
+    expect(mergeSettings({}).pauseWaveWhenCovered).toBe(false);
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.pauseWaveWhenCovered;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .pauseWaveWhenCovered,
+    ).toBe(false);
+    // A persisted true (opted in) is preserved over the default.
+    expect(
+      mergeSettings({ pauseWaveWhenCovered: true }).pauseWaveWhenCovered,
+    ).toBe(true);
+  });
+
+  it("defaults autoFocusOnHover to true and back-fills it (#404)", () => {
+    expect(DEFAULT_SETTINGS.autoFocusOnHover).toBe(true);
+    // A blob *missing* the key merges to the new opt-out default (on).
     const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
     delete old.autoFocusOnHover;
     expect(
       mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>).autoFocusOnHover,
-    ).toBe(false);
-    // A persisted true (opted in) is preserved over the default.
+    ).toBe(true);
+    // A persisted true stays true.
     expect(mergeSettings({ autoFocusOnHover: true }).autoFocusOnHover).toBe(
       true,
+    );
+    // A persisted false (a user who explicitly opted out) is preserved.
+    expect(mergeSettings({ autoFocusOnHover: false }).autoFocusOnHover).toBe(
+      false,
     );
   });
 
@@ -2508,6 +2530,119 @@ describe("mergeSettings (#100/#176)", () => {
     });
     expect(merged.terminalLineHeight).toBe(1.5);
     expect(merged.terminalLineHeightMigrated).toBe(true);
+  });
+
+  it("defaults the terminal background lightness to 0 (match the app panel) and the migration flag to false", () => {
+    expect(DEFAULT_SETTINGS.terminalBackgroundLightness).toBe(0);
+    expect(DEFAULT_SETTINGS.terminalBackgroundMatchMigrated).toBe(false);
+  });
+
+  it("resolves the terminal background lightness to 0 for a brand-new / pre-#390 blob", () => {
+    // A brand-new install (empty blob) takes the 0 default.
+    expect(mergeSettings({}).terminalBackgroundLightness).toBe(0);
+    // A pre-#390 blob (no key at all) also back-fills to 0.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.terminalBackgroundLightness;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .terminalBackgroundLightness,
+    ).toBe(0);
+  });
+
+  it("back-fills terminalBackgroundMatchMigrated to false for an older blob and preserves a stored value/flag", () => {
+    // An older blob (no migration key — incl. #414-era blobs, which carry only the
+    // retired `terminalBackgroundMigrated`) upgrades cleanly to false so it's still
+    // eligible for the one-time bump.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.terminalBackgroundMatchMigrated;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>)
+        .terminalBackgroundMatchMigrated,
+    ).toBe(false);
+    // A persisted background value + set flag win over the defaults.
+    const merged = mergeSettings({
+      terminalBackgroundLightness: 50,
+      terminalBackgroundMatchMigrated: true,
+    });
+    expect(merged.terminalBackgroundLightness).toBe(50);
+    expect(merged.terminalBackgroundMatchMigrated).toBe(true);
+  });
+
+  it("defaults the UI v2 settings (task 373): backgroundAnimation on, densePanels off, capAgentWidth on", () => {
+    expect(DEFAULT_SETTINGS.backgroundAnimation).toBe(true);
+    expect(DEFAULT_SETTINGS.densePanels).toBe(false);
+    expect(DEFAULT_SETTINGS.capAgentWidth).toBe(true);
+  });
+
+  it("back-fills the UI v2 keys for an older / legacy blob and preserves stored values (task 373)", () => {
+    // An empty blob (a fresh install) gets all three defaults.
+    const empty = mergeSettings({});
+    expect(empty.backgroundAnimation).toBe(true);
+    expect(empty.densePanels).toBe(false);
+    expect(empty.capAgentWidth).toBe(true);
+    // A legacy blob lacking the keys (a pre-373 sessions.json) upgrades cleanly.
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.backgroundAnimation;
+    delete old.densePanels;
+    delete old.capAgentWidth;
+    const merged = mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>);
+    expect(merged.backgroundAnimation).toBe(true);
+    expect(merged.densePanels).toBe(false);
+    expect(merged.capAgentWidth).toBe(true);
+    // Persisted values win over the defaults.
+    const stored = mergeSettings({
+      backgroundAnimation: false,
+      densePanels: true,
+      capAgentWidth: false,
+    });
+    expect(stored.backgroundAnimation).toBe(false);
+    expect(stored.densePanels).toBe(true);
+    expect(stored.capAgentWidth).toBe(false);
+  });
+});
+
+describe("random accent (UI v2 task 373)", () => {
+  it("randomPaletteAccent picks the first entry for rand()=0 and the last for rand()→1", () => {
+    expect(randomPaletteAccent(() => 0)).toBe(REPO_PALETTE[0]);
+    expect(randomPaletteAccent(() => 0.999999)).toBe(
+      REPO_PALETTE[REPO_PALETTE.length - 1],
+    );
+  });
+
+  it("randomPaletteAccent always returns a palette member", () => {
+    for (const r of [0, 0.1, 0.25, 0.5, 0.7, 0.9, 0.999999]) {
+      expect(REPO_PALETTE).toContain(randomPaletteAccent(() => r));
+    }
+    // The default (Math.random) path too.
+    expect(REPO_PALETTE).toContain(randomPaletteAccent());
+  });
+
+  it("resolvedRandomAccent memoizes one palette member per run", () => {
+    const first = resolvedRandomAccent();
+    expect(REPO_PALETTE).toContain(first);
+    // Stable across re-reads within a run (re-saving settings never re-rolls).
+    expect(resolvedRandomAccent()).toBe(first);
+    expect(resolvedRandomAccent()).toBe(first);
+  });
+});
+
+describe("toggleDensePanels (UI v2 task 373)", () => {
+  const lastToast = () => {
+    const { toasts } = useStore.getState();
+    return toasts[toasts.length - 1]?.message;
+  };
+
+  it("flips settings.densePanels and toasts the demo strings", () => {
+    useStore.setState({ settings: { ...DEFAULT_SETTINGS }, toasts: [] });
+    expect(useStore.getState().settings.densePanels).toBe(false);
+
+    useStore.getState().toggleDensePanels();
+    expect(useStore.getState().settings.densePanels).toBe(true);
+    expect(lastToast()).toBe("Dense panels on");
+
+    useStore.getState().toggleDensePanels();
+    expect(useStore.getState().settings.densePanels).toBe(false);
+    expect(lastToast()).toBe("Dense panels off");
   });
 });
 
@@ -2584,6 +2719,46 @@ describe("migrateTerminalLineHeight (#367)", () => {
   });
 });
 
+describe("migrateTerminalBackground (the inverse of #414's 0 → 25 bump)", () => {
+  it("bumps an explicit #414-era 25 down to 0 and stamps the flag (changed)", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalBackgroundLightness: 25,
+      terminalBackgroundMatchMigrated: false,
+    };
+    const { settings, changed } = migrateTerminalBackground(before);
+    expect(settings.terminalBackgroundLightness).toBe(0);
+    expect(settings.terminalBackgroundMatchMigrated).toBe(true);
+    expect(changed).toBe(true);
+  });
+
+  it("leaves 0 and any other chosen value unchanged but still stamps the flag (not changed)", () => {
+    for (const value of [0, 5, 10, 50, 100]) {
+      const before = {
+        ...DEFAULT_SETTINGS,
+        terminalBackgroundLightness: value,
+        terminalBackgroundMatchMigrated: false,
+      };
+      const { settings, changed } = migrateTerminalBackground(before);
+      expect(settings.terminalBackgroundLightness).toBe(value);
+      expect(settings.terminalBackgroundMatchMigrated).toBe(true);
+      expect(changed).toBe(false);
+    }
+  });
+
+  it("never re-runs once the flag is set — a re-picked 25 is preserved", () => {
+    const before = {
+      ...DEFAULT_SETTINGS,
+      terminalBackgroundLightness: 25,
+      terminalBackgroundMatchMigrated: true,
+    };
+    const { settings, changed } = migrateTerminalBackground(before);
+    expect(settings).toBe(before); // untouched (same reference)
+    expect(settings.terminalBackgroundLightness).toBe(25);
+    expect(changed).toBe(false);
+  });
+});
+
 describe("openFileFromTree (#175)", () => {
   const s = () => useStore.getState();
   const fileLeaf = (
@@ -2630,7 +2805,6 @@ describe("openFileFromTree (#175)", () => {
       canvases: [{ id: "canvas-1", name: "Canvas 1", layout: null }],
       activeCanvasId: "canvas-1",
       overviewPanels: {},
-      detachedCanvasIds: [],
       selectedId: null,
       activeLeafId: null,
     });
@@ -2666,7 +2840,6 @@ describe("openFileFromTree (#175)", () => {
       overviewPanels: {
         "/repo/a": [{ id: "p1", kind: "markdown", file: "notes.md" }],
       },
-      detachedCanvasIds: [],
       selectedId: null,
       activeLeafId: null,
     });
@@ -2677,36 +2850,6 @@ describe("openFileFromTree (#175)", () => {
     expect(st.overviewPanels["/repo/a"]).toHaveLength(1); // no duplicate panel
     expect(st.activeLeafId).toBe("L");
     expect(st.selectedId).toBe("p1");
-  });
-
-  it("Canvas, leaf lives in a detached tab: raises that window, no main-view switch (#84)", async () => {
-    useStore.setState({
-      view: "canvas",
-      canvases: [
-        { id: "canvas-1", name: "Canvas 1", layout: null },
-        {
-          id: "c2",
-          name: "Canvas 2",
-          layout: fileLeaf("L", "/repo/a", "notes.md"),
-        },
-      ],
-      activeCanvasId: "canvas-1",
-      overviewPanels: {
-        "/repo/a": [{ id: "p1", kind: "markdown", file: "notes.md" }],
-      },
-      detachedCanvasIds: ["c2"],
-      selectedId: null,
-      activeLeafId: null,
-    });
-    const focusSpy = vi.spyOn(s(), "focusCanvasWindow");
-    await s().openFileFromTree("/repo/a", "notes.md", "markdown");
-    const st = s();
-    expect(focusSpy).toHaveBeenCalledWith("c2");
-    expect(st.activeCanvasId).toBe("canvas-1"); // main view's active tab unchanged
-    expect(st.selectedId).toBe("p1");
-    // Nothing appended to the main tab.
-    expect(collectLeaves(st.canvases[0]?.layout ?? null)).toHaveLength(0);
-    focusSpy.mockRestore();
   });
 
   it("addOverviewPanel returns the new id on add and the existing id on a dedup hit", async () => {
@@ -3173,5 +3316,593 @@ describe("cloneRepo (#295/#299)", () => {
     const last = s().toasts.at(-1);
     expect(last?.message).toBe("fatal: repository not found");
     expect(last?.tone).toBe("error");
+  });
+});
+
+describe("settings.keybinds (keybind rework)", () => {
+  it("defaults keybinds to {} and back-fills an older blob", () => {
+    expect(DEFAULT_SETTINGS.keybinds).toEqual({});
+    const old = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete old.keybinds;
+    expect(
+      mergeSettings(old as Partial<typeof DEFAULT_SETTINGS>).keybinds,
+    ).toEqual({});
+  });
+
+  it("preserves persisted overrides verbatim", () => {
+    const merged = mergeSettings({
+      keybinds: { "close-panel": "mod+shift+x", "view-canvas": "" },
+    });
+    expect(merged.keybinds).toEqual({
+      "close-panel": "mod+shift+x",
+      "view-canvas": "",
+    });
+  });
+});
+
+describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
+  const s = () => useStore.getState();
+  const leaf = (id: string, content: CanvasContent): CanvasNode => ({
+    type: "leaf",
+    id,
+    content,
+  });
+  const split = (a: CanvasNode, b: CanvasNode): CanvasNode => ({
+    type: "split",
+    id: "sp",
+    dir: "row",
+    sizes: [50, 50],
+    a,
+    b,
+  });
+
+  it("closes an open big-mode overlay first, touching nothing else", () => {
+    useStore.setState({
+      view: "canvas",
+      maximizedItem: { kind: "diff", repoPath: "/repo/x" },
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: leaf("l1", { kind: "diff", repoPath: "/repo/x" }),
+        },
+      ],
+      activeCanvasId: "c1",
+      activeLeafId: "l1",
+    });
+    s().closeFocusedPanel();
+    expect(s().maximizedItem).toBeNull();
+    // The underlying panel is untouched — only the overlay closed.
+    expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(1);
+    expect(s().activeLeafId).toBe("l1");
+  });
+
+  it("removes the focused Canvas leaf and advances focus to its neighbor", () => {
+    useStore.setState({
+      view: "canvas",
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: split(
+            leaf("la", { kind: "diff", repoPath: "/repo/x" }),
+            leaf("lb", {
+              kind: "terminal",
+              repoPath: "/repo/x",
+              sessionId: "t1",
+            }),
+          ),
+        },
+      ],
+      activeCanvasId: "c1",
+      activeLeafId: "la",
+    });
+    s().closeFocusedPanel();
+    const leaves = collectLeaves(s().canvases[0]?.layout ?? null);
+    expect(leaves.map((l) => l.id)).toEqual(["lb"]);
+    // Focus advanced to the surviving neighbor, so a repeat ⌘W keeps working…
+    expect(s().activeLeafId).toBe("lb");
+    s().closeFocusedPanel();
+    expect(s().canvases[0]?.layout).toBeNull();
+    expect(s().activeLeafId).toBeNull();
+    // …and with nothing left, a further call is a safe no-op.
+    s().closeFocusedPanel();
+    expect(s().canvases[0]?.layout).toBeNull();
+  });
+
+  it("no-ops in Canvas when the focused leaf is stale or nothing is focused", () => {
+    useStore.setState({
+      view: "canvas",
+      canvases: [
+        {
+          id: "c1",
+          name: "C1",
+          layout: leaf("l1", { kind: "diff", repoPath: "/repo/x" }),
+        },
+      ],
+      activeCanvasId: "c1",
+      activeLeafId: "gone",
+    });
+    s().closeFocusedPanel();
+    expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(1);
+    useStore.setState({ activeLeafId: null });
+    s().closeFocusedPanel();
+    expect(collectLeaves(s().canvases[0]?.layout ?? null)).toHaveLength(1);
+  });
+
+  it("removes the selected non-agent panel in Overview (the hover-× action)", async () => {
+    useStore.setState({
+      view: "overview",
+      selectedId: "p1",
+      overviewPanels: {
+        "/repo/x": [{ id: "p1", kind: "markdown", file: "a.md" }],
+      },
+    });
+    s().closeFocusedPanel();
+    // removeOverviewPanel is async; let it settle.
+    await Promise.resolve();
+    expect(s().overviewPanels["/repo/x"]).toBeUndefined();
+  });
+
+  it("removes the selected agent / schedule / recurring in Overview (its × action)", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    const cancelSchSpy = vi.spyOn(ipc, "cancelSchedule").mockResolvedValue();
+    const cancelRecSpy = vi.spyOn(ipc, "cancelRecurring").mockResolvedValue();
+    const schedule: ScheduledSession = {
+      id: "sch1",
+      cwd: "/repo/x",
+      branch: null,
+      prompt: null,
+      name: null,
+      fireAtMs: 999,
+      createdAt: 0,
+    } as unknown as ScheduledSession;
+    const recurring: RecurringSession = {
+      id: "rec1",
+      cwd: "/repo/x",
+      interval_secs: 3600,
+      next_fire_at: 999,
+      created_at: 0,
+    } as unknown as RecurringSession;
+    useStore.setState({
+      view: "overview",
+      sessions: [session("a1")],
+      schedules: [schedule],
+      recurrings: [recurring],
+      selectedId: "a1",
+      overviewPanels: {},
+    });
+    // Agent card: ⌘W removes it (kill + forget), exactly like the card's ×.
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("a1");
+    expect(s().sessions).toHaveLength(0);
+
+    // Schedule card: ⌘W cancels it (its × / Cancel action).
+    useStore.setState({ selectedId: "sch1" });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    expect(s().schedules).toHaveLength(0);
+    expect(cancelSchSpy).toHaveBeenCalledWith("sch1");
+
+    // Recurring card: ⌘W cancels it (its × / Cancel action).
+    useStore.setState({ selectedId: "rec1" });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    expect(s().recurrings).toHaveLength(0);
+    expect(cancelRecSpy).toHaveBeenCalledWith("rec1");
+
+    killSpy.mockRestore();
+    cancelSchSpy.mockRestore();
+    cancelRecSpy.mockRestore();
+  });
+
+  it("no-ops in Overview when the selection points at a gone item", () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "overview",
+      sessions: [session("a1")],
+      schedules: [],
+      recurrings: [],
+      selectedId: "gone",
+      overviewPanels: {},
+    });
+    s().closeFocusedPanel();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+    killSpy.mockRestore();
+  });
+
+  it("no-ops in Overview when the selected card is hidden by the repo filter (#34)", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "overview",
+      sessions: [session("a1")], // repoPath "/repo/a1"
+      schedules: [],
+      recurrings: [],
+      selectedId: "a1",
+      overviewPanels: {},
+      // Filter to another repo: a1's card is off the wall, so ⌘W must not act —
+      // the mouse × it mirrors only exists on a visible card.
+      overviewRepoFilter: { path: "/repo/other", mode: "all" },
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+
+    // With the filter matching the agent's repo the card is visible again — ⌘W
+    // removes it exactly like before.
+    useStore.setState({
+      overviewRepoFilter: { path: "/repo/a1", mode: "all" },
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("a1");
+    expect(s().sessions).toHaveLength(0);
+    killSpy.mockRestore();
+  });
+
+  it("removes the focused agent in the Attention view (kill + forget)", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "attention",
+      sessions: [session("a1")],
+      sessionActive: { a1: true }, // has been active, not busy
+      attentionEligible: { a1: true }, // admission grace confirmed (#398)
+      dismissedAttention: {},
+      selectedId: "a1",
+    });
+    s().closeFocusedPanel();
+    // removeSession → killSession is async; let it settle.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("a1");
+    expect(s().sessions).toHaveLength(0);
+    killSpy.mockRestore();
+  });
+
+  it("no-ops in the Attention view with an empty queue", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "attention",
+      sessions: [session("a1")],
+      sessionActive: {},
+      attentionEligible: { a1: true }, // confirmed idle — dismissal is the excluder
+      // Dismissed → not in the queue. (Task 410 surfaces even never-active agents,
+      // so `sessionActive: {}` alone no longer empties the queue — dismissing does.)
+      dismissedAttention: { a1: true },
+      selectedId: "a1",
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+    killSpy.mockRestore();
+  });
+});
+
+describe("attention repo filter (#445)", () => {
+  const s = () => useStore.getState();
+
+  it("filtering from Attention keeps the view (guard) while setting the filter", () => {
+    useStore.setState({ view: "attention", overviewRepoFilter: null });
+    // Mimic a sidebar folder/branch/worktree click: set the shared filter, and only
+    // force Overview when NOT already in Attention (the step-4 inline guard).
+    s().setOverviewRepoFilter("/repo/a1", "all");
+    if (s().view !== "attention") s().setView("overview");
+    expect(s().view).toBe("attention");
+    expect(s().overviewRepoFilter).toEqual({ path: "/repo/a1", mode: "all" });
+  });
+
+  it("filtering from Overview switches to Overview (guard) and sets the filter", () => {
+    useStore.setState({ view: "overview", overviewRepoFilter: null });
+    s().setOverviewRepoFilter("/repo/a1", "all");
+    if (s().view !== "attention") s().setView("overview");
+    expect(s().view).toBe("overview");
+    expect(s().overviewRepoFilter).toEqual({ path: "/repo/a1", mode: "all" });
+  });
+
+  it("dismissAllAttention only dismisses the filtered (visible) agents", () => {
+    useStore.setState({
+      view: "attention",
+      sessions: [session("a1"), session("b1")],
+      sessionActive: { a1: true, b1: true },
+      attentionEligible: { a1: true, b1: true },
+      dismissedAttention: {},
+      overviewRepoFilter: { path: "/repo/a1", mode: "all" },
+      selectedId: "a1",
+    });
+    s().dismissAllAttention();
+    expect(s().dismissedAttention.a1).toBe(true);
+    // The hidden repo-B agent is untouched — dismiss-all acts on the visible queue only.
+    expect(s().dismissedAttention.b1).toBeUndefined();
+  });
+
+  it("closeFocusedPanel in Attention removes a visible agent, never a filtered-out one", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "attention",
+      sessions: [session("a1"), session("b1")],
+      sessionActive: { a1: true, b1: true },
+      attentionEligible: { a1: true, b1: true },
+      dismissedAttention: {},
+      // Filter to repo B while the selection is on the hidden repo-A agent. The
+      // Attention branch resolves the active id from the FILTERED queue (top = b1),
+      // so ⌘W removes b1 — never the filtered-out a1.
+      overviewRepoFilter: { path: "/repo/b1", mode: "all" },
+      selectedId: "a1",
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("b1");
+    expect(killSpy).not.toHaveBeenCalledWith("a1");
+    killSpy.mockRestore();
+  });
+});
+
+describe("attention admission grace (#398 flicker fix)", () => {
+  const s = () => useStore.getState();
+
+  /** A full busy→idle cycle — the raw settle edge the backend emits ~700ms into any
+   * output pause. Membership must NOT follow it; only the grace confirmation may. */
+  function armIdle(id: string) {
+    s().setBusy(id, true);
+    s().setBusy(id, false);
+  }
+
+  beforeEach(() => {
+    // The grace is a module-level setTimeout: run every test under fake timers and
+    // stub the #212 git volley the settle edge schedules (600ms debounce).
+    vi.useFakeTimers();
+    useStore.setState({
+      sessions: [session("s1")],
+      refreshRepoGit: vi.fn().mockResolvedValue(undefined),
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("confirms eligibility only after ATTENTION_GRACE_MS of uninterrupted idle", async () => {
+    armIdle("s1");
+    // The dot-facing stamp is immediate (yellow at the raw settle); membership isn't.
+    expect(s().sessionIdleSince.s1).toBeDefined();
+    expect(s().attentionEligible.s1).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(s().attentionEligible.s1).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(s().attentionEligible.s1).toBe(true);
+  });
+
+  it("a flicker (busy resumes mid-grace) never grants eligibility", async () => {
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(3_000);
+    s().setBusy("s1", true); // output resumed — the pause was mid-turn
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(s().attentionEligible.s1).toBeUndefined();
+  });
+
+  it("going busy revokes granted eligibility once the eviction debounce confirms it", async () => {
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+    s().setBusy("s1", true);
+    // Not instant: a member's eviction is debounced so a spurious blip can't
+    // blink it out of the queue — sustained busy confirms it.
+    expect(s().attentionEligible.s1).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(s().attentionEligible.s1).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(s().attentionEligible.s1).toBeUndefined();
+  });
+
+  it("a NEW insert runs the grace (a seeded spawn goes busy first and never flashes)", async () => {
+    useStore.setState({ sessions: [] });
+    s().upsertSession(session("s2"));
+    expect(s().attentionEligible.s2).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s2).toBe(true);
+  });
+
+  it("a record UPDATE neither re-arms nor demotes an eligible member", async () => {
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+    s().upsertSession({ ...session("s1"), name: "renamed" });
+    expect(s().attentionEligible.s1).toBe(true); // not demoted
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s().attentionEligible.s1).toBe(true); // and no stray timer re-ran
+  });
+
+  it("dropSession cancels a pending grace and clears eligibility", async () => {
+    armIdle("s1");
+    s().dropSession("s1");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s().attentionEligible.s1).toBeUndefined();
+  });
+
+  it("markExited cancels a pending grace (an exited agent is never confirmed idle)", async () => {
+    armIdle("s1");
+    s().markExited("s1", 1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s().attentionEligible.s1).toBeUndefined();
+  });
+
+  it("markRunning (restart) revokes eligibility and re-runs the grace", async () => {
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+    s().markRunning("s1"); // Restart under the same id (#63)
+    expect(s().attentionEligible.s1).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+  });
+
+  it("a fired grace for an unknown id (shell terminal / removed) grants nothing", async () => {
+    armIdle("ghost"); // never in `sessions` — e.g. a shell terminal's settle
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s().attentionEligible.ghost).toBeUndefined();
+  });
+
+  it("the watched-agent notification rides the confirmed settle, not the raw edge (#336)", async () => {
+    const notifySpy = vi
+      .spyOn(notify, "notifyAgentReady")
+      .mockResolvedValue(undefined);
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, watchAllAgents: true },
+    });
+    armIdle("s1");
+    expect(notifySpy).not.toHaveBeenCalled(); // no longer fires on the raw edge
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    notifySpy.mockRestore();
+  });
+
+  it("a flickering settle never notifies a watched agent", async () => {
+    const notifySpy = vi
+      .spyOn(notify, "notifyAgentReady")
+      .mockResolvedValue(undefined);
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, watchAllAgents: true },
+    });
+    armIdle("s1");
+    await vi.advanceTimersByTimeAsync(3_000);
+    s().setBusy("s1", true); // the pause was mid-turn — output resumed
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(notifySpy).not.toHaveBeenCalled();
+    notifySpy.mockRestore();
+  });
+});
+
+describe("attention eviction debounce (the blink fix)", () => {
+  const s = () => useStore.getState();
+
+  /** Confirm `id` as an eligible queue member: full cycle + the admission grace. */
+  async function confirmIdle(id: string) {
+    s().setBusy(id, true);
+    s().setBusy(id, false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible[id]).toBe(true);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useStore.setState({
+      sessions: [session("s1")],
+      refreshRepoGit: vi.fn().mockResolvedValue(undefined),
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a sub-confirm busy blip keeps membership AND the original FIFO stamp", async () => {
+    await confirmIdle("s1");
+    const stamp = s().sessionIdleSince.s1;
+    expect(stamp).toBeDefined();
+    // A spurious blip: busy for well under the confirm window, then idle again.
+    s().setBusy("s1", true);
+    expect(s().attentionEligible.s1).toBe(true); // never left the queue
+    expect(s().sessionIdleSince.s1).toBe(stamp); // position untouched
+    await vi.advanceTimersByTimeAsync(900);
+    s().setBusy("s1", false);
+    expect(s().attentionEligible.s1).toBe(true);
+    expect(s().sessionIdleSince.s1).toBe(stamp); // still the ORIGINAL stamp
+    // And nothing pending revokes it later.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(s().attentionEligible.s1).toBe(true);
+    expect(s().sessionIdleSince.s1).toBe(stamp);
+  });
+
+  it("a resolved blip does not re-fire the watched-agent notification (#336)", async () => {
+    const notifySpy = vi
+      .spyOn(notify, "notifyAgentReady")
+      .mockResolvedValue(undefined);
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, watchAllAgents: true },
+    });
+    await confirmIdle("s1");
+    expect(notifySpy).toHaveBeenCalledTimes(1); // the confirmed settle
+    s().setBusy("s1", true);
+    await vi.advanceTimersByTimeAsync(500);
+    s().setBusy("s1", false); // blip resolves — eligibility was never revoked
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(notifySpy).toHaveBeenCalledTimes(1); // no duplicate
+    notifySpy.mockRestore();
+  });
+
+  it("sustained busy evicts, clears the stamp, and a later settle re-queues at the back", async () => {
+    await confirmIdle("s1");
+    s().setBusy("s1", true);
+    await vi.advanceTimersByTimeAsync(1_500); // the debounce confirms a real turn
+    expect(s().attentionEligible.s1).toBeUndefined();
+    expect(s().sessionIdleSince.s1).toBeUndefined();
+    // The turn ends much later: a fresh settle stamps a fresh (later) FIFO key and
+    // re-runs the admission grace — the agent re-enters at the back of the queue.
+    await vi.advanceTimersByTimeAsync(10_000);
+    s().setBusy("s1", false);
+    expect(s().sessionIdleSince.s1).toBeDefined();
+    expect(s().attentionEligible.s1).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s1).toBe(true);
+  });
+
+  it("a dismissal survives a blip and is cleared only by a CONFIRMED busy", async () => {
+    await confirmIdle("s1");
+    s().dismissAttention("s1");
+    expect(s().dismissedAttention.s1).toBe(true);
+    // Blip: dismissed member goes busy briefly — the acknowledgement stands.
+    s().setBusy("s1", true);
+    await vi.advanceTimersByTimeAsync(800);
+    s().setBusy("s1", false);
+    expect(s().dismissedAttention.s1).toBe(true);
+    // Confirmed new work un-acknowledges it.
+    s().setBusy("s1", true);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(s().dismissedAttention.s1).toBeUndefined();
+  });
+
+  it("removal, exit, and restart cancel a pending eviction", async () => {
+    await confirmIdle("s1");
+    s().setBusy("s1", true); // eviction pending
+    s().dropSession("s1");
+    await vi.advanceTimersByTimeAsync(20_000); // a leaked timer would fire here
+    expect(s().attentionEligible.s1).toBeUndefined();
+
+    useStore.setState({ sessions: [session("s2")] });
+    await confirmIdle("s2");
+    s().setBusy("s2", true);
+    s().markExited("s2", 1); // exit clears busy + eligibility, cancels the timer
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(s().attentionEligible.s2).toBeUndefined();
+
+    useStore.setState({ sessions: [session("s3")] });
+    await confirmIdle("s3");
+    s().setBusy("s3", true); // eviction pending…
+    s().markExited("s3", 1); // …crashes while busy (clears the flag + timers)
+    s().markRunning("s3"); // Restart: fresh idle life, fresh grace (#63/#398)
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s().attentionEligible.s3).toBe(true);
+  });
+
+  it("a busy-but-not-yet-evicted member is still admitted by attentionQueue", async () => {
+    await confirmIdle("s1");
+    s().setBusy("s1", true); // eviction pending — raw busy no longer excludes
+    const queue = attentionQueue({
+      sessions: s().sessions,
+      sessionBusy: s().sessionBusy,
+      sessionActive: s().sessionActive,
+      dismissed: s().dismissedAttention,
+      eligible: s().attentionEligible,
+      idleSince: s().sessionIdleSince,
+      recurringChildIds: new Set(),
+    });
+    expect(queue.map((x) => x.id)).toEqual(["s1"]);
   });
 });

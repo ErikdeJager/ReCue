@@ -38,7 +38,28 @@ export interface SessionRecord {
    * per agent; the global `watchAllAgents` setting can force it on. Absent/false for
    * older records → unwatched. */
   watch?: boolean;
+  /** Dev-container session: the docker image it runs in (spawn + resume wrap the
+   * agent CLI in `docker run <image> …`). Absent/null for a normal host-PTY
+   * session and for older records. */
+  container_image?: string | null;
+  /** The directory the agent is CURRENTLY working in per claude's own session log
+   * (`EnterWorktree` / `/cd` move it) — the relocation signal for the sidebar's
+   * worktree grouping. Updated on the #97 title-worker cadence (claude-only);
+   * absent for non-claude agents and older records. */
+  current_cwd?: string | null;
 }
+
+/** Payload of `container://building`: the default dev-container image is being
+ * built (first run, one-time) — surfaced as a toast so a spawn waiting behind the
+ * build reads as progress, not a hang. */
+export interface ContainerBuildingPayload {
+  message: string;
+}
+
+/** The docker runtime state (the `container_runtime_status` command): drives the
+ * New Session modal's container toggle — hidden when docker isn't installed,
+ * disabled-with-a-hint when installed but not running. */
+export type DockerStatus = "absent" | "stopped" | "running";
 
 /** A slash-invokable skill/command (#114, mirrors `skills::SkillInfo`). Powers
  * the scheduled-prompt autocomplete; `name` is bare (inserted as `/<name>`),
@@ -60,6 +81,17 @@ export interface AgentInfo {
   supports_resume: boolean;
   supports_auto_name: boolean;
   version: string | null;
+}
+
+/** One editor catalog entry's live detection result ("Open in editor", from the
+ * `detect_editors` command) — snake_case to match the Rust serialization, like
+ * `AgentInfo`. Existence-based: `found` means a launchable install was resolved;
+ * `via` names where ("PATH" / "Toolbox" / "Applications" / "Program Files"). */
+export interface EditorInfo {
+  id: string;
+  display_name: string;
+  found: boolean;
+  via: string | null;
 }
 
 /** What ReCue decided about the WebKitGTK DMA-BUF renderer at boot (#357), for
@@ -279,6 +311,17 @@ export interface WorkingDiff {
  * "NotSeen" when absent. Persisted opaquely (the frontend owns the digest shape). */
 export type DiffSeenMap = Record<string, Record<string, string>>;
 
+/** A diff-seen **write patch** (task 429): per-repo, per-file deltas the backend
+ * merges over the persisted map under the Store mutex, so a stale window's
+ * debounced write can't drop another window's concurrent marks. A string sets that
+ * file's digest; a `null` file tombstones (deletes) the entry; a `null` repo
+ * deletes the whole repo key (the server also prunes a repo object emptied by file
+ * tombstones, so the frontend never needs the repo tombstone). */
+export type DiffSeenPatch = Record<
+  string,
+  Record<string, string | null> | null
+>;
+
 /** One commit in a folder's history (#230, mirrors `git::CommitInfo`) — the diff
  * viewer's "Commits" source list. */
 export interface CommitInfo {
@@ -313,10 +356,59 @@ export interface ExitPayload {
   code: number | null;
 }
 
+/** Payload of the `session://forgotten` event (task 431): a clean #63 exit Rust
+ * already forgot — every window drops local state; only `toast_window` toasts. */
+export interface ForgottenPayload {
+  id: string;
+  toast_window: string;
+}
+
+/** Payload of the `worktree://kept` event (task 431): the exit-driven worktree
+ * cleanup found a dirty worktree and kept it (#74) — only `toast_window` warns. */
+export interface WorktreeKeptPayload {
+  dest: string;
+  toast_window: string;
+}
+
+/** Outcome of the Rust ref-counted worktree cleanup (task 431,
+ * `cleanup_worktree_if_empty`): removed (incl. already gone — idempotent), still
+ * referenced by some item, kept because git refused the non-forced remove, or
+ * refused because the path is not an app-managed worktree (automation never
+ * deletes what ReCue didn't create). */
+export type WorktreeCleanup = "removed" | "inUse" | "keptDirty" | "notManaged";
+
 /** Payload of the `session://state` event — busy/idle (#42). */
 export interface StatePayload {
   id: string;
   busy: boolean;
+}
+
+/** Payload of the `session://size` broadcast (tasks 426/427): the authoritative,
+ * smallest-wins-arbitrated PTY grid. The ONLY thing that ever resizes a pooled
+ * xterm's grid (terminalPool applies it; nothing else calls term.resize). */
+export interface SizePayload {
+  id: string;
+  cols: number;
+  rows: number;
+}
+
+/** Return of `attach_terminal` (task 426): the effective grid the attaching host
+ * must adopt before replaying scrollback. */
+export interface GridPayload {
+  cols: number;
+  rows: number;
+}
+
+/** One transient same-file soft claim (task 435), as snapshotted by `file_claims`
+ * and broadcast (full list) on `file_claims://changed`: window `window` is the
+ * authoritative auto-save editor of `{repo_path, file}`; every other window
+ * renders that file read-only. Backend snake_case (the `SessionRecord`
+ * convention). Advisory only — never persisted, never an on-disk lock. */
+export interface FileClaim {
+  repo_path: string;
+  file: string;
+  /** The claiming window's Tauri label — opaque, matched against `WINDOW_LABEL`. */
+  window: string;
 }
 
 /** Payload of the `session://name` event (#97): claude's latest auto-title. */
@@ -332,9 +424,42 @@ export interface ForkablePayload {
   forkable: boolean;
 }
 
+/** Payload of the `session://cwd` event: the directory a session is currently
+ * working in per claude's own log — the agent-relocation signal that re-parents
+ * its sidebar row under a detected worktree (and back). */
+export interface CwdPayload {
+  id: string;
+  cwd: string;
+}
+
+/** One worktree of a registered repo per `git worktree list` (the detection read),
+ * stamped backend-side. Mirrors `commands::RepoWorktree` (snake_case fields). */
+export interface RepoWorktree {
+  /** Absolute checkout path (git prints `/`-separated on every OS). */
+  path: string;
+  /** The checked-out commit. */
+  head: string;
+  /** Short branch name (`refs/heads/` stripped); null when detached. */
+  branch: string | null;
+  /** First listing entry = the repository's main checkout (a hint — the frontend
+   * also self-excludes by path equivalence; a registered folder may itself BE a
+   * linked worktree). */
+  is_main: boolean;
+  /** Under `<data-dir>/worktrees` — created and owned by ReCue (#74). */
+  managed: boolean;
+  /** The path exists on this host (false for container-created `/work/…` paths). */
+  exists: boolean;
+  /** `git worktree lock` held — Claude Code locks while an agent actively works
+   * there, so this doubles as an "in use" hint. */
+  locked: boolean;
+  locked_reason: string | null;
+  /** git considers the entry prunable (its directory is gone/invalid). */
+  prunable: boolean;
+}
+
 // --- Frontend UI state ---
 
-export type View = "overview" | "canvas";
+export type View = "overview" | "canvas" | "attention";
 
 /**
  * Application settings (#100), persisted as an opaque blob through the Rust store
@@ -352,15 +477,41 @@ export interface Settings {
   terminalLineHeight: number;
   /** xterm cursor blink. */
   terminalCursorBlink: boolean;
+  /** Terminal background lightness (#390): 0 = `#1e1e2e` (default — exactly the
+   * app's panel surface, `--surface-base` dark, so terminals blend with the app),
+   * 100 = a soft gray. Lightens ONLY the agent/shell terminal
+   * background (xterm canvas + its padding frame); terminal-only and dark in both
+   * themes, so it never touches the light/dark theme toggle or non-terminal surfaces. */
+  terminalBackgroundLightness: number;
   // Appearance (wired by a follow-up)
   /** UI theme (#333): "dark" (default, Catppuccin Mocha) or "light" (Catppuccin
    * Latte). Applied as a `data-theme` attribute on <html> by applySettingsEffects;
    * the terminal stays dark in both. */
   theme: "dark" | "light";
-  /** Accent color hex from `REPO_PALETTE`, or "" to use the default token. */
+  /** Accent color: a hex from `REPO_PALETTE`, "" to use the default token, or the
+   * literal `"random"` sentinel (UI v2 task 373) — re-resolved to a random
+   * `REPO_PALETTE` member once per launch by applySettingsEffects. */
   accentColor: string;
   /** Force reduced motion beyond the OS setting. */
   reduceMotion: boolean;
+  /** Animate the app background (UI v2 wave, card 3). Default true; the visual
+   * consumer lands with the wave background — until then the flag persists inertly. */
+  backgroundAnimation: boolean;
+  /** Pause the wave while panels cover the stage (UI v2 task 384). Default false
+   * (opt-in, task 402); the wave stops rendering (zero frames) whenever the Overview
+   * wall has cards / the active Canvas tab has panels, and resumes live the instant
+   * the stage is clear.
+   * Ignored when backgroundAnimation is off (that unmounts the canvas entirely). */
+  pauseWaveWhenCovered: boolean;
+  /** Dense panels (UI v2 §9): collapse every stage gap and pane padding to 0 so
+   * panels tile edge-to-edge (hairlines keep them separated). Applied as a `dense`
+   * class on <html> by applySettingsEffects (the task-372 `:root.dense` token hook);
+   * toggled by ⌘D or Settings → Appearance. Default false. */
+  densePanels: boolean;
+  /** Cap every Overview panel at a comfortable max width (UI v2, card 5; broadened
+   * task 419 to every column type — agent, recurring, file, diff, terminal, kanban,
+   * filetree, scheduled). Default true (opt-out). */
+  capAgentWidth: boolean;
   /** Overview column minimum width in px (320–600); the floor before columns
    * scroll horizontally (#176). Applied as the `--overview-card-min` CSS var. */
   overviewPanelMinWidth: number;
@@ -396,8 +547,13 @@ export interface Settings {
   /** Confirm destructive Sidebar actions (Remove / Kill all / Close all). */
   confirmDestructive: boolean;
   /** Focus-follows-mouse (#368): when true, hovering an agent or shell terminal panel
-   * focuses it immediately so keystrokes are captured without a click. Off by default
-   * (opt-in). Read live by Terminal.tsx; not a side-effecting setting. */
+   * focuses it immediately so keystrokes are captured without a click. Since #371 the
+   * hover also moves the selection/active-panel highlight to the hovered Overview card
+   * or Canvas panel, and entering a panel with no terminal input (diff/file/kanban/
+   * filetree/scheduled/recurring, or an agent owned by another window) blurs the
+   * previously focused terminal so keystrokes never silently keep flowing to it. On
+   * by default (opt-out). Read live by Terminal.tsx / Overview / CanvasSurface; not a
+   * side-effecting setting. */
   autoFocusOnHover: boolean;
   /** What closing a Canvas tab *with contents* does (#137): `ask` shows a modal,
    * `kill` tears down its agents/items, `keep` just drops the tab (today's behavior).
@@ -446,7 +602,7 @@ export interface Settings {
   autoContinueAfterLimit: boolean;
   /** Show the five-hour Claude usage bar above the sidebar footer (#154/#326). Default
    * true. When false the bar is hidden AND ReCue never reads the Claude OAuth token —
-   * the usage IPC (`claude_session_usage`) is not invoked at all. */
+   * the Rust engine's usage poll (`autocontinue.rs poll_gate`, task 430) never runs. */
   showSessionUsage: boolean;
   /** Whether to offer the "Enable auto restart on limit reset" prompt button above the
    * usage bar when the five-hour limit is reached and auto-continue is off (#309). Default
@@ -457,6 +613,14 @@ export interface Settings {
    * edge, regardless of its per-agent `watch` flag (the per-agent flags are retained for
    * when this is turned back off). Default `false` — watch is otherwise opt-in per agent. */
   watchAllAgents: boolean;
+  // Shortcuts
+  /** Keyboard-shortcut overrides (Settings → Shortcuts): rebindable action id
+   * (`KeybindActionId`, `src/keybinds.ts`) → serialized chord (`"mod+w"`,
+   * `"alt+1"`, …), `""` = explicitly unbound. Only **overrides** live here — an
+   * untouched action has no key and follows its registry default, so new defaults
+   * reach existing installs. Read live by `useKeyboardNav` on every keydown (no
+   * applySettingsEffects step); invalid persisted chords read as unbound. */
+  keybinds: Record<string, string>;
   /** Whether the first-launch coding-agent picker has run. Defaults `false`, so an
    * existing install also runs the one-time detection on its next launch (auto-pick
    * if exactly one CLI is installed, the picker modal if 2+). Set once, then never
@@ -467,6 +631,28 @@ export interface Settings {
    *  (lacking the key) is eligible for the one-time bump; set true once so a user who
    *  later re-picks 1.2 is never re-migrated. Mirrors `onboarded`. */
   terminalLineHeightMigrated: boolean;
+  /** One-time migration marker: whether the terminal background-lightness default
+   *  drop (the #414-era 25 → 0, now that `--terminal-bg` matches the app's panel
+   *  surface) has been applied for this install. Defaults false so an older blob
+   *  (lacking the key) is eligible for the one-time bump of an explicit legacy 25;
+   *  set true once so a user who later re-picks 25 is never re-migrated. Deliberately
+   *  a NEW flag — #414-era installs already have the retired
+   *  `terminalBackgroundMigrated: true` stamped (the stale key rides along harmlessly
+   *  in persisted blobs). Mirrors `terminalLineHeightMigrated`. */
+  terminalBackgroundMatchMigrated: boolean;
+  // Editor ("Open in editor")
+  /** The editor "Open in editor" (⌘O, menus) launches: a catalog id from
+   * `src/editors.ts` (`"vscode"`, `"idea"`, …), `"custom"` (→ `customEditorCommand`),
+   * or `null` = not chosen yet — the next use opens the picker modal ("ask every
+   * time" when the user unchecks Remember). */
+  preferredEditor: string | null;
+  /** Launch command for the **custom** editor, used when `preferredEditor ===
+   * "custom"`. An **argv** like `customAgentCommand` (program + args, split on
+   * spaces, quote to group) — NOT a shell line. Every `{path}` occurrence is
+   * replaced with the target folder; without a placeholder the folder is appended
+   * as the last arg. Terminal editors go through their emulator, e.g.
+   * `alacritty -e nvim {path}`. */
+  customEditorCommand: string;
 }
 
 // --- Canvas (#46): a recursive binary split-panel (BSP) layout tree ---
@@ -554,6 +740,26 @@ export interface PersistedCanvases {
   activeId: string;
 }
 
+/** A `set_canvases` **write patch** (task 429): send only the field(s) the action
+ * changed — the backend merges field-wise over the persisted blob under the Store
+ * mutex (a tab switch sends `activeId` only; a layout/rename/reorder edit sends
+ * `canvases` only), so a stale window's write can't clobber the other field.
+ * `PersistedCanvases` stays the read/boot shape. */
+export interface PersistedCanvasesPatch {
+  canvases?: CanvasTab[];
+  activeId?: string;
+}
+
+/** Init presets for a full app window (task 434, mirrors `commands::AppWindowInit`).
+ * Passed to `open_app_window` and carried as URL params, so the new window's OWN
+ * store presets its local state at boot: `repo` filters its Overview to that repo;
+ * `canvas` boots it into the Canvas view on that tab (when the tab exists). Local
+ * UI only — nothing is persisted, no other window is touched. */
+export interface AppWindowInit {
+  repo?: string;
+  canvas?: string;
+}
+
 export type ToastTone = "info" | "error" | "success";
 
 export interface Toast {
@@ -631,6 +837,14 @@ export interface SessionView {
    * record; toggled via the sidebar menu / header WatchButton. Default false. The global
    * `watchAllAgents` setting can force notifications on regardless of this flag. */
   watch?: boolean;
+  /** Dev-container session: the docker image it runs in; null/absent for a normal
+   * host-PTY session. Drives the static "container" badge beside the fork badge. */
+  containerImage?: string | null;
+  /** The directory the agent is CURRENTLY working in per claude's own session log —
+   * the relocation signal: when it lands inside a detected worktree of this
+   * session's repo, the sidebar re-parents the row under that worktree header
+   * (`sessionActiveWorktree`, src/worktrees.ts). Null/absent = at home. */
+  currentCwd?: string | null;
 }
 
 /** Everything the frontend needs at boot, in ONE IPC round-trip (#352 — mirrors
@@ -662,6 +876,4 @@ export interface BootState {
   platform: string;
   /** Windows build number, `0` elsewhere (#140). */
   windows_build: number;
-  /** Canvas ids with a detached window open (#84). */
-  detached_canvas_ids: string[];
 }

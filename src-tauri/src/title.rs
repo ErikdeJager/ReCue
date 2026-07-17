@@ -27,11 +27,15 @@ const MAX_LEN: usize = 80;
 pub fn read_session_title(claude_session_id: &str) -> Option<String> {
     let path = find_log(claude_session_id)?;
     let file = std::fs::File::open(path).ok()?;
-    let reader = BufReader::new(file);
+    title_from_reader(BufReader::new(file))
+}
 
-    // One forward pass: keep the LAST `ai-title` (it's appended as the title
-    // evolves) and the FIRST `last-prompt` (the fallback). A cheap substring
-    // pre-filter avoids JSON-parsing the many lines that are neither.
+/// Core of `read_session_title` over any line source (factored out so the unit
+/// tests can feed it byte slices). One forward pass: keep the LAST `ai-title`
+/// (it's appended as the title evolves) and the FIRST `last-prompt` (the
+/// fallback). A cheap substring pre-filter avoids JSON-parsing the many lines
+/// that are neither; an unreadable (non-UTF-8) line is skipped.
+fn title_from_reader(reader: impl BufRead) -> Option<String> {
     let mut ai_title: Option<String> = None;
     let mut first_prompt: Option<String> = None;
     for line in reader.lines() {
@@ -76,32 +80,129 @@ enum LogLocation {
 }
 
 /// Locate `~/.claude/projects/*/<id>.jsonl` by the globally-unique session UUID, so
-/// we never replicate claude's cwd→dir encoding (it maps `/` and `.` → `-`). The
-/// UUID makes the filename unique, so the first project dir that has it wins.
+/// we never replicate claude's cwd→dir encoding (it maps `/` and `.` → `-`). When
+/// several project dirs hold a copy, the **newest by mtime** wins (see
+/// `locate_log_in`) — the same rule as `find_log`, so the fork guard (#134/#138)
+/// and the title/cwd readers can never disagree about which log is live.
 fn locate_log(id: &str) -> LogLocation {
     let Some(home) = crate::path_env::home_dir() else {
         return LogLocation::Unknown;
     };
-    let projects = home.join(".claude").join("projects");
-    let file_name = format!("{id}.jsonl");
-    let Ok(entries) = std::fs::read_dir(&projects) else {
+    locate_log_in(&home.join(".claude").join("projects"), id)
+}
+
+/// Core of `locate_log` over an explicit projects root (factored out so the unit
+/// tests can point it at a temp fixture): an unreadable root is `Unknown`, a
+/// readable one with no `<id>.jsonl` anywhere is `Absent`, and — like `find_log` —
+/// the **newest** copy by mtime wins when several project dirs hold one: entering
+/// a worktree RELOCATES the transcript (Claude Code ≥ 2.1.198) and can leave a
+/// stale, turn-less copy behind, and a first-match walk could pin the fork guard
+/// to that stale file for good while the title/cwd readers follow the live one.
+fn locate_log_in(projects: &Path, id: &str) -> LogLocation {
+    if std::fs::read_dir(projects).is_err() {
         return LogLocation::Unknown;
-    };
-    for entry in entries.flatten() {
-        let candidate = entry.path().join(&file_name);
-        if candidate.is_file() {
-            return LogLocation::Found(candidate);
-        }
     }
-    LogLocation::Absent
+    match newest_log_in(projects, &format!("{id}.jsonl")) {
+        Some(path) => LogLocation::Found(path),
+        None => LogLocation::Absent,
+    }
 }
 
 /// The session's log path, or `None` when it isn't there / can't be reached.
+///
+/// Picks the **newest** `<id>.jsonl` by mtime when several project dirs hold one:
+/// entering a worktree RELOCATES the transcript to that directory's project
+/// storage (Claude Code ≥ 2.1.198) and can leave a stale copy behind — the old
+/// first-match walk could pin the title (and the `read_session_cwd` relocation
+/// signal) to the stale file for good. With a single copy (the overwhelmingly
+/// common case) this is the old behavior. Shares `locate_log`'s resolution, so
+/// every log reader agrees on which copy is live.
 fn find_log(id: &str) -> Option<PathBuf> {
     match locate_log(id) {
         LogLocation::Found(path) => Some(path),
-        _ => None,
+        LogLocation::Absent | LogLocation::Unknown => None,
     }
+}
+
+/// The newest (by mtime) `<file_name>` across the project dirs under `projects`.
+/// An unreadable mtime sorts as the epoch, so a readable duplicate still wins.
+fn newest_log_in(projects: &Path, file_name: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(projects).ok()?;
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let candidate = entry.path().join(file_name);
+        let Ok(meta) = candidate.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
+            best = Some((mtime, candidate));
+        }
+    }
+    best.map(|(_, path)| path)
+}
+
+/// How much of the log tail `read_session_cwd` scans. Every transcript line
+/// carries a `cwd`, but a single line (a large tool result) can exceed 64 KiB —
+/// a 256 KiB window keeps the read bounded while making a truncated-tail miss
+/// (fail-open: no relocation signal until the next burst re-read) rare.
+const CWD_TAIL_BYTES: u64 = 256 * 1024;
+
+/// The directory the session is currently working in, per claude's own log:
+/// every JSONL line carries a `cwd` field, and `EnterWorktree` / `/cd` move it.
+/// This is the agent-relocation signal — when it lands inside a detected
+/// worktree, the sidebar re-parents the agent row there. Bounded (only the log
+/// tail is read) and best-effort like the title read: `None` on any miss.
+pub fn read_session_cwd(claude_session_id: &str) -> Option<String> {
+    let path = find_log(claude_session_id)?;
+    read_cwd_at(&path, CWD_TAIL_BYTES)
+}
+
+/// Core of `read_session_cwd` over an explicit log path, with the tail window as
+/// a parameter (factored out so the unit tests can exercise the windowing on
+/// small files; the wrapper passes `CWD_TAIL_BYTES`): read at most the last
+/// `tail_bytes` of the file and take the last `cwd` in that tail.
+fn read_cwd_at(path: &Path, tail_bytes: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(tail_bytes);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+    // A tail window can start mid-line and mid-UTF-8 — lossy-convert, and let
+    // the parser drop the leading partial line.
+    let tail = String::from_utf8_lossy(&buf);
+    last_cwd_in_tail(&tail, start > 0)
+}
+
+/// Pure core of `read_session_cwd`: the LAST line in `tail` that parses as a
+/// JSON object carrying a non-empty string `cwd`. `truncated` drops the first
+/// line (a tail window that didn't start at byte 0 may open mid-record). A
+/// substring pre-filter gates the serde parse, the `read_session_title` pattern.
+fn last_cwd_in_tail(tail: &str, truncated: bool) -> Option<String> {
+    let mut lines = tail.lines();
+    if truncated {
+        let _ = lines.next();
+    }
+    let mut found: Option<String> = None;
+    for line in lines {
+        if !line.contains("\"cwd\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(cwd) = value.get("cwd").and_then(|v| v.as_str()) {
+            if !cwd.is_empty() {
+                found = Some(cwd.to_string());
+            }
+        }
+    }
+    found
 }
 
 /// Whether a session's claude log holds at least one real **conversation turn** — the
@@ -189,7 +290,7 @@ impl ProjectLogIndex {
             return Self::unknown();
         };
         let mut dirs: Vec<PathBuf> = Vec::new();
-        let mut logs: HashMap<String, usize> = HashMap::new();
+        let mut newest: HashMap<String, (std::time::SystemTime, usize)> = HashMap::new();
         let mut unlisted: Vec<PathBuf> = Vec::new();
         for entry in entries.flatten() {
             let dir = entry.path();
@@ -206,15 +307,30 @@ impl ProjectLogIndex {
                 let name = file.file_name();
                 let Some(name) = name.to_str() else { continue };
                 if name.ends_with(".jsonl") {
-                    // First writer wins — the UUID makes the filename globally unique,
-                    // exactly the assumption `locate_log` already documents.
-                    logs.entry(name.to_string()).or_insert(dir_ix);
+                    // Newest copy wins — the same mtime rule `locate_log`/`find_log`
+                    // apply to a relocated transcript's stale duplicate (an
+                    // unreadable mtime sorts as the epoch; ties keep the first).
+                    let mtime = file
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::UNIX_EPOCH);
+                    match newest.get(name) {
+                        Some((seen, _)) if *seen >= mtime => {}
+                        _ => {
+                            newest.insert(name.to_string(), (mtime, dir_ix));
+                        }
+                    }
                 }
             }
         }
         Self {
             dirs,
-            logs: Some(logs),
+            logs: Some(
+                newest
+                    .into_iter()
+                    .map(|(name, (_, dir_ix))| (name, dir_ix))
+                    .collect(),
+            ),
             unlisted,
         }
     }
@@ -310,6 +426,51 @@ mod tests {
     }
 
     #[test]
+    fn title_from_reader_prefers_the_last_ai_title() {
+        // The title is appended as the conversation evolves — the LAST one wins,
+        // over any prompt and over junk lines that don't parse.
+        let log = concat!(
+            "{\"type\":\"last-prompt\",\"lastPrompt\":\"first prompt\"}\n",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Early title\"}\n",
+            "junk that is not json\n",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Final title\"}\n",
+        );
+        assert_eq!(
+            title_from_reader(log.as_bytes()),
+            Some("Final title".to_string())
+        );
+    }
+
+    #[test]
+    fn title_from_reader_falls_back_to_the_first_prompt() {
+        // No ai-title anywhere: the FIRST last-prompt is the fallback (later
+        // prompts never replace it).
+        let log = concat!(
+            "{\"type\":\"mode\",\"mode\":\"default\"}\n",
+            "{\"type\":\"last-prompt\",\"lastPrompt\":\"first prompt\"}\n",
+            "{\"type\":\"last-prompt\",\"lastPrompt\":\"second prompt\"}\n",
+        );
+        assert_eq!(
+            title_from_reader(log.as_bytes()),
+            Some("first prompt".to_string())
+        );
+        // No title or prompt at all → None (the caller keeps the branch label).
+        assert_eq!(title_from_reader(&b"{\"type\":\"mode\"}\n"[..]), None);
+        assert_eq!(title_from_reader(&b""[..]), None);
+    }
+
+    #[test]
+    fn title_from_reader_skips_unreadable_and_lookalike_lines() {
+        // An invalid-UTF-8 line makes `lines()` yield Err — skipped, not fatal.
+        let mut bytes = b"\xff\xfe not utf-8\n".to_vec();
+        bytes.extend_from_slice(b"{\"type\":\"ai-title\",\"aiTitle\":\"Survives\"}\n");
+        // A line carrying an "ai-title" KEY under the wrong `type` passes the
+        // substring pre-filter but not `field_of` — it must not clobber the title.
+        bytes.extend_from_slice(b"{\"type\":\"noise\",\"ai-title\":\"clobber\"}\n");
+        assert_eq!(title_from_reader(&bytes[..]), Some("Survives".to_string()));
+    }
+
+    #[test]
     fn log_has_turn_detects_conversation() {
         use std::io::Write;
         let dir = std::env::temp_dir().join(format!("cc-fork-test-{}", std::process::id()));
@@ -339,6 +500,253 @@ mod tests {
         assert!(log_has_turn(&dir.join("does-not-exist.jsonl")));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn log_has_turn_ignores_lookalike_lines() {
+        use std::io::Write;
+        let dir = projects_fixture("lookalike");
+        let log = dir.join("lookalike.jsonl");
+        let mut f = std::fs::File::create(&log).unwrap();
+        // Parses, but the type is NOT user/assistant — only mentions "user".
+        writeln!(f, r#"{{"type":"file-history-snapshot","note":"user"}}"#).unwrap();
+        // Mentions "assistant" but isn't JSON at all.
+        writeln!(f, "not json but \"assistant\" appears").unwrap();
+        assert!(
+            !log_has_turn(&log),
+            "lines that merely mention user/assistant are not turns"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Differential over the REAL home (read-only): the per-lookup
+    /// `has_conversation` and the boot-time snapshot must agree — the #355
+    /// "identical semantics" invariant. The fabricated UUID exists on no machine,
+    /// so both resolve the same `Absent` (readable projects dir) or `Unknown`
+    /// (no `~/.claude/projects`) location, whichever this machine has.
+    #[test]
+    fn has_conversation_matches_the_boot_index() {
+        let id = format!("recue-title-cov-{}-2222-none", std::process::id());
+        assert_eq!(
+            has_conversation(&id),
+            ProjectLogIndex::build().has_conversation(&id)
+        );
+    }
+
+    #[test]
+    fn last_cwd_in_tail_takes_the_last_parseable_cwd() {
+        let tail = concat!(
+            "{\"type\":\"user\",\"cwd\":\"/repo\"}\n",
+            "not json with \"cwd\" in it\n",
+            "{\"type\":\"assistant\",\"cwd\":\"/repo/.claude/worktrees/feat-x\"}\n",
+            "{\"type\":\"file-history-snapshot\"}\n",
+        );
+        assert_eq!(
+            last_cwd_in_tail(tail, false),
+            Some("/repo/.claude/worktrees/feat-x".to_string())
+        );
+        // Truncated tail: the (possibly partial) first line is dropped — here it
+        // would otherwise win as the only cwd.
+        let only_first = "{\"cwd\":\"/partial\"}\n{\"type\":\"x\"}\n";
+        assert_eq!(last_cwd_in_tail(only_first, true), None);
+        // No cwd anywhere / empty cwd → None (fail-open).
+        assert_eq!(last_cwd_in_tail("{\"type\":\"x\"}\n", false), None);
+        assert_eq!(last_cwd_in_tail("{\"cwd\":\"\"}\n", false), None);
+        assert_eq!(last_cwd_in_tail("", false), None);
+        // A parseable line whose `cwd` isn't a string leaves the prior find intact.
+        assert_eq!(
+            last_cwd_in_tail("{\"cwd\":\"/keep\"}\n{\"cwd\":123}\n", false),
+            Some("/keep".to_string())
+        );
+    }
+
+    #[test]
+    fn read_cwd_at_reads_a_small_file_in_full() {
+        let dir = projects_fixture("cwd-small");
+        let log = dir.join("cwd.jsonl");
+        // Fits the window (start == 0): nothing is dropped, so a cwd on the very
+        // first line is visible and the LAST one still wins.
+        std::fs::write(&log, "{\"cwd\":\"/head\"}\n").unwrap();
+        assert_eq!(read_cwd_at(&log, 1024), Some("/head".to_string()));
+        std::fs::write(&log, "{\"cwd\":\"/repo\"}\n{\"cwd\":\"/repo/wt\"}\n").unwrap();
+        assert_eq!(read_cwd_at(&log, 1024), Some("/repo/wt".to_string()));
+        // A missing file → None (fail-open).
+        assert_eq!(read_cwd_at(&dir.join("missing.jsonl"), 1024), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_cwd_at_scans_only_the_tail_window() {
+        let dir = projects_fixture("cwd-tail");
+        let log = dir.join("cwd.jsonl");
+        let line1 = "{\"cwd\":\"/only-in-head\"}\n";
+        let line2 = "{\"type\":\"noise-noise-noise\"}\n";
+        let line3 = "{\"cwd\":\"/in-tail\"}\n";
+        std::fs::write(&log, format!("{line1}{line2}{line3}")).unwrap();
+        // Window covers line3 plus a partial line2: the partial first line is
+        // dropped, the tail cwd is found.
+        let window = (line3.len() + 5) as u64;
+        assert_eq!(read_cwd_at(&log, window), Some("/in-tail".to_string()));
+        // Window entirely inside line3 (partial only): dropped → None, even
+        // though earlier lines carry a cwd — the read really is bounded.
+        assert_eq!(read_cwd_at(&log, 5), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn newest_log_in_skips_a_directory_named_like_the_log() {
+        let projects = projects_fixture("dir-candidate");
+        // A DIRECTORY named `<uuid>.jsonl` must never be picked up as a log…
+        std::fs::create_dir_all(projects.join("-repo-a").join("uuid.jsonl")).unwrap();
+        assert_eq!(newest_log_in(&projects, "uuid.jsonl"), None);
+        // …while a real file in a sibling project dir still is.
+        let real = projects.join("-repo-b").join("uuid.jsonl");
+        std::fs::create_dir_all(projects.join("-repo-b")).unwrap();
+        std::fs::write(&real, "{}").unwrap();
+        assert_eq!(newest_log_in(&projects, "uuid.jsonl"), Some(real));
+        std::fs::remove_dir_all(&projects).ok();
+    }
+
+    #[test]
+    fn locate_log_in_distinguishes_found_absent_unknown() {
+        let projects = projects_fixture("locate");
+        write_log(&projects, "-repo-a", "aaaa-1111", true);
+        match locate_log_in(&projects, "aaaa-1111") {
+            LogLocation::Found(p) => {
+                assert_eq!(p, projects.join("-repo-a").join("aaaa-1111.jsonl"));
+            }
+            _ => panic!("expected Found"),
+        }
+        // Readable root, no such log anywhere → genuinely Absent (not forkable).
+        assert!(matches!(
+            locate_log_in(&projects, "zzzz-0000"),
+            LogLocation::Absent
+        ));
+        // Unreadable/missing root → Unknown (fail open, per #134).
+        assert!(matches!(
+            locate_log_in(&projects.join("nope"), "aaaa-1111"),
+            LogLocation::Unknown
+        ));
+        std::fs::remove_dir_all(&projects).ok();
+    }
+
+    /// Pin a file's mtime explicitly (no sleeps — the `newest_log_in` test's pattern).
+    fn set_mtime(path: &Path, at: std::time::SystemTime) {
+        std::fs::File::options()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    #[test]
+    fn locate_log_in_prefers_the_newest_duplicate() {
+        let projects = projects_fixture("locate-newest");
+        // The worktree-relocation layout: the old project dir keeps a stale copy,
+        // the worktree's project dir holds the live one.
+        write_log(&projects, "-repo", "dddd-4444", false);
+        write_log(&projects, "-repo--claude-worktrees-x", "dddd-4444", true);
+        let stale = projects.join("-repo").join("dddd-4444.jsonl");
+        let fresh = projects
+            .join("-repo--claude-worktrees-x")
+            .join("dddd-4444.jsonl");
+        let base =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        set_mtime(&stale, base);
+        set_mtime(&fresh, base + std::time::Duration::from_secs(60));
+        match locate_log_in(&projects, "dddd-4444") {
+            LogLocation::Found(p) => assert_eq!(p, fresh),
+            _ => panic!("expected Found"),
+        }
+        std::fs::remove_dir_all(&projects).ok();
+    }
+
+    #[test]
+    fn project_log_index_prefers_the_newest_duplicate() {
+        let projects = projects_fixture("index-newest");
+        // Stale copy: startup metadata only (not forkable); relocated live copy: a
+        // real turn. Under the old first-listed rule the answer depended on
+        // read_dir order; newest-by-mtime pins it to the live log, matching
+        // locate_log/find_log so Fork can never stick to the stale duplicate.
+        write_log(&projects, "-repo", "eeee-5555", false);
+        write_log(&projects, "-repo--claude-worktrees-x", "eeee-5555", true);
+        let stale = projects.join("-repo").join("eeee-5555.jsonl");
+        let fresh = projects
+            .join("-repo--claude-worktrees-x")
+            .join("eeee-5555.jsonl");
+        let base =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        set_mtime(&stale, base + std::time::Duration::from_secs(60));
+        set_mtime(&fresh, base + std::time::Duration::from_secs(120));
+        assert!(ProjectLogIndex::build_in(&projects).has_conversation("eeee-5555"));
+
+        // Reverse orientation: when the NEWEST copy has no turn, not forkable.
+        set_mtime(&stale, base + std::time::Duration::from_secs(200));
+        assert!(!ProjectLogIndex::build_in(&projects).has_conversation("eeee-5555"));
+        std::fs::remove_dir_all(&projects).ok();
+    }
+
+    /// Differential over the REAL home (read-only — nothing is ever written under
+    /// `~`): `find_log` must be exactly `newest_log_in` over `~/.claude/projects`,
+    /// and the public readers must fail open to `None` for a session that has no
+    /// log anywhere (the fabricated UUID exists on no machine).
+    #[test]
+    fn find_log_and_the_public_readers_fail_open_without_a_log() {
+        let id = format!("recue-title-cov-{}-1111-none", std::process::id());
+        let expected = crate::path_env::home_dir().and_then(|h| {
+            newest_log_in(&h.join(".claude").join("projects"), &format!("{id}.jsonl"))
+        });
+        assert_eq!(find_log(&id), expected);
+        assert_eq!(find_log(&id), None, "a fabricated UUID can have no log");
+        assert_eq!(read_session_title(&id), None);
+        assert_eq!(read_session_cwd(&id), None);
+    }
+
+    #[test]
+    fn newest_log_in_prefers_the_freshest_duplicate() {
+        use std::fs::{self, File};
+        use std::time::{Duration, SystemTime};
+        let projects =
+            std::env::temp_dir().join(format!("cc-projects-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&projects);
+        // Two project dirs both holding uuid.jsonl — the worktree-relocation
+        // layout: `-repo` keeps a stale copy, `-repo--claude-worktrees-x` the
+        // live one. Explicit mtimes (no sleeps) make "newest" deterministic.
+        let stale_dir = projects.join("-repo");
+        let fresh_dir = projects.join("-repo--claude-worktrees-x");
+        fs::create_dir_all(&stale_dir).unwrap();
+        fs::create_dir_all(&fresh_dir).unwrap();
+        let stale = stale_dir.join("uuid.jsonl");
+        let fresh = fresh_dir.join("uuid.jsonl");
+        fs::write(&stale, "{}").unwrap();
+        fs::write(&fresh, "{}").unwrap();
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        File::options()
+            .append(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(base)
+            .unwrap();
+        File::options()
+            .append(true)
+            .open(&fresh)
+            .unwrap()
+            .set_modified(base + Duration::from_secs(60))
+            .unwrap();
+
+        assert_eq!(newest_log_in(&projects, "uuid.jsonl"), Some(fresh.clone()));
+        // Flip the freshness — the OTHER copy wins (it really is mtime, not order).
+        File::options()
+            .append(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(base + Duration::from_secs(120))
+            .unwrap();
+        assert_eq!(newest_log_in(&projects, "uuid.jsonl"), Some(stale));
+        // Missing everywhere → None.
+        assert_eq!(newest_log_in(&projects, "other.jsonl"), None);
+        let _ = fs::remove_dir_all(&projects);
     }
 
     #[test]
@@ -386,6 +794,8 @@ mod tests {
         std::fs::create_dir_all(projects.join("-Users-me-repo-a")).unwrap();
         write_log(&projects, "-Users-me-repo-b", "aaaa-1111", true);
         write_log(&projects, "-Users-me-repo-b", "bbbb-2222", false);
+        // A stray FILE in the projects root is not a project dir — skipped.
+        std::fs::write(projects.join("stray.txt"), "not a dir").unwrap();
 
         let index = ProjectLogIndex::build_in(&projects);
         assert!(index.has_conversation("aaaa-1111"), "log with a user turn");

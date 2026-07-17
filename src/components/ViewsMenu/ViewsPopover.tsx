@@ -52,10 +52,13 @@ function ViewsPopover({
       {renderTrigger({ open, toggle: () => setOpen((o) => !o) })}
       {open && (
         <div
-          className={`${styles.popover} ${align === "left" ? styles.alignLeft : styles.alignRight}`}
+          className={`menu-pop ${styles.popover} ${align === "left" ? styles.alignLeft : styles.alignRight}`}
           role="menu"
           aria-label="Open a view"
         >
+          {/* Section header (UI v2 §10, task 375) — the demo's "OPEN A VIEW"
+              label; CSS uppercases it. */}
+          <div className="menu-section">Open a view</div>
           <ViewsMenu repoPath={repoPath} onClose={() => setOpen(false)} />
         </div>
       )}

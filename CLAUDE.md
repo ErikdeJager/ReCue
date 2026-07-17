@@ -61,12 +61,10 @@ be unit-tested). Concretely:
   (#363) — `main.tsx` writes it **synchronously** from the UA (`detectPlatform` /
   `applyPlatformAttribute` in `platform.ts`) *before* the first render, because the store's
   `platform` signal is an async IPC and static CSS tokens can't wait for it (the store then
-  re-applies the authoritative backend value). Its one consumer today is the
-  `:root[data-platform="linux"]` **`--ui`** override in `tokens.css` (the bundled Inter):
-  the shared `:root --ui` line is **never** edited, so macOS/Windows stay byte-for-byte
-  unchanged — there is no single ordering of one shared font list that is both safe on
-  Windows (which would pick up a locally-installed Inter over Segoe UI) and effective on
-  Linux (where the generics always resolve to *something*).
+  re-applies the authoritative backend value). (Superseded by UI v2 task 372 —
+  JetBrains Mono is `--ui` on every OS; the #363 Linux-only Inter `--ui` override is
+  retired, and `data-platform` remains as the platform-CSS seam, currently with no CSS
+  consumer.)
 - **CSS / WebView too:** WKWebView (macOS) and WebView2/Chromium (Windows) diverge — and
   **Linux is Chromium too (WebKitGTK/WebView)**, so the Chromium-friendly choices carry
   over: prefer `::-webkit-scrollbar` styling, ship plain-color fallbacks alongside
@@ -89,11 +87,11 @@ already honors this.
 ## What this app is
 
 An **Overview** "agent wall" of real terminals, a **Canvas** split-panel workspace
-(with file, **git-diff**, and terminal viewers), and a repo-grouped **sidebar**. A
-Canvas tab can **pop out into its own native window** for multi-monitor use (#84).
-Each session is a **real PTY running `claude`** — ReCue provides the window
-chrome, navigation, persistence, and git-reading; the terminals come from the
-Claude Code CLI itself.
+(with file, **git-diff**, and terminal viewers), and a repo-grouped **sidebar**. Any
+number of **full app windows** can be open at once — each a complete ReCue, mirroring
+any session's terminal — for multi-monitor use (tasks 426–440). Each session is a
+**real PTY running `claude`** — ReCue provides the window chrome, navigation,
+persistence, and git-reading; the terminals come from the Claude Code CLI itself.
 
 `claude` is assumed to be installed and authenticated on `PATH` (the app surfaces a
 clear error if it is missing). Because a bundled `.app` launched from Finder/Dock
@@ -114,10 +112,9 @@ steady-state boot pays **zero** probe cost.
 - **Frontend:** React + TypeScript + Vite, **Zustand** for state, plain CSS with
   CSS-variable design tokens (CSS Modules), **xterm.js** terminals (⌘-clickable
   `http`/`https` links via `@xterm/addon-web-links`, #109), **Lucide**
-  icons, **JetBrains Mono** (bundled, offline — the terminal `--mono` face on every OS)
-  and **Inter Variable** (bundled, offline, latin subset only — the **Linux-only** UI
-  face, #363; macOS keeps San Francisco and Windows Segoe UI, so its woff2 is never even
-  fetched there), **react-markdown + remark-gfm**
+  icons, **JetBrains Mono** (bundled, offline — the terminal `--mono` face AND, since
+  UI v2 task 372, the `--ui` face on every OS; the #363 bundled-Inter Linux-only UI
+  face is superseded/retired), **react-markdown + remark-gfm**
   (GFM markdown, no raw HTML) + **Prism.js** (curated-language code highlighting —
   JS/TS/JSX, Rust, Python, JSON/YAML/TOML, CSS, markup, Bash, **Java**, **INI/.env/
   .properties** #150) — both in the universal **`FileViewer`** (#40/#44), whose **raw
@@ -133,27 +130,29 @@ steady-state boot pays **zero** probe cost.
 - Dark (default) and Light themes (#333) — a Catppuccin **Latte** token override
   selected in Settings → Appearance (the terminal stays dark in both)
 - **Code-split bundle (#356).** The frontend is **not** one chunk: everything not needed to
-  paint the sidebar + terminals is behind a dynamic `import()`. Lazy boundaries — the two
-  **window routes** (`App.tsx` is a `Suspense` router over `src/MainApp.tsx` and
-  `CanvasWindow`, so a detached window #84 never downloads the sidebar/Overview/modals); the
+  paint the sidebar + terminals is behind a dynamic `import()`. Lazy boundaries — the one
+  **window route** (`App.tsx` is a `Suspense` router over the single lazy `src/MainApp.tsx`
+  — every window renders the full shell since task 437 deleted the #84 `CanvasWindow`
+  route — keeping the shell out of the thin Vite entry chunk); the
   four **content panels** in `ItemContent.tsx` (`FileViewer` / `KanbanPanel` /
   `DiffInspector` / `FileTree` — which is what carries the whole **react-markdown + Prism**
   stack out of the first-paint graph), each in its **own** per-branch `Suspense` (never one
   boundary around `ItemContent` — a suspending boundary `display:none`s its children, which
-  would un-measure a pooled xterm, the #18 class of bug); the ten modals in
+  would un-measure a pooled xterm, the #18 class of bug); the eleven modals in
   `components/ModalHost.tsx` (Suspense fallback **`null`** — an empty modal shell would be a
   visible regression); the **`@xterm/addon-webgl`** addon in `terminalPool.createHost()`
   (xterm core / fit / web-links stay **static** — terminals *are* the first paint; the addon
   attaches a few ms later, and on a software rasterizer #346 its chunk is never fetched); and
-  **mermaid** (#254). `src/prefetch.ts` warms the deferred chunks on idle
+  **mermaid** (#254); and the vendored **WaveEngine** (`src/vendor/waveEngineLoader.ts`, UI v2
+  task 377 — loaded on `WaveBackground` mount). `src/prefetch.ts` warms the deferred chunks on idle
   (`requestIdleCallback`, feature-detected with a `setTimeout` fallback for older WKWebView).
   **Rule: only a dynamic `import()` removes work from the first-paint path** — a statically
   reachable module is parsed before first render whatever chunk it lands in, so
   `manualChunks` is deliberately **not** used; never static-import `react-markdown` /
   `prismjs` / `@xterm/addon-webgl` into the entry graph. Guarded by
-  `node scripts/bundle-report.mjs --check` (per-route first-paint closure from Vite's
-  `build.manifest`, with a budget): main window **854 kB raw / 246 kB gzip**, down from a
-  single 1,351 kB / 391 kB chunk; the detached canvas window is lighter still (770 kB).
+  `node scripts/bundle-report.mjs --check` (the one route's first-paint closure from Vite's
+  `build.manifest`, with a budget): main window **896 kB raw / 257 kB gzip**, down from a
+  single 1,351 kB / 391 kB chunk.
 
 ## Architecture (data flow)
 
@@ -165,8 +164,54 @@ steady-state boot pays **zero** probe cost.
   handling convention. A **fork** (#126, `fork_session`) is a spawn variant
   that branches a source agent's conversation into a new parallel session
   (`--session-id <new> --resume <source> --fork-session`) — see Conventions.
+- **Dev-container sessions (opt-in):** the New Session modal's branch step has a
+  **"Run in dev container"** toggle (**⌘⇧C / Ctrl+Shift+C** — a fixed contextual chord:
+  `CONTAINER_TOGGLE_CHORD` in `keybinds.ts`, reserved so no rebind can collide; an info
+  "i" popover states the can/cannots) that spawns the agent **inside docker**:
+  `docker run --rm --init -i -t --label recue.session=<id>` wrapping the claude CLI —
+  the rewrite happens in `pty.rs` **upstream of `spawn_with_id`** (the PTY child is the
+  docker CLI; reader/busy/exit machinery untouched), all argv/gitfile/label logic in the
+  pure, unit-tested **`src-tauri/src/container.rs`**, composition (mounts, credentials,
+  identity, uid/gid) in `commands.rs`. Mounts (`--mount type=bind`, never `-v` — Windows
+  drive-colon safe): the repo (or worktree) at `/work` + a **per-session home**
+  (`<data>/container-homes/<id>`) at `/home/agent`, seeded once with the RAW
+  `~/.claude/.credentials.json` blob (macOS: the Keychain blob) so claude stays signed in
+  and **`--resume` works across restarts**; a worktree session adds the **single-file
+  `.git` overlay** (parent `.git` dir → `/repo/.git`, a generated one-line gitfile
+  bind-mounted read-only OVER `/work/.git` — the host's own gitfile is untouched, so
+  host-side git panels keep working; the worktree is `git worktree lock`ed against an
+  in-container `prune`, unlocked by `remove_worktree`). **No git credentials are
+  mounted**: identity + `safe.directory=*`/`core.fsmonitor=false`/`gc.auto=0` ride in as
+  `GIT_CONFIG_*` env, so the agent can branch + **commit** (instantly visible to the
+  host — shared `.git`) but **push fails by design**. Kill is **via the docker CLI by
+  label** (a PTY SIGHUP reaches only the docker *client*; on Windows the label-kill is
+  the ONLY effective kill): Remove/clean-exit → `kill_session_container_detached` (+
+  per-session dir cleanup), app quit → a bounded parallel sweep, boot → a reap of
+  crash strays before resume. Claude-only; `forkable:false` + `uses_claude_log=false`
+  (auto-name degrades to the branch label; fork refused with a typed
+  `ContainerUnsupported`). The default image `recue-agent:latest` is **built from an
+  embedded Dockerfile** (stdin, empty context; node 22 + git + the claude CLI) on first
+  use — deduped, prefetched on toggle-ON, surfaced via a `container://building` toast —
+  and a `containerImage` settings key overrides it (no build). The toggle itself is
+  gated by a **docker runtime probe** (`container_runtime_status`: absent → row hidden,
+  stopped → disabled + "start Docker" hint with a ~3.5s re-probe, running → usable).
+  Linux native docker additionally passes `--user uid:gid` (Docker Desktop maps
+  ownership itself). As part of this, **every `git::hidden_command` read now sets
+  `GIT_OPTIONAL_LOCKS=0`** so host status/diff polls never contend with a committing
+  container agent (or any in-terminal git writer). v1 scope: immediate sessions only
+  (schedule/recurring/template flows spawn host PTYs); the `.claude.json`
+  onboarding-seed key follows the verify-against-the-installed-CLI discipline (flagged
+  in-code).
 - **Output:** `lib.rs` forwards the channel to the `session://output` /
-  `session://exited` / `session://state` Tauri events. The frontend `ipc.ts`
+  `session://exited` / `session://state` Tauri events. Since task 440 the
+  `session://output` + `session://size` emits are **targeted**: `emit_filter`ed only to
+  windows holding a **live terminal host** for that session (the task-426 registry's
+  `output_subs` — subscribed at host creation, unsubscribed at dispose; a
+  zero-subscriber session skips the base64 encode **and** the emit entirely), which is
+  why the two frontend listens are **label-scoped** (`{ target: WINDOW_LABEL }` — a
+  default-target listener would bypass `emit_filter`); a window that starts viewing
+  later back-fills loss-free via the subscribe-ack-gated `session_scrollback` + the
+  offset dedupe below, and every lifecycle event stays app-global. The frontend `ipc.ts`
   subscription routes output **bytes** to `outputBus.ts` (a pub/sub the xterm
   `Terminal` consumes — deliberately *not* React state) and lifecycle +
   busy/idle to the Zustand `store.ts`. Each `session://output` event **and**
@@ -189,6 +234,12 @@ steady-state boot pays **zero** probe cost.
   second (#315 — a clean single turn still settles at ~700ms). So **keystroke echo doesn't
   read as busy** (#55), `write_stdin` stamps a per-session `last_input` time and the
   monitor marks busy only when output arrived ≥300ms *after* the last keystroke.
+  Likewise a **repaint never wakes an idle dot**: output attributable to an automatic
+  focus/mouse report (#403, `last_report`) **or to a `resize_pty`** (`last_resize` +
+  `RESIZE_REPAINT_MS`, the attention-blink fix — reparenting a pooled terminal into a
+  differently-sized slot SIGWINCHes claude into a full TUI repaint) is suppressed on the
+  idle→busy edge only (the shared `repaint_attributable`), so an already-busy session is
+  untouched and sustained real output past the window still wins.
   Busy also requires the session to have **work to do** (#116) — either the user has
   submitted input, or it booted **prompt-seeded** (#93, an `ActivityState.seeded`
   flag set by `spawn_session_with_prompt`) — so `claude`'s pre-input **startup paint
@@ -209,8 +260,11 @@ steady-state boot pays **zero** probe cost.
   seeded into the store on load) so a previously-active agent shows yellow immediately
   on boot. Under reduced-motion the sweep is dropped, leaving a solid glowing blue dot
   (and a solid yellow settled dot) distinct from idle.
-- **Input / resize:** the `Terminal` sends keystrokes to `write_stdin` and a
-  `ResizeObserver` drives `resize_pty`.
+- **Input / resize:** the `Terminal` sends keystrokes to `write_stdin`; a
+  `ResizeObserver` **proposes** a size for its slot (`propose_terminal_size`, tasks
+  426/427) and the backend's smallest-wins arbiter (`terminal_views.rs`) applies the
+  effective grid + broadcasts `session://size` — the only path that resizes an xterm
+  after attach. See the Multi-window bullet.
 - **Persistence / resume:** records + recents survive restarts; on boot the
   manager best-effort `resume_session`s each via `claude --resume <id>`.
 - **Git:** `working_diff(cwd)` / `current_branch(cwd)` / `compare_branches(cwd, base,
@@ -266,11 +320,53 @@ steady-state boot pays **zero** probe cost.
   **Delete** / **Rename** (#267/#291) backed by the path-validated `create_dir` / `delete_path`
   / `rename_path` writes (the 3rd–5th deliberate `files.rs` writes; confirm-gated delete), plus
   Reveal in Finder/Explorer and Copy absolute·relative path.
+- **Agent-created worktree detection:** ReCue auto-detects **every** git worktree of a
+  registered repo — Claude Code's `EnterWorktree`/`--worktree` (`<repo>/.claude/worktrees/*`),
+  `WorktreeCreate`-hook or hand-made ones anywhere — via the batched `list_repo_worktrees`
+  (`git worktree list --porcelain`, plain not `-z` (Ubuntu 22.04 ships git 2.34), pure
+  fail-open parser in `git.rs`, entries stamped `is_main`/`managed`/`exists` backend-side)
+  riding the #359 refresh volley as the **`"worktrees"` kind** (in `focusRefreshKinds`' cheap
+  set, so the sidebar's 15 s poll + busy→idle debounce + focus backstop all carry it).
+  Detected worktrees render **presence-driven** under their parent repo in the sidebar (live
+  full-strength; idle dimmed — the `locked` attr, Claude Code's while-working lock, only
+  feeds that dimming; there is **no text badge and no "in use" chip** — a small Lucide
+  `CornerDownRight` elbow before the branch glyph is the sole worktree cue, and worktree
+  child rows are NOT extra-indented). Every worktree row's menu has an always-confirm-gated
+  **Delete worktree…** (ignores the `confirmDestructive` opt-out): the store `deleteWorktree`
+  kills the worktree's agents (incl. relocated ones, `worktreeDoomedSessionIds`), cancels its
+  schedules/recurrings, closes its panels (a `deletingWorktrees` guard mutes the ref-counted
+  auto-cleanup mid-delete), then the `delete_worktree` command — validated against
+  `git worktree list` membership (never the main checkout / the registered folder / a bare
+  entry), unlock-first, `git worktree remove --force` with a `git worktree prune` fallback
+  for a stale entry; the **branch is kept**. **Automation still never deletes what ReCue
+  didn't create** (`remove_worktree` hard-refuses paths outside `<data-dir>/worktrees`, and
+  `cleanupWorktreeIfEmpty` short-circuits) — only the explicit, user-confirmed Delete may.
+  Claude agents **relocate live**: the #97 title worker (now poked on BOTH
+  busy edges) also tails the session's newest-by-mtime JSONL for its `cwd`
+  (`SessionEvent::Cwd` → `session://cwd` → persisted `current_cwd`), and
+  `sessionActiveWorktree` (`src/worktrees.ts`, the pure decision core) moves the agent's
+  sidebar row under the worktree group and back — `effectiveRepo`/records stay authoritative
+  (grouping semantics unchanged; detection only adds rows/hints); non-claude agents get a
+  best-effort one-busy-session heuristic. The external/orphan header's **New session** spawns
+  **in place** (`spawn_session` with an explicit `worktree_parent`, never `git worktree add`).
+  Lifecycle: an authoritative listing losing a worktree (Claude's clean-exit auto-removal, a
+  manual remove) drops the row and auto-closes its panels with one toast (the close +
+  toast run in the **primary window** only, task 433 — every window's volley keeps its
+  own detection mirrors fresh); a failed git read
+  keeps prior state (fail-open). **Scope isolation:** worktree contents are excluded from the
+  parent repo's `search_files`/`search_file_contents` unconditionally (the walker guard is
+  `container::host_worktree_admin_name` over the `.git` pointer FILE — submodule gitfiles
+  (`.git/modules/…`) don't match, and the leaked `.git` gitfile no longer lists as a text
+  file), while the FileTree shows the worktree folder **in place** (muted + `worktree` chip)
+  behind a per-worktree **"Show worktree contents…"** gate — never keyed to a container
+  folder name. Path identity is lexical + canonicalize-first in Rust (`norm_path_key` /
+  `path_under_norm`) and platform-parameterized in TS (`normPathKey`), case-folded on
+  Windows only.
 - **OS files → file tree (#253):** dragging files/folders from Finder/Explorer onto a
   FileTree **folder row** (or the tree **root**) **moves** them into that directory.
   Tauri's webview drag-drop event is **window-global** (not DOM-bound), so `src/
-  osFileDrop.ts` (`useOsFileDrop`, wired from both `App.tsx` and the detached
-  `CanvasWindow` — each its own webview) listens via `getCurrentWebview().
+  osFileDrop.ts` (`useOsFileDrop`, wired per window from `MainApp.tsx` — every window
+  is its own webview) listens via `getCurrentWebview().
   onDragDropEvent` and **hit-tests** the cursor: physical→CSS px via `devicePixelRatio`
   (Retina + Windows fractional scaling), `document.elementFromPoint` →
   `closest("[data-filetree-droptarget]")`/`[data-filetree-repo]` (pure
@@ -284,19 +380,110 @@ steady-state boot pays **zero** probe cost.
 - **Views:** the store holds `sessions / selectedId / view / recents / branches /
   canvases / activeCanvasId / claudeMissing / toasts / schedules / settings /
   sidebarWidth / folderOrder`; the app mounts one of
-  **Overview or Canvas** (#46/#75 — Focus was removed). Each session's xterm is owned
+  **Overview, Attention, or Canvas** (#46/#75 — the original Focus view was removed;
+  **Attention** #398 is a FIFO triage queue of idle agents awaiting the user — queue
+  admission waits a 5s **confirmed-idle grace** (`attentionEligible` / `ATTENTION_GRACE_MS`
+  in `store.ts`, deliberately = the backend's `BACKGROUND_HOLD_MS`), because the ~700ms
+  busy-heuristic settle fires mid-turn on any output pause and #315's sticky hold only
+  engages *after* a first flicker — so a working agent never blinks into the queue, a
+  seeded spawn never flashes as "NEW", and the watched-agent notification #336 rides the
+  same confirmed settle; symmetrically, **eviction is debounced** (`ATTENTION_EVICT_CONFIRM_MS`,
+  ~1.5s — the blink fix): a queued member leaves only once a busy signal is *sustained*,
+  so a sub-second spurious blip (e.g. a resize/focus repaint that slipped past the backend
+  attribution) can never eject it or reset its FIFO position, and `attentionQueue`
+  membership rides `attentionEligible` alone rather than raw `sessionBusy`;
+  the queue pane also shows keybind tips while non-empty). The queue can be
+  **narrowed** to one repo / own-branch / worktree by the **same shared
+  `overviewRepoFilter`** Overview uses (task 445) — a sidebar folder/branch/worktree
+  click filters the inbox **in place** when Attention is active (guarded
+  `if (view !== "attention")`), else switches to Overview, with a `Showing <repo>` /
+  `Show all` bar in the pane; the optional `filter` threads through the pure
+  `attentionQueue` (default no-op) so all five consumers (list/active/count, the ⌘W
+  close, Shift+↑/↓ nav, dismiss / dismiss-all) honor it and navigation never touches a
+  filtered-out agent. The
+  sidebar **`ViewSwitch`** presents **Overview + Attention** as the two equal-weight
+  *main* views and **Canvas** as a smaller, de-emphasized *secondary* button (#406),
+  with no queue-count badge (#405); in expanded mode Overview/Attention are text
+  segments, and only the collapsed rail renders Attention as its `AlertTriangle` icon.
+  Each session's xterm is owned
   by a **persistent terminal
   pool** (`Terminal/terminalPool.ts`), created once and **reparented** into the
   active view's slot (parked off-screen otherwise) — so a view switch never
   disposes/recreates the terminal or replays scrollback (which would garble
-  `claude`'s width-specific TUI redraw). Scrollback replays once at creation;
-  resizes are debounced + applied only while visible. The pool's `createHost`
+  `claude`'s width-specific TUI redraw). Scrollback replays once at creation; each
+  host **attaches a per-window view and proposes** sizes (tasks 426/427 — debounced,
+  proposed only while visible) and renders the broadcast smallest-wins grid
+  **letterboxed** in its slot. The pool's `createHost`
   **linkifies `http`/`https` URLs** (a `WebLinksAddon`) so a **⌘-click** opens the
   default browser via the dependency-free Rust `open_url` (http/https only, so no
   shell-injection vector even where the opener is `cmd`) — for both agent and shell
   terminals (#109). `open_url` is **cross-platform** (#217): macOS `open`, Windows
   `cmd /C start "" <url>`, else `xdg-open` — so the same path (and the #210 feedback
   button) opens the browser on Windows too, not a File Explorer folder.
+- **Configurable keybinds (keybind rework):** every non-contextual global shortcut is a
+  rebindable action in the **`src/keybinds.ts`** registry. Defaults: **⌥1/⌥2/⌥3** switch
+  Overview/Attention/Canvas, **⌘W** closes the focused panel (`store.closeFocusedPanel`:
+  an open big-mode overlay first; else the active Canvas leaf exactly like its header ×,
+  with focus advancing to a spatial neighbor so repeated ⌘W keeps closing; else the
+  selected Overview card via the exact action its hover-× calls — a file/diff/terminal/
+  kanban panel via `removeOverviewPanel`, and since **#425** also an **agent**
+  (`removeSession`, kill + forget), a **schedule** (`cancelSchedule`), or a **recurring**
+  (`cancelRecurring`) — un-gated like each card's ×, while a Canvas agent leaf stays
+  "close the panel only"), **⌘⌥N / Ctrl+Alt+N** opens a **new full app window** (436 —
+  see the Multi-window bullet; rebindable like the rest, with the documented AltGr-layout
+  caveat), **⌘,** opens Settings, plus the carried-over ⌘E big mode (#284) / ⌘N /
+  ⌘⇧N / ⌘K / ⌘F / ⌘B / ⌘D and the Open-in-editor pair **⌘O/⌘⇧O** (see the Open-in-editor
+  bullet). **Removed:** ⌘T (new tab #206), ⌘1–9 (canvas jump #76 — the
+  modal-internal new-session-recents #61/#66 and global-search folder-chip #397 digits
+  are unaffected), ⌘\ (view toggle #77). Overrides persist as **`settings.keybinds`**
+  (action id → serialized chord, `""` = unbound; only overrides stored, so new defaults
+  reach old installs) and are edited in Settings → Shortcuts; `useKeyboardNav.ts`
+  dispatches by serializing each keydown (`eventChord`, physical `e.code`, so ⌥-digit
+  survives macOS glyph composition and letters survive non-QWERTY layouts) and looking
+  it up. **`mod` is platform-resolved** — ⌘ on macOS, Ctrl on Windows AND Linux — so a
+  bare macOS ⌃-chord (readline ⌃E/⌃N/⌃W…) now flows to the focused terminal instead of
+  triggering the app (the old `metaKey || ctrlKey` matching swallowed it; on Windows/
+  Linux Ctrl-chords are the app's `mod`, as before). Hint sites (Sidebar / EmptyState /
+  ViewSwitch tooltips / GlobalSearch chip / big-mode titles / tips) render live labels
+  via `useKeybindLabel`, so a rebind never leaves a stale hint. On macOS the default
+  Tauri menu's **⌘W Close Window accelerator would preempt the webview**, so
+  `src-tauri/src/menu.rs` rebuilds `Menu::default` at setup with the predefined items
+  swapped for a custom **⇧⌘W** Close Window, and inserts a **File → New Window** item
+  (436) with deliberately **no accelerator** — an AppKit key-equivalent would preempt
+  the webview and can't track a rebind (the ⌘W lesson); the rebindable ⌘⌥N is
+  webview-dispatched (Edit-menu clipboard items untouched —
+  WKWebView needs them; Windows/Linux create no default menu, so the keybind is the
+  only chord entry point there).
+- **Open in editor:** launch the user's preferred external editor/IDE at a folder —
+  from the agent header **⋯ menu** (`AgentHeaderMenu`, so it appears on Overview cards,
+  Canvas panels, Big mode, and Attention), the sidebar **agent-row / repo / branch-line /
+  worktree** context menus (next to "Reveal in Finder"), or the rebindable **⌘O**
+  (open the *selected* item's folder — an agent resolves via `contentForSelected` to its
+  `repoPath`, already the worktree for worktree agents) / **⌘⇧O** (re-open the picker to
+  choose again). The Rust **`editors.rs`** (mirroring `agents.rs`) owns an `EditorSpec`
+  catalog — VS Code, Cursor, Windsurf, Zed (`zed`/`zeditor`), Sublime, Notepad++
+  (`-openFoldersAsWorkspace`), TextMate, Kate, the JetBrains family (idea/webstorm/
+  pycharm/phpstorm/rustrover/goland/clion/rider/Android Studio/Fleet) — with **one
+  resolver for detection AND launch** (they can never disagree; existence-based, never
+  `--version` — JetBrains launchers boot a JVM): ① CLI on the login-shell PATH via
+  `pty::resolve_command` (#360/#140), ② the JetBrains **Toolbox scripts dir** per OS,
+  ③ a macOS `/Applications`+`~/Applications` bundle → `open -na <app> --args <path>`,
+  ④ known Windows install paths (`%VAR%` templates), ⑤ the versioned
+  `%ProgramFiles%\JetBrains\<Product> <ver>` layout. Launches are detached
+  fire-and-forget like `os_open` — CLI/script launches through `git::hidden_command`
+  (CREATE_NO_WINDOW + `apply_path` + the #350 AppImage scrub), `open`/direct GUI exes
+  through `child_env::command`. Commands: `detect_editors` (spawn_blocking; feeds the
+  picker + Settings annotations) and `open_in_editor(path, editor)`. The preference is
+  **global**: `settings.preferredEditor` (`null` = ask every time) + a
+  `customEditorCommand` argv (tokenized by `agents::parse_custom_command`, `{path}`
+  substituted / appended — the inclusivity valve for terminal editors,
+  `alacritty -e nvim {path}`), edited in **Settings → Editor** (a native select over the
+  `src/editors.ts` label mirror + "— detected" annotations). First use (or a
+  `BinaryNotFound` launch — the self-heal) opens the **`EditorPickerModal`** (lazy, the
+  Onboarding pattern) listing detected editors + the custom row, with **"Remember my
+  choice" checked by default**; every window runs the full ModalHost (437), so the
+  picker exists per window (the `EditorPickerGate` named export is a #84-era remnant,
+  rendered by ModalHost itself).
 - **Lazy terminal mount (#351):** a pooled xterm is created on **first visibility**, not
   on React mount — `Terminal.tsx` gates `mountTerminal` on a **latching**
   `IntersectionObserver` (`Terminal/useVisibleOnce.ts`), so booting into an Overview wall
@@ -306,7 +493,7 @@ steady-state boot pays **zero** probe cost.
   **Overview** fills with its horizontally scrolling wall — IntersectionObserver clips a
   target against every intermediate scroll container *before* applying `rootMargin`, so a
   viewport-rooted observer could never pre-load a card scrolled out of the wall; everywhere
-  else (Canvas panels, big mode #157, detached windows #84) the context is `null` ⇒ the
+  else (Canvas panels, big mode #157, additional app windows) the context is `null` ⇒ the
   viewport root. The replays that do happen are **serialized** through a bounded FIFO queue
   (`Terminal/replayQueue.ts`, `MAX_CONCURRENT_REPLAYS = 1`, a macrotask yield between jobs),
   and the pre-replay live buffer is byte-capped (`Terminal/pendingOutput.ts`) only until the
@@ -362,6 +549,8 @@ steady-state boot pays **zero** probe cost.
   opens a `.md`-scoped `FilePicker` with an in-picker create-or-open flow #151),
   a **Checkout branch…** picker (#266 — local/remote branches + create-new inline,
   `checkoutFolderBranch` / `createFolderBranch` without spawning an agent),
+  an **Open in new window** item (438 — a new full app window preset to that repo as its
+  Overview filter, via `open_app_window`; also on the collapsed rail's folder-icon menu),
   non-destructive **Reveal in Finder** / **Copy path**
   utilities (#130 — `reveal_path` → `os_open`: macOS `open` / Windows `explorer.exe` /
   Linux `xdg-open`, #345, no shell) + **Pull**
@@ -384,7 +573,10 @@ steady-state boot pays **zero** probe cost.
   own recursive **BSP split-panel** layout (a binary tree `split{dir,a,b,sizes}` /
   `leaf{id,content}`; pure ops in `Canvas/canvasTree.ts`). The tabs (`canvases` =
   `{id,name,layout}[]` + `activeCanvasId`) persist as one opaque `canvases` JSON blob
-  (migrated once from the old single `canvas_layout`); the `CanvasTabs` strip adds
+  (migrated once from the old single `canvas_layout`; since 429 each write is a
+  `{canvases?, activeId?}` **patch** merged under the Store mutex and broadcast as
+  `canvas://changed` to every window — a tab can also open in a second full app
+  window, see the Multi-window bullet); the `CanvasTabs` strip adds
   (+), closes (always keeps ≥1), inline-renames, and drag-reorders tabs via a nested
   dnd-kit context. Panels host **real content** (#47): agent terminals (#18 pool),
   file viewers (#44), diff viewers (#39), shell terminals (#72), and **kanban boards**
@@ -460,30 +652,77 @@ steady-state boot pays **zero** probe cost.
   arbitrary file write). Opened from the repo **Views** menu's single "Kanban board" entry
   with an in-picker **create-or-open** flow (#151), a draggable sidebar row, an Overview
   column, and a Canvas panel.
-- **Detached canvas windows (#84):** a Canvas tab can open in its **own native
-  window** for multi-monitor use, via a **pop-out button** on the tab or a **drag
-  tear-off** (drag a tab out of the strip). The button/tear-off call Rust
-  `open_canvas_window(id,title)`, which creates a `WebviewWindow` labelled
-  `canvas-<id>` loading the **canvas-only route** `index.html?canvas=<id>`
-  (`windowContext.ts` reads the param → `IS_MAIN_WINDOW` / `WINDOW_LABEL`;
-  `CanvasWindow` renders the shared `Canvas/CanvasSurface` with no sidebar/Overview/
-  tabs). Each window is its **own document** — its own store, `outputBus`, and #18
-  terminal pool — and Tauri session events are **global**, so a detached window's
-  pool renders the same backend PTYs. **One PTY renders in one window at a time**
-  (the #18 width constraint): the pure `computeSessionOwners(canvases, detachedIds)`
-  assigns each session to exactly one window (a detached canvas claims its sessions,
-  else `"main"`); Overview cards + Canvas panels show a **`DetachedNote`** ("running
-  in a separate window" + Focus) instead of a terminal when another window owns it,
-  and each window's `reconcileTerminals` keeps only owned PTYs (dispose-in-one /
-  create-in-the-other, reversed on re-dock). **Cross-window sync:** `set_canvases`
-  persists then broadcasts `canvas://changed` (the **main** window is authoritative
-  for `activeId`; a detached window's write merges only the `canvases` array);
-  opening/closing a window broadcasts `canvas://windows` (the detached id set). The
-  main tab strip marks detached tabs ("in window"), ⌘1–9 (#76) and a detached-tab
-  click **`focus_canvas_window`** (raise) instead of switching, and **closing a
-  detached window re-docks** its canvas (its `Destroyed` handler re-broadcasts the
-  set; the main window reclaims the PTYs). Detached windows are **per-session** — not
-  restored on relaunch (capability `canvas-*` in `capabilities/default.json`).
+- **Multi-window (tasks 426–440):** any number of **full app windows**. Rust
+  `open_app_window(AppWindowInit { repo, canvas }) -> uuid` creates a window labelled
+  `app-<uuid>` loading `index.html?win=<uuid>[&repo=…][&canvas=…]` (hidden-until-painted
+  #348; `capabilities/default.json` `"windows"` is `["main", "app-*"]`), and
+  `focus_app_window(id)` raises one. Every window is a **complete ReCue** — sidebar +
+  Overview/Attention/Canvas + ModalHost, its own document/store/`outputBus`/#18 terminal
+  pool — with **window-local** view/selection/tab/filter state; the init presets set
+  that local state once (repo → Overview repo filter, canvas → Canvas view on that tab
+  when it exists) and are persisted nowhere (a Windows path survives the URL via the
+  byte-exact `encode_query_value`, space → `%20` never `+`). **Entry points**
+  (436/437/438): a second app launch is routed by `tauri-plugin-single-instance`
+  (registered first; per-OS transports — Windows named mutex / Linux session-bus D-Bus /
+  macOS unix socket — the second process exits and the running one opens a window,
+  closing the old two-processes-resume-the-same-uuids `sessions.json` corruption; dev
+  shares `com.recue.app`, so `tauri dev` beside a live ReCue now pokes-and-exits); macOS
+  Dock **Reopen** restores a window when none is visible (`reopen_focus_target`: `main`
+  → first `app-*` → any); the rebindable **⌘⌥N / Ctrl+Alt+N** New-window keybind; macOS
+  **File → New Window** (`menu.rs`, no accelerator); the sidebar repo menu's **Open in
+  new window** (repo preset); and the Canvas tab **pop-out / drag tear-off** (canvas
+  preset — the originating window keeps the tab, both render it). **Mirroring**
+  (426/427): any window renders any session — a pooled host **attaches** a per-window
+  view and only **proposes** sizes (`terminal_views.rs`: session → window label →
+  desired cols/rows); the PTY grid is the component-wise **smallest-wins** minimum
+  (tmux `window-size=smallest`), broadcast as `session://size` (the only path that
+  resizes an xterm after attach); larger views **letterbox**; views purge on window
+  `Destroyed`; and **typing into one agent from two windows interleaves at the PTY like
+  two tmux clients — documented semantics, not a bug**. The #18 never-dispose and #351
+  visibility-gate invariants hold per window. **Targeted output** (440): see the Output
+  bullet — `session://output`/`session://size` reach only subscriber windows via
+  label-scoped listeners; lifecycle events + the 428 broadcasts stay app-global so every
+  window's sidebar / busy dots / Attention stay live. **Shared vs local state:** every
+  persisted slice converges through Rust post-persist `*://changed` broadcasts (428 —
+  settings, recents, diff-seen, repo order/colors, overview panels/order, sidebar
+  width/collapsed, canvas templates, plus a `sessions://changed` roster) applied by
+  equality-guarded, never-persisting sync actions; the clobber-prone blobs (settings /
+  canvases / diff-seen) persist as **patches merged under the Store mutex** (429,
+  `Store::update_with` + the `merge_*_patch` helpers). **Primary election** (433): Rust
+  elects the **oldest surviving full window** (`primary.rs` → `window://primary` + the
+  `primary_window` snapshot); only the primary runs the once-per-app frontend effects
+  (onboarding, folder pruning, the update check + "Updated to vX" toast, migration
+  persists, folder-color auto-assign, the `schedule://fired` transition, backend-event
+  toasts + watched-agent notifications), and a promoted window re-arms the idempotent
+  ones live (`armPrimaryEffects`). The remaining app singletons moved into Rust
+  outright: the one usage poll + auto-continue engine (430, `autocontinue.rs`), the #63
+  clean-exit forget + serialized worktree cleanup (431, `classify_exit` →
+  `session://forgotten`, focused-window toast), and the boot shell-terminal respawn
+  (432, idempotent in `boot.rs`). **Same-file edit guard** (435): the first window to
+  edit an auto-saved file (FileViewer raw #148 / Kanban) soft-claims it
+  (`file_claims.rs`, transient — `file_claims://changed`, purged on window close);
+  other windows' editors render **read-only** with a `ClaimBanner` ("Being edited in
+  another window — Take over"); with one window on a file behavior is unchanged
+  (fallback stays last-writer-wins). **Window restore** (439): the open-window set +
+  bounds + creation presets persist in the dedicated backend-internal `window_state`
+  store key (`PersistedWindow`; debounced saves off Moved/Resized, an `ExitRequested`
+  quit-time flush, monitor-safe `clamp_bounds`, cap main + 8 extras) and are recreated
+  at boot through the shared `create_app_window` path — deliberately **reversing #84's
+  "detached windows are per-session" rule** (Wayland restores size-only; compositors own
+  placement). **Maximized default + persistence** (443): `PersistedWindow` gains a
+  serde-default `maximized: bool` tracked live at the `Moved`/`Resized` site (while
+  maximized only the flag changes, so `x/y/width/height` stay the last non-maximized
+  un-maximize target); on a **fresh install** (no saved `main` entry) the main window
+  opens **maximized** by default, restore re-`maximize()`s after applying bounds (Wayland
+  honors `maximize()` unlike `set_position`; macOS zoom), and additional `app-*` windows
+  still open at 1280×832 unless restored maximized — all applied while hidden (#348), no
+  flash. **The #84 single-owner era is deleted** (437): the ownership map + hook,
+  the detached-note placeholder, the `CanvasWindow` route, the four canvas-window Rust
+  commands, their window-set broadcast event, and the store's detached-id slice are all
+  gone; `?canvas=<id>` survives one release as a **compat parse** (a full shell preset
+  to that canvas, keeping the real `canvas-<id>` Tauri label so the per-label view
+  purge/attach stay correct). Closing a non-last window never kills a PTY (agents run
+  backend-side); the last window closing still quits the app (`kill_all`).
 - **Scheduled sessions (#93/#94/#125):** an agent can be **scheduled to launch later**.
   The **"+ Schedule session"** sidebar button / **⌘⇧N** opens the new-session modal
   in **schedule mode** — folder → branch (incl. **"+ add branch"** to create a new
@@ -497,7 +736,8 @@ steady-state boot pays **zero** probe cost.
   (best-effort) **creates** the new branch (`git checkout -b`, #124/#125) or checks
   out the existing one, spawns `claude` **pre-seeded with the prompt** (the
   positional invocation, see Conventions), converts the record into a live session,
-  and emits **`schedule://fired`** (→ the main window moves it scheduled→live). On
+  and emits **`schedule://fired`** (→ the **primary** window (433) moves it
+  scheduled→live). On
   boot the first tick fires anything **missed while closed** (catch-up). One-shot
   only (local clock). **#94** makes a schedule a first-class **draggable item type**:
   a `CanvasContent` **`kind: "scheduled"`** (+ a `payloadToContent` case) renders the
@@ -507,8 +747,9 @@ steady-state boot pays **zero** probe cost.
   **Canvas panel** — each with a **Start now** button (#269, `fire_schedule_now`). A schedule
   targeting a **worktree** creates the worktree + branch **eagerly at schedule time** (#259),
   and schedules are **window-global** — a Rust `broadcast_schedules` → `schedule://changed`
-  keeps detached windows (#84) in sync, and on fire `rewriteScheduledLeaves` swaps the pending
-  Canvas leaf to the live agent (#280). Time helpers live in `src/time.ts`. The schedule **prompt** field
+  keeps every window in sync (the #84-era seam task 428 later generalized to all persisted
+  slices), and on fire `rewriteScheduledLeaves` swaps the pending
+  Canvas leaf to the live agent (#280, run by the primary window 433). Time helpers live in `src/time.ts`. The schedule **prompt** field
   (in both the `NewSessionModal` schedule step and the `ScheduledPanel`) is a shared
   **`SkillAutocomplete`** component (#114): typing `/` in command position opens a
   dropdown of the slash-invokable **skills** `claude` would offer, read best-effort by
@@ -540,18 +781,26 @@ steady-state boot pays **zero** probe cost.
   and the busy indicator is never stalled. The Settings auto-name toggle (#100) gates
   it.
 - **Settings (#100/#102/#103/#107/#119):** a sidebar **footer gear** opens a centered,
-  focus-trapped **Settings modal** (`components/Settings`) — a **fixed 720×600** size
-  (clamped to 90vh, #119) so every section renders identically and a tall section
-  scrolls inside the content pane (the nav + action row stay put) — with **eight** sections
-  (**nine** on Linux, which additionally gets **Rendering**, #357) —
+  focus-trapped **Settings modal** (`components/Settings`) — a **fixed 740×540** size
+  (clamped to 92vw/88vh — #119's fixed-size precedent, resized by UI v2 task 373)
+  so every section renders identically and a tall section
+  scrolls inside the content pane (the nav + action row stay put) — with **nine** sections
+  (**ten** on Linux, which additionally gets **Rendering**, #357) —
   **Terminal** (font size / line height via the custom **`Slider`** #122 + cursor
   blink → the live pooled xterms via `terminalPool.applyTerminalSettings`),
   **Sessions** (the #97 auto-name toggle + the #142 **Coding agent** selector →
   `defaultAgent`, now claude / codex / **opencode** with an inline "untested" caution
   for the non-claude picks, + the #296 auto-continue-after-limit toggle),
   **Appearance** (a **Dark/Light theme** toggle #333 + an accent swatch over the Catppuccin
-  palette + a reduce-motion toggle +
-  the Overview panel min-width #176), **Rendering** (**Linux only** #357 — filtered out of
+  palette **with a "?" random-per-launch swatch** (task 373, `resolvedRandomAccent`) + a
+  reduce-motion toggle + **Dense panels** (the ⌘D toggle's checkbox twin, task 373) +
+  **Background animation** (the #377 wave on/off) + **Pause when covered by panels**
+  (`pauseWaveWhenCovered`, task 384 — default off (opt-in, task 402), disabled while the wave is off; the wave
+  stops rendering while the Overview wall has cards / a Canvas tab has panels and resumes
+  live when the stage clears) + a display-size slider #366 +
+  the Overview panel min-width #176 + the `capAgentWidth` cap-agent-card-width toggle,
+  task 373 — consumed by the Overview wall's 900px `.cardCapped` on agent/recurring
+  cards, task 379), **Rendering** (**Linux only** #357 — filtered out of
   the nav on macOS/Windows: a **DMA-BUF renderer** control (auto/on/off, applied at the
   **next launch** — GTK reads the env once at init, so the persisted mode is read straight
   off `sessions.json` **before** `tauri::Builder` via the shared Rust `early_settings`), a
@@ -561,9 +810,18 @@ steady-state boot pays **zero** probe cost.
   **Diagnostics** readout of the boot decision (`renderer_diagnostics` → the
   `linux_webkit::RendererReport` captured in a `OnceLock`; `null` off Linux)), **Behavior** (default launch view + confirm-destructive
   gating #103 + the Canvas tab-close default `canvasCloseBehavior`: Ask / Always kill / Never
-  kill #137 + the diff display/line/sort defaults #237/#258), **Kanban** (per-column colors by
+  kill #137 + the diff display/line/sort defaults #237/#258), **Editor** (the Open-in-editor
+  preferred-editor select over the `src/editors.ts` catalog mirror with live "— detected"
+  annotations + the `{path}` custom command — see the Open-in-editor bullet), **Kanban** (per-column colors by
   name #239), **Updates** (check for updates / current version / "What's new" / update now
-  #191), and **Data & About** (open data folder, clear recents, app + agent versions). A
+  #191), **Shortcuts** (#318/373, made **editable** by the keybind rework — the
+  rebindable actions of the `src/keybinds.ts` registry render as click-to-record rows
+  (press the new combo; Backspace unbinds, Esc cancels; reserved/conflicting chords
+  are refused inline with per-row reset-to-default), staged in the draft like every
+  section and persisted as `settings.keybinds` overrides; the fixed contextual chords
+  (⌘S / ⌘⏎ / ⌘⌥1–6 / Shift+arrows / the diff keys, `shortcuts.ts`) stay a read-only
+  reference below, every chord through `kbdHint`), and **Data & About** (open data
+  folder, clear recents, app + agent versions). A
   modal-local **draft** applies only on **Save** via `applySettingsEffects` (the `theme`
   field #333 toggles `data-theme="light"` on `<html>` → the `:root[data-theme="light"]`
   Catppuccin-Latte token block in `tokens.css` reskins the whole UI, while the terminal
@@ -573,7 +831,12 @@ steady-state boot pays **zero** probe cost.
   `accentCompanions` #107; reduce-motion toggles `body.reduce-motion`). Settings
   persist as an opaque `settings` blob (`get_settings` / `set_settings`) merged over
   TS-side `DEFAULT_SETTINGS`, so an older `sessions.json` upgrades cleanly (a blob lacking
-  `theme` upgrades to `"dark"`).
+  `theme` upgrades to `"dark"`). Since 429 `set_settings` takes a **patch** — the modal
+  diffs its draft against the seed baseline (`settingsPatch`) and Rust merges it over
+  the persisted blob **under the Store mutex** — and since 428 every successful persist
+  broadcasts `settings://changed` to every window, so one window's Save can no longer
+  clobber another's unrelated fields and a theme/accent change reskins every open
+  window live.
 - **Pluggable coding agent (#101):** an `AgentSpec` catalog
   (`src-tauri/src/agents.rs`) is the single source of truth for each agent's binary +
   how it spawns / resumes / seeds a session; the **`claude`** spec preserves today's
@@ -603,7 +866,7 @@ steady-state boot pays **zero** probe cost.
   CLI**); an interactive session is the bare TUI in cwd. The **five-hour usage bar**
   (#154) is Claude-only: `isClaudeActive` now hides it whenever **any** non-claude
   (codex *or* opencode) session is active.
-- **First-launch agent picker:** on boot (main window only) `maybeOnboardAgent` runs once
+- **First-launch agent picker:** on boot (primary window only, 433) `maybeOnboardAgent` runs once
   — gated by a new `onboarded` flag in the settings blob (defaults `false`, so an existing
   install also runs the one-time check on its next launch; preserved across "Reset to
   defaults"). It presence-checks each `SELECTABLE_AGENTS` CLI via `agent_info`
@@ -613,17 +876,24 @@ steady-state boot pays **zero** probe cost.
   `OnboardingModal` (`components/Onboarding`) to pick — Claude badged "Recommended",
   codex/opencode "Untested", Escape/scrim keeps the current default. Picking / dismissing
   sets `onboarded` so it never re-prompts.
-- **Five-hour usage bar + auto-continue (#154/#296/#297/#305/#309):** a sidebar-footer
-  **`UsageBar`** (`components/Usage`) shows Claude's rolling five-hour usage — the Rust
-  `claude_session_usage` (`usage.rs`) reads the OAuth token (`~/.claude/.credentials.json` via
+- **Five-hour usage bar + auto-continue (#154/#296/#297/#305/#309, engine in Rust since
+  430):** a sidebar-footer
+  **`UsageBar`** (`components/Usage`) shows Claude's rolling five-hour usage — `usage.rs`
+  reads the OAuth token (`~/.claude/.credentials.json` via
   the cross-platform `home_dir()`, with a macOS-Keychain fallback `#[cfg(target_os = "macos")]`
-  -gated) and fetches a snapshot; the bar turns **red at ≥90%** (#272), is **fail-open** (any
+  -gated) and fetches a snapshot for the **one app-wide Rust usage poll** (430,
+  `autocontinue.rs` — the endpoint 429s aggressively below ~180s, so N windows must
+  never each poll; the frontend `usage` slice is an event-fed mirror via
+  `usage://changed`); the bar turns **red at ≥90%** (#272), is **fail-open** (any
   miss hides it), and is **Claude-only** (`isClaudeActive` hides it when any codex/opencode
   session is live). **Auto-continue after limit reset** (#296 — opt-in setting
   `autoContinueAfterLimit`, default off) arms when usage hits ~100%, waits for the reset
   (confirmed by **both** clock time **and** percent < 90), then nudges each running **Claude**
-  agent (Enter→`continue`→Enter) — a pure reducer `evaluateAutoContinue` in `src/autoContinue.ts`
-  (armed poll ~45s). It's surfaced in the ⋯ menu + Settings → Sessions, with a **per-agent
+  agent (Enter→`continue`→Enter) — since 430 the whole arm/wait/fire machine is the
+  Rust engine in `autocontinue.rs` (a ~45s armed poll; state mirrored to the store via
+  `autocontinue://changed`), so it fires exactly once per app however many windows are
+  open; `src/autoContinue.ts` keeps only the pure UI helpers (`isLimitReached` + the
+  thresholds). It's surfaced in the ⋯ menu + Settings → Sessions, with a **per-agent
   opt-out** (`AutoContinueToggle`, persisted `auto_continue_disabled`, shown only at the limit
   #297/#305) and an **"Enable auto restart on limit reset"** prompt (`AutoContinuePrompt`) above
   the usage bar, shown only once the limit is reached (#309, shared `isLimitReached`).
@@ -639,12 +909,15 @@ steady-state boot pays **zero** probe cost.
 - **Big mode (#157/#284):** any Overview card / Canvas panel can **maximize** into a full-window
   modal (`BigModeModal`) via a header maximize icon or **⌘E / Ctrl+E** on the selected item
   (`toggleMaximizeSelected` + a transient `maximizedItem` store slice). A shared `ItemContent`
-  renderer is the single live-render site (carrying the #84 ownership guard), so a pooled
+  renderer is the single live-render site per window, so a pooled
   terminal / auto-save hook is never mounted twice.
 - **Resizable sidebar (#108):** a thin right-edge drag handle sets the sidebar width,
-  clamped to **[180, 560]** (default 260) and **persisted** via a dedicated Rust
+  clamped to **[180, 560]** (default **248** since UI v2 task 374 — was 260) and
+  **persisted** via a dedicated Rust
   `sidebar_width` value (`get_sidebar_width` / `set_sidebar_width`), kept **separate**
-  from the Settings blob so the modal draft can't clobber a drag. Main-window only.
+  from the Settings blob so the modal draft can't clobber a drag. The handle exists in
+  every full window; the persisted width converges across windows via the 428
+  `sidebar_width://changed` broadcast.
 - **Reorderable folders (#211):** the top-level repo "folders" are **drag-reorderable**
   — there's **no separate handle**; the whole repo header is the grip (a `useSortable`
   whose `attributes`/`listeners` sit on the `repoHeader`), while the 4px pointer
@@ -659,7 +932,8 @@ steady-state boot pays **zero** probe cost.
   from the Settings blob like `sidebar_width`; the displayed order is `mergeRepoOrder(
   folderOrder, repoOrder(...))` so a spawned/added repo appends and a forgotten one
   drops without scrambling the rest. The collapsed rail renders the same persisted
-  order (no drag there — out of scope). Main-window only.
+  order (no drag there — out of scope). The drag exists in every full window; the
+  persisted order converges via the 428 `repo_order://changed` broadcast.
 
 ## Layout
 
@@ -668,55 +942,89 @@ steady-state boot pays **zero** probe cost.
 ├── index.html              # Vite entry
 ├── src/                    # Frontend (React + TS)
 │   ├── main.tsx            # React bootstrap (loads fonts + tokens + global CSS)
-│   ├── App.tsx             # Root: a Suspense router over the two LAZY window routes —
-│   │                       #   MainApp or the detached CanvasWindow (#84/#356)
-│   ├── MainApp.tsx         # Main-window route chunk: sidebar + Overview/Canvas + ModalHost (#356)
+│   ├── App.tsx             # Root: a Suspense router over the single LAZY MainApp route
+│   │                       #   (#356; task 437 deleted the #84 canvas route)
+│   ├── MainApp.tsx         # The one full-shell route chunk — every window renders it:
+│   │                       #   sidebar + Overview/Attention/Canvas + ModalHost (#356/#437)
 │   ├── prefetch.ts         # Idle warm-up of the deferred chunks (rIC → setTimeout) (#356)
 │   ├── store.ts            # Zustand store (state + cross-cutting actions)
 │   ├── ipc.ts              # Typed Tauri command/event wrappers
 │   ├── outputBus.ts        # Per-session output pub/sub (bytes kept out of store)
 │   ├── paths.ts            # Shared path helpers (repoName, sessionLabel, effectiveRepo #96)
 │   ├── time.ts             # Schedule time helpers (toLocalInput, formatFireTime) (#93/#94)
-│   ├── windowContext.ts    # Window identity (#84): main vs canvas-<id>, ownership helpers
-│   ├── ownership.ts        # useSessionOwners hook — which window renders each PTY (#84)
-│   ├── useKeyboardNav.ts   # Global keyboard shortcuts (#24/#76/#77/#84/#93)
+│   ├── windowContext.ts    # Window identity (#434/#437): the ?win= parse → WINDOW_KIND /
+│   │                       #   WINDOW_LABEL / APP_WINDOW_ID / INIT_REPO_PATH / INIT_CANVAS_ID
+│   │                       #   + isPrimaryLabel (#433)
+│   ├── fileClaims.ts       # Pure same-file edit-claim helpers (claimIntent/heldElsewhere, #435)
+│   ├── keybinds.ts         # Configurable-keybind registry + pure chord logic (keybind rework)
+│   ├── editors.ts          # Label mirror of the Rust editor catalog ("Open in editor")
+│   ├── useKeybind.ts       # useKeybindLabel — live hint labels off settings.keybinds
+│   ├── useKeyboardNav.ts   # Global keyboard dispatcher over the keybinds registry (#24/#76/#84)
 │   ├── useAutoSaveFile.ts  # Read + hot-reload + debounced-write hook (FileViewer raw + Kanban) (#148)
-│   ├── autoContinue.ts     # Pure auto-continue-after-limit reducer + isLimitReached (#296/#305)
+│   ├── autoContinue.ts     # Pure auto-continue UI helpers (isLimitReached, #296/#305) —
+│   │                       #   the engine is Rust (autocontinue.rs, #430)
+│   ├── tips.ts / tips.json # Startup tips — the empty-state hero (UI v2 #379) + the
+│   │                       #   Overview filtered-empty state, via the shared TipRow (#424)
 │   ├── updater.ts          # In-app auto-update: check / download+install / relaunch (#190)
 │   ├── components/         # React components (CSS Module alongside each):
 │   │                       #   Sidebar, Overview, Canvas (+ CanvasSurface),
-│   │                       #   CanvasWindow (#84), CanvasCloseModal (#137), BigMode (#157/#284),
+│   │                       #   CanvasCloseModal (#137), BigMode (#157/#284),
 │   │                       #   Terminal, FileViewer (+ MermaidBlock #254), FileTree (#167/#252),
-│   │                       #   FilePicker, FileSwitcher (#90), DiffInspector, DetachedNote (#84),
+│   │                       #   FilePicker, FileSwitcher (#90), DiffInspector,
+│   │                       #   ClaimBanner (the #435 "being edited in another window" banner),
 │   │                       #   Kanban (engine + KanbanPanel, #141–#151),
 │   │                       #   ScheduledPanel (#94), RecurringPanel (#294), Settings (#100),
 │   │                       #   BusyIndicator, Usage/UsageBar (#154),
 │   │                       #   AutoContinuePrompt/AutoContinueToggle (#296/#309), CloneRepoModal (#295),
 │   │                       #   TemplateEditor + TemplateManager (#117) + TemplateUseModal (#118),
-│   │                       #   Checkbox, Slider (#122), SkillAutocomplete (#114), PatchNotes (#192),
+│   │                       #   Checkbox, Slider (#122), SegmentedControl (UI v2 #372),
+│   │                       #   SkillAutocomplete (#114), PatchNotes (#192),
 │   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
-│   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState
-│   │                       #   ModalHost.tsx — the ten lazily-mounted top-level modals (#356)
-│   ├── styles/             # tokens.css (design tokens) + global.css (reset/base)
+│   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState,
+│   │                       #   Titlebar (the themed macOS Overlay title-bar strip, task 444 — macOS-only via data-platform),
+│   │                       #   TipRow (the shared rotating-tip row: EmptyState hero + Overview filtered-empty, #424),
+│   │                       #   WaveBackground (UI v2 wave layer, task 377 — lazy src/vendor/WaveEngine.js;
+│   │                       #     lazy waveHost runs it on the main thread OR from an OffscreenCanvas
+│   │                       #     Web Worker + a governed/paused-when-covered loop, task 384)
+│   │                       #   EditorPicker (the "Open in editor" first-use/re-pick modal)
+│   │                       #   ModalHost.tsx — the eleven lazily-mounted top-level modals (#356)
+│   ├── styles/             # tokens.css (design tokens) + global.css (reset/base) +
+│   │                       #   the UI v2 primitives: atoms.css (buttons/chips/kbd hints),
+│   │                       #   menu.css (anchored menus/popovers), modal.css (centered
+│   │                       #   modals) (#372/#375/#378)
+│   ├── vendor/             # WaveEngine.js (sha-pinned vendored wave engine — never edit)
+│   │                       #   + waveEngineLoader.ts (its lazy dynamic-import seam, #377)
 │   └── types/              # Shared TS types (backend-mirrored models)
 ├── src-tauri/              # Rust backend (Tauri)
-│   ├── src/lib.rs          # App builder, state wiring, event forwarding, schedule + recurring poll loop (#93/#294)
+│   ├── src/lib.rs          # App builder, state wiring, the targeted event forwarder (#440),
+│   │                       #   schedule + recurring poll loop (#93/#294), auto-continue engine
+│   │                       #   thread (#430), window lifecycle (Destroyed purge/unregister,
+│   │                       #   ExitRequested flush, single-instance + Reopen entry points #436)
 │   ├── src/main.rs         # Binary entry point
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
+│   ├── src/terminal_views.rs # Terminal-view registry: smallest-wins grid arbitration (#426)
+│   │                       #   + the #440 output-subscriber dimension
+│   ├── src/primary.rs      # Primary-window election → window://primary (#433)
+│   ├── src/window_state.rs # Persisted window registry: debounced bounds saves + monitor-safe
+│   │                       #   clamped restore of the open-window set (#439)
+│   ├── src/file_claims.rs  # Transient same-file edit claims → file_claims://changed (#435)
+│   ├── src/autocontinue.rs # Rust auto-continue engine + the ONE app-wide usage poll (#430)
+│   ├── src/boot.rs         # Bounded-parallel boot resume (#355) + the idempotent shell-terminal
+│   │                       #   respawn pass (#432)
 │   ├── src/agents.rs       # Pluggable coding-agent specs (AgentSpec catalog): claude (#101) + codex (#141) + opencode (untested)
-│   ├── src/path_env.rs     # Restore login-shell PATH at startup (Finder/.desktop-launch fix, macOS+Linux)
-│   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
+│   ├── src/editors.rs      # "Open in editor": EditorSpec catalog + shared detect/launch resolver
 │   ├── src/path_env.rs     # Login-shell PATH: async probe + PathState cell + rc-mtime cache (#360; Finder/.desktop-launch fix, macOS+Linux)
+│   ├── src/child_env.rs    # AppImage env scrub for every child process (PTY + git/xdg-open shell-outs) (#350)
 │   ├── src/linux_desktop.rs # WM_CLASS/app_id pin for Linux desktop-entry matching (#362)
 │   ├── src/early_settings.rs # Shared PRE-GTK settings reader: sessions.json off disk before tauri::Builder (#357)
 │   ├── src/linux_webkit.rs # Linux DMA-BUF decision + Settings override + the boot RendererReport (#346/#347/#357)
 │   ├── src/linux_gtk.rs    # Linux GTK dialog theme from ReCue's own theme, before GTK init (#349)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
-│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen, path cache #360)
+│   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen, path cache #360, window state #439) + the #429 merge_*_patch helpers
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + commits (#230) + per-file status (#252) + list (local+remote #180) + checkout + worktree (#74) + fetch (#180) + pull --ff-only (#181) + clone (#295/#308)
 │   ├── src/files.rs        # Repo file access (lazy list_dir tree + search_files picker + search_file_contents in-tree content search #202, read/write_text_file #141, move_into_repo OS-drop #253, create_dir/delete_path/rename_path #267/#291, path-validated)
-│   ├── src/usage.rs        # Best-effort read of Claude's five-hour usage snapshot for the usage bar (#154)
+│   ├── src/usage.rs        # Best-effort fetch of Claude's five-hour usage snapshot (#154) — polled only by the Rust engine (#430)
 │   ├── src/skills.rs        # Read-only scan of .claude skills/commands for prompt autocomplete (#114)
 │   ├── Info.plist          # Partial plist (mic + speech-recognition usage strings), merged into the bundle
 │   ├── tauri.conf.json     # Window, bundle, build config
@@ -845,7 +1153,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > never remounted and no scrollback is replayed — then **latches** the window (the pure
 > `Terminal/webglFallback.ts`): no terminal in it re-attaches WebGL for the rest of the run, since
 > a driver that dropped one context drops the next one too. One `console.warn` per window; the
-> latch is per-document, so a detached canvas window (#84) latches independently. Platform-neutral
+> latch is per-document, so each window latches independently. Platform-neutral
 > code that merely *fires* most often on WebKitGTK. The addon is loaded lazily (#356), so the
 > handler is attached to the resolved addon instance and both the `disposed` flag and the latch
 > are re-checked after the `import()` settles — a host torn down (or a window latched by another
@@ -917,7 +1225,16 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   branch step starts an agent in an app-managed worktree
   (`<app-data>/worktrees/<repo-id>/<branch>`), shown nested under its parent repo in
   the sidebar; the worktree is removed (ref-counted) only when its last agent goes,
-  and a dirty worktree is kept rather than force-deleted; and (3) **branch creation**
+  and a dirty worktree is kept rather than force-deleted. **The automatic remove is
+  scoped to what ReCue created**: `remove_worktree` hard-refuses any destination outside
+  `<data-dir>/worktrees` — worktree *detection* surfaces agent-created (EnterWorktree /
+  hook / manual) worktrees in the same UI and in-place spawns give them sessions, so
+  no automated teardown path may ever `git worktree remove` a checkout ReCue didn't create;
+  the read side (`git worktree list --porcelain`) stays read-only, and the only force-remove
+  is the **user-confirmed Delete worktree…** flow (the separate `delete_worktree` command —
+  works on ANY listed linked worktree of the repo, validated to never be the main checkout /
+  the registered folder / a bare entry, unlock-first, with a `git worktree prune` fallback
+  for a stale entry; the branch is kept); and (3) **branch creation**
   (#124, expanding the earlier "never creates branches" rule) — the branch step's
   **"+ add branch"** option creates + checks out a new branch (`git checkout -b
   <name> [<base>]`, base defaulting to the current branch/HEAD) and starts a normal
@@ -998,11 +1315,15 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   Terminal / Sessions / Appearance / Behavior / Data & About sections (see the
   architecture note). A **Dark/Light theme** toggle lives in the Appearance section
   (#333, default Dark); no per-session config beyond these.
-- **Multi-window** is now supported for **Canvas tabs only** (#84 — reverses the v1
-  single-window rule): a canvas can open in its own native window (pop-out button +
-  drag tear-off) for multi-monitor use. Detached windows are **per-session** (not
-  restored on relaunch); Overview and individual panels do **not** pop out, and a
-  single PTY is never shown in two windows at once (see the architecture note).
+- **Multi-window** now means **N full app windows** (tasks 426–440 — the #84
+  canvas-only pop-outs were the first reversal of the v1 single-window rule; the epic
+  completed it and deleted them): any number of complete ReCue windows (Canvas pop-out /
+  tear-off, ⌘⌥N, File → New Window, the repo menu's Open in new window, a second app
+  launch), **restored on relaunch** (439 — reversing #84's "detached windows are
+  per-session" precedent), with a single PTY rendered in **any number of windows
+  simultaneously** (mirrored, smallest-wins grid, letterboxed — superseding #84's
+  one-window-at-a-time rule). Individual panels still do not pop out — a window is
+  always a full shell (see the architecture note).
 - **macOS code signing + Hardened Runtime + entitlements now exist — for permissions**
   (#292 — narrows the earlier "no code signing / notarization" rule, the way #74/#124
   narrowed the git rule and #84/#100/#126 reversed single-window/settings/fork). The old
@@ -1079,19 +1400,29 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   returns a typed `NothingToFork` error instead of spawning a doomed code-1 panel), and a
   persisted `forkable` flag (emitted on the #97 title-worker cadence) renders the Fork
   affordance **unavailable up front** at all three sites (#138).
-- **Exit handling (#63):** the discriminator is the exit code (`store.ts`
-  `onExited` / the pure `isCleanExit`). A **clean exit — `claude` exits code 0
-  while running** (the user ended the agent) is forgotten like _Remove_:
-  `forgetExitedSession` drops it from the store (its pooled xterm is disposed by
-  `reconcileTerminals`) **and** its persisted record (so it doesn't return on next
-  boot), with a brief "Agent exited" toast — no overlay, no Restart. **Any other
-  exit** (non-zero/crash, or a failed boot resume) keeps the session with its
+- **Exit handling (#63):** the discriminator is the exit code, and since task 431 the
+  clean-exit decision is **Rust-owned** — made exactly once per app in the forwarder,
+  never per window: `classify_exit` (`commands.rs`) consumes a **clean exit — `claude`
+  exits code 0 while running** (the user ended the agent) and forgets it like _Remove_ —
+  the detached forget task kills + deletes the persisted record, emits
+  **`session://forgotten`** (every window drops its local state; its pooled xterm is
+  disposed by `reconcileTerminals`; exactly one window — the focused, via the payload's
+  `toast_target` — shows the brief "Agent exited" toast), and runs the serialized
+  ref-counted worktree cleanup (`cleanup_worktree_if_empty`). No `session://exited` is
+  emitted for a consumed clean exit, so no window ever flashes an exit overlay for it;
+  an app-initiated kill can never be misread as clean because `kill_session` sets the
+  `intentional` flag carried on `Exited` **before any signal** (the #354 `silent`
+  pattern), and every guard failure fails open to the plain `session://exited` emit.
+  **Any other
+  exit** (non-zero/crash, or a failed boot resume) emits `session://exited` as before
+  and stays frontend-handled: the session keeps its
   `exitedCode`, so `Terminal.tsx` shows the "Process exited (code N)" overlay +
   Restart. **Restart** (`restartSession` → `resume_session`) spawns a fresh PTY
   under the same id; on success the Terminal calls `terminalPool.resetTerminal`
   to dispose + recreate the pooled xterm so the relaunched TUI repaints cleanly
   instead of appending onto the dead session's screen. The boot window is guarded
-  (`booting`): a code-0 exit there keeps the overlay rather than auto-forgetting,
+  (the Rust `BootWindow`, cleared ~4 s after the resume pass): a code-0 exit there
+  degrades to the overlay rather than auto-forgetting,
   and **app shutdown keeps records** (`kill_all` doesn't delete them) so they
   auto-resume on next boot (#30) — the only path that "offers to restart."
   **The `Exited` event is driven by the child, not the PTY (#354).** A per-session
@@ -1111,23 +1442,38 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   `kill_all` (shutdown) pays **one** shared grace for all sessions and **silences** the exit
   events (an `ExitState.silent` flag set **before any signal**) — a prompt `Exited` could now
   reach the still-live webview, and an agent that exits 0 on SIGHUP would read as a *clean*
-  exit, so `isCleanExit` would **delete the persisted record** and the session would not come
-  back (#30/#63). A signal death maps to exit code **1** (portable-pty), never 0, so a killed
+  exit, so the #63/431 forget path would **delete the persisted record** and the session
+  would not come back (#30/#63). A signal death maps to exit code **1** (portable-pty), never 0, so a killed
   agent can never be mistaken for a clean exit. **Windows is unchanged**: no job object — the
   kill is still `ChildKiller::kill()` → `TerminateProcess` on the direct child; it inherits
   only the platform-neutral child-wait-driven `Exited`.
-- **Window chrome:** the **standard native macOS title bar** (#19) — native
-  traffic lights, native title (`title: "ReCue"`), native drag, no custom
-  positioning. The window config carries no `titleBarStyle`/`hiddenTitle`/
-  `trafficLightPosition`, and there is no custom `Titlebar` component or
-  `data-tauri-drag-region` (the earlier overlay chrome from #3 was removed). The
-  webview content area sits cleanly below the native bar, so the app shell starts
-  at the top of the content area (no reserved top strip). **Detached canvas windows
-  (#84)** use the same native chrome; they're created from Rust
-  (`open_canvas_window`) with the label `canvas-<id>` and a `?canvas=<id>` route, so
-  no JS window-create permission is needed — only the `canvas-*` capability so the
-  new window can invoke commands + listen to events.
-  **Hidden until painted (#348)** — every window (main + detached canvas) is created
+- **Window chrome:** an **integrated, ReCue-themed title bar** (task 444, reversing
+  #19's "native bar, no custom chrome"). On **macOS** the window is `titleBarStyle:
+  "Overlay"` + `hiddenTitle: true` + a fixed `trafficLightPosition` (`{x:16,y:10}`) — in
+  `tauri.conf.json` `app.windows[0]` AND mirrored on the `create_app_window` builder,
+  macOS-gated (`#[cfg(target_os = "macos")]` — those three builder methods are macOS-only
+  in Tauri 2). The Overlay style extends the webview under the title bar, so the native
+  traffic lights (kept, with native drag + double-click-zoom) float over a **slim
+  `--surface-mantle` `Titlebar` strip** (`src/components/Titlebar`) — a single
+  `data-tauri-drag-region` `<header>`, no title text, continuous with the sidebar chrome,
+  following the light/dark theme live. It's the FIRST child of `.app` (a
+  `flex-direction: column` container), so on macOS it reserves 30px above `.app-body`; the
+  strip is revealed **only on macOS** via the `data-platform` seam (#363,
+  `Titlebar.module.css`), so **Windows/Linux keep native decorations** and render **no**
+  strip (no empty band). On **every** OS the native window theme is synced to ReCue's
+  light/dark theme via the pure `commands::theme_to_window_theme` + `commands::window_theme`
+  → `window.set_theme(...)` (in `lib.rs` setup + `create_app_window` before reveal, and
+  in `set_theme_background` on a runtime switch) — full DWM-caption / CSD **color** parity
+  needs custom decorations and is future work. `data-tauri-drag-region` needs no capability
+  change — `core:default` already grants `startDragging` (per #19). **App windows (tasks
+  426–440)** use the same chrome; they're created from Rust
+  (`open_app_window` → the shared `create_app_window`) with the label `app-<uuid>` and
+  an `index.html?win=<uuid>` route, so
+  no JS window-create permission is needed — only the `app-*` capability line
+  (`capabilities/default.json` is `["main", "app-*"]`) so a
+  new window can invoke commands + listen to events; the open-window set + bounds
+  persist in the backend-internal `window_state` key and are restored at the next
+  launch (439). **Hidden until painted (#348)** — every window (main + app windows) is created
   **`visible: false`** with a **themed native `backgroundColor`** (`tauri.conf.json`
   `app.windows[0]` / `WebviewWindowBuilder::background_color`, from the pure
   `commands::background_for_theme`; `lib.rs` `setup` re-colors the main window from the
@@ -1141,22 +1487,24 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   no `allow-show`, and widening it isn't needed since window ops are already Rust-owned),
   with `schedule_reveal_fallback` showing any still-hidden window after **2 s** so a dead
   bundle can't leave the app invisible; a runtime theme switch pushes the new native color
-  via `set_theme_background`. Because `App()` is a **`Suspense` router over two lazy route
-  chunks** (#356), the hook is called from a **`RevealOnPaint`** component rendered *inside*
+  via `set_theme_background`. Because `App()` is a **`Suspense` router over the one lazy
+  `MainApp` route chunk** (#356/437), the hook is called from a **`RevealOnPaint`** component rendered *inside*
   that boundary, as a sibling of the route — a pending boundary commits its **fallback**,
-  not its children, so the reveal fires only once `MainApp` / `CanvasWindow` has actually
+  not its children, so the reveal fires only once `MainApp` has actually
   mounted, never on the empty fallback frame (and a chunk that never loads can't deadlock
   the window shut: the 2 s Rust fallback still shows it).
-  **Invariant:** the two pre-paint hexes (`#1e1e2e` dark / `#eff1f5` light) are duplicated
-  in **four** places — `--bg-base` in `src/styles/tokens.css`, the inline style in
-  `index.html`, `THEME_BG` in `src/theme.ts`, and `background_for_theme` in `commands.rs`
-  — keep them in sync (the TS/HTML/CSS trio is guarded by `src/theme.test.ts`, the Rust
-  mapping by its own unit test). Platform-neutral: no `#[cfg]` arms (on macOS
+  **Invariant:** the two pre-paint hexes (`#11111b` dark / `#dce0e8` light — the crust
+  stage since UI v2 task 372) are duplicated in **five** places — `--bg-base` in
+  `src/styles/tokens.css`, the inline style in `index.html`, `THEME_BG` in `src/theme.ts`,
+  `background_for_theme` in `commands.rs`, and `"backgroundColor"` in
+  `src-tauri/tauri.conf.json` — keep them in sync (the TS/HTML/CSS trio is guarded by
+  `src/theme.test.ts`, the Rust mapping by its own unit test, tauri.conf.json by review). Platform-neutral: no `#[cfg]` arms (on macOS
   `set_background_color` is a no-op for the *webview* layer, but the document's inline
   `html` background paints over it before the window is ever revealed).
 - **Builds & distribution:** `npm run tauri build` produces a local macOS `.app`/`.dmg`,
-  Windows NSIS/MSI installers, or a Linux **AppImage** (#345, host-OS dependent); the
-  **updater artifacts are minisign-signed** on all three. Release builds use a tuned
+  Windows NSIS/MSI installers, or — on Linux — an **AppImage** *and* a **`.deb`** (#345/#361,
+  host-OS dependent); the **updater artifacts are minisign-signed** on all three. Release
+  builds use a tuned
   **`[profile.release]`** (#358 — fat `lto`, `codegen-units = 1`, `strip = true`, size
   `opt-level = "s"`) so the binary — and with it every bundle, above all the AppImage, whose
   squashfs is paged in on **every** cold start — is materially smaller; it deliberately keeps
@@ -1164,9 +1512,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   panic in a reader / monitor / title / forwarder / poll thread kills only that thread instead
   of the whole app and every live PTY session. The extra link time is paid only by
   `release.yml` (a version-bump push); the PR gate and `tauri dev` build with the dev/test
-  profiles. macOS
-  Windows NSIS/MSI installers, or — on Linux — an **AppImage** *and* a **`.deb`** (#345/#361,
-  host-OS dependent); the **updater artifacts are minisign-signed** on all three. On Linux
+  profiles. On Linux
   only the **AppImage** is an updater artifact (Tauri's Linux updater can only replace the
   file at `$APPIMAGE`), so `latest.json`'s `linux-x86_64` entry points at it and it
   **self-updates**; the `.deb` gets no `.sig` and exists to be **repacked by the in-repo AUR
@@ -1252,19 +1598,39 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   both `dev` and `build`) declaring `NSMicrophoneUsageDescription` /
   `NSSpeechRecognitionUsageDescription` so voice dictation works inside a session's PTY
   (macOS attributes a child process's mic request to the responsible app — ReCue).
-- **Styling:** CSS Modules (`*.module.css` next to each component) that consume
-  the design tokens in `src/styles/tokens.css`. The reset, base styles,
+- **Styling (UI v2, #372–#383):** CSS Modules (`*.module.css` next to each component)
+  that consume the design tokens in `src/styles/tokens.css`. The reset, base styles,
   scrollbars, keyframes, and the `prefers-reduced-motion` killswitch live in
-  `src/styles/global.css`. Tokens, global CSS, and the bundled **JetBrains Mono**
-  font (`@fontsource`, offline — never a CDN) are imported once in
-  `src/main.tsx`. Stay on-system: use tokens, never off-system colors. The color
-  tokens are a **Catppuccin Mocha** remap (#33) — accent is **Peach**, with
-  `--accent-fg` for readable text on the (light) accent fill, `--scrim` for
-  full-window dim overlays, and `--status-*` repointed to Catppuccin accents. A
-  custom accent from Settings (#102) overrides `--accent` **and** its derived
-  companions `--accent-hover` / `--accent-dim` / `--accent-fg` together
-  (`accentCompanions`, #107). See the **Design reference** in `TASK_ARCHIVE.md` (the
-  original near-black v1 palette; superseded by the Mocha tokens).
+  `src/styles/global.css`; the shared **UI v2 primitives** sit beside them —
+  `src/styles/atoms.css` (block buttons / chips / kbd hints), `menu.css` (the one
+  anchored context-menu/popover look) and `modal.css` (the centered-modal scrim/pop
+  chrome), plus the `SegmentedControl` / `Checkbox` / `Slider` atom components. All of
+  it, with the bundled **JetBrains Mono** font (`@fontsource`, offline — never a CDN),
+  is imported once in `src/main.tsx`. Stay on-system: use tokens, never off-system
+  colors. The color tokens are a **Catppuccin Mocha** remap (#33) organized into the
+  v2 **surface roles** (#372): `--surface-crust` (the content **stage** behind the
+  Overview wall / Canvas splits, painted by the vendored `WaveBackground`, #377) /
+  `--surface-mantle` (chrome: sidebar, rail, tab strip) / `--surface-base` (panels,
+  cards, menus, modals) / `--surface-0`/`-1` (selection/hover fills) — the legacy
+  aliases (`--content-bg` / `--bg-panel` / `--bg-elevated` / `--bg-hover` /
+  `--bg-sidebar`) still resolve to them. The **corner language**: panels and everything
+  inside them are square (`--radius-control`/`--radius-chip` 0); 5–7px rounding only on
+  sidebar-chrome controls (`--radius-chrome`/`-chrome-sm`/`-btn`); 999px dots/pills;
+  ~10–12px only on **floating chrome** (menus/modals/toasts — also the only shadowed
+  surfaces: `--shadow-menu`/`-modal`/`-toast`). Stage geometry rides the
+  `--stage-gap` / `--stage-pad-*` vars, zeroed by the `:root.dense` hook (**dense
+  mode**, ⌘D, #373). Accent is **Peach**, with `--accent-fg` for readable text on the
+  accent fill and `--scrim` for full-window dim overlays; the derived
+  `--accent-tint-fill/-border/-hover` tokens `color-mix()` from the single
+  `var(--accent)` — every color-mix-bearing fill/border declares a **plain token
+  fallback first** (the cross-platform rule). A custom accent from Settings (#102)
+  overrides `--accent` **and** its companions `--accent-hover` / `--accent-dim` /
+  `--accent-fg` together (`accentCompanions`, #107), and the wave recolors live.
+  **The accent never encodes status or selection**: statuses stay on the fixed
+  `--status-*` / `--diff-*` / `--usage-critical` tokens, and selection/active fills are
+  Surface0 (#375/#378). Design reference: `docs/ui-v2-handoff/DESIGN-SPEC.md` + the
+  demo `ReCue-v2-demo.html` (untracked, local-only; demo wins over prose). The
+  original near-black v1 palette lives in `TASK_ARCHIVE.md` (superseded).
 
 ## Tasks
 
@@ -1282,7 +1648,7 @@ repo-root board files:
 - **The plan lane** ships as **two interchangeable variants** — run **one** at a time in
   the plan terminal; both explore the codebase, assign the next task number `N` (one greater
   than the highest used **anywhere** — board, `PLAN-*.md`, `TASK_ARCHIVE.md`; next is
-  **#311**), write a self-contained `PLAN-<N>.md`, set the card's `Dependencies:`, and move it
+  **#448**), write a self-contained `PLAN-<N>.md`, set the card's `Dependencies:`, and move it
   to `IMPLEMENT`, producing **identical board output**:
   - **`/plan-assume-kanban-dev`** (autonomous) — where a card is ambiguous it makes the most
     reasonable interpretation itself and **records each call** under a `## Task <N>` section in
@@ -1322,7 +1688,7 @@ board-viewer rendering.
 
 **Board files at the repo root.** `KANBAN.md` (the live board) and `PLAN-<N>.md` (per-task
 plans) are **git-ignored / local-only**; `ASSUMPTIONS.md` (refinement decisions) and
-`TASK_ARCHIVE.md` (permanent history — #1–#310 to date) are **tracked**. All feature work
+`TASK_ARCHIVE.md` (permanent history — #1–#447 to date) are **tracked**. All feature work
 happens in isolated worktrees — the **main checkout never leaves its branch**; the plan and
 archive lanes commit only their own tracked file (`ASSUMPTIONS.md` / `TASK_ARCHIVE.md`) so the
 concurrent lanes don't collide. Task numbers are **global and never reused**. The `(#N)`

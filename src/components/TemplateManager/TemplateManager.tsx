@@ -68,9 +68,9 @@ function TemplateManager() {
   };
 
   return (
-    <div className={styles.overlay} onClick={close}>
+    <div className={`modal-scrim ${styles.overlay}`} onClick={close}>
       <div
-        className={styles.dialog}
+        className={`modal-pop ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-label="Manage templates"
@@ -189,7 +189,7 @@ function TemplateManager() {
         <footer className={styles.footer}>
           <button
             type="button"
-            className={styles.importBtn}
+            className="modal-btn modal-btn-neutral"
             onClick={() => void importTemplate()}
             title="Import a template from a JSON file"
           >
@@ -197,7 +197,7 @@ function TemplateManager() {
           </button>
           <button
             type="button"
-            className={styles.newBtn}
+            className="modal-btn modal-btn-primary"
             onClick={() => openEditor(null)}
           >
             <Plus size={14} strokeWidth={1.5} /> New template

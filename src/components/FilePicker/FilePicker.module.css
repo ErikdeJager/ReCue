@@ -64,7 +64,7 @@
   gap: var(--space-1);
   padding: var(--space-6) var(--space-8);
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-primary);
   font: inherit;
@@ -72,13 +72,18 @@
   cursor: pointer;
 }
 
+.row:hover {
+  background: var(--bg-elevated);
+}
+
+/* Surface0 selection fill (v2 — accent never encodes selection). */
 .rowActive {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
 }
 
 .name {
   overflow: hidden;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-row);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -87,7 +92,7 @@
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-micro);
   white-space: nowrap;
   text-overflow: ellipsis;
 }

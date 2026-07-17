@@ -4,7 +4,11 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
-  background: var(--terminal-bg);
+  /* #390: the configurable terminal-background lightness is published to
+     --terminal-bg-user by the pool; the plain-var fallback keeps the frame at the
+     --terminal-bg default (the app's panel surface) until (and if) the user
+     lightens it. */
+  background: var(--terminal-bg-user, var(--terminal-bg));
   overflow: hidden;
 }
 
@@ -29,9 +33,30 @@
      structurally correct. The BOTTOM gets extra room (20px vs 12px top, #262) so a
      one-row sub-pixel rounding error at certain font-size/line-height combos is
      absorbed visually and the input line is never clipped below the fold; the
-     terminalPool fit guard tells the PTY one fewer row whenever the painted height
-     would still overflow this box. Horizontal padding unchanged. */
+     terminalPool size proposal tells the arbiter one fewer row whenever the painted
+     height would still overflow this box (task 427 — the #262 shave, applied to the
+     PROPOSED rows). Horizontal padding unchanged. */
   padding: var(--space-12) var(--space-8) var(--space-20) var(--space-8);
+  /* Letterbox centering (task 427): the xterm grid is the backend's smallest-wins
+     arbitration over every attached window, so it can be SMALLER than this slot —
+     center it and let .wrapper's terminal-bg token show through as bands (no new
+     colors, no JS positioning). With grid == fit (today's single-view case) the
+     .xterm content fills the content box and the layout is pixel-equivalent.
+     FitAddon measures this container (the flex parent, whose own box is unchanged:
+     absolute inset:0), so proposals are unaffected. Transient case: a grid
+     momentarily larger than a shrinking slot overflows centered and is clipped by
+     .wrapper's overflow:hidden until the ~120ms propose + broadcast round-trip
+     settles. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* xterm's root sizes to its grid and never stretches to the slot (task 427):
+   flex-basis auto keeps the letterboxed grid at its natural size, centered by the
+   parent's alignment above. */
+.terminal > :global(.xterm) {
+  flex: 0 0 auto;
 }
 
 .exitOverlay {

@@ -432,7 +432,7 @@ function TemplateEditor() {
               Canvas (#186), rebalancing the template's blocks to equal area. */}
           <button
             type="button"
-            className={styles.distributeBtn}
+            className={`modal-btn modal-btn-neutral ${styles.distributeBtn}`}
             onClick={distribute}
             disabled={!canEqualize}
             title="Distribute panels evenly"
@@ -440,10 +440,18 @@ function TemplateEditor() {
           >
             <Grid2x2 size={14} strokeWidth={1.5} />
           </button>
-          <button type="button" className={styles.cancelBtn} onClick={close}>
+          <button
+            type="button"
+            className="modal-btn modal-btn-neutral"
+            onClick={close}
+          >
             Cancel
           </button>
-          <button type="button" className={styles.saveBtn} onClick={onSave}>
+          <button
+            type="button"
+            className="modal-btn modal-btn-primary"
+            onClick={onSave}
+          >
             Save template
           </button>
         </header>

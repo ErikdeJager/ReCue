@@ -1,0 +1,19 @@
+/* "Being edited in another window" banner (task 435) — sits above a read-only
+   auto-save editor (FileViewer raw/plain #148, Kanban #141–#151) whose file
+   another window has soft-claimed; the Take-over button transfers the claim.
+   Tokens only; square corners (inside a panel — the UI v2 corner language). */
+.banner {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-4) var(--space-8);
+  background: var(--surface-0);
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+
+.text {
+  min-width: 0;
+  flex: 1;
+}

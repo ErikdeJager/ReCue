@@ -94,6 +94,23 @@ pub struct PersistedSession {
     /// records (without the field) still deserialize and stay unwatched.
     #[serde(default)]
     pub watch: bool,
+    /// Dev-container session: the docker image it runs in. `Some` ⇒ spawn and resume
+    /// wrap the agent CLI in `docker run <image> …` (see `container.rs`); the
+    /// per-session home under `<data-dir>/container-homes/<id>` is what makes
+    /// `--resume` work across restarts. `None` (normal sessions + older records) ⇒ a
+    /// plain host PTY. Persisted on the record — not re-read from settings — so a
+    /// later image-setting change never breaks an existing session's resume. Mirrors
+    /// `worktree_parent`'s serde shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_image: Option<String>,
+    /// The directory the agent is CURRENTLY working in, per claude's own session
+    /// log (every JSONL line carries a `cwd`; `EnterWorktree` / `/cd` move it) —
+    /// the relocation signal that re-parents the sidebar row under a worktree.
+    /// Updated on the #97 title-worker cadence (claude-only), persisted so the
+    /// grouping is right immediately on boot; the next burst re-read refreshes
+    /// it. `None` for non-claude agents and older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_cwd: Option<String>,
 }
 
 /// A user-added Overview panel (a non-agent column), persisted per repo (#38).
@@ -221,6 +238,34 @@ pub struct RecurringSession {
     pub agent: String,
 }
 
+/// One restorable window (Multi-window task 439): a full app window (`main` or
+/// `app-<uuid>`) with its last-known bounds and the init presets it was created
+/// with (task 434's `AppWindowInit` → the `?repo=`/`?canvas=` URL params). `x`/`y`
+/// are the OUTER position and `width`/`height` the INNER (client-area) size, both
+/// in physical px — deliberately the pair tao's `Moved`/`Resized` events report and
+/// tauri's `set_position`/`set_size` setters accept, so a save→restore cycle never
+/// accretes the title-bar height. Presets are creation-time, not live UI state (a
+/// window opened plain and later filtered restores plain).
+///
+/// `maximized` (task 443) records whether the window was left maximized; `x/y/width/
+/// height` then stay the last NON-maximized geometry (the un-maximize / restore
+/// target), and restore re-maximizes AFTER applying that geometry. Its `serde(default)`
+/// keeps a pre-443 file (no key) loading as `false`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistedWindow {
+    pub label: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub maximized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas: Option<String>,
+}
+
 /// The on-disk shape of the persistence file.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistedState {
@@ -324,6 +369,16 @@ pub struct PersistedState {
     /// release-build probe; `default` keeps old files loading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_cache: Option<PathCache>,
+    /// The restorable open-window set (Multi-window task 439). Kept as a dedicated
+    /// value (like `sidebar_width` / `path_cache`), separate from the Settings blob
+    /// so a Settings draft can't clobber it, and **not** exposed as a Tauri command
+    /// — it is backend-internal (Rust saves it debounced from window events and
+    /// restores it at boot; the frontend never sees it — the `path_cache`
+    /// precedent). This deliberately reverses the #84 "detached windows are
+    /// per-session" rule: full app windows now survive relaunch. Empty until first
+    /// written; `default` keeps old files loading.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub window_state: Vec<PersistedWindow>,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -438,6 +493,29 @@ impl Store {
         let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
             Some(session) if session.forkable != forkable => {
                 session.forkable = forkable;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.persist(&guard)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Set a session's current working directory (the agent-relocation signal) and
+    /// persist **only on change** — the title worker re-reads it on every burst
+    /// offset, so this avoids rewriting the file when the agent hasn't moved. A
+    /// no-op for an unknown id.
+    pub fn set_current_cwd(&self, id: &str, cwd: Option<String>) -> io::Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let changed = match guard.sessions.iter_mut().find(|s| s.id == id) {
+            Some(session) if session.current_cwd != cwd => {
+                session.current_cwd = cwd;
                 true
             }
             _ => false,
@@ -598,9 +676,24 @@ impl Store {
         self.with(|state| state.canvases.clone())
     }
 
-    /// Replace the multi-canvas tab state and persist (#58).
+    /// Replace the multi-canvas tab state and persist (#58). The command surface
+    /// moved onto [`Self::merge_canvases`] (task 429); the wholesale replace stays
+    /// for tests/back-compat — hence the non-test dead-code allow (the
+    /// [`Self::perm_reprompt_done`] precedent).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_canvases(&self, canvases: serde_json::Value) -> io::Result<()> {
         self.update(|state| state.canvases = canvases)
+    }
+
+    /// Merge a canvases patch over the persisted blob and persist, both under the
+    /// store mutex so two concurrent patch commands cannot interleave a
+    /// read-modify-write — task 429. Returns the merged blob for the post-persist
+    /// `canvas://changed` broadcast. See [`merge_canvases_patch`] for the semantics.
+    pub fn merge_canvases(&self, patch: serde_json::Value) -> io::Result<serde_json::Value> {
+        self.update_with(|state| {
+            merge_canvases_patch(&mut state.canvases, patch);
+            state.canvases.clone()
+        })
     }
 
     /// Saved Canvas templates (#117) — opaque JSON; `null` until first written.
@@ -619,9 +712,23 @@ impl Store {
         self.with(|state| state.settings.clone())
     }
 
-    /// Replace the application settings and persist (#100).
+    /// Replace the application settings and persist (#100). The command surface
+    /// moved onto [`Self::merge_settings`] (task 429); the wholesale replace stays
+    /// for tests/back-compat — hence the non-test dead-code allow.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_settings(&self, settings: serde_json::Value) -> io::Result<()> {
         self.update(|state| state.settings = settings)
+    }
+
+    /// Merge a settings patch over the persisted blob and persist, both under the
+    /// store mutex so two concurrent patch commands cannot interleave a
+    /// read-modify-write — task 429. Returns the merged blob for the post-persist
+    /// `settings://changed` broadcast. See [`merge_settings_patch`] for the semantics.
+    pub fn merge_settings(&self, patch: serde_json::Value) -> io::Result<serde_json::Value> {
+        self.update_with(|state| {
+            merge_settings_patch(&mut state.settings, patch);
+            state.settings.clone()
+        })
     }
 
     /// The persisted sidebar width in px (#108); `None` until first set (the
@@ -696,15 +803,44 @@ impl Store {
         self.update(|state| state.path_cache = Some(cache))
     }
 
+    /// The restorable open-window set (Multi-window task 439); empty until first
+    /// written. Backend-internal — read once at boot by
+    /// `window_state::restore_windows`, written by its debounced saver; never
+    /// exposed as a Tauri command (the `path_cache` precedent).
+    pub fn window_state(&self) -> Vec<PersistedWindow> {
+        self.with(|state| state.window_state.clone())
+    }
+
+    /// Replace + persist the restorable open-window set (task 439). Written by the
+    /// `window_state` saver only when the snapshot actually changed.
+    pub fn set_window_state(&self, windows: Vec<PersistedWindow>) -> io::Result<()> {
+        self.update(|state| state.window_state = windows)
+    }
+
     /// The per-repo diff "seen" markers (#278) — opaque JSON; `null` until first
     /// written (the frontend owns the `{ repoPath: { filePath: digest } }` shape).
     pub fn diff_seen(&self) -> serde_json::Value {
         self.with(|state| state.diff_seen.clone())
     }
 
-    /// Replace the per-repo diff "seen" markers and persist (#278).
+    /// Replace the per-repo diff "seen" markers and persist (#278). The command
+    /// surface moved onto [`Self::merge_diff_seen`] (task 429); the wholesale
+    /// replace stays for tests/back-compat — hence the non-test dead-code allow.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_diff_seen(&self, diff_seen: serde_json::Value) -> io::Result<()> {
         self.update(|state| state.diff_seen = diff_seen)
+    }
+
+    /// Merge a diff-seen patch over the persisted map and persist, both under the
+    /// store mutex so two concurrent patch commands cannot interleave a
+    /// read-modify-write — task 429. Returns the merged map for the post-persist
+    /// `diff_seen://changed` broadcast. See [`merge_diff_seen_patch`] for the
+    /// tombstone semantics.
+    pub fn merge_diff_seen(&self, patch: serde_json::Value) -> io::Result<serde_json::Value> {
+        self.update_with(|state| {
+            merge_diff_seen_patch(&mut state.diff_seen, patch);
+            state.diff_seen.clone()
+        })
     }
 
     /// All pending scheduled sessions (#93).
@@ -861,12 +997,22 @@ impl Store {
     }
 
     fn update(&self, mutate: impl FnOnce(&mut PersistedState)) -> io::Result<()> {
+        self.update_with(mutate)
+    }
+
+    /// Mutate-then-persist under a **single** mutex hold, returning the mutator's
+    /// value — the primitive behind the task-429 patch merges (`merge_settings` /
+    /// `merge_diff_seen` / `merge_canvases`): because the read, the merge, and the
+    /// write all happen under one lock, two concurrent patch commands can never
+    /// interleave a read-modify-write and lose one side's fields.
+    fn update_with<R>(&self, mutate: impl FnOnce(&mut PersistedState) -> R) -> io::Result<R> {
         let mut guard = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        mutate(&mut guard);
-        self.persist(&guard)
+        let out = mutate(&mut guard);
+        self.persist(&guard)?;
+        Ok(out)
     }
 
     fn persist(&self, state: &PersistedState) -> io::Result<()> {
@@ -903,6 +1049,131 @@ impl Store {
     }
 }
 
+// --- Server-side patch merges (task 429) -----------------------------------------
+//
+// The settings / canvases / diff-seen slices used to be whole-blob replaces computed
+// from possibly-stale frontend state: window B saving its copy of a blob silently
+// reverted whatever window A had changed since B last read it (the lost-update
+// class). The frontend now sends only what it changed — a *patch* — and these pure
+// helpers merge it over the current persisted value; `Store::merge_*` runs each
+// merge + persist under ONE mutex hold (`update_with`), so writes to different keys
+// can never collide. Concurrent writes to the *same* key stay last-write-wins by
+// design. Pure JSON logic — platform-neutral on macOS, Windows, and Linux.
+
+/// Shallow top-level merge of a settings patch (task 429): every key present in the
+/// patch is written **verbatim** — an explicit `null` value is *stored* (e.g.
+/// `preferredEditor: null` is a legitimate value), never treated as a delete, and a
+/// nested object (like `keybinds`) travels whole and replaces whole. Keys absent
+/// from the patch are untouched — which also means a settings key can no longer be
+/// deleted; nothing deletes settings keys today, and the frontend's
+/// `mergeSettings`-over-defaults makes a stale key inert (accepted trade-off).
+/// A `null`/non-object current blob starts from `{}` (the first-ever save); a
+/// non-object patch is a defensive no-op.
+pub(crate) fn merge_settings_patch(current: &mut serde_json::Value, patch: serde_json::Value) {
+    let serde_json::Value::Object(patch) = patch else {
+        return;
+    };
+    if !current.is_object() {
+        *current = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let blob = current.as_object_mut().expect("ensured object above");
+    for (key, value) in patch {
+        blob.insert(key, value);
+    }
+}
+
+/// Two-level per-key merge of a diff-seen patch (task 429) with `null` tombstones:
+/// `{repo: {file: "digest"}}` sets one entry, `{repo: {file: null}}` deletes that
+/// entry, `{repo: null}` deletes the whole repo key, and a repo object left empty
+/// after deletes is pruned (mirroring the frontend's empty-repo drop). A
+/// `null`/non-object current map starts from `{}`; a non-object patch (or a repo
+/// value that is neither object nor `null`) is a defensive no-op.
+pub(crate) fn merge_diff_seen_patch(current: &mut serde_json::Value, patch: serde_json::Value) {
+    let serde_json::Value::Object(patch) = patch else {
+        return;
+    };
+    if !current.is_object() {
+        *current = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let map = current.as_object_mut().expect("ensured object above");
+    for (repo, value) in patch {
+        match value {
+            serde_json::Value::Null => {
+                map.remove(&repo);
+            }
+            serde_json::Value::Object(files) => {
+                let entry = map
+                    .entry(repo.clone())
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if !entry.is_object() {
+                    *entry = serde_json::Value::Object(serde_json::Map::new());
+                }
+                let repo_map = entry.as_object_mut().expect("ensured object above");
+                for (file, digest) in files {
+                    if digest.is_null() {
+                        repo_map.remove(&file);
+                    } else {
+                        repo_map.insert(file, digest);
+                    }
+                }
+                if repo_map.is_empty() {
+                    map.remove(&repo);
+                }
+            }
+            _ => {} // defensive: neither an object nor a tombstone — skip
+        }
+    }
+}
+
+/// Field-wise merge of a canvases patch (task 429), label-independent: `canvases`
+/// (the whole tab array — per-tab merging is deliberately out of scope, the #84
+/// last-write-wins semantics) and `activeId` (the boot hint) each replace the stored
+/// value only when present in the patch, so a tab switch (`{activeId}`) and a layout
+/// edit (`{canvases}`) from two windows can no longer clobber each other. Afterwards
+/// the blob is validated: with a missing/empty tab array the `activeId` hint is
+/// dropped (meaningless), and an `activeId` naming no tab re-homes to the first
+/// tab's id (the `applyCanvasSync` rule, applied to the persisted hint). A
+/// `null`/non-object current blob starts from `{}`; a non-object patch is a
+/// defensive no-op.
+pub(crate) fn merge_canvases_patch(current: &mut serde_json::Value, patch: serde_json::Value) {
+    let serde_json::Value::Object(mut patch) = patch else {
+        return;
+    };
+    if !current.is_object() {
+        *current = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let blob = current.as_object_mut().expect("ensured object above");
+    if let Some(canvases) = patch.remove("canvases") {
+        blob.insert("canvases".to_string(), canvases);
+    }
+    if let Some(active) = patch.remove("activeId") {
+        blob.insert("activeId".to_string(), active);
+    }
+    let ids: Vec<String> = blob
+        .get("canvases")
+        .and_then(|c| c.as_array())
+        .map(|tabs| {
+            tabs.iter()
+                .filter_map(|t| t.get("id").and_then(|i| i.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if ids.is_empty() {
+        blob.remove("activeId");
+        return;
+    }
+    let active_ok = blob
+        .get("activeId")
+        .and_then(|a| a.as_str())
+        .is_some_and(|a| ids.iter().any(|id| id == a));
+    if !active_ok {
+        blob.insert(
+            "activeId".to_string(),
+            serde_json::Value::String(ids[0].clone()),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -922,6 +1193,8 @@ mod tests {
             forkable: true,
             auto_continue_disabled: false,
             watch: false,
+            container_image: None,
+            current_cwd: None,
         }
     }
 
@@ -966,6 +1239,63 @@ mod tests {
         let reloaded = Store::load(&path);
         assert_eq!(reloaded.sessions(), store.sessions());
         assert_eq!(reloaded.recents(), vec!["/repo/a".to_string()]);
+        let _ = fs::remove_file(&path);
+    }
+
+    /// Dev-container sessions: `container_image` round-trips, defaults to `None` on a
+    /// record written before the field existed, and `None` is skipped on write (the
+    /// `worktree_parent` serde shape) so old ReCue builds keep loading the file.
+    #[test]
+    fn container_image_round_trips_and_defaults_none() {
+        // A pre-container JSON record (no field) deserializes to None.
+        let legacy: PersistedSession = serde_json::from_str(
+            r#"{"id":"a","claude_session_id":"a","repo_path":"/r","name":null,"created_at":0}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.container_image, None);
+
+        // None is skipped on serialize; Some round-trips through disk.
+        let plain = serde_json::to_string(&record("a", "/repo/a")).unwrap();
+        assert!(!plain.contains("container_image"));
+        let mut containerized = record("c", "/repo/c");
+        containerized.container_image = Some("recue-agent:latest".into());
+        let path = temp_path("container-image");
+        let store = Store::load(&path);
+        store.add_session(containerized).unwrap();
+        let reloaded = Store::load(&path);
+        assert_eq!(
+            reloaded.session("c").unwrap().container_image.as_deref(),
+            Some("recue-agent:latest")
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    /// The agent-relocation `current_cwd` shares the `container_image` serde shape:
+    /// absent on old records (→ `None`), skipped on write while unset, and
+    /// `set_current_cwd` persists on change only.
+    #[test]
+    fn current_cwd_defaults_none_and_persists_on_change() {
+        let legacy: PersistedSession = serde_json::from_str(
+            r#"{"id":"a","claude_session_id":"a","repo_path":"/r","name":null,"created_at":0}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.current_cwd, None);
+        let plain = serde_json::to_string(&record("a", "/repo/a")).unwrap();
+        assert!(!plain.contains("current_cwd"));
+
+        let path = temp_path("current-cwd");
+        let store = Store::load(&path);
+        store.add_session(record("a", "/repo/a")).unwrap();
+        store
+            .set_current_cwd("a", Some("/repo/a/.claude/worktrees/x".into()))
+            .unwrap();
+        let reloaded = Store::load(&path);
+        assert_eq!(
+            reloaded.session("a").unwrap().current_cwd.as_deref(),
+            Some("/repo/a/.claude/worktrees/x")
+        );
+        // Unknown id → no-op, no error.
+        store.set_current_cwd("ghost", Some("/x".into())).unwrap();
         let _ = fs::remove_file(&path);
     }
 
@@ -1093,6 +1423,60 @@ mod tests {
     }
 
     #[test]
+    fn window_state_set_and_persist() {
+        let path = temp_path("windowstate");
+        let store = Store::load(&path);
+        // Unset until the window registry first writes (task 439). A pre-439 file
+        // (no `window_state` key) loads the same way.
+        assert!(store.window_state().is_empty());
+        let legacy: PersistedState =
+            serde_json::from_str(r#"{"sessions":[],"recents":[]}"#).expect("legacy state loads");
+        assert!(legacy.window_state.is_empty());
+
+        // A pre-443 window entry (no `maximized` key) deserializes to `false` (task
+        // 443's serde-default backward compatibility).
+        let pre443: PersistedWindow =
+            serde_json::from_str(r#"{"label":"main","x":0,"y":0,"width":1280,"height":832}"#)
+                .expect("pre-443 window entry loads");
+        assert!(!pre443.maximized);
+
+        let windows = vec![
+            PersistedWindow {
+                label: "main".to_string(),
+                x: 40,
+                y: 60,
+                width: 1280,
+                height: 832,
+                maximized: true, // task 443: the maximized flag round-trips
+                repo: None,
+                canvas: None,
+            },
+            PersistedWindow {
+                label: "app-1".to_string(),
+                x: -1920, // a negative-origin second monitor is a legal position
+                y: 0,
+                width: 900,
+                height: 700,
+                maximized: false,
+                repo: Some("/repo/a".to_string()),
+                canvas: Some("c1".to_string()),
+            },
+        ];
+        store.set_window_state(windows.clone()).unwrap();
+
+        let reloaded = Store::load(&path);
+        assert_eq!(reloaded.window_state(), windows);
+        // The maximized flag survives the save→load round-trip.
+        assert!(reloaded.window_state()[0].maximized);
+        assert!(!reloaded.window_state()[1].maximized);
+
+        // An empty set persists as empty (not serialized) and reloads empty.
+        store.set_window_state(vec![]).unwrap();
+        assert!(Store::load(&path).window_state().is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn diff_seen_set_and_persist() {
         let path = temp_path("diffseen");
         let store = Store::load(&path);
@@ -1160,6 +1544,173 @@ mod tests {
         });
         store.set_canvases(tabs.clone()).unwrap();
         assert_eq!(Store::load(&path).canvases(), tabs);
+        let _ = fs::remove_file(&path);
+    }
+
+    // --- Server-side patch merges (task 429) ---
+
+    #[test]
+    fn merge_settings_two_stale_writers_both_survive() {
+        // The lost-update regression: two senders that each know nothing of the
+        // other's key patch sequentially — both keys land in the blob.
+        let path = temp_path("mergesettings");
+        let store = Store::load(&path);
+        assert!(store.settings().is_null()); // merge over the null first-write blob
+        store.merge_settings(serde_json::json!({ "a": 1 })).unwrap();
+        let merged = store.merge_settings(serde_json::json!({ "b": 2 })).unwrap();
+        assert_eq!(merged, serde_json::json!({ "a": 1, "b": 2 }));
+        // The merged result persists across a reload.
+        assert_eq!(
+            Store::load(&path).settings(),
+            serde_json::json!({ "a": 1, "b": 2 })
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn merge_settings_patch_semantics() {
+        // Explicit null is stored verbatim (a legitimate value, never a delete).
+        let mut current = serde_json::json!({ "preferredEditor": "zed", "theme": "dark" });
+        merge_settings_patch(&mut current, serde_json::json!({ "preferredEditor": null }));
+        assert_eq!(
+            current,
+            serde_json::json!({ "preferredEditor": null, "theme": "dark" })
+        );
+
+        // A nested object (keybinds) travels whole and replaces whole.
+        let mut current = serde_json::json!({ "keybinds": { "a": "Mod+1", "b": "Mod+2" } });
+        merge_settings_patch(
+            &mut current,
+            serde_json::json!({ "keybinds": { "c": "Mod+3" } }),
+        );
+        assert_eq!(current, serde_json::json!({ "keybinds": { "c": "Mod+3" } }));
+
+        // A non-object patch is a defensive no-op.
+        let mut current = serde_json::json!({ "theme": "dark" });
+        merge_settings_patch(&mut current, serde_json::Value::Null);
+        merge_settings_patch(&mut current, serde_json::json!([1, 2]));
+        assert_eq!(current, serde_json::json!({ "theme": "dark" }));
+    }
+
+    #[test]
+    fn merge_diff_seen_two_stale_writers_both_survive() {
+        let path = temp_path("mergediffseen");
+        let store = Store::load(&path);
+        store
+            .merge_diff_seen(serde_json::json!({ "r": { "x": "d1" } }))
+            .unwrap();
+        let merged = store
+            .merge_diff_seen(serde_json::json!({ "r": { "y": "d2" } }))
+            .unwrap();
+        assert_eq!(merged, serde_json::json!({ "r": { "x": "d1", "y": "d2" } }));
+        assert_eq!(
+            Store::load(&path).diff_seen(),
+            serde_json::json!({ "r": { "x": "d1", "y": "d2" } })
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn merge_diff_seen_patch_tombstones() {
+        // A file tombstone deletes that entry only.
+        let mut current = serde_json::json!({ "r": { "x": "d1", "y": "d2" } });
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": { "x": null } }));
+        assert_eq!(current, serde_json::json!({ "r": { "y": "d2" } }));
+
+        // A repo emptied by tombstones is pruned.
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": { "y": null } }));
+        assert_eq!(current, serde_json::json!({}));
+
+        // A repo-level tombstone removes the whole repo key.
+        let mut current = serde_json::json!({ "r": { "x": "d1" }, "s": { "z": "d3" } });
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": null }));
+        assert_eq!(current, serde_json::json!({ "s": { "z": "d3" } }));
+
+        // A non-object patch is a defensive no-op.
+        merge_diff_seen_patch(&mut current, serde_json::json!("nope"));
+        assert_eq!(current, serde_json::json!({ "s": { "z": "d3" } }));
+    }
+
+    #[test]
+    fn merge_canvases_field_wise() {
+        let tabs = serde_json::json!([
+            { "id": "c1", "name": "Canvas 1", "layout": null },
+            { "id": "c2", "name": "Canvas 2", "layout": null }
+        ]);
+
+        // A canvases-only patch keeps the stored activeId (the tab-switch survives).
+        let mut current = serde_json::json!({ "canvases": [{ "id": "c1" }], "activeId": "c1" });
+        merge_canvases_patch(
+            &mut current,
+            serde_json::json!({ "canvases": tabs.clone() }),
+        );
+        assert_eq!(
+            current,
+            serde_json::json!({ "canvases": tabs.clone(), "activeId": "c1" })
+        );
+
+        // An activeId-only patch keeps the stored tab array (the layout edit survives).
+        merge_canvases_patch(&mut current, serde_json::json!({ "activeId": "c2" }));
+        assert_eq!(
+            current,
+            serde_json::json!({ "canvases": tabs.clone(), "activeId": "c2" })
+        );
+
+        // An activeId naming a vanished tab re-homes to the first tab's id.
+        merge_canvases_patch(
+            &mut current,
+            serde_json::json!({ "canvases": [{ "id": "c3", "name": "Canvas 3", "layout": null }] }),
+        );
+        assert_eq!(
+            current,
+            serde_json::json!({
+                "canvases": [{ "id": "c3", "name": "Canvas 3", "layout": null }],
+                "activeId": "c3"
+            })
+        );
+    }
+
+    #[test]
+    fn merge_canvases_first_write_and_empty_guard() {
+        let path = temp_path("mergecanvases");
+        let store = Store::load(&path);
+        assert!(store.canvases().is_null());
+
+        // An activeId-only write against a blob with no tab array drops the hint
+        // (a boot hint with no tabs is meaningless).
+        let merged = store
+            .merge_canvases(serde_json::json!({ "activeId": "c1" }))
+            .unwrap();
+        assert_eq!(merged, serde_json::json!({}));
+
+        // First real write over the (now empty-object) blob with both fields.
+        let merged = store
+            .merge_canvases(serde_json::json!({
+                "canvases": [{ "id": "c1", "name": "Canvas 1", "layout": null }],
+                "activeId": "c1"
+            }))
+            .unwrap();
+        assert_eq!(
+            merged,
+            serde_json::json!({
+                "canvases": [{ "id": "c1", "name": "Canvas 1", "layout": null }],
+                "activeId": "c1"
+            })
+        );
+        assert_eq!(Store::load(&path).canvases(), merged);
+
+        // An empty tab array also drops the hint.
+        let mut current = serde_json::json!({ "canvases": [{ "id": "c1" }], "activeId": "c1" });
+        merge_canvases_patch(&mut current, serde_json::json!({ "canvases": [] }));
+        assert_eq!(current, serde_json::json!({ "canvases": [] }));
+
+        // A non-object patch is a defensive no-op.
+        let mut current = serde_json::json!({ "canvases": [{ "id": "c1" }], "activeId": "c1" });
+        merge_canvases_patch(&mut current, serde_json::Value::Null);
+        assert_eq!(
+            current,
+            serde_json::json!({ "canvases": [{ "id": "c1" }], "activeId": "c1" })
+        );
         let _ = fs::remove_file(&path);
     }
 
@@ -1580,5 +2131,99 @@ mod tests {
         let ids: Vec<_> = reloaded.sessions().iter().map(|s| s.id.clone()).collect();
         assert_eq!(ids, vec!["s2".to_string()]);
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_auto_name_sets_clears_and_ignores_unknown_ids() {
+        let path = temp_path("autoname");
+        let store = Store::load(&path);
+        store.add_session(record("s1", "/repo/x")).unwrap();
+        // Defaults to no auto title.
+        assert_eq!(store.session("s1").unwrap().auto_name, None);
+
+        // Setting claude's own title persists (survives a reload) and never
+        // touches the user's custom `name`.
+        store
+            .set_auto_name("s1", Some("Fix the flaky test".to_string()))
+            .unwrap();
+        let reloaded = Store::load(&path).session("s1").unwrap();
+        assert_eq!(reloaded.auto_name.as_deref(), Some("Fix the flaky test"));
+        assert_eq!(reloaded.name, None);
+
+        // Clearing reverts to None and persists too.
+        store.set_auto_name("s1", None).unwrap();
+        assert_eq!(Store::load(&path).session("s1").unwrap().auto_name, None);
+
+        // An unknown id is a no-op (no panic, no error).
+        store.set_auto_name("missing", Some("x".into())).unwrap();
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn clear_recents_empties_the_list_and_keeps_sessions() {
+        let path = temp_path("clearrecents");
+        let store = Store::load(&path);
+        store.add_session(record("s1", "/repo/x")).unwrap();
+        store.touch_recent("/repo/a").unwrap();
+        store.touch_recent("/repo/b").unwrap();
+
+        store.clear_recents().unwrap();
+        assert!(store.recents().is_empty());
+        // The wipe persists, and sessions are untouched.
+        let reloaded = Store::load(&path);
+        assert!(reloaded.recents().is_empty());
+        assert_eq!(reloaded.sessions().len(), 1);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn perm_reprompt_done_defaults_false_and_persists_once_set() {
+        let path = temp_path("permreprompt");
+        let store = Store::load(&path);
+        assert!(!store.perm_reprompt_done());
+
+        store.set_perm_reprompt_done().unwrap();
+        assert!(store.perm_reprompt_done());
+        // The one-time flag survives a reload, so the re-prompt never re-runs.
+        assert!(Store::load(&path).perm_reprompt_done());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn persist_surfaces_io_errors_and_cleans_up_its_temp_file() {
+        // (a) The parent "directory" is actually a file → create_dir_all fails and
+        // the update surfaces the error instead of silently dropping the write.
+        let blocker = temp_path("persist-blocker");
+        fs::write(&blocker, "not a directory").unwrap();
+        let store = Store::load(blocker.join("sessions.json"));
+        assert!(store.add_session(record("s1", "/repo/x")).is_err());
+        let _ = fs::remove_file(&blocker);
+
+        // (b) The target path is an existing DIRECTORY → every rename attempt
+        // fails; after the bounded retries the error surfaces and the temp file
+        // is cleaned up (no litter).
+        let mut dir_target = std::env::temp_dir();
+        dir_target.push(format!("recue-store-dirtarget-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir_target);
+        fs::create_dir_all(&dir_target).unwrap();
+        let store = Store::load(&dir_target);
+        assert!(store.add_session(record("s1", "/repo/x")).is_err());
+        assert!(
+            !dir_target.with_extension("tmp").exists(),
+            "a failed persist leaves no .tmp litter"
+        );
+        let _ = fs::remove_dir_all(&dir_target);
+    }
+
+    #[test]
+    fn merge_diff_seen_patch_recovers_a_corrupt_repo_entry_and_skips_garbage() {
+        // A non-object stored repo value is replaced by the patched object.
+        let mut current = serde_json::json!({ "r": 5 });
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": { "f": "d1" } }));
+        assert_eq!(current, serde_json::json!({ "r": { "f": "d1" } }));
+
+        // A patch repo value that is neither an object nor null is skipped.
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": 42, "s": "junk" }));
+        assert_eq!(current, serde_json::json!({ "r": { "f": "d1" } }));
     }
 }

@@ -1,38 +1,55 @@
+/* First-launch hero (UI v2 §7, task 379) — a transparent centered column
+   sitting directly on the boosted hero wave (task 377). */
 .empty {
   display: flex;
   height: 100%;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-8);
-  padding: var(--space-32);
+  gap: 6px;
   text-align: center;
 }
 
-.title {
-  margin: 0;
+/* "ReCue" wordmark — 700 is reserved for the wordmark (UI v2 §2.3); the soft
+   shadow keeps it readable over the animated strands. */
+.wordmark {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
   color: var(--text-primary);
-  font-size: 15px;
-  font-weight: 500;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.8);
+  margin-bottom: 8px;
 }
 
-.subtitle {
-  margin: 0 0 var(--space-8);
-  color: var(--text-secondary);
-  font-size: var(--fs-meta);
+/* A black glow on Latte crust would read as smudge — use a light halo. */
+:global([data-theme="light"]) .wordmark {
+  text-shadow: 0 2px 24px rgba(239, 241, 245, 0.9);
 }
 
+/* The "Cue" half of the wordmark in the app accent (Peach by default; a custom
+   accent from Settings → Appearance recolors it live via var(--accent)). The
+   inherited font-size/weight/letter-spacing/text-shadow keep it identical to
+   "Re" — only the color differs. */
+.accent {
+  color: var(--accent);
+}
+
+/* ONE compact accent "New session ⌘N" button (28px, demo-exact). The ⌘N span
+   is the 372 `.kbd-hint`/`.kbd-hint-onfill` atom pair (global classes). */
 .button {
-  padding: var(--space-8) var(--space-16);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 12px;
   border: 0;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-btn);
   background: var(--accent);
   color: var(--accent-fg);
   font: inherit;
-  font-size: var(--fs-ui);
-  font-weight: 500;
+  font-size: var(--fs-row);
+  font-weight: 600;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .button:hover {

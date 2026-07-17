@@ -43,11 +43,19 @@ body {
 }
 
 .main {
+  /* Hosts the task-377 wave layer at z -1: position anchors it, isolation keeps
+     its negative z-index inside this stacking context (below all content, above
+     the crust). The background stays — it is the backgroundAnimation-off /
+     pre-engine-load static stage. */
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex: 1;
   flex-direction: column;
   min-width: 0;
-  background: var(--bg-panel);
+  /* Crust stage (UI v2 task 372): the content stage paints --bg-base so the first
+     painted frame matches the native pre-paint color (#348). */
+  background: var(--bg-base);
 }
 
 .main-content {
@@ -56,9 +64,16 @@ body {
   overflow: hidden;
 }
 
+/* Transparent placeholder for a lazy view chunk's Suspense fallback (#398) — the wave
+   background shows through until the chunk lands (a few ms off local disk). */
+.main-content-loading {
+  height: 100%;
+}
+
 /* --- Keyboard focus ring (on-brand, keyboard-only) --- */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-ring-width) solid var(--accent); /* plain fallback */
+  outline-color: var(--focus-ring); /* softened accent */
   outline-offset: 2px;
 }
 

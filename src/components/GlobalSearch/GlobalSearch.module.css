@@ -1,30 +1,19 @@
-/* ⌘F / Ctrl+F global search modal (#337). A centered launcher over a full-window scrim,
-   like the ⌘K Create-panel launcher (#189) — tokens only, so it reskins with the theme
-   and is identical on macOS / Windows. */
+/* ⌘F / Ctrl+F global search modal (#337): the shared modal-scrim/modal-pop chrome
+   (modal.css, task 378), kept top-anchored at 10vh like the ⌘K launcher (#189).
+   This module keeps only z-index, anchoring, width, and the row/result layout. */
 .overlay {
-  position: fixed;
-  inset: 0;
   z-index: 100;
-  display: flex;
   align-items: flex-start;
-  justify-content: center;
   padding-top: 10vh;
-  background: var(--scrim);
 }
 
 .dialog {
   display: flex;
   width: 560px;
-  max-width: calc(100vw - var(--space-32));
   max-height: 74vh;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-window);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
   transform-origin: top center;
-  animation: global-search-in var(--dur-slow) var(--ease-out);
 }
 
 .searchRow {
@@ -59,14 +48,69 @@
   outline: none;
 }
 
-.kbd {
+/* Folder-filter chips (task 397): a wrap row under the search bar. Muted at rest;
+   the active chip lights to the Surface0 selection fill (accent never encodes
+   selection). Token-only, no color-mix — identical on macOS/Windows/Linux. */
+.filterChips {
+  display: flex;
   flex-shrink: 0;
-  padding: 0 var(--space-6);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-chip);
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-16);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-2) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-chrome-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-meta-xs);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.filterChip:hover {
+  color: var(--text-secondary);
+}
+
+.filterChipActive,
+.filterChipActive:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.filterDot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: var(--radius-dot);
+  opacity: 0.5;
+}
+
+.filterChipActive .filterDot {
+  opacity: 1;
+}
+
+.filterName {
+  overflow: hidden;
+  max-width: 140px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filterKbd {
+  flex-shrink: 0;
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-micro);
 }
 
 .results {
@@ -115,13 +159,14 @@
   margin-bottom: var(--space-4);
 }
 
+/* Kind headers — the v2 micro eyebrow (uppercase, muted, .06em). */
 .kindHeader {
   margin: var(--space-4) 0 var(--space-1);
   padding: 0 var(--space-8);
   color: var(--text-muted);
-  font-size: var(--fs-meta-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: var(--fs-micro);
+  font-weight: 400;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -132,7 +177,7 @@
   gap: var(--space-8);
   padding: var(--space-6) var(--space-8);
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -141,8 +186,13 @@
   transition: background var(--dur-fast) var(--ease-out);
 }
 
+.row:hover {
+  background: var(--bg-elevated);
+}
+
+/* Surface0 selection fill (v2 — accent never encodes selection). */
 .rowActive {
-  background: var(--accent-dim);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
@@ -201,13 +251,10 @@
   font-weight: 600;
 }
 
-@keyframes global-search-in {
-  from {
-    opacity: 0;
-    transform: scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+/* Non-interactive overflow indicator under a capped repo group (task 393). */
+.moreHint {
+  margin: 0;
+  padding: var(--space-4) var(--space-8) var(--space-6);
+  color: var(--text-muted);
+  font-size: var(--fs-meta-sm);
 }

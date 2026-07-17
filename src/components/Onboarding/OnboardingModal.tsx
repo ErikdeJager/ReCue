@@ -64,10 +64,10 @@ function OnboardingModal() {
   };
 
   return (
-    <div className={styles.overlay} onClick={dismiss}>
+    <div className={`modal-scrim ${styles.overlay}`} onClick={dismiss}>
       <div
         ref={dialogRef}
-        className={styles.dialog}
+        className={`modal-pop ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-label="Choose your coding agent"
@@ -77,9 +77,8 @@ function OnboardingModal() {
         <header className={styles.header}>
           <h2 className={styles.title}>Choose your coding agent</h2>
           <p className={styles.subtitle}>
-            ReCue can run sessions under different coding-agent CLIs. Pick the
-            one new sessions should use — you can change this anytime in
-            Settings.
+            ReCue found more than one coding agent on your PATH. Pick which one
+            new sessions use — you can change it later in Settings.
           </p>
         </header>
         <div className={styles.choices}>
@@ -91,7 +90,7 @@ function OnboardingModal() {
                 type="button"
                 data-agent={a.id}
                 data-recommended={!untested}
-                className={styles.choice}
+                className={`${styles.choice} ${untested ? "" : styles.choiceRecommended}`}
                 onClick={() => void choose(a.id)}
               >
                 <span className={styles.choiceRow}>

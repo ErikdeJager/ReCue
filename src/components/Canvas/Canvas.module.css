@@ -1,45 +1,50 @@
 /* Canvas view (#46/#47): the split-panel area fills the view; content is dragged
    in from the sidebar via the app-level DnD context. */
+/* Transparent (task 377): the stage container behind it (.main / .window) paints
+   the crust and hosts the wave layer — ONE canvas spans strip + panes. */
 .canvas {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-base);
 }
 
+/* Transparent (task 377): the wave shows through the split separators and the
+   empty drop target; the opaque leaf panels cover it wherever there is content. */
 .area {
   position: relative;
   flex: 1;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: var(--bg-panel);
+  /* Stage inset (UI v2 §8): the panes sit inset on the wave; 0 in dense mode. */
+  padding: var(--stage-pad-canvas);
 }
 
 /* --- Canvas tab strip (#58) --- */
+/* Transparent chrome (UI v2): no height / border / background — the ONE shared
+   wave (task 377, mounted in .main / .window) shows through behind the tabs. */
 .tabStrip {
   display: flex;
-  height: 34px;
   flex-shrink: 0;
   align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-8);
-  border-bottom: 1px solid var(--border-hairline);
-  background: var(--bg-sidebar);
+  gap: 3px;
+  padding: var(--space-6) 10px;
   overflow-x: auto;
 }
 
+/* Inactive tabs are fully transparent ghosts on the wave; the active tab is a
+   base-filled hairline block (UI v2 §8). */
 .tab {
   display: flex;
   height: 24px;
   flex-shrink: 0;
   align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-4) 0 var(--space-8);
+  gap: 5px;
+  padding: 0 var(--space-4) 0 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-chip);
-  background: var(--bg-panel);
-  color: var(--text-secondary);
+  background: transparent;
+  color: var(--text-muted);
   transition:
     background var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
@@ -50,9 +55,13 @@
 }
 
 .tabActive {
-  border-color: var(--border-strong);
-  background: var(--bg-elevated);
+  border-color: var(--border-hairline);
+  background: var(--bg-panel);
   color: var(--text-primary);
+}
+
+.tabActive .tabLabel {
+  font-weight: 600;
 }
 
 .tabDragging {
@@ -85,8 +94,8 @@
 
 .tabClose {
   display: flex;
-  /* Slightly bigger hit area so it's easier to click (#85). 20px is the strip's
-     reference icon-button size — the +/Templates/Distribute buttons match it (#249). */
+  /* Slightly bigger hit area so it's easier to click (#85) — a deliberate
+     deviation from the demo's ~16px mock buttons. */
   width: 20px;
   height: 20px;
   flex-shrink: 0;
@@ -102,33 +111,35 @@
     color var(--dur-fast) var(--ease-out);
 }
 
+/* Hover = color change only (no fill): the ✕ turns red (UI v2 §8). */
 .tabClose:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: none;
+  color: var(--status-error);
 }
 
 .tabAdd {
   display: flex;
-  /* 20px square, matching the per-tab × close button (#249). The + and
+  /* 22px square (UI v2 §8) — the strip's reference aux-button size; the + and
      Distribute buttons are single-icon, so a square is correct; the Templates ▾
      trigger overrides the width via .tabMenuTrigger to fit its two icons. */
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
   border: 0;
   border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-secondary);
+  background: none;
+  color: var(--text-muted);
   cursor: pointer;
   transition:
     background var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
 }
 
+/* Base fill (not Surface0) on hover — these ghost buttons sit on the wave. */
 .tabAdd:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--bg-panel);
   color: var(--text-primary);
 }
 
@@ -137,26 +148,20 @@
   opacity: 0.4;
 }
 
-/* "Distribute evenly" (#186) pushed to the far right of the strip (#205): the
-   auto left margin shoves it (the last child) to the right edge, away from the
-   add/templates cluster. Combined with .tabAdd in the markup for its base styling. */
-.tabDistribute {
-  margin-left: auto;
-}
-
-/* "Templates ▾" trigger (#249): keeps the strip's 20px height (from .tabAdd) but
+/* "Templates ▾" trigger (#249): keeps the strip's 22px height (from .tabAdd) but
    takes its natural width — it carries two icons (the label glyph + the chevron),
-   which a 20px square would clip. A tight horizontal padding + small gap let them
-   breathe; min-width holds the 20px square baseline if the icons ever change. */
+   which a 22px square would clip. A tight horizontal padding + small gap let them
+   breathe; min-width holds the 22px square baseline if the icons ever change. */
 .tabMenuTrigger {
   width: auto;
-  min-width: 20px;
-  gap: var(--space-1);
-  padding: 0 var(--space-2);
+  min-width: 22px;
+  gap: var(--space-2);
+  padding: 0 5px;
 }
 
 /* --- Tab-strip dropdown menus (#117/#205): shared by the "+" (New tab) and
-   "Templates ▾" dropdowns. --- */
+   "Templates ▾" dropdowns. The LOOK comes from the shared menu.css primitive
+   (task 375, `menu-pop`/`menu-item`); these classes keep only positioning. --- */
 .menuWrap {
   position: relative;
   display: flex;
@@ -168,63 +173,27 @@
    which would clip a menu sitting below the 34px strip. `top`/`right` are set
    inline from the button's viewport rect (CanvasTabs.tsx), mirroring the sidebar
    context menu (#31). */
-.menu {
+.menuPos {
   position: fixed;
   z-index: 20;
   display: flex;
-  min-width: 160px;
   flex-direction: column;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
 }
 
-.menuItem {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-8);
-  padding: var(--space-6) var(--space-8);
-  border: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-/* Shortcut hint on a menu item (#206): muted mono, pushed to the right edge. */
-.menuKbd {
-  flex-shrink: 0;
-  color: var(--text-muted);
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-  font-weight: 400;
-}
-
-.menuItem:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-.menuItem:disabled {
-  color: var(--text-muted);
-  cursor: not-allowed;
-}
-
-/* Empty-canvas center drop target. */
+/* Empty-canvas center drop target (UI v2 §8): a centered stack on the wave —
+   icon, title, hint, "New tab" button. The dashed border is transparent at rest
+   (the copy replaces the always-on box) and lights up on drag-over; the node
+   still fills the area, so droppability is unchanged. */
 .center {
   display: flex;
   height: 100%;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  margin: var(--space-16);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-window);
+  gap: 9px;
+  margin: 0;
+  border: 1px dashed transparent;
+  color: var(--text-muted);
   transition:
     border-color var(--dur-fast) var(--ease-out),
     background var(--dur-fast) var(--ease-out);
@@ -235,13 +204,25 @@
   background: var(--accent-dim);
 }
 
+.centerTitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-ui);
+  /* The empty-canvas copy sits on the wave background (task 377). */
+  text-shadow: 0 1px 6px rgba(17, 17, 27, 0.65);
+}
+
 .centerHint {
   margin: 0;
   color: var(--text-muted);
-  font-size: var(--fs-meta);
+  font-size: var(--fs-meta-xs);
+  /* The empty-canvas copy sits on the wave background (task 377). */
+  text-shadow: 0 1px 6px rgba(17, 17, 27, 0.65);
 }
 
 /* --- A leaf panel --- */
+/* Base bg + hairline border, square (UI v2 §8). Terminals paint their own crust
+   via the xterm theme; other panel bodies are re-based by cards 7/8. */
 .panel {
   position: relative;
   display: flex;
@@ -249,14 +230,25 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border-hairline);
-  background: var(--content-bg);
+  /* Folder-color resting tint (task 386): a subtle wash of the owning folder's
+     color over the hairline (full strength only when keyboard-focused). Plain
+     hairline first as the cross-platform color-mix fallback; `--repo-color` is set
+     inline per panel, absent ⇒ `transparent` ⇒ the plain hairline shows through. */
+  border-color: color-mix(
+    in srgb,
+    var(--repo-color, transparent) 30%,
+    var(--border-hairline)
+  );
+  background: var(--bg-panel);
 }
 
-/* The keyboard-focused panel (#76): a subtle accent frame so it's clear which
-   panel Shift+arrows move from and where keystrokes go. */
+/* The keyboard-focused panel (#76): the owning folder's color frame (task 386 —
+   the accent never encodes selection) so it's clear which panel Shift+arrows move
+   from and where keystrokes go. `--repo-color` is set inline per panel; a plain
+   accent fallback keeps a frame even where it's absent. */
 .panelActive {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  border-color: var(--repo-color, var(--accent));
+  box-shadow: inset 0 0 0 1px var(--repo-color, var(--accent));
 }
 
 /* The whole header bar is the drag handle (#144, mirroring Overview #70):
@@ -265,12 +257,14 @@
    pointerdown, and carry a default cursor, so they stay clickable. */
 .panelHeader {
   display: flex;
-  height: 28px;
+  /* FIXED 30px (UI v2 §8): flex-shrink 0 + the ellipsizing title block mean the
+     header never grows — long titles/meta clip instead. */
+  height: 30px;
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-8);
-  padding: 0 var(--space-4) 0 var(--space-8);
+  padding: 0 10px;
   border-bottom: 1px solid var(--border-hairline);
   background: var(--bg-panel);
   cursor: grab;
@@ -302,7 +296,7 @@
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
+  color: var(--surface-1);
   transition: color var(--dur-fast) var(--ease-out);
 }
 
@@ -318,11 +312,12 @@
   cursor: default;
 }
 
+/* Repo dot (non-agent panels): 8px rounded square (UI v2 §8). */
 .panelDot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   flex-shrink: 0;
-  border-radius: var(--radius-dot);
+  border-radius: 3px;
 }
 
 /* `min-width: 0` (and dropping the old `flex-shrink: 0`) lets the title shrink so
@@ -331,8 +326,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-primary);
-  font-size: var(--fs-meta-sm);
-  font-weight: 500;
+  font-size: var(--fs-ui);
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -348,7 +343,7 @@
   background: var(--bg-base);
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-ui);
   font-weight: 500;
 }
 
@@ -356,7 +351,7 @@
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-meta-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -391,8 +386,14 @@
 }
 
 .panelClose:hover:not([aria-disabled="true"]) {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+/* The ✕ close button (UI v2 §8): red text on hover, fill stays Surface0. Same
+   specificity as the base hover rule above — source order makes this win. */
+.panelClose.panelCloseDanger:hover:not([aria-disabled="true"]) {
+  color: var(--status-error);
 }
 
 /* Unavailable Fork (#138): aria-disabled (not native, so the explanatory `title`
@@ -512,15 +513,18 @@
   position: relative;
 }
 
+/* Floating chrome (UI v2 §10, task 383) — the anchored-menu look (Base surface,
+   window radius, menu shadow), like the FileSwitcher popover it mirrors. */
 .pickPopover {
   position: absolute;
   bottom: calc(100% + var(--space-4));
   left: 0;
   z-index: 20;
+  overflow: hidden;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
+  border-radius: var(--radius-window);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-menu);
 }
 
 /* A split group fills its slot (parent area, or an enclosing Panel when nested). */
@@ -530,18 +534,66 @@
 }
 
 /* --- Resize separators (react-resizable-panels) --- */
-/* `flex: 0 0 6px` sizes the main axis (width in a row group, height in a column
-   group) and stretches the cross axis — one rule for both orientations. The
-   library manages the resize cursor itself. */
+/* A transparent --stage-gap (8px; 0 in dense) opens between panels so the wave
+   peeks through, with a centered 1px hairline divider (UI v2 §8). The flex
+   longhands size the main axis (width in a row group, height in a column group)
+   and stretch the cross axis — one rule for both orientations. The library
+   manages the resize cursor itself. */
 .handle {
-  flex: 0 0 6px;
+  position: relative;
+  z-index: 1; /* the invisible hit-area extension paints above panel edges */
+  flex-grow: 0;
+  flex-shrink: 0;
+  /* Longhand — var() in the flex shorthand basis slot is flaky on older WebKit. */
+  flex-basis: var(--stage-gap);
+  background: transparent; /* the wave peeks through the gap */
+}
+
+/* The visible divider: a centered 1px hairline. The library renders
+   role="separator" with aria-orientation="vertical" for a row-group divider
+   and "horizontal" for a column-group one. */
+.handle::before {
+  content: "";
+  position: absolute;
   background: var(--border-hairline);
   transition: background var(--dur-fast) var(--ease-out);
 }
 
-.handle:hover,
-.handle:active {
+.handle[aria-orientation="vertical"]::before {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.handle[aria-orientation="horizontal"]::before {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.handle:hover::before,
+.handle:active::before {
   background: var(--accent);
+}
+
+/* Invisible hit-area extension along the resize axis so dragging still works
+   in dense mode, where --stage-gap is 0 and the element itself has no width. */
+.handle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.handle[aria-orientation="vertical"]::after {
+  inset: 0 -4px;
+}
+
+.handle[aria-orientation="horizontal"]::after {
+  inset: -4px 0;
 }
 
 /* --- Edge split-drop zones (shown only during a drag) --- */
@@ -613,57 +665,10 @@
     color var(--dur-fast) var(--ease-out);
 }
 
+/* Hover = color change only, no fill (UI v2 §8). */
 .tabPopOut:hover {
-  background: var(--bg-hover);
+  background: none;
   color: var(--text-primary);
-}
-
-/* A tab whose canvas is open in its own window: dimmed, with the pop-out (now
-   "focus window") button accented so it reads as the live affordance. */
-.tabDetached .tabLabel {
-  font-style: italic;
-  opacity: 0.8;
-}
-
-.tabDetached .tabPopOut {
-  color: var(--accent);
-}
-
-/* Note shown in a panel / canvas whose PTYs are rendered in another window. */
-.detachedNote {
-  display: flex;
-  height: 100%;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-8);
-}
-
-.detachedText {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--fs-meta);
-}
-
-.detachedBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  font-size: var(--fs-meta);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-
-.detachedBtn:hover {
-  border-color: var(--accent);
-  background: var(--bg-hover);
 }
 
 /* The drag ghost that follows the cursor while a panel is lifted (#155): a compact
@@ -678,7 +683,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover, 0 8px 24px rgb(0 0 0 / 40%));
+  box-shadow: var(--shadow-menu, 0 8px 24px rgb(0 0 0 / 40%));
   color: var(--text-muted);
   cursor: grabbing;
 }

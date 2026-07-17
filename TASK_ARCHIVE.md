@@ -7,17 +7,17 @@ board's `## ARCHIVE` column). Numbers are **global and never reused** — the ne
 greater than the highest used anywhere (board, `PLAN-*.md`, this file).
 
 The **Implemented (completed tasks)** index below is a condensed, one-line-per-task record of
-everything shipped so far — **#1–#310**. Earlier tasks were carried over from the prior pipeline;
-tasks #152–#310 (originally written out as full `### N. [x]` entries) were **condensed into the
-same index style** to keep this file small — their full detail (Description / Subtasks /
-Acceptance / Implementation report) lives in git history and each task's PR. New archived tasks
-are appended (as `## Task <N>` or `### N. [x]` entries) after the index.
+everything shipped so far. **Every completed task is condensed here except the 20 most
+recently-archived** — those are written out in full at the end of this file (Description /
+What shipped / Key files / Dependencies). As new tasks land, the oldest full entries are folded
+up into this index (the same condensation #152–#310 already went through), so only ~20 full
+entries are ever kept — each condensed task's full detail lives in git history and its PR.
 
 ---
 
 ## Project context
 
-**ReCue** — a **macOS and Windows** desktop app (**Rust + Tauri 2 + React/TypeScript**) for
+**ReCue** — a **macOS, Windows, and Linux** desktop app (**Rust + Tauri 2 + React/TypeScript**) for
 running and managing many live coding-agent CLI sessions at once (Claude by default; Codex and
 OpenCode are pluggable, #101/#141): an **Overview** "agent wall" of real terminals, a **Canvas**
 split-panel workspace (with file, **git-diff**, and terminal viewers), and a repo-grouped
@@ -550,6 +550,124 @@ an Overview wall, a Focus view with a git-diff inspector, and a repo-grouped sid
 - #308 Blobless partial clone — added `--filter=blob:none` to the `git.rs` `clone_repo` shell-out for dramatically faster large-repo clones (full history + all refs, lazy blob fetch), deliberately not `--depth`/`--single-branch`; new test `clone_preserves_full_history_not_shallow` guards against a shallow regression.
 - #309 "Enable auto restart on limit reset" prompt button — a new `AutoContinuePrompt` in the sidebar footer above the usage bar (shown only when the Claude limit is reached via shared `isLimitReached`, the setting is off, and a new suppression toggle `promptEnableAutoContinueAtLimit` default true) whose click flips on `autoContinueAfterLimit` (store `enableAutoContinueAfterLimit`) and self-hides.
 - #310 Empty schedule "Launch time" field — changed the `NewSessionModal` on-open reset seed from `DEFAULT_WHEN = "in 5 min"` to `""` for the schedule step (recurring "First run" still seeds `"now"`), revealing the existing placeholder/hint; existing gating already handles the empty field.
+
+**Post-groundwork fixes & features (#311–#344).** Template/Kanban polish, the macOS
+permissions signing fix, the busy-dot flicker fix, usage-bar hardening, Light mode,
+watch notifications & global search.
+
+- #311 Custom tab name in the "New tab from template" modal — an optional "Tab name" field on the folder step; `instantiateTemplate` gained an optional `tabName` (`tabName.trim() || template.name`), so a blank value keeps the template-name fallback byte-for-byte.
+- #312 "Add to .gitignore" in the file-tree row context menu — appends the row's repo-root-relative **anchored** pattern (`/src/foo.ts` for a file, `/build/` for a folder) to the repo-root `.gitignore`, creating it if absent and never duplicating a line already present.
+- #313 Revert the glowing clone progress bar to a plain indeterminate loading bar — CSS-only revert of #307's glow/comet/drop-shadow treatment back to the #299 plain accent stripe on a flat track (still indeterminate, no `aria-valuenow`).
+- #314 Make macOS mic/folder/system-settings permissions actually stick — finished #292: a plain `tauri build` is linker-signed **ad-hoc** (entitlements + Hardened Runtime only applied when a signing identity is set), so `scripts/sign-macos-local.sh` (`npm run build:mac`) does a stable self-signed re-sign so a TCC grant persists.
+- #315 Keep the activity dot blue while a background process is still working — fixed the blue↔yellow flicker: once the busy dot would otherwise oscillate (output bursts spaced >700ms apart), the session goes **sticky** and holds blue on a ~5s window until output is truly quiet (`pty.rs` monitor).
+- #316 Fix the 5-hour usage bar reading a stale/expired OAuth token — recent Claude Code keeps the refreshed token in the **macOS Keychain** but leaves a stale `~/.claude/.credentials.json`; `usage.rs` now falls through to the Keychain when the on-disk token is rejected.
+- #317 Truncate the "New session" button label with an ellipsis on overflow — wrapped the bare label text node and added `min-width:0` to `.newButton`, so a narrow sidebar (#108) ellipsizes the label instead of wrapping or pushing the `+` icon / keyboard hint out.
+- #318 Keyboard shortcuts reference section in Settings — a read-only "Shortcuts" section listing every app keybind, grouped and labelled (later made **editable** by the keybind rework / #373).
+- #319 Confirm before clearing recent folders in Settings — gated Data & About → "Clear recents (N)" behind the app's inline two-click confirm, honoring the `confirmDestructive` setting (#103) like every sibling destructive action.
+- #320 Stop a newly-created agent from scrambling other agents' terminals — the shared-WebGL-glyph-atlas bug: #221's per-creation `clearTextureAtlas()` wiped the atlas **all** pooled xterms share, garbling running agents until a reflow; the clear is now scoped so a new spawn no longer corrupts the others.
+- #321 Sign CI release builds so macOS mic/folder permissions work + persist — `release.yml` now signs releases (self-signed with a stable cert via `scripts/gen-macos-ci-cert.sh`, or Developer-ID sign+notarize with all 7 `APPLE_*` secrets, else ad-hoc), fixing the ad-hoc-CI TCC bug, plus a one-time boot `tccutil reset` so an updater is re-asked once.
+- #322 Remove the redundant header "+" add-card button from Kanban columns — dropped the column-header "+" (a duplicate of the in-column "+ Add card"), both of which called the same `openComposer`.
+- #323 Remove the post-drag focus border on Kanban cards — dnd-kit's `RestoreFocus` re-focused the dropped card leaving a persistent accent outline; scoped the CSS so a just-dropped card no longer wears a focus ring.
+- #324 Git-diff gutter in the file viewer — gave the FileViewer's curated Prism code view a left gutter coloring each line by its working-tree status vs `HEAD` — a green bar (added), a yellow bar (modified), a small red dot at a removal boundary.
+- #325 Custom coding-agent command in Settings — added a fourth **"Custom"** agent to the pluggable system (#101/#141/#142): the user types a program + args in Settings → Sessions and ReCue runs it to start each session, treated like the other non-Claude agents (no resume/fork/auto-name).
+- #326 Setting to disable session-usage display (and auth-token access) — a "Show session usage" toggle in Settings → Sessions (default ON) that, when off, hides the five-hour usage bar **and** stops ReCue ever reading the Claude OAuth token (a privacy option).
+- #327 Open the repo's GitHub page from the sidebar folder menu — a "View on GitHub" item (shown only for a git repo with a GitHub remote) opening the repo page via `open_url`; the URL is resolved ahead of time on a refresh cadence and cached, so the menu still opens instantly.
+- #328 Move the five-hour usage fetch off the main thread — converted the sync `claude_session_usage` command to `async` + `spawn_blocking` (the #316 pattern) so its blocking token read + up-to-8s HTTPS GET no longer freeze the webview main thread.
+- #329 DiffInspector accordion cards — enforce a readable min-width and scroll on overflow — added a `min-width` + inner overflow scroll so a many-file diff in a narrow Canvas split / Overview column no longer crushes its cards unreadably (a flexbox `min-width:auto` fix).
+- #330 Load diff-viewer and file-tree git reads off the webview thread — moved the DiffInspector's ~1.5s working-tree diff read + hunk parse (and the file-tree status read) to `async` + `spawn_blocking`, so a large working tree no longer stutters the UI on each refresh.
+- #331 "New session here" on a worktree agent nests under the existing worktree — the worktree `OpenViewButton`'s "New session here" now adds the agent inside that worktree's existing nested sub-group (under the parent repo) instead of registering the app-managed worktree dir as a stray top-level folder.
+- #332 Esc-to-cancel in session modals must not exit macOS fullscreen — the New/Schedule/Recurring and template modals now consume the Esc keydown so it cancels the modal only, instead of leaking up the responder chain and popping the window out of native fullscreen.
+- #333 Light mode theme option in Settings (Catppuccin Latte) — a Dark/Light segmented control in Settings → Appearance reskins the UI with a Catppuccin **Latte** palette (default stays Dark/Mocha, byte-for-byte); persists across restart + detached canvas windows, terminal stays dark.
+- #334 Clear the Overview folder filter when selecting an agent it would hide — clicking a sidebar agent row in a folder the active Overview filter would hide now auto-clears the filter, so the agent is actually shown/selected instead of silently disappearing.
+- #335 Per-agent added/removed line counts in the sidebar — each agent row shows a compact green **+N** / red **−N** of lines changed vs `HEAD`, computed off-thread (batched `async` command, the #330 pattern) on the existing refresh cadence.
+- #336 Per-agent "watch" notifications — a per-agent, opt-in **watch** flag (from the sidebar context menu + a header button) that fires a native OS notification the moment a watched agent's turn ends (busy→idle); off by default, with a global gate.
+- #337 Global search modal (⌘F / Ctrl+F) — a `GlobalSearch` modal searching across every open folder: agents, terminals, file/diff/kanban panels, schedules/recurrings, files on disk (name + content), and best-effort live agent terminal output, ranked and grouped by relevance.
+- #338 Branch ahead/behind indicator (↑/↓ vs upstream) in the sidebar — a compact `↑N ↓M` next to each folder's current-branch label (repo branch line + worktree headers) showing how far the checked-out branch has diverged from its upstream.
+- #339 Enter key submits the "New tab from template" modal — plain Enter advances template→folder step and launches on the folder step, so template → folder → launch works keyboard-only.
+- #340 Consolidate agent header actions into a "…" menu — folded Fork / Copy resume / Watch (#336) out of always-visible icon buttons into one shared `AgentHeaderMenu` (`MoreHorizontal`) dropdown on the Overview card / Canvas panel header.
+- #341 Kanban card editor: auto-continue `-` bullet lists on Shift+Enter — Shift+Enter on a `-` (or `- [ ]`/`- [x]`) bullet inserts a fresh `- ` prefix; on an empty bullet it terminates the list.
+- #342 Note that Dark mode is the recommended theme in Settings → Appearance — a muted helper line under the Dark/Light toggle (pure copy, no behavior; later restyled as a yellow caution by #396).
+- #343 Fix and polish Light-mode theming — made the #333 Light theme actually usable (readable text, light content surfaces, a darker accent, a light busy sheen instead of a black band), token-first, with the Dark theme byte-for-byte unchanged.
+- #344 Sidebar agent rows: overlap diff-line counts and the × in one hover-swapped trailing slot — the #335 +N/−N counts and the #57 × now share one trailing slot (counts at rest, × fading in over the same spot on hover) with zero layout shift.
+
+**Linux support, performance & boot optimizations (#345–#365).** The Linux port,
+the WebKitGTK/AppImage fixes, and a sweep of startup/boot performance work.
+
+- #345 Linux support (Arch/Ubuntu/Mint fully, best-effort others) — ReCue now builds/tests/runs on Linux: split the macOS-assuming `cfg(unix)` arms into a Linux leg (`xdg-open` open/reveal + FreeDesktop D-Bus file reveal, `$SHELL` shell fallback, Ctrl-form kbd hints / "Reveal in File Manager"), plus a ubuntu-22.04 AppImage CI leg; macOS/Windows unchanged.
+- #346 Linux performance pass — four compounding causes of "slow on Arch": the WebKitGTK **DMA-BUF** env workaround (`linux_webkit.rs`), a software-WebGL → **DOM-renderer** fallback for the terminal, **coalesced** output emits, and **base64** scrollback replay; Linux-gated ones cfg-gated, the neutral ones order/content-preserving.
+- #347 Fix the DMA-BUF workaround misfiring on hybrid Intel+NVIDIA GPUs — #346 disabled DMA-BUF on the mere *presence* of the NVIDIA kernel module, forcing CPU rendering on a hybrid laptop that actually renders on the healthy Mesa iGPU; replaced with GPU-aware `decide_dmabuf` (disable only when the NVIDIA blob is the sole/PRIME renderer or a Mesa-less VM).
+- #348 Eliminate the white startup flash — hidden-until-painted windows with a themed pre-paint background: `visible:false` + a themed native `backgroundColor`, an inline-styled `index.html` reading the `recue.theme` localStorage mirror, and a Rust `reveal_window` shown on first paint (with a 2s fallback).
+- #349 Linux: native file dialogs follow ReCue's own theme — the AppImage's forced `GTK_THEME=Adwaita:light` made every native dialog blinding white; `linux_gtk.rs` now sets the GTK dialog theme from ReCue's own Dark/Light theme (read pre-GTK-init via `early_settings`).
+- #350 Scrub the AppImage-injected environment from every child process — `child_env.rs`: a value-based scrub stripping `$APPDIR`-owned PATH/lib segments + the AppRun marker/forced vars (`APPDIR`, `GTK_THEME`, `GDK_BACKEND`, …) from every spawned child (PTY + git/xdg-open probes), armed only under an AppImage so macOS/Windows/non-AppImage Linux stay byte-for-byte unchanged.
+- #351 Lazy-mount Overview terminals — a pooled xterm is created on **first visibility** (a latching `IntersectionObserver` rooted at the wall) rather than at boot, with a bounded FIFO scrollback-replay queue, so an Overview wall of N resumed agents no longer builds N xterms/WebGL contexts up front (the dominant boot cost, worst on WebKitGTK).
+- #352 Batch the boot IPC waterfall — replaced `init()`'s 34-invoke / 22-sequential-wave waterfall with one aggregated `boot_state` command + parallel event-listener registration + a no-flash loading gate, cutting the evaluate-JS round-trips gating first render.
+- #353 Move straggler sync Tauri commands off the webview main thread — converted the blocking PTY spawn/kill/scrollback family, agent `--version` probes, and git writes from `pub fn` to `async`, so the window no longer freezes while they run.
+- #354 Fast, reliable session exit — kill the PTY **process group** (`killpg` SIGHUP → grace → SIGKILL) and derive `Exited` from a per-session child-**wait** thread, not the reader's EOF (a PTY master only EOFs once every inherited slave-fd holder is gone), so an exited agent's card no longer lingers for seconds; Windows unchanged.
+- #355 Bounded-parallel boot resume + a one-shot claude project-log index — replaced strictly-serial boot resume (each session re-walking `~/.claude/projects` for forkability) with a 4-wide worker pool over one shared, one-time project-log index.
+- #356 Code-split the frontend bundle — split the single 1,351 kB chunk with dynamic `import()` boundaries: the two window routes, the four content panels (carrying react-markdown + Prism out of first paint), eleven modals, the xterm WebGL addon, and mermaid — first paint down to 854 kB raw / 246 kB gzip, guarded by `bundle-report.mjs --check`.
+- #357 Settings → Rendering (Linux-only) — DMA-BUF + terminal-renderer overrides (auto/on/off, auto/webgl/dom) with a boot-decision **Diagnostics** readout, filling #347's tri-state seam: DMA-BUF via a persisted setting read pre-`tauri::Builder` (`early_settings`, applied next launch), the terminal renderer applied **live** (`applyTerminalRenderer`).
+- #358 Tune `[profile.release]` — added Tauri's size profile (fat `lto`, `codegen-units=1`, `strip=true`, `opt-level="s"`) so the binary/AppImage squashfs is materially smaller, deliberately keeping `panic="unwind"` so a panic in a worker thread kills only that thread, not the whole app.
+- #359 Tame the boot git storm — tiered, scoped, and coalesced the sidebar's five-git-reads-per-repo boot volley (which re-fired **unscoped** on every busy→idle edge and read up to 2000 untracked files per repo just to count diff lines).
+- #360 Take the login-shell PATH probe off the startup critical path — the `$SHELL -ilc` PATH probe (up to 3s) now resolves **concurrently** with window creation and publishes into a `path_env` cell the spawn seams read, with a fingerprinted rc-mtime cache so a steady-state boot pays zero probe cost; the process env is never mutated.
+- #361 Ship a native Arch/AUR package (`recue-bin`) + Linux install docs — an in-repo AUR PKGBUILD that repacks the release `.deb` against the **system** webkit2gtk (no bundled userland, no FUSE, no AppRun forcing); a runtime `install_kind()` probe gates the in-app updater off for distro-managed (`"system"`) installs.
+- #362 Fix the Linux `StartupWMClass` mismatch — pin the app's WM_CLASS/`app_id` to an owned `recue` (`linux_desktop.rs` `glib::set_prgname`) so icon/taskbar grouping works, plus a consented, reversible `install-linux-desktop.sh` (ReCue never installs a desktop file itself).
+- #363 Give the UI font a Linux leg — bundle **Inter Variable** (latin) applied Linux-only, since the `--ui` system stack falls through to a worse distro default on Linux (superseded by UI v2 / #372, which uses JetBrains Mono as `--ui` on every OS).
+- #364 Recover from an unrecovered xterm WebGL context loss — on an unrecovered `onContextLoss`, clear the pool's dangling addon reference + dispose the addon (xterm swaps to the DOM renderer, same buffer, no host remount/replay) and **latch** the window so no terminal re-attaches WebGL for the rest of the run.
+- #365 Walk the Linux real-box verification checklist on Arch/Hyprland — an evidence-backed pass over every "needs real-box verification" box in `TRAJECTORY_TO_LINUX.md`, run on a hybrid Intel+NVIDIA Arch/Hyprland box; the deliverable is honest ticks + recorded findings (nothing fixed).
+
+**Display scaling, focus-follows-mouse & usage viewer (#366–#371).**
+
+- #366 Settings → Appearance: display-size slider (UI scaling) — a "Display size" slider scaling the whole UI up/down like browser-zoom, starting at 100% (normal).
+- #367 Default terminal line height to 1.0 — changed the Settings → Terminal line-height default 1.2→1.0 with a **one-time migration** of the persisted old default (a stored value would otherwise win over the new default).
+- #368 Focus-follows-mouse — an opt-in "focus follows mouse" (sloppy focus) mode: hovering a terminal panel focuses it so keystrokes land without a click; off by default.
+- #369 Unique repo colors first — a newly-added folder now takes a palette color **not already used** by another folder (instead of a path-hash that frequently collided), repeating only once every color is in use; existing folders grandfathered.
+- #370 Expandable "all usage" viewer in the sidebar — a collapsed-by-default disclosure below the 5-hour usage bar that expands to list **every** usage window the API reports (5-hour, weekly, …), each with its own percent / mini bar / countdown; adaptive to whatever buckets the API returns.
+- #371 Focus-on-hover moves the selection border — extends #368: with it on, hovering any Overview card / Canvas panel moves the selection border there, and entering a no-input panel (diff/file/kanban/…) blurs the previously focused agent xterm.
+
+**UI v2 reskin epic (#372–#383).** A 12-card reskin onto the v2 design language (spec
+`docs/ui-v2-handoff/DESIGN-SPEC.md` + `ReCue-v2-demo.html` reference demo — demo wins;
+ships as v2.0.0 after card 12, no per-card version bump / patch notes).
+
+- #372 UI v2 (1/12): Design foundation — v2 tokens (crust stage, square corners, mono type scale), **JetBrains Mono as `--ui`** everywhere, the pre-paint background invariant, and the shared UI atoms (atoms/menu/modal CSS); every later card consumes this.
+- #373 UI v2 (2/12): Settings rework — reskins the Settings modal onto the §10 look, completes an **editable** Shortcuts section (⌘F/⌘D), ships dense panels end-to-end (⌘D), and the new v2 settings.
+- #374 UI v2 (4/12): Sidebar reskin — the top action cluster, §5 tree metrics, footer (update pill + usage meter), first-launch empty block, and §6 collapsed rail — a reskin with **zero functionality lost** (every dnd-kit listener / handler left byte-identical).
+- #375 UI v2 (9/12): Floating chrome I — a shared **menu.css** primitive giving every context menu / popover (and the New-session popover) the one v2 menu look, zero functionality lost.
+- #376 UI v2 (11/12): Toast rework — toasts move from the bottom-right stack (#32) to larger **bottom-center** blocks each led by a Lucide tone icon; store API / dismiss / stacking / reduced-motion preserved.
+- #377 UI v2 (3/12): Wave background system — the vendored `WaveEngine.js` flow-field on one Canvas2D layer per window (behind Overview, Canvas, and detached canvas windows), lazy-loaded, random seed per launch, live accent recolor, per-surface presets without remount.
+- #378 UI v2 (10/12): Floating chrome II — the modal fleet (15 surfaces) reskinned onto the §10 scrim/pop contract via a shared **modal.css** primitive, zero functionality lost.
+- #379 UI v2 (5/12): Overview wall reskin — the agent wall on the crust stage over the wave: square Base cards with a 2px repo band, a fixed 36px header and a flush crust terminal, the chrome-free filter bar, wave-centered empty/first-launch states, the `capAgentWidth` cap, and startup tips.
+- #380 UI v2 (6/12): Canvas reskin — the Canvas view on the one shared wave: a transparent tab strip, 30px panel chrome, hairline split dividers over transparent gaps, a wave empty state, and detached-window chrome.
+- #381 UI v2 (7/12): Content viewers reskin — the FileViewer toolbar (Saved status + segmented Rendered|Raw) + markdown type ramp, and the DiffInspector meta/pager + tinted diff rows.
+- #382 UI v2 (8/12): Boards & ops panels reskin — the Kanban board, FileTree, and Scheduled/Recurring panel bodies onto the v2 language, zero functionality lost.
+- #383 UI v2 (12/12): parity & polish sweep — the §12 v1→v2 parity checklist, the accent/light/interaction/reduced-motion/dense/cross-platform audits, token-drift reconciliation, the first-paint bundle budget, and the CLAUDE.md styling docs; with this card the epic is complete.
+- #384 Wave background optimization pass — the UI v2 wave (#377) moves rendering to a **Web Worker + OffscreenCanvas** where supported (the verbatim sha-pinned engine unmodified, today's main-thread loop as a byte-for-byte fallback), with governed frame cost: **paused entirely when panels tile over the stage** (the common working state → zero frames), fps-capped 48→24 while any agent is busy, and adaptively downscaled on sustained overruns; a new Appearance setting `pauseWaveWhenCovered` (default ON) exposes the covered-pause.
+
+**Post-v2 polish (#385–#396).** _(#398+ are written out in full at the end of this file.)_
+
+- #385 Restore the pre-UI-rework blue "shimmer" busy indicator — brought back the calm blue dot with a Claude-style sheen **sweeping across it** (replacing the v2 opacity-pulse "blink" + its tinted ring), keeping the three-state semantics + reduced-motion behavior + token system.
+- #386 Agent/panel borders use the owning folder's color — the selection/focus highlight around each Overview card / Canvas panel now uses its folder's `repoColor` instead of the global `--accent`, per the v2 rule that the accent never encodes selection.
+- #387 Usage popup — weekday reset labels & human-readable reset durations — the "all usage" popup shows a weekday abbreviation / short date (instead of a raw `122h`) for a far-future reset, keeping the compact countdown under 24h, plus a precise local time.
+- #388 Add "New folder…" and "Clone Repo…" to the ⋯ session-options menu — the footer ⋯ menu (#294) now also offers the New folder… / Clone Repo… the background context menu (#172) carries, so adding/cloning a folder needs no empty-background right-click.
+- #389 Remove "Schedule session" from the global sidebar background context menu — dropped the redundant item (scheduling is already the "+ Schedule session" footer button and ⌘⇧N).
+- #390 Configurable terminal background lightness — a "Terminal background" slider in Settings → Appearance lightening the terminal from near-black (`#11111b`) toward gray (`#3a3a45`); applies **live** to every running terminal (no host dispose / scrollback replay), persists, defaults to 0 (today's look).
+- #391 ⌘K launcher — filter-as-you-type type picker — the ⌘K "Create panel" launcher's type step gained an auto-focused search input filtering panel types as you type, with ↑/↓/Enter selection; the 1–6 number keys still index the filtered list.
+- #392 Unify creatable item/panel ordering across every menu — every surface listing creatable item/panel types (⌘K launcher, repo/worktree Views menus, header "open a view" popover, Canvas template palette) now renders one canonical order (Session, Terminal, File Tree, File Viewer, Diff Viewer, Kanban board) from a single shared `itemTypeOrder.ts`; order-only, no entry gained or lost.
+- #393 ⌘F search — surface active-agent repos first & cap each repo to 6 results — repos with a live agent list **first** (not strictly alphabetical) and each repo group caps at **6** results with a "…" overflow, so a live agent isn't buried and a many-hit repo can't flood the list.
+- #394 Improve ⌘F search across live agent terminal output — verify + fidelity fix of the #337/#353 terminal-output search: the ANSI stripper (`pty.rs strip_ansi`, the search path's sole caller) now expands a non-erasing cursor-forward (CUF, `ESC[nC`) into spaces (clamped at 64) so a phrase the user saw spaced (`A B`) matches the searched text; the non-navigable `:line` badge is hidden for `output`-kind rows.
+- #395 Sidebar repo header — active-agent count in the "+" slot — each repo header shows its count of active (running) agents at rest in the same slot the New-session **+** occupies, swapping to the clickable **+** on hover / keyboard-focus with zero layout shift; the always-on total-sessions chip is removed (empty/none-running cases keep today's behavior, no "0").
+- #396 Style the "Dark mode is the recommended experience" Settings note as a yellow caution — restyled the #342 plain-grey note as an on-system **yellow caution** (matching the untested-agent caution elsewhere in the modal) so it reads as a deliberate warning.
+
+**Continued polish (#397+).** _(#404+ are written out in full at the end of this file.)_
+
+- #397 ⌘F search — per-folder filter chips (⌘-Number) with lifted per-repo cap — a row of muted folder chips under the search bar; **⌘-Number** (Ctrl+N on Windows/Linux) lights the Nth chip and narrows results to that folder (again / Escape / click clears), and while a folder filter is active #393's per-repo 6-item cap is **lifted** so all its matches show. Reuses #393's `rankAndGroup` with `perRepoCap: Infinity` — no `search.ts` logic change; the global ⌘1–9 Canvas-jump is inert while the modal owns ⌘-Number.
+- #398 Attention view — a FIFO triage queue for idle agents needing input — a third top-level view that FIFO-queues agents gone idle (oldest-idle first) so the user triages them one at a time: the queue on the left, the selected agent's **real live terminal** on the right (via `ItemContent`, so a `DetachedNote` shows when another window owns the PTY), then dismiss (keep alive) or kill and advance. Pure derived state — no new Rust / git read / persistence; ⌘⏎ (Ctrl+Enter) dismisses, Shift+↑/↓ cycle the queue, and the ViewSwitch segment carries a live idle-count badge.
+- #399 Let macOS Ctrl+⌘+F native fullscreen through — the ⌘F/Ctrl+F global-search chord no longer swallows macOS's native **Ctrl+⌘+F** fullscreen combo: a pure `isGlobalSearchChord` predicate (+ unit test) fires the handler only when **exactly one** of Cmd/Ctrl is held, so Cmd+Ctrl+F falls through to the OS while plain Ctrl+F still opens search on macOS. A no-op on Windows/Linux (Ctrl+F alone still matches).
+- #400 Order folder pickers most-recently-used — count every panel open as a repo "use" — the folder/repo create-pickers (⌘K Create-panel, ⌘N/⌘⇧N New-session, "New tab from template…") already order by the persisted **`recents`** list, but it was bumped only on agent spawn; now `addOverviewPanel` (the single funnel for every non-agent panel) bumps the repo to the front of `recents` before its dedup early-return (resolving the worktree parent per #331), so opening a file/diff/terminal/kanban/file-tree panel counts as a repo use and every picker's ordering stays accurate — no picker UI changed.
+- #401 Soften UI v2 element borders and focus rings — a token-only, theme-aware CSS tuning (no behavior change): lowered the neutral border-token alphas (`--border-hairline`/`--border-strong`) in both the dark and light `tokens.css` blocks (heaviness was color weight, not the 1px floor), and formalized the keyboard focus ring into new `--focus-ring` (accent @ ~70% via `color-mix`, custom-accent-live) + `--focus-ring-width` (2px→1.5px) tokens, consumed with the plain-`var(--accent)`-fallback-first pattern in `global.css` + eight component overrides.
+- #402 Default the wave "Pause when covered by panels" setting to OFF (opt-in) — `pauseWaveWhenCovered` (#384) now defaults **off**, so a fresh install keeps the background wave animating even when the Overview wall has cards or a Canvas tab has panels; pausing-while-covered is now an explicit opt-in. A `DEFAULT_SETTINGS` value flip only — no migration (the `mergeSettings` back-fill handles the upgrade); a user who saved settings since #384 keeps their persisted `true`.
+- #403 Robust activity indicator — stop the busy dot flickering when a panel is focused — a **backend-only** `pty.rs` fix (platform-neutral): focusing an agent (hover/click) made xterm emit a DECSET-1004 focus-in report, claude repainted, and the busy monitor mis-read that one-shot repaint as work — blinking the dot blue, churning the Attention queue and even resurrecting dismissed cards. Added `last_report` to `ActivityState` (stamped by `write_stdin` on a non-input report), a `report_repaint` signal in `monitor_loop`, and a `suppress_on` param to `decide_busy` that gates only the **idle→busy** edge — an already-busy session and a real keystroke-started turn are untouched (#185 preserved). Fixing the source fixes every consumer at once.
+- #405 Remove the Attention queue-count badge from the ViewSwitch — Attention is an **optional** mode, so its ViewSwitch button no longer shows a live idle-count pill that made it read as required/urgent. Removed the `attentionCount` selector + the `.count` (expanded) and `.countCompact` (compact-rail) badges from both `ViewSwitch.tsx` renderings and their now-dead CSS; the button's icon, accessible name, and view-switch behavior — and the Attention view's own in-view "N idle" header — are untouched (kept minimal so #406 builds cleanly on top).
+- #406 Make Overview + Attention the main view buttons; Canvas a smaller secondary button — the sidebar view switcher now reads as a prominence hierarchy: Overview + Attention are an equal-weight two-segment shared `SegmentedControl`, and Canvas is a visibly smaller, de-emphasized `<button>` appended after it (with `view === "canvas"` leaving neither segment active and lighting the Canvas button instead); the compact rail reorders to Overview, Attention, Canvas with a Canvas de-emphasis. Layout/visual only — the shared `SegmentedControl` atom, the store, and all shortcuts are unchanged. Depends on #405.
 ---
 
 ## Design reference (dark theme only)
@@ -589,9 +707,10 @@ one soft shadow for popovers/modals only (`0 8px 28px rgba(0,0,0,.45)`). **Motio
 Open work no longer lives in this file — it flows through the `kanban-dev-pima` board
 (`KANBAN.md`: `PLAN → IMPLEMENT → MERGE → ARCHIVE`) and per-task `PLAN-<N>.md` files. This
 file is the **completed-task archive only**: the condensed **Implemented (completed tasks)**
-index above covers **#1–#310** (one line per task; full per-task detail — Description, Subtasks,
-Acceptance criteria, Implementation report — lives in git history and each task's PR). New
-archived tasks are appended below.
+index above covers every shipped task **except the 20 most recently-archived** (one line per
+task; full per-task detail — Description, Subtasks, Acceptance criteria, Implementation report —
+lives in git history and each task's PR). The 20 most recent tasks are written out **in full**
+below.
 
 > **Never skip a card.** The pipeline implements **every** unblocked card — one whose
 > `deps:` are all in `## ARCHIVE` or already archived here — lowest task number first, and never
@@ -600,3923 +719,2235 @@ archived tasks are appended below.
 
 ---
 
-### 311. [x] Custom tab name in the "New tab from template" modal
+## Full-detail entries — the 20 most recently-archived tasks
 
-**Status:** Done
-**Depends on:** none
+> The tasks below are kept **written out in full** (Description / What shipped / Key files /
+> Dependencies). They are the 20 most recently archived, so they appear in **archive order**,
+> not strict numeric order: #404, #409, #411, #407, #410,
+> #408, #412, #414, #415, #413, #417, #418, #420, #419, #416, #421, #422, #423, #424, #425. Every earlier task is condensed in the
+> index above.
 
-**Description**
+### 404. [x] Default focus-follows-mouse (auto-focus agents & panels on hover) ON + clarify the label
 
-The **"New tab from template…"** flow (#118) now lets the user optionally type a **custom name
-for the new Canvas tab** on the modal's folder step. The freshly instantiated tab takes that
-name; leaving the field blank (or whitespace-only) keeps today's behavior byte-for-byte — the
-tab is named after the template. The name applies to the **Canvas tab** itself, not to any
-agent/panel inside it (the #136 per-block `new-agent` name is untouched).
+"Auto-focus on hover" (#368/#371) is now the **default** — agents and panels are focused/selected
+when the mouse moves over them — instead of the prior opt-in/off default, and the Settings toggle is
+reworded to say that **agents and panels** (not just "panels") are auto-focused. The hover-focus
+**behavior** itself is unchanged; this is a default-value + copy change.
 
-**What shipped** (commit [`d316f3e`](https://github.com/ErikdeJager/ReCue/commit/d316f3e), PR
-[#63](https://github.com/ErikdeJager/ReCue/pull/63), merged `3788fd8`, 2026-07-02):
+**What shipped** (branch `default-auto-focus-on-hover`, PR
+[#162](https://github.com/ErikdeJager/ReCue/pull/162), merged 2026-07-15 into `iteration-1`) — 18
+insertions / 13 deletions across four files:
 
-- **`src/components/Canvas/templateInstantiate.ts`:** `instantiateTemplate(template, cwd, genId,
-  tabName?)` gained an optional trailing `tabName`; the returned `CanvasTab.name` is
-  `tabName?.trim() || template.name`, so an omitted/blank/whitespace value preserves the
-  template-name fallback exactly.
-- **`src/store.ts`:** the `useTemplate` action + its `AppState` interface widened to
-  `useTemplate(templateId, cwd, tabName?)`, threading `tabName` into `instantiateTemplate`; the
-  sole-empty-vs-append logic (#142), active-tab set, `ipc.setCanvases` persist, toast, and async
-  block resolution are unchanged (the toast still references `template.name`).
-- **`src/components/TemplateUseModal/TemplateUseModal.tsx`:** a local `tabName` state + an optional
-  "Tab name" `<input>` on the folder step (after the folder picker, before the actions row),
-  labeled `Tab name (optional)`, placeholder = the chosen template's name (`chosen?.name`, fallback
-  `"Custom name…"`), `aria-label="Tab name"`, spreading `noAutoCapitalize`; `open()` now calls
-  `runTemplate(templateId, cwd, tabName)`. No explicit reset — the modal unmounts on close.
-- **`src/components/TemplateUseModal/TemplateUseModal.module.css`:** a `.nameInput` class styled
-  like NewSessionModal's `.search` (full-width, token padding/border/radius, `--bg-base` fill,
-  `--text-primary` text, muted placeholder, `--accent` focus border) — design tokens only.
-- **Tests:** `templateInstantiate.test.ts` covers trimmed-name-wins and blank/omitted → template
-  name; `store.test.ts` covers `useTemplate` naming the tab from a provided name and falling back
-  when blank.
+- **`src/store.ts`** — `DEFAULT_SETTINGS.autoFocusOnHover` flipped `false → true`, with the comment
+  updated to on-by-default (opt-out): because `mergeSettings` back-fills a **missing** key from the
+  default, an existing install that never chose the setting gets hover-focus **on**, while a user who
+  explicitly persisted `false` keeps it off.
+- **`src/types/index.ts`** — the `autoFocusOnHover` doc comment changed from "Off by default (opt-in)"
+  to "On by default (opt-out)".
+- **`src/components/Settings/Settings.tsx`** — the Behavior `Checkbox` label reworded from "Focus
+  panels on hover" to **"Auto-focus agents and panels on hover"**; the help text (blur/text-field
+  behavior) kept accurate.
+- **`src/store.test.ts`** — the default/back-fill test retitled `defaults autoFocusOnHover to true and
+  back-fills it (#404)`: asserts `DEFAULT_SETTINGS.autoFocusOnHover === true`, a blob **missing** the
+  key back-fills to `true`, an explicit `true` stays `true`, and an explicit `false` stays `false`
+  (opt-out preserved).
 
-**Key files/areas touched:** `src/components/Canvas/templateInstantiate.ts` (+ `.test.ts`),
-`src/store.ts` (+ `store.test.ts`), `src/components/TemplateUseModal/TemplateUseModal.tsx` +
-`.module.css` (6 files, +95/−7).
+**Key decisions** (from `ASSUMPTIONS.md` Task 404)
 
-**Dependencies:** none.
+- "Default behaviour is hover focus turned on" = flip `DEFAULT_SETTINGS.autoFocusOnHover` false→true;
+  the #368/#371 feature behavior is untouched.
+- **No migration flag.** Relied on `mergeSettings` back-fill semantics (missing key → new default) so
+  everyone who hasn't opted out gets hover-focus, while an explicitly-saved `false` is preserved —
+  deliberately **not** migrating to protect a never-chosen off-state (contrast `terminalLineHeight`
+  #367, which did migrate), because the card wants on-by-default for all non-opted-out users.
+- "The default option should say that agents and panels are auto focussed on hover" = reword the
+  Settings label to name agents **and** panels and update the type + `DEFAULT_SETTINGS` comments from
+  "opt-in/off" to "on by default (opt-out)".
 
-**Notes**
+**Cross-platform:** pure store/TS default + copy change; no path/shell/native primitives — identical
+on macOS, Windows, and Linux.
 
-- **Decisions** (per `ASSUMPTIONS.md` §Task 311): the field lives on **step 2 (folder step)**, not
-  the template-list step; **label** `Tab name (optional)` (worded "Tab" to make clear it names the
-  Canvas tab, not an agent); **placeholder = the chosen template's name** so the user sees the
-  default the tab will take; **blank ⇒ template name** (`tabName.trim() || template.name`, entered
-  value trimmed); the name is threaded as an **additive optional trailing parameter**
-  (`useTemplate` → `instantiateTemplate`), so every existing call site and test stays green; the
-  **toast copy is unchanged** (references the template, not the new tab name); no explicit state
-  reset (the modal is conditionally mounted, so `tabName` resets on each open).
-- **Cross-platform:** pure frontend — a React state string + one optional pure-function parameter —
-  with no OS-specific primitives, IPC, or persistence-shape change, so it renders and behaves
-  identically on macOS and Windows. Checks green: `npm run build` / `lint` / `test`.
+**Dependencies:** Task 403 (the robust-activity-indicator fix). Turning hover-focus on by default
+amplifies the focus-report busy blink, so 403 landed first to keep the default-on experience
+flicker-free.
 
----
+### 409. [x] Softer Kanban board corners + restore card hover-lift
 
-### 313. [x] Revert the glowing clone progress bar to a plain indeterminate loading bar
+The markdown **Kanban board** (#141–#151) reads less blocky again: its **columns** and **cards**
+get a modest, board-scoped corner radius (a tasteful middle between the UI v2 square look and the
+old v1 radii), and the card **hover-lift** animation the v2 reskin (task 382) flattened is
+restored — a hovered card smoothly rises ~2px with a soft drop shadow, signalling it's draggable —
+without reverting the global v2 square-panel language anywhere else.
 
-**Status:** Done
-**Depends on:** none
+**What shipped** (branch `softer-kanban-corners-hover-lift`, PR
+[#165](https://github.com/ErikdeJager/ReCue/pull/165), merged 2026-07-15 into `dev`) — a single
+CSS-only file, 26 insertions / 6 deletions in
+`src/components/Kanban/KanbanPanel.module.css`:
 
-**Description**
+- **Column corners.** `.column` gains `border-radius: var(--radius-btn)` (6px). The rule already
+  had `overflow: hidden`, so the header top corners and the card-area bottom corners clip cleanly
+  to the rounded box. A comment marks it as Task 409's deliberate, board-scoped exception to the
+  v2 square-panel language (not a full revert).
+- **Card corners.** `.card`'s `border-radius: var(--radius-chip)` (0) → `var(--radius-micro)`
+  (4px) — kept ≤ the column radius so cards read slightly tighter than columns, like the old UI.
+  Because it's on the base `.card`, `.cardPlaceholder` and the in-tree `.cardOverlay` drag ghost
+  inherit the same rounded shape.
+- **Card transition.** The `.card` `transition` list is extended to also animate `transform` and
+  `box-shadow` (alongside `border-color`/`background`), so the rise/settle is smooth.
+- **Hover-lift.** The existing `.card:not(.cardPlaceholder):not(.cardOverlay):hover` rule (which
+  already set `border-color: var(--border-strong); cursor: grab`) gains
+  `transform: translateY(-2px)` + `box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28)` — the removed #234
+  values verbatim. The origin placeholder and floating ghost are excluded (the ghost keeps its own
+  `--shadow-menu`).
+- **Reduced-motion override.** A new `:global(body.reduce-motion) .card…:hover` rule zeroes
+  `transform`/`box-shadow`, because `global.css`'s killswitch only clamps transition *durations* —
+  a static hover transform would otherwise still jump instantly. Under reduced motion only the calm
+  border-strengthen + `grab` cursor cue remains.
 
-The transient "Cloning…" loading bar in the sidebar (shown while a repo clones, #295/#299) had
-picked up a glow/shimmer treatment in #307 — a breathing accent halo, a comet-gradient stripe,
-and a drop-shadow-lit collapsed-rail icon — which looked bad. This is a faithful **CSS-only
-revert of #307** (commit `eaa7575`), restoring the pre-#307 (#299) **plain** indeterminate bar:
-a solid accent stripe sliding across a flat token track, no glow. The bar stays indeterminate (a
-`git clone` gives no reliable percent) — `role="progressbar"` with no `aria-valuenow`, the
-`clone-progress` sweep, and the resolve-to-real-repo behavior are all unchanged.
+No TSX/logic changes (the `.card`/`.column`/`.cardPlaceholder`/`.cardOverlay` class names already
+existed and were applied where needed); no new tokens, no Rust, no test changes.
 
-**What shipped** (commit [`bf5de45`](https://github.com/ErikdeJager/ReCue/commit/bf5de45), PR
-[#64](https://github.com/ErikdeJager/ReCue/pull/64), merged `7518840`, 2026-07-02):
+**Key decisions** (from `ASSUMPTIONS.md` Task 409)
 
-- **`src/components/Sidebar/Sidebar.module.css`:**
-  - `.phantomTrack` — removed the two `box-shadow` lines (`--accent-dim` fallback + the
-    `color-mix(--accent 35%)` breathing glow) and the `animation: clone-glow 1.9s …`, and restored
-    `height: 4px` → `3px`, leaving a plain `--bg-hover` track.
-  - `.phantomBar` — replaced the comet `linear-gradient` (dim → `--accent-hover` → dim) with a
-    single solid `background: var(--accent)`, restored `width: 45%` → `40%`, and re-timed
-    `clone-progress 1.15s ease-in-out` → `1.2s var(--ease-out)`.
-  - `.railPhantom` (collapsed rail) — removed the two `filter: drop-shadow(...)` glow lines,
-    keeping its `clone-pulse` opacity breathe + `opacity: 0.75`.
-  - The three affected doc comments were rewritten to drop all glow/comet/`color-mix` language.
-- **`src/styles/global.css`:** deleted the entire `@keyframes clone-glow` block (now unreferenced —
-  it was used only by `.phantomTrack`) and reverted the `@keyframes clone-progress` doc comment to
-  the plain #299 wording; the `clone-progress` and `clone-pulse` keyframe bodies (both predate #307)
-  are untouched.
+- Chose modest radii as a tasteful middle — columns 6px (`--radius-btn`), cards 4px
+  (`--radius-micro`), cards ≤ columns — not the old 7/5px and not v2's 0.
+- **Reused existing on-system radius tokens directly** rather than adding new tokens to
+  `tokens.css` or panel-local custom properties: keeps it token-driven, covers the in-tree drag
+  ghost, and avoids touching the global square-panel tokens (`--radius-control`/`--radius-chip`
+  stay 0, so panels/cards elsewhere stay square).
+- Restored the hover-lift with the #234 values verbatim + the explicit reduced-motion `none`
+  override (required because the global killswitch only clamps durations, not static hover
+  transforms). Kept the literal `rgba` black shadow (no card-hover shadow token exists; the
+  `--shadow-*` floating-chrome tokens are far too heavy for a 2px lift) — renders identically
+  across WebViews.
+- Scoped strictly to the outer column/card shapes + the card hover-lift; left all Kanban
+  input/composer/checkbox/code-block styling square and untouched to avoid overlap with **Task
+  407** (the new-card composer input border/focus, which owns `.composerInput`).
 
-**Key files/areas touched:** `src/components/Sidebar/Sidebar.module.css`, `src/styles/global.css`
-(2 files, +22/−69). No TS/Rust/markup change.
-
-**Dependencies:** none.
-
-**Notes**
-
-- **Decisions** (per `ASSUMPTIONS.md` §Task 313): the card's "revert task that made this glow" maps
-  **unambiguously to #307**, so this is a straight CSS-only revert of `eaa7575` (not a remodel after
-  another bar). The bar **stays indeterminate** (no percent). The revert is **faithful and complete**
-  — it includes the collapsed-rail `.railPhantom` drop-shadow (the only "beyond the literal bar" item,
-  deliberately included since #307 glowed both surfaces) and restores all bundled #307 tweaks (track
-  `4px→3px`, bar `45%→40%`, timing `1.15s ease-in-out → 1.2s var(--ease-out)`). The "Cloning…" row
-  layout, dim, label, folder marker, and resolve-to-real-repo/session-start behavior are all preserved
-  (no `Sidebar.tsx` markup change, no `store.ts` change).
-- **Cross-platform:** removing `box-shadow`/`color-mix`/`drop-shadow` only *reduces* WKWebView↔WebView2
-  divergence risk — the plain token-background + transform-only bar renders identically on macOS and
-  Windows, and the global `body.reduce-motion` killswitch still freezes it to a static solid stripe.
-  Checks green: `npm run build` / `lint` / `format:check` / `test`; `grep -rn "clone-glow" src` returns
-  nothing.
-
----
-
-### 312. [x] Add "Add to .gitignore" to the file-tree row context menu
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-The **FileTree** right-click context menu (on both file and folder rows) gained an **"Add to
-.gitignore"** item, placed between "Copy relative path" and Delete. Clicking it appends that item's
-repo-root-relative **anchored** pattern to the repo-root `.gitignore` — `/src/foo.ts` for a file,
-`/build/` for a folder — creating `.gitignore` if absent, never duplicating a line already present,
-and fixing a missing trailing newline before appending. On success the tree re-lists and re-reads
-git status, so a now-ignored (untracked) row dims automatically via the existing #270 ignore
-coloring. This saves hand-editing `.gitignore` for the common "stop tracking this" action.
-
-**What shipped** (commit [`c704f40`](https://github.com/ErikdeJager/ReCue/commit/c704f40), PR
-[#65](https://github.com/ErikdeJager/ReCue/pull/65), merged `9801fb4`, 2026-07-02):
-
-- **`src-tauri/src/files.rs`:** `add_to_gitignore(repo, rel) -> Result<bool, String>` — the **sixth**
-  deliberate, path-validated `files.rs` write. Reuses the shared `confine(repo, rel)` guard (rejects
-  `..`/symlink/absolute escapes; the item must exist inside the repo) and **derives dir-ness
-  server-side** from the confined path's `is_dir()` (so the command signature is just `(repo, path)`,
-  no trusted flag). Normalizes the POSIX `rel` (`\`→`/`, trim slashes), refuses the empty/repo-root
-  pattern, builds `/{norm}` (file) or `/{norm}/` (dir), reads the current `.gitignore` (treating
-  `NotFound` as empty, surfacing other read errors), returns `Ok(false)` on an exact-line match
-  (`line.trim() == pattern`), else appends the pattern on its own line (prepending `\n` when the
-  file doesn't end in one) via `fs::write` and returns `Ok(true)`. Unit tests cover: fresh-repo
-  file create → `/src/foo.ts`, folder → `/build/`, idempotent second call (`false`, byte-identical),
-  trailing-newline insertion, and a traversal path erroring + writing nothing.
-- **`src-tauri/src/commands.rs` / `src-tauri/src/lib.rs`:** the `add_to_gitignore(repo, path) ->
-  Result<bool, SessionError>` `#[tauri::command]` + its registration in the `generate_handler!` list.
-- **`src/ipc.ts`:** `addToGitignore(repo, path) → invoke<boolean>("add_to_gitignore", …)` wrapper.
-- **`src/store.ts`:** an `addToGitignore` action mirroring the other tree writes — on error toasts
-  `isSessionError(err) ? err.message : "Could not update .gitignore"`; on success bumps
-  `fileTreeRefresh[repo]`, calls `refreshFileStatuses(repo)`, and toasts the returned boolean
-  ("Added to .gitignore" success vs "Already in .gitignore" info).
-- **`src/components/FileTree/FileTree.tsx`:** the non-danger "Add to .gitignore" `menuItem` in **both**
-  the folder and file menu branches (between "Copy relative path" and Delete), calling
-  `addToGitignore(repoPath, menu.path)` then `closeMenu()`.
-
-**Key files/areas touched:** `src-tauri/src/files.rs` (+ tests), `src-tauri/src/commands.rs`,
-`src-tauri/src/lib.rs`, `src/ipc.ts`, `src/store.ts`, `src/components/FileTree/FileTree.tsx`
-(6 files, +203/−6).
+**Cross-platform:** CSS-only, on-system radius tokens + a literal `rgba` shadow; no path/shell/
+native primitives — identical (and theme-correct in dark/light) on macOS, Windows, and Linux.
 
 **Dependencies:** none.
 
-**Notes**
+### 411. [x] Clicking a sidebar item in Attention view switches to Overview
 
-- **Decisions** (per `ASSUMPTIONS.md` §Task 312): patterns are **repo-root-anchored** — a **leading
-  slash** (matches only that exact path from the root, and guarantees the line never starts with
-  `#`/`!`), plus a **trailing slash for folders** (restricts to a directory); **dir-vs-file derived
-  server-side**, not from a frontend flag. **Idempotence = exact-line match** (does not detect an
-  equivalent-but-differently-written existing entry, e.g. an unanchored `src/foo.ts`). **Glob
-  metacharacters are NOT escaped** — the literal path is written as-is (real source paths almost never
-  contain them). **Not confirm-gated** (non-destructive, one click writes). **Only the FileTree's
-  `repoPath`-root `.gitignore`** is touched (no nested per-directory files), and the item is **always
-  shown** for both files and folders regardless of git status (writing into a non-git folder is
-  harmless). **Documented caveat:** git does not ignore already-tracked paths, so an already-tracked
-  file/folder won't visually dim after adding it — correct git behavior, not a bug.
-- **Cross-platform:** `files.rs` uses only `std::fs` (no shell-out) and writes `/`-separated patterns,
-  so it behaves identically on macOS and Windows; the menu label ("Add to .gitignore") is OS-neutral.
-  Checks green: `cargo test` / `npm run lint:rust` / `npm run build` / `lint` / `test`.
+While the app is in the **Attention** triage view (#398 — the FIFO queue of idle agents awaiting
+the user), clicking any left-sidebar item (agent / file / diff / filetree / terminal / kanban /
+schedule / recurring, expanded row **or** collapsed-rail dot) now switches the app to **Overview**
+and selects that item there — so the user lands on the thing they clicked instead of staying on the
+Attention queue, which can only surface idle-agent members in its pane. Overview and Canvas sidebar
+clicks keep today's behavior.
 
----
+**What shipped** (branch `attention-sidebar-click-to-overview`, PR
+[#166](https://github.com/ErikdeJager/ReCue/pull/166), merged 2026-07-15 into `dev`) — 62
+insertions / 2 deletions across two files:
 
-### 314. [x] Make macOS mic / folder / system-settings permissions actually stick (embed entitlements + a stable local signature)
+- **`src/store.ts`** — the one behavioral change, made in the shared **`selectItem(item)`** action
+  (the #79 choke point every sidebar row routes through). Its non-canvas branch — which previously
+  just did `set({ selectedId: item.id })` for both Overview and Attention — is now view-aware:
+  when the captured `s.view === "attention"` it `set({ view: "overview", selectedId: item.id })`,
+  else it selects in place. This mirrors the branch's existing Canvas "item not shown here → go to
+  Overview" rule. `s` is captured once at the top, and the earlier #334 filter-clear `set` doesn't
+  mutate `s.view`, so the `attention` read stays correct — meaning an Attention **agent** click
+  still composes with #334 (switch to Overview **and** clear a mismatched `overviewRepoFilter` so
+  the agent is visible on the wall).
+- **`src/store.test.ts`** — four unit tests: Attention agent click → Overview + selected;
+  Attention non-agent (file/diff) click → Overview + selected; Overview click keeps the view
+  (regression guard for the unchanged branch); and the #334 + #411 composition (Attention agent
+  click switches **and** clears the mismatched filter).
 
-**Status:** Done
-**Depends on:** none
+No Sidebar.tsx changes were needed — all rows already route through `selectItem`, and the
+repo-header/branch-line/rail-folder clicks already `setView("overview")` themselves.
 
-**Description**
+**Key decisions** (from `ASSUMPTIONS.md` Task 411)
 
-Finishes the macOS permissions fix that #292 set up but that a plain build silently bypasses. On
-macOS, an agent needing a permission (mic/voice, protected folders, system settings) was prompted
-repeatedly ("6×") and Allow never took effect. **Empirically-confirmed root cause** (planner
-inspected the actual built `ReCue.app` on macOS 26.5.1 with `codesign`/`spctl`): a plain
-`npm run tauri build` produces a **linker-signed ad-hoc** app — `flags=0x20002(adhoc,linker-signed)`,
-**Hardened Runtime OFF**, **zero entitlements** (no `audio-input`), a **malformed** signature
-(`Info.plist=not bound`, `Sealed Resources=none`), signing `Identifier=recue-…` (not
-`com.recue.app`), and a per-build `cdhash` Designated Requirement. The Tauri macOS bundler only
-applies `bundle.macOS.entitlements` + Hardened Runtime **when a signing identity is configured**,
-so #292's machinery never runs on the default build. Both symptoms follow: the `audio-input`
-entitlement being absent under no-Hardened-Runtime means macOS can't grant even after Allow, and
-the per-build `cdhash` DR + malformed signature mean TCC can't record/match a durable grant, so
-every fresh access attempt re-prompts. This is a **macOS bundle/script/docs-only** fix — **no
-runtime Rust/TS/CSS**; Windows/Linux untouched.
+- Centralized the switch in the single shared `selectItem` action rather than per-call-site — the
+  cleanest on-pattern spot, mirroring the existing Canvas→Overview "not shown here → Overview" rule.
+- The switch is **unconditional** for any sidebar item click while in Attention (all item kinds),
+  matching the verbatim "clicking on an item" request, not only agents — and it also covers the
+  collapsed-rail agent dots (they route through `selectItem` too).
+- Repo-header title / branch-line / rail-folder clicks are **not** touched — they already call
+  `setView("overview")` + set the Overview filter.
+- Because the rule lives in shared `selectItem`, **global-search** item navigation performed while
+  in Attention also lands in Overview — a consistent, intended side effect (Attention can only
+  display idle queue members), not a regression.
+- Overview and Canvas sidebar-click behavior is left exactly as today (the #79 no-auto-switch rule
+  preserved for those views).
 
-**What shipped** (commit [`74cc892`](https://github.com/ErikdeJager/ReCue/commit/74cc892), PR
-[#66](https://github.com/ErikdeJager/ReCue/pull/66), merged `16a9069`, 2026-07-02):
+**Cross-platform:** pure frontend store state + tests; no IPC/native/path/shell code — identical on
+macOS, Windows, and Linux.
 
-- **`scripts/sign-macos-local.sh`** (hardened, +405/−… rewrite): resolves a **stable** identity by
-  default — `$SIGN_IDENTITY` if set, else an auto-detected/created self-signed **"ReCue Local
-  Signing"** cert — and **refuses to silently ad-hoc-sign** (ad-hoc is now opt-in via
-  `RECUE_ALLOW_ADHOC=1`, never the silent default that reproduced the broken state). Always signs
-  with `--options runtime` (Hardened Runtime ON) + `-i com.recue.app` (fixes the wrong Identifier /
-  `Info.plist=not bound`), signs **nested code first** (dropping the deprecated `--deep`), and feeds
-  `codesign` a **comment-free copy** of the entitlements (AMFI rejects the tracked file's XML
-  comments). **Fail-closed verification** exits non-zero unless all hold: `runtime` flag present,
-  `Identifier=com.recue.app`, **both** entitlements listed (`audio-input` +
-  `cs.disable-library-validation`), `codesign --verify --strict` passes, and the DR is
-  **not** a `cdhash`. Prints recovery hints.
-- **Non-interactive self-signed identity creation** (opt-in `RECUE_CREATE_IDENTITY=1`, idempotent):
-  generates a `codeSigning` cert + key as an **OpenSSL-3 `-legacy` p12** (so macOS can import the
-  key) into the login keychain with untrusted-cert detection (`codesign` signs fine untrusted);
-  falls back to the ad-hoc-with-warning path on failure rather than aborting a build.
-- **`package.json`:** two **macOS-only** convenience scripts — `sign:mac` (thin passthrough) and
-  `build:mac` (`npm run tauri build` then `RECUE_CREATE_IDENTITY=1` sign, resolving the
-  universal-apple-darwin path with a single-arch fallback via an inline `node -e`). The
-  cross-platform `tauri`/`build` scripts are unchanged, so Windows/Linux `tauri build` is untouched.
-- **`docs/macos-permissions.md`** (rewritten, +313/−…): the confirmed root cause (plain `tauri build`
-  embeds no entitlements + no Hardened Runtime + a `cdhash`-pinned, malformed signature), the working
-  recipe (`npm run build:mac` or `tauri build` + the signer), verification commands + what "good"
-  looks like, and full recovery (`tccutil reset Microphone com.recue.app`, remove stale
-  Privacy & Security rows, move to `/Applications` to defeat **App Translocation**,
-  `xattr -dr com.apple.quarantine`), plus the honest local-vs-Apple-account split.
+**Dependencies:** none. (Concurrent Attention tasks 410 — queue membership — and 412 — agent × /
+⌘W — were kept out of scope; any `Attention.tsx` file overlap was avoided since this task edits only
+`store.ts`/`store.test.ts`.)
 
-**Key files/areas touched:** `scripts/sign-macos-local.sh`, `package.json`, `docs/macos-permissions.md`
-(3 files, +550/−172). No runtime Rust/TS/CSS; no change to `Entitlements.plist`/`Info.plist`/
-`tauri.conf.json`/`release.yml`.
+### 407. [x] Kanban new-card composer input drops the redundant focus ring
 
-**Dependencies:** none.
+The Kanban board's **"+ Add card"** composer textarea no longer shows two concentric colored edges
+at once. It already carries a per-column accent-colored border at rest (`--col-accent`, matching the
+column's header dot), so the app's separate softened-Peach keyboard focus ring layered a redundant
+second edge on top — this drops that ring on the composer input only, leaving the accent border as
+the field's sole, always-present edge, matching how the card **edit** experience reads.
 
-**Notes**
+**What shipped** (branch `kanban-composer-focus-ring`, PR
+[#167](https://github.com/ErikdeJager/ReCue/pull/167), merged 2026-07-15 into `dev`) — a single
+CSS-only file, 9 insertions in `src/components/Kanban/KanbanPanel.module.css`:
 
-- **Decisions** (per `ASSUMPTIONS.md` §Task 314): **process-attribution is NOT broken** — portable-pty
-  spawns the child without disclaiming responsibility, so macOS already attributes the TCC request to
-  ReCue; a runtime `responsibility_spawnattrs_setdisclaim` change was **evaluated and rejected** (would
-  make it worse). **JIT/unsigned-memory is a non-issue** — `node` execs as its own separately-signed
-  binary and WKWebView JIT runs in Apple-signed helpers, so no `cs.allow-jit`/`allow-unsigned-executable-memory`
-  entitlement is needed; `Entitlements.plist` stays as-is. **Local vs Apple-account split (recorded
-  honestly):** a **local** build is fully fixable **without an Apple account** via a stable self-signed
-  cert (entitlement present ⇒ Allow works; cert-based DR ⇒ grants persist across rebuilds); a
-  **downloaded release** that "just works" for arbitrary users needs the **Developer-ID + notarization**
-  path (Apple account + the dormant `APPLE_*` CI secrets, the only thing that also clears Gatekeeper).
-  An optional middle path (sign CI releases with a fixed self-signed cert in a secret) is **documented as
-  future work, not wired**. The optional one-clause `CLAUDE.md` note was **not** applied (kept the primary
-  doc surface in `docs/macos-permissions.md`).
-- **Verification:** CI can't exercise a GUI TCC prompt, so the automated criteria assert **signature
-  correctness** (the necessary+sufficient precondition) via `codesign`/`spctl`, with a documented
-  real-Mac smoke (prompt once → Allow sticks → survives relaunch + a same-cert rebuild). Regression guards
-  (no runtime code disturbed) green: `npm run lint` / `test` / `build` / `lint:rust` / `cargo test`.
-- **Cross-platform:** entirely macOS-scoped — the signer and npm conveniences are macOS-only and the
-  cross-platform build scripts are unchanged, so Windows/Linux build + runtime behavior is byte-for-byte
-  unchanged (no TCC there).
+- A dedicated rule beside the existing `.composerInput` styles:
+  `.composerInput:focus, .composerInput:focus-visible { outline: none; }`. The qualified
+  `:focus-visible` selector (specificity 0,2,0) reliably beats the global `global.css`
+  `:focus-visible` ring (0,1,0) regardless of stylesheet import order — a bare `outline: none` on
+  the base class would tie the global rule's specificity and be order-dependent — and the `:focus`
+  selector also covers any UA default outline on every engine. The `--col-accent` border was left
+  exactly as-is.
 
----
+No global `:focus-visible` change, no token changes, no TS/Rust — the ring is untouched everywhere
+else in the app.
 
-### 315. [x] Keep the activity dot blue while a background process is still working (fix blue↔yellow flicker)
+**Key decisions** (from `ASSUMPTIONS.md` Task 407)
 
-**Status:** Done
-**Depends on:** none
+- Kept the composer input's existing per-column accent border (`--col-accent`, matching the column
+  dot) rather than switching it to the global `--accent` (Peach) — the edge is already an accent
+  color and the per-column tint is deliberate (#233/#239); the only real change is removing the
+  redundant focus ring.
+- Scoped strictly to the new-card composer input (`.composerInput`); the card-edit textarea
+  (`.cardEditInput`, the user's reference) and the column-rename input (`.columnNameInput`) are
+  left unchanged.
+- Kept the composer border always accent-colored (no separate focused vs unfocused state) and
+  removed the focus ring entirely, accepting the minor a11y trade-off since the composer
+  auto-focuses and the accent border + caret still delineate the field — matching the explicit
+  "no focus" request.
+- Interpreted "text area input fields" (plural) as the single new-card creation textarea per the
+  request body, not a board-wide focus-ring removal.
 
-**Description**
+**Cross-platform:** pure token-driven CSS, no platform branch — renders identically on WKWebView
+(macOS), WebView2/Chromium (Windows), and WebKitGTK (Linux).
 
-When an agent ran a background process (a background `Bash` task, a subagent, a long tool call),
-the activity dot flickered rapidly between **blue** (busy) and **yellow** (idle/"needs input")
-~twice a second. Root cause (backend timing, `pty.rs monitor_loop`): busy was `true` only while
-output flowed within a **700ms window** (`BUSY_WINDOW_MS`), but a background process repaints
-Claude's TUI only intermittently — output arrives in bursts spaced >700ms apart, so each burst
-flipped busy→true and each 700ms gap flipped it→false. The fix is **smart flicker suppression**:
-once a session's dot starts oscillating (output resumes shortly after it went quiet), that session
-enters a **sticky** mode and holds **solid blue** on a longer ~5s window until output is truly
-quiet, then settles to yellow once. A clean single finished turn still settles at ~700ms,
-unchanged. Agent-agnostic (pure output timing, no TUI parsing) and backend-only.
+**Dependencies:** none. (Task 409 also edited `KanbanPanel.module.css` — card/column corners +
+hover-lift — but never touched `.composerInput`'s focus outline, so the two edits were disjoint
+within the file.)
 
-**What shipped** (commit [`d7752ff`](https://github.com/ErikdeJager/ReCue/commit/d7752ff), PR
-[#67](https://github.com/ErikdeJager/ReCue/pull/67), merged `4e7fca3`, 2026-07-02):
+### 410. [x] Attention queue surfaces started agents until they start working
 
-- **`src-tauri/src/pty.rs`:**
-  - Added `const BACKGROUND_HOLD_MS: u64 = 5_000` — the sticky-hold duration **and** the "re-arm"
-    window for flicker detection (a re-activation within this long of a settle counts as flicker).
-    `BUSY_WINDOW_MS = 700` is kept for busy-**on** and the normal (non-sticky) settle.
-  - A per-session `BusyDecision { emitted, sticky, settled_at }` struct (owned solely by the monitor
-    thread), replacing the bare `emitted: HashMap<String, bool>` dedup map.
-  - A **pure** `decide_busy(st, now, active_fast, active_hold) -> bool` hysteresis helper: normal
-    mode becomes busy on fresh `active_fast` and settles as soon as `active_fast` drops (snappy clean
-    turn); an idle→busy edge within `BACKGROUND_HOLD_MS` of the last settle flips the session
-    **sticky**; sticky mode stays busy while `active_hold` (bridging burst gaps) and only settles
-    after ~5s fully quiet, clearing `sticky` on the settle. (`active_fast` ⊂ `active_hold` since
-    700ms ⊂ 5000ms.)
-  - `monitor_loop` rewired: the snapshot computes the two guarded signals `active_fast = recent &&
-    now - out < BUSY_WINDOW_MS` and `active_hold = recent && now - out < BACKGROUND_HOLD_MS` (same
-    `has_work`/echo guards as before), the `retain` cleanup keys on `decisions` (a reused id starts
-    fresh), and the emit loop runs each through `decide_busy`, still emitting `SessionEvent::State`
-    only on change. The busy→idle **title-worker poke** (#97/#212/#252 branch + file-status refresh)
-    now fires **once at the true settle** instead of on every flicker cycle.
-  - Four pure unit tests: clean-turn fast settle, background-burst blue hold, first-activation never
-    sticky, and fresh-turn-after-long-idle not sticky. Busy-related doc comments updated.
-- **`CLAUDE.md`:** a one-clause addition to the busy-indicator note documenting the ~5s sticky-hold
-  anti-flicker behavior (#315).
+The **Attention** triage view (#398) is now a control surface for *all* agents that currently need
+the user, not only agents that finished a turn. A freshly **started** agent (gray "never worked
+yet") appears in the queue so the user can drive it, and it drops out the moment it is **actively
+working** (blue/busy). When it finishes and needs input again it re-appears (yellow "awaiting"),
+exactly as before.
 
-**Key files/areas touched:** `src-tauri/src/pty.rs` (+ tests), `CLAUDE.md` (2 files, +187/−26).
+**What shipped** (branch `task-410-attention-started-agents`, PR
+[#168](https://github.com/ErikdeJager/ReCue/pull/168), merged 2026-07-15 into `dev`) — 97 insertions
+/ 30 deletions across four files:
 
-**Dependencies:** none.
+- **`src/components/Attention/attentionQueue.ts`** — the pure membership function's predicate is
+  relaxed: the `if (!sessionActive[s.id]) return false` precondition is dropped, so an agent is a
+  member iff it is **not** a recurring child, not exited, not `reconnecting`, **not busy**, and not
+  dismissed — i.e. any non-busy agent, fresh **or** awaiting. `sessionActive` was removed from the
+  destructure (to avoid `no-unused-vars`) but **kept in the `AttentionQueueInput` interface** so
+  the four call sites + tests need no signature change; the `sortKey`
+  (`idleSince[id] ?? createdAt * 1000`) is unchanged — a fresh agent with no idle edge correctly
+  sorts by its spawn time.
+- **`src/components/Attention/Attention.tsx`** — `QueueCard` gains a real `hasBeenActive` prop
+  (passed `sessionActive[id] ?? false` at the `queue.map` call site) replacing the hardcoded
+  always-yellow indicator: a fresh agent shows the gray `--status-idle` dot + a distinct **"NEW"**
+  tag; a settled agent keeps the yellow dot + the **"IDLE"** tag. The header count wording changed
+  from "N idle" to "N waiting" to cover both.
+- **`src/components/Attention/Attention.module.css`** — a `.newTag` chip variant mirroring
+  `.idleTag` but tinted with the gray `--status-idle` token, so the fresh chip reads distinct from
+  the awaiting chip.
+- **`src/components/Attention/attentionQueue.test.ts`** — the "excludes a never-active agent" test
+  flipped to assert inclusion; added coverage for a fresh **busy** agent (excluded), a fresh
+  **dismissed** agent (excluded), and mixed fresh/awaiting FIFO ordering (the `createdAt`
+  seconds→ms fallback interleaves correctly).
 
-**Notes**
+No `store.ts` / `useKeyboardNav.ts` logic changes — they call `attentionQueue()` and inherit the
+new membership automatically, so Shift+↑/↓ nav and dismiss / dismiss-all operate over the expanded
+set for free. No backend/Rust change.
 
-- **Decisions** (ask-variant — user-confirmed via clarifying questions, per `ASSUMPTIONS.md`
-  §Task 315): **fix approach = "smart flicker suppression"** (chosen over a blanket-longer window
-  and over parsing Claude's on-screen background-task indicator) — a normal single turn stays snappy
-  (~700ms), only an oscillating dot goes sticky; **hold duration = ~5s** (`BACKGROUND_HOLD_MS`),
-  reused as the flicker re-arm window. **Accepted trade-off:** a genuinely-finished background task,
-  or a turn with internal >700ms pauses, now takes up to ~5s to show the yellow "needs input" dot.
-  **Deliberately out of scope:** a genuine >5s-quiet gap (e.g. a long single tool call with no
-  output) still legitimately settles to yellow — that's correct, not the reported flicker (noted in
-  a code comment).
-- **Cross-platform:** pure Rust output-timing hysteresis with no `#[cfg]`/OS-specific code and no
-  frontend/CSS change (the store `setBusy` dedup + `BusyIndicator` already paint whatever the backend
-  sends), so it behaves identically on macOS and Windows; the new tests are pure-logic and run on
-  both. No IPC-shape/persistence/command change (`SessionEvent::State` unchanged; strictly fewer
-  events flow). Checks green: `cargo test` / `npm run lint:rust` / `format:rust` / `npm run build` /
-  `test`.
+**Key decisions** (from `ASSUMPTIONS.md` Task 410)
 
----
+- State→membership mapping: a queue member is any non-busy agent — both fresh gray (never active)
+  and settled yellow (awaiting) — while busy blue (actively working) is excluded. Interpreted
+  "started" = fresh gray and "actively doing something" = busy; removal-on-active is driven by the
+  existing `sessionBusy` flag (no store/`setBusy` change needed).
+- FIFO ordering unchanged: fresh agents (no `idleSince`) sort by `createdAt`, interleaved
+  chronologically with awaiting agents' idle-edge times; a newly started agent goes to the back.
+- Pass the real `hasBeenActive` to each `QueueCard` (gray idle dot + "NEW" vs yellow dot + "IDLE")
+  so a fresh agent doesn't misread as "finished — needs input".
+- Kept `sessionActive` in the `AttentionQueueInput` interface (no longer read for membership) to
+  avoid churn at the 4 call sites + the test — only removed it from the function's destructure.
+- Boot-persisted never-active idle sessions enter the queue after the reconnect window settles
+  (desirable; the existing `reconnecting` exclusion prevents a boot flood). Seeded/scheduled agents
+  surface only once finished (their startup paint reads busy); a possible sub-second fresh flicker
+  before the first busy transition is acceptable and not special-cased.
 
-### 320. [x] Stop a newly-created agent from scrambling the other agents' terminals (shared WebGL glyph atlas)
+**Cross-platform:** pure WebView/TS (queue predicate + presentational tweaks + tests); no
+native/`#[cfg]`/path/shell code — identical on macOS, Windows, and Linux.
 
-**Status:** Done
-**Depends on:** none
+**Dependencies:** none. (Concurrent Attention tasks 411 — click-to-switch — and 412 — agent × /
+⌘W — touch the same directory but are orthogonal and were kept out of scope here.)
 
-**Description**
+### 408. [x] Branch picker type-to-filter with create-branch fallback
 
-Often, right after creating a new agent, the on-screen output of the **other**, already-running
-agents scrambled into garbled/jumbled glyphs (misplaced characters, doubled box-drawing). The
-victims healed the instant `claude` re-rendered its TUI (any width change / reflow), then could
-re-garble on the next spawn. Reported on **macOS**, tied to "right before the Windows release."
+In every in-repo branch picker, the user can now just start typing to filter the branch list (the
+best match auto-highlights, locals before remotes). When the typed text matches **no** existing
+branch, the picker jumps straight to the create-branch option pre-filled with that text and focused,
+so Enter creates a new branch (⌘/Ctrl+Enter as an isolated worktree) instead of forcing the user to
+click "+ add branch" / "Create new branch" and retype the name.
 
-Root cause — a **shared WebGL glyph atlas**. Every pooled xterm terminal is constructed with
-**identical** options in `createHost` (same `--mono` family, size, line-height, theme), so
-`@xterm/addon-webgl` hands them all **one shared `TextureAtlas`** (it caches one atlas per
-identical config). Task **#221** (2026-06-28, "Fix the terminal font rendering 'jiggly' on
-Windows") added an async font-load block that calls `webgl.clearTextureAtlas()` on **every**
-terminal creation — needed because the atlas could be built with fallback-font metrics before
-*JetBrains Mono* finished loading. But clearing the **shared** atlas wipes the glyph cache for
-**all** terminals while only the *new* one repaints, so the already-running agents keep pointing
-at glyph slots that no longer exist → jumble, until a reflow (SIGWINCH → `claude` full repaint +
-atlas re-warm) re-rasterizes every glyph. That is exactly why "a width change fixes it," and why
-the *other* agents (not the new one) are the victims.
+**What shipped** (branch `branch-picker-type-to-filter-create`, PR
+[#169](https://github.com/ErikdeJager/ReCue/pull/169), merged 2026-07-15 into `dev`) — 162
+insertions / 9 deletions across four files:
 
-The fix clears the shared atlas **only once** — the first time the real font has loaded — so a
-later spawn never disturbs the running agents.
+- **`src/branchFilter.ts`** (new, 41 lines) — a pure helper `matchBranchFilter(query,
+  filteredLocals, filteredRemotes)` returning a `BranchFilterMatch` discriminated union
+  (`{kind:"local"|"remote", value}` / `{kind:"create", name}` / `{kind:"none"}`): the top matching
+  local wins, else the top matching remote, else — when the trimmed query is non-empty — the
+  create-branch fallback carrying the trimmed query as the new name; a blank/whitespace-only query
+  with no matches is `"none"`. Sibling of `paths.ts`, mirroring the `folderNav.ts` precedent.
+- **`src/branchFilter.test.ts`** (new, 53 lines) — vitest coverage: top-local wins, top-remote when
+  no locals, create on non-empty no-match, `"none"` on blank query, whitespace-only → `"none"`, and
+  the query trimmed into the create name.
+- **`src/components/NewSessionModal/NewSessionModal.tsx`** — `onBranchQueryChange` now routes a
+  no-match query through `matchBranchFilter`: on `create` it converts the filter to the create
+  action (`setAddBranchActive(true)`, seeds `newBranchName` with the typed text case-preserved,
+  clears `branchQuery`, clears both selections + the error). The existing focus effect moves the
+  caret into the pre-filled name input, and the existing `onNewBranchKeyDown`/submit/worktree/
+  defer-mode wiring handles Enter, ⌘⏎, and schedule/recurring advance for free — no new key
+  handlers. Guarded by `!fetchingRemotes` so a query matching a still-fetching remote doesn't jump
+  to create prematurely.
+- **`src/components/Sidebar/Sidebar.tsx`** — the "Checkout branch…" picker's (#266) filter
+  `onChange` gets the same behavior: a non-empty no-match query (and `!checkoutLoading`) opens the
+  create input pre-filled + focused (its `autoFocus`) and clears the filter; its existing Enter
+  handler creates + checks out off the folder's current branch. Otherwise `setCheckoutFilter(value)`
+  as before.
 
-**What shipped** (commit [`bc9553f`](https://github.com/ErikdeJager/ReCue/commit/bc9553f), PR
-[#70](https://github.com/ErikdeJager/ReCue/pull/70), branch `fix/font-jumble`, 2026-07-05):
+Backend untouched — reuses `validate_new_branch`, `createBranchSession`/`createBranchWorktreeSession`,
+`createFolderBranch`, `list_branches`. The DiffInspector compare-branches selector was left alone
+(create semantics are meaningless there); the `>4`-branch filter-visibility thresholds are unchanged.
 
-- **`src/components/Terminal/terminalPool.ts`:**
-  - Added a module-level `let fontAtlasRebuilt = false` guard.
-  - In `createHost`'s async font-load block, wrapped the `webgl.clearTextureAtlas()` call
-    (previously unconditional, run on every terminal creation) in `if (webgl && !fontAtlasRebuilt)
-    { fontAtlasRebuilt = true; … }`, so the SHARED atlas is cleared exactly once — by the first
-    terminal to see the loaded font. Everything else in the block is unchanged: the per-terminal
-    `fontFamily` re-measure swap, `term.refresh(0, rows-1)`, and `safeFit()`.
+**Key decisions** (from `ASSUMPTIONS.md` Task 408)
 
-**Key files/areas touched:** `src/components/Terminal/terminalPool.ts` (1 file, guard + one
-conditional).
+- In-scope pickers: the NewSessionModal branch step (new-session + schedule/recurring +
+  per-repo/worktree/remote) and the Sidebar "Checkout branch…" picker. Out of scope: the
+  DiffInspector compare (base/target) selector.
+- Matching stays case-insensitive substring, auto-highlighting the top match (locals before
+  remotes) — not switched to prefix matching.
+- No-match trigger fires the moment a trimmed non-empty query matches zero local **and** zero
+  remote branches — no minimum query length. On jump-to-create: seed the create-name with the typed
+  text (raw case), clear the filter, focus the create-name input; base defaults to the current
+  branch. Enter creates (⌘/Ctrl+Enter = worktree in the modal); schedule/recurring records the
+  new-branch intent; the checkout picker's Enter creates + checks out.
+- Kept the existing `>4`-branch filter-visibility thresholds (did not make the filter always
+  visible); the explicit "+ add branch" / "Create new branch" buttons remain for small repos.
+- Suppress the auto-jump-to-create while remotes are still fetching (`fetchingRemotes`), so a query
+  matching a not-yet-loaded remote doesn't prematurely convert.
+- Extracted the tested pure helper `matchBranchFilter` (mirroring the `folderNav.ts` + test
+  precedent), reused by both call sites.
 
-**Dependencies:** none.
-
-**Notes**
-
-- **Why the guard is the fix (validated against xterm internals):** after boot `fontAtlasRebuilt`
-  is already `true`, so a newly-spawned agent **skips** the shared-atlas clear — it never disturbs
-  the atlas the running agents are drawing from. The per-terminal `fontFamily` swap (kept
-  unchanged) is the *real* per-terminal repair: it fires xterm's options-change
-  (`OptionsService.onMultipleOptionChange(['fontFamily',…])` → `RenderService.clear()` →
-  `_clearModel(true)`), a full model clear that re-acquires that terminal's glyphs at the correct
-  metrics. A `refresh()`-all-siblings loop was **deliberately not** added — `Terminal.refresh()`
-  skips unchanged cells in the WebGL `_updateModel`, so it doesn't re-rasterize a sibling's glyphs
-  and can even re-trigger the garble; only a model clear (resize or its own `fontFamily` swap)
-  repairs a sibling, and with the guard there is nothing to repair.
-- **#221's Windows fix preserved:** the *first* terminal still clears + rebuilds the shared atlas
-  with the loaded font, and every terminal still runs the `fontFamily` re-measure, so glyphs stay
-  crisp (no "jiggly"/malformed `C`) on the first and all subsequent spawns. `applyTerminalSettings`
-  (font-size change) is unaffected — a new size is a new atlas config, so xterm derives a fresh
-  correct-metric atlas on its own; the one-time guard never needs resetting.
-- **Not the dedup change:** the other suspect — the `replayDedupe.ts` / byte-offset dedup
-  (`fix/windows-stray-c-on-spawn`) — was ruled out: it is strictly per-session, byte-correct, and
-  byte-identical on macOS (the `windowsPty` option is Windows-only), so it cannot scramble *other*
-  sessions.
-- **Out of scope (follow-up):** with very many terminals, macOS WKWebView can hit its
-  concurrent-WebGL-context cap and fire `webglcontextlost` on an older terminal
-  (`onContextLoss(() => addon.dispose())` drops it to the DOM renderer) — a distinct, rarer vector,
-  not this jumble.
-- **Cross-platform:** platform-neutral — no `#[cfg]`/`isWindows` branch, no CSS/backend change; a
-  no-op under the DOM renderer (detached windows #105, which has no shared GL atlas). macOS bug
-  fixed, Windows unchanged. Windows real-box check (glyphs still crisp, spawns don't scramble
-  siblings) to be recorded in `TRAJECTORY_TO_WINDOWS.md` per the Windows-parity convention
-  (GUI/WebGL paths can't be unit-tested on CI). Checks green: `npm run build` / `npm run lint` /
-  `npm test` (599 tests).
-
----
-
-### 321. [x] Sign CI release builds so macOS mic/folder permissions actually work + persist (+ one-time re-ask after update)
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-Follow-up to #292/#314 that fixes the bug **in the app users actually run**. On macOS, speaking
-to a `claude` agent with voice made macOS ask for the microphone ~5× and clicking **Allow** never
-worked or stuck; the same repeated-prompt-then-fail hit protected folders (Downloads/Documents/
-Desktop). **Root cause:** ReCue spawns `claude` as a child PTY, so macOS TCC attributes the child's
-mic/folder request to the *responsible* app (ReCue) — but the **downloaded release was linker-signed
-ad-hoc**: Hardened Runtime **OFF**, the `com.apple.security.device.audio-input` entitlement
-**absent** (so "Allow" can't grant), and a per-build **`cdhash` Designated Requirement** (so TCC
-can't persist a grant). #292 added the entitlements + usage strings and #314 made a *local*
-`npm run build:mac` self-sign, but the Tauri **bundler only applies the entitlements + Hardened
-Runtime when a signing identity is configured**, and CI had none — so **every CI release stayed
-ad-hoc** (the shipped bug), and #314 was never verified on a real Mac. This task brings a stable,
-entitled, Hardened-Runtime signature to CI releases with a **free self-signed certificate** (no
-Apple account), and guarantees macOS **re-asks** the permission after the fix update.
-
-**What shipped** (commit `ec7396d`, PR #69 — https://github.com/ErikdeJager/ReCue/pull/69, branch
-`fix/permissions`, 2026-07-05):
-
-- **`.github/workflows/release.yml`** — the macOS leg now **signs releases** in one of two modes,
-  selected purely by which secrets are set: **sign-only** with a stable self-signed cert (4 signing
-  secrets, no Apple account) or **Developer-ID + notarize** (all 7). The "Configure Apple signing"
-  step (`id: applesign`) **splits signing from notarization**: it exports the 4 signing vars when
-  cert+identity are present, and the 3 notarization vars **only when all three are non-empty** —
-  fixing the `std::env::var_os` `Some("")` trap where an empty `APPLE_ID`/`APPLE_PASSWORD`/
-  `APPLE_TEAM_ID` made the bundler try to notarize with empty creds and **fail the build**. With
-  **no** signing secrets it prints "ad-hoc fallback" and `exit 0`s (build still succeeds — signing
-  is opt-in). It emits a `signing=enabled|disabled` output that gates a new **`codesign`-assert
-  step** (Hardened Runtime + `audio-input` + non-`cdhash` DR; skipped on the ad-hoc fallback,
-  `spctl` not asserted since a self-signed build is expectedly Gatekeeper-"rejected").
-- **`src-tauri/Entitlements.plist`** — removed the XML comment block; the bundler passes the file
-  **verbatim** to `codesign`, whose AMFI parser can reject an XML comment (`AMFIUnserializeXML:
-  syntax error`). Rationale moved to `docs/macos-permissions.md`.
-- **`scripts/gen-macos-ci-cert.sh`** (new, macOS/`gh`) — one command to generate a fixed self-signed
-  `codeSigning` `.p12` (RSA-2048, 10-yr, **`-legacy`** so macOS `security import` keeps the private
-  key), back it up to `~/.recue-signing/`, and set the 4 signing secrets via `gh` (prints them if
-  `gh` is absent). **Reuses** the backup cert on re-run so the Designated Requirement — and users'
-  granted permissions — stay stable across releases (`RECUE_FORCE_NEW_CERT=1` to rotate).
-  bash-3.2-safe (macOS ships bash 3.2).
-- **`src-tauri/src/store.rs` + `src-tauri/src/lib.rs`** — a persisted one-shot `perm_reprompt_done`
-  scalar drives a **one-time, macOS-only** best-effort `tccutil reset Microphone/SpeechRecognition
-  com.recue.app` at boot: when a user updates from an old ad-hoc build into the signed one the
-  signature (DR) changes so macOS should re-ask, but a stale/denied TCC row can suppress it — the
-  reset clears that so the user is **re-asked once** (and now Allow works), then never nagged again.
-  `#[cfg(target_os = "macos")]`-gated with no non-macOS code path.
-- **Docs** — `docs/macos-permissions.md` (title #321; two live CI modes with secret tables; the
-  `var_os` split; comment-free entitlements; the `gen-macos-ci-cert.sh` recipe; a new "Updating from
-  an older build" section — in-place update = no Gatekeeper warning + the one-time re-ask; summary
-  table row for CI self-signed), `README.md` (stale "ad-hoc"/"dormant" wording fixed), `CLAUDE.md`
-  (three #292/#314 scope notes updated to #292/#314/#321).
-
-**Key files/areas touched:** `.github/workflows/release.yml`, `src-tauri/Entitlements.plist`,
-`scripts/gen-macos-ci-cert.sh` (new), `src-tauri/src/store.rs`, `src-tauri/src/lib.rs`,
-`docs/macos-permissions.md`, `README.md`, `CLAUDE.md` (8 files). **No** version bump / patch notes
-(batched release owns the bump); `tauri.conf.json` untouched.
+**Cross-platform:** no path/shell/OS assumptions; the only platform-sensitive bit (⌘ vs Ctrl) is
+already handled by the reused `metaKey || ctrlKey` handlers + `kbdHint` labels — identical on macOS,
+Windows, and Linux.
 
 **Dependencies:** none.
 
-**Notes**
-
-- **Decisions** (user-confirmed): sign **releases** with a **free self-signed cert** (not Developer
-  ID — no Apple account); the bug is hit on a **downloaded release**; distribution is **just me / a
-  few Macs**, so the one-time Gatekeeper warning on a fresh download is acceptable; **guarantee a
-  re-ask after this update** (→ the one-time `tccutil reset`); and **maximize automation** — the
-  cert was generated and the 4 signing secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
-  `APPLE_SIGNING_IDENTITY`=`ReCue Self Signed`, `KEYCHAIN_PASSWORD`) set on the repo as part of this
-  work, so the next release from `main` self-signs. The `responsibility_spawnattrs_setdisclaim`
-  disclaim stays **rejected** (we *want* ReCue to remain the responsible process); no App Sandbox;
-  no new entitlements.
-- **Verification:** the full self-signed chain was proven **on a real Mac** (the check #314
-  skipped): the `-legacy` p12 imports with its private key and `codesign --options runtime
-  --entitlements <comment-free plist> -i com.recue.app` yields `Identifier=com.recue.app`,
-  `flags=0x10000(runtime)`, the `audio-input` entitlement, and a **cert-based DR** (`identifier
-  "com.recue.app" and certificate leaf = H"…"`, not `cdhash`). `cargo fmt`/`clippy`/`cargo test`
-  (154) / `eslint` / `vitest` (599) / `vite build` / `prettier` all green. The GUI mic-prompt
-  Allow-and-confirm is the one **manual** step (can't script a TCC dialog / speech), to be done on
-  the next signed release; the CI `codesign`-assert step guards the signature shape automatically.
-- **Cross-platform:** entirely macOS-scoped — the signer/helper and the `tccutil` re-ask are
-  `#[cfg(target_os = "macos")]`/macOS-tool-only, and the `release.yml` Windows leg never sees the
-  Apple env, so Windows/Linux build + runtime behavior is byte-for-byte unchanged (no TCC there).
-- **Operational:** the fix only takes effect once a release is built **with** the signing secrets
-  (now set) and **published** (a maintainer publishes the draft; the updater endpoint only resolves
-  a published "latest"). Existing installs get it via the in-app updater — an in-place swap, so **no
-  Gatekeeper warning on update** — then one permission prompt (from the DR change + the one-time
-  reset), Allow, and it persists. Keep `~/.recue-signing/ReCue-CI.p12` and reuse it every release,
-  or grants re-prompt after each update.
-
----
-
-### 317. [x] Truncate the "New session" button label with an ellipsis on overflow
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-The sidebar's primary **"New session"** button (⌘N / Ctrl+N) did not truncate its label when the
-sidebar was dragged narrow (toward its 180px minimum, #108) — the "New session" text was a bare
-text node (an anonymous flex item CSS can't target) and `.newButton` lacked `min-width: 0`, so the
-label wrapped to a second line / overflowed and pushed the `+` icon or keyboard hint out of the
-button. The secondary **"Schedule session"** button directly below it already truncated correctly
-(its label lives in a `<span className={styles.scheduleLabel}>` with `overflow:hidden;
-text-overflow:ellipsis; white-space:nowrap`, and the button carries `flex:1; min-width:0`, added by
-#301). The fix mirrors that exact pattern onto the New session button so both behave identically.
-
-**What shipped** (commit [`9435370`](https://github.com/ErikdeJager/ReCue/commit/9435370), PR
-[#71](https://github.com/ErikdeJager/ReCue/pull/71), branch `truncate-new-session-label`,
-2026-07-05):
-
-- **`src/components/Sidebar/Sidebar.tsx`** (expanded "New session" button, ~line 2695): added
-  `className={styles.newIcon}` to the `<Plus size={16} strokeWidth={1.5} />` icon and replaced the
-  bare `New session` text node with `<span className={styles.newLabel}>New session</span>`. The
-  `<kbd>` keyboard hint is untouched.
-- **`src/components/Sidebar/Sidebar.module.css`:** added `min-width: 0` to the existing `.newButton`
-  rule (so the flex button's content can shrink below its intrinsic width — required for the child
-  ellipsis to engage), and two new rules right after `.newButton:hover`: `.newIcon { flex-shrink: 0 }`
-  (so the `+` icon keeps its intrinsic 16px) and `.newLabel { flex: 1; min-width: 0; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; text-align: left }` (the ellipsis rule, mirroring
-  `.scheduleLabel`).
-
-**Key files/areas touched:** `src/components/Sidebar/Sidebar.tsx` (one-line JSX wrap + icon class),
-`src/components/Sidebar/Sidebar.module.css` (`min-width:0` on `.newButton` + new `.newIcon` /
-`.newLabel` rules). 2 files.
-
-**Dependencies:** none.
-
-**Notes**
-
-- **Why new, uniquely-named classes (`.newIcon`, `.newLabel`) rather than reusing
-  `.scheduleIcon`/`.scheduleLabel`:** the module has a pre-existing duplicate `.scheduleIcon` rule
-  whose second definition (~line 679) also sets `color: var(--status-running)`; reusing it on the `+`
-  icon would leak that status color, so parallel classes copy only the truncation behavior.
-- **No native `title` tooltip added:** the reference Schedule button has none, and the card asked for
-  the "same behaviour," so the fix omits a hover tooltip to keep the two buttons identical (trivial to
-  add later).
-- **Scope:** limited to the **expanded** top-of-sidebar primary button. The collapsed rail's
-  icon-only button (no label), the other New-session entry points (repo header `+`, worktree `+`,
-  repo context menu), and the Schedule button / `⋯` overflow (#294) are untouched. No change to
-  `openNewSession()`.
-- **Cross-platform:** pure presentational CSS (`text-overflow:ellipsis`, `min-width:0`,
-  `flex-shrink`) with no `-webkit-`-only effects, so it renders identically in WKWebView (macOS) and
-  WebView2/Chromium (Windows) — and the truncation matters on Windows too (the "Ctrl+N" hint is
-  longer). Checks green: `npm run build` / `npm run lint` / `npm run format:check`. No unit test
-  applies (presentational CSS; the Sidebar has no test file).
-
----
-
-### 318. [x] Keyboard shortcuts reference section in Settings
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-Added an eighth, **read-only "Shortcuts"** section to the Settings modal
-(`src/components/Settings/Settings.tsx`, #100/#119 — a fixed 720×600 dialog with a left nav + right
-content pane) that lists all of the app's keyboard shortcuts, grouped and labelled, so a user can
-discover the keybinds without digging through code or docs. Purely a reference display — no
-rebinding, no persistence, no change to any keyboard *handler* (`useKeyboardNav.ts` and all
-component handlers untouched).
-
-**What shipped** (commit [`756ed9f`](https://github.com/ErikdeJager/ReCue/commit/756ed9f), PR
-[#72](https://github.com/ErikdeJager/ReCue/pull/72), branch `shortcuts-reference-settings`,
-2026-07-05):
-
-- **`src/components/Settings/shortcuts.ts`** (new, 104 lines): a typed, static `SHORTCUT_GROUPS`
-  list (`Shortcut { mac, win, description }` / `ShortcutGroup { title, shortcuts }`) with four
-  groups — **Sessions**, **Panels & Canvas**, **Navigation**, **Files & Diff** — populated only
-  from the code-verified inventory (global shortcuts from `useKeyboardNav.ts` plus the
-  widely-relevant contextual ones that already carry user-facing hints: `⌘S` save; DiffInspector
-  `←/→`, `↑/↓`, `S`). Each entry stores explicit `mac`/`win` strings; platform-identical chords use
-  the same string for both.
-- **`src/components/Settings/Settings.tsx`:** added `"shortcuts"` to the `Section` union, a
-  `SECTIONS` entry (Lucide `Keyboard` icon, label "Shortcuts") placed just before "Data & About",
-  and a `{section === "shortcuts" && …}` render block mapping `SHORTCUT_GROUPS` → titled groups of
-  `<kbd>` chip + description rows, each chip rendered cross-platform via the already-imported
-  `kbdHint(platform, s.mac, s.win)`.
-- **`src/components/Settings/Settings.module.css`:** new `.shortcutsSection` / `.shortcutGroup` /
-  `.shortcutList` / `.shortcutRow` / `.shortcutKey` / `.shortcutDesc` styles — the `<kbd>` chip
-  modeled on `CanvasCloseModal.module.css`'s `.kbd` (bordered mono chip), using only existing
-  design tokens.
-- **`src/components/Settings/shortcuts.test.ts`** (new): a Vitest data-shape check — `SHORTCUT_GROUPS`
-  non-empty, every group has ≥1 shortcut, every shortcut has non-empty `mac`/`win`/`description`.
-
-**Key files/areas touched:** `src/components/Settings/shortcuts.ts` (new), `Settings.tsx`,
-`Settings.module.css`, `shortcuts.test.ts` (new). 4 files.
-
-**Dependencies:** none (Settings modal #100, fixed size #119, `kbdHint`/`platform` #143, and the
-shortcuts themselves were already shipped).
-
-**Notes**
-
-- **Read-only by design:** the pane contains no inputs/checkboxes/sliders/buttons that mutate
-  `draft` or call `saveSettings` — opening it and clicking around leaves settings unchanged.
-- **Deliberately excluded transient in-dialog accelerators** (CanvasCloseModal K/↵/Esc,
-  CreatePanelModal 1–6/Esc, NewSessionModal `⌘⏎`/in-modal `⌘1–9` recents, generic Esc/Enter) —
-  they're surfaced inline in their own dialogs and would bloat/duplicate a global reference. No
-  shortcuts were invented; every row mirrors a real handler.
-- **The list is a static mirror** of `useKeyboardNav.ts` (not derived from the handlers), so the
-  one maintenance risk is drift if shortcuts change later — accepted as the read-only-reference
-  design.
-- **Cross-platform:** each chip renders `⌘…` on macOS and `Ctrl+…` on Windows via `kbdHint` (whose
-  behavior is already unit-tested by `platform.test.ts`); pure tokens/CSS, identical on
-  WKWebView/WebView2. Checks green: `npm run build` / `npm run lint` / `npm test` / `npm run
-  format:check`.
-
----
-
-### 319. [x] Confirm before clearing recent folders in Settings
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-The Settings → **Data & About** → "Clear recents (N)" button cleared the recent-folders list
-immediately, so a single misclick silently discarded all remembered folders (no in-app undo). Gated
-it behind the app's established **inline two-click confirm**, honoring the existing
-`confirmDestructive` setting (#103) exactly like every sibling destructive action (TemplateManager
-delete, FileTree delete, Kanban column delete, Sidebar "Forget folder" / "Kill all agents").
-
-**What shipped** (commit [`d0ba229`](https://github.com/ErikdeJager/ReCue/commit/d0ba229), PR
-[#73](https://github.com/ErikdeJager/ReCue/pull/73), branch `confirm-clear-recents`, 2026-07-05):
-
-- **`src/components/Settings/Settings.tsx`:** read `confirmDestructive` from the store; added a
-  local `confirmingClear` `useState`; gated the `clearRecents` handler so that when
-  `confirmDestructive` is on and not yet armed it `setConfirmingClear(true); return;` (arms without
-  clearing), and otherwise runs the existing three lines (`ipc.clearRecents()`, `setRecents([])`,
-  `pushToast("Recent folders cleared")`) and resets the flag. The button relabels to "Clear all
-  recent folders?" while armed (`Trash2` icon kept), gains a `.dataButtonArmed` danger class, a
-  "Click again to clear all recent folders" `title`, and an `onMouseLeave` that cancels the arm.
-  The `disabled={recentsCount === 0}` prop is unchanged.
-- **`src/components/Settings/Settings.module.css`:** added a `.dataButtonArmed` rule mirroring
-  TemplateManager's `.dangerArmed` (red `--status-error` fill + `--accent-fg` text), scoped so its
-  `:hover` keeps the danger fill.
-
-**Key files/areas touched:** `src/components/Settings/Settings.tsx`, `Settings.module.css`. 2 files.
-
-**Dependencies:** none (Settings modal #100 and confirm-destructive gating #103 already shipped).
-
-**Notes**
-
-- **Honors the global toggle, not always-on:** with `confirmDestructive` **off**, the first click
-  clears immediately (current behavior preserved) — matching every sibling action rather than
-  diverging with an always-on confirm.
-- **No backend/IPC/store changes:** the Rust `clear_recents` command, the `setRecents`/`recents`
-  slice, and the IPC layer are untouched; the whole guard is a local state flag + one CSS class.
-- **No armed-state leak:** the Settings modal remounts fresh each open (`Settings()` gates
-  `<SettingsModal/>` on the open flag), and the `onMouseLeave` cancels on pointer-out, so no
-  reset-on-section-change logic was needed.
-- **Cross-platform:** pure React state + CSS tokens (no native dialog / `window.confirm` / path /
-  shell), identical on macOS (WKWebView) and Windows (WebView2). Checks green: `npm run build` /
-  `npm run lint` / `npm run format:check` (the Settings modal is presentational — no unit test).
-
----
-
-### 322. [x] Remove the redundant header "+" add-card button from Kanban columns
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-Each Kanban column header carried a small "+" button that opened the add-card composer — the exact
-same action as the "+ Add card" button inside the column body. Two controls doing the identical
-thing is redundant clutter, so the header "+" was removed; the in-column "+ Add card" button (the
-primary, discoverable one) stays. Both had called the same `openComposer` handler, so removing the
-header one orphaned nothing.
-
-**What shipped** (commit [`27230b9`](https://github.com/ErikdeJager/ReCue/commit/27230b9), PR
-[#74](https://github.com/ErikdeJager/ReCue/pull/74), branch `remove-kanban-header-add-button`,
-2026-07-05):
-
-- **`src/components/Kanban/KanbanPanel.tsx`:** deleted the header `styles.colAdd` `<button>`
-  (a bare `<Plus size={14}/>`, `aria-label="Add card"`) from `BoardColumn`'s `<header>`, and
-  updated the stale `BoardColumn` JSDoc that described the header as containing a "+". Kept
-  `openComposer` (still invoked by the in-column "+ Add card" button) and the Lucide `Plus` import
-  (still used by "+ Add card" and "Add column").
-- **`src/components/Kanban/KanbanPanel.module.css`:** removed the now-dead `.colAdd` / `.colAdd:hover`
-  rules (and their `#233` comment), and updated the `.composer` comment to say the composer is
-  opened only by the bottom "+ Add card" affordance.
-
-**Key files/areas touched:** `src/components/Kanban/KanbanPanel.tsx`, `KanbanPanel.module.css`.
-2 files.
-
-**Dependencies:** none (the Kanban board #141–#151 already landed; this is a self-contained UI tweak).
-
-**Notes**
-
-- **Nothing orphaned:** verified via grep that no keyboard shortcut or test referenced
-  `colAdd`/the header add button, and that `openComposer` + the `Plus` import remain in use — the
-  build/lint would fail loudly otherwise.
-- **In-column add-card unchanged:** the composer, `openComposer`/`submitComposer`/`addComposedCard`,
-  the Raw view, drag-and-drop, and the markdown parse/serialize engine are all untouched.
-- **Cross-platform:** pure React/CSS with on-system design tokens — no OS-specific paths,
-  shell-outs, or key handling, so identical on macOS and Windows. No Rust. Checks green:
-  `npm run build` / `npm run lint` / `npm test` / `npm run format:check`.
-
----
-
-### 316. [x] Fix the 5-hour usage bar reading a stale/expired OAuth token (Keychain fall-through)
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-The sidebar-footer **5-hour Claude usage bar** (#154) stopped showing any data after a recent
-Claude Code update. Root cause (established empirically on a real machine, claude 2.1.193 — **not**
-an endpoint/schema change): recent Claude Code keeps the canonical, refreshed OAuth token in the
-**macOS Keychain** but leaves a **stale `~/.claude/.credentials.json`** on disk. ReCue's
-`read_oauth_token()` read the **file first** (`read_token_from_file().or_else(read_token_from_keychain)`)
-and — because the file existed and yielded a token — never fell through to the fresh Keychain one,
-so the usage GET 401'd and the bar hid. Verified directly: the expired file token → HTTP 401, the
-fresh Keychain token → HTTP 200 with exactly the shape `parse_snapshot` already handles
-(`five_hour.utilization`, `five_hour.resets_at`). The endpoint URL, `oauth-2025-04-20` beta header,
-and response fields are all unchanged. Fix: make token *selection* expiry-aware (prefer a
-non-expired token, file → Keychain).
-
-**What shipped** (commit [`9c41e1b`](https://github.com/ErikdeJager/ReCue/commit/9c41e1b), PR
-[#75](https://github.com/ErikdeJager/ReCue/pull/75), branch `fix-usage-bar-stale-token`,
-2026-07-05) — backend-only, all in **`src-tauri/src/usage.rs`**:
-
-- Introduced a private `OauthToken { access_token, expires_at: Option<i64> }` (epoch **ms**) with
-  `is_expired(now_ms)` whose `map_or(false, …)` makes **unknown expiry ⇒ usable** (schema-drift
-  guard).
-- Extended `token_from_json` → `Option<OauthToken>`: extracts the access token exactly as before
-  (`claudeAiOauth.accessToken` else top-level `access_token`) and additionally reads `expiresAt`
-  (else top-level `expires_at`) tolerantly — a JSON number **or** numeric string; missing/garbage ⇒
-  `None`.
-- `read_token_from_file` / (macOS-gated) `read_token_from_keychain` now return `OauthToken`; the
-  non-macOS keychain stub still returns `None`.
-- Rewrote `read_oauth_token` around a **pure, unit-tested** `select_token(file, keychain, now_ms)`:
-  use the **file** token if present and not expired (the common Windows/Linux + fresh-macOS path —
-  Keychain **not** read, so no gratuitous permission prompt); otherwise the **Keychain** token if
-  fresh (the confirmed-broken macOS case); otherwise fall back to whichever is present (file
-  preferred), preserving today's fail-open-at-HTTP behavior.
-- Hardening: bumped the stale `CLAUDE_CODE_UA` (`claude-code/2.1.0` → current) and added
-  **token-free** fail-open diagnostics categorizing the miss. Added unit tests for expiry-aware
-  selection and the extended parse.
-
-**Key files/areas touched:** `src-tauri/src/usage.rs` (1 file — token type, expiry-aware selection,
-UA bump, diagnostics, tests). No frontend change (the `UsageSnapshot` shape is unchanged; the bar
-only hid because the backend returned `None`).
-
-**Dependencies:** none.
-
-**Notes**
-
-- **No gratuitous Keychain prompt:** when the file token is still fresh the Keychain is never read
-  (short-circuit), so Windows/Linux behavior is byte-for-byte unchanged and macOS doesn't prompt in
-  the common case.
-- **Deliberately not done:** OAuth token *refresh* (would race Claude and needs the client-id/token
-  endpoint — Claude already keeps a fresh Keychain token), a local usage-file reader (verified none
-  exists under `~/.claude`; the OAuth API is the sole source), and any endpoint/beta-header/
-  `parse_snapshot` change (a live 200 confirmed they're still correct). If **all** sources are
-  expired/absent, the command returns `None` (bar hides) — same fail-open as today, no panic.
-- **Cross-platform:** the Keychain path stays `#[cfg(target_os = "macos")]`-gated; Windows/Linux
-  (no Keychain, canonical fresh file token) take the file token unchanged. `home_dir()` untouched.
-  Checks green: `cargo test` (new token-selection + parse tests) / `npm run lint:rust` /
-  `npm run format:rust` / `npm run build` / `npm test`. The real-machine Keychain smoke (expired
-  file + fresh Keychain → bar populates; no prompt when file is fresh) is the one manual step CI
-  can't exercise.
-
----
-
-### 323. [x] Remove the post-drag focus border on Kanban cards
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-After dragging a card in the in-app Kanban board, the just-dropped card wore a persistent
-accent-colored focus border/outline until the user clicked elsewhere. Two things combined:
-**dnd-kit** makes the card `<article>` focusable (`role="button"` / `tabIndex=0` via its spread
-`attributes`) and **restores focus to it after a drag** (`RestoreFocus`, default on), and two CSS
-rules then painted that focused article — `.card:focus-within { border-color: var(--accent) }`
-(`:focus-within` also matches when the article *itself* holds focus) plus the app-wide
-`:focus-visible { outline: 2px solid var(--accent) }` in `global.css`. The fix suppresses that
-indicator on the card article itself while keeping the hover lift, the **edit-mode** accent border
-(driven by the same `:focus-within` when the edit `<textarea>` descendant is focused), and the
-inner pencil/trash/checkbox focus rings.
-
-**What shipped** (commit [`df6812c`](https://github.com/ErikdeJager/ReCue/commit/df6812c), PR
-[#76](https://github.com/ErikdeJager/ReCue/pull/76), branch `remove-kanban-card-focus-border`,
-2026-07-05) — CSS-only:
-
-- **`src/components/Kanban/KanbanPanel.module.css`:** added a `.card:focus { border-color:
-  var(--border-hairline); outline: none; }` rule **immediately after** the existing
-  `.card:focus-within` rule (source order matters). Same specificity `(0,2,0)` as `:focus-within`,
-  so the later rule wins for the article-focused (post-drag/tab) case and reverts to the resting
-  hairline border; `outline: none` beats the global `:focus-visible` `(0,1,0)` ring. During **edit
-  mode** the article is not `:focus` (only `:focus-within`), so the accent border is preserved; the
-  hover rule `(0,4,0)` still wins when hovered.
-- **`TRAJECTORY_TO_WINDOWS.md`:** recorded the Windows real-box verification note (WebView2 drag
-  → no border), per the Windows-parity convention for GUI paths CI can't exercise.
-
-**Key files/areas touched:** `src/components/Kanban/KanbanPanel.module.css` (one additive rule),
-`TRAJECTORY_TO_WINDOWS.md` (verification note). No `.tsx` / Rust change.
-
-**Dependencies:** none.
-
-**Notes**
-
-- **dnd-kit focus restoration left on:** deliberately did **not** set
-  `accessibility={{ restoreFocus: false }}` — that would harm keyboard drag continuity and wouldn't
-  cover a card focused by plain Tab. The CSS approach hides the indicator without changing focus
-  behavior.
-- **Accessibility trade-off (recorded):** suppressing the card article's own ring also removes the
-  visible ring when a keyboard user Tabs to a card — an intentional consequence of the "should not
-  appear at all" requirement; inner controls, editing, hover, and focus *restoration* are untouched.
-  A narrower mouse-only fallback (`.card:focus:not(:focus-visible)`) is noted for later if keyboard
-  discoverability is reprioritized.
-- **Cross-platform:** plain `outline: none` + a `border-color` revert (no `-webkit-`/macOS-only
-  assumption), scoped to a CSS-Module hashed class so it can't leak — identical on WKWebView (macOS)
-  and WebView2/Chromium (Windows). Checks green: `npm run build` / `npm run lint` /
-  `npm run format:check` / `npm test` (Kanban tests are logic-only; the drop-border check is manual).
-
----
-
-### 326. [x] Setting to disable session-usage display (and auth-token access)
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-Added a user-facing **"Show session usage"** toggle in Settings → Sessions (default **ON** —
-today's behavior) that, when turned off, completely hides the five-hour Claude usage bar (#154)
-**and** completely prevents ReCue from ever reading the Claude OAuth auth token — a privacy option
-for users who don't want the app touching their credentials. The gate lives at the sole frontend
-caller of the usage IPC: `claude_session_usage` (`usage.rs`, `lib.rs:302`) is the **only** code path
-that reads the token (grep-verified), and it is invoked only via `ipc.claudeSessionUsage()` inside
-the store's `refreshUsage`, so guarding that caller fully satisfies "never accesses the token" — no
-Rust change needed.
-
-**What shipped** (commit [`e112f6a`](https://github.com/ErikdeJager/ReCue/commit/e112f6a), PR
-[#77](https://github.com/ErikdeJager/ReCue/pull/77), branch `disable-session-usage-display`,
-2026-07-05):
-
-- **`src/types/index.ts`:** added `showSessionUsage: boolean` to the `Settings` interface (Sessions
-  block).
-- **`src/store.ts`:** `DEFAULT_SETTINGS.showSessionUsage: true`; `refreshUsage` early-returns
-  (before the `isClaudeActive` check) when the setting is off — clearing the `usage` slice to
-  unavailable (guarded to avoid a redundant re-render) and still running `applyAutoContinue()` so
-  the #296 machine disarms; `startUsagePolling` returns early when off (no poll, no token access at
-  boot — `settings` are loaded before it runs); `saveSettings` reacts to a runtime toggle by
-  starting the poll on enable, or stopping it + clearing `usage` + disarming auto-continue on
-  disable.
-- **`src/components/Usage/UsageBar.tsx`:** folds `showSessionUsage` into `showUsage`, so with the
-  setting off (or during the brief window before the store clears `usage`) the bar renders as the
-  ordinary plain hairline separator — not `null` — preserving footer structure while removing all
-  usage data.
-- **`src/components/Settings/Settings.tsx`:** the new "Show session usage" checkbox + help copy
-  ("When off, ReCue never reads your Claude auth token."), placed before the auto-continue rows; and
-  those rows tightened so the "Auto continue after limit reset" checkbox is `disabled` (with a
-  "Requires session usage to be enabled." note) when usage is off — a user can't arm a feature that
-  can't fire.
-- **`src/store.usage.test.ts`** (new): asserts `refreshUsage` leaves `claudeSessionUsage` uncalled
-  (and `usage.available === false`) when `showSessionUsage` is off, and calls it once when on with a
-  Claude session active.
-
-**Key files/areas touched:** `src/types/index.ts`, `src/store.ts`, `src/components/Usage/UsageBar.tsx`,
-`src/components/Settings/Settings.tsx`, `src/store.usage.test.ts` (new). 5 files, frontend-only.
-
-**Dependencies:** none (usage bar #154, auto-continue #296/#309, Settings blob #100/#102 all landed).
-
-**Notes**
-
-- **No Rust changes:** guarding the single frontend choke point is sufficient and cleanest; `usage.rs`
-  / `claude_session_usage` are untouched.
-- **Auto-continue gated for free:** with usage off, `usage.available` is false, so the #296 reducer
-  disarms and the #309 `AutoContinuePrompt` already returns `null` (`isLimitReached` false) — no
-  component-internal change; only the Settings checkbox enablement is additionally tightened.
-- **Older blobs default ON:** `mergeSettings` fills the missing key with `true`, so existing installs
-  see no behavior change.
-- **Independent of sibling #325** (custom-agent, which hides the bar via `isClaudeActive`): both
-  lightly touch `UsageBar`'s render guard — additive, resolved by the merge lane.
-- **Cross-platform:** no OS-specific code added; the only OS-sensitive path (`usage.rs` token read,
-  `home_dir()`/Keychain) is simply not invoked when off — inherently identical on macOS and Windows.
-  Checks green: `npm run build` / `npm run lint` / `npm test`.
-
----
-
-### 325. [x] Custom coding-agent command in Settings
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-Added a fourth **"Custom"** coding agent to ReCue's pluggable agent system (#101/#141/#142): a user
-picks Custom in Settings → Sessions and types their own launch command (a program + args, e.g.
-`my-agent --foo`) that ReCue runs to start each new session — so any CLI-based agent works, not only
-the three built-ins. A custom agent is treated like the other non-Claude agents: no
-resume/fork/auto-name, marked "untested", and the five-hour usage meter is hidden while a custom
-session is live.
-
-**What shipped** (commit [`f9113bb`](https://github.com/ErikdeJager/ReCue/commit/f9113bb), PR
-[#78](https://github.com/ErikdeJager/ReCue/pull/78), branch `custom-coding-agent-command`,
-2026-07-05):
-
-- **`src-tauri/src/agents.rs`:** a `CUSTOM` `AgentSpec` (`id="custom"`, all caps false, placeholder
-  `binary_name="custom"`) + `"custom" => CUSTOM` in `agent_spec`; two pure, unit-tested helpers —
-  `parse_custom_command(command) -> Option<(program, args)>` (a minimal argv tokenizer: split on
-  whitespace, honoring `"double"`/`'single'` quotes, `None` on empty) and `read_custom_command(
-  settings) -> Option<String>` (reads the opaque `customAgentCommand` key, trimmed/non-empty).
-- **`src-tauri/src/pty.rs`:** threaded a `custom_command: Option<&str>` param through
-  `spawn_session` / `spawn_session_with_prompt`; for `agent == "custom"` it parses the command and,
-  for a seeded launch, appends the prompt as a trailing positional arg (best-effort), then spawns
-  via the existing cross-platform `spawn_with_id` (`uses_claude_log=false`). Non-custom paths
-  unchanged.
-- **`src-tauri/src/commands.rs`:** each spawn site (`spawn_session`, `spawn_worktree_agent`,
-  `spawn_worktree_agent_new_branch`, `fire_due_schedules`, `fire_one_recurring`) resolves the custom
-  command from `store.settings()` and passes it through; `agent_info` gained `store` and, for
-  custom, probes the **configured program**'s `--version` (so `ClaudeMissing` names the user's
-  program) with a `"custom"` fallback.
-- **Frontend:** `src/agents.ts` — `CUSTOM_CAPS` in `CATALOG` + a new `SETTINGS_AGENTS` list
-  (`SELECTABLE_AGENTS` stays `[claude, codex, opencode]` so onboarding never offers the
-  undetectable custom); `src/types/index.ts` + `src/store.ts` — `customAgentCommand: string`
-  (default `""`, back-filled by `mergeSettings`); `src/components/Settings/Settings.tsx`
-  (+`.module.css`) — the Coding-agent control maps over `SETTINGS_AGENTS` (Custom is a 4th segment)
-  and, when Custom is selected, shows a command `<input>` with placeholder + help; the existing
-  "untested" caution and the auto-continue disable (`defaultAgent !== "claude"`) apply for free.
-- **Tests:** `src/agents.test.ts` (`agentCaps("custom")` caps false, `agentIsUntested` true) and
-  `src/store.test.ts` (a `agent: "custom"` session makes `isClaudeActive` false → usage bar hidden),
-  plus the Rust tokenizer/spec unit tests.
-
-**Key files/areas touched:** `agents.rs`, `commands.rs`, `pty.rs` (Rust) + `agents.ts`,
-`agents.test.ts`, `types/index.ts`, `store.ts`, `store.test.ts`, `Settings.tsx`, `Settings.module.css`.
-10 files.
-
-**Dependencies:** none (AgentSpec #101, codex gating #141, selector #142, usage bar/`isClaudeActive`
-#154, Settings blob #100/#102 all landed).
-
-**Notes**
-
-- **Argv, not a shell line:** the custom command is a program + args (quotes group tokens); no
-  pipes/redirection/`&&`/`$VAR`/globbing — a user needing that wraps it themselves (`bash -lc "…"` /
-  `cmd /C "…"`). Documented in code + Settings help.
-- **Seeding is best-effort:** appending the prompt as a trailing positional works for CLIs that
-  accept a positional prompt (Claude/Codex-like) but not arbitrary tools; the interactive
-  (non-seeded) launch always works.
-- **Capabilities gated off** exactly like Codex/OpenCode (owns its own session identity): boot
-  resume skips a custom record (`supports_resume=false`), Restart returns `ResumeUnsupported`, Fork
-  is unavailable, and the label falls back to the branch (no `ai-title` glob). `isClaudeActive`
-  needed **no logic change** — it already treats any non-`"claude"` id (incl. `"custom"`) as
-  non-Claude; a regression test was added instead. Task #326's separate manual "disable usage"
-  setting was left independent.
-- **Clear failure modes:** an empty command fails with a toast (no phantom `"custom"` spawn); a
-  program not on PATH surfaces the `ClaudeMissing` banner naming the parsed program.
-- **Cross-platform:** the parsed program resolves through the shared `find_on_path`/`launch_target`
-  seam (PATHEXT + `cmd.exe /C` for `.cmd`/`.bat`), and the `--version` probe stays behind
-  `hidden_command` (no console flash) — a Windows custom command works exactly like a built-in
-  agent; no hardcoded POSIX invocation. Claude spawn/resume/fork args are byte-for-byte unchanged
-  (guarded by the `agent == "custom"` branch). Checks green: `npm run build` / `npm run lint` /
-  `npm test` / `npm run format:check` / `cargo test` / `npm run lint:rust` / `npm run format:rust`.
-
----
-
-### 327. [x] Open the repo's GitHub page from the sidebar folder menu
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-Added a **"View on GitHub"** item to the left-panel sidebar's repo/folder context menus that opens
-the folder's GitHub repository page in the default browser — shown **only** when the folder is a git
-repo whose remote points at GitHub, hidden otherwise. The menu still opens **instantly**: the
-decision (and the URL) is resolved ahead of time on a fixed refresh cadence and cached in the store,
-never computed synchronously on right-click.
-
-**What shipped** (commit [`b7de41e`](https://github.com/ErikdeJager/ReCue/commit/b7de41e), PR
-[#79](https://github.com/ErikdeJager/ReCue/pull/79), branch `view-on-github-menu`, 2026-07-05):
-
-- **`src-tauri/src/git.rs`:** a pure, unit-tested `github_web_url(remote)` normalizer (HTTPS/`http`/
-  SCP-SSH `git@github.com:owner/repo.git`/`ssh://`/`git://` → `https://github.com/<owner>/<repo>`,
-  stripping `.git`/trailing slash/userinfo/port, `http`→`https`, host must be exactly `github.com`
-  case-insensitive, `None` for GitLab/Bitbucket/GHE/single-segment/garbage), plus
-  `github_web_url_for(cwd)` (prefers `origin`, else the first `git remote`; `run_git` →
-  `hidden_command`, local no-network) and the batched `github_web_urls(paths)` (mirrors
-  `current_branches`, only GitHub-resolving paths present).
-- **`src-tauri/src/commands.rs` + `lib.rs`:** a new async `github_web_urls` command
-  (`spawn_blocking`, keeps the webview thread free), registered in `invoke_handler!`.
-- **`src/ipc.ts`:** a `githubWebUrls(paths)` wrapper.
-- **`src/store.ts`:** a `githubUrls: Record<string,string>` map + init, a `refreshGithubUrls` action
-  (full-replace with a `urlMapsEqual` shallow-equality guard so an idle settle that didn't touch
-  remotes doesn't re-render), wired into the **same cadence** as `branches`/`fileStatuses` — load +
-  repo-set change and the debounced busy→idle edge (#212/#252) — so an in-terminal `git remote
-  add`/`set-url` is picked up.
-- **`src/components/Sidebar/Sidebar.tsx`:** reads the cached `githubUrls`; the "View on GitHub" item
-  (text-only, no icon, placed right after **Pull** in the non-destructive utility group) is rendered
-  in all three repo menus — the **repo header menu**, the **`RepoBranchLine`** menu, and the
-  **`WorktreeHeader`** menu (a worktree uses its **parent** repo's cached URL) — each opening the URL
-  via the already-imported cross-platform http/https-only `openUrl` (#217).
-
-**Key files/areas touched:** `src-tauri/src/git.rs` (normalizer + git read + tests), `commands.rs`,
-`lib.rs`, `src/ipc.ts`, `src/store.ts`, `src/components/Sidebar/Sidebar.tsx`. 6 files.
-
-**Dependencies:** none.
-
-**Notes**
-
-- **Menu opens instantly (the performance constraint):** the item's visibility and URL come only
-  from the cached `githubUrls` map — **zero git work at menu-open time**. The only git work is two
-  cheap local `git remote` / `git remote get-url` calls per repo, run off the main thread
-  (`spawn_blocking`) on the debounced branch/file-status cadence.
-- **Assumptions:** prefer `origin` else the first remote (hide if none); host must be exactly
-  `github.com` (GitHub Enterprise hidden — not reliably detectable; a follow-up could add a
-  configurable host list); always the repo root page (no branch/PR/commit/file deep-link); no
-  settings toggle.
-- **Cross-platform:** the only OS-sensitive primitives — the `git` shell-out (guarded by
-  `hidden_command`, no Windows console flash) and the browser open (`open_url` — macOS `open` /
-  Windows `cmd /C start` / `xdg-open`) — are already cross-platform, so behavior is identical on
-  macOS and Windows; no POSIX-only assumptions. Fail-open: non-GitHub/remote-less/non-git folders
-  resolve to `None` and hide the item. Checks green: `npm run build` / `npm run lint` / `npm test` /
-  `cargo test` / `npm run lint:rust`.
-
----
-
-### 324. [x] Git-diff gutter in the file viewer (uncommitted change markers)
-
-**Status:** Done
-**Depends on:** none
-
-**Description**
-
-Gave the universal `FileViewer`'s **curated code view** (the Prism `CodeBlock`) a left **git-diff
-gutter** that colors each line by its uncommitted working-tree status vs `HEAD` — a **green** bar
-for an added line, a **yellow** bar for a modified line, and a small **red dot** at the boundary
-where content was removed — so a developer sees at a glance what they've changed since the last
-commit. The markers **auto-refresh on a ~2 s poll** (paused when hidden), so they disappear within
-one interval when the change is committed in a terminal (the gutter re-checks whether the diff is
-still present).
-
-**What shipped** (commit [`a0b2b67`](https://github.com/ErikdeJager/ReCue/commit/a0b2b67), PR
-[#80](https://github.com/ErikdeJager/ReCue/pull/80), branch `git-diff-gutter`, 2026-07-05):
-
-- **`src-tauri/src/git.rs`:** a scoped `file_diff(cwd, path) -> Option<FileDiff>` (a thin
-  `git diff HEAD --no-color --no-ext-diff -- <path>` + the existing pure `parse_unified_diff`, with
-  an `is_tracked` check + the #183 `git diff --no-index -- /dev/null <path>` fallback so a brand-new
-  untracked file reads as all-Added; `has_head` guard for an unborn repo). Modeled on
-  `commit_diff`/`compare_branches`, far lighter than whole-repo `working_diff`, fail-open (clean /
-  non-git → `None`). Rust temp-repo unit tests added.
-- **`src-tauri/src/commands.rs` + `lib.rs`:** the `file_diff(repo, file)` `#[tauri::command]`
-  (returning the shared `FileDiff`), registered in `generate_handler!`.
-- **`src/ipc.ts`:** a `fileDiff(repo, file)` wrapper.
-- **`src/components/FileViewer/gutter.ts` (+ `gutter.test.ts`):** a pure, unit-tested
-  `gutterMarkers(hunks)` classifier — walks the hunks grouping each maximal run of `add`/`del` rows
-  into a change block, marks the first `min(d,a)` adds **modified** (yellow) and any insertion tail
-  **added** (green), and records a red-dot **deletion** at the line following a delete-heavy/pure
-  deletion block (an `EOF_DELETION` sentinel for a trailing deletion).
-- **`src/components/FileViewer/useFileDiffGutter.ts`:** a small fetch/poll hook (mirrors
-  `useAutoSaveFile`'s visibility gating) — fetches on mount/active-change, every ~2 s while visible,
-  and on `text` change; enabled only for the code view; fully fail-open.
-- **`src/components/FileViewer/FileViewer.tsx` (+ `FileViewer.module.css`):** wired the hook
-  (`gutterEnabled = lang !== undefined`), extended `CodeBlock` with a `LineGutter` column inside a
-  flex-row **shared vertical scroller** (`.codeGutterWrap` owns vertical scroll so gutter cell _n_
-  lines up with code line _n_ — no JS scroll-sync; the code `<pre>` owns only horizontal scroll so
-  the gutter stays pinned). Marker styles use only `--status-done`/`-awaiting`/`-error` tokens.
-
-**Key files/areas touched:** `src-tauri/src/git.rs`, `commands.rs`, `lib.rs`; `src/ipc.ts`; new
-`FileViewer/gutter.ts` + `gutter.test.ts` + `useFileDiffGutter.ts`; `FileViewer.tsx` +
-`FileViewer.module.css`. 9 files.
-
-**Dependencies:** none (builds on landed infra: `parse_unified_diff`/`working_diff` #39/#183, the
-`FileDiff`/`HunkLine` types, `useAutoSaveFile`'s poll pattern #148, the status tokens).
-
-**Notes**
-
-- **Scope — code view only:** the gutter is deliberately limited to the read-only Prism code view.
-  Rendered markdown has no source lines; the editable `<textarea>` views (markdown Raw / plain-text)
-  have no per-line DOM and their unsaved buffer would diverge from the on-disk diff; large (>256 KB)
-  files degrade to a plain read-only view for perf. So markers only appear where the rendered `text`
-  mirrors disk and each line is addressable.
-- **Marker semantics** follow the VS Code dirty-diff convention (green added / yellow modified / red
-  dot for a removal — the dot only *marks* the removal, it doesn't reveal the removed text). No git
-  write, no staging/revert affordance — read-only (`git diff HEAD` + `git diff --no-index`).
-- **Clears within ~2 s of a commit:** a self-contained poll (not the #212 busy→idle
-  `fileStatuses` signal) guarantees the gutter re-checks and clears regardless of trees/agents.
-- **Cross-platform:** the only OS-sensitive primitive is the `git` shell-out, which reuses the
-  `hidden_command` (CREATE_NO_WINDOW) path; the `/dev/null` untracked arg is already proven on
-  Windows by #183; all colors are `--status-*` tokens and the markers are static (nothing to guard
-  for reduced-motion) — so the gutter renders identically on WKWebView (macOS) and WebView2
-  (Windows). Checks green: `npm run build` / `npm test` / `npm run lint` / `npm run format:check` /
-  `cargo test` / `npm run lint:rust`.
-
-### 328. [x] Move the five-hour usage fetch off the main thread (async, non-blocking)
-
-Stopped the whole app UI from freezing every time the sidebar-footer **five-hour usage bar** (#154)
-refreshed. The `claude_session_usage` Tauri command was a **synchronous `#[tauri::command] pub fn`**,
-and in Tauri 2 a sync command runs on the **main (webview) event-loop thread** — so its blocking
-credentials read, its up-to-8 s `ureq` HTTPS GET (`HTTP_TIMEOUT`), and the macOS `security`
-subprocess spawn all executed on the thread that drives WKWebView/WebView2, locking rendering **and**
-input until the request returned. This was the exact bug class #316 had already fixed for the git
-commands; the usage command was simply missed by that sweep. After this change the fetch runs on the
-blocking pool and the window stays fully responsive during a refresh (scroll, tab switch, typing in a
-terminal — no freeze).
-
-**What shipped** (commit [`bdcb8d7`](https://github.com/ErikdeJager/ReCue/commit/bdcb8d7), PR
-[#82](https://github.com/ErikdeJager/ReCue/pull/82), branch `usage-async-offload`, 2026-07-06):
-
-- **`src-tauri/src/usage.rs` (only file touched, +21/−4):** the current command body (token read →
-  `fetch_usage` → `parse_snapshot`, with its `usage_diag` breadcrumbs) was extracted **verbatim**
-  into a private, non-command `fn usage_snapshot_blocking() -> Option<UsageSnapshot>`; a new
-  `#[tauri::command] pub async fn claude_session_usage()` wraps it as
-  `tauri::async_runtime::spawn_blocking(usage_snapshot_blocking).await.ok().flatten()`, mirroring the
-  #316 `git::current_branch`/`fetch_remotes` conversion. The stale/incorrect doc comment ("Sync →
-  Tauri runs it off the main thread…") was corrected to describe the async/`spawn_blocking` behavior.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 328 — assume variant):
-
-- **Root cause is the sync Rust command, not the frontend.** `refreshUsage` already `await`s off a
-  `setInterval` (not on any React render path), so no frontend change was needed. "Make it Async
-  (multi thread)" was read as: make the Rust command async and offload its blocking work where the
-  freeze actually lives.
-- **Minimal, precedented fix — `spawn_blocking`, not a new async HTTP client.** Reused the existing
-  blocking `ureq` client rather than pulling in `reqwest`; zero new dependencies, smallest surface.
-- **Return type unchanged** (`Option<UsageSnapshot>`), so the `src/ipc.ts` `invoke<UsageSnapshot |
-  null>` contract and `src/store.ts` `refreshUsage` needed **no changes**; poll cadence
-  (`USAGE_POLL_MS = 180_000` / `ARMED_POLL_MS = 45_000`) left as-is (the card is about lag, not
-  staleness; the endpoint 429s below 180 s).
-- **Fail-open preserved, including a join error.** A token miss / HTTP error / parse mismatch — and a
-  `spawn_blocking` task panic — all collapse to `None` (the bar hides) via `.ok().flatten()`.
-- **Cross-platform parity is inherent.** `spawn_blocking` is OS-agnostic; the macOS Keychain fallback
-  (`#[cfg(target_os = "macos")]`) stays gated inside the moved body, so behavior is byte-for-byte
-  identical on macOS and Windows — only the thread the work runs on changes. The GUI + network
-  responsiveness check needs a real box (not CI-unit-testable) and was flagged for macOS/Windows
-  smoke verification per the CLAUDE.md untestable-path rule.
-
-**Key files/areas touched:** `src-tauri/src/usage.rs`. 1 file.
-
-**Dependencies:** none (all prior usage-bar work — #154, #272, #296, #297, #305, #309, #316, #326 —
-already landed; the change is self-contained and mirrors the #316 spawn_blocking pattern).
-
-### 329. [x] DiffInspector accordion cards — enforce a readable min-width and scroll on overflow
-
-Fixed the diff viewer's **Accordion** display mode (#231/#237) so a large diff (many changed files)
-stays usable in narrow Canvas splits and Overview columns. Previously the accordion crushed its file
-cards so small their contents couldn't be read. **Root cause:** `.accordion` is a `flex-direction:
-column` container and each `.card` has `overflow:hidden` — per the CSS Flexbox spec, a flex item
-whose main-axis `overflow` isn't `visible` gets an automatic minimum size of **0**, so with many
-cards the flex algorithm shrank every card toward 0 height and `overflow:hidden` clipped their
-contents instead of the accordion's `overflow-y:auto` scrolling. On the x-axis, `align-items:stretch`
-gave each card exactly the accordion's content width with no floor, so a narrow panel dropped it
-below what's needed to read the header or code body. After this change collapsed cards keep their
-natural height and the list scrolls vertically; cards have a readable minimum width and the accordion
-scrolls horizontally when the panel is narrower than that minimum.
-
-**What shipped** (commit [`89837bf`](https://github.com/ErikdeJager/ReCue/commit/89837bf), PR
-[#81](https://github.com/ErikdeJager/ReCue/pull/81), branch `task-329-diff-accordion-min-width`,
-2026-07-06):
-
-- **`src/components/DiffInspector/DiffInspector.module.css` (only file touched, +19/−1):** three
-  scoped edits, each with an explanatory comment — (1) `.card { flex-shrink: 0 }` so cards keep their
-  natural (content) height and the accordion's existing scroll engages instead of crushing them
-  (cards still don't grow — default `flex-grow:0` — so a short list is unchanged); (2) `.card {
-  min-width: 320px }` so a card's used width is `max(accordion content width, 320px)`, covering both
-  collapsed and expanded cards with one rule; (3) `.accordion` `overflow-y:auto` → `overflow:auto`
-  (both axes) so a card floored at 320px can be scrolled into view horizontally when the panel is
-  narrower, with no horizontal scrollbar when the panel is wide enough. `.card`'s `overflow:hidden`
-  (needed to clip `.cardBody`'s top border to the rounded corners) and `.cardBody`'s
-  `max-height:420px; overflow:auto` cap were kept as-is.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 329):
-
-- **Minimum-width value = 320px (a judgment call).** Readable for the 12px-mono diff body + line-
-  number gutters + the header (badge/filename/± counts), and deliberately **below** the Overview
-  column min (`--overview-card-min` default 400px, #176) so the common Overview case never triggers
-  horizontal scroll — the floor only bites in genuinely narrow Canvas splits.
-- **Fixed px, not the `--overview-card-min` variable** — keeps the diff-card floor local and
-  predictable across Overview/Canvas/BigMode, since that variable means "Overview column width," not
-  "diff card width."
-- **Narrow-panel behavior = horizontal scroll**, mirroring the Overview wall's "overflow horizontally
-  instead of squeezing" precedent, rather than letting the panel dictate a sub-minimum width.
-- **Scope = Accordion only; Focused mode untouched** (separate classes; verified non-regressed). No
-  `DiffInspector.tsx`/logic changes — a pure layout fix.
-
-**Key files/areas touched:** `src/components/DiffInspector/DiffInspector.module.css`. 1 file.
-
-**Dependencies:** none (the DiffInspector and its Accordion mode already exist and are landed —
-#231/#237/#278).
-
-**Notes**
-
-- **Cross-platform:** pure WebView CSS (flexbox `flex-shrink`/`min-width` + `overflow`) with no
-  native/path/shell code and no OS-conditional styling; flexbox + overflow scrolling behave
-  identically under WKWebView (macOS) and WebView2/Chromium (Windows), and scrollbars are already
-  themed globally via `::-webkit-scrollbar` (honored by both engines) — so it renders the same on
-  both OSes. The GUI layout result needs a real-box visual check that CI can't assert. Checks green:
-  `npm run build` / `npm run lint` / `npm run format:check`.
-
-### 330. [x] Load diff-viewer and file-tree git reads off the webview thread (async)
-
-Stopped the diff viewer (and the file-tree status coloring) from freezing the UI. The **DiffInspector**
-re-reads the working-tree diff every ~1.5 s (`POLL_MS = 1500`), and each read ran a synchronous `git`
-shell-out **plus a full hunk parse on the webview/main thread** — so on a repo with a large working
-tree (or several diff panels open at once) the app stuttered on every refresh. **Root cause:** the
-diff / file-status git commands were plain synchronous `#[tauri::command] pub fn`, and in Tauri a sync
-command runs on the webview thread, so its git call + parse blocked input/rendering until it returned
-— the exact bug already fixed for the branch reads (`current_branch`/`current_branches`/`list_branches`/
-`fetch_remotes`, #316) and for `remove_worktree` (#200) / `clone_repo` (#299), which were converted to
-`spawn_blocking`. The diff and file-status reads were simply never converted. After this change the git
-work runs on Tauri's blocking thread pool: the UI stays responsive while the diff still refreshes to
-the latest working-tree state within ~1.5 s after an agent's turn (no staleness).
-
-**What shipped** (commit [`210d41c`](https://github.com/ErikdeJager/ReCue/commit/210d41c), PR
-[#83](https://github.com/ErikdeJager/ReCue/pull/83), branch `async-diff-git-reads-330`, 2026-07-06;
-2 files, +52/−15):
-
-- **`src-tauri/src/commands.rs`:** converted six git-read commands from synchronous `fn` to `async fn`
-  running their git call via `tauri::async_runtime::spawn_blocking`, mirroring the existing
-  `current_branches` / `fetch_remotes` pattern, with names/args/return types unchanged and doc-comments
-  refreshed —
-  - `working_diff(cwd) -> WorkingDiff` (the heaviest read; `.unwrap_or_default()` fail-open on a join
-    error),
-  - `file_statuses(repo) -> Vec<FileStatusEntry>` (the FileTree row-coloring read — the "other panel"
-    the card named),
-  - `file_diff(repo, file) -> Option<FileDiff>` (the FileViewer gutter; `.ok().flatten()`),
-  - `list_commits(cwd, limit) -> Vec<CommitInfo>` (clamp kept, then off-thread),
-  - `commit_diff(cwd, sha) -> Result<WorkingDiff, SessionError>` and
-  - `compare_branches(cwd, base, target) -> Result<WorkingDiff, SessionError>` (join error → `SessionError::Io`).
-- **`src-tauri/src/git.rs`:** added `Default` to the `DiffSummary` and `WorkingDiff` derive lists so
-  `working_diff`'s async wrapper can `.unwrap_or_default()` on the (near-unreachable) blocking-task
-  join error. The other return types (`Vec<…>`, `Option<…>`) already have `Default`.
-- **No frontend change:** `src/ipc.ts` wraps each command with `invoke<T>()` (Promise-returning) and
-  `lib.rs` registers them by bare name, so the sync→async conversion is transparent to the IPC contract
-  and registration. `DiffInspector.tsx`'s poll cadence, `inFlightRef`/`sigRef`, and `JSON.stringify(next)`
-  change-detection were left untouched.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 330):
-
-- **Root cause = blocking Rust I/O on the webview thread, not too-frequent re-fetch or off-screen
-  polling.** Fix = `spawn_blocking`, the established #200/#299/`fetch_remotes` pattern; matches the
-  card's ask ("use multi threading/Async to load the diffs in the background").
-- **"Other panels" scope = include the FileTree's `file_statuses`, exclude the rest.** `file_diff` and
-  the diff viewer's compare/commit sources were converted in the same sweep for consistency (same
-  trivial pattern); **excluded** `pull_branch`/`checkout_branch`/`create_branch` — user-initiated
-  one-shots, not polled, so not a source of "constant" lag (noted as deferred).
-- **Rejected the frontend `JSON.stringify`→lighter-fingerprint optimization** to avoid a correctness
-  regression: a summary/counts-only signature could miss a same-count content edit and show a **stale**
-  diff (the card requires the diff still reflect the latest state). Once the git work is off-thread the
-  residual stringify is a minor JS cost, not a freeze — so no new frontend helper/test was added.
-
-**Key files/areas touched:** `src-tauri/src/commands.rs`, `src-tauri/src/git.rs`. 2 files.
-
-**Dependencies:** none (all the diff / file-tree / git plumbing already existed and had landed; this
-only changed the thread the reads run on — orthogonal to the sibling #329 accordion-CSS card).
-
-**Notes**
-
-- **Cross-platform:** `tauri::async_runtime::spawn_blocking` is OS-neutral and the moved git calls
-  still go through `git::hidden_command()` (the Windows `CREATE_NO_WINDOW` console-flash guard)
-  unchanged; **no** new `#[cfg(...)]` divergence — only the thread the identical git work runs on
-  changes, so both OS arms stay byte-for-byte equivalent. The UI-smoothness result needs a real-box
-  visual check on both macOS and Windows (not unit-testable). Checks green: `cargo test` /
-  `npm run lint:rust` / `npm run format:rust` / `npm run build` / `npm run lint` / `npm test`.
-
-### 331. [x] "New session here" on a worktree agent nests under the existing worktree instead of registering a stray sidebar folder
-
-Starting a new agent from a **worktree** agent's (or worktree panel's) "Open a view or start a session
-in this folder" button (`OpenViewButton` → "New session here", #213/#177) now adds the new agent
-**inside that worktree's existing nested sub-group** (under the parent repo), instead of registering the
-app-managed worktree directory (`<app-data>/worktrees/<repo-id>/<branch>`) as its own brand-new
-top-level sidebar folder. **Root cause:** the interactive Rust `spawn_session` command always persisted
-the new record with `worktree_parent: None` and called `store.touch_recent(&cwd)` with the **worktree
-folder** path — so the new session was treated as a normal session whose `repoPath` was the worktree
-folder (included in `sessions.filter(s => !s.worktreeParent)` and unioned into the top-level
-`repoOrder`), and the worktree folder landed in `recents` (both the optimistic frontend update and the
-durable backend `touch_recent`) → it surfaced as a stray top-level folder. The schedule/recurring
-**fire** path and **fork** (#126) already set `worktree_parent` and touch the parent, so they nested
-correctly; this made the interactive spawn behave the same way.
-
-**What shipped** (commit [`6dd3fb1`](https://github.com/ErikdeJager/ReCue/commit/6dd3fb1), PR
-[#84](https://github.com/ErikdeJager/ReCue/pull/84), branch `worktree-new-session-nesting`, 2026-07-06;
-4 files, +152/−4):
-
-- **`src-tauri/src/commands.rs`:** added a pure `worktree_parent_for_cwd(sessions, cwd) -> Option<String>`
-  resolver — the parent repo of an app-managed worktree folder `cwd` if an agent already runs there (a
-  persisted session whose `repo_path == cwd` carries a `worktree_parent`), else `None` (so a normal spawn
-  is unaffected). It matches `cwd` against the **exact persisted `repo_path` string** (an opaque
-  identifier), so it's separator-agnostic and identical on macOS/Windows with no path parsing. In
-  `spawn_session`, computed `worktree_parent = worktree_parent_for_cwd(&store.sessions(), &cwd)`, set the
-  record's `worktree_parent` from it (replacing the hardcoded `None`), and replaced `touch_recent(&cwd)`
-  with `touch_recent(worktree_parent.as_deref().unwrap_or(&cwd))` — touching the parent for a worktree
-  spawn, the folder itself otherwise. Added a Rust unit test (`mk_session` helper) asserting the resolver
-  returns the parent for a worktree-agent cwd and `None` for a plain/normal-only cwd.
-- **`src/store.ts`:** aligned the optimistic recents update in the `spawnSession` and
-  `createBranchSession` actions to `record.worktree_parent ?? cwd`, so no stray worktree folder flashes
-  before the next refresh. The existing `upsertSession(toSessionView(record))` already picks up the
-  corrected `worktreeParent` from the backend record, so nesting is automatic.
-- **`src/store.test.ts` + `src/paths.test.ts`:** frontend test that spawning into a worktree cwd yields a
-  session whose `worktreeParent`/`effectiveRepo` is the parent and unshifts the **parent** (not the
-  worktree folder) into `recents`; plus a `paths.test.ts` assertion reinforcing the grouping invariant
-  (a `{repoPath:"/wt/feat", worktreeParent:"/repo"}` session has `effectiveRepo === "/repo"` and is
-  excluded from the top-level filter).
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 331):
-
-- **"Reuse the existing worktree" = the new agent JOINS the existing worktree's nested sub-group** (same
-  worktree folder `repoPath` → same sub-group; #74 already supports multiple agents per worktree), not a
-  second/separate worktree.
-- **Fix spans backend + frontend, not frontend-only** — the durable backend record (`worktree_parent:
-  None` + `touch_recent(worktreeFolder)`) would re-introduce the stray folder on the next refresh/reboot
-  even if the frontend patched its optimistic state, so the backend is the real fix; the frontend change
-  only keeps the optimistic UI consistent.
-- **Detection = reuse the recorded `worktree_parent` of an existing session at the same `repo_path`**
-  (mirrors the frontend `worktreeParentOf`), not a git worktree probe — reliable, consistent with how
-  the app tracks worktree membership, and an opaque-string match (no path parsing).
-- **Centralized in the backend `spawn_session` command** so every entry point routing through
-  `ipc.spawnSession` (OpenViewButton "New session here", `NewSessionModal` instant/branch spawn,
-  `CreatePanelModal`, Canvas template `new-agent`, `createBranchSession`) nests correctly at once. The
-  worktree "New session here" UX stays an instant, no-modal spawn on the worktree's current branch — only
-  grouping/recents change.
-- **Accepted edge case (out of scope):** a worktree that currently has only a non-agent panel and zero
-  session records can't have its parent resolved from the session store, so its panel's "New session
-  here" would still register a top-level folder — rare, not the reported bug (a worktree *agent*'s button
-  always has a live session); noted as a known limitation for a follow-up.
-
-**Key files/areas touched:** `src-tauri/src/commands.rs`, `src/store.ts`, `src/store.test.ts`,
-`src/paths.test.ts`. 4 files.
-
-**Dependencies:** none (#74 worktrees, #96 `effectiveRepo`, #127 `startRepoSession`, #177 instant "New
-session here", #199 worktree-parent tracking, #213 worktree `OpenViewButton` all landed).
-
-**Notes**
-
-- **Cross-platform:** the fix matches `cwd` against the exact persisted `repo_path` string (the same
-  string the backend produced and the frontend passed back), never parsing/splitting a path — so it
-  behaves byte-for-byte identically with Windows `%USERPROFILE%`/backslash worktree paths and macOS
-  `/`-paths; no new path handling, no `platform`/`joinPath`/`splitPath` needed. The backend change is
-  guarded by `worktree_parent.is_some()`, so an ordinary folder never matches (no regression). The GUI/PTY
-  spawn + restart-persistence check needs a real box (not unit-testable) and was flagged for macOS/Windows
-  smoke verification. Checks green: `npm run build` / `npm run lint` / `npm test` / `cargo test` /
-  `npm run lint:rust` / `npm run format:rust`.
-
-### 332. [x] Esc-to-cancel in session modals must not exit macOS fullscreen
-
-Pressing **Esc** to cancel a session modal while the ReCue window is in **native macOS fullscreen** no
-longer pops the window out of fullscreen — it now cancels the modal only. **Root cause:** on macOS, an
-Esc keydown that the web content leaves *unhandled* leaks up the responder chain and the OS treats it as
-"exit fullscreen". The `NewSessionModal` (New / Schedule / Recurring session) and `TemplateUseModal`
-(new Canvas tab from template) both closed on Esc via a **window-level** keydown listener that called
-`close()` **without** `event.preventDefault()`, so the keydown read as unhandled and still triggered the
-native fullscreen exit even though the modal also closed. Calling `event.preventDefault()` marks the
-event handled by the web content, suppressing the native default — Esc now stays scoped to cancelling
-the modal. The fix is applied **universally** (no platform gate): `preventDefault()` on Esc is harmless
-on Windows and outside fullscreen (Esc has no destructive default there), and is more robust than
-detecting fullscreen state.
-
-**What shipped** (commit [`401929c`](https://github.com/ErikdeJager/ReCue/commit/401929c), PR
-[#85](https://github.com/ErikdeJager/ReCue/pull/85), branch `esc-cancel-session-modals-fullscreen`,
-2026-07-06; 2 files, +11/−2):
-
-- **`src/components/NewSessionModal/NewSessionModal.tsx`:** in the window-level "Escape closes the
-  popover" keydown listener, added `event.preventDefault()` before `close()`, with a `(#332)`
-  provenance comment noting the macOS-fullscreen reason. Listener registration/cleanup and the
-  `[open, close]` deps left unchanged.
-- **`src/components/TemplateUseModal/TemplateUseModal.tsx`:** the identical one-line
-  `event.preventDefault()` (+ `(#332)` comment) in its window-level Esc keydown listener.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 332):
-
-- **"Session modals" = the create/schedule/manage-session family** — `NewSessionModal`,
-  `TemplateUseModal`, `CloneRepoModal`, `CanvasCloseModal`, `CreatePanelModal`, `OnboardingModal`.
-  **Excluded** the `Settings` modal (not session-specific) and sidebar context-menus/rename inputs
-  (popovers, not modals).
-- **Actual code change is only two files.** An audit of all seven Esc-cancel modals found 5 already
-  call `event.preventDefault()` on Esc; only `NewSessionModal` and `TemplateUseModal` (both
-  `window`-listener wired) omitted it — those are the real fix. The rest were confirmed compliant,
-  no edits.
-- **Universal `preventDefault()`, no platform gate / fullscreen detection** — applied unconditionally
-  rather than only-when-macOS-fullscreen, matching CLAUDE.md's "macOS behavior fixed, Windows
-  unaffected" seam.
-- **No shared `useModalEscape` hook / refactor** — kept the minimal per-modal one-line change since
-  most modals already comply; the smallest correct change wins.
-- **Skill-menu case is unaffected:** `SkillAutocomplete`'s open `/`-menu already `preventDefault()`s
-  **and** `stopPropagation()`s Esc (the React synthetic `stopPropagation` also stops the native
-  event), so the window Esc listener does not fire while the menu is open — Esc still closes just the
-  menu, not the whole modal.
-
-**Key files/areas touched:** `src/components/NewSessionModal/NewSessionModal.tsx`,
-`src/components/TemplateUseModal/TemplateUseModal.tsx`. 2 files. Frontend-only; no Rust.
-
-**Dependencies:** none.
-
-**Notes**
-
-- **Cross-platform:** `event.preventDefault()` on the Esc keydown is OS-neutral and applied without any
-  `#[cfg]`/`platform` gate — harmless on Windows and when not fullscreen (Esc has no destructive
-  default there), so both OS arms behave equivalently and Windows Esc-cancel is unchanged. The native
-  macOS fullscreen-exit suppression is WKWebView-only and can't be exercised in jsdom/CI, so it was
-  flagged for a manual macOS-fullscreen smoke check per the repo's GUI-path convention; the automated
-  checks confirm the event is `preventDefault`ed. Checks green: `npm run build` / `npm run lint` /
-  `npm test`.
-
-### 334. [x] Clear the Overview folder filter when selecting an agent it would hide
-
-When the Overview wall is filtered to one folder and the user clicks a sidebar **agent row** belonging
-to a **different** folder — one the active filter would hide — the filter now **clears automatically**,
-so the clicked agent is actually shown and selected in the wall instead of silently disappearing behind
-a mismatched folder filter. **Before:** the Overview folder filter (`overviewRepoFilter`, #34/#197/#247)
-narrows the wall to one repo cluster, but `selectItem` (#79, the sidebar-row select action) only set
-`selectedId` and never touched the filter — so selecting an agent the filter hid pointed `selectedId` at
-a column that wasn't rendered, and nothing appeared to happen (the visible no-op the card reported). The
-fix adds a small early-out guard at the top of `selectItem` that, for an **agent** the current filter
-would hide, clears the filter first — judged by `sessionInFilter`, the exact predicate the wall itself
-uses to render.
-
-**What shipped** (commit [`d7a0b35`](https://github.com/ErikdeJager/ReCue/commit/d7a0b35), PR
-[#86](https://github.com/ErikdeJager/ReCue/pull/86), branch `clear-overview-filter-on-agent-select`,
-2026-07-06; 2 files, +95):
-
-- **`src/store.ts`:** added a `#334` guard at the top of the `selectItem` action (before its
-  `view !== "canvas"` branch) — when `item.kind === "agent"` and a filter is active, it looks the full
-  session up in `s.sessions` (a `SidebarItem` carries only `{ id, kind, repoPath }`, but
-  `sessionInFilter` needs the session's `worktreeParent` to judge `"own"`/worktree cases) and, if
-  `!sessionInFilter(sess, s.overviewRepoFilter)`, sets `overviewRepoFilter: null`. No new import
-  (`sessionInFilter` was already imported). Fail-safe: a not-found session keeps the filter.
-- **`src/store.test.ts`:** 5 new `#334` unit tests beside the existing `setOverviewRepoFilter` tests —
-  mismatched agent clears the filter, same-folder agent keeps it, `"all"`-filter worktree agent of the
-  filtered repo keeps it (visible via `effectiveRepo`, #96), `"own"`-filter worktree agent it hides
-  clears it, and a null filter / a non-agent item both leave the filter untouched.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 334):
-
-- **"Deselect" = clear the filter entirely** (`overviewRepoFilter → null`), not switch it to the clicked
-  agent's folder — the card says "the filter should deselect".
-- **Scoped to agent rows only.** `selectItem` is shared by all sidebar item kinds (files, diffs,
-  terminals, kanban, filetree, scheduled, recurring); the guard fires only for `item.kind === "agent"`,
-  leaving every other kind's filter intact.
-- **Only a mismatch clears it** — selecting an agent already visible under the filter leaves the filter
-  as is; judged by the wall's own `sessionInFilter` (so an `"all"` filter keeps a same-repo worktree
-  agent, an `"own"` filter clears for one it hides).
-- **Runs regardless of view.** The guard is before `selectItem`'s view branching; clearing the filter
-  while in Canvas is harmless (the filter only narrows the Overview wall) and keeps the sidebar's
-  filtered-header highlight consistent on return to Overview.
-- Keyboard navigation (`useKeyboardNav.ts`) steps only through the already-filtered column set, so it
-  can never land on a hidden agent — no change needed, out of scope.
-
-**Key files/areas touched:** `src/store.ts`, `src/store.test.ts`. 2 files. Frontend-only; no Rust.
-
-**Dependencies:** none.
-
-**Notes**
-
-- **Cross-platform:** a single additive early-out in one store action reusing the wall's
-  `sessionInFilter` predicate — pure frontend/store logic with no data-model, IPC, Rust, or OS-specific
-  code, so it behaves identically on macOS and Windows (no `platform`/`#[cfg]` gate needed). Idempotent
-  (re-selecting the same agent is a no-op once the filter is null). Checks green: `npm run build` /
-  `npm run lint` / `npm test`.
-
-### 333. [x] Light mode theme option in Settings (Catppuccin Latte)
-
-Added a **Light** theme, selectable in **Settings → Appearance** (a Dark/Light segmented control),
-that reskins the whole UI with a **Catppuccin Latte** palette while keeping the same design language
-(borders, spacing, radii, accent usage). The default stays **Dark** (Mocha, byte-for-byte the prior
-appearance); the choice persists across restarts and applies to detached canvas windows too. This
-card **reverses** CLAUDE.md's documented "Dark theme only" (stack) and "no light mode" (out-of-scope)
-rules — like #84 (single-window), #100 (settings), and #126 (fork) reversed earlier v1 rules.
-Because the app is fully **design-token driven** (every color is a `var(--token)` from
-`src/styles/tokens.css`, with no hardcoded color literals in component CSS), the theme is achieved
-almost entirely by **redefining the color tokens under a selector** — components need no per-component
-work. The **terminal area stays dark in both themes** (claude's TUI is dark-designed).
-
-**What shipped** (commit [`0de534d`](https://github.com/ErikdeJager/ReCue/commit/0de534d), PR
-[#87](https://github.com/ErikdeJager/ReCue/pull/87), branch `light-mode-theme-333`, 2026-07-06;
-7 files, +128/−10):
-
-- **`src/types/index.ts`:** added `theme: "dark" | "light"` to the `Settings` interface.
-- **`src/store.ts`:** `theme: "dark"` in `DEFAULT_SETTINGS` (so an older `sessions.json` lacking
-  `theme` upgrades to `"dark"` via the existing `mergeSettings` spread); in `applySettingsEffects`,
-  a `data-theme` toggle on `<html>` — `root.setAttribute("data-theme", "light")` for light, removed
-  for dark. Runs on boot (`init`) and on `saveSettings`, and — since `CanvasWindow` also calls
-  `init()` — in detached windows too.
-- **`src/styles/tokens.css`:** a `:root[data-theme="light"] { … }` block overriding **only** the
-  color tokens that must flip (surfaces, borders, text, accent = Latte Peach `#fe640b`, diff, status,
-  syntax, a softer popover shadow) with the Catppuccin **Latte** palette; plus a new stable
-  `--terminal-fg` token in `:root` (value `#cdd6f4` = the current foreground). `--terminal-bg` /
-  `--terminal-fg` / `--terminal-selection` / `--usage-critical` are **deliberately not** overridden,
-  so the terminal stays dark. Spacing/radii/type/motion/fonts inherit from `:root`.
-- **`src/components/Terminal/terminalPool.ts`:** the xterm `foreground` now reads `--terminal-fg`
-  (not the flipping `--text-primary`), keeping terminal text light in both themes.
-- **`src/components/Settings/Settings.tsx`:** a Dark/Light segmented control in the Appearance
-  section (above Accent color), reusing the existing `styles.segmented` pattern; applied on Save.
-- **`src/store.test.ts`:** `theme` default/merge assertions (`DEFAULT_SETTINGS.theme === "dark"`, an
-  old blob missing `theme` upgrades to `"dark"`, `mergeSettings({ theme: "light" }).theme === "light"`).
-- **`CLAUDE.md`:** the documentation reversal — "Dark theme only" → "Dark (default) and Light themes
-  (#333)", the out-of-scope "no light mode" reversed with a #333 note, the Settings architecture
-  paragraph updated to mention the `theme` field, the `data-theme="light"` toggle on `<html>`, and
-  that the terminal stays dark.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 333):
-
-- **Light palette = Catppuccin Latte**, the natural light sibling of the #33 Mocha remap (proper
-  contrast on light surfaces; the pale Mocha pastels would wash out).
-- **Mechanism = `data-theme="light"` on `<html>` + a `:root[data-theme="light"]` override block**,
-  *not* a `body.light` class — **load-bearing**: the custom accent (#102/#107) is written **inline on
-  `<html>`**, so putting the theme selector on the same element lets the inline custom accent
-  correctly win; a `body.light` rule on the child would override the inherited inline accent and
-  silently break a custom accent in light mode.
-- **Terminal stays dark in both themes** via the un-overridden `--terminal-bg`/`--terminal-selection`
-  + the new stable `--terminal-fg`; terminals aren't re-themed on a runtime switch (both themes render
-  them dark, so no live re-theme needed).
-- **No "System/Auto" (prefers-color-scheme) option** — explicit Dark/Light only for v1.
-- **`REPO_PALETTE` and the Settings accent-swatch palette are NOT re-themed** — persisted
-  brand/identity colors; re-theming would break stored repo colors.
-- **Accepted minor caveats:** the Appearance "default" accent swatch chip (`#fab387` Mocha Peach)
-  won't exactly match the applied Latte Peach (`#fe640b`) in light mode; and a brief dark first-paint
-  flash on boot (theme applies async in `init()`, identical timing to the existing accent/reduce-motion
-  effects) — neither addressed.
-
-**Key files/areas touched:** `src/types/index.ts`, `src/store.ts`, `src/styles/tokens.css`,
-`src/components/Terminal/terminalPool.ts`, `src/components/Settings/Settings.tsx`, `src/store.test.ts`,
-`CLAUDE.md`. 7 files. Frontend/docs only; no Rust/backend (rides the existing opaque `settings` blob).
-
-**Dependencies:** none (self-contained; uses only the existing settings blob and token layer).
-
-**Notes**
-
-- **Cross-platform:** pure CSS/JS with no OS-specific code — scrollbars already use
-  `::-webkit-scrollbar` (WKWebView + WebView2), `color-mix` tints already ship plain-color fallbacks,
-  and no macOS-only vibrancy is introduced, so the light theme behaves identically on macOS and
-  Windows. Fully reversible (set the theme back to Dark) and idempotent (`applySettingsEffects` sets/
-  removes the `data-theme` attribute deterministically each call). Checks green: `npm run build` /
-  `npm run lint` / `npm run format:check` / `npm test`.
-
-### 335. [x] Per-agent added/removed line counts in the sidebar
-
-Each **sidebar agent (session) row** now shows a compact green **+N** / red **−N** count of lines
-added / removed in that agent's working tree vs `HEAD`, so a user sees at a glance how much each agent
-has changed. The count is computed **off the webview thread** (batched `async` Tauri command on
-`spawn_blocking`, the #330 pattern) on the existing refresh cadence, a long agent **name ellipsizes**
-so the badge stays visible, and a Settings → Appearance toggle (`showDiffLineCounts`, default **on**)
-turns the whole feature off — removing the badge **and** skipping the git reads entirely.
-
-**What shipped** (commit [`6095d97`](https://github.com/ErikdeJager/ReCue/commit/6095d97), PR
-[#88](https://github.com/ErikdeJager/ReCue/pull/88), branch `task-335-diff-line-counts`, 2026-07-06;
-11 files, +397/−6):
-
-- **`src-tauri/src/git.rs`:** a `DiffLineCounts { added, removed }` struct (`Serialize`, `Default`);
-  a pure `sum_numstat(out)` helper parsing `git diff --numstat` (`<added>\t<removed>\t<path>`, a
-  binary `-\t-\t…` row contributes 0); a bounded `count_new_file_lines(cwd, rel)` (size-capped +
-  binary-skipping newline count, +1 for a final unterminated line); and `diff_line_counts(cwd)` — one
-  `git diff --numstat HEAD` for tracked changes plus untracked additions via the existing
-  `untracked_files` (bounded by `MAX_UNTRACKED_FILES`), entirely fail-open. Every git call routes
-  through `hidden_command()` (the Windows console-flash guard). Unit tests: `sum_numstat_sums_added_and_removed`
-  (fixture asserts `(13,6)`), `diff_line_counts_tracked_edits_and_untracked_additions`, and
-  `diff_line_counts_clean_and_non_git_are_zero`.
-- **`src-tauri/src/commands.rs` + `lib.rs`:** an `async fn diff_line_counts(paths: Vec<String>) ->
-  HashMap<String, DiffLineCounts>` command running the git work on `spawn_blocking` (batched — the
-  whole sidebar refresh is one IPC round-trip), registered in `generate_handler!`.
-- **`src/types/index.ts` + `src/ipc.ts`:** a `DiffLineCounts` type, `showDiffLineCounts: boolean` on
-  `Settings`, and a `diffLineCounts(paths)` IPC wrapper.
-- **`src/store.ts`:** a `diffLineCounts: Record<string, DiffLineCounts>` map (keyed by
-  `session.repoPath`), a `refreshDiffLineCounts` action that **self-guards on the setting** (off ⇒ no
-  git read) and skips a no-op re-render via a shallow `diffCountsMapsEqual`, `DEFAULT_SETTINGS.
-  showDiffLineCounts = true`, and wiring into the debounced busy→idle edge (`scheduleBranchRefresh`)
-  and the spawn/checkout refresh sites.
-- **`src/components/Sidebar/diffCounts.ts` (+ `.test.ts`):** a pure `diffCountBadge(counts, enabled)`
-  returning `null` when disabled / no counts / `{0,0}`, else the counts — Vitest covers off / clean /
-  adds-only / dels-only / both / undefined.
-- **`src/components/Sidebar/Sidebar.tsx` + `.module.css`:** the badge rendered in `SessionRow` as a
-  `flex-shrink:0` slot between the label and the × (so the name truncates first), `+N` in
-  `--status-done` green and `−N` (Unicode minus U+2212) in `--status-error` red, mono at
-  `--fs-meta-xs` with tabular numerals, hidden during inline rename; plus a load-effect refresh keyed
-  on the repo set **and** `showDiffLineCounts` so an off→on toggle populates immediately.
-- **`src/components/Settings/Settings.tsx`:** an Appearance `Checkbox` ("Show added/removed line
-  counts on agent rows").
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 335):
-
-- **Scope = sidebar only** ("left panel") — Overview card / Canvas panel headers are out of scope
-  (noted as a possible future extension).
-- **Untracked (non-ignored) files are included in +N** via a bounded, binary-skipping, size-capped
-  newline read — because `git diff --numstat HEAD` alone omits a fresh agent's newly created files
-  and would show a misleading +0. Removed lines come only from tracked numstat.
-- **Map key = the agent's own working-tree path (`session.repoPath`)** so worktree agents key by
-  their own cwd; agents sharing a folder show the same totals (expected).
-- **Setting `showDiffLineCounts` (default on) lives in Appearance**; when off, no badge **and** zero
-  git reads (self-guarded action).
-- **Colors = `--status-done`/`--status-error` tokens** (matching the FileTree #252 tinting), never
-  hardcoded; a clean tree hides the badge (no `+0 −0`).
-- **"Multi-threaded / async / non-blocking" = batched `async` command on `spawn_blocking`** (#330),
-  fetched on the debounced busy→idle / load / checkout cadence — never on the render path. Bounded
-  (`MAX_UNTRACKED_FILES` + per-file byte cap) so it can't storm; the untracked pass can be dropped
-  later with no frontend change if it proves heavy.
-
-**Key files/areas touched:** `src-tauri/src/git.rs`, `commands.rs`, `lib.rs`; `src/types/index.ts`,
-`src/ipc.ts`, `src/store.ts`; `src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css` + new
-`diffCounts.ts`/`diffCounts.test.ts`; `src/components/Settings/Settings.tsx`. 11 files.
-
-**Dependencies:** none (self-contained; reuses `hidden_command`, `untracked_files`, the refresh
-cadence, and `--status-*` tokens).
-
-**Notes**
-
-- **Cross-platform:** the only OS-sensitive primitive is the `git` shell-out, which uses
-  `hidden_command` (no console flash on Windows, no-op on macOS); the file reads use `cwd.join(rel)`
-  (`PathBuf`), never string path concat, and the CSS ellipsis + `--status-*` tokens are OS-neutral —
-  so the badge behaves identically on macOS and Windows. Fail-open (any git miss / non-git folder /
-  join error → zero, badge hidden, no toast) and idempotent (the store skips a no-op update via
-  `diffCountsMapsEqual`). Checks green: `cargo test` / `npm run lint:rust` / `npm run format:rust` /
-  `npm run build` / `npm run lint` / `npm test`.
-
-### 339. [x] Enter key submits the "New tab from template" modal
-
-The **`TemplateUseModal`** ("New tab from template", #118) now responds to a plain **Enter**: on the
-**template** step Enter advances to the folder step (like clicking **Continue**), and on the **folder**
-step Enter launches the template into a new Canvas tab (like clicking **Open template**) — so a user can
-go template → folder → launch with the keyboard alone instead of being forced to reach for the mouse.
-Each step's Enter is gated by exactly the condition that enables that step's primary button (a template
-selected / `cwd && templateId`), so a disabled primary stays inert.
-
-**What shipped** (commit [`cbca63e`](https://github.com/ErikdeJager/ReCue/commit/cbca63e), PR
-[#89](https://github.com/ErikdeJager/ReCue/pull/89), branch `task-339-enter-submits-template-modal`,
-2026-07-06; 1 file, +40/−7):
-
-- **`src/components/TemplateUseModal/TemplateUseModal.tsx` (single-file change):**
-  - The dialog wrapper is swapped from a `<div>` to a **`<form onSubmit={onSubmit}>`** (same
-    class/role/aria/`stopPropagation`; `.dialog` is selected by class and stays `display:flex`, so the
-    render is byte-identical — no CSS change), mirroring `NewSessionModal`'s form-level submit pattern.
-  - A step-aware **`submitStep()`** helper: on the template step `if (templateId) setStep("folder")`; on
-    the folder step `open()` — and `open()` already no-ops when `!templateId || !cwd` and closes the
-    modal on success (via `useTemplate`), so no extra guard/`close()` is needed and there's no
-    double-launch. `onSubmit` `preventDefault()`s then calls `submitStep()`.
-  - Both `role="listbox"` containers (Templates, Recent folders) get an **`onKeyDown={onListKeyDown}`**
-    that runs `submitStep()` on Enter — needed because the rows are `type="button"`, so Enter on a
-    focused row wouldn't otherwise submit the form (same reason `NewSessionModal` adds a list `onKeyDown`).
-  - The two primary buttons — **Continue** and **Open template** — become `type="submit"` (dropping their
-    `onClick`), keeping their `disabled` guards; **Cancel**, **back**, **Choose folder…**, and the
-    zero-templates **New template…** stay `type="button"` so Enter on them fires their own action.
-  - A `nameRef` on the optional tab-name `<input>` plus a `useEffect` that **focuses it when the folder
-    step opens**, so Enter is immediately live (the folder defaults to the most-recent recent, so launch
-    is usually valid on arrival). The existing Escape `keydown` `useEffect` (#332) is untouched.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 339):
-
-- **Enter semantics per step:** template step advances (= Continue, only with a template selected); folder
-  step launches (= Open template, only when `cwd && templateId`). "Complete the launch once all info is
-  ready" = Enter both advances between steps and fires the final launch, each gated by its primary's
-  enable condition.
-- **Plain Enter only (no modifiers):** the handler ignores `metaKey`/`ctrlKey`/`altKey`, so no ⌘/Ctrl
-  chord is ever hijacked; no ⌘⏎ "worktree" variant (that's a `NewSessionModal` concept, out of scope).
-- **Initial-focus nudge = the tab-name input**, not the launch button — lets the user optionally name the
-  tab while Enter still submits via implicit form submission.
-- **List Enter acts on the current selection, not a Tab-focused row:** the modal has no arrow-key roving,
-  so `onListKeyDown` runs the step action on the currently *selected* row; keyboard users change selection
-  with **Space** first. No auto-select of the first row, no new focus-trap/Tab-cycling.
-- **No component test added:** Vitest runs the `node` env (no jsdom) with no component-render tests, so
-  verification is `npm run build` + `npm run lint` + `npm test` (all pass) + a manual smoke check.
-
-**Key files/areas touched:** `src/components/TemplateUseModal/TemplateUseModal.tsx` only. No store,
-`useTemplate`, CSS, or Rust changes.
-
-**Dependencies:** none.
-
-**Notes**
-
-- **Cross-platform:** Enter is the same key on macOS and Windows and no modifier is involved, so nothing
-  OS-specific is needed; the plain-Enter guard keeps it clear of any future ⌘/Ctrl chord. Escape-to-close
-  (#332) is preserved.
-
-### 338. [x] Branch ahead/behind indicator (↑/↓ vs upstream) in the sidebar
-
-Each git folder shown in the sidebar now displays a compact **`↑N ↓M`** indicator next to its
-**current-branch label** — on the repo's own branch line (`RepoBranchLine`) and on each worktree
-sub-group header (`WorktreeHeader`) — so a user sees at a glance how far their checked-out branch has
-diverged from its upstream remote-tracking branch, without opening a terminal. `↑N` = local commits not
-yet on the upstream (green `--status-done`); `↓M` = upstream commits not yet local (yellow
-`--status-awaiting`); each side shows **only when its count > 0**, and an in-sync branch (`0/0`), a
-branch with **no upstream**, or a non-git folder renders **nothing**. Counts are read **purely locally**
-against the already-fetched remote-tracking ref — no network on any refresh tick — so they're "as of the
-last `git fetch`". End-to-end this mirrors the #335 diff-line-count badge.
-
-**What shipped** (commit [`6baa3e1`](https://github.com/ErikdeJager/ReCue/commit/6baa3e1), PR
-[#90](https://github.com/ErikdeJager/ReCue/pull/90), branch `task-338-branch-ahead-behind`, 2026-07-06;
-10 files, +317/−4):
-
-- **`src-tauri/src/git.rs`:** an `AheadBehind { ahead, behind }` struct (`Serialize`, `Copy`, `Default`);
-  a **pure, unit-tested** `parse_ahead_behind(&str) -> Option<AheadBehind>` (parses a single
-  `<ahead>\t<behind>` line, tolerant of tab or space separators; malformed/empty → `None`); a fail-open
-  `ahead_behind(cwd)` running `git rev-list --left-right --count HEAD...@{upstream}` (left = ahead, right =
-  behind) — `@{upstream}` exits non-zero without an upstream, so `run_git` → `None` automatically — and a
-  batch `ahead_behind_many(paths)` that **omits** no-upstream/non-git folders from the map (mirroring
-  `github_web_urls`). Every git call routes through `hidden_command` (the Windows console-flash guard).
-  Unit tests cover `"2\t1"`/`"0\t0"`/`"3 5"`(space)/`""`/`"garbage"`.
-- **`src-tauri/src/commands.rs` + `lib.rs`:** an `async fn branch_ahead_behind(paths) ->
-  HashMap<String, git::AheadBehind>` batch command running the git reads on `spawn_blocking` (#330 — off
-  the webview thread, one IPC round-trip), registered in `generate_handler!`.
-- **`src/types/index.ts` + `src/ipc.ts`:** an `AheadBehind` type and a `branchAheadBehind(paths)` IPC
-  wrapper.
-- **`src/store.ts`:** a `branchAheadBehind: Record<string, AheadBehind>` map (keyed by repo/worktree
-  folder path), a `refreshBranchAheadBehind` action (full-replace so a folder that lost its upstream drops
-  out, guarded by a referential-stability `aheadBehindMapsEqual`, fail-open on IPC error), and wiring
-  **alongside every `refreshBranches()`** — the debounced busy→idle edge (`scheduleBranchRefresh`), the
-  spawn/checkout/branch-create actions, and after `fetchFolder`/`pullFolder` (a pull also re-reads the
-  branch label so ahead→0 stays honest).
-- **`src/components/Sidebar/branchStatus.ts` (+ `.test.ts`):** a pure `aheadBehindBadge(counts)` returning
-  `null` for undefined / in-sync `{0,0}`, else the counts — Vitest covers undefined / `{0,0}` / ahead-only
-  / behind-only / both.
-- **`src/components/Sidebar/Sidebar.tsx` + `.module.css`:** the `↑N ↓M` indicator rendered after the
-  branch name in `RepoBranchLine` (keyed by repo) and in `WorktreeHeader` (keyed by the worktree path,
-  `!compact`-gated like the `worktree` badge); a `.aheadBehind` slot (`flex-shrink:0`, muted mono, tabular
-  figures) with `.ahead`/`.behind` token colors, so a long branch name ellipsizes first; plus
-  `refreshBranchAheadBehind` wired into the sidebar's `reposKey` and focus/visibility refresh effects.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 338):
-
-- **Scope = the current/checked-out branch of each sidebar folder** (repo branch line + worktree header);
-  the branch *picker* lists are **not** annotated, and a worktree with only a pending schedule (absent
-  from the `branches` map) gets no badge.
-- **No network fetch / staleness is deliberate:** reads only the already-fetched remote-tracking ref;
-  never triggers `git fetch` on a refresh tick (a network call on every idle edge could hang/rate-limit a
-  private remote in a GUI-launched process). `↓N` appears only after an app Fetch/Pull or an in-terminal
-  fetch observes remote commits — counts are "as of the last fetch".
-- **No Settings toggle** — ships always-on: a cheap purely-local read with no privacy surface (unlike
-  #335's per-file diff read, which is gated). A reviewer could add a toggle later.
-- **Map absence = "no indicator":** the batch command omits no-upstream/non-git folders; a present `{0,0}`
-  is also hidden by the pure badge helper.
-- **Format:** `↑`(U+2191)/`↓`(U+2193), each side only when >0; ahead green (`--status-done`), behind
-  yellow (`--status-awaiting`), muted mono — on-system tokens only.
-
-**Key files/areas touched:** `src-tauri/src/git.rs`, `commands.rs`, `lib.rs`; `src/types/index.ts`,
-`src/ipc.ts`, `src/store.ts`; `src/components/Sidebar/Sidebar.tsx` + `Sidebar.module.css` + new
-`branchStatus.ts`/`branchStatus.test.ts`. 10 files.
-
-**Dependencies:** none (self-contained; reuses `run_git`/`hidden_command`, the branch-refresh cadence, and
-`--status-*` tokens; end-to-end mirrors the #335 diff-line-count badge).
-
-**Notes**
-
-- **Cross-platform:** the only OS-sensitive primitive is the `git` shell-out, which routes through
-  `hidden_command` (no console flash on Windows, no-op on macOS); rendering uses on-system CSS tokens +
-  standard `↑`/`↓` glyphs, identical on macOS (WKWebView) and Windows (WebView2). Fail-open everywhere (no
-  upstream / detached HEAD / non-git / any git error → no map entry, no badge, no toast) and idempotent
-  (the store skips a no-op update via `aheadBehindMapsEqual`). Checks green: `cargo test` / `npm run
-  lint:rust` / `npm run build` / `npm run lint` / `npm test`.
-
-### 336. [x] Per-agent "watch" notifications — native popup when a watched agent finishes or needs input
-
-A user can now turn on **watch** for a specific agent, and a **native OS notification** pops up the
-moment that agent's turn ends (busy→idle — i.e. it finished, or is waiting for input). Notifications are
-**off by default and opt-in**: watch is a **per-agent** flag toggled from two entry points (the sidebar
-agent context menu and a header button on the Overview card / Canvas panel), with a global
-**"Watch all agents"** setting (also default off) that notifies for every agent regardless of the
-per-agent flag while retaining the per-agent values. A watched agent notifies on **every** busy→idle edge
-(each finished turn), fired only from the main window so a detached canvas window never double-fires. The
-per-agent flag persists across restart via `sessions.json`. This end-to-end mirrors the #297
-auto-continue global+per-agent pattern and reuses the busy→idle edge that flips the `BusyIndicator` yellow.
-
-**What shipped** (commit [`2b45a7f`](https://github.com/ErikdeJager/ReCue/commit/2b45a7f), PR
-[#91](https://github.com/ErikdeJager/ReCue/pull/91), branch `task-336-watch-notifications`, 2026-07-06;
-19 files (incl. lockfiles), +908/−4):
-
-- **Notification plugin (Rust + JS + capability):** `tauri-plugin-notification = "2"` added to
-  `src-tauri/Cargo.toml`, inited in `lib.rs` (`.plugin(tauri_plugin_notification::init())`),
-  `"notification:default"` granted in `capabilities/default.json`, and
-  `@tauri-apps/plugin-notification` added to `package.json`. Cross-platform native toasts (macOS +
-  Windows) — no `#[cfg]` in ReCue code.
-- **Per-session `watch` flag (Rust):** `#[serde(default)] pub watch: bool` added to `SessionRecord`
-  (`store.rs`) and to every `SessionRecord { … }` struct literal across `commands.rs`/`store.rs`; a
-  `Store::set_session_watch(id, watch)` persisting only on change (mirroring `set_session_auto_continue`);
-  a `set_session_watch` Tauri command (`commands.rs`) registered in `lib.rs`'s `invoke_handler!`.
-- **Types + IPC + store (TS):** `watch?: boolean` on `SessionRecord`/`SessionView` and `watchAllAgents:
-  boolean` on `Settings` (`types/index.ts`); a `setSessionWatch(id, watch)` IPC wrapper (`ipc.ts`);
-  `toSessionView` maps `record.watch ?? false`, `DEFAULT_SETTINGS.watchAllAgents = false`, and
-  `setWatch(id, watch)` (optimistic local update + `void ipc.setSessionWatch`) + `toggleWatch(id)` store
-  actions (`store.ts`).
-- **`src/notify.ts` (new):** `notifyAgentReady(title, body)` — ensure-permission (granted → request → bail
-  silently if denied) then `sendNotification`, wrapped best-effort (never throws) — and
-  `ensureNotificationPermission()` used to prompt at opt-in time.
-- **Fire on the busy→idle edge (`store.ts` `setBusy`):** in the existing `wasBusy && !busy` branch, when
-  `IS_MAIN_WINDOW && !booting`, resolve the session, skip recurring-owned children
-  (`ownedChildSessionIds`), compute `effectiveWatch = settings.watchAllAgents || session.watch`, and
-  fire-and-forget `notifyAgentReady(label, "Finished or awaiting your input")`.
-- **Entry points:** a Watch item (lucide `Eye`/`EyeOff`, "Watch" ↔ "Stop watching") in the sidebar
-  `AgentContextMenu`; a new **reusable `WatchButton`** component (`src/components/WatchButton/`) with
-  `aria-pressed` + a `pointerDown` stop-propagation guard (so it never starts the header drag, like
-  `AutoContinueToggle`), inserted into the Overview `SessionCard` header actions and the Canvas agent
-  panel header — both driven by the same store flag, so all three stay in sync. Toggling on also calls
-  `ensureNotificationPermission()`.
-- **Settings → Sessions:** a "Watch all agents" `Checkbox` bound to `watchAllAgents` (default off) with
-  helper copy, requesting permission when switched on.
-- **`TRAJECTORY_TO_WINDOWS.md`:** records that native notification delivery (permission prompt + toast
-  rendering) needs a Windows real-box smoke check (dev builds may not surface Windows toasts until the app
-  is installed / Start-Menu-registered).
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 336):
-
-- **Mechanism = native OS notification via the Tauri `notification` plugin**, not an in-app toast (the
-  value of watch is being alerted while the app is unfocused); the plugin abstracts macOS vs Windows.
-- **Trigger = the existing busy→idle transition** — "finished" and "has a question" are indistinguishable
-  at the monitor level, so one generic body ("Finished or awaiting your input") covers both.
-- **Fires on every busy→idle transition** for an effectively-watched agent (not just the first); no
-  focus-based suppression (a future refinement).
-- **Effective watch = `settings.watchAllAgents || session.watch`** (both default off); the two toggle
-  entry points control only the per-agent flag, and "watch all" retains per-agent values for when it's
-  turned back off.
-- **Permission requested at opt-in time** and re-checked before each send (silently skipped if
-  denied/unavailable) — ReCue never prompts on launch, and a denied prompt never breaks the busy→idle
-  path.
-- **Fired only from the main window** (`IS_MAIN_WINDOW`, session events are window-global) and suppressed
-  during boot-resume, so a detached canvas window / boot replay never double-fires.
-- **Recurring-owned child sessions are excluded** (no watch UI, render only in the recurring surface), so
-  "watch all" doesn't spam on each rotation. Clicking the notification does nothing beyond the OS default
-  (no deep link — out of scope for cross-platform simplicity).
-- **Reusable action shape for Task 340:** the shared `WatchButton` + `toggleWatch(id)` are the clean
-  action Task 340's "…" dropdown consolidation folds in.
-
-**Key files/areas touched:** `src-tauri/Cargo.toml`, `capabilities/default.json`, `src-tauri/src/store.rs`,
-`commands.rs`, `lib.rs`; `package.json`; `src/types/index.ts`, `src/ipc.ts`, `src/store.ts`, new
-`src/notify.ts`, new `src/components/WatchButton/`; `src/components/Sidebar/Sidebar.tsx`,
-`Overview/Overview.tsx`, `Canvas/CanvasSurface.tsx`, `Settings/Settings.tsx`; `TRAJECTORY_TO_WINDOWS.md`.
-19 files (incl. lockfiles).
-
-**Dependencies:** none. (**Unblocks Task 340** — the "…" header-action consolidation folds in the
-`WatchButton`/`toggleWatch` action.)
-
-**Notes**
-
-- **Cross-platform:** the only OS-divergent primitive is the notification plugin, which abstracts native
-  delivery on macOS (WKWebView) and Windows (WebView2) — no new `#[cfg]` in ReCue code. Windows dev builds
-  may not render toasts until the app is installed (an OS/dev limitation, flagged in
-  `TRAJECTORY_TO_WINDOWS.md` for real-box verification). Additive & backward-compatible: `watch` is
-  `#[serde(default)]` and `watchAllAgents` merges over `DEFAULT_SETTINGS`, so an older `sessions.json`
-  upgrades cleanly. Best-effort/fail-open (permission denied/unavailable → silent no-op). Checks green:
-  `cargo test` / `npm run lint:rust` / `npm run build` / `npm run lint` / `npm test`.
-
-### 337. [x] Global search modal (⌘F / Ctrl+F) across agents, terminals & files
-
-One keystroke — **⌘F on macOS / Ctrl+F on Windows** — now opens a **`GlobalSearch`** modal that searches
-**everything** across every open folder: agents, shell terminals, file/diff/kanban viewer panels,
-scheduled/recurring sessions, **files on disk** (filename **and** content across every sidebar repo), and
-— best-effort — **live agent terminal output**. Results are ranked by relevance and laid out **grouped by
-repo, then by item type**, with a highlighted `path:line` snippet for content/output hits. ↑/↓ move a
-highlighted row and Enter (or click) activates it — jumping to an open item via the existing `selectItem`
-(#79), opening a file viewer for a not-yet-open file, or selecting the agent for a terminal-output hit —
-then closing the modal. The combo is swallowed even while a terminal is focused (the terminal never sees
-the `f`), is main-window-only (inert in a detached canvas window), and Escape / scrim click closes.
-
-**What shipped** (commit [`38e015a`](https://github.com/ErikdeJager/ReCue/commit/38e015a), PR
-[#92](https://github.com/ErikdeJager/ReCue/pull/92), branch `global-search-modal`, 2026-07-06; 11 files,
-+1454/−1):
-
-- **`src-tauri/src/pty.rs`:** a **pure** `strip_ansi(&str) -> String` (drops CSI/OSC/lone-`ESC` escapes,
-  keeps printable text + `\n`/`\t`); a **pure** `match_output_lines(text, needle_lower, per_session,
-  clamp)` returning `(1-based line, ~200-char snippet)` per matching line (mirroring `files.rs`'s clamp);
-  and `SessionManager::search_output(needle, per_session, total)` that snapshots each live session's
-  bounded scrollback (`SCROLLBACK_CAP` ~256 KB), lossy-UTF8 + `strip_ansi` + `match_output_lines`, tagging
-  hits with the session id and stopping at `total` — so scrollback bytes never reach React (per
-  convention). Blank needle → empty. Unit tests cover `strip_ansi` and `match_output_lines`.
-- **`src-tauri/src/commands.rs` + `lib.rs`:** a `SessionOutputMatch { id, line, snippet }` struct + a
-  `search_session_output(query, limit?) -> Vec<SessionOutputMatch>` command (per-session cap 5, total
-  `limit.unwrap_or(50)`) that **cannot fail** (empty vec on no-match/blank), registered in
-  `invoke_handler!`.
-- **`src/ipc.ts`:** a `SessionOutputMatch` interface + `searchSessionOutput(query, limit?)` wrapper (plus
-  reuse of the existing `searchFiles`/`searchFileContents`).
-- **`src/store.ts`:** `globalSearchOpen: boolean` state + `openGlobalSearch`/`closeGlobalSearch` actions.
-- **`src/useKeyboardNav.ts`:** a ⌘F/Ctrl+F handler block (`metaKey || ctrlKey`, `!shift`, `!alt`,
-  `key==="f"`) with `preventDefault` + `stopPropagation`, main-window-gated, toggling the modal and not
-  stacking over `newSessionOpen`/`createPanelOpen` (mirrors the ⌘K guard).
-- **`src/components/GlobalSearch/search.ts` (+ `search.test.ts`):** the pure result model
-  (`SearchResult`, `ResultKind`) + `scoreTitle` (exact > prefix > word-boundary > substring, minus match
-  index, short-title bonus), `scoreFilename`/content/output bases (title > filename > content > output),
-  `rankAndGroup` (sort within `(repo, kind)` by score then title; repos ordered like the sidebar; kinds by
-  a fixed `KIND_ORDER`), `splitHighlight` (pure version of FileTree's `renderSnippet`), and `flatOrder`
-  for ↑/↓ nav. Vitest covers ranking order, grouping stability, and highlight segmentation.
-- **`src/components/GlobalSearch/GlobalSearch.tsx` + `.module.css`:** the focus-trapped modal (modeled on
-  `CreatePanelModal`) — autofocused input, ~180ms debounce, a monotonic `requestSeq` ref dropping stale
-  async responses, a `length >= 2` gate for content/output search, per-repo/kind caps, `<mark>`-highlighted
-  snippets, and activation via `selectItem` / `addOverviewPanel`→`selectItem` / agent-select; the
-  ⌘F/Ctrl+F hint routes through `kbdHint`. Tokens-only styling.
-- **`src/App.tsx`:** mounts `{globalSearchOpen && <GlobalSearch />}`.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 337):
-
-- **Terminal-output search IS included, best-effort** — server-side ANSI-strip + substring over each live
-  session's retained in-memory scrollback tail (`SCROLLBACK_CAP` ~256 KB), keeping bytes off the React
-  thread; **not** persisted `~/.claude/projects/*.jsonl` history; any failure degrades silently (the rest
-  of search still works).
-- **"Files" = both open file/diff/kanban viewer panels AND files on disk** across every sidebar repo
-  (filename via `search_files` + content via `search_file_contents`), not just open viewers.
-- **Searchable kinds:** agents, shell terminals, file/diff/kanban panels, scheduled + recurring sessions,
-  and terminal output — matched by title/label; recurring-owned children excluded (matching Overview).
-- **Main-window only** (`IS_MAIN_WINDOW`, like ⌘N/⌘K/⌘T) since results navigate the sidebar/Overview; a
-  detached canvas window's ⌘F is inert.
-- **Debounce ~180ms + query length ≥ 2 for content/output** (filename/title match at ≥ 1); results capped
-  per repo/kind. **Ranking is a client-side heuristic** (not a fuzzy lib), grouped by repo then item type.
-- **Activation reuses existing actions** — open item → `selectItem` (view-aware jump #79); not-yet-open
-  file → `addOverviewPanel(repo, "markdown", file)` then `selectItem`; terminal-output hit → selects its
-  agent; no new Overview↔Canvas switching beyond `selectItem`'s own.
-
-**Key files/areas touched:** `src-tauri/src/pty.rs`, `commands.rs`, `lib.rs`; `src/ipc.ts`, `src/store.ts`,
-`src/useKeyboardNav.ts`, `src/App.tsx`; new `src/components/GlobalSearch/` (component + CSS module + pure
-`search.ts`/`search.test.ts`). 11 files.
-
-**Dependencies:** none (fully additive; reuses `searchFiles`/`searchFileContents`, `selectItem`,
-`addOverviewPanel`, `repoOrder`, `ownedChildSessionIds`, `kbdHint`).
-
-**Notes**
-
-- **Cross-platform:** all new logic is `metaKey || ctrlKey` + pure byte/string handling (no path or
-  shell-outs), identical on macOS (WKWebView) and Windows (WebView2); the visible keyboard hint routes
-  through `kbdHint` so it reads "Ctrl+F" on Windows. Fully additive and safe to re-run — `search_session_output`
-  returns an empty vec on any no-match/blank input and never errors, so removing the ⌘F handler + modal
-  mount disables the feature with no other behavioral change. Heaviest path (all-repo content search per
-  keystroke) is bounded by the debounce, `length >= 2` gate, per-repo caps, and the already-bounded backend
-  commands. Checks green: `cargo test` / `npm run lint:rust` / `npm run build` / `npm run lint` / `npm test`.
-
-### 340. [x] Consolidate agent header actions (Fork / Copy resume / Watch) into a "…" menu
-
-The three secondary agent-panel header actions — **Fork conversation**, **Copy resume command**, and the
-#336 **Watch** toggle — are folded out of separate always-visible icon buttons into a single **"…"
-(`MoreHorizontal`) dropdown menu**, so an agent's Overview card / Canvas panel header stays uncluttered
-while all three stay one click away. The menu is a **shared `AgentHeaderMenu` component** rendered
-identically at every agent-header site, and — as a net-new additive extension — it's also added to the
-**Big-mode** header (agent items only), which previously had only a title + Close. `OpenViewButton`,
-**Maximize** (⌘E/Ctrl+E), and **Remove/Close** stay as direct icon buttons. All the original gating is
-preserved inside the menu: **Fork** is dimmed (`aria-disabled`, no-op click, `forkUnavailableReason`
-tooltip) for a source with no on-disk conversation yet (#138) or a non-forkable agent (Codex/OpenCode/
-Custom, #142), and **Copy resume command** is shown only when `agentSupportsResume(session.agent)`.
-
-**What shipped** (commit [`0598c80`](https://github.com/ErikdeJager/ReCue/commit/0598c80), PR
-[#93](https://github.com/ErikdeJager/ReCue/pull/93), branch `consolidate-agent-header-actions`,
-2026-07-06; 6 files, +296/−122):
-
-- **`src/components/AgentHeaderMenu/AgentHeaderMenu.tsx` + `.module.css` (new):** a self-contained "…"
-  popover modeled on `ViewsPopover`/`ViewsMenu` — a `MoreHorizontal` trigger (`aria-haspopup="menu"`,
-  `aria-expanded`), a `role="menu"` popover positioned per an `align` prop, outside-`mousedown` + `Escape`
-  dismissal, and a root `onPointerDown` `stopPropagation` so opening it never starts the header drag.
-  Three `role="menuitem"` rows: **Fork conversation** (`GitFork`, `aria-disabled={!canFork}` with the
-  `forkUnavailableReason` tooltip, no-op when disabled), **Copy resume command** (`Copy`, rendered only
-  when `agentSupportsResume`, copies `claude --resume <id>` with the existing toast), and **Watch / Stop
-  watching** (`Eye`/`EyeOff` reflecting `session.watch`, calls `toggleWatch(session.id)` +
-  `ensureNotificationPermission()`). Props: `{ session, className?, iconSize?, align? }`. Design-token CSS
-  only (incl. an `.item[aria-disabled="true"]` dimmed/`not-allowed` rule).
-- **`src/components/Overview/Overview.tsx`:** replaced the inline Fork + Copy-resume buttons and the #336
-  standalone `WatchButton` in `SessionCard` actions with `<AgentHeaderMenu … className={styles.action}
-  iconSize={15}/>` (order: OpenView, "…", Maximize, Remove); dropped the `onFork`/`onCopyResume` props +
-  call-site wiring and the now-orphaned `forkSession`/`copyToClipboard` selectors and unused imports.
-- **`src/components/Canvas/CanvasSurface.tsx`:** replaced the agent Fork + Copy-resume buttons and the
-  standalone `WatchButton` in `.panelActions` with `<AgentHeaderMenu … className={styles.panelClose}
-  iconSize={14}/>` (agent leaves only, order: OpenView, "…", Maximize, Close); removed the now-unused
-  `copyToClipboard`/`forkSession` selectors + imports.
-- **`src/components/BigMode/BigModeModal.tsx` + `.module.css`:** for an agent `maximizedItem`, resolves the
-  session and renders `<AgentHeaderMenu … className={styles.close} iconSize={16} align="right"/>` before
-  the Close button (title + Close otherwise unchanged).
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 340):
-
-- **Exactly the three named actions move into the "…" menu** — Fork / Copy resume / Watch;
-  `OpenViewButton`, Maximize (⌘E/Ctrl+E), and Remove/Close **stay direct** (primary affordances / a
-  keyboard-shortcut action); the `AutoContinueToggle` strip is untouched.
-- **Menu primitive reused, not new:** a shared `AgentHeaderMenu` modeled on `ViewsPopover`/`ViewsMenu`
-  (render-prop-style popover host, outside-click + Escape dismissal, pointerdown-stopped), `MoreHorizontal`
-  trigger — no refactor of `ViewsPopover`.
-- **Big mode included as a net-new additive extension** (agent items only) for cross-site consistency;
-  flagged droppable. Minor accepted wrinkle: Escape while the popover is open also closes Big mode (both
-  window-level listeners).
-- **Watch is folded in as a menu row, superseding #336's standalone `WatchButton` in the headers** (reusing
-  336's `toggleWatch` + `ensureNotificationPermission`); the `WatchButton` component file is left in place
-  as harmless dead code (deletion out of scope).
-- **Sidebar `AgentContextMenu` explicitly left unchanged** (already a right-click dropdown, not a header).
-- **Per-site trigger styling via a `className` prop** (Overview `styles.action`/15, Canvas
-  `styles.panelClose`/14, Big mode `styles.close`/16); behavior/items identical.
-
-**Key files/areas touched:** new `src/components/AgentHeaderMenu/` (`.tsx` + `.module.css`);
-`src/components/Overview/Overview.tsx`, `src/components/Canvas/CanvasSurface.tsx`,
-`src/components/BigMode/BigModeModal.tsx` (+ `.module.css`). 6 files. Frontend-only — no Rust/IPC/
-persistence changes, no new keyboard shortcuts.
-
-**Dependencies:** Task 336 (consumes its `session.watch`, `toggleWatch(id)`, and
-`src/notify.ts` `ensureNotificationPermission`, and supersedes its header `WatchButton`).
-
-**Notes**
-
-- **Cross-platform:** identical on macOS and Windows — the resume command is the literal
-  `claude --resume <id>` on both, the menu adds no keyboard shortcuts (so no `kbdHint`/`revealLabel`
-  routing needed; the untouched Maximize button keeps its `kbdHint` tooltip), Escape uses
-  `event.key === "Escape"`, and styling is design-tokens only. No Rust / `#[cfg]` changes. Purely additive
-  and reversible. Checks green: `npm run build` / `npm run lint` / `npm test`.
-
-### 342. [x] Note that Dark mode is the recommended theme in Settings → Appearance
-
-A small, muted helper line — **"Dark mode is the recommended experience."** — now sits directly under
-the Dark/Light theme toggle in **Settings → Appearance**, gently steering users toward the more polished
-Dark theme (Light being the newer, less-refined option). Pure copy/UX hint: **no behavior change**, no
-new setting, no persistence — the line is **always visible** regardless of which theme is currently
-selected.
-
-**What shipped** (commit [`c36ac3c`](https://github.com/ErikdeJager/ReCue/commit/c36ac3c), PR
-[#94](https://github.com/ErikdeJager/ReCue/pull/94), branch `note-dark-mode-recommended-theme`,
-2026-07-06; 1 file, +3):
-
-- **`src/components/Settings/Settings.tsx`:** inside the Appearance section's existing Theme `.field`
-  wrapper, immediately after the `.segmented` Dark/Light toggle group and before the `.field`'s closing
-  tag, added `<p className={styles.helpText}>Dark mode is the recommended experience.</p>`. The `.field`
-  wrapper is `flex-direction:column`, so the line stacks under the toggle with the wrapper's consistent
-  gap.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 342):
-
-- **Exact wording** chosen as **"Dark mode is the recommended experience."** — short, neutral, names no
-  platform and carries no keyboard shortcut (so no `kbdHint`/`revealLabel` routing; pure WebView copy,
-  identical on macOS and Windows).
-- **Always visible** (static hint), not conditional on the current selection — simplest, and communicates
-  the recommendation regardless of which theme is active.
-- **Reused the established `.helpText` class** (`color: var(--text-muted); font-size: var(--fs-meta-sm);
-  line-height:1.4`, from #162) already used for muted description lines elsewhere in the same modal — **no
-  new CSS class**. Because `--text-muted` is theme-aware in `tokens.css` (Overlay0 in dark, Overlay1 in
-  light), the hint reads correctly and legibly in both themes.
-- **No test file** — copy-only change with no pure logic to unit-test; verification is `npm run build` /
-  `npm run lint` / `npm run format:check` plus a `tauri dev` smoke check.
-
-**Dependencies:** none. (Kept scoped to the single Theme `.field` so the concurrent light-mode theming
-overhaul card — Task 343 — merges trivially; this card does not depend on it.)
-
-**Notes**
-
-- **Cross-platform:** identical on macOS and Windows — a single static `<p>` reusing an existing class and
-  a theme-aware token, no OS-specific primitive, no Rust/IPC/persistence changes. Extremely low risk;
-  rollback is deleting the one line.
-
-### 341. [x] Kanban card editor: auto-continue `-` bullet lists on Shift+Enter
-
-Editing or composing a Kanban card now does **smart list continuation**: pressing **Shift+Enter** while
-the current line is a `-` bullet auto-inserts a fresh `- ` prefix so the list keeps going, and pressing
-Shift+Enter on an **empty** bullet terminates the list instead (the blank `- ` is removed, caret lands on
-the now-plain line). It handles `-` **task-list** items (`- [ ] `/`- [x] `, continuing as a fresh
-**unchecked** box), **preserves leading indentation**, **splits** mid-line text (the part right of the
-caret becomes the new bullet's content), and **replaces** a non-collapsed selection before continuing. In
-this editor plain **Enter still commits/adds the card** and **Escape still cancels** — only Shift+Enter
-gained the behavior, and a non-bullet Shift+Enter still inserts a plain newline unchanged.
-
-**What shipped** (commit [`291aa52`](https://github.com/ErikdeJager/ReCue/commit/291aa52), PR
-[#95](https://github.com/ErikdeJager/ReCue/pull/95), branch `kanban-smart-list-continuation`,
-2026-07-06; 3 files, +139/−3):
-
-- **`src/components/Kanban/smartList.ts` (new):** a pure, DOM-free, dependency-free
-  `applySmartNewline(value, selStart, selEnd) → { value, caret } | null`. Finds the current line via
-  `lastIndexOf("\n", start-1)+1` / `indexOf("\n", start)`, matches the bullet with
-  `/^([ \t]*)- (\[[ xX]\] )?/`; returns `null` for a non-bullet line (so the caller lets the native
-  newline happen), drops the line for an empty bullet (terminate), else splices in
-  `"\n" + indent + "- " + (task ? "[ ] " : "")` and reports the new caret. LF-only (the editor state is
-  already normalized).
-- **`src/components/Kanban/smartList.test.ts` (new):** Vitest coverage for every acceptance case —
-  continue, empty-terminate, indent preserved, task-list continue (incl. checked→unchecked), mid-line
-  split, selection-replace, non-bullet → `null`, bare `-` → `null`.
-- **`src/components/Kanban/KanbanPanel.tsx`:** imports `flushSync` (react-dom) + `applySmartNewline`, adds
-  a module-level `handleSmartBulletKey(e, setValue)` that (on Shift+Enter over a bullet) `preventDefault`s,
-  computes `{value, caret}`, pushes it through the existing setter with **`flushSync`**, then restores the
-  caret via `setSelectionRange` on the captured element — and calls it first in the two card-composition
-  textareas' `onKeyDown` (edit-existing-card → `onEditTextChange`, add-card composer → `setComposerText`).
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 341):
-
-- **Fires on Shift+Enter only** — in the Kanban card editor plain **Enter commits** the card (never a
-  newline) and **Shift+Enter is the newline key**, matching the card's "shift+enter" wording; plain
-  Enter/Escape are untouched.
-- **Both card-composition textareas in scope** — editing an existing card **and** the Add-card composer
-  (both compose a card's title+body identically). The board **Raw**-view textarea and the FileViewer
-  raw-markdown textarea are **out of scope** (separate whole-file markdown surfaces).
-- **`-` marker only** (dash), matching the card and the Kanban convention; `*`/`+`/ordered lists are out
-  of scope, but the marker regex is centralized in the pure helper so a follow-up can extend it in one
-  place. **Task-list items are in scope** and continue as a fresh **unchecked** `- [ ] `.
-- **Empty bullet terminates** (no second empty bullet), **indentation preserved**, caret-based **mid-line
-  split** and **selection-replace**. The title line isn't special-cased (line-based helper; harmless).
-- **Controlled-textarea technique:** `flushSync` commits the new controlled value to the DOM node before
-  `setSelectionRange` restores the caret (no flicker); guarded by `isComposing` for IME safety.
-
-**Dependencies:** none (self-contained UI work on the existing Kanban card editor; no engine/CSS/backend
-change).
-
-**Notes**
-
-- **Cross-platform:** pure WebView string logic on **Shift+Enter** — no `Cmd`/`Ctrl` chord and no
-  native/path/shell code, so it is byte-for-byte identical on macOS (WKWebView) and Windows (WebView2).
-  The board `.md` still round-trips through the unchanged `parseBoard`/`serializeBoard`. Checks green:
-  `npm test` / `npm run build` / `npm run lint`.
-
-### 344. [x] Sidebar agent rows: overlap diff-line counts and the × in one hover-swapped trailing slot
-
-Each sidebar **agent row** now renders the #335 green/red added/removed line counts and the #57 ×
-(remove) button in **one shared trailing slot**, layered instead of side-by-side. At rest the `+N` / `−N`
-counts show; on row hover they go `visibility:hidden` (keeping their box, so the slot width is preserved)
-and the absolutely-positioned × fades in **over the exact same spot** — a true swap with **zero layout
-shift**, reclaiming the ~24px the always-reserved empty × slot used to take from the agent name at rest.
-A clean/no-diff row (or the setting off) is unchanged — the slot's `min-width:24px` still reserves the ×
-(nothing at rest, × on hover).
-
-**What shipped** (commit [`c1a69d3`](https://github.com/ErikdeJager/ReCue/commit/c1a69d3), PR
-[#96](https://github.com/ErikdeJager/ReCue/pull/96), branch `overlap-diff-counts-remove-slot`,
-2026-07-06; 2 files, +62/−35):
-
-- **`src/components/Sidebar/Sidebar.tsx` (`SessionRow`):** wrapped the existing diff-count badge span
-  (unchanged conditional `{!editing && badge && …}`, `aria-label`, `diffAdd`/`diffDel` spans) and the ×
-  button (unchanged `onClick={onRemove}`, `title`, `aria-label`, Lucide `<X size={14}>`) in a single new
-  `<span className={styles.trailing}>`. No logic/state change; the `AgentContextMenu` block stays a direct
-  child of `.row` after the wrapper.
-- **`src/components/Sidebar/Sidebar.module.css`:** new `.trailing` slot
-  (`position:relative; flex-shrink:0; min-width:24px; margin-right:var(--space-4)`) — the counts are its
-  only in-flow child (they define the slot width, clamped to the ×'s 24px); `.remove` became
-  `position:absolute; right:0; top:50%; translateY(-50%)` (out of flow, contributes no width) with
-  `pointer-events:none` at rest → `pointer-events:auto` on `.row:hover` so the invisible × can't intercept
-  a click over the counts; `.diffCounts` dropped its own `flex-shrink`/`padding-right` (the wrapper owns
-  spacing); and `.row:hover .diffCounts` switched from `display:none` to `visibility:hidden` to keep the
-  slot width stable on hover. `.diffAdd`/`.diffDel` colors (`--status-done`/`--status-error`) unchanged.
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 344):
-
-- **No-diff / clean rows match today exactly** — nothing at rest, × on hover; `.trailing`'s
-  `min-width:24px` keeps the ×'s slot reserved.
-- **Agent-rows-only scope** — `.row`/`.remove`/`.diffCounts`/`.diffAdd`/`.diffDel` are used **only** by
-  `SessionRow`; non-agent rows (file/diff/terminal/scheduled/recurring, using `.fileClose`/
-  `.scheduleCancel`) and the collapsed rail (`.railDot*`) are untouched.
-- **Pure-CSS swap, no hover React state** — the counts keep their conditional render; the swap is the
-  `display:none → visibility:hidden` change plus the absolute-overlay ×. Because the counts stay
-  `visibility:hidden` (box preserved) on hover, the slot — and the agent name width — never reflows.
-- **`pointer-events` guard** — the overlapping invisible × can't fire a click over the counts at rest;
-  the `<button>`'s keyboard focusability is unchanged. Counts stay non-interactive (they simply yield the
-  slot to the × on hover).
-
-**Dependencies:** none (builds on the already-shipped #335 sidebar diff counts + the #57 row × button;
-independent of the concurrent Task 343 light-mode work — reuses existing tokens, introduces no new color).
-
-**Notes**
-
-- **Cross-platform:** pure CSS/DOM hover swap using existing tokens (`--status-done`, `--status-error`,
-  `--text-muted`, `--radius-chip`, `--space-*`, `--dur-fast`, `--ease-out`) — no `color-mix`, no
-  `-webkit`-only effect, no native/path/shell/Rust code. `position:absolute` + `opacity`/`visibility`/
-  `pointer-events` render identically on WKWebView (macOS) and WebView2/Chromium (Windows). Presentational
-  and reversible (revert the two files to restore the side-by-side slots). Checks green: `npm run build` /
-  `npm run lint` / `npm run format:check` / `npm test`.
-
-### 343. [x] Fix and polish Light-mode theming (readable text, light surfaces, darker accent, light busy sheen; Dark unchanged)
-
-The Light theme (Catppuccin Latte, #333) was largely unusable — dark-on-dark text, black content
-surfaces (Kanban board, rendered markdown, code/diff views, Canvas panels), a too-bright accent, and a
-busy dot whose sweep flashed a **dark ("black") band**. This task made Light actually usable while leaving
-the **Dark theme byte-for-byte unchanged**. The whole fix is token-first: the four root causes were
-(a) 9 non-terminal surfaces reused the intentionally-dark `--terminal-bg`, (b) the busy sheen swept
-`--text-primary` (which is *dark* in Latte), (c) low-contrast Latte `--text-muted`/`--text-secondary`, and
-(d) a too-bright default accent. Fixed by two new **theme-flip alias tokens** whose base value equals the
-token they replace (so Dark is provably identical), Latte-block value edits, and **one** Light-only
-per-component override for the Overview inter-agent separator.
-
-**What shipped** (commit [`843652f`](https://github.com/ErikdeJager/ReCue/commit/843652f), PR
-[#97](https://github.com/ErikdeJager/ReCue/pull/97), branch `fix-light-mode-theming`, 2026-07-06;
-6 files, +42/−18):
-
-- **`src/styles/tokens.css`:** added two alias tokens to the base `:root` (Dark) block —
-  `--content-bg: var(--terminal-bg)` (== #11111b in Dark) and `--busy-sheen: var(--text-primary)`
-  (== #cdd6f4 in Dark) — **no existing base value touched**. In the Latte `:root[data-theme="light"]`
-  block: flipped `--content-bg: #dce0e8` (light sunken well, ~4.6:1 for #5c5f77 text) and
-  `--busy-sheen: #eff1f5` (near-white glint); darkened text `--text-secondary #6c6f85→#5c5f77` (~5:1) and
-  `--text-muted #8c8fa1→#6c6f85` (~4:1, keeping the primary>secondary>muted hierarchy); and darkened the
-  **default** accent `--accent #fe640b→#e05a0a`, `--accent-hover #ff7a30→#f56b17`, `--accent-dim` alpha
-  updated (`--accent-fg` kept `#ffffff`).
-- **Swapped 9 non-terminal surfaces `--terminal-bg → --content-bg`** (each resolves to the same dark
-  color, so Dark is identical): `FileViewer.module.css` `.message`/`.raw`/`.editor`/`.markdown`/
-  `.codeGutterWrap`/`.diffGutter`, `Canvas.module.css` `.panel`, `Overview.module.css` `.placeholder`,
-  `KanbanPanel.module.css` `.rawEditor`. The **real terminal** (`Terminal.module.css .wrapper`) keeps
-  `--terminal-bg` and stays dark.
-- **`BusyIndicator.module.css`:** the `.busy::after` sheen `color-mix` input `--text-primary → --busy-sheen`
-  (no new `color-mix` introduced), so the glint stays light in Latte.
-- **`Overview.module.css`:** the one per-component override —
-  `:global([data-theme="light"]) .card { border-right-color: #acb0be }` + `.cardGroupStart`
-  `border-left-color` (Latte Surface2) — giving adjacent agent columns an opaque light-slate separator
-  (a translucent hairline vanishes against abutting dark terminal bodies).
-
-**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 343):
-
-- **"Kanban background is black" → the Canvas panel backdrop / Raw editor**, not the board itself (the
-  Board view has no bg of its own; Overview-mounted boards already inherit a light bg). Fixed via
-  `.panel` + `.rawEditor` `--content-bg`.
-- **"Borders between agents are black" → dark panel boxes**, primarily fixed by the `--content-bg` flip;
-  the light-slate Overview separator is the only additional per-component override.
-- **Clean-CSS convention:** token-layer first; the two new tokens are **aliases** (base == replaced token
-  → Dark unchanged); the sole per-component override is `:global([data-theme="light"]) .localClass`,
-  mirroring the existing `:global(body.reduce-motion)` pattern.
-- **Contrast targets:** muted deliberately lands ~4:1 (not full 4.5:1) to preserve the
-  primary>secondary>muted hierarchy; `--text-primary` unchanged (~6:1).
-- **"Slightly darker" accent quantified** as ~11% darker peach; flagged as tunable. **Custom accent still
-  wins** — it writes `--accent`/`-hover`/`-dim`/`-fg` **inline on `<html>`** (higher specificity than
-  `:root[data-theme="light"]`), so editing the Latte default accent doesn't override it.
-- **Dark-unchanged guarantee** enforced via the `git diff tokens.css` audit (base block gains only two
-  alias lines; every component swap resolves to the same dark color; the terminal + xterm theme +
-  `--terminal-*` Latte non-override untouched). No unit-test changes (`accentCompanions` untouched).
-
-**Dependencies:** none. (Concurrent with Task 344, which deliberately reused existing tokens to avoid
-colliding with this light-mode work.)
-
-**Notes**
-
-- **Cross-platform:** all edits are plain hex/`var()` values or a swap of an **already-shipping**
-  `color-mix` input — **no new `color-mix()`** and no `-webkit`-only effect, so no new plain-color
-  fallback is needed and rendering is identical on WKWebView (macOS) and WebView2/Chromium (Windows).
-  CSS-token work only — no TS/Rust, fully idempotent and reversible. Checks green: `npm run build` /
-  `npm run lint` / `npm run format:check` / `npm test`.
-
-### 345. [x] Linux support (Arch/Ubuntu/Mint fully, best-effort others) — `xdg-open`/file-manager reveal, Ctrl-form kbd hints, `$SHELL` fallback, ubuntu-22.04 AppImage CI leg
-
-ReCue now builds, tests, **and runs** on **Linux** alongside macOS and Windows — targeting **Arch,
-Ubuntu, and Mint fully, best-effort for other distros** (#345). The codebase was already ~90%
-Linux-ready: most per-OS divergence uses `#[cfg(unix)]` / `#[cfg(not(windows))]` arms Linux inherits,
-the frontend keyboard handling is `metaKey || ctrlKey`, and the Linux WebView is Chromium (WebKitGTK)
-so every `-webkit-scrollbar` / `color-mix` CSS choice carries over unchanged. The port was a small set
-of **targeted fixes** where a "not-Windows"/`cfg(unix)` arm secretly assumed *macOS* (the macOS `open`
-binary, `open -R`, ⌘ glyphs), plus the CI/bundle and docs. **macOS and Windows behavior is unchanged.**
-
-**What shipped** (branch `feat/linux`, PR [#98](https://github.com/ErikdeJager/ReCue/pull/98),
-2026-07-07):
-
-- **`src-tauri/src/commands.rs`** — `os_open` (backs `open_data_folder` + `reveal_path`) split its
-  non-Windows arm into a macOS `open` arm and a `#[cfg(not(any(macos, windows)))]` → **`xdg-open`** arm.
-  `reveal_file_in_finder` gained an `#[cfg(all(unix, not(target_os = "macos")))]` arm →
-  **`reveal_file_linux`**, a best-effort file-manager **select** via the FreeDesktop
-  `org.freedesktop.FileManager1.ShowItems` D-Bus method (`dbus-send`), falling back to `xdg-open` on the
-  file's parent directory when there is no FileManager1 provider. `reveal_file_linux`'s `cfg` is widened
-  with `, test)` (+ `allow(dead_code)` under `test`) so the macOS host still type-checks it (mirroring
-  the existing `explorer_select_arg` `any(windows, test)` pattern).
-- **`src-tauri/src/pty.rs`** — `default_shell` now keeps macOS's `$SHELL` else `/bin/zsh` byte-for-byte
-  and delegates Linux/BSD to a new `test`-widened `non_macos_unix_shell` (`$SHELL` else first existing
-  of `/bin/bash`, `/bin/sh` — `/bin/zsh` is not a safe Linux default). New unit test
-  `non_macos_unix_shell_is_never_empty`.
-- **`src-tauri/src/path_env.rs`** — no code change (the login-shell PATH probe is `#[cfg(unix)]` and
-  already runs on Linux, restoring the user's real PATH for a `.desktop`/AppImage launch); clarified the
-  module + `restore_user_path` doc comments (were "macOS").
-- **`src/platform.ts`** + **`src/platform.test.ts`** — added `isLinux(platform)`; `kbdHint` now returns
-  the **Ctrl**-form on Windows **and Linux** (⌘ only on macOS) and `revealLabel` returns **"Reveal in
-  File Manager"** on Linux. One-file change fixes all ~50 `kbdHint` and 9 `revealLabel` call sites (they
-  thread the `platform` signal). Added Linux test cases.
-- **`.github/workflows/release.yml`** — added a third release-matrix leg **`ubuntu-22.04`** with
-  `args: --bundles appimage` and an apt step installing the Tauri 2 / AppImage toolchain
-  (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`,
-  `build-essential`, `curl wget file`, `libssl-dev`, `patchelf`). The macOS-only signing/DMG steps are
-  already `matrix.platform == 'macos-latest'`-guarded, so they skip on Linux. tauri-action minisign-signs
-  the AppImage like the other legs and merges a `linux-x86_64` entry into `latest.json` → the **AppImage
-  self-updates**; the leg runs last (serialized `max-parallel: 1`) so the merge appends after darwin +
-  windows.
-- **Docs** — `CLAUDE.md` (the "⚠️ Cross-platform is a hard requirement" section + stack/seams/build
-  notes now say **macOS, Windows, and Linux** and document the Linux arms), `README.md` (prerequisites,
-  Linux AppImage artifact, 3-OS pipeline), and a new **`TRAJECTORY_TO_LINUX.md`** (the running log of
-  Linux parity work + a "needs real-box verification" checklist).
-
-**Key decisions** (confirmed with the maintainer):
-
-- **AppImage only** — one universal binary runs on Arch/Ubuntu/Mint & others; no `.deb`/`.rpm`, no AUR
-  PKGBUILD. CI builds AppImage-only via `--bundles appimage` (leaving `tauri.conf.json`
-  `bundle.targets: "all"` so macOS/Windows are undisturbed and a local `tauri build` still emits all
-  Linux formats for dev).
-- **ubuntu-22.04** CI base — broadest glibc/webkit2gtk-4.1 floor (runs on Ubuntu 22.04+, Mint 21 **and**
-  22, current Arch).
-- **AppImage self-updates** through the existing minisign updater (`linux-x86_64` in `latest.json`);
-  no version bump / no patch-notes file in this PR (releases are batched by the maintainer).
-
-**Dependencies:** none (additive Linux arms + a CI leg + docs; no change to macOS or Windows behavior).
-
-**Notes**
-
-- **Cross-platform:** every genuine divergence stays `#[cfg]`-gated (Rust) or branched on the `platform`
-  signal (frontend), with all arms provided; the macOS arm is byte-for-byte unchanged and the Windows
-  arm untouched, the Linux arm is additive. Because the macOS build host can't compile a Linux-only arm,
-  Linux-only helpers (`reveal_file_linux`, `non_macos_unix_shell`) widen their `cfg` with `, test)` so
-  `cargo clippy --all-targets -- -D warnings` and `cargo test` type-check + exercise them on the host.
-  Checks green on macOS: `npm run build` / `npm run lint` / `npm test` (platform Linux cases) /
-  `cargo test` (180 pass, incl. the new shell test) / `cargo clippy --all-targets -- -D warnings` /
-  `cargo fmt --check` (touched files clean). GUI/AppImage/D-Bus paths that can't be unit-tested are
-  logged for real-box verification in **`TRAJECTORY_TO_LINUX.md`**.
-
-### 346. [x] Linux performance — WebKitGTK DMABUF env workaround, software-WebGL → DOM-renderer fallback, coalesced output emits, base64 scrollback replay
-
-ReCue on Arch Linux (release AppImage, Wayland, across NVIDIA/AMD/Intel machines) was extremely slow —
-laggy terminal input echo, slow display updates, slow agent boot/spawn — while macOS and Windows were
-fine (#346). Investigation across the backend PTY pipeline, the frontend rendering path, and the
-Linux/WebKitGTK configuration found four compounding causes; all four are fixed — the Linux-specific
-ones cfg-/platform-gated, the platform-neutral ones provably order/content-preserving. **macOS and
-Windows behavior is unchanged.**
-
-**What shipped** (branch `fiz/linux-oprimization`, PR [#99](https://github.com/ErikdeJager/ReCue/pull/99),
-2026-07-08):
-
-- **`src-tauri/src/linux_webkit.rs`** (new) + **`src-tauri/src/lib.rs`** — the WebKitGTK DMA-BUF
-  workaround: `apply_webkit_env_workarounds()` runs at the top of `run()` (before `tauri::Builder`/GTK
-  init and before any threads, next to `path_env::restore_user_path()`) and sets
-  `WEBKIT_DISABLE_DMABUF_RENDERER=1` **only** when the NVIDIA proprietary driver
-  (`/proc/driver/nvidia/version` / `/sys/module/nvidia`) or a VM (`/sys/hypervisor/type`, DMI
-  product/vendor strings) is detected — on NVIDIA/VMs WebKitGTK's DMA-BUF renderer is the classic
-  "Tauri app is unusably slow on Linux" failure, dragging the whole webview down. A user-set
-  `WEBKIT_DISABLE_DMABUF_RENDERER` is always respected; `RECUE_DISABLE_DMABUF=1|0` force-overrides both
-  ways; healthy AMD/Intel Mesa stacks keep the (faster) DMA-BUF path. `WEBKIT_DISABLE_COMPOSITING_MODE`
-  is never auto-set (`RECUE_DISABLE_COMPOSITING=1` is a debug opt-in). The pure decision core
-  (`should_disable_dmabuf` / `parse_force_flag` / `is_vm_product_name`) is cfg-widened with `, test)`
-  (the `reveal_file_linux` precedent) and fully unit-tested on every host; only the thin fs-probe +
-  `set_var` shell is Linux-only (edition-2021 `set_var` is safe; the 2024 caveat is flagged in-code).
-- **`src/components/Terminal/webglRenderer.ts`** (new, pure + vitest suite) +
-  **`src/components/Terminal/terminalPool.ts`** — the software-WebGL fallback: WebKitGTK can hand
-  xterm's WebGL addon a context that "works" but is software-rasterized (llvmpipe/SwiftShader), so
-  every terminal frame rendered on the CPU. The pool now probes the WebGL renderer string **once per
-  app** (memoized; Linux only — macOS/Windows short-circuit to `true` and never construct the probe
-  canvas) and skips the `WebglAddon` when `isSoftwareWebGLRenderer` matches, so xterm uses its DOM
-  renderer (the #105 detached-window fallback — faster than software GL). Unknown/empty renderer
-  strings keep WebGL (only skip when we *know* it's software).
-- **`src/store.ts`** — `init()` now loads the `platform` (+ `windowsBuild`) signal **before** the first
-  `refresh()`, so the platform is always known before any terminal host is created — closing the latent
-  race for the new Linux probe **and** for Windows' `windowsPtyOption` (both read it at host-creation
-  time). Platform-neutral: same reads, earlier.
-- **`src-tauri/src/commands.rs`** + **`src/types/index.ts`** + **`terminalPool.ts`** — base64 scrollback
-  replay: `ScrollbackReply` now carries `b64: String` (via the #261 `encode_output`) instead of
-  `bytes: Vec<u8>`, which serde serialized as a JSON integer array — ~1 MB+ of JSON parsed on **every**
-  terminal mount (an agent wall of N terminals paid N of those at boot). The pool decodes with the
-  existing `decodeOutputB64`. New serde round-trip test. Platform-neutral win for all three OSes.
-- **`src-tauri/src/pty.rs`** + **`src-tauri/src/lib.rs`** — coalesced output emits: the event-forwarder
-  thread now drains whatever is queued after each blocking `recv` (`try_recv`, zero added latency for a
-  lone event; `MAX_EVENT_DRAIN` 512 bounds a pass) and merges **consecutive contiguous same-session**
-  `Output` runs via the new pure `pty::coalesce_output_events` (cap `COALESCE_MAX_BYTES` = 256 KB =
-  `SCROLLBACK_CAP`), collapsing claude's TUI repaint storms from hundreds of per-8 KB emits/sec — each
-  an evaluate-JS on the webview main thread, costliest on Linux/WebKitGTK — into a few. The
-  **contiguity guard** (next chunk's start == run's end) keeps the frontend's
-  `start = offset - bytes.length` dedupe math exact and splits across a Restart (a respawn under the
-  same id resets the fresh `Scrollback` total to 0 — a naive merge would corrupt the replay dedupe);
-  non-Output events are never reordered (a session's `Exited` still emits strictly after its final
-  `Output`). 8 new unit tests incl. the Restart hazard, ordering across `Exited`, and the size cap.
-- **Docs** — `TRAJECTORY_TO_LINUX.md` gained a "Performance (Task #346)" section (symptoms, fixes,
-  env-var policy) + a "Needs real-box verification (performance)" checklist (per-GPU DMABUF behavior,
-  llvmpipe fallback, AppImage under load); `CLAUDE.md` documents the four fixes in the Linux build note.
-
-**Key decisions**
-
-- **Detection-based, not unconditional**: the user's fleet spans NVIDIA/AMD/Intel, so
-  `WEBKIT_DISABLE_DMABUF_RENDERER=1` is set only on the known-bad stacks (NVIDIA proprietary / VM) —
-  blanket-disabling would cost performance on healthy Mesa. User env always wins; `RECUE_*` overrides
-  exist for support.
-- **Deliberately untouched** (future work, logged in the trajectory): the login-shell PATH probe's boot
-  cost (≤3 s worst case), per-keystroke `write_stdin` invokes (batching adds latency by definition),
-  Overview terminal virtualization, `[profile.release]` tuning.
-- No version bump / patch-notes file (releases are batched by the maintainer).
-
-**Dependencies:** 345 (the Linux port this optimizes).
-
-**Notes**
-
-- Checks green on macOS: `cargo test` (196 pass, incl. the new coalescer / env-policy / scrollback
-  tests), `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo llvm-cov` logic
-  surface 87.6% lines (`linux_webkit.rs` 97.9%), `npm test` (664 pass / 46 files), frontend coverage
-  90.5% lines, `npm run build` / `lint` / `format:check`.
-- The per-GPU runtime behavior (DMABUF auto-set on NVIDIA, left alone on AMD/Intel, llvmpipe → DOM
-  renderer, AppImage under a busy TUI) can't be exercised on CI — walked via the
-  `TRAJECTORY_TO_LINUX.md` checklist on real boxes.
-
-### 349. [x] Linux: native file dialogs follow ReCue's own theme (fix the always-white Adwaita dialogs in the AppImage)
-
-In the shipped **AppImage** every native dialog — the folder picker ("Choose a working directory"), the
-open-file dialog (FileSwitcher → Browse…) and the save dialog (template export) — rendered white/light
-Adwaita no matter the desktop's theme or ReCue's own Dark/Light setting (#333), so a dark-desktop user in
-a dark app got a blinding white dialog. Three facts stack up: (1) Tauri's AppImage bundler injects the
-vendored `linuxdeploy-plugin-gtk.sh` AppRun hook, which bundles GTK and then **forces `GTK_THEME`** for
-the whole process, picking the variant by grepping the *system theme name* for the substring `dark` — so
-`catppuccin-mocha-yellow-standard+default` (and any `color-scheme: prefer-dark` setup whose theme name
-lacks "dark") falls through to `GTK_THEME=Adwaita:light`; (2) `tauri-plugin-dialog` (2.7.1) resolves to
-rfd's **in-process GTK3** backend on Linux (`Cargo.lock`: `rfd 0.16` + `gtk-sys 0.18`, **no `ashpd`**), so
-every dialog is a GTK3 widget created inside our process and themed by that polluted env; (3) GTK3's
-`get_theme_name()` gives **`GTK_THEME` absolute precedence** — `gtk-theme-name` /
-`gtk-application-prefer-dark-theme` are not even read when it is set, which is why tao's
-`Window::set_theme` cannot fix it. The env itself must be corrected, **before GTK initializes**.
-**macOS and Windows are byte-for-byte unchanged** (no env write, no file read).
-
-**What shipped** (branch `linux-gtk-dialog-theme`, PR [#101](https://github.com/ErikdeJager/ReCue/pull/101),
-2026-07-14):
-
-- **`src-tauri/src/linux_gtk.rs`** (new, mirroring `linux_webkit.rs`'s shape) — `apply_gtk_theme_env()`
-  builds a `GtkThemeProbe` from the environment + the persisted store and exports `GTK_THEME`. The pure,
-  unit-tested `gtk_theme_env` policy, in order: **(1)** `RECUE_GTK_THEME=<literal GTK_THEME value>` forces
-  the value **everywhere** (the support escape hatch — and the way to smoke-test this in `tauri dev`
-  without building an AppImage; a blank/whitespace value is treated as unset); **(2)** not in an AppImage
-  (`$APPIMAGE`/`$APPDIR` unset — a dev run, `.deb`, or distro package) → leave `GTK_THEME` untouched, since
-  the desktop's real GTK theme already applies and forcing Adwaita would be a downgrade; **(3)**
-  `APPIMAGE_GTK_THEME` set → leave it alone (the hook already copied the user's explicit choice verbatim —
-  ReCue never clobbers it); **(4)** otherwise pick the **Adwaita** variant — the family the AppImage
-  actually bundles and the only one guaranteed to render against the bundled GTK — from ReCue's own
-  `settings.theme`: `light` (case-insensitive, trimmed) → `Adwaita:light`, everything else including a
-  fresh install with no persisted settings → `Adwaita:dark` (matching `DEFAULT_SETTINGS.theme = "dark"`).
-  One `[recue] GTK: set GTK_THEME=… (was …; recue theme: …)` log line on the write.
-- **Reading the theme before Tauri exists** — the `Store` is only constructed in `.setup()`, i.e. *after*
-  GTK init, so the module reads `settings.theme` straight out of `sessions.json` itself: read-only and
-  **fail-open** (`theme_from_store_json` returns `None` for malformed JSON, a missing/`null` `settings`, a
-  missing or non-string `theme` → dark, which is the default theme anyway). `store_path()` re-derives
-  Tauri's Linux `app_data_dir()` rule (`$XDG_DATA_HOME` when absolute, else `path_env::home_dir()` +
-  `.local/share`, joined with the identifier), reusing the shared `home_dir()` seam rather than reading
-  `$HOME`. A **drift-guard test** parses `tauri.conf.json` via `include_str!` and asserts its `identifier`
-  still equals the hardcoded `com.recue.app`, so the hand-derived path can't silently rot.
-- **`src-tauri/src/lib.rs`** — `mod linux_gtk;` + one call in `run()`, immediately after
-  `linux_webkit::apply_webkit_env_workarounds()` and before `tauri::Builder` — i.e. before GTK init **and**
-  before any thread spawns (env mutation isn't thread-safe; `set_var` is `unsafe` in Rust 2024 for exactly
-  that reason), joining the existing pre-GTK env writes.
-- **`src/components/Settings/Settings.tsx`** — a Linux-only (`isLinux(platform)`) sentence appended to the
-  existing Theme help text: native file dialogs adopt the theme the next time ReCue starts. Absent on
-  macOS/Windows; no new CSS, store state, or component.
-- **Docs** — `TRAJECTORY_TO_LINUX.md` gained a dated `### Native GTK dialogs were always light (Task #349)`
-  entry (bug / fix / rejected options / real-box checklist); `README.md`'s Linux build section gained a
-  one-line override note (`APPIMAGE_GTK_THEME=Adwaita:dark`, or `RECUE_GTK_THEME=<gtk theme>`).
-
-**Key decisions**
-
-- **Fix the env, don't swap the backend.** The **`xdg-portal`** feature of `tauri-plugin-dialog` was
-  rejected and kept only as the *documented fallback*: it hard-requires a running `xdg-desktop-portal` +
-  backend, and rfd has no GTK fallback when built with it — on a minimal/wlroots box the dialogs would stop
-  working **entirely**, turning a cosmetic bug into "cannot open a folder" (unacceptable for the
-  best-effort-other-distros promise). It also follows the *system* theme, so a light-desktop + dark-ReCue
-  user would still mismatch. Also rejected: **unsetting `GTK_THEME`** (the user's real theme may not exist
-  under the AppImage's `XDG_DATA_DIRS` or render against the *bundled* GTK — precisely why the hook forces
-  Adwaita; it would trade a white dialog for a possibly-broken one) and **runtime tao `set_theme`** (needs a
-  direct `gtk` dep and is a no-op while `GTK_THEME` is set — fact 3).
-- **The variant follows ReCue's own theme, not the system color-scheme** — the dialog belongs to the app,
-  and this is deterministic + unit-testable on any host. Only the Adwaita **variant** is chosen, never a
-  different theme *name*.
-- **Scoped to the AppImage-polluted env only.** A dev / distro-package run is left alone; making
-  non-AppImage dialogs follow ReCue's theme rather than the desktop's is an explicit non-goal.
-- **Accepted limitation:** `GTK_THEME` is read at GTK init, so toggling the theme in Settings re-themes the
-  app instantly but the **native dialogs pick up the new variant on the next launch** — surfaced as the
-  muted Linux-only Settings hint above.
-- **A separate module, not an extension of `linux_webkit.rs`** — Task 347 is editing that file; the only
-  shared touchpoint is the append-only call list in `run()`. Complementary to Task 350 (which scrubs
-  AppImage-polluted env from *child* processes — a different process's env; `GTK_THEME` landing on its
-  strip-list for children is fine and expected).
-- No dependency / `Cargo.toml` / `Cargo.lock` / `tauri.conf.json` / capability / dialog-call-site
-  (`src/ipc.ts`) change. No version bump or patch-notes file (releases are batched by the maintainer).
-
-**Dependencies:** none. (Builds on landed work only: #333 the `settings.theme` field, #345 the Linux port +
-AppImage leg, #346 `linux_webkit.rs`'s pre-GTK env pattern.)
-
-**Notes**
-
-- The pure decision core (`gtk_theme_env` / `adwaita_variant` / `theme_from_store_json`) is `, test)`-widened
-  (the `reveal_file_linux` / `explorer_select_arg` precedent) so the macOS and Windows hosts still type-check
-  **and** unit-test it; only the thin env-probe + `set_var` + file-read shell is Linux-only.
-- The GUI/AppImage surface (a dark folder picker in the real AppImage, the light variant after a toggle +
-  relaunch, both escape hatches honored, a non-AppImage run leaving `GTK_THEME` untouched) can't be
-  exercised on CI — logged in `TRAJECTORY_TO_LINUX.md`'s real-box checklist (Arch/Ubuntu/Mint ×
-  GNOME/KDE/Cinnamon/Xfce, Wayland + X11).
-- Benign side effect: a dark `GTK_THEME` also darkens the GTK window background and WebKitGTK's
-  `prefers-color-scheme`. ReCue's CSS keys off `data-theme`, not `prefers-color-scheme`, so nothing in the UI
-  changes — and a dark native background *helps* (does not fight) Task 348's white-startup-flash work.
-
-### 350. [x] Scrub the AppImage-injected environment from every child process ReCue spawns
-
-Under the Linux **AppImage**, every process ReCue spawned — each `claude`/codex agent PTY, every #72 shell
-terminal, every `git` shell-out and `<cli> --version` probe, `xdg-open`, `dbus-send`, the login-shell PATH
-probe — inherited the AppImage runtime's polluted environment: the bookkeeping vars (`APPDIR`, `APPIMAGE`,
-`APPIMAGE_UUID`, `ARGV0`, `OWD`), the scalars the vendored `linuxdeploy-plugin-gtk` AppRun hook forces for
-the *webview* (`GTK_THEME=Adwaita:light`, `GDK_BACKEND=x11`), and `$APPDIR`-prefixed values for `PATH`,
-`LD_LIBRARY_PATH`, `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GIO_MODULE_DIR`, `GDK_PIXBUF_MODULE_FILE`,
-`GI_TYPELIB_PATH`, `PYTHONPATH`, `PERLLIB`, `QT_PLUGIN_PATH`, `GST_*`, … — all pointing into the transient
-`/tmp/.mount_…` FUSE mount. That is documented to break `xdg-open` and to degrade or outright break a system
-binary that ends up loading the AppImage's bundled libraries (tauri-apps/tauri#10617,
-AppImage/AppImageKit#124). One shared, pure, unit-tested scrub seam now gives children the user's real
-environment. **A byte-for-byte no-op on macOS, on Windows, and on any non-AppImage Linux build** (dev,
-`.deb`, pacman).
-
-**What shipped** (branch `scrub-appimage-child-env`, PR [#102](https://github.com/ErikdeJager/ReCue/pull/102),
-2026-07-14):
-
-- **`src-tauri/src/child_env.rs`** (new, modeled on `linux_webkit.rs`) — the pure core plus three
-  process-level entry points. The rule is **value-based, not an exhaustive var list**: any `:`-separated
-  segment living under `$APPDIR` (or under the `/tmp/.mount_` prefix) is stripped from **any** variable, so a
-  future AppRun's newly injected path vars are covered automatically — only a new *scalar* forcing would need
-  a `FORCED_VARS` entry. Per key: `APPIMAGE_ORIGINAL_*` bookkeeping and the marker vars are dropped; a forced
-  scalar is restored from its `APPIMAGE_ORIGINAL_<VAR>` backup if one exists, else dropped; any var with a
-  backup is restored **verbatim**; otherwise the AppImage-owned segments are stripped. A var whose segments
-  were *all* AppImage-owned is **removed entirely, never set to `""`** — an empty `LD_LIBRARY_PATH` segment
-  means "current working directory" to the dynamic loader (a consumer then falls back to its FreeDesktop
-  default, which is exactly the pre-AppImage state, since AppRun only ever *prepends*). `PATH` is on a
-  `NEVER_UNSET` list, so an all-AppImage `PATH` is left untouched rather than emptied.
-- **Entry points** — `child_env_vars()` (the PTY env snapshot for `portable_pty::CommandBuilder`, which
-  starts from an *empty* env set, so a var omitted here is genuinely absent from the child; non-UTF-8 pairs
-  pass through verbatim — they cannot be AppImage vars), `scrub_command(&mut Command)` (snapshot → `scrub_env`
-  → `env_diff` → `env_remove`/`env` overrides), and `command(program)` (construct + scrub). Outside an
-  AppImage the diff is empty, so **zero** `env`/`env_remove` calls are made and the `Command` is byte-for-byte
-  what it was before.
-- **Five spawn seams wired** — `pty.rs::spawn_with_id` (the single spawn behind `spawn_session` /
-  `spawn_session_with_prompt` / `resume_session` / `fork_session` / `spawn_terminal`) copies the scrubbed env
-  instead of raw `std::env::vars_os()`, still setting `TERM=xterm-256color` after; `git::hidden_command`
-  applies the scrub, covering every `git` shell-out and `<cli> --version` probe (its doc comment now names it
-  the shared "shell out to a helper process" seam — console-flash guard **and** AppImage scrub); `commands.rs`'s
-  `os_open` / `open_url` / `reveal_file_in_finder` / `reveal_file_linux` (`dbus-send` + the `xdg-open`
-  parent-dir fallback) build through `child_env::command`; and `path_env::login_shell_path_blocking` runs the
-  `$SHELL -ilc` probe through it too.
-- **Docs** — `CLAUDE.md` gained `child_env.rs` in the `src-tauri/` layout tree, `child_env_vars()` /
-  `scrub_command()` in the "reuse the established cross-platform seams" Rust list (next to
-  `git::hidden_command()`), and a sentence in the Linux block; `TRAJECTORY_TO_LINUX.md` gained a dated
-  `### AppImage child-process environment (Task #350)` entry + its real-box checklist.
-
-**Key decisions**
-
-- **One shared seam, not a `pty.rs`-only patch.** The card only named the PTY spawn, but `git`, `xdg-open`,
-  `dbus-send` and the login-shell probe inherit the same pollution — so all five go through one module.
-- **Gated `#[cfg(all(unix, not(target_os = "macos")))]`**, not the card's `#[cfg(unix)]`, so macOS stays
-  byte-for-byte (it shares the unix arm but never sees an AppImage). The pure helpers are `, test)`-widened +
-  `cfg_attr(test, allow(dead_code))` — the `explorer_select_arg` / `reveal_file_linux` / `should_disable_dmabuf`
-  precedent — so the macOS/Windows hosts still type-check **and** unit-test them without tripping clippy's
-  `--all-targets -D warnings` dead-code check.
-- **The scrub arms only when `APPDIR` or `APPIMAGE` is present in the env map**, making every other run a
-  provable identity transform — pinned by the first unit test and by `scrub_command`'s empty-diff path.
-- **Binary resolution is untouched:** `find_on_path` / `resolve_command` still use ReCue's *own* process
-  `PATH` (already repaired by #345's login-shell probe). The scrub changes what the child *inherits*, never
-  which binary is found.
-- **`WEBKIT_DISABLE_DMABUF_RENDERER` is deliberately not stripped** — #346 sets it for ReCue's own webview,
-  it isn't AppImage-injected, and it's inert for CLI children. The macOS-only spawns (`usage.rs`'s `security`,
-  `lib.rs`'s `tccutil`) are likewise left alone; no AppImage exists there.
-- **Complementary with Task #349, not overlapping:** #349 *sets* `GTK_THEME` for ReCue's **own** process (so
-  the native dialogs are dark); this task *strips* it from **children** under the AppImage (so a GTK app
-  launched from a ReCue terminal uses the user's own theme). No frontend, store, IPC, or bundling-config
+### 412. [x] Move the agent × out of the Attention queue into the agent header, and make ⌘W close the focused Attention agent
+
+In the **Attention** view (#398), the per-card close (×) button is removed from each queue row and a
+single × now lives in the **top-right of the focused agent's own header** (the right pane).
+Additionally, the app-wide **⌘W / Ctrl+W "close the focused panel" keybind** now works in Attention
+— it removes the focused agent, exactly like the header ×. The result: a calmer queue list (rows are
+pure select targets), the destructive close lives on the agent it acts on, and the close shortcut
+behaves sensibly in Attention instead of doing nothing.
+
+**What shipped** (branch `move-attention-close-to-header`, PR
+[#170](https://github.com/ErikdeJager/ReCue/pull/170), merged 2026-07-15 into `dev`) — 83 insertions
+/ 115 deletions across five files:
+
+- **`src/components/Attention/Attention.tsx`** — `QueueCard` loses its hover `.cardRemove` × and all
+  its supporting state (the `armed` two-step confirm, the `timer` ref, `clearTimer`/`disarm`/
+  `handleRemove`, the unmount cleanup, and the `onRemove`/`confirmDestructive` props) — it's now a
+  pure presentational select target. A destructive × (`X` from lucide, `size={15}`) is added as the
+  **rightmost** control in the agent-pane header's `.agentActions` group (after ⋯ and Maximize),
+  calling `removeSession(activeSession.id)` **directly, no inline confirm arm** — matching the
+  Overview agent-header × convention.
+- **`src/components/Attention/Attention.module.css`** — the `.cardRemove*` rules (~43 lines) are
+  deleted; an `.actionDanger:hover` rule (red `--status-error`) is added, mirroring
+  `Overview.module.css`.
+- **`src/store.ts`** — `closeFocusedPanel`'s trailing Attention **no-op** is replaced with a branch
+  that, in the main window's Attention view, rebuilds the queue (same inputs as `dismissAttention`),
+  resolves the effective active id (`selectedId` if a queue member, else `queue[0]`), and
+  `void removeSession(activeId)` — a deliberate exception to the "never destructive" ⌘W rule,
+  matching the header ×. Selection advances automatically as the queue recomputes; an empty queue is
+  a safe no-op.
+- **`src/useKeyboardNav.ts`** — docstring/comment only: the ⌘W line notes it now also removes the
+  focused Attention agent. No dispatcher change — `close-panel` already routed to
+  `closeFocusedPanel` in every view (and still stays inert while a modal owns the keyboard).
+- **`src/store.test.ts`** — the old "no-ops in the Attention view" test is rewritten to assert
+  `closeFocusedPanel()` removes the focused queued agent, plus a new empty-queue no-op case.
+
+The non-destructive **dismiss** (⌘⏎ / `dismissAttention` / "Dismiss all") is untouched, as is queue
+membership (Task 410's territory) and sidebar-click routing (Task 411's).
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 412)
+
+- × semantics = the existing "kill + forget" (`store.removeSession`), unchanged from today's queue
+  ×; **not** the non-destructive "remove from queue" (that stays ⌘⏎/`dismissAttention`). ⌘W does the
+  same `removeSession`.
+- The relocated header × fires `removeSession` directly with **no** inline two-step confirm arm —
+  matching the Overview agent-header × convention (which ignores `settings.confirmDestructive`) — so
+  ⌘W and the × do literally the same thing; this drops the queue card's old #103 inline confirm arm.
+- "Focused agent" in Attention = the effective active queue selection (`selectedId` when a current
+  queue member, else the top of the queue), mirroring how the pane already resolves `activeId`. ⌘W
+  with an empty queue is a no-op.
+- The × is the rightmost control in the agent-pane header `.agentActions` group (after ⋯ and
+  Maximize) — the top-right corner of the individual agent.
+- No dispatcher change for ⌘W: `close-panel` already routes to `closeFocusedPanel` in every view;
+  only its Attention branch changed (was a deliberate no-op). ⌘⏎ dismiss is untouched.
+
+**Cross-platform:** pure frontend TypeScript + CSS; the ⌘W chord already resolves to ⌘ on macOS and
+**Ctrl on Windows AND Linux** via `eventChord`. No OS-gated code, no paths, no shell-outs —
+identical on all three platforms.
+
+**Dependencies:** none. (Overlapped the Attention directory with sibling tasks 410 — queue
+membership — and 411 — sidebar-click routing; the merge lane resolved the mechanical overlap by
+rebasing this PR onto `dev` after 410/411 landed.)
+
+### 414. [x] Default the terminal background lightness to 25% (brighten terminals a bit by default)
+
+Terminals now open a touch brighter out of the box: the existing "Terminal background" lightness
+setting (Settings → Appearance, added in #390) defaults to **25%** instead of 0%, landing the
+background at roughly `#1b1b26` — a subtle lift from near-black toward gray. Users who prefer the
+old near-black look drag the slider back to 0%. A one-time migration carries the new default to
+existing installs, not just fresh ones.
+
+**What shipped** (branch `default-terminal-bg-lightness-25`, PR
+[#173](https://github.com/ErikdeJager/ReCue/pull/173), merged 2026-07-15 into `dev`):
+
+- **`DEFAULT_SETTINGS.terminalBackgroundLightness` 0 → 25** (`src/store.ts`) — fresh /
+  never-saved installs get 25% straight from the default; a pre-#390 blob lacking the key
+  back-fills to 25 via `mergeSettings`.
+- **One-time migration mirroring the #367 line-height precedent** — a new
+  `terminalBackgroundMigrated: boolean` flag on the `Settings` interface (`src/types/index.ts`,
+  default `false`), and `migrateTerminalBackground(s)` (`src/store.ts`, guarded by
+  `LEGACY_TERMINAL_BACKGROUND_LIGHTNESS = 0`): a no-op once the flag is set, otherwise it bumps an
+  explicitly-stored legacy 0 → the new default 25 **once**, stamps the flag `true`, and reports
+  `changed`. Referenced against `DEFAULT_SETTINGS.terminalBackgroundLightness` so the default and
+  the migration target can't drift. This closes the gap where an install that saved settings after
+  #390 shipped had an explicit `terminalBackgroundLightness: 0` that would otherwise win over the
+  new default.
+- **Boot wiring** — chained after `migrateTerminalLineHeight`, combining both migrations' `changed`
+  flags into one one-off `ipc.setSettings(...)` persist (main window only), run before
+  `applySettingsEffects` so terminals paint the migrated value from the first frame.
+- **Reset to defaults preserves the flag** (`src/components/Settings/Settings.tsx`) — restores
+  `terminalBackgroundLightness` to 25 while keeping `terminalBackgroundMigrated`, so the one-time
+  migration never re-arms.
+- **Module-level fallback bumped** — `currentTerminalSettings.background` 0 → 25 in
+  `src/components/Terminal/terminalPool.ts` (tracks the new default, mirroring the `lineHeight`
+  fallback comment) for any xterm created before `applyTerminalSettings` runs.
+- Unit tests (`src/store.test.ts`): the new default is 25 + flag false; `mergeSettings` back-fill
+  of the flag; `migrateTerminalBackground` bumps legacy 0 → 25 once, leaves a non-zero value, and
+  no-ops when the flag is set.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 414)
+
+- "Terminal lighten" == the existing #390 `terminalBackgroundLightness` background slider, not a
+  new foreground/ANSI-palette brightening feature — so this is a re-default (0 → 25), not a new
+  control; the color math (`terminalBackground.ts`) and live-apply path (`applyTerminalSettings`,
+  the #18 no-remount/no-scrollback-replay invariant) are untouched.
+- The legacy default 0 is also the opt-out endpoint, so the one-time bump nudges a
+  deliberately-chosen 0 back to 25 the first boot after shipping; the flag makes it a one-shot
+  (re-set 0 and it sticks) — the same accepted tradeoff as the #367 line-height migration, and
+  nearly all stored 0s are the untouched old default.
+- Slider kept in the Appearance section where #390 placed it; no relocation, relabel, or help-text
   change.
 
-**Dependencies:** none.
-
-**Notes**
-
-- The pure core (`is_appimage_segment` / `filter_segments` / `scrub_env` / `env_diff`) is unit-tested on every
-  host: the no-AppImage identity case, the full AppImage map (markers, forced scalars, `PATH`,
-  `LD_LIBRARY_PATH`, `XDG_DATA_DIRS`, the GTK module vars, untouched user vars, no emitted empty segment), the
-  never-empty `PATH` guard, the `APPIMAGE_ORIGINAL_*` restore + backup-key removal, the `APPDIR`-absent /
-  `/tmp/.mount_`-only (`--appimage-extract-and-run`) case, idempotence, and `env_diff` both ways. A prefix
-  false-positive guard is included: `/home/u/squashfs-root2/bin` is **not** under `/home/u/squashfs-root`.
-- The AppImage surface can't be exercised on CI — logged in `TRAJECTORY_TO_LINUX.md`'s real-box checklist: a
-  ReCue shell terminal's `env` carries no `APPDIR`/`APPIMAGE`/`OWD`/`ARGV0`/`GTK_THEME`/`GDK_BACKEND` and no
-  `/tmp/.mount_` segment in `PATH`/`XDG_DATA_DIRS`/`LD_LIBRARY_PATH`; `xdg-open`, the Ctrl-click link open,
-  "Reveal in File Manager", "Open data folder", `git`, and a spawned `claude` agent all work under the
-  AppImage; and ReCue's own window/dialogs are visually unchanged (the app's *own* process env is untouched).
-
-### 353. [x] Move the straggler sync Tauri commands (PTY spawn/kill/scrollback, agent probes, git writes) off the webview main thread
-
-In Tauri 2 a command declared `pub fn` runs **on the webview/main thread**; only `pub async fn` is dispatched
-to the async runtime. A set of commands that do genuinely blocking work were still synchronous, so the window
-froze while they ran: the whole **PTY spawn family** (a `cwd` stat + a full `$PATH` scan + `openpty()` + a copy
-of the entire process env + `fork`/`exec`, inline — plus `git worktree add` for the worktree variants and a
-`~/.claude/projects` glob for a fork), the **agent probes** (`agent_info` / `claude_version` spawn
-`<binary> --version` **and wait** — and because the command was sync, `maybeOnboardAgent`'s `Promise.all` over
-`SELECTABLE_AGENTS` executed them *serially on the main thread*, freezing a not-yet-onboarded install for
-~1–2 s × N), **`session_scrollback`** (a 256 KB copy + base64 per terminal mount, N of them at boot),
-**`search_session_output`** (that copy plus a UTF-8 decode + ANSI strip + scan for **every live session**, on
-every keystroke in the global search modal), **`kill_session`**, the **git writes** `pull_branch` (a *network*
-`git pull` on the main thread) / `checkout_branch` / `create_branch` (the trio #330 explicitly deferred), and
-the schedule/recurring creators + manual fire (an eager `git worktree add`, and a possible inline first spawn).
-All 17 now run `async fn` + `tauri::async_runtime::spawn_blocking`, the pattern from #200/#299/#316/#328/#330.
-The win is largest on Linux/WebKitGTK, where main-thread work is the known bottleneck (#346), but it is
-platform-neutral — no `#[cfg]` arm is introduced or changed.
-
-**What shipped** (branch `sync-commands-off-main-thread`, PR
-[#107](https://github.com/ErikdeJager/ReCue/pull/107), 2026-07-14) — **`src-tauri/src/commands.rs` only**:
-
-- **17 commands converted** to `pub async fn` + `spawn_blocking`: `spawn_session`, `spawn_terminal`,
-  `spawn_worktree_agent`, `spawn_worktree_agent_new_branch`, `resume_session`, `fork_session`, `kill_session`,
-  `session_scrollback`, `search_session_output`, `agent_info`, `claude_version`, `pull_branch`,
-  `checkout_branch`, `create_branch`, `create_schedule`, `create_recurring`, `fire_schedule_now`.
-- **The state-plumbing crux.** `State<'_, T>` is a **borrow** — not `'static`, so it can never be captured by a
-  `spawn_blocking` closure (`F: FnOnce() -> R + Send + 'static`). Every converted command therefore drops its
-  `State` args, takes an owned **`app: AppHandle`** (`Clone + Send + Sync + 'static`), and resolves
-  `app.state::<SessionManager>()` / `app.state::<Store>()` **inside** the closure — the same route the
-  boot-resume thread, the event forwarder, and `fire_schedule_now` already used. Bodies moved **verbatim** into
-  private `*_blocking` helpers; the commands are thin wrappers. Because a `State` arg is what forces an async
-  command to return `Result`, dropping it also let the two non-`Result` commands (`agent_info`,
-  `search_session_output`) keep their bare return types — **so `src/ipc.ts`, the store, and every TS type are
-  untouched** (an `AppHandle` param is injected by Tauri, never sent by `invoke`).
-- **Three commands deliberately stay sync, each with the rationale recorded in-code**: **`write_stdin`** —
-  per-keystroke, the work is a `memcpy` + one `write`/`flush` (microseconds), and async would **destroy write
-  ordering**, since `terminalPool.ts` fires it un-awaited from xterm's `onData`, so two quick keystrokes would
-  become two racing tasks that could reach the PTY out of order (a corrupted prompt); **`resize_pty`** — a
-  cheap ioctl, fired-and-forgotten from a `ResizeObserver`, where racing async resizes could land out of order
-  and leave the PTY on a stale size (a garbled TUI) for zero win; **`list_sessions`** — an in-memory `Vec`
-  clone, called about once at boot.
-
-**Key decisions**
-
-- **No `pty.rs` / `store.rs` changes at all.** Their `std::sync::Mutex`es stay as-is — **no `tokio::sync`, no
-  `Arc<SessionManager>` managed-state swap**. No guard can cross an `.await`, because every lock is taken
-  inside a synchronous method called from *inside* the blocking closure, and the `Send` bound on Tauri's
-  spawned command future makes the alternative a compile error (`std::sync::MutexGuard` is `!Send`). This also
-  kept the diff clear of the concurrent Tasks #350/#354, which edit `pty.rs` internals.
-- **`async fn` + `spawn_blocking`, never `#[tauri::command(async)]`** — the latter runs the blocking body on a
-  *tokio worker* thread rather than the blocking pool, which can starve the runtime.
-- **Scope rule: convert every sync command that spawns a process or shells out to git.** That is 6 more than
-  the card listed (the two worktree spawns, `search_session_output`, and the deferred `pull`/`checkout`/`create`
-  branch trio) plus the three schedule/recurring commands. Deliberately **not** converted, and recorded rather
-  than silently skipped: the `files.rs` family, `list_skills`, `save_clipboard_image`, the openers, and the
-  in-memory store getters/setters — a different (mostly sub-millisecond FS/opener) family;
-  `search_file_contents` is flagged as the one plausible remaining straggler for a follow-up card.
-- **Ordering is the one real semantic change** — async commands are no longer FIFO with each other. Safe here
-  because every converted command targets a distinct id or is an idempotent user-initiated one-shot, and
-  `session_scrollback` is explicitly safe out of order: its reply carries the absolute `end` offset that
-  `replayDedupe.ts` dedupes the live stream against (#261/#346).
-- **The blocking-`write_all` problem for `write_stdin` is a non-goal, not an oversight.** Making it
-  non-blocking *without* losing FIFO order needs a per-session writer thread + an `mpsc` queue in `pty.rs` —
-  a separate, larger change, recorded as a follow-up rather than bodged in with `spawn_blocking`.
-
-**Dependencies:** none. (Builds on the landed `spawn_blocking` + `AppHandle`-state pattern: #200/#299/#316/#328/#330.)
-
-**Notes**
-
-- No automated command-level test was added — the repo has no `tauri::test` mock-app harness and the change is
-  structural. Acceptance rests on the compile-time `Send` guarantee, clippy `-D warnings`, the unchanged
-  existing suites, and enumerated manual smoke checks (GUI responsiveness is not CI-assertable): spawning an
-  agent while others print no longer stalls the window and the new terminal still paints claude's startup
-  exactly once; Settings → Sessions stays interactive while the `--version` probes run (they now genuinely run
-  **concurrently** on the blocking pool); fast typing stays byte-for-byte in order; and Remove / Fork / Restart
-  / Start-now / Pull / Checkout / Create-branch / worktree spawn all keep their existing toasts.
-- Known, pre-existing hazard noted rather than fixed: a concurrent same-id spawn (double-clicking Restart) is
-  now genuinely parallel rather than serialized on the main thread. The race already existed (the boot-resume
-  thread races main-thread commands) and the frontend guards the affordances — out of scope, but worth
-  remembering if a stray process is ever observed.
-
-### 356. [x] Code-split the frontend bundle — lazy routes, panels, modals, markdown/Prism, and the xterm WebGL addon
-
-The whole frontend was **one 1,351.5 kB (391.1 kB gzip) chunk** parsed before first paint — `vite.config.ts`
-had no `build` section at all, and mermaid (#254) was the app's only dynamic import. Everything else came
-along eagerly: the react-markdown + remark-gfm + micromark/mdast/hast stack (151 kB), Prism plus its ~24
-statically-imported language grammars (70.6 kB), the xterm WebGL addon (107.4 kB — even on a machine that
-would never use it), every modal, every panel, and *both* window routes, so a **detached canvas window** (#84)
-parsed the sidebar, Overview, and eleven modals it can never show. Deferring all of that cuts first-paint JS to
-**854.3 kB / 245.5 kB gzip** for the main window and **769.6 kB / 221.3 kB** for a detached canvas window — a
-startup win on every OS and a large one on Linux/WebKitGTK, where JS parse is the slowest (#346).
-
-**What shipped** (branch `code-split-frontend-356`, PR [#111](https://github.com/ErikdeJager/ReCue/pull/111),
-2026-07-14) — frontend only, no Rust change:
-
-- **Route split** — `src/App.tsx` is now a `Suspense` router over a lazy `MainApp` (extracted verbatim into
-  the new `src/MainApp.tsx`) and a lazy `CanvasWindow`. Window identity is fixed for a window's lifetime
-  (URL-derived, #84), so exactly one route chunk is ever fetched. The fallback is a bare `div.app` — it paints
-  the app background and nothing else, deliberately, so it stays complementary with Task #348's
-  `visible:false` → `show()` window gate (which needs a background-painted first commit, never white).
-- **Lazy panels** — `ItemContent.tsx` (the single live-render site for panel content, #157) `React.lazy`s
-  `FileViewer` / `KanbanPanel` / `DiffInspector` / `FileTree`. Since those four are the *only* importers of the
-  markdown and Prism stacks, this is what carries all ~221 kB of them out of the first-paint graph — **without
-  touching `prism.ts`, `mermaid.ts`, `markdownCheckboxes.tsx`, or any unit-tested pure module**. Each lazy
-  branch gets its **own** `Suspense` boundary, reusing the existing `.placeholder` "Loading…" style.
-- **Lazy modals** — a new `src/components/ModalHost.tsx` holds ten gates (Settings, NewSession, CloneRepo,
-  CreatePanel, GlobalSearch, CanvasClose, TemplateUse / Manager / Editor, Onboarding), each subscribing to its
-  own store flag — so `MainApp` no longer re-renders when a modal opens (a small bonus win). The Suspense
-  fallback is **`null`** on purpose: an empty modal shell would be a visible regression, whereas `null` means
-  the modal simply appears once its chunk lands. `Toaster`, `BigModeModal`, `UpdateModal`, and `ClaudeMissing`
-  stay static (first-paint or safety-critical — the update install overlay must never be a chunk away).
-- **Lazy xterm WebGL addon** — `terminalPool.createHost()` now `import()`s `@xterm/addon-webgl` on demand,
-  while xterm core / `addon-fit` / `addon-web-links` / the xterm CSS stay eager (terminals *are* the first
-  paint). `disposed` is hoisted above the WebGL block to guard a late attach into a torn-down host, a `.catch()`
-  keeps the DOM renderer if the chunk or the constructor fails, and the #221 font-atlas rebuild `await`s
-  `webglReady` so it still runs exactly once.
-- **Idle prefetch** — a new `src/prefetch.ts` warms the deferred chunks after first paint via
-  `requestIdleCallback` (feature-detected, with a `setTimeout` fallback for older WKWebView/Safari), so the
-  first Settings / ⌘N / file-panel open is instant. A detached window skips the modal warm-up.
-- **Regression guard** — `build: { manifest: true }` plus a new dependency-free `scripts/bundle-report.mjs`
-  (Node builtins only) computes each route's first-paint closure — the entry chunk plus its **static** import
-  closure plus the route chunk and its static closure, deliberately *not* following `dynamicImports` — reports
-  raw + gzip, and with `--check` fails the build over budget (900 kB raw / 260 kB gzip). `npm run bundle:report`
-  added to `package.json`.
-
-**Key decisions**
-
-- **No `manualChunks`, and the reason is recorded in `CLAUDE.md`.** Rollup chunking only decides *which file* a
-  module lands in — a statically reachable module is still fetched, parsed, and executed before first render
-  whatever chunk it sits in. **Only a dynamic `import()` removes work from the first-paint path.** The CLAUDE.md
-  bullet spells out the durable rule: never static-import react-markdown / prismjs / `@xterm/addon-webgl` back
-  into the entry graph — and the `--check` budget is what enforces it mechanically.
-- **Lazy the four *consumers*, not the markdown/Prism internals.** Refactoring `FileViewer` into an async
-  markdown/prism loader would have won the same bytes while churning unit-tested pure modules; lazying the four
-  components that exclusively import them wins it for free.
-- **Never wrap `ItemContent` (or a `Terminal` branch) in one shared Suspense boundary.** A suspending boundary
-  hides its already-rendered children with `display:none`, which would leave a pooled xterm un-measurable and
-  misfit — the #18 class of bug. Per-branch boundaries mean a terminal is never inside one.
-- **xterm core and `terminalPool` stay eager and synchronous.** The pool's sync API is consumed from React
-  effects and from `store.ts`; making it async would churn the app's most delicate subsystem (#18 pool, #221
-  font atlas, #261 write coalescing, #346) to defer code needed milliseconds later. Only the *addon* is deferred.
-- **Accepted trade-off (the plan's top risk):** a main-window terminal now paints its first frames on xterm's
-  DOM renderer and swaps to WebGL a few ms later when the chunk resolves. xterm supports `loadAddon` after
-  `open()` — that was already the code's order, just synchronous — and both renderers are known-good in
-  production (#105/#346). Rollback is a one-line restore of the static import. On Linux with a software
-  rasterizer the chunk is **never fetched at all** — a pure win.
-- **Three modals move from "always mounted, self-gated" to "mounted only while open."** `NewSessionModal`'s
-  focus restore was moved into its effect cleanup so it still fires now that close means unmount.
+**Cross-platform:** pure frontend / xterm / TS with zero OS branches — no `#[cfg]`, path, shell,
+or CSS divergence; macOS, Windows, and Linux (incl. detached canvas windows #84) behave
+identically.
 
 **Dependencies:** none.
 
-**Notes**
+### 415. [x] Rank file-search dropdowns by relevance (filename matches above content/path-only matches)
 
-- Verified deferred into their own async chunks, absent from both routes' first-paint closure: react-markdown /
-  remark-gfm / micromark / hast, prismjs, `@xterm/addon-webgl`, all ten modals, FileViewer, KanbanPanel,
-  DiffInspector, FileTree. **Mermaid remains a further lazy chunk *inside* FileViewer**, so a markdown file with
-  no ` ```mermaid ` fence still never fetches it.
-- Checks green: `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (671 tests / 47 files), and
-  `node scripts/bundle-report.mjs --check`.
-- Code-splitting is only observable in a **production** build (`vite dev` serves unbundled ESM), so the
-  async-chunk-under-`tauri://`-offline check and the WebGL late-attach on WKWebView / WebView2 are real-box
-  items rather than CI-assertable ones.
+File-search dropdowns now order results **best-match first**: a file whose **name** matches the
+query (exact/prefix especially) sorts above files that match only in a directory segment or (in the
+FileTree) in file *contents*, instead of the previous roughly-alphabetical backend walk order.
+Non-matching-name results still appear, just lower — the same relevance model GlobalSearch (#337/#393)
+already used, now brought to the `FilePicker`-based dropdowns and the FileTree in-panel search for
+cross-surface consistency.
 
-### 351. [x] Lazy-mount Overview terminals — visibility-gated xterm creation + a bounded scrollback-replay queue
+**What shipped** (branch `rank-file-search-relevance`, PR
+[#174](https://github.com/ErikdeJager/ReCue/pull/174), merged 2026-07-15 into `dev`):
 
-Overview's wall is a **horizontally scrolling** row of cards, of which roughly three are visible at a time —
-but every card's terminal was **fully mounted at boot**. So N resumed agents meant N eager `createHost` calls,
-each constructing an XTerm, opening its **own WebGL context**, fetching up to 256 KB of scrollback, ANSI-parsing
-it on the webview main thread, awaiting three `document.fonts.load` calls and firing a resize IPC — ten agents
-≈ 2.5 MB parsed and 10 GL contexts in the first seconds, the dominant boot cost and worst on Linux/WebKitGTK
-(where `TRAJECTORY_TO_LINUX.md` already listed "Overview terminal virtualization" as future work — this task
-closes it). Terminals are now created **only when their card first scrolls into view**, and the replays that do
-happen are **serialized** rather than racing each other on the single main thread.
+- **New pure module `src/fileRank.ts`** (+ `src/fileRank.test.ts`) — React/store/Tauri-free,
+  mirroring `GlobalSearch/search.ts`'s style: `scoreFilePath(query, relPath)` scores a matched path
+  by basename tier (exact 100 / prefix 80 / word-boundary 60 / mid-substring 40 / directory-only 20;
+  empty query → 0), and `rankFileMatches(query, paths)` reorders by score desc, tie-broken by shorter
+  full path → alphabetical → stable input order. An **empty query returns input order unchanged**
+  (browse-all is not reordered); the transform never mutates its input.
+- **`src/components/FilePicker/FilePicker.tsx`** — `filtered` is now
+  `useMemo(rankFileMatches(query, matches ?? []))`, with the active-row reset effect keyed on
+  `[matches, query]` so the highlight returns to the top as the ranked order changes. This single
+  choke point covers the file-viewer switcher (#90), the Kanban/markdown open picker (#145/#151),
+  `CreatePanelModal`, and `TemplatePendingPanel`.
+- **`src/components/FileTree/FileTree.tsx`** — the **"Files"** group renders from a
+  `useMemo(rankFileMatches(debounced, fileHits))`; the **"In files"** content group is left below,
+  unchanged. `fileCount` / `fileCapped` and every result cap are untouched (ranking reorders, never
+  drops).
 
-**What shipped** (branch `lazy-mount-overview-terminals`, PR
-[#103](https://github.com/ErikdeJager/ReCue/pull/103), 2026-07-14) — frontend only, no Rust change:
+**Key decisions** (from `ASSUMPTIONS.md` Task 415)
 
-- **`useVisibleOnce.ts`** (new) + **`Terminal.tsx`** — a **latching** `IntersectionObserver` gates
-  `mountTerminal`: once a slot has been visible, it stays mounted forever. The gate lives in `Terminal.tsx`,
-  **not** in Overview, so it covers every terminal surface (Overview cards, Canvas panels, big mode #157,
-  detached windows #84) through the one component instead of adding an Overview-only path.
-- **`TerminalScrollRootContext`** — filled by `Overview.tsx` with its scrolling wall element. This matters:
-  `IntersectionObserver` clips against an intermediate scroll container **before** applying `rootMargin`, so a
-  viewport-rooted observer could never pre-load an off-screen wall card. With the wall as the root, the 600px
-  horizontal pre-load margin (≥1.5 cards at the 400px default column min-width) is real. Everywhere else the
-  root stays the viewport.
-- **`replayQueue.ts`** (new, pure + unit-tested) + **`terminalPool.ts`** — scrollback replays run through a
-  bounded FIFO queue (`MAX_CONCURRENT_REPLAYS = 1`, a macrotask yield between jobs), each awaiting its
-  `term.write` callback (resolve-once, with a 2 s safety timeout), so one ANSI parse can never stack on
-  another. A queued-but-unstarted hydration is **cancelled** on host dispose.
-- **`pendingOutput.ts`** (new, pure + unit-tested) — the pre-replay live buffer is capped at 2 MB (oldest
-  dropped) **only while the scrollback fetch has not yet been dispatched**. That window is provably gap-free:
-  the backend pushes to its `Scrollback` before emitting, so every pre-dispatch chunk is already ≤ the
-  snapshot's `end` offset. After dispatch the buffer is uncapped, so every byte above `end` survives
-  `dedupeAgainstScrollback`.
-- **Pending focus** — `focusTerminal` gained a short-lived (3 s) pending focus, so ⌘/Ctrl+1–9 onto a
-  not-yet-created host still lands and the user can type immediately. Without it the CanvasSurface's
-  active-leaf effect would silently no-op against a host that doesn't exist yet.
+- Scoring is a **frontend** pure helper over the already-capped backend result set — **no** backend /
+  IPC / cap change; `search_files` / `search_file_contents` stay exactly as they are.
+- Per surface: FilePicker doesn't search content, so "name > contents" there means basename-match
+  above directory-only-match; the FileTree already renders content matches in a separate group below
+  filename matches, so this task only ranks within the filename group and leaves content hits
+  untouched.
+- Tiers deliberately mirror GlobalSearch's `scoreFilename`; GlobalSearch is the reference model and is
+  left untouched (non-goal). Cap-boundary limitation accepted and documented (a pathological ultra-broad
+  query that hits the cap ranks only the first-N-by-walk).
 
-**Key decisions**
-
-- **"Virtualize" means deferred creation only — never recycling.** Once a terminal is created it is never
-  disposed or parked on scroll-out. Disposing on scroll-out would re-enter the **#18 invariant**: replayed
-  scrollback carries cursor-positioned escape sequences computed for a specific PTY width, so a re-replay at a
-  different size garbles claude's TUI. Zero boot benefit, guaranteed corruption.
-- **No output is lost, and no new mechanism was invented.** `outputBus` already drops chunks for a
-  listener-less session, and that is *already* today's behavior for any session not rendered in the current
-  view (booting straight into Canvas, or spawning an agent while on Canvas). The backend's 256 KB `Scrollback`
-  retains the bytes and `replayDedupe` drops the overlap at creation — so deferring host creation **re-uses an
-  already-exercised path**. History older than the 256 KB window is not recoverable; accepted, and unchanged
-  from today.
-- **Everything else about an unmounted agent keeps working** — the busy/idle dot, notifications, global search
-  (Rust-side scrollback search, #337) and auto-continue (#296) are all backend-driven and never touch the pool.
-- **Rejected the card's third fix direction** ("replay a smaller initial tail, the rest on idle"): it needs a
-  new backend `session_scrollback` parameter and trades away user-visible history for a win the visibility gate
-  already delivers.
-- **Non-terminal Overview panels (FileViewer / DiffInspector / Kanban / FileTree / Scheduled / Recurring) are
-  not gated** in this task — their mount cost is far smaller. Noted as a follow-up that can reuse the same hook.
-- No backend change and no new user setting; rollback is two constants.
+**Cross-platform:** pure string logic over POSIX (`/`) repo-relative paths — no separator, `$HOME`,
+or OS branch; identical on macOS, Windows, and Linux.
 
 **Dependencies:** none.
 
-**Notes**
+### 413. [x] Line-cap large files in the file viewer with a "show more" reveal
 
-- New unit tests cover the pure parts per repo convention (the pool itself is coverage-excluded DOM/xterm glue):
-  the bounded-concurrency FIFO (limit, ordering, `cancel`, a rejecting/throwing job, the yield) and the
-  pending-output cap (drops oldest, preserves order, `Infinity` keeps all). Checks green: `npm run lint`,
-  `npm run format:check`, `npm test` (686 passing), `npm run test:coverage` (90.93% lines, gate 75%),
-  `npm run build`.
-- Pure WebView/TS — `IntersectionObserver` is supported by WKWebView, WebView2/Chromium **and** WebKitGTK, so
-  there is no `#[cfg]` divergence and no OS primitive involved; identical on all three, with the biggest win on
-  Linux.
+The universal FileViewer no longer janks (or freezes) opening a very large text/markdown file
+(e.g. `TASK_ARCHIVE.md`, ~1,742 lines): it renders only the first N lines and offers an in-viewer
+button to progressively reveal the rest, so the panel opens instantly and the whole file is still
+readable on demand. The cap is by **line count**, orthogonal to the existing 256 KB byte threshold —
+it fixes the rendered-markdown path (a large react-markdown AST + Prism highlighting) that the byte
+cap didn't help.
 
-### 347. [x] Fix the Linux DMA-BUF workaround misfiring on hybrid Intel+NVIDIA GPUs (GPU-aware detection)
+**What shipped** (branch `line-cap-large-files`, PR
+[#175](https://github.com/ErikdeJager/ReCue/pull/175), merged 2026-07-15 into `dev`):
 
-**#346's own workaround had become the "slow on Arch" bug.** Its `nvidia_driver_present()` returned true on the
-mere *presence* of the kernel module (`/proc/driver/nvidia/version` or `/sys/module/nvidia`) — but on a **hybrid
-laptop** the NVIDIA card exists while the webview actually renders on the Intel/AMD **iGPU via Mesa**, where
-DMA-BUF is healthy and fast. So ReCue forced `WEBKIT_DISABLE_DMABUF_RENDERER=1` on a machine that didn't need
-it, pushing the bundled Skia WebKit into CPU rendering, which then cascaded into software WebGL → xterm's DOM
-renderer. Verified on the reporter's Arch/Hyprland box (`card0` = nvidia blob RTX 4080 Max-Q on nvidia-open
-610.43.03, `card1` = `i915` Intel Iris Xe rendering the webview; boot log
-`set WEBKIT_DISABLE_DMABUF_RENDERER=1 (nvidia: true, vm: false)`). `vm_detected()` was equally coarse: it
-tripped on the mere existence of `/sys/hypervisor/type` (which also exists on a **bare-metal Xen dom0**) and on
-loose DMI *substring* matches including `"standard pc"` and `"kvm"`, which appear in real hardware product
-strings.
+- **New pure helper `src/components/FileViewer/lineCap.ts`** (+ `lineCap.test.ts`) —
+  `LINE_CAP = 500` (initial), `LINE_CHUNK = 1000` (per "show more"), `nextVisible(current, total,
+  chunk)` (clamps to total), and `lineTruncation(total, visible, chunk)` → `{ total, shown, remaining,
+  truncated, nextChunk }` (the pure logic the footer renders).
+- **`src/components/FileViewer/FileViewer.tsx`** — a `visibleLines` state (reset to `LINE_CAP` per
+  file alongside the Raw-mode reset), a memoized line split, and `displayText` (the first
+  `visibleLines` lines) fed to the three **read-only** sinks (rendered markdown / Prism `CodeBlock` /
+  read-only `<pre>`, including the >256 KB `tooLarge` path). The **editable auto-saving `<textarea>`**
+  stays on the **full** `text`, so a save (auto or ⌘S) always writes the complete file — never a
+  truncated buffer. While rendered markdown is truncated, its interactive #173 task-list checkboxes
+  render read-only (`interactive: !(renderMarkdown && truncated)`, `source: displayText`) so a toggle
+  can't persist a partial buffer. A pinned footer bar shows "Showing N of M lines" (`aria-live`
+  status) with native, keyboard-operable "Show K more lines" and "Show all" buttons; it disappears
+  once every line is shown.
+- **`src/components/FileViewer/FileViewer.module.css`** — `.moreBar` / `.moreCount` / `.moreBtn` /
+  `.moreLink` (tokens only).
 
-**What shipped** (branch `linux-dmabuf-hybrid-gpu`, PR [#104](https://github.com/ErikdeJager/ReCue/pull/104),
-2026-07-14):
+**Key decisions** (from `ASSUMPTIONS.md` Task 413)
 
-- **`src-tauri/src/linux_webkit.rs` rewritten** around pure, unit-tested types and functions
-  (`RendererOverride` / `NvidiaKernel` / `GpuClass` / `DmabufProbe` / `DmabufDecision` / `VmSignals`;
-  `decide_dmabuf`, `nvidia_kernel_flavor`, `nvidia_driver_version`, `classify_gpu`, `is_hypervisor_dmi`,
-  `vm_detected`, `cpuinfo_has_hypervisor_flag`, `only_virtual_gpus`, `describe_probe`, plus the kept
-  `parse_force_flag`), over thin Linux-only `/sys` + `/proc` probes.
-- **The new policy** (ordered, in `decide_dmabuf`): a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` always
-  wins and is never touched → `RECUE_DISABLE_DMABUF` force-overrides both ways → **disable** only when GL is
-  explicitly PRIME-routed to the blob (`__GLX_VENDOR_LIBRARY_NAME=nvidia` / `__NV_PRIME_RENDER_OFFLOAD=1` — the
-  hybrid exemption cannot apply, since the webview's GL *is* NVIDIA's), or when the **NVIDIA blob is the sole
-  renderer** (no Mesa-driven DRM card), or in a **VM with no native Mesa GPU** → otherwise **keep** it. So a
-  hybrid iGPU+dGPU laptop, nouveau, an AMD/Intel-only box, and a passthrough VM all keep the faster DMA-BUF
-  path. An unreadable `/sys/class/drm` leaves the GPU list empty and lands on "disable" — conservative, exactly
-  as #346 was.
-- **GPU inventory** from `/sys/class/drm/card*` (DRM driver-name → Mesa / NvidiaBlob / Virtual / Unknown, with a
-  PCI vendor-id fallback) rather than counting render nodes — the same signal, more precise, and trivially
-  pure-testable.
-- **VM detection tightened** to require **two independent signals** (the CPUID `hypervisor` flag plus
-  DMI/hypervisor-node/virtual-GPU corroboration, or an exact DMI hit with only-virtual GPUs), with **exact —
-  not substring — DMI matching** and an explicit **bare-metal Xen dom0 exclusion** (`/proc/xen/capabilities`
-  containing `control_d`). `"PowerEdge KVM 1000"` and a real "Standard PC Server Board" no longer read as VMs.
-- **One boot diagnostic line for *both* outcomes**, naming the evidence — e.g. `[recue] WebKitGTK: DMA-BUF left
-  on — Mesa GPU present (healthy DMA-BUF) (gpus: nvidia[blob],i915[mesa]; nvidia: open 610.43.03; vm: no;
-  session: wayland) — override with RECUE_DISABLE_DMABUF=1|0`. **#346 logged only the disable case, which is
-  exactly why the misfire was invisible.**
-- **Frontend (comment/log only, zero logic change)** — `webglRenderer.ts`'s header is reframed as what it is (a
-  consequence-level fail-safe, not a detector), and `terminalPool.ts::webglAllowed()` now logs the WebGL
-  renderer string once on Linux for support diagnostics. Once DMA-BUF is correctly left on, that probe reads a
-  hardware renderer (`Mesa Intel(R) Graphics …`) and xterm's WebGL addon is used again — no change needed there.
+- The editable textarea is **never** line-capped (it always holds the full file → saves write the
+  complete file) — the deliberate "don't corrupt saves" choice; the cap applies only to read-only
+  render paths and is additive with the 256 KB `LARGE_BYTES` threshold.
+- Defaults `LINE_CAP = 500` / `LINE_CHUNK = 1000` plus a "Show all" (both chunked and all-at-once
+  reveal) — tunable single-source constants; the reveal control is a pinned footer bar, not inside
+  the scroll region.
+- Mermaid needs no code change (capping the source omits later fences; a split fence degrades to its
+  code block + error note until revealed). No backend change (`read_text_file` still reads the whole
+  file, 5 MB cap); scope limited to the universal FileViewer (KanbanPanel / PatchNotes / Settings out
+  of scope).
 
-**Key decisions**
-
-- **nvidia-open gates *identically* to the proprietary blob**, and is only *logged* separately. The card grouped
-  it with nouveau; that was deliberately not done, because it ships the same proprietary userspace EGL the
-  workaround targets — and an nvidia-open-**only** desktop still needs the workaround. What actually fixes the
-  reported box is the Mesa-present/hybrid rule, not a driver-flavor exemption.
-- **No NVIDIA driver-version gate.** The version is parsed for the diagnostic log only; a wrong threshold would
-  risk a blank or garbled webview, which is worse than slow.
-- **The `RendererOverride` tri-state (Auto / ForceDisable / ForceKeep) is the seam** a future Settings
-  renderer-override card plugs into — resolved today from `RECUE_DISABLE_DMABUF` alone, with an in-code note
-  that a *persisted* setting must be read **before `tauri::Builder`** (GTK reads the env at init). No Tauri
-  command, IPC, or settings field was added here.
-- Escape hatches unchanged: a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` is never touched, and the
-  `RECUE_DISABLE_COMPOSITING` debug opt-in is untouched.
-
-**Dependencies:** none. (Corrects #346, which introduced the detection.)
-
-**Notes**
-
-- 23 unit tests, including the named **`hybrid_intel_nvidia_open_keeps_dmabuf`** regression guard built from the
-  reporter's verbatim `/sys` strings, plus a Linux-only no-panic/consistency smoke test over the impure probes.
-  Every pure fn is `, test)`-widened so the macOS and Windows hosts still type-check and run them;
-  **macOS/Windows behavior is byte-for-byte unchanged** (the arm is unreachable there).
-- Per-GPU runtime behavior can't be exercised on CI — a dated `### DMA-BUF detection regression (Task #347)`
-  section + real-box checklist went into `TRAJECTORY_TO_LINUX.md`, and `CLAUDE.md`'s Linux-performance item (1)
-  was restated under the new policy (`#346/#347`).
-
-### 348. [x] Eliminate the white startup flash — hidden-until-painted windows + a themed pre-paint background
-
-Every launch (and every Canvas pop-out, #84) flashed a white rectangle before the UI appeared. **Four
-independent gaps compounded:** (1) `tauri.conf.json`'s window declared no `backgroundColor` and no
-`visible: false`, so the OS mapped the window and painted its **default white surface** as soon as it was
-created — long before the webview had anything to show; (2) `index.html` was 13 completely **unstyled** lines —
-every stylesheet reaches the page through JS (`main.tsx` imports the fonts, `tokens.css` and `global.css`; each
-component imports its own CSS Module), so from document-parse until the ~1.35 MB bundle had been fetched,
-parsed and executed the document had **zero** styles and the WebView painted white (`body { background:
-var(--bg-base) }` lives in `global.css` — far too late to help); (3) `open_canvas_window` built its
-`canvas-<id>` window with no background color, visible immediately; and (4) the **theme** (#333) lives in the
-opaque Rust `settings` blob and only reaches the frontend *asynchronously*, so a Light-theme user got
-white → dark → light. Any pre-paint color therefore has to know the theme **before the JS bundle runs**, in
-both the native window (created by Rust before the webview exists) and the raw HTML document.
-
-**What shipped** (branch `white-startup-flash-348`, PR [#105](https://github.com/ErikdeJager/ReCue/pull/105),
-2026-07-14):
-
-- **`tauri.conf.json`** — the main window is created with `backgroundColor: "#1e1e2e"` **and**
-  `visible: false`, so there is no white OS surface at creation.
-- **`index.html`** — an inline pre-paint `<style>` (dark, plus an `html[data-theme="light"]` rule) and a
-  **synchronous** boot script that reads the `recue.theme` localStorage mirror before first paint.
-- **`src/theme.ts`** (new) — the never-throwing theme mirror: `THEME_STORAGE_KEY`, `THEME_BG`,
-  `themeFromStored`, `readStoredTheme`, `storeTheme`. `store.ts`'s `applySettingsEffects` writes the mirror on
-  every settings apply; the **Rust settings blob stays the source of truth**, and the mirror is only a
-  best-effort pre-paint hint.
-- **`src/useRevealWindow.ts`** (new) — an idempotent post-commit reveal fired from `App()` (the shared root of
-  *both* the main and the detached-canvas routes), on **rAF and a 0 ms timer, whichever lands first** — a hidden
-  WebView may not tick rAF at all.
-- **`commands.rs`** — the pure `background_for_theme` / `window_background` mapping (unit-tested), the new
-  `reveal_window` and `set_theme_background` commands, and **`schedule_reveal_fallback`**: any still-hidden
-  window is shown after 2 s regardless, so a crashed bundle or a dead dev server can never leave the app
-  running-but-invisible. `open_canvas_window` now builds hidden + themed, and `focus_canvas_window` (plus the
-  already-open branch) `show()`s before `set_focus()`.
-- **`lib.rs`** — re-colors the main window from the **persisted** theme in `setup` (after the `Store` is
-  managed, but before the window is ever shown) and schedules its reveal fallback.
-- **`store.ts`** — `saveSettings` pushes the new native background to every window on a theme change, so an
-  already-open window has no stale-color gutter on resize.
-
-**Key decisions**
-
-- **Pre-paint color is the theme's `--bg-base`** (`#1e1e2e` Mocha / `#eff1f5` Latte) — not `--bg-sidebar` or
-  `--terminal-bg`. That hex is necessarily duplicated in four places (`index.html`, `theme.ts`, `commands.rs`,
-  `tokens.css`), so **`src/theme.test.ts` carries an anti-drift guard** asserting all four agree for both
-  themes.
-- **A localStorage mirror, not a Rust-built window with an `initialization_script`.** All windows share one
-  origin, so the mirror is readable pre-paint by both routes. A missing or stale mirror degrades to *today's*
-  behavior (one dark→light flip) and self-heals that same launch — **no white flash either way**. The
-  alternative was a bigger, riskier change to how the main window is created.
-- **Reveal via an app-owned Rust `reveal_window` command, not `getCurrentWindow().show()`** — this avoids
-  widening `capabilities/default.json` with `core:window:allow-show`, and matches the existing Rust-owned
-  window commands (`open_canvas_window` / `focus_canvas_window` / `close_canvas_window`).
-- **Reveal fires on React's first commit, not on the settings/session IPC** — so backend latency can never
-  delay the window appearing.
-- **Added beyond the card's literal text:** `set_theme_background` (so an open window's *native* background
-  follows a theme change), the same hidden+themed treatment for detached canvas windows, and the 2 s Rust-side
-  reveal fallback.
-- **No `color-scheme` declaration was added** — an explicit background suffices, and `color-scheme` would drag
-  UA form-control and scrollbar restyling along with it.
-
-**Dependencies:** none. (Complementary with #356, whose route-level Suspense fallback is a bare
-background-painting `div.app` precisely so the first commit paints the app background, never white.)
-
-**Notes**
-
-- Platform-neutral: **no `#[cfg]` divergence at all** — macOS, Windows and Linux alike. `backgroundColor` +
-  `visible:false` works on WebKitGTK since Tauri 2.1.0 (ReCue is on 2.11.3).
-- The startup surface can't be asserted on CI, so "Needs real-box verification (startup flash, #348)" checklists
-  went into **both** `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md`; `CLAUDE.md`'s "Window chrome"
-  convention now records the hidden-until-painted rule and the four-place pre-paint hex invariant.
-
-### 355. [x] Bounded-parallel boot resume + a one-shot claude project-log index
-
-On boot, persisted sessions were reconnected **strictly one at a time** on a single thread, and every one of
-them re-scanned `~/.claude/projects` from scratch (a `read_dir` plus a stat per project dir) to decide
-forkability. So N sessions cost N serial spawns **and** N directory walks before the last terminal appeared —
-seconds of staggered reconnect on a busy install. The resume loop is now a **4-wide worker pool** over one
-**snapshot** of the claude projects tree, with byte-identical events, error handling, and UI behavior.
-
-**What shipped** (branch `bounded-parallel-boot-resume`, PR
-[#106](https://github.com/ErikdeJager/ReCue/pull/106), 2026-07-14):
-
-- **`src-tauri/src/boot.rs`** (new) — `resume_persisted_sessions(app)` runs a bounded worker pool
-  (`RESUME_CONCURRENCY = 4`, clamped to the record count) over the persisted records, with the pure,
-  unit-testable helpers `run_bounded` / `resume_worker_count` / `next_record` / `plan_for`. `lib.rs`'s setup
-  block collapses to a single `thread::spawn(move || boot::resume_persisted_sessions(resume))`.
-- **`title::ProjectLogIndex`** (new) — one directory scan per boot. It snapshots
-  `~/.claude/projects/*/<uuid>.jsonl` **listing each project dir's `.jsonl` filenames** (name → dir), so a
-  lookup is O(1) and the whole cost is O(M) rather than N × M stats. Its semantics match `title::has_conversation`
-  **exactly**: a shared `conversation_from(LogLocation)` helper, the fail-open `Unknown ⇒ true`, and a per-dir
-  stat fallback so a project dir whose listing fails never reports `Absent` where `locate_log` would have
-  reported `Found` (which would have wrongly disabled the Fork affordance).
-- **Per-record behavior is unchanged** — same order (resume → forkable → `set_forkable` →
-  `session://forkable`), same best-effort `let _ =` handling, no new events or payload fields, and the
-  #101/#141 capability gating preserved (a codex / opencode / custom record is not resumed and reports
-  `forkable: false` without touching the index at all).
-
-**Key decisions**
-
-- **A boot-scoped snapshot, not a global or TTL cache.** The index is built once and dropped when the loop
-  ends; the live title worker keeps its per-call `locate_log`. So a project dir created *after* boot is always
-  seen, and there is **nothing to invalidate** — the classic staleness bug is designed out rather than managed.
-- **Fixed pool width of 4, not `available_parallelism`.** The work is process-creation/IO-bound, and a wider
-  pool would just pile concurrent spawns onto the OS during first paint.
-- **Dropped "resume visible/selected sessions first" from the card's scope**, deliberately: `selectedId` is not
-  persisted at all, and `canvases`/`settings` are opaque frontend-owned JSON blobs the Rust store must not
-  parse. With a 4-wide pool the reordering win is a few hundred ms. Records are dispatched in persisted order;
-  visibility is Task #351's concern.
-- **`pty.rs` production code is untouched** — `SessionManager` was already concurrency-safe (#260), and
-  portable-pty 0.9.0 cloexecs the pty fds and closes fds ≥ 3 in the child on unix (and passes
-  `bInheritHandles=FALSE` on Windows). Only a unix-gated concurrent-spawn **regression test** was added there.
-- **No frontend change** (`git diff --stat -- src/` is empty): `booting` / `RECONNECT_BACKSTOP_MS` / the #30
-  reconnecting flow all stay as-is — a faster resume simply means more resumes land inside that window.
-- No batching of `Store::set_forkable` and no new events or error toasts: it already persists only on change
-  (≈zero writes on a normal boot), and a failed resume stays best-effort, so the child's own exit remains the
-  single existing signal.
+**Cross-platform:** pure frontend / TS / CSS with no OS-specific primitive — identical on macOS,
+Windows, and Linux.
 
 **Dependencies:** none.
 
-**Notes**
+### 417. [x] Keep homepage empty-state tips on a single line (never wrap)
 
-- Tests: a **peak-concurrency probe** (50 items / 4 workers, `AtomicUsize` + `fetch_max` — each item runs
-  exactly once and `peak <= 4`), the single-worker sequential case, a **snapshot proof** (a project dir created
-  after `build_in` is invisible to the index), the fail-open + unlistable-dir fallback (unix-gated), capability
-  gating, and a unix-gated `concurrent_spawns_register_every_session` regression guard in `pty.rs`.
-- Real-box-check entries went into `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md` — **four concurrent
-  ConPTY creations are worth eyeballing on Windows**, since that is the one path CI cannot exercise.
+The startup **tip** under the "New session" button on the empty-state hero now always sits on
+exactly one line — never wrapping to a second. A tip too wide for the available space truncates
+with an ellipsis (full text on hover) instead of wrapping or overflowing the layout.
 
-### 358. [x] Tune `[profile.release]` (LTO, one CGU, strip, size opt-level) — deliberately keeping `panic = "unwind"`
+**What shipped** (branch `task-417-single-line-tips`, PR
+[#178](https://github.com/ErikdeJager/ReCue/pull/178), merged 2026-07-15 into `dev`):
 
-`src-tauri/Cargo.toml` had **no `[profile.release]` at all**, so release builds ran on Cargo's stock defaults:
-no LTO, 16 codegen units, unstripped symbols. The resulting binary is decompressed and paged in from the
-AppImage's squashfs at **every** launch, so its size is a direct cold-start cost (an acknowledged upstream
-AppImage issue). This adds Tauri's standard size profile — **minus** the one lever that would have been actively
-harmful. It also closes the "deliberately untouched" `[profile.release]` item that #346 logged in
-`TRAJECTORY_TO_LINUX.md`.
+- **`src/components/EmptyState/EmptyState.module.css`** — `.tipText` gains `white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;` (keeping `min-width: 0` so the flex item can shrink
+  and the ellipsis triggers); `.tipRow`'s cap widens `max-width: 460px` → `min(92%, 700px)` so every
+  curated ≤100-char tip fits on one line while still bounding to the container on a narrow window
+  (where the ellipsis engages).
+- **`src/components/EmptyState/EmptyState.tsx`** — computes `renderedTip` once and renders the tip
+  span as `<span className={styles.tipText} title={renderedTip}>{renderedTip}</span>`, so a truncated
+  tip is still fully readable via the native tooltip.
 
-**What shipped** (branch `release-profile-tuning`, PR [#108](https://github.com/ErikdeJager/ReCue/pull/108),
-2026-07-14):
+**Key decisions** (from `ASSUMPTIONS.md` Task 417)
 
-- **`src-tauri/Cargo.toml`** — a heavily-commented `[profile.release]`: `lto = true` (fat), `codegen-units = 1`,
-  `strip = true`, `opt-level = "s"`.
-- **`src-tauri/src/pty.rs`** — an `#[ignore]`d `bench_output_hot_path` test (test-only; **no production-code
-  change**) timing the three CPU-bound stages of the PTY output path — `Scrollback::push` at 8 KB chunks against
-  the 256 KB cap, `coalesce_output_events`, and `commands::encode_output` — with `std::time::Instant` and **no
-  new dependency** (no criterion). Shipped rather than thrown away so the `opt-level` choice stays reproducible,
-  including for Task #361's AUR package.
-- **Docs** — a dated `TRAJECTORY_TO_LINUX.md` entry (profile, the panic rationale, CI build-time cost, the
-  `lto = "thin"` fallback), a short mirrored `TRAJECTORY_TO_WINDOWS.md` note (on MSVC `strip` is near-free and
-  release carries no PDB), and one sentence in `CLAUDE.md`'s **Builds & distribution** bullet.
+- The single-line requirement takes precedence over showing full text: an over-long tip truncates
+  with an ellipsis rather than wrapping/overflowing.
+- The 700px cap relies on the existing `tips.test.ts` ≤100-char / no-newline guarantee (JetBrains
+  Mono's uniform advance makes a fixed single-line width hold for all tips); a future over-long tip
+  simply truncates, so the change is self-correcting.
+- Interpreted "tips underneath the new session button" as the EmptyState hero tip fed by
+  `src/tips.json` — the only such surface. Tip content, catalog, shuffle logic, and `renderTip` are
+  untouched.
 
-**Key decisions**
-
-- **`panic = "abort"` was rejected, and the reasoning is recorded *in the manifest* so nobody "completes" the
-  profile later.** Technically nothing needs unwinding — the backend has no `catch_unwind`, no `#[should_panic]`,
-  and no production `unwrap`/`expect` outside one startup `.expect`. But ReCue **supervises long-lived PTY
-  sessions from always-running threads** (the per-session reader loop, the busy/idle monitor, the title worker,
-  the `lib.rs` event forwarder, the schedule/recurring poll, the `path_env` probe), and every mutex take already
-  handles a poisoned lock — there is not one `lock().unwrap()` in the tree. Under unwinding, a panic in any of
-  those threads kills **only that thread** while every other live agent and detached window survives.
-  `panic = "abort"` would trade that live property away — the whole app dies, every agent lost — for the
-  **smallest** of the four size levers (~5–10% of unwind tables).
-- **Fat `lto = true`, not `"thin"`.** The extra link time is paid only by `release.yml` (version-bump pushes,
-  four serialized Rust binaries — the macOS universal target counts twice) and produces a draft release a human
-  publishes later; it is **never** paid by the PR gate, since `ci.yml` uses the dev/test profiles. `lto = "thin"`
-  is documented as the one-word fallback if a leg OOMs (the arm64 macOS runner has ~7 GB, and universal means
-  two LTO links).
-- **`opt-level = "s"` by the plan's own decision rule.** `3` was to be shipped only if `"s"` proved >15% slower
-  on the aggregate hot path *and* a stage dropped below ~200 MB/s — and a claude repaint storm is single-digit
-  MB/s, with #261/#346 having already moved the costly work off the critical path.
-- **The card's "23.6 MB / 86 MB" figures were treated as unverified** — acceptance was gated on a *relative*
-  delta (binary ≥25% smaller) rather than absolute numbers.
-- **No release build was added to the PR gate** (`ci.yml` explicitly refuses per-PR `tauri build` cost). Accepted
-  consequence: a broken release link would surface only on the next version-bump push; rollback is a one-line
-  revert of the profile block.
+**Cross-platform:** pure CSS + one JSX `title` attribute — `white-space: nowrap` /
+`text-overflow: ellipsis` are universal; no `#[cfg]` / `platform` branch — identical on macOS
+(WKWebView) and Windows/Linux (Chromium).
 
 **Dependencies:** none.
 
-**Notes**
+### 418. [x] Update the Canvas empty-state hint to say "Drag in a panel from the left"
 
-- **No size or benchmark numbers are claimed, and this is the honest gap in the task.** The implementing box has
-  no `webkit2gtk-4.1` / `javascriptcoregtk-4.1` system libraries — `cargo check` fails identically on untouched
-  `main` — so it could not **link** a binary: no `cargo build --release`, no AppImage, no `cargo test` run, and
-  no benchmark. Per the plan's own decision rule, an unrunnable benchmark defaults to `opt-level = "s"`. The
-  measurements are logged as **pending real-box verification** in `TRAJECTORY_TO_LINUX.md`, with the exact
-  commands to obtain them.
-- Green in CI: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` (so the manifest parses and the
-  new test compiles warning-free), `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (671
-  tests). `cargo test` compiles the test target but fails at **link** on those missing system libs — a
-  pre-existing environment gap, not a defect of this change.
-- Untouched: no `[profile.dev|test|bench]`, no `.cargo/config.toml`, no `RUSTFLAGS`, no new dependency.
+An empty Canvas tab's hint now reads **"Drag in a panel from the left, or start with an empty tab"**
+instead of "Open a view from a session, or start with an empty tab", so the copy accurately
+describes how a user fills a Canvas tab (by dragging a sidebar row in from the left).
 
-### 364. [x] Recover from an unrecovered xterm WebGL context loss (dispose the addon → DOM renderer, latched)
+**What shipped** (branch `update-canvas-empty-state-hint`, PR
+[#177](https://github.com/ErikdeJager/ReCue/pull/177), merged 2026-07-15 into `dev`):
 
-**The card's premise was partly wrong, and the task was rescoped honestly rather than built to the letter.** It
-said the WebGL addon was attached "without a context-loss handler" — but `terminalPool.ts` has had a minimal
-`addon.onContextLoss(() => addon.dispose())` since #18. What was *actually* missing is what happens around that
-dispose: the pool kept a **dangling reference** to the disposed addon, so the async #221 font-atlas rebuild
-could still call `clearTextureAtlas()` on it — and, worse, **burn the one-shot module-global `fontAtlasRebuilt`
-flag that every other live terminal still needs**. There was also no anti-retry latch (a sick GPU could be
-hammered with a context-loss storm as each new terminal attached a fresh addon), no warning, and no observable
-state. WebGL contexts drop on OOM/suspend, likelier on WebKitGTK.
+- **`src/components/Canvas/CanvasSurface.tsx`** — the `centerHint` line in `CenterDrop()` changed its
+  leading clause "Open a view from a session" → "Drag in a panel from the left", keeping the trailing
+  ", or start with an empty tab" (which describes the "New tab" button below), the `centerTitle`
+  heading, the icon, and the button unchanged. `CanvasSurface` is the shared surface for both the
+  main Canvas view and detached canvas windows (#84), and the string appeared exactly once, so both
+  places update from one edit.
 
-**What shipped** (branch `xterm-webgl-context-loss`, PR
-[#109](https://github.com/ErikdeJager/ReCue/pull/109), 2026-07-14) — frontend only:
+**Key decisions** (from `ASSUMPTIONS.md` Task 418)
 
-- **`src/components/Terminal/webglFallback.ts`** (new, pure and dependency-free) — the per-document WebGL
-  fallback latch plus a per-session renderer record: `allowsWebgl` / `noteRenderer` / `noteContextLoss` /
-  `rendererOf` / `hasLostContext` / `forget` / `reset`, exposed through a `webglFallback` singleton so the main
-  window and each detached canvas window (#84) latch **independently**.
-- **`terminalPool.ts`** — on an **unrecovered** context loss, `createHost` now clears its addon reference,
-  latches + warns once, disposes the addon (xterm swaps back to its DOM renderer and re-lays-out the **same**
-  buffer), and forces a belt-and-braces `term.refresh(0, term.rows - 1)`. The window is then latched to the DOM
-  renderer for the rest of the run, so a newly created terminal (spawn / Restart / template) attaches no
-  `WebglAddon` at all. `webglFallback.allowsWebgl()` is checked **before** `webglAllowed()`, so a fallen-back
-  window never even constructs the #346 probe canvas.
-- `host.dispose` forgets the session's renderer record (keeping the map bounded) but **deliberately does not
-  clear the latch** — disposing the terminal that lost its context must not re-arm WebGL. The latch likewise
-  survives `resetTerminal` (session Restart) and `forget()`.
+- The card's before/after `…` was truncation shorthand, not literal copy — only the leading clause is
+  replaced, preserving the trailing "New tab" clause; final copy: "Drag in a panel from the left, or
+  start with an empty tab".
+- "From the left" is accurate on all platforms (the sidebar drag source is always left of the canvas;
+  layout is not OS-conditional).
 
-**Key decisions**
-
-- **The latch is window-wide (a module singleton per document), not per-session.** A real GL loss is
-  driver/process-level, so a terminal spawned after the loss would immediately lose its context too. Rollback to
-  a per-session key is noted in the plan.
-- **No re-attach, and no `webglcontextrestored` handling.** Verified against `@xterm/addon-webgl@0.19.0`: the
-  addon itself waits ~3 s for a restore and only fires `onContextLoss` when the context is **unrecoverable** —
-  so a retry path would be redundant at best and a context storm at worst.
-- **A new module rather than extending `webglRenderer.ts`** — that keeps `webglRenderer.ts` a pure classifier
-  and kept this diff conflict-free with the concurrent Task #357, which extends that same file.
-- **No user-facing surface** (no toast, badge, or setting) — a single `console.warn` in #346's style. The
-  user-visible outcome is simply that the terminal keeps working. `webglFallback.allowsWebgl()` / `reset()` are
-  documented as the seam for Task #357's Settings renderer override (an explicit "force WebGL" must clear the
-  latch).
-- **The #18 pool invariant holds**: no host / xterm / container / PTY dispose, no scrollback replay, no remount —
-  the renderer swaps underneath the same live buffer.
+**Cross-platform:** a pure user-facing copy change, no branch/logic/CSS — identical on macOS,
+Windows, and Linux.
 
 **Dependencies:** none.
 
-**Notes**
+### 420. [x] Accent-color the "Cue" in the empty-state "ReCue" wordmark
 
-- Unit tests cover the pure module at 100% lines/branches/functions. The one path CI cannot exercise — the
-  actual `WEBGL_lose_context` smoke test — is recorded as a real-box verification step in
-  `TRAJECTORY_TO_LINUX.md`, with one clause added to `CLAUDE.md`.
-- Unchanged elsewhere: detached windows (#105) and Linux software-WebGL boxes (#346) still never construct the
-  addon at all; macOS/Windows main-window terminals still do.
+The empty-state hero's "ReCue" wordmark is now subtly two-tone: **"Re"** keeps the default text
+color and **"Cue"** is drawn in the app accent (`var(--accent)`, Peach by default). Purely visual
+polish — no behavior change.
 
-### 363. [x] Give the UI font a Linux leg — bundle Inter Variable (latin), applied Linux-only
+**What shipped** (branch `accent-cue-wordmark`, PR
+[#179](https://github.com/ErikdeJager/ReCue/pull/179), merged 2026-07-15 into `dev`):
 
-`tokens.css`'s `--ui` stack (`-apple-system, "SF Pro Text", ui-sans-serif, system-ui, sans-serif`) resolves to
-San Francisco on macOS and Segoe UI on Windows, but on Linux it falls through to whatever the distro's default
-sans happens to be — which reads noticeably worse than the other two targets. The card suggested simply adding
-Linux-common faces (Inter, Cantarell, Ubuntu, Noto Sans) ahead of the generic. **That was measured on the
-reporting Arch box and rejected**: `fc-list` showed that **none** of those faces are installed (only Adwaita
-Sans/Mono + FreeSans, with `fc-match sans-serif` → FreeSans), so a fallback-only list would have been a **no-op
-on the very machine that reported the bug**, and non-deterministic everywhere else. So the face is **bundled**
-instead.
+- **`src/components/EmptyState/EmptyState.tsx`** — the single `ReCue` text node in the `.wordmark`
+  div split to `Re<span className={styles.accent}>Cue</span>` (adjacent, no whitespace, so it still
+  reads/copies as "ReCue").
+- **`src/components/EmptyState/EmptyState.module.css`** — a new `.accent { color: var(--accent); }`
+  rule; everything else (size, weight 700, letter-spacing, `text-shadow` incl. its light-theme halo)
+  is inherited from `.wordmark`, so only the "Cue" glyph color changes.
 
-**What shipped** (branch `linux-ui-font`, PR [#110](https://github.com/ErikdeJager/ReCue/pull/110),
-2026-07-14) — frontend only, no Rust change:
+**Key decisions** (from `ASSUMPTIONS.md` Task 420)
 
-- **Inter Variable bundled offline** (`@fontsource-variable/inter`, OFL-1.1 — never a CDN, like the existing
-  JetBrains Mono) via a **hand-written `@font-face`** in the new `src/styles/fonts.css` naming only the **latin**
-  subset: one **48,256 B** woff2 ships, instead of the **218,512 B** that `import "@fontsource-variable/inter"`
-  would have emitted across all seven subsets. Variable rather than static because the UI uses weights
-  400/500/600 — one file, real weights.
-- **Applied Linux-only** through a new `:root[data-platform="linux"]` `--ui` override. The shared `:root --ui`
-  line is **not touched**, so macOS and Windows render byte-for-byte as before — and never fetch the woff2 at
-  all, since a `@font-face` file loads only when an element actually matches the family. A short system-face
-  tail is kept in the Linux stack for non-latin glyph coverage.
-- **A new seam for platform-conditional CSS** — `data-platform` on `<html>`, written **synchronously** from the
-  WebView user-agent (`detectPlatform` / `applyPlatformAttribute` in `src/platform.ts`) from `main.tsx`
-  **before the first render**. The store's `platform` signal is an async IPC and would have flipped the font
-  mid-boot. `store.ts` re-applies the attribute from the authoritative backend `platform()` when it lands (a
-  no-op in practice, and a self-heal if the UA sniff were ever wrong).
+- Split point is "Re" | "Cue" so exactly the "Cue" glyphs take `var(--accent)`; using the token (not
+  a hex) means a custom accent from Settings → Appearance recolors it **live**, and no light-theme
+  override is needed since `var(--accent)` is already theme-tuned (`#e05a0a` on Latte).
+- No unit test — `EmptyState` is pure presentational JSX; verification is lint + build + manual smoke
+  (accent-override live recolor, dark/light legibility). Only the hero wordmark is touched; other
+  "ReCue" appearances (window title, About, patch notes, onboarding) are left as-is.
 
-**Key decisions**
-
-- **The ordering hazard was verified, not assumed.** Prepending `"Inter"` into the *shared* stack is **not**
-  platform-neutral: macOS is safe (`-apple-system` wins first), but **Windows is not** — neither
-  `-apple-system` nor `"SF Pro Text"` resolve there, so a user who happened to have Inter installed would get
-  it *instead of* Segoe UI. Appending after `system-ui` is safe on macOS/Windows but a no-op on Linux (the
-  generic always resolves; fontconfig even defines a `system-ui` generic). Hence a **platform-scoped override**,
-  never a re-ordering of the shared list.
-- **`format("woff2")`, not fontsource's `format("woff2-variations")`** — an engine that doesn't know the newer
-  keyword degrades to the default instance rather than skipping the `src` entirely (which would mean no font at
-  all). The verbatim latin `unicode-range` lets non-latin codepoints fall through to system faces, so no tofu.
-- **Consistent with Task #356's bundle budget:** a woff2 is not JS, is never parsed by the engine, and is
-  fetched only on Linux — +47 KB on disk (~0.9% of `dist/`), with **zero** JS-parse cost.
-- **`index.html` was deliberately not touched** (Task #348 owns it), so the two land independently.
-- Out of scope and recorded rather than built: the `--mono`/terminal font, mermaid's `fontFamily`, and a
-  user-facing "UI font" setting or opt-out for Linux users who prefer their desktop font.
+**Cross-platform:** pure frontend CSS + JSX, no platform branching — byte-identical on macOS,
+Windows, and Linux.
 
 **Dependencies:** none.
 
-**Notes**
+### 419. [x] Cap the width of every Overview panel, not just agent cards
 
-- **Measured, not assumed** (`npm run build`): exactly **one** `dist/assets/inter-latin-wght-normal-*.woff2` at
-  48,256 B; total woff2 payload 164,332 B (up from 116,076 B) — both matching the plan exactly. The
-  bare-package `url()` resolution in plain CSS was empirically verified against this repo's own Vite 7.3.6.
-- Tests: `detectPlatform` over the real WKWebView / WebView2 / WebKitGTK user-agent strings plus the unknown
-  case, and a **mechanical regression guard** that reads `tokens.css` + `fonts.css` off disk and asserts the
-  `:root --ui` stack still equals the original **exactly**, that the Linux block leads with `"Inter Variable"`
-  and ends in a generic, and that the named family is genuinely bundled locally.
-- Checks green: `npm run lint`, `npm run format:check`, `npm run build`, `npm test` (681 passed). The GUI check
-  (does it actually *look* right on each distro) is recorded in `TRAJECTORY_TO_LINUX.md`.
+With the "cap card width" setting on (default), the 900px maximum now applies to **every** Overview
+column type — file, diff, terminal, kanban, filetree, and scheduled panels — not just agent and
+recurring cards, giving the wall a consistent comfortable maximum instead of letting non-agent
+panels stretch unbounded.
 
-### 352. [x] Batch the boot IPC waterfall — one aggregated `boot_state` command + parallel event listeners + a no-flash loading gate
+**What shipped** (branch `cap-overview-panel-width`, PR
+[#180](https://github.com/ErikdeJager/ReCue/pull/180), merged 2026-07-15 into `dev`):
 
-`init()` was a waterfall: it awaited **13 event-listen registrations one at a time**, then `platform`, then
-`windowsBuild`, then refresh batch A, then batch B, then serial `listSchedules` / `listRecurrings` /
-`appVersion` / `getLastVersion` / `listCanvasWindows` — **34 invokes across 22 sequential waves**, 16 of them
-gating the first meaningful render. Every one of those round-trips is an evaluate-JS hop on the webview main
-thread, which is costliest on WebKitGTK. Boot is now **14 invokes in 2 concurrent waves**.
+- **`src/components/Overview/Overview.tsx`** — `ExtraPanel` (file/diff/terminal/kanban/filetree) and
+  `ScheduleCard` now read `capWidth = useStore((s) => s.settings.capAgentWidth)` and pass
+  `capped={capWidth}` to their `PanelColumn`, reusing the existing `.card` → `.cardCapped`
+  (`max-width: 900px`) mechanism that `SessionCard` / `RecurringCard` already used. Broadened the
+  `PanelColumn.capped` prop doc + `SessionCard` inline comments.
+- Copy broadened without touching the persisted key: the **`capAgentWidth`** settings key, its
+  default `true`, and its `mergeSettings` back-fill are unchanged (so old blobs and the store tests
+  stay green) — only its *meaning* widened. Settings → Appearance label "Cap agent card width" →
+  **"Cap Overview panel width"**, help text → "Limit Overview panels to a comfortable maximum width.";
+  the `types/index.ts` / `store.ts` / `.cardCapped` CSS comments broadened to match.
 
-**What shipped** (branch `batch-boot-ipc-waterfall`, PR
-[#112](https://github.com/ErikdeJager/ReCue/pull/112), 2026-07-14):
+**Key decisions** (from `ASSUMPTIONS.md` Task 419)
 
-- **One aggregated Rust `boot_state` command** (`BootState` struct + a pure, unit-testable `boot_state_from`)
-  returning **all 21 boot reads** in a single round-trip: sessions, recents, repo colors, Overview
-  panels/order, the legacy `open_files`, canvas layout/tabs/templates, settings, sidebar width/collapsed, folder
-  order, diff-seen, schedules, recurrings, last + running version, platform, Windows build, and the detached
-  canvas ids. It is `async` + `spawn_blocking` (the Windows `cmd /C ver` probe stays off the webview main
-  thread, matching #308/#330/#353), and the probe is awaited **before** any store lock, so no mutex guard
-  crosses an `await`.
-- **The 13 `listen` registrations batched** into one parallel wave (`Promise.all` inside each `subscribe*Events`
-  helper, and across the four helpers).
-- **Boot restructured into two concurrent waves**: the `boot_state` fetch **races** the listener wave, but the
-  payload is applied only **after** the listeners resolve — preserving today's invariant that a live
-  `session://output` / `session://exited` can never land un-handled.
-- **`store.applyBootState`** — the single place the payload becomes state, in **one `set()`**. `refresh()` is
-  now a thin fetch + apply (keeping its name, so `store.refresh.test.ts` keeps its entry point).
-- **A `booted` flag** gating three empty-state affordances (the Overview `EmptyState`, the Sidebar "No
-  repositories yet." hint, and the empty-canvas center hint) so none of them can flash before content arrives.
-  Deliberately **no spinner or skeleton** — it is complementary to Task #348's pre-paint window-show gate.
+- Reuse `capAgentWidth` as the single gate — no new key, no migration — for migration-safety and
+  store-test stability; the cap stays **gated by the toggle for all panel types** (turning it off
+  leaves every column uncapped).
+- One shared 900px cap for every panel type (no per-type values); Overview-wall only — Big mode /
+  Canvas / detached windows untouched. The #176 min-width floor and horizontal scroll are unchanged.
 
-**Key decisions**
-
-- **`platform` + `windowsBuild` must land in the *same* `set()` as `sessions`** — the #346 invariant, since
-  `terminalPool` reads them at host-creation time. This was made an explicit acceptance criterion **and** a
-  test, not just a code comment.
-- **Every existing command and `ipc.ts` wrapper is kept and still registered.** This is a batching *read*, not a
-  replacement — some become boot-unused but remain the API surface for Settings/About and other call sites. **No
-  command was deleted.**
-- **A single point of failure was consciously accepted**: one command now replaces three independent try/catch
-  groups. `boot_state` is infallible server-side (in-memory store reads), and the only realistic failure ("not
-  running inside Tauri") already sank all three groups before. `booted` flips true **even when `boot_state`
-  fails**, so the UI never strands on a blank screen.
-- **Only one new pure module was extracted** (`src/boot.ts` → `resolveCanvases`: persisted tabs, stale
-  `activeId` fallback, the legacy `canvas_layout` migration, and the detached-window override), keeping the rest
-  of the derivation inside the store action to avoid an import cycle with `store.ts`.
-- **The detached canvas window (#84) boots identically** — every `IS_MAIN_WINDOW`-only side effect (the legacy
-  `open_files` clear, terminal respawn, canvas-migration persist, the update toast + `setLastVersion`, the usage
-  poll) is preserved verbatim.
-- Out of scope, and left to their owners: the sidebar's post-boot git refreshes (Task #359),
-  `maybeOnboardAgent`'s three `agent_info` probes, `pruneMissingFolders`' `dir_exists` calls (all already
-  void-ed off the critical path), and the boot resume loop (Task #355).
+**Cross-platform:** pure frontend CSS-class application + a store read, no OS branch — identical on
+macOS, Windows, and Linux.
 
 **Dependencies:** none.
 
-**Notes**
+### 416. [x] Dev-container new-session modal — portal info popover, inline build feedback, kbd-hint layout
 
-- A Rust unit test proves **each `boot_state_from` field equals what its individual getter/command returns** —
-  so the aggregate can't silently drift from the surface it replaced. `store.refresh.test.ts` was re-pointed at
-  a `makeBootState()` fixture with every prior assertion kept, plus new coverage: boot issues only `bootState` +
-  the four subscribes; `platform` and `sessions` land together; `booted` flips even on failure.
-- Platform-neutral win, largest on WebKitGTK; real-box checks recorded in `TRAJECTORY_TO_LINUX.md`.
+Three rough edges on the New Session modal's "Run in dev container" toggle row fixed in one cohesive
+change: the info "i" popover now overlays the whole app (no longer clipped inside the 300px scrolling
+modal), a first-run image build is surfaced as inline yellow warning text + spinner beside the Start
+button (instead of a toast), and the row lays out justify-between (toggle left; kbd hint + "i" info
+icon grouped right).
 
-### 354. [x] Fast, reliable session exit — kill the PTY process group and derive `Exited` from the child, not the reader's EOF
+**What shipped** (branch `task-416-container-modal-popover`, PR
+[#181](https://github.com/ErikdeJager/ReCue/pull/181), merged 2026-07-15 into `dev`):
 
-`kill_session` / `kill_all` only killed the **direct** child pid, and the `Exited` event was **EOF-driven** — but
-on unix a PTY master only EOFs once **every** holder of the slave fd is gone, and claude's subprocesses (MCP
-servers, tool children) inherit it. So an already-exited agent's card stayed alive for seconds (the reported
-"instances exit slow"), and with a descendant that ignores SIGHUP the master **never EOFs at all** — verified
-with a PTY probe where the reader was still blocked after 8 s.
+- **`ContainerInfoPopover.tsx`** — the popover panel is now `createPortal`'d to `document.body` with
+  `position: fixed`, anchored **above-and-to-the-left** of the "i" trigger from its
+  `getBoundingClientRect()`, clamped ≥8px from every viewport edge (flips below if there's no room
+  above). Outside-click checks **both** trigger and panel refs (the panel is no longer a descendant),
+  the capture-phase Escape (closes only the popover) is unchanged, a modal **scroll closes** it, and
+  a window **resize repositions** it. ARIA (`aria-expanded`/`aria-label`, panel `role="note"`) kept.
+- **`NewSessionModal.tsx`** — the toggle row restructured to `justify-content: space-between`: the
+  checkbox "Run in dev container" on the left, a new `.containerRowActions` group (kbd hint then the
+  "i" icon) on the right, and the docker-stopped "start Docker" hint relocated to its own full-width
+  line below. The kbd moved out of the checkbox label; the chord renders via
+  `chordLabel(CONTAINER_TOGGLE_CHORD, platform)` (⌘⇧C / Ctrl+Shift+C). A modal-local
+  `containerBuilding` state (reset on open) subscribes to `container://building` while open and is
+  cleared when `ensureContainerImage()` settles; a yellow `.buildingHint` ("Building the dev container
+  (first run)…") + lucide `<Loader>` spinner renders left of Start only during a genuine first-run
+  build (an already-built image never flashes).
+- **`store.ts`** — the `container://building` toast is gated on `!get().newSessionOpen`, so the modal's
+  inline indicator owns the in-modal case while a build starting **after** the modal closes still
+  toasts (feedback never lost).
+- **`containerAvailability.ts` (+ test)** — a pure `showBuildIndicator(useContainer, building,
+  blocked)` helper used at the render site, with unit cases.
 
-**What shipped** (branch `fast-session-exit`, PR [#113](https://github.com/ErikdeJager/ReCue/pull/113),
-2026-07-14):
+**Key decisions** (from `ASSUMPTIONS.md` Task 416)
 
-- **`Exited` is now driven by the child, not the reader.** A per-session **exit-waiter thread**
-  (`pty.rs exit_waiter`) owns the `Child`, blocks in `wait()`, and is the **sole** emitter of
-  `SessionEvent::Exited`. The reader's send is **deleted**, not merely guarded, so there is still exactly **one**
-  `Exited` per PTY generation — the frontend's consume-once `intentionalKills` contract is untouched.
-- **Trailing output still precedes `Exited`** — the waiter waits, bounded (`EXIT_DRAIN_MS`, 150 ms), on a
-  `reader_done` flag the reader sets after its last `Output`, then hangs up lingering descendants and escalates
-  to SIGKILL after a further 250 ms. Worst-case added exit latency ~400 ms; normally a few ms.
-- **Unix process-group kill (no orphans)** — `hangup_group` / `kill_group` (`killpg` SIGHUP → bounded grace →
-  SIGKILL) back `kill_session`, `kill_all`, and the waiter's cleanup of descendants still holding the slave.
-- **`kill_session` is non-blocking**: the SIGHUP goes out immediately and the SIGKILL escalation runs off-thread,
-  replacing portable-pty's ~200 ms sleep *inside* the Tauri command. **`kill_all` is bounded**: one shared 200 ms
-  grace for all sessions rather than ~200 ms × N serially, run inline rather than on detached threads (which may
-  not survive process exit → orphans).
-- **Same-id respawn (Restart) hardening** — a superseded generation is silenced and killed, so a stale waiter's
-  late exit can never be attributed to the fresh session.
+- The build indicator is **event-driven** (shown only while a real `docker build` is in flight), not
+  optimistic on toggle-ON, so a built image never flashes; toast suppressed only while the modal is
+  open.
+- Build state kept **modal-local** (`useState` + a modal-scoped listener); the only store change is
+  the one-line toast gate — keeps the change small and cohesive.
+- Popover anchored above-left (per explicit user guidance), portaled with viewport clamping; the
+  right group is kbd-then-"i" (info icon rightmost); yellow uses the existing `--status-awaiting`
+  token; the spinner relies on the global reduced-motion killswitch.
 
-**Key decisions**
-
-- **No `pre_exec`/`setsid` of our own, and no `nix` dependency.** The root cause was confirmed *in the vendored
-  crate*: portable-pty 0.9.0's unix spawn **already** calls `setsid()` in `pre_exec` (`src/unix.rs:257`), so the
-  child is a session/process-group leader (`pgid == pid`) and `killpg(child_pid)` is already correct — it can
-  only ever reach the agent's **own** descendants. The only new dep is `libc`, gated
-  `[target.'cfg(unix)'.dependencies]` and already in the lock file via portable-pty.
-- **The subtlest bug this task had to avoid: `kill_all` must be *silent*.** An `ExitState::silent` flag is set
-  **before any signal** on shutdown, so a shutdown kill emits **no** `Exited` at all. Without it, a claude that
-  traps SIGHUP and exits **0** would reach the still-live webview, `isCleanExit` would read it as a *clean* exit,
-  and `forgetExitedSession` would **delete the persisted record** — silently breaking #30's "quitting keeps your
-  sessions" guarantee. `kill_session`, by contrast, still emits exactly one `Exited`, so `intentionalKills`
-  bookkeeping is unchanged.
-- **Exit-code semantics are preserved by construction, not by a new flag.** portable-pty maps a signal death to
-  exit code **1** (never 0), so a killed agent can never be misread as a clean code-0 exit and get its record
-  forgotten (#63). Documented and **asserted in a test** rather than adding a "killed" field to the event payload.
-- **SIGHUP first, not SIGTERM** (matching portable-pty's and a terminal's own semantics), escalating to SIGKILL.
-- **Deliberately did *not* killpg the tty's foreground process group** (`MasterPty::process_group_leader`): the
-  setsid'd child's own group already covers claude's non-detached descendants. A descendant that `setsid`s
-  *itself* is recorded as a known, best-effort limitation.
-- **Windows is byte-for-byte untouched** — no job object (an explicit non-goal), no `libc` compiled there, and
-  the kill path stays `ChildKiller::kill()` → `TerminateProcess` (verified in the crate: both `WinChild::kill`
-  and the cloned `WinChildKiller::kill` call `TerminateProcess(handle, 1)`). Windows still *inherits* the
-  platform-neutral child-wait-driven `Exited`, which is a cfg-free improvement. `pid` and the two grace
-  constants carry `#[cfg_attr(windows, allow(dead_code))]` so a Windows `clippy --all-targets -- -D warnings`
-  stays clean.
-- **No frontend change at all** — `isCleanExit`, `forgetExitedSession`, `intentionalKills`, the Restart overlay
-  and "shutdown keeps records" are exactly as they were.
+**Cross-platform:** pure frontend / CSS; the only OS-sensitive bit (the chord glyphs) already routes
+through `chordLabel` — identical on macOS, Windows, and Linux. No Rust / backend change.
 
 **Dependencies:** none.
 
-**Notes**
+### 421. [x] Relocate the dev-container "Building…" indicator above the modal action buttons
 
-- Three new `#[cfg(unix)]` tests (plus a `session_pid` accessor and a `group_gone` helper): a prompt exit despite
-  a lingering descendant; a prompt whole-group kill (asserting **exactly one** `Exited`, **never code 0**); and a
-  **silent** `kill_all` leaving no process group behind. **Each was verified to fail against a pre-#354
-  simulation** and pass after — the tests genuinely pin the bug, rather than merely describing the new code.
-- Docs: the `CLAUDE.md` "Exit handling (#63)" convention + Spawn bullet, and dated entries with real-box
-  checklists in `TRAJECTORY_TO_LINUX.md` / `TRAJECTORY_TO_WINDOWS.md` (the Windows `TerminateProcess` path and a
-  real MCP-server-holding-the-slave scenario are the items CI cannot exercise).
+In the New Session modal, the first-run "Building the dev container (first run)…" status line +
+spinner is moved out from between the Cancel/Worktree/Start action buttons onto its own full-width
+line **above** the button row — in the gap below the "Run in dev container" checkbox row — so the
+build feedback reads as a clear status line instead of being wedged inline beside Start. Position
+only; when it shows is unchanged.
 
-### 359. [x] Tame the boot git storm — tier, scope, and coalesce the sidebar git refresh volley
+**What shipped** (branch `task-421-container-building-indicator`, PR
+[#183](https://github.com/ErikdeJager/ReCue/pull/183), merged 2026-07-16 into `iteration-2`):
 
-Right after boot's batch A, the Sidebar effect fired **five** git reads per repo — `refreshBranches` +
-`refreshFileStatuses` + `refreshGithubUrls` + `refreshDiffLineCounts` + `refreshBranchAheadBehind` — roughly six
-`git` process spawns per repo, and `diff_line_counts` additionally **read up to 2000 untracked files per repo**
-to count their lines. The same volley re-fired **unscoped** on every session's busy→idle edge (debounced 600 ms)
-— so during boot resume of many sessions it stormed repeatedly at exactly the moment the app was trying to become
-interactive, plus a 15 s poll on top.
+- **`src/components/NewSessionModal/NewSessionModal.tsx`** — the `.buildingHint` JSX block (the
+  `{!deferMode && showBuildIndicator(...) && (<span className={styles.buildingHint} role="status">…
+  <Loader/>…</span>)}` expression) is cut out of `<div className={styles.actions}>` and re-inserted as
+  a **sibling of `.actions`**, after the dev-container opt-in IIFE block and before the action row. As
+  a `.popover` flex-column child it becomes its own row above the buttons; the guard, the
+  `showBuildIndicator(...)` call, the spinner, the copy, and `role="status"` are byte-for-byte
+  unchanged. The two now-stale "beside/left of Start" position comments were reworded.
+- **`src/components/NewSessionModal/NewSessionModal.module.css`** — `.buildingHint` gains
+  `margin-bottom: var(--space-12)` so it spaces evenly between the checkbox row (already
+  `margin-bottom: var(--space-12)`) and the button row; its descriptive comment updated. As a
+  flex-column child the `inline-flex` span blockifies full-width and left-aligns, matching the sibling
+  `.containerHint` docker-stopped line.
 
-**What shipped** (branch `tame-boot-git-storm`, PR [#114](https://github.com/ErikdeJager/ReCue/pull/114),
-2026-07-14):
+**Key decisions** (from `ASSUMPTIONS.md` Task 421)
 
-- **Tiered the boot volley.** `refreshBranches` (one `git rev-parse` per folder) **stays** on the critical
-  path — it is the sidebar's primary label source via `sessionLabel`. The **decorations** (GitHub URLs #327,
-  ahead/behind #338, per-agent line counts #335, FileTree tints #252) now run **after first paint** *and* **after
-  the boot-resume window settles**.
-- **`resumeSettled`** — a new store flag, true immediately when zero session records were persisted, else flipped
-  by the **existing** 4 s `RECONNECT_BACKSTOP_MS`. That's a **hard cap**: a slow or failed `claude --resume` can
-  never defer the decorations forever. Deliberately *not* keyed on "every session emitted output", which a
-  never-resuming session would hang on.
-- **Scoped the busy→idle volley** to the settling session's **own folder** (exactly the #212 contract). The
-  600 ms debounce accumulates a `Set` of folders; an unknown session id falls back to an unscoped volley
-  (fail-safe).
-- **`file_statuses` is read only for repos with a mounted FileTree** — its sole consumer — removing the heaviest
-  `git` command (a full working-tree walk) from the boot path entirely. A boot with no tree open now does **zero**
-  `git status` reads.
-- **Coalesced all five reads** behind one `refreshRepoGit({ repos?, kinds?, whenSettled?, throttleFull? })`
-  action with an in-flight guard + a merged trailing rerun, replacing ~8 copy-pasted five-call blocks. The
-  focus/visibility backstop still runs a **full, unscoped** volley (throttled to ≤1 per 30 s), so a folder edited
-  in an external editor still updates its badges.
-- **Cheaper git (`git.rs`)** — `diff_line_counts` drops a redundant `has_head` spawn (3 → **2**; `git diff
-  --numstat HEAD` already fails exactly where `has_head` was false, pinned by a new unborn-repo test), gains a
-  **total-byte budget** (16 MB/repo) on top of the existing file/size caps, and **streams** line counts instead
-  of `fs::read`-ing whole files. `github_web_url_for` goes 2 spawns → **1** (a single
-  `git config --local --get-regexp` + the pure `pick_remote_url`).
+- Kept the existing inline `.buildingHint` span (#416) rather than reintroducing a toast — the card
+  asks only to move the text; relocate it, don't re-implement it.
+- Kept the wording "Building the dev container (first run)…" verbatim, and the spinner, `role="status"`,
+  and `--status-awaiting` color unchanged — only position + one CSS margin changed.
+- Placed the line as its own full-width, left-aligned row (matching `.containerHint`) with
+  `margin-bottom: var(--space-12)`, mirroring the modal's existing rhythm.
+- `showBuildIndicator`'s logic (and its unit tests, which assert the pure helper, not DOM order) are
+  untouched, so the indicator still shows under exactly the same conditions.
 
-**Key decisions**
+**Cross-platform:** pure frontend TSX/CSS over existing tokens (`--space-12`, `--status-awaiting`); no
+OS-conditional code — identical on macOS, Windows, and Linux (Chromium/WebKit WebView on all three).
+The real first-run docker-build smoke was flagged for interactive verification in the PR.
 
-- **The card's "or default `showDiffLineCounts` off on Linux" option was explicitly rejected** — that would be a
-  silent per-OS feature removal. The badge keeps working on all three OSes; it is simply made cheaper, deferred,
-  and per-repo scoped.
-- **"After first paint" = a double `requestAnimationFrame`** (with a `setTimeout` fallback), **not**
-  `requestIdleCallback` — its support on WKWebView/WebKitGTK isn't worth relying on. Complementary to Task
-  #348's pre-paint window-show gate.
-- **Viewport-based skipping was rejected** (as the card permitted): the sidebar is short and non-virtualized, and
-  scroll-dependent data would pop in and interact badly with worktree nesting, the collapsed rail, and detached
-  windows.
-- **The "any settle refreshes every repo" safety net is preserved** for externally edited folders — that's what
-  the throttled focus/visibility full volley is for; the 15 s interval poll keeps the cheap branches +
-  ahead/behind pair.
-- Untracked line counting keeps its bounded-fidelity tradeoff: pathological untracked trees may undercount, as
-  they already do today under the existing caps.
+**Dependencies:** none. (Builds on #416's inline build indicator.)
 
-**Dependencies:** none.
+### 422. [x] Give the top Kanban card room to lift on hover (stop it clipping under the column header)
 
-**Notes**
+In the in-app Kanban board, the topmost card in each column was clipped by the column's top edge when
+its hover-lift animation (Task 409's `translateY(-2px)` + soft shadow) raised it — because the
+`.cards` list had `top` padding `0` and its `.column` ancestor has `overflow: hidden`. Fix: give the
+card list symmetric top padding so the lifted top card (and its shadow) stays fully visible.
 
-- New pure `src/gitRefresh.ts` (`normalizeRequest` / `mergeRequests` / `mergeScoped` — which deletes a scoped key
-  the read no longer returns, and is referentially stable — plus `afterPaint` / `focusRefreshKinds`) with unit
-  tests, and new store-level tests for tiering / deferral / scoping / coalescing / open-tree gating.
-- Checks green: `npm test` (703 passed), `npm run build`, `npm run lint`, `npm run format:check`,
-  `npm run lint:rust`, `npm run format:rust`, `cargo test` (210 passed).
-- Platform-neutral: no `#[cfg]` divergence, no new shell-out primitive, no OS-specific frontend API.
+**What shipped** (branch `task-422-kanban-top-card-lift`, PR
+[#182](https://github.com/ErikdeJager/ReCue/pull/182), merged 2026-07-16 into `iteration-2`):
 
-### 360. [x] Take the login-shell PATH probe off the startup critical path (async probe + fingerprinted cache)
+- **`src/components/Kanban/KanbanPanel.module.css`** — the `.cards` rule's `padding` shorthand changed
+  from `0 var(--space-8) var(--space-8)` to `var(--space-8)` (top `0`→`8px`; right/bottom/left were
+  already 8px), with an explanatory Task 422 comment. The top card now rests 8px below the clip-region
+  top, so a 2px lift stays comfortably inside — reaching parity with the already-accepted 8px bottom
+  padding that absorbs the identical bottom-card lift.
 
-`restore_user_path()` ran **synchronously at the top of `run()`, before the window existed**, waiting up to 3 s
-on `$SHELL -ilc` (release builds only) — so a heavy interactive rc (oh-my-zsh, nvm) delayed the window by
-exactly that much. The probe now resolves **concurrently with window creation**, and a fingerprinted cache means
-a steady-state boot pays **zero** probe cost.
+**Key decisions** (from `ASSUMPTIONS.md` Task 422)
 
-**What shipped** (branch `async-path-probe`, PR [#115](https://github.com/ErikdeJager/ReCue/pull/115),
-2026-07-14):
+- Fix by adding top padding to `.cards` rather than shrinking the hover lift or altering `.column`'s
+  `overflow: hidden`/rounded corners — keeps Task 409's lift + rounding intact and just makes room.
+- 8px (`var(--space-8)`), making `.cards` padding symmetric — reads as even (not a lopsided gap) and
+  matches the bottom padding by construction. `.column`'s `overflow`, `.cards`' `overflow-y: auto`
+  scroll behavior, dragging, the DragOverlay preview, the placeholder, and the composer are all
+  untouched; reduced-motion already suppresses the lift (no clip to fix there).
 
-- **`path_env::start_probe()`** — snapshots the env and returns immediately; the probe runs on its own thread
-  while the window is being created.
-- **The result lands in an in-process `Mutex` + `Condvar` cell** (`PathState`: `Inherit` / `Pending` / `Ready`).
-- **Two readers, deliberately different.** `effective_path()` **blocks** (bounded by a 5 s `WAIT_TIMEOUT`, with a
-  timeout-downgrade so a wedged probe can't make every later reader pay the cap) and backs `pty::find_on_path`
-  (both cfg arms) + `spawn_with_id`'s child env — this is the **correctness gate**, since a spawn must not
-  resolve `claude` against a minimal GUI PATH. `apply_path()` **never blocks** and backs `git::hidden_command`,
-  which runs inside *synchronous* Tauri commands on the main thread — a blocking git call there would stall the
-  webview, which is the exact failure this task exists to remove.
-- **A cross-launch cache** — a backend-internal `path_cache` scalar in `store.rs` (getter + setter, **no Tauri
-  command, no frontend change**), keyed by `$SHELL` plus the mtime/presence of every rc file that can set PATH
-  (`/etc/profile`, `/etc/paths` and `/etc/paths.d` as a directory, `~/.profile`, the zsh/bash/fish rc sets,
-  ZDOTDIR-aware). A hit **seeds** the PATH at boot with no subprocess at all; the probe still re-runs in the
-  background and refreshes the cache, republishing in-memory if it differs so later spawns get the fresh value.
+**Cross-platform:** a one-line CSS padding tweak over an existing token — no `#[cfg]`/platform CSS
+branch; identical on macOS (WKWebView), Windows (WebView2), and Linux (WebKitGTK).
 
-**Key decisions**
+**Dependencies:** none. (Adjusts Task 409's Kanban hover-lift.)
 
-- **The process env is never mutated for PATH — no `set_var` at all.** This is the safest design rather than the
-  fastest: `set_var` races a concurrent `getenv`, which is precisely the data race the card flagged. The probe
-  thread also works from a **main-thread env snapshot** (SHELL/PATH/HOME/ZDOTDIR), so it never calls `getenv`
-  concurrently with anything either.
-- **`linux_webkit` / `linux_gtk` must still run *first*.** They are the last `set_var`s in the process, and
-  `start_probe()` is the first thing to spawn a thread — so that ordering in `run()` is **load-bearing**, and is
-  documented as such.
-- **The cache stores the raw *discovered* login-shell PATH, never the merged one** — so no per-launch segment (an
-  AppImage `/tmp/.mount_…/usr/bin`, a dev-shell PATH) is ever persisted. The merge against the current process
-  PATH is redone every boot.
-- **A stale-fingerprint cache is not optimistically used** — readers wait for the probe instead. And a
-  failed/timed-out probe **never downgrades a good seed** (`publish_fallback` only fills a non-`Ready` slot);
-  with no seed it publishes today's fallback unchanged.
-- **Scope call:** `commands.rs`'s `os_open` / `open_url` / `reveal_file_in_finder` / `reveal_file_linux` (and
-  `usage.rs`'s `security`, `lib.rs`'s `tccutil`) are left alone — they launch system binaries always present in
-  the minimal GUI PATH, and skipping them kept the diff off Task #350's seams.
-- **Dev builds and Windows are byte-for-byte unchanged**: the probe never arms, `effective_path()` returns the
-  process PATH, and `apply_path()` adds no `env` call to any `Command`.
+### 423. [x] Round the Kanban board's controls and equalize the Add/Cancel buttons
 
-**Dependencies:** none.
+Inside the in-app Kanban board only, the buttons and text inputs/areas now get the same slight corner
+rounding the cards already have (so the composer/edit controls visually belong to the rounded cards),
+and the add-card composer's "Add card" / "Cancel" buttons are made exactly the same size. The
+app-wide square corner language is unchanged — a board-scoped exception, like Task 409's card/column
+rounding.
 
-**Notes**
+**What shipped** (branch `task-423-kanban-control-rounding`, PR
+[#184](https://github.com/ErikdeJager/ReCue/pull/184), merged 2026-07-16 into `iteration-2`) — a
+CSS-only change to **`src/components/Kanban/KanbanPanel.module.css`** (57 lines):
 
-- 17 new Rust unit tests (223 total, up from 206): the `PathState` machine (a `Pending` reader blocks until
-  `publish`; a seed publishes immediately; the probe overrides a seed; a failed probe keeps a seeded value; a
-  timeout downgrades to the process PATH; `override_path` is `None` unless ready **and** different), the
-  fingerprint (mtime / shell change / file-appears / file-disappears), the cache rules, and `path_cache`
-  persistence + legacy-file upgrade. Pure helpers gate `#[cfg(any(unix, test))]` (the `explorer_select_arg`
-  precedent) so a Windows host still type-checks and runs them.
-- The actual win (a GUI launch not stalling on a heavy rc) can't be unit-tested — real-box checklists went into
-  `TRAJECTORY_TO_LINUX.md` and `TRAJECTORY_TO_WINDOWS.md`; `CLAUDE.md` records the new PATH seam.
+- **Rounding:** every Kanban interactive control now references `--radius-micro` (4px, the existing
+  card radius) instead of the zeroed `--radius-chip`/`--radius-control` — the composer input + Add/
+  Cancel buttons, the card-edit input + Save/Cancel, the column-rename input + hover affordance, the
+  `.colBtn`/`.cardBtn` icon buttons, the toolbar `.saveBtn`, `.undoRow`, `.addColumn`, and the
+  `.rawEditor` (which had no radius). Rendered card-body markdown (inline code/pre, GFM task
+  checkboxes) is left square — that's content, not composer chrome.
+- **Equal size:** `.composerAdd` and `.composerCancel` gain `flex: 1` + `justify-content: center`, so
+  they split their row 50/50 regardless of label text (a min-width couldn't guarantee equality); the
+  reused card-edit Save/Cancel row is equalized by the same rule.
 
-### 361. [x] Ship a native Arch/AUR package (`recue-bin`) + Linux install docs, and gate the in-app updater off for distro-managed installs
+**Key decisions** (from `ASSUMPTIONS.md` Task 423)
 
-The AppImage bundles the Ubuntu 22.04 GTK/WebKit userland (90 MB `libwebkit2gtk-4.1`, 165 libs), its AppRun hook
-forces `GTK_THEME` + `GDK_BACKEND=x11`, cold start pays squashfs/FUSE decompression, and Arch needs `fuse2`
-installed to run it at all — so it is the root of a whole class of Linux issues (the ones #349 and #350 had to
-patch around). A native package sidesteps every one of them: system webkit2gtk, no env pollution, no FUSE, faster
-start. **But a pacman-managed install must not offer to update itself**, since Tauri's Linux updater can only
-replace an `$APPIMAGE`.
+- Reuse `--radius-micro` (4px) — "slightly rounded to match the cards" taken literally — referenced
+  only from the Kanban module (no global token edit), matching Task 409's in-file pattern.
+- Round all Kanban buttons + text inputs/areas (listed above); leave rendered-markdown code/pre and
+  the task checkbox square.
+- Equalize via `flex: 1` + centered content rather than a min-width, so the split is exact.
+- Pure CSS, no `KanbanPanel.tsx` change; platform-neutral.
 
-**What shipped** (branch `linux-aur-package`, PR [#116](https://github.com/ErikdeJager/ReCue/pull/116),
-2026-07-14):
+**Cross-platform:** CSS-token-only over an existing token — no `#[cfg]`/platform CSS branch; identical
+on macOS, Windows, and Linux.
 
-- **Rust `install_kind()`** — a pure `classify_install(os, appimage, override_kind, debug)` plus a thin command:
-  **`"bundle"`** (macOS `.app` / Windows installer / any debug build), **`"appimage"`** (`$APPIMAGE` set), or
-  **`"system"`** (a Linux **release** binary *without* it ⇒ pacman/apt owns it). An **empty** `APPIMAGE` counts as
-  unset, and `RECUE_INSTALL_KIND` force-overrides (mirroring #346's `RECUE_DISABLE_DMABUF`).
-- **The updater gate (frontend)** — `ipc.installKind()`, a pure `selfUpdates()` in `platform.ts` (false **only**
-  for `"system"`), an `installKind` store field loaded at boot, and guards in `store.checkForUpdate` (short-circuits
-  to `idle` with **no network call**) and `store.installUpdate` (no-op + toast). `UpdateIndicator` is hidden on a
-  package-managed install, and Settings → Updates hides Check / Update-now, showing a `sudo pacman -Syu recue-bin`
-  note instead — while "Current version" and the #192 patch notes still render.
-- **CI** — the Linux leg now builds `--bundles appimage,deb`, plus a Linux-only `continue-on-error` job-summary
-  step printing the `.deb` name + sha256. **The updater artifact stays the AppImage**: `latest.json`'s
-  `linux-x86_64` entry is unchanged and the `.deb` gets no `.sig`.
-- **Packaging** — `packaging/aur/recue-bin/{PKGBUILD,.SRCINFO}` repacking the released `.deb`, and an executable
-  `scripts/aur-bump.sh <version>` that re-pins `pkgver`/`sha256sums`/`.SRCINFO` and **hard-errors while
-  `sha256sums` is still the `SKIP` placeholder** (so a half-configured PKGBUILD can't be published).
-- **Docs** — a README **Install (Linux)** section (which build self-updates), a new `docs/linux-packaging.md`
-  (install matrix, updater rule, maintainer runbook, LICENSE caveat), a `TRAJECTORY_TO_LINUX.md` entry, and the
-  `CLAUDE.md` distribution note + layout tree.
+**Dependencies:** none. (A board-scoped rounding exception alongside Task 409; does not touch #422's
+`.cards` padding.)
 
-**Key decisions**
+### 424. [x] Show a startup tip on the filtered-Overview empty state (drop the wave-companion copy)
 
-- **Detection must be *runtime*, not compile-time** — the AUR package repacks the **same binary** the `.deb`
-  carries, so a cargo feature or build-time env could not possibly distinguish them.
-- **A debug build reports `"bundle"`**, so `npm run tauri dev` on Linux keeps today's update UI and the #193 dev
-  mock stays exercisable.
-- **A Linux release binary run outside an AppImage reports `"system"` and hides the update UI** — deliberately,
-  including a `target/release` run or an `--appimage-extract` run. Tauri's Linux updater can only replace an
-  `$APPIMAGE`, so an offer there would *always* fail; better to hide it than to offer a broken button.
-- **One AUR package (`recue-bin`), not two.** A source-built `recue` was rejected: npm/cargo network fetches at
-  build time conflict with makepkg's declared-sources model, it needs heavy makedepends, and it yields the same
-  binary anyway. The name is reserved via `provides=('recue')` / `conflicts=('recue')`.
-- **Publishing to the AUR stays a documented *manual* maintainer step.** No AUR account or SSH-key secret exists,
-  and auto-publishing on every release is not something to enable silently.
-- **The PKGBUILD does not hand-edit the `.desktop` entry** — it inherits whatever Tauri generates, so Task #362's
-  `StartupWMClass` fix flows into the AUR package for free.
-- **The boot post-update "Updated to v…" toast is left enabled** for package installs — it is a pure version
-  compare, so it correctly fires after a `pacman -Syu` too.
-- `license=('custom')` — the repo has **no LICENSE file**, and adding one is a legal decision, not an engineering
-  one. Flagged in `docs/linux-packaging.md` as a **prerequisite for a real AUR submission** that redistributes the
-  binary.
+When the Overview wall is filtered to a folder/branch that has no sessions yet, the empty state no
+longer shows the "the wave keeps you company until then" line — it now shows a rotating **startup
+tip**, exactly like the welcome hero's tip (same "tip" chip, rotating text from `tips.ts`, and
+click-to-shuffle). The "No sessions in <repo> yet" title and the "New session" button above it stay.
+
+**What shipped** (branch `task-424-filtered-empty-tip`, PR
+[#185](https://github.com/ErikdeJager/ReCue/pull/185), merged 2026-07-16 into `iteration-2`):
+
+- **New `src/components/TipRow/` (`TipRow.tsx` + `TipRow.module.css`)** — a shared tip component
+  extracted from the welcome hero (the "tip" chip, rotating text via the existing `tips.ts` helpers,
+  click-to-shuffle), so `EmptyState` and the Overview filtered branch reuse one implementation instead
+  of duplicating it; the tip CSS moved into the new module.
+- **`src/components/EmptyState/EmptyState.tsx` / `.module.css`** — now render `<TipRow />` and drop
+  their inline tip markup + the moved CSS rules.
+- **`src/components/Overview/Overview.tsx` / `.module.css`** — the filtered-empty branch renders
+  `<TipRow />` in place of the removed "wave keeps you company" line.
+
+**Key decisions** (from `ASSUMPTIONS.md` Task 424)
+
+- Remove only the "the wave keeps you company until then" line; keep the "No sessions in <repo> yet"
+  title and the "New session" button.
+- The tip renders identically to the welcome hero (same chip, rotating text, click-to-shuffle) via the
+  existing `tips.ts` helpers.
+- **Reuse, not duplicate** — extract a shared `TipRow` used by both `EmptyState` and the Overview
+  filtered branch, moving the tip CSS into it.
+- Left the non-filtered `!filter` fallback string ("No agents yet.") unchanged — the card targets the
+  filtered folder/branch case only.
+
+**Cross-platform:** pure React/TS + CSS-token component extraction; no path/shell/native primitives —
+identical on macOS, Windows, and Linux.
 
 **Dependencies:** none.
 
-**Notes**
+### 425. [x] ⌘W removes the selected agent (and schedule/recurring) on the Overview wall
 
-- **Verified on a real Arch box** (webkit2gtk-4.1 2.52.5): `npm run tauri build -- --bundles deb` produced
-  `ReCue_1.2.1_amd64.deb`; the PKGBUILD's `package()` body was run **verbatim** against it (yielding
-  `/usr/bin/recue` + the untouched `.desktop` + icons); `makepkg --printsrcinfo` generated the committed
-  `.SRCINFO`; and `depends` was derived from the binary's **actual** `NEEDED` links — confirming **no
-  `libayatana-appindicator`** is needed (ReCue ships no tray).
-- macOS, Windows and the Linux AppImage are **byte-for-byte unchanged** — `src/store.update.test.ts` (with a
-  mocked `./updater`) proves `"system"` never calls the updater while `"appimage"` / `"bundle"` / the unloaded
-  `""` default still do.
-- Checks green: `npm run build`, `lint`, `test` (680 passed), `format:check`, `cargo test` (213 passed), clippy
-  `-D warnings`, `cargo fmt --check`, `bash -n scripts/aur-bump.sh`, `makepkg --printsrcinfo`.
+On the Overview wall, **⌘W / Ctrl+W** now removes the selected **agent** (previously it closed only
+non-agent panels, so agents felt un-closeable by keyboard), and the fix is extended to also close a
+selected **schedule** and **recurring** card — closing the whole "only non-agent panels are closed"
+gap so ⌘W matches each card's own × exactly.
 
-### 362. [x] Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a consented desktop-integration path
+**What shipped** (branch `task-425-cmdw-remove-agent`, PR
+[#186](https://github.com/ErikdeJager/ReCue/pull/186), merged 2026-07-16 into `iteration-2`):
 
-The AppImage's internal desktop entry said `StartupWMClass=recue` while the user-installed one said `Recue` — and
-a wrong WM_CLASS breaks icon/taskbar grouping (the window doesn't associate with its launcher entry). The root
-cause is that ReCue never *owned* its window identity: it inherited it from `argv[0]` (which an AppImage's
-`AppRun` may rewrite) plus GDK's capitalization rule, which derives an X11 `res_class` by capitalizing the
-program name. The fix pins it at the source rather than patching the generated entry.
+- **`src/store.ts`** — `closeFocusedPanel`'s Overview branch now dispatches by the selected item's
+  kind: an agent via `removeSession`, a schedule via `cancelSchedule`, a recurring via
+  `cancelRecurring` (each the same un-gated action as that card's ×), in addition to the existing
+  `removeOverviewPanel` for file/diff/terminal/kanban panels. Doc-comment updated.
+- **`src/store.test.ts`** — new coverage for the agent / schedule / recurring ⌘W-close paths.
 
-**What shipped** (branch `linux-wmclass`, PR [#117](https://github.com/ErikdeJager/ReCue/pull/117),
-2026-07-14):
+**Key decisions** (from `ASSUMPTIONS.md` Task 425)
 
-- **`src-tauri/src/linux_desktop.rs`** (new, mirroring `linux_webkit.rs` / `linux_gtk.rs`) — `APP_WM_CLASS =
-  "recue"` + `pin_wm_class()` → `glib::set_prgname()`, called from `run()` **before `tauri::Builder`**. ReCue now
-  owns its WM_CLASS / Wayland `app_id` outright. `glib = "0.18"` is target-gated to Linux and was **already in the
-  lockfile** via tao/gtk, so `cargo tree -d` shows no duplicate and no new crate compiles.
-- **A custom desktop-entry template** (`src-tauri/linux/recue.desktop`) wired via `bundle.linux.deb.desktopTemplate`
-  (+ `rpm` for parity). The **deb** seam is what controls the **AppImage**'s internal entry — its `.AppDir` is packed
-  from the deb data tree, and there is no `appimage.desktopTemplate` (verified in the bundler source). `Exec` stays
-  the bare `{{exec}}` placeholder (linuxdeploy's `AppRun` parses that line), and the entry gains `StartupNotify=true`
-  + `Keywords=`.
-- **Anti-drift Rust tests** (running on **every** OS): the template's `StartupWMClass=` must equal `APP_WM_CLASS`,
-  the bundler placeholders must survive, `tauri.conf.json` must still point at the template, and the install script
-  must never hardcode the value.
-- **A release-workflow assertion** — the Linux leg extracts the freshly built AppImage's desktop entry and
-  **hard-fails** on a wrong `StartupWMClass` / `Icon` / `Exec` (extraction *tooling* trouble only warns).
-- **`scripts/install-linux-desktop.sh`** — consent-gated (`[y/N]` unless `--yes`), XDG-only (**never `sudo`**,
-  nothing outside `$XDG_DATA_HOME`), idempotent, with `--uninstall`. It copies `StartupWMClass` **verbatim from the
-  AppImage's own entry** rather than hardcoding it. **The app itself still never writes a desktop file** — no
-  silent auto-integration.
-- **Linux icon quality** — `bundle.icon` reordered/extended so the embedded window icon is **256×256** (it was
-  32×32, since tauri-codegen picks the first PNG) and the installed hicolor set gains 64×64 + 512×512.
-  macOS/Windows still take `icon.icns` / `icon.ico`.
+- **Confirm gate:** ⌘W removes the agent via the **same un-gated path** as its ×/Remove — *not* routed
+  through `confirmDestructive` (which gates only bulk teardown); every single-agent remove in the app
+  is un-gated, and "easily" argues against friction. (The caller's suggestion to honor the gate was
+  deliberately declined; trivial to add later.)
+- **Canvas vs Overview:** Canvas / detached-window ⌘W on an agent leaf stays "close the panel only"
+  (`removeLeaf`; the agent survives in the pool/Overview), matching the Canvas header ×. Only
+  **Overview** ⌘W kills+forgets, matching Overview's × semantics.
+- **Scope completion:** also closes a selected schedule (`cancelSchedule`) and recurring
+  (`cancelRecurring`), not just agents — matching each card's × exactly.
+- **Focus advance:** Overview ⌘W does **not** advance selection to a neighbor after removal (matching
+  the existing non-agent Overview close); `selectedId` clears/goes stale, so a repeat ⌘W is a safe
+  no-op. Neighbor-advance stays Canvas-only.
 
-**Key decisions**
-
-- **Lowercase `recue` is the single canonical identifier** — it is the Wayland `app_id` (the reporting box runs
-  Hyprland, where `res_class` does not exist at all), the X11 `res_name`, and the desktop-entry basename. GNOME
-  matches `res_name` → `StartupWMClass` first, and KDE matches case-insensitively.
-- **Rejected `app.enableGTKAppId`** (it would introduce a *third* identifier, `com.recue.app`) and
-  **`mainBinaryName`** (it would touch macOS/Windows bundle internals and the code-signing surface for a
-  Linux-only concern). Also rejected a `gdk_set_program_class` FFI pin: the safe binding panics pre-`gtk_init`,
-  and it only affects X11 `res_class`, which no shell needs once `res_name`/`app_id` match.
-- **Fixed at the source, not post-processed in CI** — the card allowed patching the artifact; wiring the template
-  through the bundler means the AUR package (#361) inherits the correct entry for free.
-- No tray work (excluded by the card), no MIME/file associations, and no deb/rpm/AUR packaging (that is #361,
-  which reuses these canonical identifiers).
+**Cross-platform:** pure store/TS logic; the shortcut already matches `metaKey || ctrlKey`, so ⌘W on
+macOS and Ctrl+W on Windows/Linux both fire — identical on all three.
 
 **Dependencies:** none.
 
-**Notes**
+### 426. [x] Multi-window 1/16 — Terminal-view attachment registry + smallest-wins PTY size arbitration
 
-- **Measured on a real Arch/Hyprland box, not assumed** — and the hostile-input case was actually tested:
+The backend foundation for the multi-window epic (cards 1–16): a single authoritative answer to
+"who is viewing session X, and how big must its PTY grid be?". Per session it tracks which windows
+view it and each view's desired `(cols, rows)`; the **effective grid** is the component-wise
+minimum over all attached views (tmux `window-size=smallest` — every window always sees the complete
+grid, larger views letterbox). This card lands as a **behavior-preserving no-op with ZERO frontend
+changes**: the new commands/events exist and are unit-tested, but nothing calls them yet — later
+cards (2/16 frontend mirror sizing, 3/16 change broadcasts, 9/16 full app windows, 15/16 targeted
+output) consume it.
 
-  | run | result |
-  | --- | --- |
-  | shipped 1.2.1 AppImage | `xprop` → `WM_CLASS = "recue", "Recue"`; Hyprland `class: Recue`, `xwayland: true` |
-  | this build, native launch | Wayland `app_id` = **`recue`**, `xwayland: false` — matches the shipped entry exactly |
-  | this build, **hostile `argv[0]`** (`exec -a HostileRunName`) | still **`recue`** — the pin genuinely owns the value |
-  | this build, `GDK_BACKEND=x11` + hostile `argv[0]` | `WM_CLASS = "recue", "Recue"` — `res_name` pinned; `res_class` is GDK's capitalization |
+**What shipped** (branch `task-426-terminal-view-registry`, PR
+[#188](https://github.com/ErikdeJager/ReCue/pull/188), merged 2026-07-16 into `backend-decouple`,
+commit `f005576`; 4 files, +695/-16):
 
-- The AppImage was built from the branch and its generated `.AppDir` entry extracted, confirming the template took
-  effect (`StartupWMClass=recue`, `Exec=recue`, `Icon=recue`, `StartupNotify`, `Keywords`, plus the new
-  64×64/512×512 icons).
-- Docs: new `docs/linux-desktop-integration.md`, a README "Linux desktop integration" section (documenting
-  download-then-run, plus Gear Lever/appimaged as the zero-effort alternative), a dated `TRAJECTORY_TO_LINUX.md`
-  entry with the real measurements, and two `CLAUDE.md` additions.
+- **`src-tauri/src/terminal_views.rs`** — **new** (503 lines), all policy in one place (the
+  `linux_webkit.rs` pattern: pure, unit-tested core + thin glue). A pure `ViewRegistry` (session id →
+  window label → desired `(cols, rows)`, plus a per-session last-**applied** effective size) with a
+  `SizeUpdate { cols, rows, resized }` result: `effective` (component-wise min, `None` when no
+  views), `attach` (upsert), `detach` (drop the view; drop the session entry when it was the last
+  one), `propose` (updates desired size **only if the view is already attached** — a never-attached
+  or purged view is a no-op, so a late `ResizeObserver` racing a window close can't resurrect a
+  zombie view that clamps the PTY forever), and `purge_window` (drop a label's views across every
+  session, return the sessions whose effective grid changed). All dims clamped to `>=1`. A thin
+  `TerminalViews` Tauri-managed wrapper (poison-recovering `Mutex`, `kill_all` precedent) holds the
+  lock across mutate + best-effort `resize_pty` + `broadcast_size`. Full unit tests (pure registry
+  bulk + glue tests driving a real sessionless `SessionManager` and asserting the `SessionEvent::Size`
+  sequence).
+- **`src-tauri/src/pty.rs`** — new `SessionEvent::Size { id, cols, rows }` variant (doc-commented as
+  the authoritative multi-window grid, emitted only by the arbiter, never by reader/monitor threads)
+  + a best-effort `SessionManager::broadcast_size`. Two tests added (`coalesce_output_events` passes
+  `Size` through unmerged / splits an Output run; `broadcast_size` delivers exactly one event).
+  `resize_pty` (command + manager method) **byte-for-byte untouched**.
+- **`src-tauri/src/commands.rs`** — `SizePayload { id, cols, rows }` (for `session://size`) +
+  `GridPayload { cols, rows }` (attach return) + three thin **synchronous, infallible** commands:
+  `attach_terminal(id, window_label, cols, rows) -> GridPayload`, `detach_terminal`,
+  `propose_terminal_size` (synchronous for the same #353 out-of-order-resize reason as `resize_pty`;
+  `window_label` is an explicit param, not derived from the invoking `Window`, for later cross-window
+  cards).
+- **`src-tauri/src/lib.rs`** — `mod terminal_views;`; `app.manage(TerminalViews::default())`; the
+  `session://size` forwarder arm; registered the three commands; restructured the `.run(...)` closure
+  from `if let RunEvent::Exit` to a `match` with the **Exit body kept byte-identical** (the
+  container sweep + `kill_all` ordering is load-bearing, #354) plus a **global**
+  `WindowEvent::Destroyed` arm that purges ALL views of the closing window label (any window kind —
+  `main`, `canvas-*`, future app windows) via `try_state` (never panics during teardown).
 
-### 365. [x] Walk the Linux real-box verification checklist on Arch/Hyprland — evidence, honest ticks, and recorded findings
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 426)
 
-An evidence-backed pass over every "Needs real-box verification" box in `TRAJECTORY_TO_LINUX.md`, run on a real
-hybrid Intel+NVIDIA Arch/Hyprland box. **The deliverable is evidence and an honest checklist, not a pass rate** —
-nothing found was fixed; failures were recorded as findings for the maintainer to file.
+- **One global Destroyed seam**, not a per-window `on_window_event` — fires for every window kind
+  incl. future app windows; `try_state` guards teardown ordering. The `open_canvas_window` per-window
+  re-dock handler stays as-is (additive, label-generic).
+- **`propose` on a never-attached/purged view is a no-op, NOT an implicit attach** — prevents a late
+  `ResizeObserver` racing a window close from resurrecting a zombie view.
+- **`session://size` is emitted on every effective-grid change PLUS always on attach** (even
+  unchanged, so a new host learns the grid); detach/propose/purge emit only on change.
+- **"Resize only when changed" compares against the registry's last-APPLIED size, not the PTY's
+  actual size** — so the legacy `resize_pty` passthrough can go stale vs the registry; accepted
+  transitional state (documented in-module), resolved when later cards migrate the frontend onto
+  attach/propose. Registry entries for killed/exited sessions are left inert (no `kill_session`
+  cleanup — out of scope for card 1).
+- **Lock-order rule:** the registry mutex may be held while calling into `SessionManager`, but
+  `pty.rs` never calls into `terminal_views`, so no cycle is possible (documented in module docs).
+- No `capabilities/default.json` change (Tauri 2 custom commands aren't ACL-gated); no version bump /
+  patch notes (releases are batched by the maintainer).
 
-**What shipped** (branch `linux-verify-walk`, PR [#119](https://github.com/ErikdeJager/ReCue/pull/119),
-2026-07-14) — **no behavior change to any Rust or TS source**; the diff touches exactly three files:
-`TRAJECTORY_TO_LINUX.md` (a dated section: box fingerprint, results table, findings, maintainer checklist), the
-new read-only evidence collector `scripts/linux-verify.sh`, and one `verify:linux` script in `package.json`.
+**Cross-platform:** pure Rust over `HashMap`/`Mutex`/`mpsc` plus the already-abstracted
+`SessionManager::resize_pty` (portable-pty's `TIOCSWINSZ`/`ResizePseudoConsole`), so no `#[cfg]` arms
+are needed — identical on macOS, Windows, and Linux.
 
-**Verdict: 34 boxes** as of the walked commit `5192ad1` — not the 15 the card guessed, nor the 13 the plan counted
-(#347/#349/#350/#351 had each appended a checklist of their own since #346). **6 PASS · 0 FAIL · 16 PARTIAL ·
-8 BLOCKED · 4 N/A.** Only **6** boxes are ticked, every one environment-independent, and **each tick names the
-environment it was proved on**. A partially covered box stays `- [ ]` with an inline note recording what *was*
-seen — a box is never ticked unless it was actually exercised.
+**Dependencies:** none.
 
-**Box under test:** Arch 7.1.3 · Wayland · Hyprland v0.55.4 · `card0` nvidia (RTX 4080 Max-Q, nvidia-open
-610.43.03) + `card1` i915 (Intel Iris Xe) · bare metal (0 VM signals) · Thunar + Brave · libfuse3 only · commit
-`5192ad1` (contains #347 and #350). Every launch used an **isolated data dir** (`XDG_DATA_HOME=$(mktemp -d)`) and
-a `timeout`, so the maintainer's live `claude` sessions were never resumed or rewritten.
+### 427. [x] Multi-window 2/16 — Frontend mirror-capable terminal sizing: attach/propose views, broadcast-driven grid, letterboxed slots
 
-**The headline: Task #347 is confirmed fixed on the exact box it was written for.** The boot line reads
-`[recue] WebKitGTK: DMA-BUF left on — Mesa GPU present (healthy DMA-BUF) (gpus: nvidia[blob],i915[mesa]; nvidia:
-open 610.43.03; vm: no; session: wayland)`, every evidence field matches `/sys` ground truth, and
-`WEBKIT_DISABLE_DMABUF_RENDERER` is **absent** from the app's environment. PRIME offload and all three override
-forms produce exactly their specified lines. **Task #350** is confirmed on two of its three scrub seams, caught
-live under the AppImage: the login-shell PATH probe and the `claude --version` / `opencode --version` probes all
-run with no `APPDIR`/`APPIMAGE`/`GTK_THEME`/`GDK_BACKEND`, no `LD_LIBRARY_PATH`, and a `PATH` free of
-`/tmp/.mount_` — while WebKit's own helper processes correctly keep the full AppImage env.
+Moves the frontend terminal pool off the "my window owns the PTY size" model onto the task-426
+attach/propose/broadcast protocol: a terminal host **never resizes its own xterm grid** — it
+*proposes* a size for its slot and renders whatever grid the backend's smallest-wins arbiter
+broadcasts, centered/letterboxed in the slot. Every pooled terminal is now mirror-capable (tmux
+`window-size=smallest`), the foundation the rest of the epic builds on. With one owner per session
+today, behavior is **visually unchanged** (single view ⇒ the arbitrated grid *is* this window's
+shaved proposal).
 
-**Findings (recorded, not fixed — the maintainer files these as cards)**
+**What shipped** (branch `task-427-frontend-mirror-sizing`, PR
+[#189](https://github.com/ErikdeJager/ReCue/pull/189), merged 2026-07-16 into `backend-decouple`,
+commit `71bcdaf`; 8 frontend files, +417/-53, zero `src-tauri/` changes):
 
-- **F1 — the AppImage cannot currently be built on Arch**, for two independent reasons: linuxdeploy's bundled
-  `strip` can't parse Arch's `.relr.dyn` sections (`unknown type [0x13]`) and aborts (needs `NO_STRIP=1`); then
-  `linuxdeploy-plugin-gtk.sh` dies on `cp: cannot stat '/usr/lib/gdk-pixbuf-2.0/2.10.0'`, because Arch's
-  `gdk-pixbuf2 2.44.7-1` still advertises that dir in its `.pc` but no longer ships it. **CI (ubuntu-22.04) is
-  unaffected** — but nobody can build or test the Linux artifact on the distro the Linux work is actually being
-  done on.
-- **F2 — cut a release containing #346–#351.** The **shipped v1.2.1 AppImage still has the #347 bug**: launching
-  the published release on this box logs the pre-#347 line `set WEBKIT_DISABLE_DMABUF_RENDERER=1 (nvidia: true,
-  vm: false, forced: false)`. **Every Linux user on the current release is still getting the forced-CPU webview
-  that #347 diagnosed as itself the cause of the reported slowness.** All of #346–#351 are on `main` and
-  unreleased.
-- **F3 — the DMA-BUF checklist's verification instrument was structurally wrong.** The #347 checklist (and #365's
-  own plan) said to confirm `WEBKIT_DISABLE_DMABUF_RENDERER=1` in `/proc/<pid>/environ`. That **cannot work**:
-  `/proc/<pid>/environ` is the **exec-time snapshot** and never reflects a runtime `setenv()` — which is exactly
-  what `linux_webkit`/`linux_gtk` do. Verified: with `RECUE_DISABLE_DMABUF=1` the boot line says "disabled" while
-  `/proc/environ` shows no such var. Corrected inline in the doc ("read `env` in a ReCue shell terminal").
-- **F4 — the terminal-pool WebGL diagnostic is unreadable from a terminal.** WebKitGTK does **not** forward the
-  webview console to stderr, so `[recue] terminals: WebGL renderer: …` is only reachable through the WebKit
-  inspector — making one whole box (#346's B4) and a clause of #347's D1 unverifiable headlessly **on every OS**.
-  Proposed fix: report the renderer string through a small Rust `log_diagnostic` command.
-- **F5 — a stale premise in the #346 checklist** (prose only, corrected in this PR): it asserted DMA-BUF is left
-  on "(no log line)". Post-#347 there is **always** exactly one boot line, for both outcomes.
+- **`src/components/Terminal/terminalPool.ts`** — the core rework. A per-host `attachView` measures a
+  proposal (fit `proposeDimensions()` + the #262 bottom-clearance shave, falling back to current
+  `term.cols/rows` when unmeasurable), calls `attach_terminal` and applies the **returned** effective
+  grid via `term.resize` **before any scrollback byte is written** (a per-host **attach gate** the
+  replay job awaits, with a 1s safety timeout so a slotless `resetTerminal` host can never wedge the
+  `MAX_CONCURRENT_REPLAYS=1` replay queue). The debounced (still exactly `RESIZE_DEBOUNCE_MS=120`)
+  `ResizeObserver` path now **proposes only** (`propose_terminal_size`), never `fit.fit()`/local
+  `term.resize`; a resize tick while unattached re-attaches instead (self-heal, since the backend
+  drops proposals for never-attached views). A lazy once-per-document pool-level `session://size`
+  listener is **the only** code that resizes an xterm grid after attach. `unmountTerminal` + `dispose`
+  send `detach_terminal` so an invisible terminal never holds the min down. `#351`
+  `trimmable=false` moved to after the attach gate.
+- **`src/components/Terminal/sizeProposal.ts` (+ `.test.ts`)** — **new** pure DOM-free helpers:
+  `sanitizeProposal` (NaN/undefined/non-positive → null, else integers clamped ≥1) and
+  `shaveProposalRows` (the #262 shave applied to the *proposed* row count; no shave for rows ≤ 1 or
+  unreadable metrics).
+- **`src/ipc.ts`** — removed the now-unused `resizePty` wrapper (single caller was the pool; the Rust
+  `resize_pty` command stays untouched per 426); added `attachTerminal` → `GridPayload`,
+  `detachTerminal`, `proposeTerminalSize`, and a standalone `subscribeSessionSize` helper (feeds the
+  pool, not the store — the `outputBus` "geometry is terminal-plumbing, keep it out of React state"
+  philosophy).
+- **`src/types/index.ts`** — `SizePayload { id, cols, rows }` + `GridPayload { cols, rows }` mirrors.
+- **`src/windowContext.ts` (+ `.test.ts`)** — new `IS_DETACHED_CANVAS_WINDOW` constant replaces
+  `IS_MAIN_WINDOW` at the three #105 WebGL-gate sites, so the DOM-renderer fallback is scoped to
+  detached **canvas** windows specifically and a future full app window (card 9/16) gets WebGL by
+  default (byte-identical today — asserted equal to `!IS_MAIN_WINDOW`; the #364 per-window latch
+  untouched).
+- **`src/components/Terminal/Terminal.module.css`** — token-only letterbox: flex-centering on
+  `.terminal` + `flex:0 0 auto` on `:global(.xterm)`; bands show the existing
+  `--terminal-bg-user`/`--terminal-bg` wrapper token (no new colors). Grid == fit (today's single-view
+  case) is pixel-equivalent.
 
-**Key decisions**
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 427)
 
-- **Depended on Tasks #347 and #350 and walked the *fixed* build** — the key judgment call. #347 rewrites the
-  DMA-BUF decision *and* the #346 checklist itself (today's boot line being, per #347, the bug on this exact
-  hybrid box), and #350 scrubs the AppImage env from the very `xdg-open`/`dbus-send`/`git`/`claude` child spawns
-  that several boxes test. **Verifying earlier would have enshrined ticks that were stale on arrival.**
-- **Nothing from the earlier research session was ticked on trust** — its AppImage-launch / DMA-BUF-log
-  observations were pre-#347 and pre-#350, so they were re-verified against the branch build.
-- **Tasks #348 (7 boxes) and #355 (3 boxes) merged to `main` *while this walk was running* and were deliberately
-  left unwalked and unverified** — the artifact was built from `5192ad1`, which does not contain their code, so
-  any verdict on them would have been **fabricated**. They need their own pass. This is precisely the staleness
-  trap #365 exists to avoid.
-- **Boxes covering absent environments stay unticked** with an explicit `N/A — not this box` scope note (no
-  AMD/NVIDIA-only GPU, no GNOME/KDE/Cinnamon, no X11 session, no libfuse2).
-- **Agent-vs-human split**: every headless check was performed by the implementer (PATH probe, `xdg-open`
-  handlers, a verbatim `dbus-send` FileManager1.ShowItems, notification-daemon activatability, the `latest.json`
-  `linux-x86_64` entry, GPU/`/sys` ground truth, the whole DMA-BUF override matrix). Every GUI-only step was
-  handed to the maintainer as a **written checklist (M1–M10) with blank verdict slots**.
+- **Attach on every `mountTerminal`** (backend upsert; a re-mount into a different slot re-measures);
+  grid-before-replay enforced by the attach gate + 1s timeout (because `replayQueue` starts jobs
+  synchronously on enqueue, before the slot is assigned, and a slotless `resetTerminal` host never
+  attaches).
+- The **returned** effective grid is applied via `term.resize` (not the broadcast) to guarantee
+  ordering; the attach-triggered broadcast then arrives as a no-op resize.
+- `session://size` consumed by a **lazy once-per-document pool-level listener** (registered from
+  `ensureHost`, never unsubscribed — the `parkingLayer` precedent), never store state.
+- Fire-and-forget attach/detach/propose ordering leans on Tauri's per-webview invoke FIFO + the
+  synchronous (#353) backend commands + upsert/no-op semantics; the `!attached ⇒ attachView` self-heal
+  recovers any dropped attach.
+- The scrollbar-hugs-grid cosmetic nuance is a flagged smoke check with a `padding-right` fallback.
 
-**Dependencies:** 347, 350.
+**Out of scope (deferred):** ownership/reconcile policy (`computeSessionOwners`, `ownedHere`,
+`DetachedNote`, per-window `reconcileTerminals`) stays as-is — one window renders a session at a time,
+so the mirror path is exercised but single-view until card 11/16. No `src-tauri/` change.
 
-**Notes**
+**Cross-platform:** WebView TS + CSS (identical WKWebView / WebView2 / WebKitGTK — flex centering and
+token vars are universal); the one platform-sensitive primitive (PTY resize) lives behind the 426
+backend seam.
 
-- Two scope limits are stated in the doc: the **locally built AppImage does not prove CI's ubuntu-22.04 glibc
-  floor** (it links Arch's — so the launch box was *also* walked against the real published artifact, which runs
-  fine here), and the **performance verdicts are a snapshot of `5192ad1`** (#351/#353/#355/#356 move exactly those
-  numbers).
-- `scripts/linux-verify.sh` is read-only and reusable, so Ubuntu and Mint can be walked later unchanged.
-- The updater end-to-end (download → replace → relaunch) is **blocked** until a newer release is published; only
-  the signed `linux-x86_64` manifest entry and the app's own `APPIMAGE` env (a #350 regression check) were
-  verifiable.
+**Dependencies:** Task 426.
 
-### 357. [x] Settings → Rendering (Linux-only): DMA-BUF + terminal-renderer overrides with a boot-decision readout
+### 428. [x] Multi-window 3/16 — Rust-owned change broadcasts for the quiet persisted slices + a `sessions://changed` roster event
 
-Tauri's own Linux graphics guidance explicitly recommends user-facing rendering-mode settings, because WebKitGTK
-masks WebGL renderer strings and auto-detection is unreliable. Until now ReCue's only overrides were env vars
-(`RECUE_DISABLE_DMABUF`, `WEBKIT_DISABLE_DMABUF_RENDERER`) — which a `.desktop` or AppImage launch never sees. This
-fills the `RendererOverride` tri-state seam that #347 deliberately left open, and surfaces **what the auto-detection
-actually decided at boot** so a user can diagnose rather than guess.
+Generalizes the existing "Rust owns it, windows subscribe" pattern (`broadcast_schedules` →
+`schedule://changed` → `applyScheduleSync`) to every remaining "quiet" persisted slice, plus a new
+`sessions://changed` roster broadcast — so a session spawned/renamed/removed, or a setting / repo
+color / order / diff-seen / template change made in one window updates every other window **live,
+without a reboot**. Card 3/16 of the epic: N full app windows will converge on shared state
+exclusively through these Rust-emitted broadcasts.
 
-**What shipped** (branch `settings-rendering-linux`, PR
-[#118](https://github.com/ErikdeJager/ReCue/pull/118), 2026-07-14):
+**What shipped** (branch `task-428-state-sync-broadcasts`, PR
+[#190](https://github.com/ErikdeJager/ReCue/pull/190), merged 2026-07-16 into `backend-decouple`,
+commit `ff06d6d`; 4 files, +836/-22, **no `lib.rs` change**):
 
-- **A Linux-only Settings → Rendering section** — a dedicated pane (icon `MonitorCog`, after Appearance), filtered
-  out of the nav on macOS/Windows by construction (`renderer_diagnostics` returns `null` there). A stale
-  `"rendering"` deep-link clamps to the default pane.
-- **DMA-BUF renderer control** (Auto / On / Off) — persisted as `linuxDmabufRenderer`, feeding #347's
-  `RendererOverride`. Applies at the **next launch** (GTK reads the env once at init), with an inline "Restart
-  ReCue to apply this" note shown **only** when the draft differs from the mode that was in effect at boot — so a
-  fresh install never sees a spurious note.
-- **Terminal renderer control** (Auto / WebGL / DOM) — persisted as `linuxTerminalRenderer`, applied **live** on
-  Save: the `WebglAddon` is loaded/disposed on the *running* xterm, so **no pooled host is ever disposed** (the #18
-  no-replay invariant) and the **shared glyph atlas is never cleared** (the #221 font-jumble bug).
-- **A diagnostics readout + Copy button** — the exact boot line, its reason, the evidence the probes saw, what
-  decided it, and the probed WebGL renderer string. Works with **zero terminals open** (the probe runs on demand).
-  Backed by a read-only `renderer_diagnostics` command over a `OnceLock` captured at boot.
-- **New shared `src-tauri/src/early_settings.rs`** — reads the settings blob straight off `sessions.json`
-  **before `tauri::Builder`** (the Tauri `Store` only exists inside `.setup()`, i.e. *after* GTK init). Fail-open at
-  every step, with an `include_str!("../tauri.conf.json")` identifier drift guard. **`linux_gtk.rs` (#349)
-  converges onto it** — its duplicate `store_path` / `theme_from_store_json` / consts are deleted, retiring the
-  duplication #349 had to introduce.
+- **`src-tauri/src/commands.rs`** — eleven `broadcast_*` helpers next to `broadcast_schedules`
+  (`settings://changed`, `recents://changed`, `diff_seen://changed`, `repo_order://changed`,
+  `repo_colors://changed`, `overview_panels://changed`, `overview_order://changed`,
+  `sidebar_width://changed`, `sidebar_collapsed://changed`, `canvas_templates://changed`,
+  `sessions://changed`), each emitting the full slice value exactly as its getter returns it, **only
+  after a successful persist**. Wired into the thirteen quiet setters (an `app: AppHandle` param —
+  Tauri-injected, no `generate_handler!`/frontend change) and the roster/recents mutation sites
+  (`spawn_session`, both worktree spawns, `fork_session`, `kill_session` — roster only when a record
+  existed, `rename_session`, `cancel_recurring`'s child removal, `clone_repo`, and both fire paths
+  which broadcast **recents only**).
+- **`src/ipc.ts`** — `StateSyncHandlers` + `subscribeStateSyncEvents` (one parallel `listen` wave,
+  the #352 pattern), wired into `init`'s existing `Promise.all`.
+- **`src/store.ts`** — eleven JSON-equality-guarded apply-sync actions (`applySettingsSync` runs
+  `mergeSettings` + `applySettingsEffects` for a live theme/accent reskin; `applySidebarWidthSync`
+  clamps; `applySessionsSync` reconciles via the new pure exported **`diffSessionRoster`** helper —
+  added ids `upsertSession`, removed ids `dropSession`, existing ids merge record-derived fields
+  while preserving the view-only live fields `reconnecting`/`exitedCode`). **None calls any
+  `ipc.set*`/persist path** — no echo loops.
+- **`src/store.sync.test.ts`** — **new** unit tests: each apply-sync updates on a different value /
+  no-ops on an identical one / never calls an `ipc` setter spy; clamp + default; `diffSessionRoster`
+  add/remove/rename-merge + object-identity preservation + identical-roster `{[], [], null}`.
 
-**Key decisions**
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 428)
 
-- **Precedence, and never a silently-broken setting**: a user-exported `WEBKIT_DISABLE_DMABUF_RENDERER` >
-  `RECUE_DISABLE_DMABUF` > the persisted Setting > auto-detection. #347's rules 1–2 are untouched, and the setting
-  is only consulted when no env override exists. Crucially, **when an env var wins, the pane says so** rather than
-  letting the saved setting look mysteriously ineffective.
-- **The polarity is the sharp edge here, and it is asserted in both directions.** The *setting* names the
-  **renderer** (`on` = DMA-BUF on = `ForceKeep`); the *env var* names the **workaround** (`=1` = disable =
-  `ForceDisable`). Getting this backwards would invert the user's intent, so `resolve_dmabuf_override`'s tests pin
-  both directions.
-- **A dedicated section, not rows inside Appearance** — these are engine/diagnostic switches plus a log readout, and
-  a filtered `SECTIONS` array makes the whole thing vanish on macOS/Windows, leaving Appearance byte-identical there.
-- **No in-app "Restart now" button** — a relaunch would kill every running agent's PTY. A Copy-diagnostics button
-  (for bug reports) is offered instead.
-- **No change to #347's detection logic**, to `isSoftwareWebGLRenderer`, or to any macOS/Windows behavior. Both
-  settings default to `"auto"`, so existing installs are unchanged. No new dependency, no capability change.
+- Broadcasts live in the **command layer** (where `broadcast_schedules` already is), never in
+  `store.rs` (which stays Tauri-free like `SessionManager`); emitted after a successful persist, never
+  on `Err`.
+- `sessions://changed` fires from **interactive roster mutations only** — deliberately NOT from the
+  schedule/recurring fire paths, whose `schedule://fired` / `recurring://fired` already carry the
+  record and where a roster emit would race the #300 recurring `current_session_id` rotation
+  (unowned-child flash). `recents://changed` fires from **every** persisted recents mutation
+  (including `clone_repo` + both fire paths — broader than the frontend-facing add/remove/clear).
+- `applySettingsSync` reskins live but leaves `saveSettings`-only side effects (theme-background push,
+  usage-poll start/stop) to the saving window (poll toggle is single-main-window today, revisit in
+  card 9/16).
+- Cross-window write conflicts stay **last-write-wins per whole slice**; a stale debounced persist
+  (sidebar drag, diff-seen) may briefly override a foreign change and self-heals on the next
+  broadcast — accepted, documented. Per-session flags (`set_session_auto_continue`/`_watch`) and
+  machine-local scalars (`set_open_files`/`set_canvas_layout`/`set_last_version`/path cache) do NOT
+  broadcast.
+- **No `lib.rs` changes at all** (`AppHandle` params need no re-registration; no new commands or
+  `SessionEvent` variants) — minimizes the collision surface with Task 426 (the dependency is purely
+  conflict-avoidance on the shared `commands.rs` surface, not logic).
+- No new Rust unit tests for the emit glue (needs a live `AppHandle`, the untested
+  `broadcast_schedules` precedent); correctness pinned by the frontend tests + two-window smoke.
 
-**Dependencies:** 347 (whose `RendererOverride` seam this fills).
+**Cross-platform:** Tauri events are global to all windows on macOS/Windows/Linux; no path/shell/key/
+`#[cfg]` code added — platform-neutral by construction.
 
-**Notes**
+**Dependencies:** Task 426.
 
-- **Verified on the real Arch/Hyprland box the original bug came from** (hybrid Intel i915 + NVIDIA-open
-  610.43.03), against an isolated `XDG_DATA_HOME` so the developer's real `sessions.json` was never touched: **all
-  five DMA-BUF scenarios** produce the correct boot line — no key → auto ("left on"); `off` → "forced off in
-  Settings"; `on` → "forced on in Settings"; `RECUE_DISABLE_DMABUF=1` beats the setting; and a user-exported
-  `WEBKIT_DISABLE_DMABUF_RENDERER` beats everything and is left untouched. The readout's evidence matches `/sys`
-  ground truth exactly.
-- Checks green: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, `cargo test` (252 pass),
-  `npm run build`, `npm run lint`, `npm run format:check`, `npm test` (691 pass) — and the first-paint bundle is
-  still within the #356 budget.
+### 429. [x] Multi-window 4/16 — Server-side merges for the clobber-prone whole-blob writes (settings / canvases / diff-seen patches under the Store mutex)
 
-### 367. [x] Default terminal line height to 1.0 (one-time migrate the old 1.2 default)
+Kills the stale-window lost-update class for the three clobber-prone whole-blob persists: a window
+that saves **settings**, edits the **canvas tab set**, or toggles a **diff-seen** marker now sends
+only *what it changed* (a patch), and Rust merges that patch over the current persisted state **under
+the Store mutex** — so two windows writing different fields of the same slice can never silently
+revert each other. Task 428's broadcasts shrink the staleness window; these server-side merges close
+the residue a debounce/draft can always straddle.
 
-The Settings → Terminal line-height default had been **1.2** since settings first shipped (#100). New installs and
-users who never re-picked it wanted the tighter **1.0**. But because the settings blob persists opaquely and a
-stored value wins over the default (`mergeSettings` is `{ ...DEFAULT_SETTINGS, ...raw }`), merely changing the
-default fixes only *new* / never-saved installs — every install that ever saved settings has `terminalLineHeight:
-1.2` persisted explicitly and would keep it. So the change also carries a **one-time migration** that bumps an
-install still sitting on the old 1.2 default down to 1.0, while leaving any other deliberately-chosen value — and
-any 1.2 a user re-picks *after* the migration — untouched.
+**What shipped** (branch `task-429-server-side-merges`, PR
+[#191](https://github.com/ErikdeJager/ReCue/pull/191), merged 2026-07-16 into `backend-decouple`,
+commit `4b7125c`; 8 files, +789/-116, **no `lib.rs` change**):
 
-**What shipped** (branch `task-367-terminal-line-height-1-0`, PR
-[#120](https://github.com/ErikdeJager/ReCue/pull/120), merged 2026-07-14):
+- **`src-tauri/src/store.rs`** — a lock-once `update_with<R>(mutate)` (mutate + persist under a single
+  lock; `update` re-expressed through it), three pure unit-tested free helpers
+  (`merge_settings_patch` — shallow top-level, values written verbatim incl. explicit `null`, nested
+  objects like `keybinds` replace whole; `merge_diff_seen_patch` — two-level per-key merge with `null`
+  tombstones (`{repo:{file:null}}` deletes an entry, `{repo:null}` a repo, emptied repos pruned);
+  `merge_canvases_patch` — field-wise `{canvases?, activeId?}`, a stored `activeId` naming no tab
+  re-homes to the first, an activeId-only write against an empty/absent array is dropped), and the
+  three `Store::merge_*` methods returning the merged slice for the broadcast. Full merge-semantics
+  unit tests, including the two-stale-writer no-clobber regression cases.
+- **`src-tauri/src/commands.rs`** — `set_settings` / `set_diff_seen` swap to the merge methods
+  (keeping 428's post-persist broadcasts); **`set_canvases` drops the `window: Window` param and the
+  main-vs-detached label branch entirely**, merges the patch, and emits `canvas://changed` with the
+  merged blob — correct for ANY window.
+- **`src/types/index.ts`** — `DiffSeenPatch` (`Record<string, Record<string, string|null>|null>`) +
+  `PersistedCanvasesPatch` (`{ canvases?, activeId? }`).
+- **`src/ipc.ts`** — the three wrappers now take patches (`setSettings(Partial<Settings>)`,
+  `setDiffSeen(DiffSeenPatch)`, `setCanvases(PersistedCanvasesPatch)`).
+- **`src/store.ts`** — exported pure `settingsPatch(base, next)`; `saveSettings(settings, baseline?)`
+  diffs against the modal's draft-seeding snapshot and persists only the patch (local apply is
+  patch-over-current, mirroring the server merge so 428's echo is a no-op); a module-level
+  `pendingDiffSeenPatch` accumulator flushed/cleared by the existing 300 ms `persistDiffSeen`
+  debounce; every `setCanvases` call site sends only what it changed (`selectCanvas` → `activeId`
+  only, layout/rename/reorder → `canvases` only, `addCanvas` → both).
+- **`src/components/Settings/Settings.tsx`** — a `baselineRef` capturing the draft's seed, passed to
+  `saveSettings` on Save.
+- **`src/store.patch.test.ts`** (new) + `src/store.editor.test.ts` (aligned) — Vitest proving the
+  patch payloads (`settingsPatch` semantics, baseline-respecting saves, diff-seen tombstone flush,
+  `selectCanvas`/`renameCanvas`/`addCanvas` payload shapes).
 
-- **New default 1.0** — `DEFAULT_SETTINGS.terminalLineHeight` is now `1.0` (`store.ts`), and the pooled-terminal
-  fallback `currentTerminalSettings.lineHeight` in `terminalPool.ts` tracks it (`1.0`), so an xterm created before
-  `applyTerminalSettings` runs matches the new default.
-- **A persisted one-time migration flag** — a new `terminalLineHeightMigrated: boolean` on the `Settings` interface
-  (`types/index.ts`), defaulting **false** in `DEFAULT_SETTINGS` so an older blob lacking the key is back-filled
-  `false` and thus eligible for the one-time bump — mirroring the `onboarded` precedent.
-- **A pure, exported `migrateTerminalLineHeight(s)`** (`store.ts`) — returns `{ settings, changed }`: if already
-  flagged, no-op; else bump *exactly* ~1.2 (`Math.abs(v - LEGACY_LINE_HEIGHT) < 1e-6`, `LEGACY_LINE_HEIGHT = 1.2`)
-  to 1.0, always stamp the flag `true`, and report `changed` only when a value was actually bumped.
-- **Wired into `applyBootState`** (the sole settings-load path) — computes the migration after `mergeSettings`,
-  lands the migrated settings in the boot `set(...)` and live terminals, and — in the existing **main-window-only**
-  side-effects block, beside the #58 canvas `migrated` persist — persists the blob **once** via `ipc.setSettings`
-  only when a value was actually bumped (best-effort `.catch`). Detached windows show the migrated value but never
-  persist (the main window owns settings persistence).
-- **"Reset to defaults" preserves the flag** — the Settings handler now seeds the draft from `DEFAULT_SETTINGS`
-  while preserving both `onboarded` **and** `terminalLineHeightMigrated`, so a reset-then-re-pick-1.2 can't re-arm
-  the migration and clobber the deliberate value.
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 429)
 
-**Key decisions** (from `ASSUMPTIONS.md` Task 367)
+- Kept the existing command names + arg keys (new merge *semantics*, not new `patch_*` commands) so
+  there's **no `lib.rs`/`generate_handler`/capability churn** — minimizing conflict with Task 428,
+  which reshapes the same setters.
+- Merges execute inside a **single mutex-held Store closure** (`update_with` returning the merged
+  slice), not a read-then-write in `commands.rs` — "under the Store mutex" taken literally to close
+  the two-lock interleave race.
+- Settings patch is diffed against the **modal's draft-seed snapshot** (new optional `baseline` arg),
+  so two simultaneously-open modals saving different fields don't clobber. A patch-only persisted blob
+  may lack never-changed keys — safe: `mergeSettings` fills TS defaults and the Rust boot readers
+  (`early_settings`/`linux_gtk`/`containerImage`) already fail open to defaults.
+- The `canvases` array itself stays **whole-array last-write-wins** (per-tab merging out of scope);
+  concurrent same-key writes stay last-write-wins by design — the fix targets different-key clobbering.
+- 428's broadcast helpers are the post-merge emitters (they re-read the store, so carry the merged
+  value); the plan told the implementer to re-verify 428's landed shape in the worktree first (the
+  card's cited line `~1452-1464` had drifted to `~1517-1548` after Task 426 landed).
 
-- **One-time-flag over a schema/version system** — a single persisted boolean mirroring `onboarded` suffices; no
-  settings-version machinery was introduced.
-- **Exact-1.2 match with a defensive epsilon** — `1e-6` is far tighter than the 0.1 slider step (1.1/1.3 are 0.1
-  away, so they never collide) yet robust to any FP drift; the slider emits `Number("1.2") === 1.2` exactly, so
-  strict equality would also have matched.
-- **Persist only when it actually bumped** — `changed = wasLegacy` minimizes writes; the flag is always `true`
-  in-memory after boot, and the only way to change line height is `saveSettings` (which spreads in-memory settings),
-  so a re-picked 1.2 always carries `flag: true` and can never be re-bumped — the one hole ("Reset to defaults")
-  is closed by preserving the flag there.
-- **Frontend-only** — the settings blob is opaque on the Rust side, so no backend change and no per-OS gating;
-  identical on macOS, Windows, and Linux.
+**Rollback-safe:** `sessions.json` shapes are unchanged (a merge-path-written blob is a valid whole
+blob for the old code), so downgrade is safe; a full-blob payload degrades to "patch every key" —
+identical result.
 
-**Dependencies:** none. (Self-contained; independent of the concurrently-planned Tasks 366/368/369.)
+**Cross-platform:** pure JSON/state logic, no path/shell/key/`#[cfg]` code — platform-neutral by
+construction on macOS, Windows, and Linux.
 
-**Notes**
+**Dependencies:** Task 428.
 
-- New unit tests cover the default value (`terminalLineHeight === 1.0`, `terminalLineHeightMigrated === false`), the
-  migration (bump 1.2→1.0 with `changed: true`; leave 1.0/1.1/1.3/1.5/1.8 unchanged with `changed: false` while
-  still stamping the flag; already-migrated 1.2 stays 1.2 — the re-picked-1.2 guarantee), and the `mergeSettings`
-  back-fill of the new flag.
+### 430. [x] Multi-window 5/16 — Rust-owned auto-continue engine: the one usage poll + arm/nudge executor moves to `autocontinue.rs`, state events feed the unchanged UI
 
-### 368. [x] Focus-follows-mouse — opt-in auto-focus of a hovered terminal panel
+Moves the #296 auto-continue-after-limit machine (arm at ~100% usage → wait for the five-hour reset →
+nudge each captured Claude agent with Enter/`continue`/Enter) from the frontend into Rust, so it runs
+**exactly once per app** instead of N times once the epic's full windows exist (the double-nudge
+hazard). Rust becomes the **single** usage poller — critical because the usage endpoint aggressively
+429s below ~180s and the old frontend `IS_MAIN_WINDOW` poll gate is itself broken by N windows. The UI
+(AutoContinuePrompt, AutoContinueToggle, ⋯ menu, Settings → Sessions, UsageBar) renders exactly as
+today, now fed by Rust-emitted state events.
 
-Until now a terminal (agent PTY or #72 shell) captured the keyboard only after a **click**. This adds an opt-in
-"focus follows mouse" (sloppy focus) mode: when enabled, moving the pointer over a terminal panel focuses it
-immediately, so keystrokes land without a click. Off by default, so today's click-to-focus stays the norm.
+**What shipped** (branch `task-430-rust-autocontinue`, PR
+[#193](https://github.com/ErikdeJager/ReCue/pull/193), merged 2026-07-16 into `backend-decouple`,
+commit `717c5b4`; 14 files, +1449/-841):
 
-**What shipped** (branch `focus-follows-mouse`, PR
-[#121](https://github.com/ErikdeJager/ReCue/pull/121), merged 2026-07-14):
+- **`src-tauri/src/autocontinue.rs`** — **new** (1046 lines). A faithful port of the pure reducer
+  `evaluate(prev, usage, now_ms, config, live_claude_ids) -> EvalResult` with the exact #296 arm/wait/
+  fire semantics + constants (`ARM_THRESHOLD_PCT` 99.5, `RESET_CONFIRM_PCT` 90, `USAGE_POLL_MS`
+  180_000, `ARMED_POLL_MS` 45_000, `ENGINE_TICK_MS` 5_000, `CONTINUE_KEY_DELAY_MS` 120); a hand-rolled
+  RFC3339-subset + numeric-epoch `parse_resets_at` (honoring `usage.rs`'s no-date-crate stance); pure
+  `poll_gate` / `engine_config` / `live_claude_ids` / `fetch_due` helpers; the single engine thread
+  (`run` — a 5s `recv_timeout` poke tick, fetches only when due, reducer every wake against the cached
+  snapshot, inline best-effort nudge per fired id); a `Shared` cache written **before** each emit
+  (invariant: `auto_continue_snapshot` ≥ any event a subscriber saw) + a `Poke`/`poke` seam + the
+  `auto_continue_snapshot` command. Full Rust unit tests mirroring the old TS reducer suite.
+- **`src-tauri/src/pty.rs`** — `SessionManager::live_session_ids()` (map entries whose child isn't
+  reaped) as the engine's liveness source.
+- **`src-tauri/src/usage.rs`** — `usage_snapshot_blocking` → `pub(crate)`; deleted the now-caller-less
+  `claude_session_usage` command; `PartialEq` on `UsageSnapshot`/`UsageBucket` for the emit-on-change
+  guard.
+- **`src-tauri/src/lib.rs`** — `mod autocontinue;`, manage `Poke`+`Shared`, spawn the engine thread
+  next to the #93 scheduler, register `auto_continue_snapshot`, unregister `claude_session_usage`.
+- **`src-tauri/src/commands.rs`** — a one-line `autocontinue::poke(&app)` in `set_settings` (post-
+  persist) so a `showSessionUsage`/`autoContinueAfterLimit` toggle reacts within one wake.
+- **Frontend** (`ipc.ts` / `store.ts` / `autoContinue.ts` + 5 test files) — deleted the entire
+  firing path (`evaluateAutoContinue`, the 180s/45s timers, `sendContinue`, `refreshUsage`/
+  `startUsagePolling`/`stopUsagePolling`/`applyAutoContinue`, `claudeSessionUsage`); the `usage` /
+  `autoContinue` slices become **event-fed mirrors** (`subscribeUsageEvents` +
+  `applyUsageSync`/`applyAutoContinueSync`, both equality-guarded and zero-persist, plus a pure
+  exported `usageFromSnapshot` mapper and a boot `autoContinueSnapshot()` seed). `src/autoContinue.ts`
+  trimmed to the pure UI helpers (`isLimitReached` + thresholds + the mirrored `AutoContinueState`).
 
-- **A new opt-in boolean setting `autoFocusOnHover`** (`false` by default) on the `Settings` interface
-  (`types/index.ts`) + `DEFAULT_SETTINGS` (`store.ts`) — added to the opaque settings blob, so **no Rust change** and
-  **no `applySettingsEffects` wiring** (it's read **live** per-hover via `useStore((s) => s.settings.autoFocusOnHover)`).
-  `mergeSettings` back-fills `false` for an older blob and preserves a persisted `true`.
-- **A Settings → Behavior "Focus panels on hover" checkbox** + help line (`Settings.tsx`), using the existing
-  `Checkbox`/`field`/`helpText` patterns; toggling + Save persists it and takes effect without a restart.
-- **A pure `shouldHoverFocus(enabled, activeElement)` helper** (new `Terminal/hoverFocus.ts`) — the focus-steal
-  guard: returns `false` when disabled; when enabled, skips stealing focus from a real editable field
-  (`INPUT`/`TEXTAREA`/`SELECT`/`contenteditable`) so a FileViewer/Kanban raw `<textarea>`, a rename input, or a modal
-  field is never interrupted — but treats xterm's own helper `<textarea>` (inside `.xterm`) as OK to leave, so
-  moving **between** terminals does move focus. Unit-tested (`hoverFocus.test.ts`).
-- **A single `onMouseEnter` handler on the terminal body wrapper** in `Terminal.tsx` that calls
-  `terminalPool.focusTerminal(sessionId)` behind the guard. Because `Terminal.tsx` is the sole render site for both
-  the `agent` and `terminal` kinds (via `ItemContent`), this one change covers **every** view — Overview, Canvas,
-  big mode — and both window types (main + detached).
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 430)
 
-**Key decisions** (from `ASSUMPTIONS.md` Task 368)
+- Rust owns the **one** app-wide usage poll; the frontend timers are gone and the `usage` slice is an
+  event-fed mirror — two independent 180s pollers would double requests against a 429-prone endpoint.
+- Preserved today's implicit coupling: `showSessionUsage` off ⇒ no fetch ⇒ auto-continue never arms
+  (the #326 no-poll-no-token privacy gate outranks the feature), plus the `isClaudeActive`
+  all-sessions-claude fetch gate — both in the pure Rust `poll_gate`.
+- No UI reads the armed machine state today; the store `autoContinue` slice is kept as a read-only
+  mirror (`autocontinue://changed`) for parity/observability + future UI. The machine stays transient
+  (never persisted).
+- Rust "live Claude session" = a persisted claude record with a currently-running PTY (slightly
+  stricter than the frontend's `exitedCode === undefined`, which also counted reconnecting boot
+  records; nudging is best-effort either way).
+- Engine cadence: 5s wake tick, fetches only when due (180s / 45s armed / immediate on first run or
+  gate-off→on); `set_settings` pokes post-persist; reducer runs every wake against the **cached**
+  snapshot (safe — firing needs a fresh <90% reading). Nudge byte sequence + 120ms gaps identical, run
+  inline on the engine thread.
+- The full arm→reset→nudge path is **not CI-testable** (needs a real five-hour limit event) — flagged
+  for interactive verification in the PR (the #296 precedent); the sequence is isolated in one Rust
+  spot for real-CLI adjustment.
 
-- **Only the two xterm-backed panel kinds are hover-focus targets** — non-xterm panels (FileViewer, DiffInspector,
-  Kanban, FileTree, Scheduled, Recurring, pending template) have no single keyboard-capture element and would fight
-  their own inputs, so they are deliberately left alone.
-- **`onMouseEnter` on the body wrapper, not the header** — hover intent that fires once per pointer entry (no focus
-  spam), ignores touch taps, and keeps the header's drag handle / action buttons usable.
-- **Hover moves keyboard focus only** — it does **not** move the Canvas "active leaf" highlight (that stays
-  `pointerDown`-driven), so the visual selection doesn't jump with the mouse.
-- **Detached windows** pick up the setting on their own `init()` load; a live toggle reaches a detached window on its
-  next load — consistent with how the settings blob propagates today.
-- **Cross-platform:** pure WebView/DOM event handling, no OS-specific key handling — identical on macOS, Windows,
-  and Linux.
+**Cross-platform:** platform-neutral by construction — a plain Rust thread, `ureq` HTTPS,
+`write_stdin` (same bytes on all three OSes), global Tauri events; no `#[cfg]`/paths/shells/keys.
 
-**Dependencies:** none. (Self-contained; inert unless the user opts in.)
+**Dependencies:** Task 429 (via 429 → 428 — reuses their broadcast/apply-sync conventions +
+`init` subscribe wave, and 429's reshaped `set_settings`/`saveSettings` which this card edits).
 
-### 369. [x] Unique repo colors first — prefer an unused palette color for a new folder
+### 431. [x] Multi-window 6/16 — Rust-owned clean-exit forget + ref-counted worktree cleanup: one decision per app, one "Agent exited" toast per exit
 
-A new top-level folder's default repo color (#35) was a hash of its path into the 14-entry `REPO_PALETTE`, so
-distinct folders frequently collided on the same color. This makes each **newly-added** folder visually distinct:
-it now takes a palette color **not already used** by another folder, only repeating once every palette color is in
-use. Existing folders are grandfathered (never recolored).
+Moves the #63 clean-exit decision (code 0 while running → kill + delete record + toast) and the
+ref-counted worktree removal to happen **exactly once per app, in Rust** — instead of in each
+window's `session://exited` handler, where the epic's N full windows would all double-delete records,
+double-toast, and race `remove_worktree`. Every window drops its local state via the task-428 roster
+broadcast plus a small `session://forgotten` event, and exactly ONE window shows the "Agent exited"
+toast. The non-clean exit path (overlay + Restart) stays frontend and byte-identical.
 
-**What shipped** (branch `task-369-unique-repo-colors`, PR
-[#122](https://github.com/ErikdeJager/ReCue/pull/122), merged 2026-07-14):
+**What shipped** (branch `task-431-rust-clean-exit-forget`, PR
+[#194](https://github.com/ErikdeJager/ReCue/pull/194), merged 2026-07-16 into `backend-decouple`,
+commit `e0b4467`; 7 files, +902/-263):
 
-- **A pure `sidebarRepos(recents, sessions, recurrings)` helper** (`store.ts`) — the canonical top-level-folder set
-  (`repoOrder(recents ∪ worktreeParents ∪ recurringCwds, non-worktree sessions)`), mirroring `pruneMissingFolders`,
-  so worktree **child** dirs (nested, sharing the parent's color) are never assigned a stray color.
-- **A pure, unit-tested `pickRepoColor(path, colors, existingRepos)` helper** (`store.ts`, after `repoColor`) —
-  returns the **first unused** `REPO_PALETTE` color (in palette order), where "used" is each *other* current
-  folder's **effective** color (`repoColor(r, colors)` — user override / prior assignment, else hashed default);
-  falls back to the stable hashed default (`repoColor(path, {})`) once all 14 are in use. Deterministic; a
-  user-override color outside the palette consumes no slot; ignores `path`'s own color.
-- **A main-window-only `useStore.subscribe` block in `init()`** (guarded by a module-level `folderColorSubStarted`
-  flag against StrictMode double-invoke) — seeds `knownRepos` from the **post-boot** folder set (so boot-present
-  folders are grandfathered), then on any change to `recents`/`sessions`/`recurrings` (cheap reference-equality
-  gate) assigns + **persists** (`setRepoColor` → existing `set_repo_color` / `repo_colors` storage) a distinct color
-  to each folder that appears afterwards and has none, threading an accumulating colors map so a batch of new
-  folders each avoid the others' just-picked colors.
+- **`src-tauri/src/pty.rs`** — `ExitState.intentional: AtomicBool` set by `kill_session` **before any
+  signal** (the #354 `silent` pattern) and carried on `SessionEvent::Exited { …, intentional }` — so
+  a Remove/forget/rotation/cancel kill whose child traps SIGHUP and exits 0 can never be misread as a
+  clean exit. The `session://exited` wire payload is unchanged; the frontend's own `intentionalKills`
+  set stays for its unchanged non-clean paths.
+- **`src-tauri/src/commands.rs`** — the pure discriminator `is_clean_exit` + `classify_exit` →
+  `ExitAction` (full truth table, ported from the TS `isCleanExit`); `ForgottenPayload` /
+  `WorktreeKeptPayload` + a `toast_target` (first focused window → `"main"` → any); the ported pure
+  `worktree_has_items` (#199 battery) + a serialized `cleanup_worktree_if_empty` command
+  (`WorktreeCleanupLock` mutex, non-forced unlock+remove, outcomes `Removed`/`InUse`/`KeptDirty`,
+  idempotent on a missing dest); a `BootWindow(AtomicBool)` + `RECONNECT_BACKSTOP_MS`; and the
+  forwarder-side `handle_session_exit` (fail-open to today's emit on any guard failure) + the detached
+  `forget_cleanly_exited` task (reuses `kill_session_blocking` → the same dev-container teardown +
+  `store.remove_session` + `broadcast_sessions`, then emits `session://forgotten`, then runs the
+  worktree cleanup). Full Rust unit tests for the classifier + `worktree_has_items`.
+- **`src-tauri/src/lib.rs`** — manage `BootWindow` (true iff persisted records exist at setup) +
+  `WorktreeCleanupLock`; clear the boot window 4 s after the resume pass returns; gate the forwarder's
+  `Exited` arm through `handle_session_exit` (consumed → nothing emitted; else emit `session://exited`
+  as before); register `cleanup_worktree_if_empty`.
+- **Frontend** (`ipc.ts` / `store.ts` / `types/index.ts` / `store.test.ts`) — deleted `isCleanExit`,
+  `worktreeHasItems`, `forgetExitedSession`, and the `onExited` clean branch; added
+  `applySessionForgotten` (drops local state in every window, toasts only when `toast_window ===
+  WINDOW_LABEL`) + `applyWorktreeKept`; rewired `cleanupWorktreeIfEmpty` onto the authoritative Rust
+  command (mapping `keptDirty` → the error toast, `removed`/`inUse`/failure → silent). The
+  `isCleanExit`/`worktreeHasItems` test batteries moved to Rust.
 
-**Key decisions** (from `ASSUMPTIONS.md` Task 369)
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 431)
 
-- **First-unused-in-palette-order**, not random-among-unused — deterministic, stable, testable.
-- **Fallback once all 14 are used** is the existing stable hash default (matches today's pick), not round-robin.
-- **Auto-assigned colors persist** via the same `repo_colors` map as user overrides, so a folder keeps its color
-  permanently; a user override or prior assignment always wins and is never overwritten. **No Rust change** — reuses
-  the #35 storage.
-- **Grandfather boot-present folders** — `knownRepos` is seeded from the post-`applyBootState` set, so the feature
-  only affects folders added afterwards.
-- **Main window only** — it owns the `set_repo_color` write and the window-global recents/sessions/recurrings, so a
-  detached window can't double-assign. **Known limitation (recorded):** a detached canvas window open when a folder
-  is added shows the new color only on its next boot (repo colors have no live cross-window broadcast today).
-- **Cross-platform:** pure TS/WebView, no OS-specific paths — identical on macOS, Windows, and Linux.
+- Contrary to the card's premise, today's frontend clean-exit path did **not** run the worktree
+  cleanup — per the card's directive the Rust forget path now adds it, so a cleanly-exited last
+  worktree agent removes its clean worktree (dirty → kept + warned): a small deliberate improvement
+  matching "#63: forgotten like Remove".
+- Worktree ref-count/removal is centralized as **one serialized Rust command** the existing frontend
+  call sites delegate to (not each moving wholesale into Rust); the forced `remove_worktree`
+  (`forgetRepo`) stays as-is.
+- On a consumed clean exit Rust does **not** emit `session://exited` at all — so no window ever
+  flashes a transient exit overlay for a clean exit (detached windows previously briefly did).
+- Single-toast targeting: Rust picks the focused window's label (fallback `"main"`, then any),
+  carried in the payload; a targeted window closing mid-flight loses the toast rather than
+  duplicating it (accepted).
+- Recurring-owned children (`current_session_id` match) are excluded — their exits still emit
+  `session://exited` and the frontend's rotation branch handles them as today. The boot-window guard's
+  Rust equivalent (`BootWindow`, cleared 4 s after resume) is semantics-identical; exact wall-clock
+  equality with a frontend timer is impossible cross-process.
+- The non-clean "Session exited (code N)" toast stays main-window-gated as today (de-duplicating it
+  across N windows belongs to later cards); this card touches only the clean-exit branch.
 
-**Dependencies:** none. (Self-contained; reuses the #35 `set_repo_color` / `repo_colors` storage.)
+**Fail-safe:** every guard failure (missing state, boot window, recurring-owned, intentional) degrades
+to today's `session://exited` emit — worst case is the old behavior, never a lost record. #354
+silent-kill semantics stay byte-identical.
 
-### 366. [x] Settings → Appearance: display-size slider (UI scaling)
+**Cross-platform:** AtomicBools, global Tauri events, `git` via the existing `hidden_command`-backed
+helpers — no paths/shells/`#[cfg]` arms; identical on macOS, Windows, and Linux.
 
-A **Display size** slider was added to Settings → Appearance that scales the whole app UI up and down like
-browser-zoom, starting at **100%** (normal). A user can enlarge the entire interface (text, controls, spacing,
-panels) for readability or shrink it to fit more on screen — one uniform control.
+**Dependencies:** Task 430 (sequencing — 429/430 reshape the same `store.ts` init/subscribe wave and
+`lib.rs` setup this card edits; via 430 → 429 → 428, whose broadcast/apply-sync conventions
+`session://forgotten` follows).
 
-**What shipped** (branch `settings-appearance-display-size`, PR
-[#123](https://github.com/ErikdeJager/ReCue/pull/123), merged 2026-07-14):
+### 432. [x] Multi-window 7/16 — Boot shell-terminal respawn moves to Rust: one idempotent respawn pass next to the resume loop, the frontend just renders
 
-- **A new `displaySize` setting** (integer percent, default **100**) on the `Settings` interface (`types/index.ts`)
-  + `DEFAULT_SETTINGS` (`store.ts`) — in the opaque settings blob, so **no Rust change**; `mergeSettings` back-fills
-  `100` for an older blob.
-- **A pure, unit-tested `displayZoom(percent)` helper** (`store.ts`, beside `accentCompanions`, with exported
-  `MIN_DISPLAY_SIZE = 80` / `MAX_DISPLAY_SIZE = 150`) — clamps to [80, 150], returns `null` at exactly 100 (so the
-  caller *clears* the property and a default install is byte-for-byte unchanged) and `null` for a non-finite input,
-  else the multiplier string (e.g. `125 → "1.25"`).
-- **Applied as CSS `zoom` on `<html>`** in `applySettingsEffects` — `removeProperty("zoom")` at 100, else
-  `setProperty("zoom", zoom)`. Runs on **both** boot (`applyBootState`) and Save, in **every** window with a store
-  (including a detached canvas window on its own boot). The visible terminals refit automatically via their
-  `ResizeObserver` (the zoom is a layout change); no extra pool call.
-- **A "Display size" `Slider`** (80–150%, step 5%) + help line in the Appearance section (`Settings.tsx`), reusing
-  the shared `Slider` (#122); staged in the modal draft and applied on Save.
+Respawning the persisted shell **terminal items** (#72) on boot becomes a Rust-owned, once-per-app
+step in the boot sequence (next to the agent resume pass) instead of a frontend side effect of the
+booting main window — so the epic's N full windows (each running the same frontend boot code) can
+never double-spawn the same panel ids, and a window opened/reloaded mid-session never kills+respawns a
+live shell (a real bug today: a dev webview reload re-running `applyBootState` killed every live shell
+via `spawn_with_id`'s same-id replace semantics). Panel ids stay stable; the frontend just renders.
 
-**Key decisions** (from `ASSUMPTIONS.md` Task 366)
+**What shipped** (branch `task-432-rust-boot-terminal-respawn`, PR
+[#195](https://github.com/ErikdeJager/ReCue/pull/195), merged 2026-07-16 into `backend-decouple`,
+commit `0ee76ca`; 6 files, +219/-19):
 
-- **CSS `zoom` on `<html>`, not root font-size** — the type/spacing tokens are **px-based** (and many CSS Modules use
-  raw px), so a root font-size change wouldn't propagate; `zoom` is the only uniform whole-app scale and is supported
-  on all three WebViews (WKWebView / WebView2 / WebKitGTK). Native `Webview::set_zoom` was kept only as a documented
-  fallback, not implemented.
-- **Terminals scale with the display zoom** (they reparent into `#root`) — accepted as the correct "display size"
-  behavior; the terminal font-size/line-height settings stay **independent** as the base size (effective size =
-  terminalFontSize × displayScale), and cols/rows are scale-invariant (FitAddon measures container and cell in the
-  same zoomed space). No per-terminal counter-zoom.
-- **Default 100% clears the property entirely** (a no-op), so a default install is unchanged; range 80–150%, step 5%
-  chosen for safe layout + accessibility.
-- **No pre-paint mirror** (no `index.html` boot-script / #348 `--bg-base` change) — display size settles post-boot
-  like accent / Overview-min-width, accepting a one-frame settle; only theme is pre-painted.
-- **Pure frontend** — opaque settings blob, so no Rust/capability change. A live change reaches an already-open
-  detached window only on that window's next boot (same as live theme changes today).
-- **OS file-drop hit-testing** (`osFileDrop.ts` `targetAt`) flagged for real-box verification at non-100% zoom;
-  adjust by the scale only if a drop lands wrong (conditional, not touched pre-emptively).
+- **`src-tauri/src/boot.rs`** — the pure `terminal_panel_ids` (filters `kind == "terminal"` across
+  repos → sorted `(repo, id)` pairs, deterministic; carries the flagged deliberate-read comment about
+  reading the frontend-owned `overview_panels` map at its one consumer site), the idempotent core
+  `respawn_missing_terminals` (skips any id already registered in the PTY registry — live *or*
+  exited-but-kept — so it never kills+replaces a generation, best-effort per panel like `resume_one`),
+  and the thin `respawn_shell_terminals(app)` AppHandle wrapper. Unit tests: the pure filter (all OSes)
+  + a unix PTY skip/spawn/idempotence test.
+- **`src-tauri/src/pty.rs`** — a public `SessionManager::has_session(id) -> bool` presence check (the
+  boot respawn's idempotence source; a same-id spawn would kill the existing generation, so "skip if
+  present" is what makes the pass safe to re-run) + a `has_session` unknown-id test.
+- **`src-tauri/src/lib.rs`** — calls `boot::respawn_shell_terminals(&resume)` on the existing resume
+  thread, after the dev-container reap and **before** `resume_persisted_sessions` (which early-returns
+  on zero agent records and so can't host it), leaving Task 431's post-resume boot-window tail intact.
+- **`src-tauri/src/commands.rs`** — `spawn_terminal` doc-comment only (now "respawned by the Rust boot
+  sequence"; the command remains the runtime create/Restart path).
+- **`src/store.ts`** — deleted the `applyBootState` boot respawn loop (replacement comment points at
+  the Rust owner); the runtime `ipc.spawnTerminal` call sites (`addOverviewPanel`, `restartTerminal`,
+  the template `new-terminal` resolution) are untouched.
+- **`src/store.refresh.test.ts`** — inverted the #72 boot test: booting with a terminal panel now
+  calls `ipc.spawnTerminal` **zero** times, while the panel still lands in `overviewPanels`.
 
-**Dependencies:** none. (Self-contained; independent of the sibling Tasks 367/368/369.)
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 432)
 
-### 370. [x] Expandable "all usage" viewer in the sidebar (adaptive, collapsed by default)
+- `overview_panels` is already a typed Rust struct (`OverviewPanel` with a `kind` field) — no new
+  parsing; "minimal parse" = filter `kind == "terminal"` in one flagged place.
+- The idempotence guard is **skip any already-registered id** (present at all — live OR
+  exited-but-kept), implemented **only in the boot respawn loop, not the `spawn_terminal` command** —
+  because `restartTerminal` legitimately respawns a same-id exited terminal via the kill+replace
+  semantics, so a command-level skip would break Restart.
+- Spawn failures stay silent best-effort per panel (parity with the deleted `.catch(() => {})`).
+- Accepted edge: shells now spawn before any webview subscribes, so a shell that dies instantly (broken
+  `$SHELL`) emits `session://exited` into the void and shows no exited overlay until an app restart —
+  rare, degrades to a dead-looking panel; scrollback still replays via `replayDedupe`.
 
-The sidebar-footer Claude usage bar (#154) only ever showed the **5-hour** window. This adds a collapsed-by-default
-disclosure — a small up-chevron left of the reset countdown — that expands a box listing **every** usage window
-Anthropic's API reports (5-hour, weekly, …), each with its own percentage, mini bar, and reset countdown. The list
-is **adaptive**: it renders whatever buckets the API returns, so a new metric Anthropic adds appears automatically
-with no code change.
+**Rollback-safe:** no persisted-schema change, no new events/commands/capabilities; re-adding the
+frontend loop restores the old behavior byte-for-byte.
 
-**What shipped** (branch `task-370-all-usage-viewer`, PR
-[#124](https://github.com/ErikdeJager/ReCue/pull/124), merged 2026-07-14):
+**Cross-platform:** platform-neutral — `spawn_terminal` already has the per-OS shell resolution
+(PowerShell / `$SHELL`→`/bin/bash`→`/bin/sh` / `/bin/zsh`); this card only changes *which side calls
+it at boot*. The one PTY test is `cfg(all(test, unix))` like the existing pty tests; the pure filter
+test runs on all OSes.
 
-- **Backend (`usage.rs`)** — a new serializable `UsageBucket { key, usedPercent (clamped 0–100), resetsAt }` and a
-  pure `parse_buckets(v)` that iterates the response object and pushes one bucket per top-level object carrying a
-  **finite** `utilization`/`used_percentage` number (non-objects / metadata without a percentage are skipped — the
-  adaptivity guard), reusing `value_to_string` for `resets_at`. `UsageSnapshot` gains `buckets: Vec<UsageBucket>`;
-  `parse_snapshot` keeps the existing `five_hour` extraction **byte-for-byte** (a missing `five_hour` still returns
-  `None` and hides the bar) and sets `buckets: parse_buckets(v)`. New tests cover multi-bucket, an **unknown** key,
-  a skipped non-numeric bucket, and clamping.
-- **IPC + store** — `UsageBucket` mirrored in `ipc.ts` (`buckets` on `UsageSnapshot`); the store `usage` slice gains
-  `buckets: { key, usedPercent, resetsAtMs }[]`, mapped in `refreshUsage` (bucket `resetsAt` → `resetsAtMs` via
-  `parseResetsAt`), with `buckets: []` added to every unavailable/reset literal (the required field made `tsc`
-  enumerate each site).
-- **Pure helper (`usageBuckets.ts`)** — `humanizeUsageLabel(key)` (known-key map + a generic fallback:
-  underscores→spaces, capitalized, so a brand-new key renders sensibly), `orderUsageBuckets` (five_hour first,
-  seven_day next, unknown keys last, alphabetical tie-break), and `prepareUsageBuckets` attaching labels in order.
-  Unit-tested (`usageBuckets.test.ts`).
-- **UI (`UsageBar.tsx` + `Usage.module.css`)** — a transient `expanded` state (default collapsed), a chevron
-  disclosure button in the meta row, and an expandable `.box` (rendered as the first child so it grows upward from
-  the sidebar bottom) mapping `prepareUsageBuckets` to rows (label · mini bar · percent · own countdown), reusing the
-  `now` tick and the per-bucket `critical` (≥90%) fill classes/tokens. Hidden in the collapsed rail and the empty
-  hairline state.
+**Dependencies:** Task 431 (sequencing — 431 edits the same `lib.rs` resume thread and `store.ts` boot
+surfaces; via 431 → 430 → 429).
 
-**Key decisions** (from `ASSUMPTIONS.md` Task 370)
+### 433. [x] Multi-window 8/16 — Primary-window election: Rust tracks full windows and broadcasts `window://primary`; the once-per-app frontend effects re-gate on `isPrimary` with live takeover
 
-- **Expanded/collapsed state is transient** (local component state, collapsed each launch) — not persisted.
-- **`five_hour` stays the "primary"** — the bar fill, countdown, and auto-continue arming are byte-for-byte
-  unchanged, and a missing `five_hour` still hides the whole bar; the expanded box lists all buckets including the
-  5-hour one for a complete picture.
-- **Adaptivity by surfacing all buckets generically** — any top-level object with a numeric utilization becomes a
-  bucket; the frontend iterates and humanizes unknown keys, so new Anthropic metrics auto-appear.
-- **Fail-open + Claude-only preserved** — an unexpected shape yields an empty `buckets` list (box shows just the
-  primary) or `None` (bar hides), never a crash; the `showSessionUsage` / `isClaudeActive` gates are untouched. No
-  new Tauri command, no polling-cadence change, no token-read/Keychain change.
-- **Tokens only + reduced-motion** — the box uses design tokens (Dark/Light/custom-accent) and any transition is
-  dropped under the global reduced-motion killswitch; pure WebView, identical on macOS/Windows/Linux.
+Gives the app exactly ONE window that runs the remaining once-per-app frontend effects (onboarding,
+folder pruning, the update check + "Updated to vX" toast, the boot migration persists, the
+folder-color auto-assign, the `schedule://fired` transition, the once-per-app toasts/notifications) —
+elected in Rust as the **oldest surviving full window** and broadcast as `window://primary` — so when
+the epic's N full app windows exist (card 9/16) those effects never double-run, and when the primary
+closes the newly elected primary **takes over live**. Today (one main window + detached canvas-only
+windows) behavior is byte-identical: main is always primary.
 
-**Dependencies:** none. (Extends the already-landed usage bar #154; self-contained.)
+**What shipped** (branch `task-433-primary-window-election`, PR
+[#196](https://github.com/ErikdeJager/ReCue/pull/196), merged 2026-07-16 into `backend-decouple`,
+commit `473917b`; 8 files, +678/-74):
+
+- **`src-tauri/src/primary.rs`** — **new**. A pure `is_full_window(label)` (eligible = label doesn't
+  start with `canvas-`), a pure `Election` state machine (eligible labels in creation order; primary =
+  oldest survivor; `register`/`unregister` return whether the primary changed; monotonic — a survivor
+  is never demoted), the Tauri-managed `Primary(Mutex<Election>)` (state written **before** each emit,
+  the task-430 subscribe-then-fetch invariant), a `PrimaryPayload { primary: Option<String> }`,
+  `register_window`/`unregister_window` (try_state + poison-recovering lock, emit on change), and the
+  `primary_window` snapshot command. Full pure unit tests.
+- **`src-tauri/src/lib.rs`** — `mod primary;`, manage `Primary` + register the config-created
+  window(s) in `.setup()`, `unregister_window` in the `RunEvent::WindowEvent{Destroyed}` arm (next to
+  task 426's `purge_window`), register the command.
+- **`src-tauri/src/commands.rs`** — the one `primary::register_window(&app, &label)` in
+  `open_canvas_window` (a documented no-op seam for the ineligible canvas label, so the 9/16
+  full-window creator inherits registration).
+- **Frontend** (`windowContext.ts` / `ipc.ts` / `store.ts` + 2 test files) — a pure `isPrimaryLabel`
+  helper; `primaryWindow` snapshot + `subscribePrimaryEvents`; a `primaryWindow` store slice whose
+  **pre-sync default preserves today's semantics** (`"main"` in the main window, `null` elsewhere —
+  the `installKind ""` precedent), `applyPrimarySync` (equality-guarded, fires `armPrimaryEffects`
+  once on a non-primary→primary transition when `booted`), and `armPrimaryEffects` (re-arms only the
+  idempotent effects: the extracted `startFolderColorAssign` subscription + a re-run `checkForUpdate`).
+  `init` resolves the `primary_window` snapshot **before** `applyBootState`; the eight once-per-app
+  sites re-gate on `isPrimaryLabel(get().primaryWindow)` instead of `IS_MAIN_WINDOW`.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 433)
+
+- "Full app window" (primary-eligible) = any label not starting with `canvas-`; when only canvas
+  windows survive, primary is `null` and NO window runs the once-per-app effects (matching today's
+  `IS_MAIN_WINDOW` outcome). Election is oldest-surviving; takeover is monotonic (at most once per
+  window lifetime).
+- Read the card's "everything keyed on `IS_MAIN_WINDOW` that must run once per app" broadly — also
+  re-gated the #336 watched-agent native notification, the schedule/recurring `://error` toasts, the
+  `recurring://fired` recents-prepend, and the `container://building` toast (same double-fire class).
+- The `onExited` `IS_MAIN_WINDOW` branches (incl. the non-clean "Session exited" toast) are
+  deliberately **untouched** (Task 431 owns exit reshaping; N-window exit-toast dedup is a later card),
+  and 431's focused-window `toast_target` stays a separate mechanism.
+- Reconciled the card's "startUsagePolling" item against 430 (the frontend poll is deleted there;
+  nothing usage-related is re-gated); `armPrimaryEffects` re-runs neither the boot one-shots
+  (onboarding, `pruneMissingFolders`, migration persists, updated-toast/`setLastVersion`) nor anything
+  destructive/modal.
+- Pre-sync "main assumes primary" default is what keeps vitest/dev-server green; flagged in-code that
+  card 9/16's secondary full windows must default to `null`. `open_canvas_window` routes through
+  `register_window` (no-op for canvas labels) so every creation site inherits the seam.
+
+**Rollback-safe:** the election is transient (no persisted-schema change); events without listeners
+are inert; restoring the `IS_MAIN_WINDOW` gates restores the old behavior byte-for-byte.
+
+**Cross-platform:** Tauri window labels/events (global on all three OSes), a plain mutex, pure TS —
+no paths/shells/`#[cfg]` arms.
+
+**Dependencies:** Task 430, Task 432 (sequencing — 432 reshapes the same `applyBootState`/`store.ts`
+boot surfaces and `lib.rs` closures; 430's usage-poll restructuring resolves the card's
+"startUsagePolling" item; via 432 → 431 → 430 → 429 the whole chain lands first).
+
+### 434. [x] Multi-window 9/16 — Full app-window shell: `?win=` window identity, `open_app_window`/`focus_app_window`, `app-*` capability, per-window boot with local init presets
+
+Makes N **full app windows** real: any number of additional windows, each labelled `app-<uuid>`,
+each rendering the complete shell (sidebar + Overview/Attention/Canvas + modals) with its own
+window-local view/selection/tab/filter state, opened by a new Rust `open_app_window(init)` whose init
+params preset the new window's local state (repo → Overview repo filter, canvas → Canvas view on that
+tab). Closing a non-last window just closes it (agents keep running backend-side); closing the last
+window still quits the app as today. The keystone of the epic — everything before it was
+behavior-preserving groundwork; this card turns it on.
+
+**What shipped** (branch `task-434-app-window-shell`, PR
+[#198](https://github.com/ErikdeJager/ReCue/pull/198), merged 2026-07-16 into `backend-decouple`,
+commit `888ed67`; 17 files, +652/-142):
+
+- **`src/windowContext.ts` (+ test)** — a pure `parseWindowIdentity(search)` and derived constants
+  (`WINDOW_KIND` `main`/`app`/`canvas`, `WINDOW_LABEL`, `APP_WINDOW_ID`, `DETACHED_CANVAS_ID`,
+  `INIT_REPO_PATH`, `INIT_CANVAS_ID`, `IS_FULL_APP_WINDOW`, `IS_DETACHED_CANVAS_WINDOW`).
+  **`IS_MAIN_WINDOW` is DELETED** (not redefined) — making the ~25-site consumer audit
+  **compile-enforced**; `ownedHere` is widened so the default `"main"` owner means "every full app
+  window" (main + `app-*` **mirror** the same PTY via the landed 426/427 attach/smallest-wins
+  machinery), while a `canvas-<id>` owner stays exclusive to its detached window.
+- **`src-tauri/src/commands.rs`** — `AppWindowInit { repo, canvas }`, a pure byte-exact
+  `encode_query_value` (space→`%20` never `+`, so `URLSearchParams` round-trips Windows paths) +
+  `app_window_url`, `open_app_window(init)` (label `app-<uuid>`, `index.html?win=…`, main-window
+  geometry, hidden-until-painted #348 + themed background + reveal fallback, `primary::register_window`
+  the 433 seam, returns the new id), and `focus_app_window(id)`. Unit tests for both pure helpers
+  including a Windows-path round-trip.
+- **`src/App.tsx`** — routes `IS_DETACHED_CANVAS_WINDOW ? <CanvasWindow /> : <MainApp />` (an `app-*`
+  window gets the full shell; the `?canvas=` route survives one release, deleted by 11/16).
+- **`src/boot.ts` (+ test)** — `resolveCanvases` reworked to `(persisted, legacy, pinCanvasId,
+  presetCanvasId)`: a detached window **pins** its own canvas; an app-window `?canvas=` is a **soft
+  preset** applied only when the tab exists (else falls back to persisted/first).
+- **`src/store.ts`** — init presets (`overviewRepoFilter` from `INIT_REPO_PATH`, `activeCanvasId` from
+  `DETACHED_CANVAS_ID ?? INIT_CANVAS_ID`, `view: canvas` when preset); the whole `IS_MAIN_WINDOW →
+  IS_FULL_APP_WINDOW` / `!IS_MAIN_WINDOW → IS_DETACHED_CANVAS_WINDOW` audit.
+- **`src/useKeyboardNav.ts` / `CanvasSurface.tsx`** — the mechanical gate swaps so an app window gets
+  every full-shell shortcut + the correct detached-note gate.
+- **`src-tauri/src/lib.rs`** register the two commands (the global Destroyed arm already covers 426's
+  purge + 433's unregister, so **no per-window handler**); **`capabilities/default.json`** →
+  `["main", "canvas-*", "app-*"]`; **`ipc.ts`/`types`** `openAppWindow`/`focusAppWindow`/`AppWindowInit`
+  (documented that the UI entry points arrive in card 10/16); **both trajectory logs** got the real-box
+  smoke items (Windows `?repo=` encoding round-trip, Linux/WebKitGTK second-window reveal + WebGL).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 434)
+
+- `IS_MAIN_WINDOW` is **deleted**, not redefined — `IS_FULL_APP_WINDOW` (= `!IS_DETACHED_CANVAS_WINDOW`)
+  replaces it everywhere; the swaps are exact complements, so today's two window kinds stay
+  byte-identical.
+- `ownedHere` is widened so default-`"main"` sessions mirror across every full window (without this an
+  app window would render only DetachedNotes — the card would be pointless); canvas-owned sessions stay
+  exclusive until 11/16 deletes the layer.
+- `?canvas=` on a `?win=` URL is a **soft local preset** (`?win=` wins; empty values read as absent),
+  not a detached-window identity.
+- **No per-window Destroyed handler** — the global `RunEvent` Destroyed arm (426 purge + 433
+  unregister) is label-generic and covers it; **last-window-quit needs no code** (Tauri's default
+  all-windows-destroyed exit + `RunEvent::Exit` `kill_all` already implement it — pinned as an
+  acceptance criterion by reading).
+- Query values are percent-encoded **byte-exact in Rust** (space→`%20`, never `+`) so Windows paths
+  survive `URLSearchParams`; pure encode/url helpers unit-tested both sides.
+- **No UI entry point** ships here (10/16 owns them) — the ipc wrappers ship documented but
+  un-triggered; manual smoke used a temporary uncommitted trigger, flagged for interactive
+  verification.
+- Accepted deferred rough edges (per 433's precedent): non-clean exit toasts may appear in each full
+  window; the persisted canvases `activeId` boot hint is last-write-wins across full windows (the live
+  active tab stays window-local); sidebar collapse/width converge via 428 broadcasts.
+
+**Rollback-safe:** no persisted-schema change, no new events; the two commands are additive and
+un-triggered by UI until 10/16; the capability line is inert without `app-*` windows.
+
+**Cross-platform:** the new Rust is pure string/window plumbing (no paths/shells/`#[cfg]`);
+`encode_query_value` exists precisely so Windows `\`/`:`/space paths survive the URL; the pre-paint
+background + reveal are the #348 machinery; the frontend is pure TS over URL params (identical
+WKWebView/WebView2/WebKitGTK). Real-box smoke logged in both trajectory files.
+
+**Dependencies:** Task 433 (builds on its `primary.rs` registration seam, `isPrimaryLabel`, and the
+null-default for non-`"main"` labels; Multi-window 1/16 = Task 426 already landed; via 433 → 430 → 432
+the whole planned chain landed first).
+
+### 435. [x] Multi-window 14/16 — Same-file edit guard: transient soft claims make one window's auto-save editor authoritative, other windows render read-only with take-over
+
+When two windows hold an editable auto-saving view of the **same file** (FileViewer raw/plain #148,
+Kanban board #141–#151), the first window to actually edit it soft-claims the file; every other
+window's editor renders **read-only** with a "Being edited in another window — Take over" affordance,
+so the two debounced write buffers can no longer silently fight. Advisory only — no on-disk locks; a
+stale claim degrades to last-writer-wins (today's behavior). With one window on the file, editing is
+byte-identical to today.
+
+**What shipped** (branch `task-435-same-file-edit-guard`, PR
+[#199](https://github.com/ErikdeJager/ReCue/pull/199), merged 2026-07-16 into `backend-decouple`,
+commit `13e5f3f`; 16 files, +1038/-84):
+
+- **`src-tauri/src/file_claims.rs`** — **new**. A pure `ClaimRegistry`
+  (`HashMap<(repo_path, file), window_label>`: `claim` last-wins/no-op on same-label, `release`
+  holder-guarded, `purge_window`, deterministically-sorted `snapshot`) inside a thin poison-recovering
+  `FileClaims` managed wrapper (the `terminal_views.rs` model: state mutated + snapshot taken **before**
+  the emit). Full pure-core unit tests.
+- **`src-tauri/src/commands.rs`** — `claim_file` / `release_file_claim` / the `file_claims` snapshot
+  (each emitting `file_claims://changed` with the full `Vec<FileClaim>` on change; `window_label`
+  explicit, the `attach_terminal` precedent).
+- **`src-tauri/src/lib.rs`** — `mod file_claims;`, manage `FileClaims`, the `Destroyed`-arm purge
+  (beside 426's `purge_window` + 433's `unregister_window`), command registration.
+- **`src/fileClaims.ts` (+ test)** — pure `claimKey`/`claimsToMap`/`heldElsewhere`/`claimIntent`
+  (the full claim-vs-release truth table), plus the `FileClaim` mirror type.
+- **`src/store.ts`** — a transient `fileClaims` slice + equality-guarded `applyFileClaimsSync` (never
+  persists), a dedicated `subscribeFileClaimEvents` in `init`'s wave + a post-boot `file_claims()`
+  snapshot fetch (subscribe-then-fetch, fail-soft).
+- **`src/useAutoSaveFile.ts`** — the claim lifecycle: claim on focus **or** dirty (covers the Kanban
+  drag path that never focuses), release once blurred+clean, purge on unmount/file-switch; a
+  `lockedBy`/`takeOver` surface with `setText`/`save` hard-gated (defense in depth); on losing the
+  claim it cancels the debounce and flushes once (auto mode) so ≤600 ms of typing isn't dropped.
+- **`ClaimBanner`** (new, modeled on `DetachedNote`) + **`FileViewer.tsx`** (readOnly textarea /
+  non-interactive checkboxes / disabled Save) + **`KanbanPanel.tsx`** (banner + panel-level mutation
+  gates + a `readOnly` prop threaded through `BoardColumn`/`SortableCard`, disabled drag sensors,
+  readOnly Raw textarea) — the hot-reload poll keeps a locked view live-following the other window's
+  saves.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 435)
+
+- Claim lifetime refined from the card's "cleared on blur/close" to "actively editing OR unsaved edits
+  pending" (claim on focus **or** dirty; release blurred+clean; manual-mode #162 keeps the claim past
+  blur until Save settles) — needed because Kanban drag mutations dirty the buffer without focusing.
+- Backend claim is unconditional last-claim-wins (take-over is the same `claim_file` command); release
+  is holder-label-guarded; purge on Destroyed. No per-panel refcounting — two same-window panels share
+  the label and may leave a microsecond unclaimed gap (accepted soft-claim semantics).
+- On losing the claim while dirty, the loser flushes **once** in auto mode (manual-mode keeps the
+  buffer in memory with Save disabled); any overlap is the documented last-writer-wins fallback.
+- Claims keyed by exact `{repoPath, file}` strings (no path normalization — panels replicate from the
+  shared persisted blobs, so spellings match; keys are never parsed as paths → Windows-safe).
+- A **dedicated** `file_claims://changed` event + snapshot command, NOT a twelfth `StateSyncHandlers`
+  entry — that interface documents *persisted* slices; claims are transient (the `canvas://windows`
+  precedent).
+- Read-only affordance is a shared `ClaimBanner` used by both consumers; no hook-rendering tests
+  (vitest is `environment: "node"`), so the card's "helpers pure + unit-tested" is satisfied by the
+  `claimIntent`/`heldElsewhere` + Rust `ClaimRegistry` batteries.
+
+**Rollback-safe:** nothing persisted (no schema change), events without listeners are inert, removing
+the UI gates restores today's behavior byte-for-byte.
+
+**Cross-platform:** opaque string keys (no path parsing), global Tauri events, pure TS/CSS tokens —
+no `#[cfg]` arms, no shell-outs; identical on macOS/Windows/Linux.
+
+**Dependencies:** Task 433 (sequencing/conflict-avoidance — 433 edits the same `lib.rs` Destroyed arm
+and `store.ts` init subscribe wave this card extends; the card's other named dep "Multi-window 3/16" =
+Task 428 was already landed and dropped off).
+
+### 438. [x] Multi-window 12/16 — "Open in new window" on the sidebar repo context menu (open_app_window repo preset)
+
+Adds an **"Open in new window"** item to the sidebar's repo context menu that opens a new full app
+window (Task 434's `open_app_window`) preset to that repo as its Overview repo filter — the one-click
+"window A on repo X, window B on repo Y" multi-monitor workflow, and the first repo-scoped UI entry
+point onto 434's un-triggered `openAppWindow` wrapper.
+
+**What shipped** (branch `task-438-repo-menu-open-in-new-window`, PR
+[#200](https://github.com/ErikdeJager/ReCue/pull/200), merged 2026-07-16 into `backend-decouple`,
+commit `0e506c6`; 1 file, +28/-3):
+
+- **`src/components/Sidebar/Sidebar.tsx`** — the menu item at the top of the repo menu's
+  non-destructive utilities block (after the Views separator, before Reveal/Copy path), calling
+  `openAppWindow({ repo: menu.repo })` with a `.catch` → error toast; the returned window id is
+  unused (no dedupe/tracking). Because `openRepoMenu` is shared, it appears in both the expanded
+  header menu and the collapsed rail's folder-icon menu.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 438)
+
+- Copy is the platform-neutral "Open in new window" (matching the existing `CanvasTabs` pop-out
+  phrase), tooltip "Open a new window showing only this folder"; **always shown** (no git/branch
+  gating — the filter is path-based, works for non-git folders).
+- Worktree-parent semantics need **no new code**: `menu.repo` is already the top-level group path (the
+  worktree parent), and 434's `"all"`-mode preset + the existing `sessionInFilter` include worktree
+  agents (`effectiveRepo`, #96/#247). Scoped to the *repo* menu only (not the worktree-header menu).
+- No dedupe/focus-existing — every click opens a fresh window (presets are untracked local init
+  state); failure `.catch` → "Could not open a new window" error toast (unlike the bare `void
+  revealPath` siblings, because the wrapper's rejection would otherwise be unhandled).
+- No new tests (no new pure logic — worktree filter semantics already covered by `paths.test.ts`; no
+  Sidebar render-test harness exists); the current window's own filter/view/selection are untouched.
+
+**Rollback-safe:** revert the one-file PR; no schema/persistence/event/Rust change — the item is
+additive and self-contained.
+
+**Cross-platform:** pure TS/JSX; platform-neutral copy (no OS names / shortcut hints), no path
+construction here (Windows `?repo=` URL encoding is 434's already-tested `encode_query_value`) —
+identical on macOS/Windows/Linux.
+
+**Dependencies:** Task 434 (ships `open_app_window`, the `AppWindowInit` shape, the `openAppWindow` ipc
+wrapper, and the `?repo=` → Overview-filter preset this item triggers).
+
+### 436. [x] Multi-window 10/16 — New Window entry points: single-instance plugin, macOS Dock Reopen, rebindable ⌘⌥N keybind + File → New Window menu item
+
+Gives the full app windows Task 434 built their global entry points: launching ReCue a second time
+pokes the already-running instance to open a new full window instead of starting a second process
+(fixing the latent corruption bug where two processes resume the same session ids and fight over
+`sessions.json`), a macOS Dock click (Reopen) restores or opens a window when none is visible, a
+rebindable **New window** keybind (default ⌘⌥N / Ctrl+Alt+N) opens one from any window, and macOS gets
+a **File → New Window** menu item.
+
+**What shipped** (branch `task-436-new-window-entry-points`, PR
+[#201](https://github.com/ErikdeJager/ReCue/pull/201), merged 2026-07-16 into `backend-decouple`,
+commit `9dc103d`; 11 files, +309/-8):
+
+- **`src-tauri/Cargo.toml`** — `tauri-plugin-single-instance = "2"` (Rust-only, no JS commands → no
+  capability change).
+- **`src-tauri/src/lib.rs`** — registers the single-instance plugin **first** (its callback ignores
+  argv/cwd and opens one new full window via `open_app_window` wrapped in `run_on_main_thread`); adds
+  the `#[cfg(target_os = "macos")]` `RunEvent::Reopen` arm (does nothing when windows are visible; when
+  none visible restores an existing window via the pure chooser, or opens a fresh one when zero exist).
+- **`src-tauri/src/commands.rs`** — the pure `reopen_focus_target(labels)` (gated
+  `any(target_os = "macos", test)` so non-mac hosts still type-check/test it; prefers `"main"` → first
+  `app-*` → any, sorted) + unit tests.
+- **`src-tauri/src/menu.rs`** — a `NEW_WINDOW_ID` File → New Window item (+ separator) at the top of
+  the File submenu, **no accelerator** (an AppKit key-equivalent would preempt the webview and can't
+  track a rebind — the ⌘W lesson); `install` de-generified to the concrete runtime so its menu-event
+  closure can call the concrete `open_app_window`; the pure `is_file_menu_text` + tests (incl. that
+  `NEW_WINDOW_ID` can't be prefix-claimed by the close handler).
+- **Frontend** (`keybinds.ts`/`store.ts`/`useKeyboardNav.ts` + test) — a rebindable `"new-window"`
+  registry action (default `mod+alt+n`, appears in Settings → Shortcuts with no Settings change), an
+  `openNewWindow` store action (the `popOutCanvas` fire-and-forget pattern), and an **unconditional**
+  dispatch case (valid from every window kind).
+- **Both trajectory logs** got the real-box smoke items (second-launch per installer/AppImage/deb,
+  named-mutex/D-Bus behavior, X11-vs-Wayland focus, AltGr-layout Ctrl+Alt+N, Dock Reopen).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 436)
+
+- Default chord `mod+alt+n` (⌘N/⌘⇧N are taken; stays in the N-family; free against every default +
+  reserved set; follows the shipped ⌘⌥1–6 precedent); the AltGr-layout collision (e.g. Polish ń) is
+  accepted as the same class, mitigated by rebind/unbind, noted in-code + the Windows trajectory log.
+- The macOS menu item carries **no accelerator** (the webview keybind dispatcher exclusively owns the
+  chord); best-effort (missing File submenu → skip). The dispatch case is unconditional (`"swallow"`,
+  no window/modal guard).
+- Reopen: tao returns `has_visible_windows`, so with visible windows AppKit's default (bring forward)
+  runs and the handler does nothing; with none visible it restores an existing window (show +
+  unminimize + focus, `main > app-* > any`) and opens fresh only when zero windows exist (unreachable
+  today — future-proofing).
+- The single-instance callback ignores argv/cwd (no CLI-open semantics), always opens one new full
+  window via `run_on_main_thread` (uniform main-thread creation + can't race the `Store` managed in
+  `.setup()`). **Dev and release share `com.recue.app`**, so `tauri dev` beside a live ReCue now cleanly
+  pokes it and exits (strictly better than today's `sessions.json` fight) — documented in-code.
+- No capability change (the plugin exposes no JS commands, no npm package); `install` de-generified to
+  the concrete runtime so the closure can call the concrete `#[tauri::command]`.
+
+**Rollback-safe:** the plugin, Reopen arm, menu item, and keybind are all additive; no persisted-schema
+change (a saved `new-window` override is just ignored by older builds), no new events, no capability
+change.
+
+**Cross-platform:** the plugin's transport is internally per-OS (Windows named mutex / Linux D-Bus
+[unconfined session bus — Flatpak-only naming concern, ReCue ships AppImage/deb/AUR] / macOS unix
+socket); the Reopen arm is macOS-only by the event's own `cfg`; the menu item is macOS-only (only
+macOS has a menu) — Windows/Linux get the keybind via the platform-resolved `mod`;
+`reopen_focus_target` compiles/tests on every host.
+
+**Dependencies:** Task 434 (every entry point calls its `open_app_window` / `AppWindowInit` /
+`ipc.openAppWindow`; via 434 → 433 → 430/432 the whole planned chain landed first).
+
+### 437. [x] Multi-window 11/16 — Canvas pop-out opens a full ReCue window; delete the #84 single-owner machinery
+
+Popping a Canvas tab out (button or drag tear-off) now opens a **full ReCue window** with that tab
+active (`open_app_window({ canvas: id })`, task 434), and **any window can view any canvas** — two
+windows on the same canvas simply mirror (tasks 426/427, letterboxed to the smallest view). The entire
+#84 detached-canvas / single-owner era is **deleted**: the ownership map, `DetachedNote`, the
+`CanvasWindow` route, the `canvas://windows` event + `detachedCanvasIds` slice, and the
+`open/focus/close/list_canvas_window` Rust commands. Net −874 lines.
+
+**What shipped** (branch `task-437-popout-full-window`, PR
+[#203](https://github.com/ErikdeJager/ReCue/pull/203), merged 2026-07-16 into `backend-decouple`,
+commit `828faf6`; 43 files, +429/-1303; one merge-attempt — the PR was rebased onto `backend-decouple`
+after 436/438 landed):
+
+- **`popOutCanvas`** now calls `ipc.openAppWindow({ canvas: id })` — a full window boots into Canvas on
+  that tab; the originating window keeps the tab (no "in window" marker, no forced switch, both render
+  it live).
+- **`MainApp.tsx`** reconcile keep-set is no longer ownership-filtered — every live session/panel/
+  canvas-layout PTY id (boundedness comes from the #351 lazy visibility gate, never disposal-on-
+  scroll-out, preserving the #18 invariant).
+- **Deleted end-to-end** (grep-clean verified, zero hits): `src/ownership.ts`, `computeSessionOwners`,
+  `ownedHere`, `ownerCanvasId`, `useSessionOwners`, `DetachedNote/`, `CanvasWindow/`,
+  `DETACHED_CANVAS_ID`, `IS_DETACHED_CANVAS_WINDOW`, `IS_FULL_APP_WINDOW`, `detachedCanvasIds`,
+  `setDetachedCanvasIds`, `focusCanvasWindow`, `canvas://windows`, the four
+  `open/focus/close/list_canvas_window` commands, `detached_canvas_ids()`, `broadcast_canvas_windows`,
+  `CanvasWindowsPayload`, and `BootState.detached_canvas_ids` (Rust + TS mirror).
+- **`App.tsx`** renders `<MainApp />` unconditionally (still lazy under the #348/#356 `RevealOnPaint`
+  Suspense); `bundle-report.mjs` lost the canvas-route entry.
+- **`windowContext.ts`** collapsed to two window kinds (`main`/`app`); `parseWindowIdentity("?canvas=")`
+  is now a one-release compat route → a **full app window** identity keeping the real `canvas-<id>`
+  Tauri label (so 426's per-label view purge + 427's attach stay correct). The module doc documents the
+  tmux-interleave semantic (two windows typing into one agent interleave like two tmux clients —
+  expected).
+- **`resolveCanvases`** dropped the `pinCanvasId` parameter (the preset applies only when the tab
+  exists); the compile-enforced gate audit dropped every degenerate `IS_*_WINDOW` gate across
+  `useKeyboardNav.ts`/`store.ts`/`CanvasSurface.tsx`/`terminalPool.ts` (the #105 canvas-window
+  DOM-renderer gates died — app windows get WebGL per `rendererDecision()` + the #364 latch);
+  `capabilities/default.json` → `["main", "app-*"]`.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 437)
+
+- "Sessions VISIBLE in this window" = the un-filtered keep-set; boundedness from the #351 lazy
+  visibility gate, never disposal-on-scroll-out (#18).
+- The `?canvas=` compat URL parses as kind `"app"` but **keeps** the real `canvas-<id>` label; such a
+  window is never primary-eligible (`primary.rs`'s predicate left as-is, out of scope) — acceptable for
+  a one-release dead route, delete next release.
+- `popOutCanvas` always opens a **new** window (no focus-if-already-open dedupe, unlike the old
+  `open_canvas_window`); the originating window keeps the tab usable with no marker.
+- `sessionIdsInLayout` is **not** deleted — only its ownership consumer `computeSessionOwners` is; it
+  stays as the reconcile keep-alive for template terminals (#118).
+- Also removed the three `terminalPool` #105 DOM-renderer gates + `wavePresets`' `activeCanvasDetached`
+  (dead once canvas windows are gone); `bundle-report.mjs` lost its "detached canvas window" route.
+- Tmux-style input interleaving is documented in the `windowContext` module doc, the `MainApp`
+  reconcile comment, both trajectory logs, and the PR body (not CLAUDE.md — following 434's precedent).
+- 435 landed first: it contains no literal `DetachedNote` reference (a one-line `ClaimBanner.tsx` touch
+  reconciled the flagged risk).
+
+**Rollback-safe:** pure deletion + one rewired call; no persisted-schema change (the `canvases` blob
+and `sessions.json` are byte-identical), no new events/commands. Old `canvas-*` windows cannot exist
+post-upgrade (never restored across relaunch), so the removed capability/commands cannot strand a live
+window.
+
+**Cross-platform:** almost entirely deletion of platform-neutral TS/Rust; the one behavioral addition
+(pop-out → `open_app_window`) rides 434's already-cross-platform window plumbing; widening WebGL to all
+windows is governed by the existing #346/#357/#364 Linux gates, unchanged on macOS/Windows.
+
+**Dependencies:** Task 434 (supplies `open_app_window`/`openAppWindow`, the `parseWindowIdentity`
+shape, `INIT_CANVAS_ID`, and the `resolveCanvases` preset this card builds on; via 434 → 433 →
+432/431/430 the whole planned chain landed first).
+
+### 440. [x] Multi-window 15/16 — Targeted PTY output delivery: `session://output` + `session://size` emit only to windows holding a live view of the session
+
+Stops broadcasting every coalesced PTY byte batch to **every** window. Each `app.emit` of
+`session://output` is one evaluate-JS on **each** webview main thread (costliest on Linux/WebKitGTK),
+so with N full app windows the per-byte cost scaled with window count. Uses the task-426 attachment
+registry to `emit_filter` `session://output` (and `session://size`) only to windows that actually hold
+a live terminal host for that session, while every lifecycle event stays app-global. A window that
+starts viewing a session later back-fills via `session_scrollback` + the offset dedupe, so no byte is
+ever lost.
+
+**What shipped** (branch `task-440-targeted-output`, PR
+[#204](https://github.com/ErikdeJager/ReCue/pull/204), merged 2026-07-16 into `backend-decouple`,
+commit `a026628`; 7 files, +461/-34):
+
+- **`src-tauri/src/terminal_views.rs`** — a new **output-subscriber dimension** (`output_subs: session
+  id → HashSet<window label>`), **separate from the sized views**: `subscribe_output`/
+  `unsubscribe_output` (drop emptied entries) / `output_targets`; `attach` upserts the subscriber
+  (self-heal), `detach` deliberately does **not** (the park case), `purge_window` sweeps a closed
+  window's labels. Full pure-core tests including the park case.
+- **`src-tauri/src/commands.rs`** — `subscribe_session_output`/`unsubscribe_session_output` sync
+  commands (named to avoid the #336 "watch" vocabulary) + the pure `output_target_matches` helper
+  (matches labeled `EventTarget` variants iff subscribed; `Any`/`App` never match) + tests.
+- **`src-tauri/src/lib.rs`** — the forwarder's `Output` and `Size` arms switch to `emit_filter` over
+  `output_targets`, **skipping the emit (and, for Output, the base64 encode) entirely when there are
+  zero subscribers**; every lifecycle arm keeps plain `app.emit`; the two new commands registered.
+- **`src/ipc.ts`** — the `session://output` and `session://size` listens re-registered
+  **label-scoped** (`{ target: WINDOW_LABEL }`) — required because a default-target listener bypasses
+  `emit_filter` (verified against tauri 2.11.3 `match_any_or_filter`); + `subscribeOutput`/
+  `unsubscribeOutput` wrappers. The other four session listens stay default (global).
+- **`src/components/Terminal/terminalPool.ts`** — subscribe at host **creation**, unsubscribe at
+  **dispose** (parking leaves it intact — the buffer stays byte-complete with no re-replay); the
+  replay job awaits the subscribe **ack** before fetching the scrollback snapshot, so back-fill is
+  loss-free (pre-registration bytes in the snapshot, post arrive live, `dedupeAgainstScrollback` drops
+  the overlap).
+- **Both trajectory logs** got the real-box smoke + the Linux measurement item.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 440)
+
+- Delivery keys on "holding a **live pooled host**", not "holding an attached view" — because 427's
+  `unmountTerminal` detaches the sized view on park while the parked xterm keeps consuming output with
+  no later re-replay (#18/#351 replay-once), so view-keyed delivery would leave permanent gaps on every
+  view switch. Hence the separate subscriber dimension, registered at host creation / dropped at
+  dispose or window purge; `attach` upserts as self-heal.
+- Verified against tauri 2.11.3: a default-target `listen()` (target `Any`) **bypasses** `emit_filter`,
+  so both listeners must be label-scoped; scoped listeners still receive plain global emits (no
+  transition hazard), so the other four listens stay default.
+- Loss-free back-fill is guaranteed by gating the scrollback fetch on the subscribe **ack** (after the
+  existing `attachGate`); never-mounted (#351) sessions have zero subscribers, so the backend skips the
+  encode **and** the emit — also a single-window boot win.
+- `session://size` targeted to the same set; the attach-time grid is already returned directly by
+  `attach_terminal`, so targeting can't strand an attaching host; parked hosts (still subscribers) keep
+  tracking grid changes. Lifecycle events + the 428 roster stay app-global.
+- "note the measured effect for Linux in-code" = a #346-style `lib.rs` comment quantifying the effect,
+  with the real-box numeric measurement logged in `TRAJECTORY_TO_LINUX.md`.
+
+**Rollback-safe:** no persisted-schema/wire-shape change (`OutputPayload`/`SizePayload` identical), the
+two commands are additive; reverting restores global emits which scoped listeners still receive.
+
+**Cross-platform:** pure Rust event plumbing + TS IPC — no paths/shells/`#[cfg]`/CSS; the win is
+biggest on Linux/WebKitGTK (each skipped emit is a skipped evaluate-JS) and real on macOS/Windows;
+behavior identical on all three.
+
+**Dependencies:** Task 437 (via 437 → 434 → 433 → 432/431/430 the whole chain landed first; the
+426–429 registry/broadcast machinery this builds directly on was already landed).
+
+### 439. [x] Multi-window 13/16 — Restore the open-window set on relaunch: a dedicated Rust-persisted window registry (debounced bounds saves, creation-time presets, monitor-safe clamped recreation)
+
+Relaunching ReCue brings back the **same set of full app windows** the user had open — each at its
+saved position/size (clamped to the current monitor layout) and with the repo-focus / pinned-canvas
+preset it was opened with — instead of always booting a single main window. Deliberately **reverses
+the #84 "detached windows are per-session" precedent**: full app windows now survive a relaunch.
+
+**What shipped** (branch `task-439-window-restore`, PR
+[#205](https://github.com/ErikdeJager/ReCue/pull/205), merged 2026-07-16 into `backend-decouple`,
+commit `487e6fc`; 6 files, +1027/-28, **no `src/` changes**; one merge-attempt — rebased after 440
+landed):
+
+- **`src-tauri/src/store.rs`** — a `PersistedWindow { label, x, y, width, height, repo?, canvas? }`
+  model (`x`/`y` = **outer** position, `width`/`height` = **inner** client-area size in physical px —
+  the exact pair tao's Moved/Resized report and `set_position`/`set_size` accept, so a save→restore
+  cycle never accretes the title-bar height) + a dedicated `#[serde(default, skip_serializing_if)]`
+  `window_state: Vec<PersistedWindow>` field (the `path_cache` precedent — **backend-internal**, no
+  Tauri command, never in the Settings blob) + `window_state()`/`set_window_state()` + a roundtrip test.
+- **`src-tauri/src/window_state.rs`** — **new** (804 lines). A pure `WindowSet` state machine returning
+  `SaveAction` (`None`/`Debounce`/`FlushNow`): `register`/`moved`/`resized`/`destroyed`/`exit_requested`
+  with the quit-vs-close disambiguation (⌘Q's `ExitRequested` sets an `exiting` flag + flushes; a
+  `Destroyed` that would empty the set keeps the entry + flushes; single closes prune) and the Windows
+  minimize sentinels ignored (0×0 resize, −32000/−32000 move). Pure `clamp_bounds` (shrink to largest
+  monitor, re-place a window that no longer overlaps by ≥`MIN_VISIBLE_PX`, `None` for degenerate sizes /
+  no monitors → default placement), `restorable` (split `main` from `app-*` extras, drop unknown/
+  duplicate labels, cap at `MAX_RESTORED_EXTRAS` = 8), and `is_restorable_label`. The managed `Registry`
+  + debounced saver thread (persist-on-change), the `note_*` entry points, and `restore_windows(app)`.
+  Full pure-part unit tests (incl. the ⌘Q and close-A-then-main sequences, negative-origin monitors, a
+  50-entry corrupt file → 8 extras).
+- **`src-tauri/src/commands.rs`** — factored `open_app_window` into a shared
+  `create_app_window(app, init, bounds)` (the command passes `None`; the boot restore passes clamped
+  bounds applied while hidden — no flash), registering each window in both primary election (433) and
+  the window registry with its creation presets.
+- **`src-tauri/src/lib.rs`** — `mod window_state;`, manage the `Registry` + saver, `restore_windows`
+  in `.setup()` **after** main's primary registration (so main stays oldest → primary → restored
+  windows run zero once-per-app boot effects), the widened `WindowEvent` arm (Moved/Resized/Destroyed),
+  and the `ExitRequested` arm.
+- **Both trajectory logs** got the real-box smoke (physical-px restore under fractional scaling,
+  minimize sentinels, unplugged-monitor re-place, X11-vs-Wayland size-only degrade, `ExitRequested`
+  ordering).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 439)
+
+- Reverses the #84 per-session-windows rule; only full `main`/`app-*` windows exist to restore (437
+  deleted canvas windows). Presets are captured at **window-creation** time from 434's `AppWindowInit`
+  (not the live filter / active tab — a window opened plain then filtered restores plain; no
+  frontend→Rust state reporting added). Restored `app-*` windows mint **fresh** uuids/labels.
+- Move/resize debounced (500 ms); open/close/exit flushed promptly (a prune lost to an unflushed
+  debounce would restore a closed window). Quit never prunes (the `exiting` flag + would-empty rule);
+  single closes always do.
+- Defensive cap main + 8 extras; unknown/duplicate labels and degenerate (sub-200px / zero) sizes drop
+  to default placement. Maximized/fullscreen state is **not** persisted (v1 simplification). Wayland
+  degrade accepted (compositors refuse client positioning → size-only + default placement, documented +
+  logged). No "restore windows" settings toggle (always on).
+
+**Rollback-safe:** the store field is `serde(default)` + not serialized when empty (clean up/downgrade);
+no new commands/events/capability lines; the `open_app_window` refactor is behavior-preserving for
+every existing caller (436's entry points call the unchanged command signature).
+
+**Cross-platform:** all new Rust is platform-neutral Tauri API (no paths/shells/`#[cfg]`); physical-px
+persistence matches every OS's monitor API; the Windows minimize sentinels + Wayland degrade are
+handled/documented; **no frontend change** → WKWebView/WebView2/WebKitGTK identical.
+
+**Dependencies:** Task 437, Task 438 (after 437 only full `main`/`app-*` windows exist — the exact set
+this persists; 438 is the repo-preset entry point; via 437 → 434 → 433's `create`-path + primary
+election this leans on, the whole planned chain landed first).
+
+### 441. [x] Multi-window 16/16 — Docs catch-up + real-box test matrix: rewrite CLAUDE.md's window model, sweep stale single-owner references, and write the manual verification checklists into both trajectory logs
+
+The Multi-window epic's one designated docs card — every earlier epic card (426–440) deliberately
+deferred CLAUDE.md edits to this one. Brings the project documentation up to the reality the epic
+shipped: CLAUDE.md's window/architecture sections describe N full app windows, every stale
+single-owner reference is swept, and both trajectory logs gain the consolidated real-box verification
+matrix for everything the epic couldn't CI-test. **This closes the Multi-window epic** (tasks 426–441).
+
+**What shipped** (branch `task-441-multiwindow-docs`, PR
+[#206](https://github.com/ErikdeJager/ReCue/pull/206), merged 2026-07-16 into `backend-decouple`,
+commit `fa9f767`; 3 files, +336/-106, **docs-only — no source changes**):
+
+- **`CLAUDE.md`** (+210 net) — the "Detached canvas windows (#84)" architecture bullet replaced by a
+  dense **Multi-window (tasks 426–440)** bullet (full app windows via `?win=<uuid>` /
+  `open_app_window`/`focus_app_window`; window-local view/selection/tab/filter; shared state via the
+  428 broadcasts + 429 patch merges; 426/427 mirroring + smallest-wins + tmux-interleave; 440 targeted
+  output; 433 primary election + the Rust-owned singletons 430/431/432; 435 edit guard; every entry
+  point 436/437/438; 439 window restore reversing #84; the deleted #84 machinery named; the `?canvas=`
+  compat route). The v1-scope multi-window bullet, the Window-chrome convention, the Exit-handling
+  (#63) convention, the Layout tree (deleted `ownership.ts`/`CanvasWindow`/`DetachedNote`, added
+  `fileClaims.ts`/`ClaimBanner` + the six Rust modules), and ~25 mechanical sweep anchors all updated;
+  the #356 bundle figures refreshed to the single-route reality.
+- **`TRAJECTORY_TO_WINDOWS.md` / `TRAJECTORY_TO_LINUX.md`** — the committed merge-conflict markers
+  resolved (both content blocks kept, six marker lines deleted), and each gained a dated
+  **"Multi-window epic (tasks 426–440)"** section: an as-landed summary + a `### Needs real-box
+  verification` checklist (Windows: ConPTY reflow under min-size arbitration, single-instance named
+  mutex, Ctrl+Alt+N vs AltGr, multi-monitor restore + minimize sentinels + unplugged-monitor re-place,
+  the Windows-path `?repo=` round-trip, per-window WebView2 memory, 440 targeting smoke, 435 guard
+  smoke, primary takeover; Linux: single-instance D-Bus per distro + FUSE cleanup, the Wayland focus
+  caveat, Wayland size-only vs X11 full restore, per-window WebKitGTK memory + DMA-BUF + the #364 latch,
+  AppImage second-launch routing, N-window restore boot cost, `ExitRequested` ordering, the
+  output-storm measurement), cross-referencing (not duplicating) the per-card items 434–440 already
+  appended.
+
+**Verification:** the doc-sweep greps return **zero** hits for `ownership.ts` / `computeSessionOwners`
+/ `ownedHere` / `DetachedNote` / `open_canvas_window` / `canvas://windows` / `detachedCanvasIds` /
+`IS_MAIN_WINDOW` / `evaluateAutoContinue` / `startUsagePolling` / `isCleanExit` / "canvas-only route" in
+CLAUDE.md, and no conflict markers remain in either trajectory file.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 441)
+
+- Docs describe the **as-landed code, not the plans** (430–440's `PLAN-*.md` are deleted at build
+  time); the fact base was built from `TASK_ARCHIVE.md` 426–440 + worktree greps, with "code wins" on
+  any divergence (flagged in the PR, never code-patched from this docs card).
+- Historical `(#N)` provenance citations stay (e.g. "reverses the #84 rule"); only text presenting
+  deleted behavior as current is rewritten (`CanvasWindow` only in deleted-machinery text, `?canvas=`
+  only as the one-release compat route).
+- CLAUDE.md's "Tasks" section (incl. the stale "next is #311" line) is **out of scope** (board
+  machinery; `TASK_ARCHIVE.md` is the numbering source of truth); `docs/macos-permissions.md` and
+  `docs/linux-packaging.md` untouched.
+- No macOS trajectory file exists, so macOS-only items (Dock Reopen, File → New Window, ⌘Q
+  `ExitRequested` ordering) stay PR-flagged (the #84/#105 precedent), noted in each matrix intro.
+- The #356 bundle figures refreshed from an actual `npm run bundle:report` (single route post-437), the
+  770 kB detached-canvas figure dropped.
+
+**Rollback-safe:** revert the one docs PR — no code, schema, or behavior touched.
+
+**Dependencies:** Task 439, Task 435, Task 440, Task 436 (the card's four named deps — 13/16, 14/16,
+15/16, 10/16; every other epic card 426–434/437–438 arrives transitively and landed first). **This card
+closes the Multi-window epic — tasks 426–441 are all archived.**
+
+### 442. [x] Slow the background wave's morph/drift rate
+
+The animated UI-v2 wave background (task 377) re-shaped its direction/waveform over time faster than
+the user liked. This slows the whole wave simulation's temporal drift to a calmer, more gradual rate —
+**without** disabling the animation — so the "waves subtly change direction/form" more slowly.
+
+**What shipped** (branch `task-442-slow-wave-drift`, PR
+[#210](https://github.com/ErikdeJager/ReCue/pull/210); 2 files):
+
+- **`src/components/WaveBackground/waveTick.ts`** — a single named constant `WAVE_TIME_SCALE = 0.7`
+  (≈30% slower) added beside `FPS_CAP`/`BUSY_FPS_CAP`/`SETTLE_FRAMES`, and applied to the `dt` returned
+  by the pure reducer `gateFrame` **only on the drawing branch** (`dt: dt * WAVE_TIME_SCALE`). The
+  physical-delta burst-guard clamp `[0.001, 0.05]` still runs on the pre-scale delta, so a paused-tab
+  gap can never integrate one giant step (effective upper bound after scale = `0.035`); non-draw
+  branches keep their literal `dt: 0`.
+- **`src/components/WaveBackground/waveTick.test.ts`** — every drawn-frame `dt` expectation updated to
+  the scaled value, plus a focused test asserting the scale (`r.dt ≈ physical * WAVE_TIME_SCALE` and
+  strictly slower than real time).
+
+Because `waveHost.ts` (main-thread mode) and `waveWorker.ts` (OffscreenCanvas worker mode) both pass
+`gate.dt` straight into `eng.frame`, both render modes are slowed identically from the one edit. The
+morph rate (`fieldT`) and strand advection are scaled by the same proportion, so the wave stays
+coherent, just calmer.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 442)
+
+- "Reduce wave changes / a bit slower" = slow the temporal drift (WaveEngine's `fieldT` morph that
+  re-shapes direction/waveform) **without** disabling the animation.
+- Scaled the per-frame `dt` rather than the preset `speed`: the engine's morph rate is
+  `0.20 + 0.30*speed` with a constant 0.20 floor, so reducing `speed` slows advection far more than the
+  morph the user complained about; `dt`-scaling slows morph + flow uniformly and covers both render
+  modes from one edit. **`src/vendor/WaveEngine.js` is sha256-pinned and untouched** — `dt` is the only
+  external morph-rate lever, so no vendor exception was needed (`waveEngine.test.ts` pin still passes).
+- Factor `0.7` chosen as a clearly perceptible but non-drastic "a bit slower"; it is one constant,
+  trivially retunable (0.75 gentler / 0.6 stronger).
+- Kept a hardcoded constant, **not** a new Settings toggle (`backgroundAnimation` already covers
+  on/off; a wave-speed slider isn't warranted). The `pauseWaveWhenCovered` setting is untouched.
+- Minor noted side effect (inherent to "no vendor edit"): the engine's residue sweep and trail fade
+  are also `dt`-tied, so stale-trail cleanup runs ~43% slower — cosmetic, not a correctness bug.
+- Pure WebView/TS in a reducer consumed identically on macOS/Windows/Linux; no OS-specific branch.
+
+**Dependencies:** none.
+
+### 447. [x] Tint the Attention empty-state inbox icon with the app accent color
+
+On the Attention view's empty ("All caught up") state, the large inbox hero icon rendered in the yellow
+`--status-awaiting` status color. This recolors it to the application **accent** (Peach by default, or
+whatever custom accent the user picks in Settings → Appearance) so the branding hero matches the rest
+of the app's accent.
+
+**What shipped** (branch `task-447-attention-accent-icon`, PR
+[#209](https://github.com/ErikdeJager/ReCue/pull/209); 1 file, single-line CSS token swap):
+
+- **`src/components/Attention/Attention.module.css`** — the `.empty svg` rule's `color` changed from
+  `var(--status-awaiting)` to `var(--accent)`. No `.tsx` change: the Lucide `Inbox` glyph inherits
+  `color` via the uniquely-scoped `.empty svg` selector (lucide icons use `stroke="currentColor"`), so
+  a custom accent (written inline on `<html>`) recolors it **live** across every window, and it tracks
+  Dark/Light themes. No other icon (the dismiss-all `CheckCheck`, queue-card icons, agent-pane header
+  icons) is affected.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 447)
+
+- "The inbox icon" = the Lucide `Inbox` hero icon in the Attention empty state (`Attention.tsx:223`,
+  colored by `.empty svg`), **not** the sidebar `ViewSwitch` rail `AlertTriangle` — the icon shown ON
+  the Attention page itself.
+- Used full-strength `var(--accent)` (not `--accent-dim`/`--accent-tint-*`) so it clearly matches the
+  accent; the empty state already carries a legibility text-shadow, so a full-strength hero reads fine.
+- Used the `--accent` CSS **variable** (not a hardcoded hex) so a custom accent recolors it live and it
+  tracks Dark ↔ Light; platform-neutral pure CSS.
+- Tinting this **decorative/branding** icon with `--accent` does **not** violate CLAUDE.md's "accent
+  never encodes status/selection" rule (that targets status *semantics*) — it actually removes a minor
+  smell, since the icon was borrowing the `--status-awaiting` status token for a decorative purpose.
+
+**Dependencies:** none.
+
+### 443. [x] Open maximized (full desktop) by default, persist the user's window size
+
+On a fresh install (no persisted window bounds) ReCue's main window now opens **maximized / filling the
+available desktop** instead of the fixed 1280×832 frame, and — extending the #439 window-restore epic
+card — the maximized state now **persists and round-trips**, so "big by default, then it stays how I
+left it" holds across quits on macOS, Windows, and Linux. Backend-only (the frontend has no
+window-sizing logic).
+
+**What shipped** (branch `task-443-maximize-default`, PR
+[#211](https://github.com/ErikdeJager/ReCue/pull/211); Rust only):
+
+- **`src-tauri/src/store.rs`** — `PersistedWindow` gains a `maximized: bool` field (`#[serde(default)]`,
+  so a pre-443 `sessions.json` without the key loads as `false` — backward compatible). While
+  maximized, only the flag is set; the stored `x/y/width/height` stay the last **non-maximized**
+  geometry (the un-maximize / restore target). Tests: a pre-443 blob deserializes `maximized: false`,
+  and a `true`/`false` pair round-trips through save→load.
+- **`src-tauri/src/window_state.rs`** — pure `WindowSet::set_maximized(label, bool) -> SaveAction`
+  (flag-only, idempotent `None` on unchanged, no-op while exiting / for an untracked label, **never
+  mutates geometry**) plus a `merge_action(a, b)` helper (`FlushNow > Debounce > None`) for the
+  un-maximize edge that both clears the flag and records new geometry. A `live_maximized(app, label)`
+  helper queries `is_maximized()` at the `Moved`/`Resized` event site (main-thread-safe): a maximizing
+  event records only the flag; an un-maximizing event clears it and records the restored normal
+  geometry. `restore_windows` default-maximizes the still-hidden `main` window on a fresh install
+  (builder 1280×832 becomes the un-maximize target) and re-maximizes any restored window whose
+  `maximized` flag is set — applied **before** the #348 reveal, so no flash. Module doc updated (the
+  old "maximized state is not persisted" note replaced), including the Wayland note that `maximize()`
+  (unlike `set_position`) is honored by the compositor.
+- **`src-tauri/src/commands.rs`** — `create_app_window` gains a `maximized: bool` param, applying
+  `window.maximize()` while hidden (after bounds) and threading the flag into
+  `window_state::register`. `open_app_window` passes `false` (a user-opened app window is never
+  maximized by default); the restore extras loop passes each entry's `maximized`.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 443)
+
+- "Maximum size / full desktop" = the OS **maximize** (Windows maximize / macOS AppKit zoom / X11 &
+  Wayland compositor maximize), **not** a manual `set_size` to the raw monitor size — OS maximize
+  respects the menu-bar/Dock/taskbar work area, which the Tauri Monitor API does not expose. Applied on
+  the still-hidden window before reveal → no flash.
+- Persisted a new `maximized: bool` on `PersistedWindow` (serde-default, backward compatible) rather
+  than geometry-only; the #439 doc note explicitly invited it, it makes "stays maximized unless the
+  user resized" clean, and it restores correctly on Wayland. Geometry restore stays the always-present
+  floor, so the flag is a best-effort enhancement that degrades gracefully (esp. macOS zoom quirks).
+- Only the **main** window maximizes by default on a fresh launch; additional app windows keep the
+  1280×832 default, though a formerly-maximized app window does re-maximize on restore.
+- macOS `zoom`-while-hidden + `is_maximized` is the riskiest arm — flagged for real-box verification in
+  `TRAJECTORY_TO_WINDOWS.md`, with the geometry floor as the fallback. Backend-only change.
+
+**Dependencies:** none (extends the already-archived #439 window-restore; no ordering dependency on any
+un-landed or sibling card — Task 444 also touches window chrome but is title-bar styling, no code
+overlap with sizing/persistence).
+
+### 446. [x] Portal sidebar context menus to body — fix dimmed worktree menu transparency & clipping
+
+A right-click context menu opened from a **dimmed (idle) worktree row** in the sidebar rendered
+**semi-transparent** (underlying content bled through) and was **clipped inside the sidebar** instead of
+floating over the whole window. Both symptoms had one root cause — the menu was a DOM descendant of the
+idle worktree row's `opacity: 0.62` element — and both are fixed by portaling the menus to
+`document.body`. The worktree row's presence-driven dimming is preserved.
+
+**What shipped** (branch `task-446-portal-sidebar-menus`, PR
+[#212](https://github.com/ErikdeJager/ReCue/pull/212), merged as `3f78a7e`; `Sidebar.tsx` only —
+no CSS/Rust change):
+
+- **`src/components/Sidebar/Sidebar.tsx`** — added `import { createPortal } from "react-dom";` and a
+  tiny shared `MenuPortal` wrapper (`createPortal(children, document.body)`), then wrapped **all five**
+  sidebar context-menu render sites (the `WorktreeHeader` inline menu — the load-bearing fix — plus the
+  shared `RowContextMenu`, `AgentContextMenu`, the `RepoBranchLine` inline menu, and the
+  sidebar-background/collapsed-rail inline menu) in `<MenuPortal>`. Both the `menu-overlay` (full-screen
+  outside-click catcher) and the `menu-pop` surface are portaled together, so outside-clicks anywhere in
+  the window still dismiss. The menus keep their own `position: fixed` + viewport-clamped `{x, y}` and
+  the existing `menuPos`/`menuOverlay` z-index (201/200). React portals preserve synthetic-event
+  bubbling, so Escape/outside-click/right-click dismissal and the inline confirm steps (Close worktree /
+  Close items here / Delete worktree…) keep working.
+
+**Root cause & fix rationale.** An ancestor with `opacity < 1` both composites its whole subtree as one
+group at that opacity (the transparency) **and** creates a stacking context that captures a
+`position: fixed` descendant into the group — which `.repos` (`overflow-y: auto`) / `.sidebar`
+(`overflow: hidden`) then clip (the clipping). Portaling the menu out to `<body>` escapes the dimmed
+ancestor entirely, fixing both at once. The other four menus weren't visibly buggy (their rows have no
+`opacity < 1` ancestor) but use the identical `position: fixed` pattern, so they were portaled too for
+consistency and to future-proof the pattern. A side benefit: portaling out of the dnd-kit draggable row
+means a menu click can no longer accidentally start a drag.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 446)
+
+- Fix mechanism = React `createPortal` to `document.body` (matching the existing `ContainerInfoPopover`
+  precedent), not a narrower CSS tweak — one change fixes **both** the opacity bleed and the clipping,
+  since a single root cause drives both.
+- Kept the worktree-row dimming as-is (`.worktreeIdle opacity: 0.62`) — did **not** refactor it to
+  `--text-muted`; the portal makes the dimming safe, so the minimal fix leaves the designed
+  presence-driven dimming untouched.
+- The load-bearing fix is the `WorktreeHeader` menu (the only dimmed-ancestor site); the other four
+  fixed-position sites were portaled too for consistency — zero downside (they already used
+  `position: fixed`). The `ViewsMenu` embedded inside the worktree menu is portaled along for free.
+- No CSS/Rust changes; z-index tokens unchanged. Pure WebView/TS/React — identical on
+  macOS/Windows/Linux, no OS branches, no new `color-mix`.
+
+**Dependencies:** none.
+
+### 445. [x] Filter the Attention inbox by repo/folder/branch from the sidebar
+
+The **Attention** triage inbox (#398) can now be narrowed to a single repo (or its own branch, or one
+worktree) by clicking a folder / branch / worktree row in the sidebar — exactly the way those same
+clicks already filter the **Overview** wall — with a `Showing <repo>` indicator + `Show all` clear
+button inside the queue pane. The filter is the **same shared, transient `overviewRepoFilter` field**
+Overview uses, so a filter set in one view is reflected in the other. Pure WebView/TS/store/CSS —
+platform-neutral, no backend change.
+
+**What shipped** (branch `task-445-attention-filter`, PR
+[#213](https://github.com/ErikdeJager/ReCue/pull/213), merged as `0eccde9`):
+
+- **`src/components/Attention/attentionQueue.ts`** — the single-source-of-truth queue helper gains an
+  optional `filter?: OverviewFilter` on its input, applied inside the existing `members` predicate via
+  the shared `sessionInFilter` (undefined/null ⇒ no filtering). Call sites that omit it are byte-for-byte
+  unchanged.
+- **`src/components/Attention/Attention.tsx`** — reads `overviewRepoFilter`, passes it into
+  `attentionQueue` (so `activeId`/`activeSession`/list/count all reflect the filtered queue), renders a
+  `.filterBar` (`Showing <repo>` + `· this branch` for `mode:"own"` + `Show all` → `setOverviewRepoFilter(null)`)
+  mirroring Overview, and a filter-aware empty state (`No agents waiting in <repo>` vs the unfiltered
+  `All caught up`), with the filter bar kept clearable above the empty block.
+- **`src/components/Attention/Attention.module.css`** — added `.filterBar`/`.filterLabel`/`.showAll`
+  copied from Overview (tokens only).
+- **`src/components/Sidebar/Sidebar.tsx`** — the four filter-click sites (`RepoGroup` repo-title,
+  `RepoBranchLine` branch-line, `WorktreeHeader` worktree-name, collapsed-rail folder) changed their
+  unconditional `setView("overview")` to `if (view !== "attention") setView("overview")`, so a click
+  filters the inbox **in place** when already in Attention but still switches to Overview from
+  Overview/Canvas.
+- **`src/store.ts` + `src/useKeyboardNav.ts`** — the four other `attentionQueue` consumers
+  (`dismissAttention` next-advance, `dismissAllAttention`, `closeFocusedPanel` ⌘W, Shift+↑/↓ nav) now
+  pass the current `overviewRepoFilter`, so navigation/removal/dismiss never touch a hidden agent and
+  the right pane never shows a filtered-out agent.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 445)
+
+- Reused the **same** shared `overviewRepoFilter` field (no Attention-only filter, no rename — avoids
+  churning ~20 references), so one sidebar click filters whichever view is active ("just like overview
+  mode").
+- Granularity matches exactly what the sidebar already exposes — repo folder (`mode:"all"`), repo
+  own-branch (`mode:"own"`), worktree folder — all covered for free by `overviewRepoFilter` +
+  `sessionInFilter`. Filtering by an arbitrary non-checked-out/non-worktree branch is a documented
+  non-goal (Overview doesn't do it either).
+- Guarded the four `setView("overview")` calls with `if (view !== "attention")` so a filter click in
+  Attention filters in place instead of yanking the user to Overview.
+- Threaded the optional `filter` through the pure `attentionQueue` (default no-op) so all five consumers
+  stay consistent; re-clicking the filtered row clears it via the existing `setOverviewRepoFilter`
+  toggle. Did NOT restyle the inbox icon (that was sibling Task 447). No backend/Rust, no `ViewSwitch`
+  changes.
+
+**Dependencies:** none (builds on the already-archived #398 Attention view and the #34/#197/#247
+Overview repo filter).
+
+### 444. [x] Themed (app-colored) window title bar / window-controls region
+
+The top bar holding the macOS traffic lights now reads as part of ReCue rather than default OS chrome:
+an **integrated, app-colored title bar** — the native traffic lights float over a slim ReCue-themed
+strip (`--surface-mantle`, following the light/dark theme) continuous with the sidebar chrome. On
+Windows/Linux the native decorations are kept (no custom caption buttons), but the native caption is
+**synced to ReCue's light/dark theme** so it isn't jarringly light in a dark app. Composed with the
+#348 hidden-until-painted machinery so there is no launch flash. **This deliberately reverses #19**
+(which had removed the original #3 custom title bar), the way #84/#100/#126 reversed earlier "no" rules.
+
+**What shipped** (branch `task-444-themed-titlebar`, PR
+[#214](https://github.com/ErikdeJager/ReCue/pull/214), merged as `96503a4`):
+
+- **`src-tauri/tauri.conf.json`** — re-added the three macOS-only `app.windows[0]` keys (ignored on
+  Windows/Linux): `titleBarStyle: "Overlay"`, `hiddenTitle: true`,
+  `trafficLightPosition: { x: 16, y: 10 }`. `backgroundColor`/`visible: false` (#348) unchanged.
+- **`src/components/Titlebar/Titlebar.tsx` + `.module.css`** (new) — a single
+  `<header data-tauri-drag-region />` pure drag strip, `display: none` by default and revealed
+  (`display: block; height: 30px; background: var(--surface-mantle); border-bottom: --border-hairline`)
+  **only** on `:global(:root[data-platform="macos"])` — the synchronous #363 `data-platform` seam, so
+  the strip's presence is correct on the first frame (no async-IPC pop-in) and reserves zero space on
+  Windows/Linux. The mantle/hairline tokens flip automatically in the light-theme block.
+- **`src/MainApp.tsx`** — renders `<Titlebar />` as the first child of `.app` (already
+  `flex-direction: column`), so on macOS the strip reserves 30px above `.app-body` and on Windows/Linux
+  it's `display:none`.
+- **`src-tauri/src/commands.rs`** — pure `theme_to_window_theme(Option<&str>) -> tauri::Theme`
+  (`"light"` → Light, else Dark) with a unit test; a `window_theme(store)` helper; a
+  `#[cfg(target_os = "macos")]`-gated `create_app_window` builder block applying the same
+  Overlay/hidden-title/traffic-light settings + initial `set_theme` so every `app-*` window matches;
+  and `set_theme_background` extended to also `window.set_theme(...)` per window on a runtime theme
+  toggle.
+- **`src-tauri/src/lib.rs`** — `.setup()` sets the still-hidden main window's initial native theme from
+  the persisted theme (`window.set_theme(Some(commands::window_theme(...)))`) alongside the existing
+  `set_background_color` block, before reveal — no flash.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 444)
+
+- macOS approach = `titleBarStyle: "Overlay"` + `hiddenTitle` + `trafficLightPosition` with a themed
+  `data-tauri-drag-region` strip (keep native traffic lights, app-color the bar) rather than fully
+  custom-drawn controls — lowest-risk way to deliver an integrated bar, avoiding #19's original
+  drag/positioning complaint.
+- Windows/Linux approach = keep native decorations; a native caption cannot take ReCue's exact color
+  without full custom decorations (out of scope). Best-effort match = sync the native window theme
+  (dark/light) to ReCue's theme via portable `set_theme` (macOS NSAppearance / Windows DWM immersive
+  dark / Linux GTK prefer-dark). Full custom-decoration parity is deferred, logged in the trajectory
+  docs.
+- The strip hosts nothing (no title text, no controls) — native title hidden; a pure drag region
+  matching `--surface-mantle`, reserving ~30px on macOS only. Visibility gated by the synchronous
+  `data-platform="macos"` CSS seam (correct on the first frame), composed with #348 (window hidden
+  until painted → no flash).
+- This card reverses #19; the plan required updating CLAUDE.md's "Window chrome" convention to record
+  the reversal. Rust divergence is `#[cfg(target_os = "macos")]`-gated; the new pure
+  `theme_to_window_theme` helper (with a unit test) drives the native theme sync.
+
+**Dependencies:** none. (Shared `tauri.conf.json` `app.windows[0]` / `create_app_window` surfaces with
+Task 443, but kept disjoint — 444 owns only title-bar styling, 443 owns size/bounds; the merge lane
+resolved the textual overlap, hence the one merge retry.)

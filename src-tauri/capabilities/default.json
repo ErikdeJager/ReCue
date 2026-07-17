@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window and detached canvas windows (#84)",
-  "windows": ["main", "canvas-*"],
+  "description": "Capability for the main window and full app windows (task 434/437)",
+  "windows": ["main", "app-*"],
   "permissions": [
     "core:default",
     "dialog:default",

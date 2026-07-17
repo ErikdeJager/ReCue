@@ -1,0 +1,19 @@
+[
+  "Drag any sidebar row into the Canvas to open it as a panel",
+  "⌘E opens the selected agent or panel in big mode",
+  "⌘D toggles dense panels — gaps collapse and terminals get the whole stage",
+  "⌘⏎ in the branch step starts the agent in an isolated git worktree",
+  "Fork a conversation from an agent's ⋯ menu to try two approaches in parallel",
+  "⌘⇧N schedules an agent for later — try 1h, 6pm, or tomorrow 9am",
+  "Drag a Canvas tab out of the strip to pop it into its own window",
+  "Save a Canvas layout as a template, then spawn it into any folder",
+  "Click a repo name in the sidebar to filter the wall to that repo",
+  "Type / in a schedule prompt to autocomplete your Claude skills",
+  "Open any markdown file as a Kanban board from the repo menu's Views",
+  "Double-click an agent's title to rename it",
+  "Drop files from your file manager onto a file tree to move them into the repo",
+  "⌘F searches file names and contents across a repo",
+  "⌥1, ⌥2 and ⌥3 switch between Overview, Attention, and Canvas",
+  "⌘W closes the focused panel in Canvas, Overview, or big mode",
+  "Every shortcut is rebindable in Settings → Shortcuts"
+]

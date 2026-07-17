@@ -40,12 +40,12 @@ function UpdateModal() {
     // Full-window blocking overlay — captures all input until relaunch (#190).
     return (
       <div
-        className={styles.overlay}
+        className={`modal-scrim ${styles.overlay}`}
         role="alertdialog"
         aria-modal="true"
         aria-label="Installing update"
       >
-        <div className={styles.installBox}>
+        <div className={`modal-pop ${styles.installBox}`}>
           <p className={styles.installTitle}>
             Updating{version ? ` to v${version}` : ""}…
           </p>
@@ -72,9 +72,9 @@ function UpdateModal() {
   if (!showConfirm) return null;
 
   return (
-    <div className={styles.overlay} onClick={cancelUpdate}>
+    <div className={`modal-scrim ${styles.overlay}`} onClick={cancelUpdate}>
       <div
-        className={styles.dialog}
+        className={`modal-pop ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-label="Update available"
@@ -90,14 +90,14 @@ function UpdateModal() {
         <div className={styles.actions}>
           <button
             type="button"
-            className={styles.cancel}
+            className="modal-btn modal-btn-neutral"
             onClick={cancelUpdate}
           >
             Cancel
           </button>
           <button
             type="button"
-            className={styles.confirm}
+            className="modal-btn modal-btn-primary"
             onClick={() => void installUpdate()}
           >
             Update &amp; restart

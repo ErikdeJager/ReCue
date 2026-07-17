@@ -8,10 +8,12 @@ as alternatives.
 
 Each session is a **real PTY** running the agent's own CLI — ReCue doesn't wrap,
 re-implement, or proxy the agent. It provides everything around it: an **Overview**
-"agent wall" of live terminals, a **Canvas** split-panel workspace (with file, git-diff,
-and terminal viewers), a repo-grouped **sidebar**, scheduling, persistence, and
-read-mostly git integration. The terminals are the genuine agent TUIs, so every prompt,
-permission dialog, and keybinding works exactly as it does in a plain terminal.
+"agent wall" of live terminals, an **Attention** inbox of agents waiting on your input,
+a **Canvas** split-panel workspace (with file, git-diff, and terminal viewers), a
+repo-grouped **sidebar**, scheduling, persistence, and read-mostly git integration —
+across **any number of full app windows**. The terminals are the genuine agent TUIs, so
+every prompt, permission dialog, and keybinding works exactly as it does in a plain
+terminal.
 
 Every feature works on all three platforms (OS-specific behavior is gated behind a
 single platform abstraction; see [`CLAUDE.md`](CLAUDE.md)). Linux targets Arch, Ubuntu,
@@ -26,9 +28,11 @@ and picking up where each left off after a reboot — is what ReCue is for:
 - **See everything at once** — a wall of live terminals grouped by repository, each with
   a status dot that shows *working* (shimmer), *waiting for you* (yellow), or *fresh*
   (gray).
+- **Know who needs you** — an **Attention** inbox queues agents that finished and are
+  waiting on your input, oldest first, so nothing sits forgotten.
 - **Arrange your own workspace** — split-panel Canvas tabs mixing agent terminals, file
-  viewers, git diffs, shell terminals, and Kanban boards; pop a tab out into its own
-  native window for multi-monitor use.
+  viewers, git diffs, shell terminals, and Kanban boards; open as many full app windows
+  as you have monitors, and render the same terminal in several of them at once.
 - **Come back to where you were** — sessions, layouts, and settings survive restarts;
   agents that support it resume their conversation automatically on launch.
 - **Run agents on your schedule** — queue a session to start later ("tomorrow", "6pm",
@@ -64,12 +68,26 @@ battle-tested. New agent specs are additive — see `src-tauri/src/agents.rs`.
   add **diff**, **file-viewer**, **terminal**, and **Kanban-board** columns. **Fork** any
   agent's conversation from its header to branch it into a new parallel session (where
   the agent supports it).
+- **Attention inbox** — a triage queue of idle agents awaiting your input, oldest first,
+  with a confirmed-idle grace so a still-working agent never blinks in. Step through it
+  from the keyboard, dismiss items, or narrow it to one repo / branch / worktree from
+  the sidebar.
+- **Multi-window** — open **any number of full app windows** (⌘⌥N / Ctrl+Alt+N,
+  **File → New Window**, a repo's **Open in new window**, or tearing a Canvas tab off).
+  Every window is a complete ReCue; the same terminal can render in several windows at
+  once (mirrored, tmux-style smallest-fit), and the whole window set — bounds included —
+  is restored on relaunch.
 - **Canvas** — a split-panel workspace with **multiple named tabs**; drag any sidebar
   item (agent, file, diff, terminal, or Kanban board) in to tile it, split panels on
   their edges, drag a panel's header to reorder it, resize borders. A tab can **pop out
-  into its own native window**, and closing a tab can optionally kill everything in it.
+  into a new app window**, and closing a tab can optionally kill everything in it.
   Save reusable **Canvas templates** — a layout of action blocks (start session, open
   terminal, file, or diff) — and open a whole workspace from one in a single step.
+- **Dev containers** — flip **Run in dev container** (⌘⇧C / Ctrl+Shift+C) on a new
+  Claude session to spawn the agent **inside Docker**: the repo (or worktree) mounted at
+  `/work`, a per-session home seeded with your sign-in, branching and commits working
+  as normal — and pushes refused by design. The default image builds itself on first
+  use; Settings can point at your own.
 - **Files & Kanban boards** — open any repo text file in a viewer with markdown
   rendering (including **Mermaid** diagrams) and syntax highlighting; **edit** raw
   markdown / plain text inline with **auto-save**. Open or create a markdown **Kanban
@@ -90,12 +108,12 @@ battle-tested. New agent specs are additive — see `src-tauri/src/agents.rs`.
   prompt (with **slash-command autocomplete**) and a branch — including a new branch or
   an isolated worktree created when it fires. Missed schedules catch up on next launch;
   the **⋯** menu adds **recurring** sessions that relaunch a fresh agent on an interval.
-- **Keyboard-first** — ⌘N / Ctrl+N opens a fast two-step launcher (type-ahead recents →
-  branch pick; **Enter** to start, **⌘⏎ / Ctrl+Enter** for an isolated worktree agent).
-  Shift+arrows move between agents or panels, ⌘1–9 / Ctrl+1–9 jump between canvases,
-  ⌘\ / Ctrl+\ toggles Overview ↔ Canvas, ⌘E / Ctrl+E maximizes the selected item.
-  ⌘-click / Ctrl-click any `http(s)` link printed in a terminal to open it in your
-  browser.
+- **Keyboard-first, rebindable** — ⌘N / Ctrl+N opens a fast two-step launcher (type-ahead
+  recents → branch pick; **Enter** to start, **⌘⏎ / Ctrl+Enter** for an isolated worktree
+  agent). ⌥1 / ⌥2 / ⌥3 switch Overview / Attention / Canvas, Shift+arrows move between
+  agents or panels, ⌘E / Ctrl+E maximizes the selected item, ⌘W / Ctrl+W closes it — and
+  every global shortcut is **rebindable** in Settings → Shortcuts. ⌘-click / Ctrl-click
+  any `http(s)` link printed in a terminal to open it in your browser.
 - **Persistence + resume** — sessions, layouts, settings, and recent folders survive
   restarts; resumable agents pick their conversation back up by id on launch. An agent
   you end cleanly just disappears; one that crashes keeps a **Restart** button.

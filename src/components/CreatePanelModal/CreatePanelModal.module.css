@@ -1,14 +1,11 @@
-/* Dimmed full-screen scrim; closes on outside click (#189). A centered launcher
-   (opened by ⌘K from anywhere), unlike the top-left-anchored NewSessionModal. */
+/* ⌘K "Create panel" launcher (#189): the shared modal-scrim/modal-pop chrome
+   (modal.css, task 378), kept top-anchored at 12vh (unlike the centered dialogs).
+   This module keeps only z-index, anchoring, width/padding, and the row/input
+   layout — the look comes from the primitive. */
 .overlay {
-  position: fixed;
-  inset: 0;
   z-index: 100;
-  display: flex;
   align-items: flex-start;
-  justify-content: center;
   padding-top: 12vh;
-  background: var(--scrim);
 }
 
 .dialog {
@@ -18,12 +15,7 @@
   flex-direction: column;
   overflow-y: auto;
   padding: var(--space-16);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-window);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
   transform-origin: top center;
-  animation: create-panel-in var(--dur-slow) var(--ease-out);
 }
 
 .title {
@@ -47,7 +39,7 @@
   font-size: var(--fs-meta-sm);
 }
 
-/* Type chips (#189): icon + label + a digit-key hint. */
+/* Type rows (#189): 28px radius-btn rows with a Surface0 hover (v2). */
 .types {
   display: flex;
   flex-direction: column;
@@ -60,13 +52,14 @@
   align-items: center;
   gap: var(--space-8);
   width: 100%;
-  padding: var(--space-6) var(--space-8);
+  height: 28px;
+  padding: 0 var(--space-8);
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-row);
   text-align: left;
   cursor: pointer;
   transition:
@@ -76,9 +69,16 @@
 
 .type:hover,
 .type:focus-visible {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   outline: none;
+}
+
+/* Surface0 highlight for the filter-as-you-type selection (task 391 — the accent
+   never encodes selection, mirroring .folderActive). */
+.typeActive {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
 .typeIcon {
@@ -91,17 +91,6 @@
   min-width: 0;
 }
 
-/* Digit hint (#189) — the in-modal number key / ⌘⌥N index. */
-.typeKbd {
-  flex-shrink: 0;
-  padding: 0 var(--space-6);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-chip);
-  color: var(--text-muted);
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-}
-
 /* Back affordance to the previous step (mirrors NewSessionModal's folderBack). */
 .back {
   display: flex;
@@ -110,7 +99,7 @@
   margin-bottom: var(--space-12);
   padding: var(--space-4) var(--space-6);
   border: 0;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -121,7 +110,7 @@
 }
 
 .back:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
@@ -136,13 +125,15 @@
   font-size: var(--fs-meta-sm);
 }
 
+/* Folder search — the v2 crust input idiom. */
 .search {
   width: 100%;
+  height: 28px;
   margin-bottom: var(--space-8);
-  padding: var(--space-6) var(--space-8);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  padding: 0 9px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-chrome);
+  background: var(--content-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--fs-meta);
@@ -169,11 +160,13 @@
 .folderActive {
   display: flex;
   width: 100%;
+  height: 28px;
+  flex-shrink: 0;
   align-items: center;
   gap: var(--space-8);
-  padding: var(--space-4) var(--space-8);
+  padding: 0 var(--space-8);
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -185,12 +178,13 @@
 }
 
 .folder:hover {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
+/* Surface0 selection fill (v2 — accent never encodes selection). */
 .folderActive {
-  background: var(--accent-dim);
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
@@ -205,7 +199,7 @@
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
+  font-size: var(--fs-micro);
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -223,44 +217,4 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-8);
-}
-
-.cancel,
-.pickButton {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-6) var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.cancel:hover,
-.pickButton:hover {
-  background: var(--bg-hover);
-}
-
-.btnKbd {
-  font-family: var(--mono);
-  font-size: var(--fs-meta-sm);
-  font-weight: 400;
-  opacity: 0.7;
-}
-
-@keyframes create-panel-in {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
 }

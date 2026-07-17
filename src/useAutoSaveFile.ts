@@ -18,12 +18,32 @@
 //! the Save button (`save()`). For data safety, manual mode STILL flushes a dirty
 //! buffer on **unmount / file-switch** (so closing a panel can't silently lose
 //! work). Every mounted buffer registers with `saverRegistry` so ⌘S can find it.
+//!
+//! Cross-window edit guard (Multi-window task 435): the last-write-wins tradeoff
+//! above is narrowed for the one common concurrent-writer case — two ReCue
+//! windows editing the same file. The hook soft-claims `{repoPath, file}` for
+//! this window when its editor **focuses or dirties** (the Rust `file_claims`
+//! registry; all decisions via the pure `claimIntent`), and releases it once
+//! **blurred/idle AND clean** (manual mode keeps a dirty buffer's claim past blur
+//! until Save settles) and on unmount/file-switch. While a FOREIGN window holds
+//! the claim, `lockedBy` names it and `setText`/`save` are hard no-ops (the
+//! consumers mirror that as read-only UI with a "Take over" banner); the
+//! hot-reload poll keeps running so the read-only view live-follows the other
+//! window's saves. Claims are advisory (never an on-disk lock, fire-and-forget
+//! IPC) — a stale/raced claim degrades to exactly the last-writer-wins above.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { readTextFile, writeTextFile } from "./ipc";
+import { claimIntent, heldElsewhere } from "./fileClaims";
+import {
+  claimFile,
+  readTextFile,
+  releaseFileClaim,
+  writeTextFile,
+} from "./ipc";
 import { registerSaver } from "./saverRegistry";
 import { useStore } from "./store";
+import { WINDOW_LABEL } from "./windowContext";
 
 // Hot-reload poll while visible (#44/#143).
 const POLL_MS = 1000;
@@ -57,6 +77,15 @@ export interface AutoSaveFile {
   onCompositionStart: () => void;
   /** IME composition end — re-arm the debounced save for the finished text. */
   onCompositionEnd: () => void;
+  /** The FOREIGN window currently soft-claiming this file (task 435), or null.
+   * While set, `setText`/`save` are hard no-ops and the consumer renders
+   * read-only + a "Being edited in another window — Take over" banner. Stays
+   * null for this window's own claim, so one window on a file is unchanged. */
+  lockedBy: string | null;
+  /** Claim the file for THIS window unconditionally (task 435) — the banner's
+   * "Take over". The broadcast flips the former holder to read-only (it
+   * flushes its dirty buffer once in auto mode; last-writer-wins on overlap). */
+  takeOver: () => void;
 }
 
 /**
@@ -96,11 +125,47 @@ export function useAutoSaveFile(
     setDirtyState(v);
   }, []);
 
+  // Cross-window soft claim (task 435): the FOREIGN window holding this file, or
+  // null (free / held by us — own-label claims are invisible, so one window on a
+  // file behaves exactly as before). Mirrored into a ref so the stable callbacks
+  // read the current value, plus `heldRef` — "THIS hook instance asserted the
+  // claim". Multiple instances in one window each track their own heldRef against
+  // the same window-level claim: the backend dedupes same-label claims, and an
+  // instance releasing while a sibling still edits leaves a microsecond soft gap
+  // the sibling's next edit re-claims (accepted — advisory, no refcounting).
+  const lockedBy = useStore((s) =>
+    heldElsewhere(s.fileClaims, repoPath, file, WINDOW_LABEL),
+  );
+  const lockedByRef = useRef(lockedBy);
+  lockedByRef.current = lockedBy;
+  const heldRef = useRef(false);
+
+  // Evaluate + act on the claim lifecycle (task 435): every call site routes
+  // through the pure `claimIntent`. IPC is fire-and-forget (`.catch(() => {})`)
+  // so vitest / a plain dev server behave exactly as before.
+  const syncClaim = useCallback(() => {
+    const intent = claimIntent({
+      held: heldRef.current,
+      focused: focused.current,
+      dirty: dirty.current,
+      lockedByOther: lockedByRef.current !== null,
+    });
+    if (intent === "claim") {
+      heldRef.current = true;
+      void claimFile(repoPath, file, WINDOW_LABEL).catch(() => {});
+    } else if (intent === "release") {
+      heldRef.current = false;
+      void releaseFileClaim(repoPath, file, WINDOW_LABEL).catch(() => {});
+    }
+  }, [repoPath, file]);
+
   const writeNow = useCallback(
     (content: string) => {
       if (content === lastSynced.current) {
         markDirty(false);
         setStatus("saved");
+        // A blurred/manual save settling clean releases the claim (task 435).
+        syncClaim();
         return;
       }
       setStatus("saving");
@@ -109,13 +174,14 @@ export function useAutoSaveFile(
           lastSynced.current = content;
           markDirty(false);
           setStatus("saved");
+          syncClaim();
         })
         .catch(() => {
           // Keep dirty so the next edit (or blur/unmount flush) retries.
           setStatus("error");
         });
     },
-    [repoPath, file, markDirty],
+    [repoPath, file, markDirty, syncClaim],
   );
 
   const scheduleWrite = useCallback(
@@ -131,19 +197,30 @@ export function useAutoSaveFile(
 
   const setText = useCallback(
     (next: string) => {
+      // Hard gate (task 435): while a FOREIGN window holds the claim this buffer
+      // is read-only — defense in depth, so no write can fight regardless of any
+      // UI gate a consumer misses. Keys on the locally-known claim map, so a
+      // not-yet-delivered claim can never block anyone (fail-open).
+      if (lockedByRef.current) return;
       setTextState(next);
       markDirty(true);
+      // Claim on first dirty (task 435) — covers the Kanban drag path, which
+      // mutates via setText without ever focusing an editor.
+      syncClaim();
       if (autoSaveRef.current) {
         setStatus("saving");
         scheduleWrite(next);
       }
       // Manual mode (#162): buffer is dirty; wait for save() / ⌘S — no write.
     },
-    [scheduleWrite, markDirty],
+    [scheduleWrite, markDirty, syncClaim],
   );
 
   // Flush the dirty buffer to disk now (#162 manual Save / ⌘S). No-op when clean.
   const save = useCallback(() => {
+    // Hard gate (task 435): a foreign claim makes manual save a no-op too — the
+    // dirty buffer is kept in memory until a take-back (Save renders disabled).
+    if (lockedByRef.current) return;
     if (writeTimer.current) {
       clearTimeout(writeTimer.current);
       writeTimer.current = null;
@@ -189,12 +266,41 @@ export function useAutoSaveFile(
         clearTimeout(writeTimer.current);
         writeTimer.current = null;
       }
-      if (dirty.current && textRef.current !== null) {
+      // Hard gate (task 435) here too: with a FOREIGN claim another window owns
+      // the file now — flushing this stale buffer would overwrite that window's
+      // saved edits, so it is surrendered instead (the documented take-over
+      // semantics; last-writer-wins only ever applies between un-claimed writers).
+      if (dirty.current && textRef.current !== null && !lockedByRef.current) {
         void writeTextFile(repoPath, file, textRef.current).catch(() => {});
         dirty.current = false;
       }
+      // Force-release this instance's claim on unmount / file-switch (task 435)
+      // so a closed panel never leaves the file read-only elsewhere.
+      if (heldRef.current) {
+        heldRef.current = false;
+        void releaseFileClaim(repoPath, file, WINDOW_LABEL).catch(() => {});
+      }
     };
   }, [repoPath, file, markDirty]);
+
+  // Loss of claim (task 435): another window claimed/took over this file while
+  // this instance held it. Surrender locally (never "release" — that could clear
+  // the NEW holder), cancel the pending debounce, and in auto mode flush the
+  // dirty buffer ONCE so up to 600ms of typed text isn't silently dropped — any
+  // overlap with the taker's first edit is the documented last-writer-wins
+  // fallback. A manual-mode dirty buffer is kept in memory with Save disabled
+  // until a take-back.
+  useEffect(() => {
+    if (lockedBy === null || !heldRef.current) return;
+    heldRef.current = false;
+    if (writeTimer.current) {
+      clearTimeout(writeTimer.current);
+      writeTimer.current = null;
+    }
+    if (autoSaveRef.current && dirty.current && textRef.current !== null) {
+      writeNow(textRef.current);
+    }
+  }, [lockedBy, writeNow]);
 
   // React to a save-mode change (#162): auto→manual cancels a pending debounce but
   // keeps the dirty buffer (wait for ⌘S); manual→auto schedules a write if dirty.
@@ -257,19 +363,26 @@ export function useAutoSaveFile(
 
   const onFocus = useCallback(() => {
     focused.current = true;
-  }, []);
+    // Claim on focus (task 435) — the editor engaged.
+    syncClaim();
+  }, [syncClaim]);
 
   const onBlur = useCallback(() => {
     focused.current = false;
-    // Manual mode (#162): keep the dirty buffer; the user saves explicitly.
-    if (!autoSaveRef.current) return;
-    // Auto mode: flush a pending write immediately on blur.
-    if (writeTimer.current) {
-      clearTimeout(writeTimer.current);
-      writeTimer.current = null;
+    // Manual mode (#162): keep the dirty buffer; the user saves explicitly. The
+    // claim is kept too (still dirty) until Save settles — syncClaim below.
+    if (autoSaveRef.current) {
+      // Auto mode: flush a pending write immediately on blur.
+      if (writeTimer.current) {
+        clearTimeout(writeTimer.current);
+        writeTimer.current = null;
+      }
+      if (dirty.current && textRef.current !== null) writeNow(textRef.current);
     }
-    if (dirty.current && textRef.current !== null) writeNow(textRef.current);
-  }, [writeNow]);
+    // Task 435: a clean blur releases now; a dirty one releases when the flush /
+    // manual save settles (writeNow's completion re-evaluates).
+    syncClaim();
+  }, [writeNow, syncClaim]);
 
   const onCompositionStart = useCallback(() => {
     composing.current = true;
@@ -281,6 +394,14 @@ export function useAutoSaveFile(
     if (autoSaveRef.current && dirty.current && textRef.current !== null)
       scheduleWrite(textRef.current);
   }, [scheduleWrite]);
+
+  // Take over a foreign claim (task 435): claim unconditionally — last claim
+  // wins in the backend, and the broadcast flips the former holder's window to
+  // read-only (its loss-of-claim effect flushes its dirty buffer once).
+  const takeOver = useCallback(() => {
+    heldRef.current = true;
+    void claimFile(repoPath, file, WINDOW_LABEL).catch(() => {});
+  }, [repoPath, file]);
 
   return {
     text,
@@ -294,5 +415,7 @@ export function useAutoSaveFile(
     onBlur,
     onCompositionStart,
     onCompositionEnd,
+    lockedBy,
+    takeOver,
   };
 }

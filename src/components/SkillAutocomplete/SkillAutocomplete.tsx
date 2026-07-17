@@ -164,7 +164,7 @@ function SkillAutocomplete({
         <div
           ref={listRef}
           id="skill-autocomplete-list"
-          className={styles.menu}
+          className={`menu-pop ${styles.menu}`}
           role="listbox"
           aria-label="Slash commands"
         >

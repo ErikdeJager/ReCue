@@ -1,78 +1,80 @@
-// Keyboard-shortcut reference data for the Settings → Shortcuts pane (#318). This
-// is a **read-only** display list — it mirrors the handlers wired in
-// `useKeyboardNav.ts` (global) and a few component-scoped handlers, but it does
-// not bind or rebind anything.
+// Keyboard-shortcut reference data for the Settings → Shortcuts pane. Since the
+// keybind rework this lists only the **fixed, contextual** chords — the ones
+// hardcoded in `useKeyboardNav.ts` / component-scoped handlers that are NOT
+// rebindable. The rebindable actions render above this list as live, editable
+// rows driven by the `src/keybinds.ts` registry (`KEYBIND_ACTIONS`) + the
+// `settings.keybinds` overrides — never duplicated here, so the two can't drift.
 //
 // Cross-platform: each shortcut carries a `mac` and a `win` string; the pane feeds
 // them through `kbdHint(platform, mac, win)` so macOS renders glyphs (⌘/⇧/⌥) and
-// Windows renders the "Ctrl+…" form. For a chord identical on both platforms
+// Windows/Linux render the "Ctrl+…" form. For a chord identical on both platforms
 // (single letters / arrows) the two strings are the same.
 
+import { chordLabel, CONTAINER_TOGGLE_CHORD } from "../../keybinds";
+
 export interface Shortcut {
-  /** The macOS glyph form (e.g. "⌘N"). */
+  /** The macOS glyph form (e.g. "⌘S"). */
   mac: string;
-  /** The Windows form (e.g. "Ctrl+N"). */
+  /** The Windows/Linux form (e.g. "Ctrl+S"). */
   win: string;
   /** What the shortcut does. */
   description: string;
 }
 
 export interface ShortcutGroup {
-  /** The group heading (e.g. "Sessions"). */
+  /** The group heading (e.g. "Navigation"). */
   title: string;
   shortcuts: Shortcut[];
 }
 
-/** The grouped, cross-platform shortcut reference shown in Settings → Shortcuts. */
+/** The grouped, cross-platform reference of **fixed** (non-rebindable) shortcuts
+ * shown below the editable bindings in Settings → Shortcuts. */
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
-    title: "Sessions",
+    title: "New session",
     shortcuts: [
-      { mac: "⌘N", win: "Ctrl+N", description: "New session" },
-      { mac: "⌘⇧N", win: "Ctrl+Shift+N", description: "Schedule session" },
-    ],
-  },
-  {
-    title: "Panels & Canvas",
-    shortcuts: [
-      { mac: "⌘K", win: "Ctrl+K", description: "Open the panel launcher" },
       {
-        mac: "⌘⌥1–⌘⌥6",
-        win: "Ctrl+Alt+1–6",
-        description:
-          "Create panel by type (session/file/diff/terminal/kanban/tree)",
-      },
-      { mac: "⌘T", win: "Ctrl+T", description: "New Canvas tab" },
-      {
-        mac: "⌘E",
-        win: "Ctrl+E",
-        description: "Toggle big mode for the selected item",
+        // One source of truth with the modal's kbd chip + the reserved set:
+        // rendered from the fixed chord in keybinds.ts, never a drifting literal.
+        mac: chordLabel(CONTAINER_TOGGLE_CHORD, "macos"),
+        win: chordLabel(CONTAINER_TOGGLE_CHORD, "windows"),
+        description: "Toggle “Run in dev container” (branch step)",
       },
     ],
   },
   {
     title: "Navigation",
     shortcuts: [
-      { mac: "⌘\\", win: "Ctrl+\\", description: "Toggle Overview ↔ Canvas" },
-      {
-        mac: "⌘1–⌘9",
-        win: "Ctrl+1–9",
-        description: "Jump to canvas N (Canvas view)",
-      },
-      {
-        mac: "⌘B",
-        win: "Ctrl+B",
-        description: "Collapse / expand the sidebar",
-      },
       {
         mac: "⇧←/→",
         win: "Shift+←/→",
         description: "Select previous / next column (Overview)",
       },
       {
+        mac: "⇧↑/↓",
+        win: "Shift+↑/↓",
+        description: "Select previous / next agent (Attention)",
+      },
+      {
         mac: "⇧ + arrows",
         win: "Shift + arrows",
         description: "Move the focused panel (Canvas)",
+      },
+    ],
+  },
+  {
+    title: "Panels & Attention",
+    shortcuts: [
+      {
+        mac: "⌘⌥1–⌘⌥6",
+        win: "Ctrl+Alt+1–6",
+        description:
+          "Create panel by type (session/file/diff/terminal/kanban/tree)",
+      },
+      {
+        mac: "⌘⏎",
+        win: "Ctrl+Enter",
+        description: "Dismiss the selected agent (Attention)",
       },
     ],
   },

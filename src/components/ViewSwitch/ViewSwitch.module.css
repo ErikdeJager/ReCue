@@ -1,57 +1,72 @@
-/* Full-width segmented control: fills its sidebar container, segments split
-   evenly. */
-.group {
+/* Expanded mode renders the two main views (Overview + Attention) through the shared
+   SegmentedControl atom (UI v2 task 372) and appends a smaller standalone Canvas
+   button (#406); the compact rail mode keeps local icon-button styles. */
+
+/* Expanded row: the two-segment main control stretches to fill, the smaller Canvas
+   button hugs its content beside it (#406). */
+.expanded {
   display: flex;
-  padding: var(--space-2);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  align-items: center;
+  gap: 6px;
 }
 
-.option,
-.active {
+/* The Overview + Attention SegmentedControl fills the remaining row width. */
+.mainControl {
   flex: 1;
-  padding: var(--space-4) var(--space-12);
-  border: 0;
-  border-radius: var(--radius-chip);
+  min-width: 0;
+}
+
+/* Secondary Canvas view (#406): a visibly smaller, lighter icon button beside the two
+   main segments. Chrome-radius + Surface0 active fill so its selected state matches the
+   segmented thumb (--bg-elevated resolves to Surface0). Tokens only — no color-mix. */
+.canvasBtn,
+.canvasBtnActive {
+  display: inline-flex;
+  width: 24px;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-chrome-sm);
   background: transparent;
   color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--fs-meta);
-  text-align: center;
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-out);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
 }
 
-.option:hover {
+.canvasBtn:hover {
   color: var(--text-primary);
 }
 
-.active {
+.canvasBtnActive {
+  border-color: var(--border-hairline);
   background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
-/* Compact (icon-only) mode for the collapsed sidebar rail (#168): two stacked
-   icon buttons sized to the narrow rail (~44px, #214). */
+/* Compact (icon-only) mode for the collapsed sidebar rail (#168, UI v2 §6): three
+   stacked 28×28 ghost icon buttons — no crust well/border, Surface0 active fill. */
 .groupCompact {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-control);
-  background: var(--bg-base);
+  gap: 5px;
 }
 
 .iconOption,
 .iconActive {
+  position: relative;
   display: flex;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
-  padding: var(--space-4);
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-btn);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -64,5 +79,15 @@
 
 .iconActive {
   background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* Canvas is the de-emphasized secondary view (#406): a touch lighter than the two main
+   icons while idle (kept at the full 28×28 tap target); hover/active still brighten. */
+.iconOption.iconCanvas {
+  color: var(--text-muted);
+}
+
+.iconOption.iconCanvas:hover {
   color: var(--text-primary);
 }

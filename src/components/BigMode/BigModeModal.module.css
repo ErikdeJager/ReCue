@@ -1,29 +1,20 @@
-/* "Big mode" overlay (#157): a near-fullscreen modal showing one item over a dimmed
-   scrim, mirroring the app's modal pattern (scrim + elevated surface). On-system
-   tokens only; reduced motion drops the fade. */
+/* "Big mode" overlay (#157): the shared modal-scrim/modal-pop chrome (modal.css,
+   task 378) — this module keeps only z-index and the near-fullscreen sizing; the
+   global reduced-motion killswitch drops the shared fade/pop. */
 .overlay {
-  position: fixed;
-  inset: 0;
   z-index: 220;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--scrim);
-  animation: bigModeFade var(--dur-fast) var(--ease-out);
 }
 
 /* Near-fullscreen ("all width and height") with a small inset so the scrim + the
-   thin header stay visible. */
+   thin header stay visible. max-width unclamped: the inset drives the size here,
+   and modal-pop's 92vw cap would otherwise shear the right edge on wide windows. */
 .dialog {
   position: absolute;
   inset: var(--space-16);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-window);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-popover);
+  max-width: none;
 }
 
 .header {
@@ -86,17 +77,4 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
-}
-
-@keyframes bigModeFade {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-:global(body.reduce-motion) .overlay {
-  animation: none;
 }

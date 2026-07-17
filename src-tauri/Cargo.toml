@@ -1,6 +1,6 @@
 [package]
 name = "recue"
-version = "1.3.1"
+version = "2.0.0"
 description = "ReCue — run and manage many live claude CLI sessions"
 authors = ["Erik de Jager"]
 edition = "2021"
@@ -42,6 +42,12 @@ tauri-plugin-clipboard-manager = "2.3.2"
 # watched agent finishes a turn / needs input. Cross-platform (macOS + Windows);
 # the frontend sends the notification, this exposes the plugin + capability.
 tauri-plugin-notification = "2"
+# One running instance (Multi-window 10/16): a second launch pokes the first instance
+# (Windows named mutex / Linux D-Bus / macOS unix socket) to open a new full app window
+# and exits — previously a second process re-resumed the SAME session uuids and fought
+# over sessions.json. Rust-only (no JS commands → no capability entry). Linux pulls
+# zbus transitively; macOS/Windows stay light.
+tauri-plugin-single-instance = "2"
 # Encode a clipboard image (raw RGBA) to a temp PNG for image paste (#220) — claude
 # attaches the file when its path is pasted. Pure-Rust, no system deps.
 png = "0.18.1"
@@ -67,6 +73,13 @@ libc = "0.2"
 # macOS/Windows never build it. See `src/linux_desktop.rs`.
 [target.'cfg(target_os = "linux")'.dependencies]
 glib = "0.18"
+
+# Mock-runtime unit tests for the thin `AppHandle` glue (primary.rs / file_claims.rs /
+# window_state.rs): enables `tauri::test` (mock_builder / MockRuntime) for `cargo test` /
+# clippy --all-targets / llvm-cov builds only — dev-dep feature unification never reaches
+# a plain `cargo build` or the release bundles, so the shipped app is byte-identical.
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
 
 [lints.clippy]
 all = "warn"
