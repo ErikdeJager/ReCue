@@ -335,6 +335,9 @@ export function useKeyboardNav(): void {
             eligible: state.attentionEligible,
             idleSince: state.sessionIdleSince,
             recurringChildIds: ownedChildSessionIds(state.recurrings),
+            // Cycle only the visible (filtered) queue (#445) so nav never lands on a
+            // hidden agent.
+            filter: state.overviewRepoFilter,
           }).map((q) => q.id);
           const id = adjacentId(
             ids,

@@ -2,6 +2,7 @@
 // so it's unit-testable and shared by the store (dismiss actions), the ViewSwitch
 // count badge, the keyboard nav, and the Attention view itself — one source of truth.
 
+import { sessionInFilter, type OverviewFilter } from "../../paths";
 import type { SessionView } from "../../types";
 
 export interface AttentionQueueInput {
@@ -33,6 +34,11 @@ export interface AttentionQueueInput {
   /** Recurring-owned child session ids (#294) — they render only in their recurring
    * surface, never as their own queue entry. */
   recurringChildIds: Set<string>;
+  /** Transient repo/folder/branch filter shared with the Overview wall (#34/#445).
+   * `undefined`/`null` ⇒ no filtering; otherwise only sessions matching the filter
+   * (via the shared `sessionInFilter`) are queue members. Call sites that omit it are
+   * byte-for-byte unchanged. */
+  filter?: OverviewFilter;
 }
 
 /**
@@ -64,6 +70,9 @@ export function attentionQueue(input: AttentionQueueInput): SessionView[] {
     if (s.reconnecting) return false;
     if (!eligible[s.id]) return false;
     if (dismissed[s.id]) return false;
+    // Shared repo/folder/branch filter (#445): narrow the queue to the same sessions
+    // the Overview wall shows under this filter. Undefined/null ⇒ no filtering.
+    if (input.filter && !sessionInFilter(s, input.filter)) return false;
     return true;
   });
 
