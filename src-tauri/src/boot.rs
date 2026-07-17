@@ -313,19 +313,19 @@ mod tests {
     #[test]
     fn run_bounded_is_a_no_op_without_items_or_workers() {
         let ran = Arc::new(AtomicUsize::new(0));
-        {
-            let ran = Arc::clone(&ran);
-            run_bounded(Vec::<usize>::new(), 4, move |_| {
+        // One closure shape shared by every call, so the control run below proves
+        // the no-op cases really never invoked it.
+        let bump = |ran: Arc<AtomicUsize>| {
+            move |_: usize| {
                 ran.fetch_add(1, Ordering::SeqCst);
-            });
-        }
-        {
-            let ran = Arc::clone(&ran);
-            run_bounded((0..3).collect::<Vec<usize>>(), 0, move |_| {
-                ran.fetch_add(1, Ordering::SeqCst);
-            });
-        }
+            }
+        };
+        run_bounded(Vec::new(), 4, bump(Arc::clone(&ran)));
+        run_bounded((0..3).collect(), 0, bump(Arc::clone(&ran)));
         assert_eq!(ran.load(Ordering::SeqCst), 0);
+        // Control: with items AND workers, the very same closure does run.
+        run_bounded(vec![0usize], 1, bump(Arc::clone(&ran)));
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
     }
 
     // --- Boot respawn of shell terminal items (#72, task 432) ---

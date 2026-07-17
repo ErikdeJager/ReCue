@@ -926,6 +926,33 @@ mod tests {
         assert_eq!(parse_resets_at(Some("2026-04-11T07:00:00+2:00")), None); // bad offset
     }
 
+    #[test]
+    fn rfc3339_separator_and_offset_edges() {
+        // The two tolerated date-time separators besides 'T' (lowercase, space)…
+        assert_eq!(
+            parse_resets_at(Some("2026-04-11t07:00:00z")),
+            Some(1_775_890_800_000)
+        );
+        assert_eq!(
+            parse_resets_at(Some("2026-04-11 07:00:00Z")),
+            Some(1_775_890_800_000)
+        );
+        // …and any other separator refuses.
+        assert_eq!(parse_resets_at(Some("2026-04-11X07:00:00Z")), None);
+        // Offsets must be ±HH:MM or ±HHMM — other lengths refuse…
+        assert_eq!(parse_resets_at(Some("2026-04-11T07:00:00+02")), None);
+        assert_eq!(parse_resets_at(Some("2026-04-11T07:00:00+02000")), None);
+        // …and in-range: shape-valid hour 25 / minute 60 are refused.
+        assert_eq!(parse_resets_at(Some("2026-04-11T07:00:00+25:00")), None);
+        assert_eq!(parse_resets_at(Some("2026-04-11T07:00:00+00:60")), None);
+        // A trailing designator that is neither Z nor a numeric offset…
+        assert_eq!(parse_resets_at(Some("2026-04-11T07:00:00UTC")), None);
+        // …a Z that isn't final…
+        assert_eq!(parse_resets_at(Some("2026-04-11T07:00:00Zx")), None);
+        // …and a fraction that runs to end-of-string with no offset at all.
+        assert_eq!(parse_resets_at(Some("2026-04-11T07:00:00.5")), None);
+    }
+
     // --- poll_gate ---
 
     #[test]

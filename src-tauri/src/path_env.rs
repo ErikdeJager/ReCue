@@ -288,26 +288,39 @@ pub fn start_probe() {
         };
 
         shared().begin();
-        std::thread::spawn(move || {
-            match login_shell_path(&inputs.shell) {
-                Some(discovered) => {
-                    let (merged, cache) = probe_publication(
-                        &inputs.current_path,
-                        &inputs.common,
-                        &inputs.shell,
-                        &fingerprint(&inputs),
-                        &discovered,
-                    );
-                    shared().publish(OsString::from(merged), cache);
-                }
-                None => {
-                    // Today's fallback, unchanged: the launchd/session PATH + the
-                    // well-known dirs. Never downgrades an already-published seed.
-                    let merged = merge_paths(&inputs.current_path, None, &inputs.common);
-                    shared().publish_fallback(OsString::from(merged));
-                }
-            }
-        });
+        std::thread::spawn(move || run_probe_into(shared(), &inputs, login_shell_path));
+    }
+}
+
+/// The probe thread's body: run the login-shell probe (injected, so tests never
+/// spawn a shell) over the captured env snapshot and publish the outcome into
+/// `state` — the success arm the merged PATH plus the cache record to persist,
+/// the failure arm today's fallback merge. Parameterized on the state cell (the
+/// [`PathState`]-instance pattern) so the publication rules are unit-testable
+/// without touching the shared cell.
+#[cfg(unix)]
+fn run_probe_into(
+    state: &PathState,
+    inputs: &ProbeInputs,
+    probe: impl FnOnce(&str) -> Option<String>,
+) {
+    match probe(&inputs.shell) {
+        Some(discovered) => {
+            let (merged, cache) = probe_publication(
+                &inputs.current_path,
+                &inputs.common,
+                &inputs.shell,
+                &fingerprint(inputs),
+                &discovered,
+            );
+            state.publish(OsString::from(merged), cache);
+        }
+        None => {
+            // Today's fallback, unchanged: the launchd/session PATH + the
+            // well-known dirs. Never downgrades an already-published seed.
+            let merged = merge_paths(&inputs.current_path, None, &inputs.common);
+            state.publish_fallback(OsString::from(merged));
+        }
     }
 }
 
@@ -324,16 +337,23 @@ pub fn seed_from_cache(cached: Option<PathCache>) {
         let (Some(cached), Some(inputs)) = (cached, PROBE_INPUTS.get()) else {
             return;
         };
-        if cache_applies(&cached, &inputs.shell, &fingerprint(inputs)) {
-            // Re-merge against *this* launch's PATH — the cache holds only the raw
-            // discovered PATH, so nothing launch-specific is ever carried over.
-            let merged = merge_paths(&inputs.current_path, Some(&cached.path), &inputs.common);
-            shared().seed(OsString::from(merged));
-        }
+        seed_into(shared(), &cached, inputs);
     }
     #[cfg(not(unix))]
     {
         let _ = cached;
+    }
+}
+
+/// The [`seed_from_cache`] core over an explicit state cell + env snapshot: when
+/// the persisted `$SHELL` + fingerprint still apply, re-merge the cached PATH
+/// against *this* launch's PATH — the cache holds only the raw discovered PATH,
+/// so nothing launch-specific is ever carried over — and seed it.
+#[cfg(unix)]
+fn seed_into(state: &PathState, cached: &PathCache, inputs: &ProbeInputs) {
+    if cache_applies(cached, &inputs.shell, &fingerprint(inputs)) {
+        let merged = merge_paths(&inputs.current_path, Some(&cached.path), &inputs.common);
+        state.seed(OsString::from(merged));
     }
 }
 
@@ -368,7 +388,14 @@ pub(crate) fn effective_path() -> Option<OsString> {
 /// Adds **nothing at all** when the probe hasn't landed or never ran (debug builds,
 /// Windows), so those `Command`s stay byte-for-byte what they are today.
 pub(crate) fn apply_path(cmd: &mut std::process::Command) {
-    if let Some(path) = shared().override_path() {
+    apply_path_from(cmd, shared().override_path());
+}
+
+/// [`apply_path`] over an explicit override — adds the env call only when a
+/// restored PATH exists, so the helper `Command` otherwise stays byte-for-byte
+/// untouched. Split from the shared-cell read so the rule is directly testable.
+fn apply_path_from(cmd: &mut std::process::Command, path: Option<OsString>) {
+    if let Some(path) = path {
         cmd.env("PATH", path);
     }
 }
@@ -552,13 +579,21 @@ fn probe_publication(
 #[cfg(any(unix, test))]
 #[cfg_attr(test, allow(dead_code))]
 fn common_dirs() -> Vec<String> {
+    common_dirs_from(home_dir().as_deref())
+}
+
+/// [`common_dirs`] over an explicit home — pure, so the home-relative expansion
+/// (and the homeless fallback) is unit-tested on every host.
+#[cfg(any(unix, test))]
+#[cfg_attr(test, allow(dead_code))]
+fn common_dirs_from(home: Option<&Path>) -> Vec<String> {
     let mut dirs = vec![
         "/opt/homebrew/bin".to_string(),
         "/opt/homebrew/sbin".to_string(),
         "/usr/local/bin".to_string(),
         "/usr/local/sbin".to_string(),
     ];
-    if let Some(home) = home_dir() {
+    if let Some(home) = home {
         for sub in [
             ".local/bin",      // Claude Code's native installer + pipx, etc.
             ".npm-global/bin", // a common `npm config set prefix` target
@@ -751,15 +786,32 @@ mod tests {
 
     #[test]
     fn common_dirs_includes_homebrew_and_a_home_relative_dir() {
-        let dirs = common_dirs();
-        assert!(dirs.iter().any(|d| d == "/opt/homebrew/bin"));
-        // The home-relative dirs are joined with the platform path separator, so the
-        // `/`-style ending only holds on unix (this whole probe is a macOS/Linux
-        // GUI-PATH fix; #140 no-ops it on Windows). Gate the separator-sensitive check
-        // to unix so the Windows test run — where Git Bash still sets HOME — stays green.
+        // The env-reading wrapper is exactly the core over the live home — a
+        // read-only delegation check that holds with or without HOME set.
+        assert_eq!(common_dirs(), common_dirs_from(home_dir().as_deref()));
+
+        // Homeless: only the fixed system dirs, in order (separator-neutral, so
+        // this also runs on the Windows test host).
+        assert_eq!(
+            common_dirs_from(None),
+            vec![
+                "/opt/homebrew/bin".to_string(),
+                "/opt/homebrew/sbin".to_string(),
+                "/usr/local/bin".to_string(),
+                "/usr/local/sbin".to_string(),
+            ]
+        );
+
+        // With a home, the home-relative dirs follow. The joins use the platform
+        // path separator, so the exact-path checks are unix-only (this whole probe
+        // is a macOS/Linux GUI-PATH fix; #140 no-ops it on Windows).
         #[cfg(unix)]
-        if std::env::var_os("HOME").is_some() {
-            assert!(dirs.iter().any(|d| d.ends_with("/.local/bin")));
+        {
+            let dirs = common_dirs_from(Some(Path::new("/home/u")));
+            assert!(dirs.iter().any(|d| d == "/opt/homebrew/bin"));
+            assert!(dirs.iter().any(|d| d == "/home/u/.local/bin"));
+            assert!(dirs.iter().any(|d| d == "/home/u/.cargo/bin"));
+            assert_eq!(dirs.len(), 10, "4 system + 6 home-relative dirs");
         }
     }
 
@@ -1064,6 +1116,245 @@ mod tests {
         assert!(!relocated.contains(&home.join(".zshrc")));
         assert!(relocated.contains(&PathBuf::from("/etc/zshenv")));
         assert!(relocated.contains(&home.join(".profile")));
+    }
+
+    #[test]
+    fn rc_candidates_without_a_home_lists_only_global_files() {
+        // No home (and no ZDOTDIR): only the /etc sources can carry PATH edits —
+        // the union shell covers every family's homeless branch at once.
+        let globals: Vec<PathBuf> = [
+            "/etc/profile",
+            "/etc/paths",
+            "/etc/paths.d",
+            "/etc/zshenv",
+            "/etc/zprofile",
+            "/etc/zshrc",
+            "/etc/zlogin",
+            "/etc/bash.bashrc",
+            "/etc/bashrc",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+        assert_eq!(rc_candidates("/usr/bin/nu", None, None), globals);
+
+        // ZDOTDIR alone still relocates the user zsh files — but no ~/.profile.
+        let zdotdir = PathBuf::from("/cfg/zsh");
+        let relocated = rc_candidates("/bin/zsh", None, Some(&zdotdir));
+        assert!(relocated.contains(&zdotdir.join(".zshrc")));
+        assert!(!relocated.iter().any(|p| p.ends_with(".profile")));
+    }
+
+    // --- The probe orchestration (#360) --------------------------------------------
+
+    /// A synthetic env snapshot, so the orchestration tests never read `$SHELL`/
+    /// `$PATH` (a `home` of `None` keeps the fingerprint to the /etc files).
+    #[cfg(unix)]
+    fn inputs_for(shell: &str, current_path: &str, common: &[&str]) -> ProbeInputs {
+        ProbeInputs {
+            shell: shell.to_string(),
+            current_path: current_path.to_string(),
+            common: common.iter().map(|s| s.to_string()).collect(),
+            home: None,
+            zdotdir: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_probe_into_publishes_the_merged_path_and_cache() {
+        let state = PathState::new();
+        state.begin();
+        let inputs = inputs_for("/bin/fakesh", "/usr/bin:/bin", &["/common/bin"]);
+        run_probe_into(&state, &inputs, |shell| {
+            assert_eq!(shell, "/bin/fakesh", "the probe runs the captured $SHELL");
+            Some("/probe/bin:/usr/bin".to_string())
+        });
+
+        // Merged: discovered order first, then the common dirs, then what's left
+        // of the current PATH — published as Ready for every consumer.
+        assert_eq!(
+            state.wait_path(Duration::from_secs(5)).as_deref(),
+            Some(OsStr::new("/probe/bin:/usr/bin:/common/bin:/bin"))
+        );
+        // The cache record persists the raw DISCOVERED path, keyed by the live
+        // fingerprint of the snapshot's rc files.
+        let record = state
+            .wait_probe(Duration::from_secs(5))
+            .expect("a cache record to persist");
+        assert_eq!(record.shell, "/bin/fakesh");
+        assert_eq!(record.path, "/probe/bin:/usr/bin");
+        assert_eq!(record.fingerprint, fingerprint(&inputs));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_probe_into_failure_publishes_the_fallback_merge_and_no_cache() {
+        let state = PathState::new();
+        state.begin();
+        let inputs = inputs_for("/bin/fakesh", "/usr/bin", &["/common/bin"]);
+        run_probe_into(&state, &inputs, |_| None);
+
+        assert_eq!(
+            state.wait_path(Duration::from_secs(5)).as_deref(),
+            Some(OsStr::new("/common/bin:/usr/bin"))
+        );
+        // A failed probe persists nothing (a previous cache stays untouched).
+        assert_eq!(state.wait_probe(Duration::from_secs(5)), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seed_into_publishes_only_when_the_fingerprint_applies() {
+        let inputs = inputs_for("/bin/fakesh", "/usr/bin", &["/common/bin"]);
+        let live_fp = fingerprint(&inputs);
+
+        // A matching cache seeds the re-merged PATH (never the raw cached one).
+        let state = PathState::new();
+        state.begin();
+        seed_into(
+            &state,
+            &PathCache {
+                shell: "/bin/fakesh".to_string(),
+                fingerprint: live_fp,
+                path: "/cached/bin".to_string(),
+            },
+            &inputs,
+        );
+        assert_eq!(
+            state.override_path().as_deref(),
+            Some(OsStr::new("/cached/bin:/common/bin:/usr/bin"))
+        );
+
+        // A stale fingerprint seeds nothing — the state stays Pending.
+        let stale = PathState::new();
+        stale.begin();
+        seed_into(
+            &stale,
+            &PathCache {
+                shell: "/bin/fakesh".to_string(),
+                fingerprint: "stale".to_string(),
+                path: "/cached/bin".to_string(),
+            },
+            &inputs,
+        );
+        assert_eq!(stale.override_path(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_inputs_capture_snapshots_the_live_env() {
+        // Read-only: every field must agree with a direct (equally read-only) env
+        // read taken in the same test.
+        let inputs = ProbeInputs::capture();
+        assert_eq!(
+            inputs.shell,
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+        );
+        assert_eq!(
+            inputs.current_path,
+            std::env::var("PATH").unwrap_or_default()
+        );
+        assert_eq!(inputs.common, common_dirs());
+        assert_eq!(inputs.home, home_dir());
+        assert_eq!(
+            inputs.zdotdir,
+            std::env::var_os("ZDOTDIR")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        );
+    }
+
+    // --- The login-shell probe (#360) -----------------------------------------------
+
+    /// The files.rs `tmp` convention: a fresh per-test dir under the system temp dir.
+    #[cfg(unix)]
+    fn tmp(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("recue-pathenv-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// A stand-in login shell: an executable `#!/bin/sh` script that receives the
+    /// probe's `-ilc <script>` args, ignores them, and runs `body`.
+    #[cfg(unix)]
+    fn fake_shell(dir: &Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("fake-shell.sh");
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_path_reads_the_marked_value_from_the_shell() {
+        // The probe must pull exactly what sits between the markers — rc banner
+        // noise before them and all — through a real (offline, deterministic) spawn.
+        let dir = tmp("probe-ok");
+        let shell = fake_shell(
+            &dir,
+            &format!("echo banner\nprintf '%s' \"{MARKER}/probe/bin:/usr/bin{MARKER}\""),
+        );
+        assert_eq!(
+            login_shell_path(&shell.to_string_lossy()).as_deref(),
+            Some("/probe/bin:/usr/bin")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_path_is_none_for_unrunnable_or_markerless_shells() {
+        // Not runnable at all → the spawn fails fast, no fallback dirs invented here.
+        assert_eq!(login_shell_path("/definitely/not/a/shell-recue"), None);
+        // Runs but never prints the marker pair → nothing parseable.
+        let dir = tmp("probe-noise");
+        let shell = fake_shell(&dir, "printf '%s' 'PATH=/usr/bin but no markers'");
+        assert_eq!(login_shell_path(&shell.to_string_lossy()), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- The env-reading wrappers ---------------------------------------------------
+
+    #[test]
+    fn apply_path_from_sets_path_only_when_an_override_exists() {
+        let mut cmd = std::process::Command::new("true");
+        apply_path_from(&mut cmd, None);
+        assert_eq!(cmd.get_envs().count(), 0, "no override ⇒ untouched Command");
+
+        apply_path_from(&mut cmd, Some(OsString::from("/restored/bin")));
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert_eq!(
+            envs,
+            vec![(OsStr::new("PATH"), Some(OsStr::new("/restored/bin")))]
+        );
+    }
+
+    #[test]
+    fn debug_and_unseeded_wrappers_fall_back_to_the_process_path() {
+        // In test (debug) builds the probe never arms…
+        #[cfg(unix)]
+        {
+            if cfg!(debug_assertions) {
+                start_probe();
+                assert!(PROBE_INPUTS.get().is_none(), "debug builds must not arm");
+            }
+        }
+        // …so seeding is inert (no snapshot to fingerprint against), the probe
+        // await returns immediately with nothing to persist, and the effective
+        // PATH falls back to this process's own.
+        seed_from_cache(Some(cache("/cached/bin")));
+        seed_from_cache(None);
+        assert_eq!(await_probe(), None);
+        assert_eq!(effective_path(), std::env::var_os("PATH"));
+
+        // The never-blocking helper seam adds no env call at all while Inherit.
+        let mut cmd = std::process::Command::new("true");
+        apply_path(&mut cmd);
+        assert_eq!(cmd.get_envs().count(), 0);
     }
 }
 

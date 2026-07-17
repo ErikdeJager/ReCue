@@ -353,10 +353,27 @@ fn cmd_shim_launch(script: &Path, comspec: Option<&str>) -> (String, Vec<String>
 /// Resolve how to launch `spec` on this machine — the shared detection/launch
 /// resolver (priority order in the module doc). `None` ⇒ not installed.
 fn resolve_editor(spec: &EditorSpec) -> Option<ResolvedLaunch> {
+    resolve_editor_with(
+        spec,
+        crate::pty::resolve_command,
+        toolbox_scripts_dir().as_deref(),
+    )
+}
+
+/// [`resolve_editor`] with its env-derived inputs injected — the PATH lookup
+/// (arm ①; `pty::resolve_command` in production) and the Toolbox scripts dir
+/// (arm ②) — so the platform-neutral arms are unit-testable without touching the
+/// process env (the `toolbox_scripts_dir_from` pattern). Arms ③–⑤ keep their
+/// per-OS probes inline.
+fn resolve_editor_with(
+    spec: &EditorSpec,
+    resolve_cli: impl Fn(&str) -> Option<(String, Vec<String>)>,
+    toolbox_dir: Option<&Path>,
+) -> Option<ResolvedLaunch> {
     // ① A CLI on the login-shell PATH (blocking `effective_path` under the hood,
     //    so a Finder/.desktop-launched bundle still sees the user's real PATH).
     for name in spec.cli {
-        if let Some((program, args)) = crate::pty::resolve_command(name) {
+        if let Some((program, args)) = resolve_cli(name) {
             return Some(ResolvedLaunch {
                 program,
                 args,
@@ -367,7 +384,7 @@ fn resolve_editor(spec: &EditorSpec) -> Option<ResolvedLaunch> {
     }
     // ② A JetBrains Toolbox shell script (present even when nothing is on PATH).
     if let Some(script) = spec.toolbox_script {
-        if let Some(dir) = toolbox_scripts_dir() {
+        if let Some(dir) = toolbox_dir {
             #[cfg(windows)]
             {
                 let candidate = dir.join(format!("{script}.cmd"));
@@ -515,6 +532,31 @@ pub fn read_custom_editor_command(settings: &serde_json::Value) -> Option<String
         .map(String::from)
 }
 
+/// Build + spawn a resolved launch, detached at `path`: `program [resolver args…]
+/// [spec args…] <folder>`, through the seam the resolver chose (`hidden` ⇒
+/// `git::hidden_command`, the console-flash guard; else `child_env::command`).
+/// Extracted from [`open_in_editor`] so the argv composition + spawn dispatch are
+/// unit-testable against a stub [`ResolvedLaunch`] — tests never launch a real
+/// GUI editor.
+fn launch_resolved(
+    resolved: &ResolvedLaunch,
+    spec_args: &[&str],
+    path: &str,
+    dir: &Path,
+) -> Result<(), SessionError> {
+    let mut cmd = if resolved.hidden {
+        crate::git::hidden_command(&resolved.program)
+    } else {
+        crate::child_env::command(&resolved.program)
+    };
+    cmd.args(&resolved.args)
+        .args(spec_args)
+        .arg(path)
+        .current_dir(dir);
+    cmd.spawn().map_err(|e| SessionError::Io(e.to_string()))?;
+    Ok(())
+}
+
 /// Launch `editor` (a catalog id, or `"custom"` with the user's command) at the
 /// folder `path`, detached. Fire-and-forget like `os_open`: the `Child` is dropped,
 /// never waited on. A missing editor is a typed `BinaryNotFound` so the frontend
@@ -550,17 +592,7 @@ pub fn open_in_editor(path: &str, editor: &str, custom: Option<&str>) -> Result<
         .ok_or_else(|| SessionError::Io(format!("unknown editor `{editor}`")))?;
     let resolved = resolve_editor(spec)
         .ok_or_else(|| SessionError::BinaryNotFound(spec.display_name.to_string()))?;
-    let mut cmd = if resolved.hidden {
-        crate::git::hidden_command(&resolved.program)
-    } else {
-        crate::child_env::command(&resolved.program)
-    };
-    cmd.args(&resolved.args)
-        .args(spec.args)
-        .arg(path)
-        .current_dir(dir);
-    cmd.spawn().map_err(|e| SessionError::Io(e.to_string()))?;
-    Ok(())
+    launch_resolved(&resolved, spec.args, path, dir)
 }
 
 #[cfg(test)]
@@ -635,6 +667,8 @@ mod tests {
                 r"C:\Program Files (x86)\Notepad++\notepad++.exe"
             ))
         );
+        // A var the lookup doesn't know refuses (the closure's fallthrough arm).
+        assert_eq!(expand_win_probe(r"%APPDATA%\x.exe", get), None);
     }
 
     #[test]
@@ -782,5 +816,291 @@ mod tests {
         let dir = std::env::temp_dir();
         let err = open_in_editor(dir.to_str().unwrap(), "custom", None).unwrap_err();
         assert!(matches!(err, SessionError::Io(_)));
+    }
+
+    /// The files.rs `tmp` convention: a fresh per-test dir under the system temp dir.
+    fn tmp(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("recue-editors-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// A synthetic spec with only the given avenues, so resolver tests can never be
+    /// perturbed by (or launch!) whatever editors the host machine actually has —
+    /// every other arm (mac bundle, Windows probes) is a guaranteed miss.
+    fn probe_spec(cli: &'static [&'static str], toolbox: Option<&'static str>) -> EditorSpec {
+        EditorSpec {
+            toolbox_script: toolbox,
+            ..spec("probe", "Probe Editor", cli)
+        }
+    }
+
+    /// Wait (bounded) for a detached test child to write `expected` to `out`.
+    #[cfg(unix)]
+    fn wait_for_file(out: &Path, expected: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut written = String::new();
+        while std::time::Instant::now() < deadline {
+            written = std::fs::read_to_string(out).unwrap_or_default();
+            if written == expected {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        written
+    }
+
+    #[test]
+    fn spec_and_jetbrains_shorthands_default_the_optional_fields() {
+        // Runtime calls: `CATALOG`'s own uses are const-evaluated at compile time,
+        // so the shorthand bodies are otherwise invisible to line coverage.
+        let plain = spec("x", "X Editor", &["x", "x-cli"]);
+        assert_eq!(plain.id, "x");
+        assert_eq!(plain.display_name, "X Editor");
+        assert_eq!(plain.cli, &["x", "x-cli"]);
+        assert!(plain.args.is_empty());
+        assert!(plain.mac_bundles.is_empty());
+        assert!(plain.win_probes.is_empty());
+        assert_eq!(plain.toolbox_script, None);
+        assert_eq!(plain.jetbrains_win, None);
+
+        let jb = jetbrains(
+            "j",
+            "JB Product",
+            "jb",
+            &["JB App"],
+            "JB Product",
+            "jb64.exe",
+        );
+        assert_eq!(jb.id, "j");
+        assert_eq!(jb.display_name, "JB Product");
+        // The JetBrains shorthand detects via Toolbox/bundles, never a PATH name.
+        assert!(jb.cli.is_empty());
+        assert_eq!(jb.mac_bundles, &["JB App"]);
+        assert_eq!(jb.toolbox_script, Some("jb"));
+        assert_eq!(jb.jetbrains_win, Some(("JB Product", "jb64.exe")));
+        assert!(jb.args.is_empty());
+        assert!(jb.win_probes.is_empty());
+    }
+
+    #[test]
+    fn toolbox_scripts_dir_wrapper_reads_the_live_environment() {
+        // The thin env-reading caller must agree with the pure core over this
+        // process's own (read-only) env.
+        assert_eq!(
+            toolbox_scripts_dir(),
+            toolbox_scripts_dir_from(
+                std::env::consts::OS,
+                crate::path_env::home_dir().as_deref(),
+                std::env::var("LOCALAPPDATA").ok().as_deref(),
+            )
+        );
+        // Unix CI/dev always has a home dir, so the shape is checkable outright.
+        #[cfg(unix)]
+        {
+            let dir = toolbox_scripts_dir().expect("unix hosts have a home dir");
+            assert!(dir.ends_with(Path::new("JetBrains").join("Toolbox").join("scripts")));
+        }
+    }
+
+    #[test]
+    fn resolver_takes_the_first_cli_hit_on_path() {
+        let tried = std::cell::RefCell::new(Vec::<String>::new());
+        let resolved = resolve_editor_with(
+            &probe_spec(&["zed", "zeditor"], None),
+            |name| {
+                tried.borrow_mut().push(name.to_string());
+                (name == "zeditor")
+                    .then(|| ("/usr/bin/zeditor".to_string(), vec!["--shim".to_string()]))
+            },
+            None,
+        )
+        .expect("the second CLI name resolves");
+        // Names are tried in catalog order; the hit's program + prefix args carry
+        // through, routed via the console-flash guard.
+        assert_eq!(
+            tried.into_inner(),
+            vec!["zed".to_string(), "zeditor".to_string()]
+        );
+        assert_eq!(resolved.program, "/usr/bin/zeditor");
+        assert_eq!(resolved.args, vec!["--shim".to_string()]);
+        assert_eq!(resolved.via, "PATH");
+        assert!(resolved.hidden);
+    }
+
+    #[test]
+    fn resolver_reports_not_installed_when_every_arm_misses() {
+        // No CLI hit and no Toolbox scripts dir at all.
+        let spec = probe_spec(&["nope"], Some("nope"));
+        assert!(resolve_editor_with(&spec, |_| None, None).is_none());
+        // A scripts dir that exists but lacks the script also misses.
+        let dir = tmp("toolbox-miss");
+        let spec = probe_spec(&[], Some("ghost"));
+        assert!(resolve_editor_with(&spec, |_| None, Some(&dir)).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolver_finds_a_unix_toolbox_script() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmp("toolbox-hit");
+        let script = dir.join("rustrover");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let spec = probe_spec(&[], Some("rustrover"));
+        let resolved =
+            resolve_editor_with(&spec, |_| None, Some(&dir)).expect("the Toolbox script resolves");
+        // The launch is the stat'd script itself: absolute path, no extra args,
+        // through the hidden-command seam.
+        assert_eq!(resolved.program, script.to_string_lossy().into_owned());
+        assert!(resolved.args.is_empty());
+        assert_eq!(resolved.via, "Toolbox");
+        assert!(resolved.hidden);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_all_reports_every_catalog_entry_in_order() {
+        let infos = detect_all();
+        assert_eq!(infos.len(), CATALOG.len());
+        for (info, spec) in infos.iter().zip(CATALOG) {
+            assert_eq!(info.id, spec.id);
+            assert_eq!(info.display_name, spec.display_name);
+            // `found` and `via` must agree — one resolver backs both — and any hit
+            // names one of the resolver's arms. (Machine-independent: no assumption
+            // about which editors this host actually has.)
+            assert_eq!(info.found, info.via.is_some());
+            if let Some(via) = info.via {
+                assert!(["PATH", "Toolbox", "Applications", "Program Files"].contains(&via));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_resolved_spawns_detached_with_the_composed_argv() {
+        let dir = tmp("launch-argv");
+        let out = dir.join("argv.txt");
+        // The child prints the args it receives, making the composed argv —
+        // `program [resolver args…] [spec args…] <folder>` — observable.
+        let resolved = ResolvedLaunch {
+            program: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                format!("printf '%s\\n' \"$@\" > '{}'", out.display()),
+                "argv0".to_string(),
+            ],
+            via: "PATH",
+            hidden: true,
+        };
+        launch_resolved(
+            &resolved,
+            &["-openFoldersAsWorkspace"],
+            "/work/target",
+            &dir,
+        )
+        .expect("spawn succeeds");
+        let expected = "-openFoldersAsWorkspace\n/work/target\n";
+        assert_eq!(
+            wait_for_file(&out, expected),
+            expected,
+            "spec args then the folder, in order"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_resolved_uses_the_plain_command_seam_when_not_hidden() {
+        // The `open` / direct-GUI-exe arm (`hidden: false`) routes through
+        // `child_env::command`; a no-op child stands in for the GUI binary. The
+        // cwd is the (never-deleted) system temp dir so the detached child can't
+        // start inside a just-removed directory.
+        let dir = std::env::temp_dir();
+        let resolved = ResolvedLaunch {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "exit 0".to_string()],
+            via: "Applications",
+            hidden: false,
+        };
+        launch_resolved(&resolved, &[], "/work/target", &dir).expect("spawn succeeds");
+    }
+
+    #[test]
+    fn launch_resolved_surfaces_a_spawn_failure_as_io() {
+        let dir = std::env::temp_dir();
+        let resolved = ResolvedLaunch {
+            program: "/definitely/not/a/recue-editor".to_string(),
+            args: Vec::new(),
+            via: "PATH",
+            hidden: true,
+        };
+        let err = launch_resolved(&resolved, &[], "/work/target", &dir).unwrap_err();
+        assert!(matches!(err, SessionError::Io(_)));
+    }
+
+    #[test]
+    fn open_in_editor_custom_rejects_a_blank_command() {
+        // `Some("   ")` tokenizes to nothing — the "command is empty" error,
+        // distinct from the no-command-set error covered above.
+        let dir = std::env::temp_dir();
+        let err = open_in_editor(dir.to_str().unwrap(), "custom", Some("   ")).unwrap_err();
+        assert!(matches!(err, SessionError::Io(msg) if msg.contains("empty")));
+    }
+
+    #[test]
+    fn open_in_editor_custom_missing_binary_is_binary_not_found() {
+        // The typed BinaryNotFound is the frontend's self-heal signal (reopen the
+        // picker) — it must name the program that failed to resolve.
+        let dir = std::env::temp_dir();
+        let err = open_in_editor(
+            dir.to_str().unwrap(),
+            "custom",
+            Some("recue-missing-editor-xyz {path}"),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, SessionError::BinaryNotFound(name) if name == "recue-missing-editor-xyz")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_in_editor_custom_spawns_the_substituted_command() {
+        let dir = tmp("custom-spawn");
+        let out = dir.join("opened.txt");
+        // A stand-in "editor" that records the folder it was asked to open — the
+        // whole custom pipeline end-to-end: tokenize → substitute {path} → resolve
+        // on PATH → spawn detached.
+        let command = format!(
+            "sh -c 'printf %s \"$1\" > \"{}\"' sh {{path}}",
+            out.display()
+        );
+        open_in_editor(dir.to_str().unwrap(), "custom", Some(&command)).expect("spawns");
+        let expected = dir.to_string_lossy().into_owned();
+        assert_eq!(
+            wait_for_file(&out, &expected),
+            expected,
+            "the {{path}} substitution reached the child"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_in_editor_absent_catalog_editor_is_binary_not_found() {
+        // Pick an editor this machine does NOT have (read-only detection first, so
+        // the test can never launch a real GUI app; CI has none installed, and no
+        // dev box has all of them). The typed error names the display name.
+        let dir = std::env::temp_dir();
+        let absent = CATALOG
+            .iter()
+            .find(|s| resolve_editor(s).is_none())
+            .expect("at least one catalog editor is absent on any machine");
+        let err = open_in_editor(dir.to_str().unwrap(), absent.id, None).unwrap_err();
+        assert!(matches!(err, SessionError::BinaryNotFound(name) if name == absent.display_name));
     }
 }
