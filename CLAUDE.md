@@ -973,6 +973,7 @@ steady-state boot pays **zero** probe cost.
 │   │                       #   SkillAutocomplete (#114), PatchNotes (#192),
 │   │                       #   NewSessionModal, Onboarding (first-launch agent picker),
 │   │                       #   UpdateIndicator/UpdateModal (#190), Toaster, ViewSwitch, ClaudeMissing, EmptyState,
+│   │                       #   Titlebar (the themed macOS Overlay title-bar strip, task 444 — macOS-only via data-platform),
 │   │                       #   TipRow (the shared rotating-tip row: EmptyState hero + Overview filtered-empty, #424),
 │   │                       #   WaveBackground (UI v2 wave layer, task 377 — lazy src/vendor/WaveEngine.js;
 │   │                       #     lazy waveHost runs it on the main thread OR from an OffscreenCanvas
@@ -1438,14 +1439,26 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   agent can never be mistaken for a clean exit. **Windows is unchanged**: no job object — the
   kill is still `ChildKiller::kill()` → `TerminateProcess` on the direct child; it inherits
   only the platform-neutral child-wait-driven `Exited`.
-- **Window chrome:** the **standard native macOS title bar** (#19) — native
-  traffic lights, native title (`title: "ReCue"`), native drag, no custom
-  positioning. The window config carries no `titleBarStyle`/`hiddenTitle`/
-  `trafficLightPosition`, and there is no custom `Titlebar` component or
-  `data-tauri-drag-region` (the earlier overlay chrome from #3 was removed). The
-  webview content area sits cleanly below the native bar, so the app shell starts
-  at the top of the content area (no reserved top strip). **App windows (tasks
-  426–440)** use the same native chrome; they're created from Rust
+- **Window chrome:** an **integrated, ReCue-themed title bar** (task 444, reversing
+  #19's "native bar, no custom chrome"). On **macOS** the window is `titleBarStyle:
+  "Overlay"` + `hiddenTitle: true` + a fixed `trafficLightPosition` (`{x:16,y:10}`) — in
+  `tauri.conf.json` `app.windows[0]` AND mirrored on the `create_app_window` builder,
+  macOS-gated (`#[cfg(target_os = "macos")]` — those three builder methods are macOS-only
+  in Tauri 2). The Overlay style extends the webview under the title bar, so the native
+  traffic lights (kept, with native drag + double-click-zoom) float over a **slim
+  `--surface-mantle` `Titlebar` strip** (`src/components/Titlebar`) — a single
+  `data-tauri-drag-region` `<header>`, no title text, continuous with the sidebar chrome,
+  following the light/dark theme live. It's the FIRST child of `.app` (a
+  `flex-direction: column` container), so on macOS it reserves 30px above `.app-body`; the
+  strip is revealed **only on macOS** via the `data-platform` seam (#363,
+  `Titlebar.module.css`), so **Windows/Linux keep native decorations** and render **no**
+  strip (no empty band). On **every** OS the native window theme is synced to ReCue's
+  light/dark theme via the pure `commands::theme_to_window_theme` + `commands::window_theme`
+  → `window.set_theme(...)` (in `lib.rs` setup + `create_app_window` before reveal, and
+  in `set_theme_background` on a runtime switch) — full DWM-caption / CSD **color** parity
+  needs custom decorations and is future work. `data-tauri-drag-region` needs no capability
+  change — `core:default` already grants `startDragging` (per #19). **App windows (tasks
+  426–440)** use the same chrome; they're created from Rust
   (`open_app_window` → the shared `create_app_window`) with the label `app-<uuid>` and
   an `index.html?win=<uuid>` route, so
   no JS window-create permission is needed — only the `app-*` capability line

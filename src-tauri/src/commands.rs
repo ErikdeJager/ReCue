@@ -2181,6 +2181,26 @@ pub fn window_background(store: &Store) -> Color {
     background_for_theme(settings.get("theme").and_then(|v| v.as_str()))
 }
 
+/// Map ReCue's own light/dark theme (#333 — the `data-theme` attribute) to the NATIVE
+/// window theme (task 444) so the OS window chrome follows the app: on macOS the
+/// traffic-light rendering over the themed title-bar strip, on Windows the DWM caption,
+/// best-effort on Linux (CSD/server-side decorations can't be app-colored). `Some("light")`
+/// → Light; dark / unknown / absent → Dark (mirroring `background_for_theme`'s default so a
+/// fresh install with no `theme` key reads dark). Pure. Platform-neutral: `tauri::Theme` and
+/// `set_theme` are portable, so no `#[cfg]` arm is needed.
+pub fn theme_to_window_theme(theme: Option<&str>) -> tauri::Theme {
+    match theme {
+        Some("light") => tauri::Theme::Light,
+        _ => tauri::Theme::Dark,
+    }
+}
+
+/// The persisted theme's native window theme (task 444), mirroring `window_background`.
+pub fn window_theme(store: &Store) -> tauri::Theme {
+    let settings = store.settings();
+    theme_to_window_theme(settings.get("theme").and_then(|v| v.as_str()))
+}
+
 /// Which window a macOS Dock Reopen should restore when none is visible
 /// (Multi-window 10/16): prefer the main window, else the oldest-sorted full app
 /// window, else any window (a canvas-only remainder — reachable when the main
@@ -2235,8 +2255,13 @@ pub fn schedule_reveal_fallback(app: &AppHandle, label: &str) {
 #[tauri::command]
 pub fn set_theme_background(app: AppHandle, theme: String) {
     let color = background_for_theme(Some(theme.as_str()));
+    // Task 444: the native window theme also follows the runtime theme switch, so the
+    // OS chrome (macOS traffic-light rendering over the themed strip, the Windows DWM
+    // caption, best-effort Linux CSD) flips light↔dark with the app. Platform-neutral.
+    let window_theme = theme_to_window_theme(Some(theme.as_str()));
     for window in app.webview_windows().into_values() {
         let _ = window.set_background_color(Some(color));
+        let _ = window.set_theme(Some(window_theme));
     }
 }
 
@@ -2328,7 +2353,11 @@ pub fn create_app_window(
     let id = uuid::Uuid::new_v4().to_string();
     let label = format!("app-{id}");
     let url = app_window_url(&id, &init);
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+    // `mut` is used only by the macOS title-bar block below; on Windows/Linux that block is
+    // `#[cfg]`-stripped, so the binding is never reassigned there — allow `unused_mut` off
+    // macOS to keep `clippy -D warnings` green on every OS.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("ReCue")
         // The tauri.conf.json main-window geometry — an app window IS a full shell.
         .inner_size(1280.0, 832.0)
@@ -2336,9 +2365,27 @@ pub fn create_app_window(
         // Hidden until the frontend paints its first themed frame (#348) — the native
         // background is the current theme's --bg-base, so it never flashes white.
         .visible(false)
-        .background_color(window_background(&app.state::<Store>()))
+        .background_color(window_background(&app.state::<Store>()));
+    // Task 444: mirror the main window's integrated themed title bar (tauri.conf.json's
+    // titleBarStyle/hiddenTitle/trafficLightPosition) — the native traffic lights float
+    // over the slim ReCue-themed strip the frontend paints (Titlebar), with the native
+    // title hidden. macOS-only: these three builder methods are `#[cfg(target_os =
+    // "macos")]` in Tauri 2 (Windows/Linux keep native decorations, native theme synced
+    // below), so the whole block is gated to keep every OS compiling.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(16.0, 10.0));
+    }
+    let window = builder
         .build()
         .map_err(|e| SessionError::Io(e.to_string()))?;
+    // Task 444: sync the native window theme to the persisted ReCue theme before the
+    // window is ever revealed (#348 — no flash), mirroring the main window in lib.rs
+    // setup. Platform-neutral (`set_theme` is portable).
+    let _ = window.set_theme(Some(window_theme(&app.state::<Store>())));
     // Task 439: apply restored bounds while the window is still hidden (no flash;
     // the OS still enforces min_inner_size). Wayland refuses set_position
     // (compositor-owned placement) — restore degrades to size-only there.
@@ -4534,6 +4581,18 @@ mod tests {
             background_for_theme(Some("light")),
             Color(0xdc, 0xe0, 0xe8, 0xff)
         );
+    }
+
+    /// The NATIVE window theme (task 444) follows ReCue's own theme: only `"light"`
+    /// maps to Light; dark / unknown / absent all default to Dark — mirroring
+    /// `background_for_theme`, so a fresh install with no `theme` key reads dark.
+    #[test]
+    fn theme_to_window_theme_maps_light_else_dark() {
+        assert_eq!(theme_to_window_theme(Some("light")), tauri::Theme::Light);
+        assert_eq!(theme_to_window_theme(Some("dark")), tauri::Theme::Dark);
+        assert_eq!(theme_to_window_theme(None), tauri::Theme::Dark);
+        assert_eq!(theme_to_window_theme(Some("bogus")), tauri::Theme::Dark);
+        assert_eq!(theme_to_window_theme(Some("")), tauri::Theme::Dark);
     }
 
     /// Unreserved bytes (RFC 3986: alnum + `-_.~`) pass through untouched (task 434).
