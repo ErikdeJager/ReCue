@@ -392,7 +392,15 @@ steady-state boot pays **zero** probe cost.
   so a sub-second spurious blip (e.g. a resize/focus repaint that slipped past the backend
   attribution) can never eject it or reset its FIFO position, and `attentionQueue`
   membership rides `attentionEligible` alone rather than raw `sessionBusy`;
-  the queue pane also shows keybind tips while non-empty). The
+  the queue pane also shows keybind tips while non-empty). The queue can be
+  **narrowed** to one repo / own-branch / worktree by the **same shared
+  `overviewRepoFilter`** Overview uses (task 445) — a sidebar folder/branch/worktree
+  click filters the inbox **in place** when Attention is active (guarded
+  `if (view !== "attention")`), else switches to Overview, with a `Showing <repo>` /
+  `Show all` bar in the pane; the optional `filter` threads through the pure
+  `attentionQueue` (default no-op) so all five consumers (list/active/count, the ⌘W
+  close, Shift+↑/↓ nav, dismiss / dismiss-all) honor it and navigation never touches a
+  filtered-out agent. The
   sidebar **`ViewSwitch`** presents **Overview + Attention** as the two equal-weight
   *main* views and **Canvas** as a smaller, de-emphasized *secondary* button (#406),
   with no queue-count badge (#405); in expanded mode Overview/Attention are text
