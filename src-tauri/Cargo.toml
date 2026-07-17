@@ -74,6 +74,13 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 glib = "0.18"
 
+# Mock-runtime unit tests for the thin `AppHandle` glue (primary.rs / file_claims.rs /
+# window_state.rs): enables `tauri::test` (mock_builder / MockRuntime) for `cargo test` /
+# clippy --all-targets / llvm-cov builds only — dev-dep feature unification never reaches
+# a plain `cargo build` or the release bundles, so the shipped app is byte-identical.
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 [lints.clippy]
 all = "warn"
 

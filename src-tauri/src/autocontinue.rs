@@ -31,7 +31,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::pty::SessionManager;
 use crate::store::{PersistedSession, Store};
@@ -384,7 +384,7 @@ pub struct Poke(pub Mutex<Sender<()>>);
 /// Wake the engine now (best-effort): `set_settings` calls this so toggling
 /// `showSessionUsage` / `autoContinueAfterLimit` reacts within one wake instead of
 /// the next tick. Fail-soft when unmanaged (e.g. unit tests) or the engine exited.
-pub fn poke(app: &AppHandle) {
+pub fn poke<R: Runtime>(app: &AppHandle<R>) {
     if let Some(poke) = app.try_state::<Poke>() {
         if let Ok(tx) = poke.0.lock() {
             let _ = tx.send(());
@@ -422,7 +422,7 @@ fn now_epoch_ms() -> i64 {
 /// (bounded: a handful of sessions × 240 ms; the next wake just slips). A panic here
 /// kills only this thread (`panic = "unwind"`, the #358 rule) — no lock is
 /// `unwrap()`ed (poisoned mutexes recover via `into_inner`).
-pub fn run(app: AppHandle, rx: Receiver<()>) {
+pub fn run<R: Runtime>(app: AppHandle<R>, rx: Receiver<()>) {
     let mut state = AutoContinueState::default();
     let mut cached: Option<UsageSnapshot> = None;
     let mut last_fetch: Option<Instant> = None;
@@ -1044,5 +1044,62 @@ mod tests {
                 "autoContinue": { "armed": false, "resetsAtMs": null, "sessionIds": [] },
             })
         );
+    }
+
+    /// A unique on-disk store path per test run (the store.rs `temp_path` pattern —
+    /// module-private there, so mirrored here).
+    fn temp_store_path(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("recue-autocontinue-glue-tests");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir.join(format!("{tag}-{}.json", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn engine_loop_publishes_gated_off_state_and_stops_on_disconnect() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+        let store = Store::load(temp_store_path("engine"));
+        // Gate the poll OFF (the #326 rule) so the pass never touches credentials
+        // or the network — exactly the state this test asserts gets published.
+        store
+            .set_settings(serde_json::json!({ "showSessionUsage": false }))
+            .expect("settings write");
+        app.manage(store);
+        let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+        app.manage(SessionManager::new(ev_tx));
+        app.manage(Shared::default());
+        // Pre-seed a stale usage value so the gated-off pass publishes a change
+        // (cache written, `usage://changed` emitted).
+        {
+            let shared = app.state::<Shared>();
+            shared.0.lock().expect("fresh mutex").usage = Some(UsageSnapshot {
+                used_percent: 55.0,
+                resets_at: None,
+                buckets: Vec::new(),
+            });
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let engine_handle = handle.clone();
+        let engine = std::thread::spawn(move || run(engine_handle, rx));
+        // Every sender dropped = app teardown: the engine finishes its current
+        // pass, sees Disconnected, and returns.
+        drop(tx);
+        engine.join().expect("engine thread exits cleanly");
+
+        let snap = auto_continue_snapshot(app.state());
+        assert_eq!(snap.usage, None, "gated off ⇒ usage reads unavailable");
+        assert_eq!(snap.auto_continue, AutoContinueState::default());
+    }
+
+    #[test]
+    fn poke_is_soft_without_state_and_sends_with_it() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+        poke(handle); // unmanaged (unit tests / teardown) → silent no-op
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        app.manage(Poke(Mutex::new(tx)));
+        poke(handle);
+        assert!(rx.try_recv().is_ok(), "poke must wake the engine channel");
     }
 }

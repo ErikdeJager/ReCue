@@ -32,7 +32,7 @@ use std::sync::mpsc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::store::{PersistedWindow, Store};
 
@@ -319,7 +319,7 @@ pub struct Registry {
 /// none, then flushes once. Suppressed while exiting (the synchronous exit flush
 /// is authoritative; a debounced write must never race teardown). The caller
 /// `app.manage()`s the returned value before any window event can fire.
-pub fn init(app: &AppHandle) -> Registry {
+pub fn init<R: Runtime>(app: &AppHandle<R>) -> Registry {
     let (tx, rx) = mpsc::channel::<()>();
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -352,7 +352,7 @@ fn lock_set<'a>(registry: &'a Registry) -> std::sync::MutexGuard<'a, WindowSet> 
 /// Persist the current snapshot — persist-on-change (an identical set skips the
 /// write), fail-open on io (`let _ =`), `try_state` so a teardown-ordering call
 /// can never panic.
-fn flush(app: &AppHandle) {
+fn flush<R: Runtime>(app: &AppHandle<R>) {
     let (Some(registry), Some(store)) = (app.try_state::<Registry>(), app.try_state::<Store>())
     else {
         return;
@@ -366,7 +366,7 @@ fn flush(app: &AppHandle) {
 /// Act on a pure mutation's verdict: poke the debouncer or flush synchronously
 /// (a small JSON write on the main thread — the same class as the store writes
 /// existing commands already do).
-fn apply(app: &AppHandle, registry: &Registry, action: SaveAction) {
+fn apply<R: Runtime>(app: &AppHandle<R>, registry: &Registry, action: SaveAction) {
     match action {
         SaveAction::None => {}
         SaveAction::Debounce => {
@@ -386,8 +386,8 @@ fn apply(app: &AppHandle, registry: &Registry, action: SaveAction) {
 /// `inner_size`, both main-thread-safe proxies) — on error 0s are stored, which
 /// [`clamp_bounds`]' [`MIN_RESTORE_PX`] floor turns into default placement next
 /// launch.
-pub fn register(
-    app: &AppHandle,
+pub fn register<R: Runtime>(
+    app: &AppHandle<R>,
     label: &str,
     repo: Option<String>,
     canvas: Option<String>,
@@ -428,7 +428,7 @@ pub fn register(
 
 /// Query a window's live maximized state (main-thread-safe at the event site).
 /// Best-effort: an unknown label / query error reads as not-maximized.
-fn live_maximized(app: &AppHandle, label: &str) -> bool {
+fn live_maximized<R: Runtime>(app: &AppHandle<R>, label: &str) -> bool {
     app.get_webview_window(label)
         .and_then(|w| w.is_maximized().ok())
         .unwrap_or(false)
@@ -437,7 +437,7 @@ fn live_maximized(app: &AppHandle, label: &str) -> bool {
 /// Global `WindowEvent::Moved` entry point (lib.rs). Task 443: when the window is
 /// maximized, record ONLY the flag (keep the last non-maximized position as the
 /// un-maximize target); when normal, clear the flag AND record the new position.
-pub fn note_moved(app: &AppHandle, label: &str, x: i32, y: i32) {
+pub fn note_moved<R: Runtime>(app: &AppHandle<R>, label: &str, x: i32, y: i32) {
     let Some(registry) = app.try_state::<Registry>() else {
         return;
     };
@@ -458,7 +458,7 @@ pub fn note_moved(app: &AppHandle, label: &str, x: i32, y: i32) {
 /// `Resized` with `is_maximized` true → record only the flag, keep the last normal
 /// geometry; un-maximizing fires one with false → clear the flag and record the
 /// restored size.
-pub fn note_resized(app: &AppHandle, label: &str, width: u32, height: u32) {
+pub fn note_resized<R: Runtime>(app: &AppHandle<R>, label: &str, width: u32, height: u32) {
     let Some(registry) = app.try_state::<Registry>() else {
         return;
     };
@@ -478,7 +478,7 @@ pub fn note_resized(app: &AppHandle, label: &str, width: u32, height: u32) {
 /// Global `WindowEvent::Destroyed` entry point (lib.rs) — prunes a closed window
 /// unless the app is exiting (the pure would-empty rule catches the
 /// last-window-close exit, where `ExitRequested` only fires after teardown).
-pub fn note_destroyed(app: &AppHandle, label: &str) {
+pub fn note_destroyed<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let Some(registry) = app.try_state::<Registry>() else {
         return;
     };
@@ -489,7 +489,7 @@ pub fn note_destroyed(app: &AppHandle, label: &str) {
 /// `RunEvent::ExitRequested` entry point (lib.rs) — the ⌘Q/`app.exit` path:
 /// flush the full at-quit set synchronously and suppress the per-window prunes
 /// that follow during teardown.
-pub fn note_exit_requested(app: &AppHandle) {
+pub fn note_exit_requested<R: Runtime>(app: &AppHandle<R>) {
     let Some(registry) = app.try_state::<Registry>() else {
         return;
     };
@@ -961,5 +961,104 @@ mod tests {
         let (main, extras) = restorable(entries);
         assert!(main.is_some());
         assert_eq!(extras.len(), MAX_RESTORED_EXTRAS);
+    }
+
+    /// A unique on-disk store path per test run (the store.rs `temp_path` pattern —
+    /// module-private there, so mirrored here).
+    fn temp_store_path(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("recue-window-state-glue-tests");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir.join(format!("{tag}-{}.json", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn glue_register_flush_and_debounced_note_events_persist() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+        app.manage(Store::load(temp_store_path("glue-happy")));
+        app.manage(init(handle));
+
+        // Explicit bounds → the pure verdict is FlushNow → persisted synchronously.
+        register(handle, "main", None, None, Some((10, 20, 800, 600)), false);
+        let saved = handle.state::<Store>().window_state();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            (saved[0].x, saved[0].y, saved[0].width, saved[0].height),
+            (10, 20, 800, 600)
+        );
+
+        // No bounds and no live webview window → the 0-fallback is stored (which
+        // clamp_bounds treats as corrupt → default placement at the next restore).
+        register(handle, "app-x", Some("/repo".into()), None, None, false);
+        let saved = handle.state::<Store>().window_state();
+        assert_eq!(saved.len(), 2);
+        let extra = saved.iter().find(|w| w.label == "app-x").expect("tracked");
+        assert_eq!((extra.width, extra.height), (0, 0));
+        assert_eq!(extra.repo.as_deref(), Some("/repo"));
+
+        // Move + resize on a window with no live handle read as not-maximized →
+        // geometry updates land through the debounced saver thread.
+        note_moved(handle, "main", 30, 40);
+        note_resized(handle, "main", 640, 480);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let now = handle.state::<Store>().window_state();
+            let main = now.iter().find(|w| w.label == "main").expect("tracked");
+            if (main.x, main.y, main.width, main.height) == (30, 40, 640, 480) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "debounced save never landed: {now:?}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // Destroying a non-last window prunes it and flushes synchronously.
+        note_destroyed(handle, "app-x");
+        let saved = handle.state::<Store>().window_state();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].label, "main");
+    }
+
+    #[test]
+    fn glue_exit_suppresses_the_saver_and_unmanaged_calls_are_noops() {
+        // Teardown/setup ordering: with nothing managed every entry point returns
+        // without effect — proven below by the fresh app starting empty.
+        let bare = tauri::test::mock_app();
+        let bare_handle = bare.handle();
+        register(
+            bare_handle,
+            "main",
+            None,
+            None,
+            Some((1, 2, 300, 300)),
+            false,
+        );
+        note_moved(bare_handle, "main", 9, 9);
+        note_resized(bare_handle, "main", 9, 9);
+        note_destroyed(bare_handle, "main");
+        note_exit_requested(bare_handle);
+
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+        app.manage(Store::load(temp_store_path("glue-exit")));
+        app.manage(init(handle));
+        register(handle, "main", None, None, Some((10, 20, 800, 600)), true);
+
+        // ExitRequested: one synchronous flush; the saver thread then skips every
+        // later debounced poke (the exit flush is authoritative).
+        note_exit_requested(handle);
+        let before = handle.state::<Store>().window_state();
+        assert_eq!(before.len(), 1);
+        assert!(before[0].maximized);
+
+        apply(handle, &handle.state::<Registry>(), SaveAction::Debounce);
+        std::thread::sleep(Duration::from_millis(3 * WINDOW_SAVE_DEBOUNCE_MS));
+        assert_eq!(handle.state::<Store>().window_state(), before);
+
+        // A teardown prune after ExitRequested must not shrink the saved set.
+        note_destroyed(handle, "main");
+        assert_eq!(handle.state::<Store>().window_state(), before);
     }
 }

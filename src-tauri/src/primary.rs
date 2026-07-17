@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 /// Eligible for primary: any window that is NOT a detached canvas renderer (#84).
 /// Today that is only the `main` window; card 9/16's full app windows (whatever
@@ -72,7 +72,7 @@ pub struct PrimaryPayload {
 /// the task-434 full-window creator) — ineligible labels are filtered inside.
 /// Emits `window://primary` only when the primary changed, AFTER updating the
 /// state.
-pub fn register_window(app: &AppHandle, label: &str) {
+pub fn register_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
     // `try_state`: never panic on teardown/setup ordering — no state, no election.
     let Some(state) = app.try_state::<Primary>() else {
         return;
@@ -90,7 +90,7 @@ pub fn register_window(app: &AppHandle, label: &str) {
 /// full window is promoted and broadcast — the new primary's frontend re-arms the
 /// once-per-app effects live (`armPrimaryEffects`). A shutdown-teardown emit into
 /// dying webviews is a `let _ =` no-op.
-pub fn unregister_window(app: &AppHandle, label: &str) {
+pub fn unregister_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let Some(state) = app.try_state::<Primary>() else {
         return;
     };
@@ -207,5 +207,36 @@ mod tests {
         assert!(!election.unregister("ghost"));
         assert!(!election.unregister("canvas-abc"));
         assert_eq!(election.primary(), Some("main"));
+    }
+
+    #[test]
+    fn glue_register_unregister_elect_and_snapshot_via_mock_app() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+        app.manage(Primary::default());
+
+        register_window(handle, "main"); // first eligible window → primary
+        register_window(handle, "app-2"); // eligible, but primary unchanged
+        register_window(handle, "canvas-x"); // ineligible → filtered inside
+        register_window(handle, "main"); // duplicate → no-op
+        assert_eq!(primary_window(app.state()), Some("main".to_string()));
+
+        unregister_window(handle, "unknown"); // untracked → no-op
+        unregister_window(handle, "app-2"); // non-primary death → no promotion
+        assert_eq!(primary_window(app.state()), Some("main".to_string()));
+        unregister_window(handle, "main"); // primary death, no survivor
+        assert_eq!(primary_window(app.state()), None);
+    }
+
+    #[test]
+    fn glue_without_managed_state_is_a_silent_noop() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+        // Teardown/setup ordering: no managed Primary → both entry points return
+        // without effect, so managing the state afterwards starts a FRESH election.
+        register_window(handle, "main");
+        unregister_window(handle, "main");
+        app.manage(Primary::default());
+        assert_eq!(primary_window(app.state()), None);
     }
 }

@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 
 /// One claim, as broadcast/snapshotted to the frontend (the task-428 full-value
 /// shape: every `file_claims://changed` emit carries the complete sorted list).
@@ -116,12 +116,12 @@ impl FileClaims {
 
     /// Broadcast the full snapshot (task-428 full-value shape). Best-effort — a
     /// teardown emit into dying webviews is a no-op.
-    fn emit(app: &AppHandle, snapshot: Vec<FileClaim>) {
+    fn emit<R: Runtime>(app: &AppHandle<R>, snapshot: Vec<FileClaim>) {
         let _ = app.emit("file_claims://changed", snapshot);
     }
 
     /// Claim (or take over) a file for `label`; broadcast only on change.
-    pub fn claim(&self, app: &AppHandle, repo_path: &str, file: &str, label: &str) {
+    pub fn claim<R: Runtime>(&self, app: &AppHandle<R>, repo_path: &str, file: &str, label: &str) {
         let mut registry = self.lock();
         if !registry.claim(repo_path, file, label) {
             return;
@@ -133,7 +133,13 @@ impl FileClaims {
 
     /// Release `label`'s claim on a file; a stale release (another window took
     /// over) is a silent no-op — nothing changes, nothing is broadcast.
-    pub fn release(&self, app: &AppHandle, repo_path: &str, file: &str, label: &str) {
+    pub fn release<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        repo_path: &str,
+        file: &str,
+        label: &str,
+    ) {
         let mut registry = self.lock();
         if !registry.release(repo_path, file, label) {
             return;
@@ -145,7 +151,7 @@ impl FileClaims {
 
     /// Drop ALL of a closing window's claims (any window kind), broadcasting once
     /// if anything changed — the `Destroyed`-arm escape hatch (`lib.rs`).
-    pub fn purge_window(&self, app: &AppHandle, label: &str) {
+    pub fn purge_window<R: Runtime>(&self, app: &AppHandle<R>, label: &str) {
         let mut registry = self.lock();
         if !registry.purge_window(label) {
             return;
@@ -265,5 +271,31 @@ mod tests {
         reg.claim("/repo", "b.md", "canvas-1");
         assert!(reg.release("/repo", "a.md", "main"));
         assert_eq!(reg.snapshot(), vec![claim("/repo", "b.md", "canvas-1")]);
+    }
+
+    #[test]
+    fn wrapper_claim_release_purge_route_through_the_registry() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+        let claims = FileClaims::default();
+
+        claims.claim(handle, "/repo", "notes.md", "main");
+        assert_eq!(claims.snapshot(), vec![claim("/repo", "notes.md", "main")]);
+        claims.claim(handle, "/repo", "notes.md", "main"); // same holder → unchanged
+        claims.claim(handle, "/repo", "notes.md", "app-2"); // take-over
+        assert_eq!(claims.snapshot(), vec![claim("/repo", "notes.md", "app-2")]);
+
+        claims.release(handle, "/repo", "notes.md", "main"); // stale → silent no-op
+        assert_eq!(claims.snapshot(), vec![claim("/repo", "notes.md", "app-2")]);
+        claims.release(handle, "/repo", "notes.md", "app-2"); // holder → removed
+        assert_eq!(claims.snapshot(), vec![]);
+
+        claims.claim(handle, "/repo", "a.md", "app-2");
+        claims.claim(handle, "/repo", "b.md", "app-2");
+        claims.claim(handle, "/repo", "c.md", "main");
+        claims.purge_window(handle, "app-2"); // drops exactly that window's claims
+        assert_eq!(claims.snapshot(), vec![claim("/repo", "c.md", "main")]);
+        claims.purge_window(handle, "app-2"); // idempotent second purge → no-op
+        assert_eq!(claims.snapshot(), vec![claim("/repo", "c.md", "main")]);
     }
 }
