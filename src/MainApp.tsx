@@ -24,7 +24,6 @@ import ModalHost from "./components/ModalHost";
 import Overview from "./components/Overview/Overview";
 import Sidebar from "./components/Sidebar/Sidebar";
 import { reconcileTerminals } from "./components/Terminal/terminalPool";
-import Titlebar from "./components/Titlebar/Titlebar";
 import Toaster from "./components/Toaster/Toaster";
 import UpdateModal from "./components/Update/UpdateModal";
 import WaveBackground from "./components/WaveBackground/WaveBackground";
@@ -193,11 +192,6 @@ function MainApp() {
 
   return (
     <div className="app">
-      {/* Themed window title-bar strip (task 444): a slim `--surface-mantle` strip the
-          native macOS traffic lights float over (Overlay title bar); `display: none` off
-          macOS. `.app` is `flex-direction: column`, so on macOS it reserves 30px above
-          `.app-body`; elsewhere it renders nothing and `.app-body` fills the window. */}
-      <Titlebar />
       {claudeMissing && <ClaudeMissing />}
       <DndContext
         sensors={sensors}

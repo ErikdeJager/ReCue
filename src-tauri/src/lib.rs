@@ -216,10 +216,9 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let color = commands::window_background(&app.state::<Store>());
                 let _ = window.set_background_color(Some(color));
-                // Task 444: also sync the native window theme (macOS traffic-light
-                // rendering over the themed title-bar strip; the Windows DWM caption;
-                // best-effort Linux CSD) to the persisted theme, before the window is
-                // ever shown — so the chrome never flashes the wrong theme (#348).
+                // Also sync the native window theme (the macOS/Windows title-bar
+                // appearance; best-effort Linux CSD) to the persisted theme, before the
+                // window is ever shown — so the title bar never flashes the wrong theme (#348).
                 let _ = window.set_theme(Some(commands::window_theme(&app.state::<Store>())));
             }
             commands::schedule_reveal_fallback(app.handle(), "main");
