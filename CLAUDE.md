@@ -1648,7 +1648,7 @@ repo-root board files:
 - **The plan lane** ships as **two interchangeable variants** — run **one** at a time in
   the plan terminal; both explore the codebase, assign the next task number `N` (one greater
   than the highest used **anywhere** — board, `PLAN-*.md`, `TASK_ARCHIVE.md`; next is
-  **#311**), write a self-contained `PLAN-<N>.md`, set the card's `Dependencies:`, and move it
+  **#448**), write a self-contained `PLAN-<N>.md`, set the card's `Dependencies:`, and move it
   to `IMPLEMENT`, producing **identical board output**:
   - **`/plan-assume-kanban-dev`** (autonomous) — where a card is ambiguous it makes the most
     reasonable interpretation itself and **records each call** under a `## Task <N>` section in
@@ -1688,7 +1688,7 @@ board-viewer rendering.
 
 **Board files at the repo root.** `KANBAN.md` (the live board) and `PLAN-<N>.md` (per-task
 plans) are **git-ignored / local-only**; `ASSUMPTIONS.md` (refinement decisions) and
-`TASK_ARCHIVE.md` (permanent history — #1–#310 to date) are **tracked**. All feature work
+`TASK_ARCHIVE.md` (permanent history — #1–#447 to date) are **tracked**. All feature work
 happens in isolated worktrees — the **main checkout never leaves its branch**; the plan and
 archive lanes commit only their own tracked file (`ASSUMPTIONS.md` / `TASK_ARCHIVE.md`) so the
 concurrent lanes don't collide. Task numbers are **global and never reused**. The `(#N)`
