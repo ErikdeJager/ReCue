@@ -80,8 +80,10 @@ enum LogLocation {
 }
 
 /// Locate `~/.claude/projects/*/<id>.jsonl` by the globally-unique session UUID, so
-/// we never replicate claude's cwd→dir encoding (it maps `/` and `.` → `-`). The
-/// UUID makes the filename unique, so the first project dir that has it wins.
+/// we never replicate claude's cwd→dir encoding (it maps `/` and `.` → `-`). When
+/// several project dirs hold a copy, the **newest by mtime** wins (see
+/// `locate_log_in`) — the same rule as `find_log`, so the fork guard (#134/#138)
+/// and the title/cwd readers can never disagree about which log is live.
 fn locate_log(id: &str) -> LogLocation {
     let Some(home) = crate::path_env::home_dir() else {
         return LogLocation::Unknown;
@@ -91,20 +93,19 @@ fn locate_log(id: &str) -> LogLocation {
 
 /// Core of `locate_log` over an explicit projects root (factored out so the unit
 /// tests can point it at a temp fixture): an unreadable root is `Unknown`, a
-/// readable one with no `<id>.jsonl` anywhere is `Absent`, and the first project
-/// dir holding the file wins.
+/// readable one with no `<id>.jsonl` anywhere is `Absent`, and — like `find_log` —
+/// the **newest** copy by mtime wins when several project dirs hold one: entering
+/// a worktree RELOCATES the transcript (Claude Code ≥ 2.1.198) and can leave a
+/// stale, turn-less copy behind, and a first-match walk could pin the fork guard
+/// to that stale file for good while the title/cwd readers follow the live one.
 fn locate_log_in(projects: &Path, id: &str) -> LogLocation {
-    let file_name = format!("{id}.jsonl");
-    let Ok(entries) = std::fs::read_dir(projects) else {
+    if std::fs::read_dir(projects).is_err() {
         return LogLocation::Unknown;
-    };
-    for entry in entries.flatten() {
-        let candidate = entry.path().join(&file_name);
-        if candidate.is_file() {
-            return LogLocation::Found(candidate);
-        }
     }
-    LogLocation::Absent
+    match newest_log_in(projects, &format!("{id}.jsonl")) {
+        Some(path) => LogLocation::Found(path),
+        None => LogLocation::Absent,
+    }
 }
 
 /// The session's log path, or `None` when it isn't there / can't be reached.
@@ -114,13 +115,13 @@ fn locate_log_in(projects: &Path, id: &str) -> LogLocation {
 /// storage (Claude Code ≥ 2.1.198) and can leave a stale copy behind — the old
 /// first-match walk could pin the title (and the `read_session_cwd` relocation
 /// signal) to the stale file for good. With a single copy (the overwhelmingly
-/// common case) this is the old behavior.
+/// common case) this is the old behavior. Shares `locate_log`'s resolution, so
+/// every log reader agrees on which copy is live.
 fn find_log(id: &str) -> Option<PathBuf> {
-    let home = crate::path_env::home_dir()?;
-    newest_log_in(
-        &home.join(".claude").join("projects"),
-        &format!("{id}.jsonl"),
-    )
+    match locate_log(id) {
+        LogLocation::Found(path) => Some(path),
+        LogLocation::Absent | LogLocation::Unknown => None,
+    }
 }
 
 /// The newest (by mtime) `<file_name>` across the project dirs under `projects`.
@@ -289,7 +290,7 @@ impl ProjectLogIndex {
             return Self::unknown();
         };
         let mut dirs: Vec<PathBuf> = Vec::new();
-        let mut logs: HashMap<String, usize> = HashMap::new();
+        let mut newest: HashMap<String, (std::time::SystemTime, usize)> = HashMap::new();
         let mut unlisted: Vec<PathBuf> = Vec::new();
         for entry in entries.flatten() {
             let dir = entry.path();
@@ -306,15 +307,30 @@ impl ProjectLogIndex {
                 let name = file.file_name();
                 let Some(name) = name.to_str() else { continue };
                 if name.ends_with(".jsonl") {
-                    // First writer wins — the UUID makes the filename globally unique,
-                    // exactly the assumption `locate_log` already documents.
-                    logs.entry(name.to_string()).or_insert(dir_ix);
+                    // Newest copy wins — the same mtime rule `locate_log`/`find_log`
+                    // apply to a relocated transcript's stale duplicate (an
+                    // unreadable mtime sorts as the epoch; ties keep the first).
+                    let mtime = file
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::UNIX_EPOCH);
+                    match newest.get(name) {
+                        Some((seen, _)) if *seen >= mtime => {}
+                        _ => {
+                            newest.insert(name.to_string(), (mtime, dir_ix));
+                        }
+                    }
                 }
             }
         }
         Self {
             dirs,
-            logs: Some(logs),
+            logs: Some(
+                newest
+                    .into_iter()
+                    .map(|(name, (_, dir_ix))| (name, dir_ix))
+                    .collect(),
+            ),
             unlisted,
         }
     }
@@ -611,6 +627,63 @@ mod tests {
             locate_log_in(&projects.join("nope"), "aaaa-1111"),
             LogLocation::Unknown
         ));
+        std::fs::remove_dir_all(&projects).ok();
+    }
+
+    /// Pin a file's mtime explicitly (no sleeps — the `newest_log_in` test's pattern).
+    fn set_mtime(path: &Path, at: std::time::SystemTime) {
+        std::fs::File::options()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    #[test]
+    fn locate_log_in_prefers_the_newest_duplicate() {
+        let projects = projects_fixture("locate-newest");
+        // The worktree-relocation layout: the old project dir keeps a stale copy,
+        // the worktree's project dir holds the live one.
+        write_log(&projects, "-repo", "dddd-4444", false);
+        write_log(&projects, "-repo--claude-worktrees-x", "dddd-4444", true);
+        let stale = projects.join("-repo").join("dddd-4444.jsonl");
+        let fresh = projects
+            .join("-repo--claude-worktrees-x")
+            .join("dddd-4444.jsonl");
+        let base =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        set_mtime(&stale, base);
+        set_mtime(&fresh, base + std::time::Duration::from_secs(60));
+        match locate_log_in(&projects, "dddd-4444") {
+            LogLocation::Found(p) => assert_eq!(p, fresh),
+            _ => panic!("expected Found"),
+        }
+        std::fs::remove_dir_all(&projects).ok();
+    }
+
+    #[test]
+    fn project_log_index_prefers_the_newest_duplicate() {
+        let projects = projects_fixture("index-newest");
+        // Stale copy: startup metadata only (not forkable); relocated live copy: a
+        // real turn. Under the old first-listed rule the answer depended on
+        // read_dir order; newest-by-mtime pins it to the live log, matching
+        // locate_log/find_log so Fork can never stick to the stale duplicate.
+        write_log(&projects, "-repo", "eeee-5555", false);
+        write_log(&projects, "-repo--claude-worktrees-x", "eeee-5555", true);
+        let stale = projects.join("-repo").join("eeee-5555.jsonl");
+        let fresh = projects
+            .join("-repo--claude-worktrees-x")
+            .join("eeee-5555.jsonl");
+        let base =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        set_mtime(&stale, base + std::time::Duration::from_secs(60));
+        set_mtime(&fresh, base + std::time::Duration::from_secs(120));
+        assert!(ProjectLogIndex::build_in(&projects).has_conversation("eeee-5555"));
+
+        // Reverse orientation: when the NEWEST copy has no turn, not forkable.
+        set_mtime(&stale, base + std::time::Duration::from_secs(200));
+        assert!(!ProjectLogIndex::build_in(&projects).has_conversation("eeee-5555"));
         std::fs::remove_dir_all(&projects).ok();
     }
 

@@ -9,6 +9,7 @@ import {
   MIN_DRAWN_TO_DEGRADE,
   recordFrame,
   recordStat,
+  STALE_WINDOW_MS,
   statsSnapshot,
   STATS_SAMPLE_CAP,
   WAVE_SCALES,
@@ -100,6 +101,33 @@ describe("waveGovernor", () => {
     expect(r.next.drawn).toBe(1);
     expect(r.next.totalMs).toBe(5);
     expect(r.next.windowStart).toBe(1000);
+  });
+
+  it("discards a stale window after a gated/hidden pause instead of degrading on it", () => {
+    let s = initialGovState(0);
+    // Enough slow pre-pause frames that a decision WOULD degrade if trusted…
+    s = feedWindow(s, DEGRADE_BUDGET_MS + 10, MIN_DRAWN_TO_DEGRADE + 5);
+    // …then the wave is covered/hidden for a long time (no draws advance the
+    // window) and the first resumed frame arrives past the stale threshold.
+    const r = recordFrame(s, 2, s.windowStart + STALE_WINDOW_MS + 1);
+    expect(r.degradeTo).toBeNull();
+    expect(govScale(r.next)).toBe(1);
+    // Measurement restarts on the resumed frame: it IS the fresh window's first sample.
+    expect(r.next.windowStart).toBe(s.windowStart + STALE_WINDOW_MS + 1);
+    expect(r.next.drawn).toBe(1);
+    expect(r.next.totalMs).toBe(2);
+  });
+
+  it("still degrades on a normally-elapsed window (the stale guard never fires mid-run)", () => {
+    let s = initialGovState(0);
+    s = feedWindow(s, DEGRADE_BUDGET_MS + 10, MIN_DRAWN_TO_DEGRADE + 5);
+    // Closing frame lands after EVAL_WINDOW_MS but well under STALE_WINDOW_MS.
+    const r = recordFrame(
+      s,
+      DEGRADE_BUDGET_MS + 10,
+      s.windowStart + EVAL_WINDOW_MS + 50,
+    );
+    expect(r.degradeTo).toBe(WAVE_SCALES[1]);
   });
 });
 

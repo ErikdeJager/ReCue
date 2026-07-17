@@ -83,6 +83,26 @@ function effectivePlatform(): string {
  * modal (the old ⌘\ guard behavior). */
 type Dispatch = "swallow" | "pass";
 
+/** Every modal that can own the keyboard — the full #425 list. Guards any chord
+ * whose action could otherwise land on the card/panel BEHIND a dialog (or yank
+ * the view out from under one); new modal flags must be added here. */
+function anyModalOpen(state: ReturnType<typeof useStore.getState>): boolean {
+  return (
+    state.newSessionOpen ||
+    state.settingsOpen ||
+    state.globalSearchOpen ||
+    state.createPanelOpen ||
+    state.templateEditorOpen ||
+    state.templateManagerOpen ||
+    state.templateUseOpen ||
+    state.cloneRepoOpen ||
+    state.onboardingOpen ||
+    state.editorPickerOpen ||
+    state.canvasClosePromptId !== null ||
+    state.update.confirming
+  );
+}
+
 /** Run a rebindable action with its window/modal guards. Each case preserves the
  * exact guard semantics its hardcoded predecessor had. */
 function runKeybindAction(action: KeybindActionId): Dispatch {
@@ -171,20 +191,7 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
     // swallowed there, so the chord can never fall through to a WebView "close
     // window" default.
     case "close-panel": {
-      const modalOpen =
-        state.newSessionOpen ||
-        state.settingsOpen ||
-        state.globalSearchOpen ||
-        state.createPanelOpen ||
-        state.templateEditorOpen ||
-        state.templateManagerOpen ||
-        state.templateUseOpen ||
-        state.cloneRepoOpen ||
-        state.onboardingOpen ||
-        state.editorPickerOpen ||
-        state.canvasClosePromptId !== null ||
-        state.update.confirming;
-      if (!modalOpen) state.closeFocusedPanel();
+      if (!anyModalOpen(state)) state.closeFocusedPanel();
       return "swallow";
     }
     // ⌘, — the OS-conventional Settings chord. Open-only (Escape/Save close the
@@ -200,17 +207,13 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
       return "swallow";
     }
     // ⌥1/⌥2/⌥3 — direct view switching (replaces the removed ⌘\ cycle). Like the
-    // old ⌘\ guard, the event **passes through** when a modal owns the keyboard,
-    // so ⌥-glyph typing in a modal input still works.
+    // old ⌘\ guard, the event **passes through** when a modal owns the keyboard —
+    // EVERY modal, so ⌥-glyph typing (⌥2 = @ on Nordic layouts) in any modal
+    // input still types instead of flipping the view under the dialog.
     case "view-overview":
     case "view-attention":
     case "view-canvas": {
-      if (
-        state.newSessionOpen ||
-        state.settingsOpen ||
-        state.createPanelOpen ||
-        state.globalSearchOpen
-      ) {
+      if (anyModalOpen(state)) {
         return "pass";
       }
       state.setView(
@@ -252,17 +255,14 @@ export function useKeyboardNav(): void {
 
       // ⌘⏎ / Ctrl+Enter — dismiss the selected agent in the Attention view (#398):
       // it leaves the queue (and the page) but stays alive, and selection advances
-      // to the next queued agent. Only in the Attention view, and inert while a
-      // modal owns the keyboard — otherwise the combo passes straight through
-      // (return WITHOUT preventing default) so ⌘⏎ still reaches a focused terminal.
+      // to the next queued agent. Only in the Attention view, and inert while ANY
+      // modal owns the keyboard (the close-panel rule: a chord aimed at a dialog
+      // must never act on the card behind it) — otherwise the combo passes straight
+      // through (return WITHOUT preventing default) so ⌘⏎ still reaches the modal
+      // or a focused terminal.
       if (chord === "mod+enter") {
         const state = useStore.getState();
-        if (
-          state.view !== "attention" ||
-          state.newSessionOpen ||
-          state.settingsOpen ||
-          state.globalSearchOpen
-        ) {
+        if (state.view !== "attention" || anyModalOpen(state)) {
           return;
         }
         e.preventDefault();

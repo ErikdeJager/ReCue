@@ -36,7 +36,10 @@ import styles from "./AgentHeaderMenu.module.css";
  *   `forkUnavailableReason(session)` is non-null — the source has no on-disk turn yet
  *   (#138) or the agent can't fork at all (Codex/OpenCode/Custom, #142); the reason is
  *   the hover tooltip. `aria-disabled` (not the native `disabled`) keeps the tooltip.
- * - **Copy resume command** is rendered **only** when `agentSupportsResume(agent)`.
+ * - **Copy resume command** is rendered **only** when `agentSupportsResume(agent)`
+ *   AND the session is not a dev-container one — a containerized session's
+ *   conversation log lives in its per-session container home (mounted only inside
+ *   docker), so a host `claude --resume <id>` always fails "No conversation found".
  *
  * Frontend-only + platform-neutral, so it behaves identically on macOS and Windows.
  */
@@ -68,7 +71,8 @@ function AgentHeaderMenu({
 
   const forkReason = forkUnavailableReason(session);
   const canFork = forkReason === null;
-  const canResume = agentSupportsResume(session.agent);
+  const canResume =
+    agentSupportsResume(session.agent) && !session.containerImage;
   const watched = session.watch ?? false;
 
   useEffect(() => {

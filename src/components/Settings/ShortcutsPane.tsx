@@ -91,7 +91,16 @@ function ShortcutsPane({
         setRecordingId(null);
         return;
       }
-      if (e.key === "Backspace" || e.key === "Delete") {
+      // Bare ⌫/Delete unbinds (the help text's contract); with any modifier held
+      // it is a chord being RECORDED — backspace/delete are valid key tokens
+      // (mod+backspace etc.), so fall through to eventChord instead of unbinding.
+      if (
+        (e.key === "Backspace" || e.key === "Delete") &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
         assign(id, "");
         setRecordingId(null);
         return;

@@ -19,6 +19,13 @@ export const EVAL_WINDOW_MS = 4000;
  * stall of a few frames must not trigger a downscale). */
 export const MIN_DRAWN_TO_DEGRADE = 30;
 
+/** A window whose wall span exceeds this is STALE: `gateFrame` stops draw calls
+ * while hidden/covered without advancing the window, so the first frame after a
+ * long pause would otherwise close a window of minutes-old samples and could
+ * degrade permanently on pre-pause data. Under continuous drawing a window closes
+ * within one frame of EVAL_WINDOW_MS, so double never triggers falsely. */
+export const STALE_WINDOW_MS = 2 * EVAL_WINDOW_MS;
+
 export interface GovState {
   /** Index into WAVE_SCALES (0 = full res, 2 = half). */
   scaleIdx: 0 | 1 | 2;
@@ -51,6 +58,14 @@ export function recordFrame(
   drawMs: number,
   now: number,
 ): { next: GovState; degradeTo: number | null } {
+  // Resuming after a gated/hidden pause: the window's samples predate the pause —
+  // restart measurement on this frame instead of deciding on stale data.
+  if (now - s.windowStart >= STALE_WINDOW_MS) {
+    return {
+      next: { ...s, windowStart: now, totalMs: drawMs, drawn: 1 },
+      degradeTo: null,
+    };
+  }
   const totalMs = s.totalMs + drawMs;
   const drawn = s.drawn + 1;
   if (now - s.windowStart < EVAL_WINDOW_MS) {

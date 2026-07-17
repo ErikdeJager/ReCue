@@ -266,7 +266,11 @@ export function useAutoSaveFile(
         clearTimeout(writeTimer.current);
         writeTimer.current = null;
       }
-      if (dirty.current && textRef.current !== null) {
+      // Hard gate (task 435) here too: with a FOREIGN claim another window owns
+      // the file now — flushing this stale buffer would overwrite that window's
+      // saved edits, so it is surrendered instead (the documented take-over
+      // semantics; last-writer-wins only ever applies between un-claimed writers).
+      if (dirty.current && textRef.current !== null && !lockedByRef.current) {
         void writeTextFile(repoPath, file, textRef.current).catch(() => {});
         dirty.current = false;
       }

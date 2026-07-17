@@ -322,11 +322,32 @@ fn expand_win_probe(template: &str, get: impl Fn(&str) -> Option<String>) -> Opt
     Some(PathBuf::from(format!("{value}{}", &rest[end + 1..])))
 }
 
+/// Rank a matching JetBrains dir's remainder (the text after the product prefix,
+/// e.g. `" 2025.1"` or `" Community Edition 2023.1"`): the exact product (the
+/// remainder is nothing but a version) outranks an edition-suffixed sibling that
+/// shares the prefix, and versions compare **numerically** from the last
+/// whitespace token — plain string order would rank `Community Edition 2023.1`
+/// above `2025.1` (`C` > `2`). A remainder with no parseable version ranks
+/// lowest. Pure; `test`-widened.
+#[cfg(any(windows, test))]
+fn jetbrains_version_rank(rest: &str) -> (bool, Vec<u64>) {
+    let trimmed = rest.trim();
+    let last = trimmed.split_whitespace().last().unwrap_or("");
+    let version: Vec<u64> = last
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<Result<_, _>>()
+        .unwrap_or_default();
+    let exact_product = !version.is_empty() && trimmed == last;
+    (exact_product, version)
+}
+
 /// Pick the standalone JetBrains install dir for `product_prefix` out of a
 /// `%ProgramFiles%\JetBrains` listing and join its launcher: entries look like
-/// `IntelliJ IDEA 2025.1`, and the lexicographically-last match approximates the
-/// newest (JetBrains versions as `<year>.<1-3>`, so plain string order holds).
-/// Returns a path **relative to the JetBrains dir**. Pure; `test`-widened.
+/// `IntelliJ IDEA 2025.1`, ranked by [`jetbrains_version_rank`] — numeric
+/// version compare, with the exact product beating an edition-suffixed sibling
+/// (`IntelliJ IDEA Community Edition 2023.1` also matches the prefix). Returns a
+/// path **relative to the JetBrains dir**. Pure; `test`-widened.
 #[cfg(any(windows, test))]
 fn jetbrains_versioned_exe(
     entries: &[String],
@@ -336,7 +357,7 @@ fn jetbrains_versioned_exe(
     entries
         .iter()
         .filter(|e| e.starts_with(product_prefix))
-        .max()
+        .max_by_key(|e| jetbrains_version_rank(&e[product_prefix.len()..]))
         .map(|dir| PathBuf::from(dir).join("bin").join(launcher))
 }
 
@@ -747,6 +768,63 @@ mod tests {
             None
         );
         assert_eq!(jetbrains_versioned_exe(&[], "CLion", "clion64.exe"), None);
+    }
+
+    #[test]
+    fn jetbrains_versioned_exe_compares_versions_numerically_and_prefers_the_exact_product() {
+        // The lexicographic pitfall: "Community Edition 2023.1" sorts above
+        // "2025.1" as a string ('C' > '2'), yet the newer exact product must win.
+        let entries: Vec<String> = [
+            "IntelliJ IDEA Community Edition 2023.1",
+            "IntelliJ IDEA 2025.1",
+            "IntelliJ IDEA 2024.3",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            jetbrains_versioned_exe(&entries, "IntelliJ IDEA", "idea64.exe"),
+            Some(
+                PathBuf::from("IntelliJ IDEA 2025.1")
+                    .join("bin")
+                    .join("idea64.exe")
+            )
+        );
+        // Numeric compare within the edition too: 2024.10 > 2024.9 (string order
+        // would say the opposite), and with ONLY editions installed the newest
+        // edition still resolves (better than nothing).
+        let editions: Vec<String> = [
+            "PyCharm Community Edition 2024.9",
+            "PyCharm Community Edition 2024.10",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            jetbrains_versioned_exe(&editions, "PyCharm", "pycharm64.exe"),
+            Some(
+                PathBuf::from("PyCharm Community Edition 2024.10")
+                    .join("bin")
+                    .join("pycharm64.exe")
+            )
+        );
+        // An exact product beats an edition even when the edition's version is
+        // higher — the user asked for THAT product.
+        let mixed: Vec<String> = [
+            "IntelliJ IDEA Community Edition 2025.2",
+            "IntelliJ IDEA 2024.1",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            jetbrains_versioned_exe(&mixed, "IntelliJ IDEA", "idea64.exe"),
+            Some(
+                PathBuf::from("IntelliJ IDEA 2024.1")
+                    .join("bin")
+                    .join("idea64.exe")
+            )
+        );
     }
 
     #[test]
