@@ -2793,3 +2793,103 @@ window-sizing logic).
 **Dependencies:** none (extends the already-archived #439 window-restore; no ordering dependency on any
 un-landed or sibling card — Task 444 also touches window chrome but is title-bar styling, no code
 overlap with sizing/persistence).
+
+### 446. [x] Portal sidebar context menus to body — fix dimmed worktree menu transparency & clipping
+
+A right-click context menu opened from a **dimmed (idle) worktree row** in the sidebar rendered
+**semi-transparent** (underlying content bled through) and was **clipped inside the sidebar** instead of
+floating over the whole window. Both symptoms had one root cause — the menu was a DOM descendant of the
+idle worktree row's `opacity: 0.62` element — and both are fixed by portaling the menus to
+`document.body`. The worktree row's presence-driven dimming is preserved.
+
+**What shipped** (branch `task-446-portal-sidebar-menus`, PR
+[#212](https://github.com/ErikdeJager/ReCue/pull/212), merged as `3f78a7e`; `Sidebar.tsx` only —
+no CSS/Rust change):
+
+- **`src/components/Sidebar/Sidebar.tsx`** — added `import { createPortal } from "react-dom";` and a
+  tiny shared `MenuPortal` wrapper (`createPortal(children, document.body)`), then wrapped **all five**
+  sidebar context-menu render sites (the `WorktreeHeader` inline menu — the load-bearing fix — plus the
+  shared `RowContextMenu`, `AgentContextMenu`, the `RepoBranchLine` inline menu, and the
+  sidebar-background/collapsed-rail inline menu) in `<MenuPortal>`. Both the `menu-overlay` (full-screen
+  outside-click catcher) and the `menu-pop` surface are portaled together, so outside-clicks anywhere in
+  the window still dismiss. The menus keep their own `position: fixed` + viewport-clamped `{x, y}` and
+  the existing `menuPos`/`menuOverlay` z-index (201/200). React portals preserve synthetic-event
+  bubbling, so Escape/outside-click/right-click dismissal and the inline confirm steps (Close worktree /
+  Close items here / Delete worktree…) keep working.
+
+**Root cause & fix rationale.** An ancestor with `opacity < 1` both composites its whole subtree as one
+group at that opacity (the transparency) **and** creates a stacking context that captures a
+`position: fixed` descendant into the group — which `.repos` (`overflow-y: auto`) / `.sidebar`
+(`overflow: hidden`) then clip (the clipping). Portaling the menu out to `<body>` escapes the dimmed
+ancestor entirely, fixing both at once. The other four menus weren't visibly buggy (their rows have no
+`opacity < 1` ancestor) but use the identical `position: fixed` pattern, so they were portaled too for
+consistency and to future-proof the pattern. A side benefit: portaling out of the dnd-kit draggable row
+means a menu click can no longer accidentally start a drag.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 446)
+
+- Fix mechanism = React `createPortal` to `document.body` (matching the existing `ContainerInfoPopover`
+  precedent), not a narrower CSS tweak — one change fixes **both** the opacity bleed and the clipping,
+  since a single root cause drives both.
+- Kept the worktree-row dimming as-is (`.worktreeIdle opacity: 0.62`) — did **not** refactor it to
+  `--text-muted`; the portal makes the dimming safe, so the minimal fix leaves the designed
+  presence-driven dimming untouched.
+- The load-bearing fix is the `WorktreeHeader` menu (the only dimmed-ancestor site); the other four
+  fixed-position sites were portaled too for consistency — zero downside (they already used
+  `position: fixed`). The `ViewsMenu` embedded inside the worktree menu is portaled along for free.
+- No CSS/Rust changes; z-index tokens unchanged. Pure WebView/TS/React — identical on
+  macOS/Windows/Linux, no OS branches, no new `color-mix`.
+
+**Dependencies:** none.
+
+### 445. [x] Filter the Attention inbox by repo/folder/branch from the sidebar
+
+The **Attention** triage inbox (#398) can now be narrowed to a single repo (or its own branch, or one
+worktree) by clicking a folder / branch / worktree row in the sidebar — exactly the way those same
+clicks already filter the **Overview** wall — with a `Showing <repo>` indicator + `Show all` clear
+button inside the queue pane. The filter is the **same shared, transient `overviewRepoFilter` field**
+Overview uses, so a filter set in one view is reflected in the other. Pure WebView/TS/store/CSS —
+platform-neutral, no backend change.
+
+**What shipped** (branch `task-445-attention-filter`, PR
+[#213](https://github.com/ErikdeJager/ReCue/pull/213), merged as `0eccde9`):
+
+- **`src/components/Attention/attentionQueue.ts`** — the single-source-of-truth queue helper gains an
+  optional `filter?: OverviewFilter` on its input, applied inside the existing `members` predicate via
+  the shared `sessionInFilter` (undefined/null ⇒ no filtering). Call sites that omit it are byte-for-byte
+  unchanged.
+- **`src/components/Attention/Attention.tsx`** — reads `overviewRepoFilter`, passes it into
+  `attentionQueue` (so `activeId`/`activeSession`/list/count all reflect the filtered queue), renders a
+  `.filterBar` (`Showing <repo>` + `· this branch` for `mode:"own"` + `Show all` → `setOverviewRepoFilter(null)`)
+  mirroring Overview, and a filter-aware empty state (`No agents waiting in <repo>` vs the unfiltered
+  `All caught up`), with the filter bar kept clearable above the empty block.
+- **`src/components/Attention/Attention.module.css`** — added `.filterBar`/`.filterLabel`/`.showAll`
+  copied from Overview (tokens only).
+- **`src/components/Sidebar/Sidebar.tsx`** — the four filter-click sites (`RepoGroup` repo-title,
+  `RepoBranchLine` branch-line, `WorktreeHeader` worktree-name, collapsed-rail folder) changed their
+  unconditional `setView("overview")` to `if (view !== "attention") setView("overview")`, so a click
+  filters the inbox **in place** when already in Attention but still switches to Overview from
+  Overview/Canvas.
+- **`src/store.ts` + `src/useKeyboardNav.ts`** — the four other `attentionQueue` consumers
+  (`dismissAttention` next-advance, `dismissAllAttention`, `closeFocusedPanel` ⌘W, Shift+↑/↓ nav) now
+  pass the current `overviewRepoFilter`, so navigation/removal/dismiss never touch a hidden agent and
+  the right pane never shows a filtered-out agent.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 445)
+
+- Reused the **same** shared `overviewRepoFilter` field (no Attention-only filter, no rename — avoids
+  churning ~20 references), so one sidebar click filters whichever view is active ("just like overview
+  mode").
+- Granularity matches exactly what the sidebar already exposes — repo folder (`mode:"all"`), repo
+  own-branch (`mode:"own"`), worktree folder — all covered for free by `overviewRepoFilter` +
+  `sessionInFilter`. Filtering by an arbitrary non-checked-out/non-worktree branch is a documented
+  non-goal (Overview doesn't do it either).
+- Guarded the four `setView("overview")` calls with `if (view !== "attention")` so a filter click in
+  Attention filters in place instead of yanking the user to Overview.
+- Threaded the optional `filter` through the pure `attentionQueue` (default no-op) so all five consumers
+  stay consistent; re-clicking the filtered row clears it via the existing `setOverviewRepoFilter`
+  toggle. Did NOT restyle the inbox icon (that was sibling Task 447). No backend/Rust, no `ViewSwitch`
+  changes.
+
+**Dependencies:** none (builds on the already-archived #398 Attention view and the #34/#197/#247
+Overview repo filter).
