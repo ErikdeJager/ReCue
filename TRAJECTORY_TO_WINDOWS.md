@@ -1442,3 +1442,44 @@ two legs are ConPTY-flavored and want a real-box look:
       resize (unchanged effective grid) — on ConPTY (which can repaint on *any* resize
       call, even same-size) confirm no spurious busy dot on Overview↔Attention↔Canvas
       switches with unchanged panel sizes.
+
+## 2026-07-16 — Maximized-by-default + persisted window size (task 443)
+
+Backend-only, platform-neutral by construction — the flag lives in the pure `WindowSet`
+state machine (`set_maximized` / `merge_action`, unit-tested) and the persisted
+`PersistedWindow { maximized }`; only the boot `maximize()` call and the live
+`is_maximized()` query at the `Moved`/`Resized` site are impure. On Windows `maximize()`
+is a **true** maximize (fills the work area, excludes the taskbar). It is applied while
+the window is still hidden (#348), so no flash. Real-box checks:
+
+- [ ] **Fresh-install default maximize.** With no persisted `window_state` (or one with no
+      `main` entry), the main window opens **maximized** filling the desktop, no flash, no
+      1280×832 frame flicker before it.
+- [ ] **Maximized round-trips a quit.** Leave the window maximized, quit (⌘/Alt+F4 or last-
+      window close), relaunch → it reopens maximized.
+- [ ] **A user-chosen non-maximized size restores.** Un-maximize, resize/move to a custom
+      frame, quit, relaunch → it restores at that exact frame (existing #439 behavior), and
+      the stored `x/y/width/height` while maximized stayed the last non-maximized geometry
+      (the un-maximize target snaps back to it, not to a first-ever 1280×832).
+- [ ] **Extra app windows are NOT maximized by default** (⌘⌥N / File → New Window / repo
+      "Open in new window") — they open at 1280×832 — but a previously-maximized `app-*`
+      window re-maximizes on restore.
+
+## 2026-07-16 — Themed window title bar (task 444)
+
+macOS gets an integrated `--surface-mantle` `Titlebar` strip under the Overlay title bar
+(the native traffic lights float over it); Windows keeps native decorations, so the strip
+is `display:none` (revealed only via `data-platform="macos"`) and there is deliberately no
+custom caption. The one Windows-facing change is the **native theme sync**: the persisted
+ReCue light/dark theme is pushed to the window via `commands::theme_to_window_theme` →
+`window.set_theme(...)` (in `lib.rs` setup + `create_app_window` before reveal, and in
+`set_theme_background` on a runtime switch). Real-box checks:
+
+- [ ] **DWM caption follows the theme.** On Windows 10/11 confirm the native title-bar /
+      caption buttons render dark in ReCue's dark theme and light in light theme, on boot
+      (no flash — set before the hidden-until-painted reveal, #348) and on a live
+      Settings → Appearance theme toggle (via `set_theme_background`), for both the main
+      window and a second `app-*` window. Full caption **color** parity (beyond dark/light)
+      needs custom decorations — out of scope, future work.
+- [ ] **No empty strip / layout shift.** The `Titlebar` strip renders nothing on Windows
+      (no 30px band); `.app-body` fills the window exactly as before.

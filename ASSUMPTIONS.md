@@ -3985,3 +3985,55 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - The #356 bundle figures in CLAUDE.md are refreshed from an actual `npm run bundle:report` run in the worktree (single route post-437) rather than left stale; the 770 kB detached-canvas figure is dropped.
 - docs/macos-permissions.md and docs/linux-packaging.md are untouched — the card names only CLAUDE.md and the two trajectory logs.
 - Task 430 and 431 landed during/before this planning pass (archive entries exist), so the epic context's "planned" status for them was already stale; the plan treats all of 426-431 as landed and 432-440 as landing before build.
+
+## Task 447
+
+- "The inbox icon" is the Lucide `Inbox` hero icon in the Attention empty ("All caught up") state (Attention.tsx:223), colored by the `.empty svg` CSS rule (Attention.module.css:246-248) — NOT the sidebar ViewSwitch rail `AlertTriangle`; chose the icon shown ON the Attention page itself.
+- Use full-strength `var(--accent)` (not `--accent-dim`/`--accent-tint-*`) so it clearly "matches the accent color"; the empty state already has a legibility text-shadow so a full-strength accent hero reads fine.
+- Use the `--accent` CSS variable (not a hardcoded hex) so a custom accent (Settings → Appearance, inline on `<html>`) recolors it live and it tracks Dark/Light themes; platform-neutral pure CSS.
+- Treating this decorative/branding icon with `--accent` does NOT violate CLAUDE.md's "accent never encodes status/selection" rule — that rule targets status semantics; this actually removes a minor smell (it currently borrows the `--status-awaiting` status token for a decorative icon).
+
+## Task 442
+
+- "Reduce wave changes / a bit slower" interpreted as: slow the wave's temporal drift (WaveEngine's fieldT morph that re-shapes direction/waveform) without disabling the animation.
+- Chose to scale the per-frame dt (via a WAVE_TIME_SCALE constant in waveTick.ts's gateFrame) rather than the preset `speed`: the engine's morph rate is `0.20 + 0.30*speed` with a 0.20 floor, so reducing speed slows advection more than the morph the user complained about; dt-scaling slows morph+flow uniformly and covers both main + worker render modes from one edit. WaveEngine.js is sha-pinned/untouched — dt is the only external morph-rate lever, so no vendor exception is needed.
+- Picked factor 0.7 (~30% slower) as a clearly perceptible but non-drastic "a bit slower"; it is one constant, trivially retunable (0.75 gentler / 0.6 stronger).
+- Kept it a hardcoded constant, not a new Settings toggle (card default; backgroundAnimation already covers on/off — a wave-speed slider isn't warranted).
+- Change is pure WebView/TS in a reducer consumed identically on macOS/Windows/Linux; no OS-specific behavior introduced.
+
+## Task 443
+
+- "Maximum size / full desktop" = call the OS maximize (Windows maximize / macOS AppKit zoom / X11 & Wayland compositor maximize), NOT a manual set_size to the raw monitor size — OS maximize respects the menu-bar/Dock/taskbar work area, which the Tauri Monitor API does not expose. Applied on the still-hidden window before reveal so there is no flash.
+- Persist a new maximized:bool on PersistedWindow (serde-default false, backward compatible) rather than geometry-only — the doc note in window_state.rs explicitly invites it, it makes "stays maximized unless the user resized" clean, and it restores correctly on Wayland (where set_position is compositor-refused but maximize is honored). Geometry restore remains the always-present floor, so the flag is a best-effort enhancement that degrades gracefully (esp. macOS zoom quirks).
+- While maximized, only the flag is updated; stored x/y/width/height stay the last NON-maximized geometry, so un-maximizing a restored window lands on a real size (the builder 1280x832 default on a first-ever maximize).
+- Only the MAIN window maximizes by default on a fresh launch; additional app windows (⌘⌥N / Open-in-new-window / Canvas pop-out) keep the 1280x832 default. The maximized-flag persist/restore applies to all restorable windows (main + app-*), so a formerly-maximized app window does re-maximize.
+- Cross-platform / Wayland: Wayland restores size-only for position (existing #439 degrade) but honors maximize; macOS zoom-while-hidden + is_maximized is the riskiest arm and is flagged for real-box verification in TRAJECTORY_TO_WINDOWS.md, with the geometry floor as the fallback. Backend-only change — the frontend has no window-sizing logic.
+
+## Task 444
+
+- macOS approach: use `titleBarStyle: "Overlay"` + `hiddenTitle` + `trafficLightPosition` with a themed `data-tauri-drag-region` strip (keep native traffic lights, app-color the bar) rather than fully custom-drawn controls — lowest-risk way to deliver an integrated bar and avoids #19's original drag/positioning complaint.
+- Windows/Linux approach: keep native decorations (no hand-drawn caption buttons); native caption bars are OS-drawn above the webview and cannot take ReCue's exact color without full custom decorations, which is out of scope. Best-effort match = sync the native window theme (dark/light) to ReCue's theme. Full custom-decoration parity is deferred/future work, logged in the trajectory docs.
+- The themed strip hosts nothing (no title text, no controls) — native title hidden; it is a pure drag region that just matches the chrome surface color and follows light/dark theme. It reserves ~30px on macOS only (macOS `trafficLightPosition.y` tuned live).
+- Strip visibility/space is gated by the synchronous `data-platform="macos"` CSS seam (set in main.tsx before first render) so it is correct on the first frame with no async-IPC pop-in; it is `display:none` on Windows/Linux so no redundant empty band appears.
+- Strip color = `--surface-mantle` (the sidebar/chrome surface) so it reads as continuous with the app chrome; composes with #348 (painted on first frame, window hidden until then → no launch flash). Native window-theme sync added on window-create and on the runtime theme toggle via `set_theme`.
+- This card deliberately reverses #19 (native-bar decision); the plan requires updating the CLAUDE.md "Window chrome" convention to record the reversal.
+- Rust divergence is `#[cfg(target_os = "macos")]`-gated on the app-window builder; a new pure `theme_to_window_theme` helper (with a unit test) drives the native theme sync. Assumed `core:default` already grants window dragging (per #19); flagged to add `core:window:allow-start-dragging` only if the drag region no-ops at runtime.
+
+## Task 445
+
+- Reuse the SAME shared store field `overviewRepoFilter` for Attention rather than an Attention-only filter, so one sidebar click filters whichever view is active — matches the card's "just like in overview mode". Kept the field name (no rename) to avoid churning ~20 references.
+- Granularity matches exactly what the sidebar already exposes: repo folder (mode:"all"), repo own-branch (branch-line, mode:"own"), and worktree folder — all covered "for free" by reusing `overviewRepoFilter` + `sessionInFilter`. Filtering by an arbitrary branch that is not a checked-out folder or worktree row is a documented non-goal / follow-up (Overview does not do it either).
+- The four sidebar filter-clicks force `setView("overview")` today; guard that so it only switches to Overview when NOT already in Attention (`if (view !== "attention")`), so a folder/branch/worktree click filters the inbox in place instead of yanking the user to Overview.
+- Added a filter indicator bar in the Attention queue pane ("Showing <repo> [· this branch]" + "Show all" clear button) mirroring Overview's `.filterBar`, and made the empty state filter-aware.
+- Re-clicking the currently-filtered row clears the filter — reused the existing `setOverviewRepoFilter` toggle unchanged, so Attention's toggle behavior is identical to Overview's.
+- Threaded an optional `filter` through the pure `attentionQueue` helper (default no-op, existing call sites/tests unchanged) so all five consumers — view, Shift+↑/↓ nav, ⌘W remove, Dismiss-all, dismiss-advance — operate on the visible/filtered queue consistently.
+- Did NOT restyle the inbox icon (task 447's scope); no backend/Rust and no ViewSwitch changes.
+
+## Task 446
+
+- Fix mechanism: portal the menu to document.body via React createPortal (matching the existing ContainerInfoPopover precedent) rather than a narrower CSS-only tweak — one change fixes BOTH the opacity-inheritance and the clipping, since a single root cause (the menu being a DOM descendant of the opacity:0.62 .worktreeIdle element) drives both symptoms.
+- Root cause: opacity < 1 on the .worktreeIdle ancestor both composites the descendant menu at 62% (transparency) AND captures the position:fixed menu into that stacking/opacity group, which .repos (overflow-y:auto)/.sidebar (overflow:hidden) then clips (the "opacity/transform ancestor breaks position:fixed" behavior) — not a separate transform/filter ancestor (none exists in the sidebar chain).
+- Keep the worktree-row dimming as-is (.worktreeIdle opacity:0.62 stays); do NOT refactor it to --text-muted. The portal makes the dimming safe, so the minimal fix leaves the designed presence-driven dimming untouched.
+- Scope: the load-bearing fix is the WorktreeHeader inline menu (the only dimmed-ancestor site). For consistency + future-proofing the identical fixed-position pattern, also portal the other four sidebar menu render sites (shared RowContextMenu, AgentContextMenu, RepoBranchLine inline, sidebar-background/rail inline) — zero downside since they already use position:fixed.
+- Both the menu-overlay (outside-click catcher) and the menu-pop are portaled together, so outside-clicks in the main content area still dismiss; anchoring keeps the existing viewport-clamped {x,y}; React portals preserve synthetic-event bubbling so Escape/outside-click/right-click dismissal and inline-confirm items keep working; menu z-index (200/201) unchanged.
+- No CSS/Rust changes; only src/components/Sidebar/Sidebar.tsx (add createPortal import + a MenuPortal wrapper). Pure WebView/TS work — identical on macOS/Windows/Linux, no OS branches, no new color-mix.

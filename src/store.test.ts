@@ -3584,6 +3584,66 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
   });
 });
 
+describe("attention repo filter (#445)", () => {
+  const s = () => useStore.getState();
+
+  it("filtering from Attention keeps the view (guard) while setting the filter", () => {
+    useStore.setState({ view: "attention", overviewRepoFilter: null });
+    // Mimic a sidebar folder/branch/worktree click: set the shared filter, and only
+    // force Overview when NOT already in Attention (the step-4 inline guard).
+    s().setOverviewRepoFilter("/repo/a1", "all");
+    if (s().view !== "attention") s().setView("overview");
+    expect(s().view).toBe("attention");
+    expect(s().overviewRepoFilter).toEqual({ path: "/repo/a1", mode: "all" });
+  });
+
+  it("filtering from Overview switches to Overview (guard) and sets the filter", () => {
+    useStore.setState({ view: "overview", overviewRepoFilter: null });
+    s().setOverviewRepoFilter("/repo/a1", "all");
+    if (s().view !== "attention") s().setView("overview");
+    expect(s().view).toBe("overview");
+    expect(s().overviewRepoFilter).toEqual({ path: "/repo/a1", mode: "all" });
+  });
+
+  it("dismissAllAttention only dismisses the filtered (visible) agents", () => {
+    useStore.setState({
+      view: "attention",
+      sessions: [session("a1"), session("b1")],
+      sessionActive: { a1: true, b1: true },
+      attentionEligible: { a1: true, b1: true },
+      dismissedAttention: {},
+      overviewRepoFilter: { path: "/repo/a1", mode: "all" },
+      selectedId: "a1",
+    });
+    s().dismissAllAttention();
+    expect(s().dismissedAttention.a1).toBe(true);
+    // The hidden repo-B agent is untouched — dismiss-all acts on the visible queue only.
+    expect(s().dismissedAttention.b1).toBeUndefined();
+  });
+
+  it("closeFocusedPanel in Attention removes a visible agent, never a filtered-out one", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "attention",
+      sessions: [session("a1"), session("b1")],
+      sessionActive: { a1: true, b1: true },
+      attentionEligible: { a1: true, b1: true },
+      dismissedAttention: {},
+      // Filter to repo B while the selection is on the hidden repo-A agent. The
+      // Attention branch resolves the active id from the FILTERED queue (top = b1),
+      // so ⌘W removes b1 — never the filtered-out a1.
+      overviewRepoFilter: { path: "/repo/b1", mode: "all" },
+      selectedId: "a1",
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("b1");
+    expect(killSpy).not.toHaveBeenCalledWith("a1");
+    killSpy.mockRestore();
+  });
+});
+
 describe("attention admission grace (#398 flicker fix)", () => {
   const s = () => useStore.getState();
 
