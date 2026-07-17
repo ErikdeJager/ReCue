@@ -2893,3 +2893,61 @@ platform-neutral, no backend change.
 
 **Dependencies:** none (builds on the already-archived #398 Attention view and the #34/#197/#247
 Overview repo filter).
+
+### 444. [x] Themed (app-colored) window title bar / window-controls region
+
+The top bar holding the macOS traffic lights now reads as part of ReCue rather than default OS chrome:
+an **integrated, app-colored title bar** — the native traffic lights float over a slim ReCue-themed
+strip (`--surface-mantle`, following the light/dark theme) continuous with the sidebar chrome. On
+Windows/Linux the native decorations are kept (no custom caption buttons), but the native caption is
+**synced to ReCue's light/dark theme** so it isn't jarringly light in a dark app. Composed with the
+#348 hidden-until-painted machinery so there is no launch flash. **This deliberately reverses #19**
+(which had removed the original #3 custom title bar), the way #84/#100/#126 reversed earlier "no" rules.
+
+**What shipped** (branch `task-444-themed-titlebar`, PR
+[#214](https://github.com/ErikdeJager/ReCue/pull/214), merged as `96503a4`):
+
+- **`src-tauri/tauri.conf.json`** — re-added the three macOS-only `app.windows[0]` keys (ignored on
+  Windows/Linux): `titleBarStyle: "Overlay"`, `hiddenTitle: true`,
+  `trafficLightPosition: { x: 16, y: 10 }`. `backgroundColor`/`visible: false` (#348) unchanged.
+- **`src/components/Titlebar/Titlebar.tsx` + `.module.css`** (new) — a single
+  `<header data-tauri-drag-region />` pure drag strip, `display: none` by default and revealed
+  (`display: block; height: 30px; background: var(--surface-mantle); border-bottom: --border-hairline`)
+  **only** on `:global(:root[data-platform="macos"])` — the synchronous #363 `data-platform` seam, so
+  the strip's presence is correct on the first frame (no async-IPC pop-in) and reserves zero space on
+  Windows/Linux. The mantle/hairline tokens flip automatically in the light-theme block.
+- **`src/MainApp.tsx`** — renders `<Titlebar />` as the first child of `.app` (already
+  `flex-direction: column`), so on macOS the strip reserves 30px above `.app-body` and on Windows/Linux
+  it's `display:none`.
+- **`src-tauri/src/commands.rs`** — pure `theme_to_window_theme(Option<&str>) -> tauri::Theme`
+  (`"light"` → Light, else Dark) with a unit test; a `window_theme(store)` helper; a
+  `#[cfg(target_os = "macos")]`-gated `create_app_window` builder block applying the same
+  Overlay/hidden-title/traffic-light settings + initial `set_theme` so every `app-*` window matches;
+  and `set_theme_background` extended to also `window.set_theme(...)` per window on a runtime theme
+  toggle.
+- **`src-tauri/src/lib.rs`** — `.setup()` sets the still-hidden main window's initial native theme from
+  the persisted theme (`window.set_theme(Some(commands::window_theme(...)))`) alongside the existing
+  `set_background_color` block, before reveal — no flash.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 444)
+
+- macOS approach = `titleBarStyle: "Overlay"` + `hiddenTitle` + `trafficLightPosition` with a themed
+  `data-tauri-drag-region` strip (keep native traffic lights, app-color the bar) rather than fully
+  custom-drawn controls — lowest-risk way to deliver an integrated bar, avoiding #19's original
+  drag/positioning complaint.
+- Windows/Linux approach = keep native decorations; a native caption cannot take ReCue's exact color
+  without full custom decorations (out of scope). Best-effort match = sync the native window theme
+  (dark/light) to ReCue's theme via portable `set_theme` (macOS NSAppearance / Windows DWM immersive
+  dark / Linux GTK prefer-dark). Full custom-decoration parity is deferred, logged in the trajectory
+  docs.
+- The strip hosts nothing (no title text, no controls) — native title hidden; a pure drag region
+  matching `--surface-mantle`, reserving ~30px on macOS only. Visibility gated by the synchronous
+  `data-platform="macos"` CSS seam (correct on the first frame), composed with #348 (window hidden
+  until painted → no flash).
+- This card reverses #19; the plan required updating CLAUDE.md's "Window chrome" convention to record
+  the reversal. Rust divergence is `#[cfg(target_os = "macos")]`-gated; the new pure
+  `theme_to_window_theme` helper (with a unit test) drives the native theme sync.
+
+**Dependencies:** none. (Shared `tauri.conf.json` `app.windows[0]` / `create_app_window` surfaces with
+Task 443, but kept disjoint — 444 owns only title-bar styling, 443 owns size/bounds; the merge lane
+resolved the textual overlap, hence the one merge retry.)
