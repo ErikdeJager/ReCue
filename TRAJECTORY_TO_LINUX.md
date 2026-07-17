@@ -1905,6 +1905,28 @@ WebGL probe/latch are in the task-434 entry. Still missing — new items:
       N restored windows (439) exactly ONE "Updated to vX" toast / onboarding modal fires
       across the whole app.
 
+## 2026-07-16 — Maximized-by-default + persisted window size (task 443)
+
+Backend-only, platform-neutral core — the pure `WindowSet` state machine
+(`set_maximized` / `merge_action`, unit-tested) and the persisted
+`PersistedWindow { maximized }`; only the boot `maximize()` and the live `is_maximized()`
+query at the `Moved`/`Resized` site are impure. The key Linux nuance: unlike
+`set_position` (compositor-refused on **Wayland**, so #439 restore degrades to size-only
+there), `maximize()` **is** honored by Wayland compositors — so the maximized default and
+restore actually work on Wayland. On X11 it is a true maximize. Applied while the window
+is hidden (#348), so no flash. Real-box checks:
+
+- [ ] **Fresh-install default maximize (X11 + Wayland).** No persisted `window_state` →
+      the main window opens maximized filling the work area, no flash. Verify on both a
+      Wayland session and an X11 session (Arch/Ubuntu/Mint).
+- [ ] **Wayland re-maximize on restore.** Quit maximized, relaunch under Wayland → the
+      compositor re-maximizes (even though it ignored the saved `x/y` position); the
+      un-maximize target is a sensible frame.
+- [ ] **Non-maximized size restores.** Un-maximize, resize, quit, relaunch → restores at
+      that size (size-only under Wayland's compositor-owned placement, as #439).
+- [ ] **Extra app windows** open at 1280×832 (not maximized) unless a previously-maximized
+      `app-*` window is being restored.
+
 ## 2026-07-16 — Themed window title bar (task 444)
 
 macOS-only Overlay title-bar strip; on Linux the `Titlebar` strip is `display:none`

@@ -3536,6 +3536,8 @@ export const useStore = create<AppState>()((set, get) => ({
       eligible: s.attentionEligible,
       idleSince: s.sessionIdleSince,
       recurringChildIds: ownedChildSessionIds(s.recurrings),
+      // Scope to the shared repo filter (#445) so navigation lands only on visible agents.
+      filter: s.overviewRepoFilter,
     });
     const idx = queue.findIndex((q) => q.id === id);
     if (idx === -1) return; // not a current queue member → no-op
@@ -3557,6 +3559,8 @@ export const useStore = create<AppState>()((set, get) => ({
       eligible: s.attentionEligible,
       idleSince: s.sessionIdleSince,
       recurringChildIds: ownedChildSessionIds(s.recurrings),
+      // Dismiss only the currently-visible (filtered) queue (#445).
+      filter: s.overviewRepoFilter,
     });
     if (queue.length > 0) {
       set((st) => {
@@ -5591,6 +5595,8 @@ export const useStore = create<AppState>()((set, get) => ({
         eligible: s.attentionEligible,
         idleSince: s.sessionIdleSince,
         recurringChildIds: ownedChildSessionIds(s.recurrings),
+        // Resolve the effective active id the same way the (filtered) view does (#445).
+        filter: s.overviewRepoFilter,
       });
       const activeId = queue.some((q) => q.id === s.selectedId)
         ? s.selectedId

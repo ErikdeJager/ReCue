@@ -130,6 +130,11 @@ function Attention() {
   const autoNameOn = useStore((s) => s.settings.autoName);
   const showDiffLineCounts = useStore((s) => s.settings.showDiffLineCounts);
   const platform = useStore((s) => s.platform);
+  // The transient repo/folder/branch filter shared with the Overview wall (#34/#445) —
+  // a sidebar folder/branch/worktree click narrows the queue exactly as it narrows
+  // Overview, with a `Showing <repo>` indicator + `Show all` clear-button below.
+  const filter = useStore((s) => s.overviewRepoFilter);
+  const setOverviewRepoFilter = useStore((s) => s.setOverviewRepoFilter);
   const select = useStore((s) => s.select);
   const dismissAllAttention = useStore((s) => s.dismissAllAttention);
   const removeSession = useStore((s) => s.removeSession);
@@ -151,6 +156,7 @@ function Attention() {
         eligible: attentionEligible,
         idleSince: sessionIdleSince,
         recurringChildIds,
+        filter,
       }),
     [
       sessions,
@@ -160,6 +166,7 @@ function Attention() {
       attentionEligible,
       sessionIdleSince,
       recurringChildIds,
+      filter,
     ],
   );
 
@@ -218,13 +225,40 @@ function Attention() {
             </button>
           )}
         </div>
+        {/* Filter indicator (#445) — mirrors Overview's `.filterBar`. Rendered above
+            both the queue list AND the empty block so the filter is always clearable.
+            Only shown while a repo/folder/branch filter is set (shared with Overview). */}
+        {filter && (
+          <div className={styles.filterBar}>
+            <span className={styles.filterLabel}>
+              Showing <strong>{repoName(filter.path)}</strong>
+              {/* "own" mode narrows to the repo's own branch — worktrees hidden. */}
+              {filter.mode === "own" && " · this branch"}
+            </span>
+            <button
+              type="button"
+              className={styles.showAll}
+              onClick={() => setOverviewRepoFilter(null)}
+            >
+              Show all
+            </button>
+          </div>
+        )}
         {queue.length === 0 ? (
           <div className={styles.empty}>
             <Inbox size={30} strokeWidth={1.5} aria-hidden />
-            <span className={styles.emptyTitle}>All caught up</span>
-            <span className={styles.emptyHint}>
-              No agents are waiting on you.
-            </span>
+            {filter ? (
+              <span className={styles.emptyTitle}>
+                No agents waiting in {repoName(filter.path)}
+              </span>
+            ) : (
+              <>
+                <span className={styles.emptyTitle}>All caught up</span>
+                <span className={styles.emptyHint}>
+                  No agents are waiting on you.
+                </span>
+              </>
+            )}
           </div>
         ) : (
           <div className={styles.queueList}>

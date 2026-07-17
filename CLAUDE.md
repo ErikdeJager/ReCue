@@ -701,7 +701,14 @@ steady-state boot pays **zero** probe cost.
   quit-time flush, monitor-safe `clamp_bounds`, cap main + 8 extras) and are recreated
   at boot through the shared `create_app_window` path — deliberately **reversing #84's
   "detached windows are per-session" rule** (Wayland restores size-only; compositors own
-  placement). **The #84 single-owner era is deleted** (437): the ownership map + hook,
+  placement). **Maximized default + persistence** (443): `PersistedWindow` gains a
+  serde-default `maximized: bool` tracked live at the `Moved`/`Resized` site (while
+  maximized only the flag changes, so `x/y/width/height` stay the last non-maximized
+  un-maximize target); on a **fresh install** (no saved `main` entry) the main window
+  opens **maximized** by default, restore re-`maximize()`s after applying bounds (Wayland
+  honors `maximize()` unlike `set_position`; macOS zoom), and additional `app-*` windows
+  still open at 1280×832 unless restored maximized — all applied while hidden (#348), no
+  flash. **The #84 single-owner era is deleted** (437): the ownership map + hook,
   the detached-note placeholder, the `CanvasWindow` route, the four canvas-window Rust
   commands, their window-set broadcast event, and the store's detached-id slice are all
   gone; `?canvas=<id>` survives one release as a **compat parse** (a full shell preset

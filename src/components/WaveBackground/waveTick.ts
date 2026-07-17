@@ -11,6 +11,14 @@ export const FPS_CAP = 48;
 export const BUSY_FPS_CAP = 24;
 export const SETTLE_FRAMES = 240; // ~5s at the cap — "settle a few seconds, then freeze"
 
+/** Global wave time-scale (task 442): the simulation timestep handed to the engine is
+ * the physical frame delta times this factor, so the field's direction/waveform drift
+ * (WaveEngine's fieldT morph) — and the strand flow, proportionally — advance more
+ * slowly. 0.7 ≈ 30% slower, a calmer wave without freezing it. The engine itself is
+ * sha-pinned/never edited, so this is the config-surface lever (dt is the only external
+ * control of morph rate). Retune this ONE constant to taste. */
+export const WAVE_TIME_SCALE = 0.7;
+
 export interface GateState {
   /** Timestamp of the last DRAWN frame; 0 = no timebase (first frame / just unhidden). */
   last: number;
@@ -59,7 +67,7 @@ export function gateFrame(
     : 1 / 60;
   return {
     draw: true,
-    dt,
+    dt: dt * WAVE_TIME_SCALE,
     next: { last: now, frames: s.frames + 1, freezeFloor: s.freezeFloor },
   };
 }

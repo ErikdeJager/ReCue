@@ -14,10 +14,19 @@
 //!   while minimized restores at its last real bounds.
 //! - **Wayland** compositors own placement: `set_position` is refused and `Moved`
 //!   may never be delivered, so restore degrades to size-only with default
-//!   placement there. Not worked around.
-//! - **Maximized/fullscreen state is not persisted** — a window quit while
-//!   maximized restores as a normal frame at the maximized geometry (a later card
-//!   can add an `is_maximized` flag if wanted).
+//!   placement there. `maximize()` (unlike `set_position`) IS honored by the
+//!   compositor, so the maximized default/restore below works on Wayland.
+//! - **Maximized state is persisted (task 443).** Each entry carries a `maximized`
+//!   flag, tracked live at the `Moved`/`Resized` event site (`is_maximized()`): while
+//!   maximized only the flag is updated, so `x/y/width/height` stay the last
+//!   NON-maximized geometry (the un-maximize / restore target). At boot restore
+//!   re-maximizes AFTER applying that geometry, so the OS un-maximize target is the
+//!   stored frame. On a **fresh install** (no saved `main` entry) the main window
+//!   opens maximized by default (its builder 1280×832 becomes the un-maximize
+//!   target); additional `app-*` windows still open at 1280×832 unless a previously
+//!   maximized one is being restored. Maximize is applied while the window is still
+//!   hidden (#348), so there is no flash. macOS uses AppKit **zoom** (fills the
+//!   visible frame minus the menu bar/Dock); Windows/X11 use true maximize.
 
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -57,6 +66,17 @@ pub enum SaveAction {
     /// A singular event (open / close / quit) — persist the snapshot promptly, so
     /// a quit inside the debounce window can never lose it.
     FlushNow,
+}
+
+/// Combine two verdicts from a single event site (task 443 — a `Resized`/`Moved`
+/// that both clears the maximized flag AND records new geometry): the stronger
+/// wins, `FlushNow > Debounce > None`. Pure.
+pub fn merge_action(a: SaveAction, b: SaveAction) -> SaveAction {
+    match (a, b) {
+        (SaveAction::FlushNow, _) | (_, SaveAction::FlushNow) => SaveAction::FlushNow,
+        (SaveAction::Debounce, _) | (_, SaveAction::Debounce) => SaveAction::Debounce,
+        _ => SaveAction::None,
+    }
 }
 
 /// Pure live-set state machine (the `primary::Election` precedent): every rule
@@ -120,6 +140,24 @@ impl WindowSet {
         }
         entry.width = width;
         entry.height = height;
+        SaveAction::Debounce
+    }
+
+    /// Record a window's maximized state (queried live at the event site, task
+    /// 443). Only the flag changes; geometry is left untouched so the last
+    /// NON-maximized bounds remain the un-maximize / restore target across
+    /// restarts. Untracked / unchanged / exiting → no-op.
+    pub fn set_maximized(&mut self, label: &str, maximized: bool) -> SaveAction {
+        if self.exiting {
+            return SaveAction::None;
+        }
+        let Some(entry) = self.windows.iter_mut().find(|w| w.label == label) else {
+            return SaveAction::None;
+        };
+        if entry.maximized == maximized {
+            return SaveAction::None;
+        }
+        entry.maximized = maximized;
         SaveAction::Debounce
     }
 
@@ -354,6 +392,7 @@ pub fn register(
     repo: Option<String>,
     canvas: Option<String>,
     bounds: Option<(i32, i32, u32, u32)>,
+    maximized: bool,
 ) {
     let Some(registry) = app.try_state::<Registry>() else {
         return;
@@ -379,6 +418,7 @@ pub fn register(
         y,
         width,
         height,
+        maximized,
         repo,
         canvas,
     };
@@ -386,21 +426,52 @@ pub fn register(
     apply(app, &registry, action);
 }
 
-/// Global `WindowEvent::Moved` entry point (lib.rs).
+/// Query a window's live maximized state (main-thread-safe at the event site).
+/// Best-effort: an unknown label / query error reads as not-maximized.
+fn live_maximized(app: &AppHandle, label: &str) -> bool {
+    app.get_webview_window(label)
+        .and_then(|w| w.is_maximized().ok())
+        .unwrap_or(false)
+}
+
+/// Global `WindowEvent::Moved` entry point (lib.rs). Task 443: when the window is
+/// maximized, record ONLY the flag (keep the last non-maximized position as the
+/// un-maximize target); when normal, clear the flag AND record the new position.
 pub fn note_moved(app: &AppHandle, label: &str, x: i32, y: i32) {
     let Some(registry) = app.try_state::<Registry>() else {
         return;
     };
-    let action = lock_set(&registry).moved(label, x, y);
+    let maximized = live_maximized(app, label);
+    let action = {
+        let mut set = lock_set(&registry);
+        if maximized {
+            set.set_maximized(label, true)
+        } else {
+            let cleared = set.set_maximized(label, false);
+            merge_action(cleared, set.moved(label, x, y))
+        }
+    };
     apply(app, &registry, action);
 }
 
-/// Global `WindowEvent::Resized` entry point (lib.rs).
+/// Global `WindowEvent::Resized` entry point (lib.rs). Task 443: maximizing fires a
+/// `Resized` with `is_maximized` true → record only the flag, keep the last normal
+/// geometry; un-maximizing fires one with false → clear the flag and record the
+/// restored size.
 pub fn note_resized(app: &AppHandle, label: &str, width: u32, height: u32) {
     let Some(registry) = app.try_state::<Registry>() else {
         return;
     };
-    let action = lock_set(&registry).resized(label, width, height);
+    let maximized = live_maximized(app, label);
+    let action = {
+        let mut set = lock_set(&registry);
+        if maximized {
+            set.set_maximized(label, true)
+        } else {
+            let cleared = set.set_maximized(label, false);
+            merge_action(cleared, set.resized(label, width, height))
+        }
+    };
     apply(app, &registry, action);
 }
 
@@ -463,6 +534,9 @@ pub fn restore_windows(app: &AppHandle) {
     // (a) The main window: apply clamped bounds while it is still hidden.
     // On Wayland set_position is compositor-refused — size-only there.
     let mut applied: Option<(i32, i32, u32, u32)> = None;
+    // Task 443: with a saved entry, honor its maximized flag; with NO saved entry
+    // (fresh install) default to maximized so the window fills the desktop.
+    let maximized = main_entry.as_ref().map(|e| e.maximized).unwrap_or(true);
     if let Some(entry) = &main_entry {
         if let Some((x, y, width, height)) = clamp_bounds(entry, &monitors) {
             if let Some(window) = app.get_webview_window("main") {
@@ -472,16 +546,26 @@ pub fn restore_windows(app: &AppHandle) {
             }
         }
     }
-    register(app, "main", None, None, applied);
+    // Task 443: maximize AFTER set_position/set_size so the OS un-maximize target is
+    // the geometry we just applied (or the builder 1280×832 default on a fresh
+    // install). Applied while still hidden (#348) → no flash; best-effort. Wayland
+    // honors maximize() (unlike set_position); macOS uses AppKit zoom.
+    if maximized {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.maximize();
+        }
+    }
+    register(app, "main", None, None, applied, maximized);
 
-    // (b) The extras: fresh app-<uuid> windows with the saved presets + bounds.
+    // (b) The extras: fresh app-<uuid> windows with the saved presets + bounds +
+    // maximized flag (task 443 — a previously maximized app window re-maximizes).
     for entry in extras {
         let bounds = clamp_bounds(&entry, &monitors);
         let init = crate::commands::AppWindowInit {
             repo: entry.repo,
             canvas: entry.canvas,
         };
-        if let Err(e) = crate::commands::create_app_window(app, init, bounds) {
+        if let Err(e) = crate::commands::create_app_window(app, init, bounds, entry.maximized) {
             eprintln!(
                 "[recue] window restore: recreating {} failed: {e}",
                 entry.label
@@ -501,6 +585,7 @@ mod tests {
             y,
             width,
             height,
+            maximized: false,
             repo: None,
             canvas: None,
         }
@@ -590,6 +675,82 @@ mod tests {
         assert_eq!(set.resized("main", 500, 0), SaveAction::None);
         let snap = set.snapshot();
         assert_eq!((snap[0].width, snap[0].height), (1280, 832));
+    }
+
+    // -- WindowSet: set_maximized (task 443) ----------------------------------
+
+    #[test]
+    fn set_maximized_sets_the_flag_and_debounces() {
+        let mut set = WindowSet::default();
+        set.register(win("main", 100, 100, 1280, 832));
+        assert_eq!(set.set_maximized("main", true), SaveAction::Debounce);
+        assert!(set.snapshot()[0].maximized);
+    }
+
+    #[test]
+    fn set_maximized_is_idempotent() {
+        let mut set = WindowSet::default();
+        set.register(win("main", 100, 100, 1280, 832));
+        set.set_maximized("main", true);
+        // Already maximized → no-op.
+        assert_eq!(set.set_maximized("main", true), SaveAction::None);
+        // Clearing it changes the flag.
+        assert_eq!(set.set_maximized("main", false), SaveAction::Debounce);
+        assert!(!set.snapshot()[0].maximized);
+        // Already normal → no-op.
+        assert_eq!(set.set_maximized("main", false), SaveAction::None);
+    }
+
+    #[test]
+    fn set_maximized_leaves_geometry_untouched() {
+        // The un-maximize / restore target must stay the last NON-maximized frame.
+        let mut set = WindowSet::default();
+        set.register(win("main", 100, 120, 1280, 832));
+        set.set_maximized("main", true);
+        let snap = set.snapshot();
+        assert_eq!(
+            (snap[0].x, snap[0].y, snap[0].width, snap[0].height),
+            (100, 120, 1280, 832)
+        );
+    }
+
+    #[test]
+    fn set_maximized_ignores_untracked_and_exiting() {
+        let mut set = WindowSet::default();
+        set.register(win("main", 0, 0, 1280, 832));
+        assert_eq!(set.set_maximized("ghost", true), SaveAction::None);
+        // Once exiting, the at-quit snapshot is authoritative — no mutation.
+        set.exit_requested();
+        assert_eq!(set.set_maximized("main", true), SaveAction::None);
+        assert!(!set.snapshot()[0].maximized);
+    }
+
+    #[test]
+    fn maximized_flag_survives_restorable_split() {
+        // A previously maximized main + a maximized app extra both round-trip.
+        let mut main = win("main", 40, 60, 1280, 832);
+        main.maximized = true;
+        let mut app_a = win("app-a", 0, 0, 900, 700);
+        app_a.maximized = true;
+        let (got_main, extras) = restorable(vec![main, app_a, win("app-b", 10, 10, 800, 600)]);
+        assert!(got_main.expect("main present").maximized);
+        assert!(extras[0].maximized); // app-a
+        assert!(!extras[1].maximized); // app-b
+    }
+
+    // -- merge_action (task 443) ----------------------------------------------
+
+    #[test]
+    fn merge_action_takes_the_stronger_verdict() {
+        use SaveAction::*;
+        assert_eq!(merge_action(None, None), None);
+        assert_eq!(merge_action(Debounce, None), Debounce);
+        assert_eq!(merge_action(None, Debounce), Debounce);
+        assert_eq!(merge_action(Debounce, Debounce), Debounce);
+        assert_eq!(merge_action(FlushNow, None), FlushNow);
+        assert_eq!(merge_action(None, FlushNow), FlushNow);
+        assert_eq!(merge_action(FlushNow, Debounce), FlushNow);
+        assert_eq!(merge_action(Debounce, FlushNow), FlushNow);
     }
 
     // -- WindowSet: destroyed / exit ------------------------------------------
