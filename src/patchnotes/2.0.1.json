@@ -1,0 +1,12 @@
+{
+  "version": "2.0.1",
+  "date": "2026-07-17",
+  "changes": [
+    {
+      "category": "fix",
+      "items": [
+        "Restored the standard native macOS title bar. The themed title bar introduced in 2.0.0 left the traffic-light buttons sitting too high and couldn't be reliably centered, so the window now uses the normal macOS title bar with correctly positioned window controls (it still follows ReCue's dark and light theme)."
+      ]
+    }
+  ]
+}
