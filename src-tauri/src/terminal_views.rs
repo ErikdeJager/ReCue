@@ -654,4 +654,41 @@ mod tests {
         views.propose(&manager, "s", "never-attached", 80, 24);
         assert!(rx.try_recv().is_err());
     }
+
+    #[test]
+    fn glue_propose_broadcasts_only_on_grid_change() {
+        let (views, manager, rx) = glue();
+        views.attach(&manager, "s", "main", 100, 30);
+        recv_size(&rx); // drain the attach emit
+                        // A proposal that shrinks the only view resizes + broadcasts the new grid.
+        views.propose(&manager, "s", "main", 80, 24);
+        assert_eq!(recv_size(&rx), ("s".to_string(), 80, 24));
+        // Re-proposing the identical size changes nothing — no broadcast.
+        views.propose(&manager, "s", "main", 80, 24);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn glue_output_subscriptions_round_trip() {
+        let (views, manager, rx) = glue();
+        // Explicit subscribe (host creation) makes the label a delivery target.
+        views.subscribe_output("s", "app-1");
+        assert_eq!(
+            views.output_targets("s"),
+            HashSet::from(["app-1".to_string()])
+        );
+        // Attach implies subscription at the glue level too (the self-heal).
+        views.attach(&manager, "s", "main", 100, 30);
+        recv_size(&rx);
+        let targets = views.output_targets("s");
+        assert!(targets.contains("main") && targets.contains("app-1"));
+        // Unsubscribe (host dispose) removes exactly that label.
+        views.unsubscribe_output("s", "app-1");
+        assert_eq!(
+            views.output_targets("s"),
+            HashSet::from(["main".to_string()])
+        );
+        views.unsubscribe_output("s", "main");
+        assert!(views.output_targets("s").is_empty());
+    }
 }

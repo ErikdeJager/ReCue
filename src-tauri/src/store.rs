@@ -2132,4 +2132,98 @@ mod tests {
         assert_eq!(ids, vec!["s2".to_string()]);
         let _ = fs::remove_file(&path);
     }
+
+    #[test]
+    fn set_auto_name_sets_clears_and_ignores_unknown_ids() {
+        let path = temp_path("autoname");
+        let store = Store::load(&path);
+        store.add_session(record("s1", "/repo/x")).unwrap();
+        // Defaults to no auto title.
+        assert_eq!(store.session("s1").unwrap().auto_name, None);
+
+        // Setting claude's own title persists (survives a reload) and never
+        // touches the user's custom `name`.
+        store
+            .set_auto_name("s1", Some("Fix the flaky test".to_string()))
+            .unwrap();
+        let reloaded = Store::load(&path).session("s1").unwrap();
+        assert_eq!(reloaded.auto_name.as_deref(), Some("Fix the flaky test"));
+        assert_eq!(reloaded.name, None);
+
+        // Clearing reverts to None and persists too.
+        store.set_auto_name("s1", None).unwrap();
+        assert_eq!(Store::load(&path).session("s1").unwrap().auto_name, None);
+
+        // An unknown id is a no-op (no panic, no error).
+        store.set_auto_name("missing", Some("x".into())).unwrap();
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn clear_recents_empties_the_list_and_keeps_sessions() {
+        let path = temp_path("clearrecents");
+        let store = Store::load(&path);
+        store.add_session(record("s1", "/repo/x")).unwrap();
+        store.touch_recent("/repo/a").unwrap();
+        store.touch_recent("/repo/b").unwrap();
+
+        store.clear_recents().unwrap();
+        assert!(store.recents().is_empty());
+        // The wipe persists, and sessions are untouched.
+        let reloaded = Store::load(&path);
+        assert!(reloaded.recents().is_empty());
+        assert_eq!(reloaded.sessions().len(), 1);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn perm_reprompt_done_defaults_false_and_persists_once_set() {
+        let path = temp_path("permreprompt");
+        let store = Store::load(&path);
+        assert!(!store.perm_reprompt_done());
+
+        store.set_perm_reprompt_done().unwrap();
+        assert!(store.perm_reprompt_done());
+        // The one-time flag survives a reload, so the re-prompt never re-runs.
+        assert!(Store::load(&path).perm_reprompt_done());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn persist_surfaces_io_errors_and_cleans_up_its_temp_file() {
+        // (a) The parent "directory" is actually a file → create_dir_all fails and
+        // the update surfaces the error instead of silently dropping the write.
+        let blocker = temp_path("persist-blocker");
+        fs::write(&blocker, "not a directory").unwrap();
+        let store = Store::load(blocker.join("sessions.json"));
+        assert!(store.add_session(record("s1", "/repo/x")).is_err());
+        let _ = fs::remove_file(&blocker);
+
+        // (b) The target path is an existing DIRECTORY → every rename attempt
+        // fails; after the bounded retries the error surfaces and the temp file
+        // is cleaned up (no litter).
+        let mut dir_target = std::env::temp_dir();
+        dir_target.push(format!("recue-store-dirtarget-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir_target);
+        fs::create_dir_all(&dir_target).unwrap();
+        let store = Store::load(&dir_target);
+        assert!(store.add_session(record("s1", "/repo/x")).is_err());
+        assert!(
+            !dir_target.with_extension("tmp").exists(),
+            "a failed persist leaves no .tmp litter"
+        );
+        let _ = fs::remove_dir_all(&dir_target);
+    }
+
+    #[test]
+    fn merge_diff_seen_patch_recovers_a_corrupt_repo_entry_and_skips_garbage() {
+        // A non-object stored repo value is replaced by the patched object.
+        let mut current = serde_json::json!({ "r": 5 });
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": { "f": "d1" } }));
+        assert_eq!(current, serde_json::json!({ "r": { "f": "d1" } }));
+
+        // A patch repo value that is neither an object nor null is skipped.
+        merge_diff_seen_patch(&mut current, serde_json::json!({ "r": 42, "s": "junk" }));
+        assert_eq!(current, serde_json::json!({ "r": { "f": "d1" } }));
+    }
 }

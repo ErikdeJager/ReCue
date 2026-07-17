@@ -102,7 +102,14 @@ impl OauthToken {
 /// reason, before Rust took over the poll).
 pub(crate) fn usage_snapshot_blocking() -> Option<UsageSnapshot> {
     let token = read_oauth_token()?.access_token; // token dropped right after fetch
-    let Some(body) = fetch_usage(&token) else {
+    snapshot_from_fetch(fetch_usage(&token))
+}
+
+/// The fetch-result → snapshot step of `usage_snapshot_blocking` (factored out
+/// for the unit tests): an HTTP miss and a response-shape mismatch each fail
+/// open to `None`, with a token-free `usage_diag` breadcrumb naming which step.
+fn snapshot_from_fetch(body: Option<serde_json::Value>) -> Option<UsageSnapshot> {
+    let Some(body) = body else {
         usage_diag("http miss");
         return None;
     };
@@ -124,12 +131,24 @@ pub(crate) fn usage_snapshot_blocking() -> Option<UsageSnapshot> {
 /// since they have no Keychain and `claude` keeps the file token fresh (#140).
 fn read_oauth_token() -> Option<OauthToken> {
     let now_ms = now_ms();
-    let file = read_token_from_file();
+    pick_oauth_token(read_token_from_file(), read_token_from_keychain, now_ms)
+}
+
+/// Core of `read_oauth_token`, with the Keychain read as a **lazy** closure
+/// (factored out so the unit tests can prove the prompt-frugal short-circuit):
+/// a fresh file token returns WITHOUT invoking the Keychain read (no
+/// allow-prompt, #316); otherwise `select_token` (pure) picks over both
+/// sources, with the token-free diagnostics.
+fn pick_oauth_token(
+    file: Option<OauthToken>,
+    read_keychain: impl FnOnce() -> Option<OauthToken>,
+    now_ms: i64,
+) -> Option<OauthToken> {
     // Common path: a fresh file token — return it WITHOUT reading the Keychain.
     if file.as_ref().is_some_and(|t| !t.is_expired(now_ms)) {
         return file;
     }
-    let keychain = read_token_from_keychain();
+    let keychain = read_keychain();
     let picked = select_token(file, keychain, now_ms);
     match &picked {
         None => usage_diag("no token"),
@@ -204,12 +223,25 @@ fn read_raw_credentials_from(path: std::path::PathBuf) -> Option<String> {
 pub(crate) fn read_raw_credentials() -> Option<String> {
     let file = credentials_path().and_then(read_raw_credentials_from);
     let now_ms = now_ms();
+    pick_raw_credentials(file, read_raw_keychain, now_ms)
+}
+
+/// Core of `read_raw_credentials`, with the Keychain read as a **lazy** closure
+/// (factored out so the unit tests can prove the no-gratuitous-prompt path): a
+/// file blob whose access token is still valid wins WITHOUT invoking the
+/// Keychain; otherwise the Keychain blob, falling back to the stale file as a
+/// last resort (its refresh token may still work).
+fn pick_raw_credentials(
+    file: Option<String>,
+    read_keychain: impl FnOnce() -> Option<String>,
+    now_ms: i64,
+) -> Option<String> {
     if let Some(raw) = &file {
         if token_from_json(raw).is_some_and(|t| !t.is_expired(now_ms)) {
             return file;
         }
     }
-    read_raw_keychain().or(file)
+    read_keychain().or(file)
 }
 
 /// The macOS Keychain blob, verbatim (`security … -w` prints the item's password —
@@ -320,10 +352,17 @@ fn usage_diag(category: &str) {
     eprintln!("usage: {category}");
 }
 
-/// One blocking HTTPS GET. ureq maps any `>= 400` status (incl. 401/403/429) to
-/// `Err`, which we collapse to `None` (fail-open, no retry storm this tick).
+/// One blocking HTTPS GET of the real usage endpoint. See `fetch_usage_at`.
 fn fetch_usage(token: &str) -> Option<serde_json::Value> {
-    let resp = ureq::get(USAGE_URL)
+    fetch_usage_at(USAGE_URL, token)
+}
+
+/// Core of `fetch_usage` over an explicit URL (factored out so the unit tests
+/// can point it at a loopback responder). ureq maps any `>= 400` status (incl.
+/// 401/403/429) to `Err`, which we collapse to `None` (fail-open, no retry
+/// storm this tick).
+fn fetch_usage_at(url: &str, token: &str) -> Option<serde_json::Value> {
+    let resp = ureq::get(url)
         .timeout(HTTP_TIMEOUT)
         .set("Authorization", &format!("Bearer {token}"))
         .set("anthropic-beta", OAUTH_BETA)
@@ -396,6 +435,8 @@ fn value_to_string(v: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::cell::Cell;
+    use std::sync::mpsc;
 
     fn tok(access: &str, expires_at: Option<i64>) -> OauthToken {
         OauthToken {
@@ -547,6 +588,131 @@ mod tests {
     }
 
     #[test]
+    fn pick_oauth_token_short_circuits_on_a_fresh_file_token() {
+        let now = 1_000_000_i64;
+        let picked = pick_oauth_token(
+            Some(tok("file", Some(now + 60_000))),
+            || unreachable!("a fresh file token must never trigger the Keychain read (#316)"),
+            now,
+        );
+        assert_eq!(picked.unwrap().access_token, "file");
+    }
+
+    #[test]
+    fn pick_oauth_token_reads_the_keychain_only_on_the_slow_path() {
+        let now = 1_000_000_i64;
+        // Expired file → the Keychain IS read, and its fresh token wins.
+        let keychain_read = Cell::new(false);
+        let picked = pick_oauth_token(
+            Some(tok("file", Some(now - 60_000))),
+            || {
+                keychain_read.set(true);
+                Some(tok("kc", Some(now + 60_000)))
+            },
+            now,
+        );
+        assert_eq!(picked.unwrap().access_token, "kc");
+        assert!(keychain_read.get());
+        // Nothing anywhere → None (the "no token" breadcrumb path).
+        assert_eq!(pick_oauth_token(None, || None, now), None);
+        // Only an expired token left → still returned (it just 401s and the bar
+        // hides — the "token expired, no fresher source" breadcrumb path).
+        let picked = pick_oauth_token(Some(tok("file", Some(now - 1))), || None, now);
+        assert_eq!(picked.unwrap().access_token, "file");
+    }
+
+    #[test]
+    fn pick_raw_credentials_prefers_a_fresh_file_without_touching_the_keychain() {
+        let now = 1_000_000_i64;
+        let fresh = format!(
+            r#"{{"claudeAiOauth":{{"accessToken":"a","refreshToken":"keep","expiresAt":{}}}}}"#,
+            now + 60_000
+        );
+        let got = pick_raw_credentials(
+            Some(fresh.clone()),
+            || unreachable!("a fresh file blob must never trigger the Keychain read"),
+            now,
+        );
+        assert_eq!(got.as_deref(), Some(fresh.as_str()), "verbatim file blob");
+    }
+
+    #[test]
+    fn pick_raw_credentials_falls_through_to_keychain_then_stale_file() {
+        let now = 1_000_000_i64;
+        let stale = format!(
+            r#"{{"claudeAiOauth":{{"accessToken":"a","expiresAt":{}}}}}"#,
+            now - 60_000
+        );
+        // Stale file + a Keychain blob → the Keychain wins.
+        assert_eq!(
+            pick_raw_credentials(Some(stale.clone()), || Some("kc-blob".to_string()), now)
+                .as_deref(),
+            Some("kc-blob")
+        );
+        // Stale file, no Keychain → the stale file is the last resort (its
+        // refresh token may still work).
+        assert_eq!(
+            pick_raw_credentials(Some(stale.clone()), || None, now).as_deref(),
+            Some(stale.as_str())
+        );
+        // A blob with no parseable token still rides through as the last resort.
+        assert_eq!(
+            pick_raw_credentials(Some("junk".to_string()), || None, now).as_deref(),
+            Some("junk")
+        );
+        // Nothing anywhere → None.
+        assert_eq!(pick_raw_credentials(None, || None, now), None);
+    }
+
+    #[test]
+    fn now_ms_is_epoch_milliseconds() {
+        let now = now_ms();
+        // Milliseconds, not seconds: any clock this can run on is far past 2020
+        // (~1.6e12 ms) and far before the year 2500 (~1.7e13 ms). A seconds-unit
+        // regression (~1.7e9) or a nanoseconds one (~1.7e18) fails loudly.
+        assert!(now > 1_600_000_000_000, "not epoch ms: {now}");
+        assert!(now < 17_000_000_000_000, "not epoch ms: {now}");
+    }
+
+    #[test]
+    fn credentials_path_is_the_claude_file_under_home() {
+        // Every test environment (unix `HOME` / Windows `USERPROFILE`) has a home.
+        let home = crate::path_env::home_dir().expect("test env has a home dir");
+        assert_eq!(
+            credentials_path(),
+            Some(home.join(".claude").join(".credentials.json"))
+        );
+    }
+
+    /// Differential over the REAL credentials file (read-only): `read_token_from_file`
+    /// is exactly the path → raw-read → parse composition. Plain `assert!` (never
+    /// `assert_eq!`) so a failure can never Debug-print a real token.
+    #[test]
+    fn read_token_from_file_is_the_read_then_parse_composition() {
+        let via_parts = credentials_path()
+            .and_then(read_raw_credentials_from)
+            .and_then(|raw| token_from_json(&raw));
+        assert!(
+            read_token_from_file() == via_parts,
+            "read_token_from_file must equal credentials_path → read → token_from_json"
+        );
+    }
+
+    /// Off macOS there is no Keychain: the stubs report nothing, so the top-level
+    /// readers must equal their file-only compositions — the documented "the
+    /// credentials file is the sole source" contract (#140). macOS is excluded
+    /// because there the real Keychain fns would spawn `security` (an allow-prompt).
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn off_macos_the_credentials_file_is_the_sole_source() {
+        assert_eq!(read_token_from_keychain(), None);
+        assert_eq!(read_raw_keychain(), None);
+        // Plain `assert!` so a failure never Debug-prints a real token.
+        assert!(read_oauth_token() == read_token_from_file());
+        assert!(read_raw_credentials() == credentials_path().and_then(read_raw_credentials_from));
+    }
+
+    #[test]
     fn parses_utilization_and_iso_resets() {
         let v = json!({"five_hour":{"utilization":33.0,"resets_at":"2026-04-11T07:00:00+00:00"}});
         let s = parse_snapshot(&v).unwrap();
@@ -629,5 +795,113 @@ mod tests {
         assert_eq!(s.buckets.len(), 2);
         assert!(s.buckets.iter().any(|b| b.key == "five_hour"));
         assert!(s.buckets.iter().any(|b| b.key == "seven_day"));
+    }
+
+    #[test]
+    fn parse_buckets_of_a_non_object_response_is_empty() {
+        assert!(parse_buckets(&json!(["not", "an", "object"])).is_empty());
+        assert!(parse_buckets(&json!("string")).is_empty());
+    }
+
+    #[test]
+    fn value_to_string_accepts_only_strings_and_numbers() {
+        assert_eq!(value_to_string(&json!("iso")), Some("iso".to_string()));
+        assert_eq!(
+            value_to_string(&json!(1760166000)),
+            Some("1760166000".to_string())
+        );
+        assert_eq!(value_to_string(&json!(null)), None);
+        assert_eq!(value_to_string(&json!(true)), None);
+        assert_eq!(value_to_string(&json!({})), None);
+    }
+
+    #[test]
+    fn snapshot_from_fetch_fails_open_on_miss_and_mismatch() {
+        // HTTP miss → None (the "http miss" breadcrumb path).
+        assert_eq!(snapshot_from_fetch(None), None);
+        // A body without a five_hour block → None (the "parse miss" path).
+        assert_eq!(snapshot_from_fetch(Some(json!({"seven_day":{}}))), None);
+        // A well-shaped body rides through parse_snapshot unchanged.
+        let snap = snapshot_from_fetch(Some(json!({"five_hour":{"utilization":12.5}}))).unwrap();
+        assert_eq!(snap.used_percent, 12.5);
+        assert_eq!(snap.resets_at, None);
+    }
+
+    /// A one-shot loopback HTTP responder: accepts a single connection, reads the
+    /// request head, hands it back through the channel, and answers with the given
+    /// status line + body. ureq speaks plain http to 127.0.0.1, so `fetch_usage_at`
+    /// is exercised offline and deterministically.
+    fn one_shot_http(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (String, mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("one connection arrives");
+            let mut req = Vec::new();
+            let mut buf = [0u8; 1024];
+            // A GET has no body — read until the blank line ends the head
+            // (or the peer closes early: n == 0).
+            loop {
+                let n = sock.read(&mut buf).unwrap_or(0);
+                req.extend_from_slice(&buf[..n]);
+                if n == 0 || req.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = tx.send(String::from_utf8_lossy(&req).into_owned());
+            let resp = format!(
+                "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = sock.write_all(resp.as_bytes());
+        });
+        (format!("http://{addr}/"), rx)
+    }
+
+    #[test]
+    fn fetch_usage_at_parses_a_200_body_and_sends_the_load_bearing_headers() {
+        let (url, rx) = one_shot_http(
+            "HTTP/1.1 200 OK",
+            r#"{"five_hour":{"utilization":42.5,"resets_at":"soon"}}"#,
+        );
+        let body = fetch_usage_at(&url, "tok-123").expect("a 200 JSON body parses");
+        assert_eq!(body["five_hour"]["utilization"], json!(42.5));
+        let req = rx.recv().unwrap();
+        assert!(req.starts_with("GET / HTTP/1.1"), "req: {req}");
+        assert!(req.contains("Authorization: Bearer tok-123"), "req: {req}");
+        // The claude-code UA moves the request off the throttled bucket, and the
+        // beta header authorizes the OAuth token — both load-bearing.
+        assert!(
+            req.contains(&format!("User-Agent: {CLAUDE_CODE_UA}")),
+            "req: {req}"
+        );
+        assert!(
+            req.contains(&format!("anthropic-beta: {OAUTH_BETA}")),
+            "req: {req}"
+        );
+    }
+
+    #[test]
+    fn fetch_usage_at_fails_open_on_http_errors_and_bad_bodies() {
+        // 401 (ureq maps ≥400 to Err) → None, fail-open.
+        let (url, _rx) = one_shot_http("HTTP/1.1 401 Unauthorized", "{}");
+        assert_eq!(fetch_usage_at(&url, "tok"), None);
+        // A 200 whose body isn't JSON → None.
+        let (url, _rx) = one_shot_http("HTTP/1.1 200 OK", "not json");
+        assert_eq!(fetch_usage_at(&url, "tok"), None);
+        // Nothing listening at all (connection refused) → None.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        assert_eq!(
+            fetch_usage_at(&format!("http://127.0.0.1:{port}/"), "tok"),
+            None
+        );
     }
 }

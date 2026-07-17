@@ -1376,4 +1376,214 @@ mod tests {
         let _ = fs::remove_dir_all(&repo);
         let _ = fs::remove_dir_all(&outside);
     }
+
+    #[test]
+    fn search_files_zero_limit_and_missing_root_return_empty() {
+        let dir = tmp("search-limits");
+        fs::write(dir.join("hit.md"), "x").unwrap();
+        // A zero limit collects nothing (the walk stops immediately).
+        assert!(search_files(&dir, "hit", None, 0).is_empty());
+        // A root that doesn't exist walks nothing (fail-open, no error).
+        let missing = dir.join("never-created");
+        assert!(search_files(&missing, "hit", None, 10).is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_exists_is_false_when_the_repo_root_is_missing() {
+        // The repo root itself failing to canonicalize (it doesn't exist) reads
+        // as "not present" rather than erroring.
+        let dir = tmp("exists-missing-root");
+        let missing = dir.join("never-created");
+        assert!(!file_exists(&missing, "anything.md"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_walkers_stop_beyond_the_max_depth() {
+        let dir = tmp("search-depth");
+        // A file buried past MAX_SEARCH_DEPTH levels is unreachable by both
+        // walkers (the symlink-loop backstop), while a shallow file still hits.
+        let mut deep = dir.clone();
+        for _ in 0..(MAX_SEARCH_DEPTH + 4) {
+            deep.push("d");
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("buried-needle.txt"), "needle content\n").unwrap();
+        fs::write(dir.join("shallow-needle.txt"), "needle content\n").unwrap();
+
+        let by_name = search_files(&dir, "needle", None, 100);
+        assert_eq!(by_name, vec!["shallow-needle.txt".to_string()]);
+        let by_content = search_file_contents(&dir, "needle content", 100);
+        let paths: Vec<&str> = by_content.matches.iter().map(|m| m.path.as_str()).collect();
+        assert_eq!(paths, vec!["shallow-needle.txt"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_file_contents_zero_limit_missing_root_and_cross_file_cap() {
+        let dir = tmp("content-limits");
+        fs::write(dir.join("a.txt"), "needle a\n").unwrap();
+        fs::write(dir.join("b.txt"), "needle b\n").unwrap();
+
+        // limit 0 → nothing collected, flagged truncated (the cap tripped at once).
+        let zero = search_file_contents(&dir, "needle", 0);
+        assert!(zero.matches.is_empty());
+        assert!(zero.truncated);
+
+        // A missing root yields the empty default (no matches, NOT truncated).
+        let missing = search_file_contents(dir.join("never-created"), "needle", 10);
+        assert!(missing.matches.is_empty());
+        assert!(!missing.truncated);
+
+        // limit 1 with one hit per file: the cap trips *between* files (a.txt
+        // fills it; b.txt is cut off) and the result is flagged truncated.
+        let limited = search_file_contents(&dir, "needle", 1);
+        assert_eq!(limited.matches.len(), 1);
+        assert_eq!(limited.matches[0].path, "a.txt");
+        assert!(limited.truncated);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_file_contents_skips_non_utf8_files() {
+        let dir = tmp("content-nonutf8");
+        // Invalid UTF-8 under a listable extension: unreadable as text → skipped.
+        fs::write(
+            dir.join("bin.txt"),
+            [0xFFu8, 0xFE, b'n', b'e', b'e', b'd', b'l', b'e'],
+        )
+        .unwrap();
+        fs::write(dir.join("good.txt"), "needle\n").unwrap();
+        let res = search_file_contents(&dir, "needle", 10);
+        assert_eq!(res.matches.len(), 1);
+        assert_eq!(res.matches[0].path, "good.txt");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_and_write_reject_files_over_the_size_cap() {
+        let dir = tmp("size-caps");
+        // Reading a file over MAX_FILE_BYTES is refused with the size error…
+        let big = vec![b'a'; (MAX_FILE_BYTES + 1) as usize];
+        fs::write(dir.join("big.txt"), big).unwrap();
+        assert_eq!(
+            read_text_file(&dir, "big.txt").unwrap_err(),
+            "file is too large to display"
+        );
+        // …and writing content over the cap is refused before touching disk.
+        let huge = "a".repeat((MAX_FILE_BYTES + 1) as usize);
+        assert_eq!(
+            write_text_file(&dir, "huge.txt", &huge).unwrap_err(),
+            "file is too large to write"
+        );
+        assert!(!dir.join("huge.txt").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_rejects_an_existing_target_that_resolves_outside_the_repo() {
+        // `repo/../victim.md` canonicalizes to an EXISTING file outside the repo —
+        // the existing-file branch of the containment check must reject it.
+        let parent = tmp("write-outside");
+        let repo = parent.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(parent.join("victim.md"), "untouched").unwrap();
+        assert_eq!(
+            write_text_file(&repo, "../victim.md", "clobbered").unwrap_err(),
+            "path is outside the repository"
+        );
+        assert_eq!(
+            fs::read_to_string(parent.join("victim.md")).unwrap(),
+            "untouched"
+        );
+        let _ = fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn is_cross_device_matches_only_the_cross_volume_error_code() {
+        // EXDEV (unix) / ERROR_NOT_SAME_DEVICE (Windows) → true.
+        let code = if cfg!(windows) { 17 } else { 18 };
+        assert!(is_cross_device(&std::io::Error::from_raw_os_error(code)));
+        // Any other OS error (here: file-not-found) → false.
+        assert!(!is_cross_device(&std::io::Error::from_raw_os_error(2)));
+        // An error carrying no OS code at all → false.
+        assert!(!is_cross_device(&std::io::Error::other("synthetic")));
+    }
+
+    #[test]
+    fn copy_recursive_copies_files_and_directory_trees() {
+        let dir = tmp("copyrec");
+        // A single file.
+        fs::write(dir.join("src.txt"), "content").unwrap();
+        copy_recursive(&dir.join("src.txt"), &dir.join("dst.txt")).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("dst.txt")).unwrap(), "content");
+        assert!(
+            dir.join("src.txt").exists(),
+            "copy leaves the source intact"
+        );
+
+        // A nested tree.
+        fs::create_dir_all(dir.join("tree/nested")).unwrap();
+        fs::write(dir.join("tree/a.txt"), "a").unwrap();
+        fs::write(dir.join("tree/nested/b.txt"), "b").unwrap();
+        copy_recursive(&dir.join("tree"), &dir.join("copy")).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("copy/a.txt")).unwrap(), "a");
+        assert_eq!(
+            fs::read_to_string(dir.join("copy/nested/b.txt")).unwrap(),
+            "b"
+        );
+
+        // A destination that already exists fails cleanly (`fs::create_dir` refuses).
+        assert!(copy_recursive(&dir.join("tree"), &dir.join("copy")).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn move_rejects_a_file_destination_and_an_impossible_rename() {
+        let outer = tmp("move-fail");
+        let repo = outer.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("afile.txt"), "x").unwrap();
+        let ext = outer.join("ext");
+        fs::create_dir_all(&ext).unwrap();
+        fs::write(ext.join("item.txt"), "y").unwrap();
+
+        // A dest_subdir naming a FILE is refused (destination must be a directory).
+        assert_eq!(
+            move_into_repo(&repo, "afile.txt", ext.join("item.txt").to_str().unwrap()).unwrap_err(),
+            "destination is not a directory"
+        );
+        assert!(ext.join("item.txt").exists());
+
+        // Moving a directory into its own subdirectory can never succeed —
+        // fs::rename's error surfaces (the non-cross-device error arm) and both
+        // trees stay intact.
+        assert!(move_into_repo(&repo, "", outer.to_str().unwrap()).is_err());
+        assert!(outer.exists());
+        assert!(repo.join("afile.txt").exists());
+        let _ = fs::remove_dir_all(&outer);
+    }
+
+    #[test]
+    fn add_to_gitignore_rejects_the_root_and_an_unreadable_gitignore() {
+        let dir = tmp("gitignore-root");
+        fs::write(dir.join("a.txt"), "x").unwrap();
+        // The repo root itself can't be gitignored.
+        assert_eq!(
+            add_to_gitignore(&dir, "").unwrap_err(),
+            "refusing to gitignore the repository root"
+        );
+        assert!(!dir.join(".gitignore").exists());
+
+        // A `.gitignore` that exists but can't be read as a file (here: it's a
+        // directory) surfaces the IO error instead of silently clobbering it.
+        fs::create_dir_all(dir.join(".gitignore")).unwrap();
+        assert!(add_to_gitignore(&dir, "a.txt").is_err());
+        assert!(
+            dir.join(".gitignore").is_dir(),
+            "the directory is untouched"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

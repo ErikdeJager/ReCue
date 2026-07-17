@@ -3088,4 +3088,464 @@ prunable gitdir file points to non-existent location
         assert!(list_commits(&plain, 10).is_empty());
         let _ = fs::remove_dir_all(&plain);
     }
+
+    #[test]
+    fn current_branch_reports_detached_head_as_short_sha() {
+        let Some(dir) = init_repo("detached") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        assert!(git_in(&dir, &["checkout", "-q", "--detach"]));
+
+        // Detached HEAD → "@<short sha>" instead of a branch name.
+        let short = run_git(&dir, &["rev-parse", "--short", "HEAD"]).unwrap();
+        assert!(!short.is_empty());
+        assert_eq!(current_branch(&dir), format!("@{short}"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ahead_behind_counts_vs_upstream_and_fails_open() {
+        let Some(origin) = init_repo("ab-origin") else {
+            return;
+        };
+        fs::write(origin.join("a.txt"), "1\n").unwrap();
+        assert!(commit_all(&origin, "init"));
+        let Some(clone) = clone_repo(&origin, "ab-clone") else {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        };
+
+        // Freshly cloned: in sync with its upstream (0/0 — the frontend hides it).
+        assert_eq!(
+            ahead_behind(&clone),
+            Some(AheadBehind {
+                ahead: 0,
+                behind: 0
+            })
+        );
+
+        // A local commit not on the upstream → ahead 1.
+        fs::write(clone.join("local.txt"), "l\n").unwrap();
+        assert!(commit_all(&clone, "local"));
+        assert_eq!(
+            ahead_behind(&clone),
+            Some(AheadBehind {
+                ahead: 1,
+                behind: 0
+            })
+        );
+
+        // The origin advances; after a fetch the clone reads behind 1 too — the
+        // counts are "as of the last fetch" (vs the local remote-tracking ref).
+        fs::write(origin.join("remote.txt"), "r\n").unwrap();
+        assert!(commit_all(&origin, "remote"));
+        assert!(git_in(&clone, &["fetch", "-q", "origin"]));
+        assert_eq!(
+            ahead_behind(&clone),
+            Some(AheadBehind {
+                ahead: 1,
+                behind: 1
+            })
+        );
+
+        // No upstream (the origin itself) and a non-git folder → None (fail-open).
+        assert_eq!(ahead_behind(&origin), None);
+        let plain = unique_dir("ab-plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(ahead_behind(&plain), None);
+
+        // The batched map contains exactly the paths that resolve to a count.
+        let clone_key = clone.to_string_lossy().into_owned();
+        let map = ahead_behind_many(&[
+            clone_key.clone(),
+            origin.to_string_lossy().into_owned(),
+            plain.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.get(&clone_key),
+            Some(&AheadBehind {
+                ahead: 1,
+                behind: 1
+            })
+        );
+
+        let _ = fs::remove_dir_all(&plain);
+        let _ = fs::remove_dir_all(&clone);
+        let _ = fs::remove_dir_all(&origin);
+    }
+
+    #[test]
+    fn compare_branches_diffs_base_to_target_and_rejects_unknown() {
+        let Some(dir) = init_repo("compare") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "one\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let base = current_branch(&dir);
+
+        // A feature branch that edits a.txt and adds b.txt.
+        assert!(create_branch(&dir, "cmp-feature", "").is_ok());
+        fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        fs::write(dir.join("b.txt"), "new\n").unwrap();
+        assert!(commit_all(&dir, "feature work"));
+
+        let diff = compare_branches(&dir, &base, "cmp-feature").unwrap();
+        assert_eq!(diff.summary.branch, format!("{base} → cmp-feature"));
+        assert_eq!(diff.summary.files_changed, 2);
+        assert_eq!(diff.summary.adds, 2);
+        assert_eq!(diff.summary.dels, 0);
+        let by_path = |p: &str| diff.files.iter().find(|f| f.path == p);
+        let a = by_path("a.txt").expect("edited file listed");
+        assert_eq!(a.status, FileStatus::Modified);
+        assert_eq!((a.add, a.del), (1, 0));
+        let b = by_path("b.txt").expect("new file listed");
+        assert_eq!(b.status, FileStatus::Added);
+
+        // Reversed orientation: the added file reads as a deletion.
+        let rev = compare_branches(&dir, "cmp-feature", &base).unwrap();
+        let b_rev = rev.files.iter().find(|f| f.path == "b.txt").unwrap();
+        assert_eq!(b_rev.status, FileStatus::Deleted);
+
+        // Identical endpoints → an empty diff, not an error.
+        let same = compare_branches(&dir, &base, &base).unwrap();
+        assert!(same.files.is_empty());
+        assert_eq!(same.summary.files_changed, 0);
+
+        // Unknown base / target are rejected before any git diff runs.
+        assert_eq!(
+            compare_branches(&dir, "nope", "cmp-feature").unwrap_err(),
+            "unknown branch `nope`"
+        );
+        assert_eq!(
+            compare_branches(&dir, &base, "nada").unwrap_err(),
+            "unknown branch `nada`"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fetch_remotes_refreshes_and_prunes_remote_tracking_refs() {
+        let Some(origin) = init_repo("fetch-origin") else {
+            return;
+        };
+        fs::write(origin.join("a.txt"), "1\n").unwrap();
+        assert!(commit_all(&origin, "init"));
+        let Some(clone) = clone_repo(&origin, "fetch-clone") else {
+            let _ = fs::remove_dir_all(&origin);
+            return;
+        };
+
+        // A branch created on the origin appears as a remote-tracking ref on fetch.
+        assert!(git_in(&origin, &["branch", "remote-only"]));
+        assert!(!list_branches(&clone)
+            .remote
+            .iter()
+            .any(|r| r == "origin/remote-only"));
+        assert!(fetch_remotes(&clone).is_ok());
+        assert!(list_branches(&clone)
+            .remote
+            .iter()
+            .any(|r| r == "origin/remote-only"));
+
+        // Deleting it on the origin prunes the stale ref (`--prune`).
+        assert!(git_in(&origin, &["branch", "-D", "remote-only"]));
+        assert!(fetch_remotes(&clone).is_ok());
+        assert!(!list_branches(&clone)
+            .remote
+            .iter()
+            .any(|r| r == "origin/remote-only"));
+
+        let _ = fs::remove_dir_all(&clone);
+        let _ = fs::remove_dir_all(&origin);
+    }
+
+    #[test]
+    fn fetch_remotes_errors_on_a_missing_remote_and_a_non_git_folder() {
+        // An origin URL pointing at a nonexistent local path fails fast, offline.
+        let Some(dir) = init_repo("fetch-bad") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let missing = unique_dir("fetch-bad-remote"); // never created on disk
+        assert!(git_in(
+            &dir,
+            &["remote", "add", "origin", missing.to_str().unwrap()]
+        ));
+        let err = fetch_remotes(&dir).unwrap_err();
+        assert!(!err.is_empty());
+
+        // A non-git folder errors too (fatal: not a git repository).
+        let plain = unique_dir("fetch-plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert!(fetch_remotes(&plain).is_err());
+
+        let _ = fs::remove_dir_all(&plain);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clone_repo_reports_gits_error_for_a_missing_source() {
+        // Cloning a nonexistent local path fails offline with git's stderr; no
+        // repository is left behind at the destination.
+        let missing = unique_dir("clone-fail-origin"); // never created on disk
+        let dest = unique_dir("clone-fail-dest");
+        let err = super::clone_repo(missing.to_str().unwrap(), &dest).unwrap_err();
+        assert!(!err.is_empty());
+        assert!(!dest.join(".git").exists());
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn checkout_branch_surfaces_gits_error_on_a_conflicting_dirty_tree() {
+        let Some(dir) = init_repo("checkout-dirty") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "base\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let start = current_branch(&dir);
+        // A branch whose a.txt differs from the start branch's.
+        assert!(create_branch(&dir, "co-other", "").is_ok());
+        fs::write(dir.join("a.txt"), "other\n").unwrap();
+        assert!(commit_all(&dir, "other change"));
+        assert!(checkout_branch(&dir, &start).is_ok());
+
+        // An uncommitted conflicting edit makes git refuse the checkout; its stderr
+        // comes back as the error and the tree stays put on the start branch.
+        fs::write(dir.join("a.txt"), "dirty local edit\n").unwrap();
+        let err = checkout_branch(&dir, "co-other").unwrap_err();
+        assert!(!err.is_empty());
+        assert_eq!(current_branch(&dir), start);
+        assert_eq!(
+            fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "dirty local edit\n"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_branch_requires_a_name_and_surfaces_a_ref_lock_conflict() {
+        let Some(dir) = init_repo("create-branch-reflock") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let start = current_branch(&dir);
+
+        // An empty (or all-whitespace) name is rejected before any git call.
+        assert_eq!(
+            create_branch(&dir, "", "").unwrap_err(),
+            "branch name is required"
+        );
+        assert_eq!(
+            create_branch(&dir, "   ", "").unwrap_err(),
+            "branch name is required"
+        );
+
+        // `blocker` exists, so `blocker/child` passes validation (a valid, unused
+        // name) but fails inside git on the ref directory/file conflict — git's
+        // stderr comes back as the error and nothing was created or checked out.
+        assert!(git_in(&dir, &["branch", "blocker"]));
+        let err = create_branch(&dir, "blocker/child", "").unwrap_err();
+        assert!(!err.is_empty());
+        assert!(!list_branches(&dir).all.iter().any(|b| b == "blocker/child"));
+        assert_eq!(current_branch(&dir), start);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worktree_add_rejects_unknown_branch_and_new_branch_takes_a_base() {
+        let Some(dir) = init_repo("wt-more") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        let base = current_branch(&dir);
+
+        // An unknown branch is rejected before any worktree is created.
+        let dest0 = unique_dir("wt-more-dest0");
+        assert_eq!(
+            worktree_add(&dir, "missing-branch", &dest0).unwrap_err(),
+            "unknown branch `missing-branch`"
+        );
+        assert!(!dest0.exists());
+
+        // An empty new-branch name is rejected by the shared validation.
+        assert_eq!(
+            worktree_add_new_branch(&dir, "", "", &dest0).unwrap_err(),
+            "branch name is required"
+        );
+
+        // A new branch from an explicit base lands checked out in the worktree,
+        // leaving the main checkout untouched.
+        let dest1 = unique_dir("wt-more-dest1");
+        assert!(worktree_add_new_branch(&dir, "wt-from-base", &base, &dest1).is_ok());
+        assert_eq!(current_branch(&dest1), "wt-from-base");
+        assert_eq!(current_branch(&dir), base);
+
+        // A name colliding with an existing branch's ref directory passes
+        // validation but fails inside git; the stderr comes back as the error.
+        let dest2 = unique_dir("wt-more-dest2");
+        let err = worktree_add_new_branch(&dir, "wt-from-base/sub", "", &dest2).unwrap_err();
+        assert!(!err.is_empty());
+        assert!(!list_branches(&dir)
+            .all
+            .iter()
+            .any(|b| b == "wt-from-base/sub"));
+
+        assert!(worktree_remove(&dir, &dest1, false).is_ok());
+        let _ = fs::remove_dir_all(&dest2);
+        let _ = fs::remove_dir_all(&dest1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worktree_prune_drops_a_stale_entry_and_errors_outside_a_repo() {
+        let Some(dir) = init_repo("wt-prune") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        assert!(git_in(&dir, &["branch", "feat"]));
+        let dest = unique_dir("wt-prune-dest");
+        assert!(worktree_add(&dir, "feat", &dest).is_ok());
+        assert_eq!(list_worktrees(&dir).map(|e| e.len()), Some(2));
+
+        // The worktree folder vanishes off-disk — git still lists the stale entry
+        // until a prune drops it from the administrative list.
+        fs::remove_dir_all(&dest).unwrap();
+        assert_eq!(list_worktrees(&dir).map(|e| e.len()), Some(2));
+        assert!(worktree_prune(&dir).is_ok());
+        assert_eq!(list_worktrees(&dir).map(|e| e.len()), Some(1));
+
+        // Outside a repo, prune surfaces git's error.
+        let plain = unique_dir("wt-prune-plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert!(worktree_prune(&plain).is_err());
+
+        let _ = fs::remove_dir_all(&plain);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_diff_is_none_for_out_of_repo_and_missing_paths() {
+        let Some(dir) = init_repo("filediff-edges") else {
+            return;
+        };
+        fs::write(dir.join("a.txt"), "x\n").unwrap();
+        assert!(commit_all(&dir, "init"));
+        // A path outside the repo makes the tracked diff fail (fail-open → None).
+        assert!(file_diff(&dir, "../outside.txt").is_none());
+        // A nonexistent path: no tracked diff, and the untracked `--no-index`
+        // probe errors (exit ≥ 2) → None, never a synthesized diff.
+        assert!(file_diff(&dir, "no-such-file.txt").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_git_raw_allow_diff_is_none_on_a_real_git_error() {
+        // `git -C <missing dir>` exits ≥ 2 — a real error, not "differences found".
+        let missing = unique_dir("raw-allow-missing"); // never created on disk
+        assert_eq!(
+            run_git_raw_allow_diff(&missing, &["diff", "--no-index", "--", "a", "b"]),
+            None
+        );
+    }
+
+    #[test]
+    fn untracked_added_lines_skips_a_file_over_the_per_file_cap() {
+        let dir = unique_dir("untracked-overcap");
+        fs::create_dir_all(&dir).unwrap();
+        // One file just over the per-file byte gate and one small file: only the
+        // small one counts, and the oversized one spends no budget.
+        let big = vec![b'x'; (MAX_UNTRACKED_BYTES + 1) as usize];
+        fs::write(dir.join("big.txt"), big).unwrap();
+        fs::write(dir.join("small.txt"), "a\nb\n").unwrap();
+        let files = vec!["big.txt".to_string(), "small.txt".to_string()];
+        assert_eq!(untracked_added_lines(&dir, &files, 10, u64::MAX), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diff_lines_before_any_file_header_are_ignored() {
+        // Hunk/body lines with no preceding `diff --git` header have no file to
+        // attach to and are skipped (defensive against truncated diff output).
+        let diff = "index abc..def 100644\n+++ b/x.txt\n@@ -1 +1 @@\n+x\n context\n";
+        assert!(parse_unified_diff(diff).is_empty());
+    }
+
+    #[test]
+    fn no_newline_marker_is_an_unnumbered_context_row() {
+        let diff = "\
+diff --git a/x.txt b/x.txt
+index 1..2 100644
+--- a/x.txt
++++ b/x.txt
+@@ -1 +1 @@
+-old
++new
+\\ No newline at end of file
+";
+        let files = parse_unified_diff(diff);
+        assert_eq!(files.len(), 1);
+        let marker = files[0].hunks.last().unwrap();
+        assert_eq!(marker.kind, HunkLineType::Context);
+        assert_eq!(marker.old_no, None);
+        assert_eq!(marker.new_no, None);
+        assert_eq!(marker.text, "\\ No newline at end of file");
+        // The marker is not a counted line.
+        assert_eq!((files[0].add, files[0].del), (1, 1));
+    }
+
+    #[test]
+    fn quoted_diff_headers_unquote_and_markerless_git_lines_fall_back_raw() {
+        // `core.quotepath` quoting: the `diff --git` line carries no usable ` b/`
+        // split (the quote precedes `b/`), so the raw rest is kept until the
+        // quoted `+++` header assigns the unquoted path.
+        let diff = "\
+diff --git \"a/we ird.txt\" \"b/we ird.txt\"
+index 1..2 100644
+--- \"a/we ird.txt\"
++++ \"b/we ird.txt\"
+@@ -1 +1 @@
+-o
++n
+";
+        let files = parse_unified_diff(diff);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "b/we ird.txt");
+
+        // The helpers directly: no ` b/` marker → the raw rest; quotes strip.
+        assert_eq!(path_from_diff_git("nomarker"), "nomarker");
+        assert_eq!(unquote("\"spaced name\""), "spaced name");
+        assert_eq!(unquote("plain"), "plain");
+    }
+
+    #[test]
+    fn porcelain_rename_missing_or_empty_original_keeps_the_new_path_only() {
+        // A rename record truncated at the end of the stream (no original field).
+        let entries = parse_porcelain_z("R  new.txt");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "new.txt");
+        assert_eq!(entries[0].status, FileStatus::Added);
+        // An empty original field is skipped rather than emitted as a "" delete.
+        let entries = parse_porcelain_z("R  moved.txt\u{0}\u{0}");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "moved.txt");
+        assert_eq!(entries[0].status, FileStatus::Added);
+    }
+
+    #[test]
+    fn github_web_url_rejects_a_bare_host_without_a_path() {
+        // A scheme URL with no `/` after the host has no owner/repo segments.
+        assert_eq!(github_web_url("https://github.com"), None);
+        assert_eq!(github_web_url("ssh://git@github.com"), None);
+    }
 }
