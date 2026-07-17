@@ -7,7 +7,7 @@ name: CI
 #   frontend  — ESLint + Prettier + type-check/build + Vitest with a ≥75% line-coverage
 #               gate over the pure-logic surface (UI/components/hooks/store-IPC-wiring are
 #               excluded — see vitest.config.ts; "front end needs only logic tests")
-#   backend   — rustfmt + Clippy (-D warnings) + tests via cargo-llvm-cov with a ≥75% line
+#   backend   — rustfmt + Clippy (-D warnings) + tests via cargo-llvm-cov with a ≥90% line
 #               gate over the logic surface (the Tauri command/wiring boundary —
 #               commands.rs/lib.rs/main.rs — is excluded, mirroring the frontend's
 #               store.ts/ipc.ts exclusion)
@@ -66,7 +66,7 @@ jobs:
         run: npm run test:coverage
 
   backend:
-    name: Backend — rustfmt, clippy, test (≥75% coverage)
+    name: Backend — rustfmt, clippy, test (≥90% coverage)
     # ubuntu-22.04 matches release.yml's Linux floor and has the Tauri 2 system libs the
     # `recue` crate needs to compile (webkit2gtk-4.1, gtk-3, …).
     runs-on: ubuntu-22.04
@@ -107,9 +107,9 @@ jobs:
 
       # Runs the full Rust test suite AND enforces the coverage gate over the pure-logic
       # surface: cargo-llvm-cov exits non-zero if any test fails OR logic line coverage is
-      # below 75%. The Tauri IPC/wiring boundary is excluded (mirroring the frontend's
+      # below 90%. The Tauri IPC/wiring boundary is excluded (mirroring the frontend's
       # store.ts/ipc.ts exclusion): commands.rs (the #[tauri::command] surface), lib.rs (app
       # builder + event forwarding + poll loops), main.rs (entry point) — integration code
-      # exercised by the running app, not unit tests. Logic line coverage is ~87%.
-      - name: Tests + coverage gate (logic lines ≥ 75%)
-        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --ignore-filename-regex '(commands|lib|main)\.rs$' --fail-under-lines 75
+      # exercised by the running app, not unit tests.
+      - name: Tests + coverage gate (logic lines ≥ 90%)
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --ignore-filename-regex '(commands|lib|main)\.rs$' --fail-under-lines 90
