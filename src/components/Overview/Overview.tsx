@@ -75,6 +75,7 @@ import { shouldHoverSelect } from "../Terminal/hoverFocus";
 import { blurTerminals, focusTerminal } from "../Terminal/terminalPool";
 import { TerminalScrollRootContext } from "../Terminal/useVisibleOnce";
 import { overviewIsEmpty } from "../WaveBackground/wavePresets";
+import { horizontalWheelDelta, isHorizontalWheelIntent } from "./wallScroll";
 import styles from "./Overview.module.css";
 
 // A hover-driven select (#371) must not scroll the wall: scrollIntoView would move
@@ -103,6 +104,30 @@ function Wall({
   wallRef: RefObject<HTMLDivElement | null>;
   children: ReactNode;
 }) {
+  // Reclaim horizontal wall scroll from agent terminals. `claude`'s TUI mouse tracking
+  // makes xterm bind a `{passive:false}` wheel listener that unconditionally
+  // `preventDefault`s + `stopPropagation`s EVERY wheel event, so a horizontal swipe over
+  // an agent never reaches this `overflow-x:auto` wall. A CAPTURE-phase native listener
+  // runs before the event reaches the terminal (xterm's is bubble-phase), so it can steer
+  // a horizontal-intent wheel to the wall and swallow it. `attachCustomWheelEventHandler`
+  // can't (the cancel fires regardless) and React `onWheelCapture` can't (xterm's
+  // stopPropagation stops the event before it reaches React's delegated root). Only events
+  // over a terminal are reclaimed — a file/diff panel's own horizontal scroll still wins.
+  useEffect(() => {
+    const el = wallRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!isHorizontalWheelIntent(e)) return; // vertical → flows to the agent
+      const target = e.target;
+      if (!(target instanceof Element) || !target.closest(".xterm")) return;
+      el.scrollLeft += horizontalWheelDelta(e);
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    el.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    return () => el.removeEventListener("wheel", onWheel, { capture: true });
+  }, [wallRef]);
+
   return (
     <TerminalScrollRootContext.Provider value={wallRef}>
       <div ref={wallRef} className={styles.wall}>

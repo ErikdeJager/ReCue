@@ -124,6 +124,20 @@ const replays = createReplayQueue(MAX_CONCURRENT_REPLAYS);
 // disposed mid-write, or an xterm that never calls back).
 const WRITE_TIMEOUT_MS = 2000;
 
+// Wheel scroll speed. `claude`'s TUI enables mouse tracking, so xterm forwards a
+// wheel notch to the agent (an SGR wheel report) instead of scrolling its own
+// viewport. On a TRACKPAD (`DOM_DELTA_PIXEL`) xterm's `consumeWheelEvent` divides
+// the pixel delta by the cell height, damps deltas < 50px to 30%, and only forwards
+// ONE report once a fractional accumulator crosses a whole line — so at xterm's
+// default `scrollSensitivity: 1` a gentle flick sends nothing for the first several
+// events (a ~0.5s "dead" feel) and one line at a time after that (the "effort").
+// Scaling the delta up front makes the first small event cross the threshold and
+// more events forward a report. Safe: the mouse-forwarding path emits at most one
+// report per event regardless of magnitude (no over-scroll), and a physical
+// line-mode wheel is unaffected. 3–6 is the reasonable band; 5 roughly cancels the
+// 0.3 damping.
+const SCROLL_SENSITIVITY = 5;
+
 /** Resolve once the write has been parsed by xterm — or after a safety timeout.
  * Awaiting the write callback is what actually spreads the ANSI parse across the
  * queue: the next terminal's fetch only starts after this one has been parsed. */
@@ -555,6 +569,8 @@ function createHost(sessionId: string): TerminalHost {
       reducedMotionNow(),
     ),
     allowProposedApi: true,
+    // Faster trackpad wheel scrolling into the agent — see SCROLL_SENSITIVITY.
+    scrollSensitivity: SCROLL_SENSITIVITY,
     ...(windowsPty ? { windowsPty } : {}),
     theme: {
       // #390: both the canvas background and the cursor's contrast color follow the
