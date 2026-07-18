@@ -1,0 +1,12 @@
+{
+  "version": "2.0.2",
+  "date": "2026-07-18",
+  "changes": [
+    {
+      "category": "fix",
+      "items": [
+        "Restored the background animation's original drift speed. A recent change had sped up the ambient wave background; it now drifts at its original, calmer pace again."
+      ]
+    }
+  ]
+}
