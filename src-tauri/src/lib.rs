@@ -15,6 +15,7 @@ mod editors;
 mod file_claims;
 mod files;
 mod git;
+mod hook_bridge;
 mod linux_desktop;
 mod linux_gtk;
 mod linux_webkit;
@@ -68,6 +69,17 @@ fn reprompt_macos_permissions() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Turn-complete hook forwarder: a spawned codex agent's `notify` program runs us as
+    // `recue --hook-forward <url> <session-id> [event-json]`. POST the callback to the
+    // running ReCue's loopback listener and return — BEFORE any env mutation, thread
+    // spawn, or `tauri::Builder`. A fall-through would make the single-instance plugin
+    // pop a spurious app window on every codex turn; this exits fast (no PATH probe, no
+    // GTK init) and fail-open (exit 0 even if the POST fails, so codex never sees a
+    // failing notify). A normal launch returns `false` and continues below.
+    if hook_bridge::maybe_run_hook_forward() {
+        return;
+    }
+
     // Linux/WebKitGTK renderer workaround (#346, GPU-aware since #347): where the NVIDIA
     // blob actually renders the webview, WebKitGTK's DMA-BUF renderer makes the whole
     // thing crawl — laggy input echo, slow paint. Export the documented kill-switch before
@@ -178,6 +190,19 @@ pub fn run() {
                 .map(|dir| dir.join("sessions.json"))
                 .unwrap_or_else(|_| PathBuf::from("recue-sessions.json"));
             app.manage(Store::load(&store_path));
+
+            // Turn-complete hook bridge: bind the loopback listener + write the per-agent
+            // config files + store the config on the SessionManager, BEFORE the boot-resume
+            // thread so a resumed claude session gets `--settings` on its first spawn. The
+            // listener always binds (it's inert without clients); the `turnCompleteHooks`
+            // Settings toggle gates INJECTION per spawn, so turning it off is fully live.
+            // Fail-open: a bind/write failure leaves the bridge unset ⇒ heuristic-only.
+            {
+                let enabled = hook_bridge::hooks_enabled(&app.state::<Store>().settings());
+                if let Some(cfg) = hook_bridge::HookBridge::start(app.handle().clone(), enabled) {
+                    app.state::<SessionManager>().set_hook_config(cfg);
+                }
+            }
 
             // Primary-window election (task 433): register the config-created window(s) —
             // today just "main". Windows created later register at their creation site
@@ -424,6 +449,13 @@ pub fn run() {
                                     .state::<Store>()
                                     .set_current_cwd(&id, Some(cwd.clone()));
                                 handle.emit("session://cwd", commands::CwdPayload { id, cwd })
+                            }
+                            SessionEvent::Turn { id, state } => {
+                                // Authoritative turn-complete signal from an agent's hook
+                                // (turn-complete hook bridge). App-global like State/Name so
+                                // every window's Attention queue admits it immediately —
+                                // never targeted (Attention/sidebar are cross-window).
+                                handle.emit("session://turn", commands::TurnPayload { id, state })
                             }
                         };
                     }
