@@ -215,6 +215,31 @@
   letter-spacing: var(--tracking-eyebrow);
 }
 
+/* Authoritative turn-complete badges (turn-complete hook bridge), mirroring .idleTag.
+   "Finished" reuses the awaiting (yellow) token; "Needs approval" uses the error (red)
+   token so a blocked agent reads as more urgent. Token-only, so identical on every OS. */
+.finishedTag {
+  padding: 1px 4px;
+  border: 1px solid var(--status-awaiting);
+  border-radius: var(--radius-micro);
+  color: var(--status-awaiting);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+.approvalTag {
+  padding: 1px 4px;
+  border: 1px solid var(--status-error);
+  border-radius: var(--radius-micro);
+  color: var(--status-error);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--tracking-eyebrow);
+}
+
 .idleAge {
   color: var(--text-faint);
   font-size: var(--fs-meta-xs);

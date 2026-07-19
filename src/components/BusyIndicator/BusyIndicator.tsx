@@ -8,6 +8,10 @@ interface BusyIndicatorProps {
    * the dot yellow ("finished / needs input") instead of the never-active gray.
    * Ignored while `busy`. */
   hasBeenActive?: boolean;
+  /** The agent is blocked on a tool/permission approval, per its own hook
+   * (turn-complete hook bridge). When not `busy`, renders a static red dot ("Needs
+   * approval") — more urgent than the yellow settled state. Ignored while `busy`. */
+  needsApproval?: boolean;
   /** Accessible label + hover tooltip; defaults to the current state. */
   label?: string;
 }
@@ -30,13 +34,28 @@ interface BusyIndicatorProps {
 function BusyIndicator({
   busy,
   hasBeenActive = false,
+  needsApproval = false,
   label,
 }: BusyIndicatorProps) {
-  // Yellow only applies once active and now idle; busy always wins (blue).
-  const settled = !busy && hasBeenActive;
+  // Precedence: busy (blue) > needs-approval (red) > settled (yellow) > fresh (gray).
+  const approval = !busy && needsApproval;
+  const settled = !busy && !approval && hasBeenActive;
   const text =
-    label ?? (busy ? "Working…" : settled ? "Finished — needs input" : "Idle");
-  const stateClass = busy ? styles.busy : settled ? styles.settled : "";
+    label ??
+    (busy
+      ? "Working…"
+      : approval
+        ? "Needs approval"
+        : settled
+          ? "Finished — needs input"
+          : "Idle");
+  const stateClass = busy
+    ? styles.busy
+    : approval
+      ? styles.approval
+      : settled
+        ? styles.settled
+        : "";
   return (
     <span
       className={`${styles.ball} ${stateClass}`}

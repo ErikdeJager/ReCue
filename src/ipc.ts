@@ -52,6 +52,7 @@ import type {
   SizePayload,
   SkillInfo,
   StatePayload,
+  TurnPayload,
   WorkingDiff,
   WorktreeCleanup,
   WorktreeKeptPayload,
@@ -928,6 +929,10 @@ export interface SessionEventHandlers {
   onExited: (payload: ExitPayload) => void;
   /** Busy/idle transition for a session (#42). */
   onState: (payload: StatePayload) => void;
+  /** Authoritative turn-complete signal from an agent's own hook (turn-complete hook
+   * bridge): drives the Attention queue's immediate admission. Optional so a window
+   * that doesn't track the queue can ignore it. */
+  onTurn?: (payload: TurnPayload) => void;
   /** claude's auto-title for a session changed (#97). */
   onName: (payload: NamePayload) => void;
   /** The session's forkability changed (#138) — gate the Fork affordance. */
@@ -955,6 +960,7 @@ export async function subscribeSessionEvents(
     unlistenOutput,
     unlistenExited,
     unlistenState,
+    unlistenTurn,
     unlistenName,
     unlistenForkable,
     unlistenForgotten,
@@ -979,6 +985,11 @@ export async function subscribeSessionEvents(
     listen<StatePayload>("session://state", (event) =>
       handlers.onState(event.payload),
     ),
+    // Default target (app-global, like session://state): every window's Attention
+    // queue reacts to a turn-complete hook (turn-complete hook bridge).
+    listen<TurnPayload>("session://turn", (event) =>
+      handlers.onTurn?.(event.payload),
+    ),
     listen<NamePayload>("session://name", (event) =>
       handlers.onName(event.payload),
     ),
@@ -999,6 +1010,7 @@ export async function subscribeSessionEvents(
     unlistenOutput();
     unlistenExited();
     unlistenState();
+    unlistenTurn();
     unlistenName();
     unlistenForkable();
     unlistenForgotten();

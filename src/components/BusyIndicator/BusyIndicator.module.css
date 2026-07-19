@@ -50,6 +50,16 @@
     color-mix(in srgb, var(--status-awaiting) 60%, transparent);
 }
 
+/* Needs-approval (turn-complete hook bridge): the agent is blocked on a tool/permission
+   approval per its own hook — a solid --status-error (red) dot with the same soft glow,
+   no animation, reading as more urgent than the yellow settled state. Plain dim-token
+   fallback first, then the color-mix (the cross-platform rule, task 383). */
+.approval::before {
+  background: var(--status-error);
+  box-shadow: 0 0 4px var(--status-error-dim);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--status-error) 60%, transparent);
+}
+
 /* The sheen overlay, clipped to the dot. Idle: invisible. */
 .ball::after {
   content: "";

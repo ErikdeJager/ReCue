@@ -260,6 +260,51 @@ steady-state boot pays **zero** probe cost.
   seeded into the store on load) so a previously-active agent shows yellow immediately
   on boot. Under reduced-motion the sweep is dropped, leaving a solid glowing blue dot
   (and a solid yellow settled dot) distinct from idle.
+- **Turn-complete hook bridge (`hook_bridge.rs`):** the Attention queue learns an agent
+  is finished from an **authoritative** turn-complete signal instead of only the
+  ~700ms/5s output-activity heuristic (above), **with the heuristic kept as the universal
+  fallback** (custom agents, older CLIs, containers, and the hooks-off opt-out). The
+  backend starts **once at boot** a loopback (`127.0.0.1`) HTTP listener (`HookBridge::start`,
+  before the boot-resume thread) that spawned agents POST back on turn completion
+  (`/turn?token=..&kind=finished|approval[&sid=..]`); a **per-launch 128-bit token** in the
+  query is validated, an unknown/foreign session id is rejected (`SessionManager::has_session`),
+  and the listener **always answers `204`** so an agent CLI never sees a hook error.
+  **Fail-open everywhere** — a bind/write failure leaves the bridge unset ⇒ zero injection,
+  heuristic-only. **Per-agent injection at spawn** (`SessionManager::hook_injection`, **host
+  PTY sessions only** — gated on the `turnCompleteHooks` Settings toggle **and**
+  `container.is_none()`, since a container agent can't reach a host loopback port), folded
+  into the argv **before** any positional prompt (options must precede the seeded prompt) /
+  env, upstream of the docker wrap:
+  - **claude** — `--settings <file>` adding `Stop`→`finished` + `Notification`
+    (`permission_prompt`→`approval`, `idle_prompt`→`finished`) **http** hooks (merges with,
+    never replaces, the user's own settings); correlation is free — the posted body's
+    `session_id` **is** the `--session-id` we minted.
+  - **codex** — `-c notify=[…]` runs **our own binary** as `recue --hook-forward <url>
+    <session-id>` (an early `maybe_run_hook_forward` branch in `run()` that POSTs and exits
+    **before** `tauri::Builder`, so the single-instance plugin never pops a window); `finished`
+    only (codex can't distinguish approval).
+  - **opencode** — `OPENCODE_CONFIG_DIR` + a bundled JS plugin mapping
+    `session.idle`→`finished` / `permission.updated`→`approval`, reading the token-bearing
+    base URL + ReCue session id from `RECUE_HOOK_URL` / `RECUE_SESSION_ID` env.
+  Config files (the claude settings JSON + the opencode plugin) are written **once per boot**
+  under `<data>/agent-hooks` (`write_private` — `0600` on unix, the AppData-dir ACL on
+  Windows), overwritten each launch since the port + token rotate. A valid callback becomes
+  `SessionEvent::Turn { id, state }` via `SessionManager::broadcast_turn` (the **sole**
+  emitter — never the reader/monitor/title threads), forwarded **app-global** as
+  `session://turn`. **Frontend:** `ipc.ts` routes it to the store's `setTurnState`, which
+  admits the session to the Attention queue **immediately** (bypassing the 5s
+  `attentionEligible` grace), marks it `hookSeen` (so `setBusy` stops the heuristic re-arming
+  the admission grace for that id — it may still *evict* on sustained busy), records a
+  `finished`/`approval` state in `sessionTurnState`, and fires the #336 watched-agent
+  notification on the real edge (primary window only). It's **presentational-plus** — the
+  queue card + `BusyIndicator` show a red **"Needs approval"** vs yellow **"Finished"**
+  badge/dot — but membership still rides `attentionEligible`. The `turnCompleteHooks`
+  Settings → Sessions toggle (**default on**) gates injection and is a genuine **privacy
+  opt-out** (off ⇒ no loopback callbacks, no config-file injection). Cross-platform: the
+  loopback HTTP + argv/env injection are platform-neutral (the only `#[cfg]` is the `0600`
+  unix file mode). codex/opencode remain **untested** agents — their exact flag/plugin
+  shapes follow the documented CLIs and **must be verified against the installed binary**
+  (the `agents.rs` discipline).
 - **Input / resize:** the `Terminal` sends keystrokes to `write_stdin`; a
   `ResizeObserver` **proposes** a size for its slot (`propose_terminal_size`, tasks
   426/427) and the backend's smallest-wins arbiter (`terminal_views.rs`) applies the
@@ -387,7 +432,10 @@ steady-state boot pays **zero** probe cost.
   busy-heuristic settle fires mid-turn on any output pause and #315's sticky hold only
   engages *after* a first flicker — so a working agent never blinks into the queue, a
   seeded spawn never flashes as "NEW", and the watched-agent notification #336 rides the
-  same confirmed settle; symmetrically, **eviction is debounced** (`ATTENTION_EVICT_CONFIRM_MS`,
+  same confirmed settle (a **turn-complete agent hook**, when present, bypasses this grace
+  and admits the session **immediately** on its authoritative signal — see the
+  turn-complete hook bridge bullet; the heuristic grace stays the fallback);
+  symmetrically, **eviction is debounced** (`ATTENTION_EVICT_CONFIRM_MS`,
   ~1.5s — the blink fix): a queued member leaves only once a busy signal is *sustained*,
   so a sub-second spurious blip (e.g. a resize/focus repaint that slipped past the backend
   attribution) can never eject it or reset its FIFO position, and `attentionQueue`
@@ -790,7 +838,9 @@ steady-state boot pays **zero** probe cost.
   blink → the live pooled xterms via `terminalPool.applyTerminalSettings`),
   **Sessions** (the #97 auto-name toggle + the #142 **Coding agent** selector →
   `defaultAgent`, now claude / codex / **opencode** with an inline "untested" caution
-  for the non-claude picks, + the #296 auto-continue-after-limit toggle),
+  for the non-claude picks, + the #296 auto-continue-after-limit toggle + the
+  **`turnCompleteHooks`** "Detect finished turns via agent hooks" toggle (default on) that
+  gates the turn-complete hook bridge's per-spawn injection — a privacy opt-out),
   **Appearance** (a **Dark/Light theme** toggle #333 + an accent swatch over the Catppuccin
   palette **with a "?" random-per-launch swatch** (task 373, `resolvedRandomAccent`) + a
   reduce-motion toggle + **Dense panels** (the ⌘D toggle's checkbox twin, task 373) +
@@ -997,8 +1047,10 @@ steady-state boot pays **zero** probe cost.
 ├── src-tauri/              # Rust backend (Tauri)
 │   ├── src/lib.rs          # App builder, state wiring, the targeted event forwarder (#440),
 │   │                       #   schedule + recurring poll loop (#93/#294), auto-continue engine
-│   │                       #   thread (#430), window lifecycle (Destroyed purge/unregister,
-│   │                       #   ExitRequested flush, single-instance + Reopen entry points #436)
+│   │                       #   thread (#430), the `recue --hook-forward` early branch +
+│   │                       #   hook-bridge start (turn-complete hook bridge), window lifecycle
+│   │                       #   (Destroyed purge/unregister, ExitRequested flush,
+│   │                       #   single-instance + Reopen entry points #436)
 │   ├── src/main.rs         # Binary entry point
 │   ├── src/pty.rs          # Session/PTY core (SessionManager, portable-pty)
 │   ├── src/terminal_views.rs # Terminal-view registry: smallest-wins grid arbitration (#426)
@@ -1019,6 +1071,9 @@ steady-state boot pays **zero** probe cost.
 │   ├── src/linux_webkit.rs # Linux DMA-BUF decision + Settings override + the boot RendererReport (#346/#347/#357)
 │   ├── src/linux_gtk.rs    # Linux GTK dialog theme from ReCue's own theme, before GTK init (#349)
 │   ├── src/title.rs        # Best-effort reader for claude's own ai-title (#97)
+│   ├── src/hook_bridge.rs  # Turn-complete hook bridge: loopback listener + per-agent inject
+│   │                       #   (claude --settings / codex --hook-forward / opencode plugin)
+│   │                       #   → SessionEvent::Turn → session://turn (Attention immediate admit)
 │   ├── src/commands.rs     # Tauri command surface + event payloads
 │   ├── src/store.rs        # JSON persistence (sessions, recents, canvases, canvas templates, schedules, recurrings #294, settings, sidebar width, folder order, diff-seen, path cache #360, window state #439) + the #429 merge_*_patch helpers
 │   ├── src/git.rs          # Git: branch + diff + compare (#81) + commits (#230) + per-file status (#252) + list (local+remote #180) + checkout + worktree (#74) + fetch (#180) + pull --ff-only (#181) + clone (#295/#308)
