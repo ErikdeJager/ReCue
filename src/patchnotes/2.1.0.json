@@ -1,0 +1,14 @@
+{
+  "version": "2.1.0",
+  "date": "2026-07-19",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "The Attention queue now knows the moment an agent is actually finished. Instead of guessing from when the terminal goes quiet, ReCue listens to each agent's own turn-complete signal, so a finished agent appears in the queue right away — no more short delay, and no more a busy agent briefly flickering in and out.",
+        "Agents waiting on you are now labelled precisely: a yellow **Finished** badge when an agent has finished its turn and wants your next instruction, and a red **Needs approval** badge when it's paused waiting for you to approve a tool or permission (Claude and OpenCode; Codex reports finished turns only).",
+        "New **Detect finished turns via agent hooks** toggle in Settings → Sessions (on by default). Turning it off opts out entirely — ReCue opens no local listener and simply falls back to detecting finished turns from terminal activity, exactly as before."
+      ]
+    }
+  ]
+}
