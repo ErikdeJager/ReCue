@@ -625,6 +625,75 @@ mod tests {
             .ends_with("kind=finished"));
     }
 
+    #[test]
+    fn enabled_toggle_reflects_set_enabled() {
+        let c = cfg(1, "t");
+        assert!(c.enabled(), "cfg() seeds enabled = true");
+        c.set_enabled(false);
+        assert!(!c.enabled());
+        c.set_enabled(true);
+        assert!(c.enabled());
+    }
+
+    #[test]
+    fn base_url_carries_the_port_and_token() {
+        assert_eq!(
+            cfg(4321, "sekret").base_url(),
+            "http://127.0.0.1:4321/turn?token=sekret"
+        );
+    }
+
+    #[test]
+    fn new_token_is_32_char_hex_and_fresh_each_call() {
+        let a = new_token();
+        let b = new_token();
+        assert_eq!(a.len(), 32, "a uuid-simple token is 32 hex chars");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b, "each launch mints a distinct token");
+    }
+
+    #[test]
+    fn maybe_run_hook_forward_is_a_noop_for_a_normal_launch() {
+        // The test binary's argv never carries `--hook-forward`, so this must report a
+        // normal launch (`false`) — `run()` then continues into `tauri::Builder`.
+        assert!(!maybe_run_hook_forward());
+    }
+
+    #[test]
+    fn write_config_files_writes_claude_settings_and_the_opencode_plugin() {
+        let root =
+            std::env::temp_dir().join(format!("recue-hooktest-{}", uuid::Uuid::new_v4().simple()));
+        let claude_settings = root.join("claude-settings.json");
+        let opencode_dir = root.join("opencode");
+        write_config_files(&claude_settings, &opencode_dir, 5555, "tk")
+            .expect("write config files");
+
+        // claude settings JSON carries the loopback port + token and round-trips as JSON.
+        let json = std::fs::read_to_string(&claude_settings).expect("read claude settings");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v["hooks"]["Stop"][0]["hooks"][0]["url"]
+            .as_str()
+            .unwrap()
+            .contains("127.0.0.1:5555"));
+        assert!(json.contains("token=tk"));
+
+        // The opencode plugin lands at `<config-dir>/plugin/recue-turn.js`, verbatim.
+        let plugin = opencode_dir.join("plugin").join("recue-turn.js");
+        let js = std::fs::read_to_string(&plugin).expect("read opencode plugin");
+        assert_eq!(js, OPENCODE_PLUGIN_JS);
+
+        // Overwriting truncates: a re-run points at the new port with no stale bytes.
+        write_config_files(&claude_settings, &opencode_dir, 6666, "tk2").expect("rewrite");
+        let json2 = std::fs::read_to_string(&claude_settings).unwrap();
+        assert!(json2.contains("127.0.0.1:6666"));
+        assert!(
+            !json2.contains("5555"),
+            "the stale port must be truncated away"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     // A tiny TOML reader — just enough to validate `codex_notify_toml` output without
     // pulling a `toml` dependency into the crate.
     mod toml_lite {

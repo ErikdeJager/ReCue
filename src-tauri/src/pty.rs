@@ -749,8 +749,18 @@ impl SessionManager {
         // they reach the agent, not the docker CLI; extra env (opencode) rides
         // `extra_env` into `spawn_with_id`. A no-op for a container session / custom /
         // unknown agent / bridge-off (heuristic fallback).
+        //
+        // PREPEND, not append: a *seeded* claude/codex spawn ends in a positional prompt
+        // (`--session-id <id> "<prompt>"` / `codex "<prompt>"`). An option placed AFTER a
+        // trailing positional can be swallowed into the prompt (and the hook silently
+        // never loads), so injected options must precede it. Option order is irrelevant,
+        // and the resume/fork paths carry no positional, so prepending is safe everywhere.
         let (hook_args, hook_env) = self.hook_injection(spec.id, &id, container.is_some());
-        args.extend(hook_args);
+        if !hook_args.is_empty() {
+            let mut prefixed = hook_args;
+            prefixed.append(&mut args);
+            args = prefixed;
+        }
         let (program, args) = match container {
             Some(launch) => {
                 let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -2813,11 +2823,31 @@ mod tests {
                 Ok(SessionEvent::Forkable { .. }) => {}
                 Ok(SessionEvent::Size { .. }) => {}
                 Ok(SessionEvent::Cwd { .. }) => {}
+                Ok(SessionEvent::Turn { .. }) => {}
                 Err(_) => panic!("timed out waiting for session events"),
             }
         };
         assert!(String::from_utf8_lossy(&output).contains("hello-from-pty"));
         assert_eq!(exit, Some(0));
+    }
+
+    #[test]
+    fn broadcast_turn_emits_a_turn_event() {
+        // The turn-complete hook bridge's only edge into the event stream: a single
+        // `SessionEvent::Turn` carrying the session id + reported state. Platform-neutral
+        // (no PTY), so it runs on every OS.
+        let (mgr, rx) = manager();
+        mgr.broadcast_turn("sess-x", TurnState::Approval);
+        let ev = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("a Turn event");
+        match ev {
+            SessionEvent::Turn { id, state } => {
+                assert_eq!(id, "sess-x");
+                assert_eq!(state, TurnState::Approval);
+            }
+            _ => panic!("expected SessionEvent::Turn"),
+        }
     }
 
     #[cfg(unix)]
