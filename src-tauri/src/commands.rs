@@ -72,6 +72,16 @@ pub struct StatePayload {
     pub busy: bool,
 }
 
+/// Payload for the `session://turn` event (turn-complete hook bridge): an authoritative
+/// turn-complete signal from an agent's own hook — the agent finished (`finished`) or is
+/// blocked on a tool/permission approval (`approval`). Drives the Attention queue's
+/// immediate admission (bypassing the output-activity heuristic's grace).
+#[derive(Clone, Serialize)]
+pub struct TurnPayload {
+    pub id: String,
+    pub state: crate::pty::TurnState,
+}
+
 /// Payload for `session://size` (task 426): the authoritative PTY grid after
 /// multi-window smallest-wins arbitration. Broadcast on change and on attach.
 #[derive(Clone, Serialize)]
@@ -3675,6 +3685,9 @@ pub fn set_settings(
     // `autoContinueAfterLimit` change reacts now, not at the next 180s fetch —
     // task 430. Best-effort (fail-soft when unmanaged, e.g. tests).
     crate::autocontinue::poke(&app);
+    // Push the live `turnCompleteHooks` toggle into the hook bridge so a change gates
+    // injection on the next spawn (fail-soft when unmanaged).
+    crate::hook_bridge::sync_enabled(&app, &store);
     Ok(())
 }
 

@@ -209,6 +209,26 @@ pub enum SessionEvent {
     /// cadence when the log tail's `cwd` changes; claude-only (`uses_claude_log`).
     /// The command layer persists + forwards it.
     Cwd { id: String, cwd: String },
+    /// Authoritative turn-complete signal from an agent's own hook (turn-complete
+    /// hook bridge): the agent finished its turn (`Finished`) or is blocked on a
+    /// tool/permission approval (`Approval`). Emitted **only** by the loopback
+    /// `hook_bridge` listener via [`SessionManager::broadcast_turn`] — never by the
+    /// reader/monitor/title threads — and forwarded as `session://turn`. It drives the
+    /// Attention queue's *immediate* admission, bypassing the output-activity
+    /// heuristic's grace; the heuristic (`State`) stays the fallback.
+    Turn { id: String, state: TurnState },
+}
+
+/// The turn-complete state an agent hook reports (see [`SessionEvent::Turn`]). Serialized
+/// lowercase (`"finished"` / `"approval"`) for the `session://turn` payload.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[cfg_attr(test, derive(PartialEq))]
+#[serde(rename_all = "lowercase")]
+pub enum TurnState {
+    /// The agent finished its turn and awaits the user's next input.
+    Finished,
+    /// The agent is paused waiting for the user to approve a tool/permission.
+    Approval,
 }
 
 /// Cap on a single coalesced `Output` payload (#346): a run at/over this size is
@@ -579,6 +599,10 @@ pub struct SessionManager {
     activity: Activity,
     // Monotonic base for the millis timestamps in `activity`.
     base: Instant,
+    // Turn-complete hook config (loopback port + token + per-agent config-file paths +
+    // the live Settings toggle), set once at boot by `hook_bridge::HookBridge::start`.
+    // Empty in tests / when the bridge failed to bind ⇒ zero injection (heuristic-only).
+    hook: std::sync::OnceLock<crate::hook_bridge::HookConfig>,
 }
 
 impl SessionManager {
@@ -615,6 +639,37 @@ impl SessionManager {
             title_tx: Mutex::new(spawn_title_tx),
             activity,
             base,
+            hook: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Store the turn-complete hook config (once, at boot). A no-op if already set.
+    pub fn set_hook_config(&self, cfg: crate::hook_bridge::HookConfig) {
+        let _ = self.hook.set(cfg);
+    }
+
+    /// Flip the live `turnCompleteHooks` Settings toggle (called from `set_settings`).
+    pub fn set_hooks_enabled(&self, on: bool) {
+        if let Some(hook) = self.hook.get() {
+            hook.set_enabled(on);
+        }
+    }
+
+    /// Per-agent turn-complete hook injection `(extra_cli_args, extra_env)` for a spawn.
+    /// Empty when: no bridge, the toggle is off, or the session is containerized (a
+    /// container agent can't reach the host loopback, so it stays heuristic-only).
+    fn hook_injection(
+        &self,
+        agent_id: &str,
+        session_id: &str,
+        is_container: bool,
+    ) -> (Vec<String>, Vec<(String, String)>) {
+        if is_container {
+            return (Vec::new(), Vec::new());
+        }
+        match self.hook.get() {
+            Some(hook) if hook.enabled() => hook.injection(agent_id, session_id),
+            _ => (Vec::new(), Vec::new()),
         }
     }
 
@@ -669,7 +724,7 @@ impl SessionManager {
         // (#116) — otherwise it would be stuck gray (never blue/yellow).
         let trimmed_prompt = prompt.map(str::trim).filter(|p| !p.is_empty());
         let seeded = trimmed_prompt.is_some();
-        let (program, args, uses_claude_log) = if spec.id == "custom" {
+        let (program, mut args, uses_claude_log) = if spec.id == "custom" {
             // Resolve the user's command → (program, args). Missing/blank → clear error.
             let command = custom_command
                 .ok_or_else(|| SessionError::Spawn("Custom agent command is not set".into()))?;
@@ -689,6 +744,13 @@ impl SessionManager {
                 spec.supports_auto_name,
             )
         };
+        // Turn-complete hook injection (host sessions only) — extra CLI args (claude
+        // `--settings` / codex `-c notify`) fold into `args` BEFORE the docker wrap so
+        // they reach the agent, not the docker CLI; extra env (opencode) rides
+        // `extra_env` into `spawn_with_id`. A no-op for a container session / custom /
+        // unknown agent / bridge-off (heuristic fallback).
+        let (hook_args, hook_env) = self.hook_injection(spec.id, &id, container.is_some());
+        args.extend(hook_args);
         let (program, args) = match container {
             Some(launch) => {
                 let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -709,6 +771,7 @@ impl SessionManager {
             name,
             seeded,
             uses_claude_log,
+            &hook_env,
         )
     }
 
@@ -727,7 +790,11 @@ impl SessionManager {
         container: Option<&crate::container::ContainerLaunch>,
     ) -> Result<SessionInfo, SessionError> {
         let spec = crate::agents::agent_spec(agent);
-        let args = spec.resume_args(claude_session_id);
+        let mut args = spec.resume_args(claude_session_id);
+        // Turn-complete hook injection (host sessions only) — see `spawn_session_with_prompt`.
+        let (hook_args, hook_env) =
+            self.hook_injection(spec.id, claude_session_id, container.is_some());
+        args.extend(hook_args);
         // A dev-container session resumes inside a fresh container with the SAME
         // per-session home mounted, so `claude --resume <id>` finds its own log there
         // (`commands.rs` composes the launch from the persisted record). Same wrap
@@ -752,6 +819,7 @@ impl SessionManager {
             name,
             false,
             uses_claude_log,
+            &hook_env,
         )
     }
 
@@ -771,7 +839,10 @@ impl SessionManager {
     ) -> Result<SessionInfo, SessionError> {
         let id = Uuid::new_v4().to_string();
         let spec = crate::agents::agent_spec(agent);
-        let args = spec.fork_args(&id, source_session_id);
+        let mut args = spec.fork_args(&id, source_session_id);
+        // Turn-complete hook injection (a fork is never containerized).
+        let (hook_args, hook_env) = self.hook_injection(spec.id, &id, false);
+        args.extend(hook_args);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.spawn_with_id(
             id,
@@ -781,6 +852,7 @@ impl SessionManager {
             name,
             false,
             spec.supports_auto_name,
+            &hook_env,
         )
     }
 
@@ -798,8 +870,17 @@ impl SessionManager {
         cwd: impl AsRef<Path>,
     ) -> Result<SessionInfo, SessionError> {
         let shell = default_shell();
-        // A shell terminal has no claude conversation log (#141).
-        self.spawn_with_id(id, shell.as_str(), &[], cwd.as_ref(), None, false, false)
+        // A shell terminal has no claude conversation log (#141) and no agent hook.
+        self.spawn_with_id(
+            id,
+            shell.as_str(),
+            &[],
+            cwd.as_ref(),
+            None,
+            false,
+            false,
+            &[],
+        )
     }
 
     /// Send keystrokes / paste to a session's stdin.
@@ -1091,6 +1172,7 @@ impl SessionManager {
             name,
             false,
             false,
+            &[],
         )
     }
 
@@ -1112,6 +1194,7 @@ impl SessionManager {
             None,
             true,
             false,
+            &[],
         )
     }
 
@@ -1129,6 +1212,7 @@ impl SessionManager {
         name: Option<String>,
         seeded: bool,
         uses_claude_log: bool,
+        extra_env: &[(String, String)],
     ) -> Result<SessionInfo, SessionError> {
         if !cwd.is_dir() {
             return Err(SessionError::Spawn(format!(
@@ -1182,6 +1266,13 @@ impl SessionManager {
             cmd.env("PATH", path);
         }
         cmd.env("TERM", "xterm-256color");
+        // Turn-complete hook env (opencode's OPENCODE_CONFIG_DIR + RECUE_* callback vars;
+        // empty for every other agent / when the bridge is off). Applied AFTER the
+        // child_env_vars/PATH/TERM copies, so it is never subject to the #350 AppImage
+        // scrub and simply adds to the child env.
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
 
         let child = pair
             .slave
@@ -1332,6 +1423,20 @@ impl SessionManager {
                 id: id.to_string(),
                 cols,
                 rows,
+            });
+        }
+    }
+
+    /// Broadcast an authoritative turn-complete signal for a session (turn-complete hook
+    /// bridge): send one [`SessionEvent::Turn`] on the event channel, forwarded to the
+    /// frontend as `session://turn`. Called **only** by the loopback `hook_bridge`
+    /// listener. Best-effort, infallible, non-blocking — a poisoned sender lock or a
+    /// dropped forwarder (shutdown) is silently ignored, exactly like `broadcast_size`.
+    pub fn broadcast_turn(&self, id: &str, state: TurnState) {
+        if let Ok(tx) = self.events.lock() {
+            let _ = tx.send(SessionEvent::Turn {
+                id: id.to_string(),
+                state,
             });
         }
     }
@@ -3216,6 +3321,9 @@ mod tests {
         assert!(!is_noninput_report("\x1b[3~")); // function/Home/End style CSI ~ sequence
     }
 
+    // Spawns `sh` + the unix-only `spawn_program_seeded` helper, so unix-gated like the
+    // sibling heuristic tests (a Windows build excludes it).
+    #[cfg(unix)]
     #[test]
     fn focus_report_does_not_blink_busy_to_idle() {
         // #185: a focus/mouse report (xterm forwards these like keystrokes) must NOT
@@ -3439,6 +3547,9 @@ mod tests {
         let _ = mgr.kill_session(&info.id);
     }
 
+    // Spawns `sh` + the unix-only `spawn_program_seeded` helper, so unix-gated like the
+    // sibling heuristic tests (a Windows build excludes it).
+    #[cfg(unix)]
     #[test]
     fn real_keystroke_still_suppresses_echo_after_fix() {
         // Contrast to #185: a *real* keystroke still stamps last_input, so the echo

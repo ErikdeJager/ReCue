@@ -46,6 +46,10 @@ interface QueueCardProps {
   showDiffLineCounts: boolean;
   idleLabel: string;
   hasBeenActive: boolean;
+  /** Authoritative turn-complete state from the agent's hook (bridge), if any:
+   * `"finished"` → yellow "Finished" badge, `"approval"` → red "Needs approval". Absent
+   * → the heuristic IDLE/NEW marker. */
+  turnState: "finished" | "approval" | undefined;
   active: boolean;
   onSelect: () => void;
 }
@@ -62,6 +66,7 @@ function QueueCard({
   showDiffLineCounts,
   idleLabel,
   hasBeenActive,
+  turnState,
   active,
   onSelect,
 }: QueueCardProps) {
@@ -79,12 +84,22 @@ function QueueCard({
         }
       }}
     >
-      <BusyIndicator busy={false} hasBeenActive={hasBeenActive} />
+      <BusyIndicator
+        busy={false}
+        hasBeenActive={hasBeenActive}
+        needsApproval={turnState === "approval"}
+      />
       <div className={styles.cardInfo}>
         <span className={styles.cardName}>{primary}</span>
         <span className={styles.cardMeta}>{metaLine}</span>
         <span className={styles.cardFooter}>
-          {hasBeenActive ? (
+          {/* An authoritative hook state (bridge) shows a precise badge; otherwise fall
+              back to the heuristic IDLE/NEW marker. */}
+          {turnState === "approval" ? (
+            <span className={styles.approvalTag}>Needs approval</span>
+          ) : turnState === "finished" ? (
+            <span className={styles.finishedTag}>Finished</span>
+          ) : hasBeenActive ? (
             <span className={styles.idleTag}>IDLE</span>
           ) : (
             <span className={styles.newTag}>NEW</span>
@@ -123,6 +138,9 @@ function Attention() {
   const dismissedAttention = useStore((s) => s.dismissedAttention);
   const attentionEligible = useStore((s) => s.attentionEligible);
   const sessionIdleSince = useStore((s) => s.sessionIdleSince);
+  // Authoritative turn-complete state per session (turn-complete hook bridge): drives the
+  // queue card's Finished (yellow) / Needs-approval (red) badge. Presentational only.
+  const sessionTurnState = useStore((s) => s.sessionTurnState);
   const recurrings = useStore((s) => s.recurrings);
   const selectedId = useStore((s) => s.selectedId);
   const branches = useStore((s) => s.branches);
@@ -273,6 +291,7 @@ function Attention() {
                   showDiffLineCounts={showDiffLineCounts}
                   idleLabel={formatIdleAge(sessionIdleSince[session.id], now)}
                   hasBeenActive={sessionActive[session.id] ?? false}
+                  turnState={sessionTurnState[session.id]}
                   active={session.id === activeId}
                   onSelect={() => select(session.id)}
                 />

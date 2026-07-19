@@ -1007,6 +1007,24 @@ function SettingsModal() {
                 />
                 <div className={styles.field}>
                   <Checkbox
+                    // Turn-complete hook bridge: gates the loopback listener injection.
+                    // Off → new spawns get no hook (no callbacks / config-file
+                    // injection) and the Attention queue uses the output heuristic.
+                    checked={draft.turnCompleteHooks}
+                    onChange={(v) => update("turnCompleteHooks", v)}
+                    label="Detect finished turns via agent hooks"
+                    className={styles.checkRow}
+                  />
+                  <span className={styles.fieldHelp}>
+                    Let a spawned agent's own hook tell ReCue the instant a turn
+                    finishes, so the Attention queue surfaces it immediately.
+                    When off, ReCue opens no local listener and falls back to
+                    detecting finished turns from terminal activity. Applies to
+                    new sessions.
+                  </span>
+                </div>
+                <div className={styles.field}>
+                  <Checkbox
                     // #326: the privacy toggle gating the usage bar AND the Claude
                     // OAuth token read. Off → no usage IPC is ever invoked.
                     checked={draft.showSessionUsage}

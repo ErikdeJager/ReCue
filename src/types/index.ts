@@ -383,6 +383,15 @@ export interface StatePayload {
   busy: boolean;
 }
 
+/** Payload of the `session://turn` event (turn-complete hook bridge): an authoritative
+ * turn-complete signal from an agent's own hook — `"finished"` (awaiting input) or
+ * `"approval"` (blocked on a tool/permission). Drives the Attention queue's immediate
+ * admission + the queue card's Finished/Needs-approval badge. */
+export interface TurnPayload {
+  id: string;
+  state: "finished" | "approval";
+}
+
 /** Payload of the `session://size` broadcast (tasks 426/427): the authoritative,
  * smallest-wins-arbitrated PTY grid. The ONLY thing that ever resizes a pooled
  * xterm's grid (terminalPool applies it; nothing else calls term.resize). */
@@ -580,6 +589,13 @@ export interface Settings {
   // Sessions
   /** Use claude's `ai-title` (#97) for unnamed agents; off → the branch label. */
   autoName: boolean;
+  /** Turn-complete hooks (bridge): let a spawned agent's own hook signal ReCue the
+   * instant a turn finishes, so the Attention queue admits it immediately instead of
+   * waiting on the ~5s output-activity heuristic. Default true. Off makes new spawns
+   * skip the hook injection (no loopback callbacks / config-file injection) and the
+   * queue falls back to the heuristic — a privacy opt-out. Applies to newly spawned
+   * sessions; already-running ones are unaffected. */
+  turnCompleteHooks: boolean;
   /** Auto-save edited files (#162): on (default) = debounced writes; off = manual
    * save only (⌘S / the Save button). Governs every `useAutoSaveFile` consumer
    * (FileViewer raw/text + Kanban Board/Raw). */

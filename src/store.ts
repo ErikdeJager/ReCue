@@ -1463,6 +1463,12 @@ export const DEFAULT_SETTINGS: Settings = {
   })),
   autoName: true,
   autoSave: true,
+  // True by default (turn-complete hook bridge): let a spawned agent's own hook tell
+  // ReCue the instant a turn finishes (driving the Attention queue's immediate
+  // admission). Off makes new spawns skip the hook injection and the queue falls back
+  // to the output-activity heuristic — a privacy opt-out (no loopback callbacks, no
+  // config-file injection). An older sessions.json lacking the key back-fills to true.
+  turnCompleteHooks: true,
   defaultAgent: "claude",
   // Launch command for the custom agent (#325); empty until the user sets one. Blank +
   // `defaultAgent === "custom"` → a custom spawn fails with a clear toast.
@@ -2023,6 +2029,17 @@ export interface AppState {
    * busy or is removed, so a mid-turn output pause (which settles the backend's ~700ms
    * busy heuristic) never flickers a working agent's card into the queue. */
   attentionEligible: Record<string, true>;
+  /** Authoritative turn-complete state per session, from an agent's own hook
+   * (`session://turn`, turn-complete hook bridge): `"finished"` (awaiting input) or
+   * `"approval"` (blocked on a tool/permission). Absent = no hook signal yet. Purely
+   * presentational — drives the queue card's Finished/Needs-approval badge + dot; it does
+   * NOT change queue membership (that still rides `attentionEligible`). */
+  sessionTurnState: Record<string, "finished" | "approval">;
+  /** Sessions that have received at least one turn-complete hook (bridge): once set, the
+   * store prefers the hook for Attention admission and the heuristic (`setBusy`) stops
+   * arming the 5s admission grace for the id (it may still evict on sustained busy).
+   * Cleared on exit / restart / removal / boot, reverting the session to heuristic-driven. */
+  hookSeen: Record<string, true>;
   /** Terminal items (#72) whose shell has exited → exit code (or null); drives the
    * Terminal exit overlay for non-agent PTYs (they aren't in `sessions`). */
   terminalExits: Record<string, number | null>;
@@ -2207,6 +2224,10 @@ export interface AppState {
   markRunning: (id: string) => void;
   /** Set a session's busy/idle state from the backend heuristic (#42). */
   setBusy: (id: string, busy: boolean) => void;
+  /** Apply an authoritative turn-complete hook (`session://turn`, turn-complete hook
+   * bridge): admit the session to the Attention queue immediately (bypassing the 5s
+   * grace) and record its `finished`/`approval` state for the badge. */
+  setTurnState: (id: string, state: "finished" | "approval") => void;
   /** Acknowledge the selected idle agent in the Attention queue (#398): remove it from
    * the queue (the session stays alive) and advance selection to the next queued agent.
    * A no-op when `id` isn't a current queue member. */
@@ -2945,6 +2966,12 @@ async function killAgentsInRepo(repoPath: string): Promise<number> {
       attentionEligible: Object.fromEntries(
         Object.entries(s.attentionEligible).filter(([id]) => !idSet.has(id)),
       ),
+      sessionTurnState: Object.fromEntries(
+        Object.entries(s.sessionTurnState).filter(([id]) => !idSet.has(id)),
+      ),
+      hookSeen: Object.fromEntries(
+        Object.entries(s.hookSeen).filter(([id]) => !idSet.has(id)),
+      ),
     };
   });
   // Ref-counted worktree cleanup (#74): keep a dirty worktree rather than force it.
@@ -3108,6 +3135,12 @@ async function closeCanvasContents(layout: CanvasNode): Promise<void> {
       attentionEligible: Object.fromEntries(
         Object.entries(s.attentionEligible).filter(([id]) => !agentIds.has(id)),
       ),
+      sessionTurnState: Object.fromEntries(
+        Object.entries(s.sessionTurnState).filter(([id]) => !agentIds.has(id)),
+      ),
+      hookSeen: Object.fromEntries(
+        Object.entries(s.hookSeen).filter(([id]) => !agentIds.has(id)),
+      ),
       terminalExits: Object.fromEntries(
         Object.entries(s.terminalExits).filter(([id]) => !removedIds.has(id)),
       ),
@@ -3255,6 +3288,8 @@ export const useStore = create<AppState>()((set, get) => ({
   sessionIdleSince: {},
   dismissedAttention: {},
   attentionEligible: {},
+  sessionTurnState: {},
+  hookSeen: {},
   terminalExits: {},
   // Default true: with no persisted sessions there is nothing to wait for (#359), and a
   // window that never calls `refresh()` (a detached canvas) must never hold a volley.
@@ -3409,7 +3444,10 @@ export const useStore = create<AppState>()((set, get) => ({
     set((s) => ({
       sessions: [...s.sessions.filter((x) => x.id !== session.id), session],
     }));
-    if (isNew) armAttentionGrace(session.id, false);
+    // A session that already received a turn-complete hook (its id landed before the
+    // record, a rare race) is hook-driven; don't let the fallback grace fight it.
+    if (isNew && !get().hookSeen[session.id])
+      armAttentionGrace(session.id, false);
   },
 
   dropSession: (id) => {
@@ -3425,6 +3463,10 @@ export const useStore = create<AppState>()((set, get) => ({
       sessionIdleSince: omitKey(s.sessionIdleSince, id),
       dismissedAttention: omitKey(s.dismissedAttention, id),
       attentionEligible: omitKey(s.attentionEligible, id),
+      // Turn-complete hook state (bridge): a removed session is neither hook-driven
+      // nor showing a finished/approval badge.
+      sessionTurnState: omitKey(s.sessionTurnState, id),
+      hookSeen: omitKey(s.hookSeen, id),
       // Drop any heuristic worktree guess keyed to the removed session — this is
       // the one choke point every removal path funnels through (roster sync,
       // Rust's clean-exit forget, explicit Remove, recurring rotation), where a
@@ -3448,6 +3490,9 @@ export const useStore = create<AppState>()((set, get) => ({
       // An exited session is not working — clear any busy flag (#42).
       sessionBusy: omitKey(s.sessionBusy, id),
       attentionEligible: omitKey(s.attentionEligible, id),
+      // An exited session has no live turn and is no longer hook-driven (bridge).
+      sessionTurnState: omitKey(s.sessionTurnState, id),
+      hookSeen: omitKey(s.hookSeen, id),
     }));
   },
 
@@ -3535,8 +3580,62 @@ export const useStore = create<AppState>()((set, get) => ({
       // settle notify after `booting` flips false. A resolved blip (`evictPending`)
       // skips the re-arm: eligibility was never revoked, and re-arming would re-fire
       // the notification for a wait the user is already watching.
-      if (!evictPending) armAttentionGrace(id, !booting);
+      //
+      // A **hook-driven** session (`hookSeen`) never arms the fallback grace on a
+      // heuristic idle edge: its authoritative turn-complete signal (`setTurnState`)
+      // owns admission and fired already. The heuristic may still *evict* such a
+      // session (a sustained busy edge above → `armAttentionEvict`), so "agent
+      // resumed" still leaves the queue; only re-*admission* is the hook's job.
+      if (!evictPending && !get().hookSeen[id]) armAttentionGrace(id, !booting);
     }
+  },
+
+  /** Apply an authoritative turn-complete hook (`session://turn`, turn-complete hook
+   * bridge): admit the session to the Attention queue IMMEDIATELY, bypassing the 5s
+   * heuristic grace, and record its finished/approval state for the badge. Marks the
+   * session `hookSeen` so the heuristic (`setBusy`) stops arming the admission grace for
+   * it. Deliberately does NOT touch `dismissedAttention` (the resurrect guard: a genuine
+   * new turn clears dismissal via the sustained-busy `armAttentionEvict`; a duplicate/late
+   * hook then finds dismissal still set and stays dismissed). */
+  setTurnState: (id, state) => {
+    // The hook is now authoritative — drop both pending heuristic timers.
+    cancelAttentionGrace(id);
+    cancelAttentionEvict(id);
+    // Already a queue member? Then this is a label/escalation update (approval↔finished
+    // or a duplicate): keep the FIFO position and don't re-notify. A fresh admission
+    // stamps `idleSince` now and fires the watched-agent notification.
+    const alreadyEligible = !!get().attentionEligible[id];
+    const now = Date.now();
+    set((s) => ({
+      hookSeen: s.hookSeen[id] ? s.hookSeen : { ...s.hookSeen, [id]: true },
+      sessionTurnState:
+        s.sessionTurnState[id] === state
+          ? s.sessionTurnState
+          : { ...s.sessionTurnState, [id]: state },
+      // Admit now — the sole grant path for a hook-driven session (#398 invariant:
+      // the heuristic may only *revoke* eligibility for a `hookSeen` id).
+      attentionEligible: s.attentionEligible[id]
+        ? s.attentionEligible
+        : { ...s.attentionEligible, [id]: true },
+      // A finished turn means the agent has worked → render IDLE/yellow, never NEW/gray.
+      sessionActive: s.sessionActive[id]
+        ? s.sessionActive
+        : { ...s.sessionActive, [id]: true },
+      // Not busy — a turn just ended.
+      sessionBusy: s.sessionBusy[id]
+        ? omitKey(s.sessionBusy, id)
+        : s.sessionBusy,
+      // FIFO stamp only on a fresh admission; a duplicate keeps its position.
+      sessionIdleSince: alreadyEligible
+        ? s.sessionIdleSince
+        : { ...s.sessionIdleSince, [id]: now },
+    }));
+    // Parity with the busy→idle settle (#212): a turn ended, so re-read that folder's
+    // git state (an in-terminal `git checkout` during the turn may have landed).
+    scheduleGitRefresh(get().sessions.find((x) => x.id === id)?.repoPath);
+    // Watched-agent notification (#336) fires on this authoritative edge — only for a
+    // fresh admission; `maybeNotifyWatched` self-gates to the primary window + not boot.
+    if (!alreadyEligible) maybeNotifyWatched(id);
   },
 
   dismissAttention: (id) => {
@@ -3641,6 +3740,10 @@ export const useStore = create<AppState>()((set, get) => ({
         x.id === id ? { ...x, exitedCode: undefined, reconnecting: false } : x,
       ),
       attentionEligible: omitKey(s.attentionEligible, id),
+      // A restart is a fresh life: revert to heuristic-driven (until its first
+      // post-restart hook) and drop any stale finished/approval badge (bridge).
+      sessionTurnState: omitKey(s.sessionTurnState, id),
+      hookSeen: omitKey(s.hookSeen, id),
     }));
     armAttentionGrace(id, false);
   },
@@ -3955,6 +4058,12 @@ export const useStore = create<AppState>()((set, get) => ({
               // `setBusy` also schedules a debounced branch-label refresh on the
               // busy→idle edge (#212) so an in-terminal `git checkout` is reflected.
               get().setBusy(id, busy);
+            },
+            onTurn: ({ id, state }) => {
+              // Authoritative turn-complete signal from an agent's own hook
+              // (turn-complete hook bridge): admit to the Attention queue immediately
+              // and record the finished/approval badge state.
+              get().setTurnState(id, state);
             },
             onName: ({ id, name }) => {
               // claude's own auto-title (#97); fills the label for an unnamed agent
@@ -4411,6 +4520,10 @@ export const useStore = create<AppState>()((set, get) => ({
       attentionEligible: Object.fromEntries(
         views.map((v) => [v.id, true] as const),
       ),
+      // A fresh boot carries no live turn-complete hook state; a resumed session
+      // reverts to heuristic-driven until its first post-resume hook (bridge).
+      sessionTurnState: {},
+      hookSeen: {},
       recents: boot.recents,
       repoColors: boot.repo_colors,
       overviewPanels: boot.overview_panels,
@@ -6811,6 +6924,12 @@ export const useStore = create<AppState>()((set, get) => ({
         ),
         attentionEligible: Object.fromEntries(
           Object.entries(s.attentionEligible).filter(([id]) => !idSet.has(id)),
+        ),
+        sessionTurnState: Object.fromEntries(
+          Object.entries(s.sessionTurnState).filter(([id]) => !idSet.has(id)),
+        ),
+        hookSeen: Object.fromEntries(
+          Object.entries(s.hookSeen).filter(([id]) => !idSet.has(id)),
         ),
         // Drop a now-dangling Overview filter on the forgotten repo (#34/#247).
         overviewRepoFilter:
