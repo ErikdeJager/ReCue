@@ -14,6 +14,7 @@ import {
   normalizeChord,
   reservedChords,
   resolveKeybindMap,
+  terminalClaimsChord,
 } from "./keybinds";
 
 /** A keydown-shaped object; only what the chord logic reads. */
@@ -302,6 +303,57 @@ describe("isEditableTarget", () => {
     ).toBe(false);
     expect(isEditableTarget(fakeEl({ tag: "div" }))).toBe(false);
     expect(isEditableTarget(null)).toBe(false);
+  });
+});
+
+describe("terminalClaimsChord (task 448 terminal PTY passthrough)", () => {
+  /** A focus target inside a pooled xterm (structural, like isEditableTarget's). */
+  const xtermTarget = {
+    closest: (selector: string): Element | null =>
+      selector === ".xterm" ? ({} as Element) : null,
+  } as unknown as EventTarget;
+  /** A focus target outside any terminal. */
+  const plainTarget = {
+    closest: (): Element | null => null,
+  } as unknown as EventTarget;
+
+  it("claims a bare Ctrl chord on an xterm target (Ctrl+W = delete-word)", () => {
+    expect(terminalClaimsChord(ev("KeyW", { ctrl: true }), xtermTarget)).toBe(
+      true,
+    );
+  });
+
+  it("never claims a meta chord — macOS ⌘W is the app's, not readline's", () => {
+    expect(terminalClaimsChord(ev("KeyW", { meta: true }), xtermTarget)).toBe(
+      false,
+    );
+    // Ctrl+⌘ combos carry metaKey too.
+    expect(
+      terminalClaimsChord(ev("KeyW", { ctrl: true, meta: true }), xtermTarget),
+    ).toBe(false);
+  });
+
+  it("exempts Ctrl+Shift chords — the terminal-app convention for app actions", () => {
+    expect(
+      terminalClaimsChord(ev("KeyW", { ctrl: true, shift: true }), xtermTarget),
+    ).toBe(false);
+  });
+
+  it("allows Alt alongside Ctrl (AltGr layouts)", () => {
+    expect(
+      terminalClaimsChord(ev("KeyW", { ctrl: true, alt: true }), xtermTarget),
+    ).toBe(true);
+  });
+
+  it("never claims outside a terminal, or without a usable target", () => {
+    expect(terminalClaimsChord(ev("KeyW", { ctrl: true }), plainTarget)).toBe(
+      false,
+    );
+    expect(terminalClaimsChord(ev("KeyW", { ctrl: true }), null)).toBe(false);
+    // A target with no closest() (a non-element EventTarget) is safely ignored.
+    expect(
+      terminalClaimsChord(ev("KeyW", { ctrl: true }), {} as EventTarget),
+    ).toBe(false);
   });
 });
 

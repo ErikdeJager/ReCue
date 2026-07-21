@@ -134,6 +134,7 @@ beforeEach(() => {
     activeCanvasId: "canvas-1",
     liftedLeaf: null,
     maximizedItem: null,
+    removePrompt: null,
     canvasTemplates: [],
     sessionBusy: {},
     sessionActive: {},
@@ -3471,6 +3472,9 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
       recurrings: [recurring],
       selectedId: "a1",
       overviewPanels: {},
+      // Opted out of confirmation (#103): the destructive close runs instantly
+      // (the pre-448 behavior this test pins).
+      settings: { ...DEFAULT_SETTINGS, confirmDestructive: false },
     });
     // Agent card: ⌘W removes it (kill + forget), exactly like the card's ×.
     s().closeFocusedPanel();
@@ -3526,6 +3530,7 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
       // Filter to another repo: a1's card is off the wall, so ⌘W must not act —
       // the mouse × it mirrors only exists on a visible card.
       overviewRepoFilter: { path: "/repo/other", mode: "all" },
+      settings: { ...DEFAULT_SETTINGS, confirmDestructive: false },
     });
     s().closeFocusedPanel();
     await Promise.resolve();
@@ -3554,6 +3559,7 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
       attentionEligible: { a1: true }, // admission grace confirmed (#398)
       dismissedAttention: {},
       selectedId: "a1",
+      settings: { ...DEFAULT_SETTINGS, confirmDestructive: false },
     });
     s().closeFocusedPanel();
     // removeSession → killSession is async; let it settle.
@@ -3580,6 +3586,152 @@ describe("closeFocusedPanel (⌘W close-panel keybind)", () => {
     await Promise.resolve();
     expect(killSpy).not.toHaveBeenCalled();
     expect(s().sessions).toHaveLength(1);
+    killSpy.mockRestore();
+  });
+});
+
+describe("closeFocusedPanel confirm gate (task 448 removePrompt)", () => {
+  const s = () => useStore.getState();
+  const schedule = (): ScheduledSession =>
+    ({
+      id: "sch1",
+      cwd: "/repo/x",
+      branch: null,
+      prompt: null,
+      name: null,
+      fire_at: 999,
+      created_at: 0,
+    }) as unknown as ScheduledSession;
+  const recurring = (): RecurringSession =>
+    ({
+      id: "rec1",
+      cwd: "/repo/x",
+      interval_secs: 3600,
+      next_fire_at: 999,
+      created_at: 0,
+    }) as unknown as RecurringSession;
+
+  it("stages the selected Overview agent in removePrompt instead of removing it", () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "overview",
+      sessions: [session("a1")],
+      schedules: [],
+      recurrings: [],
+      selectedId: "a1",
+      overviewPanels: {},
+      settings: { ...DEFAULT_SETTINGS, confirmDestructive: true },
+    });
+    s().closeFocusedPanel();
+    // Nothing removed yet — the ConfirmRemoveModal owns the decision.
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+    expect(s().removePrompt).toEqual({ kind: "agent", id: "a1" });
+    killSpy.mockRestore();
+  });
+
+  it("confirmRemovePrompt runs the exact #425 action and clears the prompt", async () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      sessions: [session("a1")],
+      removePrompt: { kind: "agent", id: "a1" },
+    });
+    s().confirmRemovePrompt();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(killSpy).toHaveBeenCalledWith("a1");
+    expect(s().sessions).toHaveLength(0);
+    expect(s().removePrompt).toBeNull();
+    killSpy.mockRestore();
+  });
+
+  it("cancelRemovePrompt dismisses without removing anything", () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      sessions: [session("a1")],
+      removePrompt: { kind: "agent", id: "a1" },
+    });
+    s().cancelRemovePrompt();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+    expect(s().removePrompt).toBeNull();
+    killSpy.mockRestore();
+  });
+
+  it("stages a schedule / recurring with the right kind, then confirm cancels it", async () => {
+    const cancelSchSpy = vi.spyOn(ipc, "cancelSchedule").mockResolvedValue();
+    const cancelRecSpy = vi.spyOn(ipc, "cancelRecurring").mockResolvedValue();
+    useStore.setState({
+      view: "overview",
+      sessions: [],
+      schedules: [schedule()],
+      recurrings: [recurring()],
+      selectedId: "sch1",
+      overviewPanels: {},
+      settings: { ...DEFAULT_SETTINGS, confirmDestructive: true },
+    });
+    s().closeFocusedPanel();
+    expect(s().removePrompt).toEqual({ kind: "schedule", id: "sch1" });
+    s().confirmRemovePrompt();
+    await Promise.resolve();
+    expect(cancelSchSpy).toHaveBeenCalledWith("sch1");
+    expect(s().schedules).toHaveLength(0);
+
+    useStore.setState({ selectedId: "rec1" });
+    s().closeFocusedPanel();
+    expect(s().removePrompt).toEqual({ kind: "recurring", id: "rec1" });
+    s().confirmRemovePrompt();
+    await Promise.resolve();
+    expect(cancelRecSpy).toHaveBeenCalledWith("rec1");
+    expect(s().recurrings).toHaveLength(0);
+
+    cancelSchSpy.mockRestore();
+    cancelRecSpy.mockRestore();
+  });
+
+  it("stages the focused Attention agent instead of removing it", () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      view: "attention",
+      sessions: [session("a1")],
+      sessionActive: { a1: true },
+      attentionEligible: { a1: true },
+      dismissedAttention: {},
+      selectedId: "a1",
+      settings: { ...DEFAULT_SETTINGS, confirmDestructive: true },
+    });
+    s().closeFocusedPanel();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().sessions).toHaveLength(1);
+    expect(s().removePrompt).toEqual({ kind: "agent", id: "a1" });
+    killSpy.mockRestore();
+  });
+
+  it("closes a non-agent Overview panel instantly even with the setting on", async () => {
+    useStore.setState({
+      view: "overview",
+      selectedId: "p1",
+      overviewPanels: {
+        "/repo/x": [{ id: "p1", kind: "markdown", file: "a.md" }],
+      },
+      settings: { ...DEFAULT_SETTINGS, confirmDestructive: true },
+    });
+    s().closeFocusedPanel();
+    await Promise.resolve();
+    // A panel close is non-destructive (no PTY, no record) — never confirm-gated.
+    expect(s().overviewPanels["/repo/x"]).toBeUndefined();
+    expect(s().removePrompt).toBeNull();
+  });
+
+  it("a stale confirm (target gone) is a no-op that still clears the prompt", () => {
+    const killSpy = vi.spyOn(ipc, "killSession").mockResolvedValue();
+    useStore.setState({
+      sessions: [], // the agent exited while the modal was up
+      removePrompt: { kind: "agent", id: "gone" },
+    });
+    s().confirmRemovePrompt();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(s().removePrompt).toBeNull();
     killSpy.mockRestore();
   });
 });
@@ -3634,6 +3786,7 @@ describe("attention repo filter (#445)", () => {
       // so ⌘W removes b1 — never the filtered-out a1.
       overviewRepoFilter: { path: "/repo/b1", mode: "all" },
       selectedId: "a1",
+      settings: { ...DEFAULT_SETTINGS, confirmDestructive: false },
     });
     s().closeFocusedPanel();
     await Promise.resolve();

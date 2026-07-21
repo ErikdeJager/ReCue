@@ -6,7 +6,10 @@
 //
 //   ⌥1 / ⌥2 / ⌥3       switch to Overview / Attention / Canvas
 //   ⌘W / Ctrl+W        close the focused panel (big mode → Canvas leaf → Overview × →
-//                      remove the focused Attention agent)
+//                      remove the focused Attention agent; the destructive
+//                      fall-throughs are confirm-gated by `confirmDestructive`, and
+//                      typed into a focused terminal the chord passes through to
+//                      the PTY — Ctrl+W is delete-word there, task 448)
 //   ⌘, / Ctrl+,        open Settings
 //   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
 //   ⌘N / Ctrl+N        open the new-session flow from anywhere            (#26)
@@ -52,6 +55,7 @@ import {
   isEditableTarget,
   keybindCaptureActive,
   keybindMapFor,
+  terminalClaimsChord,
   type KeybindActionId,
 } from "./keybinds";
 import { detectPlatform } from "./platform";
@@ -99,6 +103,8 @@ function anyModalOpen(state: ReturnType<typeof useStore.getState>): boolean {
     state.onboardingOpen ||
     state.editorPickerOpen ||
     state.canvasClosePromptId !== null ||
+    // The ⌘W destructive-close confirm (task 448) — chords must not act behind it.
+    state.removePrompt !== null ||
     state.update.confirming
   );
 }
@@ -186,10 +192,12 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
     // Attention it removes (kills + forgets) the focused agent, the view's primary
     // close affordance. Inert while ANY modal owns the keyboard — every modal flag,
     // not just the four keyboard-opened ones: since #425 the Overview fall-through
-    // is destructive (removeSession / cancelSchedule / cancelRecurring), so a chord
+    // is destructive (removeSession / cancelSchedule / cancelRecurring — since task
+    // 448 confirm-gated by the `confirmDestructive` setting), so a chord
     // aimed at dismissing a dialog must never reach the card behind it. Still
     // swallowed there, so the chord can never fall through to a WebView "close
-    // window" default.
+    // window" default. (A focused-terminal keydown never reaches this case — the
+    // dispatcher's terminalClaimsChord guard passes it to the PTY, task 448.)
     case "close-panel": {
       if (!anyModalOpen(state)) state.closeFocusedPanel();
       return "swallow";
@@ -292,6 +300,15 @@ export function useKeyboardNav(): void {
           chord,
         );
         if (action) {
+          // Task 448: the close-panel chord typed into a focused terminal is a
+          // terminal editing key (Ctrl+W = readline/claude delete-word on
+          // Windows/Linux, where mod is Ctrl) — return WITHOUT preventDefault so
+          // xterm forwards it to the PTY instead of the app killing the panel/
+          // agent under the cursor. xterm cancels the keydown it converts to
+          // data, so no WebView default can fire either.
+          if (action === "close-panel" && terminalClaimsChord(e, e.target)) {
+            return;
+          }
           if (runKeybindAction(action) === "swallow") {
             e.preventDefault();
             e.stopPropagation();

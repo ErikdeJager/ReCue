@@ -476,7 +476,11 @@ steady-state boot pays **zero** probe cost.
   selected Overview card via the exact action its hover-× calls — a file/diff/terminal/
   kanban panel via `removeOverviewPanel`, and since **#425** also an **agent**
   (`removeSession`, kill + forget), a **schedule** (`cancelSchedule`), or a **recurring**
-  (`cancelRecurring`) — un-gated like each card's ×, while a Canvas agent leaf stays
+  (`cancelRecurring`) — un-gated like each card's × (task 448: the keyboard path is now
+  confirm-gated by `confirmDestructive` — a `removePrompt` → `ConfirmRemoveModal` — and
+  on a focused terminal the Ctrl+W chord passes through to the PTY on every OS
+  (`terminalClaimsChord`, it's readline/claude delete-word); the mouse × stays
+  un-gated), while a Canvas agent leaf stays
   "close the panel only"), **⌘⌥N / Ctrl+Alt+N** opens a **new full app window** (436 —
   see the Multi-window bullet; rebindable like the rest, with the documented AltGr-layout
   caveat), **⌘,** opens Settings, plus the carried-over ⌘E big mode (#284) / ⌘N /
