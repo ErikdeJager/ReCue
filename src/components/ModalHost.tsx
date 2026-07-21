@@ -17,6 +17,9 @@ const CanvasCloseModal = lazy(
   () => import("./CanvasCloseModal/CanvasCloseModal"),
 );
 const CloneRepoModal = lazy(() => import("./CloneRepoModal/CloneRepoModal"));
+const ConfirmRemoveModal = lazy(
+  () => import("./ConfirmRemoveModal/ConfirmRemoveModal"),
+);
 const CreatePanelModal = lazy(
   () => import("./CreatePanelModal/CreatePanelModal"),
 );
@@ -99,6 +102,17 @@ function CanvasCloseGate() {
   );
 }
 
+/** The ⌘W destructive-close confirm gate (task 448) — per window like every gate:
+ * `removePrompt` is window-local, set by this window's `closeFocusedPanel`. */
+function RemovePromptGate() {
+  const open = useStore((s) => s.removePrompt !== null);
+  return (
+    <Gate open={open}>
+      <ConfirmRemoveModal />
+    </Gate>
+  );
+}
+
 function TemplateUseGate() {
   const open = useStore((s) => s.templateUseOpen);
   return (
@@ -157,6 +171,7 @@ function ModalHost() {
       <GlobalSearchGate />
       <SettingsGate />
       <CanvasCloseGate />
+      <RemovePromptGate />
       <TemplateUseGate />
       <TemplateManagerGate />
       <TemplateEditorGate />

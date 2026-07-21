@@ -1902,6 +1902,13 @@ export function contentForSelected(state: {
   return null;
 }
 
+/** Target of the ⌘W/Ctrl+W destructive-close confirm (task 448): the kind + id of
+ * the agent / schedule / recurring the keyboard fall-through would remove. */
+export interface RemovePrompt {
+  kind: "agent" | "schedule" | "recurring";
+  id: string;
+}
+
 export interface AppState {
   // --- State ---
   sessions: SessionView[];
@@ -2591,7 +2598,11 @@ export interface AppState {
    * `removeOverviewPanel`, an agent via `removeSession`, a schedule via
    * `cancelSchedule`, a recurring via `cancelRecurring` (#425) — but only when the
    * card is actually rendered on the wall (`overviewClusterKeys`): a selection
-   * hidden by the repo filter (#34) is a no-op. Anything else is a no-op. */
+   * hidden by the repo filter (#34) is a no-op. The destructive fall-throughs
+   * (agent / schedule / recurring — here and in Attention) honor the
+   * `confirmDestructive` setting (task 448): when on, they set `removePrompt`
+   * (→ the ConfirmRemoveModal) instead of acting immediately; the mouse × stays
+   * un-gated. Anything else is a no-op. */
   closeFocusedPanel: () => void;
   /** Add a new empty Canvas tab (default "Canvas N") and select it (#58). */
   addCanvas: () => void;
@@ -2607,6 +2618,17 @@ export interface AppState {
   confirmCloseCanvas: (id: string, kill: boolean) => Promise<void>;
   /** Dismiss the #137 close prompt, leaving the tab open and untouched. */
   cancelCloseCanvas: () => void;
+  /** Target of the ⌘W destructive-close confirm (task 448), or null. Transient,
+   * per-window, never persisted (the `canvasClosePromptId` pattern). Set by
+   * `closeFocusedPanel` when `confirmDestructive` is on; resolved by
+   * `confirmRemovePrompt` / `cancelRemovePrompt`. */
+  removePrompt: RemovePrompt | null;
+  /** Run the pending destructive close via the exact #425 action (`removeSession` /
+   * `cancelSchedule` / `cancelRecurring`); a vanished target is a safe no-op that
+   * still clears the prompt (task 448). */
+  confirmRemovePrompt: () => void;
+  /** Dismiss the ⌘W destructive-close confirm, removing nothing (task 448). */
+  cancelRemovePrompt: () => void;
   /** Rename a Canvas tab; a blank name keeps the current one (#58). */
   renameCanvas: (id: string, name: string) => void;
   /** Reorder the Canvas tabs (#58, dnd-kit). */
@@ -3276,6 +3298,7 @@ export const useStore = create<AppState>()((set, get) => ({
   // the tab exists — by `resolveCanvases` once the persisted tabs arrive).
   activeCanvasId: INIT_CANVAS_ID ?? "canvas-1",
   canvasClosePromptId: null,
+  removePrompt: null,
   canvasTemplates: [],
   templateEditorOpen: false,
   templateEditorId: null,
@@ -5662,6 +5685,22 @@ export const useStore = create<AppState>()((set, get) => ({
       });
       return;
     }
+    // The keyboard path to a destructive close (task 448): with `confirmDestructive`
+    // on (#103, the default) stage the target in `removePrompt` — the
+    // ConfirmRemoveModal resolves it — instead of acting immediately; opted out, run
+    // the exact #425 action right away. The mouse × stays un-gated (it is a
+    // deliberate pointer action on the specific card); this gate exists because the
+    // ⌘W/Ctrl+W chord acts on whatever happens to be selected — and hover-focus
+    // (`autoFocusOnHover`) selects the card under the cursor.
+    const destructive = (kind: RemovePrompt["kind"], id: string) => {
+      if (s.settings.confirmDestructive) {
+        set({ removePrompt: { kind, id } });
+        return;
+      }
+      if (kind === "agent") void s.removeSession(id);
+      else if (kind === "schedule") void s.cancelSchedule(id);
+      else void s.cancelRecurring(id);
+    };
     // 3. Overview: remove whatever card is selected, each via the exact action its
     // hover-× calls, so keyboard and mouse can't drift — a non-agent panel via
     // `removeOverviewPanel`, an agent via `removeSession` (kill + forget), a schedule
@@ -5692,20 +5731,21 @@ export const useStore = create<AppState>()((set, get) => ({
         }
       }
       const id = s.selectedId;
-      // An agent card → Remove (kill + forget), its × action. (An agent id never
-      // matches an overviewPanels entry, so the loop above skipped it.)
+      // An agent card → Remove (kill + forget), its × action, confirm-gated (task
+      // 448). (An agent id never matches an overviewPanels entry, so the loop
+      // above skipped it.)
       if (s.sessions.some((x) => x.id === id)) {
-        void s.removeSession(id);
+        destructive("agent", id);
         return;
       }
-      // A scheduled card → cancel it (its × / Cancel action).
+      // A scheduled card → cancel it (its × / Cancel action), confirm-gated.
       if (s.schedules.some((x) => x.id === id)) {
-        void s.cancelSchedule(id);
+        destructive("schedule", id);
         return;
       }
-      // A recurring card → cancel it (its × / Cancel action).
+      // A recurring card → cancel it (its × / Cancel action), confirm-gated.
       if (s.recurrings.some((x) => x.id === id)) {
-        void s.cancelRecurring(id);
+        destructive("recurring", id);
         return;
       }
     }
@@ -5731,10 +5771,39 @@ export const useStore = create<AppState>()((set, get) => ({
       const activeId = queue.some((q) => q.id === s.selectedId)
         ? s.selectedId
         : (queue[0]?.id ?? null);
-      if (activeId) void s.removeSession(activeId);
+      // Confirm-gated like the Overview agent branch (task 448).
+      if (activeId) destructive("agent", activeId);
       return;
     }
     // Nothing focused: deliberate no-op.
+  },
+
+  // Resolve the ⌘W destructive-close confirm (task 448): run the exact #425 action
+  // the gate deferred. Re-resolve the target against the CURRENT state — the modal
+  // is async, so the agent may have exited / the schedule fired meanwhile; a
+  // vanished target is a safe no-op that still clears the prompt.
+  confirmRemovePrompt: () => {
+    const s = get();
+    const p = s.removePrompt;
+    if (!p) return;
+    set({ removePrompt: null });
+    if (p.kind === "agent" && s.sessions.some((x) => x.id === p.id)) {
+      void s.removeSession(p.id);
+    } else if (
+      p.kind === "schedule" &&
+      s.schedules.some((x) => x.id === p.id)
+    ) {
+      void s.cancelSchedule(p.id);
+    } else if (
+      p.kind === "recurring" &&
+      s.recurrings.some((x) => x.id === p.id)
+    ) {
+      void s.cancelRecurring(p.id);
+    }
+  },
+
+  cancelRemovePrompt: () => {
+    if (get().removePrompt) set({ removePrompt: null });
   },
 
   // Canvas templates (#117): the editor builds a draft layout of inert blocks with
