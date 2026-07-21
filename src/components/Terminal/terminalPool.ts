@@ -97,7 +97,7 @@ import {
 } from "./terminalBackground";
 import { webglFallback } from "./webglFallback";
 import {
-  decideTerminalRenderer,
+  decideTerminalRendererForPlatform,
   type TerminalRendererDecision,
   type TerminalRendererMode,
 } from "./webglRenderer";
@@ -286,9 +286,11 @@ function reducedMotionNow(): boolean {
 // DMA-BUF trouble), so the addon "works" but every terminal frame renders on the
 // CPU. Probe the renderer string ONCE per app and skip the WebGL addon when it names
 // a software rasterizer — xterm then uses its DOM renderer, which is faster than
-// software GL. macOS/Windows never construct
-// the probe canvas and always keep WebGL, so their rendering is byte-for-byte
-// unchanged.
+// software GL. macOS/Windows never construct the probe canvas — but since task 453
+// the #357 Settings *override* reaches them too: forcing "DOM" is the escape hatch
+// for the #105-class doubled/ghosted-glyph WebGL artifact in secondary app windows
+// on some Retina / fractionally-scaled setups. On "auto", macOS/Windows keep WebGL
+// byte-for-byte as before.
 //
 // #357 splits the memo in two: the raw probe is cached here, while the *decision* is
 // recomputed from it plus the persisted Settings mode — so the user can override a probe
@@ -332,9 +334,12 @@ function probedRenderer(): string | null {
 let loggedRendererReason: string | undefined;
 
 /** Which renderer this window's terminals should use, from the persisted Settings mode
- * (#357) and the one-time probe (#346). Recomputed on demand — cheap (the probe is
- * memoized). macOS/Windows short-circuit to WebGL **without probing**, whatever the
- * persisted value happens to be, so they are byte-for-byte unchanged. */
+ * (#357, cross-platform since task 453) and the one-time probe (#346, Linux only).
+ * Recomputed on demand — cheap (the probe is memoized). On "auto", macOS/Windows keep
+ * WebGL **without probing** (the probe canvas is never constructed off Linux), so their
+ * default rendering is byte-for-byte unchanged; only the forced "webgl"/"dom" modes act
+ * there. The once-per-reason console line below logs on every OS — that is deliberate:
+ * a real-box artifact report should show which renderer the window is on. */
 function rendererDecision(): TerminalRendererDecision {
   const { platform, settings } = useStore.getState();
   // Platform signal not loaded yet (outside Tauri, or a pre-init host): keep WebGL and do
@@ -342,11 +347,12 @@ function rendererDecision(): TerminalRendererDecision {
   // platform before the first refresh (store `init`), so in practice every host creation
   // sees a real value — and `applySettingsEffects` re-converges the pool afterwards anyway.
   if (platform === "") return { webgl: true, reason: "platform not loaded" };
-  if (!isLinux(platform)) return { webgl: true, reason: "GPU renderer" };
 
-  const decision = decideTerminalRenderer(
+  const linux = isLinux(platform);
+  const decision = decideTerminalRendererForPlatform(
+    linux,
     settings.linuxTerminalRenderer,
-    probedRenderer(),
+    linux ? probedRenderer() : null,
   );
   if (loggedRendererReason !== decision.reason) {
     loggedRendererReason = decision.reason;
@@ -385,22 +391,25 @@ function webglPermitted(): boolean {
 }
 
 /**
- * Apply the Linux terminal-renderer override (#357) to the **live** pool — without
- * disposing any host. That is the #18 invariant: a dispose would replay scrollback whose
- * absolute cursor moves were encoded for another width, garbling `claude`'s TUI. xterm
- * supports loading **and** disposing the WebGL addon on a *running* terminal (disposing it
- * reverts to the DOM renderer — the exact path `onContextLoss` already takes), so the swap
- * is an addon operation, never a terminal one.
+ * Apply the terminal-renderer override (#357; every OS since task 453) to the **live**
+ * pool — without disposing any host. That is the #18 invariant: a dispose would replay
+ * scrollback whose absolute cursor moves were encoded for another width, garbling
+ * `claude`'s TUI. xterm supports loading **and** disposing the WebGL addon on a *running*
+ * terminal (disposing it reverts to the DOM renderer — the exact path `onContextLoss`
+ * already takes), so the swap is an addon operation, never a terminal one.
  *
  * A converge-to-target loop: it only acts on a host whose addon state differs from the
- * target, so it is safe to call repeatedly (it runs on every Save, and on boot after the
- * settings blob loads). No-op off Linux. The target is `webglPermitted()`, so a window
- * latched to DOM by a context loss (#364) stays there even if the user then forces
- * "WebGL". (The old #105 canvas-window early-return died with the canvas windows,
- * task 437.)
+ * target, so it is safe to call repeatedly (it runs on every Save — a no-change Save hits
+ * the `continue` branch — and on boot after the settings blob loads, and on the task-428
+ * `settings://changed` cross-window sync, so one window's Save converges every window).
+ * On macOS/Windows it also now unloads a still-live addon after a #364 latch fires
+ * between saves — the same latch convergence Linux already had. The target is
+ * `webglPermitted()`, so a window latched to DOM by a context loss (#364) stays there
+ * even if the user then forces "WebGL". (The old #105 canvas-window early-return died
+ * with the canvas windows, task 437.)
  */
 export function applyTerminalRenderer(): void {
-  if (!isLinux(useStore.getState().platform)) return;
+  if (useStore.getState().platform === "") return; // platform signal not loaded yet
   const wantWebgl = webglPermitted();
   for (const host of hosts.values()) {
     if (wantWebgl && !host.webgl) {
@@ -419,9 +428,11 @@ export function applyTerminalRenderer(): void {
   }
 }
 
-/** The terminal half of the Settings → Rendering diagnostics (#357): the persisted mode,
- * the renderer actually in use, the probed renderer string, and why. Runs the probe on
- * demand, so the readout works with **zero** terminals open. */
+/** The terminal half of the Settings → Rendering diagnostics (#357; shown on every OS
+ * since task 453): the persisted mode, the renderer actually in use, the probed renderer
+ * string (Linux only — `null` on macOS/Windows, where the probe canvas is never built),
+ * and why. On Linux it runs the probe on demand, so the readout works with **zero**
+ * terminals open. */
 export function terminalRendererReport(): {
   mode: TerminalRendererMode;
   active: "webgl" | "dom";
@@ -725,11 +736,13 @@ function createHost(sessionId: string): TerminalHost {
   };
 
   // Best-effort GPU renderer; fall back to the default DOM renderer. Skipped on
-  // Linux when the one-time probe says WebGL is software-rasterized (#346) or the user
-  // forced the DOM renderer in Settings → Rendering (#357) — see `rendererDecision`.
-  // Every window attaches WebGL where permitted (task 437 dropped the #105
-  // canvas-window DOM-renderer rule with the canvas windows themselves); the #364
-  // context-loss latch remains the per-window safety net.
+  // Linux when the one-time probe says WebGL is software-rasterized (#346), or on ANY
+  // OS when the user forced the DOM renderer in Settings → Rendering (#357, cross-
+  // platform since task 453) — see `rendererDecision`. Every window attaches WebGL
+  // where permitted (task 437 dropped the #105 canvas-window DOM-renderer rule with
+  // the canvas windows themselves); the #364 context-loss latch remains the per-window
+  // safety net, and the cross-platform DOM override is the user-facing escape hatch
+  // for the #105-class doubled/ghosted-glyph artifact in secondary app windows.
   // And skipped once ANY terminal in this window has suffered an UNRECOVERED WebGL
   // context loss (#364): a GPU that dropped one context (OOM / driver reset / suspend,
   // likeliest on WebKitGTK) will drop the next one too, so re-attaching would be a
@@ -740,8 +753,8 @@ function createHost(sessionId: string): TerminalHost {
   // The addon is fetched as its own chunk (#356), so the terminal paints its first
   // frame(s) on xterm's DOM renderer and swaps to WebGL a few ms later, when the chunk
   // resolves — xterm supports `loadAddon` after `open()`, which is exactly the order the
-  // code already used, only synchronously. When the decision is DOM (a detached window, a
-  // software rasterizer, the Settings override, or the #364 latch) the chunk is never even
+  // code already used, only synchronously. When the decision is DOM (a software
+  // rasterizer, the Settings override, or the #364 latch) the chunk is never even
   // requested. Any failure (chunk error, WebGL ctor throw) leaves `host.webgl` undefined ⇒
   // the DOM renderer, as today.
   //

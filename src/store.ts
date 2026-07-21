@@ -1440,9 +1440,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // True by default (#335): show the per-agent added/removed line-count badge. Off
   // hides it AND stops ReCue running any `diff_line_counts` git read.
   showDiffLineCounts: true,
-  // Rendering (#357), Linux only. Both default to "auto", so every existing install (whose
-  // blob lacks the keys → mergeSettings fills them) and every macOS/Windows box behaves
-  // byte-for-byte as before: #346/#347's DMA-BUF detection and the #346 WebGL probe.
+  // Rendering (#357). Both default to "auto", so every existing install (whose blob lacks
+  // the keys → mergeSettings fills them) behaves byte-for-byte as before: #346/#347's
+  // DMA-BUF detection and the #346 WebGL probe on Linux, plain WebGL on macOS/Windows.
+  // The DMA-BUF key stays Linux-only; the terminal-renderer key applies on every OS since
+  // task 453 (name kept for blob compatibility — "auto" never probes off Linux).
   linuxDmabufRenderer: "auto",
   linuxTerminalRenderer: "auto",
   defaultView: "overview",
@@ -1691,11 +1693,12 @@ function applySettingsEffects(s: Settings): void {
     cursorBlink: s.terminalCursorBlink,
     background: s.terminalBackgroundLightness,
   });
-  // Terminal renderer override (#357, Linux only): converge every pooled xterm onto the
-  // chosen WebGL/DOM renderer WITHOUT disposing a host (the #18 invariant). It reads the
-  // mode from the store, and this runs after `set({ settings })` in both `saveSettings`
-  // and the boot `refresh()`, so the pool reconciles on Save and also heals any host that
-  // was created during boot before the blob had loaded. A no-op off Linux.
+  // Terminal renderer override (#357; every OS since task 453): converge every pooled
+  // xterm onto the chosen WebGL/DOM renderer WITHOUT disposing a host (the #18
+  // invariant). It reads the mode from the store, and this runs after `set({ settings })`
+  // in `saveSettings`, the boot `refresh()`, AND the task-428 `settings://changed`
+  // cross-window sync — so the pool reconciles on Save, heals any host created during
+  // boot before the blob had loaded, and one window's Save converges every open window.
   applyTerminalRenderer();
   if (typeof document === "undefined") return; // non-DOM env (e.g. unit tests)
   // Accent (#102/#107): override --accent AND its derived companion tokens

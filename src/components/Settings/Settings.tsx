@@ -81,35 +81,43 @@ const DMABUF_SOURCE_LABELS: Record<string, string> = {
 };
 
 /**
- * The copy-pasteable rendering diagnostics (#357): what ReCue decided about WebKitGTK's
- * DMA-BUF renderer at boot (decision + reason + the evidence the probes saw + what decided
- * it), and which xterm renderer the terminals are using plus the probed WebGL renderer
- * string. Plain text, so it drops straight into a bug report.
+ * The copy-pasteable rendering diagnostics (#357; every OS since task 453): on Linux,
+ * what ReCue decided about WebKitGTK's DMA-BUF renderer at boot (decision + reason + the
+ * evidence the probes saw + what decided it), and — on every platform — which xterm
+ * renderer the terminals are using plus the probed WebGL renderer string (the #346 probe
+ * stays Linux-only). Plain text, so it drops straight into a bug report.
  *
- * `report === null` means the boot report is unavailable (the command failed, or this is a
- * non-Linux build) — the terminal half still renders.
+ * `linux` gates the DMA-BUF half entirely: off Linux nothing is decided, so the lines are
+ * omitted rather than rendered as "unavailable", and the un-run probe reads `n/a` instead
+ * of "no WebGL context" (which would falsely suggest a broken GPU stack). On Linux,
+ * `report === null` means the boot report is unavailable (the command failed) — the
+ * terminal half still renders.
  */
 function diagnosticsText(
   report: RendererReport | null,
   term: TerminalRendererInfo,
+  linux: boolean,
 ): string {
   const lines: string[] = [];
-  if (report) {
-    const outcome = report.dmabuf_disabled ? "disabled" : "left on";
-    lines.push(`DMA-BUF renderer: ${outcome} — ${report.reason}`);
-    lines.push(
-      `  decided by: ${DMABUF_SOURCE_LABELS[report.source] ?? report.source}   setting: ${report.setting}`,
-    );
-    lines.push(`  evidence: ${report.evidence}`);
-  } else {
-    lines.push("DMA-BUF renderer: boot diagnostics unavailable.");
+  if (linux) {
+    if (report) {
+      const outcome = report.dmabuf_disabled ? "disabled" : "left on";
+      lines.push(`DMA-BUF renderer: ${outcome} — ${report.reason}`);
+      lines.push(
+        `  decided by: ${DMABUF_SOURCE_LABELS[report.source] ?? report.source}   setting: ${report.setting}`,
+      );
+      lines.push(`  evidence: ${report.evidence}`);
+    } else {
+      lines.push("DMA-BUF renderer: boot diagnostics unavailable.");
+    }
   }
   lines.push(
     `Terminal renderer: ${term.active === "webgl" ? "WebGL" : "DOM"} — ${term.reason}`,
   );
-  lines.push(
-    `  setting: ${term.mode}   probed: ${term.renderer ?? "no WebGL context"}`,
-  );
+  const probed = linux
+    ? (term.renderer ?? "no WebGL context")
+    : "n/a (Linux-only probe)";
+  lines.push(`  setting: ${term.mode}   probed: ${probed}`);
   return lines.join("\n");
 }
 
@@ -128,8 +136,8 @@ const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
     label: "Appearance",
     icon: <Palette size={15} strokeWidth={1.5} />,
   },
-  // Linux only (#357) — filtered out of the nav on macOS/Windows, where neither decision
-  // exists (see `visibleSections`).
+  // Every OS since task 453 (was Linux-only, #357): the DMA-BUF control inside stays
+  // Linux-gated, but the Terminal renderer override + diagnostics render everywhere.
   {
     id: "rendering",
     label: "Rendering",
@@ -213,14 +221,13 @@ function SettingsModal() {
   // so a foreign change (another window's save, task 428) landing while the modal
   // is open is neither reverted locally nor included in the persisted patch.
   const baselineRef = useRef(saved);
-  // Rendering is Linux-only (#357): drop it from the nav everywhere else, so macOS/Windows
-  // render byte-for-byte as before.
-  const visibleSections = SECTIONS.filter(
-    (s) => s.id !== "rendering" || isLinux(platform),
-  );
+  // Every section renders on every OS since task 453 (the #357 Linux-only nav filter on
+  // "rendering" is gone — the terminal-renderer override now applies everywhere; only the
+  // DMA-BUF field inside the pane stays Linux-gated).
+  const visibleSections = SECTIONS;
   const [section, setSection] = useState<Section>(() => {
-    // Clamp the deep-link / persisted target to what's actually visible, so a stale
-    // "rendering" id on macOS/Windows can never leave a blank pane.
+    // Clamp the deep-link / persisted target to a known section id, so a stale or
+    // bogus value can never leave a blank pane.
     const wanted = initialSection as Section | null;
     return wanted && visibleSections.some((s) => s.id === wanted)
       ? wanted
@@ -241,9 +248,10 @@ function SettingsModal() {
   // actions (TemplateManager delete, FileTree, Sidebar).
   const [confirmingClear, setConfirmingClear] = useState(false);
 
-  // Rendering diagnostics (#357), Linux only. The boot report comes from Rust (a OnceLock
-  // captured before GTK init); the terminal half is read straight from the pool, which runs
-  // the WebGL probe on demand — so the readout works with zero terminals open.
+  // Rendering diagnostics (#357; every OS since task 453). The Linux-only boot report
+  // comes from Rust (a OnceLock captured before GTK init); the terminal half is read
+  // straight from the pool on every platform — on Linux that runs the WebGL probe on
+  // demand, so the readout works with zero terminals open.
   const [report, setReport] = useState<RendererReport | null>(null);
   const [termInfo, setTermInfo] = useState<TerminalRendererInfo | null>(null);
 
@@ -294,12 +302,13 @@ function SettingsModal() {
       .catch(() => {});
   }, []);
 
-  // Rendering diagnostics (#357). Fetched once per open, Linux only — the command returns
-  // null off Linux anyway, but skipping the call entirely keeps macOS/Windows untouched.
-  // Best-effort: a failure leaves `report` null and the pane says so.
+  // Rendering diagnostics (#357/#453). The terminal readout is computed on every OS;
+  // the DMA-BUF boot report is fetched once per open, Linux only — the command returns
+  // null off Linux anyway, but skipping the call entirely keeps macOS/Windows free of
+  // the IPC. Best-effort: a failure leaves `report` null and the pane says so.
   useEffect(() => {
-    if (!isLinux(platform)) return;
     setTermInfo(terminalRendererReport());
+    if (!isLinux(platform)) return;
     void ipc
       .rendererDiagnostics()
       .then(setReport)
@@ -598,68 +607,73 @@ function SettingsModal() {
               </>
             )}
 
-            {/* Rendering (#357) — Linux only. Tauri's own Linux-graphics guidance is to
-                ship these switches: WebKitGTK masks the WebGL renderer string and the
-                auto-detection is unreliable, and a user who launches the AppImage from a
-                desktop menu can't set the RECUE_* environment variables at all. The
-                `isLinux` guard is belt-and-braces on top of the nav filter. */}
-            {section === "rendering" && isLinux(platform) && (
+            {/* Rendering (#357; every OS since task 453). Tauri's own Linux-graphics
+                guidance is to ship these switches: WebKitGTK masks the WebGL renderer
+                string and the auto-detection is unreliable, and a user who launches the
+                AppImage from a desktop menu can't set the RECUE_* environment variables
+                at all. The Terminal renderer override + diagnostics now render on every
+                platform (the DOM override is the escape hatch for the #105-class
+                doubled/ghosted-glyph artifact in secondary app windows); only the
+                DMA-BUF field stays Linux-gated — nothing is decided off Linux. */}
+            {section === "rendering" && (
               <>
-                <div className={styles.field}>
-                  <span className={styles.fieldLabel}>DMA-BUF renderer</span>
-                  <div className={styles.segmented}>
-                    {(
-                      [
-                        ["auto", "Auto (recommended)"],
-                        ["on", "On"],
-                        ["off", "Off"],
-                      ] as const
-                    ).map(([v, label]) => (
-                      <button
-                        key={v}
-                        type="button"
-                        className={`${styles.segment} ${draft.linuxDmabufRenderer === v ? styles.segmentActive : ""}`}
-                        onClick={() => update("linuxDmabufRenderer", v)}
-                        aria-pressed={draft.linuxDmabufRenderer === v}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <p className={styles.helpText}>
-                    WebKitGTK&rsquo;s zero-copy GPU path for the app window.{" "}
-                    <strong>Off</strong> renders the window on the CPU — the fix
-                    when the GPU path is broken (the NVIDIA proprietary driver,
-                    or a VM with no real GPU), which reads as a sluggish or
-                    blank window. <strong>On</strong> keeps it when
-                    auto-detection wrongly turns it off. Auto detects your GPU
-                    and is right for almost everyone.
-                  </p>
-                  {/* Compared against the NORMALIZED mode that was in effect at boot, so a
+                {isLinux(platform) && (
+                  <div className={styles.field}>
+                    <span className={styles.fieldLabel}>DMA-BUF renderer</span>
+                    <div className={styles.segmented}>
+                      {(
+                        [
+                          ["auto", "Auto (recommended)"],
+                          ["on", "On"],
+                          ["off", "Off"],
+                        ] as const
+                      ).map(([v, label]) => (
+                        <button
+                          key={v}
+                          type="button"
+                          className={`${styles.segment} ${draft.linuxDmabufRenderer === v ? styles.segmentActive : ""}`}
+                          onClick={() => update("linuxDmabufRenderer", v)}
+                          aria-pressed={draft.linuxDmabufRenderer === v}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className={styles.helpText}>
+                      WebKitGTK&rsquo;s zero-copy GPU path for the app window.{" "}
+                      <strong>Off</strong> renders the window on the CPU — the
+                      fix when the GPU path is broken (the NVIDIA proprietary
+                      driver, or a VM with no real GPU), which reads as a
+                      sluggish or blank window. <strong>On</strong> keeps it
+                      when auto-detection wrongly turns it off. Auto detects
+                      your GPU and is right for almost everyone.
+                    </p>
+                    {/* Compared against the NORMALIZED mode that was in effect at boot, so a
                       fresh install (nothing persisted ⇒ "auto") whose draft is still auto
                       shows no spurious note. */}
-                  {report && report.setting !== draft.linuxDmabufRenderer && (
-                    <span className={styles.fieldWarn}>
-                      <TriangleAlert size={13} strokeWidth={2} aria-hidden />
-                      Restart ReCue to apply this. (The window&rsquo;s renderer
-                      is chosen before it opens.)
-                    </span>
-                  )}
-                  {report?.source === "env" && (
-                    <span className={styles.fieldHelp}>
-                      Overridden this run by <code>RECUE_DISABLE_DMABUF</code>.
-                      The setting still saves, and applies once that variable is
-                      gone.
-                    </span>
-                  )}
-                  {report?.source === "user_env" && (
-                    <span className={styles.fieldHelp}>
-                      Overridden this run by your exported{" "}
-                      <code>WEBKIT_DISABLE_DMABUF_RENDERER</code>. The setting
-                      still saves, and applies once that variable is gone.
-                    </span>
-                  )}
-                </div>
+                    {report && report.setting !== draft.linuxDmabufRenderer && (
+                      <span className={styles.fieldWarn}>
+                        <TriangleAlert size={13} strokeWidth={2} aria-hidden />
+                        Restart ReCue to apply this. (The window&rsquo;s
+                        renderer is chosen before it opens.)
+                      </span>
+                    )}
+                    {report?.source === "env" && (
+                      <span className={styles.fieldHelp}>
+                        Overridden this run by <code>RECUE_DISABLE_DMABUF</code>
+                        . The setting still saves, and applies once that
+                        variable is gone.
+                      </span>
+                    )}
+                    {report?.source === "user_env" && (
+                      <span className={styles.fieldHelp}>
+                        Overridden this run by your exported{" "}
+                        <code>WEBKIT_DISABLE_DMABUF_RENDERER</code>. The setting
+                        still saves, and applies once that variable is gone.
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div className={styles.field}>
                   <span className={styles.fieldLabel}>Terminal renderer</span>
@@ -684,12 +698,14 @@ function SettingsModal() {
                   </div>
                   <p className={styles.helpText}>
                     How the terminals draw their text. <strong>WebGL</strong> is
-                    the fast GPU glyph renderer; when the GPU context is only
-                    software-rasterized (llvmpipe / SwiftShader) the{" "}
-                    <strong>DOM</strong> renderer is faster, which Auto detects.
-                    Applies immediately on Save — open terminals keep their
-                    contents. Detached canvas windows always use the DOM
-                    renderer.
+                    the fast GPU glyph renderer; <strong>DOM</strong> is the
+                    compatibility fallback. Auto uses WebGL — on Linux it also
+                    detects a software-rasterized GPU context (llvmpipe /
+                    SwiftShader) and falls back to DOM. If terminals in an
+                    additional app window show doubled or ghosted glyphs (a
+                    display-scaling artifact on some Retina /
+                    fractionally-scaled setups), switch to DOM. Applies
+                    immediately on Save — open terminals keep their contents.
                   </p>
                 </div>
 
@@ -702,7 +718,7 @@ function SettingsModal() {
                   {termInfo ? (
                     <>
                       <pre className={styles.diagnostics}>
-                        {diagnosticsText(report, termInfo)}
+                        {diagnosticsText(report, termInfo, isLinux(platform))}
                       </pre>
                       <button
                         type="button"
@@ -710,7 +726,11 @@ function SettingsModal() {
                         onClick={() => {
                           void ipc
                             .clipboardWriteText(
-                              diagnosticsText(report, termInfo),
+                              diagnosticsText(
+                                report,
+                                termInfo,
+                                isLinux(platform),
+                              ),
                             )
                             .then(() => pushToast("Diagnostics copied"))
                             .catch(() => pushToast("Could not copy"));
