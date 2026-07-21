@@ -58,6 +58,15 @@ pub const WORK_TARGET: &str = "/work";
 pub const HOME_TARGET: &str = "/home/agent";
 pub const REPO_GIT_TARGET: &str = "/repo/.git";
 
+/// The `git worktree lock` reason stamped at dev-container spawn (the guard against
+/// an in-container `git worktree prune`), and matched EXACTLY by the NotManaged
+/// cleanup gate (`commands::recue_container_lock_held`, task 451) before releasing a
+/// lock — ReCue only ever unlocks a lock it itself took; a user's or agent's own
+/// lock (any other reason) is never touched. Must stay ASCII with no quotes/newlines:
+/// git C-quotes special characters in the porcelain `locked <reason>` line, which
+/// would defeat the exact round-trip match.
+pub const WORKTREE_LOCK_REASON: &str = "ReCue dev-container session";
+
 /// Fallback commit identity when the host has no `user.name`/`user.email` — injected
 /// via env-config so an in-container `git commit` can never fail on identity.
 pub const FALLBACK_GIT_NAME: &str = "ReCue Agent";
