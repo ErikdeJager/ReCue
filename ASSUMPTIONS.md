@@ -4055,3 +4055,13 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Upgrade behavior preserved deliberately: a pre-439 file or an install already in the bug state (marker absent, no main entry) still gets exactly ONE task-443 maximized launch, then is marked — identical to today, no migration write.
 - `register("main")` clears the stash defensively even though no mid-run main-recreate path exists today (Dock Reopen focuses or opens app-*).
 - Included a 1–2 line CLAUDE.md doc touch (the stale 443 "no saved main entry" sentence) as part of the implementer's scope.
+
+## Task 453
+
+- Chose the card's "extend the #357 renderer override beyond Linux" option over restoring a per-window DOM guard: the #105 artifact is unverified on the current (post-#348 hidden-until-painted, per-webview) window stack, tasks 427/437 deliberately granted full app windows WebGL, and a blanket DOM default would certainly regress secondary-window rendering; the real-box checklist's decision rule governs a follow-up default flip at the named seam (rendererDecision() + WINDOW_KIND).
+- Default behavior stays byte-for-byte unchanged on every OS: "auto" off Linux remains the no-probe WebGL short-circuit (the #346 probe canvas is still never constructed on macOS/Windows); only user-forced "webgl"/"dom" gains effect there.
+- Kept the persisted key name `linuxTerminalRenderer` (no rename/migration) so existing Linux overrides survive; documented as cross-platform since task 453.
+- Surfaced the whole Settings → Rendering section on macOS/Windows, gating only the DMA-BUF control (and its diagnostics lines) to Linux inside the pane; diagnostics off Linux show `probed: n/a` instead of "no WebGL context".
+- The #364 context-loss latch keeps outranking a forced "webgl" on every OS (webglPermitted() unchanged); off Linux a post-loss settings apply now also converges still-live addons to DOM, matching Linux's existing latch behavior.
+- Recorded the real-box checklist (macOS Retina + Windows fractional scaling + override round-trip + follow-up decision rule) in TRAJECTORY_TO_WINDOWS.md, with a short no-change note in TRAJECTORY_TO_LINUX.md — there is no macOS trajectory file, and TRAJECTORY_TO_WINDOWS.md already hosts cross-OS real-box matrices (tasks 443/444 precedent).
+- No Rust changes (early_settings.rs only touches the key in a test fixture), no version bump, no patch notes.
