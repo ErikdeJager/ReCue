@@ -222,14 +222,20 @@ describe("refreshWorktrees — non-claude heuristic", () => {
   });
 });
 
-describe("cleanupWorktreeIfEmpty — external short-circuit", () => {
-  it("never calls the Rust cleanup for a detected EXTERNAL worktree", async () => {
+describe("cleanupWorktreeIfEmpty — external worktrees", () => {
+  it("calls the Rust cleanup for a detected EXTERNAL worktree (reason-gated unlock lives backend-side) — and never removes", async () => {
+    // Task 451: the round-trip is required — the Rust NotManaged path releases
+    // ReCue's own dev-container lock (exact-reason-gated, never deleting), so
+    // the frontend must not short-circuit a detected external worktree. The
+    // outcome handling is unchanged: `notManaged` → keep silently.
+    m(ipc.cleanupWorktreeIfEmpty).mockResolvedValue("notManaged");
     useStore.setState({
       repoWorktrees: { [REPO]: [mainEntry, entry({ path: WT })] },
     });
     await useStore.getState().cleanupWorktreeIfEmpty(REPO, WT);
-    expect(ipc.cleanupWorktreeIfEmpty).not.toHaveBeenCalled();
+    expect(ipc.cleanupWorktreeIfEmpty).toHaveBeenCalledWith(REPO, WT);
     expect(ipc.removeWorktree).not.toHaveBeenCalled();
+    expect(useStore.getState().toasts).toEqual([]);
   });
 
   it("still removes an empty app-managed worktree (#74 — ref-count + remove Rust-owned since task 431)", async () => {
