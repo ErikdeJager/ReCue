@@ -1354,7 +1354,11 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
   payload + render stay bounded on arbitrarily large repos. Both still skip heavy/dep
   dirs **and now `.git`** (`SKIP_DIRS` — narrowing #179's all-dot-folders listing, so
   `.git` internals no longer flood / crowd out real files; `.claude`/`.github`/… stay
-  listed) and binary extensions (`SKIP_EXTS`). The write is path-validated
+  listed); binary extensions (`SKIP_EXTS`, mirrored in `fileType.ts`'s
+  `NON_VIEWABLE_EXTS`) since task 455 gate only the picker/searches — the **tree**
+  lists **every** file type, rendering a non-previewable file as a real but
+  non-openable row (its click toasts "can't preview" instead of opening a viewer; the
+  FileTree's own in-panel search passes `include_binary` to match). The write is path-validated
   exactly like `read_text_file` (canonicalize, confine to the repo, reject
   `..`/symlink/out-of-repo targets; a new file's parent dir must exist + be inside
   the repo), narrowing the earlier "no arbitrary file writes" rule the way #74/#124

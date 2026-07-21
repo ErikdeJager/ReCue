@@ -1893,8 +1893,9 @@ pub fn set_repo_color(
 }
 
 /// Immediate children of one directory (`subdir`, repo-relative; empty = repo root)
-/// for the **lazy** file tree (#167) — folders first, then viewable files, no count
-/// or depth cap (depth is reached by expanding one level at a time). Path-validated.
+/// for the **lazy** file tree (#167) — folders first, then files (**every** file type
+/// since task 455; the viewer gate is frontend-side), no count or depth cap (depth is
+/// reached by expanding one level at a time). Path-validated.
 #[tauri::command]
 pub fn list_dir(
     repo: String,
@@ -1903,21 +1904,30 @@ pub fn list_dir(
     crate::files::list_dir(&repo, &subdir).map_err(SessionError::Io)
 }
 
-/// Search a repo's viewable files for the file picker (#56) — substring match over
+/// Search a repo's files for the file picker (#56) — substring match over
 /// repo-relative paths, optionally restricted to an extension (e.g. `.md` for the
 /// Kanban picker), result-capped so it scales to very large repos. Deterministic
-/// across machines.
+/// across machines. Viewable files only by default; `include_binary` (task 455,
+/// absent = `false` so the picker/global search stay byte-identical) widens the walk
+/// to every file type for the FileTree's in-panel search.
 #[tauri::command]
 pub fn search_files(
     repo: String,
     query: String,
     ext: Option<String>,
     limit: Option<usize>,
+    include_binary: Option<bool>,
 ) -> Vec<String> {
     let limit = limit
         .unwrap_or(crate::files::SEARCH_RESULT_CAP)
         .clamp(1, crate::files::SEARCH_RESULT_CAP * 8);
-    crate::files::search_files(&repo, &query, ext.as_deref(), limit)
+    crate::files::search_files(
+        &repo,
+        &query,
+        ext.as_deref(),
+        limit,
+        include_binary.unwrap_or(false),
+    )
 }
 
 /// Search a repo's viewable files **by content** for the in-tree search (#202) —
