@@ -3047,3 +3047,63 @@ and the maximize-by-default keys off an explicit fresh-install marker instead of
   unit-tested.
 
 **Dependencies:** none.
+
+### 453. [x] Cross-platform terminal-renderer override for secondary-window WebGL artifacts
+
+Task 437 deleted the #105-era `IS_MAIN_WINDOW` DOM-renderer guard along with the canvas windows, so
+every `app-*` full app window now attaches the xterm WebGL addon on macOS/Windows with no fallback
+for the #105 doubled/ghosted-glyph artifact (a Retina / fractional-scaling glyph-atlas issue in
+secondary native windows) — the #364 latch only catches context *loss*, and the #357 Terminal
+renderer override was Linux-only (v2.0.0 review finding, `terminalPool.ts:795`; needs a real GUI
+box to verify whether the artifact still reproduces). This extends the #357 Settings → Rendering
+**Terminal renderer** override (auto/WebGL/DOM) to every platform as the live escape hatch, keeping
+defaults byte-for-byte unchanged, and records the real-box verification checklist that decides a
+follow-up default flip.
+
+**What shipped** (branch `task/453-terminal-renderer-override`, PR
+[#222](https://github.com/ErikdeJager/ReCue/pull/222), merged into `improvements` as `96ce581`;
+9 files, +339/−172):
+
+- **`src/components/Terminal/webglRenderer.ts`** — new pure
+  `decideTerminalRendererForPlatform(linux, mode, renderer)`: off Linux the forced modes win
+  (`"webgl"`/`"dom"` → "forced in Settings") and `"auto"` stays the no-probe WebGL short-circuit;
+  on Linux it defers byte-for-byte to the existing #346/#357 `decideTerminalRenderer`.
+  `webglRenderer.test.ts` adds non-Linux forced/auto cases + a full Linux mode×renderer parity
+  sweep.
+- **`src/components/Terminal/terminalPool.ts`** — `rendererDecision()` routes through the new pure
+  function with the #346 probe still Linux-gated (the probe canvas is never constructed on
+  macOS/Windows — the CLAUDE.md invariant holds); `applyTerminalRenderer()` drops its off-Linux
+  early return (keeping only the platform-not-loaded guard), so a Save/428-sync converges every
+  window's pool live through the existing addon load/unload + refresh loop — no host dispose (#18),
+  and the #364 latch keeps outranking a forced "webgl" everywhere.
+- **`src/components/Settings/Settings.tsx`** — the Rendering section renders on every OS (the nav
+  filter is gone); only the **DMA-BUF** control (and its boot-report diagnostics lines) stays
+  Linux-gated inside the pane; `diagnosticsText` is platform-aware (off Linux: no DMA-BUF lines,
+  `probed: n/a (Linux-only probe)`); the helpText is rewritten platform-true with the stale
+  "Detached canvas windows always use the DOM renderer" sentence removed.
+- **`src/types/index.ts` / `src/store.ts`** — doc-comment truth-ups: the persisted key name
+  `linuxTerminalRenderer` is deliberately kept (no rename/migration; existing Linux overrides
+  survive) but documented as cross-platform since task 453; no behavioral store change, no Rust
+  change.
+- **`CLAUDE.md`** — Settings is ten sections on every OS; the Rendering description and the
+  Linux-performance note now split the DMA-BUF (Linux-only) vs terminal-renderer (cross-platform)
+  halves.
+- **`TRAJECTORY_TO_WINDOWS.md`** — dated task-453 entry: macOS-Retina + Windows-fractional-scaling
+  artifact checks, the override round-trip, and the decision rule — if the artifact reproduces on
+  default WebGL, a follow-up card flips the *auto* default for `app-*` windows at the named seam
+  (`rendererDecision()` + `WINDOW_KIND`); if not, task 437's deletion stands.
+  **`TRAJECTORY_TO_LINUX.md`** — short no-Linux-behavior-change note + one sanity check.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 453)
+
+- Chose extending the override over restoring a per-window DOM guard: the artifact is unverified on
+  the current (post-#348, per-webview) window stack, tasks 427/437 deliberately granted full app
+  windows WebGL, and a blanket DOM default would certainly regress secondary-window rendering to
+  fix an unverified bug.
+- Defaults unchanged on every OS — only a user-forced `"webgl"`/`"dom"` (previously inert off
+  Linux) gains effect there.
+- The real-box checklist lives in `TRAJECTORY_TO_WINDOWS.md` (which already hosts cross-OS
+  matrices, tasks 443/444 precedent — there is no macOS trajectory file).
+- No version bump, no patch notes (fix PRs never bump; releases are batched).
+
+**Dependencies:** none.
