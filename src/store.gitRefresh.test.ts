@@ -53,6 +53,10 @@ function makeBootState(over: Partial<BootState> = {}): BootState {
     app_version: "1.0.0",
     platform: "macos",
     windows_build: 0,
+    // PTY liveness (task 450): default to "nothing live/exited/busy".
+    live_ids: [],
+    exit_codes: {},
+    busy_ids: [],
     ...over,
   };
 }
