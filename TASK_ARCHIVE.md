@@ -2951,3 +2951,51 @@ Windows/Linux the native decorations are kept (no custom caption buttons), but t
 **Dependencies:** none. (Shared `tauri.conf.json` `app.windows[0]` / `create_app_window` surfaces with
 Task 443, but kept disjoint — 444 owns only title-bar styling, 443 owns size/bounds; the merge lane
 resolved the textual overlap, hence the one merge retry.)
+
+### 449. [x] Pass bare ⌥/Alt chords through to terminals and text fields (international-layout glyph fix)
+
+The rebindable-keybind dispatcher matched chords by physical `e.code` in the capture phase with no
+editable-target/focused-terminal guard, so on international layouts a user typing an Option-composed
+glyph (⌥2 = `@` on Nordic, ⌥3 = `#` on UK) into a claude terminal, the FileViewer raw `<textarea>`,
+a Kanban card editor, or a rename `<input>` flipped the view to Overview/Attention/Canvas and lost
+the character (v2.0.0 review finding, `useKeyboardNav.ts`; the modal-input slice had already been
+fixed via `anyModalOpen`). This restores the only-intercept-outside-editable-targets invariant for
+the bare-modifier chord class.
+
+**What shipped** (branch `task/449-alt-chord-passthrough`, PR
+[#220](https://github.com/ErikdeJager/ReCue/pull/220), merged into `improvements` as `2da215b`;
+3 files, +139/−20):
+
+- **`src/keybinds.ts`** — two new pure, exported helpers next to `isEditableTarget`:
+  `isBareAltChord(chord)` (true when the serialized chord's modifier set is exactly `{alt}` or
+  `{alt, shift}` — the composition-capable class: macOS ⌥/⌥⇧ glyphs, Windows Alt+numpad alt-codes)
+  and `isTerminalTarget(target)` (`target.closest(".xterm")`, the established
+  `hoverFocus.ts`/Overview/BigMode contract, with the same structural-testability `closest` guard
+  `isEditableTarget` uses). Comment truth-ups on the `new-window` AltGr caveat and the
+  `isEditableTarget` doc comment; `eventChord`'s physical-`e.code` serialization and
+  `isEditableTarget`'s deliberate `.xterm` exemption (Shift+arrow interception) untouched.
+- **`src/useKeyboardNav.ts`** — one guard in the rebindable-dispatch block, after the
+  `keybindMapFor(...)` lookup and before `runKeybindAction`: a matched **bare-alt** chord whose
+  target is editable or inside `.xterm` returns without `preventDefault`/`stopPropagation`, so the
+  composed character reaches the input / PTY. Chord-class based (not per-action), so any action
+  rebound onto an alt-only chord inherits the pass-through; the `closest()` walk runs only on
+  already-matched chords (no hot-path cost). Header + `view-*` case comments updated.
+- **`src/keybinds.test.ts`** — unit tests for both helpers plus an end-to-end regression at the
+  pure layer: a Nordic-composed `Digit2`+alt keydown serializes to `"alt+2"` → maps to
+  `"view-attention"` → is bare-alt (the guarded class), while Ctrl+Alt+N (`"mod+alt+n"`, the AltGr
+  caveat class) is not.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 449)
+
+- The guarded class is exactly `{alt}` / `{alt, shift}`; **mod-bearing** chords (⌘W, ⌘E, ⌘⌥N incl.
+  the AltGr-as-Ctrl+Alt caveat, the fixed ⌘⌥1–6 launcher chords) stay deliberately unguarded —
+  comments updated, not behavior.
+- Terminal focus = `target.closest(".xterm")` via the new exported `isTerminalTarget`; the guard is
+  `isEditableTarget(target) || isTerminalTarget(target)`.
+- Platform-neutral (identical on macOS, Windows, Linux) with the accepted consequence: with a
+  terminal focused, ⌥1/⌥2/⌥3 type into the PTY instead of switching views — the ViewSwitch / mouse
+  is the in-terminal path.
+- The existing `anyModalOpen` pass in the `view-*` cases is kept as a coexisting guard.
+
+**Dependencies:** none. (Kept minimal/localized in the dispatch block to avoid merge friction with
+concurrent Task 448's mod+W work; `isTerminalTarget` is exported for its reuse.)
