@@ -141,18 +141,28 @@ pub fn run() {
         // set_focus) may be silently refused by focus-stealing prevention — the window
         // still opens, possibly unfocused. Dev builds share the com.recue.app identity,
         // so `tauri dev` beside a live ReCue now pokes it and exits instead of
-        // corrupting shared state. run_on_main_thread keeps window creation on the main
-        // thread on every OS (the plugin's callback thread differs per transport) and,
+        // corrupting shared state. run_on_main_thread is the boot-ordering barrier:
         // because queued main-thread tasks only run once the event loop pumps (after
         // .setup() managed the Store), open_app_window can never race boot state.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             let handle = app.clone();
+            // run_on_main_thread stays as the boot-ordering barrier ONLY (tasks queued on
+            // the main thread run once the event loop pumps — after .setup() managed the
+            // Store); the creation itself moves to a separate thread because building a
+            // webview window from inside the main-thread event dispatch is the documented
+            // Windows deadlock (wry#583) — the same defect task 454 fixed in the
+            // open_app_window command. Platform-neutral: build-from-a-thread is the
+            // tauri-documented pattern and dispatches to the event loop internally. The
+            // spawn MUST stay inside this closure — hoisting it out would let a too-early
+            // poke race .setup() and panic on unmanaged state.
             let _ = app.run_on_main_thread(move || {
-                if let Err(e) =
-                    commands::open_app_window(handle, commands::AppWindowInit::default())
-                {
-                    eprintln!("[recue] single-instance new window failed: {e}");
-                }
+                std::thread::spawn(move || {
+                    if let Err(e) =
+                        commands::open_app_window(handle, commands::AppWindowInit::default())
+                    {
+                        eprintln!("[recue] single-instance new window failed: {e}");
+                    }
+                });
             });
         }))
         .plugin(tauri_plugin_dialog::init())

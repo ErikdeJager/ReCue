@@ -1483,3 +1483,63 @@ ReCue light/dark theme is pushed to the window via `commands::theme_to_window_th
       needs custom decorations — out of scope, future work.
 - [ ] **No empty strip / layout shift.** The `Titlebar` strip renders nothing on Windows
       (no 30px band); `.app-body` fills the window exactly as before.
+
+## 2026-07-21 — WebGL terminals in secondary app windows: cross-platform renderer override (task 453)
+
+Since task 437 deleted the old #105 `IS_MAIN_WINDOW` DOM-renderer guard, every `app-*`
+window attaches xterm's WebGL addon on macOS/Windows — so the #105 doubled/ghosted-glyph
+display-scaling artifact *may* have returned in secondary windows, and this environment
+cannot reproduce it (needs a real Retina / fractionally-scaled box). Task 453 therefore
+ships the remedy without changing any default: the #357 Settings → Rendering **Terminal
+renderer** override (Auto / WebGL / DOM) and the diagnostics readout now work on every OS
+(`decideTerminalRendererForPlatform` in `webglRenderer.ts`; the forced modes win
+everywhere, "auto" keeps WebGL on macOS/Windows **without ever constructing the #346
+probe canvas**, and `applyTerminalRenderer()` converges live on Save + the task-428
+cross-window sync). The persisted key stays `linuxTerminalRenderer` (no migration). The
+deleted #105 blanket guard is deliberately **NOT** restored pending real-box evidence.
+Real-box checks:
+
+- [ ] **macOS Retina artifact check.** Open a second full app window (⌘⌥N / Canvas
+      pop-out / repo "Open in new window") mirroring a live claude agent — inspect for
+      doubled/ghosted glyphs or misaligned box-drawing; repeat with a fresh spawn viewed
+      only in the secondary window; drag the window between a Retina and a non-Retina
+      display (a devicePixelRatio change mid-run).
+- [ ] **Windows fractional-scaling artifact check.** Same secondary-window inspection at
+      125% / 150% display scale, and across two monitors with different scale factors
+      (WebView2).
+- [ ] **Override round-trip.** Settings → Rendering shows on macOS/Windows; force DOM →
+      Save converges every open window live (terminal contents intact, no replay/garble);
+      the console logs the once-per-reason `[recue] terminals: …` renderer line;
+      switching back to WebGL/Auto re-attaches the addon. Diagnostics shows only the
+      terminal half, with `probed: n/a (Linux-only probe)`.
+- [ ] **Decision rule.** If the artifact reproduces on default WebGL, file a follow-up
+      card to flip the auto default to DOM for `app-*` windows on the affected OS — the
+      seam is `rendererDecision()` in `terminalPool.ts` plus `WINDOW_KIND`/`WINDOW_LABEL`
+      (`src/windowContext.ts`); the DOM override is the immediate user workaround
+      meanwhile. If it does not reproduce, record that here and close the question —
+      task 437's deletion of the guard stands.
+
+## 2026-07-21 — "Open in new window" Windows freeze fix (task 454)
+
+On Windows, every frontend "open a new window" trigger froze the whole app; macOS/Linux
+were fine. The defect: `open_app_window` was a **synchronous** command, so its body ran
+inline on the main thread inside the webview's IPC event handler — and
+`WebviewWindowBuilder::build` is documented to deadlock exactly there on Windows
+(wry#583: WebView2 controller creation is async and its completion callback dispatches
+on the same sequential UI-thread queue the in-progress handler is blocking, so the main
+thread waits forever). The fix is the tauri-documented one: the command is now
+`#[tauri::command(async)]` (the body runs on an async-runtime worker thread and the
+build round-trips to the free main-thread event loop), the single-instance poke spawns
+the creation onto a fresh thread from inside its `run_on_main_thread` boot-ordering
+barrier, and `create_app_window` carries the never-build-inside-a-main-thread-IPC-handler
+contract in its doc comment. Platform-neutral — no `#[cfg]`; macOS (WKWebView) and Linux
+(WebKitGTK) never deadlocked and are observably unchanged. Real-box checks:
+
+- [ ] Sidebar repo menu **Open in new window** opens a second full window preset to that
+      repo — no freeze; the first window stays responsive throughout.
+- [ ] **Ctrl+Alt+N** and the **Canvas tab pop-out** both open windows without freezing.
+- [ ] **Second app launch** (double-click the installed exe while ReCue runs): the
+      running instance opens a fresh window — no freeze.
+- [ ] **Boot restore** (task 439) still recreates saved `app-*` windows at launch.
+- [ ] A failed create (if reproducible) surfaces the Sidebar's "Could not open a new
+      window" toast instead of hanging.

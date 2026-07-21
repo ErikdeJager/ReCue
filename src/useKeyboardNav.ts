@@ -43,8 +43,13 @@
 // is ⌘ on macOS and Ctrl on Windows/Linux, so a **bare ⌃-chord on macOS now
 // passes through to the terminal's readline** (⌃E end-of-line, ⌃N history, …)
 // instead of triggering the app action — the old `metaKey || ctrlKey` matching
-// swallowed those. Every other key (normal typing, Shift+letters, other combos)
-// passes straight through.
+// swallowed those. **Bare-⌥/Alt chords** (the ⌥1/⌥2/⌥3 view defaults, or any
+// alt-only rebind) also pass through when any modal owns the keyboard (the
+// `anyModalOpen` pass in the view-* cases) OR when the target is editable / a
+// focused terminal (#449) — a layout can compose them into typed glyphs (⌥2 = @
+// on Nordic, ⌥3 = # on UK), so with a terminal focused ⌥1/⌥2/⌥3 type into the
+// PTY; use the ViewSwitch (or click) to switch views from there. Every other
+// key (normal typing, Shift+letters, other combos) passes straight through.
 
 import { useEffect } from "react";
 
@@ -52,7 +57,9 @@ import { attentionQueue } from "./components/Attention/attentionQueue";
 import { panelTypeForDigit } from "./components/CreatePanelModal/panelTypes";
 import {
   eventChord,
+  isBareAltChord,
   isEditableTarget,
+  isTerminalTarget,
   keybindCaptureActive,
   keybindMapFor,
   terminalClaimsChord,
@@ -217,7 +224,10 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
     // ⌥1/⌥2/⌥3 — direct view switching (replaces the removed ⌘\ cycle). Like the
     // old ⌘\ guard, the event **passes through** when a modal owns the keyboard —
     // EVERY modal, so ⌥-glyph typing (⌥2 = @ on Nordic layouts) in any modal
-    // input still types instead of flipping the view under the dialog.
+    // input still types instead of flipping the view under the dialog. The
+    // dispatch block additionally passes bare-⌥ chords through for editable /
+    // focused-terminal targets (#449) — deliberately: with a terminal focused,
+    // ⌥1/⌥2/⌥3 type into the PTY; switch views via the ViewSwitch or a click.
     case "view-overview":
     case "view-attention":
     case "view-canvas": {
@@ -300,6 +310,20 @@ export function useKeyboardNav(): void {
           chord,
         );
         if (action) {
+          // Bare-⌥ chords (the ⌥1/⌥2/⌥3 view defaults, or any alt-only rebind)
+          // compose typed glyphs on international layouts (⌥2 = @ on Nordic,
+          // ⌥3 = # on UK) — never steal them from a real text field or a focused
+          // terminal: return WITHOUT preventing default so the character reaches
+          // the input / PTY. Mod-bearing chords are exempt (they can't type; the
+          // AltGr-as-Ctrl+Alt caveat on new-window stays as documented in
+          // keybinds.ts). Chord-class, not per-action, so the invariant holds
+          // for ANY action rebound onto a bare-alt chord (#449).
+          if (
+            isBareAltChord(chord) &&
+            (isEditableTarget(e.target) || isTerminalTarget(e.target))
+          ) {
+            return;
+          }
           // Task 448: the close-panel chord typed into a focused terminal is a
           // terminal editing key (Ctrl+W = readline/claude delete-word on
           // Windows/Linux, where mod is Ctrl) — return WITHOUT preventDefault so

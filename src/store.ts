@@ -1440,9 +1440,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // True by default (#335): show the per-agent added/removed line-count badge. Off
   // hides it AND stops ReCue running any `diff_line_counts` git read.
   showDiffLineCounts: true,
-  // Rendering (#357), Linux only. Both default to "auto", so every existing install (whose
-  // blob lacks the keys → mergeSettings fills them) and every macOS/Windows box behaves
-  // byte-for-byte as before: #346/#347's DMA-BUF detection and the #346 WebGL probe.
+  // Rendering (#357). Both default to "auto", so every existing install (whose blob lacks
+  // the keys → mergeSettings fills them) behaves byte-for-byte as before: #346/#347's
+  // DMA-BUF detection and the #346 WebGL probe on Linux, plain WebGL on macOS/Windows.
+  // The DMA-BUF key stays Linux-only; the terminal-renderer key applies on every OS since
+  // task 453 (name kept for blob compatibility — "auto" never probes off Linux).
   linuxDmabufRenderer: "auto",
   linuxTerminalRenderer: "auto",
   defaultView: "overview",
@@ -1691,11 +1693,12 @@ function applySettingsEffects(s: Settings): void {
     cursorBlink: s.terminalCursorBlink,
     background: s.terminalBackgroundLightness,
   });
-  // Terminal renderer override (#357, Linux only): converge every pooled xterm onto the
-  // chosen WebGL/DOM renderer WITHOUT disposing a host (the #18 invariant). It reads the
-  // mode from the store, and this runs after `set({ settings })` in both `saveSettings`
-  // and the boot `refresh()`, so the pool reconciles on Save and also heals any host that
-  // was created during boot before the blob had loaded. A no-op off Linux.
+  // Terminal renderer override (#357; every OS since task 453): converge every pooled
+  // xterm onto the chosen WebGL/DOM renderer WITHOUT disposing a host (the #18
+  // invariant). It reads the mode from the store, and this runs after `set({ settings })`
+  // in `saveSettings`, the boot `refresh()`, AND the task-428 `settings://changed`
+  // cross-window sync — so the pool reconciles on Save, heals any host created during
+  // boot before the blob had loaded, and one window's Save converges every open window.
   applyTerminalRenderer();
   if (typeof document === "undefined") return; // non-DOM env (e.g. unit tests)
   // Accent (#102/#107): override --accent AND its derived companion tokens
@@ -6674,16 +6677,13 @@ export const useStore = create<AppState>()((set, get) => ({
     // schedule / panel removals it performs land here fire-and-forget, and a
     // non-forced remove racing the forced delete would mis-toast "Worktree kept".
     if (deletingWorktrees.has(dest)) return;
-    // NEVER auto-remove a worktree ReCue didn't create: an in-place spawn into a
-    // DETECTED external worktree produces sessions whose teardown lands here, but
-    // the agent/user owns that checkout — closing the last item must not delete
-    // it. (The Rust `cleanup_worktree_if_empty` enforces the same managed-root
-    // invariant itself — `notManaged` — so the Rust-internal clean-exit path is
-    // covered too; this short-circuit just avoids a pointless round-trip.)
-    const detected = get().repoWorktrees[parent]?.find((e) =>
-      samePath(e.path, dest, get().platform),
-    );
-    if (detected && !detected.managed) return;
+    // NEVER auto-remove a worktree ReCue didn't create: the Rust
+    // `cleanup_worktree_if_empty` enforces the managed-root invariant itself
+    // (`notManaged` → keep silently below). A detected EXTERNAL worktree must
+    // still reach the backend (task 451 — no local short-circuit): the Rust
+    // NotManaged path releases ReCue's own dev-container `git worktree lock`
+    // (gated on the exact spawn-time reason, never deleting), so a stale lock
+    // can't block the creator agent's own clean-exit worktree removal.
     // Record the parent so a later panel/schedule close can resolve it once this
     // worktree's last agent is gone (#199).
     worktreeParents.set(dest, parent);
