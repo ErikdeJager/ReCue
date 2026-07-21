@@ -4109,3 +4109,13 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - booting/resumeSettled now derive from "any view reconnecting" instead of "any sessions exist", so a mid-run window gets no exit-toast-suppression window and never defers the tier-2 git volley.
 - Deliberately NOT carried: turn-state (sessionTurnState/hookSeen — the hook bridge re-admits on its next signal), sessionIdleSince FIFO stamps (createdAt fallback covers it), cross-window exit-toast dedup (epic-deferred), recurring-child pointer repair beyond generic seeding.
 - Mapped the v2.0.0 review line numbers via `git show v2.0.0:src/store.ts`: 4263 = the applyBootState(await bootPromise) apply of the pre-subscription fetch; 4369/4370 = the blanket reconnecting:true mapping — confirming the three defects' exact sites.
+
+## Task 455
+
+- The hidden types are exactly files.rs SKIP_EXTS (images png/jpg/jpeg/gif/webp/bmp/ico/icns/tiff, pdf, fonts woff/woff2/ttf/otf/eot, archives zip/gz/tgz/bz2/xz/7z/rar/tar/dmg/iso/jar, media mp4/mov/avi/webm/mkv/mp3/wav/ogg/flac, executables/objects exe/dll/so/dylib/bin/wasm/node/class/o/a/lib/obj); all become visible in the tree.
+- SKIP_DIRS (.git, node_modules, …) and the linked-worktree `.git` pointer-file row stay hidden — the card is about file types, not VCS internals/heavy dirs.
+- Non-viewable rows do NOT open a FileViewer panel (would persist a junk error panel); click shows one info toast, the row stays git-tinted, drop-targetable, and context-menu-able (Reveal/Copy paths/Add to .gitignore/Delete — "Open in file viewer" hidden; no Rename added since file rows never had one).
+- Non-viewable rows get a distinct Lucide icon (Image for image exts, generic File otherwise) instead of a muted color, to avoid clashing with the #270 gitignored dimming.
+- The FileTree's in-panel filename search also lists binaries (it replaces the tree while typing, so hiding them there would resurface the bug) via an opt-in include_binary flag on search_files (serde-default false); FilePicker, GlobalSearch, and search_file_contents keep viewable-only filtering.
+- Viewability is decided frontend-side by a TS mirror of SKIP_EXTS in fileType.ts (comment-linked + unit-tested both sides) rather than a wire-format flag — search_files returns plain strings and drift is benign.
+- No new preview capability (no image rendering) — explicitly allowed by the card's "clicking them doesn't open anything".
