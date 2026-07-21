@@ -2364,7 +2364,18 @@ pub fn app_window_url(id: &str, init: &AppWindowInit) -> String {
 /// global `Destroyed` arm in `lib.rs` already covers an app window's close (task
 /// 426's terminal-view purge + task 433's primary re-election), and no PTY is
 /// killed on close (sessions keep running, mirrored in surviving windows).
-#[tauri::command]
+///
+/// DEADLOCK INVARIANT (task 454): this command MUST stay `(async)`. A synchronous
+/// command runs inline on the main thread inside the webview's IPC event handler,
+/// and `WebviewWindowBuilder::build` is documented to deadlock there on Windows
+/// (wry#583 — the WebView2 controller-creation completion can never be dispatched
+/// while that handler is on the stack), freezing the entire app. With `(async)` the
+/// body runs on the async runtime's worker thread and the build round-trips to the
+/// free main-thread event loop — the tauri-documented fix. macOS (WKWebView) and
+/// Linux (WebKitGTK) never deadlocked and are observably unchanged. The fn itself
+/// stays a plain sync `pub fn` so the direct Rust callers (menu.rs New Window, the
+/// Dock Reopen arm, the single-instance poke) keep calling it unchanged.
+#[tauri::command(async)]
 pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, SessionError> {
     // A user-opened app window is never maximized by default (only a fresh-install
     // `main`, or a restored previously-maximized window, is — task 443).
@@ -2380,6 +2391,15 @@ pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, Se
 /// (433) and in the window-state registry (439, with its creation presets — the
 /// same values the URL carries, so a restored window re-persists what it was
 /// created with).
+///
+/// CONTRACT (task 454): on Windows this must NEVER be called on the main thread
+/// from inside a webview IPC/event handler — `WebviewWindowBuilder::build` is
+/// documented to deadlock there (wry#583: the WebView2 controller-creation
+/// completion dispatches on the same sequential UI-thread queue the in-progress
+/// handler is blocking). Safe contexts are the `.setup()` hook (the task-439
+/// `window_state::restore_windows` boot path) and worker threads (the `(async)`
+/// `open_app_window` command, the single-instance spawned thread) — from a thread
+/// the build round-trips to the free main-thread event loop internally.
 pub fn create_app_window(
     app: &AppHandle,
     init: AppWindowInit,
@@ -4678,6 +4698,14 @@ mod tests {
             app_window_url("u1", &both),
             "index.html?win=u1&repo=C%3A%5CUsers%5Ca%20b&canvas=c2"
         );
+    }
+
+    /// Task 454: the menu / single-instance / Reopen paths call the plain fn (not the
+    /// IPC wrapper). Pin the signature so the `(async)` attribute fix can never drift
+    /// into an `async fn` that silently breaks those direct Rust callers.
+    #[test]
+    fn open_app_window_stays_directly_callable_as_a_sync_fn() {
+        let _: fn(AppHandle, AppWindowInit) -> Result<String, SessionError> = open_app_window;
     }
 
     /// Build a minimal `PersistedSession` for the `worktree_parent_for_cwd` tests (#331) —
