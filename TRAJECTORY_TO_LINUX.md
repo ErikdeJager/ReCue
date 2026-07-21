@@ -1943,3 +1943,17 @@ checks (per DE / compositor):
       partial-parity scope (full color parity = future custom decorations).
 - [ ] **No empty strip / layout shift.** The `Titlebar` strip renders nothing on Linux
       (no 30px band); `.app-body` fills the window exactly as before.
+
+## 2026-07-21 — Cross-platform terminal-renderer override (task 453)
+
+Linux is byte-for-byte unchanged: the #346 software-rasterizer probe, the #357
+auto/webgl/dom decision (`decideTerminalRenderer`), the DMA-BUF control, and the full
+diagnostics all behave exactly as before — task 453 only broadens the *override* and the
+Settings → Rendering section to macOS/Windows (via the new pure
+`decideTerminalRendererForPlatform`, which defers to `decideTerminalRenderer` whenever
+`linux` is true). One sanity check:
+
+- [ ] **Rendering pane unchanged on Linux.** Settings → Rendering still shows all three
+      fields (DMA-BUF renderer, Terminal renderer, Diagnostics) with the full two-half
+      diagnostics readout, and a saved DOM/WebGL terminal-renderer override still applies
+      live to open terminals (no dispose, contents intact).

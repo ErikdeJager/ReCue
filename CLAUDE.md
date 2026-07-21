@@ -832,8 +832,8 @@ steady-state boot pays **zero** probe cost.
   focus-trapped **Settings modal** (`components/Settings`) — a **fixed 740×540** size
   (clamped to 92vw/88vh — #119's fixed-size precedent, resized by UI v2 task 373)
   so every section renders identically and a tall section
-  scrolls inside the content pane (the nav + action row stay put) — with **nine** sections
-  (**ten** on Linux, which additionally gets **Rendering**, #357) —
+  scrolls inside the content pane (the nav + action row stay put) — with **ten** sections
+  on every OS (the **Rendering** section was Linux-only #357 until task 453) —
   **Terminal** (font size / line height via the custom **`Slider`** #122 + cursor
   blink → the live pooled xterms via `terminalPool.applyTerminalSettings`),
   **Sessions** (the #97 auto-name toggle + the #142 **Coding agent** selector →
@@ -850,15 +850,20 @@ steady-state boot pays **zero** probe cost.
   live when the stage clears) + a display-size slider #366 +
   the Overview panel min-width #176 + the `capAgentWidth` cap-agent-card-width toggle,
   task 373 — consumed by the Overview wall's 900px `.cardCapped` on agent/recurring
-  cards, task 379), **Rendering** (**Linux only** #357 — filtered out of
-  the nav on macOS/Windows: a **DMA-BUF renderer** control (auto/on/off, applied at the
+  cards, task 379), **Rendering** (#357, on every OS since task 453: a **Linux-only
+  DMA-BUF renderer** control (auto/on/off, applied at the
   **next launch** — GTK reads the env once at init, so the persisted mode is read straight
   off `sessions.json` **before** `tauri::Builder` via the shared Rust `early_settings`), a
-  **Terminal renderer** control (auto/webgl/dom, applied **live** — the WebGL addon is
-  loaded/disposed on the *running* xterm by `terminalPool.applyTerminalRenderer`, never a
-  host dispose #18, and never a `clearTextureAtlas()` #221), and a copy-pasteable
-  **Diagnostics** readout of the boot decision (`renderer_diagnostics` → the
-  `linux_webkit::RendererReport` captured in a `OnceLock`; `null` off Linux)), **Behavior** (default launch view + confirm-destructive
+  **cross-platform Terminal renderer** control (auto/webgl/dom, applied **live** — the
+  WebGL addon is loaded/disposed on the *running* xterm by
+  `terminalPool.applyTerminalRenderer`, never a host dispose #18, and never a
+  `clearTextureAtlas()` #221; the persisted key stays `linuxTerminalRenderer` for blob
+  compat, "auto" never probes off Linux, and forcing **DOM** is the escape hatch for the
+  #105-class doubled/ghosted-glyph WebGL artifact in secondary app windows on some
+  Retina / fractionally-scaled setups — task 453), and a copy-pasteable
+  **Diagnostics** readout — the terminal half on every OS, plus the boot decision on Linux
+  (`renderer_diagnostics` → the `linux_webkit::RendererReport` captured in a `OnceLock`;
+  `null` off Linux, which omits the DMA-BUF lines)), **Behavior** (default launch view + confirm-destructive
   gating #103 + the Canvas tab-close default `canvasCloseBehavior`: Ask / Always kill / Never
   kill #137 + the diff display/line/sort defaults #237/#258), **Editor** (the Open-in-editor
   preferred-editor select over the `src/editors.ts` catalog mirror with live "— detected"
@@ -1191,12 +1196,15 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html   # html report
 > `webglRenderer.ts`) — **#357** makes this user-overridable too (`linuxTerminalRenderer`:
 > auto/webgl/dom), applied **live** by `terminalPool.applyTerminalRenderer()`, which
 > loads/disposes the `WebglAddon` on the **running** xterm (the `onContextLoss` path) so no host
-> is ever disposed (#18) and the **shared** glyph atlas is never cleared (#221); (3) `session_scrollback` ships **base64** (`ScrollbackReply.b64`,
+> is ever disposed (#18) and the **shared** glyph atlas is never cleared (#221) — and since
+> **task 453** the forced webgl/dom modes reach **macOS/Windows** too (the probe stays
+> Linux-only; "auto" keeps WebGL off Linux without ever building the probe canvas); (3) `session_scrollback` ships **base64** (`ScrollbackReply.b64`,
 > decoded by `decodeOutputB64`) instead of a ~1 MB JSON integer array per terminal mount;
 > (4) the `lib.rs` event forwarder drains its queue after each blocking `recv` and merges
 > consecutive contiguous same-session output chunks (`pty::coalesce_output_events`) into
 > one emit — each emit is an evaluate-JS on the webview main thread, costliest on
-> WebKitGTK. (3)+(4) are platform-neutral wins; (1)+(2) are unreachable on macOS/Windows.
+> WebKitGTK. (3)+(4) are platform-neutral wins; (1) and the (2) probe are unreachable on
+> macOS/Windows (only the #357 override's forced modes act there, task 453).
 >
 > **WebGL context loss (#364).** The same DOM-renderer fallback also covers a *runtime* loss:
 > when xterm's WebGL addon fires `onContextLoss` (an **unrecovered** loss — GPU OOM, driver

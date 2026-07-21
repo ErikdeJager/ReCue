@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   decideTerminalRenderer,
+  decideTerminalRendererForPlatform,
   isSoftwareWebGLRenderer,
+  type TerminalRendererMode,
 } from "./webglRenderer";
 
 describe("isSoftwareWebGLRenderer (#346)", () => {
@@ -94,5 +96,50 @@ describe("decideTerminalRenderer (#357)", () => {
     const d = decideTerminalRenderer("auto", null);
     expect(d.webgl).toBe(false);
     expect(d.reason).toBe("no WebGL context");
+  });
+});
+
+describe("decideTerminalRendererForPlatform (task 453)", () => {
+  const HARDWARE = "Mesa Intel(R) Graphics (RPL-P)";
+  const SOFTWARE = "llvmpipe (LLVM 17.0.6, 256 bits)";
+
+  it('non-Linux "dom" forces the DOM renderer whatever the renderer string', () => {
+    // The #105-class escape hatch: doubled/ghosted glyphs in a secondary app
+    // window on a Retina / fractionally-scaled setup → force DOM.
+    for (const renderer of [HARDWARE, SOFTWARE, "", null]) {
+      const d = decideTerminalRendererForPlatform(false, "dom", renderer);
+      expect(d.webgl, String(renderer)).toBe(false);
+      expect(d.reason).toBe("forced in Settings");
+    }
+  });
+
+  it('non-Linux "webgl" forces the addon whatever the renderer string', () => {
+    for (const renderer of [HARDWARE, SOFTWARE, "", null]) {
+      const d = decideTerminalRendererForPlatform(false, "webgl", renderer);
+      expect(d.webgl, String(renderer)).toBe(true);
+      expect(d.reason).toBe("forced in Settings");
+    }
+  });
+
+  it('non-Linux "auto" keeps WebGL without consulting the renderer string', () => {
+    // The pre-453 macOS/Windows short-circuit, byte-for-byte: no probe influence
+    // (callers pass null off Linux — the probe canvas is never even constructed).
+    for (const renderer of [HARDWARE, SOFTWARE, "", null]) {
+      const d = decideTerminalRendererForPlatform(false, "auto", renderer);
+      expect(d.webgl, String(renderer)).toBe(true);
+      expect(d.reason).toBe("GPU renderer");
+    }
+  });
+
+  it("on Linux defers to decideTerminalRenderer for every mode × renderer", () => {
+    const modes: TerminalRendererMode[] = ["auto", "webgl", "dom"];
+    for (const mode of modes) {
+      for (const renderer of [HARDWARE, SOFTWARE, "", null]) {
+        expect(
+          decideTerminalRendererForPlatform(true, mode, renderer),
+          `${mode} × ${String(renderer)}`,
+        ).toEqual(decideTerminalRenderer(mode, renderer));
+      }
+    }
   });
 });
