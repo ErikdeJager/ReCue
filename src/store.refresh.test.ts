@@ -106,6 +106,11 @@ function makeBootState(over: Partial<BootState> = {}): BootState {
     app_version: "1.0.0",
     platform: "macos",
     windows_build: 0,
+    // PTY liveness (task 450): default to "nothing live/exited/busy" — the classic
+    // true-boot resume shape; liveness tests override per scenario.
+    live_ids: [],
+    exit_codes: {},
+    busy_ids: [],
     ...over,
   };
 }
@@ -305,6 +310,25 @@ describe("boot is ONE batched round-trip (#352)", () => {
     // one task-433 primary-window snapshot (resolved before the boot apply).
     expect(ipc.autoContinueSnapshot).toHaveBeenCalledTimes(1);
     expect(ipc.primaryWindow).toHaveBeenCalledTimes(1);
+    // Task 450: the snapshot is FETCHED only after the whole listener wave is
+    // registered (subscribe-then-fetch), so a broadcast firing while the listeners
+    // were still registering can never be newer than the applied payload. (This is
+    // the file's first `init()` — the module-level `eventsSubscribed` latch means
+    // only this call ever runs the subscribe wave, so the ordering is asserted here.)
+    const bootOrder = m(ipc.bootState).mock.invocationCallOrder[0];
+    for (const fn of [
+      ipc.subscribeSessionEvents,
+      ipc.subscribeCanvasEvents,
+      ipc.subscribeScheduleEvents,
+      ipc.subscribeRecurringEvents,
+      ipc.subscribeStateSyncEvents,
+      ipc.subscribeUsageEvents,
+      ipc.subscribeContainerEvents,
+      ipc.subscribePrimaryEvents,
+      ipc.subscribeFileClaimEvents,
+    ]) {
+      expect(bootOrder).toBeGreaterThan(m(fn).mock.invocationCallOrder[0]);
+    }
     // None of the individual boot reads it replaces are called any more (they all
     // still exist — other call sites use them — but the boot no longer waterfalls).
     for (const fn of [
@@ -454,6 +478,101 @@ describe("boot is ONE batched round-trip (#352)", () => {
     // …and nothing else was clobbered — the defaults stand.
     expect(s.sessions).toHaveLength(0);
     expect(s.platform).toBe("");
+  });
+});
+
+describe("applyBootState seeds PTY liveness (task 450)", () => {
+  const record = (id: string, agent?: string): SessionRecord => ({
+    id,
+    claude_session_id: id,
+    repo_path: "/repo/a",
+    name: null,
+    created_at: 0,
+    ...(agent ? { agent } : {}),
+  });
+
+  it("seeds a dead-but-kept agent's exit overlay — never alive, never eligible", async () => {
+    m(ipc.bootState).mockResolvedValue(
+      makeBootState({ sessions: [record("s1")], exit_codes: { s1: 1 } }),
+    );
+
+    await useStore.getState().refresh();
+
+    const s = useStore.getState();
+    const v = s.sessions.find((x) => x.id === "s1")!;
+    // The crashed agent seeds its "Process exited" overlay + Restart in this window…
+    expect(v.exitedCode).toBe(1);
+    // …never reads as reconnecting/alive, and never enters the Attention queue.
+    expect(v.reconnecting).toBeUndefined();
+    expect(s.attentionEligible.s1).toBeUndefined();
+  });
+
+  it("seeds a live agent as alive at once — no Reconnecting flash, eligible immediately", async () => {
+    m(ipc.bootState).mockResolvedValue(
+      makeBootState({ sessions: [record("s1")], live_ids: ["s1"] }),
+    );
+
+    await useStore.getState().refresh();
+
+    // Asserted BEFORE any timer fires: it is the liveness seed that keeps the flag
+    // off, not the 4s backstop clearing it later.
+    const s = useStore.getState();
+    expect(s.sessions.some((x) => x.reconnecting)).toBe(false);
+    expect(s.sessions.find((x) => x.id === "s1")!.exitedCode).toBeUndefined();
+    expect(s.attentionEligible.s1).toBe(true);
+    // Nothing is actually resuming, so the tier-2 git volley is released at once.
+    expect(s.resumeSettled).toBe(true);
+  });
+
+  it("splits resume-pending (claude → reconnecting) from dormant non-resumable (codex → idle)", async () => {
+    m(ipc.bootState).mockResolvedValue(
+      makeBootState({ sessions: [record("s1"), record("s2", "codex")] }),
+    );
+
+    await useStore.getState().refresh();
+
+    const s = useStore.getState();
+    // In neither list at true boot: the claude record's resume is still in flight →
+    // reconnecting, exactly as before…
+    expect(s.sessions.find((x) => x.id === "s1")!.reconnecting).toBe(true);
+    // …while a non-resumable agent is dormant, not resuming: idle at once.
+    expect(s.sessions.find((x) => x.id === "s2")!.reconnecting).toBeUndefined();
+    expect(s.resumeSettled).toBe(false);
+  });
+
+  it("seeds a busy agent's blue dot and keeps it out of the Attention queue", async () => {
+    m(ipc.bootState).mockResolvedValue(
+      makeBootState({
+        sessions: [record("s1")],
+        live_ids: ["s1"],
+        busy_ids: ["s1"],
+      }),
+    );
+
+    await useStore.getState().refresh();
+
+    const s = useStore.getState();
+    expect(s.sessionBusy.s1).toBe(true);
+    // A working agent must not seed as confirmed-idle (#398) — its own busy→idle
+    // settle re-admits it later.
+    expect(s.attentionEligible.s1).toBeUndefined();
+  });
+
+  it("routes a non-session exit code to terminalExits (dead #72 shell panel)", async () => {
+    m(ipc.bootState).mockResolvedValue(
+      makeBootState({
+        sessions: [record("s1")],
+        live_ids: ["s1"],
+        exit_codes: { term1: 137 },
+      }),
+    );
+
+    await useStore.getState().refresh();
+
+    const s = useStore.getState();
+    // The dead shell panel gets its Restart overlay; the agent view is untouched.
+    expect(s.terminalExits).toEqual({ term1: 137 });
+    expect(s.sessions.find((x) => x.id === "s1")!.exitedCode).toBeUndefined();
   });
 });
 

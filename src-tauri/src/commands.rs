@@ -3851,6 +3851,17 @@ pub struct BootState {
     pub platform: String,
     /// `windows_build` (`0` on non-Windows)
     pub windows_build: u32,
+    /// Task 450: PTY liveness at snapshot time — sessions whose child is running right
+    /// now (see [`SessionManager::liveness`]). Empty from the pure `boot_state_from`
+    /// (store-only), filled by the `boot_state` command from the live manager.
+    pub live_ids: Vec<String>,
+    /// Task 450: dead-but-kept PTYs → their retained exit code (exit overlay + Restart
+    /// state; spans agent sessions AND #72 shell-terminal panels). Empty from the pure
+    /// `boot_state_from`, filled by the command — see [`SessionManager::liveness`].
+    pub exit_codes: std::collections::HashMap<String, Option<i32>>,
+    /// Task 450: sessions the monitor currently reads as busy (#42). Empty from the
+    /// pure `boot_state_from`, filled by the command — see [`SessionManager::liveness`].
+    pub busy_ids: Vec<String>,
 }
 
 /// Assemble the boot payload from the persisted store — the **pure** half of `boot_state`
@@ -3882,13 +3893,25 @@ pub fn boot_state_from(
         app_version,
         platform,
         windows_build,
+        // PTY liveness (task 450) lives on the SessionManager, not the persisted store —
+        // the command overwrites these three from `manager.liveness()`.
+        live_ids: Vec::new(),
+        exit_codes: std::collections::HashMap::new(),
+        busy_ids: Vec::new(),
     }
 }
 
 /// The one boot read (#352): everything the frontend needs, in a single round-trip.
 /// Purely additive — every individual command it batches stays registered and works.
+/// Since task 450 it also carries the live PTY-liveness snapshot (`live_ids` /
+/// `exit_codes` / `busy_ids`), taken **after** the store read so a window opened
+/// mid-run seeds true backend state; the frontend fetches it only after its event
+/// listeners exist, so the snapshot can never lose to a broadcast in the gap.
 #[tauri::command]
-pub async fn boot_state(store: State<'_, Store>) -> Result<BootState, SessionError> {
+pub async fn boot_state(
+    store: State<'_, Store>,
+    manager: State<'_, SessionManager>,
+) -> Result<BootState, SessionError> {
     // The one non-trivial read: the Windows `cmd /C ver` probe (#143 `windows_build`).
     // Run it on the blocking pool (the #330 `current_branches` pattern) so it can't stall
     // an async worker — and await it FIRST, so no store lock is ever live across an await.
@@ -3899,12 +3922,14 @@ pub async fn boot_state(store: State<'_, Store>) -> Result<BootState, SessionErr
         .unwrap_or(0);
     // Infallible in practice (in-memory reads only) — async + a borrowed `State` just
     // requires a `Result` return (the `clone_repo` precedent).
-    Ok(boot_state_from(
-        &store,
-        platform(),
-        win_build,
-        app_version(),
-    ))
+    let mut boot = boot_state_from(&store, platform(), win_build, app_version());
+    // PTY liveness (task 450): overwrite the pure builder's empty placeholders from the
+    // live manager, AFTER the await above so no lock is ever held across an await.
+    let liveness = manager.liveness();
+    boot.live_ids = liveness.live_ids;
+    boot.exit_codes = liveness.exit_codes;
+    boot.busy_ids = liveness.busy_ids;
+    Ok(boot)
 }
 
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
@@ -4259,32 +4284,37 @@ pub fn install_kind() -> String {
     .to_string()
 }
 
-/// The Windows build number (e.g. `19045`, `22631`, `26100`), read once at boot and
-/// cached in the store to configure xterm.js's ConPTY handling
-/// (`windowsPty.buildNumber`, which gates reflow at ≥ 21376). On **non-Windows** this
-/// returns `0` — the frontend only consumes it under an `isWindows` guard, so macOS is
-/// untouched and never even runs the probe. On Windows it shells out to `cmd /C ver`
-/// via `hidden_command` (same `CREATE_NO_WINDOW` path as the `--version` probe, so no
-/// console flash) and parses the bracketed version. Best-effort: any failure ⇒ `0`,
-/// which simply leaves xterm's reflow disabled (today's behavior).
+/// The Windows build number (e.g. `19045`, `22631`, `26100`), probed once per process
+/// and **memoized** (task 450 — every window's `boot_state` calls this, and the OS
+/// build can't change mid-run, so only the first call pays the shell-out) to configure
+/// xterm.js's ConPTY handling (`windowsPty.buildNumber`, which gates reflow at ≥
+/// 21376). On **non-Windows** this returns `0` — the frontend only consumes it under
+/// an `isWindows` guard, so macOS is untouched and never even runs the probe. On
+/// Windows it shells out to `cmd /C ver` via `hidden_command` (same `CREATE_NO_WINDOW`
+/// path as the `--version` probe, so no console flash) and parses the bracketed
+/// version. Best-effort: any failure ⇒ `0`, which simply leaves xterm's reflow
+/// disabled (today's behavior).
 #[tauri::command]
 pub fn windows_build() -> u32 {
-    #[cfg(windows)]
-    {
-        let out = crate::git::hidden_command("cmd")
-            .args(["/C", "ver"])
-            .output()
-            .ok();
-        out.and_then(|o| {
-            let text = String::from_utf8_lossy(&o.stdout);
-            parse_windows_build(&text)
-        })
-        .unwrap_or(0)
-    }
-    #[cfg(not(windows))]
-    {
-        0
-    }
+    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUILD.get_or_init(|| {
+        #[cfg(windows)]
+        {
+            let out = crate::git::hidden_command("cmd")
+                .args(["/C", "ver"])
+                .output()
+                .ok();
+            out.and_then(|o| {
+                let text = String::from_utf8_lossy(&o.stdout);
+                parse_windows_build(&text)
+            })
+            .unwrap_or(0)
+        }
+        #[cfg(not(windows))]
+        {
+            0
+        }
+    })
 }
 
 /// What ReCue decided about the WebKitGTK DMA-BUF renderer at boot (#357), for
@@ -4796,11 +4826,16 @@ mod tests {
         assert_eq!(boot.platform, "linux");
         assert_eq!(boot.windows_build, 0);
         assert_eq!(boot.app_version, "1.2.3");
+        // The PTY-liveness trio (task 450) is EMPTY from the pure builder — it lives on
+        // the SessionManager, and only the `boot_state` command fills it.
+        assert!(boot.live_ids.is_empty());
+        assert!(boot.exit_codes.is_empty());
+        assert!(boot.busy_ids.is_empty());
 
-        // Nothing was invented: the payload is a plain JSON object of the 20 fields.
+        // Nothing was invented: the payload is a plain JSON object of the 23 fields.
         let value = serde_json::to_value(&boot).expect("serialize");
         assert!(value.get("sessions").is_some());
-        assert_eq!(value.as_object().map(|o| o.len()), Some(20));
+        assert_eq!(value.as_object().map(|o| o.len()), Some(23));
 
         let _ = std::fs::remove_file(&path);
     }

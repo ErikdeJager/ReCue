@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 
-import { agentCaps, SELECTABLE_AGENTS } from "./agents";
+import { agentCaps, agentSupportsResume, SELECTABLE_AGENTS } from "./agents";
 import { IDLE_AUTO_CONTINUE, type AutoContinueState } from "./autoContinue";
 import { resolveCanvases } from "./boot";
 import { attentionQueue } from "./components/Attention/attentionQueue";
@@ -4021,17 +4021,19 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   init: async () => {
-    // Boot is TWO concurrent waves (#352). Wave 1: the single batched `boot_state`
-    // round-trip, started immediately so it flies in parallel with the listener wave
-    // below (it used to be ~22 sequential waves / 34 invokes, 16 of them gating the
-    // first meaningful paint — and every round-trip is an evaluate-JS hop on the
-    // webview main thread, costliest on Linux/WebKitGTK, #346). `.catch(() => null)`
-    // attaches the handler NOW, so a rejection (outside Tauri) is never an unhandled
-    // promise rejection while we await the subscriptions.
-    const bootPromise = ipc.bootState().catch(() => null);
+    // Boot: subscribe FIRST, then fetch (#352/task 450). The `boot_state` snapshot is
+    // requested only once every listener below is registered — it used to be started
+    // before this wave, so a lifecycle/state broadcast firing between the backend's
+    // snapshot assembly and `listen()` completing could be LOST while the older
+    // snapshot was still applied on top. Rust writes every carried datum (persisted
+    // slice, retained exit code, queryable busy flag) BEFORE the corresponding emit,
+    // so a post-subscribe snapshot can never be older than a broadcast the window has
+    // seen, and an event delivered both ways applies idempotently. The fetch still
+    // overlaps the `primaryWindow()` round-trip below (the batching win of #352 — one
+    // payload instead of ~22 sequential waves — is unchanged).
 
-    // Wave 2: the 31 `listen` registrations (each its own invoke) as ONE parallel
-    // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
+    // The 31 `listen` registrations (each its own invoke) as ONE parallel wave.
+    // Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
       eventsSubscribed = true;
@@ -4351,6 +4353,12 @@ export const useStore = create<AppState>()((set, get) => ({
         eventsSubscribed = false;
       }
     }
+    // The one batched boot fetch (#352) — started only now that the listeners exist
+    // (task 450, see the invariant above), overlapping the `primaryWindow()`
+    // round-trip below. `.catch(() => null)` attaches the handler immediately, so a
+    // rejection (outside Tauri) is never an unhandled promise rejection while we
+    // await the primary snapshot.
+    const bootPromise = ipc.bootState().catch(() => null);
     // Primary election (task 433): resolve who's primary BEFORE the boot apply so
     // the once-per-app boot effects gate correctly even in a window that boots
     // already-primary (or never-primary). Fetched AFTER subscribing — Rust writes
@@ -4363,12 +4371,12 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       /* keep the default */
     }
-    // Apply the payload only AFTER the listeners exist: the *fetch* may race the
-    // registration, the **apply** must not — a live `session://output` / `session://
-    // exited` must never land while its handler doesn't exist (#352). The detached
-    // window id set (#84), the platform signal + Windows build (#143/#346), and every
-    // persisted slice all arrive in this one payload, applied in a single `set()`
-    // (which also re-applies the `data-platform` attribute, #363 — see `applyBootState`).
+    // Apply the payload last. Since task 450 the snapshot is also FETCHED only after
+    // the listeners exist (above), so it can never be older than a broadcast lost in
+    // the registration gap — and it now carries the PTY-liveness trio (`live_ids` /
+    // `exit_codes` / `busy_ids`) beside the platform signal + Windows build
+    // (#143/#346) and every persisted slice, all applied in a single `set()` (which
+    // also re-applies the `data-platform` attribute, #363 — see `applyBootState`).
     get().applyBootState(await bootPromise);
 
     // Usage + auto-continue boot seed (task 430): read the Rust engine's shared
@@ -4470,17 +4478,33 @@ export const useStore = create<AppState>()((set, get) => ({
     const settingsMigrated = lh.changed || bg.changed;
     applySettingsEffects(settings);
 
-    // Persisted sessions are resumed on boot (claude --resume) — show them as
-    // "reconnecting" (neutral) until their first output / a real exit, never as
-    // a wall of errors (#30). Branch labels refresh from the sidebar.
-    booting = boot.sessions.length > 0;
-    const views = boot.sessions.map((r) => ({
-      ...toSessionView(r),
-      reconnecting: true,
-    }));
+    // Persisted sessions seed from the payload's PTY-liveness trio (task 450) instead
+    // of a blanket "reconnecting": since task 440 output is TARGETED (only windows
+    // hosting a terminal receive a session's bytes), so in a window opened mid-run an
+    // un-hosted session never gets the byte that clears the flag — every agent flashed
+    // "Reconnecting…" until the 4s backstop, and a crashed agent seeded as a normal
+    // idle view (no overlay, wrongly Attention-eligible).
+    const live = new Set(boot.live_ids);
+    const exitCodes = boot.exit_codes;
+    const busy = new Set(boot.busy_ids);
+    const views = boot.sessions.map((r) => {
+      const v = toSessionView(r);
+      // Dead-but-kept PTY (task 450): seed the exit overlay + Restart; never "alive".
+      if (r.id in exitCodes)
+        return { ...v, exitedCode: exitCodes[r.id] ?? null };
+      // Running PTY: alive right now — no reconnecting flash (a window opened mid-run
+      // gets no output for un-hosted sessions since task 440, so the flag would only
+      // ever clear at the 4s backstop).
+      if (live.has(r.id)) return v;
+      // Neither: a resume still in flight (true boot) — reconnecting, exactly as
+      // before (#30, neutral until first output / a real exit). A non-resumable agent
+      // (codex/opencode) is dormant, not resuming: idle at once.
+      return agentSupportsResume(v.agent) ? { ...v, reconnecting: true } : v;
+    });
+    booting = views.some((v) => v.reconnecting);
     // Mirror the reconnecting flag into the Set the output hot path checks (#261).
     reconnectingIds.clear();
-    for (const v of views) reconnectingIds.add(v.id);
+    for (const v of views) if (v.reconnecting) reconnectingIds.add(v.id);
     // Boot re-entrancy: the session set is replaced wholesale, so drop any pending
     // admission-grace timers from the previous set (#398).
     cancelAllAttentionTimers();
@@ -4513,12 +4537,23 @@ export const useStore = create<AppState>()((set, get) => ({
       sessionActive: Object.fromEntries(
         views.filter((v) => v.hasBeenActive).map((v) => [v.id, true]),
       ),
-      // Boot views are idle (a resume never goes busy on its own — no has-work, #116)
-      // and queue-excluded while `reconnecting` anyway, so seed the confirmed-idle
-      // eligibility DIRECTLY (#398): an awaiting agent surfaces the moment its
-      // reconnecting flag clears — the pre-grace boot UX, no 5s wait.
+      // Seed busy from the snapshot (task 450): a window opened mid-run shows a
+      // working agent's blue dot immediately instead of waiting for its next
+      // `session://state` transition. Intersected with the session records so a
+      // stray id (e.g. a #72 shell terminal) never leaks in.
+      sessionBusy: Object.fromEntries(
+        views.filter((v) => busy.has(v.id)).map((v) => [v.id, true] as const),
+      ),
+      // Confirmed-idle eligibility (#398), liveness-aware since task 450: seed true
+      // only for views that are neither busy (a working agent must not sit in the
+      // Attention queue — its busy→idle settle re-admits it) nor crashed (an exit
+      // overlay is not "awaiting input"). The rest keep the pre-grace boot UX: an
+      // awaiting agent surfaces the moment its reconnecting flag clears, no 5s wait
+      // (a resume never goes busy on its own — no has-work, #116).
       attentionEligible: Object.fromEntries(
-        views.map((v) => [v.id, true] as const),
+        views
+          .filter((v) => !busy.has(v.id) && v.exitedCode === undefined)
+          .map((v) => [v.id, true] as const),
       ),
       // A fresh boot carries no live turn-complete hook state; a resumed session
       // reverts to heuristic-driven until its first post-resume hook (bridge).
@@ -4553,9 +4588,20 @@ export const useStore = create<AppState>()((set, get) => ({
       // render. Live mutations sync via `schedule://*` / `recurring://*`.
       schedules: boot.schedules,
       recurrings: boot.recurrings,
-      // Nothing to resume ⇒ the boot decorations (#359) may run as soon as the first
-      // paint is out; otherwise they wait for the backstop below.
-      resumeSettled: views.length === 0,
+      // Snapshot exit codes for NON-session ids are dead #72 shell-terminal panels
+      // (they share the PTY registry but aren't in `sessions`) — seed their Restart
+      // overlay (task 450). An intentional panel × removed the PTY from the manager
+      // entirely, so it never appears here.
+      terminalExits: Object.fromEntries(
+        Object.entries(exitCodes)
+          .filter(([id]) => !boot.sessions.some((r) => r.id === id))
+          .map(([id, code]) => [id, code ?? null] as const),
+      ),
+      // Nothing actually reconnecting ⇒ the boot decorations (#359) may run as soon
+      // as the first paint is out; otherwise they wait for the backstop below. Since
+      // task 450 this keys on the liveness-aware flag, not "any session exists" — a
+      // window opened mid-run (everything live/exited) settles immediately.
+      resumeSettled: !views.some((v) => v.reconnecting),
       booted: true,
     });
     // Keep the <html> data-platform attribute (written synchronously from the UA in

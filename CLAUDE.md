@@ -770,7 +770,11 @@ steady-state boot pays **zero** probe cost.
   gone; `?canvas=<id>` survives one release as a **compat parse** (a full shell preset
   to that canvas, keeping the real `canvas-<id>` Tauri label so the per-label view
   purge/attach stay correct). Closing a non-last window never kills a PTY (agents run
-  backend-side); the last window closing still quits the app (`kill_all`).
+  backend-side); the last window closing still quits the app (`kill_all`). `boot_state`
+  now carries PTY liveness (`live_ids` / retained `exit_codes` / `busy_ids`, task 450)
+  and is fetched only after the listener wave, so a window opened mid-run seeds
+  crashed/live/busy state instead of flashing every session "Reconnecting…" — and the
+  snapshot can never lose to a broadcast in the registration gap.
 - **Scheduled sessions (#93/#94/#125):** an agent can be **scheduled to launch later**.
   The **"+ Schedule session"** sidebar button / **⌘⇧N** opens the new-session modal
   in **schedule mode** — folder → branch (incl. **"+ add branch"** to create a new

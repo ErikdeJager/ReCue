@@ -892,4 +892,13 @@ export interface BootState {
   platform: string;
   /** Windows build number, `0` elsewhere (#140). */
   windows_build: number;
+  /** Task 450: PTY liveness at snapshot time — these three come from the **live**
+   * `SessionManager`, not the persisted store: which registered ids have a running
+   * child right now. Lets a window opened mid-run skip the "Reconnecting…" flash. */
+  live_ids: string[];
+  /** Task 450: dead-but-kept PTYs → their retained exit code (the exit overlay +
+   * Restart state); spans agent sessions AND #72 shell-terminal panels. */
+  exit_codes: Record<string, number | null>;
+  /** Task 450: ids the backend monitor currently reads as busy (#42). */
+  busy_ids: string[];
 }

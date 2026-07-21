@@ -314,6 +314,11 @@ struct ActivityState {
     /// worker so the #97 auto-name + #138 forkable globs never run for a non-claude
     /// session (which would be meaningless / could mis-report forkable).
     uses_claude_log: bool,
+    /// The monitor's last **emitted** busy value (#42), stamped BEFORE the `State` event
+    /// is sent so a post-subscribe snapshot (`SessionManager::liveness`) never regresses
+    /// behind a broadcast the window has already seen — task 450. Read only by that
+    /// snapshot; the monitor's own hysteresis stays in its thread-local `BusyDecision`.
+    busy: AtomicBool,
 }
 
 /// Per-session activity map shared between the reader threads, `write_stdin`, and
@@ -331,6 +336,12 @@ struct ExitState {
     /// The exit waiter has reaped the child (its `wait()` returned) — lets a kill escalation
     /// stop early instead of SIGKILLing a process that already died on the SIGHUP.
     reaped: AtomicBool,
+    /// The reaped child's exit code, retained for the task-450 boot-liveness snapshot
+    /// (`SessionManager::liveness`): a dead-but-kept session (exit overlay + Restart) only
+    /// ever carried its code on the one `Exited` event, so a window opened later had no way
+    /// to seed the overlay. Set BEFORE `reaped` flips true, so any reader that observes
+    /// `reaped` finds the code.
+    code: std::sync::OnceLock<Option<i32>>,
     /// Suppress this generation's `Exited` event entirely. Set by (a) `kill_all` at app
     /// shutdown — now that the exit fires promptly it could reach a still-live webview, and
     /// an agent that exits 0 on SIGHUP would read as a **clean exit**, so the #63 clean-exit
@@ -603,6 +614,18 @@ pub struct SessionManager {
     // the live Settings toggle), set once at boot by `hook_bridge::HookBridge::start`.
     // Empty in tests / when the bridge failed to bind ⇒ zero injection (heuristic-only).
     hook: std::sync::OnceLock<crate::hook_bridge::HookConfig>,
+}
+
+/// One consistent PTY-liveness snapshot for the task-450 boot payload — see
+/// [`SessionManager::liveness`]. Rides `commands::BootState` so a window opened mid-run
+/// seeds true backend state (crashed → overlay, live → no "Reconnecting…", busy → blue).
+pub struct PtyLiveness {
+    /// Registered ids whose child is still running (registered ∧ not reaped).
+    pub live_ids: Vec<String>,
+    /// Dead-but-kept ids → the retained exit code (`None` when `wait()` itself failed).
+    pub exit_codes: std::collections::HashMap<String, Option<i32>>,
+    /// Ids the monitor currently reads as busy (#42, last emitted value).
+    pub busy_ids: Vec<String>,
 }
 
 impl SessionManager {
@@ -1157,6 +1180,50 @@ impl SessionManager {
             .unwrap_or_default()
     }
 
+    /// One consistent PTY-liveness snapshot for the task-450 boot payload (`boot_state`):
+    /// which registered ids have a **running** child right now (`live_ids`), which are
+    /// dead-but-kept with their retained exit code (`exit_codes` — the exit overlay +
+    /// Restart state a window opened mid-run must seed; only a natural exit keeps the
+    /// entry, `kill_session` removes it), and which the monitor currently reads as busy
+    /// (`busy_ids`, the last emitted #42 value). Note the map spans agent sessions AND
+    /// #72 shell-terminal panels — they share the registry; the frontend splits them.
+    pub fn liveness(&self) -> PtyLiveness {
+        // The two locks are taken **sequentially, never nested**. A session mid-transition
+        // between the reads is corrected by the very event the (already-subscribed) window
+        // will receive — every carried datum is written before its corresponding emit, so
+        // the snapshot can never be older than a broadcast the window has seen, and an
+        // event delivered both ways applies idempotently. Fail-soft: a poisoned lock reads
+        // as empty, like `live_session_ids`.
+        let mut live_ids = Vec::new();
+        let mut exit_codes = std::collections::HashMap::new();
+        if let Ok(sessions) = self.lock_sessions() {
+            for (id, session) in sessions.iter() {
+                if session.exit.reaped.load(Ordering::SeqCst) {
+                    // `code` is set BEFORE `reaped` flips true (see `ExitState::code`),
+                    // so observing `reaped` guarantees the code is present.
+                    exit_codes.insert(id.clone(), session.exit.code.get().copied().flatten());
+                } else {
+                    live_ids.push(id.clone());
+                }
+            }
+        }
+        let busy_ids = self
+            .activity
+            .lock()
+            .map(|map| {
+                map.iter()
+                    .filter(|(_, state)| state.busy.load(Ordering::SeqCst))
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        PtyLiveness {
+            live_ids,
+            exit_codes,
+            busy_ids,
+        }
+    }
+
     /// A session's child pid — on unix also its **process-group id** (#354). Used only by the
     /// unix PTY tests, to assert the whole group is gone after an exit / a kill.
     #[cfg(all(test, unix))]
@@ -1323,6 +1390,7 @@ impl SessionManager {
             last_resize: AtomicU64::new(0),
             seeded: AtomicBool::new(seeded),
             uses_claude_log,
+            busy: AtomicBool::new(false),
         });
         if let Ok(mut map) = self.activity.lock() {
             map.insert(id.clone(), Arc::clone(&activity_state));
@@ -1685,6 +1753,9 @@ fn exit_waiter(
     //    before: portable-pty maps a **signal death to exit code 1**, never 0 — so a killed
     //    agent can never be misread as a clean code-0 exit and have its record forgotten (#63).
     let code = child.wait().ok().map(|status| status.exit_code() as i32);
+    // Retain the code for the task-450 boot-liveness snapshot — BEFORE `reaped` flips
+    // true, so any reader observing `reaped` finds it (see `ExitState::code`).
+    let _ = exit.code.set(code);
     exit.reaped.store(true, Ordering::SeqCst);
 
     // 2. Give the reader a bounded moment to drain the tail and hit EOF, so trailing output
@@ -1813,7 +1884,7 @@ fn monitor_loop(
         // Snapshot the two raw guarded activity signals per session under the lock, then
         // release it before sending. Both read the same atomics; `active_fast` gates the
         // clean-turn settle, `active_hold` the sticky background hold (#315).
-        let snapshot: Vec<(String, bool, bool, bool, bool)> = {
+        let snapshot: Vec<(String, bool, bool, bool, bool, Arc<ActivityState>)> = {
             let map = match activity.lock() {
                 Ok(map) => map,
                 Err(poisoned) => poisoned.into_inner(),
@@ -1853,6 +1924,9 @@ fn monitor_loop(
                         active_hold,
                         report_repaint || resize_repaint,
                         state.uses_claude_log,
+                        // Carried out of the lock so the transition branch below can
+                        // stamp the queryable `busy` flag (task 450) without re-locking.
+                        Arc::clone(state),
                     )
                 })
                 .collect()
@@ -1860,11 +1934,15 @@ fn monitor_loop(
         // Forget sessions that are gone (killed/exited) so a reused id starts fresh.
         let live: HashSet<&str> = snapshot.iter().map(|(id, ..)| id.as_str()).collect();
         decisions.retain(|id, _| live.contains(id.as_str()));
-        for (id, active_fast, active_hold, repaint_suppress, uses_claude_log) in &snapshot {
+        for (id, active_fast, active_hold, repaint_suppress, uses_claude_log, state) in &snapshot {
             let st = decisions.entry(id.clone()).or_default();
             let prev = st.emitted;
             let busy = decide_busy(st, now, *active_fast, *active_hold, *repaint_suppress);
             if prev != busy {
+                // Stamp the queryable busy flag BEFORE sending the event (task 450), so
+                // a `liveness()` snapshot taken by an already-subscribed window can
+                // never be older than a `State` broadcast that window has received.
+                state.busy.store(busy, Ordering::SeqCst);
                 if events
                     .send(SessionEvent::State {
                         id: id.clone(),
@@ -3033,6 +3111,65 @@ mod tests {
             Some(0),
             "a killed agent must never read as a clean (record-deleting) exit"
         );
+    }
+
+    // --- Boot-liveness snapshot (task 450) ---
+
+    /// A naturally-exited session stays registered (exit overlay + Restart) and the
+    /// snapshot must carry its **retained** exit code — set before `reaped` flips, so
+    /// once `Exited` has been observed the code is guaranteed present — while its id
+    /// must no longer read as live.
+    #[cfg(unix)]
+    #[test]
+    fn liveness_retains_exit_code_after_natural_exit() {
+        let (mgr, rx) = manager();
+        let info = mgr
+            .spawn_program("sh", &["-c", "exit 7"], &tmp(), None)
+            .expect("spawn sh");
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(SessionEvent::Exited { code, .. }) => {
+                    assert_eq!(code, Some(7));
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => panic!("timed out waiting for the exit event"),
+            }
+        }
+        let live = mgr.liveness();
+        assert_eq!(
+            live.exit_codes.get(&info.id),
+            Some(&Some(7)),
+            "the dead-but-kept session must carry its retained exit code"
+        );
+        assert!(
+            !live.live_ids.contains(&info.id),
+            "a reaped session must not read as live"
+        );
+    }
+
+    /// A running child reads as live (and only live): present in `live_ids`, absent
+    /// from `exit_codes` and — with no output-driven work — from `busy_ids`. After
+    /// `kill_session` removes the entry, a fresh snapshot must not mention it at all.
+    #[cfg(unix)]
+    #[test]
+    fn liveness_reports_running_child_live_and_not_busy() {
+        let (mgr, _rx) = manager();
+        let info = mgr
+            .spawn_program("sh", &["-c", "sleep 30"], &tmp(), None)
+            .expect("spawn sh");
+        let live = mgr.liveness();
+        assert!(live.live_ids.contains(&info.id), "running child is live");
+        assert!(!live.exit_codes.contains_key(&info.id));
+        assert!(
+            !live.busy_ids.contains(&info.id),
+            "no submitted input / seed ⇒ never busy (#116)"
+        );
+        mgr.kill_session(&info.id).expect("kill");
+        let after = mgr.liveness();
+        assert!(!after.live_ids.contains(&info.id));
+        assert!(!after.exit_codes.contains_key(&info.id));
+        assert!(!after.busy_ids.contains(&info.id));
     }
 
     /// App shutdown (`kill_all`) must be **silent** (#354): now that the exit fires promptly, an
