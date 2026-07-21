@@ -4055,3 +4055,57 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Upgrade behavior preserved deliberately: a pre-439 file or an install already in the bug state (marker absent, no main entry) still gets exactly ONE task-443 maximized launch, then is marked — identical to today, no migration write.
 - `register("main")` clears the stash defensively even though no mid-run main-recreate path exists today (Dock Reopen focuses or opens app-*).
 - Included a 1–2 line CLAUDE.md doc touch (the stale 443 "no saved main entry" sentence) as part of the implementer's scope.
+
+## Task 453
+
+- Chose the card's "extend the #357 renderer override beyond Linux" option over restoring a per-window DOM guard: the #105 artifact is unverified on the current (post-#348 hidden-until-painted, per-webview) window stack, tasks 427/437 deliberately granted full app windows WebGL, and a blanket DOM default would certainly regress secondary-window rendering; the real-box checklist's decision rule governs a follow-up default flip at the named seam (rendererDecision() + WINDOW_KIND).
+- Default behavior stays byte-for-byte unchanged on every OS: "auto" off Linux remains the no-probe WebGL short-circuit (the #346 probe canvas is still never constructed on macOS/Windows); only user-forced "webgl"/"dom" gains effect there.
+- Kept the persisted key name `linuxTerminalRenderer` (no rename/migration) so existing Linux overrides survive; documented as cross-platform since task 453.
+- Surfaced the whole Settings → Rendering section on macOS/Windows, gating only the DMA-BUF control (and its diagnostics lines) to Linux inside the pane; diagnostics off Linux show `probed: n/a` instead of "no WebGL context".
+- The #364 context-loss latch keeps outranking a forced "webgl" on every OS (webglPermitted() unchanged); off Linux a post-loss settings apply now also converges still-live addons to DOM, matching Linux's existing latch behavior.
+- Recorded the real-box checklist (macOS Retina + Windows fractional scaling + override round-trip + follow-up decision rule) in TRAJECTORY_TO_WINDOWS.md, with a short no-change note in TRAJECTORY_TO_LINUX.md — there is no macOS trajectory file, and TRAJECTORY_TO_WINDOWS.md already hosts cross-OS real-box matrices (tasks 443/444 precedent).
+- No Rust changes (early_settings.rs only touches the key in a test fixture), no version bump, no patch notes.
+
+## Task 448
+
+- Combined two of the card's three mitigations (terminal-focus passthrough + honoring confirmDestructive) and rejected the third: the close-panel default stays "mod+w" (OS close-tab convention; a platform-split default would force a platform param through chordForAction/keybindMapFor; the two guards remove the hazard).
+- Passthrough keys off the event (ctrlKey && !metaKey && !shiftKey) + target inside .xterm, not the platform string — macOS default ⌘W is byte-for-byte unchanged, while a rebound bare-Ctrl chord gets the same protection on every OS (the keybind rework's "bare ⌃-chords reach the terminal" rule).
+- Ctrl+Shift chords are exempt from the passthrough (the Windows Terminal / GNOME Terminal convention), so rebinding close-panel to Ctrl+Shift+W yields a chord that works even in terminals; Alt is allowed through (AltGr layouts).
+- Scoped the passthrough to close-panel only — the other Ctrl-as-mod readline collisions (Ctrl+E/K/D/B/F/N/O) are non-destructive and stay the documented status quo.
+- The confirm gate covers the whole destructive keyboard fall-through: Overview agent/schedule/recurring AND the Attention branch (uniform "keyboard kill+forget asks first"), though the card names only Overview; the Attention ⌘⏎ dismiss stays instant.
+- Mouse × buttons stay un-gated (narrowing #425's keyboard-mirrors-mouse rule for the chord only, per the review finding), and the gate honors the existing confirmDestructive setting (default on) rather than adding a new one.
+- Confirm UI is a new lazy ConfirmRemoveModal in ModalHost mirroring CanvasCloseModal (danger button autofocused so Enter confirms, Esc cancels; stale-target auto-cancel), and removePrompt is a transient per-window store slice added to anyModalOpen.
+- Existing #425 store tests are updated to run with confirmDestructive:false to keep pinning the instant paths; no version bump / patch notes (maintainer batches releases).
+
+## Task 451
+
+- Reason-gate the unlock: read `git worktree list --porcelain` on the NotManaged path and unlock ONLY when the entry is locked with the exact spawn-time reason "ReCue dev-container session" (extracted into a single `container::WORKTREE_LOCK_REASON` constant shared by the 3 lock sites and the gate); a foreign/reason-less lock or an unreadable listing fails CLOSED (no unlock — today's behavior), never a blind unlock.
+- The unlock lives inside `cleanup_worktree_blocking`'s NotManaged branch (after the InUse and dir-exists checks, before the return), so both callers — the Rust clean-exit forget and the `cleanup_worktree_if_empty` command — get it, and a second dev-container session sharing the worktree keeps the lock via the earlier InUse short-circuit.
+- Also remove the frontend `!managed` short-circuit in store.ts `cleanupWorktreeIfEmpty` (its own comment calls it a mere round-trip optimization): without this the lock still leaks on the common UI-Remove/panel-close path, which never reaches the backend; the matching store.worktrees.test.ts case is flipped to assert the backend IS called and nothing is removed/toasted.
+- Path matching uses the existing `same_path_norm` (canonicalize-first, `\`→`/`, Windows case-fold) against the porcelain entry path.
+- Out of scope by choice: the Removed early-return (dest dir already gone — a stale locked admin entry is not unlocked/pruned here), unlocking at app quit/kill_all (records persist + resume, the lock must persist too), re-locking on resume, and any change to the managed branch / remove_worktree / delete_worktree (byte-for-byte).
+- Doc touch: fix the now-stale CLAUDE.md sentence "unlocked by `remove_worktree`" (dev-container bullet, ~line 183); no version bump / patch notes (fix PRs never bump).
+- Testing: a pure unit test for the new `recue_container_lock_held` gate + extending git.rs's real-git `worktree_lock_blocks_remove_until_unlock` to pin the lock-reason porcelain round-trip; `cleanup_worktree_blocking` itself needs an AppHandle so it stays covered at the pure-core + git-helper level (project discipline); the docker/GUI smoke is flagged for a human run in the PR.
+
+## Task 454
+
+- Root cause pinned from code + tauri 2.11.3's own rustdoc without a Windows repro box: `open_app_window` is a synchronous `#[tauri::command]` calling `WebviewWindowBuilder::build()`, which tauri documents as deadlocking on Windows when run in a sync command/event handler (wry#583 — the WebView2 controller-creation completion can't be dispatched while the IPC handler blocks the main thread); real-box confirmation is recorded as a TRAJECTORY_TO_WINDOWS.md checklist per the card's instruction.
+- Chose the attribute-only fix `#[tauri::command(async)]` (verified in tauri-macros 2.6.3: the sync body then runs via async_runtime::spawn on a worker thread) over `pub async fn`, so the menu.rs / single-instance / Reopen direct Rust callers stay untouched.
+- Included one defensive hardening beyond the reported repro: the single-instance second-launch path now spawns its creation on a separate thread from INSIDE the existing run_on_main_thread closure (kept as the boot-ordering barrier so the Store is managed) — tauri's note also covers "event handlers" and that path is Windows-reachable; applied platform-neutrally, no #[cfg].
+- Deliberately left the macOS-only creation sites (File → New Window menu handler, Dock Reopen) and the .setup() boot-restore path byte-for-byte unchanged (documented-supported contexts; CLAUDE.md macOS-arm rule).
+- No frontend changes: all three UI triggers (sidebar repo menu, Ctrl+Alt+N keybind, Canvas pop-out) funnel into the same command and are fire-and-forget; the Sidebar's existing error toast simply becomes functional once the promise can settle.
+- The only automatable regression guard is a fn-pointer signature-pinning unit test plus invariant comments — the deadlock is not reproducible under tauri::test::mock_app or on CI.
+- Audited and ruled out the other suspects the card named: window_state.rs/primary.rs are lock-clean (queries before locks, guards dropped before emits/writes), so no secondary ABBA deadlock fix is needed there.
+
+## Task 450
+
+- Payload shape: three additive BootState fields — live_ids: Vec<String>, exit_codes: HashMap<String, Option<i32>> (dead-but-kept PTYs, None = unknown code), busy_ids: Vec<String> — filled by the boot_state command from a new SessionManager::liveness(); boot_state_from stays pure/store-only and returns them empty.
+- Race fix = subscribe-then-fetch: moved the one bootState fetch to after the listener wave (the codebase's own documented pattern for primaryWindow/autoContinueSnapshot/fileClaims), paired with write-before-emit on every carried datum (exit code set before reaped, busy stamped before the State send); rejected event-buffering/sequence-number schemes since gap events are lost at the Tauri layer, not reordered.
+- Accepted the small boot-latency delta (fetch no longer overlaps the listener wave, only the primaryWindow fetch) and mitigated it by memoizing the Windows cmd /C ver probe in a OnceLock.
+- Included the busy set in "liveness" (card names only live ids + exit codes): without it a mid-turn agent seeds idle and wrongly enters the new window's Attention queue — the same symptom cluster; implemented as a monitor-thread stamp on ActivityState only, no #315 heuristic changes.
+- Included dead shell-terminal panels (#72): same manager map, so their retained exit codes seed terminalExits in new windows (Restart overlay); intentional kills are removed from the map and never appear.
+- Reconnecting rule: exit_codes entry → exited overlay; live_ids → alive; neither → reconnecting only for resume-capable agents (agentSupportsResume) — a dormant codex/opencode record no longer flashes "Reconnecting…" 4s at true boot either (judged a bug-fix, not a regression).
+- True-boot nuance accepted: a session already resumed by fetch time skips the "Reconnecting…" overlay (its PTY is genuinely up; scrollback covers content); the 4s backstop timer stays unconditional for the genuinely-pending case.
+- booting/resumeSettled now derive from "any view reconnecting" instead of "any sessions exist", so a mid-run window gets no exit-toast-suppression window and never defers the tier-2 git volley.
+- Deliberately NOT carried: turn-state (sessionTurnState/hookSeen — the hook bridge re-admits on its next signal), sessionIdleSince FIFO stamps (createdAt fallback covers it), cross-window exit-toast dedup (epic-deferred), recurring-child pointer repair beyond generic seeding.
+- Mapped the v2.0.0 review line numbers via `git show v2.0.0:src/store.ts`: 4263 = the applyBootState(await bootPromise) apply of the pre-subscription fetch; 4369/4370 = the blanket reconnecting:true mapping — confirming the three defects' exact sites.
