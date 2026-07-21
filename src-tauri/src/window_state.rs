@@ -21,12 +21,21 @@
 //!   maximized only the flag is updated, so `x/y/width/height` stay the last
 //!   NON-maximized geometry (the un-maximize / restore target). At boot restore
 //!   re-maximizes AFTER applying that geometry, so the OS un-maximize target is the
-//!   stored frame. On a **fresh install** (no saved `main` entry) the main window
-//!   opens maximized by default (its builder 1280×832 becomes the un-maximize
-//!   target); additional `app-*` windows still open at 1280×832 unless a previously
-//!   maximized one is being restored. Maximize is applied while the window is still
-//!   hidden (#348), so there is no flash. macOS uses AppKit **zoom** (fills the
-//!   visible frame minus the menu bar/Dock); Windows/X11 use true maximize.
+//!   stored frame. On a **fresh install** — the explicit `window_state_initialized`
+//!   store marker not yet set (task 452), never the mere absence of a saved `main`
+//!   entry — the main window opens maximized by default (its builder 1280×832
+//!   becomes the un-maximize target); additional `app-*` windows still open at
+//!   1280×832 unless a previously maximized one is being restored. Maximize is
+//!   applied while the window is still hidden (#348), so there is no flash. macOS
+//!   uses AppKit **zoom** (fills the visible frame minus the menu bar/Dock);
+//!   Windows/X11 use true maximize.
+//! - **Main's geometry survives a mid-run close (task 452).** Closing the main
+//!   window while an `app-*` window survives retains main's last-known entry
+//!   (stashed out of the live set, frozen), so quitting later from the surviving
+//!   window still persists main's frame and the next launch restores it instead of
+//!   misreading the absent entry as a fresh install. `app-*` entries stay pruned on
+//!   close — they decide WHAT reopens, while main is unconditionally recreated at
+//!   every boot and its entry is pure geometry.
 
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -85,6 +94,17 @@ pub fn merge_action(a: SaveAction, b: SaveAction) -> SaveAction {
 #[derive(Default, Debug)]
 pub struct WindowSet {
     windows: Vec<PersistedWindow>,
+    /// Main's last-known entry, retained after its window was destroyed mid-run
+    /// (task 452). Main is special: it is unconditionally recreated at every boot
+    /// (from `tauri.conf.json`), so its persisted entry is pure geometry —
+    /// presence never means "main was open at quit" — and dropping it would make
+    /// the next launch misread the install as fresh (the task-443 maximized
+    /// default) and discard the remembered frame. `app-*` entries DO decide what
+    /// reopens, so a closed extra must stay pruned. Not part of `windows`, so
+    /// every live-count rule (the would-empty exit rule) keeps counting LIVE
+    /// windows only; geometry events for a closed main find no live entry and
+    /// leave the stash frozen.
+    closed_main: Option<PersistedWindow>,
     /// Set on `ExitRequested` (the ⌘Q/`app.exit` path) or when the LAST window is
     /// destroyed (the last-window-close exit path). Once exiting, the at-quit
     /// snapshot is authoritative: later prunes and debounced saves are suppressed
@@ -102,6 +122,12 @@ impl WindowSet {
             || self.windows.iter().any(|w| w.label == entry.label)
         {
             return SaveAction::None;
+        }
+        // Task 452: a live main supersedes a stale retained entry (defensive —
+        // nothing recreates a window labelled `main` mid-run today; this keeps the
+        // "no duplicate main in the snapshot" invariant local).
+        if entry.label == "main" {
+            self.closed_main = None;
         }
         self.windows.push(entry);
         SaveAction::FlushNow
@@ -167,7 +193,9 @@ impl WindowSet {
     /// there), so mark exiting and flush the final window — its latest bounds are
     /// already in the entry — so it is restored next launch. Otherwise prune and
     /// flush promptly (close is singular; a prompt persist can't be lost to a
-    /// quit inside the debounce window).
+    /// quit inside the debounce window). A pruned `main` is retained in the
+    /// [`Self::closed_main`] stash (task 452) so its geometry still persists at
+    /// quit; the would-empty rule above keeps counting LIVE windows only.
     pub fn destroyed(&mut self, label: &str) -> SaveAction {
         if self.exiting {
             return SaveAction::None;
@@ -179,7 +207,10 @@ impl WindowSet {
             self.exiting = true;
             return SaveAction::FlushNow;
         }
-        self.windows.remove(pos);
+        let removed = self.windows.remove(pos);
+        if removed.label == "main" {
+            self.closed_main = Some(removed);
+        }
         SaveAction::FlushNow
     }
 
@@ -194,9 +225,15 @@ impl WindowSet {
         SaveAction::FlushNow
     }
 
-    /// The current tracked set (what a flush persists).
+    /// The current tracked set (what a flush persists) — the live windows plus a
+    /// retained mid-run-closed `main` entry, if any (task 452; `restorable`
+    /// accepts `main` at any position and dedupes by label, first wins).
     pub fn snapshot(&self) -> Vec<PersistedWindow> {
-        self.windows.clone()
+        let mut windows = self.windows.clone();
+        if let Some(main) = &self.closed_main {
+            windows.push(main.clone());
+        }
+        windows
     }
 
     /// Whether the app is exiting (debounced saves are suppressed then — the exit
@@ -301,6 +338,15 @@ pub fn restorable(
         }
     }
     (main, extras)
+}
+
+/// Task 452: whether the main window should open maximized at restore. A
+/// saved entry's flag always wins; with NO saved entry, default-maximize
+/// ONLY on a genuinely fresh install (the explicit store marker) — never
+/// merely because the entry is absent (task 443's original inference, which
+/// misread a mid-run-closed main as a fresh install).
+pub fn main_restore_maximized(entry: Option<&PersistedWindow>, fresh_install: bool) -> bool {
+    entry.map(|e| e.maximized).unwrap_or(fresh_install)
 }
 
 // ---------------------------------------------------------------------------
@@ -534,9 +580,12 @@ pub fn restore_windows(app: &AppHandle) {
     // (a) The main window: apply clamped bounds while it is still hidden.
     // On Wayland set_position is compositor-refused — size-only there.
     let mut applied: Option<(i32, i32, u32, u32)> = None;
-    // Task 443: with a saved entry, honor its maximized flag; with NO saved entry
-    // (fresh install) default to maximized so the window fills the desktop.
-    let maximized = main_entry.as_ref().map(|e| e.maximized).unwrap_or(true);
+    // Task 443/452: with a saved entry, honor its maximized flag; with NO saved
+    // entry default to maximized ONLY on a genuinely fresh install (the explicit
+    // `window_state_initialized` store marker), so a main closed mid-run and
+    // absent from the persisted set never re-reads as fresh.
+    let fresh_install = !store.window_state_initialized();
+    let maximized = main_restore_maximized(main_entry.as_ref(), fresh_install);
     if let Some(entry) = &main_entry {
         if let Some((x, y, width, height)) = clamp_bounds(entry, &monitors) {
             if let Some(window) = app.get_webview_window("main") {
@@ -556,6 +605,11 @@ pub fn restore_windows(app: &AppHandle) {
         }
     }
     register(app, "main", None, None, applied, maximized);
+    // Task 452: mark the restore pass as having run — one-shot, fail-open, no
+    // redundant disk write on later boots.
+    if fresh_install {
+        let _ = store.set_window_state_initialized();
+    }
 
     // (b) The extras: fresh app-<uuid> windows with the saved presets + bounds +
     // maximized flag (task 443 — a previously maximized app window re-maximizes).
@@ -819,6 +873,144 @@ mod tests {
         assert_eq!(labels(&set), vec!["main", "app-a", "app-b"]);
     }
 
+    // -- WindowSet: retained mid-run-closed main (task 452) --------------------
+
+    #[test]
+    fn destroyed_main_mid_run_retains_its_geometry() {
+        // Closing main while an app-* window survives keeps main's entry in the
+        // snapshot (frozen geometry), so a later quit still persists its frame.
+        let mut set = WindowSet::default();
+        set.register(win("main", 40, 60, 1280, 832));
+        set.register(win("app-a", 0, 0, 900, 700));
+        assert_eq!(set.destroyed("main"), SaveAction::FlushNow);
+        assert!(!set.is_exiting());
+        let snap = set.snapshot();
+        let mut got: Vec<&str> = snap.iter().map(|w| w.label.as_str()).collect();
+        got.sort();
+        assert_eq!(got, vec!["app-a", "main"]);
+        let main = snap.iter().find(|w| w.label == "main").expect("retained");
+        assert_eq!(
+            (main.x, main.y, main.width, main.height),
+            (40, 60, 1280, 832)
+        );
+    }
+
+    #[test]
+    fn retained_main_round_trips_its_maximized_flag() {
+        let mut set = WindowSet::default();
+        set.register(win("main", 40, 60, 1280, 832));
+        set.register(win("app-a", 0, 0, 900, 700));
+        set.set_maximized("main", true);
+        set.destroyed("main");
+        let snap = set.snapshot();
+        let main = snap.iter().find(|w| w.label == "main").expect("retained");
+        assert!(main.maximized);
+    }
+
+    #[test]
+    fn last_live_window_close_after_main_closed_still_exits() {
+        // The would-empty rule counts LIVE windows only — the retained main is
+        // not in the live set, so closing the last app-* window IS the exit.
+        let mut set = WindowSet::default();
+        set.register(win("main", 40, 60, 1280, 832));
+        set.register(win("app-a", 0, 0, 900, 700));
+        assert_eq!(set.destroyed("main"), SaveAction::FlushNow);
+        assert_eq!(set.destroyed("app-a"), SaveAction::FlushNow);
+        assert!(set.is_exiting());
+        let snap = set.snapshot();
+        let mut got: Vec<&str> = snap.iter().map(|w| w.label.as_str()).collect();
+        got.sort();
+        assert_eq!(got, vec!["app-a", "main"]);
+    }
+
+    #[test]
+    fn exit_requested_after_main_closed_flushes_main_too() {
+        // The ⌘Q path from a surviving app-* window: the at-quit snapshot carries
+        // the retained main, and teardown's Destroyed storm is a no-op.
+        let mut set = WindowSet::default();
+        set.register(win("main", 40, 60, 1280, 832));
+        set.register(win("app-a", 0, 0, 900, 700));
+        set.destroyed("main");
+        assert_eq!(set.exit_requested(), SaveAction::FlushNow);
+        let snap = set.snapshot();
+        let mut got: Vec<&str> = snap.iter().map(|w| w.label.as_str()).collect();
+        got.sort();
+        assert_eq!(got, vec!["app-a", "main"]);
+        assert_eq!(set.destroyed("app-a"), SaveAction::None);
+    }
+
+    #[test]
+    fn closed_main_ignores_geometry_events() {
+        // A closed main has no live entry — geometry/flag events return None and
+        // the retained entry stays frozen at its last-known frame.
+        let mut set = WindowSet::default();
+        set.register(win("main", 40, 60, 1280, 832));
+        set.register(win("app-a", 0, 0, 900, 700));
+        set.destroyed("main");
+        assert_eq!(set.moved("main", 1, 2), SaveAction::None);
+        assert_eq!(set.resized("main", 500, 400), SaveAction::None);
+        assert_eq!(set.set_maximized("main", true), SaveAction::None);
+        let snap = set.snapshot();
+        let main = snap.iter().find(|w| w.label == "main").expect("retained");
+        assert_eq!(
+            (main.x, main.y, main.width, main.height),
+            (40, 60, 1280, 832)
+        );
+        assert!(!main.maximized);
+    }
+
+    #[test]
+    fn register_main_replaces_the_retained_entry() {
+        // Defensive/future-proof: a re-registered live main supersedes the stash,
+        // so the snapshot never carries two main entries.
+        let mut set = WindowSet::default();
+        set.register(win("main", 40, 60, 1280, 832));
+        set.register(win("app-a", 0, 0, 900, 700));
+        set.destroyed("main");
+        assert_eq!(
+            set.register(win("main", 5, 6, 1000, 700)),
+            SaveAction::FlushNow
+        );
+        let snap = set.snapshot();
+        let mains: Vec<&PersistedWindow> = snap.iter().filter(|w| w.label == "main").collect();
+        assert_eq!(mains.len(), 1);
+        assert_eq!(
+            (mains[0].x, mains[0].y, mains[0].width, mains[0].height),
+            (5, 6, 1000, 700)
+        );
+    }
+
+    #[test]
+    fn destroyed_app_window_still_prunes() {
+        // No stash for extras: app-* entries decide what reopens, so a closed one
+        // must stay pruned.
+        let mut set = WindowSet::default();
+        set.register(win("main", 0, 0, 1280, 832));
+        set.register(win("app-a", 0, 0, 900, 700));
+        set.register(win("app-b", 10, 10, 800, 600));
+        assert_eq!(set.destroyed("app-a"), SaveAction::FlushNow);
+        assert_eq!(labels(&set), vec!["main", "app-b"]);
+    }
+
+    // -- main_restore_maximized (task 452) -------------------------------------
+
+    #[test]
+    fn main_restore_maximized_saved_entry_flag_always_wins() {
+        let mut saved = win("main", 40, 60, 1280, 832);
+        saved.maximized = true;
+        assert!(main_restore_maximized(Some(&saved), false));
+        saved.maximized = false;
+        assert!(!main_restore_maximized(Some(&saved), true));
+    }
+
+    #[test]
+    fn main_restore_maximized_no_entry_keys_off_the_fresh_install_marker() {
+        // A genuinely fresh install defaults to maximized; a marked install with
+        // no main entry (lost file / pre-452 mid-run close) does NOT.
+        assert!(main_restore_maximized(None, true));
+        assert!(!main_restore_maximized(None, false));
+    }
+
     // -- clamp_bounds ---------------------------------------------------------
 
     const PRIMARY: MonitorRect = MonitorRect {
@@ -1060,5 +1252,40 @@ mod tests {
         // A teardown prune after ExitRequested must not shrink the saved set.
         note_destroyed(handle, "main");
         assert_eq!(handle.state::<Store>().window_state(), before);
+    }
+
+    #[test]
+    fn glue_mid_run_main_close_persists_its_entry() {
+        // Task 452: closing main while an app-* window survives keeps main's
+        // geometry in the persisted set, so quitting later from the surviving
+        // window can't lose it (the pre-452 bug: the next launch misread the
+        // missing entry as a fresh install and opened main maximized at default
+        // placement).
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+        app.manage(Store::load(temp_store_path("glue-main-close")));
+        app.manage(init(handle));
+
+        register(handle, "main", None, None, Some((40, 60, 1280, 832)), false);
+        register(handle, "app-x", None, None, Some((0, 0, 900, 700)), false);
+
+        note_destroyed(handle, "main");
+        let saved = handle.state::<Store>().window_state();
+        let mut got: Vec<&str> = saved.iter().map(|w| w.label.as_str()).collect();
+        got.sort();
+        assert_eq!(got, vec!["app-x", "main"]);
+        let main = saved.iter().find(|w| w.label == "main").expect("retained");
+        assert_eq!(
+            (main.x, main.y, main.width, main.height),
+            (40, 60, 1280, 832)
+        );
+        assert!(!main.maximized);
+
+        // Quitting from the surviving window flushes the same set (unchanged),
+        // and teardown's Destroyed is a no-op.
+        note_exit_requested(handle);
+        assert_eq!(handle.state::<Store>().window_state(), saved);
+        note_destroyed(handle, "app-x");
+        assert_eq!(handle.state::<Store>().window_state(), saved);
     }
 }
