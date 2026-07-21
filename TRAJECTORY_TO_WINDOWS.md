@@ -1518,3 +1518,28 @@ Real-box checks:
       (`src/windowContext.ts`); the DOM override is the immediate user workaround
       meanwhile. If it does not reproduce, record that here and close the question —
       task 437's deletion of the guard stands.
+
+## 2026-07-21 — "Open in new window" Windows freeze fix (task 454)
+
+On Windows, every frontend "open a new window" trigger froze the whole app; macOS/Linux
+were fine. The defect: `open_app_window` was a **synchronous** command, so its body ran
+inline on the main thread inside the webview's IPC event handler — and
+`WebviewWindowBuilder::build` is documented to deadlock exactly there on Windows
+(wry#583: WebView2 controller creation is async and its completion callback dispatches
+on the same sequential UI-thread queue the in-progress handler is blocking, so the main
+thread waits forever). The fix is the tauri-documented one: the command is now
+`#[tauri::command(async)]` (the body runs on an async-runtime worker thread and the
+build round-trips to the free main-thread event loop), the single-instance poke spawns
+the creation onto a fresh thread from inside its `run_on_main_thread` boot-ordering
+barrier, and `create_app_window` carries the never-build-inside-a-main-thread-IPC-handler
+contract in its doc comment. Platform-neutral — no `#[cfg]`; macOS (WKWebView) and Linux
+(WebKitGTK) never deadlocked and are observably unchanged. Real-box checks:
+
+- [ ] Sidebar repo menu **Open in new window** opens a second full window preset to that
+      repo — no freeze; the first window stays responsive throughout.
+- [ ] **Ctrl+Alt+N** and the **Canvas tab pop-out** both open windows without freezing.
+- [ ] **Second app launch** (double-click the installed exe while ReCue runs): the
+      running instance opens a fresh window — no freeze.
+- [ ] **Boot restore** (task 439) still recreates saved `app-*` windows at launch.
+- [ ] A failed create (if reproducible) surfaces the Sidebar's "Could not open a new
+      window" toast instead of hanging.
