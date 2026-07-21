@@ -4065,3 +4065,24 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - The #364 context-loss latch keeps outranking a forced "webgl" on every OS (webglPermitted() unchanged); off Linux a post-loss settings apply now also converges still-live addons to DOM, matching Linux's existing latch behavior.
 - Recorded the real-box checklist (macOS Retina + Windows fractional scaling + override round-trip + follow-up decision rule) in TRAJECTORY_TO_WINDOWS.md, with a short no-change note in TRAJECTORY_TO_LINUX.md — there is no macOS trajectory file, and TRAJECTORY_TO_WINDOWS.md already hosts cross-OS real-box matrices (tasks 443/444 precedent).
 - No Rust changes (early_settings.rs only touches the key in a test fixture), no version bump, no patch notes.
+
+## Task 448
+
+- Combined two of the card's three mitigations (terminal-focus passthrough + honoring confirmDestructive) and rejected the third: the close-panel default stays "mod+w" (OS close-tab convention; a platform-split default would force a platform param through chordForAction/keybindMapFor; the two guards remove the hazard).
+- Passthrough keys off the event (ctrlKey && !metaKey && !shiftKey) + target inside .xterm, not the platform string — macOS default ⌘W is byte-for-byte unchanged, while a rebound bare-Ctrl chord gets the same protection on every OS (the keybind rework's "bare ⌃-chords reach the terminal" rule).
+- Ctrl+Shift chords are exempt from the passthrough (the Windows Terminal / GNOME Terminal convention), so rebinding close-panel to Ctrl+Shift+W yields a chord that works even in terminals; Alt is allowed through (AltGr layouts).
+- Scoped the passthrough to close-panel only — the other Ctrl-as-mod readline collisions (Ctrl+E/K/D/B/F/N/O) are non-destructive and stay the documented status quo.
+- The confirm gate covers the whole destructive keyboard fall-through: Overview agent/schedule/recurring AND the Attention branch (uniform "keyboard kill+forget asks first"), though the card names only Overview; the Attention ⌘⏎ dismiss stays instant.
+- Mouse × buttons stay un-gated (narrowing #425's keyboard-mirrors-mouse rule for the chord only, per the review finding), and the gate honors the existing confirmDestructive setting (default on) rather than adding a new one.
+- Confirm UI is a new lazy ConfirmRemoveModal in ModalHost mirroring CanvasCloseModal (danger button autofocused so Enter confirms, Esc cancels; stale-target auto-cancel), and removePrompt is a transient per-window store slice added to anyModalOpen.
+- Existing #425 store tests are updated to run with confirmDestructive:false to keep pinning the instant paths; no version bump / patch notes (maintainer batches releases).
+
+## Task 451
+
+- Reason-gate the unlock: read `git worktree list --porcelain` on the NotManaged path and unlock ONLY when the entry is locked with the exact spawn-time reason "ReCue dev-container session" (extracted into a single `container::WORKTREE_LOCK_REASON` constant shared by the 3 lock sites and the gate); a foreign/reason-less lock or an unreadable listing fails CLOSED (no unlock — today's behavior), never a blind unlock.
+- The unlock lives inside `cleanup_worktree_blocking`'s NotManaged branch (after the InUse and dir-exists checks, before the return), so both callers — the Rust clean-exit forget and the `cleanup_worktree_if_empty` command — get it, and a second dev-container session sharing the worktree keeps the lock via the earlier InUse short-circuit.
+- Also remove the frontend `!managed` short-circuit in store.ts `cleanupWorktreeIfEmpty` (its own comment calls it a mere round-trip optimization): without this the lock still leaks on the common UI-Remove/panel-close path, which never reaches the backend; the matching store.worktrees.test.ts case is flipped to assert the backend IS called and nothing is removed/toasted.
+- Path matching uses the existing `same_path_norm` (canonicalize-first, `\`→`/`, Windows case-fold) against the porcelain entry path.
+- Out of scope by choice: the Removed early-return (dest dir already gone — a stale locked admin entry is not unlocked/pruned here), unlocking at app quit/kill_all (records persist + resume, the lock must persist too), re-locking on resume, and any change to the managed branch / remove_worktree / delete_worktree (byte-for-byte).
+- Doc touch: fix the now-stale CLAUDE.md sentence "unlocked by `remove_worktree`" (dev-container bullet, ~line 183); no version bump / patch notes (fix PRs never bump).
+- Testing: a pure unit test for the new `recue_container_lock_held` gate + extending git.rs's real-git `worktree_lock_blocks_remove_until_unlock` to pin the lock-reason porcelain round-trip; `cleanup_worktree_blocking` itself needs an AppHandle so it stays covered at the pure-core + git-helper level (project discipline); the docker/GUI smoke is flagged for a human run in the PR.
