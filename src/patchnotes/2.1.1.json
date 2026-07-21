@@ -1,0 +1,24 @@
+{
+  "version": "2.1.1",
+  "date": "2026-07-21",
+  "changes": [
+    {
+      "category": "feature",
+      "items": [
+        "The file tree now lists **every** file in a repo, not just previewable text files. Images, archives, and other binaries appear as regular rows — clicking one tells you it can't be previewed instead of opening an empty viewer — and the file tree's search can include them too.",
+        "The **Terminal renderer** control (Auto / WebGL / DOM) in Settings → Rendering now works on macOS and Windows as well as Linux, applied live to running terminals. Forcing **DOM** is the fix if terminal text looks doubled or ghosted in an additional app window on some Retina or fractionally-scaled displays."
+      ]
+    },
+    {
+      "category": "fix",
+      "items": [
+        "A window opened while the app is already running now shows each session's real state right away — live, busy, or crashed — instead of briefly flashing every terminal as \"Reconnecting…\".",
+        "Pressing the close shortcut (Ctrl+W) while a terminal is focused now reaches the terminal itself — it's delete-word there — instead of closing your agent. Closing an agent, schedule, or recurring session from the keyboard now asks for confirmation first (respecting the confirm-destructive setting); the card's × button behaves as before.",
+        "Alt-key combinations that aren't bound to a ReCue shortcut now pass through to terminals and text fields instead of being swallowed.",
+        "On Windows, opening a new app window no longer freezes the app.",
+        "The main window's size and position are remembered even if you close it mid-session while other windows stay open, and the maximized-by-default behavior now applies only to genuine fresh installs.",
+        "Cleaning up after a dev-container agent in a worktree ReCue didn't create now only releases ReCue's own lock — it never removes or deletes that worktree."
+      ]
+    }
+  ]
+}
