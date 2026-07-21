@@ -6608,16 +6608,13 @@ export const useStore = create<AppState>()((set, get) => ({
     // schedule / panel removals it performs land here fire-and-forget, and a
     // non-forced remove racing the forced delete would mis-toast "Worktree kept".
     if (deletingWorktrees.has(dest)) return;
-    // NEVER auto-remove a worktree ReCue didn't create: an in-place spawn into a
-    // DETECTED external worktree produces sessions whose teardown lands here, but
-    // the agent/user owns that checkout — closing the last item must not delete
-    // it. (The Rust `cleanup_worktree_if_empty` enforces the same managed-root
-    // invariant itself — `notManaged` — so the Rust-internal clean-exit path is
-    // covered too; this short-circuit just avoids a pointless round-trip.)
-    const detected = get().repoWorktrees[parent]?.find((e) =>
-      samePath(e.path, dest, get().platform),
-    );
-    if (detected && !detected.managed) return;
+    // NEVER auto-remove a worktree ReCue didn't create: the Rust
+    // `cleanup_worktree_if_empty` enforces the managed-root invariant itself
+    // (`notManaged` → keep silently below). A detected EXTERNAL worktree must
+    // still reach the backend (task 451 — no local short-circuit): the Rust
+    // NotManaged path releases ReCue's own dev-container `git worktree lock`
+    // (gated on the exact spawn-time reason, never deleting), so a stale lock
+    // can't block the creator agent's own clean-exit worktree removal.
     // Record the parent so a later panel/schedule close can resolve it once this
     // worktree's last agent is gone (#199).
     worktreeParents.set(dest, parent);

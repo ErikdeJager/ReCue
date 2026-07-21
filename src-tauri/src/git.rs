@@ -2911,7 +2911,21 @@ prunable gitdir file points to non-existent location
 
         let dest = unique_dir("wt-lock-dest");
         assert!(worktree_add(&dir, "feat", &dest).is_ok());
-        assert!(worktree_lock(&dir, &dest, "ReCue dev-container session").is_ok());
+        assert!(worktree_lock(&dir, &dest, crate::container::WORKTREE_LOCK_REASON).is_ok());
+        // The ASCII-space-only reason round-trips VERBATIM through the porcelain
+        // listing (git would C-quote special characters) — the exact-match
+        // contract the task-451 NotManaged unlock gate relies on.
+        let entries = list_worktrees(&dir).expect("list_worktrees");
+        let dest_name = dest.file_name().unwrap().to_string_lossy().into_owned();
+        let locked_entry = entries
+            .iter()
+            .find(|e| e.path.ends_with(&dest_name))
+            .expect("locked worktree listed");
+        assert!(locked_entry.locked);
+        assert_eq!(
+            locked_entry.locked_reason.as_deref(),
+            Some(crate::container::WORKTREE_LOCK_REASON)
+        );
         // Locking twice fails (best-effort at call sites), and a locked worktree
         // refuses removal — with and without --force.
         assert!(worktree_lock(&dir, &dest, "again").is_err());

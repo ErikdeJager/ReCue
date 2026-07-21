@@ -469,7 +469,7 @@ fn spawn_session_blocking(
             let image = prepare_container_spawn(app, &agent)?;
             let session_id = Uuid::new_v4().to_string();
             if let Some(parent) = &worktree_parent {
-                let _ = git::worktree_lock(parent, &cwd, "ReCue dev-container session");
+                let _ = git::worktree_lock(parent, &cwd, crate::container::WORKTREE_LOCK_REASON);
             }
             Some(container_launch_for(
                 &store,
@@ -593,7 +593,7 @@ fn spawn_worktree_agent_blocking(
         Some(true) => {
             let image = prepare_container_spawn(app, &agent)?;
             let session_id = Uuid::new_v4().to_string();
-            let _ = git::worktree_lock(&repo, &dest, "ReCue dev-container session");
+            let _ = git::worktree_lock(&repo, &dest, crate::container::WORKTREE_LOCK_REASON);
             Some(container_launch_for(
                 &store,
                 &session_id,
@@ -683,7 +683,7 @@ fn spawn_worktree_agent_new_branch_blocking(
         Some(true) => {
             let image = prepare_container_spawn(app, &agent)?;
             let session_id = Uuid::new_v4().to_string();
-            let _ = git::worktree_lock(&repo, &dest, "ReCue dev-container session");
+            let _ = git::worktree_lock(&repo, &dest, crate::container::WORKTREE_LOCK_REASON);
             Some(container_launch_for(
                 &store,
                 &session_id,
@@ -1422,6 +1422,18 @@ pub fn worktree_has_items(
             .any(|r| r.cwd == dest || r.worktree_path.as_deref() == Some(dest))
 }
 
+/// True when the `git worktree list` entry for `dest` holds the lock ReCue itself
+/// stamped at dev-container spawn (the exact [`crate::container::WORKTREE_LOCK_REASON`])
+/// — the only lock the NotManaged cleanup path may release (task 451). A user's or
+/// agent's own lock (any other reason, or none) is never touched.
+fn recue_container_lock_held(entries: &[crate::git::WorktreeEntry], dest: &str) -> bool {
+    entries.iter().any(|e| {
+        e.locked
+            && e.locked_reason.as_deref() == Some(crate::container::WORKTREE_LOCK_REASON)
+            && same_path_norm(&e.path, dest)
+    })
+}
+
 /// Serializes every ref-count-check → git-remove pair (task 431): two windows (or a
 /// window and the Rust exit path) can no longer both see "empty" and double-run
 /// `git worktree remove` (check/check/remove/remove-fails → a spurious "kept dirty").
@@ -1451,10 +1463,13 @@ pub enum WorktreeCleanup {
 /// earlier cleanup already won); refuse a dest outside `<data-dir>/worktrees`
 /// (`NotManaged` — the same hard invariant as `remove_worktree`, enforced HERE so the
 /// Rust-internal clean-exit caller is covered too: an in-place spawn into a DETECTED
-/// external worktree records `worktree_parent`, and its clean exit lands here without
-/// ever passing the frontend's `!managed` short-circuit); else unlock (best-effort,
-/// the dev-container lock) and run the **non-forced** `git worktree remove` — git
-/// refusing a dirty tree IS the dirty guard (#74, never force) → `KeptDirty`.
+/// external worktree records `worktree_parent`, and its clean exit lands here — but
+/// first release ReCue's OWN dev-container lock when one is held, unlock without
+/// deleting (task 451), gated on the exact spawn-time reason via
+/// [`recue_container_lock_held`] so a foreign lock is never touched); else unlock
+/// (best-effort, the dev-container lock) and run the **non-forced** `git worktree
+/// remove` — git refusing a dirty tree IS the dirty guard (#74, never force) →
+/// `KeptDirty`.
 pub fn cleanup_worktree_blocking(app: &AppHandle, parent: &str, dest: &str) -> WorktreeCleanup {
     let lock = app.state::<WorktreeCleanupLock>();
     let _guard = lock
@@ -1481,6 +1496,17 @@ pub fn cleanup_worktree_blocking(app: &AppHandle, parent: &str, dest: &str) -> W
         .map(|root| path_under_norm(dest, &root))
         .unwrap_or(false);
     if !managed {
+        // ReCue's own dev-container lock (taken at spawn against an in-container
+        // `git worktree prune`) must not outlive the session: a stale lock blocks
+        // Claude Code's own clean-exit auto-removal of ITS worktree. Release it —
+        // UNLOCK without deleting, and only when the held lock is provably ours
+        // (the exact spawn-time reason). A foreign or reason-less lock, or an
+        // unreadable listing, leaves everything untouched (fail-closed).
+        if let Some(entries) = git::list_worktrees(parent) {
+            if recue_container_lock_held(&entries, dest) {
+                let _ = git::worktree_unlock(parent, dest);
+            }
+        }
         return WorktreeCleanup::NotManaged;
     }
     // A dev-container session locked the worktree at spawn (the in-container `git
@@ -5346,6 +5372,54 @@ mod tests {
         // A bare entry is refused.
         let bare = validate_delete_target(&entries, "/repo", "/wt/bare-entry");
         assert!(bare.unwrap_err().contains("bare"));
+    }
+
+    /// Task 451: the NotManaged unlock gate releases ONLY the lock ReCue itself
+    /// stamped at dev-container spawn — exact reason + matching path; anything
+    /// else (unlocked, reason-less, foreign reason, other path) is never touched.
+    #[test]
+    fn recue_container_lock_held_gates_on_reason_and_path() {
+        let entry = |path: &str, locked: bool, reason: Option<&str>| crate::git::WorktreeEntry {
+            path: path.to_string(),
+            head: "abc".into(),
+            branch: Some("feat".into()),
+            bare: false,
+            detached: false,
+            locked,
+            locked_reason: reason.map(str::to_string),
+            prunable: false,
+        };
+        let ours = vec![entry(
+            "/wt/feat-x",
+            true,
+            Some(crate::container::WORKTREE_LOCK_REASON),
+        )];
+        // Exact reason + matching path — incl. trailing-slash and `\` variance
+        // (the `same_path_norm` normalization).
+        assert!(recue_container_lock_held(&ours, "/wt/feat-x"));
+        assert!(recue_container_lock_held(&ours, "/wt/feat-x/"));
+        assert!(recue_container_lock_held(&ours, "\\wt\\feat-x"));
+        // Not locked at all.
+        assert!(!recue_container_lock_held(
+            &[entry("/wt/feat-x", false, None)],
+            "/wt/feat-x"
+        ));
+        // Locked with no recorded reason — could be anyone's; never ours.
+        assert!(!recue_container_lock_held(
+            &[entry("/wt/feat-x", true, None)],
+            "/wt/feat-x"
+        ));
+        // A foreign reason (e.g. Claude Code's own while-working lock) is never touched.
+        assert!(!recue_container_lock_held(
+            &[entry(
+                "/wt/feat-x",
+                true,
+                Some("working agent keeps this alive")
+            )],
+            "/wt/feat-x"
+        ));
+        // Our reason on a DIFFERENT worktree never matches this dest.
+        assert!(!recue_container_lock_held(&ours, "/wt/other"));
     }
 
     #[test]

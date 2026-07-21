@@ -180,7 +180,9 @@ steady-state boot pays **zero** probe cost.
   `.git` overlay** (parent `.git` dir → `/repo/.git`, a generated one-line gitfile
   bind-mounted read-only OVER `/work/.git` — the host's own gitfile is untouched, so
   host-side git panels keep working; the worktree is `git worktree lock`ed against an
-  in-container `prune`, unlocked by `remove_worktree`). **No git credentials are
+  in-container `prune`, unlocked by `remove_worktree` — and the ref-counted cleanup
+  releases it too: on a non-managed worktree by unlocking ONLY ReCue's own
+  reason-stamped lock, without deleting, Task 451). **No git credentials are
   mounted**: identity + `safe.directory=*`/`core.fsmonitor=false`/`gc.auto=0` ride in as
   `GIT_CONFIG_*` env, so the agent can branch + **commit** (instantly visible to the
   host — shared `.git`) but **push fails by design**. Kill is **via the docker CLI by
