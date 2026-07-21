@@ -4045,3 +4045,13 @@ Fix the Linux `StartupWMClass` mismatch — own the app's WM_CLASS and ship a co
 - Terminal focus is detected as target.closest(".xterm") — the established hoverFocus.ts/Overview/BigMode contract — via a new exported isTerminalTarget helper; isEditableTarget's deliberate .xterm exemption (Shift+arrow interception) is left untouched, and the guard is isEditableTarget(target) || isTerminalTarget(target).
 - The guard is platform-neutral (applies on macOS, Windows, and Linux alike) — accepted consequence: with a terminal focused, ⌥1/⌥2/⌥3 type into the PTY instead of switching views on every OS, exactly as the card demands ("typing those characters into a terminal ... flips the view instead").
 - The existing anyModalOpen "pass" in the view-* cases is kept as a coexisting guard (covers non-editable focus inside modals); eventChord's physical e.code serialization is untouched.
+
+## Task 452
+
+- Fix both halves of the finding, not just the marker: only an explicit flag would still lose main's geometry (pruned on Destroyed), so `WindowSet` additionally retains the closed main entry (a `closed_main` stash appended to `snapshot()`); safe because main is unconditionally recreated at boot from tauri.conf.json — its entry is pure geometry, presence never means "was open" (verified no other consumer of `window_state`).
+- The stash is main-only: a closed `app-*` window must stay pruned (its entry decides what reopens); the would-empty last-window-close exit rule keeps counting live windows only (stash lives outside `windows`).
+- The explicit marker is a new backend-internal `PersistedState.window_state_initialized: bool` (serde-default false, `perm_reprompt_done` one-shot pattern), read+set in `restore_windows`; no Tauri command, no frontend change.
+- Maximize decision extracted as pure `main_restore_maximized(entry, fresh_install)` — a saved entry's flag always wins; None + fresh → true, None + not-fresh → false (builder-default 1280x832, unmaximized, as the corrupt/lost-file degrade).
+- Upgrade behavior preserved deliberately: a pre-439 file or an install already in the bug state (marker absent, no main entry) still gets exactly ONE task-443 maximized launch, then is marked — identical to today, no migration write.
+- `register("main")` clears the stash defensively even though no mid-run main-recreate path exists today (Dock Reopen focuses or opens app-*).
+- Included a 1–2 line CLAUDE.md doc touch (the stale 443 "no saved main entry" sentence) as part of the implementer's scope.
