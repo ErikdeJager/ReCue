@@ -3162,3 +3162,48 @@ keep-forever invariant (automation never deletes a worktree ReCue didn't create)
   docker/GUI smoke is flagged for a human run in the PR.
 
 **Dependencies:** none.
+
+### 454. [x] Fix Windows freeze on "Open in new window": run open_app_window off the main thread (sync-command WebView2 deadlock, wry#583)
+
+On Windows, clicking the sidebar repo menu's **Open in new window** (or Ctrl+Alt+N, or the Canvas
+tab pop-out) froze the entire application; the same code worked on macOS. Root cause, pinned from
+the code plus tauri 2.11.3's own rustdoc without a Windows repro box: `open_app_window` was a
+**synchronous** `#[tauri::command]`, which Tauri 2 executes inline on the main thread inside the
+webview's IPC event handler — and `WebviewWindowBuilder::build()` is documented to deadlock exactly
+there on Windows (wry#583: the WebView2 controller-creation completion callback can never be
+dispatched while that handler blocks the main thread), stopping the event loop and freezing every
+window. WKWebView (macOS) and WebKitGTK (Linux) have no such reentrancy restriction.
+
+**What shipped** (branch `task/454-new-window-freeze`, PR
+[#224](https://github.com/ErikdeJager/ReCue/pull/224), merged into `improvements` as `675227c`;
+3 files, +71/−8):
+
+- **`src-tauri/src/commands.rs`** — the attribute-only fix: `#[tauri::command]` →
+  `#[tauri::command(async)]` on `open_app_window` (verified in tauri-macros 2.6.3: the sync body
+  then runs via `async_runtime::spawn` on a worker thread, and the build round-trips to the
+  now-free main-thread event loop — the tauri-documented fix). Chosen over `pub async fn` so the
+  `menu.rs` / single-instance / Reopen **direct Rust callers** stay untouched; a DEADLOCK
+  INVARIANT doc comment names wry#583 so a refactor can't silently revert it, and
+  `create_app_window` gains a threading-contract note. A fn-pointer signature-pinning unit test
+  (`open_app_window_stays_directly_callable_as_a_sync_fn`) is the automatable guard — the deadlock
+  itself is not reproducible under `tauri::test::mock_app` or CI.
+- **`src-tauri/src/lib.rs`** — defensive hardening beyond the reported repro: the single-instance
+  second-launch callback keeps `run_on_main_thread` as the boot-ordering barrier only (the Store
+  must be managed before the poke) but spawns the actual creation on a separate thread from inside
+  that closure — tauri's Known-issues note also covers "event handlers" and that path is
+  Windows-reachable. Platform-neutral, no `#[cfg]`.
+- **`TRAJECTORY_TO_WINDOWS.md`** — dated task-454 entry with the real-box checklist (repo-menu
+  open / Ctrl+Alt+N / pop-out with no freeze, second-launch poke, boot restore, the
+  now-functional failed-create toast) — the code fix is complete without it, but final
+  confirmation needs a real Windows box (no CI path exercises the WebView2 reentrancy).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 454)
+
+- macOS-only creation sites (File → New Window, Dock Reopen) and the `.setup()` boot-restore path
+  left byte-for-byte unchanged (documented-supported contexts; the CLAUDE.md macOS-arm rule).
+- No frontend changes: all three UI triggers funnel into the same command fire-and-forget; the
+  Sidebar's existing error toast simply becomes functional once the promise can settle.
+- Audited and ruled out the other suspects: `window_state.rs`/`primary.rs` are lock-clean (queries
+  before locks, guards dropped before emits/writes) — no secondary ABBA deadlock fix needed.
+
+**Dependencies:** none.
