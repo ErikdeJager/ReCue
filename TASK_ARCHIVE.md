@@ -3107,3 +3107,58 @@ follow-up default flip.
 - No version bump, no patch notes (fix PRs never bump; releases are batched).
 
 **Dependencies:** none.
+
+### 451. [x] Release ReCue's dev-container worktree lock on non-managed worktree teardown (unlock without deleting)
+
+A dev-container session spawned **in place** into a non-managed (agent-created/external) worktree
+takes a `git worktree lock` at spawn (the in-container `git worktree prune` guard), but
+`cleanup_worktree_blocking`'s `NotManaged` early-return skipped the unlock entirely — so ReCue's own
+lock outlived the session and blocked Claude Code's own clean-exit worktree auto-removal forever (a
+locked worktree refuses removal even with `--force`; v2.0.0 review finding, `commands.rs:1474`).
+The fix unlocks **without deleting**, and only when the held lock is provably ReCue's own — the
+keep-forever invariant (automation never deletes a worktree ReCue didn't create) is untouched.
+
+**What shipped** (branch `task/451-notmanaged-unlock`, PR
+[#223](https://github.com/ErikdeJager/ReCue/pull/223), merged into `improvements` as `09ffdf2`;
+6 files, +124/−22):
+
+- **`src-tauri/src/container.rs`** — the spawn-time lock reason extracted into a single
+  `pub const WORKTREE_LOCK_REASON = "ReCue dev-container session"` (doc-commented: must stay ASCII
+  with no quotes/newlines so the porcelain `locked <reason>` line round-trips unquoted), consumed
+  by all three `commands.rs` spawn lock sites **and** the new unlock gate — no string drift
+  possible.
+- **`src-tauri/src/commands.rs`** — new pure `recue_container_lock_held(entries, dest)`: true only
+  for a `locked` entry whose `locked_reason` equals the constant exactly **and** whose path matches
+  `dest` via `same_path_norm` (trailing-slash / `\`-separator / Windows case-fold safe).
+  `cleanup_worktree_blocking`'s `NotManaged` branch now reads `git::list_worktrees(parent)` and,
+  when the gate holds, best-effort `git::worktree_unlock`s — then still returns `NotManaged`
+  without ever invoking `worktree_remove`. A foreign or reason-less lock, or an unreadable listing,
+  **fails closed** (no unlock — today's behavior). Runs under the `WorktreeCleanupLock` mutex after
+  `worktree_has_items`, so a second dev-container session sharing the worktree keeps the lock via
+  the earlier `InUse` short-circuit. Unit test pins the gate's reason/path truth table.
+- **`src-tauri/src/git.rs`** — `worktree_lock_blocks_remove_until_unlock` uses the constant and now
+  also pins the real-git porcelain round-trip: `list_worktrees` reports the entry `locked` with
+  `locked_reason == Some(WORKTREE_LOCK_REASON)` verbatim (the property the gate depends on).
+- **`src/store.ts`** — the second instance of the same leak: `cleanupWorktreeIfEmpty`'s
+  detected-`!managed` short-circuit (a "pointless round-trip" optimization that kept the common
+  UI-Remove/panel-close path from ever reaching the backend) is removed — the backend is always
+  called (`deletingWorktrees` guard stays first), and a `notManaged` outcome stays silent.
+  `store.worktrees.test.ts`'s external-worktree case flipped to assert the backend IS called and
+  nothing is removed or toasted.
+- **`CLAUDE.md`** — the stale "unlocked by `remove_worktree`" sentence in the dev-container bullet
+  now also names the reason-gated NotManaged unlock-without-delete.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 451)
+
+- Reason-gated, fail-closed unlock — never a blind unlock; Claude Code's own while-working lock and
+  any user lock are preserved.
+- The unlock lives in `cleanup_worktree_blocking` so both callers (Rust clean-exit forget, the
+  `cleanup_worktree_if_empty` command) get it.
+- Out of scope by choice: the `Removed` early-return (stale locked admin entry with a vanished
+  dir), unlocking at app quit/`kill_all` (records persist + resume, the lock must persist too),
+  re-locking on resume, and any change to the managed branch / `remove_worktree` /
+  `delete_worktree` (byte-for-byte).
+- Platform-neutral (git via `hidden_command`, paths via `same_path_norm` — no `#[cfg]` arms); the
+  docker/GUI smoke is flagged for a human run in the PR.
+
+**Dependencies:** none.
