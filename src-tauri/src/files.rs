@@ -1,5 +1,7 @@
 //! Repo file access for the universal file viewer (#40/#44) and the Kanban editor
-//! (#141): list a repo's viewable (text-ish) files, read a text file, and — the
+//! (#141): list a repo's files (the lazy tree lists **every** file type since task
+//! 455 — previewability is a frontend concern; the picker/search walkers still
+//! surface viewable text-ish files), read a text file, and — the
 //! app's first arbitrary file write — write a text file (`write_text_file`), all
 //! with strict path validation (reject `..`/symlink escapes out of the repo).
 //! Read content is returned verbatim and treated as untrusted by the frontend
@@ -44,9 +46,13 @@ const SKIP_DIRS: &[&str] = &[
     "out",
     ".next",
 ];
-/// File extensions skipped while listing — binary / non-text formats the viewer
-/// can't render (#44). Everything else (incl. extensionless files like `LICENSE`,
-/// `Dockerfile`) is listed and shown as text/code.
+/// File extensions of binary / non-text formats the viewer can't render (#44).
+/// Since task 455 this gates only the **search walkers** (the picker + searches
+/// list previewable files; `list_dir` shows every file type — the tree renders a
+/// non-previewable file as a non-openable row, gated frontend-side). Everything
+/// else (incl. extensionless files like `LICENSE`, `Dockerfile`) is treated as
+/// text/code.
+// Mirrored in src/components/FileViewer/fileType.ts (NON_VIEWABLE_EXTS) — keep in sync.
 const SKIP_EXTS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "icns", "tiff", "pdf", "woff", "woff2",
     "ttf", "otf", "eot", "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "mp4", "mov", "avi",
@@ -104,7 +110,8 @@ pub struct ContentSearchResult {
 /// are expanded, so it supports arbitrarily deep structures and very large repos
 /// without ever walking the whole tree. `path` is repo-relative (POSIX `/`); `name`
 /// is the last segment (the row label); `is_dir` distinguishes an expandable folder
-/// from a viewable file.
+/// from a file (since task 455 every file type lists — whether a file is
+/// previewable is decided frontend-side).
 #[derive(Debug, Clone, Serialize)]
 pub struct DirEntryInfo {
     pub name: String,
@@ -151,11 +158,13 @@ fn confine(repo: &Path, rel: &str) -> Result<PathBuf, String> {
 }
 
 /// Immediate children of one directory (`subdir`, repo-relative; empty = the repo
-/// root), for the lazy file tree (#167). Folders come first, then viewable files, each
+/// root), for the lazy file tree (#167). Folders come first, then files, each
 /// sorted case-insensitively. Heavy/dependency dirs and `.git` (`SKIP_DIRS`) are
-/// hidden; binary files (`SKIP_EXTS`) are hidden, but **every** other folder and file
-/// is returned — there is no count or depth cap (depth is reached by expanding,
-/// one level per call). The path is confined to `repo` (rejects `..`/symlink escapes).
+/// hidden; since task 455 **every file type is listed** — binaries (`SKIP_EXTS`)
+/// included; the viewer gate is frontend-side (the FileTree renders a
+/// non-previewable file as a non-openable row) — and there is no count or depth cap
+/// (depth is reached by expanding, one level per call). The path is confined to
+/// `repo` (rejects `..`/symlink escapes).
 pub fn list_dir(repo: impl AsRef<Path>, subdir: &str) -> Result<Vec<DirEntryInfo>, String> {
     let repo = repo.as_ref();
     let dir = confine(repo, subdir)?;
@@ -182,9 +191,11 @@ pub fn list_dir(repo: impl AsRef<Path>, subdir: &str) -> Result<Vec<DirEntryInfo
                 path: rel,
                 is_dir: true,
             });
-        } else if name != ".git" && is_listable(&path) {
+        } else if name != ".git" {
             // `.git` as a FILE is a linked worktree's pointer (SKIP_DIRS only
-            // hides the directory form) — never a viewable text file.
+            // hides the directory form) — never a viewable text file. Every
+            // other file type is listed since task 455 — the viewer gate
+            // (non-previewable ⇒ non-openable row) is frontend-side.
             files.push(DirEntryInfo {
                 name,
                 path: rel,
@@ -205,7 +216,10 @@ pub fn list_dir(repo: impl AsRef<Path>, subdir: &str) -> Result<Vec<DirEntryInfo
 /// (each directory's entries are sorted before recursing, so the same files surface on
 /// every machine) walk that returns repo-relative paths whose path contains `query`
 /// (case-insensitive substring; empty `query` = the first files), excluding
-/// heavy/dependency dirs + `.git` (`SKIP_DIRS`) and binaries (`SKIP_EXTS`). An optional
+/// heavy/dependency dirs + `.git` (`SKIP_DIRS`) and — unless `include_binary` is set —
+/// binaries (`SKIP_EXTS`). `include_binary` (task 455) backs the FileTree's in-panel
+/// search, which shows every file type like the tree itself; the picker and global
+/// search pass `false` to keep listing previewable files only. An optional
 /// `ext` (e.g. `.md`) restricts to that extension. The walk stops once `limit` matches
 /// are collected, so the result — and thus the IPC payload and the rendered list —
 /// stays bounded on arbitrarily large repos; the user narrows by typing.
@@ -214,21 +228,33 @@ pub fn search_files(
     query: &str,
     ext: Option<&str>,
     limit: usize,
+    include_binary: bool,
 ) -> Vec<String> {
     let repo = repo.as_ref();
     let needle = query.trim().to_lowercase();
     let ext = ext.map(|e| e.to_lowercase());
     let mut out = Vec::new();
-    search_collect(repo, repo, &needle, ext.as_deref(), limit, &mut out, 0);
+    search_collect(
+        repo,
+        repo,
+        &needle,
+        ext.as_deref(),
+        limit,
+        include_binary,
+        &mut out,
+        0,
+    );
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_collect(
     root: &Path,
     dir: &Path,
     needle: &str,
     ext: Option<&str>,
     limit: usize,
+    include_binary: bool,
     out: &mut Vec<String>,
     depth: usize,
 ) {
@@ -261,8 +287,17 @@ fn search_collect(
             if is_linked_worktree_root(&path) {
                 continue;
             }
-            search_collect(root, &path, needle, ext, limit, out, depth + 1);
-        } else if name != ".git" && is_listable(&path) {
+            search_collect(
+                root,
+                &path,
+                needle,
+                ext,
+                limit,
+                include_binary,
+                out,
+                depth + 1,
+            );
+        } else if name != ".git" && (include_binary || is_listable(&path)) {
             if let Ok(rel) = path.strip_prefix(root) {
                 let rel = rel.to_string_lossy().replace('\\', "/");
                 let lower = rel.to_lowercase();
@@ -415,7 +450,10 @@ fn make_snippet(line: &str, needle: &str) -> String {
     out
 }
 
-/// A file worth listing in the viewer: not an obvious binary by extension.
+/// A file previewable by the viewer: not an obvious binary by extension. Used by
+/// the search walkers (the picker/global search always; the content search always;
+/// the FileTree's filename search only when `include_binary` is off); `list_dir` no
+/// longer filters on it (task 455 — the tree lists every file type).
 fn is_listable(path: &Path) -> bool {
     match path.extension().and_then(|e| e.to_str()) {
         Some(ext) => !SKIP_EXTS.iter().any(|s| ext.eq_ignore_ascii_case(s)),
@@ -770,11 +808,11 @@ mod tests {
     }
 
     #[test]
-    fn list_dir_returns_one_level_folders_first_excluding_heavy_and_binaries() {
+    fn list_dir_returns_one_level_folders_first_excluding_heavy_dirs() {
         let dir = tmp("listdir");
         fs::write(dir.join("README.md"), "# hi").unwrap();
         fs::write(dir.join("LICENSE"), "MIT").unwrap(); // extensionless → text
-        fs::write(dir.join("logo.png"), "binary").unwrap(); // binary ext → skipped
+        fs::write(dir.join("logo.png"), "binary").unwrap(); // binary ext → listed too (455)
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("src/lib.ts"), "export {}").unwrap();
         fs::create_dir_all(dir.join("node_modules/pkg")).unwrap();
@@ -786,17 +824,20 @@ mod tests {
 
         let root = list_dir(&dir, "").unwrap();
         let names: Vec<&str> = root.iter().map(|e| e.name.as_str()).collect();
-        // Folders come first (`.claude`, `src`), then files (`LICENSE`, `README.md`).
-        assert_eq!(names, vec![".claude", "src", "LICENSE", "README.md"]);
+        // Folders come first (`.claude`, `src`), then EVERY file type (task 455) —
+        // the binary `logo.png` lists like the text files, sorted case-insensitively.
+        assert_eq!(
+            names,
+            vec![".claude", "src", "LICENSE", "logo.png", "README.md"]
+        );
         // No worktrees here → no entry is flagged, and (serde skip) the flag is
         // absent from the wire so ordinary listings are byte-identical.
         assert!(root.iter().all(|e| !e.worktree));
         let json = serde_json::to_string(&root).unwrap();
         assert!(!json.contains("worktree"));
-        // `.git`, `node_modules`, and the binary are excluded; `src` is a folder.
+        // `.git` and `node_modules` stay excluded; `src` is a folder.
         assert!(!names.contains(&".git"));
         assert!(!names.contains(&"node_modules"));
-        assert!(!names.contains(&"logo.png"));
         assert!(root.iter().find(|e| e.name == "src").unwrap().is_dir);
 
         // Lazy descent: listing `src` returns its child, with a repo-relative path.
@@ -872,7 +913,7 @@ mod tests {
 
         // Filename search: exactly one hit for the duplicated name, the
         // worktree-only file never appears, the submodule file does.
-        let by_name = search_files(&dir, "target", None, 50);
+        let by_name = search_files(&dir, "target", None, 50, false);
         assert_eq!(
             by_name,
             vec!["sub/target-sub.md", "target-root.md"],
@@ -886,7 +927,7 @@ mod tests {
 
         // Searching FROM the worktree still finds its own files (the walk root
         // is exempt) and never lists its `.git` pointer file.
-        let from_wt = search_files(&wt, "target", None, 50);
+        let from_wt = search_files(&wt, "target", None, 50, false);
         assert_eq!(from_wt, vec!["target-root.md", "target-wt.md"]);
         let from_wt_content = search_file_contents(&wt, "needle", 50);
         assert_eq!(from_wt_content.matches.len(), 2);
@@ -908,27 +949,59 @@ mod tests {
         }
 
         // Empty query returns the first results (bounded by the limit), deterministically.
-        let first = search_files(&dir, "", None, 50);
+        let first = search_files(&dir, "", None, 50, false);
         assert_eq!(first.len(), 50);
 
         // A specific name is found even though it sorts past the old 500-file cap —
         // the user-created board is never silently dropped now.
-        let kanban = search_files(&dir, "kanban", None, SEARCH_RESULT_CAP);
+        let kanban = search_files(&dir, "kanban", None, SEARCH_RESULT_CAP, false);
         assert_eq!(kanban, vec!["KANBAN.md".to_string()]);
 
         // Substring match across nested dirs, skipping node_modules.
-        let store = search_files(&dir, "store", None, SEARCH_RESULT_CAP);
+        let store = search_files(&dir, "store", None, SEARCH_RESULT_CAP, false);
         assert_eq!(store, vec!["src/store.ts".to_string()]);
 
         // The `.md` extension filter (Kanban picker) restricts results.
-        let md = search_files(&dir, "readme", Some(".md"), SEARCH_RESULT_CAP);
+        let md = search_files(&dir, "readme", Some(".md"), SEARCH_RESULT_CAP, false);
         assert_eq!(md, vec!["README.md".to_string()]);
-        let ts = search_files(&dir, "store", Some(".md"), SEARCH_RESULT_CAP);
+        let ts = search_files(&dir, "store", Some(".md"), SEARCH_RESULT_CAP, false);
         assert!(ts.is_empty());
 
         // No count cap on coverage: all 600 notes + the other files are searchable.
-        let all_notes = search_files(&dir, "note-", None, 1000);
+        let all_notes = search_files(&dir, "note-", None, 1000, false);
         assert_eq!(all_notes.len(), 600);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_files_include_binary_lists_binaries_only_when_asked() {
+        let dir = tmp("search-binary");
+        fs::write(dir.join("logo.png"), "binary").unwrap();
+        fs::write(dir.join("readme.md"), "# hi").unwrap();
+        // Skips that must hold in BOTH modes: heavy dirs + a worktree's `.git`
+        // pointer file (never a listable row, whatever the mode).
+        fs::create_dir_all(dir.join("node_modules")).unwrap();
+        fs::write(dir.join("node_modules/asset.png"), "skip").unwrap();
+        let wt = fake_worktree(&dir, "wt");
+        fs::write(wt.join("wt-logo.png"), "binary").unwrap();
+
+        // Default (picker / global search): binaries stay hidden.
+        let viewable = search_files(&dir, "", None, 50, false);
+        assert_eq!(viewable, vec!["readme.md".to_string()]);
+
+        // The FileTree's in-panel search (task 455): every file type surfaces —
+        // but node_modules + the worktree subtree stay excluded.
+        let all = search_files(&dir, "", None, 50, true);
+        assert_eq!(all, vec!["logo.png".to_string(), "readme.md".to_string()]);
+
+        // The `ext` filter still applies in binary-inclusive mode.
+        let md = search_files(&dir, "", Some(".md"), 50, true);
+        assert_eq!(md, vec!["readme.md".to_string()]);
+
+        // Searching FROM the worktree in binary-inclusive mode still hides its
+        // `.git` pointer file.
+        let from_wt = search_files(&wt, "", None, 50, true);
+        assert_eq!(from_wt, vec!["wt-logo.png".to_string()]);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1382,10 +1455,10 @@ mod tests {
         let dir = tmp("search-limits");
         fs::write(dir.join("hit.md"), "x").unwrap();
         // A zero limit collects nothing (the walk stops immediately).
-        assert!(search_files(&dir, "hit", None, 0).is_empty());
+        assert!(search_files(&dir, "hit", None, 0, false).is_empty());
         // A root that doesn't exist walks nothing (fail-open, no error).
         let missing = dir.join("never-created");
-        assert!(search_files(&missing, "hit", None, 10).is_empty());
+        assert!(search_files(&missing, "hit", None, 10, false).is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1412,7 +1485,7 @@ mod tests {
         fs::write(deep.join("buried-needle.txt"), "needle content\n").unwrap();
         fs::write(dir.join("shallow-needle.txt"), "needle content\n").unwrap();
 
-        let by_name = search_files(&dir, "needle", None, 100);
+        let by_name = search_files(&dir, "needle", None, 100, false);
         assert_eq!(by_name, vec!["shallow-needle.txt".to_string()]);
         let by_content = search_file_contents(&dir, "needle content", 100);
         let paths: Vec<&str> = by_content.matches.iter().map(|m| m.path.as_str()).collect();

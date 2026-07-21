@@ -82,3 +82,87 @@ export function detectMode(file: string): ViewerMode {
   if (ext === "md" || ext === "markdown") return "markdown";
   return prismLang(file) !== undefined ? "code" : "text";
 }
+
+/**
+ * Extensions of binary / non-text formats the viewer can't render (task 455) —
+ * the FileTree lists such files as real rows but gates opening them (a click
+ * toasts "can't preview" instead of creating a doomed viewer panel:
+ * `read_text_file` fails on non-UTF-8 / oversized content).
+ */
+// Mirror of SKIP_EXTS in src-tauri/src/files.rs — keep in sync.
+const NON_VIEWABLE_EXTS: Set<string> = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "ico",
+  "icns",
+  "tiff",
+  "pdf",
+  "woff",
+  "woff2",
+  "ttf",
+  "otf",
+  "eot",
+  "zip",
+  "gz",
+  "tgz",
+  "bz2",
+  "xz",
+  "7z",
+  "rar",
+  "tar",
+  "mp4",
+  "mov",
+  "avi",
+  "webm",
+  "mkv",
+  "mp3",
+  "wav",
+  "ogg",
+  "flac",
+  "exe",
+  "dll",
+  "so",
+  "dylib",
+  "bin",
+  "wasm",
+  "node",
+  "class",
+  "o",
+  "a",
+  "lib",
+  "obj",
+  "dmg",
+  "iso",
+  "jar",
+]);
+
+/** Image extensions (task 455) — used only to pick the Image icon for a
+ * non-openable tree row. NOT svg, which is viewable markup. */
+const IMAGE_EXTS: Set<string> = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "ico",
+  "icns",
+  "tiff",
+]);
+
+/** Whether the viewer can preview `file` (task 455): everything except the known
+ * binary extensions. Extensionless files (`LICENSE`, `Dockerfile`) are viewable. */
+export function isViewableFile(file: string): boolean {
+  return !NON_VIEWABLE_EXTS.has(fileExt(file));
+}
+
+/** The icon family a FileTree row should use for `file` (task 455): "text" for
+ * anything previewable, else "image" for image formats, else generic "binary". */
+export function fileIconKind(file: string): "text" | "image" | "binary" {
+  if (isViewableFile(file)) return "text";
+  return IMAGE_EXTS.has(fileExt(file)) ? "image" : "binary";
+}

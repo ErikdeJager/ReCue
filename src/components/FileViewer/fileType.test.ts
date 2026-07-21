@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { detectMode, fileExt, prismLang } from "./fileType";
+import {
+  detectMode,
+  fileExt,
+  fileIconKind,
+  isViewableFile,
+  prismLang,
+} from "./fileType";
 
 describe("file type detection (#44)", () => {
   it("treats markdown as render mode", () => {
@@ -63,5 +69,39 @@ describe("file type detection (#44)", () => {
     expect(fileExt("a/b/c.test.ts")).toBe("ts");
     expect(fileExt(".gitignore")).toBe("");
     expect(fileExt("Makefile")).toBe("");
+  });
+});
+
+describe("viewability gate for the all-types file tree (task 455)", () => {
+  it("treats text, code, extensionless, and svg files as viewable", () => {
+    expect(isViewableFile("a.md")).toBe(true);
+    expect(isViewableFile("src/x.ts")).toBe(true);
+    expect(isViewableFile("LICENSE")).toBe(true);
+    expect(isViewableFile("Dockerfile")).toBe(true);
+    // SVG is markup the viewer highlights — never a binary.
+    expect(isViewableFile("icon.svg")).toBe(true);
+  });
+
+  it("treats the mirrored SKIP_EXTS binary formats as non-viewable", () => {
+    expect(isViewableFile("logo.png")).toBe(false);
+    expect(isViewableFile("a.zip")).toBe(false);
+    expect(isViewableFile("x.dylib")).toBe(false);
+    expect(isViewableFile("movie.mp4")).toBe(false);
+  });
+
+  it("matches case-insensitively and across Windows separators", () => {
+    expect(isViewableFile("LOGO.PNG")).toBe(false);
+    expect(isViewableFile("sub\\logo.png")).toBe(false);
+    expect(isViewableFile("sub\\notes.md")).toBe(true);
+  });
+
+  it("picks the row icon family: text, image, or generic binary", () => {
+    expect(fileIconKind("README.md")).toBe("text");
+    expect(fileIconKind("LICENSE")).toBe("text");
+    expect(fileIconKind("icon.svg")).toBe("text");
+    expect(fileIconKind("logo.png")).toBe("image");
+    expect(fileIconKind("photo.JPEG")).toBe("image");
+    expect(fileIconKind("bundle.zip")).toBe("binary");
+    expect(fileIconKind("track.mp3")).toBe("binary");
   });
 });
