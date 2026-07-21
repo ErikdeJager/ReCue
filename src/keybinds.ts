@@ -124,9 +124,11 @@ export const KEYBIND_ACTIONS: readonly KeybindAction[] = [
     // Multi-window 10/16: open a new FULL app window (task 434). ⌘⌥N on macOS,
     // Ctrl+Alt+N on Windows/Linux — the same mod+alt family as the fixed ⌘⌥1–6
     // chords. Known, accepted caveat: on AltGr layouts Ctrl+Alt+N can be a typed
-    // glyph (e.g. Polish ń); the dispatcher deliberately doesn't editable-guard
-    // modifier chords, and the action is rebindable/unbindable in Settings —
-    // the same class as the shipped ⌘⌥digit chords.
+    // glyph (e.g. Polish ń); bare-⌥/Alt chords ARE editable/terminal-guarded
+    // (#449, `isBareAltChord`), but mod-bearing chords — including AltGr's
+    // Ctrl+Alt — deliberately stay unguarded, and the action is
+    // rebindable/unbindable in Settings — the same class as the shipped ⌘⌥digit
+    // chords.
     id: "new-window",
     label: "New window",
     group: "App",
@@ -480,7 +482,9 @@ export function keybindConflicts(
  * — but NOT xterm's hidden helper <textarea> (inside `.xterm`), which the arrow
  * shortcuts deliberately intercept ahead of the PTY. Mirrors the
  * `Terminal/hoverFocus.ts` contract; structural for node tests. Modifier chords are
- * unaffected — they don't type text.
+ * unaffected — they don't type text — with one exception: **bare-⌥/Alt chords**
+ * compose typed glyphs on international layouts, so the dispatcher additionally
+ * guards those with `isBareAltChord` + this predicate / `isTerminalTarget` (#449).
  */
 export function isEditableTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -489,6 +493,39 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   const tag = el.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
   return !!el.isContentEditable;
+}
+
+/**
+ * True when a serialized chord's modifier set is exactly `alt` or `alt+shift` —
+ * the chords a keyboard layout can turn into **typed text** (macOS ⌥/⌥⇧ glyph
+ * composition — ⌥2 = @ on Nordic layouts, ⌥3 = # on UK; Windows Alt+numpad), so
+ * the dispatcher must never steal them from an editable target or a focused
+ * terminal (#449). Mod-bearing chords never type and stay unguarded — including
+ * AltGr-as-Ctrl+Alt, the accepted `new-window` caveat documented on its registry
+ * entry.
+ */
+export function isBareAltChord(chord: string): boolean {
+  if (!chord) return false;
+  const mods = new Set(chord.split("+").slice(0, -1));
+  return (
+    mods.has("alt") &&
+    !mods.has("mod") &&
+    !mods.has("ctrl") &&
+    !mods.has("super")
+  );
+}
+
+/**
+ * True when `target` sits inside a live xterm terminal (`.xterm`) — the same
+ * containment contract `Terminal/hoverFocus.ts` (and the Overview / big-mode
+ * focus checks) use. The dispatcher pairs it with `isEditableTarget` (which
+ * deliberately exempts xterm's helper <textarea>) so bare-⌥ chords reach the PTY
+ * instead of switching views (#449). Structural for node tests.
+ */
+export function isTerminalTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.closest !== "function") return false;
+  return !!el.closest(".xterm");
 }
 
 // --- Recorder gate -----------------------------------------------------------
