@@ -97,7 +97,8 @@ export interface EditorInfo {
 /** What ReCue decided about the WebKitGTK DMA-BUF renderer at boot (#357), for
  * Settings → Rendering. Mirrors Rust's `linux_webkit::RendererReport` — snake_case on the
  * wire, like `AgentInfo`. `renderer_diagnostics` returns `null` on macOS/Windows (nothing
- * is decided there), which is what hides the whole Rendering section. */
+ * is decided there) — since task 453 the Rendering section renders on every OS, so a null
+ * report just omits the DMA-BUF half of the pane/diagnostics. */
 export interface RendererReport {
   /** Did ReCue export `WEBKIT_DISABLE_DMABUF_RENDERER=1`? */
   dmabuf_disabled: boolean;
@@ -534,21 +535,25 @@ export interface Settings {
    * agent's sidebar row (#335). Default on. When off, no badge renders and the store
    * performs **no** `diff_line_counts` git reads (zero cost). */
   showDiffLineCounts: boolean;
-  // Rendering — Linux only (#357). Hidden entirely on macOS/Windows, where both fields
-  // are inert whatever their persisted value.
-  /** WebKitGTK's **DMA-BUF** (zero-copy GPU) renderer: `"auto"` (#346/#347's GPU-aware
-   * detection — the default), `"on"` (force-keep, overriding a detection that wrongly
-   * disables it), `"off"` (force-disable ⇒ CPU rendering of the webview, the fix for a
-   * broken NVIDIA-blob / VM stack). Read from `sessions.json` **before GTK init** (via the
-   * Rust `early_settings`), so a change applies on the **next launch** — GTK reads the env
-   * once at init and there is no way to re-apply it live. `RECUE_DISABLE_DMABUF=1|0`, and a
-   * user-exported `WEBKIT_DISABLE_DMABUF_RENDERER`, still win over this for one run. */
+  // Rendering (#357). The DMA-BUF key is Linux-only (inert on macOS/Windows); the
+  // terminal-renderer key applies on **every** OS since task 453 (the `linux` prefix is
+  // kept for persisted-blob compatibility — no rename, no migration).
+  /** WebKitGTK's **DMA-BUF** (zero-copy GPU) renderer — **Linux only**: `"auto"`
+   * (#346/#347's GPU-aware detection — the default), `"on"` (force-keep, overriding a
+   * detection that wrongly disables it), `"off"` (force-disable ⇒ CPU rendering of the
+   * webview, the fix for a broken NVIDIA-blob / VM stack). Read from `sessions.json`
+   * **before GTK init** (via the Rust `early_settings`), so a change applies on the
+   * **next launch** — GTK reads the env once at init and there is no way to re-apply it
+   * live. `RECUE_DISABLE_DMABUF=1|0`, and a user-exported
+   * `WEBKIT_DISABLE_DMABUF_RENDERER`, still win over this for one run. */
   linuxDmabufRenderer: "auto" | "on" | "off";
-  /** xterm's renderer: `"auto"` (the #346 software-rasterizer probe — the default),
-   * `"webgl"` (force the WebGL addon even when the probe says llvmpipe/SwiftShader),
-   * `"dom"` (force xterm's DOM renderer). Applied **live** to the pooled terminals on Save
-   * — no terminal is ever disposed (the #18 invariant). Detached canvas windows always use
-   * the DOM renderer regardless (#105). */
+  /** xterm's renderer, on every OS (task 453 — the key name is kept for blob
+   * compatibility): `"auto"` (the default — WebGL, with the #346 software-rasterizer
+   * probe on Linux only; macOS/Windows never probe), `"webgl"` (force the WebGL addon
+   * even when the Linux probe says llvmpipe/SwiftShader), `"dom"` (force xterm's DOM
+   * renderer — the remedy for the #105-class doubled/ghosted-glyph WebGL artifact in
+   * secondary app windows on some Retina / fractionally-scaled setups). Applied **live**
+   * to the pooled terminals on Save — no terminal is ever disposed (the #18 invariant). */
   linuxTerminalRenderer: "auto" | "webgl" | "dom";
   // Behavior (wired by a follow-up)
   /** View shown on launch. */
@@ -892,4 +897,13 @@ export interface BootState {
   platform: string;
   /** Windows build number, `0` elsewhere (#140). */
   windows_build: number;
+  /** Task 450: PTY liveness at snapshot time — these three come from the **live**
+   * `SessionManager`, not the persisted store: which registered ids have a running
+   * child right now. Lets a window opened mid-run skip the "Reconnecting…" flash. */
+  live_ids: string[];
+  /** Task 450: dead-but-kept PTYs → their retained exit code (the exit overlay +
+   * Restart state); spans agent sessions AND #72 shell-terminal panels. */
+  exit_codes: Record<string, number | null>;
+  /** Task 450: ids the backend monitor currently reads as busy (#42). */
+  busy_ids: string[];
 }

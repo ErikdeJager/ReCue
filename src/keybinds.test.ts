@@ -7,13 +7,16 @@ import {
   CONTAINER_TOGGLE_CHORD,
   eventChord,
   eventKeyToken,
+  isBareAltChord,
   isEditableTarget,
+  isTerminalTarget,
   KEYBIND_ACTIONS,
   keybindConflicts,
   keybindMapFor,
   normalizeChord,
   reservedChords,
   resolveKeybindMap,
+  terminalClaimsChord,
 } from "./keybinds";
 
 /** A keydown-shaped object; only what the chord logic reads. */
@@ -35,6 +38,20 @@ function ev(
     key: opts.key ?? "",
     code,
   };
+}
+
+/** An element-shaped object; only what the target predicates read. */
+function fakeEl(opts: {
+  tag: string;
+  isContentEditable?: boolean;
+  insideXterm?: boolean;
+}): Element {
+  return {
+    tagName: opts.tag.toUpperCase(),
+    isContentEditable: opts.isContentEditable ?? false,
+    closest: (selector: string): Element | null =>
+      selector === ".xterm" && opts.insideXterm ? ({} as Element) : null,
+  } as unknown as Element;
 }
 
 describe("KEYBIND_ACTIONS registry", () => {
@@ -277,19 +294,6 @@ describe("keybindConflicts", () => {
 });
 
 describe("isEditableTarget", () => {
-  function fakeEl(opts: {
-    tag: string;
-    isContentEditable?: boolean;
-    insideXterm?: boolean;
-  }): Element {
-    return {
-      tagName: opts.tag.toUpperCase(),
-      isContentEditable: opts.isContentEditable ?? false,
-      closest: (selector: string): Element | null =>
-        selector === ".xterm" && opts.insideXterm ? ({} as Element) : null,
-    } as unknown as Element;
-  }
-
   it("flags real text inputs but never xterm's helper textarea", () => {
     expect(isEditableTarget(fakeEl({ tag: "input" }))).toBe(true);
     expect(isEditableTarget(fakeEl({ tag: "textarea" }))).toBe(true);
@@ -302,6 +306,112 @@ describe("isEditableTarget", () => {
     ).toBe(false);
     expect(isEditableTarget(fakeEl({ tag: "div" }))).toBe(false);
     expect(isEditableTarget(null)).toBe(false);
+  });
+});
+
+describe("isBareAltChord (#449)", () => {
+  it("flags alt-only (and alt+shift) chords — the glyph-composing class", () => {
+    expect(isBareAltChord("alt+1")).toBe(true);
+    expect(isBareAltChord("alt+2")).toBe(true);
+    expect(isBareAltChord("alt+3")).toBe(true);
+    expect(isBareAltChord("alt+shift+2")).toBe(true);
+  });
+
+  it("never flags mod-bearing chords or the empty chord", () => {
+    expect(isBareAltChord("mod+alt+n")).toBe(false);
+    expect(isBareAltChord("mod+w")).toBe(false);
+    expect(isBareAltChord("ctrl+alt+2")).toBe(false);
+    expect(isBareAltChord("super+alt+1")).toBe(false);
+    expect(isBareAltChord("mod+shift+n")).toBe(false);
+    expect(isBareAltChord("")).toBe(false);
+  });
+});
+
+describe("isTerminalTarget (#449)", () => {
+  it("flags targets inside .xterm (the hoverFocus contract)", () => {
+    expect(
+      isTerminalTarget(fakeEl({ tag: "textarea", insideXterm: true })),
+    ).toBe(true);
+  });
+
+  it("rejects plain inputs, null, and closest-less objects", () => {
+    expect(isTerminalTarget(fakeEl({ tag: "input" }))).toBe(false);
+    expect(isTerminalTarget(null)).toBe(false);
+    expect(isTerminalTarget({} as EventTarget)).toBe(false);
+  });
+});
+
+describe("bare-⌥ pass-through regression (#449, pure layer)", () => {
+  it("an ⌥2-composed glyph still resolves to the alt+2 view chord — and that chord is bare-alt", () => {
+    // Nordic ⌥2 composes "@" in e.key; the physical Digit2 wins in eventChord.
+    const chord = eventChord(ev("Digit2", { alt: true, key: "@" }), "macos");
+    expect(chord).toBe("alt+2");
+    expect(keybindMapFor({}).get("alt+2")).toBe("view-attention");
+    // The dispatcher's guard classifies it as glyph-capable, so it passes
+    // through in editable / focused-terminal targets.
+    expect(isBareAltChord("alt+2")).toBe(true);
+  });
+
+  it("an AltGr-shaped Ctrl+Alt chord serializes mod-bearing — NOT bare-alt", () => {
+    // AltGr on Windows delivers ctrl+alt; ń over KeyN → "mod+alt+n" stays
+    // unguarded (the documented new-window caveat).
+    const chord = eventChord(
+      ev("KeyN", { ctrl: true, alt: true, key: "ń" }),
+      "windows",
+    );
+    expect(chord).toBe("mod+alt+n");
+    expect(isBareAltChord(chord as string)).toBe(false);
+  });
+});
+
+describe("terminalClaimsChord (task 448 terminal PTY passthrough)", () => {
+  /** A focus target inside a pooled xterm (structural, like isEditableTarget's). */
+  const xtermTarget = {
+    closest: (selector: string): Element | null =>
+      selector === ".xterm" ? ({} as Element) : null,
+  } as unknown as EventTarget;
+  /** A focus target outside any terminal. */
+  const plainTarget = {
+    closest: (): Element | null => null,
+  } as unknown as EventTarget;
+
+  it("claims a bare Ctrl chord on an xterm target (Ctrl+W = delete-word)", () => {
+    expect(terminalClaimsChord(ev("KeyW", { ctrl: true }), xtermTarget)).toBe(
+      true,
+    );
+  });
+
+  it("never claims a meta chord — macOS ⌘W is the app's, not readline's", () => {
+    expect(terminalClaimsChord(ev("KeyW", { meta: true }), xtermTarget)).toBe(
+      false,
+    );
+    // Ctrl+⌘ combos carry metaKey too.
+    expect(
+      terminalClaimsChord(ev("KeyW", { ctrl: true, meta: true }), xtermTarget),
+    ).toBe(false);
+  });
+
+  it("exempts Ctrl+Shift chords — the terminal-app convention for app actions", () => {
+    expect(
+      terminalClaimsChord(ev("KeyW", { ctrl: true, shift: true }), xtermTarget),
+    ).toBe(false);
+  });
+
+  it("allows Alt alongside Ctrl (AltGr layouts)", () => {
+    expect(
+      terminalClaimsChord(ev("KeyW", { ctrl: true, alt: true }), xtermTarget),
+    ).toBe(true);
+  });
+
+  it("never claims outside a terminal, or without a usable target", () => {
+    expect(terminalClaimsChord(ev("KeyW", { ctrl: true }), plainTarget)).toBe(
+      false,
+    );
+    expect(terminalClaimsChord(ev("KeyW", { ctrl: true }), null)).toBe(false);
+    // A target with no closest() (a non-element EventTarget) is safely ignored.
+    expect(
+      terminalClaimsChord(ev("KeyW", { ctrl: true }), {} as EventTarget),
+    ).toBe(false);
   });
 });
 

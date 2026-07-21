@@ -10,9 +10,11 @@ import {
 import {
   ChevronDown,
   ChevronRight,
+  File as FileIcon,
   FileText,
   Folder,
   FolderOpen,
+  Image as ImageIcon,
   Locate,
   RefreshCw,
   Search,
@@ -33,6 +35,7 @@ import { splitPath } from "../../paths";
 import { joinPath, revealLabel } from "../../platform";
 import { useStore } from "../../store";
 import type { FileStatusCode } from "../../types";
+import { fileIconKind, isViewableFile } from "../FileViewer/fileType";
 import { buildFolderRollup, deletedChildrenAt, isIgnored } from "./fileStatus";
 import styles from "./FileTree.module.css";
 
@@ -51,6 +54,15 @@ function statusClass(status: FileStatusCode | undefined): string {
 function parentDir(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? "" : path.slice(0, idx);
+}
+
+/** Lucide icon for a file row by its viewability (task 455): previewable files keep
+ * the FileText glyph, image formats get Image, other binaries the generic File. */
+function iconFor(path: string) {
+  const kind = fileIconKind(path);
+  if (kind === "image") return ImageIcon;
+  if (kind === "binary") return FileIcon;
+  return FileText;
 }
 
 /** Right-click menu state: the cursor position + the row the menu targets and
@@ -84,8 +96,14 @@ const CONTENT_RESULT_LIMIT = 200;
  * and **very large repos** without ever walking the whole tree (no count or depth cap)
  * — the same data source as the file picker's `search_files`. Folder expansion state
  * lives in local component state (not persisted; refresh reloads from the root).
- * Clicking a file opens it in the file viewer; right-clicking a file offers Open in
- * file viewer / Open as Kanban board (`.md` only) / Reveal in Finder / Copy absolute
+ * The tree shows **every file type** (task 455): a file ReCue can't preview
+ * (image/archive/media/executable — `isViewableFile`) still renders as a real row
+ * (git-tinted, context-menu-able, an OS-drop target, revealable) with an image or
+ * generic-binary icon, but clicking it shows a brief "can't preview" toast instead
+ * of opening a viewer panel.
+ * Clicking a viewable file opens it in the file viewer; right-clicking a file offers
+ * Open in file viewer (previewable files only) / Open as Kanban board (`.md` only) /
+ * Reveal in Finder / Copy absolute
  * path / Copy relative path (#184) / Add to .gitignore (#312) / Delete (#267).
  * Right-clicking a **folder** offers New folder… / Rename… / Reveal in Finder / Copy
  * absolute path / Copy relative path (#291) / Add to .gitignore (#312) / Delete folder
@@ -95,7 +113,9 @@ const CONTENT_RESULT_LIMIT = 200;
  *
  * **In-panel search (#202):** a search box at the top replaces the tree with results
  * while a query is typed (debounced). Two groups — **Files** (filename hits via
- * `search_files`) and **In files** (content hits via `search_file_contents`, each with
+ * `search_files`, binary-inclusive like the tree itself since task 455 — a
+ * non-previewable hit gets the same open-vs-toast gate) and **In files** (content
+ * hits via `search_file_contents`, each with
  * the matching line as a highlighted mono **snippet**), run in parallel. Each result
  * row opens the file on click, or **reveals** it in the tree (lazy-expanding every
  * ancestor folder, then scrolling + briefly highlighting the row).
@@ -109,6 +129,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
   const addToGitignore = useStore((s) => s.addToGitignore);
   const confirmDestructive = useStore((s) => s.settings.confirmDestructive);
   const platform = useStore((s) => s.platform);
+  const pushToast = useStore((s) => s.pushToast);
   // Git working-tree status for this repo (#252): repo-relative path → "A"|"M"|"D"|"I"
   // ("I" = gitignored, #270). Undefined = not loaded / non-git → no coloring. The map is
   // shared in the store so every FileTree instance for a repo reads one fetch; it's
@@ -251,7 +272,16 @@ function FileTree({ repoPath }: { repoPath: string }) {
     setSearching(true);
     setFileHits([]);
     setContentRes(null);
-    const fileP = searchFiles(repoPath, debounced, undefined, FILE_RESULT_LIMIT)
+    // `includeBinary` (task 455): the in-panel search surfaces every file type,
+    // matching what the tree itself lists (the picker/global search stay
+    // viewable-only).
+    const fileP = searchFiles(
+      repoPath,
+      debounced,
+      undefined,
+      FILE_RESULT_LIMIT,
+      true,
+    )
       .then((hits) => {
         if (cancelled) return;
         setFileHits(hits);
@@ -353,6 +383,18 @@ function FileTree({ repoPath }: { repoPath: string }) {
 
   const openFile = (file: string) =>
     void openFileFromTree(repoPath, file, "markdown");
+
+  // Open a previewable file, or toast that this format can't be previewed (task
+  // 455): a binary row is real (tinted, context-menu-able, revealable) but never
+  // opens a viewer panel — `read_text_file` would only fail on it, leaving a
+  // persisted junk panel behind.
+  const openOrToast = (file: string) => {
+    if (isViewableFile(file)) {
+      openFile(file);
+    } else {
+      pushToast(`ReCue can't preview ${splitPath(file).base}`, "info");
+    }
+  };
 
   // Reveal a result in the tree: lazy-load every ancestor level (so the row renders),
   // expand them, leave the results view, then trigger the scroll-to + highlight (#202).
@@ -578,6 +620,9 @@ function FileTree({ repoPath }: { repoPath: string }) {
       // default styling. Tinted A/M rows also get a trailing status letter.
       const code = statusMap?.[node.path];
       const cls = statusClass(code);
+      // Every file type renders as a real row (task 455); a non-previewable one
+      // gets an image/binary icon and its click toasts instead of opening.
+      const RowIcon = iconFor(node.path);
       return (
         <button
           key={node.path}
@@ -585,13 +630,13 @@ function FileTree({ repoPath }: { repoPath: string }) {
           type="button"
           className={`${styles.row}${isRevealed ? ` ${styles.revealed}` : ""}${cls ? ` ${cls}` : ""}`}
           style={indent}
-          onClick={() => openFile(node.path)}
+          onClick={() => openOrToast(node.path)}
           onContextMenu={(event) => openMenu(event, node.path, false)}
           title={node.path}
           // A drop on a file row lands in its containing directory (#253).
           data-filetree-droptarget={parentDir(node.path)}
         >
-          <FileText
+          <RowIcon
             size={12}
             strokeWidth={1.5}
             className={styles.fileIcon}
@@ -615,6 +660,9 @@ function FileTree({ repoPath }: { repoPath: string }) {
     const ghosts = deletedChildrenAt(statusMap ?? {}, path, existing).map(
       (name) => {
         const rel = path ? `${path}/${name}` : name;
+        // Same icon family as a live row (task 455) — a deleted image ghosts
+        // with the Image glyph, not the text one.
+        const GhostIcon = iconFor(name);
         return (
           <div
             key={`ghost:${rel}`}
@@ -624,7 +672,7 @@ function FileTree({ repoPath }: { repoPath: string }) {
             // A drop on a ghost row lands in this directory level (#253).
             data-filetree-droptarget={path}
           >
-            <FileText
+            <GhostIcon
               size={12}
               strokeWidth={1.5}
               className={styles.fileIcon}
@@ -659,33 +707,42 @@ function FileTree({ repoPath }: { repoPath: string }) {
         {fileCount > 0 ? (
           <div className={styles.group}>
             <div className={styles.groupHeader}>Files</div>
-            {rankedFileHits.map((path) => (
-              <div key={path} className={styles.result}>
-                <button
-                  type="button"
-                  className={styles.resultMain}
-                  onClick={() => openFile(path)}
-                  title={`Open ${path}`}
-                >
-                  <FileText
-                    size={12}
-                    strokeWidth={1.5}
-                    className={styles.fileIcon}
-                    aria-hidden
-                  />
-                  <span className={styles.resultPath}>{path}</span>
-                </button>
-                <button
-                  type="button"
-                  className={styles.revealBtn}
-                  onClick={() => void revealInTree(path)}
-                  title="Reveal in tree"
-                  aria-label="Reveal in tree"
-                >
-                  <Locate size={13} strokeWidth={1.5} />
-                </button>
-              </div>
-            ))}
+            {rankedFileHits.map((path) => {
+              // Non-previewable hits are real results (task 455) — same icon +
+              // click gate as their tree rows (open vs "can't preview" toast).
+              const HitIcon = iconFor(path);
+              return (
+                <div key={path} className={styles.result}>
+                  <button
+                    type="button"
+                    className={styles.resultMain}
+                    onClick={() => openOrToast(path)}
+                    title={
+                      isViewableFile(path)
+                        ? `Open ${path}`
+                        : `${path} — no preview`
+                    }
+                  >
+                    <HitIcon
+                      size={12}
+                      strokeWidth={1.5}
+                      className={styles.fileIcon}
+                      aria-hidden
+                    />
+                    <span className={styles.resultPath}>{path}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.revealBtn}
+                    onClick={() => void revealInTree(path)}
+                    title="Reveal in tree"
+                    aria-label="Reveal in tree"
+                  >
+                    <Locate size={13} strokeWidth={1.5} />
+                  </button>
+                </div>
+              );
+            })}
             {fileCapped ? (
               <p className={styles.capNote}>
                 More filename matches not shown — refine your search.
@@ -971,17 +1028,22 @@ function FileTree({ repoPath }: { repoPath: string }) {
             ) : (
               // ── File menu (#184 + Delete #267) ──
               <>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-item"
-                  onClick={() => {
-                    openFile(menu.path);
-                    closeMenu();
-                  }}
-                >
-                  Open in file viewer
-                </button>
+                {/* A non-previewable file has no viewer to open in (task 455);
+                    every other item — reveal / copy / gitignore / delete —
+                    still applies. */}
+                {isViewableFile(menu.path) ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      openFile(menu.path);
+                      closeMenu();
+                    }}
+                  >
+                    Open in file viewer
+                  </button>
+                ) : null}
                 {menu.path.toLowerCase().endsWith(".md") ? (
                   <button
                     type="button"

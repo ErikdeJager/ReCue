@@ -1,0 +1,51 @@
+/* The ⌘W/Ctrl+W destructive-close confirm (task 448): the shared
+   modal-scrim/modal-pop chrome (modal.css, task 378) with a Cancel / danger-action
+   pair. Trimmed from CanvasCloseModal.module.css — layout only: z-index, width +
+   padding, and the header/body type. */
+.overlay {
+  z-index: 210;
+}
+
+.dialog {
+  display: flex;
+  width: 440px;
+  max-height: calc(100vh - var(--space-32));
+  flex-direction: column;
+  padding: 18px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-bottom: var(--space-12);
+}
+
+.headerIcon {
+  flex-shrink: 0;
+  color: var(--status-awaiting);
+}
+
+.title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13.5px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.body {
+  margin: 0 0 var(--space-16);
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+  line-height: 1.65;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-8);
+}

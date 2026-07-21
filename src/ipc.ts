@@ -354,7 +354,8 @@ export interface DirEntry {
   name: string;
   /** Repo-relative path (POSIX `/`), e.g. `src/components`. */
   path: string;
-  /** An expandable folder vs a viewable file. */
+  /** An expandable folder vs a file (every file type lists since task 455 —
+   * whether a file is previewable is decided frontend-side, `isViewableFile`). */
   is_dir: boolean;
   /** The folder is a linked git worktree root (its `.git` is a pointer file into
    * `.git/worktrees/`) — the FileTree renders it in place but gates its contents
@@ -364,27 +365,32 @@ export interface DirEntry {
 }
 
 /** Immediate children of one directory (`subdir` repo-relative, empty = repo root)
- * for the **lazy** file tree (#167): folders first then viewable files, no count or
- * depth cap — the tree fetches one level per expansion, so it scales to deep / huge
- * repos. Rejects paths outside the repo. */
+ * for the **lazy** file tree (#167): folders first then files — **every** file type
+ * since task 455 (a non-previewable file renders as a non-openable row) — no count
+ * or depth cap: the tree fetches one level per expansion, so it scales to deep /
+ * huge repos. Rejects paths outside the repo. */
 export const listDir = (repo: string, subdir: string) =>
   invoke<DirEntry[]>("list_dir", { repo, subdir });
 
 /** Search a repo's viewable files for the picker (#56) — case-insensitive substring
  * over repo-relative paths, optionally restricted to an extension (e.g. `.md`),
  * result-capped server-side so it scales to very large repos. Empty `query` returns
- * the first files. */
+ * the first files. `includeBinary` (task 455, default off — the picker/global
+ * search keep viewable-only results) widens the walk to every file type for the
+ * FileTree's in-panel search, matching what the tree itself lists. */
 export const searchFiles = (
   repo: string,
   query: string,
   ext?: string,
   limit?: number,
+  includeBinary?: boolean,
 ) =>
   invoke<string[]>("search_files", {
     repo,
     query,
     ext: ext ?? null,
     limit: limit ?? null,
+    includeBinary: includeBinary ?? false,
   });
 
 /** One content-search hit (#202): a matching line inside a file. */

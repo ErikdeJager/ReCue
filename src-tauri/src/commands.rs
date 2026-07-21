@@ -469,7 +469,7 @@ fn spawn_session_blocking(
             let image = prepare_container_spawn(app, &agent)?;
             let session_id = Uuid::new_v4().to_string();
             if let Some(parent) = &worktree_parent {
-                let _ = git::worktree_lock(parent, &cwd, "ReCue dev-container session");
+                let _ = git::worktree_lock(parent, &cwd, crate::container::WORKTREE_LOCK_REASON);
             }
             Some(container_launch_for(
                 &store,
@@ -593,7 +593,7 @@ fn spawn_worktree_agent_blocking(
         Some(true) => {
             let image = prepare_container_spawn(app, &agent)?;
             let session_id = Uuid::new_v4().to_string();
-            let _ = git::worktree_lock(&repo, &dest, "ReCue dev-container session");
+            let _ = git::worktree_lock(&repo, &dest, crate::container::WORKTREE_LOCK_REASON);
             Some(container_launch_for(
                 &store,
                 &session_id,
@@ -683,7 +683,7 @@ fn spawn_worktree_agent_new_branch_blocking(
         Some(true) => {
             let image = prepare_container_spawn(app, &agent)?;
             let session_id = Uuid::new_v4().to_string();
-            let _ = git::worktree_lock(&repo, &dest, "ReCue dev-container session");
+            let _ = git::worktree_lock(&repo, &dest, crate::container::WORKTREE_LOCK_REASON);
             Some(container_launch_for(
                 &store,
                 &session_id,
@@ -1422,6 +1422,18 @@ pub fn worktree_has_items(
             .any(|r| r.cwd == dest || r.worktree_path.as_deref() == Some(dest))
 }
 
+/// True when the `git worktree list` entry for `dest` holds the lock ReCue itself
+/// stamped at dev-container spawn (the exact [`crate::container::WORKTREE_LOCK_REASON`])
+/// — the only lock the NotManaged cleanup path may release (task 451). A user's or
+/// agent's own lock (any other reason, or none) is never touched.
+fn recue_container_lock_held(entries: &[crate::git::WorktreeEntry], dest: &str) -> bool {
+    entries.iter().any(|e| {
+        e.locked
+            && e.locked_reason.as_deref() == Some(crate::container::WORKTREE_LOCK_REASON)
+            && same_path_norm(&e.path, dest)
+    })
+}
+
 /// Serializes every ref-count-check → git-remove pair (task 431): two windows (or a
 /// window and the Rust exit path) can no longer both see "empty" and double-run
 /// `git worktree remove` (check/check/remove/remove-fails → a spurious "kept dirty").
@@ -1451,10 +1463,13 @@ pub enum WorktreeCleanup {
 /// earlier cleanup already won); refuse a dest outside `<data-dir>/worktrees`
 /// (`NotManaged` — the same hard invariant as `remove_worktree`, enforced HERE so the
 /// Rust-internal clean-exit caller is covered too: an in-place spawn into a DETECTED
-/// external worktree records `worktree_parent`, and its clean exit lands here without
-/// ever passing the frontend's `!managed` short-circuit); else unlock (best-effort,
-/// the dev-container lock) and run the **non-forced** `git worktree remove` — git
-/// refusing a dirty tree IS the dirty guard (#74, never force) → `KeptDirty`.
+/// external worktree records `worktree_parent`, and its clean exit lands here — but
+/// first release ReCue's OWN dev-container lock when one is held, unlock without
+/// deleting (task 451), gated on the exact spawn-time reason via
+/// [`recue_container_lock_held`] so a foreign lock is never touched); else unlock
+/// (best-effort, the dev-container lock) and run the **non-forced** `git worktree
+/// remove` — git refusing a dirty tree IS the dirty guard (#74, never force) →
+/// `KeptDirty`.
 pub fn cleanup_worktree_blocking(app: &AppHandle, parent: &str, dest: &str) -> WorktreeCleanup {
     let lock = app.state::<WorktreeCleanupLock>();
     let _guard = lock
@@ -1481,6 +1496,17 @@ pub fn cleanup_worktree_blocking(app: &AppHandle, parent: &str, dest: &str) -> W
         .map(|root| path_under_norm(dest, &root))
         .unwrap_or(false);
     if !managed {
+        // ReCue's own dev-container lock (taken at spawn against an in-container
+        // `git worktree prune`) must not outlive the session: a stale lock blocks
+        // Claude Code's own clean-exit auto-removal of ITS worktree. Release it —
+        // UNLOCK without deleting, and only when the held lock is provably ours
+        // (the exact spawn-time reason). A foreign or reason-less lock, or an
+        // unreadable listing, leaves everything untouched (fail-closed).
+        if let Some(entries) = git::list_worktrees(parent) {
+            if recue_container_lock_held(&entries, dest) {
+                let _ = git::worktree_unlock(parent, dest);
+            }
+        }
         return WorktreeCleanup::NotManaged;
     }
     // A dev-container session locked the worktree at spawn (the in-container `git
@@ -1867,8 +1893,9 @@ pub fn set_repo_color(
 }
 
 /// Immediate children of one directory (`subdir`, repo-relative; empty = repo root)
-/// for the **lazy** file tree (#167) — folders first, then viewable files, no count
-/// or depth cap (depth is reached by expanding one level at a time). Path-validated.
+/// for the **lazy** file tree (#167) — folders first, then files (**every** file type
+/// since task 455; the viewer gate is frontend-side), no count or depth cap (depth is
+/// reached by expanding one level at a time). Path-validated.
 #[tauri::command]
 pub fn list_dir(
     repo: String,
@@ -1877,21 +1904,30 @@ pub fn list_dir(
     crate::files::list_dir(&repo, &subdir).map_err(SessionError::Io)
 }
 
-/// Search a repo's viewable files for the file picker (#56) — substring match over
+/// Search a repo's files for the file picker (#56) — substring match over
 /// repo-relative paths, optionally restricted to an extension (e.g. `.md` for the
 /// Kanban picker), result-capped so it scales to very large repos. Deterministic
-/// across machines.
+/// across machines. Viewable files only by default; `include_binary` (task 455,
+/// absent = `false` so the picker/global search stay byte-identical) widens the walk
+/// to every file type for the FileTree's in-panel search.
 #[tauri::command]
 pub fn search_files(
     repo: String,
     query: String,
     ext: Option<String>,
     limit: Option<usize>,
+    include_binary: Option<bool>,
 ) -> Vec<String> {
     let limit = limit
         .unwrap_or(crate::files::SEARCH_RESULT_CAP)
         .clamp(1, crate::files::SEARCH_RESULT_CAP * 8);
-    crate::files::search_files(&repo, &query, ext.as_deref(), limit)
+    crate::files::search_files(
+        &repo,
+        &query,
+        ext.as_deref(),
+        limit,
+        include_binary.unwrap_or(false),
+    )
 }
 
 /// Search a repo's viewable files **by content** for the in-tree search (#202) —
@@ -2338,7 +2374,18 @@ pub fn app_window_url(id: &str, init: &AppWindowInit) -> String {
 /// global `Destroyed` arm in `lib.rs` already covers an app window's close (task
 /// 426's terminal-view purge + task 433's primary re-election), and no PTY is
 /// killed on close (sessions keep running, mirrored in surviving windows).
-#[tauri::command]
+///
+/// DEADLOCK INVARIANT (task 454): this command MUST stay `(async)`. A synchronous
+/// command runs inline on the main thread inside the webview's IPC event handler,
+/// and `WebviewWindowBuilder::build` is documented to deadlock there on Windows
+/// (wry#583 — the WebView2 controller-creation completion can never be dispatched
+/// while that handler is on the stack), freezing the entire app. With `(async)` the
+/// body runs on the async runtime's worker thread and the build round-trips to the
+/// free main-thread event loop — the tauri-documented fix. macOS (WKWebView) and
+/// Linux (WebKitGTK) never deadlocked and are observably unchanged. The fn itself
+/// stays a plain sync `pub fn` so the direct Rust callers (menu.rs New Window, the
+/// Dock Reopen arm, the single-instance poke) keep calling it unchanged.
+#[tauri::command(async)]
 pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, SessionError> {
     // A user-opened app window is never maximized by default (only a fresh-install
     // `main`, or a restored previously-maximized window, is — task 443).
@@ -2354,6 +2401,15 @@ pub fn open_app_window(app: AppHandle, init: AppWindowInit) -> Result<String, Se
 /// (433) and in the window-state registry (439, with its creation presets — the
 /// same values the URL carries, so a restored window re-persists what it was
 /// created with).
+///
+/// CONTRACT (task 454): on Windows this must NEVER be called on the main thread
+/// from inside a webview IPC/event handler — `WebviewWindowBuilder::build` is
+/// documented to deadlock there (wry#583: the WebView2 controller-creation
+/// completion dispatches on the same sequential UI-thread queue the in-progress
+/// handler is blocking). Safe contexts are the `.setup()` hook (the task-439
+/// `window_state::restore_windows` boot path) and worker threads (the `(async)`
+/// `open_app_window` command, the single-instance spawned thread) — from a thread
+/// the build round-trips to the free main-thread event loop internally.
 pub fn create_app_window(
     app: &AppHandle,
     init: AppWindowInit,
@@ -3851,6 +3907,17 @@ pub struct BootState {
     pub platform: String,
     /// `windows_build` (`0` on non-Windows)
     pub windows_build: u32,
+    /// Task 450: PTY liveness at snapshot time — sessions whose child is running right
+    /// now (see [`SessionManager::liveness`]). Empty from the pure `boot_state_from`
+    /// (store-only), filled by the `boot_state` command from the live manager.
+    pub live_ids: Vec<String>,
+    /// Task 450: dead-but-kept PTYs → their retained exit code (exit overlay + Restart
+    /// state; spans agent sessions AND #72 shell-terminal panels). Empty from the pure
+    /// `boot_state_from`, filled by the command — see [`SessionManager::liveness`].
+    pub exit_codes: std::collections::HashMap<String, Option<i32>>,
+    /// Task 450: sessions the monitor currently reads as busy (#42). Empty from the
+    /// pure `boot_state_from`, filled by the command — see [`SessionManager::liveness`].
+    pub busy_ids: Vec<String>,
 }
 
 /// Assemble the boot payload from the persisted store — the **pure** half of `boot_state`
@@ -3882,13 +3949,25 @@ pub fn boot_state_from(
         app_version,
         platform,
         windows_build,
+        // PTY liveness (task 450) lives on the SessionManager, not the persisted store —
+        // the command overwrites these three from `manager.liveness()`.
+        live_ids: Vec::new(),
+        exit_codes: std::collections::HashMap::new(),
+        busy_ids: Vec::new(),
     }
 }
 
 /// The one boot read (#352): everything the frontend needs, in a single round-trip.
 /// Purely additive — every individual command it batches stays registered and works.
+/// Since task 450 it also carries the live PTY-liveness snapshot (`live_ids` /
+/// `exit_codes` / `busy_ids`), taken **after** the store read so a window opened
+/// mid-run seeds true backend state; the frontend fetches it only after its event
+/// listeners exist, so the snapshot can never lose to a broadcast in the gap.
 #[tauri::command]
-pub async fn boot_state(store: State<'_, Store>) -> Result<BootState, SessionError> {
+pub async fn boot_state(
+    store: State<'_, Store>,
+    manager: State<'_, SessionManager>,
+) -> Result<BootState, SessionError> {
     // The one non-trivial read: the Windows `cmd /C ver` probe (#143 `windows_build`).
     // Run it on the blocking pool (the #330 `current_branches` pattern) so it can't stall
     // an async worker — and await it FIRST, so no store lock is ever live across an await.
@@ -3899,12 +3978,14 @@ pub async fn boot_state(store: State<'_, Store>) -> Result<BootState, SessionErr
         .unwrap_or(0);
     // Infallible in practice (in-memory reads only) — async + a borrowed `State` just
     // requires a `Result` return (the `clone_repo` precedent).
-    Ok(boot_state_from(
-        &store,
-        platform(),
-        win_build,
-        app_version(),
-    ))
+    let mut boot = boot_state_from(&store, platform(), win_build, app_version());
+    // PTY liveness (task 450): overwrite the pure builder's empty placeholders from the
+    // live manager, AFTER the await above so no lock is ever held across an await.
+    let liveness = manager.liveness();
+    boot.live_ids = liveness.live_ids;
+    boot.exit_codes = liveness.exit_codes;
+    boot.busy_ids = liveness.busy_ids;
+    Ok(boot)
 }
 
 /// Clear the recents list (#100 Settings → Data) and persist. Running sessions are
@@ -4259,32 +4340,37 @@ pub fn install_kind() -> String {
     .to_string()
 }
 
-/// The Windows build number (e.g. `19045`, `22631`, `26100`), read once at boot and
-/// cached in the store to configure xterm.js's ConPTY handling
-/// (`windowsPty.buildNumber`, which gates reflow at ≥ 21376). On **non-Windows** this
-/// returns `0` — the frontend only consumes it under an `isWindows` guard, so macOS is
-/// untouched and never even runs the probe. On Windows it shells out to `cmd /C ver`
-/// via `hidden_command` (same `CREATE_NO_WINDOW` path as the `--version` probe, so no
-/// console flash) and parses the bracketed version. Best-effort: any failure ⇒ `0`,
-/// which simply leaves xterm's reflow disabled (today's behavior).
+/// The Windows build number (e.g. `19045`, `22631`, `26100`), probed once per process
+/// and **memoized** (task 450 — every window's `boot_state` calls this, and the OS
+/// build can't change mid-run, so only the first call pays the shell-out) to configure
+/// xterm.js's ConPTY handling (`windowsPty.buildNumber`, which gates reflow at ≥
+/// 21376). On **non-Windows** this returns `0` — the frontend only consumes it under
+/// an `isWindows` guard, so macOS is untouched and never even runs the probe. On
+/// Windows it shells out to `cmd /C ver` via `hidden_command` (same `CREATE_NO_WINDOW`
+/// path as the `--version` probe, so no console flash) and parses the bracketed
+/// version. Best-effort: any failure ⇒ `0`, which simply leaves xterm's reflow
+/// disabled (today's behavior).
 #[tauri::command]
 pub fn windows_build() -> u32 {
-    #[cfg(windows)]
-    {
-        let out = crate::git::hidden_command("cmd")
-            .args(["/C", "ver"])
-            .output()
-            .ok();
-        out.and_then(|o| {
-            let text = String::from_utf8_lossy(&o.stdout);
-            parse_windows_build(&text)
-        })
-        .unwrap_or(0)
-    }
-    #[cfg(not(windows))]
-    {
-        0
-    }
+    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUILD.get_or_init(|| {
+        #[cfg(windows)]
+        {
+            let out = crate::git::hidden_command("cmd")
+                .args(["/C", "ver"])
+                .output()
+                .ok();
+            out.and_then(|o| {
+                let text = String::from_utf8_lossy(&o.stdout);
+                parse_windows_build(&text)
+            })
+            .unwrap_or(0)
+        }
+        #[cfg(not(windows))]
+        {
+            0
+        }
+    })
 }
 
 /// What ReCue decided about the WebKitGTK DMA-BUF renderer at boot (#357), for
@@ -4654,6 +4740,14 @@ mod tests {
         );
     }
 
+    /// Task 454: the menu / single-instance / Reopen paths call the plain fn (not the
+    /// IPC wrapper). Pin the signature so the `(async)` attribute fix can never drift
+    /// into an `async fn` that silently breaks those direct Rust callers.
+    #[test]
+    fn open_app_window_stays_directly_callable_as_a_sync_fn() {
+        let _: fn(AppHandle, AppWindowInit) -> Result<String, SessionError> = open_app_window;
+    }
+
     /// Build a minimal `PersistedSession` for the `worktree_parent_for_cwd` tests (#331) —
     /// only `repo_path` + `worktree_parent` matter to the resolver.
     fn mk_session(repo_path: &str, worktree_parent: Option<&str>) -> PersistedSession {
@@ -4796,11 +4890,16 @@ mod tests {
         assert_eq!(boot.platform, "linux");
         assert_eq!(boot.windows_build, 0);
         assert_eq!(boot.app_version, "1.2.3");
+        // The PTY-liveness trio (task 450) is EMPTY from the pure builder — it lives on
+        // the SessionManager, and only the `boot_state` command fills it.
+        assert!(boot.live_ids.is_empty());
+        assert!(boot.exit_codes.is_empty());
+        assert!(boot.busy_ids.is_empty());
 
-        // Nothing was invented: the payload is a plain JSON object of the 20 fields.
+        // Nothing was invented: the payload is a plain JSON object of the 23 fields.
         let value = serde_json::to_value(&boot).expect("serialize");
         assert!(value.get("sessions").is_some());
-        assert_eq!(value.as_object().map(|o| o.len()), Some(20));
+        assert_eq!(value.as_object().map(|o| o.len()), Some(23));
 
         let _ = std::fs::remove_file(&path);
     }
@@ -5346,6 +5445,54 @@ mod tests {
         // A bare entry is refused.
         let bare = validate_delete_target(&entries, "/repo", "/wt/bare-entry");
         assert!(bare.unwrap_err().contains("bare"));
+    }
+
+    /// Task 451: the NotManaged unlock gate releases ONLY the lock ReCue itself
+    /// stamped at dev-container spawn — exact reason + matching path; anything
+    /// else (unlocked, reason-less, foreign reason, other path) is never touched.
+    #[test]
+    fn recue_container_lock_held_gates_on_reason_and_path() {
+        let entry = |path: &str, locked: bool, reason: Option<&str>| crate::git::WorktreeEntry {
+            path: path.to_string(),
+            head: "abc".into(),
+            branch: Some("feat".into()),
+            bare: false,
+            detached: false,
+            locked,
+            locked_reason: reason.map(str::to_string),
+            prunable: false,
+        };
+        let ours = vec![entry(
+            "/wt/feat-x",
+            true,
+            Some(crate::container::WORKTREE_LOCK_REASON),
+        )];
+        // Exact reason + matching path — incl. trailing-slash and `\` variance
+        // (the `same_path_norm` normalization).
+        assert!(recue_container_lock_held(&ours, "/wt/feat-x"));
+        assert!(recue_container_lock_held(&ours, "/wt/feat-x/"));
+        assert!(recue_container_lock_held(&ours, "\\wt\\feat-x"));
+        // Not locked at all.
+        assert!(!recue_container_lock_held(
+            &[entry("/wt/feat-x", false, None)],
+            "/wt/feat-x"
+        ));
+        // Locked with no recorded reason — could be anyone's; never ours.
+        assert!(!recue_container_lock_held(
+            &[entry("/wt/feat-x", true, None)],
+            "/wt/feat-x"
+        ));
+        // A foreign reason (e.g. Claude Code's own while-working lock) is never touched.
+        assert!(!recue_container_lock_held(
+            &[entry(
+                "/wt/feat-x",
+                true,
+                Some("working agent keeps this alive")
+            )],
+            "/wt/feat-x"
+        ));
+        // Our reason on a DIFFERENT worktree never matches this dest.
+        assert!(!recue_container_lock_held(&ours, "/wt/other"));
     }
 
     #[test]

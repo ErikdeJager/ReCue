@@ -6,7 +6,10 @@
 //
 //   ⌥1 / ⌥2 / ⌥3       switch to Overview / Attention / Canvas
 //   ⌘W / Ctrl+W        close the focused panel (big mode → Canvas leaf → Overview × →
-//                      remove the focused Attention agent)
+//                      remove the focused Attention agent; the destructive
+//                      fall-throughs are confirm-gated by `confirmDestructive`, and
+//                      typed into a focused terminal the chord passes through to
+//                      the PTY — Ctrl+W is delete-word there, task 448)
 //   ⌘, / Ctrl+,        open Settings
 //   ⌘E / Ctrl+E        toggle big mode for the selected item              (#284)
 //   ⌘N / Ctrl+N        open the new-session flow from anywhere            (#26)
@@ -40,8 +43,13 @@
 // is ⌘ on macOS and Ctrl on Windows/Linux, so a **bare ⌃-chord on macOS now
 // passes through to the terminal's readline** (⌃E end-of-line, ⌃N history, …)
 // instead of triggering the app action — the old `metaKey || ctrlKey` matching
-// swallowed those. Every other key (normal typing, Shift+letters, other combos)
-// passes straight through.
+// swallowed those. **Bare-⌥/Alt chords** (the ⌥1/⌥2/⌥3 view defaults, or any
+// alt-only rebind) also pass through when any modal owns the keyboard (the
+// `anyModalOpen` pass in the view-* cases) OR when the target is editable / a
+// focused terminal (#449) — a layout can compose them into typed glyphs (⌥2 = @
+// on Nordic, ⌥3 = # on UK), so with a terminal focused ⌥1/⌥2/⌥3 type into the
+// PTY; use the ViewSwitch (or click) to switch views from there. Every other
+// key (normal typing, Shift+letters, other combos) passes straight through.
 
 import { useEffect } from "react";
 
@@ -49,9 +57,12 @@ import { attentionQueue } from "./components/Attention/attentionQueue";
 import { panelTypeForDigit } from "./components/CreatePanelModal/panelTypes";
 import {
   eventChord,
+  isBareAltChord,
   isEditableTarget,
+  isTerminalTarget,
   keybindCaptureActive,
   keybindMapFor,
+  terminalClaimsChord,
   type KeybindActionId,
 } from "./keybinds";
 import { detectPlatform } from "./platform";
@@ -99,6 +110,8 @@ function anyModalOpen(state: ReturnType<typeof useStore.getState>): boolean {
     state.onboardingOpen ||
     state.editorPickerOpen ||
     state.canvasClosePromptId !== null ||
+    // The ⌘W destructive-close confirm (task 448) — chords must not act behind it.
+    state.removePrompt !== null ||
     state.update.confirming
   );
 }
@@ -186,10 +199,12 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
     // Attention it removes (kills + forgets) the focused agent, the view's primary
     // close affordance. Inert while ANY modal owns the keyboard — every modal flag,
     // not just the four keyboard-opened ones: since #425 the Overview fall-through
-    // is destructive (removeSession / cancelSchedule / cancelRecurring), so a chord
+    // is destructive (removeSession / cancelSchedule / cancelRecurring — since task
+    // 448 confirm-gated by the `confirmDestructive` setting), so a chord
     // aimed at dismissing a dialog must never reach the card behind it. Still
     // swallowed there, so the chord can never fall through to a WebView "close
-    // window" default.
+    // window" default. (A focused-terminal keydown never reaches this case — the
+    // dispatcher's terminalClaimsChord guard passes it to the PTY, task 448.)
     case "close-panel": {
       if (!anyModalOpen(state)) state.closeFocusedPanel();
       return "swallow";
@@ -209,7 +224,10 @@ function runKeybindAction(action: KeybindActionId): Dispatch {
     // ⌥1/⌥2/⌥3 — direct view switching (replaces the removed ⌘\ cycle). Like the
     // old ⌘\ guard, the event **passes through** when a modal owns the keyboard —
     // EVERY modal, so ⌥-glyph typing (⌥2 = @ on Nordic layouts) in any modal
-    // input still types instead of flipping the view under the dialog.
+    // input still types instead of flipping the view under the dialog. The
+    // dispatch block additionally passes bare-⌥ chords through for editable /
+    // focused-terminal targets (#449) — deliberately: with a terminal focused,
+    // ⌥1/⌥2/⌥3 type into the PTY; switch views via the ViewSwitch or a click.
     case "view-overview":
     case "view-attention":
     case "view-canvas": {
@@ -292,6 +310,29 @@ export function useKeyboardNav(): void {
           chord,
         );
         if (action) {
+          // Bare-⌥ chords (the ⌥1/⌥2/⌥3 view defaults, or any alt-only rebind)
+          // compose typed glyphs on international layouts (⌥2 = @ on Nordic,
+          // ⌥3 = # on UK) — never steal them from a real text field or a focused
+          // terminal: return WITHOUT preventing default so the character reaches
+          // the input / PTY. Mod-bearing chords are exempt (they can't type; the
+          // AltGr-as-Ctrl+Alt caveat on new-window stays as documented in
+          // keybinds.ts). Chord-class, not per-action, so the invariant holds
+          // for ANY action rebound onto a bare-alt chord (#449).
+          if (
+            isBareAltChord(chord) &&
+            (isEditableTarget(e.target) || isTerminalTarget(e.target))
+          ) {
+            return;
+          }
+          // Task 448: the close-panel chord typed into a focused terminal is a
+          // terminal editing key (Ctrl+W = readline/claude delete-word on
+          // Windows/Linux, where mod is Ctrl) — return WITHOUT preventDefault so
+          // xterm forwards it to the PTY instead of the app killing the panel/
+          // agent under the cursor. xterm cancels the keydown it converts to
+          // data, so no WebView default can fire either.
+          if (action === "close-panel" && terminalClaimsChord(e, e.target)) {
+            return;
+          }
           if (runKeybindAction(action) === "swallow") {
             e.preventDefault();
             e.stopPropagation();

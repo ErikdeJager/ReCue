@@ -2951,3 +2951,422 @@ Windows/Linux the native decorations are kept (no custom caption buttons), but t
 **Dependencies:** none. (Shared `tauri.conf.json` `app.windows[0]` / `create_app_window` surfaces with
 Task 443, but kept disjoint — 444 owns only title-bar styling, 443 owns size/bounds; the merge lane
 resolved the textual overlap, hence the one merge retry.)
+
+### 449. [x] Pass bare ⌥/Alt chords through to terminals and text fields (international-layout glyph fix)
+
+The rebindable-keybind dispatcher matched chords by physical `e.code` in the capture phase with no
+editable-target/focused-terminal guard, so on international layouts a user typing an Option-composed
+glyph (⌥2 = `@` on Nordic, ⌥3 = `#` on UK) into a claude terminal, the FileViewer raw `<textarea>`,
+a Kanban card editor, or a rename `<input>` flipped the view to Overview/Attention/Canvas and lost
+the character (v2.0.0 review finding, `useKeyboardNav.ts`; the modal-input slice had already been
+fixed via `anyModalOpen`). This restores the only-intercept-outside-editable-targets invariant for
+the bare-modifier chord class.
+
+**What shipped** (branch `task/449-alt-chord-passthrough`, PR
+[#220](https://github.com/ErikdeJager/ReCue/pull/220), merged into `improvements` as `2da215b`;
+3 files, +139/−20):
+
+- **`src/keybinds.ts`** — two new pure, exported helpers next to `isEditableTarget`:
+  `isBareAltChord(chord)` (true when the serialized chord's modifier set is exactly `{alt}` or
+  `{alt, shift}` — the composition-capable class: macOS ⌥/⌥⇧ glyphs, Windows Alt+numpad alt-codes)
+  and `isTerminalTarget(target)` (`target.closest(".xterm")`, the established
+  `hoverFocus.ts`/Overview/BigMode contract, with the same structural-testability `closest` guard
+  `isEditableTarget` uses). Comment truth-ups on the `new-window` AltGr caveat and the
+  `isEditableTarget` doc comment; `eventChord`'s physical-`e.code` serialization and
+  `isEditableTarget`'s deliberate `.xterm` exemption (Shift+arrow interception) untouched.
+- **`src/useKeyboardNav.ts`** — one guard in the rebindable-dispatch block, after the
+  `keybindMapFor(...)` lookup and before `runKeybindAction`: a matched **bare-alt** chord whose
+  target is editable or inside `.xterm` returns without `preventDefault`/`stopPropagation`, so the
+  composed character reaches the input / PTY. Chord-class based (not per-action), so any action
+  rebound onto an alt-only chord inherits the pass-through; the `closest()` walk runs only on
+  already-matched chords (no hot-path cost). Header + `view-*` case comments updated.
+- **`src/keybinds.test.ts`** — unit tests for both helpers plus an end-to-end regression at the
+  pure layer: a Nordic-composed `Digit2`+alt keydown serializes to `"alt+2"` → maps to
+  `"view-attention"` → is bare-alt (the guarded class), while Ctrl+Alt+N (`"mod+alt+n"`, the AltGr
+  caveat class) is not.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 449)
+
+- The guarded class is exactly `{alt}` / `{alt, shift}`; **mod-bearing** chords (⌘W, ⌘E, ⌘⌥N incl.
+  the AltGr-as-Ctrl+Alt caveat, the fixed ⌘⌥1–6 launcher chords) stay deliberately unguarded —
+  comments updated, not behavior.
+- Terminal focus = `target.closest(".xterm")` via the new exported `isTerminalTarget`; the guard is
+  `isEditableTarget(target) || isTerminalTarget(target)`.
+- Platform-neutral (identical on macOS, Windows, Linux) with the accepted consequence: with a
+  terminal focused, ⌥1/⌥2/⌥3 type into the PTY instead of switching views — the ViewSwitch / mouse
+  is the in-terminal path.
+- The existing `anyModalOpen` pass in the `view-*` cases is kept as a coexisting guard.
+
+**Dependencies:** none. (Kept minimal/localized in the dispatch block to avoid merge friction with
+concurrent Task 448's mod+W work; `isTerminalTarget` is exported for its reuse.)
+
+### 452. [x] Window restore: track fresh-install-ness explicitly and retain main's geometry across a mid-run close
+
+`WindowSet::destroyed` pruned a closed window's persisted entry whenever it wasn't the last one, so
+closing the **main** window while an `app-*` window survived, then quitting from that window, left
+the persisted set with no `main` entry — which the task-443 default (`maximized =
+main_entry.map(|e| e.maximized).unwrap_or(true)`) read as a **fresh install**: the next launch
+opened main maximized at default placement, discarding its remembered geometry (v2.0.0 review
+finding, `window_state.rs:539`). This fixes both halves: main's geometry survives a mid-run close,
+and the maximize-by-default keys off an explicit fresh-install marker instead of an absent entry.
+
+**What shipped** (branch `task/452-window-restore-freshness`, PR
+[#221](https://github.com/ErikdeJager/ReCue/pull/221), merged into `improvements` as `a20f243`;
+3 files, +298/−19):
+
+- **`src-tauri/src/window_state.rs`** — `WindowSet` gains a **main-only `closed_main` stash**:
+  `destroyed("main")` retains the removed entry (geometry + `maximized` flag frozen at close-time
+  values) and `snapshot()` appends it, so the flushed set still carries main's remembered frame;
+  `register("main")` clears a stale stash defensively (no duplicate main). Safe because main is
+  unconditionally recreated at every boot from `tauri.conf.json` — its entry is pure geometry,
+  presence never means "was open"; a closed `app-*` stays pruned (its entry decides what reopens),
+  and the would-empty last-window-close exit rule keeps counting **live** windows only (the stash
+  lives outside `windows`). The maximize decision is extracted as the pure
+  `main_restore_maximized(entry, fresh_install)` — a saved entry's flag always wins; `None` +
+  fresh → `true`, `None` + not-fresh → `false` (builder-default 1280×832 unmaximized as the
+  lost/corrupt-file degrade) — wired into `restore_windows`, which reads the marker, and sets it
+  one-shot (guarded — zero extra writes on steady-state boots). Extensive new pure tests + a
+  mock-app glue test pin the stash lifecycle, the exit rules, and the pure decision table.
+- **`src-tauri/src/store.rs`** — new backend-internal `PersistedState.window_state_initialized:
+  bool` (`serde(default)` so legacy files load as `false`) with a getter + one-shot setter
+  mirroring the `perm_reprompt_done` shape; no Tauri command, no frontend change. Field docs note
+  the persisted set may now carry a geometry-only `main` entry whose window was closed at quit.
+- **`CLAUDE.md`** — the stale task-443 "fresh install (no saved `main` entry)" sentence in the
+  Multi-window bullet now names the explicit marker and the retained-main rule.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 452)
+
+- Fixed both halves, not just the marker — a flag alone would still lose main's geometry (pruned
+  on `Destroyed`); verified no other consumer of `window_state` exists.
+- Upgrade behavior preserved deliberately: a pre-439 file or an install already in the bug state
+  (marker absent, no main entry) still gets exactly ONE task-443 maximized launch, then is marked —
+  identical to today, no migration write; rollback-safe both ways via `serde(default)`.
+- Platform-neutral pure Rust (no `#[cfg]` arms); Wayland stays size-only as before.
+- GUI smoke (mid-run close → quit from app window → relaunch restores main's frame; fresh-install
+  delete-`sessions.json` check) flagged in the PR body per the #84/#105 precedent — cannot be
+  unit-tested.
+
+**Dependencies:** none.
+
+### 453. [x] Cross-platform terminal-renderer override for secondary-window WebGL artifacts
+
+Task 437 deleted the #105-era `IS_MAIN_WINDOW` DOM-renderer guard along with the canvas windows, so
+every `app-*` full app window now attaches the xterm WebGL addon on macOS/Windows with no fallback
+for the #105 doubled/ghosted-glyph artifact (a Retina / fractional-scaling glyph-atlas issue in
+secondary native windows) — the #364 latch only catches context *loss*, and the #357 Terminal
+renderer override was Linux-only (v2.0.0 review finding, `terminalPool.ts:795`; needs a real GUI
+box to verify whether the artifact still reproduces). This extends the #357 Settings → Rendering
+**Terminal renderer** override (auto/WebGL/DOM) to every platform as the live escape hatch, keeping
+defaults byte-for-byte unchanged, and records the real-box verification checklist that decides a
+follow-up default flip.
+
+**What shipped** (branch `task/453-terminal-renderer-override`, PR
+[#222](https://github.com/ErikdeJager/ReCue/pull/222), merged into `improvements` as `96ce581`;
+9 files, +339/−172):
+
+- **`src/components/Terminal/webglRenderer.ts`** — new pure
+  `decideTerminalRendererForPlatform(linux, mode, renderer)`: off Linux the forced modes win
+  (`"webgl"`/`"dom"` → "forced in Settings") and `"auto"` stays the no-probe WebGL short-circuit;
+  on Linux it defers byte-for-byte to the existing #346/#357 `decideTerminalRenderer`.
+  `webglRenderer.test.ts` adds non-Linux forced/auto cases + a full Linux mode×renderer parity
+  sweep.
+- **`src/components/Terminal/terminalPool.ts`** — `rendererDecision()` routes through the new pure
+  function with the #346 probe still Linux-gated (the probe canvas is never constructed on
+  macOS/Windows — the CLAUDE.md invariant holds); `applyTerminalRenderer()` drops its off-Linux
+  early return (keeping only the platform-not-loaded guard), so a Save/428-sync converges every
+  window's pool live through the existing addon load/unload + refresh loop — no host dispose (#18),
+  and the #364 latch keeps outranking a forced "webgl" everywhere.
+- **`src/components/Settings/Settings.tsx`** — the Rendering section renders on every OS (the nav
+  filter is gone); only the **DMA-BUF** control (and its boot-report diagnostics lines) stays
+  Linux-gated inside the pane; `diagnosticsText` is platform-aware (off Linux: no DMA-BUF lines,
+  `probed: n/a (Linux-only probe)`); the helpText is rewritten platform-true with the stale
+  "Detached canvas windows always use the DOM renderer" sentence removed.
+- **`src/types/index.ts` / `src/store.ts`** — doc-comment truth-ups: the persisted key name
+  `linuxTerminalRenderer` is deliberately kept (no rename/migration; existing Linux overrides
+  survive) but documented as cross-platform since task 453; no behavioral store change, no Rust
+  change.
+- **`CLAUDE.md`** — Settings is ten sections on every OS; the Rendering description and the
+  Linux-performance note now split the DMA-BUF (Linux-only) vs terminal-renderer (cross-platform)
+  halves.
+- **`TRAJECTORY_TO_WINDOWS.md`** — dated task-453 entry: macOS-Retina + Windows-fractional-scaling
+  artifact checks, the override round-trip, and the decision rule — if the artifact reproduces on
+  default WebGL, a follow-up card flips the *auto* default for `app-*` windows at the named seam
+  (`rendererDecision()` + `WINDOW_KIND`); if not, task 437's deletion stands.
+  **`TRAJECTORY_TO_LINUX.md`** — short no-Linux-behavior-change note + one sanity check.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 453)
+
+- Chose extending the override over restoring a per-window DOM guard: the artifact is unverified on
+  the current (post-#348, per-webview) window stack, tasks 427/437 deliberately granted full app
+  windows WebGL, and a blanket DOM default would certainly regress secondary-window rendering to
+  fix an unverified bug.
+- Defaults unchanged on every OS — only a user-forced `"webgl"`/`"dom"` (previously inert off
+  Linux) gains effect there.
+- The real-box checklist lives in `TRAJECTORY_TO_WINDOWS.md` (which already hosts cross-OS
+  matrices, tasks 443/444 precedent — there is no macOS trajectory file).
+- No version bump, no patch notes (fix PRs never bump; releases are batched).
+
+**Dependencies:** none.
+
+### 451. [x] Release ReCue's dev-container worktree lock on non-managed worktree teardown (unlock without deleting)
+
+A dev-container session spawned **in place** into a non-managed (agent-created/external) worktree
+takes a `git worktree lock` at spawn (the in-container `git worktree prune` guard), but
+`cleanup_worktree_blocking`'s `NotManaged` early-return skipped the unlock entirely — so ReCue's own
+lock outlived the session and blocked Claude Code's own clean-exit worktree auto-removal forever (a
+locked worktree refuses removal even with `--force`; v2.0.0 review finding, `commands.rs:1474`).
+The fix unlocks **without deleting**, and only when the held lock is provably ReCue's own — the
+keep-forever invariant (automation never deletes a worktree ReCue didn't create) is untouched.
+
+**What shipped** (branch `task/451-notmanaged-unlock`, PR
+[#223](https://github.com/ErikdeJager/ReCue/pull/223), merged into `improvements` as `09ffdf2`;
+6 files, +124/−22):
+
+- **`src-tauri/src/container.rs`** — the spawn-time lock reason extracted into a single
+  `pub const WORKTREE_LOCK_REASON = "ReCue dev-container session"` (doc-commented: must stay ASCII
+  with no quotes/newlines so the porcelain `locked <reason>` line round-trips unquoted), consumed
+  by all three `commands.rs` spawn lock sites **and** the new unlock gate — no string drift
+  possible.
+- **`src-tauri/src/commands.rs`** — new pure `recue_container_lock_held(entries, dest)`: true only
+  for a `locked` entry whose `locked_reason` equals the constant exactly **and** whose path matches
+  `dest` via `same_path_norm` (trailing-slash / `\`-separator / Windows case-fold safe).
+  `cleanup_worktree_blocking`'s `NotManaged` branch now reads `git::list_worktrees(parent)` and,
+  when the gate holds, best-effort `git::worktree_unlock`s — then still returns `NotManaged`
+  without ever invoking `worktree_remove`. A foreign or reason-less lock, or an unreadable listing,
+  **fails closed** (no unlock — today's behavior). Runs under the `WorktreeCleanupLock` mutex after
+  `worktree_has_items`, so a second dev-container session sharing the worktree keeps the lock via
+  the earlier `InUse` short-circuit. Unit test pins the gate's reason/path truth table.
+- **`src-tauri/src/git.rs`** — `worktree_lock_blocks_remove_until_unlock` uses the constant and now
+  also pins the real-git porcelain round-trip: `list_worktrees` reports the entry `locked` with
+  `locked_reason == Some(WORKTREE_LOCK_REASON)` verbatim (the property the gate depends on).
+- **`src/store.ts`** — the second instance of the same leak: `cleanupWorktreeIfEmpty`'s
+  detected-`!managed` short-circuit (a "pointless round-trip" optimization that kept the common
+  UI-Remove/panel-close path from ever reaching the backend) is removed — the backend is always
+  called (`deletingWorktrees` guard stays first), and a `notManaged` outcome stays silent.
+  `store.worktrees.test.ts`'s external-worktree case flipped to assert the backend IS called and
+  nothing is removed or toasted.
+- **`CLAUDE.md`** — the stale "unlocked by `remove_worktree`" sentence in the dev-container bullet
+  now also names the reason-gated NotManaged unlock-without-delete.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 451)
+
+- Reason-gated, fail-closed unlock — never a blind unlock; Claude Code's own while-working lock and
+  any user lock are preserved.
+- The unlock lives in `cleanup_worktree_blocking` so both callers (Rust clean-exit forget, the
+  `cleanup_worktree_if_empty` command) get it.
+- Out of scope by choice: the `Removed` early-return (stale locked admin entry with a vanished
+  dir), unlocking at app quit/`kill_all` (records persist + resume, the lock must persist too),
+  re-locking on resume, and any change to the managed branch / `remove_worktree` /
+  `delete_worktree` (byte-for-byte).
+- Platform-neutral (git via `hidden_command`, paths via `same_path_norm` — no `#[cfg]` arms); the
+  docker/GUI smoke is flagged for a human run in the PR.
+
+**Dependencies:** none.
+
+### 454. [x] Fix Windows freeze on "Open in new window": run open_app_window off the main thread (sync-command WebView2 deadlock, wry#583)
+
+On Windows, clicking the sidebar repo menu's **Open in new window** (or Ctrl+Alt+N, or the Canvas
+tab pop-out) froze the entire application; the same code worked on macOS. Root cause, pinned from
+the code plus tauri 2.11.3's own rustdoc without a Windows repro box: `open_app_window` was a
+**synchronous** `#[tauri::command]`, which Tauri 2 executes inline on the main thread inside the
+webview's IPC event handler — and `WebviewWindowBuilder::build()` is documented to deadlock exactly
+there on Windows (wry#583: the WebView2 controller-creation completion callback can never be
+dispatched while that handler blocks the main thread), stopping the event loop and freezing every
+window. WKWebView (macOS) and WebKitGTK (Linux) have no such reentrancy restriction.
+
+**What shipped** (branch `task/454-new-window-freeze`, PR
+[#224](https://github.com/ErikdeJager/ReCue/pull/224), merged into `improvements` as `675227c`;
+3 files, +71/−8):
+
+- **`src-tauri/src/commands.rs`** — the attribute-only fix: `#[tauri::command]` →
+  `#[tauri::command(async)]` on `open_app_window` (verified in tauri-macros 2.6.3: the sync body
+  then runs via `async_runtime::spawn` on a worker thread, and the build round-trips to the
+  now-free main-thread event loop — the tauri-documented fix). Chosen over `pub async fn` so the
+  `menu.rs` / single-instance / Reopen **direct Rust callers** stay untouched; a DEADLOCK
+  INVARIANT doc comment names wry#583 so a refactor can't silently revert it, and
+  `create_app_window` gains a threading-contract note. A fn-pointer signature-pinning unit test
+  (`open_app_window_stays_directly_callable_as_a_sync_fn`) is the automatable guard — the deadlock
+  itself is not reproducible under `tauri::test::mock_app` or CI.
+- **`src-tauri/src/lib.rs`** — defensive hardening beyond the reported repro: the single-instance
+  second-launch callback keeps `run_on_main_thread` as the boot-ordering barrier only (the Store
+  must be managed before the poke) but spawns the actual creation on a separate thread from inside
+  that closure — tauri's Known-issues note also covers "event handlers" and that path is
+  Windows-reachable. Platform-neutral, no `#[cfg]`.
+- **`TRAJECTORY_TO_WINDOWS.md`** — dated task-454 entry with the real-box checklist (repo-menu
+  open / Ctrl+Alt+N / pop-out with no freeze, second-launch poke, boot restore, the
+  now-functional failed-create toast) — the code fix is complete without it, but final
+  confirmation needs a real Windows box (no CI path exercises the WebView2 reentrancy).
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 454)
+
+- macOS-only creation sites (File → New Window, Dock Reopen) and the `.setup()` boot-restore path
+  left byte-for-byte unchanged (documented-supported contexts; the CLAUDE.md macOS-arm rule).
+- No frontend changes: all three UI triggers funnel into the same command fire-and-forget; the
+  Sidebar's existing error toast simply becomes functional once the promise can settle.
+- Audited and ruled out the other suspects: `window_state.rs`/`primary.rs` are lock-clean (queries
+  before locks, guards dropped before emits/writes) — no secondary ABBA deadlock fix needed.
+
+**Dependencies:** none.
+
+### 448. [x] Terminal-safe mod+W: pass Ctrl+W through to a focused terminal and confirm-gate the destructive close-panel fall-through
+
+On Windows/Linux the app's `mod` is Ctrl, so the `close-panel` default `mod+w` **is Ctrl+W** — the
+readline/claude delete-word key — and the capture-phase dispatcher swallowed it before xterm ever
+saw it. Combined with hover-focus (`autoFocusOnHover` defaults true) and #425's un-gated Overview
+fall-through, "hover an agent, type Ctrl+W to delete a word" silently **killed and forgot** that
+agent (v2.0.0 review finding, `keybinds.ts:79`). Two guards fix it; the default chord stays
+`mod+w`.
+
+**What shipped** (branch `task/448-terminal-safe-mod-w`, PR
+[#225](https://github.com/ErikdeJager/ReCue/pull/225), merged into `improvements` as `dbbd3a5`;
+9 files, +567/−14):
+
+- **`src/keybinds.ts`** — new pure `terminalClaimsChord(e, target)`: true iff the keydown is a
+  control-sequence keystroke (`ctrlKey && !metaKey && !shiftKey` — Alt allowed for AltGr layouts)
+  and the target sits inside `.xterm` (structural `closest`, the `isEditableTarget` pattern).
+  Keys off the **event**, not the platform string — macOS ⌘W (metaKey) never matches, so default
+  macOS behavior is byte-for-byte unchanged, while a rebound bare-Ctrl chord gets the same
+  protection on every OS. Ctrl+**Shift** chords are deliberately exempt (the Windows Terminal /
+  GNOME Terminal convention), so rebinding close-panel to Ctrl+Shift+W yields an
+  always-works-in-terminals chord.
+- **`src/useKeyboardNav.ts`** — the dispatcher guard: a keydown resolving to `close-panel` that
+  `terminalClaimsChord` claims returns without preventDefault/action — xterm forwards `^W` to the
+  PTY (xterm cancels keydowns it converts to data, so no WebView default fires). Scoped to
+  `close-panel` only — the other Ctrl-as-mod readline collisions (Ctrl+E/K/D/B/F/N/O) are
+  non-destructive and stay the documented status quo. `anyModalOpen` gains the new prompt flag.
+- **`src/store.ts`** — the destructive keyboard fall-through (Overview agent/schedule/recurring
+  **and** the Attention branch) now honors the existing `confirmDestructive` setting (#103,
+  default on): instead of dispatching `removeSession`/`cancelSchedule`/`cancelRecurring`
+  directly, `closeFocusedPanel` sets a transient per-window `removePrompt` slice; `confirm`/
+  `cancelRemovePrompt` resolve it (a vanished target is a safe no-op). With the setting off, all
+  four paths stay instant (the #425 behavior, pinned by the updated store tests). Non-destructive
+  closes (big-mode, Canvas leaf, Overview non-agent panel) never prompt; mouse × buttons stay
+  un-gated (#425's rule narrowed for the keyboard chord only).
+- **`src/components/ConfirmRemoveModal/`** (+ **`ModalHost.tsx`** gate) — a new lazy confirm
+  modal mirroring `CanvasCloseModal` (modal.css chrome, Esc/scrim cancel, focus trap, danger
+  button autofocused so Enter confirms), naming the agent via the Attention `labelFor` pattern,
+  with a stale-target auto-cancel effect.
+- **`src/keybinds.test.ts` / `src/store.test.ts`** — the `terminalClaimsChord` truth-table matrix
+  + prompt-flow tests (prompt set / confirm removes / cancel keeps / stale no-op / setting-off
+  instant paths). **`CLAUDE.md`** keybind bullet updated.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 448)
+
+- Combined two of the card's three mitigations and rejected the third: the default chord stays
+  `mod+w` (OS close-tab convention; a platform-split default would force a platform param through
+  `chordForAction`/`keybindMapFor`) — the two guards remove the hazard.
+- The confirm gate covers the whole destructive keyboard fall-through incl. Attention (uniform
+  "keyboard kill+forget asks first"), though the card names only Overview; Attention's ⌘⏎ dismiss
+  stays instant.
+- Honors the existing `confirmDestructive` setting rather than adding a new one; no version bump /
+  patch notes. Real-box PTY passthrough smoke on Windows/Linux flagged in the PR.
+
+**Dependencies:** none.
+
+### 450. [x] New-window state seeding: carry PTY liveness in boot_state, fetched race-free after event subscription
+
+A full app window opened mid-run (⌘⌥N, tear-off, repo "Open in new window", second launch) seeded
+only persisted store slices: a crashed agent read as **alive** (no exit overlay/Restart — the exit
+code lived only in windows that saw the one `session://exited` event), every session flashed
+"Reconnecting…" for ~4 s (task 440's targeted output means an un-hosted session never gets the
+byte that clears the flag, so only the backstop did) leaving the Attention queue falsely empty,
+and the pre-subscription `boot_state` fetch could be **older** than an app-global broadcast lost
+in the listener-registration gap, then overwrite it (the three v2.0.0 review findings at
+`store.ts:4369/4370/4263`).
+
+**What shipped** (branch `task/450-boot-liveness`, PR
+[#226](https://github.com/ErikdeJager/ReCue/pull/226), merged into `improvements` as `610ab32`;
+7 files, +425/−71):
+
+- **`src-tauri/src/pty.rs`** — the exit code is now **retained** (`ExitState.code: OnceLock`,
+  set **before** `reaped` flips, which precedes the `Exited` send) and busy made queryable
+  (`ActivityState.busy: AtomicBool`, stamped by the monitor thread **immediately before** each
+  `State` send — a stamp only, no #315 heuristic change). New
+  `SessionManager::liveness() -> PtyLiveness` partitions the manager map under sequential
+  (never nested) locks into `live_ids` / `exit_codes` (dead-but-kept PTYs, `None` = unknown) /
+  `busy_ids`; two new `#[cfg(unix)]` tests pin the exit-7 retention and the live/not-busy case.
+- **`src-tauri/src/commands.rs`** — `BootState` gains the three additive fields (empty from the
+  pure `boot_state_from`; filled by the command, which now takes `State<'_, SessionManager>`;
+  no new command, same invoke). The Windows `cmd /C ver` probe is memoized in a `OnceLock` so
+  the now-serialized fetch stays cheap for every subsequent window.
+- **`src/store.ts`** — `init` reordered to **subscribe-then-fetch** (the codebase's own
+  documented pattern for `primaryWindow`/`autoContinueSnapshot`/`fileClaims`): `bootState()` is
+  issued only after the ~31-listener wave, and with write-before-emit on every carried datum a
+  post-subscribe snapshot can never lose to a gap broadcast; double-delivery stays idempotent.
+  `applyBootState` is liveness-aware: `exit_codes` entry → seed `exitedCode` (overlay + Restart,
+  queue-excluded); `live_ids` → alive at once (no reconnecting flash, Attention-eligible
+  immediately); neither → `reconnecting` only for resume-capable agents (a dormant
+  codex/opencode record no longer flashes 4 s at true boot either); `busy_ids` → shimmering dot,
+  not seeded eligible (re-enters via the normal admission grace); non-session `exit_codes` ids →
+  `terminalExits` (dead #72 shell panels get their Restart overlay in every window).
+  `booting`/`resumeSettled` now derive from "any view reconnecting" rather than "any sessions
+  exist"; the 4 s backstop stays as the unconditional idempotent cap.
+- **`src/types/index.ts`** — the `BootState` mirror; **tests** — six new
+  `store.refresh.test.ts` cases (exited/live/resume-pending+dormant/busy/terminal-exit seeding +
+  the subscribe-before-fetch ordering assertion) and fixture-builder additions;
+  **`CLAUDE.md`** Multi-window bullet addendum.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 450)
+
+- Rejected event-buffering/sequence-number schemes — gap events are *lost* at the Tauri layer,
+  not reordered; subscribe-then-fetch + write-before-emit is the sound and established pattern.
+  Accepted the small boot-latency delta (the fetch now overlaps only the `primaryWindow` fetch).
+- Included the busy set and dead shell panels beyond the card's literal ask (same symptom
+  cluster / same manager map); a session already resumed by fetch time skipping the
+  "Reconnecting…" overlay is judged more accurate, not a regression.
+- Deliberately NOT carried: turn-state (the hook bridge re-admits), `sessionIdleSince` stamps
+  (`createdAt` fallback), cross-window exit-toast dedup (epic-deferred), recurring-child repair.
+- The v2.0.0 review line numbers were mapped via `git show v2.0.0:src/store.ts` to confirm the
+  three defect sites.
+
+**Dependencies:** none.
+
+### 455. [x] File tree shows all file types — binaries render as non-openable rows
+
+The FileTree silently hid every "binary" file — a repo's `logo.png` simply didn't exist in the
+tree — because the backend walkers filtered on `files.rs`'s `SKIP_EXTS` (images, pdf, fonts,
+archives, media, executables/objects; the card's "figure out what file types are not displayed").
+Now the tree lists **every** file type; a file ReCue can't preview renders as a real row
+(git-tinted, context-menu-able, drop-targetable, revealable) whose click shows a brief "can't
+preview" toast instead of opening a viewer panel.
+
+**What shipped** (branch `task/455-filetree-all-types`, PR
+[#227](https://github.com/ErikdeJager/ReCue/pull/227), merged into `improvements` as `755c446`;
+7 files, +369/−90):
+
+- **`src-tauri/src/files.rs`** — `list_dir` drops its `is_listable` filter (the linked-worktree
+  `.git` pointer-file guard and `SKIP_DIRS` stay — the card is about file types, not VCS
+  internals/heavy dirs); `search_files`/`search_collect` gain an opt-in `include_binary` flag
+  (default false — FilePicker/GlobalSearch requests stay byte-identical); `SKIP_EXTS` keeps a
+  keep-in-sync cross-reference comment to the TS mirror. Tests updated + a new
+  include-binary-only-when-asked case; `content_search_collect` untouched (it reads UTF-8).
+- **`src-tauri/src/commands.rs` / `src/ipc.ts`** — the `search_files` command takes
+  `include_binary: Option<bool>` (absent → false); `searchFiles` gains the trailing optional
+  param; doc truth-ups.
+- **`src/components/FileViewer/fileType.ts`** — the pure viewability mirror:
+  `NON_VIEWABLE_EXTS` (the exact `SKIP_EXTS` list, comment-linked), `IMAGE_EXTS` (svg excluded —
+  it's viewable markup), `isViewableFile` (extensionless → viewable, matching the backend), and
+  `fileIconKind` ("text" | "image" | "binary"), unit-tested incl. case-insensitivity and
+  Windows separators.
+- **`src/components/FileTree/FileTree.tsx`** — per-kind Lucide icons (`Image` for images,
+  generic `File` for other binaries, `FileText` for viewable — an icon rather than a muted
+  color, to avoid clashing with the #270 gitignored dimming); click gate (viewable → open as
+  before; else one info toast, no panel — a binary would only persist a junk "Couldn't read"
+  panel); context menu hides "Open in file viewer" for non-viewable rows (Reveal/Copy
+  paths/gitignore/Delete stay); the in-panel filename search passes `include_binary: true`
+  (it replaces the tree while typing, so hiding binaries there would resurface the bug) with the
+  same open-vs-toast gate on result rows. Git tints/#253 drop targets/ghost rows needed zero
+  changes (`git status --porcelain` has no extension filter).
+- **`CLAUDE.md`** — the file-access scope bullet amended: the tree lists every file type since
+  task 455; the picker/searches still skip binaries.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 455)
+
+- Viewability is decided frontend-side by the TS mirror rather than a wire-format flag
+  (`search_files` returns plain strings; drift is benign — worst case a clickable file shows the
+  existing "Couldn't read" message) — both lists carry keep-in-sync comments and tests.
+- No new preview capability (no image rendering) — explicitly allowed by the card; no Rename for
+  file rows (they never had one, #291 gave it to folders only).
+- Platform-neutral by construction (no `#[cfg]`/OS branches; `fileExt` splits on `/` and `\`).
+
+**Dependencies:** none.

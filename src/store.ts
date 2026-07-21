@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 
-import { agentCaps, SELECTABLE_AGENTS } from "./agents";
+import { agentCaps, agentSupportsResume, SELECTABLE_AGENTS } from "./agents";
 import { IDLE_AUTO_CONTINUE, type AutoContinueState } from "./autoContinue";
 import { resolveCanvases } from "./boot";
 import { attentionQueue } from "./components/Attention/attentionQueue";
@@ -1440,9 +1440,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // True by default (#335): show the per-agent added/removed line-count badge. Off
   // hides it AND stops ReCue running any `diff_line_counts` git read.
   showDiffLineCounts: true,
-  // Rendering (#357), Linux only. Both default to "auto", so every existing install (whose
-  // blob lacks the keys → mergeSettings fills them) and every macOS/Windows box behaves
-  // byte-for-byte as before: #346/#347's DMA-BUF detection and the #346 WebGL probe.
+  // Rendering (#357). Both default to "auto", so every existing install (whose blob lacks
+  // the keys → mergeSettings fills them) behaves byte-for-byte as before: #346/#347's
+  // DMA-BUF detection and the #346 WebGL probe on Linux, plain WebGL on macOS/Windows.
+  // The DMA-BUF key stays Linux-only; the terminal-renderer key applies on every OS since
+  // task 453 (name kept for blob compatibility — "auto" never probes off Linux).
   linuxDmabufRenderer: "auto",
   linuxTerminalRenderer: "auto",
   defaultView: "overview",
@@ -1691,11 +1693,12 @@ function applySettingsEffects(s: Settings): void {
     cursorBlink: s.terminalCursorBlink,
     background: s.terminalBackgroundLightness,
   });
-  // Terminal renderer override (#357, Linux only): converge every pooled xterm onto the
-  // chosen WebGL/DOM renderer WITHOUT disposing a host (the #18 invariant). It reads the
-  // mode from the store, and this runs after `set({ settings })` in both `saveSettings`
-  // and the boot `refresh()`, so the pool reconciles on Save and also heals any host that
-  // was created during boot before the blob had loaded. A no-op off Linux.
+  // Terminal renderer override (#357; every OS since task 453): converge every pooled
+  // xterm onto the chosen WebGL/DOM renderer WITHOUT disposing a host (the #18
+  // invariant). It reads the mode from the store, and this runs after `set({ settings })`
+  // in `saveSettings`, the boot `refresh()`, AND the task-428 `settings://changed`
+  // cross-window sync — so the pool reconciles on Save, heals any host created during
+  // boot before the blob had loaded, and one window's Save converges every open window.
   applyTerminalRenderer();
   if (typeof document === "undefined") return; // non-DOM env (e.g. unit tests)
   // Accent (#102/#107): override --accent AND its derived companion tokens
@@ -1897,6 +1900,13 @@ export function contentForSelected(state: {
     if (panel) return overviewPanelToContent(panel, repoKey);
   }
   return null;
+}
+
+/** Target of the ⌘W/Ctrl+W destructive-close confirm (task 448): the kind + id of
+ * the agent / schedule / recurring the keyboard fall-through would remove. */
+export interface RemovePrompt {
+  kind: "agent" | "schedule" | "recurring";
+  id: string;
 }
 
 export interface AppState {
@@ -2588,7 +2598,11 @@ export interface AppState {
    * `removeOverviewPanel`, an agent via `removeSession`, a schedule via
    * `cancelSchedule`, a recurring via `cancelRecurring` (#425) — but only when the
    * card is actually rendered on the wall (`overviewClusterKeys`): a selection
-   * hidden by the repo filter (#34) is a no-op. Anything else is a no-op. */
+   * hidden by the repo filter (#34) is a no-op. The destructive fall-throughs
+   * (agent / schedule / recurring — here and in Attention) honor the
+   * `confirmDestructive` setting (task 448): when on, they set `removePrompt`
+   * (→ the ConfirmRemoveModal) instead of acting immediately; the mouse × stays
+   * un-gated. Anything else is a no-op. */
   closeFocusedPanel: () => void;
   /** Add a new empty Canvas tab (default "Canvas N") and select it (#58). */
   addCanvas: () => void;
@@ -2604,6 +2618,17 @@ export interface AppState {
   confirmCloseCanvas: (id: string, kill: boolean) => Promise<void>;
   /** Dismiss the #137 close prompt, leaving the tab open and untouched. */
   cancelCloseCanvas: () => void;
+  /** Target of the ⌘W destructive-close confirm (task 448), or null. Transient,
+   * per-window, never persisted (the `canvasClosePromptId` pattern). Set by
+   * `closeFocusedPanel` when `confirmDestructive` is on; resolved by
+   * `confirmRemovePrompt` / `cancelRemovePrompt`. */
+  removePrompt: RemovePrompt | null;
+  /** Run the pending destructive close via the exact #425 action (`removeSession` /
+   * `cancelSchedule` / `cancelRecurring`); a vanished target is a safe no-op that
+   * still clears the prompt (task 448). */
+  confirmRemovePrompt: () => void;
+  /** Dismiss the ⌘W destructive-close confirm, removing nothing (task 448). */
+  cancelRemovePrompt: () => void;
   /** Rename a Canvas tab; a blank name keeps the current one (#58). */
   renameCanvas: (id: string, name: string) => void;
   /** Reorder the Canvas tabs (#58, dnd-kit). */
@@ -3273,6 +3298,7 @@ export const useStore = create<AppState>()((set, get) => ({
   // the tab exists — by `resolveCanvases` once the persisted tabs arrive).
   activeCanvasId: INIT_CANVAS_ID ?? "canvas-1",
   canvasClosePromptId: null,
+  removePrompt: null,
   canvasTemplates: [],
   templateEditorOpen: false,
   templateEditorId: null,
@@ -4021,17 +4047,19 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   init: async () => {
-    // Boot is TWO concurrent waves (#352). Wave 1: the single batched `boot_state`
-    // round-trip, started immediately so it flies in parallel with the listener wave
-    // below (it used to be ~22 sequential waves / 34 invokes, 16 of them gating the
-    // first meaningful paint — and every round-trip is an evaluate-JS hop on the
-    // webview main thread, costliest on Linux/WebKitGTK, #346). `.catch(() => null)`
-    // attaches the handler NOW, so a rejection (outside Tauri) is never an unhandled
-    // promise rejection while we await the subscriptions.
-    const bootPromise = ipc.bootState().catch(() => null);
+    // Boot: subscribe FIRST, then fetch (#352/task 450). The `boot_state` snapshot is
+    // requested only once every listener below is registered — it used to be started
+    // before this wave, so a lifecycle/state broadcast firing between the backend's
+    // snapshot assembly and `listen()` completing could be LOST while the older
+    // snapshot was still applied on top. Rust writes every carried datum (persisted
+    // slice, retained exit code, queryable busy flag) BEFORE the corresponding emit,
+    // so a post-subscribe snapshot can never be older than a broadcast the window has
+    // seen, and an event delivered both ways applies idempotently. The fetch still
+    // overlaps the `primaryWindow()` round-trip below (the batching win of #352 — one
+    // payload instead of ~22 sequential waves — is unchanged).
 
-    // Wave 2: the 31 `listen` registrations (each its own invoke) as ONE parallel
-    // wave. Subscribe exactly once: the flag is set *before* the await so StrictMode's
+    // The 31 `listen` registrations (each its own invoke) as ONE parallel wave.
+    // Subscribe exactly once: the flag is set *before* the await so StrictMode's
     // synchronous double-invoke can't register a second set of listeners (#32).
     if (!eventsSubscribed) {
       eventsSubscribed = true;
@@ -4351,6 +4379,12 @@ export const useStore = create<AppState>()((set, get) => ({
         eventsSubscribed = false;
       }
     }
+    // The one batched boot fetch (#352) — started only now that the listeners exist
+    // (task 450, see the invariant above), overlapping the `primaryWindow()`
+    // round-trip below. `.catch(() => null)` attaches the handler immediately, so a
+    // rejection (outside Tauri) is never an unhandled promise rejection while we
+    // await the primary snapshot.
+    const bootPromise = ipc.bootState().catch(() => null);
     // Primary election (task 433): resolve who's primary BEFORE the boot apply so
     // the once-per-app boot effects gate correctly even in a window that boots
     // already-primary (or never-primary). Fetched AFTER subscribing — Rust writes
@@ -4363,12 +4397,12 @@ export const useStore = create<AppState>()((set, get) => ({
     } catch {
       /* keep the default */
     }
-    // Apply the payload only AFTER the listeners exist: the *fetch* may race the
-    // registration, the **apply** must not — a live `session://output` / `session://
-    // exited` must never land while its handler doesn't exist (#352). The detached
-    // window id set (#84), the platform signal + Windows build (#143/#346), and every
-    // persisted slice all arrive in this one payload, applied in a single `set()`
-    // (which also re-applies the `data-platform` attribute, #363 — see `applyBootState`).
+    // Apply the payload last. Since task 450 the snapshot is also FETCHED only after
+    // the listeners exist (above), so it can never be older than a broadcast lost in
+    // the registration gap — and it now carries the PTY-liveness trio (`live_ids` /
+    // `exit_codes` / `busy_ids`) beside the platform signal + Windows build
+    // (#143/#346) and every persisted slice, all applied in a single `set()` (which
+    // also re-applies the `data-platform` attribute, #363 — see `applyBootState`).
     get().applyBootState(await bootPromise);
 
     // Usage + auto-continue boot seed (task 430): read the Rust engine's shared
@@ -4470,17 +4504,33 @@ export const useStore = create<AppState>()((set, get) => ({
     const settingsMigrated = lh.changed || bg.changed;
     applySettingsEffects(settings);
 
-    // Persisted sessions are resumed on boot (claude --resume) — show them as
-    // "reconnecting" (neutral) until their first output / a real exit, never as
-    // a wall of errors (#30). Branch labels refresh from the sidebar.
-    booting = boot.sessions.length > 0;
-    const views = boot.sessions.map((r) => ({
-      ...toSessionView(r),
-      reconnecting: true,
-    }));
+    // Persisted sessions seed from the payload's PTY-liveness trio (task 450) instead
+    // of a blanket "reconnecting": since task 440 output is TARGETED (only windows
+    // hosting a terminal receive a session's bytes), so in a window opened mid-run an
+    // un-hosted session never gets the byte that clears the flag — every agent flashed
+    // "Reconnecting…" until the 4s backstop, and a crashed agent seeded as a normal
+    // idle view (no overlay, wrongly Attention-eligible).
+    const live = new Set(boot.live_ids);
+    const exitCodes = boot.exit_codes;
+    const busy = new Set(boot.busy_ids);
+    const views = boot.sessions.map((r) => {
+      const v = toSessionView(r);
+      // Dead-but-kept PTY (task 450): seed the exit overlay + Restart; never "alive".
+      if (r.id in exitCodes)
+        return { ...v, exitedCode: exitCodes[r.id] ?? null };
+      // Running PTY: alive right now — no reconnecting flash (a window opened mid-run
+      // gets no output for un-hosted sessions since task 440, so the flag would only
+      // ever clear at the 4s backstop).
+      if (live.has(r.id)) return v;
+      // Neither: a resume still in flight (true boot) — reconnecting, exactly as
+      // before (#30, neutral until first output / a real exit). A non-resumable agent
+      // (codex/opencode) is dormant, not resuming: idle at once.
+      return agentSupportsResume(v.agent) ? { ...v, reconnecting: true } : v;
+    });
+    booting = views.some((v) => v.reconnecting);
     // Mirror the reconnecting flag into the Set the output hot path checks (#261).
     reconnectingIds.clear();
-    for (const v of views) reconnectingIds.add(v.id);
+    for (const v of views) if (v.reconnecting) reconnectingIds.add(v.id);
     // Boot re-entrancy: the session set is replaced wholesale, so drop any pending
     // admission-grace timers from the previous set (#398).
     cancelAllAttentionTimers();
@@ -4513,12 +4563,23 @@ export const useStore = create<AppState>()((set, get) => ({
       sessionActive: Object.fromEntries(
         views.filter((v) => v.hasBeenActive).map((v) => [v.id, true]),
       ),
-      // Boot views are idle (a resume never goes busy on its own — no has-work, #116)
-      // and queue-excluded while `reconnecting` anyway, so seed the confirmed-idle
-      // eligibility DIRECTLY (#398): an awaiting agent surfaces the moment its
-      // reconnecting flag clears — the pre-grace boot UX, no 5s wait.
+      // Seed busy from the snapshot (task 450): a window opened mid-run shows a
+      // working agent's blue dot immediately instead of waiting for its next
+      // `session://state` transition. Intersected with the session records so a
+      // stray id (e.g. a #72 shell terminal) never leaks in.
+      sessionBusy: Object.fromEntries(
+        views.filter((v) => busy.has(v.id)).map((v) => [v.id, true] as const),
+      ),
+      // Confirmed-idle eligibility (#398), liveness-aware since task 450: seed true
+      // only for views that are neither busy (a working agent must not sit in the
+      // Attention queue — its busy→idle settle re-admits it) nor crashed (an exit
+      // overlay is not "awaiting input"). The rest keep the pre-grace boot UX: an
+      // awaiting agent surfaces the moment its reconnecting flag clears, no 5s wait
+      // (a resume never goes busy on its own — no has-work, #116).
       attentionEligible: Object.fromEntries(
-        views.map((v) => [v.id, true] as const),
+        views
+          .filter((v) => !busy.has(v.id) && v.exitedCode === undefined)
+          .map((v) => [v.id, true] as const),
       ),
       // A fresh boot carries no live turn-complete hook state; a resumed session
       // reverts to heuristic-driven until its first post-resume hook (bridge).
@@ -4553,9 +4614,20 @@ export const useStore = create<AppState>()((set, get) => ({
       // render. Live mutations sync via `schedule://*` / `recurring://*`.
       schedules: boot.schedules,
       recurrings: boot.recurrings,
-      // Nothing to resume ⇒ the boot decorations (#359) may run as soon as the first
-      // paint is out; otherwise they wait for the backstop below.
-      resumeSettled: views.length === 0,
+      // Snapshot exit codes for NON-session ids are dead #72 shell-terminal panels
+      // (they share the PTY registry but aren't in `sessions`) — seed their Restart
+      // overlay (task 450). An intentional panel × removed the PTY from the manager
+      // entirely, so it never appears here.
+      terminalExits: Object.fromEntries(
+        Object.entries(exitCodes)
+          .filter(([id]) => !boot.sessions.some((r) => r.id === id))
+          .map(([id, code]) => [id, code ?? null] as const),
+      ),
+      // Nothing actually reconnecting ⇒ the boot decorations (#359) may run as soon
+      // as the first paint is out; otherwise they wait for the backstop below. Since
+      // task 450 this keys on the liveness-aware flag, not "any session exists" — a
+      // window opened mid-run (everything live/exited) settles immediately.
+      resumeSettled: !views.some((v) => v.reconnecting),
       booted: true,
     });
     // Keep the <html> data-platform attribute (written synchronously from the UA in
@@ -5659,6 +5731,22 @@ export const useStore = create<AppState>()((set, get) => ({
       });
       return;
     }
+    // The keyboard path to a destructive close (task 448): with `confirmDestructive`
+    // on (#103, the default) stage the target in `removePrompt` — the
+    // ConfirmRemoveModal resolves it — instead of acting immediately; opted out, run
+    // the exact #425 action right away. The mouse × stays un-gated (it is a
+    // deliberate pointer action on the specific card); this gate exists because the
+    // ⌘W/Ctrl+W chord acts on whatever happens to be selected — and hover-focus
+    // (`autoFocusOnHover`) selects the card under the cursor.
+    const destructive = (kind: RemovePrompt["kind"], id: string) => {
+      if (s.settings.confirmDestructive) {
+        set({ removePrompt: { kind, id } });
+        return;
+      }
+      if (kind === "agent") void s.removeSession(id);
+      else if (kind === "schedule") void s.cancelSchedule(id);
+      else void s.cancelRecurring(id);
+    };
     // 3. Overview: remove whatever card is selected, each via the exact action its
     // hover-× calls, so keyboard and mouse can't drift — a non-agent panel via
     // `removeOverviewPanel`, an agent via `removeSession` (kill + forget), a schedule
@@ -5689,20 +5777,21 @@ export const useStore = create<AppState>()((set, get) => ({
         }
       }
       const id = s.selectedId;
-      // An agent card → Remove (kill + forget), its × action. (An agent id never
-      // matches an overviewPanels entry, so the loop above skipped it.)
+      // An agent card → Remove (kill + forget), its × action, confirm-gated (task
+      // 448). (An agent id never matches an overviewPanels entry, so the loop
+      // above skipped it.)
       if (s.sessions.some((x) => x.id === id)) {
-        void s.removeSession(id);
+        destructive("agent", id);
         return;
       }
-      // A scheduled card → cancel it (its × / Cancel action).
+      // A scheduled card → cancel it (its × / Cancel action), confirm-gated.
       if (s.schedules.some((x) => x.id === id)) {
-        void s.cancelSchedule(id);
+        destructive("schedule", id);
         return;
       }
-      // A recurring card → cancel it (its × / Cancel action).
+      // A recurring card → cancel it (its × / Cancel action), confirm-gated.
       if (s.recurrings.some((x) => x.id === id)) {
-        void s.cancelRecurring(id);
+        destructive("recurring", id);
         return;
       }
     }
@@ -5728,10 +5817,39 @@ export const useStore = create<AppState>()((set, get) => ({
       const activeId = queue.some((q) => q.id === s.selectedId)
         ? s.selectedId
         : (queue[0]?.id ?? null);
-      if (activeId) void s.removeSession(activeId);
+      // Confirm-gated like the Overview agent branch (task 448).
+      if (activeId) destructive("agent", activeId);
       return;
     }
     // Nothing focused: deliberate no-op.
+  },
+
+  // Resolve the ⌘W destructive-close confirm (task 448): run the exact #425 action
+  // the gate deferred. Re-resolve the target against the CURRENT state — the modal
+  // is async, so the agent may have exited / the schedule fired meanwhile; a
+  // vanished target is a safe no-op that still clears the prompt.
+  confirmRemovePrompt: () => {
+    const s = get();
+    const p = s.removePrompt;
+    if (!p) return;
+    set({ removePrompt: null });
+    if (p.kind === "agent" && s.sessions.some((x) => x.id === p.id)) {
+      void s.removeSession(p.id);
+    } else if (
+      p.kind === "schedule" &&
+      s.schedules.some((x) => x.id === p.id)
+    ) {
+      void s.cancelSchedule(p.id);
+    } else if (
+      p.kind === "recurring" &&
+      s.recurrings.some((x) => x.id === p.id)
+    ) {
+      void s.cancelRecurring(p.id);
+    }
+  },
+
+  cancelRemovePrompt: () => {
+    if (get().removePrompt) set({ removePrompt: null });
   },
 
   // Canvas templates (#117): the editor builds a draft layout of inert blocks with
@@ -6605,16 +6723,13 @@ export const useStore = create<AppState>()((set, get) => ({
     // schedule / panel removals it performs land here fire-and-forget, and a
     // non-forced remove racing the forced delete would mis-toast "Worktree kept".
     if (deletingWorktrees.has(dest)) return;
-    // NEVER auto-remove a worktree ReCue didn't create: an in-place spawn into a
-    // DETECTED external worktree produces sessions whose teardown lands here, but
-    // the agent/user owns that checkout — closing the last item must not delete
-    // it. (The Rust `cleanup_worktree_if_empty` enforces the same managed-root
-    // invariant itself — `notManaged` — so the Rust-internal clean-exit path is
-    // covered too; this short-circuit just avoids a pointless round-trip.)
-    const detected = get().repoWorktrees[parent]?.find((e) =>
-      samePath(e.path, dest, get().platform),
-    );
-    if (detected && !detected.managed) return;
+    // NEVER auto-remove a worktree ReCue didn't create: the Rust
+    // `cleanup_worktree_if_empty` enforces the managed-root invariant itself
+    // (`notManaged` → keep silently below). A detected EXTERNAL worktree must
+    // still reach the backend (task 451 — no local short-circuit): the Rust
+    // NotManaged path releases ReCue's own dev-container `git worktree lock`
+    // (gated on the exact spawn-time reason, never deleting), so a stale lock
+    // can't block the creator agent's own clean-exit worktree removal.
     // Record the parent so a later panel/schedule close can resolve it once this
     // worktree's last agent is gone (#199).
     worktreeParents.set(dest, parent);
