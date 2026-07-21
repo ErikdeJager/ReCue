@@ -2999,3 +2999,51 @@ the bare-modifier chord class.
 
 **Dependencies:** none. (Kept minimal/localized in the dispatch block to avoid merge friction with
 concurrent Task 448's mod+W work; `isTerminalTarget` is exported for its reuse.)
+
+### 452. [x] Window restore: track fresh-install-ness explicitly and retain main's geometry across a mid-run close
+
+`WindowSet::destroyed` pruned a closed window's persisted entry whenever it wasn't the last one, so
+closing the **main** window while an `app-*` window survived, then quitting from that window, left
+the persisted set with no `main` entry — which the task-443 default (`maximized =
+main_entry.map(|e| e.maximized).unwrap_or(true)`) read as a **fresh install**: the next launch
+opened main maximized at default placement, discarding its remembered geometry (v2.0.0 review
+finding, `window_state.rs:539`). This fixes both halves: main's geometry survives a mid-run close,
+and the maximize-by-default keys off an explicit fresh-install marker instead of an absent entry.
+
+**What shipped** (branch `task/452-window-restore-freshness`, PR
+[#221](https://github.com/ErikdeJager/ReCue/pull/221), merged into `improvements` as `a20f243`;
+3 files, +298/−19):
+
+- **`src-tauri/src/window_state.rs`** — `WindowSet` gains a **main-only `closed_main` stash**:
+  `destroyed("main")` retains the removed entry (geometry + `maximized` flag frozen at close-time
+  values) and `snapshot()` appends it, so the flushed set still carries main's remembered frame;
+  `register("main")` clears a stale stash defensively (no duplicate main). Safe because main is
+  unconditionally recreated at every boot from `tauri.conf.json` — its entry is pure geometry,
+  presence never means "was open"; a closed `app-*` stays pruned (its entry decides what reopens),
+  and the would-empty last-window-close exit rule keeps counting **live** windows only (the stash
+  lives outside `windows`). The maximize decision is extracted as the pure
+  `main_restore_maximized(entry, fresh_install)` — a saved entry's flag always wins; `None` +
+  fresh → `true`, `None` + not-fresh → `false` (builder-default 1280×832 unmaximized as the
+  lost/corrupt-file degrade) — wired into `restore_windows`, which reads the marker, and sets it
+  one-shot (guarded — zero extra writes on steady-state boots). Extensive new pure tests + a
+  mock-app glue test pin the stash lifecycle, the exit rules, and the pure decision table.
+- **`src-tauri/src/store.rs`** — new backend-internal `PersistedState.window_state_initialized:
+  bool` (`serde(default)` so legacy files load as `false`) with a getter + one-shot setter
+  mirroring the `perm_reprompt_done` shape; no Tauri command, no frontend change. Field docs note
+  the persisted set may now carry a geometry-only `main` entry whose window was closed at quit.
+- **`CLAUDE.md`** — the stale task-443 "fresh install (no saved `main` entry)" sentence in the
+  Multi-window bullet now names the explicit marker and the retained-main rule.
+
+**Key assumptions carried over** (from `ASSUMPTIONS.md` Task 452)
+
+- Fixed both halves, not just the marker — a flag alone would still lose main's geometry (pruned
+  on `Destroyed`); verified no other consumer of `window_state` exists.
+- Upgrade behavior preserved deliberately: a pre-439 file or an install already in the bug state
+  (marker absent, no main entry) still gets exactly ONE task-443 maximized launch, then is marked —
+  identical to today, no migration write; rollback-safe both ways via `serde(default)`.
+- Platform-neutral pure Rust (no `#[cfg]` arms); Wayland stays size-only as before.
+- GUI smoke (mid-run close → quit from app window → relaunch restores main's frame; fresh-install
+  delete-`sessions.json` check) flagged in the PR body per the #84/#105 precedent — cannot be
+  unit-tested.
+
+**Dependencies:** none.
