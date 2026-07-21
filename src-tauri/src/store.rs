@@ -251,6 +251,11 @@ pub struct RecurringSession {
 /// height` then stay the last NON-maximized geometry (the un-maximize / restore
 /// target), and restore re-maximizes AFTER applying that geometry. Its `serde(default)`
 /// keeps a pre-443 file (no key) loading as `false`.
+///
+/// The set may carry a `main` entry whose window was already closed at quit (task
+/// 452): main is unconditionally recreated at every boot, so its entry is pure
+/// geometry — presence never means "main was open at quit". Only `app-*` entries
+/// decide what reopens.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistedWindow {
     pub label: String,
@@ -376,9 +381,21 @@ pub struct PersistedState {
     /// restores it at boot; the frontend never sees it — the `path_cache`
     /// precedent). This deliberately reverses the #84 "detached windows are
     /// per-session" rule: full app windows now survive relaunch. Empty until first
-    /// written; `default` keeps old files loading.
+    /// written; `default` keeps old files loading. May carry a geometry-only `main`
+    /// entry retained after its window closed mid-run (task 452) — see
+    /// [`PersistedWindow`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub window_state: Vec<PersistedWindow>,
+    /// One-shot marker (task 452): the boot window-restore pass has run at least
+    /// once on this install. The task-443 fresh-install "open main maximized"
+    /// default keys off this flag — never off the mere absence of a persisted
+    /// `main` window entry, which also occurs on a lost/corrupt file or (pre-452)
+    /// after closing main mid-run and quitting from a surviving app-* window.
+    /// `default` (false) keeps old files loading; an install upgrading with no
+    /// `main` entry behaves exactly like 443 once (one maximized launch), then is
+    /// marked.
+    #[serde(default)]
+    pub window_state_initialized: bool,
 }
 
 /// Thread-safe persistent store backed by a JSON file.
@@ -815,6 +832,19 @@ impl Store {
     /// `window_state` saver only when the snapshot actually changed.
     pub fn set_window_state(&self, windows: Vec<PersistedWindow>) -> io::Result<()> {
         self.update(|state| state.window_state = windows)
+    }
+
+    /// Whether the boot window-restore pass has ever run on this install (task
+    /// 452). Gates the task-443 fresh-install "open main maximized" default —
+    /// see [`PersistedState::window_state_initialized`].
+    pub fn window_state_initialized(&self) -> bool {
+        self.with(|state| state.window_state_initialized)
+    }
+
+    /// Mark the boot window-restore pass as having run (task 452; one-shot —
+    /// the `set_perm_reprompt_done` pattern).
+    pub fn set_window_state_initialized(&self) -> io::Result<()> {
+        self.update(|state| state.window_state_initialized = true)
     }
 
     /// The per-repo diff "seen" markers (#278) — opaque JSON; `null` until first
@@ -2186,6 +2216,25 @@ mod tests {
         assert!(store.perm_reprompt_done());
         // The one-time flag survives a reload, so the re-prompt never re-runs.
         assert!(Store::load(&path).perm_reprompt_done());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn window_state_initialized_defaults_false_and_persists_once_set() {
+        let path = temp_path("windowstateinit");
+        let store = Store::load(&path);
+        assert!(!store.window_state_initialized());
+        // A pre-452 file (no `window_state_initialized` key) loads as false, so an
+        // upgrading install gets exactly one task-443 maximized launch.
+        let legacy: PersistedState =
+            serde_json::from_str(r#"{"sessions":[],"recents":[]}"#).expect("legacy state loads");
+        assert!(!legacy.window_state_initialized);
+
+        store.set_window_state_initialized().unwrap();
+        assert!(store.window_state_initialized());
+        // The one-shot marker survives a reload, so a later boot with no `main`
+        // entry never re-reads as a fresh install.
+        assert!(Store::load(&path).window_state_initialized());
         let _ = fs::remove_file(&path);
     }
 

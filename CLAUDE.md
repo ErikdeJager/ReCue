@@ -760,11 +760,14 @@ steady-state boot pays **zero** probe cost.
   placement). **Maximized default + persistence** (443): `PersistedWindow` gains a
   serde-default `maximized: bool` tracked live at the `Moved`/`Resized` site (while
   maximized only the flag changes, so `x/y/width/height` stay the last non-maximized
-  un-maximize target); on a **fresh install** (no saved `main` entry) the main window
-  opens **maximized** by default, restore re-`maximize()`s after applying bounds (Wayland
-  honors `maximize()` unlike `set_position`; macOS zoom), and additional `app-*` windows
-  still open at 1280×832 unless restored maximized — all applied while hidden (#348), no
-  flash. **The #84 single-owner era is deleted** (437): the ownership map + hook,
+  un-maximize target); on a **fresh install** — the explicit `window_state_initialized`
+  store marker not yet set (task 452), never the mere absence of a saved `main` entry —
+  the main window opens **maximized** by default, restore re-`maximize()`s after applying
+  bounds (Wayland honors `maximize()` unlike `set_position`; macOS zoom), and additional
+  `app-*` windows still open at 1280×832 unless restored maximized — all applied while
+  hidden (#348), no flash; main's geometry also survives a mid-run close (452 — its entry
+  is retained/stashed when main closes while an `app-*` window survives, so a later quit
+  still persists its frame). **The #84 single-owner era is deleted** (437): the ownership map + hook,
   the detached-note placeholder, the `CanvasWindow` route, the four canvas-window Rust
   commands, their window-set broadcast event, and the store's detached-id slice are all
   gone; `?canvas=<id>` survives one release as a **compat parse** (a full shell preset
